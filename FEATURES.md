@@ -12,6 +12,7 @@ A working list. Each item carries a status (open / shipped) plus rough scope, so
 - ✅ **Medium #3 — apps clarification.** `Plugin` IS the app concept; new page maps every Django app primitive onto its umbra counterpart and explains the rename. Commit: `37f155e`.
 - ✅ **Medium #2 — settings extensibility.** `#[serde(flatten)] extra: HashMap<String, toml::Value>` on `Settings`. Unknown env vars and unknown TOML keys (`UMBRA_OPENAI_API_KEY=sk-...`, `[external.openai]` tables) flow into the map; `settings.extra_str(key)` is the scalar-string accessor. Typed `UserSettings` trait alternative parks as a future layer on top. Commit: `6f5243e`.
 - ✅ **Medium #1 — PK types beyond i32/i64/Uuid.** `PrimaryKey: Copy` relaxed to `Clone`; built-in impls cover every Rust integer width plus `String` (slug-style PKs). The derive's hardcoded type check is gone — user newtypes opt in with `impl PrimaryKey for MyId {}`, and Rust's trait-bound diagnostic does the validation. Commit: `4e8aee4`.
+- ✅ **Large #7 — backup / recovery via `dumpdata` / `loaddata`.** New `umbra::backup` module walks every registered model, dispatches per-column on `SqlType` to dump rows as JSON, reverses the dispatch on load. Carries an `umbra_dump_version` so a forward-incompatible dump fails loudly. CLI subcommands wired; round-trip verified end-to-end through the binary (2 rows → JSON → wipe → load → same 2 rows back with PKs and nullable column intact). Commit: `3ad51b5`.
 
 ## Open — large scope (design call first)
 
