@@ -28,12 +28,7 @@
 //!   `umbra-sessions` and `umbra-email`, both not yet built.
 //! - `umbra-sessions` itself — sessions plugin lands separately.
 
-// These argon2 imports are wired up here so subagent A only has to
-// drop bodies into the helper functions below; the warning is
-// suppressed at the use-site until then.
-#[allow(unused_imports)]
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
-#[allow(unused_imports)]
 use argon2::{Argon2, password_hash::rand_core::OsRng};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -117,18 +112,25 @@ impl From<sqlx::Error> for AuthError {
 /// `auth_user.password_hash`. The hash is self-describing so future
 /// parameter upgrades stay transparent: a verified hash with old
 /// parameters can be re-hashed on next login.
-pub fn hash_password(_plaintext: &str) -> Result<String, AuthError> {
-    // Filled in by subagent A.
-    Err(AuthError::InvalidCredentials)
+pub fn hash_password(plaintext: &str) -> Result<String, AuthError> {
+    let salt = SaltString::generate(&mut OsRng);
+    let hash = Argon2::default()
+        .hash_password(plaintext.as_bytes(), &salt)?
+        .to_string();
+    Ok(hash)
 }
 
 /// Verify a plaintext password against an argon2 PHC-encoded hash.
 /// Returns `Ok(true)` on match, `Ok(false)` on mismatch, and an error
 /// only when the hash itself is malformed. Callers that just want a
 /// bool can use `.unwrap_or(false)`.
-pub fn verify_password(_plaintext: &str, _hash: &str) -> Result<bool, AuthError> {
-    // Filled in by subagent A.
-    Ok(false)
+pub fn verify_password(plaintext: &str, hash: &str) -> Result<bool, AuthError> {
+    let parsed = PasswordHash::new(hash)?;
+    match Argon2::default().verify_password(plaintext.as_bytes(), &parsed) {
+        Ok(()) => Ok(true),
+        Err(argon2::password_hash::Error::Password) => Ok(false),
+        Err(e) => Err(AuthError::PasswordHash(e)),
+    }
 }
 
 /// Create a new active user with the given username, email, and
@@ -137,12 +139,26 @@ pub fn verify_password(_plaintext: &str, _hash: &str) -> Result<bool, AuthError>
 /// `Utc::now()`; `last_login` is `None`; `is_active = true`,
 /// `is_staff = false`, `is_superuser = false`.
 pub async fn create_user(
-    _username: &str,
-    _email: &str,
-    _plaintext: &str,
+    username: &str,
+    email: &str,
+    plaintext: &str,
 ) -> Result<AuthUser, AuthError> {
-    // Filled in by subagent A.
-    Err(AuthError::InvalidCredentials)
+    let now = chrono::Utc::now();
+    let hash = hash_password(plaintext)?;
+    let pool = umbra::db::pool();
+    let row = sqlx::query_as::<_, AuthUser>(
+        "INSERT INTO auth_user
+           (username, email, password_hash, is_active, is_staff, is_superuser, date_joined, last_login)
+         VALUES (?, ?, ?, 1, 0, 0, ?, NULL)
+         RETURNING *",
+    )
+    .bind(username)
+    .bind(email)
+    .bind(&hash)
+    .bind(now)
+    .fetch_one(&pool)
+    .await?;
+    Ok(row)
 }
 
 /// Verify a username + plaintext password against the user table.
@@ -152,15 +168,37 @@ pub async fn create_user(
 ///
 /// Does not update `last_login`; that's the login-flow's job once the
 /// HTTP layer lands.
-pub async fn authenticate(_username: &str, _plaintext: &str) -> Result<AuthUser, AuthError> {
-    // Filled in by subagent A.
-    Err(AuthError::InvalidCredentials)
+pub async fn authenticate(username: &str, plaintext: &str) -> Result<AuthUser, AuthError> {
+    let pool = umbra::db::pool();
+    let user: Option<AuthUser> = sqlx::query_as::<_, AuthUser>(
+        "SELECT * FROM auth_user WHERE username = ? AND is_active = 1",
+    )
+    .bind(username)
+    .fetch_optional(&pool)
+    .await?;
+
+    let Some(user) = user else {
+        return Err(AuthError::InvalidCredentials);
+    };
+
+    if verify_password(plaintext, &user.password_hash)? {
+        Ok(user)
+    } else {
+        Err(AuthError::InvalidCredentials)
+    }
 }
 
 /// Replace a user's password with a fresh hash of the given plaintext.
 /// Writes through to the database. `user.password_hash` is updated in
 /// place on success so the caller can keep using the same value.
-pub async fn set_password(_user: &mut AuthUser, _plaintext: &str) -> Result<(), AuthError> {
-    // Filled in by subagent A.
-    Err(AuthError::InvalidCredentials)
+pub async fn set_password(user: &mut AuthUser, plaintext: &str) -> Result<(), AuthError> {
+    let hash = hash_password(plaintext)?;
+    let pool = umbra::db::pool();
+    sqlx::query("UPDATE auth_user SET password_hash = ? WHERE id = ?")
+        .bind(&hash)
+        .bind(user.id)
+        .execute(&pool)
+        .await?;
+    user.password_hash = hash;
+    Ok(())
 }
