@@ -39,7 +39,7 @@
     ]
   },
   "social": {
-    "github": "https://github.com/OWNER/umbra"
+    "github": "https://github.com/dalmasonto/umbra"
   },
   "search": {
     "enabled": false
@@ -61,14 +61,14 @@
         "items": [
           {
             "label": "GitHub",
-            "href": "https://github.com/OWNER/umbra"
+            "href": "https://github.com/dalmasonto/umbra"
           }
         ]
       }
     ]
   },
   "features": {
-    "editUrl": "https://github.com/OWNER/umbra/edit/main/documentation/docs",
+    "editUrl": "https://github.com/dalmasonto/umbra/edit/main/documentation/docs",
     "showLastUpdated": true,
     "showReadingTime": true,
     "showAuthors": false,
