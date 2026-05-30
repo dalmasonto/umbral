@@ -174,7 +174,9 @@ fn create_table_names(ops: &[Operation]) -> Vec<String> {
         .iter()
         .filter_map(|op| match op {
             Operation::CreateTable { table, .. } => Some(table.clone()),
-            Operation::DropTable { .. } => None,
+            Operation::DropTable { .. }
+            | Operation::AddColumn { .. }
+            | Operation::DropColumn { .. } => None,
         })
         .collect();
     names.sort();

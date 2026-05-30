@@ -91,8 +91,9 @@ pub fn registered_models() -> Vec<ModelMeta> {
 }
 
 /// Return the registered plugin names that contributed at least one
-/// model. Sorted deterministically. Used by `make_in` / `run_in` /
-/// `show_in` to know which directories under `migrations/` to walk.
+/// model. Sorted deterministically. Used as a fallback when no
+/// topological order is published; the M7 walk used this directly,
+/// and M8 prefers [`plugin_order`] when it's been set.
 pub fn registered_plugins() -> Vec<String> {
     let mut names: Vec<String> = REGISTRY
         .get()
@@ -103,6 +104,32 @@ pub fn registered_plugins() -> Vec<String> {
     names.sort();
     names.dedup();
     names
+}
+
+/// The topological plugin order published by `App::build()` after its
+/// phase 1.5 sort. `None` until that runs; the CLI subcommands
+/// (`makemigrations`, `migrate`, `showmigrations`) call `App::build()`
+/// via `boot_for_management` before reaching the migration engine.
+static PLUGIN_ORDER: OnceLock<Vec<String>> = OnceLock::new();
+
+/// Publish the topological plugin order. Called by `App::build()` once
+/// the phase 1.5 sort has produced the order. Must include the
+/// implicit `"app"` plugin even when no real plugins are registered.
+pub(crate) fn init_plugin_order(order: Vec<String>) {
+    PLUGIN_ORDER
+        .set(order)
+        .expect("umbra::migrate::init_plugin_order called more than once");
+}
+
+/// Return the topological plugin order if `App::build()` published
+/// one; otherwise fall back to [`registered_plugins`] (sorted by
+/// name). The fallback keeps existing M5 / M6 tests working without
+/// requiring them to wire a full plugin sort.
+pub fn plugin_order() -> Vec<String> {
+    PLUGIN_ORDER
+        .get()
+        .cloned()
+        .unwrap_or_else(registered_plugins)
 }
 
 /// Return the models registered against a specific plugin. Empty if
@@ -207,7 +234,10 @@ fn hex(bytes: &[u8]) -> String {
 /// map_type`) and runs them in declaration order inside one
 /// transaction per migration file.
 ///
-/// M5 v1 ships the table-level ops. Column-level ops land at M5.1.
+/// M5 v1 shipped table-level ops; M8 v1 adds `AddColumn` and
+/// `DropColumn`. `AlterColumn`, index / constraint ops, and
+/// `RunSql` / `RunCode` are deferred (see `docs/specs/06-migration-
+/// engine.md`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind")]
 pub enum Operation {
@@ -217,6 +247,18 @@ pub enum Operation {
     CreateTable { table: String, columns: Vec<Column> },
     /// Drop an existing table.
     DropTable { table: String },
+    /// Add a new column to an existing table. Rendered as
+    /// `ALTER TABLE x ADD COLUMN y TYPE [NOT NULL]`. SQLite refuses a
+    /// non-nullable add against a populated table without a default;
+    /// the engine surfaces that as a sqlx error at apply time (M8 v1).
+    /// A future op `AddColumnWithDefault` lifts the restriction once
+    /// the `#[umbra(default = ...)]` attribute lands.
+    AddColumn { table: String, column: Column },
+    /// Drop a column from an existing table. Rendered as
+    /// `ALTER TABLE x DROP COLUMN y`. SQLite 3.35+ and Postgres
+    /// support this natively; older SQLite would need a table-
+    /// recreation dance the engine doesn't implement.
+    DropColumn { table: String, column: String },
 }
 
 /// One column inside a [`Operation::CreateTable`].
@@ -297,6 +339,17 @@ pub enum MigrateError {
     /// can't represent yet (anything other than create/drop table).
     /// M5.1 lifts this when column-level ops land.
     UnsupportedChange(String),
+    /// A column-level change the engine can't apply automatically:
+    /// type change, or a nullable flip on a populated SQLite table.
+    /// Surfaces from `diff` so the build stops before producing a
+    /// migration that would lose data or fail to apply. The user
+    /// resolves by hand-writing the migration with the appropriate
+    /// data-preserving steps. Carries the model / column / reason.
+    UnsafeAlter {
+        model: String,
+        column: String,
+        reason: String,
+    },
 }
 
 impl std::fmt::Display for MigrateError {
@@ -312,6 +365,15 @@ impl std::fmt::Display for MigrateError {
             MigrateError::UnsupportedChange(msg) => {
                 write!(f, "umbra migrate: unsupported change at M5 v1: {msg}")
             }
+            MigrateError::UnsafeAlter {
+                model,
+                column,
+                reason,
+            } => write!(
+                f,
+                "umbra migrate: unsafe column change on `{model}.{column}`: {reason}; \
+                 hand-write the migration with a data-preserving step"
+            ),
         }
     }
 }
@@ -356,17 +418,16 @@ pub async fn make() -> Result<Vec<PathBuf>, MigrateError> {
 /// Same as [`make`] but takes an explicit base directory. Used by
 /// tests to avoid touching the cwd.
 ///
-/// Iterates `registered_plugins()` in sorted-by-name order. M7 v1
-/// accepts this as a limitation: cross-plugin FK ordering wants
-/// topological order (a plugin's `CreateTable` for the FK target has
-/// to land before the dependent plugin's `CreateTable` runs), but the
-/// engine doesn't see `Plugin::dependencies()` from inside this
-/// standalone function. M8 lifts the limitation via a registry that
-/// remembers the toposorted order computed at `App::build()` time.
+/// Iterates [`plugin_order`], which is the topological order
+/// published by `App::build()`'s phase 1.5 sort. Cross-plugin FKs
+/// land in dependency order this way (a plugin's `CreateTable` for
+/// the FK target runs before the dependent plugin's `CreateTable`).
+/// Falls back to [`registered_plugins`] when no order has been
+/// published (e.g. low-level tests that init the registry directly).
 pub async fn make_in(dir: &Path) -> Result<Vec<PathBuf>, MigrateError> {
     let mut written: Vec<PathBuf> = Vec::new();
 
-    for plugin in registered_plugins() {
+    for plugin in plugin_order() {
         let plugin_dir = dir.join(&plugin);
 
         // The previous snapshot is the `snapshot_after` of the highest-
@@ -439,7 +500,7 @@ pub async fn run_in(dir: &Path) -> Result<u64, MigrateError> {
     let applied = applied_names(&pool).await?;
 
     let mut applied_count: u64 = 0;
-    for plugin in registered_plugins() {
+    for plugin in plugin_order() {
         let plugin_dir = dir.join(&plugin);
         let paths = list_migration_files(&plugin_dir)?;
 
@@ -516,7 +577,7 @@ pub async fn show_in(dir: &Path) -> Result<u64, MigrateError> {
     let applied = applied_names(&pool).await?;
 
     let mut pending: u64 = 0;
-    for plugin in registered_plugins() {
+    for plugin in plugin_order() {
         let plugin_dir = dir.join(&plugin);
         let paths = list_migration_files(&plugin_dir)?;
         if paths.is_empty() {
@@ -569,9 +630,16 @@ fn read_migration_file(path: &Path) -> Result<MigrationFile, MigrateError> {
 }
 
 /// Diff the previous snapshot against the current one and produce the
-/// ordered operation list. M5 v1 emits CreateTable / DropTable only;
-/// any column-level change on a model that appears in both snapshots
-/// surfaces as `UnsupportedChange` so M5.1 can lift the restriction.
+/// ordered operation list.
+///
+/// Emits `CreateTable` / `DropTable` for whole-model changes (M5 v1),
+/// and `AddColumn` / `DropColumn` for column-level changes on a model
+/// that appears in both snapshots (M8 v1). A column whose name stays
+/// the same but whose type or nullable flag changed surfaces as
+/// [`MigrateError::UnsafeAlter`]: SQLite can't ALTER COLUMN TYPE in
+/// place, and a nullable flip on a populated table is destructive.
+/// Renames are still handled as drop+add (the heuristic detector that
+/// disambiguates rename vs drop+add is deferred past M8 v1).
 fn diff(previous: &Snapshot, current: &Snapshot) -> Result<Vec<Operation>, MigrateError> {
     use std::collections::BTreeMap;
 
@@ -588,7 +656,7 @@ fn diff(previous: &Snapshot, current: &Snapshot) -> Result<Vec<Operation>, Migra
 
     let mut ops: Vec<Operation> = Vec::new();
 
-    // Creates and field-level diffs, in deterministic name order.
+    // Creates and column-level diffs, in deterministic name order.
     for (name, curr) in &curr_by_name {
         match prev_by_name.get(name) {
             None => ops.push(Operation::CreateTable {
@@ -596,10 +664,8 @@ fn diff(previous: &Snapshot, current: &Snapshot) -> Result<Vec<Operation>, Migra
                 columns: curr.fields.clone(),
             }),
             Some(prev) if prev == curr => {}
-            Some(_) => {
-                return Err(MigrateError::UnsupportedChange(format!(
-                    "column changes on {name}: deferred to M5.1"
-                )));
+            Some(prev) => {
+                ops.extend(diff_columns(name, prev, curr)?);
             }
         }
     }
@@ -616,13 +682,101 @@ fn diff(previous: &Snapshot, current: &Snapshot) -> Result<Vec<Operation>, Migra
     Ok(ops)
 }
 
-/// Pick the suffix used in a migration filename. One CreateTable gives
-/// `create_<table>`, one DropTable gives `drop_<table>`, anything else
-/// is the generic `auto`.
+/// Per-model column diff. Same-name columns whose type or nullable
+/// flag changed return `UnsafeAlter` (no `AlterColumn` until M8 v1.1
+/// covers the table-recreation dance for SQLite plus native ALTER for
+/// Postgres). New-named columns emit `AddColumn`; missing-name columns
+/// emit `DropColumn`. The ordering is: drops first, then adds, so a
+/// rename-as-drop+add doesn't violate a uniqueness constraint mid-
+/// migration on a single-row table.
+fn diff_columns(
+    model: &str,
+    previous: &ModelMeta,
+    current: &ModelMeta,
+) -> Result<Vec<Operation>, MigrateError> {
+    use std::collections::BTreeMap;
+
+    let prev_cols: BTreeMap<&str, &Column> = previous
+        .fields
+        .iter()
+        .map(|c| (c.name.as_str(), c))
+        .collect();
+    let curr_cols: BTreeMap<&str, &Column> = current
+        .fields
+        .iter()
+        .map(|c| (c.name.as_str(), c))
+        .collect();
+
+    // In-place type / nullable / pk changes are UnsafeAlter at M8 v1.
+    // Walk the intersection by name and fail fast on the first one.
+    for (name, prev_col) in &prev_cols {
+        if let Some(curr_col) = curr_cols.get(name) {
+            if prev_col.ty != curr_col.ty {
+                return Err(MigrateError::UnsafeAlter {
+                    model: model.to_string(),
+                    column: (*name).to_string(),
+                    reason: format!(
+                        "type change {prev_ty:?} -> {curr_ty:?} needs the AlterColumn op (deferred past M8 v1)",
+                        prev_ty = prev_col.ty,
+                        curr_ty = curr_col.ty,
+                    ),
+                });
+            }
+            if prev_col.nullable != curr_col.nullable {
+                return Err(MigrateError::UnsafeAlter {
+                    model: model.to_string(),
+                    column: (*name).to_string(),
+                    reason: format!(
+                        "nullable flip {prev_n} -> {curr_n} needs the AlterColumn op (deferred past M8 v1)",
+                        prev_n = prev_col.nullable,
+                        curr_n = curr_col.nullable,
+                    ),
+                });
+            }
+            if prev_col.primary_key != curr_col.primary_key {
+                return Err(MigrateError::UnsafeAlter {
+                    model: model.to_string(),
+                    column: (*name).to_string(),
+                    reason: "primary-key flips need a manual data-preserving migration".to_string(),
+                });
+            }
+        }
+    }
+
+    let mut ops: Vec<Operation> = Vec::new();
+
+    // Drops first so a same-position add can reuse the column slot.
+    for (name, prev_col) in &prev_cols {
+        if !curr_cols.contains_key(name) {
+            ops.push(Operation::DropColumn {
+                table: current.table.clone(),
+                column: prev_col.name.clone(),
+            });
+        }
+    }
+
+    // Then adds, in current declaration order so the schema retains
+    // the user-written column order even after re-runs.
+    for col in &current.fields {
+        if !prev_cols.contains_key(col.name.as_str()) {
+            ops.push(Operation::AddColumn {
+                table: current.table.clone(),
+                column: col.clone(),
+            });
+        }
+    }
+
+    Ok(ops)
+}
+
+/// Pick the suffix used in a migration filename. Single-op migrations
+/// get a descriptive suffix; multi-op migrations fall back to `auto`.
 fn suffix_for(ops: &[Operation]) -> String {
     match ops {
         [Operation::CreateTable { table, .. }] => format!("create_{table}"),
         [Operation::DropTable { table }] => format!("drop_{table}"),
+        [Operation::AddColumn { table, column }] => format!("add_{}_{}", table, column.name),
+        [Operation::DropColumn { table, column }] => format!("drop_{table}_{column}"),
         _ => "auto".to_string(),
     }
 }
@@ -658,8 +812,12 @@ async fn applied_names(
 }
 
 /// Render one operation to SQL via sea-query + the active backend's
-/// `map_type` mapping. M5 v1 covers the two table-level ops; column-
-/// level ops join the match arms at M5.1.
+/// `map_type` mapping. M5 v1 shipped the two table-level ops; M8 v1
+/// adds the column-level ones. `AlterColumn` is still deferred.
+///
+/// The `AddColumn` / `DropColumn` bodies are filled in by subagent A;
+/// the scaffold returns a placeholder that fails fast so a stray apply
+/// surfaces the gap obviously.
 fn render_operation(op: &Operation) -> String {
     use sea_query::{Alias, ColumnDef, SqliteQueryBuilder, Table};
 
@@ -684,5 +842,19 @@ fn render_operation(op: &Operation) -> String {
         Operation::DropTable { table } => Table::drop()
             .table(Alias::new(table))
             .build(SqliteQueryBuilder),
+        Operation::AddColumn {
+            table: _,
+            column: _,
+        } => {
+            // Filled in by subagent A.
+            String::from("-- umbra: AddColumn rendering pending")
+        }
+        Operation::DropColumn {
+            table: _,
+            column: _,
+        } => {
+            // Filled in by subagent A.
+            String::from("-- umbra: DropColumn rendering pending")
+        }
     }
 }

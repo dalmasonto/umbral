@@ -524,7 +524,9 @@ pub async fn write_outputs(
             .iter()
             .fold((0usize, 0usize), |(t, c), op| match op {
                 Operation::CreateTable { columns, .. } => (t + 1, c + columns.len()),
-                Operation::DropTable { .. } => (t, c),
+                Operation::DropTable { .. }
+                | Operation::AddColumn { .. }
+                | Operation::DropColumn { .. } => (t, c),
             });
 
     Ok(InspectReport {

@@ -18,7 +18,10 @@
 What this spec owns:
 
 - The **migration file format** (one JSON file per migration, carrying ordered operations plus a snapshot of the post-migration schema).
-- The **operation catalogue** (`CreateTable`, `DropTable`, `AddColumn`, `DropColumn`, `AlterColumn`, indices, constraints, `RunSql`, `RunCode`). **What shipped at M5:** table-level only (`CreateTable`, `DropTable`). Column-level ops (`AddColumn`, `DropColumn`, `AlterColumn`), index / constraint ops, and the `RunSql` / `RunCode` data-migration escape hatches are deferred to **M8** alongside the rename-detection and data-preserving-alter hardening. Until M8 lands, changing a field on an existing model produces `MigrateError::UnsupportedChange("column changes on {model}: deferred to M5.1")`. The slot is called "M5.1" in code comments; the actual milestone is M8 per `arch.md §7`.
+- The **operation catalogue** (`CreateTable`, `DropTable`, `AddColumn`, `DropColumn`, `AlterColumn`, indices, constraints, `RunSql`, `RunCode`).
+  - **Shipped at M5:** `CreateTable`, `DropTable`.
+  - **Shipped at M8 v1:** `AddColumn`, `DropColumn`. The autodetector now diffs columns within an existing model and emits these ops in declaration order. Renames are still drop+add; the heuristic detector that disambiguates rename vs drop+add is deferred. A column change the engine can't express safely (type change, nullable flip on a populated SQLite table) surfaces as `MigrateError::UnsafeAlter` and stops the build.
+  - **Deferred past M8 v1:** `AlterColumn` (needs the Postgres backend body for clean ALTER TABLE rendering, and a SQLite table-recreation dance for nullable / type changes); index / constraint ops; `RunSql` / `RunCode` data-migration escape hatches; rename detection. These land as the Postgres backend body and the data-migration UX work catch up.
 - The **autodetection algorithm**: diff the current `FIELDS` against the latest snapshot, produce ordered ops, write a new migration file.
 - The **tracking table** (`umbra_migrations`) and the rules for what counts as "applied".
 - The **plugin-aware ordering**: cross-plugin FKs and the rule that a plugin's migrations apply after its dependencies'.

@@ -204,6 +204,16 @@ impl AppBuilder {
         }
         crate::migrate::init_plugins(per_plugin);
 
+        // Publish the topological plugin order so the migration engine
+        // walks plugins in dependency order. The "app" plugin is the
+        // implicit owner of `.model::<T>()` registrations; it has no
+        // dependencies and lands first.
+        let mut order: Vec<String> = vec![crate::migrate::APP_PLUGIN_NAME.to_string()];
+        for plugin in &sorted_plugins {
+            order.push(plugin.name().to_string());
+        }
+        crate::migrate::init_plugin_order(order);
+
         // Phase 4 — system check. Build the context against ambient
         // state, run the framework checks plus every plugin's
         // contribution in topological order, partition into errors vs
