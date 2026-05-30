@@ -18,7 +18,19 @@
 //! built-in catalogue.
 
 use crate::backend::DatabaseBackend;
-use crate::settings::Settings;
+use crate::settings::{Environment, Settings};
+
+/// The insecure dev default for `Settings.secret_key`. Kept in sync with
+/// `crate::settings::default_secret_key()`; that function returns an owned
+/// `String`, so duplicating the literal here lets the check compare without
+/// allocating.
+const INSECURE_DEV_SECRET_KEY: &str = "umbra-insecure-dev-key-change-me";
+
+/// The default `allowed_hosts` list emitted by
+/// `crate::settings::default_allowed_hosts()`. Mirrored here so the
+/// `settings.allowed_hosts` check can detect "still the dev default"
+/// without allocating.
+const DEFAULT_ALLOWED_HOSTS: &[&str] = &["localhost", "127.0.0.1"];
 
 /// One named system check.
 ///
@@ -100,12 +112,132 @@ pub enum CheckLocation {
 
 /// Return the framework's built-in checks.
 ///
-/// Body filled in by the M4 fan-out subagent B. The function exists in
-/// the scaffold so `app::build()` can call it for phase 4; subagent B
-/// populates the returned vec with the `settings.required` check (and
-/// any others that fit at M4).
+/// At M4 the catalogue is intentionally short: there's no model
+/// registry (M5) or plugin walk (M7) yet, so only checks that read
+/// purely from `Settings` and the active backend are meaningful. The
+/// rest of the built-in catalogue (`field.backend`, `model.pk.present`,
+/// `model.table.unique`, `route.collision`, `plugin.dependency.*`)
+/// lands alongside the registries it needs.
 pub fn framework_checks() -> Vec<SystemCheck> {
-    Vec::new()
+    vec![
+        SystemCheck {
+            id: "settings.required",
+            run: settings_required,
+        },
+        SystemCheck {
+            id: "settings.allowed_hosts",
+            run: settings_allowed_hosts,
+        },
+        SystemCheck {
+            id: "settings.log_level",
+            run: settings_log_level,
+        },
+        SystemCheck {
+            id: "backend.url_scheme.matches_active_backend",
+            run: backend_url_scheme_matches_active_backend,
+        },
+    ]
+}
+
+/// Verify that `secret_key` is not the insecure dev default in
+/// `Environment::Prod`. Passes silently in Dev or Test.
+fn settings_required(ctx: &CheckContext<'_>) -> Vec<SystemCheckFinding> {
+    let mut findings = Vec::new();
+    if matches!(ctx.settings.environment, Environment::Prod)
+        && ctx.settings.secret_key == INSECURE_DEV_SECRET_KEY
+    {
+        findings.push(SystemCheckFinding {
+            check_id: "settings.required",
+            severity: Severity::Error,
+            location: CheckLocation::Settings,
+            message: "Settings.secret_key is still set to the insecure dev default in Environment::Prod. This is a hard production risk.".to_string(),
+            hint: Some("set UMBRA_SECRET_KEY in your production env, or change `secret_key` in umbra.toml.".to_string()),
+        });
+    }
+    findings
+}
+
+/// Warn when `allowed_hosts` is still the dev default in
+/// `Environment::Prod`. A real prod app almost never serves only
+/// loopback; logging this gives the operator a nudge while letting the
+/// build proceed.
+fn settings_allowed_hosts(ctx: &CheckContext<'_>) -> Vec<SystemCheckFinding> {
+    let mut findings = Vec::new();
+    if matches!(ctx.settings.environment, Environment::Prod)
+        && ctx.settings.allowed_hosts.len() == DEFAULT_ALLOWED_HOSTS.len()
+        && ctx
+            .settings
+            .allowed_hosts
+            .iter()
+            .zip(DEFAULT_ALLOWED_HOSTS.iter())
+            .all(|(a, b)| a == b)
+    {
+        findings.push(SystemCheckFinding {
+            check_id: "settings.allowed_hosts",
+            severity: Severity::Warning,
+            location: CheckLocation::Settings,
+            message: "Settings.allowed_hosts is still the dev default [\"localhost\", \"127.0.0.1\"] in Environment::Prod. A real production deployment almost certainly serves a public hostname.".to_string(),
+            hint: Some("set UMBRA_ALLOWED_HOSTS or `allowed_hosts` in umbra.toml to the hostnames this app actually serves.".to_string()),
+        });
+    }
+    findings
+}
+
+/// Warn when `log_level` is `debug` or `trace` in `Environment::Prod`.
+/// Verbose logging in production leaks internals into stdout and
+/// usually means a debug session was left on by accident.
+fn settings_log_level(ctx: &CheckContext<'_>) -> Vec<SystemCheckFinding> {
+    let mut findings = Vec::new();
+    let level = ctx.settings.log_level.to_ascii_lowercase();
+    if matches!(ctx.settings.environment, Environment::Prod)
+        && (level == "debug" || level == "trace")
+    {
+        findings.push(SystemCheckFinding {
+            check_id: "settings.log_level",
+            severity: Severity::Warning,
+            location: CheckLocation::Settings,
+            message: format!(
+                "Settings.log_level is \"{}\" in Environment::Prod. Verbose logging in production leaks internals and adds noise.",
+                ctx.settings.log_level
+            ),
+            hint: Some("set UMBRA_LOG_LEVEL to \"info\", \"warn\", or \"error\" for production deployments.".to_string()),
+        });
+    }
+    findings
+}
+
+/// Defensive invariant: the URL scheme in `database_url` should match
+/// the active backend's `name()`. Phase 2 picks the backend from the
+/// URL, so the two agree by construction today; this check exists so a
+/// future codepath that sets the backend manually can't silently drift.
+fn backend_url_scheme_matches_active_backend(ctx: &CheckContext<'_>) -> Vec<SystemCheckFinding> {
+    let mut findings = Vec::new();
+    let scheme = ctx
+        .settings
+        .database_url
+        .split_once(':')
+        .map(|(s, _)| s)
+        .unwrap_or("");
+    let expected_backend = match scheme {
+        "postgres" | "postgresql" => Some("postgres"),
+        "sqlite" => Some("sqlite"),
+        _ => None,
+    };
+    if let Some(expected) = expected_backend {
+        let active = ctx.backend.name();
+        if expected != active {
+            findings.push(SystemCheckFinding {
+                check_id: "backend.url_scheme.matches_active_backend",
+                severity: Severity::Error,
+                location: CheckLocation::Settings,
+                message: format!(
+                    "Settings.database_url scheme \"{scheme}\" implies backend \"{expected}\", but the active backend is \"{active}\"."
+                ),
+                hint: Some("the URL and the active backend must agree; fix `database_url` in umbra.toml or whichever codepath overrode the backend.".to_string()),
+            });
+        }
+    }
+    findings
 }
 
 /// Run every check in `checks` against `ctx`, accumulate findings, and
