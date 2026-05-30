@@ -16,3 +16,8 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 # `App::serve` emits a `tracing::info!` line on bind. Installing a subscriber
 # here turns that into visible stdout so an operator can see the server is up.
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Raw sqlx for the demo seed-data path (CREATE TABLE + INSERT before
+# App::build()). umbra-cli is a framework-internal binary, so depending on
+# sqlx here doesn't violate the "users only depend on the umbra facade" rule:
+# umbra-cli is part of umbra, not a downstream user crate.
+sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio"] }

@@ -2067,6 +2067,7 @@ dependencies = [
 name = "umbra-cli"
 version = "0.0.1"
 dependencies = [
+ "sqlx",
  "tokio",
  "tracing-subscriber",
  "umbra",

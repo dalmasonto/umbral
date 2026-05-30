@@ -59,6 +59,14 @@ pub mod orm {
     //! query API by implementing one trait.
 
     pub use umbra_core::orm::{
-        FieldSpec, Manager, Model, PrimaryKey, QuerySet, SqlType, column,
+        FieldSpec, Manager, Model, Post, PrimaryKey, QuerySet, SqlType, column,
     };
+
+    /// The typed column constants for the demo `Post` model.
+    ///
+    /// `umbra::orm::post::ID`, `::TITLE`, `::BODY`, `::PUBLISHED_AT`. `Post`
+    /// itself lives at `umbra::orm::Post`. The model is a development
+    /// fixture: M3's `#[derive(Model)]` retires it; users defining their
+    /// own model produce their own column module from the derive.
+    pub use umbra_core::orm::post::post;
 }
