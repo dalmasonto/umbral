@@ -265,9 +265,17 @@ milestones M0–M13 in the companion plan.
 
 ## 14. Out of Scope (for now) / Future
 
-GeoDjango-style geospatial; i18n/l10n; syndication feeds, sitemaps, flatpages; pluggable
-non-DB task brokers (Redis/AMQP); MySQL/Oracle backends; a browsable API explorer; hosted
-deployment tooling. Revisit after 0.5 based on real usage.
+Out-of-scope items are captured as a pickup-ready backlog in **`docs/specs/deferred.md`**, with structured entries (Django term, purpose, why deferred, complexity hint, suggested umbra shape, revisit signal) per item. Reorder freely; promote an entry to an outline (`docs/specs/outlines/<name>.md`) when ready to take it on.
+
+The short list, grouped:
+
+- **Django `contrib` niceties**: `umbra-contenttypes`, `umbra-messages`, `umbra-sites`, `umbra-humanize`, `umbra-redirects`, `umbra-sitemaps`, `umbra-syndication`, `umbra-flatpages`.
+- **Specialty domains**: `umbra-gis` (GeoDjango), `umbra-i18n`, `umbra-channels` (websockets).
+- **Backend / infrastructure**: MySQL / Oracle backend support; pluggable non-DB task brokers (Redis, AMQP).
+- **Tooling and UX**: DRF browsable API; hosted deploy / runtime tooling.
+- **Cross-cutting surfaces** that haven't earned their own spec yet: error model, logging.
+
+Revisit after 0.5 based on real usage. Each entry's revisit-signal field names the concrete trigger.
 
 ---
 

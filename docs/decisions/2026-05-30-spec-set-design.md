@@ -296,19 +296,17 @@ This table is the source of truth for "where does feature X go?" When a deep spe
 
 ### 7.10 Explicitly out of scope
 
-Carried from PRD §14 and confirmed here. These features exist in Django but aren't shipping in umbra's first iteration.
+The features below exist in Django but aren't shipping in umbra's first iteration. Each one is captured as a structured backlog entry (Django term, purpose, why deferred, complexity hint, suggested umbra shape, revisit signal) in **`docs/specs/deferred.md`** — the source of truth for "what's next after the M0–M13 spine."
 
-- **GeoDjango / geospatial fields** — PRD §14.
-- **i18n / l10n / `gettext` / timezone middleware** beyond UTC defaults — PRD §14.
-- **Syndication feeds, sitemaps, flatpages, redirects, humanize** — PRD §14.
-- **Messages framework** (flash messages) — rarely used standalone; revisit if a real ask appears.
-- **Sites framework** — Django's multi-tenant scaffolding; not a fit for umbra's first iteration.
-- **Contenttypes / generic relations** — defer; revisit if the admin or REST needs polymorphic FKs.
-- **Channels** (websockets, async views beyond standard async handlers) — revisit when the web layer is mature.
-- **Pluggable non-DB task brokers** (Redis, AMQP) as first-class alternatives to the DB broker — PRD §14.
-- **MySQL / Oracle backends** — Postgres-first per CLAUDE.md and PRD; SQLite for tests.
-- **Browsable API explorer** (DRF's HTML interface) — PRD §14.
-- **Hosted deploy / runtime tooling** — PRD §14.
+Short summary, grouped:
+
+- **Django `contrib` niceties.** `umbra-contenttypes`, `umbra-messages`, `umbra-sites`, `umbra-humanize`, `umbra-redirects`, `umbra-sitemaps`, `umbra-syndication`, `umbra-flatpages`.
+- **Specialty domains.** `umbra-gis` (GeoDjango), `umbra-i18n`, `umbra-channels` (websockets).
+- **Backend and infrastructure.** MySQL / Oracle backend support, pluggable non-DB task brokers (Redis, AMQP).
+- **Tooling and UX.** DRF browsable API, hosted deploy / runtime tooling.
+- **Cross-cutting umbra surfaces that haven't earned their own spec yet.** Error model, logging.
+
+Use `deferred.md` to reorder and pick up items one at a time.
 
 ---
 

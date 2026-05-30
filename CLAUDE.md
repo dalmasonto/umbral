@@ -114,7 +114,7 @@ When editing an existing wrapped doc, unwrap the prose lines you touch (and idea
 
 Two kinds of documentation live in this repo, and they serve different audiences:
 
-- **Internal design specs.** `arch.md`, `umbra-PRD.md`, `docs/specs/`, `docs/specs/outlines/`. For us and future contributors. Format: plain Markdown. The source of truth for *why* and *how* the framework is built.
+- **Internal design specs.** `arch.md`, `umbra-PRD.md`, `docs/specs/` (deep specs + `outlines/` for M7–M13 + `deferred.md` for the post-M13 backlog), `docs/decisions/` (ADR-style design notes). For us and future contributors. Format: plain Markdown. The source of truth for *why* and *how* the framework is built.
 - **User-facing docs.** `documentation/` (a SvelteKit + Specra site, served from `documentation/docs/v0.0.1/`). For people using umbra to build apps. Format: **MDX** (`.mdx`, not `.md`) using Specra components. Component catalog: https://specra-docs.com/docs/v1.0.0/en/components/accordion.
 
 ### Rule: ship a feature, ship its doc page
