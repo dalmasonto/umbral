@@ -813,11 +813,14 @@ async fn applied_names(
 
 /// Render one operation to SQL via sea-query + the active backend's
 /// `map_type` mapping. M5 v1 shipped the two table-level ops; M8 v1
-/// adds the column-level ones. `AlterColumn` is still deferred.
+/// adds the column-level ones via `Table::alter()`. `AlterColumn` is
+/// still deferred.
 ///
-/// The `AddColumn` / `DropColumn` bodies are filled in by subagent A;
-/// the scaffold returns a placeholder that fails fast so a stray apply
-/// surfaces the gap obviously.
+/// `AddColumn` ignores the `primary_key` flag: neither SQLite nor
+/// Postgres lets a primary key be added to an existing table without a
+/// table-recreation step, and the autodetector won't route a pk-flagged
+/// column through `AddColumn` anyway. A hand-edited migration that sets
+/// the flag is taken to mean "the user is taking responsibility".
 fn render_operation(op: &Operation) -> String {
     use sea_query::{Alias, ColumnDef, SqliteQueryBuilder, Table};
 
@@ -842,19 +845,21 @@ fn render_operation(op: &Operation) -> String {
         Operation::DropTable { table } => Table::drop()
             .table(Alias::new(table))
             .build(SqliteQueryBuilder),
-        Operation::AddColumn {
-            table: _,
-            column: _,
-        } => {
-            // Filled in by subagent A.
-            String::from("-- umbra: AddColumn rendering pending")
+        Operation::AddColumn { table, column } => {
+            let mut stmt = Table::alter();
+            stmt.table(Alias::new(table));
+            let backend = crate::backend::active();
+            let mut def =
+                ColumnDef::new_with_type(Alias::new(&column.name), backend.map_type(column.ty));
+            if !column.nullable {
+                def.not_null();
+            }
+            stmt.add_column(&mut def);
+            stmt.build(SqliteQueryBuilder)
         }
-        Operation::DropColumn {
-            table: _,
-            column: _,
-        } => {
-            // Filled in by subagent A.
-            String::from("-- umbra: DropColumn rendering pending")
-        }
+        Operation::DropColumn { table, column } => Table::alter()
+            .table(Alias::new(table))
+            .drop_column(Alias::new(column))
+            .build(SqliteQueryBuilder),
     }
 }
