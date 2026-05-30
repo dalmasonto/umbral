@@ -35,6 +35,16 @@ impl<T> IntCol<T> {
     }
 
     /// SQL `=`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use umbra_core::orm::Post;
+    /// use umbra_core::orm::post::post;
+    ///
+    /// // Build a predicate for `id = 2` and pass it to filter.
+    /// let _ = Post::objects().filter(post::ID.eq(2));
+    /// ```
     pub fn eq(&self, val: i64) -> Predicate<T> {
         Predicate::new(Expr::col(Alias::new(self.name)).eq(val))
     }
@@ -65,6 +75,15 @@ impl<T> IntCol<T> {
     }
 
     /// SQL `IN (...)`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use umbra_core::orm::Post;
+    /// use umbra_core::orm::post::post;
+    ///
+    /// let _ = Post::objects().filter(post::ID.in_(&[1, 2, 3]));
+    /// ```
     pub fn in_(&self, vals: &[i64]) -> Predicate<T> {
         Predicate::new(Expr::col(Alias::new(self.name)).is_in(vals.iter().copied()))
     }
@@ -75,6 +94,16 @@ impl<T> IntCol<T> {
     }
 
     /// SQL `ORDER BY ... DESC`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use umbra_core::orm::Post;
+    /// use umbra_core::orm::post::post;
+    ///
+    /// // Newest posts first, capped at 20 rows.
+    /// let _ = Post::objects().order_by(post::ID.desc()).limit(20);
+    /// ```
     pub fn desc(&self) -> OrderExpr<T> {
         OrderExpr::new(self.name, true)
     }
@@ -95,6 +124,15 @@ impl<T> StrCol<T> {
     }
 
     /// SQL `=`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use umbra_core::orm::Post;
+    /// use umbra_core::orm::post::post;
+    ///
+    /// let _ = Post::objects().filter(post::TITLE.eq("Hello world"));
+    /// ```
     pub fn eq<S: Into<String>>(&self, val: S) -> Predicate<T> {
         Predicate::new(Expr::col(Alias::new(self.name)).eq(val.into()))
     }
@@ -105,18 +143,45 @@ impl<T> StrCol<T> {
     }
 
     /// SQL `LIKE` (case-sensitive).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use umbra_core::orm::Post;
+    /// use umbra_core::orm::post::post;
+    ///
+    /// let _ = Post::objects().filter(post::TITLE.like("Hello%"));
+    /// ```
     pub fn like<S: Into<String>>(&self, pattern: S) -> Predicate<T> {
         Predicate::new(Expr::col(Alias::new(self.name)).like(pattern.into()))
     }
 
     /// Case-insensitive `LIKE` via `UPPER(col) LIKE UPPER(pattern)` for
     /// portability across backends without a native `ILIKE`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use umbra_core::orm::Post;
+    /// use umbra_core::orm::post::post;
+    ///
+    /// let _ = Post::objects().filter(post::TITLE.ilike("hello%"));
+    /// ```
     pub fn ilike<S: Into<String>>(&self, pattern: S) -> Predicate<T> {
         let pattern = pattern.into().to_uppercase();
         Predicate::new(Expr::expr(Func::upper(Expr::col(Alias::new(self.name)))).like(pattern))
     }
 
     /// SQL `LIKE '%val%'` substring containment.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use umbra_core::orm::Post;
+    /// use umbra_core::orm::post::post;
+    ///
+    /// let _ = Post::objects().filter(post::TITLE.contains("rust"));
+    /// ```
     pub fn contains<S: Into<String>>(&self, substring: S) -> Predicate<T> {
         let pattern = format!("%{}%", substring.into());
         Predicate::new(Expr::col(Alias::new(self.name)).like(pattern))
@@ -124,6 +189,19 @@ impl<T> StrCol<T> {
 
     /// Case-insensitive substring containment via `UPPER(col) LIKE
     /// UPPER('%val%')`.
+    ///
+    /// SQLite's `LIKE` is already ASCII-case-insensitive, so `contains`
+    /// and `icontains` may return the same rows there. The contract is
+    /// "emit `LIKE`"; backend case-sensitivity differs.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use umbra_core::orm::Post;
+    /// use umbra_core::orm::post::post;
+    ///
+    /// let _ = Post::objects().filter(post::TITLE.icontains("rust"));
+    /// ```
     pub fn icontains<S: Into<String>>(&self, substring: S) -> Predicate<T> {
         let pattern = format!("%{}%", substring.into()).to_uppercase();
         Predicate::new(Expr::expr(Func::upper(Expr::col(Alias::new(self.name)))).like(pattern))
@@ -250,6 +328,17 @@ impl<T> NullableDateTimeCol<T> {
     }
 
     /// Alias for `.lt`, reading naturally for time.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use chrono::Utc;
+    /// use umbra_core::orm::Post;
+    /// use umbra_core::orm::post::post;
+    ///
+    /// let now = Utc::now();
+    /// let _ = Post::objects().filter(post::PUBLISHED_AT.before(now));
+    /// ```
     pub fn before(&self, val: chrono::DateTime<chrono::Utc>) -> Predicate<T> {
         self.lt(val)
     }
@@ -260,11 +349,35 @@ impl<T> NullableDateTimeCol<T> {
     }
 
     /// SQL `IS NULL`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use umbra_core::orm::Post;
+    /// use umbra_core::orm::post::post;
+    ///
+    /// // Drafts: rows where `published_at` has not been set.
+    /// let _ = Post::objects().filter(post::PUBLISHED_AT.is_null());
+    /// ```
     pub fn is_null(&self) -> Predicate<T> {
         Predicate::new(Expr::col(Alias::new(self.name)).is_null())
     }
 
     /// SQL `IS NOT NULL`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use umbra_core::orm::Post;
+    /// use umbra_core::orm::post::post;
+    ///
+    /// // Published posts only.
+    /// let _ = Post::objects().filter(post::PUBLISHED_AT.is_not_null());
+    ///
+    /// // Compose with `&` for AND: published posts mentioning "rust".
+    /// let _ = Post::objects()
+    ///     .filter(post::PUBLISHED_AT.is_not_null() & post::TITLE.icontains("rust"));
+    /// ```
     pub fn is_not_null(&self) -> Predicate<T> {
         Predicate::new(Expr::col(Alias::new(self.name)).is_not_null())
     }
