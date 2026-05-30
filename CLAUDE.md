@@ -17,11 +17,12 @@ umbra is a Django-equivalent web framework in Rust ("a Django shadow"; *umbra* i
 The Cargo workspace boundaries *encode* the core-vs-plugin split:
 
 ```
-umbra-core     # ORM, migrations, routing, DB backends, the Plugin TRAIT. No plugin deps.
-umbra-macros   # #[derive(Model)], #[task], etc.
-umbra          # FACADE: re-exports core + macros as one stable surface (umbra::prelude::*)
-umbra-cli      # the `manage.py` equivalent binary
-plugins/
+crates/
+  umbra-core     # ORM, migrations, routing, DB backends, the Plugin TRAIT. No plugin deps.
+  umbra-macros   # #[derive(Model)], #[task], etc.
+  umbra          # FACADE: re-exports core + macros as one stable surface (umbra::prelude::*)
+  umbra-cli      # the `manage.py` equivalent binary
+plugins/         # built-in plugins, each its own crate (from M9 onward)
   umbra-auth      # built-in: users, permissions, password hashing (argon2)
   umbra-sessions  # built-in: session store + middleware (tower-sessions)
   umbra-admin     # built-in: auto CRUD UI
@@ -118,6 +119,7 @@ umbra-cli  →  umbra (facade)  →  { umbra-core, umbra-macros }
 | Proc macros (`#[derive(Model)]`, `#[task]`, etc.) | `umbra-macros` |
 | CLI binary subcommands (`migrate`, `inspectdb`, …) | `umbra-cli`; per-plugin commands extend it via `Plugin::commands()` from M7+ |
 | Built-in plugin logic (auth, sessions, admin, tasks, REST, openapi) | `plugins/<name>/` from M9 onward. Each is its own crate that depends only on the `umbra` facade. |
+| A test or smoke-test app that exercises umbra as a consumer would | `examples/<name>/`. Each example is a standalone Cargo project (NOT a workspace member) that path-deps the local umbra. See `examples/README.md`. |
 | Helpers used inside one crate only | `pub(crate)` in that crate; do NOT add them to the facade |
 
 **Cargo's ban on circular crate deps enforces the architecture.** That `umbra-core` doesn't depend on `umbra-rest` (or anything under `plugins/*`) is the structural proof that "serializers are a plugin." Don't ever add a dep from `umbra-core` to a plugin; if you find yourself wanting to, the plugin contract is wrong and needs the fix instead.

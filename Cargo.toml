@@ -1,12 +1,16 @@
 [workspace]
 resolver = "3"
 members = [
-    "umbra-core",
-    "umbra-macros",
-    "umbra",
-    "umbra-cli",
+    "crates/umbra-core",
+    "crates/umbra-macros",
+    "crates/umbra",
+    "crates/umbra-cli",
+    # `plugins/<name>/` is added explicitly as each built-in plugin lands (M9+).
 ]
-exclude = ["documentation"]
+exclude = [
+    "documentation",   # Specra docs site (SvelteKit, not a Cargo project)
+    "examples",        # Each example app is a standalone Cargo project that path-deps the local umbra, NOT a workspace member; that preserves the "as if cargo-added" consumer experience.
+]
 
 [workspace.package]
 version = "0.0.1"
