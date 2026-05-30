@@ -20,8 +20,10 @@
 //! `docs/specs/06-migration-engine.md` and `docs/specs/07-inspectdb.md`.
 
 use std::net::SocketAddr;
+use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
+use umbra::inspect::{InspectError, InspectOptions};
 use umbra::migrate::MigrateError;
 use umbra::orm::{Post, post};
 use umbra::prelude::*;
@@ -54,6 +56,21 @@ enum Command {
     Migrate,
     /// List applied vs pending migrations.
     Showmigrations,
+    /// Introspect the database, generate a `models.rs` plus an initial
+    /// migration, and optionally mark it applied. See
+    /// `docs/specs/07-inspectdb.md`.
+    Inspectdb {
+        /// Directory the generated files are written under. `models.rs`
+        /// lands at the root; the migration lands at
+        /// `<output>/migrations/app/0001_initial.json`.
+        #[arg(long)]
+        output: PathBuf,
+        /// Record `0001_initial` in `umbra_migrations` after writing it,
+        /// so the next `migrate` is a no-op against an already-populated
+        /// database.
+        #[arg(long, default_value_t = false)]
+        mark_applied: bool,
+    },
 }
 
 #[tokio::main]
@@ -75,6 +92,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Command::Makemigrations => makemigrations().await,
         Command::Migrate => migrate().await,
         Command::Showmigrations => showmigrations().await,
+        Command::Inspectdb {
+            output,
+            mark_applied,
+        } => inspectdb(output, mark_applied).await,
     }
 }
 
@@ -159,6 +180,34 @@ async fn showmigrations() -> Result<(), Box<dyn std::error::Error>> {
     boot_for_management().await?;
     umbra::migrate::show().await?;
     Ok(())
+}
+
+/// `inspectdb`: introspect the ambient SQLite pool into a `models.rs`
+/// and an initial migration under `--output`. On the empty-DB sentinel
+/// (`InspectError::NoTables`) the binary prints a short note and exits
+/// successfully; any other error propagates.
+async fn inspectdb(output: PathBuf, mark_applied: bool) -> Result<(), Box<dyn std::error::Error>> {
+    boot_for_management().await?;
+    let opts = InspectOptions {
+        output,
+        mark_applied,
+    };
+    match umbra::inspect::inspectdb(opts).await {
+        Ok(report) => {
+            println!(
+                "Inspected {} table(s), {} column(s)",
+                report.tables, report.columns,
+            );
+            println!("Wrote {}", report.models_path.display());
+            println!("Wrote {}", report.migration_path.display());
+            Ok(())
+        }
+        Err(InspectError::NoTables) => {
+            println!("no tables found in the database");
+            Ok(())
+        }
+        Err(err) => Err(Box::new(err)),
+    }
 }
 
 /// Shared boot path for the migration subcommands. Opens the pool,
