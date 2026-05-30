@@ -27,6 +27,11 @@ sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "chrono", "uuid
 # per the outline at docs/specs/outlines/templates.md. Default features
 # only; we don't need debug rendering or speedups.
 minijinja = "2"
+# `toml::Value` is the storage type for `Settings.extra`. Figment
+# pulls toml in transitively but doesn't re-export it; the direct dep
+# keeps the public API of `Settings` stable when figment internals
+# move.
+toml = "0.8"
 tokio = "1"
 tracing = "0.1"
 uuid = { version = "1", features = ["serde", "v7"] }

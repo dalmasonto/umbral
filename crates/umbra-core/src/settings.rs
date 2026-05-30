@@ -79,6 +79,22 @@ pub struct Settings {
     /// `[::1]:8000`. Override with `UMBRA_BIND_ADDR` or `umbra.toml`.
     #[serde(default = "default_bind_addr")]
     pub bind_addr: String,
+
+    /// Catch-all for `UMBRA_`-prefixed environment variables (and
+    /// `umbra.toml` keys) that don't map to a named field above.
+    ///
+    /// Real apps usually need keys the framework doesn't know about —
+    /// `OPENAI_API_KEY`, `STRIPE_SECRET`, third-party plugin
+    /// configuration. Setting `UMBRA_OPENAI_API_KEY=sk-test` makes
+    /// `settings.extra.get("openai_api_key")` return a string value
+    /// without the user crate having to wire a second figment loader.
+    ///
+    /// Values are stored as `toml::Value` so a nested
+    /// `[external.openai]` table in `umbra.toml` round-trips with its
+    /// structure intact. The accessor [`Settings::extra_str`] handles
+    /// the common scalar-string case.
+    #[serde(flatten)]
+    pub extra: std::collections::HashMap<String, toml::Value>,
 }
 
 #[derive(Clone, Debug, Deserialize, Default)]
@@ -90,6 +106,18 @@ pub enum Environment {
 }
 
 impl Settings {
+    /// Read a scalar string from the `extra` map by key. Returns
+    /// `None` if the key is absent or the value isn't a string.
+    ///
+    /// Most app-defined settings are scalar (`UMBRA_OPENAI_API_KEY=
+    /// sk-test`), so this helper is the right shape for the common
+    /// case. For nested tables (`[external.openai]` in `umbra.toml`)
+    /// the caller indexes into `extra` directly: `settings.extra.
+    /// get("external").and_then(|v| v.get("openai")).and_then(...)`.
+    pub fn extra_str(&self, key: &str) -> Option<&str> {
+        self.extra.get(key).and_then(|v| v.as_str())
+    }
+
     /// Load settings from defaults, `umbra.toml`, and `UMBRA_`-prefixed env vars.
     ///
     /// Precedence (later wins): struct defaults → `umbra.toml` → env vars.
@@ -194,6 +222,46 @@ mod tests {
             jail.create_file("umbra.toml", r#"environment = "Prod""#)?;
             let s = Settings::from_env().unwrap();
             assert!(matches!(s.environment, Environment::Prod));
+            Ok(())
+        });
+    }
+
+    /// An `UMBRA_`-prefixed env var that doesn't correspond to a known
+    /// `Settings` field falls into `extra` so user code can read it.
+    /// `OPENAI_API_KEY` stands in for the common "I have an external
+    /// service credential" case.
+    #[test]
+    fn unknown_env_var_is_captured_in_extra() {
+        Jail::expect_with(|jail| {
+            jail.set_env("UMBRA_OPENAI_API_KEY", "sk-test-12345");
+            let s = Settings::from_env().unwrap();
+            assert_eq!(s.extra_str("openai_api_key"), Some("sk-test-12345"));
+            // Known fields still resolve normally.
+            assert_eq!(s.database_url, "sqlite::memory:");
+            Ok(())
+        });
+    }
+
+    /// A nested `umbra.toml` table that doesn't map to a known field
+    /// preserves its structure inside `extra`. The accessor walks the
+    /// nested table directly via `toml::Value`.
+    #[test]
+    fn unknown_toml_table_is_captured_in_extra() {
+        Jail::expect_with(|jail| {
+            jail.create_file(
+                "umbra.toml",
+                r#"
+                [external]
+                provider = "stripe"
+                "#,
+            )?;
+            let s = Settings::from_env().unwrap();
+            let provider = s
+                .extra
+                .get("external")
+                .and_then(|v| v.get("provider"))
+                .and_then(|v| v.as_str());
+            assert_eq!(provider, Some("stripe"));
             Ok(())
         });
     }
