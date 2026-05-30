@@ -6,27 +6,29 @@ icon: info
 ---
 
 **Umbra** is a batteries-included web framework for Rust, shaped like Django.
-You declare your data, and you get migrations, CRUD, an admin, and (optionally)
-a REST API almost for free — with Rust's compile-time guarantees instead of
-runtime hopes.
+You declare your data and you get migrations, CRUD, an admin, and an optional
+REST API almost for free. The difference is that you get Rust's compile-time
+guarantees instead of having to hope at runtime.
 
-The name is Latin for *shadow*: umbra is a Django shadow.
+The name is Latin for *shadow*. umbra is a Django shadow.
 
 <Callout type="info">
 Umbra is in the design phase. The specs are being written before the code.
-Pages get added here as features ship — for now there is only this one.
+Pages get added here as features ship. For now there's only this one.
 </Callout>
 
 ## Why Umbra exists
 
-Web development in Rust is *unassembled*. Unlike Django or Rails, there is no
-mainstream "just works" path: every team picks and wires a web framework, a
+Web development in Rust is unassembled. Unlike Django or Rails, there's no
+mainstream "just works" path. Every team picks and wires a web framework, a
 database layer, a migration tool, serialization, auth, and background jobs.
-Two costs follow:
 
-- **Greenfield productivity** — a basic CRUD/REST API takes days of plumbing.
-- **Porting** — moving an existing API to Rust means re-deriving the schema,
-  the models, and the conventions by hand. There is no `inspectdb`, no managed
+Two things suffer:
+
+- **Greenfield productivity.** A basic CRUD/REST API takes days of plumbing
+  before you can write any real code.
+- **Porting.** Moving an existing API to Rust means re-deriving the schema,
+  the models, and the conventions by hand. There's no `inspectdb`, no managed
   migrations, no obvious on-ramp.
 
 Umbra targets that on-ramp.
@@ -37,7 +39,7 @@ Umbra targets that on-ramp.
   <Card
     icon="layers"
     title="Thin core, plugin-heavy"
-    description="Auth, sessions, admin, tasks, and REST are plugins — structurally identical to third-party ones. A REST-free app compiles with zero serializer code."
+    description="Auth, sessions, admin, tasks, and REST are plugins. Structurally they're identical to third-party ones. A REST-free app compiles with zero serializer code."
   />
   <Card
     icon="git-branch"
@@ -52,14 +54,15 @@ Umbra targets that on-ramp.
   <Card
     icon="zap"
     title="Stand on shoulders"
-    description="axum, sqlx, sea-query, tower do the heavy lifting. Umbra reimplements conventions and integration — not HTTP, async, SQL, or JSON."
+    description="axum, sqlx, sea-query, and tower do the heavy lifting. Umbra reimplements conventions and integration, not HTTP, async, SQL, or JSON."
   />
 </CardGrid>
 
 ## What you write
 
 A model is a struct. A migration is generated. A handler reads ambient data.
-This is the day-to-day feel — not yet working code, but the target shape:
+This is the day-to-day feel. It's not working code yet, but it's the target
+shape:
 
 ```rust
 use umbra::prelude::*;
@@ -88,10 +91,10 @@ ambient; the request body, params, and session are explicit arguments.
 
 ## Status
 
-Umbra is **pre-alpha**. There is no published crate yet. The architecture,
-PRD, and per-subsystem specs are being written first; implementation follows
-milestone by milestone. As features land, each gets a doc page here.
+Umbra is **pre-alpha**. There's no published crate yet. The architecture, the
+PRD, and the per-subsystem specs are being written first, and implementation
+follows milestone by milestone. As features land, each gets a doc page here.
 
-If you want the long version, read the design specs in the repository root:
-`arch.md` (architecture), `umbra-PRD.md` (product requirements), and
-`docs/specs/` (per-subsystem deep specs).
+For the long version, read the design specs in the repository root: `arch.md`
+(architecture), `umbra-PRD.md` (product requirements), and `docs/specs/`
+(per-subsystem deep specs).
