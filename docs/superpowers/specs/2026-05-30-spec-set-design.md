@@ -49,13 +49,18 @@ Four shaping choices, made during brainstorming:
 
 ---
 
-## 3. Cross-cutting principle: visibility of underlying crates
+## 3. Cross-cutting principles
 
-A load-bearing design question surfaced during brainstorming: **does an umbra
-developer see axum?** The answer codifies the framework's *feel*.
+Two load-bearing design questions surfaced during brainstorming. Their answers
+codify the framework's *feel* and are inherited by every subsystem spec — those
+specs don't relitigate them. Both rules will be lifted into `arch.md` as the
+single source of truth.
 
-Rule of thumb: **if a crate is a way to build the framework, hide it; if it is
-how the user describes their own data and behavior, surface it.**
+### 3.1 Visibility of underlying crates
+
+**Does an umbra developer see axum?** Rule of thumb: **if a crate is a way to
+build the framework, hide it; if it is how the user describes their own data
+and behavior, surface it.**
 
 | Crate | Visibility | Notes |
 |---|---|---|
@@ -68,8 +73,45 @@ how the user describes their own data and behavior, surface it.**
 | **tracing** | **Visible.** Users add their own spans/logs. | Observability is the user's. |
 | **figment / config** | **Hidden** behind `Settings`. | Users see typed structs, not a config library. |
 
-This principle is **inherited by every subsystem spec** — they don't relitigate
-it. It will be lifted into `arch.md` as the single source of truth.
+### 3.2 Handler-visible context: ambient vs explicit
+
+**Does a handler signature carry `State<DbPool>`?** No — and the same rule
+extends to every other kind of context. The first table answers *what types*
+show up; this one answers *what context* shows up.
+
+| Kind of context | Examples | Visibility in a handler |
+|---|---|---|
+| **App-wide / process-scoped** | DB pool, `Settings`, plugin registry, task-queue handle, cache, template engine | **Ambient.** Set during `App::build()` (stored in `OnceLock`s inside the relevant module). Reached via accessors: `Post::objects()`, `umbra::settings()`, `umbra::tasks::enqueue(...)`. **No `State<…>` in the handler signature.** |
+| **Per-request / request-scoped** | The Request, parsed body, path/query params, the session, the authenticated user, an active transaction handle | **Explicit arguments.** Extracted into the handler signature: `Request`, `Path<T>`, `Json<T>`, `Form<T>`, `Query<T>`, `Session`, `Auth<User>`. Uses axum extractors *under the hood*; the user sees umbra types only. |
+
+A Django-shape umbra handler — no `State`, no `axum`, ambient ORM:
+
+```rust
+use umbra::prelude::*;
+
+async fn create_post(
+    auth: Auth<User>,
+    Json(payload): Json<NewPost>,
+) -> Result<Json<Post>> {
+    let post = Post::objects()           // ambient pool via OnceLock
+        .create(NewPost { author_id: auth.user.id, ..payload })
+        .await?;
+    Ok(Json(post))
+}
+```
+
+**Edge cases the rule has to survive** (recorded so the specs that own them
+don't forget):
+
+- **Tests.** `OnceLock` is write-once per process. The override path lives in
+  `01-app-and-settings.md`: a `Manager::on(&pool)` explicit-pool escape hatch,
+  plus a `test_with_pool(pool, async { ... })` helper that scopes the override
+  for a test future. Open question #1 closes here.
+- **Multi-database routing** (PRD F-ORM-8). Default pool is ambient; explicit
+  alias via `Post::objects().using("replica")` keeps the rule.
+- **Per-request transactions.** `Db::tx(|tx| async { ... })` passes `tx` into
+  the closure as a request-scoped argument without leaking it through the
+  handler signature.
 
 ---
 
@@ -118,7 +160,7 @@ Target length: 1–3 pages. Illustrative code, not a frozen reference.
 | # | File | Covers | Maps to milestone |
 |---|---|---|---|
 | 00 | `00-overview.md` | Index, reading order, Django↔umbra glossary, naming conventions (`umbra-*`), the canonical example app the specs reference | — |
-| 01 | `01-app-and-settings.md` | Typed settings (env layering via figment), `App::builder()`, lifecycle order (build → system check → on_ready → serve), the `OnceLock<DbPool>` decision | M0 |
+| 01 | `01-app-and-settings.md` | Typed settings (env layering via figment), `App::builder()`, lifecycle order (build → system check → on_ready → serve), the `OnceLock<DbPool>` decision **including the test-override path (`Manager::on(&pool)` + `test_with_pool` scoped helper) and which modules own which `OnceLock`s** | M0 |
 | 02 | `02-plugin-contract.md` | The `Plugin` trait, dependency-inversion model, what a plugin contributes (models, routes, middleware, commands, settings schema, hooks), registration (explicit + optional `inventory`), the prelude surface | M7 build-order, **specced early** as architectural keystone — gates every built-in spec |
 | 03 | `03-orm-querysets.md` | `QuerySet<T>` builder, lazy eval, `filter / exclude / order_by / limit / values`, Manager (`T::objects()`), ambient pool access, raw-SQL escape hatch | M1 |
 | 04 | `04-orm-model-and-fields.md` | The `Model` trait by hand → `#[derive(Model)]` output shape, field types (text/int/float/bool/datetime/decimal/UUID/JSON), options (optional/default/unique/indexed), `Meta` (table name, ordering, indexes), the nullable→`Option<T>` invariant | M2–M3 |
@@ -149,7 +191,7 @@ trigger.**
 
 | File | Covers | Promote-to-deep trigger |
 |---|---|---|
-| `web-layer.md` | `umbra::web` shape (Router, Request, Response, extractors), middleware chain, the "hide axum" rule applied | Promote when M0's second route lands, or when the Plugin contract spec needs to name `Router` concretely |
+| `web-layer.md` | `umbra::web` shape (Router, Request, Response, extractors `Auth<User>` / `Session` / `Path<T>` / `Json<T>` / `Form<T>` / `Query<T>`), middleware chain, the "hide axum" rule applied, **the invariant that handler signatures never carry `State<X>` for any app-wide X** | Promote when M0's second route lands, or when the Plugin contract spec needs to name `Router` concretely |
 | `auth-and-sessions.md` | `umbra-auth` (User model, perms, argon2, login guards) + `umbra-sessions` (tower-sessions wrapper, DB session store) | M8 entry — re-expressing built-ins as plugins |
 | `tasks.md` | `umbra-tasks`: `#[task]`, `Task` trait, DB-backed broker, worker loop, retries, scheduling | M10 entry |
 | `rest.md` | `umbra-rest`: serializers / `ModelSerializer`, viewsets, routers, pagination, filtering, throttling | M11 entry |
@@ -195,7 +237,10 @@ Carried forward from PRD §13 and from this brainstorming, to be resolved in the
 specs that touch them:
 
 1. **Ambient ORM access** — `OnceLock<DbPool>` vs always-explicit `State`
-   threading. *Decided in `01-app-and-settings.md`.*
+   threading. *Direction decided here in §3.2 (ambient, with `Manager::on(&pool)`
+   + `test_with_pool` escape hatches); concrete `OnceLock` placement, the
+   test-override helper signature, and any `using("alias")` multi-DB hook
+   designed in `01-app-and-settings.md`.*
 2. **Plugin registration default** — explicit builder vs `inventory`/`linkme`
    auto-registration as the recommended path. *Decided in `02-plugin-
    contract.md`.*
