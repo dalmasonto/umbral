@@ -24,19 +24,7 @@
     "showBreadcrumbs": true,
     "showTableOfContents": true,
     "tocPosition": "right",
-    "tocMaxDepth": 3,
-    "tabGroups": [
-      {
-        "id": "guides",
-        "label": "Guides",
-        "icon": "book-open"
-      },
-      {
-        "id": "api",
-        "label": "API Reference",
-        "icon": "zap"
-      }
-    ]
+    "tocMaxDepth": 3
   },
   "social": {
     "github": "https://github.com/dalmasonto/umbra"
