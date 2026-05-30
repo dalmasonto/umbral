@@ -87,3 +87,96 @@ impl Settings {
             .map_err(Box::new)
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::result_large_err)]
+// `Jail::expect_with` takes a closure returning `figment::Result<()>`, and
+// `figment::Error` is ~208 bytes. Boxing it here would only obscure tests
+// without any runtime benefit, so the lint is silenced module-wide.
+mod tests {
+    //! `Settings::init` and `settings::get` are intentionally out of scope here:
+    //! the process-wide `OnceLock` can be set exactly once per process, which
+    //! is incompatible with cargo test's parallel runner. Covering them
+    //! correctly needs `serial_test` or a thread-local refactor.
+    use super::*;
+    use figment::Jail;
+
+    #[test]
+    fn defaults_apply_when_nothing_is_set() {
+        Jail::expect_with(|_| {
+            let s = Settings::from_env().unwrap();
+            assert_eq!(s.database_url, "sqlite://umbra.db");
+            assert_eq!(s.secret_key, "umbra-insecure-dev-key-change-me");
+            assert_eq!(s.allowed_hosts, vec!["localhost", "127.0.0.1"]);
+            assert_eq!(s.log_level, "info");
+            assert!(matches!(s.environment, Environment::Dev));
+            assert!(s.databases.is_empty());
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn umbra_env_var_overrides_database_url() {
+        Jail::expect_with(|jail| {
+            jail.set_env("UMBRA_DATABASE_URL", "postgres://example");
+            let s = Settings::from_env().unwrap();
+            assert_eq!(s.database_url, "postgres://example");
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn nested_env_var_populates_databases_map() {
+        Jail::expect_with(|jail| {
+            jail.set_env("UMBRA_DATABASES__REPLICA", "sqlite://replica.db");
+            let s = Settings::from_env().unwrap();
+            assert_eq!(
+                s.databases.get("replica").map(String::as_str),
+                Some("sqlite://replica.db"),
+            );
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn umbra_toml_in_cwd_is_loaded() {
+        Jail::expect_with(|jail| {
+            jail.create_file("umbra.toml", r#"secret_key = "from-toml""#)?;
+            let s = Settings::from_env().unwrap();
+            assert_eq!(s.secret_key, "from-toml");
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn toml_wins_over_env_under_current_join_order() {
+        // The doc comment on `Settings::from_env` advertises precedence
+        // "defaults -> toml -> env vars", but figment's `join` is non
+        // overriding: the first provider to set a key keeps it. Toml is
+        // joined first, so it actually wins. This test pins down the real
+        // behaviour so the discrepancy is impossible to miss. Fixing the
+        // precedence is a follow-up: swap to `merge` for env, or reorder.
+        Jail::expect_with(|jail| {
+            jail.create_file("umbra.toml", r#"secret_key = "from-toml""#)?;
+            jail.set_env("UMBRA_SECRET_KEY", "from-env");
+            let s = Settings::from_env().unwrap();
+            assert_eq!(s.secret_key, "from-toml");
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn environment_default_is_dev() {
+        assert!(matches!(Environment::default(), Environment::Dev));
+    }
+
+    #[test]
+    fn environment_prod_round_trips_through_toml() {
+        Jail::expect_with(|jail| {
+            jail.create_file("umbra.toml", r#"environment = "Prod""#)?;
+            let s = Settings::from_env().unwrap();
+            assert!(matches!(s.environment, Environment::Prod));
+            Ok(())
+        });
+    }
+}
