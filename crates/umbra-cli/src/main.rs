@@ -74,7 +74,7 @@ enum Command {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() {
     // `App::serve` logs the bound address through `tracing::info!`. Without a
     // subscriber that line is dropped and the operator gets no feedback that
     // the server is actually up. `EnvFilter` honours `RUST_LOG` so the
@@ -87,7 +87,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     let cli = Cli::parse();
-    match cli.command.unwrap_or(Command::Serve) {
+    let result = match cli.command.unwrap_or(Command::Serve) {
         Command::Serve => serve().await,
         Command::Makemigrations => makemigrations().await,
         Command::Migrate => migrate().await,
@@ -96,6 +96,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             output,
             mark_applied,
         } => inspectdb(output, mark_applied).await,
+    };
+    // Catch the error explicitly so the user-facing diagnostic uses
+    // the `Display` impl (`umbra inspectdb: column \`x.y\` has
+    // unsupported SQL type \`BLOB\`; ...`) rather than the `Debug`
+    // dump (`UnsupportedColumnType { table: "x", ... }`) Rust would
+    // otherwise print from `fn main() -> Result<_, E>`.
+    if let Err(err) = result {
+        eprintln!("error: {err}");
+        std::process::exit(1);
     }
 }
 
