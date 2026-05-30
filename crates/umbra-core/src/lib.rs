@@ -2,6 +2,9 @@
 //!
 //! Do not depend on this crate directly. Use the `umbra` facade.
 //!
-//! Status: M0 scaffold. No implementation yet. See the design specs at
-//! `docs/specs/01-app-and-settings.md` through `docs/specs/07-inspectdb.md`
-//! for the target shape.
+//! Status: M0 shipped — Settings, db pool, web re-exports, App builder.
+
+pub mod app;
+pub mod db;
+pub mod settings;
+pub mod web;

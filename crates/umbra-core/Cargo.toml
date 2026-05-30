@@ -9,3 +9,9 @@ authors.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+axum = "0.8"
+figment = { version = "0.10", features = ["env", "toml"] }
+serde = { version = "1", features = ["derive"] }
+sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio"] }
+tokio = "1"
+tracing = "0.1"
