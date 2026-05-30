@@ -28,6 +28,12 @@ pub trait Model:
     /// The primary-key type. M2 supports `i64` only; UUID lands later.
     type PrimaryKey: PrimaryKey;
 
+    /// The struct name, used by the migration engine (M5) to label
+    /// snapshot entries and to map autodetected operations back to
+    /// the model that produced them. The M3 derive emits the struct
+    /// ident verbatim ("Post", "Comment", etc.).
+    const NAME: &'static str;
+
     /// The SQL table name. M3's derive defaults this to the
     /// `snake_case` of the struct name unless `#[umbra(table = "...")]`
     /// overrides it.
@@ -104,7 +110,7 @@ pub struct FieldSpec {
 ///
 /// Backend-specific variants (Postgres `Array`, `HStore`, `Jsonb`) land
 /// at M4 when the system check exists to gate them at boot.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SqlType {
     /// 16-bit signed integer. `i8` / `i16` / `u8` in Rust.
     SmallInt,

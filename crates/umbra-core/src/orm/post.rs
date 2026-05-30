@@ -47,6 +47,8 @@ impl Post {
 impl crate::orm::Model for Post {
     type PrimaryKey = i64;
 
+    const NAME: &'static str = "Post";
+
     const TABLE: &'static str = "post";
 
     const FIELDS: &'static [crate::orm::FieldSpec] = &[

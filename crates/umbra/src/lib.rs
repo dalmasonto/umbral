@@ -68,6 +68,22 @@ pub mod check {
     };
 }
 
+pub mod migrate {
+    //! The migration engine (M5).
+    //!
+    //! Implements the declare → migrate → change → migrate loop. Users
+    //! register models with `App::builder().model::<T>()`; `make`
+    //! generates a JSON migration file from the diff against the
+    //! latest snapshot; `run` applies pending migrations against the
+    //! ambient pool inside one transaction per file.
+
+    pub use umbra_core::migrate::{
+        APP_PLUGIN_NAME, Column, MIGRATIONS_DIR, MigrateError, MigrationFile, MigrationRef,
+        ModelMeta, Operation, Snapshot, make, make_in, registered_models, run, run_in, show,
+        show_in,
+    };
+}
+
 pub mod web {
     //! The web layer: router, extractors, and response types.
     //!

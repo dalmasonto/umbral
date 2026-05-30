@@ -4,6 +4,8 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 
 use crate::db;
+use crate::migrate::ModelMeta;
+use crate::orm::Model;
 use crate::settings::Settings;
 
 /// A built and ready-to-serve umbra application.
@@ -44,6 +46,7 @@ pub struct AppBuilder {
     settings: Option<Settings>,
     databases: HashMap<String, SqlitePool>,
     router: Option<Router>,
+    models: Vec<ModelMeta>,
 }
 
 impl AppBuilder {
@@ -62,6 +65,19 @@ impl AppBuilder {
     /// here.
     pub fn database(mut self, alias: &str, pool: SqlitePool) -> Self {
         self.databases.insert(alias.to_owned(), pool);
+        self
+    }
+
+    /// Register a model with the app's migration engine.
+    ///
+    /// Called once per model the user wants the M5 `makemigrations` /
+    /// `migrate` commands to track. Captures the model's `NAME` /
+    /// `TABLE` / `FIELDS` constants into an owned `ModelMeta` so the
+    /// migration code can iterate without naming concrete `T` at the
+    /// call site. M7's Plugin contract will replace this with
+    /// `Plugin::models()` discovered through the plugin registry.
+    pub fn model<T: Model>(mut self) -> Self {
+        self.models.push(ModelMeta::for_::<T>());
         self
     }
 
@@ -127,6 +143,7 @@ impl AppBuilder {
         crate::settings::init(&settings);
         db::init(self.databases);
         crate::backend::init(backend);
+        crate::migrate::init(self.models);
 
         // Phase 4 — system check. Build the context against ambient
         // state, run the framework checks, partition into errors vs

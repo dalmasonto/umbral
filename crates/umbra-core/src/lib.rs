@@ -8,6 +8,7 @@ pub mod app;
 pub mod backend;
 pub mod check;
 pub mod db;
+pub mod migrate;
 pub mod orm;
 pub mod settings;
 pub mod web;

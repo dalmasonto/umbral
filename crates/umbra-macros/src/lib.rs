@@ -227,9 +227,11 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
     // equal the struct ident (e.g. a struct already named `comment`).
     // Silence it the same way `post.rs` does for parity with the M2
     // hand-written shape.
+    let struct_name_str = struct_name.to_string();
     let output = quote! {
         impl ::umbra::orm::Model for #struct_name {
             type PrimaryKey = #pk_ty_tokens;
+            const NAME: &'static str = #struct_name_str;
             const TABLE: &'static str = #table_name;
             const FIELDS: &'static [::umbra::orm::FieldSpec] = &[
                 #(#field_specs),*
