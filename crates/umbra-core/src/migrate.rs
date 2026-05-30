@@ -859,22 +859,14 @@ async fn applied_names(
 /// migration that sets the flag is taken to mean "the user is taking
 /// responsibility".
 fn render_operation(op: &Operation) -> Vec<String> {
-    use sea_query::{Alias, ColumnDef, SqliteQueryBuilder, Table};
+    use sea_query::{Alias, SqliteQueryBuilder, Table};
 
     match op {
         Operation::CreateTable { table, columns } => {
             let mut stmt = Table::create();
             stmt.table(Alias::new(table));
-            let backend = crate::backend::active();
             for col in columns {
-                let mut def =
-                    ColumnDef::new_with_type(Alias::new(&col.name), backend.map_type(col.ty));
-                if !col.nullable {
-                    def.not_null();
-                }
-                if col.primary_key {
-                    def.primary_key();
-                }
+                let mut def = build_column_def(col);
                 stmt.col(&mut def);
             }
             vec![stmt.build(SqliteQueryBuilder)]
@@ -887,12 +879,7 @@ fn render_operation(op: &Operation) -> Vec<String> {
         Operation::AddColumn { table, column } => {
             let mut stmt = Table::alter();
             stmt.table(Alias::new(table));
-            let backend = crate::backend::active();
-            let mut def =
-                ColumnDef::new_with_type(Alias::new(&column.name), backend.map_type(column.ty));
-            if !column.nullable {
-                def.not_null();
-            }
+            let mut def = build_column_def(column);
             stmt.add_column(&mut def);
             vec![stmt.build(SqliteQueryBuilder)]
         }
@@ -928,22 +915,15 @@ fn render_operation(op: &Operation) -> Vec<String> {
 /// which is the correct data-integrity behaviour. Nullable
 /// `FALSE -> TRUE` always succeeds.
 fn render_alter_column_dance(table: &str, new_columns: &[Column]) -> Vec<String> {
-    use sea_query::{Alias, ColumnDef, SqliteQueryBuilder, Table};
+    use sea_query::{Alias, SqliteQueryBuilder, Table};
 
     let tmp = format!("_umbra_new_{table}");
-    let backend = crate::backend::active();
 
     // Step 1 — CREATE TABLE _umbra_new_<table>.
     let mut create = Table::create();
     create.table(Alias::new(&tmp));
     for col in new_columns {
-        let mut def = ColumnDef::new_with_type(Alias::new(&col.name), backend.map_type(col.ty));
-        if !col.nullable {
-            def.not_null();
-        }
-        if col.primary_key {
-            def.primary_key();
-        }
+        let mut def = build_column_def(col);
         create.col(&mut def);
     }
 
@@ -975,6 +955,54 @@ fn render_alter_column_dance(table: &str, new_columns: &[Column]) -> Vec<String>
         drop_sql,
         rename_sql,
     ]
+}
+
+/// Build a `sea_query::ColumnDef` for one column, applying every
+/// per-backend quirk in one place so CreateTable / AddColumn / the
+/// AlterColumn dance all stay consistent.
+///
+/// SQLite has one important quirk: its ROWID-alias mechanic (which
+/// gives a primary-key column auto-increment behaviour out of the
+/// box) only fires when the column's type is the exact text
+/// `INTEGER` — case-insensitive but no other variant. `BIGINT
+/// PRIMARY KEY`, even on a column the M3 derive declared as `i64`,
+/// does NOT auto-increment, so an `INSERT INTO t (other_col) VALUES
+/// (...)` without an explicit PK value fails the NOT NULL
+/// constraint. Every umbra user with an `id: i64` model would hit
+/// this without the override.
+///
+/// The fix: for SQLite, when a column is a primary key with an
+/// integer SqlType (Integer or BigInt), force the rendered type to
+/// `Integer` and attach `auto_increment()` so the generated DDL
+/// reads `"id" integer NOT NULL PRIMARY KEY AUTOINCREMENT`. SQLite
+/// stores both `i32` and `i64` as INTEGER affinity anyway, so the
+/// override is a no-op semantically — the rows that round-trip
+/// through `sqlx::FromRow` deserialize back into `i64` cleanly.
+fn build_column_def(col: &Column) -> sea_query::ColumnDef {
+    use sea_query::{Alias, ColumnDef, ColumnType};
+
+    let backend = crate::backend::active();
+    let is_sqlite_int_pk = backend.name() == "sqlite"
+        && col.primary_key
+        && matches!(col.ty, SqlType::Integer | SqlType::BigInt);
+
+    let column_type = if is_sqlite_int_pk {
+        ColumnType::Integer
+    } else {
+        backend.map_type(col.ty)
+    };
+
+    let mut def = ColumnDef::new_with_type(Alias::new(&col.name), column_type);
+    if !col.nullable {
+        def.not_null();
+    }
+    if col.primary_key {
+        def.primary_key();
+        if is_sqlite_int_pk {
+            def.auto_increment();
+        }
+    }
+    def
 }
 
 #[cfg(test)]

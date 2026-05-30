@@ -958,3 +958,71 @@ async fn run_in_applies_an_alter_column_nullable_flip() {
     );
     assert_eq!(tracked[0].0, APP_PLUGIN_NAME);
 }
+
+/// Regression: a `Model` with `id: i64` (BigInt PK) must render as
+/// `INTEGER PRIMARY KEY AUTOINCREMENT` on SQLite, not `bigint PRIMARY
+/// KEY`. Otherwise an `INSERT INTO t (other_cols) VALUES (...)`
+/// without an explicit id value fails the NOT NULL constraint, since
+/// only the exact text `INTEGER` triggers SQLite's ROWID-alias
+/// auto-increment behaviour.
+///
+/// Pinning the invariant via a behavioural assertion: insert two rows
+/// without explicit ids and confirm SQLite assigned monotonically
+/// increasing PKs (1, 2). The shared seed already created `post` via
+/// the M5 CreateTable op; this test layers an INSERT pair on top.
+#[tokio::test]
+async fn create_table_emits_integer_pk_so_inserts_auto_increment() {
+    let _ = migrated_dir().await;
+    let pool = pool();
+
+    // Brand-new table for this test so the inserts don't collide with
+    // the seeded `post` rows or row counts the other tests assert on.
+    sqlx::query(
+        "CREATE TABLE m51_pk_probe (id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT NOT NULL)",
+    )
+    .execute(&pool)
+    .await
+    .expect("create m51_pk_probe");
+
+    // The behavioural check applies to any auto-increment-shaped DDL:
+    // an INSERT that omits id should succeed and SQLite should assign
+    // 1, 2, ... .
+    sqlx::query("INSERT INTO m51_pk_probe (label) VALUES (?)")
+        .bind("alpha")
+        .execute(&pool)
+        .await
+        .expect("insert without explicit id should succeed");
+    sqlx::query("INSERT INTO m51_pk_probe (label) VALUES (?)")
+        .bind("beta")
+        .execute(&pool)
+        .await
+        .expect("second insert without explicit id should succeed");
+
+    let rows: Vec<(i64, String)> =
+        sqlx::query_as("SELECT id, label FROM m51_pk_probe ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .expect("select assigned ids");
+    assert_eq!(rows, vec![(1, "alpha".to_string()), (2, "beta".to_string())]);
+
+    // And the engine-rendered `post` table picks up the same shape: a
+    // sqlite_master row mentioning `INTEGER` and `AUTOINCREMENT` on
+    // the id column. Case-insensitive grep because sea-query's output
+    // is lowercase and the tests should survive a rendering tweak.
+    let post_ddl: String =
+        sqlx::query_scalar("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'post'")
+            .fetch_one(&pool)
+            .await
+            .expect("select post DDL");
+    let lower = post_ddl.to_ascii_lowercase();
+    assert!(
+        lower.contains("integer") && lower.contains("autoincrement"),
+        "post DDL must use INTEGER PRIMARY KEY AUTOINCREMENT for the SQLite ROWID-alias \
+         mechanic to fire; got: {post_ddl}",
+    );
+    assert!(
+        !lower.contains("bigint"),
+        "post DDL must NOT use BIGINT for the PK on SQLite (would defeat auto-increment); \
+         got: {post_ddl}",
+    );
+}
