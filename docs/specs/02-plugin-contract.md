@@ -51,6 +51,26 @@ Every method except `name()` has a default that returns the empty contribution. 
 
 `dependencies()` lets a plugin declare which other plugins must load first (`umbra-admin` depends on `umbra-auth`; `umbra-openapi` depends on `umbra-rest`). The builder uses it for topological ordering. Cycles are caught at boot as a `BuildError`.
 
+### What shipped at M7 v1
+
+The M7 v1 trait ships the keystone subset:
+
+- `name`, `dependencies` (with cycle detection in the topological sort),
+- `models` (the per-plugin model list; the migration engine walks every registered plugin's directory),
+- `routes` (merged into the app router after the hand-written router),
+- `system_checks` (run in phase 4 alongside the framework checks),
+- `on_ready` (sync, fires in topological order at the end of `App::build()`).
+
+**Deferred.**
+
+- `middleware()` (no built-in plugin needs it until sessions land at M8 / M9; cross-plugin ordering open question is still open).
+- `commands()` (clap's dynamic-subcommand surface isn't ergonomic enough to ship a clean shape yet; revisit when tasks adds a `worker` subcommand at M9).
+- `inventory` / `linkme` auto-registration (`with_auto_plugins`). The spec already recommends explicit `.plugin(...)` as the default; the opt-in path lands when a built-in needs it.
+- A typed settings schema on the trait (open question §Settings schema validation; resolve when `umbra-tasks` lands at M9).
+- Signal subscriptions inside `on_ready` (outline `signals.md` owns the API; this is parked).
+
+The existing `AppBuilder::model::<T>()` keeps working: those models register under an implicit `"app"` plugin so a single-binary umbra app needs no explicit `Plugin` impl. M8's auth / sessions extraction moves them into their own plugins; the implicit `"app"` plugin stays for user-binary models that don't earn their own plugin crate.
+
 ### Registration: explicit by default, inventory by opt-in
 
 The default path is explicit. The user names every plugin in their `App::builder()` call:

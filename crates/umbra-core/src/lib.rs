@@ -11,5 +11,6 @@ pub mod db;
 pub mod inspect;
 pub mod migrate;
 pub mod orm;
+pub mod plugin;
 pub mod settings;
 pub mod web;

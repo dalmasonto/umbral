@@ -23,6 +23,7 @@ pub mod prelude {
     //! not pollute the prelude with bare names like `pool`.
 
     pub use crate::orm::Model;
+    pub use crate::plugin::{AppContext, Plugin};
     pub use crate::web::{
         Form, IntoResponse, Json, JsonResponse, Path, Query, Router, delete, get, patch, post, put,
     };
@@ -82,6 +83,17 @@ pub mod migrate {
         ModelMeta, Operation, Snapshot, make, make_in, record_applied, registered_models, run,
         run_in, show, show_in,
     };
+}
+
+pub mod plugin {
+    //! The Plugin trait (M7), umbra's extension mechanism.
+    //!
+    //! Auth, sessions, admin, tasks, REST, and OpenAPI are all
+    //! plugins; so is every third-party crate that ships models,
+    //! routes, or commands. The trait is also re-exported from the
+    //! prelude so `use umbra::prelude::*;` brings it in.
+
+    pub use umbra_core::plugin::{AppContext, Plugin, PluginError};
 }
 
 pub mod inspect {

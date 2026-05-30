@@ -6,6 +6,7 @@ use std::net::SocketAddr;
 use crate::db;
 use crate::migrate::ModelMeta;
 use crate::orm::Model;
+use crate::plugin::Plugin;
 use crate::settings::Settings;
 
 /// A built and ready-to-serve umbra application.
@@ -47,6 +48,7 @@ pub struct AppBuilder {
     databases: HashMap<String, SqlitePool>,
     router: Option<Router>,
     models: Vec<ModelMeta>,
+    plugins: Vec<Box<dyn Plugin>>,
 }
 
 impl AppBuilder {
@@ -78,6 +80,20 @@ impl AppBuilder {
     /// `Plugin::models()` discovered through the plugin registry.
     pub fn model<T: Model>(mut self) -> Self {
         self.models.push(ModelMeta::for_::<T>());
+        self
+    }
+
+    /// Register a plugin (M7).
+    ///
+    /// Plugins contribute models, routes, system_checks, and an
+    /// `on_ready` hook. `App::build()` topologically sorts the
+    /// registered set by `Plugin::dependencies()` and walks every
+    /// plugin's contributions. The plugin name `"app"` is reserved
+    /// for the implicit plugin that owns models registered via
+    /// `.model::<T>()`; a plugin claiming that name causes
+    /// `BuildError::ReservedPluginName`.
+    pub fn plugin<P: Plugin>(mut self, plugin: P) -> Self {
+        self.plugins.push(Box::new(plugin));
         self
     }
 
@@ -195,6 +211,30 @@ pub enum BuildError {
     SystemCheckFailed {
         findings: Vec<crate::check::SystemCheckFinding>,
     },
+    /// A plugin's `dependencies()` lists a plugin that was never
+    /// registered with `.plugin(...)`. Carries the unmet name plus
+    /// the plugin that asked for it.
+    DependencyNotFound {
+        plugin: &'static str,
+        missing: &'static str,
+    },
+    /// The dependency graph has a cycle. Carries the plugin names that
+    /// form it (in any cyclic order; the diagnostic is "these N plugins
+    /// reference each other").
+    PluginCycle { names: Vec<&'static str> },
+    /// Two registered plugins share a `name()`. Plugin names are keys
+    /// in the migration tracking table and the dependency graph; a
+    /// collision would break both.
+    DuplicatePluginName { name: &'static str },
+    /// A plugin claimed the reserved `"app"` name (used by the
+    /// implicit plugin that owns `.model::<T>()` registrations).
+    ReservedPluginName,
+    /// A plugin's `on_ready` returned an error. Carries the plugin's
+    /// name plus the underlying error.
+    PluginOnReady {
+        plugin: &'static str,
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
 }
 
 impl std::fmt::Display for BuildError {
@@ -220,6 +260,27 @@ impl std::fmt::Display for BuildError {
                 f,
                 "umbra: App::builder() requires a default DB pool; call .database(\"default\", umbra::db::connect(&url).await?) before .build()"
             ),
+            BuildError::DependencyNotFound { plugin, missing } => write!(
+                f,
+                "umbra: plugin `{plugin}` depends on `{missing}`, which isn't registered; \
+                 call .plugin({missing}::default()) on the builder"
+            ),
+            BuildError::PluginCycle { names } => {
+                write!(f, "umbra: plugin dependency cycle: {}", names.join(" -> "))
+            }
+            BuildError::DuplicatePluginName { name } => write!(
+                f,
+                "umbra: two plugins both report name `{name}`; plugin names are unique keys \
+                 (migration tracking, dependency graph)"
+            ),
+            BuildError::ReservedPluginName => write!(
+                f,
+                "umbra: the plugin name `app` is reserved for models registered via \
+                 .model::<T>(); pick a different name"
+            ),
+            BuildError::PluginOnReady { plugin, source } => {
+                write!(f, "umbra: plugin `{plugin}`'s on_ready failed: {source}")
+            }
         }
     }
 }
