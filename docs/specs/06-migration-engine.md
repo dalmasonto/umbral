@@ -18,7 +18,7 @@
 What this spec owns:
 
 - The **migration file format** (one JSON file per migration, carrying ordered operations plus a snapshot of the post-migration schema).
-- The **operation catalogue** (`CreateTable`, `DropTable`, `AddColumn`, `DropColumn`, `AlterColumn`, indices, constraints, `RunSql`, `RunCode`).
+- The **operation catalogue** (`CreateTable`, `DropTable`, `AddColumn`, `DropColumn`, `AlterColumn`, indices, constraints, `RunSql`, `RunCode`). **What shipped at M5:** table-level only (`CreateTable`, `DropTable`). Column-level ops (`AddColumn`, `DropColumn`, `AlterColumn`), index / constraint ops, and the `RunSql` / `RunCode` data-migration escape hatches are deferred to **M8** alongside the rename-detection and data-preserving-alter hardening. Until M8 lands, changing a field on an existing model produces `MigrateError::UnsupportedChange("column changes on {model}: deferred to M5.1")`. The slot is called "M5.1" in code comments; the actual milestone is M8 per `arch.md §7`.
 - The **autodetection algorithm**: diff the current `FIELDS` against the latest snapshot, produce ordered ops, write a new migration file.
 - The **tracking table** (`umbra_migrations`) and the rules for what counts as "applied".
 - The **plugin-aware ordering**: cross-plugin FKs and the rule that a plugin's migrations apply after its dependencies'.

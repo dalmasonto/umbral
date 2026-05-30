@@ -14,8 +14,10 @@
 //!   `snapshot_after`.
 //! - An [`Operation`] enum with the two minimum-viable ops:
 //!   [`Operation::CreateTable`] and [`Operation::DropTable`]. Column-
-//!   level ops (`AddColumn`, `DropColumn`, `AlterColumn`) land at M5.1;
-//!   they need finer-grained diff logic than M5 v1 ships.
+//!   level ops (`AddColumn`, `DropColumn`, `AlterColumn`) land at M8
+//!   alongside rename detection (per `arch.md §7` and
+//!   `docs/specs/06-migration-engine.md`). The "M5.1" label in the
+//!   `UnsupportedChange` error message is shorthand for the same slot.
 //! - A [`MigrationFile`] format (one JSON file per migration) carrying
 //!   `id`, `operations`, and `snapshot_after`.
 //! - The `umbra_migrations` tracking table (one row per applied
