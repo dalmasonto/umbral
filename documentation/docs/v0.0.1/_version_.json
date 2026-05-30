@@ -1,0 +1,9 @@
+{
+    "$schema": "https://raw.githubusercontent.com/SpecraDocs/specra-sdk/main/config/version.schema.json",
+    "banner": {
+    "text": "This version is in beta. Some features may change before release.",
+    "type": "info"
+    },
+    "icon": "book",
+    "badge": "Beta"
+}

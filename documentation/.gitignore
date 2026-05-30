@@ -1,0 +1,19 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+.svelte-kit/
+build/
+dist/
+.output/
+
+# Env / secrets
+.env
+.env.*
+!.env.sample
+
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/
+*.log

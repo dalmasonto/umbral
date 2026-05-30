@@ -1,0 +1,105 @@
+@import "specra/styles";
+@source "./**/*.{js,ts,svelte}";
+
+@theme inline {
+    --font-sans: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue", sans-serif;
+    --font-mono: "Fira Code", "JetBrains Mono", Menlo, Monaco, Consolas, "Courier New", monospace;
+}
+
+/* ─── Vite-Inspired Light Theme ─── */
+:root {
+  --background: #ffffff;
+  --foreground: #1b1b1f;
+  --card: #f9f9f9;
+  --card-foreground: #1b1b1f;
+  --popover: #ffffff;
+  --popover-foreground: #1b1b1f;
+  --primary: #bd34fe;
+  --primary-foreground: #ffffff;
+  --secondary: #f6f6f7;
+  --secondary-foreground: #1b1b1f;
+  --muted: #f6f6f7;
+  --muted-foreground: #616161;
+  --accent: #f6f6f7;
+  --accent-foreground: #1b1b1f;
+  --destructive: #e5484d;
+  --destructive-foreground: #ffffff;
+  --border: #e2e2e3;
+  --input: #e2e2e3;
+  --ring: #bd34fe;
+  --sidebar: #f6f6f7;
+  --sidebar-foreground: #616161;
+  --sidebar-border: #e2e2e3;
+  --sidebar-primary: #bd34fe;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #f0f0f1;
+  --sidebar-accent-foreground: #1b1b1f;
+}
+
+/* ─── Vite-Inspired Dark Theme (default) ─── */
+.dark {
+  --background: #1b1b1f;
+  --foreground: rgba(255, 255, 255, 0.87);
+  --card: #232326;
+  --card-foreground: rgba(255, 255, 255, 0.87);
+  --popover: #232326;
+  --popover-foreground: rgba(255, 255, 255, 0.87);
+  --primary: #bd34fe;
+  --primary-foreground: #ffffff;
+  --secondary: #2e2e32;
+  --secondary-foreground: rgba(255, 255, 255, 0.87);
+  --muted: #232326;
+  --muted-foreground: #ababab;
+  --accent: #2e2e32;
+  --accent-foreground: rgba(255, 255, 255, 0.87);
+  --destructive: #e5484d;
+  --destructive-foreground: #ffffff;
+  --border: #2e2e32;
+  --input: #2e2e32;
+  --ring: #bd34fe;
+  --sidebar: #161618;
+  --sidebar-foreground: #ababab;
+  --sidebar-border: #2e2e32;
+  --sidebar-primary: #bd34fe;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #232326;
+  --sidebar-accent-foreground: rgba(255, 255, 255, 0.87);
+}
+
+/* ─── Smaller text and headings (Vite-style compact) ─── */
+.prose {
+  font-size: 0.9375rem;
+  line-height: 1.7;
+}
+
+.prose :where(h1):not(:where([class~="not-prose"],[class~="not-prose"] *)) {
+  font-size: 1.75rem;
+  margin-top: 0;
+}
+
+.prose :where(h2):not(:where([class~="not-prose"],[class~="not-prose"] *)) {
+  font-size: 1.375rem;
+  margin-top: 2rem;
+  margin-bottom: 0.75rem;
+}
+
+.prose :where(h3):not(:where([class~="not-prose"],[class~="not-prose"] *)) {
+  font-size: 1.125rem;
+  margin-top: 1.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.prose :where(p):not(:where([class~="not-prose"],[class~="not-prose"] *)) {
+  font-size: 0.9375rem;
+  line-height: 1.7;
+  margin-bottom: 0.75rem;
+}
+
+.prose :where(li):not(:where([class~="not-prose"],[class~="not-prose"] *)) {
+  font-size: 0.9375rem;
+  line-height: 1.7;
+}
+
+.prose :where(code):not(:where([class~="not-prose"],[class~="not-prose"] *)) {
+  font-size: 0.8125rem;
+}
