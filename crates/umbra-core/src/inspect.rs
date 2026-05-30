@@ -40,7 +40,7 @@
 
 use std::path::{Path, PathBuf};
 
-use sqlx::SqlitePool;
+use sqlx::{Row, SqlitePool};
 
 use crate::migrate::{self, Column, MigrationFile, ModelMeta, Operation, Snapshot};
 use crate::orm::SqlType;
@@ -209,10 +209,131 @@ pub async fn inspectdb(opts: InspectOptions) -> Result<InspectReport, InspectErr
 /// Reads `sqlite_master` for table names and `PRAGMA table_info(...)`
 /// for column descriptors. Skips internal tables (`sqlite_*`,
 /// `umbra_migrations`).
-///
-/// Filled in by subagent A.
-pub async fn introspect_pool(_pool: &SqlitePool) -> Result<IntrospectedSchema, InspectError> {
-    Ok(IntrospectedSchema { tables: Vec::new() })
+pub async fn introspect_pool(pool: &SqlitePool) -> Result<IntrospectedSchema, InspectError> {
+    // List user tables in lexical name order. `sqlite_master` carries
+    // both tables and indexes; the `type = 'table'` predicate scopes the
+    // result to tables. The skip-list takes out SQLite's internal
+    // bookkeeping (`sqlite_%`) and umbra's own tracking table, which
+    // would otherwise loop back through the migration engine.
+    let table_rows = sqlx::query(
+        "SELECT name FROM sqlite_master \
+         WHERE type = 'table' \
+           AND name NOT LIKE 'sqlite_%' \
+           AND name <> 'umbra_migrations' \
+         ORDER BY name",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let mut tables: Vec<IntrospectedTable> = Vec::with_capacity(table_rows.len());
+    for row in table_rows {
+        let table: String = row.try_get("name")?;
+        let columns = introspect_columns(pool, &table).await?;
+        tables.push(IntrospectedTable {
+            name: pascal_case(&table),
+            table,
+            columns,
+        });
+    }
+
+    Ok(IntrospectedSchema { tables })
+}
+
+/// Read one table's columns via `PRAGMA table_info`. The PRAGMA returns
+/// `(cid, name, type, notnull, dflt_value, pk)` rows in declaration
+/// order, sorted defensively by `cid` so a downstream change to the
+/// PRAGMA's behaviour doesn't silently scramble field order.
+async fn introspect_columns(
+    pool: &SqlitePool,
+    table: &str,
+) -> Result<Vec<IntrospectedColumn>, InspectError> {
+    // The PRAGMA name can't be bound as a parameter, but it also can't
+    // contain user-supplied input here: `table` comes from `sqlite_master`
+    // and matches an existing table identifier by construction.
+    let sql = format!("PRAGMA table_info(\"{}\")", table.replace('"', "\"\""));
+    let mut rows = sqlx::query(&sql).fetch_all(pool).await?;
+    rows.sort_by_key(|r| r.try_get::<i64, _>("cid").unwrap_or(0));
+
+    let mut columns: Vec<IntrospectedColumn> = Vec::with_capacity(rows.len());
+    for row in rows {
+        let name: String = row.try_get("name")?;
+        let raw_type: String = row.try_get("type")?;
+        let notnull: i64 = row.try_get("notnull")?;
+        let pk: i64 = row.try_get("pk")?;
+        let ty = map_sqlite_type(&raw_type).ok_or_else(|| InspectError::UnsupportedColumnType {
+            table: table.to_string(),
+            column: name.clone(),
+            sql_type: raw_type.clone(),
+        })?;
+        columns.push(IntrospectedColumn {
+            name,
+            ty,
+            primary_key: pk != 0,
+            nullable: notnull == 0,
+        });
+    }
+    Ok(columns)
+}
+
+/// Map a raw SQLite type string to the M6 v1 [`SqlType`] catalogue.
+/// Case-insensitive; trailing `(n)` or `(p,s)` width parameters are
+/// stripped before matching so `VARCHAR(255)` and `NUMERIC(10,2)` come
+/// through as `varchar` and `numeric`. Returns `None` on anything not
+/// in the table; the caller turns that into
+/// [`InspectError::UnsupportedColumnType`] with the table and column
+/// names attached.
+fn map_sqlite_type(raw: &str) -> Option<SqlType> {
+    let head = match raw.split_once('(') {
+        Some((before, _)) => before,
+        None => raw,
+    };
+    let normalised = head.trim().to_ascii_lowercase();
+    match normalised.as_str() {
+        "smallint" | "int2" => Some(SqlType::SmallInt),
+        "int" | "integer" | "int4" => Some(SqlType::Integer),
+        "bigint" | "int8" => Some(SqlType::BigInt),
+        "real" | "float" | "float4" => Some(SqlType::Real),
+        "double" | "double precision" | "float8" => Some(SqlType::Double),
+        "boolean" | "bool" => Some(SqlType::Boolean),
+        "text" | "varchar" | "char" | "clob" | "character" | "varying character" | "nchar"
+        | "nvarchar" => Some(SqlType::Text),
+        "date" => Some(SqlType::Date),
+        "time" => Some(SqlType::Time),
+        "timestamp" | "timestamptz" | "datetime" => Some(SqlType::Timestamptz),
+        "uuid" => Some(SqlType::Uuid),
+        _ => None,
+    }
+}
+
+/// Convert a SQL identifier (typically a table name) into UpperCamelCase
+/// for use as a Rust struct name. Splits on `_`, ` `, and `-`, takes the
+/// alphanumeric remainder, and uppercases the first character of each
+/// segment. `blog_post` becomes `BlogPost`; `auth_user_groups` becomes
+/// `AuthUserGroups`. Empty input returns the empty string; the renderer
+/// upstream guarantees a non-empty table name.
+fn pascal_case(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut upper_next = true;
+    for ch in input.chars() {
+        if ch == '_' || ch == ' ' || ch == '-' {
+            upper_next = true;
+            continue;
+        }
+        if !ch.is_alphanumeric() {
+            continue;
+        }
+        if upper_next {
+            for u in ch.to_uppercase() {
+                out.push(u);
+            }
+            upper_next = false;
+        } else {
+            for l in ch.to_lowercase() {
+                out.push(l);
+            }
+        }
+    }
+    out
 }
 
 /// Render the introspected schema as the contents of a `models.rs`
