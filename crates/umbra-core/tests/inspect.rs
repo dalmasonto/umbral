@@ -273,14 +273,14 @@ async fn introspect_pool_skips_sqlite_internals_and_umbra_migrations() {
 // introspection drifts.                                                //
 // --------------------------------------------------------------------- //
 
-/// Build a `IntrospectedSchema` by hand with two tables that differ
-/// from their PascalCased struct names (`post` -> `Post`, `blog_post`
-/// -> `BlogPost`). The renderer should emit one struct per table and
-/// a `#[umbra(table = "...")]` attribute for each, since neither
-/// struct name compares equal to the SQL table name verbatim (`"Post"
-/// != "post"`).
+/// Build an `IntrospectedSchema` by hand with two tables whose
+/// PascalCased struct names round-trip cleanly through the derive's
+/// snake_case (`post` -> `Post` -> `"post"`, `blog_post` -> `BlogPost`
+/// -> `"blog_post"`). The renderer should emit one struct per table
+/// and OMIT the `#[umbra(table = "...")]` attribute in both cases
+/// since the derive's auto-derived table name already matches.
 #[tokio::test]
-async fn render_models_emits_one_struct_per_table_with_table_attr_when_needed() {
+async fn render_models_omits_table_attribute_when_derive_round_trips() {
     let schema = IntrospectedSchema {
         tables: vec![
             IntrospectedTable {
@@ -317,15 +317,12 @@ async fn render_models_emits_one_struct_per_table_with_table_attr_when_needed() 
         "rendered output should declare `pub struct BlogPost`; got:\n{out}",
     );
     assert!(
-        out.contains("#[umbra(table = \"blog_post\")]"),
-        "blog_post's struct name (`BlogPost`) differs from its table; \
-         the renderer should emit `#[umbra(table = \"blog_post\")]`; got:\n{out}",
-    );
-    assert!(
-        out.contains("#[umbra(table = \"post\")]"),
-        "post's struct name (`Post`) differs from its table (`Post` != \
-         `post`), so the renderer should emit `#[umbra(table = \
-         \"post\")]`; got:\n{out}",
+        !out.contains("#[umbra(table"),
+        "neither struct name needs the attribute (the derive's \
+         auto-snake_case of `Post` is `post` and of `BlogPost` is \
+         `blog_post`, matching the source tables); the renderer should \
+         leave the attribute off so the file compiles against the M3 \
+         derive; got:\n{out}",
     );
 }
 

@@ -320,6 +320,34 @@ fn map_sqlite_type(raw: &str) -> Option<SqlType> {
 /// segment. `blog_post` becomes `BlogPost`; `auth_user_groups` becomes
 /// `AuthUserGroups`. Empty input returns the empty string; the renderer
 /// upstream guarantees a non-empty table name.
+/// Mirror of `umbra_macros::to_snake_case`. The M3 derive computes a
+/// model's `TABLE` const as snake_case of the struct name; the
+/// renderer uses this helper to decide whether the source SQL table
+/// name round-trips through the derive (so the `#[umbra(table = ...)]`
+/// attribute can be omitted). Kept identical to the derive's body so
+/// the two agree byte-for-byte.
+fn derive_table_name(camel: &str) -> String {
+    let chars: Vec<char> = camel.chars().collect();
+    let mut out = String::with_capacity(camel.len() + 4);
+    for (i, &c) in chars.iter().enumerate() {
+        if c.is_ascii_uppercase() {
+            let prev = if i == 0 { None } else { Some(chars[i - 1]) };
+            let next = chars.get(i + 1).copied();
+            let prev_lower_or_digit =
+                matches!(prev, Some(p) if p.is_ascii_lowercase() || p.is_ascii_digit());
+            let run_break = prev.map(|p| p.is_ascii_uppercase()).unwrap_or(false)
+                && matches!(next, Some(n) if n.is_ascii_lowercase());
+            if i != 0 && (prev_lower_or_digit || run_break) {
+                out.push('_');
+            }
+            out.push(c.to_ascii_lowercase());
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 fn pascal_case(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     let mut upper_next = true;
@@ -381,13 +409,17 @@ use umbra::prelude::*;
 
 /// Render a single `#[derive(Model)]` struct for one introspected table.
 /// The `#[umbra(table = "...")]` attribute is emitted only when the
-/// PascalCased struct name doesn't already round-trip to the original
-/// table name (e.g. `blog_post` -> `BlogPost` needs the attribute;
-/// `Post` -> `Post` doesn't).
+/// derive's auto-derived table name (snake_case of the struct name)
+/// doesn't equal the SQL table name. For the typical Django shape
+/// (`blog_post` -> `BlogPost` -> derive computes `"blog_post"`), the
+/// attribute is redundant and is left off so the generated code
+/// compiles against the M3 derive (which does not yet recognise
+/// `#[umbra(...)]` attributes; see `umbra-macros/src/lib.rs` §M3
+/// constraints). The attribute lands as derive support grows.
 fn render_one_struct(table: &IntrospectedTable) -> String {
     let mut out = String::new();
     out.push_str("#[derive(Debug, Clone, Model)]\n");
-    if table.table != table.name {
+    if derive_table_name(&table.name) != table.table {
         out.push_str(&format!("#[umbra(table = \"{}\")]\n", table.table));
     }
     out.push_str(&format!("pub struct {} {{\n", table.name));
@@ -538,7 +570,7 @@ mod tests {
     }
 
     #[test]
-    fn snake_case_table_gets_umbra_table_attribute() {
+    fn snake_case_table_skips_attribute_when_derive_round_trips() {
         let schema = IntrospectedSchema {
             tables: vec![IntrospectedTable {
                 table: "blog_post".to_string(),
@@ -550,17 +582,23 @@ mod tests {
             }],
         };
         let out = render_models(&schema);
-        assert!(out.contains("#[umbra(table = \"blog_post\")]"));
+        // `BlogPost` snake_cases to `blog_post` via the derive, so the
+        // attribute is redundant and is left off. This keeps the
+        // generated file compatible with the M3 derive, which doesn't
+        // yet recognise `#[umbra(...)]` attributes.
+        assert!(!out.contains("#[umbra(table"));
         assert!(out.contains("pub struct BlogPost {"));
         assert!(out.contains("pub id: i64,"));
         assert!(out.contains("pub title: String,"));
     }
 
     #[test]
-    fn struct_name_matching_table_skips_attribute() {
+    fn lowercase_single_word_table_skips_attribute() {
+        // `post` -> `Post` -> derive snake_cases to `"post"`, matches
+        // the source table verbatim, so the attribute is left off.
         let schema = IntrospectedSchema {
             tables: vec![IntrospectedTable {
-                table: "Post".to_string(),
+                table: "post".to_string(),
                 name: "Post".to_string(),
                 columns: vec![col("id", SqlType::BigInt, true, false)],
             }],
@@ -568,6 +606,24 @@ mod tests {
         let out = render_models(&schema);
         assert!(!out.contains("#[umbra(table"));
         assert!(out.contains("pub struct Post {"));
+    }
+
+    #[test]
+    fn non_round_tripping_table_name_keeps_attribute() {
+        // SQL tables with names the derive's snake_case won't reach
+        // (e.g. uppercase, runs of capitals, leading digits) need the
+        // explicit attribute. This case is rare in Django ports but
+        // the renderer should still cover it for the derive's eventual
+        // attribute-support landing.
+        let schema = IntrospectedSchema {
+            tables: vec![IntrospectedTable {
+                table: "POSTS".to_string(),
+                name: "Posts".to_string(),
+                columns: vec![col("id", SqlType::BigInt, true, false)],
+            }],
+        };
+        let out = render_models(&schema);
+        assert!(out.contains("#[umbra(table = \"POSTS\")]"));
     }
 
     #[test]
