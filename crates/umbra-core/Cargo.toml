@@ -13,11 +13,12 @@ axum = "0.8"
 chrono = { version = "0.4", features = ["serde"] }
 figment = { version = "0.10", features = ["env", "toml"] }
 sea-query = "0.32"
-sea-query-binder = { version = "0.7", features = ["sqlx-sqlite", "with-chrono"] }
+sea-query-binder = { version = "0.7", features = ["sqlx-sqlite", "with-chrono", "with-uuid"] }
 serde = { version = "1", features = ["derive"] }
-sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "chrono"] }
+sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "chrono", "uuid"] }
 tokio = "1"
 tracing = "0.1"
+uuid = { version = "1", features = ["serde", "v7"] }
 
 [dev-dependencies]
 # figment::Jail (for env-var and toml file sandboxing in tests) lives behind

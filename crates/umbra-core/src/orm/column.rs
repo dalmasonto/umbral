@@ -392,3 +392,206 @@ impl<T> NullableDateTimeCol<T> {
         OrderExpr::new(self.name, true)
     }
 }
+
+// =========================================================================
+//
+// M3 type-catalogue refresh: stubs added by the scaffold commit; methods
+// filled in by the M3 type-catalogue fan-out subagent A.
+//
+// Convention for the new types: a struct with `name: &'static str` plus
+// `PhantomData<T>`, and a const `::new(&'static str)` constructor.
+// Methods (.eq / .ne / .lt / .gt / .le / .ge / .is_null / .is_not_null /
+// .asc / .desc / .before / .after / etc.) get added by subagent A so the
+// stubs compile cleanly during the parallel phase.
+//
+// =========================================================================
+
+/// A 64-bit float column (`f64`). Also serves `f32` field declarations
+/// because `f32 -> f64` is lossless; the SqlType variant on FieldSpec
+/// keeps the original precision distinction (`Real` vs `Double`) so
+/// the migration engine renders the right SQL column type.
+pub struct F64Col<T> {
+    pub(crate) name: &'static str,
+    _phantom: PhantomData<T>,
+}
+
+impl<T> F64Col<T> {
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+/// A boolean column.
+pub struct BoolCol<T> {
+    pub(crate) name: &'static str,
+    _phantom: PhantomData<T>,
+}
+
+impl<T> BoolCol<T> {
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+/// A `uuid::Uuid`-typed column.
+pub struct UuidCol<T> {
+    pub(crate) name: &'static str,
+    _phantom: PhantomData<T>,
+}
+
+impl<T> UuidCol<T> {
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+/// A `chrono::NaiveDate`-typed column (no time, no timezone).
+pub struct DateCol<T> {
+    pub(crate) name: &'static str,
+    _phantom: PhantomData<T>,
+}
+
+impl<T> DateCol<T> {
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+/// A `chrono::NaiveTime`-typed column (no date, no timezone).
+pub struct TimeCol<T> {
+    pub(crate) name: &'static str,
+    _phantom: PhantomData<T>,
+}
+
+impl<T> TimeCol<T> {
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+// -------------------------------------------------------------------------
+// Nullable variants. Each wraps a base type and adds `.is_null` /
+// `.is_not_null`; otherwise the same predicates apply with the same
+// signatures. The derive emits these for `Option<T>` fields across the
+// catalogue.
+// -------------------------------------------------------------------------
+
+/// A nullable `i64`-typed column.
+pub struct NullableIntCol<T> {
+    pub(crate) name: &'static str,
+    _phantom: PhantomData<T>,
+}
+
+impl<T> NullableIntCol<T> {
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+/// A nullable `String`-typed column.
+pub struct NullableStrCol<T> {
+    pub(crate) name: &'static str,
+    _phantom: PhantomData<T>,
+}
+
+impl<T> NullableStrCol<T> {
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+/// A nullable `f64`-typed column.
+pub struct NullableF64Col<T> {
+    pub(crate) name: &'static str,
+    _phantom: PhantomData<T>,
+}
+
+impl<T> NullableF64Col<T> {
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+/// A nullable `bool`-typed column.
+pub struct NullableBoolCol<T> {
+    pub(crate) name: &'static str,
+    _phantom: PhantomData<T>,
+}
+
+impl<T> NullableBoolCol<T> {
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+/// A nullable `uuid::Uuid`-typed column.
+pub struct NullableUuidCol<T> {
+    pub(crate) name: &'static str,
+    _phantom: PhantomData<T>,
+}
+
+impl<T> NullableUuidCol<T> {
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+/// A nullable `chrono::NaiveDate`-typed column.
+pub struct NullableDateCol<T> {
+    pub(crate) name: &'static str,
+    _phantom: PhantomData<T>,
+}
+
+impl<T> NullableDateCol<T> {
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+/// A nullable `chrono::NaiveTime`-typed column.
+pub struct NullableTimeCol<T> {
+    pub(crate) name: &'static str,
+    _phantom: PhantomData<T>,
+}
+
+impl<T> NullableTimeCol<T> {
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            _phantom: PhantomData,
+        }
+    }
+}

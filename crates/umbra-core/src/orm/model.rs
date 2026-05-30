@@ -47,11 +47,15 @@ pub trait Model:
 
 /// Types that can serve as a model's primary key.
 ///
-/// Minimal at M2 (just `i64`). Implementations for `Uuid` and any other
-/// PK shape land at later milestones when there's a real use case.
+/// M3 supports `i32`, `i64`, and `uuid::Uuid`. Django porters who use
+/// UUID PKs land here naturally with `id: uuid::Uuid`; Rust devs who
+/// reach for `i32` get it too. Smaller and unsigned ints aren't useful
+/// for PKs in practice, so they're left off the list.
 pub trait PrimaryKey: Copy + Send + Sync + 'static {}
 
+impl PrimaryKey for i32 {}
 impl PrimaryKey for i64 {}
+impl PrimaryKey for uuid::Uuid {}
 
 /// Static metadata for one column on a model.
 ///
@@ -93,14 +97,35 @@ pub struct FieldSpec {
 /// the M4 `DatabaseBackend` abstraction. This enum is the abstract
 /// classification umbra reasons about.
 ///
-/// M2 ships the three variants needed for the hardcoded `Post` model.
-/// More land as the M3 derive's field-type catalogue grows.
+/// The catalogue follows spec 04 §4.1: each variant covers one Django-
+/// shape field type. Rust types in the field declaration map to a
+/// variant via the M3 derive's `classify_field_type`; the table is in
+/// `umbra-macros/src/lib.rs` alongside the derive.
+///
+/// Backend-specific variants (Postgres `Array`, `HStore`, `Jsonb`) land
+/// at M4 when the system check exists to gate them at boot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SqlType {
-    /// 64-bit signed integer. `i64` in Rust.
+    /// 16-bit signed integer. `i8` / `i16` / `u8` in Rust.
+    SmallInt,
+    /// 32-bit signed integer. `i32` / `u16` in Rust.
+    Integer,
+    /// 64-bit signed integer. `i64` / `u32` in Rust.
     BigInt,
+    /// 32-bit floating point. `f32` in Rust.
+    Real,
+    /// 64-bit floating point. `f64` in Rust.
+    Double,
+    /// Boolean. `bool` in Rust.
+    Boolean,
     /// Variable-length string. `String` in Rust.
     Text,
+    /// Date without time. `chrono::NaiveDate` in Rust.
+    Date,
+    /// Time without date. `chrono::NaiveTime` in Rust.
+    Time,
     /// Timestamp with timezone. `chrono::DateTime<chrono::Utc>` in Rust.
     Timestamptz,
+    /// 128-bit UUID. `uuid::Uuid` in Rust.
+    Uuid,
 }
