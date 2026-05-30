@@ -439,3 +439,44 @@ async fn first_returns_none_when_no_match() {
         "id=999 is not seeded, so first() must be None"
     );
 }
+
+/// `QuerySet::to_sql` renders the prepared statement without
+/// executing it — useful for debugging and pinning the shape of the
+/// generated SQL. The rendered string carries `?` placeholders for
+/// every bound value, which is what sqlx would send to the driver.
+///
+/// No pool is required; the method is pure rendering.
+#[test]
+fn to_sql_renders_the_select_without_executing() {
+    let sql = Post::objects()
+        .filter(post::TITLE.eq("hello"))
+        .order_by(post::ID.asc())
+        .limit(5)
+        .to_sql();
+
+    // Spot-check the salient pieces. We don't pin the exact string
+    // because sea-query's formatter may evolve; we pin the
+    // invariants instead.
+    let lower = sql.to_ascii_lowercase();
+    assert!(
+        lower.contains("select"),
+        "expected SELECT keyword; got {sql}"
+    );
+    assert!(
+        lower.contains("from \"post\""),
+        "expected FROM \"post\"; got {sql}"
+    );
+    assert!(
+        lower.contains("where") && lower.contains("\"title\" = ?"),
+        "expected WHERE clause with bound placeholder for title; got {sql}",
+    );
+    assert!(
+        lower.contains("order by \"id\" asc"),
+        "expected ORDER BY id asc; got {sql}",
+    );
+    assert!(lower.contains("limit"), "expected LIMIT clause; got {sql}");
+    assert!(
+        !sql.contains("hello"),
+        "the bound value MUST stay out of the SQL string (it's a parameter, not literal); got {sql}",
+    );
+}

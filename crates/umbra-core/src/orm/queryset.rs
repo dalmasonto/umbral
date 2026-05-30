@@ -132,6 +132,21 @@ fn resolve_pool(explicit: Option<sqlx::SqlitePool>) -> sqlx::SqlitePool {
 /// supertrait, so the row mapping is available without naming a
 /// concrete type here.
 impl<T: Model> QuerySet<T> {
+    /// Render the SQL the QuerySet would execute, without running it.
+    ///
+    /// Returns the prepared statement with `?` placeholders for the
+    /// bound values, exactly the string sqlx would send. Useful for
+    /// `eprintln!`-style debugging and for tests that want to pin
+    /// the rendered query without round-tripping through a pool.
+    ///
+    /// The bound values are intentionally not surfaced (sqlx's binder
+    /// types aren't part of umbra's public surface); a `(sql, values)`
+    /// accessor lands when EXPLAIN-style integration needs it.
+    pub fn to_sql(&self) -> String {
+        let (sql, _values) = self.query.build_sqlx(SqliteQueryBuilder);
+        sql
+    }
+
     /// Run the SELECT and return every matching row.
     pub async fn fetch(self) -> Result<Vec<T>, sqlx::Error> {
         let pool = resolve_pool(self.explicit_pool);
