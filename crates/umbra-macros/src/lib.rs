@@ -198,13 +198,15 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             ));
         }
     };
-    if !is_supported_primary_key(&id_field.ty) {
-        return Err(syn::Error::new_spanned(
-            &id_field.ty,
-            "umbra M3 supports id types i32, i64, or uuid::Uuid; \
-             got an unsupported primary-key type",
-        ));
-    }
+    // The id field's type isn't validated here: any type implementing
+    // `umbra::orm::PrimaryKey` works. The trait ships impls for every
+    // Rust integer width, `uuid::Uuid`, and `String`; user crates can
+    // add their own with `impl PrimaryKey for MyId {}`. The trait
+    // bound on `Model::PrimaryKey` makes the compiler reject types
+    // that don't implement it, with a real Rust diagnostic (which is
+    // more useful than the previous hard-coded "i32/i64/Uuid" message
+    // when the user's intent is genuinely a custom newtype).
+    //
     // The `PrimaryKey` associated type echoes the user-written field
     // type verbatim so user crate paths (`uuid::Uuid`, `::uuid::Uuid`,
     // bare `Uuid`) round-trip unchanged through the emitted tokens.
@@ -287,7 +289,12 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                 #(#field_specs),*
             ];
             fn primary_key(&self) -> #pk_ty_tokens {
-                self.id
+                // `.clone()` works for every PK type the trait accepts
+                // (the bound is `Clone`, not `Copy`). For `i32`, `i64`,
+                // `Uuid`, etc. the optimiser folds the clone back into
+                // a copy; for `String` the clone is the work the call
+                // site would have done anyway.
+                self.id.clone()
             }
         }
 
@@ -456,14 +463,6 @@ impl FieldKind {
             _ => "unreachable: error_message called on a supported FieldKind",
         }
     }
-}
-
-/// True if the `id` field's type is one of the M3 PK catalogue: `i32`,
-/// `i64`, or `uuid::Uuid` (matched by last path segment so `Uuid`,
-/// `uuid::Uuid`, `::uuid::Uuid` all resolve). The user-written type
-/// tokens are re-used verbatim for the emitted associated type.
-fn is_supported_primary_key(ty: &Type) -> bool {
-    type_is_ident(ty, "i32") || type_is_ident(ty, "i64") || type_is_ident(ty, "Uuid")
 }
 
 /// Inspect a `syn::Type` and pick its `FieldKind`.

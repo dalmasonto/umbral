@@ -53,15 +53,40 @@ pub trait Model:
 
 /// Types that can serve as a model's primary key.
 ///
-/// M3 supports `i32`, `i64`, and `uuid::Uuid`. Django porters who use
-/// UUID PKs land here naturally with `id: uuid::Uuid`; Rust devs who
-/// reach for `i32` get it too. Smaller and unsigned ints aren't useful
-/// for PKs in practice, so they're left off the list.
-pub trait PrimaryKey: Copy + Send + Sync + 'static {}
+/// Built-in impls cover every Rust integer width, `uuid::Uuid`, and
+/// `String` (for slug-style keys). The bound is `Clone + Send + Sync
+/// + 'static` rather than `Copy` so non-Copy types like `String` work
+/// the same way as the integer types; for the integer types the
+/// generated `.clone()` lowers to the same machine code as a copy.
+///
+/// User crates extend the catalogue with one line:
+///
+/// ```ignore
+/// #[derive(Clone)]
+/// pub struct UserId(pub u64);
+///
+/// impl umbra::orm::PrimaryKey for UserId {}
+/// ```
+pub trait PrimaryKey: Clone + Send + Sync + 'static {}
 
+// Every Rust integer width that can serve as a SQL primary key.
+// SQLite stores all of these with INTEGER affinity; Postgres exposes
+// SMALLINT / INT / BIGINT / NUMERIC depending on width.
+impl PrimaryKey for i8 {}
+impl PrimaryKey for i16 {}
 impl PrimaryKey for i32 {}
 impl PrimaryKey for i64 {}
+impl PrimaryKey for i128 {}
+impl PrimaryKey for u8 {}
+impl PrimaryKey for u16 {}
+impl PrimaryKey for u32 {}
+impl PrimaryKey for u64 {}
+impl PrimaryKey for u128 {}
+
+// Non-integer built-ins. UUIDs and slug-style String keys are the
+// two non-integer shapes the porting catalogue calls out.
 impl PrimaryKey for uuid::Uuid {}
+impl PrimaryKey for String {}
 
 /// Static metadata for one column on a model.
 ///

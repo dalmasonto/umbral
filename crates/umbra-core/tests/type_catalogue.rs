@@ -460,3 +460,71 @@ fn umbra_table_attribute_overrides_the_default_table_name() {
     // The Model::NAME stays the Rust struct name regardless.
     assert_eq!(UserWithCustomTable::NAME, "UserWithCustomTable");
 }
+
+// --------------------------------------------------------------------- //
+// FEATURES.md #1 — primary-key catalogue extension. The `PrimaryKey`    //
+// trait ships impls for every integer width plus `String`. The derive  //
+// no longer hardcodes a per-type check; any type implementing the      //
+// trait works as a model's id.                                         //
+// --------------------------------------------------------------------- //
+
+#[derive(Debug, sqlx::FromRow, umbra::orm::Model)]
+struct PkU32 {
+    id: u32,
+    name: String,
+}
+
+/// `id: u32` should drive `<PkU32 as Model>::PrimaryKey = u32`. Before
+/// FEATURES.md #1 closed, this would have failed at derive time with
+/// "umbra M3 supports id types i32, i64, or uuid::Uuid".
+#[test]
+fn primary_key_u32_works() {
+    let row = PkU32 {
+        id: 42,
+        name: String::new(),
+    };
+    let pk: u32 = row.primary_key();
+    assert_eq!(pk, 42);
+}
+
+#[derive(Debug, Clone, sqlx::FromRow, umbra::orm::Model)]
+struct PkString {
+    id: String,
+    title: String,
+}
+
+/// `id: String` is the slug-style key pattern (Django's `SlugField`
+/// PK). The trait bound is now `Clone`, not `Copy`, so non-Copy types
+/// like `String` work the same way as the integer types.
+#[test]
+fn primary_key_string_works() {
+    let row = PkString {
+        id: "hello-world".to_string(),
+        title: String::new(),
+    };
+    let pk: String = row.primary_key();
+    assert_eq!(pk, "hello-world");
+}
+
+// User-defined newtype PK. Demonstrates the public extension path:
+// `impl PrimaryKey for MyId {}` is the one line a user crate writes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct UserScopedId(u64);
+
+impl umbra::orm::PrimaryKey for UserScopedId {}
+
+// NOTE: the model itself can't currently use UserScopedId as its `id`
+// field because the M3 derive's field-type classifier doesn't know
+// about user-defined types — `classify_field_type` would return
+// `Unsupported`. The PK trait extension shipped here is the first
+// half; the field-type extension is a follow-on (FEATURES.md medium
+// #1, second pass). This test pins the trait surface so the impl side
+// compiles and a future model author can wire the full path.
+#[test]
+fn user_defined_primary_key_type_compiles() {
+    let id = UserScopedId(7);
+    // The bound `T: PrimaryKey` is satisfied.
+    fn accept<T: umbra::orm::PrimaryKey>(_: T) {}
+    accept(id.clone());
+    assert_eq!(id, UserScopedId(7));
+}
