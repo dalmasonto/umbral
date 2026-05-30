@@ -1,0 +1,13 @@
+[package]
+name = "umbra"
+description = "A Django-shape web framework for Rust. The facade: re-exports umbra-core and umbra-macros as one stable surface (`use umbra::prelude::*`)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+umbra-core = { path = "../umbra-core", version = "0.0.1" }
+umbra-macros = { path = "../umbra-macros", version = "0.0.1" }

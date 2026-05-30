@@ -1,0 +1,17 @@
+[workspace]
+resolver = "3"
+members = [
+    "umbra-core",
+    "umbra-macros",
+    "umbra",
+    "umbra-cli",
+]
+exclude = ["documentation"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/dalmasonto/umbra"
+authors = ["Dalmas Ogembo <dalmasogembo@gmail.com>"]
+rust-version = "1.85"

@@ -1,0 +1,11 @@
+[package]
+name = "umbra-core"
+description = "umbra internals: ORM, migrations, routing, DB backends, the Plugin trait. Do not depend on this directly; use the `umbra` facade."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]

@@ -1,0 +1,12 @@
+[package]
+name = "umbra-cli"
+description = "The `manage.py` equivalent binary for umbra (migrate, makemigrations, worker, inspectdb, ...)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+umbra = { path = "../umbra", version = "0.0.1" }

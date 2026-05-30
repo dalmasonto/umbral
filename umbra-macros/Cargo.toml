@@ -1,0 +1,14 @@
+[package]
+name = "umbra-macros"
+description = "Derive macros for umbra (`#[derive(Model)]`, `#[task]`, etc.). Do not depend on this directly; use the `umbra` facade."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
