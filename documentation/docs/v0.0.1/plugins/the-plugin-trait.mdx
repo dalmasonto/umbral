@@ -1,0 +1,80 @@
+---
+title: The Plugin trait
+description: umbra's only extension mechanism. Built-ins and third-party plugins are structurally identical.
+sidebar_position: 1
+icon: puzzle
+---
+
+Every umbra extension is a `Plugin`. Auth, sessions, admin, tasks, and REST
+are plugins. So is every third-party crate that ships models, routes, or
+commands. The trait is the architectural keystone: if a built-in needed
+special-casing to fit, the contract would be wrong.
+
+## The trait
+
+```rust
+use umbra::prelude::*;
+
+pub struct BlogPlugin;
+
+impl Plugin for BlogPlugin {
+    fn name(&self) -> &'static str { "blog" }
+
+    fn dependencies(&self) -> &'static [&'static str] { &["auth"] }
+
+    fn models(&self) -> Vec<umbra::migrate::ModelMeta> {
+        vec![umbra::migrate::ModelMeta::for_::<Post>()]
+    }
+
+    fn routes(&self) -> Router {
+        Router::new().route("/posts", get(list_posts))
+    }
+
+    // system_checks and on_ready default to no-op.
+}
+```
+
+Register it on the builder:
+
+```rust
+App::builder()
+    .settings(settings)
+    .database("default", pool)
+    .plugin(BlogPlugin)
+    .build()?;
+```
+
+`App::build()` topologically sorts the registered plugins by their
+`dependencies()`, runs each plugin's `system_checks()` alongside the
+framework's, merges every plugin's `routes()` into the app router, and
+fires `on_ready` in dependency order.
+
+## What plugins contribute
+
+<CardGrid cols={3}>
+  <Card icon="database" title="models" description="Per-plugin model list. The migration engine walks every plugin's migrations/<name>/ directory in dependency order." />
+  <Card icon="route" title="routes" description="An axum-shape Router. Plugins choose their own path prefixes; the App merges them all." />
+  <Card icon="shield" title="system_checks" description="Boot-time invariants. Errors block boot; warnings log and continue." />
+  <Card icon="git-branch" title="dependencies" description="Other plugin names. The topological sort uses this; cycles surface as BuildError::PluginCycle." />
+  <Card icon="zap" title="on_ready" description="Synchronous hook fired after build() succeeds. Spawn background work, wire signals, seal late registrations." />
+  <Card icon="alert-triangle" title="name (required)" description="Unique within the binary. The reserved name 'app' belongs to the implicit plugin that owns .model::<T>() registrations." />
+</CardGrid>
+
+## What ships at M7 v1 vs deferred
+
+The trait above is the M7 v1 shape. Deferred to later milestones:
+
+- `middleware()` — the cross-plugin layer-ordering open question is still
+  open. Lifts when sessions need it.
+- `commands()` — clap's dynamic-subcommand surface ergonomics. Lifts when
+  tasks add a `worker` subcommand.
+- inventory / linkme auto-registration. Explicit `.plugin(...)` is the
+  default recommendation; auto lands when a built-in opts in.
+
+## The proof
+
+`plugins/umbra-auth/` is the first built-in plugin and uses exactly the
+contract above with zero special-casing inside `umbra-core`. See
+[Users and passwords](/v0.0.1/auth/users-and-passwords) for the shape.
+
+The spec lives in `docs/specs/02-plugin-contract.md`.

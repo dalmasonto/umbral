@@ -1,0 +1,78 @@
+---
+title: Declaring models
+description: One struct, one #[derive(Model)], and you get a typed QuerySet.
+sidebar_position: 1
+icon: layers
+---
+
+A model is a struct with `#[derive(Model)]`. The derive generates the trait
+impl, the per-field column constants, and an `objects()` Manager that picks
+up the ambient database pool.
+
+## The minimal model
+
+```rust
+use umbra::prelude::*;
+use chrono::{DateTime, Utc};
+
+#[derive(Debug, Clone, sqlx::FromRow, umbra::orm::Model)]
+pub struct Post {
+    pub id: i64,
+    pub title: String,
+    pub body: String,
+    pub published_at: Option<DateTime<Utc>>,
+}
+```
+
+The rules the derive enforces:
+
+- Exactly one field named `id`, typed `i32`, `i64`, or `uuid::Uuid` — that's
+  the primary key.
+- Field types come from the M3 catalogue: signed ints (`i16` / `i32` / `i64`),
+  `f32` / `f64`, `bool`, `String`, `chrono::NaiveDate` / `NaiveTime` /
+  `DateTime<Utc>`, `uuid::Uuid`.
+- `Option<T>` of any of the above is the only path to a nullable column.
+
+## The table name
+
+By default the table is snake_case of the struct name — `BlogPost` becomes
+`blog_post`. Override with the struct-level attribute when you need a
+different name:
+
+```rust
+#[derive(Debug, Clone, sqlx::FromRow, umbra::orm::Model)]
+#[umbra(table = "auth_user")]
+pub struct User {
+    pub id: i64,
+    pub username: String,
+}
+```
+
+The attribute lands at M3.1; per-field attributes (`max_length`, `db_index`,
+`default`, `choices`, `on_delete`) are scheduled as the plugins that need
+them ship.
+
+## Reading rows
+
+`Post::objects()` returns a `Manager<Post>` that builds a `QuerySet`. No pool
+argument — the manager reaches the ambient pool published by `App::build()`.
+
+```rust
+let recent = Post::objects()
+    .filter(post::published_at.is_not_null())
+    .order_by(post::published_at.desc())
+    .limit(20)
+    .fetch()
+    .await?;
+```
+
+Each field gets a typed column constant under the snake_case module:
+`post::id`, `post::title`, `post::body`, `post::published_at`. The
+comparison methods are checked at compile time.
+
+## What's next
+
+- Register the model with the migration engine so
+  [makemigrations](/v0.0.1/migrations/managed-migrations) tracks it.
+- Read the spec at `docs/specs/04-orm-model-and-fields.md` for the full
+  field-type catalogue and the QuerySet surface.

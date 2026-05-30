@@ -1,0 +1,63 @@
+---
+title: Your first app
+description: Boot an umbra app with Settings, a SQLite pool, and one route.
+sidebar_position: 1
+icon: rocket
+---
+
+The minimal umbra app boots through one builder, registers a database pool,
+and serves a hand-written route. From there you grow into models, migrations,
+and plugins.
+
+## The shape
+
+```rust
+use umbra::prelude::*;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let settings = umbra::Settings::from_env()?;
+    let pool = umbra::db::connect(&settings.database_url).await?;
+
+    let app = App::builder()
+        .settings(settings)
+        .database("default", pool)
+        .router(Router::new().route("/", get(|| async { "hello, umbra" })))
+        .build()?;
+
+    app.serve("127.0.0.1:8000".parse()?).await?;
+    Ok(())
+}
+```
+
+`App::builder().build()` runs five phases under the hood: collect, detect the
+backend, publish the ambient state, run system checks, and merge plugin
+routers. From the user's perspective the call is a single line.
+
+## Settings
+
+`Settings::from_env()` layers defaults, an `umbra.toml` file (optional), and
+`UMBRA_`-prefixed environment variables (last wins). The fields that matter
+on day one:
+
+<CardGrid cols={2}>
+  <Card icon="database" title="database_url" description="The DB connection string. Default sqlite::memory: — fine for tests, not for the management CLI. Override with UMBRA_DATABASE_URL." />
+  <Card icon="key" title="secret_key" description="Required. Set via UMBRA_SECRET_KEY. The dev default is rejected in production." />
+</CardGrid>
+
+<Callout type="warning">
+The `sqlite::memory:` default doesn't persist between subcommand invocations,
+which makes `cargo run -p umbra-cli -- migrate` quietly target a throwaway
+database. Export `UMBRA_DATABASE_URL=sqlite://app.db?mode=rwc` for any
+real work.
+</Callout>
+
+## What's next
+
+- [Declare a model](/v0.0.1/orm/models) and let the derive generate the
+  `Model` impl.
+- [Run a migration](/v0.0.1/migrations/managed-migrations) — declare,
+  migrate, change, migrate.
+- [Port an existing database](/v0.0.1/migrations/inspectdb).
+
+The full builder shape lives in `docs/specs/01-app-and-settings.md`.

@@ -1,0 +1,76 @@
+---
+title: Management commands
+description: umbra-cli — the manage.py equivalent. serve, migrate, inspectdb, and the rest.
+sidebar_position: 1
+icon: terminal
+---
+
+`umbra-cli` is the `manage.py` equivalent. Every subcommand boots the App
+(so the ambient pool, settings, and plugin registrations are live), then
+runs against the registered set.
+
+## The subcommands
+
+<CardGrid cols={2}>
+  <Card icon="play" title="serve" description="Default. Boots the App and serves HTTP. cargo run -p umbra-cli with no args is the same thing." />
+  <Card icon="file-plus" title="makemigrations" description="Diff every registered plugin's models against the latest snapshot. Writes one JSON file per plugin that has changes; prints 'no changes detected' if nothing moved." />
+  <Card icon="play-circle" title="migrate" description="Apply every pending migration against the ambient pool, in topological plugin order. Each migration runs in its own transaction." />
+  <Card icon="list" title="showmigrations" description="Print per-plugin migration state. [X] applied, [ ] pending. Returns the pending count so a CI hook can fail when migrations are out of date." />
+  <Card icon="download" title="inspectdb" description="Introspect an existing SQLite database into models.rs + a 0001_initial.json migration. See the porting guide." />
+</CardGrid>
+
+## Settings come from the environment
+
+The CLI loads settings the same way the server does — defaults, an optional
+`umbra.toml`, and `UMBRA_`-prefixed environment variables (last wins).
+
+```bash
+export UMBRA_SECRET_KEY=$(openssl rand -hex 32)
+export UMBRA_DATABASE_URL=sqlite://app.db?mode=rwc
+
+cargo run -p umbra-cli -- makemigrations
+cargo run -p umbra-cli -- migrate
+```
+
+<Callout type="warning">
+Without `UMBRA_DATABASE_URL` set, the management subcommands fall back to
+`sqlite::memory:` — every invocation gets a fresh database. `migrate` will
+happily report `Applied 1 migration(s)` while applying to an in-memory pool
+that vanishes when the process exits. Export the URL once and forget about
+it.
+</Callout>
+
+## inspectdb flags
+
+```bash
+cargo run -p umbra-cli -- inspectdb \
+    --output plugins/imported \
+    [--mark-applied]
+```
+
+| Flag | Effect |
+|---|---|
+| `--output <path>` | Where `models.rs` and `migrations/app/0001_initial.json` land. Required. |
+| `--mark-applied` | Record `0001_initial` in `umbra_migrations` without running the SQL. Pass when the target DB already holds the introspected tables. |
+
+See [the inspectdb guide](/v0.0.1/migrations/inspectdb) for the full
+workflow.
+
+## Errors
+
+Every subcommand prints errors through the `Display` impl, not the `Debug`
+repr. A failure reads as a single human-readable diagnostic:
+
+```
+error: umbra inspectdb: column `doc.payload` has unsupported SQL type
+       `BLOB`; add a matching SqlType variant or edit the generated
+       model by hand
+```
+
+Exit code is `1` on any error, `0` on success.
+
+## What's next
+
+The deep spec for each subcommand lives alongside its subsystem:
+`docs/specs/06-migration-engine.md` for the migrate trio,
+`docs/specs/07-inspectdb.md` for inspectdb.

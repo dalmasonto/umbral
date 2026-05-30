@@ -1,0 +1,81 @@
+---
+title: inspectdb
+description: Introspect an existing database into models and a 0001_initial migration.
+sidebar_position: 2
+icon: download
+---
+
+`inspectdb` is the porting on-ramp. Point it at an existing SQLite database
+and it generates a `models.rs` with one `#[derive(Model)]` struct per table,
+plus a `0001_initial.json` migration that recreates the schema. The output
+drops into the same M5 migration loop — no parallel porting code path.
+
+## Run it
+
+```bash
+cargo run -p umbra-cli -- inspectdb --output plugins/imported
+# -> Inspected 12 table(s), 47 column(s)
+# -> Wrote plugins/imported/models.rs
+# -> Wrote plugins/imported/migrations/app/0001_initial.json
+```
+
+The output:
+
+```
+plugins/imported/
+├── models.rs                          # one #[derive(Model)] per table
+└── migrations/
+    └── app/
+        └── 0001_initial.json          # one CreateTable per table
+```
+
+Wire each generated struct with `App::builder().model::<T>()` (or move them
+into a real plugin once M7's plugin contract suits your project shape) and
+the loop runs normally from there.
+
+## Marking the initial migration applied
+
+When the target database already holds the tables you just introspected,
+running the migration would fail on "table already exists". Pass
+`--mark-applied` to record the row in `umbra_migrations` without running
+the SQL:
+
+```bash
+cargo run -p umbra-cli -- inspectdb --output plugins/imported --mark-applied
+```
+
+The next `migrate` is a no-op until you actually change a model.
+
+## The M6 v1 type catalogue
+
+The columns inspectdb knows about today:
+
+<CardGrid cols={3}>
+  <Card icon="hash" title="Integers" description="SMALLINT, INTEGER, BIGINT and their aliases map to i16 / i32 / i64." />
+  <Card icon="percent" title="Floats" description="REAL → f32; DOUBLE / FLOAT8 → f64." />
+  <Card icon="check-square" title="Booleans" description="BOOLEAN / BOOL → bool." />
+  <Card icon="type" title="Text" description="TEXT, VARCHAR, CHAR, CLOB all map to String. VARCHAR(n) width is recorded as a comment." />
+  <Card icon="calendar" title="Dates and times" description="DATE → NaiveDate, TIME → NaiveTime, TIMESTAMP / DATETIME → DateTime<Utc>." />
+  <Card icon="key" title="UUIDs" description="UUID → uuid::Uuid." />
+</CardGrid>
+
+A column with a SQL type outside the catalogue (NUMERIC, JSON, BYTEA,
+arrays, custom types) makes `inspectdb` stop with an `UnsupportedColumnType`
+error naming the offending column. Either add a matching `SqlType` variant
+or edit the generated `models.rs` by hand.
+
+<Callout type="info">
+`umbra_migrations`, every `sqlite_*` internal table, and any table with an
+SQL type the catalogue doesn't know are excluded automatically.
+</Callout>
+
+## Deferred past M6 v1
+
+- Postgres introspection. Today's path is SQLite-only via `PRAGMA
+  table_info`; Postgres lands with the backend body.
+- Foreign-key and index detection. The `Column` shape doesn't yet carry FKs
+  or indexes; once the field types exist, inspectdb picks them up.
+- Generated plugin crates with a `Plugin` impl. Today the output is a flat
+  `models.rs` you wire by hand. M7's full plugin shape ships the crate too.
+
+The full target shape lives in `docs/specs/07-inspectdb.md`.
