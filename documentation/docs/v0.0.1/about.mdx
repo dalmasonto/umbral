@@ -1,57 +1,97 @@
 ---
-title: About Specra
+title: What is Umbra?
+description: A Django-shape web framework for Rust.
 sidebar_position: 1
 icon: info
 ---
 
-[Specra](https://specra-docs.com) is a self-hosted, Mintlify-quality documentation platform built with **SvelteKit**, **MDX**, and **Tailwind CSS**. It provides a polished, readable docs experience with powerful features for both readers and writers.
+**Umbra** is a batteries-included web framework for Rust, shaped like Django.
+You declare your data, and you get migrations, CRUD, an admin, and (optionally)
+a REST API almost for free — with Rust's compile-time guarantees instead of
+runtime hopes.
 
-## Why Specra?
+The name is Latin for *shadow*: umbra is a Django shadow.
+
+<Callout type="info">
+Umbra is in the design phase. The specs are being written before the code.
+Pages get added here as features ship — for now there is only this one.
+</Callout>
+
+## Why Umbra exists
+
+Web development in Rust is *unassembled*. Unlike Django or Rails, there is no
+mainstream "just works" path: every team picks and wires a web framework, a
+database layer, a migration tool, serialization, auth, and background jobs.
+Two costs follow:
+
+- **Greenfield productivity** — a basic CRUD/REST API takes days of plumbing.
+- **Porting** — moving an existing API to Rust means re-deriving the schema,
+  the models, and the conventions by hand. There is no `inspectdb`, no managed
+  migrations, no obvious on-ramp.
+
+Umbra targets that on-ramp.
+
+## The shape
 
 <CardGrid cols={2}>
-  <Card icon="zap" title="Fast & Static" description="Pre-rendered pages with edge caching for lightning-fast load times" />
-  <Card icon="search" title="Instant Search" description="Meilisearch-powered full-text search with typo tolerance" />
-  <Card icon="git-branch" title="Versioned Docs" description="Multiple documentation versions under /docs/v1.0.0/, /docs/v2.0.0/" />
-  <Card icon="palette" title="Theme Support" description="Dark mode, customizable colors, and design tokens" />
+  <Card
+    icon="layers"
+    title="Thin core, plugin-heavy"
+    description="Auth, sessions, admin, tasks, and REST are plugins — structurally identical to third-party ones. A REST-free app compiles with zero serializer code."
+  />
+  <Card
+    icon="git-branch"
+    title="Managed migrations from day one"
+    description="Declare or change a model; an autodetected migration is generated; migrate applies it. The declare → migrate → change → migrate cycle is the product, not a later feature."
+  />
+  <Card
+    icon="shield"
+    title="The easy path is the safe path"
+    description="Nullable columns are Option<T>. Errors are Result. Backend mismatches fail at boot. SQL is always parameterized."
+  />
+  <Card
+    icon="zap"
+    title="Stand on shoulders"
+    description="axum, sqlx, sea-query, tower do the heavy lifting. Umbra reimplements conventions and integration — not HTTP, async, SQL, or JSON."
+  />
 </CardGrid>
 
-## Built With
+## What you write
 
-- **SvelteKit** - Svelte framework with file-based routing
-- **MDX** - Markdown with Svelte components
-- **Tailwind CSS** - Utility-first styling
-- **Meilisearch** - Fast, typo-tolerant search
-- **TypeScript** - Full type safety
+A model is a struct. A migration is generated. A handler reads ambient data.
+This is the day-to-day feel — not yet working code, but the target shape:
 
-## Core Principles
+```rust
+use umbra::prelude::*;
 
-<Steps>
-  <Step title="Content First">
-    Your documentation lives in the `docs/` folder as MDX files. The system handles routing, navigation, and rendering automatically.
-  </Step>
-  
-  <Step title="Developer Experience">
-    Edit MDX files, and see changes instantly with hot reload. No complex configuration required.
-  </Step>
-  
-  <Step title="Production Ready">
-    Built-in SEO, accessibility, performance optimization, and CI/CD integration.
-  </Step>
-</Steps>
+#[derive(Model)]
+pub struct Post {
+    pub id: i64,
+    pub title: String,
+    pub body: String,
+    pub published: Option<DateTime<Utc>>,
+}
 
-## What's Included
+async fn list_published() -> Result<Json<Vec<Post>>> {
+    let posts = Post::objects()
+        .filter(post::published.is_not_null())
+        .order_by(post::published.desc())
+        .limit(20)
+        .fetch()
+        .await?;
+    Ok(Json(posts))
+}
+```
 
-| Feature | Description |
-|---------|-------------|
-| **MDX Components** | Callouts, tabs, code blocks, cards, accordions, and more |
-| **Sidebar Navigation** | Auto-generated from folder structure with collapsible groups |
-| **Table of Contents** | Auto-generated from headings with scroll tracking |
-| **Version Switcher** | Switch between documentation versions |
-| **Search** | Full-text search with keyboard shortcuts (⌘K) |
-| **Dark Mode** | System-aware theme with manual toggle |
-| **Reading Time** | Automatic reading time estimation |
-| **Responsive** | Mobile-first design that works on all devices |
+No `State<DbPool>` in the handler signature. No `axum::` types. The ORM is
+ambient; the request body, params, and session are explicit arguments.
 
-## Getting Started
+## Status
 
-Ready to write documentation? Head to the [Getting Started](/docs/v1.0.0/getting-started) guide.
+Umbra is **pre-alpha**. There is no published crate yet. The architecture,
+PRD, and per-subsystem specs are being written first; implementation follows
+milestone by milestone. As features land, each gets a doc page here.
+
+If you want the long version, read the design specs in the repository root:
+`arch.md` (architecture), `umbra-PRD.md` (product requirements), and
+`docs/specs/` (per-subsystem deep specs).
