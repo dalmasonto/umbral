@@ -4,19 +4,14 @@ A working list. Each item carries a status (open / shipped) plus rough scope, so
 
 ---
 
-## Shipped (this round)
+## Shipped
 
 - ✅ **Critical update #1 — "Inspired by Django" framing.** Relabelled across README, arch.md, CLAUDE.md, about.mdx, and the PRD. Historical decision docs under `docs/decisions/` keep their wording. Commit: `37c76d2`.
 - ✅ **Gap #2 — configurable bind address.** `Settings` grows `bind_addr` (default `127.0.0.1:8000`); override via `UMBRA_BIND_ADDR` or `umbra.toml`. Verified by binding to 8765 and curling. Commit: `760c477`.
 - ✅ **Feature #7 — `QuerySet::to_sql` for debug-time SQL introspection.** Renders the prepared statement (with `?` placeholders) without executing. Test pins SELECT/FROM/WHERE/ORDER BY/LIMIT invariants without locking to the exact sea-query formatter output. Commit: `5907f07`.
-
-## Open — medium scope (need a small design call)
-
-1. **Primary-key types beyond `i32`/`i64`/`uuid::Uuid` (originally feature #2).** The M3 derive currently hand-rolls each. Two paths: (a) expose a `PrimaryKey` trait users can impl for their own types, (b) auto-derive from any sqlx-compatible scalar. The trait path is the right shape but needs the trait surface pinned. Low-medium effort once the design is fixed; the macro is the simpler half.
-
-2. **Settings extensibility (originally gap #1).** Today `Settings` is a fixed struct. Real apps want their own keys (`OPENAI_API_KEY`, `STRIPE_SECRET`, etc.). Two options: (a) an `extra: HashMap<String, String>` catch-all, (b) a `UserSettings` trait the app implements and registers via the builder. Path (b) is more typed; path (a) is simpler. Lands when the first plugin needs typed settings.
-
-3. **Apps clarification (originally feature #5 — not actually a missing feature).** The original ask said "I haven't seen apps". umbra's `Plugin` *is* the app concept — `plugins/umbra-auth/` is an app. This is a documentation ask: rename / cross-link so plugin authors find this without bouncing through the spec set. Doc-only change.
+- ✅ **Medium #3 — apps clarification.** `Plugin` IS the app concept; new page maps every Django app primitive onto its umbra counterpart and explains the rename. Commit: `37f155e`.
+- ✅ **Medium #2 — settings extensibility.** `#[serde(flatten)] extra: HashMap<String, toml::Value>` on `Settings`. Unknown env vars and unknown TOML keys (`UMBRA_OPENAI_API_KEY=sk-...`, `[external.openai]` tables) flow into the map; `settings.extra_str(key)` is the scalar-string accessor. Typed `UserSettings` trait alternative parks as a future layer on top. Commit: `6f5243e`.
+- ✅ **Medium #1 — PK types beyond i32/i64/Uuid.** `PrimaryKey: Copy` relaxed to `Clone`; built-in impls cover every Rust integer width plus `String` (slug-style PKs). The derive's hardcoded type check is gone — user newtypes opt in with `impl PrimaryKey for MyId {}`, and Rust's trait-bound diagnostic does the validation. Commit: `4e8aee4`.
 
 ## Open — large scope (design call first)
 
