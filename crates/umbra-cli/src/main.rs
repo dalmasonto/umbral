@@ -72,6 +72,20 @@ enum Command {
         #[arg(long, default_value_t = false)]
         mark_applied: bool,
     },
+    /// Dump every registered model's rows to JSON. The upgrade-safety
+    /// net: snapshot data before a breaking schema change, load it
+    /// back into the new schema afterwards.
+    Dumpdata {
+        /// Where the JSON envelope is written.
+        #[arg(long)]
+        output: PathBuf,
+    },
+    /// Load a `dumpdata` JSON envelope back into the database. The
+    /// schema must already exist; run `migrate` first.
+    Loaddata {
+        /// Path to the JSON envelope.
+        input: PathBuf,
+    },
 }
 
 #[tokio::main]
@@ -97,6 +111,8 @@ async fn main() {
             output,
             mark_applied,
         } => inspectdb(output, mark_applied).await,
+        Command::Dumpdata { output } => dumpdata(output).await,
+        Command::Loaddata { input } => loaddata(input).await,
     };
     // Catch the error explicitly so the user-facing diagnostic uses
     // the `Display` impl (`umbra inspectdb: column \`x.y\` has
@@ -226,6 +242,29 @@ async fn inspectdb(output: PathBuf, mark_applied: bool) -> Result<(), Box<dyn st
         }
         Err(err) => Err(Box::new(err)),
     }
+}
+
+/// `dumpdata`: snapshot every registered model's rows to JSON.
+async fn dumpdata(output: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    boot_for_management().await?;
+    umbra::backup::dump_to_path(&output).await?;
+    println!("Wrote {}", output.display());
+    Ok(())
+}
+
+/// `loaddata`: replay a `dumpdata` JSON envelope into the schema.
+async fn loaddata(input: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    boot_for_management().await?;
+    let report = umbra::backup::load_from_path(&input).await?;
+    println!(
+        "Loaded {} row(s) into {} table(s)",
+        report.rows_loaded,
+        report.tables_loaded.len()
+    );
+    for skipped in &report.skipped_tables {
+        eprintln!("warning: skipped table `{skipped}` (not in current schema)");
+    }
+    Ok(())
 }
 
 /// Shared boot path for the migration subcommands. Opens the pool,

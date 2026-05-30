@@ -96,6 +96,23 @@ pub mod plugin {
     pub use umbra_core::plugin::{AppContext, Plugin, PluginError};
 }
 
+pub mod backup {
+    //! Dump every registered model's rows to JSON; load them back.
+    //!
+    //! The `dump` / `load` pair is the upgrade-safety net: a user
+    //! preparing for a breaking framework change runs `dumpdata`,
+    //! migrates the schema (or the framework version), then runs
+    //! `loaddata` to put their rows back. The receiving schema has
+    //! to already exist — `loaddata` doesn't run migrations.
+    //!
+    //! `umbra-cli dumpdata --output backup.json` and `umbra-cli
+    //! loaddata backup.json` are the CLI entry points.
+
+    pub use umbra_core::backup::{
+        BackupError, Dump, LoadReport, ModelDump, dump, dump_to_path, load, load_from_path,
+    };
+}
+
 pub mod templates {
     //! Server-side HTML rendering via minijinja.
     //!

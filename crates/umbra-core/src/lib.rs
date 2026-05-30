@@ -6,6 +6,7 @@
 
 pub mod app;
 pub mod backend;
+pub mod backup;
 pub mod check;
 pub mod db;
 pub mod inspect;
