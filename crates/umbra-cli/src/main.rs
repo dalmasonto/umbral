@@ -145,14 +145,17 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// `makemigrations`: diff the registry against the latest snapshot and
-/// write a migration file. Prints the written path, or
-/// `no changes detected` on the `NoChanges` sentinel.
+/// `makemigrations`: diff the registry against the latest snapshot
+/// for every registered plugin and write one migration file per plugin
+/// that has changes. Prints one `Wrote <path>` line per written file,
+/// or `no changes detected` on the `NoChanges` sentinel.
 async fn makemigrations() -> Result<(), Box<dyn std::error::Error>> {
     boot_for_management().await?;
     match umbra::migrate::make().await {
-        Ok(path) => {
-            println!("Wrote {}", path.display());
+        Ok(paths) => {
+            for path in paths {
+                println!("Wrote {}", path.display());
+            }
             Ok(())
         }
         Err(MigrateError::NoChanges) => {

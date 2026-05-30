@@ -181,6 +181,17 @@ impl Snapshot {
         Self { models }
     }
 
+    /// Build a snapshot containing only the models registered
+    /// against the given plugin. Used by `make_in` to diff each
+    /// plugin's migrations independently against its own prior
+    /// snapshot, so cross-plugin model sets don't bleed into one
+    /// migration file.
+    pub fn current_for(plugin: &str) -> Self {
+        let mut models = models_for_plugin(plugin);
+        models.sort_by(|a, b| a.name.cmp(&b.name));
+        Self { models }
+    }
+
     /// Compute the snapshot's SHA-256 hash, hex-encoded. Stored in the
     /// `umbra_migrations.snapshot_hash` column for drift detection.
     pub fn hash(&self) -> String {
@@ -339,106 +350,135 @@ impl From<sqlx::Error> for MigrateError {
 // Top-level entry points.
 // =========================================================================
 
-/// Generate a new migration file by diffing the current model registry
-/// against the latest snapshot in `migrations/<APP_PLUGIN_NAME>/`. The
-/// file is written into the same directory with the next sequence
-/// number and a `_<short_name>` suffix derived from the dominant
-/// operation.
+/// Generate one migration file per registered plugin that has changes,
+/// diffing each plugin's current model set against the latest snapshot
+/// in `migrations/<plugin>/`. Each new file lands inside its own
+/// plugin directory with the next sequence number and a `_<short_name>`
+/// suffix derived from the dominant operation.
 ///
-/// Returns the path to the file that was written. Returns
-/// `MigrateError::NoChanges` if the current snapshot equals the latest.
-pub async fn make() -> Result<PathBuf, MigrateError> {
+/// Returns the paths of every file written, one per plugin that had a
+/// non-empty diff. Returns `MigrateError::NoChanges` if no plugin
+/// produced any changes at all.
+pub async fn make() -> Result<Vec<PathBuf>, MigrateError> {
     make_in(Path::new(MIGRATIONS_DIR)).await
 }
 
 /// Same as [`make`] but takes an explicit base directory. Used by
 /// tests to avoid touching the cwd.
-pub async fn make_in(dir: &Path) -> Result<PathBuf, MigrateError> {
-    let plugin_dir = dir.join(APP_PLUGIN_NAME);
+///
+/// Iterates `registered_plugins()` in sorted-by-name order. M7 v1
+/// accepts this as a limitation: cross-plugin FK ordering wants
+/// topological order (a plugin's `CreateTable` for the FK target has
+/// to land before the dependent plugin's `CreateTable` runs), but the
+/// engine doesn't see `Plugin::dependencies()` from inside this
+/// standalone function. M8 lifts the limitation via a registry that
+/// remembers the toposorted order computed at `App::build()` time.
+pub async fn make_in(dir: &Path) -> Result<Vec<PathBuf>, MigrateError> {
+    let mut written: Vec<PathBuf> = Vec::new();
 
-    // The previous snapshot is the `snapshot_after` of the highest-numbered
-    // migration file (filenames are zero-padded so lexical sort matches
-    // numeric order). An empty or missing directory means "no prior state",
-    // which is the first-run case.
-    let existing = list_migration_files(&plugin_dir)?;
-    let previous = match existing.last() {
-        Some(path) => read_migration_file(path)?.snapshot_after,
-        None => Snapshot::default(),
-    };
+    for plugin in registered_plugins() {
+        let plugin_dir = dir.join(&plugin);
 
-    let current = Snapshot::current();
-    let operations = diff(&previous, &current)?;
-    if operations.is_empty() {
-        return Err(MigrateError::NoChanges);
+        // The previous snapshot is the `snapshot_after` of the highest-
+        // numbered migration file (filenames are zero-padded so lexical
+        // sort matches numeric order). An empty or missing directory
+        // means "no prior state", the first-run case for this plugin.
+        let existing = list_migration_files(&plugin_dir)?;
+        let previous = match existing.last() {
+            Some(path) => read_migration_file(path)?.snapshot_after,
+            None => Snapshot::default(),
+        };
+
+        let current = Snapshot::current_for(&plugin);
+        let operations = diff(&previous, &current)?;
+        if operations.is_empty() {
+            continue;
+        }
+
+        let seq = (existing.len() + 1) as u32;
+        let suffix = suffix_for(&operations);
+        let id = format!("{seq:04}_{suffix}");
+        let filename = format!("{id}.json");
+
+        let file = MigrationFile {
+            id: id.clone(),
+            plugin: plugin.clone(),
+            depends_on: Vec::new(),
+            operations,
+            snapshot_after: current,
+        };
+
+        std::fs::create_dir_all(&plugin_dir)?;
+        let path = plugin_dir.join(filename);
+        let json = serde_json::to_string_pretty(&file)?;
+        std::fs::write(&path, json)?;
+        written.push(path);
     }
 
-    let seq = (existing.len() + 1) as u32;
-    let suffix = suffix_for(&operations);
-    let id = format!("{seq:04}_{suffix}");
-    let filename = format!("{id}.json");
-
-    let file = MigrationFile {
-        id: id.clone(),
-        plugin: APP_PLUGIN_NAME.to_string(),
-        depends_on: Vec::new(),
-        operations,
-        snapshot_after: current,
-    };
-
-    std::fs::create_dir_all(&plugin_dir)?;
-    let path = plugin_dir.join(filename);
-    let json = serde_json::to_string_pretty(&file)?;
-    std::fs::write(&path, json)?;
-    Ok(path)
+    if written.is_empty() {
+        return Err(MigrateError::NoChanges);
+    }
+    Ok(written)
 }
 
-/// Apply every pending migration in `migrations/<APP_PLUGIN_NAME>/` to
-/// the ambient pool. Reads the `umbra_migrations` tracking table to
-/// determine "pending"; each migration runs in its own transaction
-/// along with its tracking-table insert.
+/// Apply every pending migration across every registered plugin's
+/// `migrations/<plugin>/` directory to the ambient pool. Reads the
+/// `umbra_migrations` tracking table to determine "pending"; each
+/// migration runs in its own transaction along with its tracking-table
+/// insert.
 ///
-/// Returns the number of migrations applied (zero if all migrations
-/// were already in the tracking table).
+/// Returns the total number of migrations applied (zero if every
+/// plugin's migrations were already in the tracking table).
 pub async fn run() -> Result<u64, MigrateError> {
     run_in(Path::new(MIGRATIONS_DIR)).await
 }
 
 /// Same as [`run`] but takes an explicit base directory. Used by
 /// tests to avoid touching the cwd.
+///
+/// Iterates `registered_plugins()` in sorted-by-name order. M7 v1
+/// accepts this as a limitation: cross-plugin FK ordering wants
+/// topological order across plugins (the FK target's `CreateTable`
+/// applies before the dependent plugin's `CreateTable`), but the
+/// engine doesn't see `Plugin::dependencies()` from inside this
+/// standalone function. M8 lifts the limitation via a registry that
+/// remembers the toposorted order computed at `App::build()` time.
 pub async fn run_in(dir: &Path) -> Result<u64, MigrateError> {
     let pool = crate::db::pool();
     ensure_tracking_table(&pool).await?;
-
-    let plugin_dir = dir.join(APP_PLUGIN_NAME);
-    let paths = list_migration_files(&plugin_dir)?;
     let applied = applied_names(&pool).await?;
 
     let mut applied_count: u64 = 0;
-    for path in paths {
-        let file = read_migration_file(&path)?;
-        if applied.contains(&(file.plugin.clone(), file.id.clone())) {
-            continue;
-        }
+    for plugin in registered_plugins() {
+        let plugin_dir = dir.join(&plugin);
+        let paths = list_migration_files(&plugin_dir)?;
 
-        let mut tx = pool.begin().await?;
-        for op in &file.operations {
-            let sql = render_operation(op);
-            sqlx::query(&sql).execute(&mut *tx).await?;
+        for path in paths {
+            let file = read_migration_file(&path)?;
+            if applied.contains(&(file.plugin.clone(), file.id.clone())) {
+                continue;
+            }
+
+            let mut tx = pool.begin().await?;
+            for op in &file.operations {
+                let sql = render_operation(op);
+                sqlx::query(&sql).execute(&mut *tx).await?;
+            }
+            let snapshot_hash = file.snapshot_after.hash();
+            let applied_at = chrono::Utc::now().to_rfc3339();
+            sqlx::query(
+                "INSERT INTO umbra_migrations (plugin, name, applied_at, snapshot_hash) \
+                 VALUES (?, ?, ?, ?)",
+            )
+            .bind(&file.plugin)
+            .bind(&file.id)
+            .bind(&applied_at)
+            .bind(&snapshot_hash)
+            .execute(&mut *tx)
+            .await?;
+            tx.commit().await?;
+            applied_count += 1;
         }
-        let snapshot_hash = file.snapshot_after.hash();
-        let applied_at = chrono::Utc::now().to_rfc3339();
-        sqlx::query(
-            "INSERT INTO umbra_migrations (plugin, name, applied_at, snapshot_hash) \
-             VALUES (?, ?, ?, ?)",
-        )
-        .bind(&file.plugin)
-        .bind(&file.id)
-        .bind(&applied_at)
-        .bind(&snapshot_hash)
-        .execute(&mut *tx)
-        .await?;
-        tx.commit().await?;
-        applied_count += 1;
     }
     Ok(applied_count)
 }
@@ -476,24 +516,32 @@ pub async fn show() -> Result<u64, MigrateError> {
     show_in(Path::new(MIGRATIONS_DIR)).await
 }
 
-/// Same as [`show`] but takes an explicit base directory.
+/// Same as [`show`] but takes an explicit base directory. Walks every
+/// registered plugin in sorted-by-name order, printing one section per
+/// plugin that owns at least one migration file; empty plugins are
+/// skipped silently rather than emitting a bare header.
 pub async fn show_in(dir: &Path) -> Result<u64, MigrateError> {
     let pool = crate::db::pool();
     ensure_tracking_table(&pool).await?;
-
-    let plugin_dir = dir.join(APP_PLUGIN_NAME);
-    let paths = list_migration_files(&plugin_dir)?;
     let applied = applied_names(&pool).await?;
 
     let mut pending: u64 = 0;
-    for path in paths {
-        let file = read_migration_file(&path)?;
-        let key = (file.plugin.clone(), file.id.clone());
-        if applied.contains(&key) {
-            println!("[X] {}/{}", file.plugin, file.id);
-        } else {
-            println!("[ ] {}/{}", file.plugin, file.id);
-            pending += 1;
+    for plugin in registered_plugins() {
+        let plugin_dir = dir.join(&plugin);
+        let paths = list_migration_files(&plugin_dir)?;
+        if paths.is_empty() {
+            continue;
+        }
+        println!("# plugin: {plugin}");
+        for path in paths {
+            let file = read_migration_file(&path)?;
+            let key = (file.plugin.clone(), file.id.clone());
+            if applied.contains(&key) {
+                println!("[X] {}/{}", file.plugin, file.id);
+            } else {
+                println!("[ ] {}/{}", file.plugin, file.id);
+                pending += 1;
+            }
         }
     }
     Ok(pending)

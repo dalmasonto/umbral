@@ -225,9 +225,16 @@ async fn first_make_in_emits_create_table_for_every_registered_model() {
     boot().await;
     let tmp = tempfile::tempdir().expect("create tempdir");
 
-    let path = make_in(tmp.path())
+    let written = make_in(tmp.path())
         .await
         .expect("first make_in against empty dir should write a migration");
+    assert_eq!(
+        written.len(),
+        1,
+        "one plugin (`app`) registered, one file expected; got {} paths",
+        written.len(),
+    );
+    let path = written.first().expect("at least one written path");
 
     let filename = path
         .file_name()
@@ -247,7 +254,7 @@ async fn first_make_in_emits_create_table_for_every_registered_model() {
         "two-model first migration should land on `_auto`, got {filename}",
     );
 
-    let file = read_migration_file(&path);
+    let file = read_migration_file(path);
     assert_eq!(file.id, "0001_auto");
     assert_eq!(file.plugin, APP_PLUGIN_NAME);
     assert!(
@@ -300,9 +307,16 @@ async fn hand_written_empty_prior_snapshot_drives_a_diff_of_all_models() {
         &migration_with_snapshot("0001_prior", Snapshot { models: Vec::new() }),
     );
 
-    let path = make_in(tmp.path())
+    let written = make_in(tmp.path())
         .await
         .expect("empty prior snapshot should drive a non-empty diff");
+    assert_eq!(
+        written.len(),
+        1,
+        "one plugin (`app`) registered, one file expected; got {} paths",
+        written.len(),
+    );
+    let path = written.first().expect("at least one written path");
 
     let filename = path
         .file_name()
@@ -313,7 +327,7 @@ async fn hand_written_empty_prior_snapshot_drives_a_diff_of_all_models() {
         "second migration should be numbered 0002, got {filename}",
     );
 
-    let file = read_migration_file(&path);
+    let file = read_migration_file(path);
     assert_eq!(file.operations.len(), registered_models().len());
     for op in &file.operations {
         assert!(
