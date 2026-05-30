@@ -207,6 +207,7 @@ The opt-in `with_auto_plugins()` mode is for plugin *authors* who want their use
 
 ## Cross-links
 
+- The author-side how-to guide for writing a plugin against this contract: `08-authoring-plugins.md`.
 - The dependency-inversion model this spec rests on: `arch.md §3`.
 - The prelude's physical exports: `umbra-core` and the facade crate (no spec; tracked at the workspace level).
 - Plugin-owned migrations are collected by: `06-migration-engine.md`.

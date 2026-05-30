@@ -4,7 +4,7 @@
 |---|---|
 | **Status** | Draft |
 | **Maps to milestone** | None (foundation for the spec set) |
-| **Companions** | `arch.md`, `umbra-PRD.md`, the per-subsystem specs `01`–`07`, the outlines under `outlines/` |
+| **Companions** | `arch.md`, `umbra-PRD.md`, the per-subsystem specs `01`–`07`, the author guide `08`, the outlines under `outlines/`, the post-M13 backlog in `deferred.md` |
 
 ## Purpose
 
@@ -21,8 +21,9 @@ The deep specs are numbered in the order someone reading the design from scratch
 5. **`05-backends-and-system-check.md`.** The `DatabaseBackend` abstraction and the boot-time field/backend compatibility check.
 6. **`06-migration-engine.md`.** Model snapshot, autodetection, tracking table, the declare → migrate → change → migrate loop end-to-end. The north star.
 7. **`07-inspectdb.md`.** Introspect an existing database into models that feed straight back into the migration engine. The porting payoff.
+8. **`08-authoring-plugins.md`.** The author-side walkthrough — from `cargo new umbra-foo --lib` to `cargo publish`. Complements `02-plugin-contract.md` (what the contract is) with how you actually build one.
 
-Outlines under `outlines/*.md` cover M7–M13 surfaces at half-page depth. Each one is promoted to a deep spec when its milestone is approached. The full coverage audit (every Django capability mapped to a spec or outline) lives in `docs/decisions/2026-05-30-spec-set-design.md §7`.
+Outlines under `outlines/*.md` cover M7–M13 surfaces at half-page depth. Each one is promoted to a deep spec when its milestone is approached. Items deferred beyond M13 live as structured backlog entries in `deferred.md`. The full coverage audit (every Django capability mapped to a spec, outline, or deferred entry) lives in `docs/decisions/2026-05-30-spec-set-design.md §7`.
 
 ## Naming conventions
 
