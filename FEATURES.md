@@ -13,18 +13,29 @@ A working list. Each item carries a status (open / shipped) plus rough scope, so
 - ✅ **Medium #2 — settings extensibility.** `#[serde(flatten)] extra: HashMap<String, toml::Value>` on `Settings`. Unknown env vars and unknown TOML keys (`UMBRA_OPENAI_API_KEY=sk-...`, `[external.openai]` tables) flow into the map; `settings.extra_str(key)` is the scalar-string accessor. Typed `UserSettings` trait alternative parks as a future layer on top. Commit: `6f5243e`.
 - ✅ **Medium #1 — PK types beyond i32/i64/Uuid.** `PrimaryKey: Copy` relaxed to `Clone`; built-in impls cover every Rust integer width plus `String` (slug-style PKs). The derive's hardcoded type check is gone — user newtypes opt in with `impl PrimaryKey for MyId {}`, and Rust's trait-bound diagnostic does the validation. Commit: `4e8aee4`.
 - ✅ **Large #7 — backup / recovery via `dumpdata` / `loaddata`.** New `umbra::backup` module walks every registered model, dispatches per-column on `SqlType` to dump rows as JSON, reverses the dispatch on load. Carries an `umbra_dump_version` so a forward-incompatible dump fails loudly. CLI subcommands wired; round-trip verified end-to-end through the binary (2 rows → JSON → wipe → load → same 2 rows back with PKs and nullable column intact). Commit: `3ad51b5`.
+- ✅ **Large #6 — per-plugin database routing.** `Plugin::database()` returns `Option<&'static str>`. App::build validates the alias exists in the pool set (typos surface as `BuildError::PluginDatabaseAlias` at boot) and publishes a per-model alias map via `migrate::init_model_aliases`. QuerySet's `resolve_pool` consults it: explicit `.on(&pool)` wins, then the plugin's alias, then the default pool. Commit: `a0767cf`.
 
-## Open — large scope (design call first)
+## Open — large scope (multi-round work)
 
-4. **Postgres backend body.** `PostgresBackend` is stubbed at M4. Filling it unblocks the `pg_catalog`-based introspection path in `inspectdb`, native `ALTER COLUMN` rendering (lifts the SQLite table-recreation dance), and the `arch.md`-preferred Postgres-first orientation. The dep cost is real (`sqlx` postgres feature; possibly `tokio-postgres`).
+### #4 + #5: Postgres backend + RLS
 
-5. **Row Level Security (originally feature #1).** Postgres-specific; depends on the Postgres backend. Could ship as a third-party crate that registers via the `Plugin` trait (`AppContext` + `on_ready` set up the RLS scoping). Good first test of "external plugin via the M7 contract".
+**Decision:** full `sqlx::Any` refactor (you picked this option). The realistic scope is bigger than a single autonomous commit — 55 `SqlitePool` / `SqliteRow` / `SqliteQueryBuilder` references across 18 files, plus 4 new code paths.
 
-6. **`DATABASE_ROUTERS` / multiple databases (originally feature #4).** `Settings.databases: HashMap<String, String>` already exists; `umbra::db::pool_for(alias)` already exists. What's missing is the routing layer that picks the right alias per-model. Django ships this as a runtime registry; the typed-in-Rust version is the design question.
+**Phased plan**, each phase a dedicated round so the test suite stays green throughout:
 
-7. **Backup / recovery, sql + json import / export (originally feature #3).** Real ask. Best layered as a CLI subcommand (`umbra-cli dumpdata` / `loaddata`) plus a JSON envelope format that captures rows + the schema snapshot for round-trip safety. Medium build; can ship without changes to the engine.
+- **Phase 1 — AnyPool plumbing.** Enable `sqlx`'s `any` + `postgres` features. Refactor `crates/umbra-core/src/db.rs` (`SqlitePool` → `AnyPool`). Change `Model`'s supertrait bound from `FromRow<'r, SqliteRow>` to `FromRow<'r, AnyRow>`. Update `queryset.rs`. Touch every test (the boots all use `SqlitePool`). Tests still target sqlite at runtime; nothing Postgres-specific yet.
 
-8. **App-rename / model-move detection (originally feature #6).** Django's "did you rename X to Y" prompt. The migration engine already has the snapshot diff machinery; adding heuristic-driven prompts is M8 hardening territory. Defer.
+- **Phase 2 — Backend dispatch in migrate.** `render_operation` dispatches on `backend::active().name()`. SQLite path keeps its INTEGER PRIMARY KEY AUTOINCREMENT quirk; Postgres path emits `BIGSERIAL` / `GENERATED ALWAYS AS IDENTITY`. `render_alter_column_dance` similarly conditional (Postgres has native `ALTER COLUMN` and doesn't need the table-recreation dance).
+
+- **Phase 3 — Postgres introspection in inspectdb.** Replace the PRAGMA path with a `pg_catalog` query when the active backend is Postgres. Same `IntrospectedSchema` output; different source.
+
+- **Phase 4 — PostgresBackend.map_type body + RLS plugin.** Fill in the Postgres `ColumnType` mapping. RLS (#5) lands as a third-party plugin crate that registers via the existing M7 contract — `Plugin::on_ready` runs the `ALTER TABLE ... ENABLE ROW LEVEL SECURITY` statements and installs policies.
+
+Each phase is its own session: too much for autonomous ship-and-verify in one round, and a half-finished refactor with broken tests is worse than no refactor.
+
+### #8: rename detection heuristic
+
+Deferred (you chose this). M8 hardening per spec 06; current drop+add behaviour is correct, just lossy. Revisit when inspectdb / migrate hits a real-world rename case.
 
 ## Reference
 
