@@ -109,14 +109,43 @@ impl DatabaseBackend for PostgresBackend {
     fn name(&self) -> &'static str {
         "postgres"
     }
-    fn supports(&self, _feature: BackendFeature) -> bool {
-        // Filled in by subagent A. M4 scaffold returns false so the
-        // workspace compiles; the real catalogue lands in the fan-out.
-        false
+
+    /// Postgres feature catalogue. Source of truth: spec
+    /// `docs/specs/05-backends-and-system-check.md` §7.1. Postgres carries
+    /// every `BackendFeature` umbra reasons about today; `HStoreColumns`
+    /// is reported true and the HSTORE extension stays a DBA concern.
+    fn supports(&self, feature: BackendFeature) -> bool {
+        match feature {
+            BackendFeature::InsertReturning
+            | BackendFeature::UpsertOnConflict
+            | BackendFeature::ArrayColumns
+            | BackendFeature::HStoreColumns
+            | BackendFeature::JsonbColumns
+            | BackendFeature::FullTextSearch
+            | BackendFeature::CidrInet
+            | BackendFeature::UuidNative
+            | BackendFeature::Boolean => true,
+        }
     }
-    fn map_type(&self, _ty: crate::orm::SqlType) -> sea_query::ColumnType {
-        // Filled in by subagent A.
-        sea_query::ColumnType::Text
+
+    /// Postgres `SqlType` -> `sea_query::ColumnType` mapping. Source of
+    /// truth: spec `05-backends-and-system-check.md` §7.1.
+    fn map_type(&self, ty: crate::orm::SqlType) -> sea_query::ColumnType {
+        use crate::orm::SqlType;
+        use sea_query::ColumnType;
+        match ty {
+            SqlType::SmallInt => ColumnType::SmallInteger,
+            SqlType::Integer => ColumnType::Integer,
+            SqlType::BigInt => ColumnType::BigInteger,
+            SqlType::Real => ColumnType::Float,
+            SqlType::Double => ColumnType::Double,
+            SqlType::Boolean => ColumnType::Boolean,
+            SqlType::Text => ColumnType::Text,
+            SqlType::Date => ColumnType::Date,
+            SqlType::Time => ColumnType::Time,
+            SqlType::Timestamptz => ColumnType::TimestampWithTimeZone,
+            SqlType::Uuid => ColumnType::Uuid,
+        }
     }
 }
 
@@ -124,14 +153,47 @@ impl DatabaseBackend for SqliteBackend {
     fn name(&self) -> &'static str {
         "sqlite"
     }
-    fn supports(&self, _feature: BackendFeature) -> bool {
-        // Filled in by subagent A. M4 scaffold returns false so the
-        // workspace compiles; the real catalogue lands in the fan-out.
-        false
+
+    /// SQLite feature catalogue. Source of truth: spec
+    /// `docs/specs/05-backends-and-system-check.md` §7.1. SQLite carries
+    /// the modern transactional features (RETURNING since 3.35, ON
+    /// CONFLICT since 3.24) and native `BOOLEAN`, but no array / hstore /
+    /// jsonb / full-text / network / native-UUID surface. UUIDs go
+    /// through `TEXT` instead; see `map_type` below.
+    fn supports(&self, feature: BackendFeature) -> bool {
+        match feature {
+            BackendFeature::InsertReturning
+            | BackendFeature::UpsertOnConflict
+            | BackendFeature::Boolean => true,
+            BackendFeature::ArrayColumns
+            | BackendFeature::HStoreColumns
+            | BackendFeature::JsonbColumns
+            | BackendFeature::FullTextSearch
+            | BackendFeature::CidrInet
+            | BackendFeature::UuidNative => false,
+        }
     }
-    fn map_type(&self, _ty: crate::orm::SqlType) -> sea_query::ColumnType {
-        // Filled in by subagent A.
-        sea_query::ColumnType::Text
+
+    /// SQLite `SqlType` -> `sea_query::ColumnType` mapping. Source of
+    /// truth: spec `05-backends-and-system-check.md` §7.1. `Uuid` lands
+    /// on `Text` because SQLite has no native UUID type, which is the
+    /// reason `supports(UuidNative)` reports false above.
+    fn map_type(&self, ty: crate::orm::SqlType) -> sea_query::ColumnType {
+        use crate::orm::SqlType;
+        use sea_query::ColumnType;
+        match ty {
+            SqlType::SmallInt => ColumnType::SmallInteger,
+            SqlType::Integer => ColumnType::Integer,
+            SqlType::BigInt => ColumnType::BigInteger,
+            SqlType::Real => ColumnType::Float,
+            SqlType::Double => ColumnType::Double,
+            SqlType::Boolean => ColumnType::Boolean,
+            SqlType::Text => ColumnType::Text,
+            SqlType::Date => ColumnType::Date,
+            SqlType::Time => ColumnType::Time,
+            SqlType::Timestamptz => ColumnType::TimestampWithTimeZone,
+            SqlType::Uuid => ColumnType::Text,
+        }
     }
 }
 
