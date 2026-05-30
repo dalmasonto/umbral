@@ -1,0 +1,115 @@
+---
+title: Rendering HTML
+description: Server-side templates via minijinja, with autoescape on by default.
+sidebar_position: 1
+icon: file-text
+---
+
+`umbra::templates` is the server-side HTML rendering substrate. Templates live
+on disk under a project-level directory, load at boot, and render through one
+ambient accessor that picks up the engine from `App::build()`'s `OnceLock` —
+the same pattern as the DB pool. The engine is
+[minijinja](https://docs.rs/minijinja), which speaks Jinja2 syntax (`{% %}` /
+`{{ }}`), so anyone who's used Django or Flask templates will recognise the
+shape immediately.
+
+## Point the builder at a templates directory
+
+```rust
+use umbra::prelude::*;
+
+App::builder()
+    .settings(settings)
+    .database("default", pool)
+    .templates_dir("templates")   // default is `./templates`
+    .router(Router::new().route("/", get(home)))
+    .build()?;
+```
+
+When `templates_dir` isn't called the engine looks for `./templates` relative
+to the binary's cwd. If the directory doesn't exist the engine still boots
+(empty) — the absence isn't an error until something tries to render.
+
+## A base template and a child
+
+```html
+{/* templates/base.html */}
+<!doctype html>
+<html>
+  <head><title>{% block title %}umbra app{% endblock %}</title></head>
+  <body>
+    <header><nav><a href="/">Home</a> <a href="/articles">Articles</a></nav></header>
+    <main>{% block content %}{% endblock %}</main>
+  </body>
+</html>
+```
+
+```html
+{/* templates/articles_list.html */}
+{% extends "base.html" %}
+{% block title %}Articles — umbra app{% endblock %}
+{% block content %}
+  <h1>Articles</h1>
+  {% for article in articles %}
+    <article>
+      <h2><a href="/articles/{{ article.id }}">{{ article.title }}</a></h2>
+      <p>{{ article.body }}</p>
+    </article>
+  {% endfor %}
+{% endblock %}
+```
+
+Inheritance, loops, conditionals, and variable interpolation are all standard
+Jinja2.
+
+## Render from a handler
+
+```rust
+use umbra::prelude::*;
+use umbra::templates::context;
+use umbra::web::Html;
+
+async fn list_articles() -> Result<Html<String>, (StatusCode, String)> {
+    let articles = Article::objects().fetch().await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let body = umbra::templates::render("articles_list.html", &context!(articles))
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Html(body))
+}
+```
+
+`context!` is minijinja's macro, re-exported through the facade so your crate
+doesn't need a direct minijinja dependency. `umbra::web::Html` is an axum
+re-export that sets the response's `Content-Type: text/html`.
+
+## Autoescape is on by default
+
+Any template whose name ends in `.html` or `.htm` renders with autoescape on.
+A value containing `<script>` comes out as `&lt;script&gt;` — the XSS
+guarantee from `arch.md §4.5`. Text templates (`.txt`) render verbatim, so an
+email-body template that wants raw output works the same way.
+
+<Callout type="warning">
+Opting out of autoescape for one value is a deliberate keystroke: pipe
+through the `safe` filter (`{{ value|safe }}`). There's no global escape
+hatch. If you find yourself reaching for `safe` often, you're probably one
+helper function away from a cleaner data shape.
+</Callout>
+
+## What ships at v1 vs deferred
+
+<CardGrid cols={2}>
+  <Card icon="folder" title="Shipped" description="One project-level templates directory. Jinja2 syntax (extends, block, for, if, set, filters). Autoescape on .html. Template names use forward-slashes (admin/base.html) on every OS." />
+  <Card icon="clock" title="Deferred" description="Per-plugin templates/ directories with override search paths (lands with the admin plugin at M11). Custom filter / test registration through Plugin::on_ready. Hot reload in dev via minijinja-autoreload." />
+</CardGrid>
+
+## Worked example
+
+`examples/derive-demo` exercises this end-to-end: five templates under
+`templates/` (base + home + articles list + article detail + 404), four
+routes serving HTML, one keeping the JSON shape, plus the XSS guard
+verified by injecting `<script>` into a row body and watching it render as
+`&lt;script&gt;`.
+
+The substrate spec promotes from the outline at
+`docs/specs/outlines/templates.md` when the admin plugin lands.
