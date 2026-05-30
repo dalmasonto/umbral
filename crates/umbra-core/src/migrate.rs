@@ -42,26 +42,89 @@ use serde::{Deserialize, Serialize};
 use crate::orm::{FieldSpec, Model, SqlType};
 
 /// Per-process model registry. Published by `AppBuilder::build()`
-/// after `.model::<T>()` calls collected metadata into the builder.
-static REGISTRY: OnceLock<Vec<ModelMeta>> = OnceLock::new();
+/// after `.model::<T>()` calls and `.plugin(...)` registrations
+/// collected metadata into the builder.
+///
+/// Stored as a flat vector of `(plugin_name, model)` pairs so M5's
+/// existing `registered_models()` keeps working (drop the plugin
+/// names) and the M7 plugin-aware walks (`registered_plugins`,
+/// `models_for_plugin`) can read the same source of truth without a
+/// second registry. The plugin name `"app"` covers models registered
+/// via `.model::<T>()`; every other name is a real Plugin's.
+static REGISTRY: OnceLock<Vec<(String, ModelMeta)>> = OnceLock::new();
 
-/// Initialize the model registry. Called by `AppBuilder::build()` only.
+/// Initialize the registry with the implicit `"app"` plugin only.
+/// Convenience wrapper over [`init_plugins`] kept for the M5 / M6
+/// callers that don't yet know about plugins.
 pub(crate) fn init(models: Vec<ModelMeta>) {
-    REGISTRY
-        .set(models)
-        .expect("umbra::migrate::init called more than once");
+    let mut per_plugin: std::collections::HashMap<String, Vec<ModelMeta>> =
+        std::collections::HashMap::new();
+    per_plugin.insert(APP_PLUGIN_NAME.to_string(), models);
+    init_plugins(per_plugin);
 }
 
-/// Return the registered models.
+/// Initialize the registry with one entry per plugin.
+///
+/// `App::build()` calls this after collecting `.model::<T>()` into the
+/// implicit `"app"` plugin and walking every registered plugin's
+/// `Plugin::models()`. Plugins missing from the map contribute zero
+/// models (default-noop `models()` returns an empty vec; the entry
+/// can be omitted).
+pub(crate) fn init_plugins(per_plugin: std::collections::HashMap<String, Vec<ModelMeta>>) {
+    let mut flat: Vec<(String, ModelMeta)> = Vec::new();
+    let mut plugin_names: Vec<String> = per_plugin.keys().cloned().collect();
+    plugin_names.sort();
+    for plugin in plugin_names {
+        for m in per_plugin.get(&plugin).cloned().unwrap_or_default() {
+            flat.push((plugin.clone(), m));
+        }
+    }
+    REGISTRY
+        .set(flat)
+        .expect("umbra::migrate::init_plugins called more than once");
+}
+
+/// Return every registered model, flat. Drops the per-plugin grouping;
+/// useful when the caller only needs the model set (e.g. M5's `make`
+/// when the codebase only had a single `"app"` plugin).
 ///
 /// # Panics
 ///
 /// Panics if `App::build()` hasn't run.
-pub fn registered_models() -> &'static [ModelMeta] {
+pub fn registered_models() -> Vec<ModelMeta> {
     REGISTRY
         .get()
         .expect("umbra: model registry not initialised — did you call App::build()?")
-        .as_slice()
+        .iter()
+        .map(|(_, m)| m.clone())
+        .collect()
+}
+
+/// Return the registered plugin names that contributed at least one
+/// model. Sorted deterministically. Used by `make_in` / `run_in` /
+/// `show_in` to know which directories under `migrations/` to walk.
+pub fn registered_plugins() -> Vec<String> {
+    let mut names: Vec<String> = REGISTRY
+        .get()
+        .expect("umbra: model registry not initialised — did you call App::build()?")
+        .iter()
+        .map(|(p, _)| p.clone())
+        .collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
+/// Return the models registered against a specific plugin. Empty if
+/// no plugin by that name registered models.
+pub fn models_for_plugin(plugin: &str) -> Vec<ModelMeta> {
+    REGISTRY
+        .get()
+        .expect("umbra: model registry not initialised — did you call App::build()?")
+        .iter()
+        .filter(|(p, _)| p == plugin)
+        .map(|(_, m)| m.clone())
+        .collect()
 }
 
 /// Static metadata for one registered model, copied off the `Model`
