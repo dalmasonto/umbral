@@ -15,3 +15,10 @@ serde = { version = "1", features = ["derive"] }
 sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio"] }
 tokio = "1"
 tracing = "0.1"
+
+[dev-dependencies]
+# figment::Jail (for env-var and toml file sandboxing in tests) lives behind
+# the "test" feature.
+figment = { version = "0.10", features = ["test"] }
+# tokio macros enable #[tokio::test] for async tests; rt is the runtime.
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }
