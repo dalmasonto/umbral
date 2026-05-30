@@ -86,7 +86,11 @@ it. It will be lifted into `arch.md` as the single source of truth.
     cross-plugin FK ordering).
 - §0 already names managed migrations as a north star; add the explicit
   *declare → migrate → change → migrate* phrasing.
-- Insert §X: "Visibility of underlying crates" — adopt the table from §3 above.
+- Insert a new section **between §1 (Architectural Pillars) and §2 (The
+  Plugin Contract)** titled "Visibility of underlying crates" — adopt the
+  table from §3 above. It belongs there because dependency direction is
+  already established in §1, and §2 starts naming concrete public surface
+  (the prelude), so the rule needs to be in scope before that point.
 
 ### Commit B — update `umbra-PRD.md` in place
 
