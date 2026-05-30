@@ -24,6 +24,18 @@ What this spec owns:
 - **Conflict resolution** when an introspected name collides with a registered built-in plugin's table (e.g. `auth_user`).
 - The **output shape** (where files land, how the generated migration is marked applied).
 
+**What shipped at M6 v1.** SQLite-only introspection via `PRAGMA table_info`, the type-mapping subset that matches the M5 `SqlType` catalogue (integers, floats, bool, text, date / time / timestamptz, uuid, plus their nullable variants), and a flat output: one `models.rs` with `#[derive(Model)]` structs and one `migrations/0001_initial.json`. The `--mark-applied` flag inserts a row into `umbra_migrations` so a follow-up `migrate` is a no-op. The user wires the generated `models.rs` into their binary by hand (`mod models;` plus one `.model::<T>()` per struct on the builder) until the plugin contract lands.
+
+**Deferred to later milestones.**
+
+- Postgres introspection (needs the M4 backend abstraction to grow an `introspect` hook) — slated for the same milestone that adds the Postgres backend body.
+- Generated plugin crate (`lib.rs` with `impl Plugin`, `Cargo.toml`) — needs the M7 plugin contract.
+- Conflict resolution against registered plugins' migrations — needs the M7 plugin contract.
+- Foreign-key detection, M2M heuristics, `#[umbra(max_length = n)]` rendering for `VARCHAR(n)`, NUMERIC / JSON / BYTEA / array / custom-type mappings — gated on the field types existing in `umbra-core`; today's catalogue covers the scalars and date / time / uuid only.
+- `--strip-prefix`, `--ignore-builtin`, `--plugin <name>` flags — deferred with the plugin-crate output they're attached to.
+
+The "spec owns" list above is the eventual target shape. Drift between today's code and that shape is intentional and tracked here; the same way `06-migration-engine.md` calls out the M5 / M8 split for column-level ops.
+
 What this spec **does not** own:
 
 - The mechanics of applying a migration. That's `06-migration-engine.md`.

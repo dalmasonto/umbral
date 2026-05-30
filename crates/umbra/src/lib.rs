@@ -79,8 +79,25 @@ pub mod migrate {
 
     pub use umbra_core::migrate::{
         APP_PLUGIN_NAME, Column, MIGRATIONS_DIR, MigrateError, MigrationFile, MigrationRef,
-        ModelMeta, Operation, Snapshot, make, make_in, registered_models, run, run_in, show,
-        show_in,
+        ModelMeta, Operation, Snapshot, make, make_in, record_applied, registered_models, run,
+        run_in, show, show_in,
+    };
+}
+
+pub mod inspect {
+    //! `inspectdb` (M6): introspect an existing database into umbra
+    //! models that drop straight into the M5 migration loop.
+    //!
+    //! M6 v1 ships SQLite introspection and a flat output (one
+    //! `models.rs` plus `migrations/app/0001_initial.json`). The
+    //! plugin-crate output, Postgres backend, FK / index detection,
+    //! and the `--strip-prefix` / `--ignore-builtin` flags are
+    //! deferred per `docs/specs/07-inspectdb.md`.
+
+    pub use umbra_core::inspect::{
+        INITIAL_MIGRATION_ID, INSPECTED_PLUGIN_NAME, InspectError, InspectOptions, InspectReport,
+        IntrospectedColumn, IntrospectedSchema, IntrospectedTable, inspectdb, introspect_pool,
+        render_initial_migration, render_models, write_outputs,
     };
 }
 

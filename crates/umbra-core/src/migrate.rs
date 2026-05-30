@@ -380,6 +380,32 @@ pub async fn run_in(dir: &Path) -> Result<u64, MigrateError> {
     Ok(applied_count)
 }
 
+/// Record a migration as applied in the `umbra_migrations` tracking
+/// table without running its operations. The "mark as applied" path
+/// `inspectdb --mark-applied` uses to register the introspected
+/// `0001_initial` against an already-populated database. Idempotent:
+/// if the `(plugin, name)` row already exists, the call is a no-op.
+pub async fn record_applied(
+    plugin: &str,
+    name: &str,
+    snapshot_hash: &str,
+) -> Result<(), MigrateError> {
+    let pool = crate::db::pool();
+    ensure_tracking_table(&pool).await?;
+    let applied_at = chrono::Utc::now().to_rfc3339();
+    sqlx::query(
+        "INSERT OR IGNORE INTO umbra_migrations (plugin, name, applied_at, snapshot_hash) \
+         VALUES (?, ?, ?, ?)",
+    )
+    .bind(plugin)
+    .bind(name)
+    .bind(&applied_at)
+    .bind(snapshot_hash)
+    .execute(&pool)
+    .await?;
+    Ok(())
+}
+
 /// Print the per-migration state, applied or pending. Output goes to
 /// stdout; the return value is the count of pending migrations so a
 /// CLI can `exit(n)` on need.
