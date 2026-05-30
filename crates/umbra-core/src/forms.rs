@@ -37,6 +37,53 @@
 use std::collections::HashMap;
 
 // =========================================================================
+// Form trait. The `#[derive(Form)]` macro emits an impl of this. User
+// code can also impl it by hand for the rare "I want different
+// semantics than the macro" case.
+// =========================================================================
+
+/// The contract a typed form satisfies. `validate` reads form data
+/// (a `HashMap<String, String>`, the natural shape after
+/// `serde_urlencoded` or axum's `Form` extractor) and produces either
+/// the typed struct or a `ValidationErrors` map describing every
+/// problem at once.
+///
+/// `render_html` writes the form's HTML inputs, prefilled from a
+/// HashMap on the re-render path (after a validation failure or on
+/// edit views). The default impl walks `fields()` and concatenates
+/// each field's `render_html` — most macro-derived forms inherit
+/// this and only override when they need custom layout.
+pub trait Form: Sized {
+    /// Parse and validate the form's input. Returns the typed struct
+    /// on success; returns `ValidationErrors` with every field's
+    /// problems accumulated on failure.
+    fn validate(data: &HashMap<String, String>) -> Result<Self, ValidationErrors>;
+
+    /// The field declarations this form carries. Used by the default
+    /// `render_html` to walk them in declaration order. The macro
+    /// emits one entry per struct field.
+    fn fields() -> Vec<Field>;
+
+    /// Render every field as an HTML `<label>` + `<input>` pair,
+    /// prefilled from `data`. Wraps each in a `<div class="field">`
+    /// for styling. Override if you want a non-default layout.
+    fn render_html(data: &HashMap<String, String>) -> String {
+        let mut out = String::new();
+        for field in Self::fields() {
+            let value = data.get(&field.name).map(String::as_str).unwrap_or("");
+            out.push_str("<div class=\"field\">");
+            out.push_str(&format!(
+                "<label for=\"{name}\">{name}</label>",
+                name = field.name
+            ));
+            out.push_str(&field.render_html(value));
+            out.push_str("</div>");
+        }
+        out
+    }
+}
+
+// =========================================================================
 // Errors. One per-field message list, plus a "non-field" bucket for
 // cross-field issues (passwords don't match, etc.).
 // =========================================================================
@@ -265,6 +312,20 @@ impl Field {
         }
     }
 
+    /// New floating-point field. Renders as `<input type="number">`
+    /// (no `step` set; HTML's default accepts decimals). Validates
+    /// only `Required`; the macro's parse step is what catches
+    /// non-numeric input — the field-level validator would reject
+    /// integer literals which is the wrong shape for an f64 field.
+    pub fn float(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            kind: InputKind::Number,
+            required: true,
+            validators: vec![Box::new(Required), Box::new(FloatFormat)],
+        }
+    }
+
     /// New boolean field. Required-by-default would be wrong here
     /// (HTML emits the field key only when the box is checked), so
     /// boolean fields skip `Required`.
@@ -362,6 +423,19 @@ impl Validator for IntegerFormat {
             .parse::<i64>()
             .map(|_| ())
             .map_err(|_| format!("{field_name} must be a whole number"))
+    }
+}
+
+/// `FloatFormat` is the float-field counterpart. Accepts anything
+/// that parses as `f64`, which includes integer literals like `"42"`
+/// — JS's `parseFloat` does the same.
+struct FloatFormat;
+impl Validator for FloatFormat {
+    fn check(&self, field_name: &str, value: &str) -> Result<(), String> {
+        value
+            .parse::<f64>()
+            .map(|_| ())
+            .map_err(|_| format!("{field_name} must be a number"))
     }
 }
 

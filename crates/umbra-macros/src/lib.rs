@@ -723,3 +723,314 @@ fn to_snake_case(camel: &str) -> String {
 fn to_screaming_snake_case(name: &str) -> String {
     to_snake_case(name).to_ascii_uppercase()
 }
+
+// =========================================================================
+// `#[derive(Form)]` (FEATURES.md follow-on). Lowers a struct + per-field
+// `#[form(...)]` attrs into an `impl umbra::forms::Form`. The validate /
+// render bodies call into the Field primitives from umbra-core::forms;
+// the macro only does compile-time wiring.
+// =========================================================================
+
+/// Derive `umbra::forms::Form` on a struct of named fields.
+///
+/// Field-type dispatch:
+///
+/// - `String` -> `Field::text(name)` (or `email`/`password` per attr)
+/// - `i32` / `i64` / `u32` / `u64` -> `Field::integer(name)`
+/// - `f32` / `f64` -> `Field::integer(name)` (numeric, accepts decimals)
+/// - `bool` -> `Field::boolean(name)`
+/// - `Option<T>` -> the inner type, marked `.optional()`
+///
+/// Per-field attribute keys (all under `#[form(...)]`):
+///
+/// - `min_length = N` / `max_length = N` -> add MinLength/MaxLength
+/// - `email` -> use `Field::email`, adds the EmailFormat check
+/// - `password` -> use `Field::password` (renders as `type="password"`)
+/// - `optional` -> skip Required (forced on for `Option<T>`)
+#[proc_macro_derive(Form, attributes(form))]
+pub fn derive_form(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    expand_form(input)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+/// Per-field options parsed from `#[form(...)]`.
+#[derive(Default)]
+struct FormFieldAttr {
+    email: bool,
+    password: bool,
+    optional: bool,
+    min_length: Option<usize>,
+    max_length: Option<usize>,
+}
+
+fn parse_form_attrs(attrs: &[syn::Attribute]) -> syn::Result<FormFieldAttr> {
+    let mut out = FormFieldAttr::default();
+    for attr in attrs {
+        if !attr.path().is_ident("form") {
+            continue;
+        }
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("email") {
+                out.email = true;
+                Ok(())
+            } else if meta.path.is_ident("password") {
+                out.password = true;
+                Ok(())
+            } else if meta.path.is_ident("optional") {
+                out.optional = true;
+                Ok(())
+            } else if meta.path.is_ident("min_length") {
+                let lit: syn::LitInt = meta.value()?.parse()?;
+                out.min_length = Some(lit.base10_parse()?);
+                Ok(())
+            } else if meta.path.is_ident("max_length") {
+                let lit: syn::LitInt = meta.value()?.parse()?;
+                out.max_length = Some(lit.base10_parse()?);
+                Ok(())
+            } else {
+                Err(meta.error(
+                    "umbra::Form derive accepts `email`, `password`, \
+                     `optional`, `min_length = N`, `max_length = N`",
+                ))
+            }
+        })?;
+    }
+    Ok(out)
+}
+
+/// What kind of value the Rust field holds. Drives both the validator
+/// builder selection AND the value-parsing code path.
+#[derive(Clone, Copy)]
+enum FormFieldKind {
+    String,
+    Integer,
+    Float,
+    Bool,
+}
+
+fn classify_form_field_type(ty: &syn::Type) -> Option<(FormFieldKind, bool)> {
+    // Returns (kind, is_option). Option<T> peels one layer; the inner
+    // type is what we classify against.
+    if let Some(inner) = option_inner_type(ty) {
+        let (kind, _) = classify_form_field_type(inner)?;
+        return Some((kind, true));
+    }
+    if type_is_ident(ty, "String") {
+        return Some((FormFieldKind::String, false));
+    }
+    if type_is_ident(ty, "i32")
+        || type_is_ident(ty, "i64")
+        || type_is_ident(ty, "u32")
+        || type_is_ident(ty, "u64")
+        || type_is_ident(ty, "i16")
+        || type_is_ident(ty, "u16")
+        || type_is_ident(ty, "i8")
+        || type_is_ident(ty, "u8")
+        || type_is_ident(ty, "isize")
+        || type_is_ident(ty, "usize")
+    {
+        return Some((FormFieldKind::Integer, false));
+    }
+    if type_is_ident(ty, "f32") || type_is_ident(ty, "f64") {
+        return Some((FormFieldKind::Float, false));
+    }
+    if type_is_ident(ty, "bool") {
+        return Some((FormFieldKind::Bool, false));
+    }
+    None
+}
+
+fn option_inner_type(ty: &syn::Type) -> Option<&syn::Type> {
+    let syn::Type::Path(tp) = ty else {
+        return None;
+    };
+    let seg = tp.path.segments.last()?;
+    if seg.ident != "Option" {
+        return None;
+    }
+    let syn::PathArguments::AngleBracketed(args) = &seg.arguments else {
+        return None;
+    };
+    for arg in &args.args {
+        if let syn::GenericArgument::Type(inner) = arg {
+            return Some(inner);
+        }
+    }
+    None
+}
+
+fn expand_form(input: DeriveInput) -> syn::Result<TokenStream2> {
+    let struct_name = &input.ident;
+    let fields = match &input.data {
+        Data::Struct(data) => match &data.fields {
+            Fields::Named(named) => &named.named,
+            _ => {
+                return Err(syn::Error::new_spanned(
+                    struct_name,
+                    "umbra::Form can only be derived on structs with named fields",
+                ));
+            }
+        },
+        _ => {
+            return Err(syn::Error::new_spanned(
+                struct_name,
+                "umbra::Form can only be derived on structs with named fields",
+            ));
+        }
+    };
+
+    let mut field_builders: Vec<TokenStream2> = Vec::new();
+    let mut validate_body: Vec<TokenStream2> = Vec::new();
+    let mut struct_inits: Vec<TokenStream2> = Vec::new();
+
+    for field in fields.iter() {
+        let field_ident = field.ident.as_ref().unwrap();
+        let field_name = field_ident.to_string();
+        let attrs = parse_form_attrs(&field.attrs)?;
+        let Some((kind, is_option)) = classify_form_field_type(&field.ty) else {
+            return Err(syn::Error::new_spanned(
+                &field.ty,
+                "umbra::Form derive: unsupported field type. v1 accepts \
+                 String, i8..i64 / u8..u64 / isize / usize, f32 / f64, bool, \
+                 and Option<T> of any of those.",
+            ));
+        };
+        let is_optional = is_option || attrs.optional;
+
+        // Build the Field constructor chain. For each field the macro
+        // emits a `let <ident>_field = ::umbra::forms::Field::<ctor>(name)
+        //     [.min_length(N)] [.max_length(N)] [.optional()];`.
+        let ctor = match (kind, attrs.email, attrs.password) {
+            (FormFieldKind::String, true, _) => quote!(email),
+            (FormFieldKind::String, _, true) => quote!(password),
+            (FormFieldKind::String, _, _) => quote!(text),
+            (FormFieldKind::Integer, _, _) => quote!(integer),
+            (FormFieldKind::Float, _, _) => quote!(float),
+            (FormFieldKind::Bool, _, _) => quote!(boolean),
+        };
+        let mut chain = quote! {
+            ::umbra::forms::Field::#ctor(#field_name)
+        };
+        if let Some(n) = attrs.min_length {
+            chain = quote! { #chain.min_length(#n) };
+        }
+        if let Some(n) = attrs.max_length {
+            chain = quote! { #chain.max_length(#n) };
+        }
+        if is_optional {
+            chain = quote! { #chain.optional() };
+        }
+        let field_var = format_ident!("_{}_field", field_ident);
+        field_builders.push(quote! {
+            let #field_var: ::umbra::forms::Field = #chain;
+        });
+
+        // Validation step.
+        let raw_var = format_ident!("_{}_raw", field_ident);
+        let parsed_var = format_ident!("_{}_parsed", field_ident);
+        validate_body.push(quote! {
+            let #raw_var: String = data
+                .get(#field_name)
+                .cloned()
+                .unwrap_or_default();
+            #field_var.validate(&#raw_var, &mut errs);
+        });
+
+        // Parsing step. Even on validation failure, we still try to
+        // parse so the parse error is collected too. Macro emits one
+        // of:
+        //   - Option<String>: empty -> None, else Some(raw)
+        //   - String: raw
+        //   - Option<Int>: empty -> None, else Some(parse::<T>())
+        //   - Int: parse::<T>() or 0 on failure (errs already pushed)
+        //   - bool: matches!(raw.as_str(), "true" | "on" | "1")
+        let parse_expr = match (kind, is_option) {
+            (FormFieldKind::String, true) => quote! {
+                if #raw_var.is_empty() { None } else { Some(#raw_var.clone()) }
+            },
+            (FormFieldKind::String, false) => quote! { #raw_var.clone() },
+            (FormFieldKind::Integer, true) => quote! {
+                if #raw_var.is_empty() {
+                    None
+                } else {
+                    match #raw_var.parse() {
+                        Ok(v) => Some(v),
+                        Err(_) => {
+                            errs.add(#field_name, format!("{} must be a whole number", #field_name));
+                            None
+                        }
+                    }
+                }
+            },
+            (FormFieldKind::Integer, false) => quote! {
+                match #raw_var.parse() {
+                    Ok(v) => v,
+                    Err(_) => Default::default(),
+                }
+            },
+            (FormFieldKind::Float, true) => quote! {
+                if #raw_var.is_empty() {
+                    None
+                } else {
+                    match #raw_var.parse() {
+                        Ok(v) => Some(v),
+                        Err(_) => {
+                            errs.add(#field_name, format!("{} must be a number", #field_name));
+                            None
+                        }
+                    }
+                }
+            },
+            (FormFieldKind::Float, false) => quote! {
+                match #raw_var.parse() {
+                    Ok(v) => v,
+                    Err(_) => Default::default(),
+                }
+            },
+            (FormFieldKind::Bool, true) => quote! {
+                if #raw_var.is_empty() {
+                    None
+                } else {
+                    Some(matches!(#raw_var.as_str(), "true" | "on" | "1"))
+                }
+            },
+            (FormFieldKind::Bool, false) => quote! {
+                matches!(#raw_var.as_str(), "true" | "on" | "1")
+            },
+        };
+        validate_body.push(quote! {
+            let #parsed_var = { #parse_expr };
+        });
+
+        struct_inits.push(quote! { #field_ident: #parsed_var });
+    }
+
+    let field_builders_iter = field_builders.iter();
+    let field_builders_iter2 = field_builders.iter();
+    let field_var_idents: Vec<syn::Ident> = fields
+        .iter()
+        .map(|f| format_ident!("_{}_field", f.ident.as_ref().unwrap()))
+        .collect();
+
+    let output = quote! {
+        impl ::umbra::forms::Form for #struct_name {
+            fn validate(
+                data: &::std::collections::HashMap<::std::string::String, ::std::string::String>,
+            ) -> ::std::result::Result<Self, ::umbra::forms::ValidationErrors> {
+                let mut errs = ::umbra::forms::ValidationErrors::new();
+                #(#field_builders_iter)*
+                #(#validate_body)*
+                errs.into_result()?;
+                Ok(Self { #(#struct_inits),* })
+            }
+
+            fn fields() -> ::std::vec::Vec<::umbra::forms::Field> {
+                #(#field_builders_iter2)*
+                vec![ #(#field_var_idents),* ]
+            }
+        }
+    };
+    Ok(output)
+}

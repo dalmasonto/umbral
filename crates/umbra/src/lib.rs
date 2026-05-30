@@ -100,15 +100,25 @@ pub mod plugin {
 pub mod forms {
     //! Form parsing, validation, and HTML rendering.
     //!
-    //! Primitives + composition at v1: build `Field`s from
-    //! `umbra::forms::{Field, ...}`, run them over a `HashMap` of
-    //! form input, collect `ValidationErrors`, render each field's
-    //! HTML via `field.render_html(value)`. A `#[derive(Form)]`
-    //! macro is a future round.
+    //! Two layers:
+    //!
+    //! - **Primitives**: `Field`, `Validator` impls (`Required`,
+    //!   `MinLength`, `MaxLength`, `EmailFormat`), `ValidationErrors`.
+    //!   Build forms by hand when the macro doesn't fit.
+    //! - **`#[derive(Form)]`**: lowers a struct + per-field
+    //!   `#[form(min_length = N, email, password, optional, ...)]`
+    //!   attrs into an `impl Form` that validates a `HashMap` into
+    //!   the typed struct and renders the HTML.
 
     pub use umbra_core::forms::{
-        EmailFormat, Field, InputKind, MaxLength, MinLength, Required, ValidationErrors, Validator,
+        EmailFormat, Field, Form, InputKind, MaxLength, MinLength, Required, ValidationErrors,
+        Validator,
     };
+
+    /// The `#[derive(Form)]` proc-macro. Shares the `Form` name with
+    /// the trait — Rust's type and macro namespaces are separate so
+    /// both ride in on one import.
+    pub use umbra_macros::Form;
 }
 
 pub mod backup {
