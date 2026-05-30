@@ -21,3 +21,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # sqlx here doesn't violate the "users only depend on the umbra facade" rule:
 # umbra-cli is part of umbra, not a downstream user crate.
 sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio"] }
+# `derive` so the subcommand enum picks up Parser/Subcommand impls. The
+# CLI is the only place clap shows up; the facade stays free of it.
+clap = { version = "4", features = ["derive"] }

@@ -1,26 +1,60 @@
 //! The `manage.py` equivalent binary for umbra.
 //!
-//! At M0 this was scaffold-only. At M1/M2 the binary doubles as the live
-//! demonstration that the ORM works end-to-end through the facade: it
-//! creates a `post` table, seeds two rows, and exposes a `GET /posts`
-//! route that runs `Post::objects().fetch().await` — with **no
-//! `.on(&pool)`** — to prove that the ambient pool installed by
-//! `App::build()` is what the QuerySet picks up. That's the Django
-//! ergonomic the framework promises.
+//! M0 was scaffold-only. M1/M2 used the binary as a live demonstration
+//! that the ORM worked end-to-end through the facade (CREATE TABLE +
+//! seed, then a `GET /posts` route that ran `Post::objects().fetch()`
+//! against the ambient pool). M5 grows the binary into the real
+//! `manage.py` shape: clap-driven subcommand dispatch with `serve`
+//! (the default) alongside the migration trio `makemigrations`,
+//! `migrate`, and `showmigrations`.
 //!
-//! Later milestones add the real `manage.py` shape: `migrate`,
-//! `makemigrations`, `worker`, `inspectdb`, configurable bind address,
-//! signal-based graceful shutdown. See `docs/specs/06-migration-engine.md`
-//! and `docs/specs/07-inspectdb.md` for the subcommand contracts. At
-//! that point the hand-rolled CREATE TABLE here goes away (M5's
-//! `migrate` handles schema bootstrap) and the demo `Post` model moves
-//! to its real shape from `#[derive(Model)]` (M3).
+//! Every subcommand boots through the same `App::builder()` so the
+//! ambient pool and the model registry get published before the
+//! command runs. The non-serve subcommands skip the listener bind and
+//! the demo seed; they only need the pool + registry, both of which
+//! `App::build()` publishes synchronously.
+//!
+//! Later milestones add `worker`, `inspectdb`, a configurable bind
+//! address, signal-based graceful shutdown, and (from M7) per-plugin
+//! subcommands surfaced via `Plugin::commands()`. See
+//! `docs/specs/06-migration-engine.md` and `docs/specs/07-inspectdb.md`.
 
 use std::net::SocketAddr;
 
+use clap::{Parser, Subcommand};
+use umbra::migrate::MigrateError;
 use umbra::orm::{Post, post};
 use umbra::prelude::*;
 use umbra::web::{Json, Router, StatusCode};
+
+/// Top-level CLI surface. `command` is optional so a bare `umbra-cli`
+/// invocation keeps booting the server (the M0/M1 default), matching
+/// Django's `manage.py runserver` not being the implicit default but
+/// the framework's current convention until M9 adds richer commands.
+#[derive(Debug, Parser)]
+#[command(
+    name = "umbra-cli",
+    about = "The manage.py equivalent for umbra.",
+    disable_help_subcommand = true
+)]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Debug, Subcommand)]
+enum Command {
+    /// Boot the HTTP server on 127.0.0.1:8000. The default when no
+    /// subcommand is given.
+    Serve,
+    /// Diff the registered models against the latest snapshot and
+    /// write a new migration file under `migrations/app/`.
+    Makemigrations,
+    /// Apply every pending migration file against the ambient pool.
+    Migrate,
+    /// List applied vs pending migrations.
+    Showmigrations,
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -35,13 +69,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
 
-    let settings = match Settings::from_env() {
-        Ok(s) => s,
-        Err(err) => {
-            eprintln!("umbra-cli: failed to load settings: {err}");
-            std::process::exit(1);
-        }
-    };
+    let cli = Cli::parse();
+    match cli.command.unwrap_or(Command::Serve) {
+        Command::Serve => serve().await,
+        Command::Makemigrations => makemigrations().await,
+        Command::Migrate => migrate().await,
+        Command::Showmigrations => showmigrations().await,
+    }
+}
+
+/// Boot the App and run the HTTP server. The default subcommand.
+async fn serve() -> Result<(), Box<dyn std::error::Error>> {
+    let settings = load_settings()?;
 
     // For the demo we override sqlite::memory: with a file-backed URL so
     // every pool connection sees the same database. sqlx's pool can open
@@ -58,7 +97,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pool = umbra::db::connect(&database_url).await?;
 
     // Demo seed. CREATE TABLE IF NOT EXISTS + INSERT OR IGNORE so re-runs
-    // are idempotent. M5's migrate retires this.
+    // are idempotent. The M5 migrate path supersedes this for users who
+    // declare the model and migrate; the seed sticks around so `serve`
+    // is self-contained without a separate migrate step.
     init_post_table(&pool).await?;
     seed_post_rows(&pool).await?;
 
@@ -70,6 +111,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = App::builder()
         .settings(settings)
         .database("default", pool)
+        .model::<Post>()
         .router(
             Router::new()
                 .route("/", get(|| async { "umbra-cli server (M0 scaffold)" }))
@@ -80,6 +122,70 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     app.serve(addr).await?;
     Ok(())
+}
+
+/// `makemigrations`: diff the registry against the latest snapshot and
+/// write a migration file. Prints the written path, or
+/// `no changes detected` on the `NoChanges` sentinel.
+async fn makemigrations() -> Result<(), Box<dyn std::error::Error>> {
+    boot_for_management().await?;
+    match umbra::migrate::make().await {
+        Ok(path) => {
+            println!("Wrote {}", path.display());
+            Ok(())
+        }
+        Err(MigrateError::NoChanges) => {
+            println!("no changes detected");
+            Ok(())
+        }
+        Err(err) => Err(Box::new(err)),
+    }
+}
+
+/// `migrate`: apply every pending migration against the ambient pool.
+async fn migrate() -> Result<(), Box<dyn std::error::Error>> {
+    boot_for_management().await?;
+    let n = umbra::migrate::run().await?;
+    if n == 0 {
+        println!("No pending migrations");
+    } else {
+        println!("Applied {n} migration(s)");
+    }
+    Ok(())
+}
+
+/// `showmigrations`: print per-migration applied/pending state.
+async fn showmigrations() -> Result<(), Box<dyn std::error::Error>> {
+    boot_for_management().await?;
+    umbra::migrate::show().await?;
+    Ok(())
+}
+
+/// Shared boot path for the migration subcommands. Opens the pool,
+/// builds the App so the ambient pool and the model registry get
+/// published, and discards the resulting `App` value (no listener
+/// bind). The published `OnceLock`s are what `umbra::migrate::*`
+/// needs.
+async fn boot_for_management() -> Result<(), Box<dyn std::error::Error>> {
+    let settings = load_settings()?;
+    let pool = umbra::db::connect(&settings.database_url).await?;
+    let _app = App::builder()
+        .settings(settings)
+        .database("default", pool)
+        .model::<Post>()
+        .router(Router::new())
+        .build()?;
+    Ok(())
+}
+
+fn load_settings() -> Result<Settings, Box<dyn std::error::Error>> {
+    match Settings::from_env() {
+        Ok(s) => Ok(s),
+        Err(err) => {
+            eprintln!("umbra-cli: failed to load settings: {err}");
+            std::process::exit(1);
+        }
+    }
 }
 
 /// The Django-shape handler. Notice what isn't here: no pool parameter,
