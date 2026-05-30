@@ -7,6 +7,10 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 umbra = { path = "../../crates/umbra" }
+# REST plugin: auto-generates JSON CRUD over every registered model.
+# Same Article data, two surfaces (HTML + JSON), zero per-model
+# serializer code.
+umbra-rest = { path = "../../plugins/umbra-rest" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }

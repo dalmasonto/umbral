@@ -2052,6 +2052,7 @@ dependencies = [
  "sha2",
  "sqlx",
  "tokio",
+ "toml",
  "tracing",
  "uuid",
 ]
@@ -2066,6 +2067,7 @@ dependencies = [
  "tokio",
  "tracing-subscriber",
  "umbra",
+ "umbra-rest",
 ]
 
 [[package]]
@@ -2075,6 +2077,18 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "umbra-rest"
+version = "0.0.1"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "umbra",
+ "uuid",
 ]
 
 [[package]]

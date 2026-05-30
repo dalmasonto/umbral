@@ -75,11 +75,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // at an absolute path or use the default `./templates`
         // relative to its deploy layout).
         .templates_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/templates"))
+        // Auto-generated JSON CRUD at /api/article/. The RestPlugin
+        // walks the same model registry the migration engine uses,
+        // so the surface stays in lockstep with the schema for free.
+        .plugin(umbra_rest::RestPlugin::default())
         .router(
             Router::new()
                 .route("/", get(home))
                 .route("/articles", get(list_articles_html))
                 .route("/articles/{id}", get(article_detail))
+                // Backwards-compat alias from the pre-RestPlugin era.
+                // New clients should hit /api/article/ instead.
                 .route("/api/articles", get(list_articles_json)),
         )
         .build()?;

@@ -9,6 +9,7 @@ members = [
     "../plugins/umbra-auth",
     "../plugins/umbra-admin",
     "../plugins/umbra-sessions",
+    "../plugins/umbra-rest",
 ]
 
 [workspace.package]
