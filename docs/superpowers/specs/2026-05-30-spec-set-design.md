@@ -11,21 +11,13 @@
 
 ## 1. Context
 
-Umbra is a greenfield, Django-equivalent web framework for Rust. The repository
-contains three pre-existing documents:
+Umbra is a greenfield, Django-equivalent web framework for Rust. The repository contains three pre-existing documents:
 
-- **`CLAUDE.md`** — the most recent thinking; treats the *declare → migrate →
-  change → migrate* loop as a day-one (M5) target and treats *thin core + plugin-
-  heavy* as the one idea that matters most.
-- **`umbra-PRD.md`** — product requirements; downgrades autodetection to P1 and
-  does not name the declare→migrate loop. **Drifts from CLAUDE.md.**
-- **`django-shadow-rust-plan.md`** — architecture and build order; schedules M5
-  as forward-only migrations and M8 as autodetection. **Drifts from CLAUDE.md.**
+- **`CLAUDE.md`** — the most recent thinking; treats the *declare → migrate → change → migrate* loop as a day-one (M5) target and treats *thin core + plugin-heavy* as the one idea that matters most.
+- **`umbra-PRD.md`** — product requirements; downgrades autodetection to P1 and does not name the declare→migrate loop. **Drifts from CLAUDE.md.**
+- **`django-shadow-rust-plan.md`** — architecture and build order; schedules M5 as forward-only migrations and M8 as autodetection. **Drifts from CLAUDE.md.**
 
-The goal of this design is to specify the doc set we will write *before*
-implementation begins, so the framework's design is auditable on paper before
-any code is written. The user's directive: "specs first; we shall implement them
-as we go on."
+The goal of this design is to specify the doc set we will write *before* implementation begins, so the framework's design is auditable on paper before any code is written. The user's directive: "specs first; we shall implement them as we go on."
 
 ---
 
@@ -33,34 +25,20 @@ as we go on."
 
 Four shaping choices, made during brainstorming:
 
-1. **Scope.** Deep specs for the M0–M5 spine (and M6 `inspectdb`, because it is
-   the porting payoff and inseparable from M5's migration engine). M7–M13 get
-   half-page **outlines** that get promoted to deep specs when their milestone
-   comes up.
-2. **Granularity.** One spec per subsystem (plugin contract, ORM, migration
-   engine, etc.) — not grouped mega-docs. Lets each spec be committed and
-   reviewed in isolation.
-3. **Depth.** **Design + API-shape sketches** — mechanics, invariants, trade-
-   offs, *plus* illustrative Rust signatures for the key public surface. Enough
-   to drive implementation; not a frozen API reference.
-4. **Existing docs.** Rename `django-shadow-rust-plan.md` → `arch.md` (matches
-   CLAUDE.md's reference). Update PRD in place to bump autodetection to P0 and
-   name the declare→migrate loop.
+1. **Scope.** Deep specs for the M0–M5 spine (and M6 `inspectdb`, because it is the porting payoff and inseparable from M5's migration engine). M7–M13 get half-page **outlines** that get promoted to deep specs when their milestone comes up.
+2. **Granularity.** One spec per subsystem (plugin contract, ORM, migration engine, etc.) — not grouped mega-docs. Lets each spec be committed and reviewed in isolation.
+3. **Depth.** **Design + API-shape sketches** — mechanics, invariants, trade-offs, *plus* illustrative Rust signatures for the key public surface. Enough to drive implementation; not a frozen API reference.
+4. **Existing docs.** Rename `django-shadow-rust-plan.md` → `arch.md` (matches CLAUDE.md's reference). Update PRD in place to bump autodetection to P0 and name the declare→migrate loop.
 
 ---
 
 ## 3. Cross-cutting principles
 
-Two load-bearing design questions surfaced during brainstorming. Their answers
-codify the framework's *feel* and are inherited by every subsystem spec — those
-specs don't relitigate them. Both rules will be lifted into `arch.md` as the
-single source of truth.
+Two load-bearing design questions surfaced during brainstorming. Their answers codify the framework's *feel* and are inherited by every subsystem spec — those specs don't relitigate them. Both rules will be lifted into `arch.md` as the single source of truth.
 
 ### 3.1 Visibility of underlying crates
 
-**Does an umbra developer see axum?** Rule of thumb: **if a crate is a way to
-build the framework, hide it; if it is how the user describes their own data
-and behavior, surface it.**
+**Does an umbra developer see axum?** Rule of thumb: **if a crate is a way to build the framework, hide it; if it is how the user describes their own data and behavior, surface it.**
 
 | Crate | Visibility | Notes |
 |---|---|---|
@@ -75,9 +53,7 @@ and behavior, surface it.**
 
 ### 3.2 Handler-visible context: ambient vs explicit
 
-**Does a handler signature carry `State<DbPool>`?** No — and the same rule
-extends to every other kind of context. The first table answers *what types*
-show up; this one answers *what context* shows up.
+**Does a handler signature carry `State<DbPool>`?** No — and the same rule extends to every other kind of context. The first table answers *what types* show up; this one answers *what context* shows up.
 
 | Kind of context | Examples | Visibility in a handler |
 |---|---|---|
@@ -100,18 +76,11 @@ async fn create_post(
 }
 ```
 
-**Edge cases the rule has to survive** (recorded so the specs that own them
-don't forget):
+**Edge cases the rule has to survive** (recorded so the specs that own them don't forget):
 
-- **Tests.** `OnceLock` is write-once per process. The override path lives in
-  `01-app-and-settings.md`: a `Manager::on(&pool)` explicit-pool escape hatch,
-  plus a `test_with_pool(pool, async { ... })` helper that scopes the override
-  for a test future. Open question #1 closes here.
-- **Multi-database routing** (PRD F-ORM-8). Default pool is ambient; explicit
-  alias via `Post::objects().using("replica")` keeps the rule.
-- **Per-request transactions.** `Db::tx(|tx| async { ... })` passes `tx` into
-  the closure as a request-scoped argument without leaking it through the
-  handler signature.
+- **Tests.** `OnceLock` is write-once per process. The override path lives in `01-app-and-settings.md`: a `Manager::on(&pool)` explicit-pool escape hatch, plus a `test_with_pool(pool, async { ... })` helper that scopes the override for a test future. Open question #1 closes here.
+- **Multi-database routing** (PRD F-ORM-8). Default pool is ambient; explicit alias via `Post::objects().using("replica")` keeps the rule.
+- **Per-request transactions.** `Db::tx(|tx| async { ... })` passes `tx` into the closure as a request-scoped argument without leaking it through the handler signature.
 
 ---
 
@@ -120,29 +89,18 @@ don't forget):
 ### Commit A — rename `django-shadow-rust-plan.md` → `arch.md`, sync
 
 - §7 Build Order rewritten to match CLAUDE.md:
-  - **M5** = full migration engine (model snapshot + basic autodetection +
-    tracking table + `migrate`). Not forward-only.
+  - **M5** = full migration engine (model snapshot + basic autodetection + tracking table + `migrate`). Not forward-only.
   - **M6** = `inspectdb`.
   - **M7** = Plugin trait extraction (architectural keystone).
-  - **M8** = hardening autodetection (rename detection, data migrations,
-    cross-plugin FK ordering).
-- §0 already names managed migrations as a north star; add the explicit
-  *declare → migrate → change → migrate* phrasing.
-- Insert a new section **between §1 (Architectural Pillars) and §2 (The
-  Plugin Contract)** titled "Visibility of underlying crates" — adopt the
-  table from §3 above. It belongs there because dependency direction is
-  already established in §1, and §2 starts naming concrete public surface
-  (the prelude), so the rule needs to be in scope before that point.
+  - **M8** = hardening autodetection (rename detection, data migrations, cross-plugin FK ordering).
+- §0 already names managed migrations as a north star; add the explicit *declare → migrate → change → migrate* phrasing.
+- Insert a new section **between §1 (Architectural Pillars) and §2 (The Plugin Contract)** titled "Visibility of underlying crates" — adopt the table from §3 above. It belongs there because dependency direction is already established in §1, and §2 starts naming concrete public surface (the prelude), so the rule needs to be in scope before that point.
 
 ### Commit B — update `umbra-PRD.md` in place
 
-- `F-MIG-3` (autodetection) **P1 → P0**, with rationale (matches CLAUDE.md
-  "day one"; the declare→migrate loop is the product, not a later feature).
-- §1 Summary and §6 Product Principles call out the declare→migrate→change→
-  migrate loop by name.
-- §10 Release Phasing rewritten so phase 0.1 *includes* M5 (the loop is alive
-  at the 0.1/0.2 boundary). 0.2 ("Porting MVP") then becomes `inspectdb` (M6)
-  + hardening — same goal, more accurate cut.
+- `F-MIG-3` (autodetection) **P1 → P0**, with rationale (matches CLAUDE.md "day one"; the declare→migrate loop is the product, not a later feature).
+- §1 Summary and §6 Product Principles call out the declare→migrate→change→migrate loop by name.
+- §10 Release Phasing rewritten so phase 0.1 *includes* M5 (the loop is alive at the 0.1/0.2 boundary). 0.2 ("Porting MVP") then becomes `inspectdb` (M6) + hardening — same goal, more accurate cut.
 - Companion-doc reference updated: `django-shadow-rust-plan.md` → `arch.md`.
 
 ---
@@ -151,9 +109,7 @@ don't forget):
 
 Each follows a common skeleton:
 
-> **Purpose · Concepts · API-shape sketch (illustrative Rust) · Mechanics &
-> invariants · Trade-offs and alternatives considered · Open questions ·
-> Cross-links.**
+> **Purpose · Concepts · API-shape sketch (illustrative Rust) · Mechanics & invariants · Trade-offs and alternatives considered · Open questions · Cross-links.**
 
 Target length: 1–3 pages. Illustrative code, not a frozen reference.
 
@@ -170,24 +126,15 @@ Target length: 1–3 pages. Illustrative code, not a frozen reference.
 
 ### Deliberately *not* deep at this stage
 
-- **Routing / views / middleware.** M0 has one hand-written axum route on
-  purpose; the `umbra::web` API is best designed once we know what handlers
-  need to receive from the ORM and the Plugin contract. Locking it down before
-  M3/M5 would freeze the wrong shape. Outline only.
-- **CLI.** `manage.py`-equivalent gets a section inside `arch.md` for now;
-  promoted when the command list grows past `migrate` / `makemigrations` /
-  `inspectdb`.
-- **Error model & security defaults.** Referenced cross-cuttingly inside
-  `arch.md` and inside specs that touch them; promoted to their own specs once
-  they accrete real surface area.
+- **Routing / views / middleware.** M0 has one hand-written axum route on purpose; the `umbra::web` API is best designed once we know what handlers need to receive from the ORM and the Plugin contract. Locking it down before M3/M5 would freeze the wrong shape. Outline only.
+- **CLI.** `manage.py`-equivalent gets a section inside `arch.md` for now; promoted when the command list grows past `migrate` / `makemigrations` / `inspectdb`.
+- **Error model & security defaults.** Referenced cross-cuttingly inside `arch.md` and inside specs that touch them; promoted to their own specs once they accrete real surface area.
 
 ---
 
 ## 6. Outlines (`docs/specs/outlines/`, 6 commits)
 
-Each outline is ~½ page: **Purpose · Key concepts · Open questions · Cross-
-links to deep specs that constrain it · "Promote to deep spec when …"
-trigger.**
+Each outline is ~½ page: **Purpose · Key concepts · Open questions · Cross-links to deep specs that constrain it · "Promote to deep spec when …" trigger.**
 
 | File | Covers | Promote-to-deep trigger |
 |---|---|---|
@@ -198,9 +145,7 @@ trigger.**
 | `admin.md` | `umbra-admin`: auto CRUD UI, list/filter/search, inlines, bulk actions, permission integration | M12 entry |
 | `openapi.md` | `umbra-openapi`: utoipa integration, Swagger UI, schema gen from REST viewsets | M12 entry (after admin or in parallel) |
 
-Outlines live in `docs/specs/outlines/` rather than as half-finished entries
-inside `docs/specs/`, so the deep-spec directory stays a clean "source of
-truth" list and deferred work stays obviously deferred.
+Outlines live in `docs/specs/outlines/` rather than as half-finished entries inside `docs/specs/`, so the deep-spec directory stays a clean "source of truth" list and deferred work stays obviously deferred.
 
 ---
 
@@ -233,44 +178,25 @@ Each commit stands on its own and is reviewable independently.
 
 ## 9. Open questions captured for later
 
-Carried forward from PRD §13 and from this brainstorming, to be resolved in the
-specs that touch them:
+Carried forward from PRD §13 and from this brainstorming, to be resolved in the specs that touch them:
 
-1. **Ambient ORM access** — `OnceLock<DbPool>` vs always-explicit `State`
-   threading. *Direction decided here in §3.2 (ambient, with `Manager::on(&pool)`
-   + `test_with_pool` escape hatches); concrete `OnceLock` placement, the
-   test-override helper signature, and any `using("alias")` multi-DB hook
-   designed in `01-app-and-settings.md`.*
-2. **Plugin registration default** — explicit builder vs `inventory`/`linkme`
-   auto-registration as the recommended path. *Decided in `02-plugin-
-   contract.md`.*
-3. **Admin UI rendering** — server-rendered templates vs a small embedded SPA.
-   *Decided in `admin.md` (outline → deep spec at M12).*
-4. **Async story for signals/hooks** — sync vs async callbacks; ordering
-   guarantees. *Decided in `02-plugin-contract.md` or a follow-up signals
-   spec.*
-5. **Custom user model mechanism** — how to allow override without Django's
-   runtime swapping tricks. *Decided in `auth-and-sessions.md` (outline → deep
-   at M8).*
-6. **`umbra::web` API shape** — concrete types for `Router`, `Request`,
-   `Response`, extractors. *Deliberately deferred to the web-layer deep spec
-   (post-ORM).*
+1. **Ambient ORM access** — `OnceLock<DbPool>` vs always-explicit `State` threading. *Direction decided here in §3.2 (ambient, with `Manager::on(&pool)` + `test_with_pool` escape hatches); concrete `OnceLock` placement, the test-override helper signature, and any `using("alias")` multi-DB hook designed in `01-app-and-settings.md`.*
+2. **Plugin registration default** — explicit builder vs `inventory`/`linkme` auto-registration as the recommended path. *Decided in `02-plugin-contract.md`.*
+3. **Admin UI rendering** — server-rendered templates vs a small embedded SPA. *Decided in `admin.md` (outline → deep spec at M12).*
+4. **Async story for signals/hooks** — sync vs async callbacks; ordering guarantees. *Decided in `02-plugin-contract.md` or a follow-up signals spec.*
+5. **Custom user model mechanism** — how to allow override without Django's runtime swapping tricks. *Decided in `auth-and-sessions.md` (outline → deep at M8).*
+6. **`umbra::web` API shape** — concrete types for `Router`, `Request`, `Response`, extractors. *Deliberately deferred to the web-layer deep spec (post-ORM).*
 
 ---
 
 ## 10. Out of scope for this design
 
-- The actual content of the specs themselves — written one by one in the
-  implementation plan that follows.
-- Any Rust code. No `Cargo.toml`, no `src/`, until the spec set is complete
-  and approved.
-- Tooling choices (CI, formatter config, MSRV policy) — captured in arch.md or
-  later commits as they become needed.
+- The actual content of the specs themselves — written one by one in the implementation plan that follows.
+- Any Rust code. No `Cargo.toml`, no `src/`, until the spec set is complete and approved.
+- Tooling choices (CI, formatter config, MSRV policy) — captured in arch.md or later commits as they become needed.
 
 ---
 
 ## 11. Next step
 
-Hand off to the **writing-plans** skill: turn this design into an ordered,
-committable plan of 16 writing tasks with clear inputs, outputs, and review
-checkpoints.
+Hand off to the **writing-plans** skill: turn this design into an ordered, committable plan of 16 writing tasks with clear inputs, outputs, and review checkpoints.
