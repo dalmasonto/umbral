@@ -193,6 +193,79 @@ Don't translate internal specs into user-facing docs. The spec is the spec. The 
 is the smallest useful slice for someone using the feature. If you find yourself rewriting
 `arch.md` in MDX, stop and link to it instead.
 
+## Skills: capture what you learn, as you learn it
+
+As you work on umbra, write skills. A skill is a small instruction file the next agent
+(or you, weeks later) can load to skip the re-discovery you just did. The goal is an
+incremental library that grows with the codebase.
+
+Three things are worth a skill:
+
+- **How you solved something.** A specific problem and the fix that worked, with enough
+  context that someone hitting the same wall finds the skill.
+- **How something works.** Mechanics that aren't obvious from the code: how
+  `sqlx::query!` resolves columns at compile time, how a derive macro expands, how
+  `tower::Layer` composes through the middleware chain.
+- **How something is wired together.** Configuration that spans multiple files or
+  crates: how the Plugin trait dispatches, how the autodetector reads model snapshots,
+  how cargo features gate optional plugins.
+
+### Where they go
+
+```
+.claude/skills/<slug>.md
+```
+
+Use a kebab-case slug that describes the trigger. Examples: `sqlx-offline-cache.md`,
+`plugin-trait-dispatch.md`, `derive-model-expansion.md`, `migration-snapshot-format.md`.
+
+### Structure
+
+Every skill is markdown with YAML frontmatter:
+
+```markdown
+---
+name: <slug>
+description: <trigger sentence: "Use when X" or "Triggers on Y">
+---
+
+# <Title>
+
+## Context
+What problem this skill solves and when it applies.
+
+## Approach
+The procedure or explanation. Numbered steps if procedural; named sections if
+explanatory.
+
+## Why
+The reasoning behind this approach. What the alternatives were and why they lost.
+
+## Pitfalls
+Edge cases, common confusions, things that already bit someone.
+
+## See also
+Links to `arch.md` sections, `docs/specs/` files, or other skills.
+```
+
+The `description` field matters most. It's what shows up in the skill catalog and what
+future agents read to decide whether to load the skill. Write it as a trigger ("Use when
+debugging sqlx compile errors against the offline cache"), not as a summary ("This skill
+is about sqlx").
+
+### When to write one
+
+Right after you understand or solve something, while the context is fresh. Don't batch
+this. A skill written days later loses the specifics that made it useful in the first
+place.
+
+### What NOT to capture
+
+- Things obvious from reading the code.
+- One-off trivia that won't recur.
+- Restatements of `arch.md`, the PRD, or `docs/specs/`. Link to those instead.
+- Opinions without rationale.
+
 ## Prior art worth studying
 
 **Cot** (Django-like; builds its own ORM on sea-query + axum, the closest prior art),
