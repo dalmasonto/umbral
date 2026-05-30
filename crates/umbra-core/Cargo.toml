@@ -30,8 +30,15 @@ uuid = { version = "1", features = ["serde", "v7"] }
 # figment::Jail (for env-var and toml file sandboxing in tests) lives behind
 # the "test" feature.
 figment = { version = "0.10", features = ["test"] }
+# Isolated per-test scratch directories for the migrate integration tests
+# (declare -> migrate -> change -> migrate loop reads and writes JSON files,
+# so each test needs its own dir to stay independent of test order).
+tempfile = "3"
 # tokio macros enable #[tokio::test] for async tests; rt is the runtime.
-tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }
+# `sync` carries tokio::sync::OnceCell, which the migrate integration tests
+# use to boot App::build() exactly once across tokio::test cases that share
+# the same process.
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync"] }
 # umbra (the facade) is needed in tests/ because #[derive(Model)] emits
 # `::umbra::orm::*` paths and those have to resolve at the integration-test
 # layer. Dev-dep only — doesn't propagate to release builds, so the
