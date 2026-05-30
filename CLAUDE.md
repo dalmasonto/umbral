@@ -87,9 +87,11 @@ Build the primitives by hand first, then extract abstractions. Managed migration
 
 ## Commands
 
-No build tooling exists yet. Once scaffolded it is a standard Cargo workspace:
+The Cargo workspace lives at `crates/Cargo.toml`, **not** at the repo root. Every `cargo` command runs from inside `crates/`:
 
 ```bash
+cd crates
+
 cargo build                      # build all workspace crates
 cargo test                       # run all tests
 cargo test -p umbra-core         # test a single crate
@@ -97,6 +99,15 @@ cargo test <test_name>           # run a single test by name
 cargo run -p umbra-cli -- <cmd>  # the manage.py equivalent (migrate, makemigrations, worker, inspectdb, ...)
 cargo clippy --all-targets       # lint
 cargo fmt                        # format
+```
+
+Build artefacts (`crates/target/`, `crates/Cargo.lock`) are produced inside the same directory and are gitignored. The repo root deliberately has no `Cargo.toml`: this is a multi-purpose tree (framework + docs + Specra site + example apps) rather than a single cargo project.
+
+For an example app outside the framework workspace:
+
+```bash
+cd examples/<name>
+cargo build                      # standalone Cargo project, ignores the framework workspace
 ```
 
 `sqlx::query!` compile-time checks need either a live `DATABASE_URL` or a prepared `.sqlx` offline cache once the DB layer exists.
