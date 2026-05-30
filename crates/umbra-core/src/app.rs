@@ -36,6 +36,17 @@ impl App {
 
         axum::serve(listener, self.router).await
     }
+
+    /// Consume the [`App`] and return its merged axum router.
+    ///
+    /// Useful when the caller wants to drive the router themselves: an
+    /// integration test that sends synthetic requests via
+    /// `tower::ServiceExt::oneshot`, an embedding scenario that nests
+    /// umbra under another axum tree, or any other path that doesn't
+    /// want `serve()`'s opinionated listener.
+    pub fn into_router(self) -> Router {
+        self.router
+    }
 }
 
 /// The fluent entry point for constructing an [`App`].

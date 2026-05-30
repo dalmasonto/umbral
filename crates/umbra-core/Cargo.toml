@@ -39,6 +39,15 @@ tempfile = "3"
 # use to boot App::build() exactly once across tokio::test cases that share
 # the same process.
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync"] }
+# tower::ServiceExt::oneshot drives a single synthetic request through the
+# merged axum::Router in `tests/plugin_contract.rs` so the plugin-routes-
+# mount-under-the-app-router check doesn't need a real TCP listener.
+tower = { version = "0.5", features = ["util"] }
+# http::Request / Response shape for the same oneshot path. axum re-exports
+# the types but the trait bound on `oneshot` wants the concrete `http::*`
+# types, so a direct dev-dep keeps the call site short.
+http = "1"
+http-body-util = "0.1"
 # umbra (the facade) is needed in tests/ because #[derive(Model)] emits
 # `::umbra::orm::*` paths and those have to resolve at the integration-test
 # layer. Dev-dep only — doesn't propagate to release builds, so the
