@@ -76,13 +76,17 @@ impl Settings {
     /// Load settings from defaults, `umbra.toml`, and `UMBRA_`-prefixed env vars.
     ///
     /// Precedence (later wins): struct defaults → `umbra.toml` → env vars.
+    /// Implementation uses `merge` (not `join`) for both providers so each
+    /// subsequent source overrides the previous one's values. With `join`
+    /// the first provider to set a key would keep it, which would invert
+    /// the documented precedence.
     ///
     /// The error type is boxed because `figment::Error` is large (over 200
     /// bytes); see `clippy::result_large_err`.
     pub fn from_env() -> Result<Self, Box<figment::Error>> {
         Figment::new()
-            .join(Toml::file("umbra.toml"))
-            .join(Env::prefixed("UMBRA_").split("__"))
+            .merge(Toml::file("umbra.toml"))
+            .merge(Env::prefixed("UMBRA_").split("__"))
             .extract()
             .map_err(Box::new)
     }
@@ -149,18 +153,15 @@ mod tests {
     }
 
     #[test]
-    fn toml_wins_over_env_under_current_join_order() {
-        // The doc comment on `Settings::from_env` advertises precedence
-        // "defaults -> toml -> env vars", but figment's `join` is non
-        // overriding: the first provider to set a key keeps it. Toml is
-        // joined first, so it actually wins. This test pins down the real
-        // behaviour so the discrepancy is impossible to miss. Fixing the
-        // precedence is a follow-up: swap to `merge` for env, or reorder.
+    fn env_var_overrides_toml() {
+        // Matches the precedence documented on `Settings::from_env`:
+        // env vars override toml. The implementation uses `merge` (not
+        // `join`) precisely so this assertion holds.
         Jail::expect_with(|jail| {
             jail.create_file("umbra.toml", r#"secret_key = "from-toml""#)?;
             jail.set_env("UMBRA_SECRET_KEY", "from-env");
             let s = Settings::from_env().unwrap();
-            assert_eq!(s.secret_key, "from-toml");
+            assert_eq!(s.secret_key, "from-env");
             Ok(())
         });
     }
