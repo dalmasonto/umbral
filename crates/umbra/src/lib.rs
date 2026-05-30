@@ -97,6 +97,20 @@ pub mod plugin {
     pub use umbra_core::plugin::{AppContext, Plugin, PluginError};
 }
 
+pub mod forms {
+    //! Form parsing, validation, and HTML rendering.
+    //!
+    //! Primitives + composition at v1: build `Field`s from
+    //! `umbra::forms::{Field, ...}`, run them over a `HashMap` of
+    //! form input, collect `ValidationErrors`, render each field's
+    //! HTML via `field.render_html(value)`. A `#[derive(Form)]`
+    //! macro is a future round.
+
+    pub use umbra_core::forms::{
+        EmailFormat, Field, InputKind, MaxLength, MinLength, Required, ValidationErrors, Validator,
+    };
+}
+
 pub mod backup {
     //! Dump every registered model's rows to JSON; load them back.
     //!

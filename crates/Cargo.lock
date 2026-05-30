@@ -2317,6 +2317,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "umbra-sessions"
+version = "0.0.1"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "umbra",
+ "umbra-auth",
+ "uuid",
+]
+
+[[package]]
 name = "uncased"
 version = "0.9.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"

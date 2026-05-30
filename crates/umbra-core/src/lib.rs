@@ -9,6 +9,7 @@ pub mod backend;
 pub mod backup;
 pub mod check;
 pub mod db;
+pub mod forms;
 pub mod inspect;
 pub mod migrate;
 pub mod orm;

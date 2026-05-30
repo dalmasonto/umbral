@@ -1,0 +1,24 @@
+[package]
+name = "umbra-sessions"
+description = "Session storage + cookie helpers for umbra. DB-backed sessions linked to umbra-auth users."
+workspace = "../../crates"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+umbra = { path = "../../crates/umbra", version = "0.0.1" }
+# AuthUser hydration via the umbra-auth helpers.
+umbra-auth = { path = "../umbra-auth", version = "0.0.1" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "chrono"] }
+uuid = { version = "1", features = ["serde", "v4", "v7"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync"] }
+tempfile = "3"
