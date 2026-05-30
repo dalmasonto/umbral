@@ -228,7 +228,7 @@ milestones M0–M13 in the companion plan.
 
 ## 11. Competitive Landscape
 
-- **Django + DRF (Python):** the experience being shadowed. Wins on maturity & ecosystem; loses
+- **Django + DRF (Python):** the experience being echoed. Wins on maturity & ecosystem; loses
   on runtime performance and compile-time safety. Umbra's reference point.
 - **Loco (Rust):** Rails-style, batteries-included on SeaORM. Closest productivity peer; Umbra
   differentiates on Django-style migrations/`inspectdb` and porting focus.

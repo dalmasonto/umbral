@@ -4,7 +4,7 @@ A Django-shape web framework for Rust.
 
 Declare your data and you get migrations, CRUD, an admin, and an optional REST API almost for free, with Rust's compile-time guarantees instead of runtime hopes.
 
-The name is Latin for *shadow*. umbra is a Django shadow.
+The name is Latin for *shadow*. umbra is a separate Rust framework inspired by Django's shape and ergonomics; it isn't a port of Django and shares no code with the Django project.
 
 > **Status: pre-alpha, design phase.** No published crate yet. The architecture, the PRD, and per-subsystem specs are written first; implementation lands milestone by milestone. See `docs/specs/` for the design and `arch.md` for the architecture.
 

@@ -1,8 +1,8 @@
-# Building a Django Shadow in Rust — Architecture, Features & Build Strategy
+# Building a Django-Inspired Web Framework in Rust — Architecture, Features & Build Strategy
 
-The goal is not to clone Django line-for-line, but to recreate the *feeling*: declare your data, get migrations, CRUD, an admin, and (optionally) an API almost for free, while gaining Rust's compile-time resilience. The framework is **thin-core + plugin-heavy**, and it **dogfoods its own plugin system** for every built-in feature.
+The goal is not to clone Django line-for-line, but to recreate the *feeling*: declare your data, get migrations, CRUD, an admin, and (optionally) an API almost for free, while gaining Rust's compile-time resilience. umbra is a separate Rust framework inspired by Django's shape and ergonomics; it isn't a port and shares no code with the Django project. The framework is **thin-core + plugin-heavy**, and it **dogfoods its own plugin system** for every built-in feature.
 
-> **Project name: `umbra`** (Latin for *shadow*, a Django shadow). Placeholder; rename the whole tree later with a single `sed 's/umbra/yourname/g'`. Convention: the facade crate is `umbra`, internals are `umbra-*`, and third-party plugins follow `umbra-<thing>` the way Django plugins are `django-<thing>`.
+> **Project name: `umbra`** (Latin for *shadow*; the framework lives in Django's shadow in shape, not in code). Placeholder; rename the whole tree later with a single `sed 's/umbra/yourname/g'`. Convention: the facade crate is `umbra`, internals are `umbra-*`, and third-party plugins follow `umbra-<thing>` the way Django plugins are `django-<thing>`.
 
 ---
 

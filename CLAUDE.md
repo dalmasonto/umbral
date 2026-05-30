@@ -6,7 +6,7 @@ Guidance for Claude Code (claude.ai/code) when working in this repository.
 
 Greenfield. No Cargo workspace or source yet. Before scaffolding anything, read `arch.md`; that's the authoritative design spec.
 
-umbra is a Django-equivalent web framework in Rust ("a Django shadow"; *umbra* is Latin for shadow). The goal is to recreate Django's *feeling*: declare data and you get migrations, CRUD, an admin, and an optional REST API almost for free, with Rust's compile-time guarantees. The name is a placeholder; the whole tree can be renamed later with `sed 's/umbra/yourname/g'`.
+umbra is a Django-inspired web framework in Rust (*umbra* is Latin for shadow — the framework lives in Django's shadow in shape, not in code). It's a separate project that shares no code with Django; the goal is to recreate Django's *feeling*: declare data and you get migrations, CRUD, an admin, and an optional REST API almost for free, with Rust's compile-time guarantees. The name is a placeholder; the whole tree can be renamed later with `sed 's/umbra/yourname/g'`.
 
 ## The one idea that matters most
 
