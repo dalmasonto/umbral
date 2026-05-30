@@ -44,13 +44,15 @@ impl Post {
 /// The sibling column module.
 ///
 /// Each column constant here is the typed handle used in `filter` /
-/// `order_by` predicates: `post::title.eq("hello")`, `post::published_at
-/// .is_not_null()`, etc. M3 will generate this module from the
-/// `#[derive(Model)]` on the struct above.
+/// `order_by` predicates: `post::ID.eq(2)`, `post::PUBLISHED_AT.is_not_null()`,
+/// etc. M3 will generate this module from the `#[derive(Model)]` on the
+/// struct above.
 ///
-/// Column constants get populated AFTER `crate::orm::column` lands its
-/// types; the parallel fan-out wiring keeps this file empty of constants
-/// during the parallel phase and adds them in the integration commit.
+/// The double-`post` path (`umbra_core::orm::post::post::ID`) reads oddly
+/// but matches the spec's `<model>.rs` file + sibling `mod <model>` of
+/// column constants convention. clippy's `module_inception` lint is
+/// silenced because the pattern is intentional.
+#[allow(clippy::module_inception)]
 pub mod post {
     use super::Post;
     use crate::orm::column::{IntCol, NullableDateTimeCol, StrCol};
