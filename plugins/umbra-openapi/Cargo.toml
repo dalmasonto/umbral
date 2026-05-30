@@ -22,3 +22,6 @@ tower = { version = "0.5", features = ["util"] }
 axum = "0.8"
 http = "1"
 http-body-util = "0.1"
+umbra-rest = { path = "../umbra-rest", version = "0.0.1" }
+umbra-auth = { path = "../umbra-auth", version = "0.0.1" }
+chrono = { version = "0.4", features = ["serde"] }
