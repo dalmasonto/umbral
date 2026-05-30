@@ -23,4 +23,5 @@ serde = { version = "1", features = ["derive"] }
 sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "chrono"] }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync"] }
+tempfile = "3"

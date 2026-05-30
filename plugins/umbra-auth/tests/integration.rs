@@ -35,27 +35,31 @@ async fn boot() {
         let settings =
             umbra::Settings::from_env().expect("figment defaults always load in a test env");
 
-        // A shared-cache in-memory SQLite. The default
-        // `umbra::db::connect("sqlite::memory:")` gives each pool
-        // connection a fresh, isolated database, which means a CREATE
-        // TABLE on connection #1 (run inside this OnceCell init) is
-        // invisible to the helpers' queries that land on connection #2
-        // a few tests later. `cache=shared` against a named in-memory
-        // file gets every connection in the same process pointing at
-        // one database, so the table the boot creates is visible
-        // throughout the test binary. The migrate tests dodge the same
-        // hazard by hammering a single connection across tightly
-        // serialized queries; the auth helpers spread their writes
-        // across more independent calls so we lift the constraint
-        // directly via the URL.
+        // sqlx's in-memory SQLite is per-connection: each connection
+        // in the pool gets its own empty DB, so a CREATE TABLE on
+        // one connection is invisible to queries that land on
+        // another. Working around it with `cache=shared` or a
+        // 1-connection pool turned out to be flaky under tokio's
+        // multi-task parallelism (connection recycling tore down the
+        // shared cache). A tempfile is the deterministic fix: every
+        // pool connection sees the same on-disk file, and the OS
+        // cleans it up when the TempDir drops. The file lives for
+        // the test-binary's lifetime, which matches the shared-state
+        // scope the auth helpers need.
+        let tmp = tempfile::tempdir().expect("create tempdir for the test DB");
+        let db_path = tmp.path().join("umbra_auth_integration.sqlite");
+        // Leak the TempDir so its Drop doesn't fire mid-test and
+        // delete the file under us. Test-only; the OS cleans /tmp
+        // between boots.
+        std::mem::forget(tmp);
         let options = SqliteConnectOptions::new()
-            .filename("file:umbra_auth_integration?mode=memory&cache=shared")
+            .filename(&db_path)
             .create_if_missing(true);
         let pool = SqlitePoolOptions::new()
             .max_connections(5)
             .connect_with(options)
             .await
-            .expect("in-memory sqlite with shared cache should connect");
+            .expect("sqlite should connect against the tempfile");
 
         umbra::App::builder()
             .settings(settings)

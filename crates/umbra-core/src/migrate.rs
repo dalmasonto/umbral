@@ -259,6 +259,18 @@ pub enum Operation {
     /// support this natively; older SQLite would need a table-
     /// recreation dance the engine doesn't implement.
     DropColumn { table: String, column: String },
+    /// Alter a column's nullable flag (the only safe in-place change
+    /// the engine ships at M5.1). Self-contained: carries the full
+    /// new column list so the SQLite table-recreation dance can
+    /// rebuild the schema without re-reading the snapshot. The
+    /// `column` field names the specific column that triggered the
+    /// alter (used for the filename suffix and diagnostics); the
+    /// `new_columns` list is the post-change schema.
+    AlterColumn {
+        table: String,
+        column: String,
+        new_columns: Vec<Column>,
+    },
 }
 
 /// One column inside a [`Operation::CreateTable`].
@@ -512,8 +524,9 @@ pub async fn run_in(dir: &Path) -> Result<u64, MigrateError> {
 
             let mut tx = pool.begin().await?;
             for op in &file.operations {
-                let sql = render_operation(op);
-                sqlx::query(&sql).execute(&mut *tx).await?;
+                for sql in render_operation(op) {
+                    sqlx::query(&sql).execute(&mut *tx).await?;
+                }
             }
             let snapshot_hash = file.snapshot_after.hash();
             let applied_at = chrono::Utc::now().to_rfc3339();
@@ -713,8 +726,12 @@ fn diff_columns(
         .map(|c| (c.name.as_str(), c))
         .collect();
 
-    // In-place type / nullable / pk changes are UnsafeAlter at M8 v1.
-    // Walk the intersection by name and fail fast on the first one.
+    // Walk the intersection by name. Type and pk changes still
+    // surface as UnsafeAlter (need cast semantics + a primary-key
+    // rebuild dance that's not in scope at the M5.1 close). Nullable
+    // flips become AlterColumn ops, rendered via the SQLite
+    // table-recreation dance.
+    let mut alter_columns: Vec<&str> = Vec::new();
     for (name, prev_col) in &prev_cols {
         if let Some(curr_col) = curr_cols.get(name) {
             if prev_col.ty != curr_col.ty {
@@ -722,20 +739,9 @@ fn diff_columns(
                     model: model.to_string(),
                     column: (*name).to_string(),
                     reason: format!(
-                        "type change {prev_ty:?} -> {curr_ty:?} needs the AlterColumn op (deferred past M8 v1)",
+                        "type change {prev_ty:?} -> {curr_ty:?} needs cast semantics not yet modelled",
                         prev_ty = prev_col.ty,
                         curr_ty = curr_col.ty,
-                    ),
-                });
-            }
-            if prev_col.nullable != curr_col.nullable {
-                return Err(MigrateError::UnsafeAlter {
-                    model: model.to_string(),
-                    column: (*name).to_string(),
-                    reason: format!(
-                        "nullable flip {prev_n} -> {curr_n} needs the AlterColumn op (deferred past M8 v1)",
-                        prev_n = prev_col.nullable,
-                        curr_n = curr_col.nullable,
                     ),
                 });
             }
@@ -746,10 +752,29 @@ fn diff_columns(
                     reason: "primary-key flips need a manual data-preserving migration".to_string(),
                 });
             }
+            if prev_col.nullable != curr_col.nullable {
+                alter_columns.push(*name);
+            }
         }
     }
 
     let mut ops: Vec<Operation> = Vec::new();
+
+    // AlterColumn ops first, in name order. One AlterColumn per
+    // changed column; each carries the full new schema so the render
+    // can rebuild without further context. Multiple nullable flips on
+    // one table generate multiple AlterColumns; the apply loop runs
+    // them sequentially (each is a table-recreation, so back-to-back
+    // alters drop and recreate twice; the cost is acceptable while
+    // M5.1 ships the simple case).
+    let new_columns: Vec<Column> = current.fields.clone();
+    for name in alter_columns {
+        ops.push(Operation::AlterColumn {
+            table: current.table.clone(),
+            column: name.to_string(),
+            new_columns: new_columns.clone(),
+        });
+    }
 
     // Drops first so a same-position add can reuse the column slot.
     for (name, prev_col) in &prev_cols {
@@ -783,6 +808,7 @@ fn suffix_for(ops: &[Operation]) -> String {
         [Operation::DropTable { table }] => format!("drop_{table}"),
         [Operation::AddColumn { table, column }] => format!("add_{}_{}", table, column.name),
         [Operation::DropColumn { table, column }] => format!("drop_{table}_{column}"),
+        [Operation::AlterColumn { table, column, .. }] => format!("alter_{table}_{column}"),
         _ => "auto".to_string(),
     }
 }
@@ -817,17 +843,22 @@ async fn applied_names(
     Ok(rows.into_iter().collect())
 }
 
-/// Render one operation to SQL via sea-query + the active backend's
-/// `map_type` mapping. M5 v1 shipped the two table-level ops; M8 v1
-/// adds the column-level ones via `Table::alter()`. `AlterColumn` is
-/// still deferred.
+/// Render one operation to a list of SQL statements via sea-query +
+/// the active backend's `map_type` mapping. Most ops produce one
+/// statement; `AlterColumn` produces the multi-statement SQLite
+/// table-recreation dance (`CREATE _umbra_new` + `INSERT ... SELECT`
+/// + `DROP` + `RENAME`).
+///
+/// The apply loop in `run_in` executes each statement in order inside
+/// the same transaction.
 ///
 /// `AddColumn` ignores the `primary_key` flag: neither SQLite nor
-/// Postgres lets a primary key be added to an existing table without a
-/// table-recreation step, and the autodetector won't route a pk-flagged
-/// column through `AddColumn` anyway. A hand-edited migration that sets
-/// the flag is taken to mean "the user is taking responsibility".
-fn render_operation(op: &Operation) -> String {
+/// Postgres lets a primary key be added to an existing table without
+/// a table-recreation step, and the autodetector won't route a
+/// pk-flagged column through `AddColumn` anyway. A hand-edited
+/// migration that sets the flag is taken to mean "the user is taking
+/// responsibility".
+fn render_operation(op: &Operation) -> Vec<String> {
     use sea_query::{Alias, ColumnDef, SqliteQueryBuilder, Table};
 
     match op {
@@ -846,11 +877,13 @@ fn render_operation(op: &Operation) -> String {
                 }
                 stmt.col(&mut def);
             }
-            stmt.build(SqliteQueryBuilder)
+            vec![stmt.build(SqliteQueryBuilder)]
         }
-        Operation::DropTable { table } => Table::drop()
-            .table(Alias::new(table))
-            .build(SqliteQueryBuilder),
+        Operation::DropTable { table } => vec![
+            Table::drop()
+                .table(Alias::new(table))
+                .build(SqliteQueryBuilder),
+        ],
         Operation::AddColumn { table, column } => {
             let mut stmt = Table::alter();
             stmt.table(Alias::new(table));
@@ -861,13 +894,87 @@ fn render_operation(op: &Operation) -> String {
                 def.not_null();
             }
             stmt.add_column(&mut def);
-            stmt.build(SqliteQueryBuilder)
+            vec![stmt.build(SqliteQueryBuilder)]
         }
-        Operation::DropColumn { table, column } => Table::alter()
-            .table(Alias::new(table))
-            .drop_column(Alias::new(column))
-            .build(SqliteQueryBuilder),
+        Operation::DropColumn { table, column } => vec![
+            Table::alter()
+                .table(Alias::new(table))
+                .drop_column(Alias::new(column))
+                .build(SqliteQueryBuilder),
+        ],
+        Operation::AlterColumn {
+            table,
+            column: _,
+            new_columns,
+        } => render_alter_column_dance(table, new_columns),
     }
+}
+
+/// The SQLite table-recreation dance for `AlterColumn`. SQLite has no
+/// in-place `ALTER COLUMN`, so the only safe way to flip a column's
+/// nullable flag is to rebuild the table:
+///
+/// 1. `CREATE TABLE _umbra_new_<table>` with the new schema.
+/// 2. `INSERT ... SELECT` to copy every row from the old table.
+/// 3. `DROP TABLE <table>`.
+/// 4. `ALTER TABLE _umbra_new_<table> RENAME TO <table>`.
+///
+/// Wrapped in a transaction by the caller. Indexes, triggers, and FK
+/// targets aren't preserved at M5.1 because umbra-core's schema model
+/// doesn't yet carry them; once it does, this routine picks them up
+/// by rebuilding them at step 1.
+///
+/// Nullable `TRUE -> FALSE` fails at step 2 if any row holds NULL,
+/// which is the correct data-integrity behaviour. Nullable
+/// `FALSE -> TRUE` always succeeds.
+fn render_alter_column_dance(table: &str, new_columns: &[Column]) -> Vec<String> {
+    use sea_query::{Alias, ColumnDef, SqliteQueryBuilder, Table};
+
+    let tmp = format!("_umbra_new_{table}");
+    let backend = crate::backend::active();
+
+    // Step 1 — CREATE TABLE _umbra_new_<table>.
+    let mut create = Table::create();
+    create.table(Alias::new(&tmp));
+    for col in new_columns {
+        let mut def = ColumnDef::new_with_type(Alias::new(&col.name), backend.map_type(col.ty));
+        if !col.nullable {
+            def.not_null();
+        }
+        if col.primary_key {
+            def.primary_key();
+        }
+        create.col(&mut def);
+    }
+
+    // Step 2 — INSERT ... SELECT. Same column list both sides; the
+    // dance only handles nullable flips (columns are otherwise
+    // identical). Each name is double-quoted so SQLite identifier
+    // rules don't bite on reserved words.
+    let column_list = new_columns
+        .iter()
+        .map(|c| format!("\"{}\"", c.name.replace('"', "\"\"")))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let insert_sql =
+        format!("INSERT INTO \"{tmp}\" ({column_list}) SELECT {column_list} FROM \"{table}\"");
+
+    // Step 3 — DROP TABLE <table>.
+    let drop_sql = Table::drop()
+        .table(Alias::new(table))
+        .build(SqliteQueryBuilder);
+
+    // Step 4 — ALTER TABLE _umbra_new_<table> RENAME TO <table>.
+    let rename_sql = Table::rename()
+        .table(Alias::new(&tmp), Alias::new(table))
+        .build(SqliteQueryBuilder);
+
+    vec![
+        create.build(SqliteQueryBuilder),
+        insert_sql,
+        drop_sql,
+        rename_sql,
+    ]
 }
 
 #[cfg(test)]

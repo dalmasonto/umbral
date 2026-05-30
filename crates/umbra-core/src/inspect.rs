@@ -526,7 +526,8 @@ pub async fn write_outputs(
                 Operation::CreateTable { columns, .. } => (t + 1, c + columns.len()),
                 Operation::DropTable { .. }
                 | Operation::AddColumn { .. }
-                | Operation::DropColumn { .. } => (t, c),
+                | Operation::DropColumn { .. }
+                | Operation::AlterColumn { .. } => (t, c),
             });
 
     Ok(InspectReport {
