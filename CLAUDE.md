@@ -100,6 +100,62 @@ cargo fmt                        # format
 
 `sqlx::query!` compile-time checks need either a live `DATABASE_URL` or a prepared `.sqlx` offline cache once the DB layer exists.
 
+## Working in the workspace
+
+The four core crates connect via a single dependency arrow pointing inward toward the framework's centre:
+
+```
+umbra-cli  →  umbra (facade)  →  { umbra-core, umbra-macros }
+                  ↑
+            plugins/* (from M9 onward, each a separate crate)
+```
+
+`umbra` is the **facade**, the only stable surface user code and plugin authors should import. Internal types live in `umbra-core` and `umbra-macros`; the facade re-exports the subset that's stable. When you add something a plugin author needs (a trait, a field type, an extractor, a derive), it goes in `umbra-core` (or `umbra-macros` for a macro) **and** gets a re-export from the facade. The prelude (`umbra::prelude`) re-exports the common subset so `use umbra::prelude::*;` brings in everything a typical handler / model / plugin author needs.
+
+| Adding ... | Goes in ... |
+|---|---|
+| ORM types, field types, QuerySet methods | `umbra-core` |
+| Proc macros (`#[derive(Model)]`, `#[task]`, etc.) | `umbra-macros` |
+| CLI binary subcommands (`migrate`, `inspectdb`, …) | `umbra-cli`; per-plugin commands extend it via `Plugin::commands()` from M7+ |
+| Built-in plugin logic (auth, sessions, admin, tasks, REST, openapi) | `plugins/<name>/` from M9 onward. Each is its own crate that depends only on the `umbra` facade. |
+| Helpers used inside one crate only | `pub(crate)` in that crate; do NOT add them to the facade |
+
+**Cargo's ban on circular crate deps enforces the architecture.** That `umbra-core` doesn't depend on `umbra-rest` (or anything under `plugins/*`) is the structural proof that "serializers are a plugin." Don't ever add a dep from `umbra-core` to a plugin; if you find yourself wanting to, the plugin contract is wrong and needs the fix instead.
+
+**Where to expose a new public type.** Three categories:
+
+- **Core surface** (`Plugin`, `Model`, `AppContext`, `Router`, `Request`, `Response`, common field types, common extractors). Add to `umbra-core` (or `umbra-macros`), re-export from `umbra`, include in `umbra::prelude`.
+- **Power-user surface** (raw SQL query builders, `DatabaseBackend` trait, the migration engine's operation enum). Add to `umbra-core`, re-export from `umbra` under a module (e.g. `umbra::db::query!`, `umbra::backends::*`), but **not** in the prelude. The prelude stays free of ambiguity.
+- **Internal-only**. `pub(crate)` in the originating crate. Never appears in the facade.
+
+## Commit cadence
+
+**One feature, one fix, one commit.** Don't batch unrelated changes. If a feature took multiple WIP commits during development, squash them before merging into the public history.
+
+**Before every commit, verify the whole workspace** (not just the crate you changed; a change in `umbra-core` can silently break the facade's re-exports):
+
+```bash
+cargo fmt
+cargo clippy --all-targets
+cargo build
+cargo test
+```
+
+If any of those fail, fix them or back out the change. Don't commit broken code, and never use `--no-verify` to skip pre-commit hooks. Investigate and fix the underlying issue instead.
+
+**Multi-crate commits are fine when they're one logical change.** A feature that adds a new field type genuinely touches `umbra-core` (the type and `FieldSpec`), `umbra-macros` (so `#[derive(Model)]` handles it), and `umbra` (the re-export). That's one commit, not three, because reverting it as a unit is the only sensible undo.
+
+**Commit message form.**
+
+- First line ≤ 72 characters, imperative voice, with an optional `<type>(<scope>):` prefix. Types: `feat`, `fix`, `docs`, `chore`, `refactor`, `test`, `perf`. Scopes: a crate name (`orm`, `migrate`, `plugin-contract`) or `workspace` for cross-crate. Examples:
+  - `feat(orm): add F-expression support to QuerySet`
+  - `fix(migrate): handle nullable column rename safely`
+  - `docs(specs): clarify the Manager::on(&pool) escape hatch`
+- Body explains *why*, not what. The diff shows what; future readers want to know the reason.
+- For a commit that closes an open question from a spec, name the spec and the question number in the body (`Closes spec 02 open question #2`).
+
+**When in doubt, ask before committing.** Especially for cross-crate refactors, destructive operations (deleting code, renaming public types), or anything that would force a downstream plugin to change. The cost of pausing to confirm is low; the cost of an unwanted commit on a shared branch can be high.
+
 ## Writing conventions
 
 These apply to every internal spec (`arch.md`, `umbra-PRD.md`, `docs/specs/`, the design notes under `docs/decisions/`) and to user-facing MDX in `documentation/`.
