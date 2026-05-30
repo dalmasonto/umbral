@@ -1,0 +1,17 @@
+[package]
+name = "umbra-derive-demo"
+version = "0.1.0"
+edition = "2024"
+description = "Standalone umbra example: #[derive(Model)] on a custom user-defined model, served over HTTP."
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+umbra = { path = "../../crates/umbra" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+chrono = { version = "0.4", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio"] }
+# `App::serve` logs the bound address through `tracing::info!`. Installing a
+# subscriber here turns that into visible stdout so an operator can see the
+# server is up. Mirrors the choice in umbra-cli for the same reason.
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
