@@ -26,3 +26,9 @@ uuid = { version = "1", features = ["serde", "v7"] }
 figment = { version = "0.10", features = ["test"] }
 # tokio macros enable #[tokio::test] for async tests; rt is the runtime.
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }
+# umbra (the facade) is needed in tests/ because #[derive(Model)] emits
+# `::umbra::orm::*` paths and those have to resolve at the integration-test
+# layer. Dev-dep only — doesn't propagate to release builds, so the
+# umbra-core → umbra arrow this introduces (alongside the release-time
+# umbra → umbra-core arrow) is a non-cycle by Cargo's rules.
+umbra = { path = "../umbra" }

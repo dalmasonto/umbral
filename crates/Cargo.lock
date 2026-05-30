@@ -2092,6 +2092,7 @@ dependencies = [
  "sqlx",
  "tokio",
  "tracing",
+ "umbra",
  "uuid",
 ]
 
