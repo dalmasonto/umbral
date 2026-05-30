@@ -87,14 +87,22 @@ impl AppBuilder {
     ///    opens the pool first (with `umbra::db::connect(...).await`)
     ///    and hands it to the builder. This matches the canonical
     ///    pattern in spec 01-app-and-settings.md.
-    /// 2. **Publish ambient state.** Write settings and pools into their
-    ///    `OnceLock`s so accessors like `umbra::db::pool()` work.
-    /// 3. **Build router.** Merge every registered plugin's routes (M7+)
-    ///    with the hand-written router. At M0, only the hand-written
+    /// 2. **Detect backend.** `backend::detect(&settings.database_url)`
+    ///    picks one of the shipped `DatabaseBackend` impls (M4
+    ///    abstraction). An unknown URL scheme (mysql / oracle / etc.)
+    ///    fails here, before any system check runs.
+    /// 3. **Publish ambient state.** Write settings, pools, and the
+    ///    active backend into their `OnceLock`s.
+    /// 4. **System check.** Run framework-built-in checks against the
+    ///    just-published context (active backend + settings). Errors
+    ///    block boot; warnings log and continue.
+    /// 5. **Build router.** Merge every registered plugin's routes (M7+)
+    ///    with the hand-written router. At M4, only the hand-written
     ///    router exists.
     ///
-    /// Phases 4 (system check) and 5 (on_ready) are no-ops at M0; they
-    /// land when the Plugin contract and backend abstraction exist.
+    /// `Plugin::on_ready` (the doc-comment originally called this phase
+    /// 5) lives in M7 with the rest of the Plugin contract; the M4
+    /// build doesn't fire it.
     ///
     /// `build()` is intentionally sync. Earlier iterations auto-opened
     /// the default pool from `settings.database_url` by spinning up a
@@ -111,11 +119,42 @@ impl AppBuilder {
             return Err(BuildError::DefaultPoolMissing);
         }
 
-        // Phase 2 — publish ambient state
+        // Phase 2 — detect backend from the configured URL.
+        let backend =
+            crate::backend::detect(&settings.database_url).map_err(BuildError::BackendDetect)?;
+
+        // Phase 3 — publish ambient state
         crate::settings::init(&settings);
         db::init(self.databases);
+        crate::backend::init(backend);
 
-        // Phase 3 — build the merged router
+        // Phase 4 — system check. Build the context against ambient
+        // state, run the framework checks, partition into errors vs
+        // warnings, log the warnings, fail the build on any errors.
+        let ctx = crate::check::CheckContext {
+            backend,
+            settings: crate::settings::get(),
+        };
+        let checks = crate::check::framework_checks();
+        let findings = crate::check::run_all(&ctx, &checks);
+        let mut errors = Vec::new();
+        for finding in findings {
+            match finding.severity {
+                crate::check::Severity::Error => errors.push(finding),
+                crate::check::Severity::Warning => {
+                    tracing::warn!(
+                        check = finding.check_id,
+                        "umbra system check warning: {}",
+                        finding.message
+                    );
+                }
+            }
+        }
+        if !errors.is_empty() {
+            return Err(BuildError::SystemCheckFailed { findings: errors });
+        }
+
+        // Phase 5 — build the merged router
         let router = self.router.unwrap_or_else(|| {
             Router::new().fallback(|| async { "umbra is running, but no routes are registered." })
         });
@@ -131,6 +170,14 @@ pub enum BuildError {
     SettingsMissing,
     /// `.database("default", pool)` wasn't called on the builder.
     DefaultPoolMissing,
+    /// The URL scheme in `settings.database_url` doesn't match any
+    /// shipped backend.
+    BackendDetect(crate::backend::BackendDetectError),
+    /// One or more system checks failed with `Severity::Error`. The
+    /// full list of findings is in the variant.
+    SystemCheckFailed {
+        findings: Vec<crate::check::SystemCheckFinding>,
+    },
 }
 
 impl std::fmt::Display for BuildError {
@@ -140,6 +187,18 @@ impl std::fmt::Display for BuildError {
                 f,
                 "umbra: App::builder() requires Settings; call .settings(Settings::from_env()?) before .build()"
             ),
+            BuildError::BackendDetect(err) => write!(f, "{err}"),
+            BuildError::SystemCheckFailed { findings } => {
+                writeln!(f, "umbra: {} system check(s) failed:", findings.len())?;
+                for finding in findings {
+                    write!(f, "  - [{}] {}", finding.check_id, finding.message)?;
+                    if let Some(hint) = &finding.hint {
+                        write!(f, " (hint: {hint})")?;
+                    }
+                    writeln!(f)?;
+                }
+                Ok(())
+            }
             BuildError::DefaultPoolMissing => write!(
                 f,
                 "umbra: App::builder() requires a default DB pool; call .database(\"default\", umbra::db::connect(&url).await?) before .build()"

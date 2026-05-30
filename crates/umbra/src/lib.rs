@@ -41,6 +41,33 @@ pub mod db {
     pub use umbra_core::db::{connect, pool, pool_for};
 }
 
+pub mod backend {
+    //! The database backend abstraction (M4).
+    //!
+    //! `active()` returns the backend that `App::build()` matched
+    //! against `settings.database_url`. Plugin code consults this when
+    //! it needs to gate Postgres-only behaviour or render dialect-aware
+    //! SQL. See `docs/specs/05-backends-and-system-check.md`.
+
+    pub use umbra_core::backend::{
+        BackendDetectError, BackendFeature, DatabaseBackend, PostgresBackend, SqliteBackend,
+        active, detect,
+    };
+}
+
+pub mod check {
+    //! The boot-time system check framework (M4).
+    //!
+    //! Plugins return their own checks from `Plugin::system_checks()`
+    //! (M7); the framework's built-in checks live in `umbra-core` and
+    //! get walked alongside in phase 4 of `App::build()`.
+
+    pub use umbra_core::check::{
+        CheckContext, CheckLocation, Severity, SystemCheck, SystemCheckFinding, framework_checks,
+        run_all,
+    };
+}
+
 pub mod web {
     //! The web layer: router, extractors, and response types.
     //!
