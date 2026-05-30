@@ -640,7 +640,13 @@ fn read_migration_file(path: &Path) -> Result<MigrationFile, MigrateError> {
 /// place, and a nullable flip on a populated table is destructive.
 /// Renames are still handled as drop+add (the heuristic detector that
 /// disambiguates rename vs drop+add is deferred past M8 v1).
-fn diff(previous: &Snapshot, current: &Snapshot) -> Result<Vec<Operation>, MigrateError> {
+///
+/// `pub` (not `pub(crate)`) so the M8 integration tests can drive the
+/// diff directly with hand-built snapshots. Spec 06 calls the diff
+/// the engine's contract; exposing it lets the tests pin every column-
+/// level scenario without laundering snapshots through the process-
+/// wide registry first.
+pub fn diff(previous: &Snapshot, current: &Snapshot) -> Result<Vec<Operation>, MigrateError> {
     use std::collections::BTreeMap;
 
     let prev_by_name: BTreeMap<&str, &ModelMeta> = previous
@@ -861,5 +867,60 @@ fn render_operation(op: &Operation) -> String {
             .table(Alias::new(table))
             .drop_column(Alias::new(column))
             .build(SqliteQueryBuilder),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// M8 — `plugin_order()` falls back to `registered_plugins()` when
+    /// no topological order has been published. The fallback keeps the
+    /// engine usable from low-level paths that drive `init_plugins`
+    /// directly (the M5 / M6 tests that pre-date phase 1.5 of
+    /// `App::build()`).
+    ///
+    /// Runs in the lib's unit-test binary, which is wholly separate
+    /// from the integration test binaries and so owns its own copies
+    /// of `REGISTRY` and `PLUGIN_ORDER`. This test seeds `REGISTRY` via
+    /// `init_plugins`, never touches `init_plugin_order`, and pins the
+    /// fallback to the sorted-by-name `registered_plugins()` output.
+    /// As the only test that touches either OnceLock in this binary,
+    /// it has them to itself.
+    #[test]
+    fn plugin_order_falls_back_to_registered_plugins_when_unpublished() {
+        let mut per_plugin: std::collections::HashMap<String, Vec<ModelMeta>> =
+            std::collections::HashMap::new();
+        per_plugin.insert(
+            "zeta".to_string(),
+            vec![ModelMeta {
+                name: "ZetaModel".to_string(),
+                table: "zeta".to_string(),
+                fields: Vec::new(),
+            }],
+        );
+        per_plugin.insert(
+            "alpha".to_string(),
+            vec![ModelMeta {
+                name: "AlphaModel".to_string(),
+                table: "alpha".to_string(),
+                fields: Vec::new(),
+            }],
+        );
+        init_plugins(per_plugin);
+
+        // `init_plugin_order` was never called, so `plugin_order` must
+        // return the sorted-by-name fallback.
+        let order = plugin_order();
+        assert_eq!(
+            order,
+            vec!["alpha".to_string(), "zeta".to_string()],
+            "fallback should sort by name; got {order:?}",
+        );
+        assert_eq!(
+            order,
+            registered_plugins(),
+            "fallback should exactly equal registered_plugins()",
+        );
     }
 }

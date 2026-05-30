@@ -80,7 +80,7 @@ pub mod migrate {
 
     pub use umbra_core::migrate::{
         APP_PLUGIN_NAME, Column, MIGRATIONS_DIR, MigrateError, MigrationFile, MigrationRef,
-        ModelMeta, Operation, Snapshot, make, make_in, models_for_plugin, plugin_order,
+        ModelMeta, Operation, Snapshot, diff, make, make_in, models_for_plugin, plugin_order,
         record_applied, registered_models, registered_plugins, run, run_in, show, show_in,
     };
 }

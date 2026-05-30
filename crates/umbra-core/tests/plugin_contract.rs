@@ -40,7 +40,7 @@ use tower::ServiceExt;
 use umbra::App;
 use umbra::Settings;
 use umbra::check::{SystemCheck, SystemCheckFinding};
-use umbra::migrate::{ModelMeta, models_for_plugin, registered_plugins};
+use umbra::migrate::{ModelMeta, models_for_plugin, plugin_order, registered_plugins};
 use umbra::plugin::{AppContext, Plugin, PluginError};
 use umbra::web::{Router, get};
 use umbra_core::app::BuildError;
@@ -416,6 +416,29 @@ async fn topological_order_governs_on_ready() {
         order,
         vec!["parent_plugin", "child_plugin"],
         "parent_plugin must fire before child_plugin per the topological sort; got {order:?}",
+    );
+}
+
+/// M8 — `App::build()` publishes the topological plugin order through
+/// `migrate::plugin_order()`. The implicit `"app"` plugin lands first
+/// (it has no dependencies and is the home of `.model::<T>()`
+/// registrations), then every registered plugin in dependency order.
+/// `parent_plugin` (no deps) precedes `child_plugin`
+/// (`dependencies() = ["parent_plugin"]`); the migration engine reads
+/// this exact slice when it walks per-plugin migration directories so
+/// cross-plugin FK targets get created before their dependents.
+#[tokio::test]
+async fn plugin_order_reflects_the_topological_sort() {
+    boot().await;
+    let order = plugin_order();
+    assert_eq!(
+        order,
+        vec![
+            APP_PLUGIN_NAME.to_string(),
+            "parent_plugin".to_string(),
+            "child_plugin".to_string(),
+        ],
+        "plugin_order must list `app` first then dependencies before dependents; got {order:?}",
     );
 }
 
