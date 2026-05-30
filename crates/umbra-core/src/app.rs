@@ -110,7 +110,8 @@ impl AppBuilder {
 
     /// Finalize the application.
     ///
-    /// Phases (see spec 01 §Mechanics and invariants):
+    /// Phases (see spec 01 §Mechanics and invariants and spec 02
+    /// §Dependency ordering):
     ///
     /// 1. **Collect.** Gather settings, databases, and router from
     ///    builder-local state. Settings must be set explicitly via
@@ -119,22 +120,30 @@ impl AppBuilder {
     ///    opens the pool first (with `umbra::db::connect(...).await`)
     ///    and hands it to the builder. This matches the canonical
     ///    pattern in spec 01-app-and-settings.md.
-    /// 2. **Detect backend.** `backend::detect(&settings.database_url)`
+    /// 2. **Validate plugins.** Reject the reserved `"app"` name,
+    ///    reject duplicate `Plugin::name()`s, verify every entry in a
+    ///    `dependencies()` list points at a registered plugin, and
+    ///    compute a stable topological order. Cycles surface as
+    ///    `BuildError::PluginCycle`.
+    /// 3. **Detect backend.** `backend::detect(&settings.database_url)`
     ///    picks one of the shipped `DatabaseBackend` impls (M4
     ///    abstraction). An unknown URL scheme (mysql / oracle / etc.)
     ///    fails here, before any system check runs.
-    /// 3. **Publish ambient state.** Write settings, pools, and the
-    ///    active backend into their `OnceLock`s.
-    /// 4. **System check.** Run framework-built-in checks against the
-    ///    just-published context (active backend + settings). Errors
-    ///    block boot; warnings log and continue.
-    /// 5. **Build router.** Merge every registered plugin's routes (M7+)
-    ///    with the hand-written router. At M4, only the hand-written
-    ///    router exists.
-    ///
-    /// `Plugin::on_ready` (the doc-comment originally called this phase
-    /// 5) lives in M7 with the rest of the Plugin contract; the M4
-    /// build doesn't fire it.
+    /// 4. **Publish ambient state.** Write settings, pools, and the
+    ///    active backend into their `OnceLock`s. The model registry
+    ///    carries one entry per plugin (the implicit `"app"` plus every
+    ///    registered plugin's `Plugin::models()`).
+    /// 5. **System check.** Run framework-built-in checks plus every
+    ///    plugin's `system_checks()` (concatenated in topological order)
+    ///    against the just-published context. Errors block boot;
+    ///    warnings log and continue.
+    /// 6. **Build router.** Start from the hand-written router (or a
+    ///    fallback handler), then merge every plugin's `routes()` in
+    ///    topological order. axum's `Router::merge` panics on
+    ///    duplicate routes with a clear message.
+    /// 7. **Fire `on_ready`.** Call each plugin's `on_ready(&AppContext)`
+    ///    in topological order. A failure here surfaces as
+    ///    `BuildError::PluginOnReady`.
     ///
     /// `build()` is intentionally sync. Earlier iterations auto-opened
     /// the default pool from `settings.database_url` by spinning up a
@@ -151,24 +160,51 @@ impl AppBuilder {
             return Err(BuildError::DefaultPoolMissing);
         }
 
+        // Phase 1.5 — validate plugins and compute a stable topological
+        // order. Reserved-name and duplicate-name checks reject the
+        // build before any ambient state gets published; the toposort
+        // surfaces both missing deps and cycles as `BuildError`. The
+        // sorted slice is reused in phases 3 / 4 / 5 / 6 so every plugin
+        // walk reads from one canonical order.
+        let sorted_plugins = sort_plugins(&self.plugins)?;
+
         // Phase 2 — detect backend from the configured URL.
         let backend =
             crate::backend::detect(&settings.database_url).map_err(BuildError::BackendDetect)?;
 
-        // Phase 3 — publish ambient state
+        // Phase 3 — publish ambient state. The model registry now carries
+        // one entry per registered plugin (the implicit `"app"` plugin
+        // for `.model::<T>()` registrations, plus every `.plugin(...)`
+        // contribution). Plugins that contribute zero models still get a
+        // map entry; the flattening in `migrate::init_plugins` collapses
+        // them to nothing in the registry but the per-plugin model walk
+        // stays deterministic.
         crate::settings::init(&settings);
         db::init(self.databases);
         crate::backend::init(backend);
-        crate::migrate::init(self.models);
+
+        let mut per_plugin: HashMap<String, Vec<ModelMeta>> = HashMap::new();
+        per_plugin.insert(
+            crate::migrate::APP_PLUGIN_NAME.to_string(),
+            std::mem::take(&mut self.models),
+        );
+        for plugin in &sorted_plugins {
+            per_plugin.insert(plugin.name().to_string(), plugin.models());
+        }
+        crate::migrate::init_plugins(per_plugin);
 
         // Phase 4 — system check. Build the context against ambient
-        // state, run the framework checks, partition into errors vs
+        // state, run the framework checks plus every plugin's
+        // contribution in topological order, partition into errors vs
         // warnings, log the warnings, fail the build on any errors.
         let ctx = crate::check::CheckContext {
             backend,
             settings: crate::settings::get(),
         };
-        let checks = crate::check::framework_checks();
+        let mut checks = crate::check::framework_checks();
+        for plugin in &sorted_plugins {
+            checks.extend(plugin.system_checks());
+        }
         let findings = crate::check::run_all(&ctx, &checks);
         let mut errors = Vec::new();
         for finding in findings {
@@ -187,13 +223,118 @@ impl AppBuilder {
             return Err(BuildError::SystemCheckFailed { findings: errors });
         }
 
-        // Phase 5 — build the merged router
-        let router = self.router.unwrap_or_else(|| {
+        // Phase 5 — build the merged router. Start from the hand-written
+        // router (or a fallback handler if none was registered), then
+        // merge every plugin's routes in topological order. axum's
+        // `Router::merge` composes path tables; conflicts panic with a
+        // clear message.
+        let mut router = self.router.unwrap_or_else(|| {
             Router::new().fallback(|| async { "umbra is running, but no routes are registered." })
         });
+        for plugin in &sorted_plugins {
+            router = router.merge(plugin.routes());
+        }
+
+        // Phase 6 — fire each plugin's `on_ready` in topological order.
+        // Runs after the system check passes and after the router is
+        // built, so a plugin can rely on ambient state being live and on
+        // any earlier dependency's `on_ready` having already run.
+        let ctx = crate::plugin::AppContext {
+            pool: crate::db::pool(),
+            settings: crate::settings::get().clone(),
+        };
+        for plugin in &sorted_plugins {
+            plugin
+                .on_ready(&ctx)
+                .map_err(|source| BuildError::PluginOnReady {
+                    plugin: plugin.name(),
+                    source,
+                })?;
+        }
 
         Ok(App { router })
     }
+}
+
+/// Validate the registered plugins and return them in a stable
+/// topological order keyed by `Plugin::dependencies()`. Standard Kahn's
+/// algorithm with a name-sorted ready queue so ties resolve
+/// deterministically.
+///
+/// Rejects:
+///
+/// - A plugin claiming the reserved `"app"` name.
+/// - Two plugins reporting the same `name()`.
+/// - A `dependencies()` entry that doesn't name a registered plugin.
+/// - A dependency cycle (the remaining-unsorted set surfaces as
+///   `BuildError::PluginCycle`).
+fn sort_plugins(plugins: &[Box<dyn Plugin>]) -> Result<Vec<&dyn Plugin>, BuildError> {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    // Reserved + duplicate-name checks. The implicit `"app"` plugin is
+    // not counted toward duplicates; only the user's plugin list is.
+    let mut seen: BTreeSet<&'static str> = BTreeSet::new();
+    for plugin in plugins {
+        let name = plugin.name();
+        if name == crate::migrate::APP_PLUGIN_NAME {
+            return Err(BuildError::ReservedPluginName);
+        }
+        if !seen.insert(name) {
+            return Err(BuildError::DuplicatePluginName { name });
+        }
+    }
+
+    // Index plugins by name for the dependency lookups below. `BTreeMap`
+    // keeps the iteration order deterministic, which matters for the
+    // tie-break in Kahn's algorithm.
+    let by_name: BTreeMap<&'static str, &dyn Plugin> =
+        plugins.iter().map(|p| (p.name(), p.as_ref())).collect();
+
+    // Dependency-exists check. Done before the toposort so a missing
+    // dep surfaces with the asking plugin's name attached, not as a
+    // cycle false-positive.
+    for plugin in plugins {
+        for dep in plugin.dependencies() {
+            if !by_name.contains_key(dep) {
+                return Err(BuildError::DependencyNotFound {
+                    plugin: plugin.name(),
+                    missing: dep,
+                });
+            }
+        }
+    }
+
+    // Kahn's algorithm. `remaining_deps[name]` is the set of names this
+    // plugin still waits on; once it empties, the plugin joins the
+    // ready queue. The queue is a sorted set so ties resolve by name.
+    let mut remaining_deps: BTreeMap<&'static str, BTreeSet<&'static str>> = by_name
+        .iter()
+        .map(|(name, plugin)| (*name, plugin.dependencies().iter().copied().collect()))
+        .collect();
+
+    let mut ready: BTreeSet<&'static str> = remaining_deps
+        .iter()
+        .filter_map(|(name, deps)| if deps.is_empty() { Some(*name) } else { None })
+        .collect();
+
+    let mut sorted: Vec<&dyn Plugin> = Vec::with_capacity(plugins.len());
+    while let Some(name) = ready.iter().next().copied() {
+        ready.remove(&name);
+        remaining_deps.remove(&name);
+        sorted.push(by_name[&name]);
+        for (other_name, deps) in remaining_deps.iter_mut() {
+            if deps.remove(&name) && deps.is_empty() {
+                ready.insert(*other_name);
+            }
+        }
+    }
+
+    if !remaining_deps.is_empty() {
+        let names: Vec<&'static str> = remaining_deps.keys().copied().collect();
+        return Err(BuildError::PluginCycle { names });
+    }
+
+    Ok(sorted)
 }
 
 /// Errors that can occur during `AppBuilder::build()`.

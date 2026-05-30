@@ -53,16 +53,6 @@ use crate::orm::{FieldSpec, Model, SqlType};
 /// via `.model::<T>()`; every other name is a real Plugin's.
 static REGISTRY: OnceLock<Vec<(String, ModelMeta)>> = OnceLock::new();
 
-/// Initialize the registry with the implicit `"app"` plugin only.
-/// Convenience wrapper over [`init_plugins`] kept for the M5 / M6
-/// callers that don't yet know about plugins.
-pub(crate) fn init(models: Vec<ModelMeta>) {
-    let mut per_plugin: std::collections::HashMap<String, Vec<ModelMeta>> =
-        std::collections::HashMap::new();
-    per_plugin.insert(APP_PLUGIN_NAME.to_string(), models);
-    init_plugins(per_plugin);
-}
-
 /// Initialize the registry with one entry per plugin.
 ///
 /// `App::build()` calls this after collecting `.model::<T>()` into the
