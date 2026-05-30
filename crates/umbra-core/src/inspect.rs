@@ -274,11 +274,21 @@ async fn introspect_columns(
             column: name.clone(),
             sql_type: raw_type.clone(),
         })?;
+        let primary_key = pk != 0;
+        // SQLite's `PRAGMA table_info` reports `notnull = 0` for
+        // `INTEGER PRIMARY KEY` columns because they're aliases for
+        // ROWID (which SQLite manages internally). The columns are
+        // nonetheless guaranteed non-null: SQLite refuses to insert
+        // NULL into a primary key. Forcing `nullable = false` here
+        // makes the generated `#[derive(Model)]` compile (the M3
+        // derive's PK detection requires a non-`Option` PK field)
+        // and matches what the database actually enforces.
+        let nullable = if primary_key { false } else { notnull == 0 };
         columns.push(IntrospectedColumn {
             name,
             ty,
-            primary_key: pk != 0,
-            nullable: notnull == 0,
+            primary_key,
+            nullable,
         });
     }
     Ok(columns)
@@ -419,7 +429,12 @@ use umbra::prelude::*;
 /// attribute parser.
 fn render_one_struct(table: &IntrospectedTable) -> String {
     let mut out = String::new();
-    out.push_str("#[derive(Debug, Clone, Model)]\n");
+    // `sqlx::FromRow` is required because the `Model` trait bounds it
+    // as a supertrait (see `crates/umbra-core/src/orm/model.rs`).
+    // Without it, `#[derive(Model)]` emits an `impl Model` whose
+    // sqlx::FromRow supertrait isn't satisfied and the generated file
+    // fails to compile.
+    out.push_str("#[derive(Debug, Clone, sqlx::FromRow, Model)]\n");
     if derive_table_name(&table.name) != table.table {
         out.push_str(&format!("#[umbra(table = \"{}\")]\n", table.table));
     }

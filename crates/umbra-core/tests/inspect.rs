@@ -169,6 +169,11 @@ async fn introspect_pool_maps_types_nullability_and_primary_keys() {
     assert_eq!(post_id.name, "id");
     assert_eq!(post_id.ty, SqlType::Integer);
     assert!(post_id.primary_key, "id is the primary key");
+    assert!(
+        !post_id.nullable,
+        "INTEGER PRIMARY KEY is logically non-nullable even though PRAGMA \
+         reports notnull = 0 for the ROWID-alias case",
+    );
     let post_title = &post.columns[1];
     assert_eq!(post_title.name, "title");
     assert_eq!(post_title.ty, SqlType::Text);
@@ -190,6 +195,10 @@ async fn introspect_pool_maps_types_nullability_and_primary_keys() {
     assert_eq!(tag_id.name, "id");
     assert_eq!(tag_id.ty, SqlType::BigInt);
     assert!(tag_id.primary_key);
+    assert!(
+        !tag_id.nullable,
+        "BIGINT PRIMARY KEY is logically non-nullable"
+    );
     let tag_name = &tag.columns[1];
     assert_eq!(tag_name.name, "name");
     assert_eq!(tag_name.ty, SqlType::Text);
@@ -426,5 +435,71 @@ async fn inspectdb_with_mark_applied_records_the_initial_migration() {
     assert_eq!(
         pending, 0,
         "0001_initial was marked applied; show_in should report zero pending, got {pending}",
+    );
+}
+
+/// Regression: `render_models` must emit `sqlx::FromRow` in the derive
+/// list and must NOT wrap primary-key column types in `Option<>`.
+///
+/// Both bugs were found during the M5.1+ end-to-end CLI sweep:
+///
+/// - The `Model` trait bounds `sqlx::FromRow` as a supertrait, so
+///   `#[derive(Debug, Clone, Model)]` alone fails to compile. The
+///   renderer must include `sqlx::FromRow` so the generated file
+///   builds against the M3 derive without hand-editing.
+///
+/// - SQLite's `PRAGMA table_info` reports `notnull = 0` for
+///   `INTEGER PRIMARY KEY` columns (they're aliases for ROWID, which
+///   SQLite manages), but the columns are logically non-nullable. The
+///   M3 derive's PK-detection requires a non-`Option` PK field type;
+///   wrapping the PK in `Option<T>` made the derive fail.
+///
+/// `introspect_pool` forces `nullable = false` whenever
+/// `primary_key = true`; `render_one_struct` emits the right derive
+/// list. This test pins both invariants by string-matching the
+/// rendered output.
+#[tokio::test]
+async fn render_models_emits_fromrow_and_skips_option_on_primary_keys() {
+    let schema = IntrospectedSchema {
+        tables: vec![IntrospectedTable {
+            table: "post".to_string(),
+            name: "Post".to_string(),
+            columns: vec![
+                IntrospectedColumn {
+                    name: "id".to_string(),
+                    ty: SqlType::BigInt,
+                    primary_key: true,
+                    nullable: false,
+                },
+                IntrospectedColumn {
+                    name: "body".to_string(),
+                    ty: SqlType::Text,
+                    primary_key: false,
+                    nullable: true,
+                },
+            ],
+        }],
+    };
+
+    let out = render_models(&schema);
+
+    assert!(
+        out.contains("sqlx::FromRow"),
+        "the derive list must include sqlx::FromRow so the generated \
+         file compiles against the Model trait's supertrait bound; got:\n{out}",
+    );
+    assert!(
+        out.contains("pub id: i64,"),
+        "the primary-key column must render as the bare integer type \
+         (the M3 derive requires `id: i32 | i64 | uuid::Uuid`, no Option); got:\n{out}",
+    );
+    assert!(
+        !out.contains("pub id: Option<"),
+        "the primary-key column must NEVER be wrapped in Option; got:\n{out}",
+    );
+    // Sanity: the non-PK nullable column still gets Option.
+    assert!(
+        out.contains("pub body: Option<String>,"),
+        "non-PK nullable columns should still be Option; got:\n{out}",
     );
 }
