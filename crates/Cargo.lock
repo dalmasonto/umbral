@@ -2091,6 +2091,15 @@ dependencies = [
 [[package]]
 name = "umbra-macros"
 version = "0.0.1"
+dependencies = [
+ "chrono",
+ "proc-macro2",
+ "quote",
+ "serde",
+ "sqlx",
+ "syn",
+ "umbra",
+]
 
 [[package]]
 name = "uncased"

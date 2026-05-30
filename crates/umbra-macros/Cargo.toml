@@ -12,3 +12,18 @@ rust-version.workspace = true
 proc-macro = true
 
 [dependencies]
+# Standard proc-macro toolkit. syn parses the input; quote emits the
+# output tokens; proc-macro2 bridges the proc_macro / syn type space.
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full"] }
+
+[dev-dependencies]
+# Doctests in this crate need umbra in scope so the `::umbra::orm::Model`
+# paths the derive emits resolve at expansion time. Dev-dep only: doesn't
+# propagate to release builds, so there's no real cycle even though the
+# dependency graph looks circular on paper.
+umbra = { path = "../umbra" }
+chrono = { version = "0.4", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio"] }
