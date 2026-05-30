@@ -46,8 +46,9 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Boot the HTTP server on 127.0.0.1:8000. The default when no
-    /// subcommand is given.
+    /// Boot the HTTP server on `settings.bind_addr` (default
+    /// 127.0.0.1:8000; override with UMBRA_BIND_ADDR or umbra.toml).
+    /// The default subcommand when none is given.
     Serve,
     /// Diff the registered models against the latest snapshot and
     /// write a new migration file under `migrations/app/`.
@@ -133,10 +134,15 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     init_post_table(&pool).await?;
     seed_post_rows(&pool).await?;
 
-    // `App::serve` takes `impl Into<SocketAddr>`, which is implemented for
-    // tuples and `SocketAddr` itself but not for `&str`. The bind address is
-    // hardcoded at M0; making it configurable is a later concern.
-    let addr: SocketAddr = "127.0.0.1:8000".parse()?;
+    // The bind address comes from `settings.bind_addr` (default
+    // 127.0.0.1:8000; override with UMBRA_BIND_ADDR or `umbra.toml`).
+    // `App::serve` takes `impl Into<SocketAddr>`, which is implemented
+    // for tuples and `SocketAddr` itself but not for `&str`, so we
+    // parse the string here and let parse errors propagate.
+    let addr: SocketAddr = settings
+        .bind_addr
+        .parse()
+        .map_err(|e| format!("umbra-cli: invalid bind_addr `{}`: {e}", settings.bind_addr))?;
 
     let app = App::builder()
         .settings(settings)

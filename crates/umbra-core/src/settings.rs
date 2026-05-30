@@ -47,6 +47,13 @@ fn default_log_level() -> String {
     "info".into()
 }
 
+fn default_bind_addr() -> String {
+    // 127.0.0.1 only by default — exposing the server on 0.0.0.0
+    // is a deliberate keystroke. Override with UMBRA_BIND_ADDR or
+    // umbra.toml.
+    "127.0.0.1:8000".into()
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct Settings {
     #[serde(default = "default_database_url")]
@@ -66,6 +73,12 @@ pub struct Settings {
 
     #[serde(default = "default_log_level")]
     pub log_level: String,
+
+    /// The address the development server binds to.
+    /// `host:port` format, e.g. `127.0.0.1:8000` (default), `0.0.0.0:80`,
+    /// `[::1]:8000`. Override with `UMBRA_BIND_ADDR` or `umbra.toml`.
+    #[serde(default = "default_bind_addr")]
+    pub bind_addr: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Default)]
