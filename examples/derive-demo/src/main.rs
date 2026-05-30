@@ -1,18 +1,29 @@
 //! Standalone umbra example: `#[derive(Model)]` on a user-defined struct,
-//! served over HTTP.
+//! schema managed by the migration engine, served over HTTP.
 //!
-//! Every umbra symbol in this file comes through the `umbra` facade. There
-//! is no `umbra_core::` or `umbra_macros::` anywhere. The derive itself is
+//! Every umbra symbol comes through the `umbra` facade. There is no
+//! `umbra_core::` or `umbra_macros::` anywhere. The derive itself is
 //! re-exported as `umbra::orm::Model` (the macro), sharing its name with
 //! the `Model` trait via Rust's separate type and macro namespaces — both
 //! ride in on `use umbra::prelude::*;` together.
 //!
-//! Compare with `examples/hello/`: that example uses the built-in `Post`
-//! fixture model from `umbra::orm`. This one defines its own `Article`
-//! struct and gets the same `objects()` entry point, the same `TABLE`
-//! constant, and the same sibling column module from the derive — with
-//! zero hand-written `impl Model` boilerplate.
+//! What this example demonstrates end-to-end:
+//!
+//! - Declaring a model with `#[derive(Model)]` and getting the trait impl,
+//!   the `objects()` Manager, and the typed column constants for free.
+//! - Registering the model with `App::builder().model::<Article>()` so the
+//!   M5 migration engine tracks it.
+//! - Running `umbra::migrate::make()` + `run()` in-process on startup so
+//!   `cargo run` Just Works against a fresh database. This is a demo
+//!   pattern; production deployments run `cargo run -p umbra-cli --
+//!   migrate` as a separate step.
+//! - Inserting rows without explicit IDs (`INSERT INTO article (title,
+//!   body) VALUES (...)`) — SQLite's ROWID alias picks up the
+//!   monotonically increasing PKs that umbra's migration engine asks for.
+//! - Reading rows back through the ambient pool: `Article::objects().
+//!   fetch().await` with no pool argument anywhere.
 
+use umbra::migrate::MigrateError;
 use umbra::prelude::*;
 use umbra::web::StatusCode;
 
@@ -30,9 +41,8 @@ use umbra::web::StatusCode;
 ///   `article::BODY`, `article::PUBLISHED_AT`.
 ///
 /// `serde::Serialize` lets the handler return `Json<Vec<Article>>`.
-/// `sqlx::FromRow` is what the QuerySet terminals use to materialise rows;
-/// it's required by the `Model` trait's supertrait bound, so the derive
-/// expects it on the struct.
+/// `sqlx::FromRow` is required by `Model`'s supertrait bound; the
+/// QuerySet terminals (`fetch`, `first`) use it to materialise rows.
 // `pub` on the struct rather than the default private visibility: the derive
 // emits `pub const` column constants in the sibling `mod article`, and
 // rustc's `private_interfaces` lint flags those constants for referencing a
@@ -60,11 +70,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let settings = Settings::from_env()?;
 
-    // Override `sqlite::memory:` with a file-backed URL for the same reason
-    // umbra-cli does: a multi-connection sqlx pool with bare `:memory:`
-    // gives each connection its own isolated database, so seeded rows on
-    // one connection are invisible to handlers running on another. A file
-    // is the simplest fix. Anything serious overrides UMBRA_DATABASE_URL.
+    // Override `sqlite::memory:` with a file-backed URL so the schema and
+    // seed data survive across `cargo run` invocations. Bare `:memory:`
+    // also gives each pool connection its own isolated database, which
+    // would defeat the demo: the seed rows installed on one connection
+    // would be invisible to handlers running on another. Anything serious
+    // overrides UMBRA_DATABASE_URL.
     let database_url = if settings.database_url == "sqlite::memory:" {
         "sqlite://derive-demo.db?mode=rwc".to_string()
     } else {
@@ -72,21 +83,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let pool = umbra::db::connect(&database_url).await?;
 
-    // Demo seed. CREATE TABLE IF NOT EXISTS + INSERT OR IGNORE so re-runs
-    // are idempotent. M5's `migrate` retires this and `Manager::create`
-    // (a later milestone) retires the seed INSERTs.
-    init_article_table(&pool).await?;
-    seed_article_rows(&pool).await?;
-
     let app = App::builder()
         .settings(settings)
         .database("default", pool)
+        // M5 wiring: hand the model to the migration engine so
+        // `make()` / `run()` below can generate and apply the
+        // CreateTable migration on first run.
+        .model::<Article>()
         .router(
             Router::new()
                 .route("/", get(|| async { "umbra-derive-demo" }))
                 .route("/articles", get(list_articles)),
         )
         .build()?;
+
+    // Auto-migrate on startup. `make()` writes one JSON file per plugin
+    // that has changes (NoChanges if everything's already up to date),
+    // `run()` applies every pending file inside one transaction per
+    // file. On the first run this creates the `article` table; on
+    // re-runs both calls are no-ops. The migrations directory lands
+    // alongside the binary (`./migrations/app/0001_create_article.json`)
+    // and the user is expected to commit it.
+    //
+    // Demo-only convenience. Production deployments split this from
+    // the request-serving path: `cargo run -p umbra-cli -- makemigrations`
+    // and `migrate` are separate steps in CI.
+    auto_migrate().await?;
+
+    // Demo seed. The migration engine renders `id: i64` as
+    // `INTEGER PRIMARY KEY AUTOINCREMENT` on SQLite, so the INSERT
+    // doesn't supply an `id` value; SQLite hands out 1, 2, ... .
+    // `INSERT OR IGNORE` against a clean schema is a no-op on the
+    // unique constraints, but kept so a second `cargo run` doesn't
+    // duplicate the seed.
+    seed_article_rows().await?;
 
     // 3001 keeps the port distinct from `examples/hello/` (3000) and
     // umbra-cli (8000) so all three can run side-by-side on the same host.
@@ -96,14 +126,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// The Django-shape handler. Notice what isn't here: no pool parameter,
-/// no `.on(&pool)` on the QuerySet, no `State<DbPool>` extractor. The
-/// `Article::objects()` Manager picks up the ambient pool the
-/// `App::build()` installed in `umbra::db`'s `OnceLock`, and the terminal
-/// `.fetch().await` runs against it.
+/// Run `makemigrations` and `migrate` in-process. Tolerates `NoChanges`
+/// from `make` (the schema is already up to date) and propagates any
+/// real error.
+async fn auto_migrate() -> Result<(), Box<dyn std::error::Error>> {
+    match umbra::migrate::make().await {
+        Ok(paths) => {
+            for path in paths {
+                eprintln!("auto-migrate: wrote {}", path.display());
+            }
+        }
+        Err(MigrateError::NoChanges) => {}
+        Err(err) => return Err(Box::new(err)),
+    }
+    let n = umbra::migrate::run().await?;
+    if n > 0 {
+        eprintln!("auto-migrate: applied {n} migration(s)");
+    }
+    Ok(())
+}
+
+/// The Django-shape handler. No pool parameter, no `.on(&pool)` on the
+/// QuerySet, no `State<DbPool>` extractor. The `Article::objects()`
+/// Manager picks up the ambient pool the `App::build()` installed in
+/// `umbra::db`'s `OnceLock`, and the terminal `.fetch().await` runs
+/// against it.
 ///
-/// `Article::objects()` is generated by the derive. `article::ID` lives in
-/// the sibling column module the derive also generates.
+/// `Article::objects()` is generated by the derive. `article::ID`
+/// lives in the sibling column module the derive also generates.
 async fn list_articles() -> Result<Json<Vec<Article>>, (StatusCode, String)> {
     let articles = Article::objects()
         .order_by(article::ID.asc())
@@ -113,32 +163,36 @@ async fn list_articles() -> Result<Json<Vec<Article>>, (StatusCode, String)> {
     Ok(Json(articles))
 }
 
-/// Raw sqlx CREATE TABLE for the demo seed. Goes away at M5 when `migrate`
-/// generates and applies this from the model definition.
-async fn init_article_table(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS article (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT NOT NULL,
-            body TEXT NOT NULL,
-            published_at TEXT
-        )",
-    )
-    .execute(pool)
-    .await?;
-    Ok(())
-}
-
 /// Two seed rows so `GET /articles` returns something on a fresh DB.
-/// `INSERT OR IGNORE` keeps re-runs idempotent. Retired by
-/// `Manager::create` once that lands.
-async fn seed_article_rows(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> {
+/// `INSERT OR IGNORE` keeps re-runs idempotent: the unique constraint
+/// on the auto-generated PK isn't violated since these inserts let
+/// SQLite assign the IDs.
+async fn seed_article_rows() -> Result<(), sqlx::Error> {
+    let pool = umbra::db::pool();
+
+    // Bail if the table already has rows. Cheaper than two INSERT OR
+    // IGNORE roundtrips when the seed has run before, and avoids
+    // depending on UNIQUE constraints we don't actually declare on
+    // the title.
+    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM article")
+        .fetch_one(&pool)
+        .await?;
+    if count.0 > 0 {
+        return Ok(());
+    }
+
     sqlx::query(
-        "INSERT OR IGNORE INTO article (id, title, body, published_at) VALUES \
-         (1, 'Deriving Model', 'this row came back through Article::objects().fetch()', '2026-05-30T12:00:00Z'), \
-         (2, 'User-defined struct', 'no hand-written impl Model anywhere in this file', NULL)",
+        "INSERT INTO article (title, body, published_at) VALUES \
+         (?, ?, ?), \
+         (?, ?, ?)",
     )
-    .execute(pool)
+    .bind("Deriving Model")
+    .bind("this row came back through Article::objects().fetch()")
+    .bind("2026-05-30T12:00:00Z")
+    .bind("User-defined struct")
+    .bind("no hand-written impl Model anywhere in this file")
+    .bind(None::<String>)
+    .execute(&pool)
     .await?;
     Ok(())
 }

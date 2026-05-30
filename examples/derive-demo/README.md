@@ -37,7 +37,11 @@ Every umbra symbol in `src/main.rs` comes through the facade — no `umbra_core:
 - The auto-generated sibling column module `article`, populated with `article::ID`, `article::TITLE`, `article::BODY`, `article::PUBLISHED_AT` in SCREAMING_SNAKE_CASE. The handler uses `article::ID.asc()` to order results, which is the typed predicate surface from M1's column types.
 - `Option<chrono::DateTime<chrono::Utc>>` mapping to a `NullableDateTimeCol`. The other M3-supported field types (`i64` → `IntCol`, `String` → `StrCol`, `chrono::DateTime<chrono::Utc>` → `DateTimeCol`) are all exercised by the struct's other fields.
 
-The seed path uses raw `sqlx::query` for `CREATE TABLE IF NOT EXISTS` and `INSERT OR IGNORE` because `migrate` (M5) and `Manager::create` (M3+) don't exist yet. Both retirements are flagged in the source comments.
+The schema is no longer hand-written. The example registers `Article` with `App::builder().model::<Article>()` and runs the M5 migration engine in-process on startup (`umbra::migrate::make()` writes `migrations/app/0001_create_article.json` on first run; `umbra::migrate::run()` applies it). Re-runs are no-ops. The seed `INSERT` doesn't supply an `id` value — SQLite's `INTEGER PRIMARY KEY AUTOINCREMENT` (the shape the migration engine renders for `i64` PKs) hands out monotonically increasing ids.
+
+The auto-migrate-on-startup pattern is demo-only. Production deployments run `cargo run -p umbra-cli -- migrate` as a separate step so schema changes can be reviewed before they touch the request-serving path.
+
+`Manager::create` (which would retire the raw `INSERT`) is still deferred to a later milestone; the seed uses bound `sqlx::query` for now.
 
 ## Compare with examples/hello/
 
