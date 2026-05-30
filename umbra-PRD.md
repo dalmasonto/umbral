@@ -6,22 +6,17 @@
 | **Status** | Draft v0.1 |
 | **Date** | May 30, 2026 |
 | **Owner** | *[you]* |
-| **Companion doc** | `django-shadow-rust-plan.md` (architecture & build strategy) |
+| **Companion doc** | `arch.md` (architecture & build strategy) |
 
 ---
 
 ## 1. Summary
 
-Umbra is a batteries-included web framework for Rust that recreates Django's developer
-experience — declarative models, managed migrations, an auto-generated admin, an optional REST
-layer, an out-of-the-box task queue — while delivering Rust's compile-time safety, predictable
-latency, and fearless concurrency. Its defining bet is the **porting experience**: the fastest
-path in the Rust ecosystem to take an existing database-backed API and stand it up in Rust,
-rather than assembling Axum + sqlx + serde + a dozen other crates by hand.
+Umbra is a batteries-included web framework for Rust that recreates Django's developer experience: declarative models, managed migrations, an auto-generated admin, an optional REST layer, an out-of-the-box task queue, plus Rust's compile-time safety, predictable latency, and fearless concurrency. Its defining bet is the **porting experience**: the fastest path in the Rust ecosystem to take an existing database-backed API and stand it up in Rust, rather than assembling Axum + sqlx + serde + a dozen other crates by hand.
 
-The architecture is **thin-core + plugin-heavy**, and the framework **dogfoods its own plugin
-system** — auth, admin, sessions, and the task queue are all plugins, structurally identical to
-third-party ones.
+At the centre of the experience is the **declare → migrate → change → migrate** cycle: declare or change a model, an autodetected migration is generated, `migrate` applies it, and the next change diffs cleanly into the right `ALTER` / `DROP`. That loop is the product, not a later feature; it lands at M5 alongside the first models.
+
+The architecture is **thin-core + plugin-heavy**, and the framework **dogfoods its own plugin system**: auth, admin, sessions, and the task queue are all plugins, structurally identical to third-party ones.
 
 ---
 
@@ -103,12 +98,13 @@ frameworks because the on-ramp is too steep. Umbra targets that on-ramp.
 
 ## 6. Product Principles
 
-1. **Convention over configuration** — sensible defaults; configuration is the exception.
-2. **The easy path is the safe path** — ergonomics and resilience are not traded off.
-3. **The framework dogfoods its own extension points** — built-ins are plugins.
-4. **Stand on shoulders** — reuse primitives (HTTP, async, SQL, JSON); build conventions & glue.
-5. **Fail left** — turn runtime failures into compile-time or boot-time failures wherever possible.
-6. **Postgres-first, honest about it** — expose backend-specific power with guardrails, not lowest-common-denominator abstraction that silently breaks.
+1. **Convention over configuration.** Sensible defaults; configuration is the exception.
+2. **The easy path is the safe path.** Ergonomics and resilience are not traded off.
+3. **The framework dogfoods its own extension points.** Built-ins are plugins.
+4. **Stand on shoulders.** Reuse primitives (HTTP, async, SQL, JSON); build conventions and glue.
+5. **Fail left.** Turn runtime failures into compile-time or boot-time failures wherever possible.
+6. **Postgres-first, honest about it.** Expose backend-specific power with guardrails, not lowest-common-denominator abstraction that silently breaks.
+7. **Declare → migrate → change → migrate is the everyday loop.** Managed migrations with basic autodetection ship at M5 alongside the first models. The cycle is the product, not a polish phase.
 
 ---
 
@@ -134,7 +130,7 @@ milestones M0–M13 in the companion plan.
 |----|-------------|----------|
 | F-MIG-1 | `inspectdb` — introspect existing DB → generate models | **P0** |
 | F-MIG-2 | Forward migrations: generate + apply + track | P0 |
-| F-MIG-3 | Autodetection: diff model snapshot → ordered, reversible ops | P1 |
+| F-MIG-3 | Autodetection: diff model snapshot → ordered, reversible ops (basic cases day-one) | **P0** |
 | F-MIG-4 | Cross-plugin dependency graph | P1 |
 | F-MIG-5 | Data migrations | P1 |
 | F-MIG-6 | Squashing & fake migrations | P2 |
@@ -220,15 +216,13 @@ milestones M0–M13 in the companion plan.
 
 | Phase | Theme | Milestones | Exit criteria |
 |-------|-------|-----------|---------------|
-| **0.1 — Core spine** | Prove the ORM concept | M0–M3 | Define a model, query it via derived API |
-| **0.2 — Porting MVP** | The differentiator | M4–M6 | `inspectdb` + forward migrations against a real Postgres DB |
-| **0.3 — Plugin contract** | Extensibility keystone | M7–M9 | Auth + sessions re-expressed as plugins; `migrate` walks all plugins |
-| **0.4 — Productivity** | Batteries | M10–M12 | Task queue, optional REST, admin, OpenAPI all usable |
+| **0.1 — Spine + migration loop alive** | Prove the ORM concept and make the declare → migrate loop work end-to-end | M0–M5 | Define a model, query it via the derived API, and have an autodetected migration applied by `migrate` against a real Postgres DB |
+| **0.2 — Porting MVP** | The differentiator | M6 + M8 hardening | `inspectdb` lands cleanly into the M5 loop; rename detection and data-preserving alters in place |
+| **0.3 — Plugin contract** | Extensibility keystone | M7–M8 (overlaps with 0.2 on M8) | Auth + sessions re-expressed as plugins; `migrate` walks every registered plugin |
+| **0.4 — Productivity** | Batteries | M9–M12 | Task queue, optional REST, admin, OpenAPI all usable |
 | **0.5 — Polish** | DX & ecosystem | M13 | Generators, autoreload, docs, first external plugin |
 
-> Phasing is sequenced for *learning-first* development (the project's stated primary goal):
-> each phase is independently demoable, and the plugin contract is extracted only after the
-> primitives have been built once by hand.
+> Phasing is sequenced for *learning-first* development (the project's stated primary goal): each phase is independently demoable, and the plugin contract is extracted only after the primitives have been built once by hand. M5 sits inside phase 0.1 deliberately, because the declare → migrate → change → migrate cycle is what makes the framework feel Django-shape; without it, the ORM alone wouldn't be demoable as "umbra works."
 
 ---
 
@@ -277,5 +271,4 @@ deployment tooling. Revisit after 0.5 based on real usage.
 
 ---
 
-*Companion: see `django-shadow-rust-plan.md` for architecture, the plugin contract, the
-dependency-inversion model that avoids circular crate deps, and the full M0–M13 build order.*
+*Companion: see `arch.md` for architecture, the plugin contract, the dependency-inversion model that avoids circular crate deps, the cross-cutting visibility and handler-context rules, and the full M0–M13 build order.*
