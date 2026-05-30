@@ -65,7 +65,7 @@ The hard cases Django spent years on (rename vs. drop+add disambiguation, data-p
 
 ## Build order
 
-Build the primitives by hand first, then extract abstractions. Managed migrations aren't deferred; the declare → migrate loop lands as soon as models exist. Full rationale in `arch.md §7`.
+Build the primitives by hand first, then extract abstractions. Managed migrations aren't deferred; the declare → migrate loop lands as soon as models exist. Full rationale in `arch.md §8`.
 
 - **M0.** Workspace, typed settings, sqlx pool, one hand-written route.
 - **M1.** QuerySet builder → SQL for one hard-coded model, no macros. *(deepest Rust lesson)*
@@ -79,7 +79,7 @@ Build the primitives by hand first, then extract abstractions. Managed migration
 
 ## Design principles to uphold
 
-- **Don't reimplement primitives** (HTTP, async, SQL generation, JSON). Reimplement conventions and integration. Stand on crates; the value is the glue. Crate shortlist in `arch.md §8` (axum, sqlx, sea-query/sea-schema, syn/quote, serde, clap, etc.).
+- **Don't reimplement primitives** (HTTP, async, SQL generation, JSON). Reimplement conventions and integration. Stand on crates; the value is the glue. Crate shortlist in `arch.md §9` (axum, sqlx, sea-query/sea-schema, syn/quote, serde, clap, etc.).
 - **Make the easy path the safe path** via the type system. A nullable column becomes `Option<T>`. Errors are `Result` values with a framework error enum plus `From` impls so `?` flows. Prefer `sqlx::query!` for compile-time-checked queries.
 - **Secure by default.** CSRF, clickjacking/HSTS headers, template autoescaping, always-parameterized SQL.
 - **Backend mismatches caught at boot, not in prod.** A field declares which backends it supports (e.g. `ArrayField` is Postgres only); the startup system check fails with a clear message on an incompatible field. **Postgres-first**, SQLite for tests.
