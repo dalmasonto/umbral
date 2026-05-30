@@ -118,11 +118,19 @@ impl<T> QuerySet<T> {
 
 /// Resolve the pool to run a terminal against.
 ///
-/// Explicit pool wins; otherwise fall back to the ambient default
-/// installed by `App::build()`. Tests that skip the App builder can
-/// pass `.on(&pool)` instead.
-fn resolve_pool(explicit: Option<sqlx::SqlitePool>) -> sqlx::SqlitePool {
-    explicit.unwrap_or_else(crate::db::pool)
+/// Precedence: explicit `.on(&pool)` override wins; then the per-
+/// model database alias the Plugin contract published via
+/// `Plugin::database()` (FEATURES.md #6); then the `"default"`
+/// pool. Tests that skip the App builder pass `.on(&pool)`
+/// directly and bypass the alias lookup entirely.
+fn resolve_pool<T: Model>(explicit: Option<sqlx::SqlitePool>) -> sqlx::SqlitePool {
+    if let Some(pool) = explicit {
+        return pool;
+    }
+    if let Some(alias) = crate::migrate::model_alias(T::NAME) {
+        return crate::db::pool_for(&alias);
+    }
+    crate::db::pool()
 }
 
 /// Terminal methods for every `QuerySet<T>` where `T: Model`.
@@ -149,7 +157,7 @@ impl<T: Model> QuerySet<T> {
 
     /// Run the SELECT and return every matching row.
     pub async fn fetch(self) -> Result<Vec<T>, sqlx::Error> {
-        let pool = resolve_pool(self.explicit_pool);
+        let pool = resolve_pool::<T>(self.explicit_pool);
         let (sql, values) = self.query.build_sqlx(SqliteQueryBuilder);
         sqlx::query_as_with::<_, T, _>(&sql, values)
             .fetch_all(&pool)
@@ -159,7 +167,7 @@ impl<T: Model> QuerySet<T> {
     /// Run the SELECT with LIMIT 1 and return the first row, if any.
     pub async fn first(mut self) -> Result<Option<T>, sqlx::Error> {
         self.query.limit(1);
-        let pool = resolve_pool(self.explicit_pool);
+        let pool = resolve_pool::<T>(self.explicit_pool);
         let (sql, values) = self.query.build_sqlx(SqliteQueryBuilder);
         sqlx::query_as_with::<_, T, _>(&sql, values)
             .fetch_optional(&pool)
@@ -174,7 +182,7 @@ impl<T: Model> QuerySet<T> {
     /// `query_as_with` row type stays `(i64,)` because the result is an
     /// aggregate scalar, not a row of `T`.
     pub async fn count(self) -> Result<i64, sqlx::Error> {
-        let pool = resolve_pool(self.explicit_pool.clone());
+        let pool = resolve_pool::<T>(self.explicit_pool.clone());
         // Swap the projection for COUNT(*) and drop LIMIT / OFFSET, leaving
         // the FROM, WHERE, JOINs and GROUP BY intact. ORDER BY is harmless
         // on a scalar aggregate so it stays in place.

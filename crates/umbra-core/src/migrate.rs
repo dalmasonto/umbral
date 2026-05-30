@@ -112,6 +112,13 @@ pub fn registered_plugins() -> Vec<String> {
 /// via `boot_for_management` before reaching the migration engine.
 static PLUGIN_ORDER: OnceLock<Vec<String>> = OnceLock::new();
 
+/// Per-model database alias (`Model::NAME -> alias`) published by
+/// `App::build()` after walking each registered plugin's
+/// `Plugin::database()`. Models whose plugin returned `None` are
+/// absent from the map; QuerySet's `resolve_pool` falls back to the
+/// `"default"` alias for those. Lookup is `O(1)` on a `HashMap`.
+static MODEL_ALIASES: OnceLock<std::collections::HashMap<String, String>> = OnceLock::new();
+
 /// Publish the topological plugin order. Called by `App::build()` once
 /// the phase 1.5 sort has produced the order. Must include the
 /// implicit `"app"` plugin even when no real plugins are registered.
@@ -130,6 +137,25 @@ pub fn plugin_order() -> Vec<String> {
         .get()
         .cloned()
         .unwrap_or_else(registered_plugins)
+}
+
+/// Publish the per-model alias routing. Called by `App::build()`
+/// during phase 3 after walking every plugin's `Plugin::database()`.
+/// Plugins that returned `None` contribute no entries; only the
+/// explicit overrides land here.
+pub(crate) fn init_model_aliases(map: std::collections::HashMap<String, String>) {
+    MODEL_ALIASES
+        .set(map)
+        .expect("umbra::migrate::init_model_aliases called more than once");
+}
+
+/// Look up the database alias for one model. Returns `None` if the
+/// model isn't routed explicitly (the caller falls back to the
+/// `"default"` pool); returns `None` even when the alias map hasn't
+/// been initialised so low-level tests that drive `init_plugins`
+/// directly don't have to wire a second call.
+pub fn model_alias(model_name: &str) -> Option<String> {
+    MODEL_ALIASES.get()?.get(model_name).cloned()
 }
 
 /// Return the models registered against a specific plugin. Empty if

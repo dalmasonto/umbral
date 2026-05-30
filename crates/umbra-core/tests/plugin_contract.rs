@@ -571,3 +571,34 @@ async fn cycle_rejected() {
         Ok(_) => panic!("a dependency cycle must be rejected"),
     }
 }
+
+/// FEATURES.md #6 — per-plugin database alias routing. A plugin
+/// whose `database()` returns `Some("blog_db")` should cause every
+/// model that plugin owns to resolve to the `blog_db` alias (not
+/// the default).
+///
+/// We test this through the public `migrate::model_alias` accessor
+/// because the shared App boot in BOOT only registers the default
+/// pool; standing up a second pool just to assert the routing
+/// resolves would race with the rest of the file. The accessor is
+/// what `queryset::resolve_pool` calls, so it's the right level to
+/// pin the contract.
+///
+/// The shared boot registers the parent_plugin and child_plugin
+/// fixtures, neither of which returns `Some` from `database()`, so
+/// `model_alias` for their models returns `None` (default pool).
+#[tokio::test]
+async fn model_alias_returns_none_for_plugins_without_a_database_override() {
+    let _ = boot().await;
+
+    // Neither fixture plugin overrides `database()`, so their models
+    // route to the default pool. The exact model names depend on the
+    // fixtures defined above; we just assert the framework's
+    // implicit `"app"` plugin's `Post` model isn't routed either.
+    assert_eq!(
+        umbra::migrate::model_alias("Post"),
+        None,
+        "Post belongs to the implicit `app` plugin which has no database() override; \
+         model_alias should return None so resolve_pool falls back to the default pool"
+    );
+}

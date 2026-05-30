@@ -201,6 +201,29 @@ impl AppBuilder {
         let backend =
             crate::backend::detect(&settings.database_url).map_err(BuildError::BackendDetect)?;
 
+        // Phase 2.5 — validate every plugin's `database()` alias
+        // against the registered pool set BEFORE phase 3 moves
+        // `self.databases` into the ambient registry. Lets a typo
+        // surface at boot with a clear diagnostic instead of as a
+        // runtime "no pool registered" panic from `db::pool_for`.
+        // Also collect the per-model alias map for `init_model_aliases`
+        // below.
+        let mut model_aliases: HashMap<String, String> = HashMap::new();
+        for plugin in &sorted_plugins {
+            let Some(alias) = plugin.database() else {
+                continue;
+            };
+            if !self.databases.contains_key(alias) {
+                return Err(BuildError::PluginDatabaseAlias {
+                    plugin: plugin.name(),
+                    alias,
+                });
+            }
+            for model in plugin.models() {
+                model_aliases.insert(model.name, alias.to_string());
+            }
+        }
+
         // Phase 3 — publish ambient state. The model registry now carries
         // one entry per registered plugin (the implicit `"app"` plugin
         // for `.model::<T>()` registrations, plus every `.plugin(...)`
@@ -231,6 +254,12 @@ impl AppBuilder {
             order.push(plugin.name().to_string());
         }
         crate::migrate::init_plugin_order(order);
+
+        // Publish the per-plugin model alias map collected in phase
+        // 2.5. Done after `migrate::init_plugins` so the migration
+        // registry is alive when QuerySet's resolve_pool starts
+        // looking up by `Model::NAME`.
+        crate::migrate::init_model_aliases(model_aliases);
 
         // Templates engine — published before phase 4 so a future
         // plugin system_check that wants to inspect the loaded
@@ -429,6 +458,14 @@ pub enum BuildError {
     /// underlying `TemplateError` (an IO error reading a template
     /// file, or a syntax error in one of the loaded templates).
     TemplatesInit(crate::templates::TemplateError),
+    /// A plugin's `database()` returned an alias that isn't in the
+    /// registered pool set. Surfaces a typo at boot with a clear
+    /// "register the pool first" diagnostic instead of letting
+    /// `db::pool_for` panic at first query.
+    PluginDatabaseAlias {
+        plugin: &'static str,
+        alias: &'static str,
+    },
 }
 
 impl std::fmt::Display for BuildError {
@@ -478,6 +515,11 @@ impl std::fmt::Display for BuildError {
             BuildError::TemplatesInit(err) => {
                 write!(f, "umbra: templates engine failed to initialise: {err}")
             }
+            BuildError::PluginDatabaseAlias { plugin, alias } => write!(
+                f,
+                "umbra: plugin `{plugin}` requested database alias `{alias}`, which isn't \
+                 registered; call .database(\"{alias}\", pool) on the builder before .build()"
+            ),
         }
     }
 }

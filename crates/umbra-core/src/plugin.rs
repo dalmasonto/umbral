@@ -96,6 +96,26 @@ pub trait Plugin: Send + Sync + 'static {
         Vec::new()
     }
 
+    /// The database alias every model this plugin contributes should
+    /// be read from and written to. Returns `None` to use the
+    /// `"default"` pool (the same one `umbra::db::pool()` returns).
+    ///
+    /// This is umbra's answer to Django's `DATABASE_ROUTERS`. The
+    /// builder reads it during phase 3 and the QuerySet's
+    /// `resolve_pool` defers to it when no `.on(&pool)` override is
+    /// set on the chain. Per-plugin granularity (every model the
+    /// plugin owns goes to one database) is the v1 shape; per-model
+    /// overrides via attribute lands when a real workload needs it.
+    ///
+    /// The named alias must have been registered via
+    /// `AppBuilder::database(alias, pool)` or
+    /// `Settings.databases[alias]` before `App::build()`. A reference
+    /// to an unregistered alias surfaces as
+    /// `BuildError::PluginDatabaseAlias` at boot.
+    fn database(&self) -> Option<&'static str> {
+        None
+    }
+
     /// Wire signals, start background work, seal admin registrations.
     /// Called after phase 4 (system checks) passes, in topological
     /// dependency order. Sync, on purpose; spawn async work via
