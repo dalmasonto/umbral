@@ -1,0 +1,10 @@
+[package]
+name = "umbra-hello"
+version = "0.1.0"
+edition = "2024"
+description = "Minimal umbra hello-world example."
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+umbra = { path = "../../crates/umbra" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
