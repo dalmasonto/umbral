@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+
+{% block title %}Home — umbra derive-demo{% endblock %}
+
+{% block content %}
+  <p>
+    This demo walks the full umbra loop end-to-end against a single
+    <code>Article</code> model:
+  </p>
+  <ul>
+    <li><code>#[derive(Model)]</code> generates the trait impl, the
+      <code>Article::objects()</code> Manager, and the typed column
+      constants — see <code>src/main.rs</code>.</li>
+    <li>The migration engine wrote
+      <code>migrations/app/0001_create_article.json</code> at startup
+      and applied it; SQLite assigned ids via
+      <code>INTEGER PRIMARY KEY AUTOINCREMENT</code>.</li>
+    <li>The templates engine loaded everything under
+      <code>templates/</code> at boot. This page extends
+      <code>base.html</code> and renders {{ article_count }} seeded
+      article(s).</li>
+  </ul>
+  <p>
+    Open the <a href="/articles">articles index</a> for the HTML view,
+    or hit <a href="/api/articles">/api/articles</a> for the JSON shape.
+  </p>
+{% endblock %}

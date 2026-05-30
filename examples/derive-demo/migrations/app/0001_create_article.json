@@ -1,0 +1,71 @@
+{
+  "id": "0001_create_article",
+  "plugin": "app",
+  "depends_on": [],
+  "operations": [
+    {
+      "kind": "CreateTable",
+      "table": "article",
+      "columns": [
+        {
+          "name": "id",
+          "ty": "BigInt",
+          "primary_key": true,
+          "nullable": false
+        },
+        {
+          "name": "title",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": false
+        },
+        {
+          "name": "body",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": false
+        },
+        {
+          "name": "published_at",
+          "ty": "Timestamptz",
+          "primary_key": false,
+          "nullable": true
+        }
+      ]
+    }
+  ],
+  "snapshot_after": {
+    "models": [
+      {
+        "name": "Article",
+        "table": "article",
+        "fields": [
+          {
+            "name": "id",
+            "ty": "BigInt",
+            "primary_key": true,
+            "nullable": false
+          },
+          {
+            "name": "title",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": false
+          },
+          {
+            "name": "body",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": false
+          },
+          {
+            "name": "published_at",
+            "ty": "Timestamptz",
+            "primary_key": false,
+            "nullable": true
+          }
+        ]
+      }
+    ]
+  }
+}

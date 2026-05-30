@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>{% block title %}umbra derive-demo{% endblock %}</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; color: #1a1a1a; }
+    header { border-bottom: 1px solid #ddd; padding-bottom: 1rem; margin-bottom: 1.5rem; }
+    header h1 { margin: 0; font-size: 1.4rem; }
+    header nav a { margin-right: 1rem; color: #2a6e94; text-decoration: none; }
+    header nav a:hover { text-decoration: underline; }
+    article { margin-bottom: 1.5rem; padding: 1rem; border: 1px solid #eee; border-radius: 6px; }
+    article h2 { margin: 0 0 0.25rem 0; font-size: 1.1rem; }
+    article h2 a { color: inherit; text-decoration: none; }
+    article h2 a:hover { color: #2a6e94; }
+    article .meta { color: #888; font-size: 0.85rem; margin-bottom: 0.5rem; }
+    article p { margin: 0; }
+    footer { margin-top: 3rem; color: #888; font-size: 0.85rem; border-top: 1px solid #eee; padding-top: 1rem; }
+    code { background: #f4f4f4; padding: 0.1rem 0.3rem; border-radius: 3px; font-size: 0.9em; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>umbra derive-demo</h1>
+    <nav>
+      <a href="/">Home</a>
+      <a href="/articles">Articles</a>
+      <a href="/api/articles">JSON</a>
+    </nav>
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+  <footer>
+    Rendered through <code>umbra::templates</code> (minijinja). Source at
+    <code>examples/derive-demo/</code>.
+  </footer>
+</body>
+</html>

@@ -60,6 +60,7 @@ pub struct AppBuilder {
     router: Option<Router>,
     models: Vec<ModelMeta>,
     plugins: Vec<Box<dyn Plugin>>,
+    templates_dir: Option<std::path::PathBuf>,
 }
 
 impl AppBuilder {
@@ -116,6 +117,23 @@ impl AppBuilder {
     /// plugin.
     pub fn router(mut self, router: Router) -> Self {
         self.router = Some(router);
+        self
+    }
+
+    /// Set the templates directory.
+    ///
+    /// Defaults to `./templates` (relative to the binary's cwd) when
+    /// the builder method isn't called. If the resolved path doesn't
+    /// exist, the engine still publishes — calls to
+    /// `umbra::templates::render` then return `TemplateError::Missing`
+    /// with a clear diagnostic, which matches the "absence isn't an
+    /// error unless something tries to render" rule from the spec.
+    ///
+    /// Per-plugin templates directories with a dependency-ordered
+    /// search path land with the admin plugin at M11; today the
+    /// project root is the only path the engine knows about.
+    pub fn templates_dir<P: Into<std::path::PathBuf>>(mut self, path: P) -> Self {
+        self.templates_dir = Some(path.into());
         self
     }
 
@@ -213,6 +231,16 @@ impl AppBuilder {
             order.push(plugin.name().to_string());
         }
         crate::migrate::init_plugin_order(order);
+
+        // Templates engine — published before phase 4 so a future
+        // plugin system_check that wants to inspect the loaded
+        // templates can. Default templates directory is `./templates`
+        // relative to the binary's cwd; the builder method overrides.
+        let templates_dir = self
+            .templates_dir
+            .take()
+            .unwrap_or_else(|| std::path::PathBuf::from("templates"));
+        crate::templates::init(&templates_dir).map_err(BuildError::TemplatesInit)?;
 
         // Phase 4 — system check. Build the context against ambient
         // state, run the framework checks plus every plugin's
@@ -397,6 +425,10 @@ pub enum BuildError {
         plugin: &'static str,
         source: Box<dyn std::error::Error + Send + Sync>,
     },
+    /// The templates engine failed to initialise. Carries the
+    /// underlying `TemplateError` (an IO error reading a template
+    /// file, or a syntax error in one of the loaded templates).
+    TemplatesInit(crate::templates::TemplateError),
 }
 
 impl std::fmt::Display for BuildError {
@@ -442,6 +474,9 @@ impl std::fmt::Display for BuildError {
             ),
             BuildError::PluginOnReady { plugin, source } => {
                 write!(f, "umbra: plugin `{plugin}`'s on_ready failed: {source}")
+            }
+            BuildError::TemplatesInit(err) => {
+                write!(f, "umbra: templates engine failed to initialise: {err}")
             }
         }
     }

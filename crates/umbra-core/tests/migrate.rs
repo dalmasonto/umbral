@@ -998,12 +998,14 @@ async fn create_table_emits_integer_pk_so_inserts_auto_increment() {
         .await
         .expect("second insert without explicit id should succeed");
 
-    let rows: Vec<(i64, String)> =
-        sqlx::query_as("SELECT id, label FROM m51_pk_probe ORDER BY id")
-            .fetch_all(&pool)
-            .await
-            .expect("select assigned ids");
-    assert_eq!(rows, vec![(1, "alpha".to_string()), (2, "beta".to_string())]);
+    let rows: Vec<(i64, String)> = sqlx::query_as("SELECT id, label FROM m51_pk_probe ORDER BY id")
+        .fetch_all(&pool)
+        .await
+        .expect("select assigned ids");
+    assert_eq!(
+        rows,
+        vec![(1, "alpha".to_string()), (2, "beta".to_string())]
+    );
 
     // And the engine-rendered `post` table picks up the same shape: a
     // sqlite_master row mentioning `INTEGER` and `AUTOINCREMENT` on

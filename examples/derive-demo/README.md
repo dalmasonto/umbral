@@ -43,6 +43,20 @@ The auto-migrate-on-startup pattern is demo-only. Production deployments run `ca
 
 `Manager::create` (which would retire the raw `INSERT`) is still deferred to a later milestone; the seed uses bound `sqlx::query` for now.
 
+## Templates
+
+The example also exercises `umbra::templates` (the M11-promoted, minijinja-backed substrate). The `templates/` directory holds:
+
+- `base.html` — layout, navigation, footer, all `{% block %}` slots.
+- `home.html` — child template at `/` showing the article count.
+- `articles_list.html` — child template at `/articles` iterating with `{% for %}` and a `{% if article.published_at %}` conditional.
+- `article_detail.html` — child template at `/articles/:id`.
+- `not_found.html` — rendered with `404` when an id doesn't match.
+
+The builder method `App::builder().templates_dir(...)` points at the directory. The example uses `concat!(env!("CARGO_MANIFEST_DIR"), "/templates")` so the path is correct no matter where `cargo run` is invoked from. Autoescape is on by default for `.html` templates: a `<script>` value rendered into the page comes out as `&lt;script&gt;`, which is the XSS guarantee from `arch.md §4.5`.
+
+The JSON view at `/api/articles` is still there — same QuerySet, just a different response shape. The point is to show templates and JSON coexisting cleanly.
+
 ## Compare with examples/hello/
 
 `examples/hello/` is the M0 floor: settings, default pool, two hand-written routes, no models. It doesn't use the ORM at all.

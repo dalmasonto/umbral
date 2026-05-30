@@ -22,6 +22,11 @@ serde_json = "1"
 # tracking table.
 sha2 = "0.10"
 sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "chrono", "uuid"] }
+# Jinja2-compatible template engine. Runtime templates so admin pages can
+# be overridden by placing a same-named file higher in the search path,
+# per the outline at docs/specs/outlines/templates.md. Default features
+# only; we don't need debug rendering or speedups.
+minijinja = "2"
 tokio = "1"
 tracing = "0.1"
 uuid = { version = "1", features = ["serde", "v7"] }

@@ -96,6 +96,23 @@ pub mod plugin {
     pub use umbra_core::plugin::{AppContext, Plugin, PluginError};
 }
 
+pub mod templates {
+    //! Server-side HTML rendering via minijinja.
+    //!
+    //! Templates live under a project-level `templates/` directory
+    //! (configurable on the builder via `AppBuilder::templates_dir`).
+    //! Render with `umbra::templates::render(name, &ctx)`; the engine
+    //! is published into a process-wide ambient handle by
+    //! `App::build()`, same pattern as the DB pool.
+    //!
+    //! `minijinja::context!` is the most ergonomic context builder —
+    //! it's re-exported here so a user crate doesn't need to depend on
+    //! minijinja directly.
+
+    pub use minijinja::context;
+    pub use umbra_core::templates::{TemplateError, render};
+}
+
 pub mod inspect {
     //! `inspectdb` (M6): introspect an existing database into umbra
     //! models that drop straight into the M5 migration loop.

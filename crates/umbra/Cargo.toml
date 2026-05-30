@@ -11,3 +11,8 @@ rust-version.workspace = true
 [dependencies]
 umbra-core = { path = "../umbra-core", version = "0.0.1" }
 umbra-macros = { path = "../umbra-macros", version = "0.0.1" }
+# Re-exported by the facade as `umbra::templates::context!` so user
+# crates don't need a direct minijinja dep just to build a render
+# context. The engine itself lives in umbra-core; this is the macro
+# only.
+minijinja = "2"
