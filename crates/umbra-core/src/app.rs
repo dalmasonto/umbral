@@ -55,9 +55,11 @@ impl AppBuilder {
 
     /// Register a database pool under the given alias.
     ///
-    /// The `"default"` pool is the one returned by `umbra::db::pool()`.
-    /// If no pool is registered, `build()` will auto-connect one from
-    /// `settings.database_url`.
+    /// The `"default"` pool is the one returned by `umbra::db::pool()`
+    /// and is required: `build()` fails with `BuildError::
+    /// DefaultPoolMissing` if it isn't registered. The caller opens
+    /// the pool via `umbra::db::connect(&url).await` and passes it
+    /// here.
     pub fn database(mut self, alias: &str, pool: SqlitePool) -> Self {
         self.databases.insert(alias.to_owned(), pool);
         self
@@ -79,7 +81,12 @@ impl AppBuilder {
     /// Phases (see spec 01 §Mechanics and invariants):
     ///
     /// 1. **Collect.** Gather settings, databases, and router from
-    ///    builder-local state.
+    ///    builder-local state. Settings must be set explicitly via
+    ///    `.settings(...)`; the "default" database pool must be
+    ///    registered via `.database("default", pool)`. The caller
+    ///    opens the pool first (with `umbra::db::connect(...).await`)
+    ///    and hands it to the builder. This matches the canonical
+    ///    pattern in spec 01-app-and-settings.md.
     /// 2. **Publish ambient state.** Write settings and pools into their
     ///    `OnceLock`s so accessors like `umbra::db::pool()` work.
     /// 3. **Build router.** Merge every registered plugin's routes (M7+)
@@ -88,22 +95,20 @@ impl AppBuilder {
     ///
     /// Phases 4 (system check) and 5 (on_ready) are no-ops at M0; they
     /// land when the Plugin contract and backend abstraction exist.
+    ///
+    /// `build()` is intentionally sync. Earlier iterations auto-opened
+    /// the default pool from `settings.database_url` by spinning up a
+    /// throwaway tokio runtime to drive `db::connect`. That panicked
+    /// when called from inside any caller that was already in a tokio
+    /// runtime ("Cannot start a runtime from within a runtime"), which
+    /// is every realistic case. Requiring an explicit `.database(...)`
+    /// is both spec-correct and avoids the trap.
     pub fn build(mut self) -> Result<App, BuildError> {
-        // Phase 1 — collect settings
-        let settings = self
-            .settings
-            .take()
-            .unwrap_or_else(|| Settings::from_env().expect("umbra: failed to load settings"));
+        // Phase 1 — collect
+        let settings = self.settings.take().ok_or(BuildError::SettingsMissing)?;
 
-        // Phase 1 — ensure a default pool exists
         if !self.databases.contains_key("default") {
-            let pool = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("umbra: failed to create temporary runtime for pool init")
-                .block_on(db::connect(&settings.database_url))
-                .map_err(|e| BuildError::Database(e.to_string()))?;
-            self.databases.insert("default".to_owned(), pool);
+            return Err(BuildError::DefaultPoolMissing);
         }
 
         // Phase 2 — publish ambient state
@@ -122,14 +127,23 @@ impl AppBuilder {
 /// Errors that can occur during `AppBuilder::build()`.
 #[derive(Debug)]
 pub enum BuildError {
-    /// Failed to connect to the database.
-    Database(String),
+    /// `.settings(Settings)` wasn't called on the builder.
+    SettingsMissing,
+    /// `.database("default", pool)` wasn't called on the builder.
+    DefaultPoolMissing,
 }
 
 impl std::fmt::Display for BuildError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            BuildError::Database(msg) => write!(f, "database error: {msg}"),
+            BuildError::SettingsMissing => write!(
+                f,
+                "umbra: App::builder() requires Settings; call .settings(Settings::from_env()?) before .build()"
+            ),
+            BuildError::DefaultPoolMissing => write!(
+                f,
+                "umbra: App::builder() requires a default DB pool; call .database(\"default\", umbra::db::connect(&url).await?) before .build()"
+            ),
         }
     }
 }

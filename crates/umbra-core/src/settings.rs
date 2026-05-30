@@ -28,7 +28,11 @@ pub fn get() -> &'static Settings {
 }
 
 fn default_database_url() -> String {
-    "sqlite://umbra.db".into()
+    // In-memory SQLite so first-run with all defaults works without any
+    // filesystem assumptions (a sqlite:// URL pointing at a non-existent
+    // file errors out without `?mode=rwc`). Real apps override this via
+    // umbra.toml or UMBRA_DATABASE_URL.
+    "sqlite::memory:".into()
 }
 
 fn default_secret_key() -> String {
@@ -109,7 +113,7 @@ mod tests {
     fn defaults_apply_when_nothing_is_set() {
         Jail::expect_with(|_| {
             let s = Settings::from_env().unwrap();
-            assert_eq!(s.database_url, "sqlite://umbra.db");
+            assert_eq!(s.database_url, "sqlite::memory:");
             assert_eq!(s.secret_key, "umbra-insecure-dev-key-change-me");
             assert_eq!(s.allowed_hosts, vec!["localhost", "127.0.0.1"]);
             assert_eq!(s.log_level, "info");
