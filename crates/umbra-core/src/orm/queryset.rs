@@ -12,16 +12,19 @@
 //! exclude / distinct / values / annotate / aggregate / update / delete
 //! yet — those land as later milestones surface real need.
 //!
-//! The struct shapes are fixed (the sibling `post` module's `Post::
-//! objects` returns `Manager<Post>`). Method implementations were filled
-//! in by the M1 ORM fan-out subagent.
+//! M2 lifted the terminals and the `Manager` delegation onto a generic
+//! `T: Model` bound. The table name comes from `T::TABLE`, the SELECT
+//! column list from `T::FIELDS`, and row materialisation from the
+//! `for<'r> FromRow<'r, SqliteRow>` supertrait on `Model`. M3 will
+//! generate the `Model` impl for any user struct via `#[derive(Model)]`,
+//! at which point `Manager<MyModel>` works without any per-model code.
 
 use std::marker::PhantomData;
 
 use sea_query::{Alias, Expr, Func, Order, Query, SqliteQueryBuilder};
 use sea_query_binder::SqlxBinder;
 
-use crate::orm::{Model, OrderExpr, Post, Predicate};
+use crate::orm::{Model, OrderExpr, Predicate};
 
 /// Entry point for queries on a model.
 ///
@@ -71,8 +74,8 @@ impl<T> QuerySet<T> {
 ///
 /// These are model-agnostic: they only touch the sea-query
 /// `SelectStatement` and the pool-resolution slot, neither of which
-/// depends on `T`. Terminals (which need row mapping) live in a
-/// concrete `impl QuerySet<Post>` below.
+/// depends on `T`. Terminals (which need row mapping) live in the
+/// `impl<T: Model> QuerySet<T>` block below.
 impl<T> QuerySet<T> {
     /// Add a WHERE condition. Multiple `.filter` calls AND together.
     pub fn filter(mut self, p: Predicate<T>) -> Self {
@@ -122,36 +125,39 @@ fn resolve_pool(explicit: Option<sqlx::SqlitePool>) -> sqlx::SqlitePool {
     explicit.unwrap_or_else(crate::db::pool)
 }
 
-/// Terminal methods for `QuerySet<Post>`.
+/// Terminal methods for every `QuerySet<T>` where `T: Model`.
 ///
-/// M1 specialises on the one hardcoded model so `sqlx::query_as_with`
-/// can use a concrete `FromRow` impl. M2 lifts this onto a generic
-/// `T: Model` once the trait exists.
-impl QuerySet<Post> {
+/// `sqlx::query_as_with::<_, T, _>` works for any `T: Model` because the
+/// `Model` trait carries `for<'r> FromRow<'r, SqliteRow>` as a
+/// supertrait, so the row mapping is available without naming a
+/// concrete type here.
+impl<T: Model> QuerySet<T> {
     /// Run the SELECT and return every matching row.
-    pub async fn fetch(self) -> Result<Vec<Post>, sqlx::Error> {
+    pub async fn fetch(self) -> Result<Vec<T>, sqlx::Error> {
         let pool = resolve_pool(self.explicit_pool);
         let (sql, values) = self.query.build_sqlx(SqliteQueryBuilder);
-        sqlx::query_as_with::<_, Post, _>(&sql, values)
+        sqlx::query_as_with::<_, T, _>(&sql, values)
             .fetch_all(&pool)
             .await
     }
 
     /// Run the SELECT with LIMIT 1 and return the first row, if any.
-    pub async fn first(mut self) -> Result<Option<Post>, sqlx::Error> {
+    pub async fn first(mut self) -> Result<Option<T>, sqlx::Error> {
         self.query.limit(1);
         let pool = resolve_pool(self.explicit_pool);
         let (sql, values) = self.query.build_sqlx(SqliteQueryBuilder);
-        sqlx::query_as_with::<_, Post, _>(&sql, values)
+        sqlx::query_as_with::<_, T, _>(&sql, values)
             .fetch_optional(&pool)
             .await
     }
 
     /// Run `SELECT COUNT(*)` against the same FROM + WHERE.
     ///
-    /// Rebuilds the query rather than wrapping the existing SELECT: the
+    /// Reshapes the query rather than wrapping the existing SELECT: the
     /// projection becomes `COUNT(*)` and LIMIT/OFFSET drop away. ORDER
-    /// BY is harmless on a scalar aggregate and is left in place.
+    /// BY is harmless on a scalar aggregate and is left in place. The
+    /// `query_as_with` row type stays `(i64,)` because the result is an
+    /// aggregate scalar, not a row of `T`.
     pub async fn count(self) -> Result<i64, sqlx::Error> {
         let pool = resolve_pool(self.explicit_pool.clone());
         // Swap the projection for COUNT(*) and drop LIMIT / OFFSET, leaving
@@ -180,58 +186,54 @@ impl QuerySet<Post> {
     }
 }
 
-/// Delegating chainable + terminal surface on `Manager<Post>`.
+/// Delegating chainable + terminal surface on `Manager<T>`.
 ///
 /// Lets users write `Post::objects().filter(...).fetch().await` without
 /// a separate `.query()` hop. Each method constructs the initial
-/// `SelectStatement` against the `post` table, wraps it in a fresh
-/// `QuerySet<Post>`, and forwards.
-impl Manager<Post> {
-    fn queryset(&self) -> QuerySet<Post> {
+/// `SelectStatement` against `T::TABLE` with one column per
+/// `T::FIELDS` entry, wraps it in a fresh `QuerySet<T>`, and forwards.
+impl<T: Model> Manager<T> {
+    fn queryset(&self) -> QuerySet<T> {
+        let columns: Vec<Alias> = T::FIELDS.iter().map(|f| Alias::new(f.name)).collect();
         let query = Query::select()
-            .columns([
-                Alias::new("id"),
-                Alias::new("title"),
-                Alias::new("body"),
-                Alias::new("published_at"),
-            ])
-            .from(Alias::new(Post::TABLE))
+            .columns(columns)
+            .from(Alias::new(T::TABLE))
             .take();
         QuerySet::new(query)
     }
 
     /// See `QuerySet::filter`.
-    pub fn filter(&self, p: Predicate<Post>) -> QuerySet<Post> {
+    pub fn filter(&self, p: Predicate<T>) -> QuerySet<T> {
         self.queryset().filter(p)
     }
 
     /// See `QuerySet::order_by`.
-    pub fn order_by(&self, o: OrderExpr<Post>) -> QuerySet<Post> {
+    pub fn order_by(&self, o: OrderExpr<T>) -> QuerySet<T> {
         self.queryset().order_by(o)
     }
 
     /// See `QuerySet::limit`.
-    pub fn limit(&self, n: u64) -> QuerySet<Post> {
+    pub fn limit(&self, n: u64) -> QuerySet<T> {
         self.queryset().limit(n)
     }
 
     /// See `QuerySet::offset`.
-    pub fn offset(&self, n: u64) -> QuerySet<Post> {
+    pub fn offset(&self, n: u64) -> QuerySet<T> {
         self.queryset().offset(n)
     }
 
     /// See `QuerySet::on`.
-    pub fn on(&self, pool: &sqlx::SqlitePool) -> QuerySet<Post> {
+    pub fn on(&self, pool: &sqlx::SqlitePool) -> QuerySet<T> {
         self.queryset().on(pool)
     }
 
     /// See `QuerySet::fetch`.
-    pub async fn fetch(&self) -> Result<Vec<Post>, sqlx::Error> {
+    pub async fn fetch(&self) -> Result<Vec<T>, sqlx::Error> {
         self.queryset().fetch().await
     }
 
     /// See `QuerySet::first`.
-    pub async fn first(&self) -> Result<Option<Post>, sqlx::Error> {
+    pub async fn first(&self) -> Result<Option<T>, sqlx::Error> {
         self.queryset().first().await
     }
 
