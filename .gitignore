@@ -11,3 +11,10 @@ target/
 
 # OS
 .DS_Store
+
+# Runtime SQLite databases produced by `cargo run -p umbra-cli` (the
+# demo's file-backed pool, plus any tempfiles tests may leave behind).
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
