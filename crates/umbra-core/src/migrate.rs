@@ -271,7 +271,7 @@ impl From<sqlx::Error> for MigrateError {
 }
 
 // =========================================================================
-// Top-level entry points. Bodies filled in by the M5 fan-out subagent A.
+// Top-level entry points.
 // =========================================================================
 
 /// Generate a new migration file by diffing the current model registry
@@ -288,11 +288,43 @@ pub async fn make() -> Result<PathBuf, MigrateError> {
 
 /// Same as [`make`] but takes an explicit base directory. Used by
 /// tests to avoid touching the cwd.
-pub async fn make_in(_dir: &Path) -> Result<PathBuf, MigrateError> {
-    // Filled in by subagent A.
-    Err(MigrateError::UnsupportedChange(
-        "M5 scaffold: make not yet implemented".to_string(),
-    ))
+pub async fn make_in(dir: &Path) -> Result<PathBuf, MigrateError> {
+    let plugin_dir = dir.join(APP_PLUGIN_NAME);
+
+    // The previous snapshot is the `snapshot_after` of the highest-numbered
+    // migration file (filenames are zero-padded so lexical sort matches
+    // numeric order). An empty or missing directory means "no prior state",
+    // which is the first-run case.
+    let existing = list_migration_files(&plugin_dir)?;
+    let previous = match existing.last() {
+        Some(path) => read_migration_file(path)?.snapshot_after,
+        None => Snapshot::default(),
+    };
+
+    let current = Snapshot::current();
+    let operations = diff(&previous, &current)?;
+    if operations.is_empty() {
+        return Err(MigrateError::NoChanges);
+    }
+
+    let seq = (existing.len() + 1) as u32;
+    let suffix = suffix_for(&operations);
+    let id = format!("{seq:04}_{suffix}");
+    let filename = format!("{id}.json");
+
+    let file = MigrationFile {
+        id: id.clone(),
+        plugin: APP_PLUGIN_NAME.to_string(),
+        depends_on: Vec::new(),
+        operations,
+        snapshot_after: current,
+    };
+
+    std::fs::create_dir_all(&plugin_dir)?;
+    let path = plugin_dir.join(filename);
+    let json = serde_json::to_string_pretty(&file)?;
+    std::fs::write(&path, json)?;
+    Ok(path)
 }
 
 /// Apply every pending migration in `migrations/<APP_PLUGIN_NAME>/` to
@@ -308,20 +340,220 @@ pub async fn run() -> Result<u64, MigrateError> {
 
 /// Same as [`run`] but takes an explicit base directory. Used by
 /// tests to avoid touching the cwd.
-pub async fn run_in(_dir: &Path) -> Result<u64, MigrateError> {
-    // Filled in by subagent A.
-    Ok(0)
+pub async fn run_in(dir: &Path) -> Result<u64, MigrateError> {
+    let pool = crate::db::pool();
+    ensure_tracking_table(&pool).await?;
+
+    let plugin_dir = dir.join(APP_PLUGIN_NAME);
+    let paths = list_migration_files(&plugin_dir)?;
+    let applied = applied_names(&pool).await?;
+
+    let mut applied_count: u64 = 0;
+    for path in paths {
+        let file = read_migration_file(&path)?;
+        if applied.contains(&(file.plugin.clone(), file.id.clone())) {
+            continue;
+        }
+
+        let mut tx = pool.begin().await?;
+        for op in &file.operations {
+            let sql = render_operation(op);
+            sqlx::query(&sql).execute(&mut *tx).await?;
+        }
+        let snapshot_hash = file.snapshot_after.hash();
+        let applied_at = chrono::Utc::now().to_rfc3339();
+        sqlx::query(
+            "INSERT INTO umbra_migrations (plugin, name, applied_at, snapshot_hash) \
+             VALUES (?, ?, ?, ?)",
+        )
+        .bind(&file.plugin)
+        .bind(&file.id)
+        .bind(&applied_at)
+        .bind(&snapshot_hash)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        applied_count += 1;
+    }
+    Ok(applied_count)
 }
 
-/// Print the per-migration state — which are applied and which are
-/// pending. Output goes to stdout; the return value is the count of
-/// pending migrations so a CLI can `exit(n)` on need.
+/// Print the per-migration state, applied or pending. Output goes to
+/// stdout; the return value is the count of pending migrations so a
+/// CLI can `exit(n)` on need.
 pub async fn show() -> Result<u64, MigrateError> {
     show_in(Path::new(MIGRATIONS_DIR)).await
 }
 
 /// Same as [`show`] but takes an explicit base directory.
-pub async fn show_in(_dir: &Path) -> Result<u64, MigrateError> {
-    // Filled in by subagent A.
-    Ok(0)
+pub async fn show_in(dir: &Path) -> Result<u64, MigrateError> {
+    let pool = crate::db::pool();
+    ensure_tracking_table(&pool).await?;
+
+    let plugin_dir = dir.join(APP_PLUGIN_NAME);
+    let paths = list_migration_files(&plugin_dir)?;
+    let applied = applied_names(&pool).await?;
+
+    let mut pending: u64 = 0;
+    for path in paths {
+        let file = read_migration_file(&path)?;
+        let key = (file.plugin.clone(), file.id.clone());
+        if applied.contains(&key) {
+            println!("[X] {}/{}", file.plugin, file.id);
+        } else {
+            println!("[ ] {}/{}", file.plugin, file.id);
+            pending += 1;
+        }
+    }
+    Ok(pending)
+}
+
+// =========================================================================
+// Internal helpers. Crate-private; the public surface above is the only
+// thing the rest of umbra calls into.
+// =========================================================================
+
+/// Return every `*.json` migration file in `plugin_dir`, sorted by
+/// filename (lexical sort matches numeric order because the prefix is
+/// zero-padded). Returns an empty vec if the directory is missing.
+fn list_migration_files(plugin_dir: &Path) -> Result<Vec<PathBuf>, MigrateError> {
+    if !plugin_dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut paths: Vec<PathBuf> = Vec::new();
+    for entry in std::fs::read_dir(plugin_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) == Some("json") {
+            paths.push(path);
+        }
+    }
+    paths.sort();
+    Ok(paths)
+}
+
+/// Read and parse one migration file.
+fn read_migration_file(path: &Path) -> Result<MigrationFile, MigrateError> {
+    let text = std::fs::read_to_string(path)?;
+    let file: MigrationFile = serde_json::from_str(&text)?;
+    Ok(file)
+}
+
+/// Diff the previous snapshot against the current one and produce the
+/// ordered operation list. M5 v1 emits CreateTable / DropTable only;
+/// any column-level change on a model that appears in both snapshots
+/// surfaces as `UnsupportedChange` so M5.1 can lift the restriction.
+fn diff(previous: &Snapshot, current: &Snapshot) -> Result<Vec<Operation>, MigrateError> {
+    use std::collections::BTreeMap;
+
+    let prev_by_name: BTreeMap<&str, &ModelMeta> = previous
+        .models
+        .iter()
+        .map(|m| (m.name.as_str(), m))
+        .collect();
+    let curr_by_name: BTreeMap<&str, &ModelMeta> = current
+        .models
+        .iter()
+        .map(|m| (m.name.as_str(), m))
+        .collect();
+
+    let mut ops: Vec<Operation> = Vec::new();
+
+    // Creates and field-level diffs, in deterministic name order.
+    for (name, curr) in &curr_by_name {
+        match prev_by_name.get(name) {
+            None => ops.push(Operation::CreateTable {
+                table: curr.table.clone(),
+                columns: curr.fields.clone(),
+            }),
+            Some(prev) if prev == curr => {}
+            Some(_) => {
+                return Err(MigrateError::UnsupportedChange(format!(
+                    "column changes on {name}: deferred to M5.1"
+                )));
+            }
+        }
+    }
+
+    // Drops, also in deterministic name order.
+    for (name, prev) in &prev_by_name {
+        if !curr_by_name.contains_key(name) {
+            ops.push(Operation::DropTable {
+                table: prev.table.clone(),
+            });
+        }
+    }
+
+    Ok(ops)
+}
+
+/// Pick the suffix used in a migration filename. One CreateTable gives
+/// `create_<table>`, one DropTable gives `drop_<table>`, anything else
+/// is the generic `auto`.
+fn suffix_for(ops: &[Operation]) -> String {
+    match ops {
+        [Operation::CreateTable { table, .. }] => format!("create_{table}"),
+        [Operation::DropTable { table }] => format!("drop_{table}"),
+        _ => "auto".to_string(),
+    }
+}
+
+/// Create the tracking table if it isn't there already. SQLite-shaped
+/// DDL kept inline because this table is a chicken-and-egg case: every
+/// other migration needs the tracking row written, so the table itself
+/// can't be a migration.
+async fn ensure_tracking_table(pool: &sqlx::SqlitePool) -> Result<(), MigrateError> {
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS umbra_migrations (
+            plugin TEXT NOT NULL,
+            name TEXT NOT NULL,
+            applied_at TEXT NOT NULL,
+            snapshot_hash TEXT NOT NULL,
+            PRIMARY KEY (plugin, name)
+        )",
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Pull the set of `(plugin, name)` tuples already recorded in the
+/// tracking table.
+async fn applied_names(
+    pool: &sqlx::SqlitePool,
+) -> Result<std::collections::HashSet<(String, String)>, MigrateError> {
+    let rows: Vec<(String, String)> = sqlx::query_as("SELECT plugin, name FROM umbra_migrations")
+        .fetch_all(pool)
+        .await?;
+    Ok(rows.into_iter().collect())
+}
+
+/// Render one operation to SQL via sea-query + the active backend's
+/// `map_type` mapping. M5 v1 covers the two table-level ops; column-
+/// level ops join the match arms at M5.1.
+fn render_operation(op: &Operation) -> String {
+    use sea_query::{Alias, ColumnDef, SqliteQueryBuilder, Table};
+
+    match op {
+        Operation::CreateTable { table, columns } => {
+            let mut stmt = Table::create();
+            stmt.table(Alias::new(table));
+            let backend = crate::backend::active();
+            for col in columns {
+                let mut def =
+                    ColumnDef::new_with_type(Alias::new(&col.name), backend.map_type(col.ty));
+                if !col.nullable {
+                    def.not_null();
+                }
+                if col.primary_key {
+                    def.primary_key();
+                }
+                stmt.col(&mut def);
+            }
+            stmt.build(SqliteQueryBuilder)
+        }
+        Operation::DropTable { table } => Table::drop()
+            .table(Alias::new(table))
+            .build(SqliteQueryBuilder),
+    }
 }
