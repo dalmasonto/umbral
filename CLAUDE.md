@@ -102,7 +102,7 @@ cargo fmt                        # format
 
 ## Writing conventions
 
-These apply to every internal spec (`arch.md`, `umbra-PRD.md`, `docs/specs/`, the spec-set design under `docs/superpowers/specs/`) and to user-facing MDX in `documentation/`.
+These apply to every internal spec (`arch.md`, `umbra-PRD.md`, `docs/specs/`, the design notes under `docs/decisions/`) and to user-facing MDX in `documentation/`.
 
 ### Line wrapping
 

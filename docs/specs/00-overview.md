@@ -22,7 +22,7 @@ The deep specs are numbered in the order someone reading the design from scratch
 6. **`06-migration-engine.md`.** Model snapshot, autodetection, tracking table, the declare → migrate → change → migrate loop end-to-end. The north star.
 7. **`07-inspectdb.md`.** Introspect an existing database into models that feed straight back into the migration engine. The porting payoff.
 
-Outlines under `outlines/*.md` cover M7–M13 surfaces at half-page depth. Each one is promoted to a deep spec when its milestone is approached. The full coverage audit (every Django capability mapped to a spec or outline) lives in `docs/superpowers/specs/2026-05-30-spec-set-design.md §7`.
+Outlines under `outlines/*.md` cover M7–M13 surfaces at half-page depth. Each one is promoted to a deep spec when its milestone is approached. The full coverage audit (every Django capability mapped to a spec or outline) lives in `docs/decisions/2026-05-30-spec-set-design.md §7`.
 
 ## Naming conventions
 
@@ -98,7 +98,7 @@ That's enough surface to exercise every concept the M0–M6 specs need without i
 
 ## Open questions deferred to per-subsystem specs
 
-Every open question lives inside the spec that owns its resolution. The authoritative list (with current status of each one) is in `docs/superpowers/specs/2026-05-30-spec-set-design.md §10`. Specs flag their own open questions in their final section so reading any one spec surfaces what's still unresolved in that area.
+Every open question lives inside the spec that owns its resolution. The authoritative list (with current status of each one) is in `docs/decisions/2026-05-30-spec-set-design.md §10`. Specs flag their own open questions in their final section so reading any one spec surfaces what's still unresolved in that area.
 
 ## Conventions a future spec author should follow
 
