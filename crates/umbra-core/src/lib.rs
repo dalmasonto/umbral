@@ -6,5 +6,6 @@
 
 pub mod app;
 pub mod db;
+pub mod orm;
 pub mod settings;
 pub mod web;

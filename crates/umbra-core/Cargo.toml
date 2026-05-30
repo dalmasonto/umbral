@@ -10,9 +10,12 @@ rust-version.workspace = true
 
 [dependencies]
 axum = "0.8"
+chrono = { version = "0.4", features = ["serde"] }
 figment = { version = "0.10", features = ["env", "toml"] }
+sea-query = "0.32"
+sea-query-binder = { version = "0.7", features = ["sqlx-sqlite", "with-chrono"] }
 serde = { version = "1", features = ["derive"] }
-sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio"] }
+sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "chrono"] }
 tokio = "1"
 tracing = "0.1"
 
