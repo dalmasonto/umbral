@@ -96,10 +96,12 @@ use syn::{
 ///
 /// M3 constraints (relaxed at later milestones):
 ///
-/// - The struct must have a field named `id` of type `i64`. That field
-///   becomes the primary key.
-/// - The supported field types are `i64`, `String`,
-///   `chrono::DateTime<chrono::Utc>`, and `Option<chrono::DateTime<chrono::Utc>>`.
+/// - The struct must have a field named `id`. The primary key type may
+///   be `i32`, `i64`, or `uuid::Uuid`; spec 04 §4.2.
+/// - The supported field types follow the M3 catalogue: signed and small
+///   unsigned ints, `f32` / `f64`, `bool`, `String`, `chrono::NaiveDate`,
+///   `chrono::NaiveTime`, `chrono::DateTime<chrono::Utc>`, `uuid::Uuid`,
+///   plus the `Option<T>` of each.
 /// - No `#[umbra(...)]` attributes yet. Foreign derive attributes
 ///   (`#[serde(...)]`, `#[sqlx(...)]`, …) are ignored.
 #[proc_macro_derive(Model)]
@@ -141,9 +143,10 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         }
     };
 
-    // M3 hardcodes the primary key as `id: i64`. The error message hints
-    // at the future flexibility so a user porting from Django doesn't
-    // think they have to rename every PK to `id` forever.
+    // M3 fixes the primary key to a field named `id` and accepts the
+    // three PK types `i32`, `i64`, and `uuid::Uuid`. The error message
+    // hints at the future flexibility so a user porting from Django
+    // doesn't think they have to rename every PK to `id` forever.
     let id_field = fields
         .iter()
         .find(|f| f.ident.as_ref().is_some_and(|i| i == "id"));
@@ -152,18 +155,22 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         None => {
             return Err(syn::Error::new_spanned(
                 struct_name,
-                "umbra M3 requires an `id: i64` primary-key field \
-                 (M3+ supports custom PK names and types)",
+                "umbra M3 requires an `id` primary-key field of type \
+                 i32, i64, or uuid::Uuid (M3+ supports custom PK names)",
             ));
         }
     };
-    if !type_is_ident(&id_field.ty, "i64") {
+    if !is_supported_primary_key(&id_field.ty) {
         return Err(syn::Error::new_spanned(
             &id_field.ty,
-            "umbra M3 requires an `id: i64` primary-key field \
-             (M3+ supports custom PK names and types)",
+            "umbra M3 supports id types i32, i64, or uuid::Uuid; \
+             got an unsupported primary-key type",
         ));
     }
+    // The `PrimaryKey` associated type echoes the user-written field
+    // type verbatim so user crate paths (`uuid::Uuid`, `::uuid::Uuid`,
+    // bare `Uuid`) round-trip unchanged through the emitted tokens.
+    let pk_ty_tokens = &id_field.ty;
 
     let table_name = to_snake_case(&struct_name.to_string());
     let module_name = format_ident!("{}", table_name);
@@ -181,33 +188,14 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
 
         let kind = classify_field_type(&field.ty);
 
-        let (sql_ty_tokens, nullable_lit) = match &kind {
-            FieldKind::Int => (quote!(::umbra::orm::SqlType::BigInt), quote!(false)),
-            FieldKind::Str => (quote!(::umbra::orm::SqlType::Text), quote!(false)),
-            FieldKind::DateTime => (quote!(::umbra::orm::SqlType::Timestamptz), quote!(false)),
-            FieldKind::NullableDateTime => {
-                (quote!(::umbra::orm::SqlType::Timestamptz), quote!(true))
-            }
-            FieldKind::UnsupportedNullable => {
-                // Emit a typed error at the field's span and keep going
-                // so the user sees every problematic field at once.
-                let err = syn::Error::new_spanned(
-                    &field.ty,
-                    "umbra M3 doesn't yet ship a nullable column type for this field; \
-                     use Option<DateTime<Utc>> only",
-                )
-                .to_compile_error();
-                field_specs.push(err.clone());
-                column_consts.push(err);
-                continue;
-            }
-            FieldKind::Unsupported => {
-                let err = syn::Error::new_spanned(
-                    &field.ty,
-                    "umbra M3 doesn't yet support this field type; \
-                     see docs/specs/04-orm-model-and-fields.md for the M3 type catalogue",
-                )
-                .to_compile_error();
+        let (sql_ty_tokens, nullable_lit) = match kind.sql_type_tokens() {
+            Some((ty, nullable)) => (ty, nullable),
+            None => {
+                // `Unsupported` lands here. Emit a typed error at the
+                // field's span and keep going so the user sees every
+                // problematic field at once.
+                let err =
+                    syn::Error::new_spanned(&field.ty, kind.error_message()).to_compile_error();
                 field_specs.push(err.clone());
                 column_consts.push(err);
                 continue;
@@ -241,12 +229,12 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
     // hand-written shape.
     let output = quote! {
         impl ::umbra::orm::Model for #struct_name {
-            type PrimaryKey = i64;
+            type PrimaryKey = #pk_ty_tokens;
             const TABLE: &'static str = #table_name;
             const FIELDS: &'static [::umbra::orm::FieldSpec] = &[
                 #(#field_specs),*
             ];
-            fn primary_key(&self) -> i64 {
+            fn primary_key(&self) -> #pk_ty_tokens {
                 self.id
             }
         }
@@ -260,9 +248,6 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         #[allow(clippy::module_inception)]
         pub mod #module_name {
             use super::#struct_name;
-            use ::umbra::orm::column::{
-                DateTimeCol, IntCol, NullableDateTimeCol, StrCol,
-            };
 
             #(#column_consts)*
         }
@@ -273,30 +258,160 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
 
 /// The classification a field's Rust type lands in for M3.
 ///
-/// This is the single switchboard for the type → column-type mapping. As
-/// the M3+ derive's catalogue grows (BoolCol, FloatCol, UuidCol, …) the
-/// new variants land here and the `match` arms in `expand_model` plus
-/// `column_const_for` extend with them. The mapping table:
+/// This is the single switchboard for the type → column-type mapping.
+/// The new column type lands here, its SqlType picks up an arm in
+/// `sql_type_tokens`, and the column const expansion picks up an arm in
+/// `column_const_for`. The full M3 catalogue:
 ///
-/// | Rust field type                          | FieldKind             | SqlType     | Column type            |
-/// |------------------------------------------|-----------------------|-------------|------------------------|
-/// | `i64`                                    | `Int`                 | `BigInt`    | `IntCol<Self>`         |
-/// | `String`                                 | `Str`                 | `Text`      | `StrCol<Self>`         |
-/// | `chrono::DateTime<chrono::Utc>`          | `DateTime`            | `Timestamptz` | `DateTimeCol<Self>`  |
-/// | `Option<chrono::DateTime<chrono::Utc>>`  | `NullableDateTime`    | `Timestamptz` | `NullableDateTimeCol<Self>` |
-/// | `Option<i64>`, `Option<String>`, …       | `UnsupportedNullable` | (error)     | (error)                |
-/// | anything else                            | `Unsupported`         | (error)     | (error)                |
+/// | Rust field type                          | FieldKind             | SqlType       | Column type                  |
+/// |------------------------------------------|-----------------------|---------------|------------------------------|
+/// | `i8` / `i16` / `u8`                      | `SmallInt`            | `SmallInt`    | `IntCol<Self>`               |
+/// | `i32` / `u16`                            | `Integer`             | `Integer`     | `IntCol<Self>`               |
+/// | `i64` / `u32`                            | `BigInt`              | `BigInt`      | `IntCol<Self>`               |
+/// | `f32`                                    | `Real`                | `Real`        | `F64Col<Self>`               |
+/// | `f64`                                    | `Double`              | `Double`      | `F64Col<Self>`               |
+/// | `bool`                                   | `Bool`                | `Boolean`     | `BoolCol<Self>`              |
+/// | `String`                                 | `Str`                 | `Text`        | `StrCol<Self>`               |
+/// | `chrono::NaiveDate`                      | `Date`                | `Date`        | `DateCol<Self>`              |
+/// | `chrono::NaiveTime`                      | `Time`                | `Time`        | `TimeCol<Self>`              |
+/// | `chrono::DateTime<chrono::Utc>`          | `DateTime`            | `Timestamptz` | `DateTimeCol<Self>`          |
+/// | `uuid::Uuid`                             | `Uuid`                | `Uuid`        | `UuidCol<Self>`              |
+/// | `Option<i8>` / `i16` / `u8`              | `NullableSmallInt`    | `SmallInt`    | `NullableIntCol<Self>`       |
+/// | `Option<i32>` / `u16`                    | `NullableInteger`     | `Integer`     | `NullableIntCol<Self>`       |
+/// | `Option<i64>` / `u32`                    | `NullableBigInt`      | `BigInt`      | `NullableIntCol<Self>`       |
+/// | `Option<f32>`                            | `NullableReal`        | `Real`        | `NullableF64Col<Self>`       |
+/// | `Option<f64>`                            | `NullableDouble`      | `Double`      | `NullableF64Col<Self>`       |
+/// | `Option<bool>`                           | `NullableBool`        | `Boolean`     | `NullableBoolCol<Self>`      |
+/// | `Option<String>`                         | `NullableStr`         | `Text`        | `NullableStrCol<Self>`       |
+/// | `Option<chrono::NaiveDate>`              | `NullableDate`        | `Date`        | `NullableDateCol<Self>`      |
+/// | `Option<chrono::NaiveTime>`              | `NullableTime`        | `Time`        | `NullableTimeCol<Self>`      |
+/// | `Option<chrono::DateTime<chrono::Utc>>`  | `NullableDateTime`    | `Timestamptz` | `NullableDateTimeCol<Self>`  |
+/// | `Option<uuid::Uuid>`                     | `NullableUuid`        | `Uuid`        | `NullableUuidCol<Self>`      |
+/// | `i128` / `u64` / `u128` / anything else  | `Unsupported(...)`    | (error)       | (error)                      |
 enum FieldKind {
-    Int,
+    SmallInt,
+    Integer,
+    BigInt,
+    Real,
+    Double,
+    Bool,
     Str,
+    Date,
+    Time,
     DateTime,
+    Uuid,
+    NullableSmallInt,
+    NullableInteger,
+    NullableBigInt,
+    NullableReal,
+    NullableDouble,
+    NullableBool,
+    NullableStr,
+    NullableDate,
+    NullableTime,
     NullableDateTime,
-    /// `Option<T>` of a type we recognise as a base column but for which
-    /// there's no nullable column type yet. Emits a targeted error.
-    UnsupportedNullable,
-    /// Everything else (f64, bool, Uuid, custom types, …). Emits a
-    /// catch-all "not in the M3 catalogue" error.
-    Unsupported,
+    NullableUuid,
+    /// Catch-all: not a recognised M3 catalogue type, or one of the
+    /// explicitly-rejected wide / unsigned ints. Carries the exact
+    /// diagnostic to emit at the field's span.
+    Unsupported(UnsupportedReason),
+}
+
+/// Why a field was rejected. Splits the catch-all so the diagnostic
+/// can point the user at the right answer (use `i64` instead of `u64`,
+/// or look at the catalogue table for an exotic type).
+enum UnsupportedReason {
+    /// `i128`, `u64`, `u128`, including their `Option<...>` wrappers.
+    /// Worth a specific message because the issue is "no SQL backend
+    /// handles this natively," not "type unrecognised."
+    WideOrUnsignedInt,
+    /// Everything else off the catalogue. Generic message pointing at
+    /// spec 04.
+    NotInCatalogue,
+    /// Same as `NotInCatalogue` but the user wrote `Option<T>` of a
+    /// recognised base type, so we can be slightly more specific. Kept
+    /// as a separate variant so the error wording can be tuned without
+    /// reshuffling the main switch.
+    NullableOfWide,
+}
+
+impl FieldKind {
+    /// The `(SqlType expression, nullable bool literal)` to splice into
+    /// a `FieldSpec` for this kind, or `None` for `Unsupported`.
+    fn sql_type_tokens(&self) -> Option<(TokenStream2, TokenStream2)> {
+        let sql = match self {
+            FieldKind::SmallInt | FieldKind::NullableSmallInt => {
+                quote!(::umbra::orm::SqlType::SmallInt)
+            }
+            FieldKind::Integer | FieldKind::NullableInteger => {
+                quote!(::umbra::orm::SqlType::Integer)
+            }
+            FieldKind::BigInt | FieldKind::NullableBigInt => quote!(::umbra::orm::SqlType::BigInt),
+            FieldKind::Real | FieldKind::NullableReal => quote!(::umbra::orm::SqlType::Real),
+            FieldKind::Double | FieldKind::NullableDouble => quote!(::umbra::orm::SqlType::Double),
+            FieldKind::Bool | FieldKind::NullableBool => quote!(::umbra::orm::SqlType::Boolean),
+            FieldKind::Str | FieldKind::NullableStr => quote!(::umbra::orm::SqlType::Text),
+            FieldKind::Date | FieldKind::NullableDate => quote!(::umbra::orm::SqlType::Date),
+            FieldKind::Time | FieldKind::NullableTime => quote!(::umbra::orm::SqlType::Time),
+            FieldKind::DateTime | FieldKind::NullableDateTime => {
+                quote!(::umbra::orm::SqlType::Timestamptz)
+            }
+            FieldKind::Uuid | FieldKind::NullableUuid => quote!(::umbra::orm::SqlType::Uuid),
+            FieldKind::Unsupported(_) => return None,
+        };
+        let nullable = if self.is_nullable() {
+            quote!(true)
+        } else {
+            quote!(false)
+        };
+        Some((sql, nullable))
+    }
+
+    fn is_nullable(&self) -> bool {
+        matches!(
+            self,
+            FieldKind::NullableSmallInt
+                | FieldKind::NullableInteger
+                | FieldKind::NullableBigInt
+                | FieldKind::NullableReal
+                | FieldKind::NullableDouble
+                | FieldKind::NullableBool
+                | FieldKind::NullableStr
+                | FieldKind::NullableDate
+                | FieldKind::NullableTime
+                | FieldKind::NullableDateTime
+                | FieldKind::NullableUuid
+        )
+    }
+
+    /// The diagnostic to emit when this kind is `Unsupported`. Returns
+    /// a fixed `&'static str`; non-`Unsupported` kinds shouldn't reach
+    /// here, so they get a placeholder.
+    fn error_message(&self) -> &'static str {
+        match self {
+            FieldKind::Unsupported(UnsupportedReason::WideOrUnsignedInt) => {
+                "umbra M3 doesn't support 128-bit ints or u64 (no SQL backend handles \
+                 them natively); use i64 or u32"
+            }
+            FieldKind::Unsupported(UnsupportedReason::NullableOfWide) => {
+                "umbra M3 doesn't support 128-bit ints or u64 (no SQL backend handles \
+                 them natively); use Option<i64> or Option<u32>"
+            }
+            FieldKind::Unsupported(UnsupportedReason::NotInCatalogue) => {
+                "umbra M3 doesn't yet support this field type; see \
+                 docs/specs/04-orm-model-and-fields.md for the M3 type catalogue"
+            }
+            _ => "unreachable: error_message called on a supported FieldKind",
+        }
+    }
+}
+
+/// True if the `id` field's type is one of the M3 PK catalogue: `i32`,
+/// `i64`, or `uuid::Uuid` (matched by last path segment so `Uuid`,
+/// `uuid::Uuid`, `::uuid::Uuid` all resolve). The user-written type
+/// tokens are re-used verbatim for the emitted associated type.
+fn is_supported_primary_key(ty: &Type) -> bool {
+    type_is_ident(ty, "i32") || type_is_ident(ty, "i64") || type_is_ident(ty, "Uuid")
 }
 
 /// Inspect a `syn::Type` and pick its `FieldKind`.
@@ -304,32 +419,102 @@ enum FieldKind {
 /// Type detection here is name-based: a path's *last* segment ident is
 /// what matters. That means the derive sees through `chrono::DateTime`,
 /// `DateTime`, and `::chrono::DateTime` identically — the user can write
-/// any of them and the derive does the right thing.
+/// any of them and the derive does the right thing. Same trick for
+/// `uuid::Uuid`, `chrono::NaiveDate`, and `chrono::NaiveTime`.
 fn classify_field_type(ty: &Type) -> FieldKind {
-    if type_is_ident(ty, "i64") {
-        return FieldKind::Int;
+    // Plain primitives first. The catalogue spells out which Rust int
+    // widths land in which SqlType slot; smaller unsigned ints fold up
+    // into the next larger signed slot (u8 -> SmallInt, u16 -> Integer,
+    // u32 -> BigInt).
+    if type_is_ident(ty, "i8") || type_is_ident(ty, "i16") || type_is_ident(ty, "u8") {
+        return FieldKind::SmallInt;
+    }
+    if type_is_ident(ty, "i32") || type_is_ident(ty, "u16") {
+        return FieldKind::Integer;
+    }
+    if type_is_ident(ty, "i64") || type_is_ident(ty, "u32") {
+        return FieldKind::BigInt;
+    }
+    if type_is_ident(ty, "f32") {
+        return FieldKind::Real;
+    }
+    if type_is_ident(ty, "f64") {
+        return FieldKind::Double;
+    }
+    if type_is_ident(ty, "bool") {
+        return FieldKind::Bool;
     }
     if type_is_ident(ty, "String") {
         return FieldKind::Str;
     }
+    if type_is_ident(ty, "NaiveDate") {
+        return FieldKind::Date;
+    }
+    if type_is_ident(ty, "NaiveTime") {
+        return FieldKind::Time;
+    }
     if is_datetime_utc(ty) {
         return FieldKind::DateTime;
     }
+    if type_is_ident(ty, "Uuid") {
+        return FieldKind::Uuid;
+    }
+    if is_wide_or_unsigned_int(ty) {
+        return FieldKind::Unsupported(UnsupportedReason::WideOrUnsignedInt);
+    }
+
     if let Some(inner) = option_inner(ty) {
+        if type_is_ident(inner, "i8") || type_is_ident(inner, "i16") || type_is_ident(inner, "u8") {
+            return FieldKind::NullableSmallInt;
+        }
+        if type_is_ident(inner, "i32") || type_is_ident(inner, "u16") {
+            return FieldKind::NullableInteger;
+        }
+        if type_is_ident(inner, "i64") || type_is_ident(inner, "u32") {
+            return FieldKind::NullableBigInt;
+        }
+        if type_is_ident(inner, "f32") {
+            return FieldKind::NullableReal;
+        }
+        if type_is_ident(inner, "f64") {
+            return FieldKind::NullableDouble;
+        }
+        if type_is_ident(inner, "bool") {
+            return FieldKind::NullableBool;
+        }
+        if type_is_ident(inner, "String") {
+            return FieldKind::NullableStr;
+        }
+        if type_is_ident(inner, "NaiveDate") {
+            return FieldKind::NullableDate;
+        }
+        if type_is_ident(inner, "NaiveTime") {
+            return FieldKind::NullableTime;
+        }
         if is_datetime_utc(inner) {
             return FieldKind::NullableDateTime;
         }
-        if type_is_ident(inner, "i64") || type_is_ident(inner, "String") {
-            return FieldKind::UnsupportedNullable;
+        if type_is_ident(inner, "Uuid") {
+            return FieldKind::NullableUuid;
         }
-        return FieldKind::Unsupported;
+        if is_wide_or_unsigned_int(inner) {
+            return FieldKind::Unsupported(UnsupportedReason::NullableOfWide);
+        }
+        return FieldKind::Unsupported(UnsupportedReason::NotInCatalogue);
     }
-    FieldKind::Unsupported
+
+    FieldKind::Unsupported(UnsupportedReason::NotInCatalogue)
+}
+
+/// True for the int widths explicitly off the M3 catalogue: `i128`,
+/// `u64`, `u128`. Used to pick the targeted diagnostic.
+fn is_wide_or_unsigned_int(ty: &Type) -> bool {
+    type_is_ident(ty, "i128") || type_is_ident(ty, "u64") || type_is_ident(ty, "u128")
 }
 
 /// True when `ty` is a path whose last segment ident equals `name` and
 /// carries no generic arguments. Used for plain types like `i64`,
-/// `String`.
+/// `String`, `Uuid`, `NaiveDate`.
 fn type_is_ident(ty: &Type, name: &str) -> bool {
     if let Type::Path(TypePath { qself: None, path }) = ty {
         if let Some(last) = path.segments.last() {
@@ -406,14 +591,14 @@ fn option_inner(ty: &Type) -> Option<&Type> {
     Some(inner)
 }
 
-/// Build the `pub const FOO: FooCol<Self> = FooCol::new("foo");`
-/// declaration for one field.
+/// Build the `pub const FOO: ::umbra::orm::column::FooCol<Self> =
+/// FooCol::new("foo");` declaration for one field.
 ///
 /// The const name is `SCREAMING_SNAKE_CASE(field_name)`. The column type
-/// is chosen by `FieldKind`. Unsupported variants are caught upstream
-/// and never reach here; the match arms for them are unreachable in
-/// practice but kept exhaustive so adding a new `FieldKind` is a compile
-/// error here too.
+/// is chosen by `FieldKind`. Column type idents are produced via
+/// `format_ident!` and spliced into a fully-qualified `::umbra::orm::column::...`
+/// path so the emitted module needs no `use` imports — every plugin or
+/// user crate that derives `Model` gets the same path resolution.
 fn column_const_for(
     struct_name: &syn::Ident,
     field_name: &str,
@@ -422,21 +607,30 @@ fn column_const_for(
 ) -> TokenStream2 {
     let const_ident = format_ident!("{}", to_screaming_snake_case(field_name));
     let span = field.ty.span();
-    match kind {
-        FieldKind::Int => quote_spanned! { span =>
-            pub const #const_ident: IntCol<super::#struct_name> = IntCol::new(#field_name);
-        },
-        FieldKind::Str => quote_spanned! { span =>
-            pub const #const_ident: StrCol<super::#struct_name> = StrCol::new(#field_name);
-        },
-        FieldKind::DateTime => quote_spanned! { span =>
-            pub const #const_ident: DateTimeCol<super::#struct_name> = DateTimeCol::new(#field_name);
-        },
-        FieldKind::NullableDateTime => quote_spanned! { span =>
-            pub const #const_ident: NullableDateTimeCol<super::#struct_name> =
-                NullableDateTimeCol::new(#field_name);
-        },
-        FieldKind::UnsupportedNullable | FieldKind::Unsupported => TokenStream2::new(),
+    let col_ident = match kind {
+        FieldKind::SmallInt | FieldKind::Integer | FieldKind::BigInt => format_ident!("IntCol"),
+        FieldKind::Real | FieldKind::Double => format_ident!("F64Col"),
+        FieldKind::Bool => format_ident!("BoolCol"),
+        FieldKind::Str => format_ident!("StrCol"),
+        FieldKind::Date => format_ident!("DateCol"),
+        FieldKind::Time => format_ident!("TimeCol"),
+        FieldKind::DateTime => format_ident!("DateTimeCol"),
+        FieldKind::Uuid => format_ident!("UuidCol"),
+        FieldKind::NullableSmallInt | FieldKind::NullableInteger | FieldKind::NullableBigInt => {
+            format_ident!("NullableIntCol")
+        }
+        FieldKind::NullableReal | FieldKind::NullableDouble => format_ident!("NullableF64Col"),
+        FieldKind::NullableBool => format_ident!("NullableBoolCol"),
+        FieldKind::NullableStr => format_ident!("NullableStrCol"),
+        FieldKind::NullableDate => format_ident!("NullableDateCol"),
+        FieldKind::NullableTime => format_ident!("NullableTimeCol"),
+        FieldKind::NullableDateTime => format_ident!("NullableDateTimeCol"),
+        FieldKind::NullableUuid => format_ident!("NullableUuidCol"),
+        FieldKind::Unsupported(_) => return TokenStream2::new(),
+    };
+    quote_spanned! { span =>
+        pub const #const_ident: ::umbra::orm::column::#col_ident<super::#struct_name> =
+            ::umbra::orm::column::#col_ident::new(#field_name);
     }
 }
 
