@@ -422,6 +422,46 @@ impl<T> F64Col<T> {
             _phantom: PhantomData,
         }
     }
+
+    /// SQL `=`.
+    pub fn eq(&self, val: f64) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).eq(val))
+    }
+
+    /// SQL `<>`.
+    pub fn ne(&self, val: f64) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).ne(val))
+    }
+
+    /// SQL `<`.
+    pub fn lt(&self, val: f64) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).lt(val))
+    }
+
+    /// SQL `<=`.
+    pub fn le(&self, val: f64) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).lte(val))
+    }
+
+    /// SQL `>`.
+    pub fn gt(&self, val: f64) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).gt(val))
+    }
+
+    /// SQL `>=`.
+    pub fn ge(&self, val: f64) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).gte(val))
+    }
+
+    /// SQL `ORDER BY ... ASC`.
+    pub fn asc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, false)
+    }
+
+    /// SQL `ORDER BY ... DESC`.
+    pub fn desc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, true)
+    }
 }
 
 /// A boolean column.
@@ -436,6 +476,36 @@ impl<T> BoolCol<T> {
             name,
             _phantom: PhantomData,
         }
+    }
+
+    /// SQL `=`.
+    pub fn eq(&self, val: bool) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).eq(val))
+    }
+
+    /// SQL `<>`.
+    pub fn ne(&self, val: bool) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).ne(val))
+    }
+
+    /// Sugar for `.eq(true)`.
+    pub fn is_true(&self) -> Predicate<T> {
+        self.eq(true)
+    }
+
+    /// Sugar for `.eq(false)`.
+    pub fn is_false(&self) -> Predicate<T> {
+        self.eq(false)
+    }
+
+    /// SQL `ORDER BY ... ASC`.
+    pub fn asc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, false)
+    }
+
+    /// SQL `ORDER BY ... DESC`.
+    pub fn desc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, true)
     }
 }
 
@@ -452,6 +522,31 @@ impl<T> UuidCol<T> {
             _phantom: PhantomData,
         }
     }
+
+    /// SQL `=`.
+    pub fn eq(&self, val: uuid::Uuid) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).eq(val))
+    }
+
+    /// SQL `<>`.
+    pub fn ne(&self, val: uuid::Uuid) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).ne(val))
+    }
+
+    /// SQL `IN (...)`.
+    pub fn in_(&self, vals: &[uuid::Uuid]) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).is_in(vals.iter().copied()))
+    }
+
+    /// SQL `ORDER BY ... ASC`.
+    pub fn asc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, false)
+    }
+
+    /// SQL `ORDER BY ... DESC`.
+    pub fn desc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, true)
+    }
 }
 
 /// A `chrono::NaiveDate`-typed column (no time, no timezone).
@@ -467,6 +562,56 @@ impl<T> DateCol<T> {
             _phantom: PhantomData,
         }
     }
+
+    /// SQL `=`.
+    pub fn eq(&self, val: chrono::NaiveDate) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).eq(val))
+    }
+
+    /// SQL `<>`.
+    pub fn ne(&self, val: chrono::NaiveDate) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).ne(val))
+    }
+
+    /// SQL `<`.
+    pub fn lt(&self, val: chrono::NaiveDate) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).lt(val))
+    }
+
+    /// SQL `<=`.
+    pub fn le(&self, val: chrono::NaiveDate) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).lte(val))
+    }
+
+    /// SQL `>`.
+    pub fn gt(&self, val: chrono::NaiveDate) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).gt(val))
+    }
+
+    /// SQL `>=`.
+    pub fn ge(&self, val: chrono::NaiveDate) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).gte(val))
+    }
+
+    /// Alias for `.lt`, reading naturally for dates.
+    pub fn before(&self, val: chrono::NaiveDate) -> Predicate<T> {
+        self.lt(val)
+    }
+
+    /// Alias for `.gt`, reading naturally for dates.
+    pub fn after(&self, val: chrono::NaiveDate) -> Predicate<T> {
+        self.gt(val)
+    }
+
+    /// SQL `ORDER BY ... ASC`.
+    pub fn asc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, false)
+    }
+
+    /// SQL `ORDER BY ... DESC`.
+    pub fn desc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, true)
+    }
 }
 
 /// A `chrono::NaiveTime`-typed column (no date, no timezone).
@@ -481,6 +626,56 @@ impl<T> TimeCol<T> {
             name,
             _phantom: PhantomData,
         }
+    }
+
+    /// SQL `=`.
+    pub fn eq(&self, val: chrono::NaiveTime) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).eq(val))
+    }
+
+    /// SQL `<>`.
+    pub fn ne(&self, val: chrono::NaiveTime) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).ne(val))
+    }
+
+    /// SQL `<`.
+    pub fn lt(&self, val: chrono::NaiveTime) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).lt(val))
+    }
+
+    /// SQL `<=`.
+    pub fn le(&self, val: chrono::NaiveTime) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).lte(val))
+    }
+
+    /// SQL `>`.
+    pub fn gt(&self, val: chrono::NaiveTime) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).gt(val))
+    }
+
+    /// SQL `>=`.
+    pub fn ge(&self, val: chrono::NaiveTime) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).gte(val))
+    }
+
+    /// Alias for `.lt`, reading naturally for times.
+    pub fn before(&self, val: chrono::NaiveTime) -> Predicate<T> {
+        self.lt(val)
+    }
+
+    /// Alias for `.gt`, reading naturally for times.
+    pub fn after(&self, val: chrono::NaiveTime) -> Predicate<T> {
+        self.gt(val)
+    }
+
+    /// SQL `ORDER BY ... ASC`.
+    pub fn asc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, false)
+    }
+
+    /// SQL `ORDER BY ... DESC`.
+    pub fn desc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, true)
     }
 }
 
@@ -504,6 +699,61 @@ impl<T> NullableIntCol<T> {
             _phantom: PhantomData,
         }
     }
+
+    /// SQL `=`. NULL rows are excluded by SQL's NULL semantics.
+    pub fn eq(&self, val: i64) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).eq(val))
+    }
+
+    /// SQL `<>`. NULL rows are excluded by SQL's NULL semantics.
+    pub fn ne(&self, val: i64) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).ne(val))
+    }
+
+    /// SQL `<`.
+    pub fn lt(&self, val: i64) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).lt(val))
+    }
+
+    /// SQL `<=`.
+    pub fn le(&self, val: i64) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).lte(val))
+    }
+
+    /// SQL `>`.
+    pub fn gt(&self, val: i64) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).gt(val))
+    }
+
+    /// SQL `>=`.
+    pub fn ge(&self, val: i64) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).gte(val))
+    }
+
+    /// SQL `IN (...)`.
+    pub fn in_(&self, vals: &[i64]) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).is_in(vals.iter().copied()))
+    }
+
+    /// SQL `IS NULL`.
+    pub fn is_null(&self) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).is_null())
+    }
+
+    /// SQL `IS NOT NULL`.
+    pub fn is_not_null(&self) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).is_not_null())
+    }
+
+    /// SQL `ORDER BY ... ASC`.
+    pub fn asc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, false)
+    }
+
+    /// SQL `ORDER BY ... DESC`.
+    pub fn desc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, true)
+    }
 }
 
 /// A nullable `String`-typed column.
@@ -518,6 +768,60 @@ impl<T> NullableStrCol<T> {
             name,
             _phantom: PhantomData,
         }
+    }
+
+    /// SQL `=`. NULL rows are excluded by SQL's NULL semantics.
+    pub fn eq<S: Into<String>>(&self, val: S) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).eq(val.into()))
+    }
+
+    /// SQL `<>`. NULL rows are excluded by SQL's NULL semantics.
+    pub fn ne<S: Into<String>>(&self, val: S) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).ne(val.into()))
+    }
+
+    /// SQL `LIKE` (case-sensitive).
+    pub fn like<S: Into<String>>(&self, pattern: S) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).like(pattern.into()))
+    }
+
+    /// Case-insensitive `LIKE` via `UPPER(col) LIKE UPPER(pattern)`.
+    pub fn ilike<S: Into<String>>(&self, pattern: S) -> Predicate<T> {
+        let pattern = pattern.into().to_uppercase();
+        Predicate::new(Expr::expr(Func::upper(Expr::col(Alias::new(self.name)))).like(pattern))
+    }
+
+    /// SQL `LIKE '%val%'` substring containment.
+    pub fn contains<S: Into<String>>(&self, substring: S) -> Predicate<T> {
+        let pattern = format!("%{}%", substring.into());
+        Predicate::new(Expr::col(Alias::new(self.name)).like(pattern))
+    }
+
+    /// Case-insensitive substring containment via `UPPER(col) LIKE
+    /// UPPER('%val%')`.
+    pub fn icontains<S: Into<String>>(&self, substring: S) -> Predicate<T> {
+        let pattern = format!("%{}%", substring.into()).to_uppercase();
+        Predicate::new(Expr::expr(Func::upper(Expr::col(Alias::new(self.name)))).like(pattern))
+    }
+
+    /// SQL `IS NULL`.
+    pub fn is_null(&self) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).is_null())
+    }
+
+    /// SQL `IS NOT NULL`.
+    pub fn is_not_null(&self) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).is_not_null())
+    }
+
+    /// SQL `ORDER BY ... ASC`.
+    pub fn asc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, false)
+    }
+
+    /// SQL `ORDER BY ... DESC`.
+    pub fn desc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, true)
     }
 }
 
@@ -534,6 +838,56 @@ impl<T> NullableF64Col<T> {
             _phantom: PhantomData,
         }
     }
+
+    /// SQL `=`. NULL rows are excluded by SQL's NULL semantics.
+    pub fn eq(&self, val: f64) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).eq(val))
+    }
+
+    /// SQL `<>`. NULL rows are excluded by SQL's NULL semantics.
+    pub fn ne(&self, val: f64) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).ne(val))
+    }
+
+    /// SQL `<`.
+    pub fn lt(&self, val: f64) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).lt(val))
+    }
+
+    /// SQL `<=`.
+    pub fn le(&self, val: f64) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).lte(val))
+    }
+
+    /// SQL `>`.
+    pub fn gt(&self, val: f64) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).gt(val))
+    }
+
+    /// SQL `>=`.
+    pub fn ge(&self, val: f64) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).gte(val))
+    }
+
+    /// SQL `IS NULL`.
+    pub fn is_null(&self) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).is_null())
+    }
+
+    /// SQL `IS NOT NULL`.
+    pub fn is_not_null(&self) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).is_not_null())
+    }
+
+    /// SQL `ORDER BY ... ASC`.
+    pub fn asc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, false)
+    }
+
+    /// SQL `ORDER BY ... DESC`.
+    pub fn desc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, true)
+    }
 }
 
 /// A nullable `bool`-typed column.
@@ -548,6 +902,46 @@ impl<T> NullableBoolCol<T> {
             name,
             _phantom: PhantomData,
         }
+    }
+
+    /// SQL `=`. NULL rows are excluded by SQL's NULL semantics.
+    pub fn eq(&self, val: bool) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).eq(val))
+    }
+
+    /// SQL `<>`. NULL rows are excluded by SQL's NULL semantics.
+    pub fn ne(&self, val: bool) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).ne(val))
+    }
+
+    /// Sugar for `.eq(true)`.
+    pub fn is_true(&self) -> Predicate<T> {
+        self.eq(true)
+    }
+
+    /// Sugar for `.eq(false)`.
+    pub fn is_false(&self) -> Predicate<T> {
+        self.eq(false)
+    }
+
+    /// SQL `IS NULL`.
+    pub fn is_null(&self) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).is_null())
+    }
+
+    /// SQL `IS NOT NULL`.
+    pub fn is_not_null(&self) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).is_not_null())
+    }
+
+    /// SQL `ORDER BY ... ASC`.
+    pub fn asc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, false)
+    }
+
+    /// SQL `ORDER BY ... DESC`.
+    pub fn desc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, true)
     }
 }
 
@@ -564,6 +958,41 @@ impl<T> NullableUuidCol<T> {
             _phantom: PhantomData,
         }
     }
+
+    /// SQL `=`. NULL rows are excluded by SQL's NULL semantics.
+    pub fn eq(&self, val: uuid::Uuid) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).eq(val))
+    }
+
+    /// SQL `<>`. NULL rows are excluded by SQL's NULL semantics.
+    pub fn ne(&self, val: uuid::Uuid) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).ne(val))
+    }
+
+    /// SQL `IN (...)`.
+    pub fn in_(&self, vals: &[uuid::Uuid]) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).is_in(vals.iter().copied()))
+    }
+
+    /// SQL `IS NULL`.
+    pub fn is_null(&self) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).is_null())
+    }
+
+    /// SQL `IS NOT NULL`.
+    pub fn is_not_null(&self) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).is_not_null())
+    }
+
+    /// SQL `ORDER BY ... ASC`.
+    pub fn asc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, false)
+    }
+
+    /// SQL `ORDER BY ... DESC`.
+    pub fn desc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, true)
+    }
 }
 
 /// A nullable `chrono::NaiveDate`-typed column.
@@ -579,6 +1008,66 @@ impl<T> NullableDateCol<T> {
             _phantom: PhantomData,
         }
     }
+
+    /// SQL `=`. NULL rows are excluded by SQL's NULL semantics.
+    pub fn eq(&self, val: chrono::NaiveDate) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).eq(val))
+    }
+
+    /// SQL `<>`. NULL rows are excluded by SQL's NULL semantics.
+    pub fn ne(&self, val: chrono::NaiveDate) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).ne(val))
+    }
+
+    /// SQL `<`.
+    pub fn lt(&self, val: chrono::NaiveDate) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).lt(val))
+    }
+
+    /// SQL `<=`.
+    pub fn le(&self, val: chrono::NaiveDate) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).lte(val))
+    }
+
+    /// SQL `>`.
+    pub fn gt(&self, val: chrono::NaiveDate) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).gt(val))
+    }
+
+    /// SQL `>=`.
+    pub fn ge(&self, val: chrono::NaiveDate) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).gte(val))
+    }
+
+    /// Alias for `.lt`, reading naturally for dates.
+    pub fn before(&self, val: chrono::NaiveDate) -> Predicate<T> {
+        self.lt(val)
+    }
+
+    /// Alias for `.gt`, reading naturally for dates.
+    pub fn after(&self, val: chrono::NaiveDate) -> Predicate<T> {
+        self.gt(val)
+    }
+
+    /// SQL `IS NULL`.
+    pub fn is_null(&self) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).is_null())
+    }
+
+    /// SQL `IS NOT NULL`.
+    pub fn is_not_null(&self) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).is_not_null())
+    }
+
+    /// SQL `ORDER BY ... ASC`.
+    pub fn asc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, false)
+    }
+
+    /// SQL `ORDER BY ... DESC`.
+    pub fn desc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, true)
+    }
 }
 
 /// A nullable `chrono::NaiveTime`-typed column.
@@ -593,5 +1082,65 @@ impl<T> NullableTimeCol<T> {
             name,
             _phantom: PhantomData,
         }
+    }
+
+    /// SQL `=`. NULL rows are excluded by SQL's NULL semantics.
+    pub fn eq(&self, val: chrono::NaiveTime) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).eq(val))
+    }
+
+    /// SQL `<>`. NULL rows are excluded by SQL's NULL semantics.
+    pub fn ne(&self, val: chrono::NaiveTime) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).ne(val))
+    }
+
+    /// SQL `<`.
+    pub fn lt(&self, val: chrono::NaiveTime) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).lt(val))
+    }
+
+    /// SQL `<=`.
+    pub fn le(&self, val: chrono::NaiveTime) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).lte(val))
+    }
+
+    /// SQL `>`.
+    pub fn gt(&self, val: chrono::NaiveTime) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).gt(val))
+    }
+
+    /// SQL `>=`.
+    pub fn ge(&self, val: chrono::NaiveTime) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).gte(val))
+    }
+
+    /// Alias for `.lt`, reading naturally for times.
+    pub fn before(&self, val: chrono::NaiveTime) -> Predicate<T> {
+        self.lt(val)
+    }
+
+    /// Alias for `.gt`, reading naturally for times.
+    pub fn after(&self, val: chrono::NaiveTime) -> Predicate<T> {
+        self.gt(val)
+    }
+
+    /// SQL `IS NULL`.
+    pub fn is_null(&self) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).is_null())
+    }
+
+    /// SQL `IS NOT NULL`.
+    pub fn is_not_null(&self) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).is_not_null())
+    }
+
+    /// SQL `ORDER BY ... ASC`.
+    pub fn asc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, false)
+    }
+
+    /// SQL `ORDER BY ... DESC`.
+    pub fn desc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, true)
     }
 }
