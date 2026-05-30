@@ -1,16 +1,16 @@
 {
   "$schema": "https://raw.githubusercontent.com/SpecraDocs/specra-sdk/main/config/specra.config.schema.json",
   "site": {
-    "title": "Modern Docs",
-    "description": "Next-generation documentation platform",
+    "title": "Umbra",
+    "description": "A Django-shape web framework for Rust.",
     "url": "http://localhost:5173",
     "baseUrl": "/",
     "language": "en",
-    "organizationName": "my-org",
-    "projectName": "my-project",
-    "activeVersion": "v1.0.0",
+    "organizationName": "umbra",
+    "projectName": "umbra",
+    "activeVersion": "v0.0.1",
     "defaultProduct": {
-      "label": "Main Docs",
+      "label": "Docs",
       "icon": "book-open"
     }
   },
@@ -39,20 +39,20 @@
     ]
   },
   "social": {
-    "github": "https://github.com/your-org/your-repo"
+    "github": "https://github.com/OWNER/umbra"
   },
   "search": {
     "enabled": false
   },
   "footer": {
-    "copyright": "Copyright © 2025 Modern Docs. All rights reserved.",
+    "copyright": "Copyright © 2026 Umbra. MIT licensed.",
     "links": [
       {
         "title": "Documentation",
         "items": [
           {
-            "label": "Getting Started",
-            "href": "/docs/platform/v1.0.0/introduction/getting-started"
+            "label": "What is Umbra?",
+            "href": "/docs/v0.0.1/about"
           }
         ]
       },
@@ -61,14 +61,14 @@
         "items": [
           {
             "label": "GitHub",
-            "href": "https://github.com/your-org/your-repo"
+            "href": "https://github.com/OWNER/umbra"
           }
         ]
       }
     ]
   },
   "features": {
-    "editUrl": "https://github.com/your-org/your-repo/edit/main/docs",
+    "editUrl": "https://github.com/OWNER/umbra/edit/main/documentation/docs",
     "showLastUpdated": true,
     "showReadingTime": true,
     "showAuthors": false,
