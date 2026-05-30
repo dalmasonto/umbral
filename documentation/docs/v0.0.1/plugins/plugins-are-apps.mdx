@@ -1,0 +1,61 @@
+---
+title: Plugins are apps
+description: umbra's `Plugin` is the Django-app concept under a different name. The same thing your Django muscle memory expects.
+sidebar_position: 2
+icon: package
+---
+
+If you came to umbra from Django and went looking for `INSTALLED_APPS`, you
+probably didn't find it. The reason is naming, not a missing feature.
+
+**A `Plugin` is an app.** The umbra `Plugin` trait carries every contribution
+a Django app makes — models, routes, system checks, an `on_ready` hook, and
+(at later milestones) middleware, management commands, templates — through
+one trait, into one builder call. The built-in `umbra-auth` plugin is the
+canonical example: it ships a `User` model, password hashing helpers, a
+`Plugin` impl that registers the model under the `"auth"` namespace, and
+lives in its own crate under `plugins/umbra-auth/`. Structurally it's
+identical to anything you'd write yourself.
+
+## The Django → umbra mapping
+
+| Django | umbra |
+|---|---|
+| `django.apps.AppConfig` | `impl umbra::prelude::Plugin for MyPlugin` |
+| `INSTALLED_APPS = ['my_app']` | `App::builder().plugin(MyPlugin)` |
+| `my_app/models.py` | `pub struct ... ` with `#[derive(Model)]` |
+| `my_app/migrations/` | `plugins/my-app/migrations/<my-app>/` |
+| `my_app/urls.py` | `Plugin::routes()` returning an axum `Router` |
+| `apps.py` `ready()` | `Plugin::on_ready(&ctx)` |
+| `my_app/management/commands/` | `Plugin::commands()` (deferred — see the [Plugin trait page](/v0.0.1/plugins/the-plugin-trait)) |
+| `auth_user`, `auth_permission` (Django's auto-prefixed table names) | Up to you — `#[umbra(table = "...")]` overrides the snake-case default |
+
+## Where apps live
+
+The convention is `plugins/<name>/` at the repo root, as its own Cargo
+project. `plugins/umbra-auth/` is the live example. The pattern matches
+what every built-in plugin will look like (sessions, tasks, admin, REST),
+and what a third-party `cargo add umbra-blog` would look like — there's
+no special-casing between "built-in" and "third-party".
+
+A small project that doesn't yet need its own crate can register the
+`Plugin` impl right next to `main.rs`. Both shapes work; the crate split
+matters when you want the app to be reusable.
+
+## Why the rename
+
+"App" is a Django-specific word — it overloads "application" (the whole
+project) and creates a layer of confusion every Django newcomer asks
+about. "Plugin" is the broader, cross-ecosystem name for the same shape:
+a self-contained unit that extends a framework. The plugin contract spec
+(`docs/specs/02-plugin-contract.md`) makes the same argument from the
+architecture side: built-ins and third-parties have to be structurally
+identical, which "plugin" expresses more honestly than "app".
+
+The mental model is the same. The keyword is different.
+
+## Next
+
+- The trait surface in detail: [The Plugin trait](/v0.0.1/plugins/the-plugin-trait).
+- The canonical built-in plugin: [Users and passwords (umbra-auth)](/v0.0.1/auth/users-and-passwords).
+- The dependency-inversion rationale: `arch.md §3`.
