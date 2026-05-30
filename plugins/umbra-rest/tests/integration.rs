@@ -74,7 +74,12 @@ async fn boot() -> &'static axum::Router {
     .await
 }
 
-async fn json_request(router: axum::Router, method: &str, uri: &str, body: &str) -> (StatusCode, String) {
+async fn json_request(
+    router: axum::Router,
+    method: &str,
+    uri: &str,
+    body: &str,
+) -> (StatusCode, String) {
     let req = Request::builder()
         .method(method)
         .uri(uri)
@@ -83,7 +88,12 @@ async fn json_request(router: axum::Router, method: &str, uri: &str, body: &str)
         .unwrap();
     let resp = router.oneshot(req).await.expect("oneshot");
     let status = resp.status();
-    let bytes = resp.into_body().collect().await.expect("collect").to_bytes();
+    let bytes = resp
+        .into_body()
+        .collect()
+        .await
+        .expect("collect")
+        .to_bytes();
     (status, String::from_utf8_lossy(&bytes).into_owned())
 }
 
@@ -95,7 +105,12 @@ async fn get_request(router: axum::Router, uri: &str) -> (StatusCode, String) {
         .unwrap();
     let resp = router.oneshot(req).await.expect("oneshot");
     let status = resp.status();
-    let bytes = resp.into_body().collect().await.expect("collect").to_bytes();
+    let bytes = resp
+        .into_body()
+        .collect()
+        .await
+        .expect("collect")
+        .to_bytes();
     (status, String::from_utf8_lossy(&bytes).into_owned())
 }
 

@@ -179,14 +179,7 @@ impl umbra::web::IntoResponse for ApiError {
             ),
             ApiError::Json(e) => (StatusCode::BAD_REQUEST, "invalid_json", e.to_string()),
         };
-        (
-            status,
-            Json(ApiErrorBody {
-                error: msg,
-                code,
-            }),
-        )
-            .into_response()
+        (status, Json(ApiErrorBody { error: msg, code })).into_response()
     }
 }
 
@@ -513,7 +506,11 @@ type SqlxQuery<'q> = sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteAr
 /// HTML / JSON shapes differ from sqlx's native types (RFC-3339
 /// strings for timestamps, "true"/"1" for booleans coming through a
 /// stringly-typed body).
-fn bind_json_value<'q>(q: SqlxQuery<'q>, col: &Column, body: &Map<String, Value>) -> Result<SqlxQuery<'q>, ApiError> {
+fn bind_json_value<'q>(
+    q: SqlxQuery<'q>,
+    col: &Column,
+    body: &Map<String, Value>,
+) -> Result<SqlxQuery<'q>, ApiError> {
     let raw = body.get(&col.name).cloned().unwrap_or(Value::Null);
     Ok(match raw {
         Value::Null if col.nullable => bind_null(q, col),
@@ -524,20 +521,21 @@ fn bind_json_value<'q>(q: SqlxQuery<'q>, col: &Column, body: &Map<String, Value>
             )));
         }
         Value::Bool(b) if matches!(col.ty, SqlType::Boolean) => q.bind(b),
-        Value::Number(n) if matches!(col.ty, SqlType::SmallInt | SqlType::Integer) => q.bind(
-            n.as_i64()
-                .ok_or_else(|| {
-                    ApiError::BadInput(format!("field `{}` must be an integer", col.name))
-                })? as i32,
-        ),
-        Value::Number(n) if matches!(col.ty, SqlType::BigInt) => q.bind(
-            n.as_i64()
-                .ok_or_else(|| ApiError::BadInput(format!("field `{}` must be an integer", col.name)))?,
-        ),
-        Value::Number(n) if matches!(col.ty, SqlType::Real | SqlType::Double) => q.bind(
-            n.as_f64()
-                .ok_or_else(|| ApiError::BadInput(format!("field `{}` must be a number", col.name)))?,
-        ),
+        Value::Number(n) if matches!(col.ty, SqlType::SmallInt | SqlType::Integer) => {
+            q.bind(n.as_i64().ok_or_else(|| {
+                ApiError::BadInput(format!("field `{}` must be an integer", col.name))
+            })? as i32)
+        }
+        Value::Number(n) if matches!(col.ty, SqlType::BigInt) => {
+            q.bind(n.as_i64().ok_or_else(|| {
+                ApiError::BadInput(format!("field `{}` must be an integer", col.name))
+            })?)
+        }
+        Value::Number(n) if matches!(col.ty, SqlType::Real | SqlType::Double) => {
+            q.bind(n.as_f64().ok_or_else(|| {
+                ApiError::BadInput(format!("field `{}` must be a number", col.name))
+            })?)
+        }
         Value::String(s) => bind_string(q, col, &s)?,
         other => {
             return Err(ApiError::BadInput(format!(
@@ -582,8 +580,7 @@ fn bind_string<'q>(q: SqlxQuery<'q>, col: &Column, s: &str) -> Result<SqlxQuery<
             q.bind(parsed.with_timezone(&Utc))
         }
         SqlType::Uuid => q.bind(
-            Uuid::parse_str(s)
-                .map_err(|e| ApiError::BadInput(format!("{}: {e}", col.name)))?,
+            Uuid::parse_str(s).map_err(|e| ApiError::BadInput(format!("{}: {e}", col.name)))?,
         ),
     })
 }
