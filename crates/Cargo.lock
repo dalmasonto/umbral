@@ -2510,6 +2510,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "umbra-signals"
+version = "0.0.1"
+dependencies = [
+ "serde_json",
+ "tokio",
+ "umbra",
+]
+
+[[package]]
 name = "umbra-tasks"
 version = "0.0.1"
 dependencies = [
