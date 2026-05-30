@@ -14,6 +14,7 @@ members = [
     "../plugins/umbra-email",
     "../plugins/umbra-openapi",
     "../plugins/umbra-signals",
+    "../plugins/umbra-static",
 ]
 
 [workspace.package]
