@@ -1,0 +1,801 @@
+//! umbra-admin — auto-generated CRUD admin for umbra models.
+//!
+//! Drop-in admin interface for any umbra project. Register the
+//! [`AdminPlugin`] on `App::builder()` and every model the
+//! migration registry knows about gets:
+//!
+//! - A list view at `/admin/<table>/` with all rows in a table
+//! - A detail view at `/admin/<table>/<id>` with every field
+//! - A create form at `/admin/<table>/new`
+//! - An edit form at `/admin/<table>/<id>/edit`
+//! - A delete action at `POST /admin/<table>/<id>/delete`
+//!
+//! Plus a registered-models index at `/admin/`.
+//!
+//! ## Auth
+//!
+//! Every admin route requires HTTP Basic Auth against
+//! [`umbra_auth::authenticate`]. The user has to be `is_staff = 1`
+//! (matching Django's `auth_user.is_staff` gate). A 401 returns the
+//! browser's basic-auth prompt; a non-staff user gets 403.
+//!
+//! ## Templates
+//!
+//! Five `include_str!`-embedded Jinja templates live in
+//! `templates/`. The admin owns its own minijinja `Environment` so
+//! it can render without registering into the framework's
+//! `OnceLock`-protected global engine. `admin/base.html` is the
+//! shared chrome; the other four extend it.
+//!
+//! ## Form widgets
+//!
+//! Inputs dispatch per [`SqlType`]:
+//!
+//! | SqlType | Input |
+//! |---|---|
+//! | `SmallInt`, `Integer`, `BigInt` | `<input type="number">` |
+//! | `Real`, `Double` | `<input type="number" step="any">` |
+//! | `Boolean` | `<input type="checkbox">` |
+//! | `Text`, `Uuid` | `<input type="text">` |
+//! | `Date` | `<input type="date">` |
+//! | `Time` | `<input type="time">` |
+//! | `Timestamptz` | `<input type="datetime-local">` |
+//!
+//! Nullable fields skip the `required` attribute.
+
+use std::collections::HashMap;
+
+use base64::Engine;
+use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
+use minijinja::{Environment, context};
+use serde::Serialize;
+use sqlx::{Row, SqlitePool};
+use umbra::migrate::{Column, ModelMeta};
+use umbra::orm::SqlType;
+use umbra::prelude::*;
+use umbra::web::{
+    HeaderMap, Html, IntoResponse, Json, Path, Redirect, Response, StatusCode, header, post,
+};
+use uuid::Uuid;
+
+/// The plugin. Mounts every admin route under `/admin`.
+#[derive(Debug, Default)]
+pub struct AdminPlugin;
+
+impl Plugin for AdminPlugin {
+    fn name(&self) -> &'static str {
+        "admin"
+    }
+
+    fn dependencies(&self) -> &'static [&'static str] {
+        // Auth is required: the admin gates every route through
+        // umbra_auth::authenticate. App::build's topological sort
+        // ensures auth loads first.
+        &["auth"]
+    }
+
+    fn routes(&self) -> Router {
+        Router::new()
+            .route("/admin", get(index))
+            .route("/admin/", get(index))
+            .route("/admin/{table}/", get(list))
+            .route("/admin/{table}/new", get(new_form).post(create))
+            .route("/admin/{table}/{id}", get(detail))
+            .route("/admin/{table}/{id}/edit", get(edit_form).post(update))
+            .route("/admin/{table}/{id}/delete", post(delete))
+    }
+}
+
+// =========================================================================
+// Template environment. One Environment, built once at first use via
+// OnceLock + an init function that registers every include_str! source.
+// =========================================================================
+
+static ENGINE: std::sync::OnceLock<Environment<'static>> = std::sync::OnceLock::new();
+
+fn engine() -> &'static Environment<'static> {
+    ENGINE.get_or_init(|| {
+        let mut env = Environment::new();
+        env.set_auto_escape_callback(|_| minijinja::AutoEscape::Html);
+        env.add_template("admin/base.html", include_str!("../templates/base.html"))
+            .expect("admin/base.html parses");
+        env.add_template("admin/index.html", include_str!("../templates/index.html"))
+            .expect("admin/index.html parses");
+        env.add_template("admin/list.html", include_str!("../templates/list.html"))
+            .expect("admin/list.html parses");
+        env.add_template(
+            "admin/detail.html",
+            include_str!("../templates/detail.html"),
+        )
+        .expect("admin/detail.html parses");
+        env.add_template("admin/form.html", include_str!("../templates/form.html"))
+            .expect("admin/form.html parses");
+        env
+    })
+}
+
+fn render(name: &str, ctx: minijinja::Value) -> Result<Html<String>, AdminError> {
+    let tmpl = engine()
+        .get_template(name)
+        .map_err(|e| AdminError::Render(e.to_string()))?;
+    let body = tmpl
+        .render(ctx)
+        .map_err(|e| AdminError::Render(e.to_string()))?;
+    Ok(Html(body))
+}
+
+// =========================================================================
+// Auth gate. Every admin handler calls require_staff() before doing
+// any work. Returns either the authenticated user's name or an
+// IntoResponse that 401s with the WWW-Authenticate prompt.
+// =========================================================================
+
+async fn require_staff(headers: &HeaderMap) -> Result<String, Response> {
+    let creds = extract_basic_auth(headers).ok_or_else(challenge)?;
+    let user = umbra_auth::authenticate(&creds.username, &creds.password)
+        .await
+        .map_err(|_| challenge())?;
+    if !user.is_staff {
+        return Err((StatusCode::FORBIDDEN, "umbra-admin: not a staff user").into_response());
+    }
+    Ok(user.username)
+}
+
+fn challenge() -> Response {
+    let mut resp = (
+        StatusCode::UNAUTHORIZED,
+        "umbra-admin: authentication required",
+    )
+        .into_response();
+    resp.headers_mut().insert(
+        header::WWW_AUTHENTICATE,
+        "Basic realm=\"umbra admin\"".parse().unwrap(),
+    );
+    resp
+}
+
+struct BasicCreds {
+    username: String,
+    password: String,
+}
+
+fn extract_basic_auth(headers: &HeaderMap) -> Option<BasicCreds> {
+    let header = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
+    let encoded = header.strip_prefix("Basic ")?;
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .ok()?;
+    let decoded = String::from_utf8(decoded).ok()?;
+    let (username, password) = decoded.split_once(':')?;
+    Some(BasicCreds {
+        username: username.to_string(),
+        password: password.to_string(),
+    })
+}
+
+// =========================================================================
+// Errors. Mapped to Response via IntoResponse so every handler can use
+// `?` and get a sensible HTTP code.
+// =========================================================================
+
+#[derive(Debug)]
+enum AdminError {
+    NotFound(String),
+    Render(String),
+    Sqlx(sqlx::Error),
+    BadInput(String),
+}
+
+impl From<sqlx::Error> for AdminError {
+    fn from(e: sqlx::Error) -> Self {
+        Self::Sqlx(e)
+    }
+}
+
+impl IntoResponse for AdminError {
+    fn into_response(self) -> Response {
+        match self {
+            AdminError::NotFound(msg) => (StatusCode::NOT_FOUND, msg).into_response(),
+            AdminError::Render(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
+            AdminError::Sqlx(e) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
+            }
+            AdminError::BadInput(msg) => (StatusCode::BAD_REQUEST, msg).into_response(),
+        }
+    }
+}
+
+// =========================================================================
+// Model discovery. Walks the migration registry and filters out the
+// `umbra_migrations` tracking table and any internal SQLite tables.
+// =========================================================================
+
+#[derive(Debug, Clone, Serialize)]
+struct ModelEntry {
+    plugin: String,
+    name: String,
+    table: String,
+}
+
+fn discover_models() -> Vec<(String, ModelMeta)> {
+    let mut out: Vec<(String, ModelMeta)> = Vec::new();
+    for plugin in umbra::migrate::registered_plugins() {
+        for model in umbra::migrate::models_for_plugin(&plugin) {
+            out.push((plugin.clone(), model));
+        }
+    }
+    out
+}
+
+fn find_model(table: &str) -> Option<(String, ModelMeta)> {
+    discover_models()
+        .into_iter()
+        .find(|(_, m)| m.table == table)
+}
+
+fn pk_column(model: &ModelMeta) -> Option<&Column> {
+    model.fields.iter().find(|c| c.primary_key)
+}
+
+// =========================================================================
+// Handlers.
+// =========================================================================
+
+async fn index(headers: HeaderMap) -> Response {
+    let who = match require_staff(&headers).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let entries: Vec<ModelEntry> = discover_models()
+        .into_iter()
+        .map(|(plugin, m)| ModelEntry {
+            plugin,
+            name: m.name,
+            table: m.table,
+        })
+        .collect();
+    match render("admin/index.html", context!(user => who, models => entries)) {
+        Ok(html) => html.into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+async fn list(headers: HeaderMap, Path(table): Path<String>) -> Response {
+    let who = match require_staff(&headers).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let Some((_, model)) = find_model(&table) else {
+        return AdminError::NotFound(format!("no model with table `{table}`")).into_response();
+    };
+    let Some(pk) = pk_column(&model) else {
+        return AdminError::Render(format!("model `{table}` has no primary key")).into_response();
+    };
+    let pool = umbra::db::pool();
+    let rows = match fetch_rows(&pool, &model, None).await {
+        Ok(r) => r,
+        Err(e) => return e.into_response(),
+    };
+    match render(
+        "admin/list.html",
+        context!(user => who, model => model_for_template(&model), rows => rows, pk => pk.name.clone()),
+    ) {
+        Ok(html) => html.into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+async fn detail(headers: HeaderMap, Path((table, id)): Path<(String, String)>) -> Response {
+    let who = match require_staff(&headers).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let Some((_, model)) = find_model(&table) else {
+        return AdminError::NotFound(format!("no model with table `{table}`")).into_response();
+    };
+    let Some(pk) = pk_column(&model) else {
+        return AdminError::Render(format!("model `{table}` has no primary key")).into_response();
+    };
+    let pool = umbra::db::pool();
+    let rows = match fetch_rows(&pool, &model, Some((&pk.name, &id))).await {
+        Ok(r) => r,
+        Err(e) => return e.into_response(),
+    };
+    let Some(row) = rows.into_iter().next() else {
+        return AdminError::NotFound(format!("no row with {} = {}", pk.name, id)).into_response();
+    };
+    match render(
+        "admin/detail.html",
+        context!(user => who, model => model_for_template(&model), row => row, pk => pk.name.clone()),
+    ) {
+        Ok(html) => html.into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+async fn new_form(headers: HeaderMap, Path(table): Path<String>) -> Response {
+    let who = match require_staff(&headers).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let Some((_, model)) = find_model(&table) else {
+        return AdminError::NotFound(format!("no model with table `{table}`")).into_response();
+    };
+    let fields = form_fields_for(&model, None);
+    match render(
+        "admin/form.html",
+        context!(
+            user => who,
+            model => model_for_template(&model),
+            fields => fields,
+            verb => "Create",
+            action => format!("/admin/{}/new", model.table),
+            error => "",
+        ),
+    ) {
+        Ok(html) => html.into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+async fn create(headers: HeaderMap, Path(table): Path<String>, body: String) -> Response {
+    let who = match require_staff(&headers).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let Some((_, model)) = find_model(&table) else {
+        return AdminError::NotFound(format!("no model with table `{table}`")).into_response();
+    };
+    let form: HashMap<String, String> = match serde_urlencoded::from_str(&body) {
+        Ok(m) => m,
+        Err(e) => return AdminError::BadInput(e.to_string()).into_response(),
+    };
+    let pool = umbra::db::pool();
+    match insert_row(&pool, &model, &form).await {
+        Ok(_) => Redirect::to(&format!("/admin/{}/", model.table)).into_response(),
+        Err(e) => {
+            let fields = form_fields_for(&model, Some(&form));
+            match render(
+                "admin/form.html",
+                context!(
+                    user => who,
+                    model => model_for_template(&model),
+                    fields => fields,
+                    verb => "Create",
+                    action => format!("/admin/{}/new", model.table),
+                    error => format!("{e:?}"),
+                ),
+            ) {
+                Ok(html) => (StatusCode::BAD_REQUEST, html).into_response(),
+                Err(e2) => e2.into_response(),
+            }
+        }
+    }
+}
+
+async fn edit_form(headers: HeaderMap, Path((table, id)): Path<(String, String)>) -> Response {
+    let who = match require_staff(&headers).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let Some((_, model)) = find_model(&table) else {
+        return AdminError::NotFound(format!("no model with table `{table}`")).into_response();
+    };
+    let Some(pk) = pk_column(&model) else {
+        return AdminError::Render(format!("model `{table}` has no primary key")).into_response();
+    };
+    let pool = umbra::db::pool();
+    let rows = match fetch_rows(&pool, &model, Some((&pk.name, &id))).await {
+        Ok(r) => r,
+        Err(e) => return e.into_response(),
+    };
+    let Some(row) = rows.into_iter().next() else {
+        return AdminError::NotFound(format!("no row with {} = {}", pk.name, id)).into_response();
+    };
+    let row_strings: HashMap<String, String> =
+        row.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    let fields = form_fields_for(&model, Some(&row_strings));
+    match render(
+        "admin/form.html",
+        context!(
+            user => who,
+            model => model_for_template(&model),
+            fields => fields,
+            verb => "Edit",
+            action => format!("/admin/{}/{}/edit", model.table, id),
+            row => row,
+            pk => pk.name.clone(),
+            error => "",
+        ),
+    ) {
+        Ok(html) => html.into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+async fn update(
+    headers: HeaderMap,
+    Path((table, id)): Path<(String, String)>,
+    body: String,
+) -> Response {
+    let who = match require_staff(&headers).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let Some((_, model)) = find_model(&table) else {
+        return AdminError::NotFound(format!("no model with table `{table}`")).into_response();
+    };
+    let Some(pk) = pk_column(&model) else {
+        return AdminError::Render(format!("model `{table}` has no primary key")).into_response();
+    };
+    let form: HashMap<String, String> = match serde_urlencoded::from_str(&body) {
+        Ok(m) => m,
+        Err(e) => return AdminError::BadInput(e.to_string()).into_response(),
+    };
+    let pool = umbra::db::pool();
+    match update_row(&pool, &model, pk, &id, &form).await {
+        Ok(_) => Redirect::to(&format!("/admin/{}/{}", model.table, id)).into_response(),
+        Err(e) => {
+            let fields = form_fields_for(&model, Some(&form));
+            match render(
+                "admin/form.html",
+                context!(
+                    user => who,
+                    model => model_for_template(&model),
+                    fields => fields,
+                    verb => "Edit",
+                    action => format!("/admin/{}/{}/edit", model.table, id),
+                    error => format!("{e:?}"),
+                ),
+            ) {
+                Ok(html) => (StatusCode::BAD_REQUEST, html).into_response(),
+                Err(e2) => e2.into_response(),
+            }
+        }
+    }
+}
+
+async fn delete(headers: HeaderMap, Path((table, id)): Path<(String, String)>) -> Response {
+    if let Err(r) = require_staff(&headers).await {
+        return r;
+    }
+    let Some((_, model)) = find_model(&table) else {
+        return AdminError::NotFound(format!("no model with table `{table}`")).into_response();
+    };
+    let Some(pk) = pk_column(&model) else {
+        return AdminError::Render(format!("model `{table}` has no primary key")).into_response();
+    };
+    let pool = umbra::db::pool();
+    let sql = format!("DELETE FROM \"{}\" WHERE \"{}\" = ?", model.table, pk.name);
+    match sqlx::query(&sql).bind(&id).execute(&pool).await {
+        Ok(_) => Redirect::to(&format!("/admin/{}/", model.table)).into_response(),
+        Err(e) => AdminError::Sqlx(e).into_response(),
+    }
+}
+
+// =========================================================================
+// Row marshalling. Read rows out as `Vec<HashMap<String, String>>` for
+// the template; write rows back via per-column SqlType dispatch.
+// =========================================================================
+
+async fn fetch_rows(
+    pool: &SqlitePool,
+    model: &ModelMeta,
+    where_clause: Option<(&str, &str)>,
+) -> Result<Vec<HashMap<String, String>>, AdminError> {
+    let columns = model
+        .fields
+        .iter()
+        .map(|c| format!("\"{}\"", c.name))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = match where_clause {
+        Some((col, _)) => format!(
+            "SELECT {columns} FROM \"{}\" WHERE \"{}\" = ? LIMIT 1",
+            model.table, col
+        ),
+        None => format!(
+            "SELECT {columns} FROM \"{}\" ORDER BY 1 LIMIT 200",
+            model.table
+        ),
+    };
+    let mut q = sqlx::query(&sql);
+    if let Some((_, val)) = where_clause {
+        q = q.bind(val.to_string());
+    }
+    let rows = q.fetch_all(pool).await?;
+    let mut out: Vec<HashMap<String, String>> = Vec::with_capacity(rows.len());
+    for row in rows {
+        let mut entry: HashMap<String, String> = HashMap::new();
+        for col in &model.fields {
+            entry.insert(col.name.clone(), column_to_string(&row, col)?);
+        }
+        out.push(entry);
+    }
+    Ok(out)
+}
+
+fn column_to_string(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<String, AdminError> {
+    let name = col.name.as_str();
+    if col.nullable {
+        return Ok(match col.ty {
+            SqlType::SmallInt | SqlType::Integer => row
+                .try_get::<Option<i32>, _>(name)?
+                .map_or(String::new(), |v| v.to_string()),
+            SqlType::BigInt => row
+                .try_get::<Option<i64>, _>(name)?
+                .map_or(String::new(), |v| v.to_string()),
+            SqlType::Real => row
+                .try_get::<Option<f32>, _>(name)?
+                .map_or(String::new(), |v| v.to_string()),
+            SqlType::Double => row
+                .try_get::<Option<f64>, _>(name)?
+                .map_or(String::new(), |v| v.to_string()),
+            SqlType::Boolean => row
+                .try_get::<Option<bool>, _>(name)?
+                .map_or(String::new(), |v| {
+                    if v { "true" } else { "false" }.to_string()
+                }),
+            SqlType::Text => row.try_get::<Option<String>, _>(name)?.unwrap_or_default(),
+            SqlType::Date => row
+                .try_get::<Option<NaiveDate>, _>(name)?
+                .map_or(String::new(), |v| v.to_string()),
+            SqlType::Time => row
+                .try_get::<Option<NaiveTime>, _>(name)?
+                .map_or(String::new(), |v| v.to_string()),
+            SqlType::Timestamptz => row
+                .try_get::<Option<DateTime<Utc>>, _>(name)?
+                .map_or(String::new(), |v| v.to_rfc3339()),
+            SqlType::Uuid => row
+                .try_get::<Option<Uuid>, _>(name)?
+                .map_or(String::new(), |v| v.to_string()),
+        });
+    }
+    Ok(match col.ty {
+        SqlType::SmallInt | SqlType::Integer => row.try_get::<i32, _>(name)?.to_string(),
+        SqlType::BigInt => row.try_get::<i64, _>(name)?.to_string(),
+        SqlType::Real => row.try_get::<f32, _>(name)?.to_string(),
+        SqlType::Double => row.try_get::<f64, _>(name)?.to_string(),
+        SqlType::Boolean => if row.try_get::<bool, _>(name)? {
+            "true"
+        } else {
+            "false"
+        }
+        .to_string(),
+        SqlType::Text => row.try_get::<String, _>(name)?,
+        SqlType::Date => row.try_get::<NaiveDate, _>(name)?.to_string(),
+        SqlType::Time => row.try_get::<NaiveTime, _>(name)?.to_string(),
+        SqlType::Timestamptz => row.try_get::<DateTime<Utc>, _>(name)?.to_rfc3339(),
+        SqlType::Uuid => row.try_get::<Uuid, _>(name)?.to_string(),
+    })
+}
+
+async fn insert_row(
+    pool: &SqlitePool,
+    model: &ModelMeta,
+    form: &HashMap<String, String>,
+) -> Result<(), AdminError> {
+    // Skip the PK column if it's an integer (SQLite assigns via
+    // AUTOINCREMENT). For string/uuid PKs the form has to supply
+    // the value. The form might supply it for integers too; in
+    // that case let it through.
+    let writable: Vec<&Column> = model
+        .fields
+        .iter()
+        .filter(|c| {
+            !(c.primary_key
+                && matches!(c.ty, SqlType::Integer | SqlType::BigInt | SqlType::SmallInt)
+                && form.get(&c.name).is_none_or(|v| v.is_empty()))
+        })
+        .collect();
+    let names = writable
+        .iter()
+        .map(|c| format!("\"{}\"", c.name))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let placeholders = writable.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+    let sql = format!(
+        "INSERT INTO \"{}\" ({names}) VALUES ({placeholders})",
+        model.table
+    );
+    let mut q = sqlx::query(&sql);
+    for col in &writable {
+        q = bind_form_value(q, col, form)?;
+    }
+    q.execute(pool).await?;
+    Ok(())
+}
+
+async fn update_row(
+    pool: &SqlitePool,
+    model: &ModelMeta,
+    pk: &Column,
+    pk_value: &str,
+    form: &HashMap<String, String>,
+) -> Result<(), AdminError> {
+    let writable: Vec<&Column> = model.fields.iter().filter(|c| !c.primary_key).collect();
+    let setters = writable
+        .iter()
+        .map(|c| format!("\"{}\" = ?", c.name))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!(
+        "UPDATE \"{}\" SET {setters} WHERE \"{}\" = ?",
+        model.table, pk.name
+    );
+    let mut q = sqlx::query(&sql);
+    for col in &writable {
+        q = bind_form_value(q, col, form)?;
+    }
+    q = q.bind(pk_value.to_string());
+    q.execute(pool).await?;
+    Ok(())
+}
+
+fn bind_form_value<'q>(
+    q: sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>>,
+    col: &Column,
+    form: &HashMap<String, String>,
+) -> Result<sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>>, AdminError> {
+    let raw = form.get(&col.name).cloned().unwrap_or_default();
+    // Empty + nullable → NULL. Empty + boolean → false (HTML form
+    // omits the checkbox when unchecked). Empty + non-nullable
+    // non-boolean → reject.
+    if raw.is_empty() {
+        return Ok(match col.ty {
+            SqlType::Boolean => q.bind(false),
+            _ if col.nullable => bind_null(q, col),
+            _ => {
+                return Err(AdminError::BadInput(format!(
+                    "field `{}` is required",
+                    col.name
+                )));
+            }
+        });
+    }
+    Ok(match col.ty {
+        SqlType::SmallInt | SqlType::Integer => q.bind(
+            raw.parse::<i32>()
+                .map_err(|e| AdminError::BadInput(format!("{}: {e}", col.name)))?,
+        ),
+        SqlType::BigInt => q.bind(
+            raw.parse::<i64>()
+                .map_err(|e| AdminError::BadInput(format!("{}: {e}", col.name)))?,
+        ),
+        SqlType::Real => q.bind(
+            raw.parse::<f32>()
+                .map_err(|e| AdminError::BadInput(format!("{}: {e}", col.name)))?,
+        ),
+        SqlType::Double => q.bind(
+            raw.parse::<f64>()
+                .map_err(|e| AdminError::BadInput(format!("{}: {e}", col.name)))?,
+        ),
+        SqlType::Boolean => q.bind(matches!(raw.as_str(), "true" | "on" | "1")),
+        SqlType::Text => q.bind(raw),
+        SqlType::Date => q.bind(
+            raw.parse::<NaiveDate>()
+                .map_err(|e| AdminError::BadInput(format!("{}: {e}", col.name)))?,
+        ),
+        SqlType::Time => q.bind(
+            raw.parse::<NaiveTime>()
+                .map_err(|e| AdminError::BadInput(format!("{}: {e}", col.name)))?,
+        ),
+        SqlType::Timestamptz => {
+            // HTML's `datetime-local` emits `2026-05-30T17:00` with
+            // no timezone. Assume UTC.
+            let s = if raw.contains(':') && !raw.contains('+') && !raw.ends_with('Z') {
+                format!("{raw}:00Z")
+            } else {
+                raw.clone()
+            };
+            let parsed = DateTime::parse_from_rfc3339(&s)
+                .map_err(|e| AdminError::BadInput(format!("{}: {e}", col.name)))?;
+            q.bind(parsed.with_timezone(&Utc))
+        }
+        SqlType::Uuid => q.bind(
+            Uuid::parse_str(&raw)
+                .map_err(|e| AdminError::BadInput(format!("{}: {e}", col.name)))?,
+        ),
+    })
+}
+
+fn bind_null<'q>(
+    q: sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>>,
+    col: &Column,
+) -> sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>> {
+    match col.ty {
+        SqlType::SmallInt | SqlType::Integer => q.bind(None::<i32>),
+        SqlType::BigInt => q.bind(None::<i64>),
+        SqlType::Real => q.bind(None::<f32>),
+        SqlType::Double => q.bind(None::<f64>),
+        SqlType::Boolean => q.bind(None::<bool>),
+        SqlType::Text => q.bind(None::<String>),
+        SqlType::Date => q.bind(None::<NaiveDate>),
+        SqlType::Time => q.bind(None::<NaiveTime>),
+        SqlType::Timestamptz => q.bind(None::<DateTime<Utc>>),
+        SqlType::Uuid => q.bind(None::<Uuid>),
+    }
+}
+
+// =========================================================================
+// Template helpers.
+// =========================================================================
+
+#[derive(Debug, Clone, Serialize)]
+struct FormField {
+    name: String,
+    kind: &'static str,
+    value: String,
+    nullable: bool,
+    readonly: bool,
+}
+
+fn form_fields_for(model: &ModelMeta, prefill: Option<&HashMap<String, String>>) -> Vec<FormField> {
+    model
+        .fields
+        .iter()
+        .filter(|c| !c.primary_key) // PK isn't editable in the form
+        .map(|c| FormField {
+            name: c.name.clone(),
+            kind: input_kind(c.ty),
+            value: prefill
+                .and_then(|m| m.get(&c.name))
+                .cloned()
+                .unwrap_or_default(),
+            nullable: c.nullable,
+            readonly: false,
+        })
+        .collect()
+}
+
+fn input_kind(ty: SqlType) -> &'static str {
+    match ty {
+        SqlType::SmallInt
+        | SqlType::Integer
+        | SqlType::BigInt
+        | SqlType::Real
+        | SqlType::Double => "number",
+        SqlType::Boolean => "bool",
+        SqlType::Text | SqlType::Uuid => "text",
+        SqlType::Date => "date",
+        SqlType::Time => "time",
+        SqlType::Timestamptz => "datetime-local",
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ModelView {
+    name: String,
+    table: String,
+    fields: Vec<ColumnView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ColumnView {
+    name: String,
+    nullable: bool,
+    primary_key: bool,
+}
+
+fn model_for_template(model: &ModelMeta) -> ModelView {
+    ModelView {
+        name: model.name.clone(),
+        table: model.table.clone(),
+        fields: model
+            .fields
+            .iter()
+            .map(|c| ColumnView {
+                name: c.name.clone(),
+                nullable: c.nullable,
+                primary_key: c.primary_key,
+            })
+            .collect(),
+    }
+}
+
+// Quiet unused-import lints in case axum's `Json` isn't referenced
+// after a future refactor. Keeping the import line stable.
+#[allow(dead_code)]
+fn _unused_json_marker() -> Option<Json<()>> {
+    None
+}

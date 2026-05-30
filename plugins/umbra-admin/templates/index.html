@@ -1,0 +1,27 @@
+{% extends "admin/base.html" %}
+{% block title %}umbra admin{% endblock %}
+{% block content %}
+  <div class="panel">
+    <h2>Registered models</h2>
+    {% if models %}
+      <table>
+        <thead><tr><th>Plugin</th><th>Model</th><th>Table</th><th>Actions</th></tr></thead>
+        <tbody>
+        {% for m in models %}
+          <tr>
+            <td><code>{{ m.plugin }}</code></td>
+            <td>{{ m.name }}</td>
+            <td><code>{{ m.table }}</code></td>
+            <td class="actions">
+              <a class="btn" href="/admin/{{ m.table }}/">Browse</a>
+              <a class="btn btn-primary" href="/admin/{{ m.table }}/new">Add</a>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="empty">No models registered yet. Call <code>App::builder().model::&lt;T&gt;()</code> or register a plugin that contributes models.</p>
+    {% endif %}
+  </div>
+{% endblock %}

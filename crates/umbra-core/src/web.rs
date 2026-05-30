@@ -6,6 +6,6 @@
 
 pub use axum::Router;
 pub use axum::extract::{Form, Json, Path, Query};
-pub use axum::http::StatusCode;
-pub use axum::response::{Html, IntoResponse, Json as JsonResponse};
+pub use axum::http::{HeaderMap, StatusCode, header};
+pub use axum::response::{Html, IntoResponse, Json as JsonResponse, Redirect, Response};
 pub use axum::routing::{delete, get, head, options, patch, post, put};

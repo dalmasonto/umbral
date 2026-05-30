@@ -2233,6 +2233,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "umbra-admin"
+version = "0.0.1"
+dependencies = [
+ "axum",
+ "base64",
+ "chrono",
+ "http",
+ "http-body-util",
+ "minijinja",
+ "serde",
+ "serde_json",
+ "serde_urlencoded",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tower",
+ "umbra",
+ "umbra-auth",
+ "uuid",
+]
+
+[[package]]
 name = "umbra-auth"
 version = "0.0.1"
 dependencies = [

@@ -1,0 +1,39 @@
+{% extends "admin/base.html" %}
+{% block title %}{{ verb }} {{ model.name }} — umbra admin{% endblock %}
+{% block content %}
+  <div class="breadcrumb">
+    <a href="/admin">admin</a> / <a href="/admin/{{ model.table }}/">{{ model.name }}</a> / {{ verb }}
+  </div>
+  <div class="panel">
+    <h2>{{ verb }} {{ model.name }}{% if row %} #{{ row[pk] }}{% endif %}</h2>
+    {% if error %}<p style="color:#b8453d">{{ error }}</p>{% endif %}
+    <form method="post" action="{{ action }}">
+      {% for field in fields %}
+        <div class="field">
+          {% if field.kind == "bool" %}
+            <div class="checkbox-row">
+              <input type="checkbox" id="f_{{ field.name }}" name="{{ field.name }}" value="true"{% if field.value == "true" %} checked{% endif %}>
+              <label for="f_{{ field.name }}">{{ field.name }}{% if field.nullable %} <span class="meta">(nullable)</span>{% endif %}</label>
+            </div>
+          {% else %}
+            <label for="f_{{ field.name }}">
+              {{ field.name }}{% if field.nullable %} <span class="meta">(nullable)</span>{% endif %}
+            </label>
+            <input
+              type="{{ field.kind }}"
+              id="f_{{ field.name }}"
+              name="{{ field.name }}"
+              value="{{ field.value }}"
+              {% if not field.nullable and field.kind != "checkbox" %}required{% endif %}
+              {% if field.readonly %}readonly{% endif %}
+            >
+          {% endif %}
+        </div>
+      {% endfor %}
+      <div class="actions">
+        <button type="submit" class="btn btn-primary">Save</button>
+        <a class="btn" href="/admin/{{ model.table }}/">Cancel</a>
+      </div>
+    </form>
+  </div>
+{% endblock %}

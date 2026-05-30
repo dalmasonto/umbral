@@ -1,0 +1,34 @@
+{% extends "admin/base.html" %}
+{% block title %}{{ model.name }} — umbra admin{% endblock %}
+{% block content %}
+  <div class="breadcrumb"><a href="/admin">admin</a> / {{ model.name }}</div>
+  <div class="panel">
+    <h2 style="display:flex;align-items:center;justify-content:space-between">
+      <span>{{ model.name }} <span class="meta">({{ rows|length }} row{% if rows|length != 1 %}s{% endif %})</span></span>
+      <a class="btn btn-primary" href="/admin/{{ model.table }}/new">Add {{ model.name }}</a>
+    </h2>
+    {% if rows %}
+      <table>
+        <thead>
+          <tr>
+            {% for col in model.fields %}<th>{{ col.name }}</th>{% endfor %}
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for row in rows %}
+          <tr>
+            {% for col in model.fields %}<td>{{ row[col.name] }}</td>{% endfor %}
+            <td class="actions">
+              <a class="btn" href="/admin/{{ model.table }}/{{ row[pk] }}">View</a>
+              <a class="btn" href="/admin/{{ model.table }}/{{ row[pk] }}/edit">Edit</a>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="empty">No rows in <code>{{ model.table }}</code> yet.</p>
+    {% endif %}
+  </div>
+{% endblock %}

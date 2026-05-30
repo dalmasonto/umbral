@@ -7,6 +7,7 @@ members = [
     "umbra-cli",
     # `plugins/<name>/` is added explicitly as each built-in plugin lands (M9+).
     "../plugins/umbra-auth",
+    "../plugins/umbra-admin",
 ]
 
 [workspace.package]

@@ -1,0 +1,28 @@
+{% extends "admin/base.html" %}
+{% block title %}{{ model.name }} #{{ row[pk] }} — umbra admin{% endblock %}
+{% block content %}
+  <div class="breadcrumb">
+    <a href="/admin">admin</a> / <a href="/admin/{{ model.table }}/">{{ model.name }}</a> / #{{ row[pk] }}
+  </div>
+  <div class="panel">
+    <h2 style="display:flex;align-items:center;justify-content:space-between">
+      <span>{{ model.name }} <span class="meta">#{{ row[pk] }}</span></span>
+      <span class="actions">
+        <a class="btn" href="/admin/{{ model.table }}/{{ row[pk] }}/edit">Edit</a>
+        <form method="post" action="/admin/{{ model.table }}/{{ row[pk] }}/delete" style="display:inline" onsubmit="return confirm('Delete this row? This cannot be undone.')">
+          <button class="btn btn-danger" type="submit">Delete</button>
+        </form>
+      </span>
+    </h2>
+    <table>
+      <tbody>
+        {% for col in model.fields %}
+          <tr>
+            <th style="width:30%">{{ col.name }}</th>
+            <td>{{ row[col.name] }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% endblock %}

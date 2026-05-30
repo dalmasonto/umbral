@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>{% block title %}umbra admin{% endblock %}</title>
+  <style>
+    :root { --bg: #f7f8fa; --panel: #fff; --border: #e1e5ea; --ink: #1a1d23; --muted: #6b7380; --accent: #2a6e94; --danger: #b8453d; }
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, sans-serif; margin: 0; background: var(--bg); color: var(--ink); }
+    header { background: var(--ink); color: #fff; padding: 0.75rem 1.5rem; display: flex; align-items: center; gap: 1rem; }
+    header h1 { margin: 0; font-size: 1rem; font-weight: 500; }
+    header h1 a { color: #fff; text-decoration: none; }
+    header .who { margin-left: auto; color: #9ca3af; font-size: 0.85rem; }
+    main { max-width: 960px; margin: 1.5rem auto; padding: 0 1rem; }
+    .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 1.25rem 1.5rem; margin-bottom: 1.5rem; }
+    .panel h2 { margin-top: 0; font-size: 1.1rem; }
+    a { color: var(--accent); }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 0.5rem 0.6rem; border-bottom: 1px solid var(--border); text-align: left; font-size: 0.92rem; }
+    th { color: var(--muted); font-weight: 500; text-transform: uppercase; font-size: 0.75rem; letter-spacing: 0.05em; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: #f9fafb; }
+    .actions { display: flex; gap: 0.5rem; }
+    .btn { display: inline-block; padding: 0.4rem 0.75rem; border-radius: 4px; border: 1px solid var(--border); background: #fff; color: var(--ink); text-decoration: none; font-size: 0.85rem; cursor: pointer; font-family: inherit; }
+    .btn:hover { background: #f0f3f6; }
+    .btn-primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .btn-primary:hover { background: #235873; }
+    .btn-danger { color: var(--danger); border-color: var(--danger); }
+    .btn-danger:hover { background: var(--danger); color: #fff; }
+    form .field { margin-bottom: 1rem; }
+    form label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 0.25rem; }
+    form input[type=text], form input[type=number], form input[type=date], form input[type=time], form input[type=datetime-local] { width: 100%; padding: 0.5rem; border: 1px solid var(--border); border-radius: 4px; font-family: inherit; font-size: 0.95rem; }
+    form .checkbox-row { display: flex; align-items: center; gap: 0.5rem; }
+    form .checkbox-row label { margin-bottom: 0; }
+    .meta { color: var(--muted); font-size: 0.85rem; }
+    .empty { color: var(--muted); font-style: italic; padding: 2rem; text-align: center; }
+    .breadcrumb { color: var(--muted); font-size: 0.85rem; margin-bottom: 1rem; }
+    .breadcrumb a { color: var(--accent); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1><a href="/admin">umbra admin</a></h1>
+    {% if user %}<div class="who">Signed in as <strong>{{ user }}</strong></div>{% endif %}
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>
