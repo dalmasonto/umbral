@@ -143,6 +143,59 @@ cargo fmt                        # format
 `sqlx::query!` compile-time checks need either a live `DATABASE_URL` or a prepared `.sqlx`
 offline cache once the DB layer exists.
 
+## Documentation
+
+The repo has **two** kinds of documentation, and they serve different audiences:
+
+- **Internal design specs** — `arch.md`, `umbra-PRD.md`, `docs/specs/`,
+  `docs/specs/outlines/`. Audience: us (and future contributors). Format:
+  plain Markdown. Source of truth for *why* and *how* the framework is built.
+- **User-facing docs** — `documentation/` (a SvelteKit + Specra site, served
+  from `documentation/docs/v0.0.1/`). Audience: people using umbra to build
+  apps. Format: **MDX** (`.mdx`, not `.md`) using Specra components. Component
+  catalog: https://specra-docs.com/docs/v1.0.0/en/components/accordion.
+
+### Rule: ship a feature, ship its doc page
+
+When a feature lands (a model field type, a CLI command, a plugin capability,
+a middleware, an extractor — anything a user can write code against), add a
+minimal user-facing page in the *same* commit or PR. Basic info only —
+**not** a full reference:
+
+- **Purpose** — one paragraph, what it is and when you'd reach for it.
+- **One example** — the smallest piece of code that uses it.
+- **Link to the spec** — point at `arch.md` or the relevant `docs/specs/*.md`
+  for the design rationale.
+
+Reference-depth pages come later, once the surface stabilizes.
+
+### Where the page goes
+
+```
+documentation/docs/v0.0.1/<area>/<feature>.mdx
+```
+
+`<area>` is one of `orm`, `migrations`, `web`, `cli`, `plugins`, `auth`,
+`sessions`, `tasks`, `rest`, `admin`, `openapi` (create the folder + a
+`_category_.json` the first time you use a new area). Frontmatter is required:
+`title`, `description`, `sidebar_position`, and optionally `icon`,
+`tab_group`, `tags`.
+
+### MDX & Specra conventions
+
+- File extension is `.mdx`. Use Markdown for prose, Specra components for
+  structure (`<Callout>`, `<CardGrid>`/`<Card>`, `<Steps>`/`<Step>`,
+  `<Tabs>`/`<Tab>`, `<Accordion>`, `<Badge>`, fenced code blocks).
+- Don't import components — Specra makes them globally available.
+- A folder needs a `_category_.json` to control sidebar label, order, and
+  collapse behavior.
+
+### What NOT to add
+
+Don't translate internal specs into user-facing docs. The spec is the spec;
+the user page is the smallest useful slice for someone using the feature. If
+you find yourself rewriting `arch.md` in MDX, stop — link to it instead.
+
 ## Prior art worth studying
 
 **Cot** (Django-like; builds its own ORM on sea-query + axum — closest prior art), **Loco**
