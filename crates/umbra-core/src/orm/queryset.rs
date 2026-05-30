@@ -21,7 +21,7 @@ use std::marker::PhantomData;
 use sea_query::{Alias, Expr, Func, Order, Query, SqliteQueryBuilder};
 use sea_query_binder::SqlxBinder;
 
-use crate::orm::{OrderExpr, Post, Predicate};
+use crate::orm::{Model, OrderExpr, Post, Predicate};
 
 /// Entry point for queries on a model.
 ///

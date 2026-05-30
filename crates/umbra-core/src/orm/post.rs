@@ -29,15 +29,59 @@ pub struct Post {
 }
 
 impl Post {
-    /// The SQL table name. M2 will move this to a `Model::TABLE` const.
-    pub const TABLE: &'static str = "post";
-
     /// Entry point for queries: `Post::objects().filter(...).fetch().await`.
     ///
     /// Returns a `Manager<Post>` which in turn produces `QuerySet<Post>`s
     /// via its chainable methods. See `docs/specs/03-orm-querysets.md`.
     pub fn objects() -> crate::orm::Manager<Post> {
         crate::orm::Manager::new()
+    }
+}
+
+/// The hand-written `Model` impl. M3 will generate this exact impl from
+/// `#[derive(Model)]` on the struct above.
+///
+/// `Post::TABLE` and `Post::FIELDS` are reached via the trait (not as
+/// inherent consts); call sites use `<Post as Model>::TABLE` or just
+/// `Post::TABLE` when the trait is in scope.
+impl crate::orm::Model for Post {
+    type PrimaryKey = i64;
+
+    const TABLE: &'static str = "post";
+
+    const FIELDS: &'static [crate::orm::FieldSpec] = &[
+        crate::orm::FieldSpec {
+            name: "id",
+            ty: crate::orm::SqlType::BigInt,
+            primary_key: true,
+            nullable: false,
+            supported_backends: &[],
+        },
+        crate::orm::FieldSpec {
+            name: "title",
+            ty: crate::orm::SqlType::Text,
+            primary_key: false,
+            nullable: false,
+            supported_backends: &[],
+        },
+        crate::orm::FieldSpec {
+            name: "body",
+            ty: crate::orm::SqlType::Text,
+            primary_key: false,
+            nullable: false,
+            supported_backends: &[],
+        },
+        crate::orm::FieldSpec {
+            name: "published_at",
+            ty: crate::orm::SqlType::Timestamptz,
+            primary_key: false,
+            nullable: true,
+            supported_backends: &[],
+        },
+    ];
+
+    fn primary_key(&self) -> i64 {
+        self.id
     }
 }
 

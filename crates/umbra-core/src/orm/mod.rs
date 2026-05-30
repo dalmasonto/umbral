@@ -20,12 +20,14 @@
 //! crossing each other.
 
 pub mod column;
+pub mod model;
 pub mod post;
 pub mod queryset;
 
 use std::marker::PhantomData;
 use std::ops::{BitAnd, BitOr};
 
+pub use model::{FieldSpec, Model, PrimaryKey, SqlType};
 pub use post::Post;
 pub use queryset::{Manager, QuerySet};
 

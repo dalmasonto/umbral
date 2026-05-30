@@ -49,3 +49,16 @@ pub mod web {
 
     pub use umbra_core::web::*;
 }
+
+pub mod orm {
+    //! The ORM: model trait, querysets, and column types.
+    //!
+    //! At M2 the trait `Model` is implemented by hand on user types; M3
+    //! generates the same impl from `#[derive(Model)]`. The QuerySet is
+    //! generic over `T: Model`, so plugin authors and users get the full
+    //! query API by implementing one trait.
+
+    pub use umbra_core::orm::{
+        FieldSpec, Manager, Model, PrimaryKey, QuerySet, SqlType, column,
+    };
+}
