@@ -412,10 +412,11 @@ use umbra::prelude::*;
 /// derive's auto-derived table name (snake_case of the struct name)
 /// doesn't equal the SQL table name. For the typical Django shape
 /// (`blog_post` -> `BlogPost` -> derive computes `"blog_post"`), the
-/// attribute is redundant and is left off so the generated code
-/// compiles against the M3 derive (which does not yet recognise
-/// `#[umbra(...)]` attributes; see `umbra-macros/src/lib.rs` §M3
-/// constraints). The attribute lands as derive support grows.
+/// attribute is redundant and is left off. For unusual SQL casings
+/// (`POSTS` -> `Posts` -> derive computes `"posts"` not `"POSTS"`),
+/// the attribute is emitted and the M3.1 derive picks it up to
+/// override the default. See `umbra-macros/src/lib.rs` for the
+/// attribute parser.
 fn render_one_struct(table: &IntrospectedTable) -> String {
     let mut out = String::new();
     out.push_str("#[derive(Debug, Clone, Model)]\n");

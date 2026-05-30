@@ -431,3 +431,32 @@ async fn uuid_primary_key_roundtrips_through_sqlx() {
     assert_eq!(row.label, "greetings");
     let _: uuid::Uuid = row.primary_key();
 }
+
+// --------------------------------------------------------------------- //
+// M3.1 — `#[umbra(table = "...")]` overrides the default snake_case-of- //
+// struct-name table name. Plugin authors hit this when they want a     //
+// prefix the snake_case round-trip can't produce (e.g. struct `User`   //
+// with table `auth_user`, or the inspectdb edge case where an existing //
+// SQL table uses non-conventional casing).                             //
+// --------------------------------------------------------------------- //
+
+#[derive(Debug, sqlx::FromRow, umbra::orm::Model)]
+#[umbra(table = "auth_user_override")]
+struct UserWithCustomTable {
+    id: i64,
+    username: String,
+}
+
+#[test]
+fn umbra_table_attribute_overrides_the_default_table_name() {
+    assert_eq!(
+        UserWithCustomTable::TABLE,
+        "auth_user_override",
+        "the #[umbra(table = \"...\")] attribute should override the default snake_case",
+    );
+    // The default would have been `user_with_custom_table`; the
+    // override wins.
+    assert_ne!(UserWithCustomTable::TABLE, "user_with_custom_table");
+    // The Model::NAME stays the Rust struct name regardless.
+    assert_eq!(UserWithCustomTable::NAME, "UserWithCustomTable");
+}

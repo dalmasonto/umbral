@@ -102,14 +102,52 @@ use syn::{
 ///   unsigned ints, `f32` / `f64`, `bool`, `String`, `chrono::NaiveDate`,
 ///   `chrono::NaiveTime`, `chrono::DateTime<chrono::Utc>`, `uuid::Uuid`,
 ///   plus the `Option<T>` of each.
-/// - No `#[umbra(...)]` attributes yet. Foreign derive attributes
+/// - One struct-level `#[umbra(table = "...")]` attribute is
+///   accepted at M3.1, used to override the default snake_case-of-
+///   struct-name table name. Other attributes (per-field
+///   `max_length`, `db_index`, `default`, `choices`, `on_delete`)
+///   land as plugin authors need each. Foreign derive attributes
 ///   (`#[serde(...)]`, `#[sqlx(...)]`, …) are ignored.
-#[proc_macro_derive(Model)]
+#[proc_macro_derive(Model, attributes(umbra))]
 pub fn derive_model(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     expand_model(input)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
+}
+
+/// Parse the struct-level `#[umbra(...)]` attribute. M3.1 ships
+/// exactly one key: `table = "..."` to override the snake_case-of-
+/// struct-name default for the SQL table name. More keys land as
+/// plugin authors need them (per-field `max_length`, `db_index`,
+/// `default`, `choices`, `on_delete` — all deferred until a real
+/// plugin needs each).
+struct UmbraStructAttr {
+    table: Option<String>,
+}
+
+fn parse_umbra_struct_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraStructAttr> {
+    let mut parsed = UmbraStructAttr { table: None };
+    for attr in attrs {
+        if !attr.path().is_ident("umbra") {
+            continue;
+        }
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("table") {
+                let value = meta.value()?;
+                let lit: syn::LitStr = value.parse()?;
+                parsed.table = Some(lit.value());
+                Ok(())
+            } else {
+                Err(meta.error(
+                    "umbra::Model derive only accepts `table = \"...\"` at M3.1; \
+                     other attributes (max_length, db_index, default, choices, on_delete) \
+                     land as plugin authors need them",
+                ))
+            }
+        })?;
+    }
+    Ok(parsed)
 }
 
 /// Top-level expansion: parse the input, validate the shape, emit the
@@ -172,8 +210,20 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
     // bare `Uuid`) round-trip unchanged through the emitted tokens.
     let pk_ty_tokens = &id_field.ty;
 
-    let table_name = to_snake_case(&struct_name.to_string());
-    let module_name = format_ident!("{}", table_name);
+    // The default table name is snake_case of the struct name; a
+    // struct-level `#[umbra(table = "...")]` overrides it. Plugin
+    // authors hit the override path when they want a prefix the
+    // snake_case round-trip can't produce (e.g. struct `User` with
+    // table `auth_user`).
+    let struct_attr = parse_umbra_struct_attr(&input.attrs)?;
+    let table_name = struct_attr
+        .table
+        .unwrap_or_else(|| to_snake_case(&struct_name.to_string()));
+    // The sibling column module's identifier is always snake_case of
+    // the struct name (the user-facing path is `<snake_struct>::FIELD`).
+    // Leaving it untouched keeps existing user code working when a
+    // table-name override lands.
+    let module_name = format_ident!("{}", to_snake_case(&struct_name.to_string()));
 
     // Field-spec entries for the trait's FIELDS const, and column-const
     // declarations for the sibling module. Built side by side so the
