@@ -313,6 +313,16 @@ impl AppBuilder {
             router = router.merge(plugin.routes());
         }
 
+        // Phase 5.5 — apply each plugin's middleware in topological
+        // order. Later plugins wrap earlier ones, so a security
+        // plugin declared after the auth plugin sees the auth-
+        // augmented router and can add its own layer on top. This
+        // is the M7 deferral being lifted now that umbra-security
+        // needs it.
+        for plugin in &sorted_plugins {
+            router = plugin.wrap_router(router);
+        }
+
         // Phase 6 — fire each plugin's `on_ready` in topological order.
         // Runs after the system check passes and after the router is
         // built, so a plugin can rely on ambient state being live and on

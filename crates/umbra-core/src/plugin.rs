@@ -116,6 +116,25 @@ pub trait Plugin: Send + Sync + 'static {
         None
     }
 
+    /// Wrap the app router with the plugin's middleware layers.
+    ///
+    /// Called once per plugin during `App::build`'s phase 5, in
+    /// topological dependency order. The plugin receives the router
+    /// after its routes have already been merged in, applies any
+    /// `.layer(...)` calls it needs (tower layers, axum's middleware
+    /// fn helpers, etc.), and returns the wrapped router.
+    ///
+    /// Returning the router shape (instead of a `Vec<Layer>` like
+    /// the spec sketched) sidesteps the trait-object lifetime
+    /// problem Layer's generics produce. Plugins keep full access
+    /// to the axum / tower API at the call site.
+    ///
+    /// Default: return the router unchanged. A pure-data plugin
+    /// (models only) inherits this and never touches the router.
+    fn wrap_router(&self, router: Router) -> Router {
+        router
+    }
+
     /// Wire signals, start background work, seal admin registrations.
     /// Called after phase 4 (system checks) passes, in topological
     /// dependency order. Sync, on purpose; spawn async work via
