@@ -1,0 +1,26 @@
+[package]
+name = "umbra-auth"
+description = "Authentication plugin for umbra: User model, argon2 password hashing, login helpers."
+# The umbra workspace lives at crates/Cargo.toml (the repo root deliberately
+# has no Cargo.toml so the tree can also hold docs + example apps). Plugins
+# live at `plugins/<name>/`, which is a sibling of `crates/`, so cargo's
+# upward walk can't find the workspace on its own — point at it explicitly.
+workspace = "../../crates"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# The umbra facade. Plugin crates depend on the facade only, never on
+# umbra-core internals.
+umbra = { path = "../../crates/umbra", version = "0.0.1" }
+argon2 = { version = "0.5", features = ["std"] }
+chrono = { version = "0.4", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "chrono"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }
