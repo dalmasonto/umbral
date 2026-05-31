@@ -15,15 +15,30 @@
 //! M2 lifted the terminals and the `Manager` delegation onto a generic
 //! `T: Model` bound. The table name comes from `T::TABLE`, the SELECT
 //! column list from `T::FIELDS`, and row materialisation from the
-//! `for<'r> FromRow<'r, SqliteRow>` supertrait on `Model`. M3 will
-//! generate the `Model` impl for any user struct via `#[derive(Model)]`,
-//! at which point `Manager<MyModel>` works without any per-model code.
+//! `FromRow` bound the terminals carry. M3 generates the `Model` impl
+//! from `#[derive(Model)]`.
+//!
+//! ## Phase 2.5 — backend-agnostic terminals
+//!
+//! Through Phase 2 the QuerySet stored a `SqlitePool` and built every
+//! query with sea-query's `SqliteQueryBuilder`. Phase 2.5 widens that:
+//! the explicit-pool slot is `Option<DbPool>`, `.on(&SqlitePool)` keeps
+//! working unchanged, and a new `.on_pg(&PgPool)` registers a Postgres
+//! pool. The terminal methods dispatch on the resolved pool variant —
+//! SQLite path uses `SqliteQueryBuilder` + a `SqlitePool` executor;
+//! Postgres path uses `PostgresQueryBuilder` + a `PgPool` executor.
+//!
+//! The row-materialization bound on each terminal is the conjunction
+//! of both backends' `FromRow` impls. `#[derive(sqlx::FromRow)]` emits
+//! a generic-over-`R` impl, so a user struct with standard field
+//! types satisfies both bounds without any per-backend ceremony.
 
 use std::marker::PhantomData;
 
-use sea_query::{Alias, Expr, Func, Order, Query, SqliteQueryBuilder};
+use sea_query::{Alias, Expr, Func, Order, PostgresQueryBuilder, Query, SqliteQueryBuilder};
 use sea_query_binder::SqlxBinder;
 
+use crate::db::DbPool;
 use crate::orm::{Model, OrderExpr, Predicate};
 
 /// Entry point for queries on a model.
@@ -56,7 +71,7 @@ impl<T> Default for Manager<T> {
 /// Cloning is cheap (the `SelectStatement` clones in O(query size)).
 pub struct QuerySet<T> {
     pub(crate) query: sea_query::SelectStatement,
-    pub(crate) explicit_pool: Option<sqlx::SqlitePool>,
+    pub(crate) explicit_pool: Option<DbPool>,
     _phantom: PhantomData<T>,
 }
 
@@ -106,39 +121,51 @@ impl<T> QuerySet<T> {
         self
     }
 
-    /// Override the pool resolved at terminal time.
+    /// Override the pool resolved at terminal time with a SQLite pool.
     ///
-    /// Wins over the ambient `umbra::db::pool()` default. Used by tests
-    /// that drive the ORM without going through `App::build()`.
+    /// Wins over the ambient default. Used by tests that drive the ORM
+    /// without going through `App::build()`. For a Postgres override
+    /// use [`Self::on_pg`].
     pub fn on(mut self, pool: &sqlx::SqlitePool) -> Self {
-        self.explicit_pool = Some(pool.clone());
+        self.explicit_pool = Some(DbPool::Sqlite(pool.clone()));
+        self
+    }
+
+    /// Override the pool resolved at terminal time with a Postgres pool.
+    ///
+    /// The Postgres counterpart of [`Self::on`]. Tests that want to
+    /// exercise the Postgres branch (or that drive against a real
+    /// Postgres instance) reach for this directly.
+    pub fn on_pg(mut self, pool: &sqlx::PgPool) -> Self {
+        self.explicit_pool = Some(DbPool::Postgres(pool.clone()));
         self
     }
 }
 
 /// Resolve the pool to run a terminal against.
 ///
-/// Precedence: explicit `.on(&pool)` override wins; then the per-
-/// model database alias the Plugin contract published via
-/// `Plugin::database()` (FEATURES.md #6); then the `"default"`
-/// pool. Tests that skip the App builder pass `.on(&pool)`
-/// directly and bypass the alias lookup entirely.
-fn resolve_pool<T: Model>(explicit: Option<sqlx::SqlitePool>) -> sqlx::SqlitePool {
+/// Precedence: explicit `.on(&pool)` / `.on_pg(&pool)` override wins;
+/// then the per-model database alias the Plugin contract published
+/// via `Plugin::database()` (FEATURES.md #6); then the `"default"`
+/// pool. Tests that skip the App builder pass an explicit pool and
+/// bypass the alias lookup entirely.
+fn resolve_pool<T: Model>(explicit: Option<DbPool>) -> DbPool {
     if let Some(pool) = explicit {
         return pool;
     }
     if let Some(alias) = crate::migrate::model_alias(T::NAME) {
-        return crate::db::pool_for(&alias);
+        return crate::db::pool_for_dispatched(&alias).clone();
     }
-    crate::db::pool()
+    crate::db::pool_dispatched().clone()
 }
 
 /// Terminal methods for every `QuerySet<T>` where `T: Model`.
 ///
-/// `sqlx::query_as_with::<_, T, _>` works for any `T: Model` because the
-/// `Model` trait carries `for<'r> FromRow<'r, SqliteRow>` as a
-/// supertrait, so the row mapping is available without naming a
-/// concrete type here.
+/// Each terminal that materializes `T` carries a FromRow bound on the
+/// method (not the impl block) — the conjunction of both backends'
+/// FromRow impls. `#[derive(sqlx::FromRow)]` emits a generic-over-`R`
+/// impl, so any user struct with standard field types satisfies both
+/// bounds automatically.
 impl<T: Model> QuerySet<T> {
     /// Render the SQL the QuerySet would execute, without running it.
     ///
@@ -150,28 +177,66 @@ impl<T: Model> QuerySet<T> {
     /// The bound values are intentionally not surfaced (sqlx's binder
     /// types aren't part of umbra's public surface); a `(sql, values)`
     /// accessor lands when EXPLAIN-style integration needs it.
+    ///
+    /// The rendered placeholder dialect is SQLite's (`?`). When the
+    /// dispatched pool is Postgres the actual at-execute rendering
+    /// uses `$1`-style placeholders; the `to_sql` debug surface
+    /// continues to emit SQLite-style for stability across calls
+    /// regardless of which pool is registered.
     pub fn to_sql(&self) -> String {
         let (sql, _values) = self.query.build_sqlx(SqliteQueryBuilder);
         sql
     }
 
     /// Run the SELECT and return every matching row.
-    pub async fn fetch(self) -> Result<Vec<T>, sqlx::Error> {
-        let pool = resolve_pool::<T>(self.explicit_pool);
-        let (sql, values) = self.query.build_sqlx(SqliteQueryBuilder);
-        sqlx::query_as_with::<_, T, _>(&sql, values)
-            .fetch_all(&pool)
-            .await
+    pub async fn fetch(self) -> Result<Vec<T>, sqlx::Error>
+    where
+        T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
+            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
+    {
+        // The turbofish on `query_as_with::<DB, _, _>` is load-bearing:
+        // with both `sqlx-sqlite` and `sqlx-postgres` features on
+        // sea-query-binder, `SqlxValues` implements `IntoArguments` for
+        // both backends, so the compiler can't infer DB from the values
+        // alone. Naming DB explicitly pins which `FromRow` bound is
+        // checked.
+        match resolve_pool::<T>(self.explicit_pool) {
+            DbPool::Sqlite(pool) => {
+                let (sql, values) = self.query.build_sqlx(SqliteQueryBuilder);
+                sqlx::query_as_with::<sqlx::Sqlite, T, _>(&sql, values)
+                    .fetch_all(&pool)
+                    .await
+            }
+            DbPool::Postgres(pool) => {
+                let (sql, values) = self.query.build_sqlx(PostgresQueryBuilder);
+                sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
+                    .fetch_all(&pool)
+                    .await
+            }
+        }
     }
 
     /// Run the SELECT with LIMIT 1 and return the first row, if any.
-    pub async fn first(mut self) -> Result<Option<T>, sqlx::Error> {
+    pub async fn first(mut self) -> Result<Option<T>, sqlx::Error>
+    where
+        T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
+            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
+    {
         self.query.limit(1);
-        let pool = resolve_pool::<T>(self.explicit_pool);
-        let (sql, values) = self.query.build_sqlx(SqliteQueryBuilder);
-        sqlx::query_as_with::<_, T, _>(&sql, values)
-            .fetch_optional(&pool)
-            .await
+        match resolve_pool::<T>(self.explicit_pool) {
+            DbPool::Sqlite(pool) => {
+                let (sql, values) = self.query.build_sqlx(SqliteQueryBuilder);
+                sqlx::query_as_with::<sqlx::Sqlite, T, _>(&sql, values)
+                    .fetch_optional(&pool)
+                    .await
+            }
+            DbPool::Postgres(pool) => {
+                let (sql, values) = self.query.build_sqlx(PostgresQueryBuilder);
+                sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
+                    .fetch_optional(&pool)
+                    .await
+            }
+        }
     }
 
     /// Run `SELECT COUNT(*)` against the same FROM + WHERE.
@@ -179,10 +244,10 @@ impl<T: Model> QuerySet<T> {
     /// Reshapes the query rather than wrapping the existing SELECT: the
     /// projection becomes `COUNT(*)` and LIMIT/OFFSET drop away. ORDER
     /// BY is harmless on a scalar aggregate and is left in place. The
-    /// `query_as_with` row type stays `(i64,)` because the result is an
-    /// aggregate scalar, not a row of `T`.
+    /// row type is `(i64,)` so the FromRow constraint comes from sqlx's
+    /// tuple impl rather than the user struct — count() doesn't need
+    /// T's FromRow bounds.
     pub async fn count(self) -> Result<i64, sqlx::Error> {
-        let pool = resolve_pool::<T>(self.explicit_pool.clone());
         // Swap the projection for COUNT(*) and drop LIMIT / OFFSET, leaving
         // the FROM, WHERE, JOINs and GROUP BY intact. ORDER BY is harmless
         // on a scalar aggregate so it stays in place.
@@ -191,11 +256,23 @@ impl<T: Model> QuerySet<T> {
         rebuilt.expr(Func::count(Expr::col(Alias::new("*"))));
         rebuilt.reset_limit();
         rebuilt.reset_offset();
-        let (sql, values) = rebuilt.build_sqlx(SqliteQueryBuilder);
-        let (n,): (i64,) = sqlx::query_as_with::<_, (i64,), _>(&sql, values)
-            .fetch_one(&pool)
-            .await?;
-        Ok(n)
+
+        match resolve_pool::<T>(self.explicit_pool) {
+            DbPool::Sqlite(pool) => {
+                let (sql, values) = rebuilt.build_sqlx(SqliteQueryBuilder);
+                let (n,): (i64,) = sqlx::query_as_with::<sqlx::Sqlite, (i64,), _>(&sql, values)
+                    .fetch_one(&pool)
+                    .await?;
+                Ok(n)
+            }
+            DbPool::Postgres(pool) => {
+                let (sql, values) = rebuilt.build_sqlx(PostgresQueryBuilder);
+                let (n,): (i64,) = sqlx::query_as_with::<sqlx::Postgres, (i64,), _>(&sql, values)
+                    .fetch_one(&pool)
+                    .await?;
+                Ok(n)
+            }
+        }
     }
 
     /// Return whether any row matches.
@@ -203,7 +280,11 @@ impl<T: Model> QuerySet<T> {
     /// M1 keeps the simple form: add LIMIT 1, fetch, check non-empty.
     /// A later milestone may swap the projection for `SELECT 1` to
     /// skip column materialisation.
-    pub async fn exists(self) -> Result<bool, sqlx::Error> {
+    pub async fn exists(self) -> Result<bool, sqlx::Error>
+    where
+        T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
+            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
+    {
         let rows = self.limit(1).fetch().await?;
         Ok(!rows.is_empty())
     }
@@ -250,13 +331,26 @@ impl<T: Model> Manager<T> {
         self.queryset().on(pool)
     }
 
+    /// See `QuerySet::on_pg`.
+    pub fn on_pg(&self, pool: &sqlx::PgPool) -> QuerySet<T> {
+        self.queryset().on_pg(pool)
+    }
+
     /// See `QuerySet::fetch`.
-    pub async fn fetch(&self) -> Result<Vec<T>, sqlx::Error> {
+    pub async fn fetch(&self) -> Result<Vec<T>, sqlx::Error>
+    where
+        T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
+            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
+    {
         self.queryset().fetch().await
     }
 
     /// See `QuerySet::first`.
-    pub async fn first(&self) -> Result<Option<T>, sqlx::Error> {
+    pub async fn first(&self) -> Result<Option<T>, sqlx::Error>
+    where
+        T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
+            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
+    {
         self.queryset().first().await
     }
 
@@ -266,7 +360,11 @@ impl<T: Model> Manager<T> {
     }
 
     /// See `QuerySet::exists`.
-    pub async fn exists(&self) -> Result<bool, sqlx::Error> {
+    pub async fn exists(&self) -> Result<bool, sqlx::Error>
+    where
+        T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
+            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
+    {
         self.queryset().exists().await
     }
 }

@@ -15,7 +15,7 @@ clap = { version = "4", features = ["derive", "string"] }
 async-trait = "0.1"
 figment = { version = "0.10", features = ["env", "toml"] }
 sea-query = "0.32"
-sea-query-binder = { version = "0.7", features = ["sqlx-sqlite", "with-chrono", "with-uuid"] }
+sea-query-binder = { version = "0.7", features = ["sqlx-sqlite", "sqlx-postgres", "with-chrono", "with-uuid"] }
 serde = { version = "1", features = ["derive"] }
 # JSON serde for migration files (Snapshot + MigrationFile) and snapshot
 # hashing input.

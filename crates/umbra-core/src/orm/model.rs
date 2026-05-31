@@ -8,11 +8,14 @@
 //! narrow at M2 — primary-key type, table name, field metadata, and
 //! that's it.
 //!
-//! `Model` carries `for<'r> sqlx::FromRow<'r, SqliteRow>` as a supertrait
-//! so the QuerySet terminals can blanket `T: Model` and `sqlx::
-//! query_as_with::<_, T, _>` without ceremony. The M3 derive emits both
-//! `impl Model for T` and `#[derive(sqlx::FromRow)] for T` so users
-//! never have to think about the supertrait directly.
+//! Through Phase 2 of the Postgres rollout `Model` carried
+//! `for<'r> sqlx::FromRow<'r, SqliteRow>` as a supertrait so the
+//! QuerySet terminals could blanket on `T: Model`. Phase 2.5 drops
+//! that supertrait: the user struct still uses `#[derive(sqlx::FromRow)]`
+//! (which emits a generic `impl<'r, R: Row> FromRow<'r, R>` covering
+//! both SQLite and Postgres rows), and the QuerySet terminals carry
+//! the FromRow bound on the method, not the trait — so the same
+//! `Manager<T>` works on either backend.
 //!
 //! See `docs/specs/04-orm-model-and-fields.md` for the target shape and
 //! the M2→M3→M4→M5 progression.
@@ -22,9 +25,13 @@
 /// Read at runtime to build queries (`T::TABLE`, `T::FIELDS`), at boot
 /// to validate field/backend compatibility (M4), and at migration time
 /// to diff against the last snapshot (M5).
-pub trait Model:
-    Sized + Send + Sync + Unpin + 'static + for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
-{
+///
+/// `Model` is metadata-only — it carries no row-materialization bound.
+/// QuerySet terminals add `for<'r> FromRow<'r, R>` for the row type
+/// they need at the call site (sqlite or postgres). User structs pick
+/// up both impls via a single `#[derive(sqlx::FromRow)]` because
+/// sqlx's derive emits a generic-over-`R` impl.
+pub trait Model: Sized + Send + Sync + Unpin + 'static {
     /// The primary-key type. M2 supports `i64` only; UUID lands later.
     type PrimaryKey: PrimaryKey;
 
