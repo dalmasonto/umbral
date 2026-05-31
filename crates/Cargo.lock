@@ -2526,9 +2526,11 @@ version = "0.0.1"
 dependencies = [
  "clap",
  "sqlx",
+ "tempfile",
  "tokio",
  "tracing-subscriber",
  "umbra",
+ "umbra-core",
 ]
 
 [[package]]

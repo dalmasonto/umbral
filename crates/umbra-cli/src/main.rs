@@ -1,369 +1,102 @@
-//! The `manage.py` equivalent binary for umbra.
+//! The `umbra` global scaffolding binary.
 //!
-//! M0 was scaffold-only. M1/M2 used the binary as a live demonstration
-//! that the ORM worked end-to-end through the facade (CREATE TABLE +
-//! seed, then a `GET /posts` route that ran `Post::objects().fetch()`
-//! against the ambient pool). M5 grows the binary into the real
-//! `manage.py` shape: clap-driven subcommand dispatch with `serve`
-//! (the default) alongside the migration trio `makemigrations`,
-//! `migrate`, and `showmigrations`.
+//! `cargo install umbra-cli` installs this as `umbra` on the user's
+//! PATH. It handles **scaffolding** commands that don't need an App:
 //!
-//! Every subcommand boots through the same `App::builder()` so the
-//! ambient pool and the model registry get published before the
-//! command runs. The non-serve subcommands skip the listener bind and
-//! the demo seed; they only need the pool + registry, both of which
-//! `App::build()` publishes synchronously.
+//! - `umbra startproject <name>` — create a new umbra project
+//!   directory with `Cargo.toml`, `src/main.rs`, `umbra.toml`,
+//!   templates, and a default `404` / `500` page.
+//! - `umbra startapp <name>` — create a new plugin crate at
+//!   `plugins/<name>/` with a `{Name}Plugin` skeleton.
 //!
-//! Later milestones add `worker`, `inspectdb`, a configurable bind
-//! address, and signal-based graceful shutdown.
-//!
-//! ## Plugin-contributed subcommands
-//!
-//! `Plugin::commands()` is the seam for plugin-contributed CLI
-//! verbs (e.g. `umbra-tasks` ships `tasks-worker`). The framework's
-//! demo binary deliberately doesn't wire those in (it registers no
-//! plugins of its own, and double-booting the App across the
-//! built-in commands and a plugin-dispatch prelude is awkward).
-//! A downstream user's binary looks like:
-//!
-//! ```ignore
-//! #[tokio::main]
-//! async fn main() {
-//!     let app = umbra::App::builder()
-//!         .plugin(umbra_tasks::TasksPlugin)
-//!         .database("default", pool)
-//!         .build()
-//!         .unwrap();
-//!     match umbra::cli::dispatch(app.plugins(), std::env::args_os()).await {
-//!         Ok(umbra::cli::DispatchOutcome::Matched(_)) => return,
-//!         Ok(umbra::cli::DispatchOutcome::Help(text)) => { print!("{text}"); return; }
-//!         _ => { /* fall through to framework built-ins or a clap parse */ }
-//!     }
-//! }
-//! ```
-//!
-//! See `docs/specs/06-migration-engine.md`, `docs/specs/07-inspectdb.md`,
-//! and the `Plugin::commands()` docs in `umbra-core::plugin`.
+//! For every **management** command (`serve`, `migrate`,
+//! `makemigrations`, `inspectdb`, etc.), users run them inside their
+//! project via `cargo run -- <command>` — the project's own binary
+//! hosts those via [`umbra_cli::dispatch`]. This binary points users
+//! at that pattern instead of trying to manage their database
+//! without their model registry.
 
-use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use umbra::inspect::{InspectError, InspectOptions};
-use umbra::migrate::MigrateError;
-use umbra::orm::{Post, post};
-use umbra::prelude::*;
-use umbra::web::{Json, Router, StatusCode};
 
-/// Top-level CLI surface. `command` is optional so a bare `umbra-cli`
-/// invocation keeps booting the server (the M0/M1 default), matching
-/// Django's `manage.py runserver` not being the implicit default but
-/// the framework's current convention until M9 adds richer commands.
 #[derive(Debug, Parser)]
 #[command(
-    name = "umbra-cli",
-    about = "The manage.py equivalent for umbra.",
+    name = "umbra",
+    about = "umbra project scaffolding. `cargo install umbra-cli` puts this on your PATH.",
     disable_help_subcommand = true
 )]
 struct Cli {
     #[command(subcommand)]
-    command: Option<Command>,
+    command: Command,
 }
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Boot the HTTP server on `settings.bind_addr` (default
-    /// 127.0.0.1:8000; override with UMBRA_BIND_ADDR or umbra.toml).
-    /// The default subcommand when none is given.
-    Serve,
-    /// Diff the registered models against the latest snapshot and
-    /// write a new migration file under `migrations/app/`.
-    Makemigrations,
-    /// Apply every pending migration file against the ambient pool.
-    Migrate,
-    /// List applied vs pending migrations.
-    Showmigrations,
-    /// Introspect the database, generate a `models.rs` plus an initial
-    /// migration, and optionally mark it applied. See
-    /// `docs/specs/07-inspectdb.md`.
-    Inspectdb {
-        /// Directory the generated files are written under. `models.rs`
-        /// lands at the root; the migration lands at
-        /// `<output>/migrations/app/0001_initial.json`.
-        #[arg(long)]
-        output: PathBuf,
-        /// Record `0001_initial` in `umbra_migrations` after writing it,
-        /// so the next `migrate` is a no-op against an already-populated
-        /// database.
-        #[arg(long, default_value_t = false)]
-        mark_applied: bool,
+    /// Create a new umbra project in `./<name>/`.
+    ///
+    /// Scaffolds Cargo.toml, src/main.rs (with `umbra_cli::dispatch`
+    /// wired), umbra.toml, a templates/ dir with base / 404 / 500
+    /// pages, and a .gitignore.
+    Startproject {
+        /// Project name. Used as both the Cargo package name and the
+        /// directory name. ASCII alphanumeric, underscore, hyphen.
+        name: String,
+        /// Parent directory. Defaults to the current directory.
+        #[arg(long, default_value = ".")]
+        path: PathBuf,
     },
-    /// Dump every registered model's rows to JSON. The upgrade-safety
-    /// net: snapshot data before a breaking schema change, load it
-    /// back into the new schema afterwards.
-    Dumpdata {
-        /// Where the JSON envelope is written.
-        #[arg(long)]
-        output: PathBuf,
-    },
-    /// Load a `dumpdata` JSON envelope back into the database. The
-    /// schema must already exist; run `migrate` first.
-    Loaddata {
-        /// Path to the JSON envelope.
-        input: PathBuf,
+    /// Create a new plugin (app) crate in `<project>/plugins/<name>/`.
+    ///
+    /// Run this from inside a project. The generated plugin lives at
+    /// `plugins/<name>/` and exports a `{Name}Plugin` struct. Wire
+    /// it into your App by editing `src/main.rs` per the printed
+    /// instructions.
+    Startapp {
+        /// Plugin name. ASCII alphanumeric, underscore, hyphen.
+        name: String,
+        /// Project root. Defaults to the current directory.
+        #[arg(long, default_value = ".")]
+        path: PathBuf,
     },
 }
 
-#[tokio::main]
-async fn main() {
-    // `App::serve` logs the bound address through `tracing::info!`. Without a
-    // subscriber that line is dropped and the operator gets no feedback that
-    // the server is actually up. `EnvFilter` honours `RUST_LOG` so the
-    // default verbosity can be tuned without rebuilding.
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
-
+fn main() -> ExitCode {
     let cli = Cli::parse();
-    let result = match cli.command.unwrap_or(Command::Serve) {
-        Command::Serve => serve().await,
-        Command::Makemigrations => makemigrations().await,
-        Command::Migrate => migrate().await,
-        Command::Showmigrations => showmigrations().await,
-        Command::Inspectdb {
-            output,
-            mark_applied,
-        } => inspectdb(output, mark_applied).await,
-        Command::Dumpdata { output } => dumpdata(output).await,
-        Command::Loaddata { input } => loaddata(input).await,
+    let result = match cli.command {
+        Command::Startproject { name, path } => umbra_cli::scaffold::scaffold_project(&name, &path)
+            .map(|r| {
+                println!("Created `{}`:", r.root.display());
+                for f in &r.files {
+                    println!("  {}", f.display());
+                }
+                println!();
+                println!("Next steps:");
+                for step in &r.next_steps {
+                    println!("  {step}");
+                }
+            }),
+        Command::Startapp { name, path } => {
+            umbra_cli::scaffold::scaffold_app(&name, &path).map(|r| {
+                println!("Created `{}`:", r.root.display());
+                for f in &r.files {
+                    println!("  {}", f.display());
+                }
+                println!();
+                println!("Next steps:");
+                for step in &r.next_steps {
+                    println!("  {step}");
+                }
+            })
+        }
     };
-    // Catch the error explicitly so the user-facing diagnostic uses
-    // the `Display` impl (`umbra inspectdb: column \`x.y\` has
-    // unsupported SQL type \`BLOB\`; ...`) rather than the `Debug`
-    // dump (`UnsupportedColumnType { table: "x", ... }`) Rust would
-    // otherwise print from `fn main() -> Result<_, E>`.
-    if let Err(err) = result {
-        eprintln!("error: {err}");
-        std::process::exit(1);
-    }
-}
 
-/// Boot the App and run the HTTP server. The default subcommand.
-async fn serve() -> Result<(), Box<dyn std::error::Error>> {
-    let settings = load_settings()?;
-
-    // For the demo we override sqlite::memory: with a file-backed URL so
-    // every pool connection sees the same database. sqlx's pool can open
-    // multiple connections; with bare ":memory:" each connection is its
-    // own isolated database, and the seed rows installed on one connection
-    // would be invisible to handlers running on a different one. A file
-    // is the simplest fix. Users override with UMBRA_DATABASE_URL for
-    // anything serious.
-    let database_url = if settings.database_url == "sqlite::memory:" {
-        "sqlite://umbra-cli-demo.db?mode=rwc".to_string()
-    } else {
-        settings.database_url.clone()
-    };
-    // The demo path explicitly opens a SQLite-typed pool. `umbra::db::connect`
-    // returns a `DbPool` enum (Phase 1 of Postgres support), but the demo
-    // seed below uses sqlite-specific SQL (INSERT OR IGNORE), so we stay on
-    // the sqlite path here. A real user binary opening Postgres would
-    // call `umbra::db::connect` and pass the resulting DbPool through.
-    let pool = umbra::db::connect_sqlite(&database_url).await?;
-
-    // Demo seed. CREATE TABLE IF NOT EXISTS + INSERT OR IGNORE so re-runs
-    // are idempotent. The M5 migrate path supersedes this for users who
-    // declare the model and migrate; the seed sticks around so `serve`
-    // is self-contained without a separate migrate step.
-    init_post_table(&pool).await?;
-    seed_post_rows(&pool).await?;
-
-    // The bind address comes from `settings.bind_addr` (default
-    // 127.0.0.1:8000; override with UMBRA_BIND_ADDR or `umbra.toml`).
-    // `App::serve` takes `impl Into<SocketAddr>`, which is implemented
-    // for tuples and `SocketAddr` itself but not for `&str`, so we
-    // parse the string here and let parse errors propagate.
-    let addr: SocketAddr = settings
-        .bind_addr
-        .parse()
-        .map_err(|e| format!("umbra-cli: invalid bind_addr `{}`: {e}", settings.bind_addr))?;
-
-    let app = App::builder()
-        .settings(settings)
-        .database("default", pool)
-        .model::<Post>()
-        .router(
-            Router::new()
-                .route("/", get(|| async { "umbra-cli server (M0 scaffold)" }))
-                .route("/healthz", get(|| async { "ok" }))
-                .route("/posts", get(list_posts)),
-        )
-        .build()?;
-
-    app.serve(addr).await?;
-    Ok(())
-}
-
-/// `makemigrations`: diff the registry against the latest snapshot
-/// for every registered plugin and write one migration file per plugin
-/// that has changes. Prints one `Wrote <path>` line per written file,
-/// or `no changes detected` on the `NoChanges` sentinel.
-async fn makemigrations() -> Result<(), Box<dyn std::error::Error>> {
-    boot_for_management().await?;
-    match umbra::migrate::make().await {
-        Ok(paths) => {
-            for path in paths {
-                println!("Wrote {}", path.display());
-            }
-            Ok(())
-        }
-        Err(MigrateError::NoChanges) => {
-            println!("no changes detected");
-            Ok(())
-        }
-        Err(err) => Err(Box::new(err)),
-    }
-}
-
-/// `migrate`: apply every pending migration against the ambient pool.
-async fn migrate() -> Result<(), Box<dyn std::error::Error>> {
-    boot_for_management().await?;
-    let n = umbra::migrate::run().await?;
-    if n == 0 {
-        println!("No pending migrations");
-    } else {
-        println!("Applied {n} migration(s)");
-    }
-    Ok(())
-}
-
-/// `showmigrations`: print per-migration applied/pending state.
-async fn showmigrations() -> Result<(), Box<dyn std::error::Error>> {
-    boot_for_management().await?;
-    umbra::migrate::show().await?;
-    Ok(())
-}
-
-/// `inspectdb`: introspect the ambient SQLite pool into a `models.rs`
-/// and an initial migration under `--output`. On the empty-DB sentinel
-/// (`InspectError::NoTables`) the binary prints a short note and exits
-/// successfully; any other error propagates.
-async fn inspectdb(output: PathBuf, mark_applied: bool) -> Result<(), Box<dyn std::error::Error>> {
-    boot_for_management().await?;
-    let opts = InspectOptions {
-        output,
-        mark_applied,
-    };
-    match umbra::inspect::inspectdb(opts).await {
-        Ok(report) => {
-            println!(
-                "Inspected {} table(s), {} column(s)",
-                report.tables, report.columns,
-            );
-            println!("Wrote {}", report.models_path.display());
-            println!("Wrote {}", report.migration_path.display());
-            Ok(())
-        }
-        Err(InspectError::NoTables) => {
-            println!("no tables found in the database");
-            Ok(())
-        }
-        Err(err) => Err(Box::new(err)),
-    }
-}
-
-/// `dumpdata`: snapshot every registered model's rows to JSON.
-async fn dumpdata(output: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
-    boot_for_management().await?;
-    umbra::backup::dump_to_path(&output).await?;
-    println!("Wrote {}", output.display());
-    Ok(())
-}
-
-/// `loaddata`: replay a `dumpdata` JSON envelope into the schema.
-async fn loaddata(input: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
-    boot_for_management().await?;
-    let report = umbra::backup::load_from_path(&input).await?;
-    println!(
-        "Loaded {} row(s) into {} table(s)",
-        report.rows_loaded,
-        report.tables_loaded.len()
-    );
-    for skipped in &report.skipped_tables {
-        eprintln!("warning: skipped table `{skipped}` (not in current schema)");
-    }
-    Ok(())
-}
-
-/// Shared boot path for the migration subcommands. Opens the pool,
-/// builds the App so the ambient pool and the model registry get
-/// published, and discards the resulting `App` value (no listener
-/// bind). The published `OnceLock`s are what `umbra::migrate::*`
-/// needs.
-async fn boot_for_management() -> Result<(), Box<dyn std::error::Error>> {
-    let settings = load_settings()?;
-    let pool = umbra::db::connect(&settings.database_url).await?;
-    let _app = App::builder()
-        .settings(settings)
-        .database("default", pool)
-        .model::<Post>()
-        .router(Router::new())
-        .build()?;
-    Ok(())
-}
-
-fn load_settings() -> Result<Settings, Box<dyn std::error::Error>> {
-    match Settings::from_env() {
-        Ok(s) => Ok(s),
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
-            eprintln!("umbra-cli: failed to load settings: {err}");
-            std::process::exit(1);
+            eprintln!("error: {err}");
+            ExitCode::FAILURE
         }
     }
-}
-
-/// The Django-shape handler. Notice what isn't here: no pool parameter,
-/// no `.on(&pool)` on the QuerySet, no `State<DbPool>` extractor. The
-/// `Post::objects()` Manager picks up the ambient pool the
-/// `App::build()` installed in `umbra::db`'s `OnceLock`, and the
-/// terminal `.fetch().await` runs against it.
-///
-/// This is the cross-cutting rule from `arch.md §2.2`: process-scoped
-/// context (the DB pool) is ambient; request-scoped context (Request,
-/// Session, body, params) is an explicit handler argument.
-async fn list_posts() -> Result<Json<Vec<Post>>, (StatusCode, String)> {
-    let posts = Post::objects()
-        .order_by(post::ID.asc())
-        .fetch()
-        .await
-        .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
-    Ok(Json(posts))
-}
-
-async fn init_post_table(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS post (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT NOT NULL,
-            body TEXT NOT NULL,
-            published_at TEXT
-        )",
-    )
-    .execute(pool)
-    .await?;
-    Ok(())
-}
-
-async fn seed_post_rows(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "INSERT OR IGNORE INTO post (id, title, body, published_at) VALUES \
-         (1, 'Hello from umbra', 'first demo post', '2026-05-30T12:00:00Z'), \
-         (2, 'Ambient pool demo', 'no .on(&pool) needed in handlers', '2026-05-30T13:00:00Z')",
-    )
-    .execute(pool)
-    .await?;
-    Ok(())
 }
