@@ -384,6 +384,12 @@ fn column_to_json(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<Value, 
             SqlType::Uuid => row
                 .try_get::<Option<Uuid>, _>(name)?
                 .map_or(Value::Null, |v| Value::from(v.to_string())),
+            // Json columns serialize as themselves — the on-the-wire
+            // JSON the REST endpoint emits already nests the document
+            // structure verbatim. No string-wrapping.
+            SqlType::Json => row
+                .try_get::<Option<Value>, _>(name)?
+                .unwrap_or(Value::Null),
         });
     }
     Ok(match col.ty {
@@ -397,6 +403,7 @@ fn column_to_json(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<Value, 
         SqlType::Time => Value::from(row.try_get::<NaiveTime, _>(name)?.to_string()),
         SqlType::Timestamptz => Value::from(row.try_get::<DateTime<Utc>, _>(name)?.to_rfc3339()),
         SqlType::Uuid => Value::from(row.try_get::<Uuid, _>(name)?.to_string()),
+        SqlType::Json => row.try_get::<Value, _>(name)?,
     })
 }
 
@@ -582,6 +589,17 @@ fn bind_string<'q>(q: SqlxQuery<'q>, col: &Column, s: &str) -> Result<SqlxQuery<
         SqlType::Uuid => q.bind(
             Uuid::parse_str(s).map_err(|e| ApiError::BadInput(format!("{}: {e}", col.name)))?,
         ),
+        // The string came from a JSON request body's text-typed value
+        // (admin form or query string). Parse it back to a structured
+        // serde_json::Value so the binder stores it as JSONB / JSON
+        // rather than as an opaque string. A client that wants to send
+        // a JSON object directly should put it in the body as JSON, not
+        // wrapped in a string — the JSON-body path (column_to_json's
+        // inverse) handles that case.
+        SqlType::Json => q.bind(
+            serde_json::from_str::<Value>(s)
+                .map_err(|e| ApiError::BadInput(format!("{}: {e}", col.name)))?,
+        ),
     })
 }
 
@@ -597,5 +615,6 @@ fn bind_null<'q>(q: SqlxQuery<'q>, col: &Column) -> SqlxQuery<'q> {
         SqlType::Time => q.bind(None::<NaiveTime>),
         SqlType::Timestamptz => q.bind(None::<DateTime<Utc>>),
         SqlType::Uuid => q.bind(None::<Uuid>),
+        SqlType::Json => q.bind(None::<Value>),
     }
 }

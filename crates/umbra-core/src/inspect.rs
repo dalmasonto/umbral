@@ -415,6 +415,13 @@ fn map_postgres_type(raw: &str) -> Option<SqlType> {
         // type for either.
         "timestamp without time zone" | "timestamp with time zone" => Some(SqlType::Timestamptz),
         "uuid" => Some(SqlType::Uuid),
+        // Both `json` and `jsonb` round-trip to umbra's portable Json
+        // variant. The DDL renderer chose `jsonb` on the way out; if a
+        // pre-existing database stores values as `json` (the unindexed
+        // text variant), inspectdb still recognises it on the way in.
+        // A re-migrate would normalize to `jsonb` if the user re-creates
+        // the column, which matches the M5 declare-and-migrate loop.
+        "json" | "jsonb" => Some(SqlType::Json),
         _ => None,
     }
 }
@@ -491,6 +498,13 @@ fn map_sqlite_type(raw: &str) -> Option<SqlType> {
         "time" => Some(SqlType::Time),
         "timestamp" | "timestamptz" | "datetime" => Some(SqlType::Timestamptz),
         "uuid" => Some(SqlType::Uuid),
+        // SQLite doesn't have a native JSON column type, but a user
+        // declaring `CREATE TABLE t (data JSON)` parses the type-name
+        // verbatim into `sqlite_master` and `PRAGMA table_info`. Treat
+        // that as a hint that the column holds JSON content and route
+        // it through `SqlType::Json` (which lowers to TEXT on SQLite
+        // anyway).
+        "json" | "jsonb" => Some(SqlType::Json),
         _ => None,
     }
 }
@@ -637,6 +651,7 @@ fn render_field_type(ty: SqlType, nullable: bool) -> String {
         SqlType::Time => "chrono::NaiveTime",
         SqlType::Timestamptz => "chrono::DateTime<chrono::Utc>",
         SqlType::Uuid => "uuid::Uuid",
+        SqlType::Json => "serde_json::Value",
     };
     if nullable {
         format!("Option<{base}>")
@@ -948,19 +963,26 @@ mod tests {
             Some(SqlType::Timestamptz),
         );
         assert_eq!(map_postgres_type("uuid"), Some(SqlType::Uuid));
+        // Phase 4: both `json` and `jsonb` round-trip to the portable
+        // `SqlType::Json` (DDL renders as `jsonb` on Postgres, TEXT on
+        // SQLite).
+        assert_eq!(map_postgres_type("json"), Some(SqlType::Json));
+        assert_eq!(map_postgres_type("jsonb"), Some(SqlType::Json));
     }
 
     /// Postgres-specific types umbra doesn't model yet surface as
     /// `None` so the caller produces `UnsupportedColumnType` with the
-    /// raw type string preserved. Spec'd out the catalogue lookups
-    /// most likely to bite a Django port: numeric, jsonb, bytea,
-    /// arrays. The user fixes by hand or waits for the catalogue to
-    /// grow.
+    /// raw type string preserved. The catalogue lookups most likely to
+    /// bite a Django port: numeric, bytea, arrays, network types. The
+    /// user fixes by hand or waits for the catalogue to grow.
+    ///
+    /// Note `json`/`jsonb` are NOT on this list — Phase 4's `Json`
+    /// SqlType variant maps both back to `SqlType::Json`. The companion
+    /// arm in `map_postgres_type` is covered by
+    /// `map_postgres_type_covers_the_full_catalogue` above.
     #[test]
     fn map_postgres_type_returns_none_for_postgres_only_types() {
         assert_eq!(map_postgres_type("numeric"), None);
-        assert_eq!(map_postgres_type("jsonb"), None);
-        assert_eq!(map_postgres_type("json"), None);
         assert_eq!(map_postgres_type("bytea"), None);
         assert_eq!(map_postgres_type("ARRAY"), None);
         assert_eq!(map_postgres_type("inet"), None);

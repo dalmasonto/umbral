@@ -370,6 +370,11 @@ enum FieldKind {
     NullableTime,
     NullableDateTime,
     NullableUuid,
+    /// `serde_json::Value` — a JSON document. Backed by Postgres
+    /// JSONB or SQLite TEXT depending on the active backend; the
+    /// derive doesn't care which.
+    Json,
+    NullableJson,
     /// Catch-all: not a recognised M3 catalogue type, or one of the
     /// explicitly-rejected wide / unsigned ints. Carries the exact
     /// diagnostic to emit at the field's span.
@@ -416,6 +421,7 @@ impl FieldKind {
                 quote!(::umbra::orm::SqlType::Timestamptz)
             }
             FieldKind::Uuid | FieldKind::NullableUuid => quote!(::umbra::orm::SqlType::Uuid),
+            FieldKind::Json | FieldKind::NullableJson => quote!(::umbra::orm::SqlType::Json),
             FieldKind::Unsupported(_) => return None,
         };
         let nullable = if self.is_nullable() {
@@ -440,6 +446,7 @@ impl FieldKind {
                 | FieldKind::NullableTime
                 | FieldKind::NullableDateTime
                 | FieldKind::NullableUuid
+                | FieldKind::NullableJson
         )
     }
 
@@ -510,6 +517,12 @@ fn classify_field_type(ty: &Type) -> FieldKind {
     if type_is_ident(ty, "Uuid") {
         return FieldKind::Uuid;
     }
+    // `serde_json::Value` (the catalogue type for the Json variant).
+    // Match by leaf ident so both bare `Value` (the local re-export) and
+    // qualified `serde_json::Value` lower to `FieldKind::Json`.
+    if is_serde_json_value(ty) {
+        return FieldKind::Json;
+    }
     if is_wide_or_unsigned_int(ty) {
         return FieldKind::Unsupported(UnsupportedReason::WideOrUnsignedInt);
     }
@@ -548,6 +561,9 @@ fn classify_field_type(ty: &Type) -> FieldKind {
         if type_is_ident(inner, "Uuid") {
             return FieldKind::NullableUuid;
         }
+        if is_serde_json_value(inner) {
+            return FieldKind::NullableJson;
+        }
         if is_wide_or_unsigned_int(inner) {
             return FieldKind::Unsupported(UnsupportedReason::NullableOfWide);
         }
@@ -555,6 +571,35 @@ fn classify_field_type(ty: &Type) -> FieldKind {
     }
 
     FieldKind::Unsupported(UnsupportedReason::NotInCatalogue)
+}
+
+/// True when `ty` is `serde_json::Value` (regardless of the path
+/// prefix). The Phase 4 Json field type opts in via this type — bare
+/// `Value` is too ambiguous to pick up automatically, so the leaf
+/// segment has to be `Value` AND the segment before it (if any) has
+/// to be `serde_json` or `json`. Conservatively false on a bare
+/// `Value` ident with no qualifier; users opt in by writing
+/// `serde_json::Value` in the struct definition.
+fn is_serde_json_value(ty: &Type) -> bool {
+    let Type::Path(TypePath { qself: None, path }) = ty else {
+        return false;
+    };
+    let segments: Vec<&syn::PathSegment> = path.segments.iter().collect();
+    let Some(last) = segments.last() else {
+        return false;
+    };
+    if last.ident != "Value" || !matches!(last.arguments, PathArguments::None) {
+        return false;
+    }
+    // Require a path qualifier so the user wrote `serde_json::Value`
+    // or `::serde_json::Value`. A bare `Value` is ambiguous (it could
+    // be `bytes::Value`, `prost::Value`, etc.) and we don't want to
+    // silently misclassify those.
+    if segments.len() < 2 {
+        return false;
+    }
+    let prev = segments[segments.len() - 2];
+    prev.ident == "serde_json"
 }
 
 /// True for the int widths explicitly off the M3 catalogue: `i128`,
@@ -677,6 +722,8 @@ fn column_const_for(
         FieldKind::NullableTime => format_ident!("NullableTimeCol"),
         FieldKind::NullableDateTime => format_ident!("NullableDateTimeCol"),
         FieldKind::NullableUuid => format_ident!("NullableUuidCol"),
+        FieldKind::Json => format_ident!("JsonCol"),
+        FieldKind::NullableJson => format_ident!("NullableJsonCol"),
         FieldKind::Unsupported(_) => return TokenStream2::new(),
     };
     quote_spanned! { span =>

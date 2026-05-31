@@ -1144,3 +1144,79 @@ impl<T> NullableTimeCol<T> {
         OrderExpr::new(self.name, true)
     }
 }
+
+// =========================================================================
+// Json columns (`serde_json::Value`).
+//
+// The first iteration of Phase 4. JSON value comparison is semantically
+// non-trivial across backends — Postgres has `=` for jsonb (deep
+// equality with key-order normalization), SQLite as TEXT compares
+// strings literally and so depends on how the value was serialized.
+// To avoid shipping a half-thought comparison story, the first
+// iteration covers only `IS NULL` / `IS NOT NULL` predicates plus the
+// usual ordering ops. Equality / containment / path-access operators
+// land as a follow-on once the cross-backend semantics are pinned.
+// =========================================================================
+
+/// A `serde_json::Value`-typed column.
+pub struct JsonCol<T> {
+    pub(crate) name: &'static str,
+    _phantom: PhantomData<T>,
+}
+
+impl<T> JsonCol<T> {
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            _phantom: PhantomData,
+        }
+    }
+
+    /// SQL `ORDER BY ... ASC`. Ordering on JSON values is well-defined
+    /// per-backend (Postgres has a total order on jsonb; SQLite orders
+    /// the underlying TEXT). Use sparingly — JSON ordering is rarely
+    /// what the user means.
+    pub fn asc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, false)
+    }
+
+    /// SQL `ORDER BY ... DESC`.
+    pub fn desc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, true)
+    }
+}
+
+/// A nullable `serde_json::Value`-typed column.
+pub struct NullableJsonCol<T> {
+    pub(crate) name: &'static str,
+    _phantom: PhantomData<T>,
+}
+
+impl<T> NullableJsonCol<T> {
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            _phantom: PhantomData,
+        }
+    }
+
+    /// SQL `IS NULL`.
+    pub fn is_null(&self) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).is_null())
+    }
+
+    /// SQL `IS NOT NULL`.
+    pub fn is_not_null(&self) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).is_not_null())
+    }
+
+    /// SQL `ORDER BY ... ASC`.
+    pub fn asc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, false)
+    }
+
+    /// SQL `ORDER BY ... DESC`.
+    pub fn desc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, true)
+    }
+}

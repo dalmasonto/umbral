@@ -145,6 +145,12 @@ impl DatabaseBackend for PostgresBackend {
             SqlType::Time => ColumnType::Time,
             SqlType::Timestamptz => ColumnType::TimestampWithTimeZone,
             SqlType::Uuid => ColumnType::Uuid,
+            // Postgres has both `json` and `jsonb`; we always pick `jsonb`
+            // because that's the variant with index support and the
+            // operator surface (`@>`, `->`, `->>`). The performance gap
+            // vs `json` is meaningful for any real workload; the storage
+            // overhead is negligible.
+            SqlType::Json => ColumnType::JsonBinary,
         }
     }
 }
@@ -193,6 +199,14 @@ impl DatabaseBackend for SqliteBackend {
             SqlType::Time => ColumnType::Time,
             SqlType::Timestamptz => ColumnType::TimestampWithTimeZone,
             SqlType::Uuid => ColumnType::Text,
+            // SQLite has no native JSON column type — the JSON1 extension
+            // operates on TEXT values. Storing the document as TEXT keeps
+            // the round-trip portable through sqlx's `json` feature (which
+            // serializes `serde_json::Value` to a JSON string and decodes
+            // back). Future work: add a JSON1 system check so JSON
+            // operators on SQLite fail at boot when the extension isn't
+            // compiled in (rare but possible on bare-builds).
+            SqlType::Json => ColumnType::Text,
         }
     }
 }

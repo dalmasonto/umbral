@@ -166,4 +166,15 @@ pub enum SqlType {
     Timestamptz,
     /// 128-bit UUID. `uuid::Uuid` in Rust.
     Uuid,
+    /// JSON document. `serde_json::Value` in Rust.
+    ///
+    /// Cross-backend: Postgres stores native `JSONB` (binary form with
+    /// index / operator support); SQLite stores `TEXT` (JSON-as-string).
+    /// `serde_json::Value` round-trips through both via sqlx's `json`
+    /// feature, so a user model with a `Value` field works on either
+    /// backend without code changes. This mirrors Django's JSONField:
+    /// portable shape, dialect-specific storage. Native JSONB-only
+    /// operators (`@>`, `->`, `->>` etc.) are a deferred follow-on
+    /// landed alongside Postgres-specific column predicates.
+    Json,
 }

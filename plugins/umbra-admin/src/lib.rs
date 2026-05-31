@@ -49,6 +49,7 @@ use base64::Engine;
 use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
 use minijinja::{Environment, context};
 use serde::Serialize;
+use serde_json::Value;
 use sqlx::{Row, SqlitePool};
 use umbra::migrate::{Column, ModelMeta};
 use umbra::orm::SqlType;
@@ -549,6 +550,14 @@ fn column_to_string(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<Strin
             SqlType::Uuid => row
                 .try_get::<Option<Uuid>, _>(name)?
                 .map_or(String::new(), |v| v.to_string()),
+            // Json columns render in the admin as a compact JSON
+            // string so the operator can read and edit in the textarea
+            // widget. Pretty-printing would be friendlier visually but
+            // breaks the textarea's single-row width in the list view;
+            // a richer JSON editor is a future admin upgrade.
+            SqlType::Json => row
+                .try_get::<Option<Value>, _>(name)?
+                .map_or(String::new(), |v| v.to_string()),
         });
     }
     Ok(match col.ty {
@@ -567,6 +576,7 @@ fn column_to_string(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<Strin
         SqlType::Time => row.try_get::<NaiveTime, _>(name)?.to_string(),
         SqlType::Timestamptz => row.try_get::<DateTime<Utc>, _>(name)?.to_rfc3339(),
         SqlType::Uuid => row.try_get::<Uuid, _>(name)?.to_string(),
+        SqlType::Json => row.try_get::<Value, _>(name)?.to_string(),
     })
 }
 
@@ -696,6 +706,13 @@ fn bind_form_value<'q>(
             Uuid::parse_str(&raw)
                 .map_err(|e| AdminError::BadInput(format!("{}: {e}", col.name)))?,
         ),
+        // The admin textarea returned the JSON document as a string.
+        // Parse it back to a serde_json::Value so the binder stores
+        // structured JSON rather than the literal text.
+        SqlType::Json => q.bind(
+            serde_json::from_str::<Value>(&raw)
+                .map_err(|e| AdminError::BadInput(format!("{}: {e}", col.name)))?,
+        ),
     })
 }
 
@@ -714,6 +731,7 @@ fn bind_null<'q>(
         SqlType::Time => q.bind(None::<NaiveTime>),
         SqlType::Timestamptz => q.bind(None::<DateTime<Utc>>),
         SqlType::Uuid => q.bind(None::<Uuid>),
+        SqlType::Json => q.bind(None::<Value>),
     }
 }
 
@@ -760,6 +778,12 @@ fn input_kind(ty: SqlType) -> &'static str {
         SqlType::Date => "date",
         SqlType::Time => "time",
         SqlType::Timestamptz => "datetime-local",
+        // JSON columns render as a textarea — same widget the admin
+        // already uses for long-form Text overrides could pick when
+        // they land. The form template keys on this string; the
+        // "textarea" value is new and the template needs the matching
+        // branch landed alongside.
+        SqlType::Json => "textarea",
     }
 }
 

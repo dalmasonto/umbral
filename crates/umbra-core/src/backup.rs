@@ -341,6 +341,13 @@ fn column_to_json(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<Value, 
             SqlType::Uuid => row
                 .try_get::<Option<Uuid>, _>(name)?
                 .map_or(Value::Null, |v| Value::from(v.to_string())),
+            // The Json column already holds a serde_json::Value; the
+            // dump is the value itself (no string-wrapping). Reading via
+            // `try_get::<Option<Value>, _>` round-trips JSONB on Postgres
+            // and JSON-as-TEXT on SQLite via sqlx's `json` feature.
+            SqlType::Json => row
+                .try_get::<Option<Value>, _>(name)?
+                .unwrap_or(Value::Null),
         });
     }
     // Non-nullable: same dispatch without the Option layer.
@@ -355,6 +362,7 @@ fn column_to_json(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<Value, 
         SqlType::Time => Value::from(row.try_get::<NaiveTime, _>(name)?.to_string()),
         SqlType::Timestamptz => Value::from(row.try_get::<DateTime<Utc>, _>(name)?.to_rfc3339()),
         SqlType::Uuid => Value::from(row.try_get::<Uuid, _>(name)?.to_string()),
+        SqlType::Json => row.try_get::<Value, _>(name)?,
     })
 }
 
@@ -378,6 +386,7 @@ fn bind_value<'q>(
             SqlType::Time => q.bind(None::<NaiveTime>),
             SqlType::Timestamptz => q.bind(None::<DateTime<Utc>>),
             SqlType::Uuid => q.bind(None::<Uuid>),
+            SqlType::Json => q.bind(None::<Value>),
         });
     }
     let mismatch = |got: &str| BackupError::TypeMismatch {
@@ -428,6 +437,11 @@ fn bind_value<'q>(
             let s = val.as_str().ok_or_else(|| mismatch(json_type_name(&val)))?;
             q.bind(Uuid::parse_str(s).map_err(|_| mismatch("invalid uuid string"))?)
         }
+        // Json columns hold a serde_json::Value verbatim — no string
+        // wrapping or parsing dance. sqlx's `json` feature handles the
+        // encode side: the Value serializes to JSON text (SQLite) or
+        // a JSONB byte stream (Postgres) before hitting the wire.
+        SqlType::Json => q.bind(val),
     })
 }
 

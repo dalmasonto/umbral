@@ -253,6 +253,11 @@ fn openapi_type(ty: SqlType) -> (&'static str, Option<&'static str>) {
         SqlType::Time => ("string", Some("time")),
         SqlType::Timestamptz => ("string", Some("date-time")),
         SqlType::Uuid => ("string", Some("uuid")),
+        // OpenAPI represents JSON columns as the catch-all "object". A
+        // tighter schema would use `oneOf: [object, array]` to model the
+        // full JSON value space, but `object` is the conservative and
+        // most-tooling-friendly mapping for a first iteration.
+        SqlType::Json => ("object", None),
     }
 }
 
