@@ -81,9 +81,28 @@ Models that include at least one PG-only field cannot use the cross-backend `.fe
 Need portable list storage? Use a `serde_json::Value` field with a JSON array — see JSON columns above. The JSON type compiles and runs against both Postgres and SQLite.
 </Callout>
 
-<Callout type="warning">
-Postgres array operators (`@>` contains, `<@` contained-by, `&&` overlaps) are not yet available as QuerySet predicates. Ordering (`.asc()` / `.desc()`) and `.is_null()` / `.is_not_null()` on the nullable variant work today.
-</Callout>
+### Array operators
+
+Filter on array contents with four Postgres-native predicates:
+
+- `.contains(elem)` — column array contains the given element (`@>`).
+- `.contains_all(iter)` — column contains every value in the iterator (`@>`).
+- `.contained_by(iter)` — column is a subset of the iterator's values (`<@`).
+- `.overlaps(iter)` — column shares at least one value with the iterator (`&&`).
+
+```rust
+let info_events = Event::objects()
+    .filter(event::TAGS.contains("info"))
+    .fetch_pg(&pg_pool)
+    .await?;
+
+let any_match = Event::objects()
+    .filter(event::SCORES.overlaps([10i64, 20]))
+    .fetch_pg(&pg_pool)
+    .await?;
+```
+
+Empty-input semantics are well-defined: `contains_all([])` is always true; `contained_by([])` and `overlaps([])` are always false.
 
 ## The table name
 
