@@ -2563,6 +2563,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "umbra-security"
+version = "0.0.1"
+dependencies = [
+ "axum",
+ "getrandom 0.2.17",
+ "hex",
+ "http",
+ "http-body-util",
+ "tempfile",
+ "tokio",
+ "tower",
+ "tower-http",
+ "umbra",
+]
+
+[[package]]
 name = "umbra-sessions"
 version = "0.0.1"
 dependencies = [
