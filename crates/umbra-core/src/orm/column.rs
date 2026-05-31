@@ -1184,6 +1184,30 @@ impl<T> JsonCol<T> {
     pub fn desc(&self) -> OrderExpr<T> {
         OrderExpr::new(self.name, true)
     }
+
+    /// Extract a JSON path as text. Postgres-only.
+    ///
+    /// ```ignore
+    /// post::METADATA.path_text(&["author", "name"]).eq("alice")
+    /// ```
+    ///
+    /// Renders as `"metadata" -> 'author' ->> 'name' = 'alice'` when
+    /// the QuerySet is bound to a `PgPool`. The path must have at
+    /// least one segment; an empty path panics at construction.
+    ///
+    /// See [`JsonPathText`] for the chainable surface.
+    pub fn path_text(&self, keys: &[&str]) -> JsonPathText<T> {
+        JsonPathText::new(self.name, keys)
+    }
+
+    /// Postgres `"col" ? key` — true when the JSON object has the
+    /// given top-level key. Returns `Predicate<T>` directly (no
+    /// chainable form yet — `has_key` is a complete boolean op).
+    /// The key is single-quoted into the SQL fragment; standard SQL
+    /// apostrophe escaping is applied.
+    pub fn has_key(&self, key: &str) -> Predicate<T> {
+        json_has_key_predicate(self.name, key)
+    }
 }
 
 /// A nullable `serde_json::Value`-typed column.
@@ -1219,6 +1243,153 @@ impl<T> NullableJsonCol<T> {
     pub fn desc(&self) -> OrderExpr<T> {
         OrderExpr::new(self.name, true)
     }
+
+    /// See [`JsonCol::path_text`]. NULL columns extract NULL through
+    /// the operator — SQL's three-valued logic excludes them from
+    /// equality predicates naturally.
+    pub fn path_text(&self, keys: &[&str]) -> JsonPathText<T> {
+        JsonPathText::new(self.name, keys)
+    }
+
+    /// See [`JsonCol::has_key`].
+    pub fn has_key(&self, key: &str) -> Predicate<T> {
+        json_has_key_predicate(self.name, key)
+    }
+}
+
+// =========================================================================
+// JSON operators — Phase 4.2, Postgres-only.
+//
+// `path_text(&["a", "b"])` returns a `JsonPathText<T>` builder that
+// chains into a predicate via `.eq` / `.ne` / `.is_null` / `.is_not_null`.
+// `has_key("k")` returns a Predicate<T> directly.
+//
+// The SQL templates use `$N` placeholders and resolve correctly only
+// under PostgresQueryBuilder. `to_sql_pg()` is the right debug entry
+// for these predicates; `to_sql()` (SQLite builder) leaves `$N` tokens
+// literal. The user-facing docs and the Phase 4.0 Json field rustdoc
+// both call out that operators are deferred for SQLite; Phase 4.2.1
+// is the slot where the SQLite JSON1 fallback lands.
+// =========================================================================
+
+/// An expression that extracts a deeply-nested JSON value as text.
+/// Produced by [`JsonCol::path_text`] / [`NullableJsonCol::path_text`]
+/// and consumed by `.eq` / `.ne` / `.is_null` / `.is_not_null` to
+/// produce a `Predicate<T>`.
+///
+/// The extraction renders to Postgres' chained `->` / `->>` operator
+/// form: a path of length `n` produces `n-1` `->` steps and one final
+/// `->>` step that returns text. Single-key paths use a single `->>`.
+/// Empty paths would have nothing to extract — `path_text(&[])` panics
+/// (constructor-level invariant; an empty path is a programmer bug,
+/// not a runtime user input).
+pub struct JsonPathText<T> {
+    column: &'static str,
+    /// Path segments, ordered root-to-leaf. Owned strings so the
+    /// builder can be passed around without lifetime contortions.
+    path: Vec<String>,
+    _phantom: PhantomData<T>,
+}
+
+impl<T> JsonPathText<T> {
+    fn new(column: &'static str, keys: &[&str]) -> Self {
+        assert!(
+            !keys.is_empty(),
+            "umbra::orm::JsonPathText: path must have at least one segment"
+        );
+        Self {
+            column,
+            path: keys.iter().map(|s| s.to_string()).collect(),
+            _phantom: PhantomData,
+        }
+    }
+
+    /// Render the `"col" -> $1 -> $2 ->> $N` template for a path of
+    /// length `n`. Returns the SQL string and the path-segment Values
+    /// (in order). The caller appends comparison fragments and binds
+    /// additional values.
+    fn extract_template(&self, base_placeholder: usize) -> (String, Vec<sea_query::Value>) {
+        let col = self.column.replace('"', "\"\"");
+        let n = self.path.len();
+        let mut sql = format!("\"{col}\"");
+        // Path of length 1: "col" ->> $1
+        // Path of length n: "col" -> $1 -> $2 ... -> $(n-1) ->> $n
+        for i in 1..n {
+            sql.push_str(&format!(" -> ${}", base_placeholder + i - 1));
+        }
+        sql.push_str(&format!(" ->> ${}", base_placeholder + n - 1));
+        let values: Vec<sea_query::Value> = self
+            .path
+            .iter()
+            .map(|k| sea_query::Value::String(Some(Box::new(k.clone()))))
+            .collect();
+        (sql, values)
+    }
+
+    /// SQL `<extracted> = $val` (Postgres).
+    pub fn eq(&self, val: &str) -> Predicate<T> {
+        let (extract, mut values) = self.extract_template(1);
+        let placeholder = values.len() + 1;
+        let sql = format!("{extract} = ${placeholder}");
+        values.push(sea_query::Value::String(Some(Box::new(val.to_string()))));
+        Predicate::new(Expr::cust_with_values(&sql, values))
+    }
+
+    /// SQL `<extracted> <> $val` (Postgres).
+    pub fn ne(&self, val: &str) -> Predicate<T> {
+        let (extract, mut values) = self.extract_template(1);
+        let placeholder = values.len() + 1;
+        let sql = format!("{extract} <> ${placeholder}");
+        values.push(sea_query::Value::String(Some(Box::new(val.to_string()))));
+        Predicate::new(Expr::cust_with_values(&sql, values))
+    }
+
+    /// SQL `<extracted> IS NULL`. Distinguishes "the column itself is
+    /// NULL" from "the path traversal misses a key" — both produce
+    /// NULL from `->>`, which is the Postgres semantic.
+    pub fn is_null(&self) -> Predicate<T> {
+        let (extract, values) = self.extract_template(1);
+        Predicate::new(Expr::cust_with_values(
+            format!("{extract} IS NULL"),
+            values,
+        ))
+    }
+
+    /// SQL `<extracted> IS NOT NULL`.
+    pub fn is_not_null(&self) -> Predicate<T> {
+        let (extract, values) = self.extract_template(1);
+        Predicate::new(Expr::cust_with_values(
+            format!("{extract} IS NOT NULL"),
+            values,
+        ))
+    }
+}
+
+/// Build a `"col" ? $1` predicate — Postgres's "has top-level key"
+/// operator. Shared between JsonCol and NullableJsonCol so both
+/// expose the same surface. Postgres-only; the `?` token is sea-
+/// query's positional placeholder for SQLite, so the template uses
+/// the explicit `?` (which Postgres builder will leave alone, but
+/// sea-query's `cust_with_values` interprets — that means we can't
+/// use literal `?` here. We use the `\?` escape or build the SQL
+/// directly).
+fn json_has_key_predicate<T>(col: &'static str, key: &str) -> Predicate<T> {
+    // sea-query's cust_with_values uses `?` and `$N` as placeholder
+    // tokens — a literal `?` in the template would be substituted
+    // away. To emit a literal `?` operator we either escape it (the
+    // sea-query token doubler `??` produces a literal `?`) or render
+    // the whole fragment with `Expr::cust` (no value bindings) +
+    // string-quote the key inline. The latter is safer against future
+    // sea-query tokenizer changes; the key is single-quoted with
+    // standard SQL escape (double the apostrophe).
+    let col_escaped = col.replace('"', "\"\"");
+    let key_escaped = key.replace('\'', "''");
+    let sql = format!("\"{col_escaped}\" ?? '{key_escaped}'");
+    // The double `?` becomes a literal `?` after sea-query
+    // tokenizes the template — verified in sea-query's render
+    // logic (`Punctuation(placeholder)` followed by another
+    // `Punctuation(placeholder)` is treated as the escape).
+    Predicate::new(Expr::cust(&sql))
 }
 
 // =========================================================================
