@@ -134,6 +134,116 @@ fn path_text_typechecks_through_fetch_pg() {
     }
 }
 
+// =====================================================================
+// Phase 4.2.2 — SQLite JSON1 fallback.
+//
+// The same `path_text(...).eq(...)` and `has_key(...)` calls render
+// differently when the resolved pool is SQLite. The predicates carry
+// both forms; the QuerySet picks via `to_sql()` (SQLite) vs
+// `to_sql_pg()` (Postgres).
+// =====================================================================
+
+#[test]
+fn path_text_renders_json_extract_under_sqlite() {
+    let qs = Event::objects().filter(event::PAYLOAD.path_text(&["author", "name"]).eq("alice"));
+    let sql = qs.to_sql();
+    assert!(
+        sql.contains("json_extract"),
+        "SQLite render uses json_extract; got {sql}"
+    );
+    assert!(
+        sql.contains("\"payload\""),
+        "column should be quoted; got {sql}"
+    );
+    assert!(
+        !sql.contains("->>"),
+        "SQLite render should NOT use ->>; got {sql}"
+    );
+}
+
+#[test]
+fn has_key_renders_json_extract_is_not_null_under_sqlite() {
+    let qs = Event::objects().filter(event::PAYLOAD.has_key("author"));
+    let sql = qs.to_sql();
+    assert!(
+        sql.contains("json_extract"),
+        "SQLite has_key uses json_extract; got {sql}"
+    );
+    assert!(
+        sql.contains("IS NOT NULL"),
+        "SQLite has_key uses IS NOT NULL; got {sql}"
+    );
+}
+
+#[test]
+fn path_text_is_null_renders_json_extract_is_null_under_sqlite() {
+    let qs = Event::objects().filter(event::PAYLOAD.path_text(&["author"]).is_null());
+    let sql = qs.to_sql();
+    assert!(
+        sql.contains("json_extract"),
+        "SQLite is_null uses json_extract; got {sql}"
+    );
+    assert!(sql.contains("IS NULL"), "got {sql}");
+}
+
+/// End-to-end JSON-operator filtering against SQLite. SQLite's JSON1
+/// extension is built into sqlx-sqlite by default, so this test runs
+/// in CI without any external setup.
+#[tokio::test]
+async fn json_operators_filter_real_sqlite_rows() {
+    use serde_json::json;
+    let pool = umbra::db::connect_sqlite("sqlite::memory:").await.unwrap();
+    sqlx::query(
+        "CREATE TABLE umbra_phase42_event ( \
+            id INTEGER PRIMARY KEY AUTOINCREMENT, \
+            payload TEXT NOT NULL, \
+            meta TEXT \
+         )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let alice = json!({ "author": { "name": "alice" }, "status": "published" });
+    let bob = json!({ "author": { "name": "bob" }, "status": "draft" });
+
+    sqlx::query("INSERT INTO umbra_phase42_event (payload) VALUES (?)")
+        .bind(alice.to_string())
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO umbra_phase42_event (payload) VALUES (?)")
+        .bind(bob.to_string())
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let alice_only = Event::objects()
+        .filter(event::PAYLOAD.path_text(&["author", "name"]).eq("alice"))
+        .on(&pool)
+        .fetch()
+        .await
+        .unwrap();
+    assert_eq!(alice_only.len(), 1);
+    assert_eq!(alice_only[0].payload["author"]["name"], json!("alice"));
+
+    let with_author = Event::objects()
+        .filter(event::PAYLOAD.has_key("author"))
+        .on(&pool)
+        .fetch()
+        .await
+        .unwrap();
+    assert_eq!(with_author.len(), 2);
+
+    let published_only = Event::objects()
+        .filter(event::PAYLOAD.path_text(&["status"]).ne("draft"))
+        .on(&pool)
+        .fetch()
+        .await
+        .unwrap();
+    assert_eq!(published_only.len(), 1);
+}
+
 /// Full live round-trip against Postgres. Set `UMBRA_TEST_POSTGRES_URL`
 /// and run with `--ignored`.
 #[tokio::test]

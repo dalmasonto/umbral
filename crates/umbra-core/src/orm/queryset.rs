@@ -70,7 +70,17 @@ impl<T> Default for Manager<T> {
 /// Nothing is sent to the database until a terminal method is awaited.
 /// Cloning is cheap (the `SelectStatement` clones in O(query size)).
 pub struct QuerySet<T> {
+    /// The base SelectStatement — FROM, columns, joins, group-by,
+    /// order-by, limit, offset. Filters are NOT applied here; they
+    /// accumulate on [`Self::predicates`] and get woven in at
+    /// terminal time, so per-backend predicate variants (Phase
+    /// 4.2.2) can pick the right SimpleExpr based on the resolved
+    /// pool.
     pub(crate) query: sea_query::SelectStatement,
+    /// Accumulated filter predicates. Each one renders to either its
+    /// default `cond` (for Postgres) or its `cond_sqlite` override
+    /// (for SQLite, if set) at terminal time.
+    pub(crate) predicates: Vec<Predicate<T>>,
     pub(crate) explicit_pool: Option<DbPool>,
     _phantom: PhantomData<T>,
 }
@@ -79,9 +89,22 @@ impl<T> QuerySet<T> {
     pub(crate) fn new(query: sea_query::SelectStatement) -> Self {
         Self {
             query,
+            predicates: Vec::new(),
             explicit_pool: None,
             _phantom: PhantomData,
         }
+    }
+
+    /// Clone the base query and weave in the accumulated predicates,
+    /// picking the dialect-appropriate `SimpleExpr` for each one. The
+    /// `backend_name` is `"sqlite"` or `"postgres"`; any other value
+    /// behaves like Postgres (the default).
+    pub(crate) fn build_query_for(&self, backend_name: &str) -> sea_query::SelectStatement {
+        let mut q = self.query.clone();
+        for p in &self.predicates {
+            q.and_where(p.cond_for(backend_name));
+        }
+        q
     }
 }
 
@@ -92,9 +115,11 @@ impl<T> QuerySet<T> {
 /// depends on `T`. Terminals (which need row mapping) live in the
 /// `impl<T: Model> QuerySet<T>` block below.
 impl<T> QuerySet<T> {
-    /// Add a WHERE condition. Multiple `.filter` calls AND together.
+    /// Add a WHERE condition. Multiple `.filter` calls AND together
+    /// (sea-query's `and_where` semantics — applied at terminal time
+    /// once the resolved pool's backend is known).
     pub fn filter(mut self, p: Predicate<T>) -> Self {
-        self.query.and_where(p.cond);
+        self.predicates.push(p);
         self
     }
 
@@ -184,7 +209,8 @@ impl<T: Model> QuerySet<T> {
     /// continues to emit SQLite-style for stability across calls
     /// regardless of which pool is registered.
     pub fn to_sql(&self) -> String {
-        let (sql, _values) = self.query.build_sqlx(SqliteQueryBuilder);
+        let q = self.build_query_for("sqlite");
+        let (sql, _values) = q.build_sqlx(SqliteQueryBuilder);
         sql
     }
 
@@ -199,7 +225,8 @@ impl<T: Model> QuerySet<T> {
     /// debugging a Postgres query or asserting on the rendered shape
     /// in tests.
     pub fn to_sql_pg(&self) -> String {
-        let (sql, _values) = self.query.build_sqlx(PostgresQueryBuilder);
+        let q = self.build_query_for("postgres");
+        let (sql, _values) = q.build_sqlx(PostgresQueryBuilder);
         sql
     }
 
@@ -215,15 +242,17 @@ impl<T: Model> QuerySet<T> {
         // both backends, so the compiler can't infer DB from the values
         // alone. Naming DB explicitly pins which `FromRow` bound is
         // checked.
-        match resolve_pool::<T>(self.explicit_pool) {
+        match resolve_pool::<T>(self.explicit_pool.clone()) {
             DbPool::Sqlite(pool) => {
-                let (sql, values) = self.query.build_sqlx(SqliteQueryBuilder);
+                let q = self.build_query_for("sqlite");
+                let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
                 sqlx::query_as_with::<sqlx::Sqlite, T, _>(&sql, values)
                     .fetch_all(&pool)
                     .await
             }
             DbPool::Postgres(pool) => {
-                let (sql, values) = self.query.build_sqlx(PostgresQueryBuilder);
+                let q = self.build_query_for("postgres");
+                let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
                 sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
                     .fetch_all(&pool)
                     .await
@@ -238,15 +267,17 @@ impl<T: Model> QuerySet<T> {
             + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
     {
         self.query.limit(1);
-        match resolve_pool::<T>(self.explicit_pool) {
+        match resolve_pool::<T>(self.explicit_pool.clone()) {
             DbPool::Sqlite(pool) => {
-                let (sql, values) = self.query.build_sqlx(SqliteQueryBuilder);
+                let q = self.build_query_for("sqlite");
+                let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
                 sqlx::query_as_with::<sqlx::Sqlite, T, _>(&sql, values)
                     .fetch_optional(&pool)
                     .await
             }
             DbPool::Postgres(pool) => {
-                let (sql, values) = self.query.build_sqlx(PostgresQueryBuilder);
+                let q = self.build_query_for("postgres");
+                let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
                 sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
                     .fetch_optional(&pool)
                     .await
@@ -263,16 +294,19 @@ impl<T: Model> QuerySet<T> {
     /// tuple impl rather than the user struct — count() doesn't need
     /// T's FromRow bounds.
     pub async fn count(self) -> Result<i64, sqlx::Error> {
-        // Swap the projection for COUNT(*) and drop LIMIT / OFFSET, leaving
-        // the FROM, WHERE, JOINs and GROUP BY intact. ORDER BY is harmless
-        // on a scalar aggregate so it stays in place.
-        let mut rebuilt = self.query;
+        let pool = resolve_pool::<T>(self.explicit_pool.clone());
+        let backend = pool.backend_name();
+        // Build the dialect-appropriate filtered query first, then
+        // rebuild as COUNT. Doing it in this order keeps the predicate
+        // walk pluggable per backend without duplicating the COUNT
+        // rewrite logic across branches.
+        let mut rebuilt = self.build_query_for(backend);
         rebuilt.clear_selects();
         rebuilt.expr(Func::count(Expr::col(Alias::new("*"))));
         rebuilt.reset_limit();
         rebuilt.reset_offset();
 
-        match resolve_pool::<T>(self.explicit_pool) {
+        match pool {
             DbPool::Sqlite(pool) => {
                 let (sql, values) = rebuilt.build_sqlx(SqliteQueryBuilder);
                 let (n,): (i64,) = sqlx::query_as_with::<sqlx::Sqlite, (i64,), _>(&sql, values)
@@ -327,7 +361,8 @@ impl<T: Model> QuerySet<T> {
     where
         T: for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
     {
-        let (sql, values) = self.query.build_sqlx(PostgresQueryBuilder);
+        let q = self.build_query_for("postgres");
+        let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
         sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
             .fetch_all(pool)
             .await
@@ -339,7 +374,8 @@ impl<T: Model> QuerySet<T> {
         T: for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
     {
         self.query.limit(1);
-        let (sql, values) = self.query.build_sqlx(PostgresQueryBuilder);
+        let q = self.build_query_for("postgres");
+        let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
         sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
             .fetch_optional(pool)
             .await
@@ -348,7 +384,7 @@ impl<T: Model> QuerySet<T> {
     /// Run `SELECT COUNT(*)` against an explicit `PgPool`. No FromRow
     /// bound on `T` — the count tuple type is `(i64,)`.
     pub async fn count_pg(self, pool: &sqlx::PgPool) -> Result<i64, sqlx::Error> {
-        let mut rebuilt = self.query;
+        let mut rebuilt = self.build_query_for("postgres");
         rebuilt.clear_selects();
         rebuilt.expr(Func::count(Expr::col(Alias::new("*"))));
         rebuilt.reset_limit();

@@ -1304,16 +1304,14 @@ impl<T> JsonPathText<T> {
         }
     }
 
-    /// Render the `"col" -> $1 -> $2 ->> $N` template for a path of
-    /// length `n`. Returns the SQL string and the path-segment Values
-    /// (in order). The caller appends comparison fragments and binds
-    /// additional values.
-    fn extract_template(&self, base_placeholder: usize) -> (String, Vec<sea_query::Value>) {
+    /// Render the Postgres `"col" -> $1 -> $2 ->> $N` template for a
+    /// path of length `n`. Returns the SQL string and the path-segment
+    /// Values (in order). The caller appends comparison fragments and
+    /// binds additional values.
+    fn extract_template_pg(&self, base_placeholder: usize) -> (String, Vec<sea_query::Value>) {
         let col = self.column.replace('"', "\"\"");
         let n = self.path.len();
         let mut sql = format!("\"{col}\"");
-        // Path of length 1: "col" ->> $1
-        // Path of length n: "col" -> $1 -> $2 ... -> $(n-1) ->> $n
         for i in 1..n {
             sql.push_str(&format!(" -> ${}", base_placeholder + i - 1));
         }
@@ -1326,39 +1324,89 @@ impl<T> JsonPathText<T> {
         (sql, values)
     }
 
-    /// SQL `<extracted> = $val` (Postgres).
+    /// Build the SQLite JSON1 path string `$.a.b.c` for the stored
+    /// path. v1 uses dot-notation; users with quoted keys or array
+    /// indexes hand-roll the path as the SQLite JSON1 bracket form.
+    fn sqlite_json_path(&self) -> String {
+        let mut s = String::from("$");
+        for seg in &self.path {
+            s.push('.');
+            s.push_str(seg);
+        }
+        s
+    }
+
+    /// SQL `<extracted> = $val`. Backend-aware:
+    /// - **Postgres**: `"col" -> 'a' ->> 'b' = $val`
+    /// - **SQLite**: `json_extract("col", '$.a.b') = ?`
     pub fn eq(&self, val: &str) -> Predicate<T> {
-        let (extract, mut values) = self.extract_template(1);
-        let placeholder = values.len() + 1;
-        let sql = format!("{extract} = ${placeholder}");
-        values.push(sea_query::Value::String(Some(Box::new(val.to_string()))));
-        Predicate::new(Expr::cust_with_values(&sql, values))
+        let (extract_pg, mut pg_values) = self.extract_template_pg(1);
+        let pg_placeholder = pg_values.len() + 1;
+        let pg_sql = format!("{extract_pg} = ${pg_placeholder}");
+        pg_values.push(sea_query::Value::String(Some(Box::new(val.to_string()))));
+        let pg_cond = Expr::cust_with_values(&pg_sql, pg_values);
+
+        let col = self.column.replace('"', "\"\"");
+        let sqlite_sql = format!("json_extract(\"{col}\", ?) = ?");
+        let sqlite_values = vec![
+            sea_query::Value::String(Some(Box::new(self.sqlite_json_path()))),
+            sea_query::Value::String(Some(Box::new(val.to_string()))),
+        ];
+        let sqlite_cond = Expr::cust_with_values(&sqlite_sql, sqlite_values);
+
+        Predicate::new_with_sqlite(pg_cond, sqlite_cond)
     }
 
-    /// SQL `<extracted> <> $val` (Postgres).
+    /// SQL `<extracted> <> $val`. Backend-aware (see [`Self::eq`]).
     pub fn ne(&self, val: &str) -> Predicate<T> {
-        let (extract, mut values) = self.extract_template(1);
-        let placeholder = values.len() + 1;
-        let sql = format!("{extract} <> ${placeholder}");
-        values.push(sea_query::Value::String(Some(Box::new(val.to_string()))));
-        Predicate::new(Expr::cust_with_values(&sql, values))
+        let (extract_pg, mut pg_values) = self.extract_template_pg(1);
+        let pg_placeholder = pg_values.len() + 1;
+        let pg_sql = format!("{extract_pg} <> ${pg_placeholder}");
+        pg_values.push(sea_query::Value::String(Some(Box::new(val.to_string()))));
+        let pg_cond = Expr::cust_with_values(&pg_sql, pg_values);
+
+        let col = self.column.replace('"', "\"\"");
+        let sqlite_sql = format!("json_extract(\"{col}\", ?) <> ?");
+        let sqlite_values = vec![
+            sea_query::Value::String(Some(Box::new(self.sqlite_json_path()))),
+            sea_query::Value::String(Some(Box::new(val.to_string()))),
+        ];
+        let sqlite_cond = Expr::cust_with_values(&sqlite_sql, sqlite_values);
+
+        Predicate::new_with_sqlite(pg_cond, sqlite_cond)
     }
 
-    /// SQL `<extracted> IS NULL`. Distinguishes "the column itself is
-    /// NULL" from "the path traversal misses a key" — both produce
-    /// NULL from `->>`, which is the Postgres semantic.
+    /// SQL `<extracted> IS NULL`. Backend-aware. Both renderings
+    /// produce NULL when the column itself is NULL OR the path
+    /// misses a key.
     pub fn is_null(&self) -> Predicate<T> {
-        let (extract, values) = self.extract_template(1);
-        Predicate::new(Expr::cust_with_values(format!("{extract} IS NULL"), values))
+        let (extract_pg, pg_values) = self.extract_template_pg(1);
+        let pg_cond = Expr::cust_with_values(format!("{extract_pg} IS NULL"), pg_values);
+
+        let col = self.column.replace('"', "\"\"");
+        let sqlite_sql = format!("json_extract(\"{col}\", ?) IS NULL");
+        let sqlite_values = vec![sea_query::Value::String(Some(Box::new(
+            self.sqlite_json_path(),
+        )))];
+        let sqlite_cond = Expr::cust_with_values(&sqlite_sql, sqlite_values);
+
+        Predicate::new_with_sqlite(pg_cond, sqlite_cond)
     }
 
-    /// SQL `<extracted> IS NOT NULL`.
+    /// SQL `<extracted> IS NOT NULL`. Backend-aware (see
+    /// [`Self::is_null`]).
     pub fn is_not_null(&self) -> Predicate<T> {
-        let (extract, values) = self.extract_template(1);
-        Predicate::new(Expr::cust_with_values(
-            format!("{extract} IS NOT NULL"),
-            values,
-        ))
+        let (extract_pg, pg_values) = self.extract_template_pg(1);
+        let pg_cond = Expr::cust_with_values(format!("{extract_pg} IS NOT NULL"), pg_values);
+
+        let col = self.column.replace('"', "\"\"");
+        let sqlite_sql = format!("json_extract(\"{col}\", ?) IS NOT NULL");
+        let sqlite_values = vec![sea_query::Value::String(Some(Box::new(
+            self.sqlite_json_path(),
+        )))];
+        let sqlite_cond = Expr::cust_with_values(&sqlite_sql, sqlite_values);
+
+        Predicate::new_with_sqlite(pg_cond, sqlite_cond)
     }
 }
 
@@ -1371,22 +1419,29 @@ impl<T> JsonPathText<T> {
 /// use literal `?` here. We use the `\?` escape or build the SQL
 /// directly).
 fn json_has_key_predicate<T>(col: &'static str, key: &str) -> Predicate<T> {
-    // sea-query's cust_with_values uses `?` and `$N` as placeholder
-    // tokens — a literal `?` in the template would be substituted
-    // away. To emit a literal `?` operator we either escape it (the
-    // sea-query token doubler `??` produces a literal `?`) or render
-    // the whole fragment with `Expr::cust` (no value bindings) +
-    // string-quote the key inline. The latter is safer against future
-    // sea-query tokenizer changes; the key is single-quoted with
-    // standard SQL escape (double the apostrophe).
     let col_escaped = col.replace('"', "\"\"");
     let key_escaped = key.replace('\'', "''");
-    let sql = format!("\"{col_escaped}\" ?? '{key_escaped}'");
-    // The double `?` becomes a literal `?` after sea-query
-    // tokenizes the template — verified in sea-query's render
-    // logic (`Punctuation(placeholder)` followed by another
-    // `Punctuation(placeholder)` is treated as the escape).
-    Predicate::new(Expr::cust(&sql))
+
+    // Postgres: native `?` has-key operator. sea-query's
+    // `cust_with_values` uses `?` and `$` as placeholder tokens, so
+    // we double the `?` to emit a literal one. The key is inline
+    // single-quoted (no binding).
+    let pg_sql = format!("\"{col_escaped}\" ?? '{key_escaped}'");
+    let pg_cond = Expr::cust(&pg_sql);
+
+    // SQLite JSON1: there's no native has-key operator. The closest
+    // semantic match is `json_extract(col, '$.key') IS NOT NULL` —
+    // true when the key exists with a non-null value, false when
+    // missing OR explicitly null. The Postgres `?` operator returns
+    // true on `{"k": null}`; SQLite's fallback returns false. The
+    // diverging-on-explicit-null case is documented; users with
+    // strict "key present even if value is null" needs hand-roll the
+    // SQLite SQL.
+    let sqlite_sql = format!("json_extract(\"{col_escaped}\", ?) IS NOT NULL");
+    let sqlite_values = vec![sea_query::Value::String(Some(Box::new(format!("$.{key}"))))];
+    let sqlite_cond = Expr::cust_with_values(&sqlite_sql, sqlite_values);
+
+    Predicate::new_with_sqlite(pg_cond, sqlite_cond)
 }
 
 // =========================================================================
