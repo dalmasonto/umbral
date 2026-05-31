@@ -177,4 +177,74 @@ pub enum SqlType {
     /// operators (`@>`, `->`, `->>` etc.) are a deferred follow-on
     /// landed alongside Postgres-specific column predicates.
     Json,
+    /// Array column. `Vec<T>` in Rust where `T` is one of the
+    /// [`ArrayElement`] variants.
+    ///
+    /// **Postgres-only.** SQLite has no native array type; the M4
+    /// system check fails at boot if an Array field is registered
+    /// against the SQLite backend. For portable list storage, declare
+    /// the field as `serde_json::Value` (the [`Self::Json`] variant)
+    /// and store a JSON array inside.
+    ///
+    /// The inner type is restricted to [`ArrayElement`] rather than
+    /// `Box<SqlType>` so the outer enum stays `Copy` and `SqlType`
+    /// values can live in `const FIELDS` slices the derive emits.
+    /// Multi-dim arrays (`Vec<Vec<T>>`), nullable elements
+    /// (`Vec<Option<T>>`), and nested JSON arrays (`Vec<Value>`) are
+    /// out of scope for v1.
+    Array(ArrayElement),
+}
+
+/// Element types valid inside [`SqlType::Array`].
+///
+/// A strict subset of the [`SqlType`] catalogue: the value types
+/// Postgres supports as `T[]` and that umbra knows how to bind / decode
+/// through sqlx. Stays `Copy` so the outer `SqlType::Array(ArrayElement)`
+/// remains usable in `const FIELDS` slices.
+///
+/// Catalogue:
+///
+/// | Variant     | Postgres type | Rust inner type   |
+/// |-------------|---------------|-------------------|
+/// | `SmallInt`  | `int2[]`      | `Vec<i16>`        |
+/// | `Integer`   | `int4[]`      | `Vec<i32>`        |
+/// | `BigInt`    | `int8[]`      | `Vec<i64>`        |
+/// | `Real`      | `float4[]`    | `Vec<f32>`        |
+/// | `Double`    | `float8[]`    | `Vec<f64>`        |
+/// | `Boolean`   | `bool[]`      | `Vec<bool>`       |
+/// | `Text`      | `text[]`      | `Vec<String>`     |
+/// | `Uuid`      | `uuid[]`      | `Vec<uuid::Uuid>` |
+///
+/// Other element types (Date / Time / Timestamptz / Json) land as
+/// follow-ons when there's a real consumer; the binding semantics for
+/// chrono types as Postgres array elements need a deliberate pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum ArrayElement {
+    SmallInt,
+    Integer,
+    BigInt,
+    Real,
+    Double,
+    Boolean,
+    Text,
+    Uuid,
+}
+
+impl ArrayElement {
+    /// Lift this element type back to its [`SqlType`] equivalent. Used
+    /// when a per-element decision needs to dispatch through the same
+    /// SqlType match the rest of umbra uses (e.g. picking a
+    /// `sea_query::ColumnType` for the element).
+    pub fn to_sql_type(self) -> SqlType {
+        match self {
+            ArrayElement::SmallInt => SqlType::SmallInt,
+            ArrayElement::Integer => SqlType::Integer,
+            ArrayElement::BigInt => SqlType::BigInt,
+            ArrayElement::Real => SqlType::Real,
+            ArrayElement::Double => SqlType::Double,
+            ArrayElement::Boolean => SqlType::Boolean,
+            ArrayElement::Text => SqlType::Text,
+            ArrayElement::Uuid => SqlType::Uuid,
+        }
+    }
 }

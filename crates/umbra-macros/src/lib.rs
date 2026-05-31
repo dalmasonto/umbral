@@ -375,10 +375,32 @@ enum FieldKind {
     /// derive doesn't care which.
     Json,
     NullableJson,
+    /// `Vec<T>` where `T` is one of the [`ArrayElementKind`] variants —
+    /// a Postgres array column. The field.backend system check fires at
+    /// boot when this lands on SQLite.
+    Array(ArrayElementKind),
+    NullableArray(ArrayElementKind),
     /// Catch-all: not a recognised M3 catalogue type, or one of the
     /// explicitly-rejected wide / unsigned ints. Carries the exact
     /// diagnostic to emit at the field's span.
     Unsupported(UnsupportedReason),
+}
+
+/// Element kinds the derive recognises inside `Vec<T>`. Mirrors the
+/// `umbra::orm::ArrayElement` enum the framework re-exports — the
+/// macro can't reach into `umbra-core` at expand time so the catalogue
+/// is duplicated, with the `sql_type_tokens` body emitting the right
+/// `ArrayElement::Foo` for each.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ArrayElementKind {
+    SmallInt,
+    Integer,
+    BigInt,
+    Real,
+    Double,
+    Boolean,
+    Text,
+    Uuid,
 }
 
 /// Why a field was rejected. Splits the catch-all so the diagnostic
@@ -422,6 +444,10 @@ impl FieldKind {
             }
             FieldKind::Uuid | FieldKind::NullableUuid => quote!(::umbra::orm::SqlType::Uuid),
             FieldKind::Json | FieldKind::NullableJson => quote!(::umbra::orm::SqlType::Json),
+            FieldKind::Array(elem) | FieldKind::NullableArray(elem) => {
+                let elem_tokens = array_element_tokens(*elem);
+                quote!(::umbra::orm::SqlType::Array(#elem_tokens))
+            }
             FieldKind::Unsupported(_) => return None,
         };
         let nullable = if self.is_nullable() {
@@ -447,6 +473,7 @@ impl FieldKind {
                 | FieldKind::NullableDateTime
                 | FieldKind::NullableUuid
                 | FieldKind::NullableJson
+                | FieldKind::NullableArray(_)
         )
     }
 
@@ -523,6 +550,12 @@ fn classify_field_type(ty: &Type) -> FieldKind {
     if is_serde_json_value(ty) {
         return FieldKind::Json;
     }
+    // `Vec<T>` for the Phase 4.1 Array catalogue. Postgres-only at
+    // runtime; the field.backend system check fires at boot when
+    // a model with an Array field is registered against SQLite.
+    if let Some(kind) = vec_element_kind(ty) {
+        return FieldKind::Array(kind);
+    }
     if is_wide_or_unsigned_int(ty) {
         return FieldKind::Unsupported(UnsupportedReason::WideOrUnsignedInt);
     }
@@ -564,6 +597,9 @@ fn classify_field_type(ty: &Type) -> FieldKind {
         if is_serde_json_value(inner) {
             return FieldKind::NullableJson;
         }
+        if let Some(kind) = vec_element_kind(inner) {
+            return FieldKind::NullableArray(kind);
+        }
         if is_wide_or_unsigned_int(inner) {
             return FieldKind::Unsupported(UnsupportedReason::NullableOfWide);
         }
@@ -571,6 +607,77 @@ fn classify_field_type(ty: &Type) -> FieldKind {
     }
 
     FieldKind::Unsupported(UnsupportedReason::NotInCatalogue)
+}
+
+/// If `ty` is `Vec<T>` and `T` is one of the [`ArrayElementKind`]
+/// catalogue types, return that kind. Returns `None` otherwise
+/// (including for `Vec<i128>`, `Vec<Vec<T>>`, `Vec<Option<T>>`,
+/// `Vec<NaiveDate>` — all currently off the catalogue).
+fn vec_element_kind(ty: &Type) -> Option<ArrayElementKind> {
+    let Type::Path(TypePath { qself: None, path }) = ty else {
+        return None;
+    };
+    let last = path.segments.last()?;
+    if last.ident != "Vec" {
+        return None;
+    }
+    let PathArguments::AngleBracketed(ref args) = last.arguments else {
+        return None;
+    };
+    let mut type_args = args.args.iter().filter_map(|a| match a {
+        GenericArgument::Type(t) => Some(t),
+        _ => None,
+    });
+    let inner = type_args.next()?;
+    if type_args.next().is_some() {
+        return None;
+    }
+    // Inner type catalogue. Keep these in lockstep with the
+    // ArrayElementKind enum and the `umbra::orm::ArrayElement`
+    // variants. Date/Time/Timestamptz/Json deliberately not yet
+    // recognised — their cross-backend binding semantics need a
+    // deliberate pass.
+    if type_is_ident(inner, "i8") || type_is_ident(inner, "i16") || type_is_ident(inner, "u8") {
+        return Some(ArrayElementKind::SmallInt);
+    }
+    if type_is_ident(inner, "i32") || type_is_ident(inner, "u16") {
+        return Some(ArrayElementKind::Integer);
+    }
+    if type_is_ident(inner, "i64") || type_is_ident(inner, "u32") {
+        return Some(ArrayElementKind::BigInt);
+    }
+    if type_is_ident(inner, "f32") {
+        return Some(ArrayElementKind::Real);
+    }
+    if type_is_ident(inner, "f64") {
+        return Some(ArrayElementKind::Double);
+    }
+    if type_is_ident(inner, "bool") {
+        return Some(ArrayElementKind::Boolean);
+    }
+    if type_is_ident(inner, "String") {
+        return Some(ArrayElementKind::Text);
+    }
+    if type_is_ident(inner, "Uuid") {
+        return Some(ArrayElementKind::Uuid);
+    }
+    None
+}
+
+/// The `ArrayElement::Foo` tokens for one `ArrayElementKind`. Used by
+/// `sql_type_tokens` to splice the right variant under
+/// `SqlType::Array(...)`.
+fn array_element_tokens(kind: ArrayElementKind) -> TokenStream2 {
+    match kind {
+        ArrayElementKind::SmallInt => quote!(::umbra::orm::ArrayElement::SmallInt),
+        ArrayElementKind::Integer => quote!(::umbra::orm::ArrayElement::Integer),
+        ArrayElementKind::BigInt => quote!(::umbra::orm::ArrayElement::BigInt),
+        ArrayElementKind::Real => quote!(::umbra::orm::ArrayElement::Real),
+        ArrayElementKind::Double => quote!(::umbra::orm::ArrayElement::Double),
+        ArrayElementKind::Boolean => quote!(::umbra::orm::ArrayElement::Boolean),
+        ArrayElementKind::Text => quote!(::umbra::orm::ArrayElement::Text),
+        ArrayElementKind::Uuid => quote!(::umbra::orm::ArrayElement::Uuid),
+    }
 }
 
 /// True when `ty` is `serde_json::Value` (regardless of the path
@@ -724,6 +831,8 @@ fn column_const_for(
         FieldKind::NullableUuid => format_ident!("NullableUuidCol"),
         FieldKind::Json => format_ident!("JsonCol"),
         FieldKind::NullableJson => format_ident!("NullableJsonCol"),
+        FieldKind::Array(_) => format_ident!("ArrayCol"),
+        FieldKind::NullableArray(_) => format_ident!("NullableArrayCol"),
         FieldKind::Unsupported(_) => return TokenStream2::new(),
     };
     quote_spanned! { span =>

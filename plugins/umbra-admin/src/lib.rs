@@ -558,6 +558,7 @@ fn column_to_string(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<Strin
             SqlType::Json => row
                 .try_get::<Option<Value>, _>(name)?
                 .map_or(String::new(), |v| v.to_string()),
+            SqlType::Array(_) => panic_array_unsupported(&col.name),
         });
     }
     Ok(match col.ty {
@@ -577,7 +578,18 @@ fn column_to_string(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<Strin
         SqlType::Timestamptz => row.try_get::<DateTime<Utc>, _>(name)?.to_rfc3339(),
         SqlType::Uuid => row.try_get::<Uuid, _>(name)?.to_string(),
         SqlType::Json => row.try_get::<Value, _>(name)?.to_string(),
+        SqlType::Array(_) => panic_array_unsupported(&col.name),
     })
+}
+
+/// Boot-path-bypassed sentinel for Array fields. The admin plugin runs
+/// against SqlitePool today; field.backend should have failed boot.
+fn panic_array_unsupported(column: &str) -> ! {
+    panic!(
+        "umbra-admin: column `{column}` is a Postgres-only Array; the \
+         field.backend system check should have failed boot. A \
+         Postgres-aware admin upgrade is a Phase 4 follow-on."
+    )
 }
 
 async fn insert_row(
@@ -713,6 +725,7 @@ fn bind_form_value<'q>(
             serde_json::from_str::<Value>(&raw)
                 .map_err(|e| AdminError::BadInput(format!("{}: {e}", col.name)))?,
         ),
+        SqlType::Array(_) => panic_array_unsupported(&col.name),
     })
 }
 
@@ -732,6 +745,7 @@ fn bind_null<'q>(
         SqlType::Timestamptz => q.bind(None::<DateTime<Utc>>),
         SqlType::Uuid => q.bind(None::<Uuid>),
         SqlType::Json => q.bind(None::<Value>),
+        SqlType::Array(_) => panic_array_unsupported(&col.name),
     }
 }
 
@@ -784,6 +798,11 @@ fn input_kind(ty: SqlType) -> &'static str {
         // "textarea" value is new and the template needs the matching
         // branch landed alongside.
         SqlType::Json => "textarea",
+        // Array fields are Postgres-only; the admin form path runs on
+        // SqlitePool today and the field.backend system check fires at
+        // boot. Return a placeholder widget name; the template path
+        // never sees this since boot failed first.
+        SqlType::Array(_) => "textarea",
     }
 }
 

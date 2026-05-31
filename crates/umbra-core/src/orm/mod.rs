@@ -27,7 +27,7 @@ pub mod queryset;
 use std::marker::PhantomData;
 use std::ops::{BitAnd, BitOr};
 
-pub use model::{FieldSpec, Model, PrimaryKey, SqlType};
+pub use model::{ArrayElement, FieldSpec, Model, PrimaryKey, SqlType};
 pub use post::Post;
 pub use queryset::{Manager, QuerySet};
 

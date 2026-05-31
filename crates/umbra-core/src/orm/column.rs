@@ -1220,3 +1220,82 @@ impl<T> NullableJsonCol<T> {
         OrderExpr::new(self.name, true)
     }
 }
+
+// =========================================================================
+// Array columns — Phase 4.1, Postgres-only.
+//
+// v1 surface: ordering ops (asc/desc) and IS NULL / IS NOT NULL for
+// the nullable variant. Array-specific operators (`@>` contains,
+// `<@` contained-by, `&&` overlaps, `array_length`, `unnest`) land
+// as a follow-on. The element type is *not* a generic parameter on
+// the column struct itself — the predicate methods we ship today
+// don't need to know it, and adding a type parameter would force the
+// derive macro to plumb it through every column-const declaration
+// (each user struct's sibling module would gain an extra type arg).
+// When the per-element operators land, the element type comes via a
+// const associated value on the column or via the element ops as
+// generics on a single method.
+// =========================================================================
+
+/// A `Vec<T>`-typed column (Postgres array).
+pub struct ArrayCol<T> {
+    pub(crate) name: &'static str,
+    _phantom: PhantomData<T>,
+}
+
+impl<T> ArrayCol<T> {
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            _phantom: PhantomData,
+        }
+    }
+
+    /// SQL `ORDER BY ... ASC`. Postgres array ordering is element-wise
+    /// lexicographic — rarely what the user wants, but well-defined.
+    pub fn asc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, false)
+    }
+
+    /// SQL `ORDER BY ... DESC`.
+    pub fn desc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, true)
+    }
+}
+
+/// A nullable `Vec<T>`-typed column.
+pub struct NullableArrayCol<T> {
+    pub(crate) name: &'static str,
+    _phantom: PhantomData<T>,
+}
+
+impl<T> NullableArrayCol<T> {
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            _phantom: PhantomData,
+        }
+    }
+
+    /// SQL `IS NULL`. Note this is "the column is NULL", not "the
+    /// array is empty" — Postgres distinguishes them. The empty-array
+    /// predicate lands with the `array_length` op in a follow-on.
+    pub fn is_null(&self) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).is_null())
+    }
+
+    /// SQL `IS NOT NULL`.
+    pub fn is_not_null(&self) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).is_not_null())
+    }
+
+    /// SQL `ORDER BY ... ASC`.
+    pub fn asc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, false)
+    }
+
+    /// SQL `ORDER BY ... DESC`.
+    pub fn desc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, true)
+    }
+}

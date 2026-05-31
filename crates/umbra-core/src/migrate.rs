@@ -91,6 +91,16 @@ pub fn registered_models() -> Vec<ModelMeta> {
         .collect()
 }
 
+/// Whether the model registry has been initialised. False before
+/// `App::build()` has run; true after the phase-3 `init_plugins`
+/// call publishes the per-plugin map. Used by system checks that
+/// walk the registry — they return an empty result when the
+/// registry isn't ready rather than panicking (so low-level tests
+/// that drive `check::run_all` without booting an App keep working).
+pub fn is_initialised() -> bool {
+    REGISTRY.get().is_some()
+}
+
 /// Return the registered plugin names that contributed at least one
 /// model. Sorted deterministically. Used as a fallback when no
 /// topological order is published; the M7 walk used this directly,

@@ -258,6 +258,13 @@ fn openapi_type(ty: SqlType) -> (&'static str, Option<&'static str>) {
         // full JSON value space, but `object` is the conservative and
         // most-tooling-friendly mapping for a first iteration.
         SqlType::Json => ("object", None),
+        // Arrays render as `type: array` with an inferred item type in
+        // OpenAPI. The v1 mapping flattens the element to the same
+        // "type" string (no nested `items.format`) — enough for tools
+        // to validate the request shape, but not the full structural
+        // detail. A future pass can recurse into the element type via
+        // openapi_type for proper `items: { type, format }` nesting.
+        SqlType::Array(_) => ("array", None),
     }
 }
 

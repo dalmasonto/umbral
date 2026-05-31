@@ -288,6 +288,71 @@ impl<T: Model> QuerySet<T> {
         let rows = self.limit(1).fetch().await?;
         Ok(!rows.is_empty())
     }
+
+    // =====================================================================
+    // Postgres-only terminals (Phase 4.1).
+    //
+    // Models with Postgres-only field types (`Vec<T>` arrays, the future
+    // Hstore / CIDR / FullTextSearch types) can't satisfy the dual
+    // FromRow bound on `fetch` / `first` / `count` / `exists`. These
+    // `_pg` variants bound on `FromRow<PgRow>` alone, take the pool as
+    // an argument, and skip the dispatch — the call site explicitly
+    // says "this model is Postgres-only."
+    //
+    // For models with portable fields, the existing `fetch` etc. stay
+    // the recommended call: they pick up the ambient pool and route
+    // through `.on(&pool)` / `.on_pg(&pool)` overrides exactly as
+    // Phase 2.5 documented.
+    // =====================================================================
+
+    /// Run the SELECT against an explicit `PgPool` and return every
+    /// matching row. Bound by `FromRow<PgRow>` alone so models with
+    /// Postgres-only field types compile.
+    pub async fn fetch_pg(self, pool: &sqlx::PgPool) -> Result<Vec<T>, sqlx::Error>
+    where
+        T: for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
+    {
+        let (sql, values) = self.query.build_sqlx(PostgresQueryBuilder);
+        sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
+            .fetch_all(pool)
+            .await
+    }
+
+    /// Run the SELECT against an explicit `PgPool` with LIMIT 1.
+    pub async fn first_pg(mut self, pool: &sqlx::PgPool) -> Result<Option<T>, sqlx::Error>
+    where
+        T: for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
+    {
+        self.query.limit(1);
+        let (sql, values) = self.query.build_sqlx(PostgresQueryBuilder);
+        sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
+            .fetch_optional(pool)
+            .await
+    }
+
+    /// Run `SELECT COUNT(*)` against an explicit `PgPool`. No FromRow
+    /// bound on `T` — the count tuple type is `(i64,)`.
+    pub async fn count_pg(self, pool: &sqlx::PgPool) -> Result<i64, sqlx::Error> {
+        let mut rebuilt = self.query;
+        rebuilt.clear_selects();
+        rebuilt.expr(Func::count(Expr::col(Alias::new("*"))));
+        rebuilt.reset_limit();
+        rebuilt.reset_offset();
+        let (sql, values) = rebuilt.build_sqlx(PostgresQueryBuilder);
+        let (n,): (i64,) = sqlx::query_as_with::<sqlx::Postgres, (i64,), _>(&sql, values)
+            .fetch_one(pool)
+            .await?;
+        Ok(n)
+    }
+
+    /// Return whether any row matches, against an explicit `PgPool`.
+    pub async fn exists_pg(self, pool: &sqlx::PgPool) -> Result<bool, sqlx::Error>
+    where
+        T: for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
+    {
+        let rows = self.limit(1).fetch_pg(pool).await?;
+        Ok(!rows.is_empty())
+    }
 }
 
 /// Delegating chainable + terminal surface on `Manager<T>`.
@@ -366,5 +431,34 @@ impl<T: Model> Manager<T> {
             + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
     {
         self.queryset().exists().await
+    }
+
+    /// See [`QuerySet::fetch_pg`].
+    pub async fn fetch_pg(&self, pool: &sqlx::PgPool) -> Result<Vec<T>, sqlx::Error>
+    where
+        T: for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
+    {
+        self.queryset().fetch_pg(pool).await
+    }
+
+    /// See [`QuerySet::first_pg`].
+    pub async fn first_pg(&self, pool: &sqlx::PgPool) -> Result<Option<T>, sqlx::Error>
+    where
+        T: for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
+    {
+        self.queryset().first_pg(pool).await
+    }
+
+    /// See [`QuerySet::count_pg`].
+    pub async fn count_pg(&self, pool: &sqlx::PgPool) -> Result<i64, sqlx::Error> {
+        self.queryset().count_pg(pool).await
+    }
+
+    /// See [`QuerySet::exists_pg`].
+    pub async fn exists_pg(&self, pool: &sqlx::PgPool) -> Result<bool, sqlx::Error>
+    where
+        T: for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
+    {
+        self.queryset().exists_pg(pool).await
     }
 }

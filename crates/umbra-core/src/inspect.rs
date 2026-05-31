@@ -338,8 +338,15 @@ async fn introspect_columns_pg(
     .await?;
     let pk_columns: std::collections::HashSet<String> = pk_rows.into_iter().map(|(c,)| c).collect();
 
-    let column_rows: Vec<(String, String, String)> = sqlx::query_as(
-        "SELECT column_name, data_type, is_nullable \
+    // `udt_name` carries the underlying type name even when `data_type`
+    // is the abstract `"ARRAY"` placeholder. For `bigint[]` the
+    // information_schema reports data_type = "ARRAY" and udt_name =
+    // "_int8" (underscore prefix marks the array variant in pg_type).
+    // For non-array columns udt_name carries the same physical name
+    // (`int8`, `text`, etc.) but `data_type` is the canonical match
+    // key we already lookup against.
+    let column_rows: Vec<(String, String, String, String)> = sqlx::query_as(
+        "SELECT column_name, data_type, is_nullable, udt_name \
          FROM information_schema.columns \
          WHERE table_schema = 'public' AND table_name = $1 \
          ORDER BY ordinal_position",
@@ -349,13 +356,25 @@ async fn introspect_columns_pg(
     .await?;
 
     let mut columns: Vec<IntrospectedColumn> = Vec::with_capacity(column_rows.len());
-    for (name, data_type, is_nullable) in column_rows {
-        let ty =
+    for (name, data_type, is_nullable, udt_name) in column_rows {
+        let ty = if data_type.eq_ignore_ascii_case("ARRAY") {
+            // Element type comes from udt_name with the leading
+            // underscore stripped. `_int8` -> int8 -> ArrayElement::BigInt.
+            let elem_name = udt_name.strip_prefix('_').unwrap_or(udt_name.as_str());
+            map_postgres_array_element(elem_name).ok_or_else(|| {
+                InspectError::UnsupportedColumnType {
+                    table: table.to_string(),
+                    column: name.clone(),
+                    sql_type: format!("ARRAY of {elem_name}"),
+                }
+            })?
+        } else {
             map_postgres_type(&data_type).ok_or_else(|| InspectError::UnsupportedColumnType {
                 table: table.to_string(),
                 column: name.clone(),
                 sql_type: data_type.clone(),
-            })?;
+            })?
+        };
         let primary_key = pk_columns.contains(&name);
         // Postgres `is_nullable` is the string "YES" or "NO". A primary
         // key is non-nullable by definition (the server enforces it);
@@ -377,6 +396,38 @@ async fn introspect_columns_pg(
     }
 
     Ok(columns)
+}
+
+/// Map a Postgres array's element-type name (from `udt_name` with the
+/// leading underscore stripped) to a [`SqlType::Array`] variant.
+///
+/// The `udt_name` column on `information_schema.columns` carries the
+/// physical type name from `pg_catalog.pg_type`; array variants are
+/// prefixed with `_` (`_int8` for `bigint[]`, `_text` for `text[]`).
+/// The caller strips the prefix; this function maps the remaining
+/// stem to the umbra `ArrayElement` catalogue.
+///
+/// Returns `None` if the element type isn't in
+/// `umbra::orm::ArrayElement` — chrono types, JSON, network types,
+/// and Postgres-specific types like NUMERIC fall outside Phase 4.1's
+/// array catalogue.
+fn map_postgres_array_element(elem: &str) -> Option<SqlType> {
+    use crate::orm::ArrayElement;
+    let kind = match elem.trim().to_ascii_lowercase().as_str() {
+        // Postgres physical type names (per pg_type.typname). The
+        // information_schema strips spaces from the data_type alias
+        // form, so we match the canonical lowercase names here.
+        "int2" => ArrayElement::SmallInt,
+        "int4" => ArrayElement::Integer,
+        "int8" => ArrayElement::BigInt,
+        "float4" => ArrayElement::Real,
+        "float8" => ArrayElement::Double,
+        "bool" => ArrayElement::Boolean,
+        "text" | "varchar" | "bpchar" => ArrayElement::Text,
+        "uuid" => ArrayElement::Uuid,
+        _ => return None,
+    };
+    Some(SqlType::Array(kind))
 }
 
 /// Map a Postgres `information_schema.columns.data_type` value to the
@@ -640,19 +691,24 @@ fn render_one_struct(table: &IntrospectedTable) -> String {
 /// `umbra-macros/src/lib.rs` (see `FieldKind` for the full catalogue).
 fn render_field_type(ty: SqlType, nullable: bool) -> String {
     let base = match ty {
-        SqlType::SmallInt => "i16",
-        SqlType::Integer => "i32",
-        SqlType::BigInt => "i64",
-        SqlType::Real => "f32",
-        SqlType::Double => "f64",
-        SqlType::Boolean => "bool",
-        SqlType::Text => "String",
-        SqlType::Date => "chrono::NaiveDate",
-        SqlType::Time => "chrono::NaiveTime",
-        SqlType::Timestamptz => "chrono::DateTime<chrono::Utc>",
-        SqlType::Uuid => "uuid::Uuid",
-        SqlType::Json => "serde_json::Value",
+        SqlType::SmallInt => "i16".to_string(),
+        SqlType::Integer => "i32".to_string(),
+        SqlType::BigInt => "i64".to_string(),
+        SqlType::Real => "f32".to_string(),
+        SqlType::Double => "f64".to_string(),
+        SqlType::Boolean => "bool".to_string(),
+        SqlType::Text => "String".to_string(),
+        SqlType::Date => "chrono::NaiveDate".to_string(),
+        SqlType::Time => "chrono::NaiveTime".to_string(),
+        SqlType::Timestamptz => "chrono::DateTime<chrono::Utc>".to_string(),
+        SqlType::Uuid => "uuid::Uuid".to_string(),
+        SqlType::Json => "serde_json::Value".to_string(),
+        // Recurse through the element's SqlType. Wrapping in `Vec<...>`
+        // matches the derive's catalogue: a `Vec<i64>` declares an
+        // `Array(ArrayElement::BigInt)` field.
+        SqlType::Array(elem) => format!("Vec<{}>", render_field_type(elem.to_sql_type(), false)),
     };
+    let base = base.as_str();
     if nullable {
         format!("Option<{base}>")
     } else {

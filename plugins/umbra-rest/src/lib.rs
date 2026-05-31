@@ -390,6 +390,12 @@ fn column_to_json(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<Value, 
             SqlType::Json => row
                 .try_get::<Option<Value>, _>(name)?
                 .unwrap_or(Value::Null),
+            // Array fields are Postgres-only and the REST plugin reads
+            // through a SqlitePool today. The field.backend system
+            // check fires at boot when an Array field is registered
+            // against SQLite, so the column-to-JSON path never reaches
+            // this arm in practice.
+            SqlType::Array(_) => panic_array_unsupported(&col.name),
         });
     }
     Ok(match col.ty {
@@ -404,7 +410,22 @@ fn column_to_json(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<Value, 
         SqlType::Timestamptz => Value::from(row.try_get::<DateTime<Utc>, _>(name)?.to_rfc3339()),
         SqlType::Uuid => Value::from(row.try_get::<Uuid, _>(name)?.to_string()),
         SqlType::Json => row.try_get::<Value, _>(name)?,
+        SqlType::Array(_) => panic_array_unsupported(&col.name),
     })
+}
+
+/// Boot-path-bypassed sentinel for Array fields. The REST plugin's
+/// SqlitePool-based code path can't bind or decode Postgres arrays;
+/// the field.backend system check should have failed boot when an
+/// Array field was registered against SQLite. A future Postgres-aware
+/// REST upgrade lifts this.
+fn panic_array_unsupported(column: &str) -> ! {
+    panic!(
+        "umbra-rest: column `{column}` is a Postgres-only Array; the \
+         field.backend system check should have failed boot. The REST \
+         plugin's auto-CRUD path runs against SqlitePool today; a \
+         Postgres-aware upgrade is a Phase 4 follow-on."
+    )
 }
 
 async fn insert_row(
@@ -600,6 +621,7 @@ fn bind_string<'q>(q: SqlxQuery<'q>, col: &Column, s: &str) -> Result<SqlxQuery<
             serde_json::from_str::<Value>(s)
                 .map_err(|e| ApiError::BadInput(format!("{}: {e}", col.name)))?,
         ),
+        SqlType::Array(_) => panic_array_unsupported(&col.name),
     })
 }
 
@@ -616,5 +638,6 @@ fn bind_null<'q>(q: SqlxQuery<'q>, col: &Column) -> SqlxQuery<'q> {
         SqlType::Timestamptz => q.bind(None::<DateTime<Utc>>),
         SqlType::Uuid => q.bind(None::<Uuid>),
         SqlType::Json => q.bind(None::<Value>),
+        SqlType::Array(_) => panic_array_unsupported(&col.name),
     }
 }

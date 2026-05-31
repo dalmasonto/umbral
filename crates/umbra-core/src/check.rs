@@ -136,6 +136,10 @@ pub fn framework_checks() -> Vec<SystemCheck> {
             id: "backend.url_scheme.matches_active_backend",
             run: backend_url_scheme_matches_active_backend,
         },
+        SystemCheck {
+            id: "field.backend",
+            run: field_backend,
+        },
     ]
 }
 
@@ -238,6 +242,71 @@ fn backend_url_scheme_matches_active_backend(ctx: &CheckContext<'_>) -> Vec<Syst
         }
     }
     findings
+}
+
+/// Walk every registered model and fail at boot when a field's type
+/// is incompatible with the active backend.
+///
+/// Phase 4.1 ships exactly one gated type: `SqlType::Array(_)`, which
+/// only works on Postgres. The check matches on the `Column::ty`
+/// stored in the migrate registry directly, rather than walking back
+/// to `Model::FIELDS` for the `supported_backends` slice (the latter
+/// isn't carried on `migrate::Column`). When the next Postgres-only
+/// `SqlType` variant lands (HStore, FullTextSearch, etc.), it gets
+/// added to the `is_postgres_only` match below.
+///
+/// **Error**, not Warning: a field rendered against the wrong backend
+/// produces incorrect DDL or a runtime panic deep inside `bind_value`.
+/// Boot-time failure with a clear message is the right behaviour.
+fn field_backend(ctx: &CheckContext<'_>) -> Vec<SystemCheckFinding> {
+    let mut findings = Vec::new();
+    let active = ctx.backend.name();
+    if active == "postgres" {
+        // No Postgres-only type is rejected on Postgres; the SQLite
+        // side does the rejecting. Early return keeps the registry
+        // walk out of the hot path on Postgres boots.
+        return findings;
+    }
+    // Low-level tests that drive `run_all` without booting an App
+    // never publish the model registry; the check would panic on
+    // `registered_plugins()`. Skip silently — there are no models to
+    // walk anyway.
+    if !crate::migrate::is_initialised() {
+        return findings;
+    }
+
+    for plugin in crate::migrate::registered_plugins() {
+        for model in crate::migrate::models_for_plugin(&plugin) {
+            for field in &model.fields {
+                if is_postgres_only(field.ty) {
+                    findings.push(SystemCheckFinding {
+                        check_id: "field.backend",
+                        severity: Severity::Error,
+                        location: CheckLocation::Settings,
+                        message: format!(
+                            "Field `{plugin}::{}::{}` has type {:?} which is Postgres-only, but the active backend is `{active}`.",
+                            model.name, field.name, field.ty,
+                        ),
+                        hint: Some(
+                            "switch UMBRA_DATABASE_URL to a `postgres://...` URL, \
+                             or change the field to a portable type — \
+                             `serde_json::Value` (SqlType::Json) is the closest \
+                             portable analogue to an array."
+                                .to_string(),
+                        ),
+                    });
+                }
+            }
+        }
+    }
+    findings
+}
+
+/// True for `SqlType` variants that only work on Postgres. Today this
+/// is just `Array(_)`; future Postgres-only types (HStore, CIDR /
+/// INET, FullTextSearch) get added to this match.
+fn is_postgres_only(ty: crate::orm::SqlType) -> bool {
+    matches!(ty, crate::orm::SqlType::Array(_))
 }
 
 /// Run every check in `checks` against `ctx`, accumulate findings, and

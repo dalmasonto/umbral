@@ -348,6 +348,11 @@ fn column_to_json(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<Value, 
             SqlType::Json => row
                 .try_get::<Option<Value>, _>(name)?
                 .unwrap_or(Value::Null),
+            // Array fields are Postgres-only and backup runs against
+            // the SQLite pool. The field.backend system check gates
+            // them at boot; reaching this means the boot path was
+            // bypassed.
+            SqlType::Array(_) => unreachable_array(&col.name),
         });
     }
     // Non-nullable: same dispatch without the Option layer.
@@ -363,7 +368,20 @@ fn column_to_json(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<Value, 
         SqlType::Timestamptz => Value::from(row.try_get::<DateTime<Utc>, _>(name)?.to_rfc3339()),
         SqlType::Uuid => Value::from(row.try_get::<Uuid, _>(name)?.to_string()),
         SqlType::Json => row.try_get::<Value, _>(name)?,
+        SqlType::Array(_) => unreachable_array(&col.name),
     })
+}
+
+/// Boot-path-bypassed sentinel. Array fields are Postgres-only — the
+/// field.backend system check fires at App::build before any dump or
+/// load runs against the SQLite pool. If we reach here, the boot path
+/// was bypassed.
+fn unreachable_array(column: &str) -> ! {
+    panic!(
+        "umbra backup: column `{column}` is a Postgres-only Array; \
+         the field.backend system check should have failed boot. \
+         For portable list storage use SqlType::Json instead."
+    )
 }
 
 fn bind_value<'q>(
@@ -387,6 +405,7 @@ fn bind_value<'q>(
             SqlType::Timestamptz => q.bind(None::<DateTime<Utc>>),
             SqlType::Uuid => q.bind(None::<Uuid>),
             SqlType::Json => q.bind(None::<Value>),
+            SqlType::Array(_) => unreachable_array(&col.name),
         });
     }
     let mismatch = |got: &str| BackupError::TypeMismatch {
@@ -442,6 +461,7 @@ fn bind_value<'q>(
         // encode side: the Value serializes to JSON text (SQLite) or
         // a JSONB byte stream (Postgres) before hitting the wire.
         SqlType::Json => q.bind(val),
+        SqlType::Array(_) => unreachable_array(&col.name),
     })
 }
 

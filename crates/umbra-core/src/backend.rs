@@ -151,6 +151,15 @@ impl DatabaseBackend for PostgresBackend {
             // vs `json` is meaningful for any real workload; the storage
             // overhead is negligible.
             SqlType::Json => ColumnType::JsonBinary,
+            // Postgres array. The inner type round-trips through this
+            // same map_type recursively (lifting ArrayElement to its
+            // SqlType equivalent), which keeps the per-element rendering
+            // in one place and lets future SqlType variants pick up
+            // array support automatically once they're added to
+            // ArrayElement.
+            SqlType::Array(elem) => {
+                ColumnType::Array(std::sync::Arc::new(self.map_type(elem.to_sql_type())))
+            }
         }
     }
 }
@@ -207,6 +216,18 @@ impl DatabaseBackend for SqliteBackend {
             // operators on SQLite fail at boot when the extension isn't
             // compiled in (rare but possible on bare-builds).
             SqlType::Json => ColumnType::Text,
+            // Postgres-only. The M4 `field.backend` system check fires
+            // at boot when an Array field is registered against SQLite,
+            // so reaching this arm at runtime means the boot path was
+            // bypassed (low-level test seeding, hand-rolled
+            // backend::init, etc.). Panic with a clear pointer rather
+            // than rendering a SQL fragment SQLite can't parse.
+            SqlType::Array(_) => panic!(
+                "umbra::backend::SqliteBackend::map_type: SqlType::Array is Postgres-only. \
+                 The field.backend system check should have failed boot; if you reached this \
+                 panic, either the model registry wasn't initialised before map_type ran or \
+                 the check was disabled. For portable list storage, use SqlType::Json instead."
+            ),
         }
     }
 }
