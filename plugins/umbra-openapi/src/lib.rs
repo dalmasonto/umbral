@@ -137,9 +137,20 @@ impl Plugin for OpenApiPlugin {
 
     fn routes(&self) -> Router {
         let _ = CONFIG.set(self.clone());
-        Router::new()
+        let mut router = Router::new()
             .route(&self.spec_url(), get(spec_handler))
-            .route(&self.ui_route(), get(swagger_ui_handler))
+            .route(&self.ui_route(), get(swagger_ui_handler));
+        // Also register the slash-less form (`/openapi` alongside
+        // `/openapi/`) so the trailing-slash gotcha doesn't bite users
+        // who haven't opted into the framework-wide
+        // `App::builder().slash_redirect(SlashRedirect::Append)`
+        // policy. Cheap: same handler, no extra state. Skipped when
+        // the base path is `/` (the ui_route is already just `/`,
+        // no alternate form to register).
+        if self.base_path != "/" {
+            router = router.route(&self.base_path, get(swagger_ui_handler));
+        }
+        router
     }
 }
 

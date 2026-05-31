@@ -214,6 +214,7 @@ pub mod web {
     //! axum). Later milestones will add umbra-specific wrappers without
     //! changing the names here.
 
+    pub use umbra_core::slash::SlashRedirect;
     pub use umbra_core::web::*;
 }
 

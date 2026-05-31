@@ -10,6 +10,10 @@ rust-version.workspace = true
 
 [dependencies]
 axum = "0.8"
+# tower is the Service/Layer trait core that axum builds on. We need
+# it as a regular (not dev) dep because the trailing-slash redirect
+# layer in `crate::slash` implements `tower::Layer` + `tower::Service`.
+tower = { version = "0.5", default-features = false }
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "string"] }
 async-trait = "0.1"

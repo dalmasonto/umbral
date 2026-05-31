@@ -70,6 +70,7 @@ pub struct AppBuilder {
     models: Vec<ModelMeta>,
     plugins: Vec<Box<dyn Plugin>>,
     templates_dir: Option<std::path::PathBuf>,
+    slash_redirect: crate::slash::SlashRedirect,
 }
 
 impl AppBuilder {
@@ -149,6 +150,26 @@ impl AppBuilder {
     /// project root is the only path the engine knows about.
     pub fn templates_dir<P: Into<std::path::PathBuf>>(mut self, path: P) -> Self {
         self.templates_dir = Some(path.into());
+        self
+    }
+
+    /// Set the trailing-slash redirect policy. Django's `APPEND_SLASH`
+    /// port — see [`crate::slash::SlashRedirect`].
+    ///
+    /// Default is `Off` (axum's strict matching). Most apps want
+    /// `Append` (Django default: `/foo` 404 → 308 → `/foo/`) so that
+    /// the same URL works with or without the trailing slash.
+    ///
+    /// ```ignore
+    /// use umbra::prelude::*;
+    /// use umbra::web::SlashRedirect;
+    ///
+    /// App::builder()
+    ///     .slash_redirect(SlashRedirect::Append)
+    ///     .build()?;
+    /// ```
+    pub fn slash_redirect(mut self, policy: crate::slash::SlashRedirect) -> Self {
+        self.slash_redirect = policy;
         self
     }
 
@@ -354,6 +375,21 @@ impl AppBuilder {
         // needs it.
         for plugin in &sorted_plugins {
             router = plugin.wrap_router(router);
+        }
+
+        // Phase 5.6 — install the trailing-slash redirect fallback if
+        // the user opted in via `.slash_redirect()`. We snapshot the
+        // router BEFORE installing the fallback — the snapshot is what
+        // gets probed for the alternate path, and it can't recursively
+        // hit this fallback because it doesn't have one. axum
+        // `Router::layer()` wraps individual routes only; it doesn't
+        // run on requests that miss every route, so it can't catch
+        // those 404s. The fallback handler is the right surface for
+        // catching missed paths.
+        if self.slash_redirect != crate::slash::SlashRedirect::Off {
+            let snapshot = router.clone();
+            let fallback = crate::slash::slash_redirect_fallback(snapshot, self.slash_redirect);
+            router = router.fallback(fallback);
         }
 
         // Phase 6 — fire each plugin's `on_ready` in topological order.
