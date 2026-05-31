@@ -1,21 +1,21 @@
 ## Status
 
-**5 of 10 closed.** Last updated 2026-06-01.
+**6 of 10 closed.** Last updated 2026-06-01.
 
 | # | Gap | Status |
 |---|-----|--------|
-| 1 | Email plugin attachments | done — pending commit |
+| 1 | Email plugin attachments | done — `abf502c` |
 | 2 | Django-style 404 / 500 pages | done — `e42f408` |
 | 3 | CLI: `umbra startproject` / `startapp` + dispatch shape | done — `95f0709` + `e5645a4` |
 | 4 | Plugin docs + REST custom field rendering | done — `1cdbc18` (docs) + `dc84dbf` (code) |
 | 5 | OpenAPI customisation params (`.description()`) | done — `e42f408` |
-| 6 | Security audit across system + plugins | open |
+| 6 | Security audit across system + plugins | done — `cd656d5` |
 | 7 | No `.create()` method on `Model` objects | open |
 | 8 | No `.update()` method on `Model` objects | open |
 | 9 | No `.delete()` method on `Model` objects | open |
 | 10 | No bulk create/update/delete on `Model` objects | open |
 
-Gaps 7–10 are one architectural shape (a write-side complement to the existing read-side QuerySet terminals); they're best tackled as a single Model-writes session. Gap 6 benefits from its own dedicated security-focused session.
+Gaps 7–10 are one architectural shape (a write-side complement to the existing read-side QuerySet terminals); they're best tackled as a single Model-writes session.
 
 ## Seen/Known gaps
 
@@ -30,7 +30,8 @@ Gaps 7–10 are one architectural shape (a write-side complement to the existing
        — Custom field rendering shipped: `RestPlugin::hide(table, field)`, `.transform(table, field, |v| ...)`, `.computed(table, name, |row| ...)`. Per-row, per-table, applied in hide→transform→computed order on every outbound response. The example `transform("user", "email", mask_email)` in rest.mdx now matches exactly the DRF `get_email(obj)` pattern called out in the gap. 8 new tests in `tests/field_overrides.rs`.
 5. [x] The openapi plugin should allow the user to pass in params to customize the openapi schema. ie the base path, title, version, description, etc.
        — `.description(s)` added in commit e42f408; `.at()`, `.title()`, `.version()`, `.exclude()` already existed.
-6. [ ] Security audit across the system and the plugins
+6. [x] Security audit across the system and the plugins
+       — Shipped via `cd656d5`. Four parallel audit agents (ORM/SQL, Auth+Sessions+RLS, Templates+XSS+Headers, CLI+Scaffolding+IO) produced triaged reports. Combined findings: 2 HIGH (both fixed), 6 MEDIUM (all fixed or documented), 8 LOW (key ones fixed, rest acknowledged in canary comments). HIGH fixes: session tokens SHA-256 hashed before DB storage so a DB leak doesn't surrender live sessions; CSRF compare uses `subtle::ConstantTimeEq`. MEDIUM fixes: defense-in-depth for dev secret_key when bind_addr isn't loopback; `model.table` quote-doubled in REST/admin/backup SQL; RLS using/with_check raw-SQL trust boundary documented with `# SQL injection warning` sections; admin sanitises sqlx errors to a fixed string (logs full error server-side); Content-Type in error pages derived from render result (not template-was-set). LOW: CRLF redirect canary comment, autoescape extension-whitelist sync warning, ConsoleBackend warns in non-dev environments. Major verified-clean surfaces: argon2id w/ per-password CSPRNG salt, account-enumeration defense, HttpOnly+Secure+SameSite cookie flags, autoescape on by default for HTML, no open redirects, scaffold name validation blocks path traversal, no secret logging, lettre's typed APIs for email headers (no manual construction → no CRLF injection in From/To/Subject/filename).
 7. [ ] There is no `.create()` method on `Model` objects
 8. [ ] There is no `.update()` method on `Model` objects
 9. [ ] There is no `.delete()` method on `Model` objects
