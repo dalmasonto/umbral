@@ -28,18 +28,15 @@ A working list. Each item carries a status (open / shipped) plus rough scope, so
 - ✅ **umbra-security plugin.** CSRF protection (double-submit cookie) + default security headers (`X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`); opt-in HSTS. First consumer of `Plugin::wrap_router`. Commit: `03fb8dd`.
 - ✅ **umbra-testing crate.** Django `TestCase + Client` ergonomics: `TestClient` over an `axum::Router` with verb-shaped methods, a per-client cookie jar (Set-Cookie on response → Cookie on next request), default header pinning, JSON helpers. `TempPool` for tempfile-backed sqlite. `TestResponse` with `assert_status`, `assert_status_ok`, `assert_body_contains`, `assert_header`, `body_json::<T>` (body printed on parse error). Lives under `crates/` (not a plugin); consumers drop it in `[dev-dependencies]`. Commit: `12bb39c`.
 - ✅ **`Plugin::commands()` CLI lift.** Closes the second M7 deferral. `umbra::cli::PluginCommand` (async trait: `command() -> clap::Command`, `run(matches)`); `Plugin::commands()` returns a `Vec<Box<dyn PluginCommand>>`. `umbra::cli::dispatch(plugins, args)` walks every plugin's commands, composes them under one clap parser, and routes. Duplicate names are first-registered-wins with a warning. App keeps its plugins post-build (`app.plugins()`) so dispatch can borrow them. Demonstrated by umbra-tasks shipping `tasks-worker` (with `--once`). Commit: `5d5b4c4`.
+- ✅ **Postgres rollout Phase 1 — DbPool enum + backend-aware connect.** `umbra::db::DbPool` (sqlite + postgres variants) is the new type the App stores; `umbra::db::connect(url)` dispatches by URL scheme; `connect_sqlite(url)` is the typed shortcut. `AppBuilder::database` accepts `impl Into<DbPool>` so every existing caller continues to work. `pool()` still returns `SqlitePool` for backward compat (panics on a Postgres variant with a clear Phase-2 hint); `pool_dispatched()` returns `&DbPool` for code ready to branch. New `BuildError::DatabaseBackendMismatch` cross-checks `settings.database_url` against the registered pool's runtime backend at boot. **Deviation from the original sketch**: a pure SqlitePool → AnyPool swap doesn't fit in one round (sea-query-binder has no `Any` backend), so the seam landed as a typed enum instead. Postgres connections are accepted at boot; the queryset / migration engine still target SQLite at runtime — Phase 2 threads `DbPool` through them. Commit: `3228f57`.
 
 ## Open — large scope (multi-round work)
 
-### #4 + #5: Postgres backend + RLS
+### #4 + #5: Postgres backend + RLS — Phases 2-4
 
-**Decision:** full `sqlx::Any` refactor (you picked this option). The realistic scope is bigger than a single autonomous commit — 55 `SqlitePool` / `SqliteRow` / `SqliteQueryBuilder` references across 18 files, plus 4 new code paths.
+Phase 1 shipped (DbPool enum + backend-aware connect + boot-time mismatch detection). Remaining phases:
 
-**Phased plan**, each phase a dedicated round so the test suite stays green throughout:
-
-- **Phase 1 — AnyPool plumbing.** Enable `sqlx`'s `any` + `postgres` features. Refactor `crates/umbra-core/src/db.rs` (`SqlitePool` → `AnyPool`). Change `Model`'s supertrait bound from `FromRow<'r, SqliteRow>` to `FromRow<'r, AnyRow>`. Update `queryset.rs`. Touch every test (the boots all use `SqlitePool`). Tests still target sqlite at runtime; nothing Postgres-specific yet.
-
-- **Phase 2 — Backend dispatch in migrate.** `render_operation` dispatches on `backend::active().name()`. SQLite path keeps its INTEGER PRIMARY KEY AUTOINCREMENT quirk; Postgres path emits `BIGSERIAL` / `GENERATED ALWAYS AS IDENTITY`. `render_alter_column_dance` similarly conditional (Postgres has native `ALTER COLUMN` and doesn't need the table-recreation dance).
+- **Phase 2 — Backend dispatch in migrate.** `render_operation` dispatches on `backend::active().name()`. SQLite path keeps its INTEGER PRIMARY KEY AUTOINCREMENT quirk; Postgres path emits `BIGSERIAL` / `GENERATED ALWAYS AS IDENTITY`. `render_alter_column_dance` similarly conditional (Postgres has native `ALTER COLUMN` and doesn't need the table-recreation dance). Queryset / migration engine plumb through `pool_dispatched()` for the per-variant query path.
 
 - **Phase 3 — Postgres introspection in inspectdb.** Replace the PRAGMA path with a `pg_catalog` query when the active backend is Postgres. Same `IntrospectedSchema` output; different source.
 
