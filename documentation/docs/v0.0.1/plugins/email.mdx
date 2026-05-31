@@ -1,0 +1,149 @@
+---
+title: Email plugin
+description: SMTP + template-driven transactional email. Django's `django.core.mail` shape, with file attachments.
+sidebar_position: 9
+icon: mail
+---
+
+`umbra-email` ships a single `send(&EmailMessage)` call backed by a
+configured SMTP transport. The dev default is a console backend that
+prints messages to stderr instead of opening connections — password
+reset and welcome flows work on a fresh `cargo run` without anyone
+wiring credentials.
+
+## Quickstart
+
+```rust
+use umbra::prelude::*;
+use umbra_email::{EmailMessage, EmailPlugin, send};
+
+let app = App::builder()
+    .plugin(EmailPlugin::default())
+    .build()?;
+
+// Anywhere a handler runs:
+let msg = EmailMessage::new("Welcome to Acme", vec!["alice@example.com".into()])
+    .from("noreply@acme.test")
+    .text_body("Glad to have you.");
+
+send(&msg).await?;
+```
+
+The plugin's job is to read settings, install a `OnceLock<Backend>`,
+and forward `send` calls through it. The plugin has no routes or
+models.
+
+## Backends
+
+| Setting | Effect |
+|---------|--------|
+| `email_smtp_host` unset | **Console backend** (default). Messages render to stderr; no network. |
+| `email_smtp_host` set | **SMTP backend**. Connects to the configured relay with STARTTLS. |
+| `UMBRA_EMAIL_BACKEND=console` | Forces the console backend even when SMTP keys exist. Useful in CI / tests. |
+
+SMTP settings (all read from `UMBRA_<KEY>` env vars or `umbra.toml`):
+
+```bash
+export UMBRA_EMAIL_SMTP_HOST=smtp.example.com
+export UMBRA_EMAIL_SMTP_PORT=587
+export UMBRA_EMAIL_SMTP_USER=acme@example.com
+export UMBRA_EMAIL_SMTP_PASSWORD=secret
+export UMBRA_EMAIL_DEFAULT_FROM=noreply@acme.test
+```
+
+## Building messages
+
+```rust
+let msg = EmailMessage::new("Subject", vec!["a@b.test".into()])
+    .from("sender@acme.test")
+    .add_to("c@d.test")                 // append another recipient
+    .text_body("plain text")
+    .html_body("<p>HTML</p>")           // pair with text_body → multipart/alternative
+    .reply_to("support@acme.test");
+```
+
+`text_body` and `html_body` compose as `multipart/alternative` when
+both are present so the recipient's client picks one.
+
+## File attachments
+
+Pass raw bytes plus the MIME type. For a file on disk, read it
+yourself — the plugin doesn't take paths because it doesn't want to
+guess at sync vs async I/O or content-type detection on your behalf.
+
+```rust
+use umbra_email::EmailMessage;
+
+let pdf = std::fs::read("invoice.pdf")?;
+
+let msg = EmailMessage::new("Your invoice", vec!["alice@example.com".into()])
+    .text_body("Please find your invoice attached.")
+    .attach("invoice.pdf", "application/pdf", pdf);
+
+send(&msg).await?;
+```
+
+Multiple attachments work — call `.attach(...)` once per file:
+
+```rust
+let msg = EmailMessage::new("Quarterly reports", recipients)
+    .text_body("Three reports attached.")
+    .attach("q1.pdf", "application/pdf", q1_pdf)
+    .attach("q2.pdf", "application/pdf", q2_pdf)
+    .attach("q3.pdf", "application/pdf", q3_pdf);
+```
+
+When any attachment is present, the message renders as
+`multipart/mixed`. If you also have both text and HTML bodies, the
+two-body shape nests inside the mixed envelope:
+
+```text
+multipart/mixed
+├── multipart/alternative
+│     ├── text/plain
+│     └── text/html
+├── attachment 1
+└── attachment 2
+```
+
+<Callout type="info">
+**Why bytes-only?** Path-loading would force the plugin to decide
+between sync `std::fs::read` (blocks the executor) and async
+`tokio::fs::read` (changes the `attach` signature). Auto content-type
+detection would pull in `mime_guess`. Both are easy enough to do at
+the call site that the plugin's API stays narrow. If a real consumer
+surfaces a need for either, adding `.attach_file(path)` is
+non-breaking.
+</Callout>
+
+## Templates
+
+The `render_email_body` helper renders an umbra template into a
+string and maps `TemplateError` into `EmailError`. Useful for the
+HTML half of a multipart message:
+
+```rust
+use serde::Serialize;
+use umbra_email::render_email_body;
+
+#[derive(Serialize)]
+struct WelcomeContext<'a> { name: &'a str }
+
+let html = render_email_body(
+    "emails/welcome.html",
+    &WelcomeContext { name: "Alice" },
+)?;
+
+let msg = EmailMessage::new("Welcome", vec!["alice@example.com".into()])
+    .text_body("Welcome, Alice.")
+    .html_body(html);
+```
+
+## What's not in v1
+
+- **No retry queue.** Transient SMTP failures bubble up. Wiring sends
+  through `umbra-tasks` is the natural follow-on.
+- **No inline images** (`cid:` references from HTML). Use a hosted
+  URL for embedded logos / branding.
+- **No CC / BCC.** Single `to:` list only.
+- **No S/MIME or DKIM signing.** Configure signing at your relay.

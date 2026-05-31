@@ -36,8 +36,9 @@
 //! - No retry queue. Transient SMTP failures bubble up as
 //!   `EmailError::Smtp`. Wiring this through `umbra-tasks` lands in a
 //!   future round (`enqueue("send_email", payload)`).
-//! - No attachments, no inline images, no CC / BCC. Plain
-//!   From / To / Subject / Reply-To / Body.
+//! - File attachments shipped via [`EmailMessage::attach`]. Inline
+//!   images (`cid:` references from HTML) and CC / BCC are still
+//!   future work — the gap a real consumer surfaces first wins.
 //! - No S/MIME or DKIM signing. Use your relay's signing.
 //! - One recipient list (`to`). Multiple recipients work; CC and BCC
 //!   do not.
@@ -50,6 +51,7 @@
 
 use std::sync::OnceLock;
 
+use lettre::message::header::{ContentDisposition, ContentType};
 use lettre::message::{Mailbox, MultiPart, SinglePart};
 use lettre::transport::smtp::authentication::Credentials;
 use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
@@ -100,6 +102,53 @@ pub struct EmailMessage {
     pub text_body: Option<String>,
     pub html_body: Option<String>,
     pub reply_to: Option<String>,
+    /// File attachments. Each lands as a separate part under a
+    /// `multipart/mixed` envelope when the message is composed.
+    /// Order is preserved; empty by default. See [`Attachment`] and
+    /// [`Self::attach`].
+    pub attachments: Vec<Attachment>,
+}
+
+/// One file attachment carried by an [`EmailMessage`].
+///
+/// The bytes-only shape is intentional for v1: no path-loading
+/// (`std::fs::read` is one line for the file case), no auto content-
+/// type detection (the caller knows what they generated), no inline-
+/// image / `cid:` support (use a hosted CDN URL in the HTML body
+/// instead). When a real consumer surfaces a need for any of those,
+/// the API extends — adding fields is non-breaking, taking them away
+/// later isn't.
+///
+/// Construct via [`Self::new`] or use [`EmailMessage::attach`] to
+/// register one in a builder chain without naming the struct.
+#[derive(Debug, Clone)]
+pub struct Attachment {
+    /// Filename surfaced to the recipient (the `filename=` parameter
+    /// in the `Content-Disposition` header). Sanitised by lettre at
+    /// header-render time — no escaping needed at the call site.
+    pub filename: String,
+    /// MIME content type. Use the canonical `type/subtype` form
+    /// (e.g. `"application/pdf"`, `"image/png"`). Invalid content
+    /// types surface as a `lettre` error during `send`.
+    pub content_type: String,
+    /// Raw bytes. Gets base64-encoded by lettre at MIME-render time;
+    /// pass the unencoded payload here.
+    pub data: Vec<u8>,
+}
+
+impl Attachment {
+    /// Build an attachment from its three required pieces.
+    pub fn new<F: Into<String>, C: Into<String>>(
+        filename: F,
+        content_type: C,
+        data: Vec<u8>,
+    ) -> Self {
+        Self {
+            filename: filename.into(),
+            content_type: content_type.into(),
+            data,
+        }
+    }
 }
 
 impl EmailMessage {
@@ -155,6 +204,31 @@ impl EmailMessage {
         self.reply_to = Some(reply_to.into());
         self
     }
+
+    /// Add a file attachment. The message is composed as
+    /// `multipart/mixed` when any attachments are present; the body
+    /// (text / html / both) lands as one part and each attachment
+    /// follows.
+    ///
+    /// Pass the raw bytes — lettre base64-encodes them at the
+    /// MIME-render step. For a file on disk, read it yourself:
+    ///
+    /// ```ignore
+    /// let pdf = std::fs::read("invoice.pdf")?;
+    /// let msg = EmailMessage::new("Your invoice", vec!["a@b.com".into()])
+    ///     .text_body("See attached.")
+    ///     .attach("invoice.pdf", "application/pdf", pdf);
+    /// ```
+    pub fn attach<F: Into<String>, C: Into<String>>(
+        mut self,
+        filename: F,
+        content_type: C,
+        data: Vec<u8>,
+    ) -> Self {
+        self.attachments
+            .push(Attachment::new(filename, content_type, data));
+        self
+    }
 }
 
 // =========================================================================
@@ -182,6 +256,13 @@ pub enum EmailError {
     Smtp(lettre::transport::smtp::Error),
     /// Rendering an email body template failed.
     Templates(TemplateError),
+    /// An attachment's `content_type` didn't parse as a valid MIME
+    /// type. The filename is carried so the user-facing message
+    /// names which attachment is bad.
+    InvalidAttachmentContentType {
+        filename: String,
+        content_type: String,
+    },
 }
 
 impl std::fmt::Display for EmailError {
@@ -198,6 +279,13 @@ impl std::fmt::Display for EmailError {
             EmailError::Build(e) => write!(f, "umbra-email: message build: {e}"),
             EmailError::Smtp(e) => write!(f, "umbra-email: smtp: {e}"),
             EmailError::Templates(e) => write!(f, "umbra-email: templates: {e}"),
+            EmailError::InvalidAttachmentContentType {
+                filename,
+                content_type,
+            } => write!(
+                f,
+                "umbra-email: attachment `{filename}` has invalid content type `{content_type}`",
+            ),
         }
     }
 }
@@ -348,7 +436,17 @@ pub async fn send(message: &EmailMessage) -> Result<(), EmailError> {
     }
 }
 
-fn compose(from: &str, message: &EmailMessage) -> Result<Message, EmailError> {
+/// Compose an `EmailMessage` into a wire-ready `lettre::Message`.
+///
+/// The public bridge between the umbra type and the lettre type.
+/// `send_email` calls this internally; downstream callers who want to
+/// queue, sign, or introspect a message before delivery can call it
+/// directly. `lettre::Message::formatted()` then yields the raw RFC
+/// 822 / MIME bytes.
+///
+/// `from` is the envelope From address — typically pulled from the
+/// `email_default_from` setting when `EmailMessage.from` is empty.
+pub fn compose(from: &str, message: &EmailMessage) -> Result<Message, EmailError> {
     let from_mbox: Mailbox = from.parse()?;
     let mut builder = Message::builder().from(from_mbox).subject(&message.subject);
 
@@ -362,18 +460,75 @@ fn compose(from: &str, message: &EmailMessage) -> Result<Message, EmailError> {
         builder = builder.reply_to(mbox);
     }
 
-    // Body shape: text-only, html-only, both (alternative), or empty.
-    let message = match (&message.text_body, &message.html_body) {
-        (Some(text), Some(html)) => builder.multipart(MultiPart::alternative_plain_html(
-            text.clone(),
-            html.clone(),
-        ))?,
-        (Some(text), None) => builder.singlepart(SinglePart::plain(text.clone()))?,
-        (None, Some(html)) => builder.singlepart(SinglePart::html(html.clone()))?,
-        (None, None) => builder.singlepart(SinglePart::plain(String::new()))?,
-    };
+    // No attachments → use the existing single/alternative body
+    // shape directly. Adding a multipart/mixed wrapper around a
+    // single-part body would still validate but adds an extra MIME
+    // level for no reason, so skip it when we can.
+    if message.attachments.is_empty() {
+        let composed = match (&message.text_body, &message.html_body) {
+            (Some(text), Some(html)) => builder.multipart(MultiPart::alternative_plain_html(
+                text.clone(),
+                html.clone(),
+            ))?,
+            (Some(text), None) => builder.singlepart(SinglePart::plain(text.clone()))?,
+            (None, Some(html)) => builder.singlepart(SinglePart::html(html.clone()))?,
+            (None, None) => builder.singlepart(SinglePart::plain(String::new()))?,
+        };
+        return Ok(composed);
+    }
 
-    Ok(message)
+    // Attachments present → wrap the body in `multipart/mixed`. The
+    // body part is either a singlepart (one body) or a
+    // multipart/alternative (both bodies) nested inside the mixed
+    // envelope, per RFC 2046:
+    //
+    //   multipart/mixed
+    //     ├── multipart/alternative
+    //     │     ├── text/plain
+    //     │     └── text/html
+    //     ├── attachment 1
+    //     └── attachment 2
+    let mut mixed = MultiPart::mixed().build();
+    let body_part = match (&message.text_body, &message.html_body) {
+        (Some(text), Some(html)) => {
+            // alternative as a nested multipart inside mixed.
+            mixed = mixed.multipart(MultiPart::alternative_plain_html(
+                text.clone(),
+                html.clone(),
+            ));
+            None
+        }
+        (Some(text), None) => Some(SinglePart::plain(text.clone())),
+        (None, Some(html)) => Some(SinglePart::html(html.clone())),
+        (None, None) => Some(SinglePart::plain(String::new())),
+    };
+    if let Some(part) = body_part {
+        mixed = mixed.singlepart(part);
+    }
+
+    for att in &message.attachments {
+        mixed = mixed.singlepart(build_attachment_part(att)?);
+    }
+
+    Ok(builder.multipart(mixed)?)
+}
+
+/// Render one [`Attachment`] into a `SinglePart` with the right
+/// Content-Type and Content-Disposition headers. lettre handles the
+/// base64 encoding when the part lands in the multipart/mixed tree.
+fn build_attachment_part(att: &Attachment) -> Result<SinglePart, EmailError> {
+    let ct: ContentType =
+        att.content_type
+            .parse()
+            .map_err(|_| EmailError::InvalidAttachmentContentType {
+                filename: att.filename.clone(),
+                content_type: att.content_type.clone(),
+            })?;
+    let disposition = ContentDisposition::attachment(&att.filename);
+    Ok(SinglePart::builder()
+        .header(ct)
+        .header(disposition)
+        .body(att.data.clone()))
 }
 
 async fn deliver_smtp(cfg: &EmailConfig, message: Message) -> Result<(), EmailError> {
