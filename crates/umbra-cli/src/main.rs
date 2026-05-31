@@ -15,9 +15,35 @@
 //! `App::build()` publishes synchronously.
 //!
 //! Later milestones add `worker`, `inspectdb`, a configurable bind
-//! address, signal-based graceful shutdown, and (from M7) per-plugin
-//! subcommands surfaced via `Plugin::commands()`. See
-//! `docs/specs/06-migration-engine.md` and `docs/specs/07-inspectdb.md`.
+//! address, and signal-based graceful shutdown.
+//!
+//! ## Plugin-contributed subcommands
+//!
+//! `Plugin::commands()` is the seam for plugin-contributed CLI
+//! verbs (e.g. `umbra-tasks` ships `tasks-worker`). The framework's
+//! demo binary deliberately doesn't wire those in (it registers no
+//! plugins of its own, and double-booting the App across the
+//! built-in commands and a plugin-dispatch prelude is awkward).
+//! A downstream user's binary looks like:
+//!
+//! ```ignore
+//! #[tokio::main]
+//! async fn main() {
+//!     let app = umbra::App::builder()
+//!         .plugin(umbra_tasks::TasksPlugin)
+//!         .database("default", pool)
+//!         .build()
+//!         .unwrap();
+//!     match umbra::cli::dispatch(app.plugins(), std::env::args_os()).await {
+//!         Ok(umbra::cli::DispatchOutcome::Matched(_)) => return,
+//!         Ok(umbra::cli::DispatchOutcome::Help(text)) => { print!("{text}"); return; }
+//!         _ => { /* fall through to framework built-ins or a clap parse */ }
+//!     }
+//! }
+//! ```
+//!
+//! See `docs/specs/06-migration-engine.md`, `docs/specs/07-inspectdb.md`,
+//! and the `Plugin::commands()` docs in `umbra-core::plugin`.
 
 use std::net::SocketAddr;
 use std::path::PathBuf;

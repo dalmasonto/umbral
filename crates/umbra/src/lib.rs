@@ -97,6 +97,31 @@ pub mod plugin {
     pub use umbra_core::plugin::{AppContext, Plugin, PluginError};
 }
 
+pub mod cli {
+    //! Plugin-contributed CLI subcommands.
+    //!
+    //! Plugins implement [`PluginCommand`] and return values from
+    //! `Plugin::commands()`; the user's binary calls [`dispatch`] with
+    //! the App's plugin list to route args to the right handler. See
+    //! `docs/specs/02-plugin-contract.md` and `umbra-core::cli` for
+    //! the full design.
+    //!
+    //! ```ignore
+    //! use umbra::cli::dispatch;
+    //!
+    //! #[tokio::main]
+    //! async fn main() {
+    //!     let app = umbra::App::builder()
+    //!         .plugin(my_plugin::MyPlugin)
+    //!         .build()
+    //!         .unwrap();
+    //!     dispatch(app.plugins(), std::env::args_os()).await.unwrap();
+    //! }
+    //! ```
+
+    pub use umbra_core::cli::{CliError, DispatchOutcome, PluginCommand, dispatch};
+}
+
 pub mod forms {
     //! Form parsing, validation, and HTML rendering.
     //!

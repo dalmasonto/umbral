@@ -16,6 +16,7 @@ use crate::settings::Settings;
 /// route passed to `AppBuilder::router()`).
 pub struct App {
     router: Router,
+    plugins: Vec<Box<dyn Plugin>>,
 }
 
 impl App {
@@ -46,6 +47,15 @@ impl App {
     /// want `serve()`'s opinionated listener.
     pub fn into_router(self) -> Router {
         self.router
+    }
+
+    /// Borrow the registered plugins in topological dependency order.
+    ///
+    /// Used by [`crate::cli::dispatch`] to walk every plugin's
+    /// `commands()` contribution at CLI dispatch time. Borrowed (not
+    /// moved) so the App stays usable after a dispatch call returns.
+    pub fn plugins(&self) -> &[Box<dyn Plugin>] {
+        &self.plugins
     }
 }
 
@@ -193,9 +203,11 @@ impl AppBuilder {
         // order. Reserved-name and duplicate-name checks reject the
         // build before any ambient state gets published; the toposort
         // surfaces both missing deps and cycles as `BuildError`. The
-        // sorted slice is reused in phases 3 / 4 / 5 / 6 so every plugin
-        // walk reads from one canonical order.
-        let sorted_plugins = sort_plugins(&self.plugins)?;
+        // sorted vec is reused in phases 3 / 4 / 5 / 6 so every plugin
+        // walk reads from one canonical order, then handed to `App` so
+        // post-build callers (notably `umbra::cli::dispatch`) can walk
+        // the same list.
+        let sorted_plugins = sort_plugins(std::mem::take(&mut self.plugins))?;
 
         // Phase 2 — detect backend from the configured URL.
         let backend =
@@ -340,7 +352,10 @@ impl AppBuilder {
                 })?;
         }
 
-        Ok(App { router })
+        Ok(App {
+            router,
+            plugins: sorted_plugins,
+        })
     }
 }
 
@@ -356,13 +371,13 @@ impl AppBuilder {
 /// - A `dependencies()` entry that doesn't name a registered plugin.
 /// - A dependency cycle (the remaining-unsorted set surfaces as
 ///   `BuildError::PluginCycle`).
-fn sort_plugins(plugins: &[Box<dyn Plugin>]) -> Result<Vec<&dyn Plugin>, BuildError> {
+fn sort_plugins(plugins: Vec<Box<dyn Plugin>>) -> Result<Vec<Box<dyn Plugin>>, BuildError> {
     use std::collections::{BTreeMap, BTreeSet};
 
     // Reserved + duplicate-name checks. The implicit `"app"` plugin is
     // not counted toward duplicates; only the user's plugin list is.
     let mut seen: BTreeSet<&'static str> = BTreeSet::new();
-    for plugin in plugins {
+    for plugin in &plugins {
         let name = plugin.name();
         if name == crate::migrate::APP_PLUGIN_NAME {
             return Err(BuildError::ReservedPluginName);
@@ -372,16 +387,19 @@ fn sort_plugins(plugins: &[Box<dyn Plugin>]) -> Result<Vec<&dyn Plugin>, BuildEr
         }
     }
 
-    // Index plugins by name for the dependency lookups below. `BTreeMap`
-    // keeps the iteration order deterministic, which matters for the
-    // tie-break in Kahn's algorithm.
-    let by_name: BTreeMap<&'static str, &dyn Plugin> =
-        plugins.iter().map(|p| (p.name(), p.as_ref())).collect();
+    // Index plugins by name for the dependency lookups + the
+    // sort-by-name traversal below. We pull the boxes out of the
+    // input vec by index later, so the index table stays alongside.
+    let by_name: BTreeMap<&'static str, usize> = plugins
+        .iter()
+        .enumerate()
+        .map(|(i, p)| (p.name(), i))
+        .collect();
 
     // Dependency-exists check. Done before the toposort so a missing
     // dep surfaces with the asking plugin's name attached, not as a
     // cycle false-positive.
-    for plugin in plugins {
+    for plugin in &plugins {
         for dep in plugin.dependencies() {
             if !by_name.contains_key(dep) {
                 return Err(BuildError::DependencyNotFound {
@@ -392,12 +410,13 @@ fn sort_plugins(plugins: &[Box<dyn Plugin>]) -> Result<Vec<&dyn Plugin>, BuildEr
         }
     }
 
-    // Kahn's algorithm. `remaining_deps[name]` is the set of names this
-    // plugin still waits on; once it empties, the plugin joins the
-    // ready queue. The queue is a sorted set so ties resolve by name.
-    let mut remaining_deps: BTreeMap<&'static str, BTreeSet<&'static str>> = by_name
+    // Kahn's algorithm against the index table. `remaining_deps[name]`
+    // is the set of names this plugin still waits on; once it empties,
+    // the plugin joins the ready queue. The queue is a sorted set so
+    // ties resolve by name.
+    let mut remaining_deps: BTreeMap<&'static str, BTreeSet<&'static str>> = plugins
         .iter()
-        .map(|(name, plugin)| (*name, plugin.dependencies().iter().copied().collect()))
+        .map(|p| (p.name(), p.dependencies().iter().copied().collect()))
         .collect();
 
     let mut ready: BTreeSet<&'static str> = remaining_deps
@@ -405,11 +424,11 @@ fn sort_plugins(plugins: &[Box<dyn Plugin>]) -> Result<Vec<&dyn Plugin>, BuildEr
         .filter_map(|(name, deps)| if deps.is_empty() { Some(*name) } else { None })
         .collect();
 
-    let mut sorted: Vec<&dyn Plugin> = Vec::with_capacity(plugins.len());
+    let mut order: Vec<&'static str> = Vec::with_capacity(plugins.len());
     while let Some(name) = ready.iter().next().copied() {
         ready.remove(&name);
         remaining_deps.remove(&name);
-        sorted.push(by_name[&name]);
+        order.push(name);
         for (other_name, deps) in remaining_deps.iter_mut() {
             if deps.remove(&name) && deps.is_empty() {
                 ready.insert(*other_name);
@@ -422,6 +441,20 @@ fn sort_plugins(plugins: &[Box<dyn Plugin>]) -> Result<Vec<&dyn Plugin>, BuildEr
         return Err(BuildError::PluginCycle { names });
     }
 
+    // Reorder the owned boxes into topological order. We pull each
+    // plugin out of an `Option` slot so the move is statically
+    // tracked; every slot is taken exactly once because the toposort
+    // produced one entry per plugin.
+    let mut slots: Vec<Option<Box<dyn Plugin>>> = plugins.into_iter().map(Some).collect();
+    let mut sorted: Vec<Box<dyn Plugin>> = Vec::with_capacity(order.len());
+    for name in order {
+        let idx = by_name[&name];
+        sorted.push(
+            slots[idx]
+                .take()
+                .expect("toposort produced one entry per plugin"),
+        );
+    }
     Ok(sorted)
 }
 

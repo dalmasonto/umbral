@@ -8,6 +8,7 @@ pub mod app;
 pub mod backend;
 pub mod backup;
 pub mod check;
+pub mod cli;
 pub mod db;
 pub mod forms;
 pub mod inspect;

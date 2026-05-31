@@ -135,6 +135,20 @@ pub trait Plugin: Send + Sync + 'static {
         router
     }
 
+    /// CLI subcommands the plugin contributes.
+    ///
+    /// Each command implements [`crate::cli::PluginCommand`] and ships
+    /// a `clap::Command` plus an async `run` handler. The framework's
+    /// binary (or any user-written one) calls
+    /// [`crate::cli::dispatch`] with the App's plugin list to wire
+    /// these into a single CLI tree.
+    ///
+    /// Default: no commands. Plugins that only contribute models,
+    /// routes, or middleware leave this alone.
+    fn commands(&self) -> Vec<Box<dyn crate::cli::PluginCommand>> {
+        Vec::new()
+    }
+
     /// Wire signals, start background work, seal admin registrations.
     /// Called after phase 4 (system checks) passes, in topological
     /// dependency order. Sync, on purpose; spawn async work via

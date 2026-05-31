@@ -337,3 +337,65 @@ async fn run_worker_once_returns_false_on_empty_queue() {
         .expect("run_worker_once should not block on an empty queue");
     assert!(matches!(result, Ok(false)));
 }
+
+// =========================================================================
+// 7. tasks-worker plugin command (the M7 `Plugin::commands()` lift)
+// =========================================================================
+
+/// Dispatch `tasks-worker --once` through umbra::cli::dispatch and
+/// verify it ran one iteration of the worker. End-to-end check that
+/// `Plugin::commands()` is wired correctly: TasksPlugin contributes
+/// the WorkerCommand, dispatch matches it by name, and the handler's
+/// `run()` calls into `run_worker_once`.
+#[tokio::test(flavor = "multi_thread")]
+async fn dispatch_routes_tasks_worker_command_to_run_worker_once() {
+    let _guard = test_lock().await;
+    boot().await;
+    drain_queue().await;
+    _clear_handlers_for_tests();
+
+    static FLAG: OnceLock<AtomicBool> = OnceLock::new();
+    FLAG.get_or_init(|| AtomicBool::new(false))
+        .store(false, Ordering::SeqCst);
+
+    register_handler("cli_routed", |_payload: &str| async move {
+        FLAG.get().unwrap().store(true, Ordering::SeqCst);
+        Ok(())
+    });
+    enqueue(
+        "cli_routed",
+        serde_json::json!({"via": "cli"}),
+        Default::default(),
+    )
+    .await
+    .expect("enqueue");
+
+    let plugins: Vec<Box<dyn umbra::prelude::Plugin>> = vec![Box::new(TasksPlugin)];
+    let outcome = umbra::cli::dispatch(&plugins, vec!["umbra-cli", "tasks-worker", "--once"])
+        .await
+        .expect("dispatch ok");
+    match outcome {
+        umbra::cli::DispatchOutcome::Matched(name) => assert_eq!(name, "tasks-worker"),
+        other => panic!("expected Matched(tasks-worker), got {other:?}"),
+    }
+
+    assert!(
+        FLAG.get().unwrap().load(Ordering::SeqCst),
+        "handler should have run via dispatched CLI command"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn dispatch_returns_unmatched_for_unknown_command() {
+    let _guard = test_lock().await;
+    boot().await;
+
+    let plugins: Vec<Box<dyn umbra::prelude::Plugin>> = vec![Box::new(TasksPlugin)];
+    let outcome = umbra::cli::dispatch(&plugins, vec!["umbra-cli", "no-such-cmd"])
+        .await
+        .map_err(|e| format!("{e}"));
+    // clap reports an unknown subcommand as a parse error, which the
+    // dispatcher bubbles out as Err. That's the contract: clap surfaces
+    // the typo at the boundary.
+    assert!(outcome.is_err(), "got: {outcome:?}");
+}

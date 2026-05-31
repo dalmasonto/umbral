@@ -11,6 +11,8 @@ rust-version.workspace = true
 [dependencies]
 axum = "0.8"
 chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive", "string"] }
+async-trait = "0.1"
 figment = { version = "0.10", features = ["env", "toml"] }
 sea-query = "0.32"
 sea-query-binder = { version = "0.7", features = ["sqlx-sqlite", "with-chrono", "with-uuid"] }

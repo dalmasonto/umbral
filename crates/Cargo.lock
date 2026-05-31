@@ -2478,8 +2478,10 @@ dependencies = [
 name = "umbra-core"
 version = "0.0.1"
 dependencies = [
+ "async-trait",
  "axum",
  "chrono",
+ "clap",
  "figment",
  "http",
  "http-body-util",
@@ -2621,7 +2623,9 @@ dependencies = [
 name = "umbra-tasks"
 version = "0.0.1"
 dependencies = [
+ "async-trait",
  "chrono",
+ "clap",
  "serde",
  "serde_json",
  "sqlx",

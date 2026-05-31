@@ -88,6 +88,44 @@ impl Plugin for TasksPlugin {
     fn models(&self) -> Vec<umbra::migrate::ModelMeta> {
         vec![umbra::migrate::ModelMeta::for_::<TaskRow>()]
     }
+
+    fn commands(&self) -> Vec<Box<dyn umbra::cli::PluginCommand>> {
+        vec![Box::new(WorkerCommand)]
+    }
+}
+
+/// `tasks worker`: drain the task queue.
+///
+/// `--once` runs one iteration of the claim/dispatch loop and exits
+/// (suitable for tests, cron-driven workers, or anywhere
+/// `run_worker`'s infinite loop is unwanted).
+///
+/// Without `--once` the command never returns; it keeps polling at
+/// the default interval.
+#[derive(Debug, Default)]
+pub struct WorkerCommand;
+
+#[async_trait::async_trait]
+impl umbra::cli::PluginCommand for WorkerCommand {
+    fn command(&self) -> clap::Command {
+        clap::Command::new("tasks-worker")
+            .about("Run the umbra-tasks background worker")
+            .arg(
+                clap::Arg::new("once")
+                    .long("once")
+                    .help("Run one iteration of the claim/dispatch loop and exit")
+                    .action(clap::ArgAction::SetTrue),
+            )
+    }
+
+    async fn run(&self, matches: &clap::ArgMatches) -> Result<(), umbra::cli::CliError> {
+        if matches.get_flag("once") {
+            let _ran = run_worker_once().await?;
+            Ok(())
+        } else {
+            run_worker(WorkerOptions::default()).await
+        }
+    }
 }
 
 /// Errors the task helpers and worker can produce.
