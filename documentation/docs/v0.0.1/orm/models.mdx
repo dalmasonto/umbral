@@ -31,7 +31,28 @@ The rules the derive enforces:
 - Field types come from the M3 catalogue: signed ints (`i16` / `i32` / `i64`),
   `f32` / `f64`, `bool`, `String`, `chrono::NaiveDate` / `NaiveTime` /
   `DateTime<Utc>`, `uuid::Uuid`.
+- `serde_json::Value` for a JSON column; `Option<serde_json::Value>` for a nullable one.
 - `Option<T>` of any of the above is the only path to a nullable column.
+
+## JSON columns
+
+A field typed `serde_json::Value` maps to `JSONB` on Postgres (binary storage, indexable, with Postgres's full operator surface) and to `TEXT` on SQLite (sqlx's `json` feature handles serde on the boundary). The same struct compiles and runs against either backend.
+
+```rust
+use umbra::prelude::*;
+
+#[derive(Debug, Clone, sqlx::FromRow, umbra::orm::Model)]
+pub struct Event {
+    pub id: i64,
+    pub kind: String,
+    pub payload: serde_json::Value,          // JSONB / TEXT — required
+    pub meta: Option<serde_json::Value>,     // nullable JSON
+}
+```
+
+<Callout type="info">
+Equality, containment (`@>`), and path-access (`->`, `->>`) operators are not yet available. Cross-backend semantics (Postgres deep-equality vs SQLite byte-equality on TEXT) need to be pinned first. `is_null()` / `is_not_null()` and `asc()` / `desc()` ordering work today.
+</Callout>
 
 ## The table name
 
