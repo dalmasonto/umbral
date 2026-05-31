@@ -2450,6 +2450,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "umbra-cache"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "umbra",
+]
+
+[[package]]
 name = "umbra-cli"
 version = "0.0.1"
 dependencies = [
