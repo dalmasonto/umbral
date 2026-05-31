@@ -242,6 +242,95 @@ Each field gets a typed column constant under the snake_case module:
 `post::id`, `post::title`, `post::body`, `post::published_at`. The
 comparison methods are checked at compile time.
 
+## Writing rows
+
+Four write primitives complement the read side. All return a
+`Result<_, umbra::orm::WriteError>` whose variants name the offending
+field on type mismatch / null-on-required-column / unknown-column
+errors.
+
+### `create(instance)` — INSERT one row
+
+```rust
+let new_post = Post {
+    id: 0, // 0 is the autoincrement sentinel
+    title: "Hello".into(),
+    body: "World".into(),
+    published_at: None,
+};
+
+let inserted = Post::objects().create(new_post).await?;
+assert!(inserted.id > 0); // autoincrement PK populated
+```
+
+The integer `0`, the nil UUID, and the empty `String` are all treated
+as autoincrement-PK sentinels — the column is omitted from the INSERT
+so the database assigns one. An explicit non-default PK (`id = 999`)
+is bound as-is, so callers with UUID PKs or slug PKs can set them
+themselves.
+
+The returned struct comes from `RETURNING *`, so timestamps that
+default to `NOW()` server-side land populated.
+
+### `bulk_create([...])` — INSERT many in one statement
+
+```rust
+let rows = (1..=100)
+    .map(|i| Post { id: 0, title: format!("post {i}"), body: "...".into(), published_at: None })
+    .collect();
+
+let count = Post::objects().bulk_create(rows).await?;
+assert_eq!(count, 100);
+```
+
+One INSERT with N value tuples — far faster than calling `.create()`
+in a loop. Returns the affected-rows count rather than the populated
+rows; if you need the inserted IDs, follow up with a
+`.filter(...).fetch()`.
+
+### `.delete()` — DELETE matching rows
+
+```rust
+let removed = Post::objects()
+    .filter(post::PUBLISHED_AT.lt(cutoff))
+    .delete()
+    .await?;
+```
+
+Applies the accumulated filter predicates as the WHERE clause and
+returns the deleted-rows count. **Without `.filter(...)`, deletes
+every row.** The type system can't tell "I forgot the filter" from
+"I really meant to truncate."
+
+### `.update_values(map)` — UPDATE matching rows
+
+```rust
+use serde_json::{json, Map};
+
+let mut updates = Map::new();
+updates.insert("title".into(), json!("Rebranded"));
+updates.insert("body".into(), json!("New copy."));
+
+let touched = Post::objects()
+    .filter(post::ID.eq(42))
+    .update_values(updates)
+    .await?;
+```
+
+Takes a `serde_json::Map<String, Value>` of column → new value.
+Each value is converted to the right sea-query type per the column's
+`SqlType`. PATCH semantics — columns absent from the map keep their
+current values. The PK column is silently skipped if present in the
+map (rewriting the PK while filtering on the old one is a footgun).
+
+<Callout type="info">
+A typed per-column setter API (`.update([post::TITLE.set("...")])`)
+is on the roadmap. For now the JSON-map shape reuses the same
+dispatch the REST plugin uses for PATCH bodies, which means a
+request body lands directly in `.update_values(...)` with no
+intermediate struct.
+</Callout>
+
 ## What's next
 
 - Register the model with the migration engine so

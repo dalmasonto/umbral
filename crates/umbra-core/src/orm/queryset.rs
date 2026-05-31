@@ -354,6 +354,133 @@ impl<T: Model> QuerySet<T> {
     // Phase 2.5 documented.
     // =====================================================================
 
+    // =====================================================================
+    // Write terminals — DELETE and UPDATE.
+    //
+    // Both apply the accumulated filter predicates as the WHERE clause,
+    // dispatch to the resolved pool's backend, and return the affected-
+    // rows count from sqlx. No row materialisation — DELETE is keyless,
+    // and UPDATE doesn't do a RETURNING read-back at v1 (use
+    // `.filter(...).fetch()` after a write if you need the updated
+    // rows back).
+    //
+    // **Without a `.filter(...)`, both terminals affect every row in
+    // the table.** That mirrors raw SQL semantics; the type system
+    // can't distinguish "I forgot the filter" from "I really meant to
+    // truncate." Users protecting against accidental full-table writes
+    // wrap their callers or assert a row count via `.count()` first.
+    // =====================================================================
+
+    /// `DELETE FROM table WHERE <predicates>`. Returns the number of
+    /// rows deleted. With no `.filter` calls, deletes every row.
+    pub async fn delete(self) -> Result<u64, sqlx::Error> {
+        let pool = resolve_pool::<T>(self.explicit_pool.clone());
+        let backend = pool.backend_name();
+        let stmt = self.build_delete_for(backend);
+        match pool {
+            DbPool::Sqlite(pool) => {
+                let (sql, values) = stmt.build_sqlx(SqliteQueryBuilder);
+                let result = sqlx::query_with::<sqlx::Sqlite, _>(&sql, values)
+                    .execute(&pool)
+                    .await?;
+                Ok(result.rows_affected())
+            }
+            DbPool::Postgres(pool) => {
+                let (sql, values) = stmt.build_sqlx(PostgresQueryBuilder);
+                let result = sqlx::query_with::<sqlx::Postgres, _>(&sql, values)
+                    .execute(&pool)
+                    .await?;
+                Ok(result.rows_affected())
+            }
+        }
+    }
+
+    /// `UPDATE table SET k=v[, ...] WHERE <predicates>`. The values
+    /// map provides `column_name → JSON value` pairs; each is
+    /// converted to a `sea_query::Value` per the column's declared
+    /// `SqlType` via [`crate::orm::write::json_to_sea_value`]. Returns
+    /// the number of rows affected.
+    ///
+    /// Unknown columns in the map fail loudly with
+    /// `WriteError::UnknownColumn`. JSON `null` is rejected for
+    /// non-nullable columns; supplying a column that exists but is
+    /// absent from the map is silently a no-op (the column keeps its
+    /// current value — PATCH semantics, not PUT).
+    pub async fn update_values(
+        self,
+        values: serde_json::Map<String, serde_json::Value>,
+    ) -> Result<u64, crate::orm::write::WriteError> {
+        let pool = resolve_pool::<T>(self.explicit_pool.clone());
+        let backend = pool.backend_name();
+        let stmt = self.build_update_for(backend, &values)?;
+        match pool {
+            DbPool::Sqlite(pool) => {
+                let (sql, values) = stmt.build_sqlx(SqliteQueryBuilder);
+                let result = sqlx::query_with::<sqlx::Sqlite, _>(&sql, values)
+                    .execute(&pool)
+                    .await?;
+                Ok(result.rows_affected())
+            }
+            DbPool::Postgres(pool) => {
+                let (sql, values) = stmt.build_sqlx(PostgresQueryBuilder);
+                let result = sqlx::query_with::<sqlx::Postgres, _>(&sql, values)
+                    .execute(&pool)
+                    .await?;
+                Ok(result.rows_affected())
+            }
+        }
+    }
+
+    /// Helper: build the DELETE statement for the active backend.
+    /// Public-by-virtue-of-being-pub(crate) so the `_pg` and (future)
+    /// `_sqlite` explicit-pool variants can share the SQL builder.
+    fn build_delete_for(&self, backend_name: &str) -> sea_query::DeleteStatement {
+        let mut stmt = Query::delete();
+        stmt.from_table(Alias::new(T::TABLE));
+        for p in &self.predicates {
+            stmt.and_where(p.cond_for(backend_name));
+        }
+        stmt
+    }
+
+    /// Helper: build the UPDATE statement for the active backend.
+    /// Walks the `values` map, validates each column against the
+    /// model's `FIELDS` metadata, converts the JSON value via
+    /// `write::json_to_sea_value`, and threads the accumulated
+    /// predicates into the WHERE clause.
+    fn build_update_for(
+        &self,
+        backend_name: &str,
+        values: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<sea_query::UpdateStatement, crate::orm::write::WriteError> {
+        use crate::orm::write::{WriteError, json_to_sea_value};
+        let mut stmt = Query::update();
+        stmt.table(Alias::new(T::TABLE));
+        for (col_name, val) in values {
+            // Look up the column on the model. Unknown column names
+            // fail loudly here rather than producing a bad UPDATE.
+            let field = T::FIELDS
+                .iter()
+                .find(|f| f.name == col_name.as_str())
+                .ok_or_else(|| WriteError::UnknownColumn {
+                    field: col_name.clone(),
+                })?;
+            // Reject attempts to overwrite the PK via update_values.
+            // The QuerySet's WHERE clause is the only way to identify
+            // rows; rewriting the PK while filtering on the old one
+            // is a footgun.
+            if field.primary_key {
+                continue;
+            }
+            let sea_value = json_to_sea_value(field.ty, val, field.nullable, &field.name)?;
+            stmt.value(Alias::new(field.name), sea_value);
+        }
+        for p in &self.predicates {
+            stmt.and_where(p.cond_for(backend_name));
+        }
+        Ok(stmt)
+    }
+
     /// Run the SELECT against an explicit `PgPool` and return every
     /// matching row. Bound by `FromRow<PgRow>` alone so models with
     /// Postgres-only field types compile.
@@ -512,4 +639,244 @@ impl<T: Model> Manager<T> {
     {
         self.queryset().exists_pg(pool).await
     }
+
+    // =====================================================================
+    // Write methods — INSERT.
+    //
+    // `create(instance)` does one row; `bulk_create([...])` does many in
+    // a single multi-VALUES INSERT. Both serialise the instance(s) to a
+    // JSON map via `serde::Serialize`, look up each field in the model's
+    // `FIELDS` metadata, and bind values through
+    // [`crate::orm::write::json_to_sea_value`].
+    //
+    // PK handling:
+    // - Default value (0 for ints, nil for UUIDs, empty for String):
+    //   omitted from the INSERT column list so the DB autoincrement /
+    //   default kicks in.
+    // - Explicit non-default value: included in the INSERT so the
+    //   caller can supply UUIDs / slug PKs themselves.
+    // =====================================================================
+
+    /// INSERT one row, return the row as it now exists in the
+    /// database (with any autoincrement PK populated). Uses the
+    /// ambient pool via `Manager::queryset().resolve_pool`.
+    pub async fn create(&self, instance: T) -> Result<T, crate::orm::write::WriteError>
+    where
+        T: serde::Serialize
+            + for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
+            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
+    {
+        let map = serialize_to_map(&instance)?;
+        let pool = resolve_pool::<T>(None);
+        let backend = pool.backend_name();
+        let stmt = build_insert_one_for::<T>(backend, &map)?;
+        match pool {
+            DbPool::Sqlite(pool) => {
+                let (sql, values) = stmt.build_sqlx(SqliteQueryBuilder);
+                let row = sqlx::query_as_with::<sqlx::Sqlite, T, _>(&sql, values)
+                    .fetch_one(&pool)
+                    .await?;
+                Ok(row)
+            }
+            DbPool::Postgres(pool) => {
+                let (sql, values) = stmt.build_sqlx(PostgresQueryBuilder);
+                let row = sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
+                    .fetch_one(&pool)
+                    .await?;
+                Ok(row)
+            }
+        }
+    }
+
+    /// INSERT many rows in a single statement. Returns the number of
+    /// rows inserted. Doesn't RETURNING-read-back the rows — use a
+    /// follow-up `Model::objects().filter(...).fetch()` if you need
+    /// them populated.
+    ///
+    /// Empty input is a no-op (returns Ok(0)) — the alternative
+    /// (building a `INSERT INTO t () VALUES ()` and failing at the
+    /// DB) doesn't help anyone.
+    pub async fn bulk_create(&self, instances: Vec<T>) -> Result<u64, crate::orm::write::WriteError>
+    where
+        T: serde::Serialize,
+    {
+        if instances.is_empty() {
+            return Ok(0);
+        }
+        let maps: Result<Vec<_>, _> = instances.iter().map(serialize_to_map).collect();
+        let maps = maps?;
+        let pool = resolve_pool::<T>(None);
+        let backend = pool.backend_name();
+        let stmt = build_insert_many_for::<T>(backend, &maps)?;
+        match pool {
+            DbPool::Sqlite(pool) => {
+                let (sql, values) = stmt.build_sqlx(SqliteQueryBuilder);
+                let result = sqlx::query_with::<sqlx::Sqlite, _>(&sql, values)
+                    .execute(&pool)
+                    .await?;
+                Ok(result.rows_affected())
+            }
+            DbPool::Postgres(pool) => {
+                let (sql, values) = stmt.build_sqlx(PostgresQueryBuilder);
+                let result = sqlx::query_with::<sqlx::Postgres, _>(&sql, values)
+                    .execute(&pool)
+                    .await?;
+                Ok(result.rows_affected())
+            }
+        }
+    }
+
+    /// `create` against an explicit Postgres pool. The Postgres
+    /// counterpart of [`Self::create`] for models with Postgres-only
+    /// field types (Array, Inet, MacAddr, FullText), whose `FromRow`
+    /// impl exists only for `PgRow`.
+    pub async fn create_pg(
+        &self,
+        instance: T,
+        pool: &sqlx::PgPool,
+    ) -> Result<T, crate::orm::write::WriteError>
+    where
+        T: serde::Serialize + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
+    {
+        let map = serialize_to_map(&instance)?;
+        let stmt = build_insert_one_for::<T>("postgres", &map)?;
+        let (sql, values) = stmt.build_sqlx(PostgresQueryBuilder);
+        let row = sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
+            .fetch_one(pool)
+            .await?;
+        Ok(row)
+    }
+
+    /// `bulk_create` against an explicit Postgres pool.
+    pub async fn bulk_create_pg(
+        &self,
+        instances: Vec<T>,
+        pool: &sqlx::PgPool,
+    ) -> Result<u64, crate::orm::write::WriteError>
+    where
+        T: serde::Serialize,
+    {
+        if instances.is_empty() {
+            return Ok(0);
+        }
+        let maps: Result<Vec<_>, _> = instances.iter().map(serialize_to_map).collect();
+        let maps = maps?;
+        let stmt = build_insert_many_for::<T>("postgres", &maps)?;
+        let (sql, values) = stmt.build_sqlx(PostgresQueryBuilder);
+        let result = sqlx::query_with::<sqlx::Postgres, _>(&sql, values)
+            .execute(pool)
+            .await?;
+        Ok(result.rows_affected())
+    }
+}
+
+/// Convert a `T: Serialize` instance to a `Map<String, Value>` for
+/// the insert path. Errors out if the instance doesn't serialize to a
+/// JSON object (only flat structs and HashMap-like shapes do).
+fn serialize_to_map<T: serde::Serialize>(
+    instance: &T,
+) -> Result<serde_json::Map<String, serde_json::Value>, crate::orm::write::WriteError> {
+    let value = serde_json::to_value(instance)?;
+    match value {
+        serde_json::Value::Object(map) => Ok(map),
+        _ => Err(crate::orm::write::WriteError::NotAnObject),
+    }
+}
+
+/// Build a single-row INSERT statement for one map of column values.
+/// Skips the PK column when its value is the autoincrement sentinel
+/// (see [`crate::orm::write::is_default_pk`]). Adds a `RETURNING *`
+/// clause so the caller can read back the populated instance.
+fn build_insert_one_for<T: Model>(
+    _backend_name: &str,
+    map: &serde_json::Map<String, serde_json::Value>,
+) -> Result<sea_query::InsertStatement, crate::orm::write::WriteError> {
+    use crate::orm::write::{is_default_pk, json_to_sea_value};
+    let mut columns: Vec<Alias> = Vec::new();
+    let mut values: Vec<sea_query::SimpleExpr> = Vec::new();
+    for field in T::FIELDS {
+        let val = map
+            .get(field.name)
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        // Skip PK if it's the default sentinel — let the DB
+        // autoincrement / default kick in.
+        if field.primary_key && is_default_pk(field.ty, &val) {
+            continue;
+        }
+        // Skip absent fields when nullable (caller didn't supply them).
+        if val.is_null() && field.nullable && !map.contains_key(field.name) {
+            continue;
+        }
+        let sea_value = json_to_sea_value(field.ty, &val, field.nullable, field.name)?;
+        columns.push(Alias::new(field.name));
+        values.push(sea_value.into());
+    }
+
+    let mut stmt = Query::insert();
+    stmt.into_table(Alias::new(T::TABLE)).columns(columns);
+    stmt.values(values).map_err(|e| {
+        crate::orm::write::WriteError::Sqlx(sqlx::Error::Protocol(format!(
+            "umbra::orm::write: sea-query rejected INSERT values: {e}"
+        )))
+    })?;
+    // RETURNING * so the caller can read the populated row back. Works
+    // on Postgres natively; sqlx-sqlite 0.8 supports it via SQLite >= 3.35.
+    stmt.returning_all();
+    Ok(stmt)
+}
+
+/// Build a multi-row INSERT. Reuses the per-row column-selection logic
+/// from `build_insert_one_for` for the first map, then asserts every
+/// subsequent map exposes the same column set (heterogeneous row shapes
+/// would change the column list mid-INSERT, which SQL forbids).
+fn build_insert_many_for<T: Model>(
+    _backend_name: &str,
+    maps: &[serde_json::Map<String, serde_json::Value>],
+) -> Result<sea_query::InsertStatement, crate::orm::write::WriteError> {
+    use crate::orm::write::{is_default_pk, json_to_sea_value};
+    // Decide column set from the first row. Subsequent rows MUST
+    // produce the same column set — anything else would break the
+    // INSERT's columns clause.
+    let first = &maps[0];
+    let included_fields: Vec<&crate::orm::FieldSpec> = T::FIELDS
+        .iter()
+        .filter(|field| {
+            let val = first
+                .get(field.name)
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            if field.primary_key && is_default_pk(field.ty, &val) {
+                return false;
+            }
+            if val.is_null() && field.nullable && !first.contains_key(field.name) {
+                return false;
+            }
+            true
+        })
+        .collect();
+
+    let columns: Vec<Alias> = included_fields.iter().map(|f| Alias::new(f.name)).collect();
+
+    let mut stmt = Query::insert();
+    stmt.into_table(Alias::new(T::TABLE)).columns(columns);
+    for map in maps {
+        let row_values: Result<Vec<_>, _> = included_fields
+            .iter()
+            .map(|field| {
+                let val = map
+                    .get(field.name)
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
+                json_to_sea_value(field.ty, &val, field.nullable, field.name)
+                    .map(sea_query::SimpleExpr::from)
+            })
+            .collect();
+        stmt.values(row_values?).map_err(|e| {
+            crate::orm::write::WriteError::Sqlx(sqlx::Error::Protocol(format!(
+                "umbra::orm::write: sea-query rejected INSERT values: {e}"
+            )))
+        })?;
+    }
+    Ok(stmt)
 }

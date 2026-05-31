@@ -235,9 +235,10 @@ pub mod orm {
     //! is generic over `T: Model`, so plugin authors and users get the
     //! full query API by implementing one trait, by hand or via derive.
 
+    pub use umbra_core::orm::write::WriteError;
     pub use umbra_core::orm::{
         ArrayElement, FieldSpec, Manager, Model, Post, PrimaryKey, QuerySet, SqlType, TsVector,
-        column,
+        column, write,
     };
 
     /// The `#[derive(Model)]` proc macro. Shares the `Model` name with the

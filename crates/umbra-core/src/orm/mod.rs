@@ -24,6 +24,7 @@ pub mod model;
 pub mod post;
 pub mod queryset;
 pub mod tsvector;
+pub mod write;
 
 use std::marker::PhantomData;
 use std::ops::{BitAnd, BitOr};
