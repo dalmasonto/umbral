@@ -132,6 +132,45 @@ let any_match = Event::objects()
 
 Empty-input semantics are well-defined: `contains_all([])` is always true; `contained_by([])` and `overlaps([])` are always false.
 
+## Network address columns
+
+Postgres natively stores and indexes IP addresses and MAC addresses. Three **Postgres-only** field types expose this: `INET` for host addresses with an optional netmask, `CIDR` for network addresses (host bits must be zero), and `MACADDR` for hardware addresses.
+
+| Rust type | SqlType | Postgres column |
+|---|---|---|
+| `ipnetwork::IpNetwork` | `Inet` | `INET` — IPv4 or IPv6 host address, optional prefix length |
+| `ipnetwork::IpNetwork` | `Cidr` | `CIDR` — network address, host bits enforced zero by Postgres |
+| `mac_address::MacAddress` | `MacAddr` | `MACADDR` — 6-byte hardware address |
+
+The derive defaults `ipnetwork::IpNetwork` to `Inet`. Opt-in to `CIDR` semantics is deferred to a future `#[umbra(cidr)]` attribute; until then, edit the generated migration directly if you need the stricter constraint.
+
+```rust
+use umbra::prelude::*;
+use ipnetwork::IpNetwork;
+use mac_address::MacAddress;
+
+#[derive(Debug, Clone, sqlx::FromRow, umbra::orm::Model)]
+pub struct Node {
+    pub id: i64,
+    pub addr: IpNetwork,                  // INET — required
+    pub mac: MacAddress,                  // MACADDR — required
+    pub fallback: Option<IpNetwork>,      // INET — nullable
+}
+
+// Filter by exact address — use _pg terminals for PG-only models
+let target = "10.0.0.1/24".parse::<IpNetwork>()?;
+let nodes: Vec<Node> = Node::objects()
+    .filter(node::ADDR.eq(target))
+    .fetch_pg(&pg_pool)
+    .await?;
+```
+
+The predicate surface ships `.eq(val)` / `.ne(val)` / `.asc()` / `.desc()`, plus `.is_null()` / `.is_not_null()` on nullable variants. Network containment operators (`<<`, `>>`) are deferred to a later phase.
+
+<Callout type="info">
+Need portable IP storage without a Postgres dependency? Store addresses as `String` and call `.parse::<IpAddr>()` at the application layer. The network-specific predicates won't be available, but the model will compile and run against SQLite.
+</Callout>
+
 ## The table name
 
 By default the table is snake_case of the struct name — `BlogPost` becomes
