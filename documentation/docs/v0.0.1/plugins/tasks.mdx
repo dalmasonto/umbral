@@ -1,0 +1,77 @@
+---
+title: Tasks plugin
+description: Database-backed background task queue. The Celery shape in Rust.
+sidebar_position: 7
+icon: clock
+---
+
+`umbra-tasks` runs background work outside the request/response cycle. It uses
+your application's existing database as the broker — no Redis, no RabbitMQ, no
+separate infrastructure. A fresh umbra project gets background jobs for the cost
+of one `.plugin(TasksPlugin)` line.
+
+## What you get from `TasksPlugin::default()`
+
+Registering the plugin creates one migration: a `task_row` table that tracks
+every enqueued job — its name, JSON payload, status, attempt count, schedule
+time, and error message on failure. The plugin also contributes a `tasks-worker`
+management command so `umbra-cli` can drain the queue.
+
+```rust
+App::builder()
+    .plugin(TasksPlugin::default())
+    .build()?;
+```
+
+## Declaring and enqueueing a task
+
+There is no `#[task]` proc-macro yet (that lands when the deep spec promotes from
+the outline). The v1 API is explicit: register a handler closure under a string
+name at startup, then enqueue payloads under the same name at runtime.
+
+```rust
+use umbra_tasks::{EnqueueOptions, enqueue, register_handler};
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize)]
+struct WelcomePayload { user_id: i64 }
+
+// At startup — before the worker runs.
+register_handler("send_welcome_email", |payload: &str| async move {
+    let p: WelcomePayload = serde_json::from_str(payload).map_err(|e| e.to_string())?;
+    send_email(p.user_id).await.map_err(|e| e.to_string())
+});
+
+// In a handler, after a user signs up.
+let _task_id = enqueue("send_welcome_email", WelcomePayload { user_id: 42 }, EnqueueOptions::default()).await?;
+```
+
+`EnqueueOptions` lets you set `max_attempts` (default 3) and `scheduled_for`
+(default `Utc::now()`) to delay execution.
+
+## Running the worker
+
+```bash
+# Run continuously — polls every second, handles Ctrl-C gracefully.
+cargo run -p umbra-cli -- tasks-worker
+
+# Run exactly one claim/dispatch iteration and exit (useful for tests or cron).
+cargo run -p umbra-cli -- tasks-worker --once
+```
+
+The worker claims one pending row at a time inside a transaction, dispatches the
+handler, and writes back `succeeded` or `failed`. Panicking handlers are caught
+via `tokio::task::spawn` so one bad job cannot take the worker down.
+
+## What is NOT in v1
+
+- **`#[task]` proc-macro.** Handler names are strings; the macro lands when the
+  deep spec is promoted from the outline.
+- **Priority queues and distributed locks.** SQLite is single-writer; a brief
+  transaction is sufficient. Postgres-aware locking is a later follow-on.
+- **Periodic scheduling ("beat").** There is no cron-like repeat mechanism yet.
+  Deferred to the deep spec.
+- **Status enum.** Status is stored as a plain string (`pending`, `running`,
+  `succeeded`, `failed`) because the M3 derive doesn't support enum `SqlType` yet.
+
+The spec outline lives in `docs/specs/outlines/`. Source: `plugins/umbra-tasks/src/lib.rs`.

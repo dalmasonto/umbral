@@ -1,0 +1,96 @@
+---
+title: OpenAPI plugin
+description: Swagger UI + machine-readable JSON spec for your REST endpoints, auto-generated from the model registry.
+sidebar_position: 4
+icon: book-open
+---
+
+`umbra-openapi` walks the model registry and serves a live Swagger UI and a
+machine-readable JSON spec. Add it to any app that already uses
+[`umbra-rest`](/v0.0.1/rest/overview) — the OpenAPI plugin depends on REST's
+routes and will not compile without it.
+
+## Quickstart
+
+```rust
+use umbra::prelude::*;
+use umbra_rest::RestPlugin;
+use umbra_openapi::OpenApiPlugin;
+
+App::builder()
+    .settings(settings)
+    .database("default", pool)
+    .plugin(RestPlugin::default())
+    .plugin(OpenApiPlugin::default())
+    .build()?;
+```
+
+With defaults the plugin registers two endpoints:
+
+| URL | What you get |
+|---|---|
+| `/openapi` and `/openapi/` | Swagger UI (both paths serve the same UI) |
+| `/openapi/openapi.json` | Machine-readable spec |
+
+## Customising the spec
+
+Chain builder methods before passing the plugin to `.plugin()`:
+
+```rust
+OpenApiPlugin::default()
+    .at("/api/docs")           // move the mount base; /api/docs and /api/docs/ both work
+    .title("Acme API")         // info.title in the spec
+    .version("1.2.0")          // info.version
+    .description("Markdown is fine here.\n\nShown above the operations list.")
+```
+
+`.at()` is the only method that affects URLs. The Swagger UI and JSON spec
+always live at `<base>/` and `<base>/openapi.json` relative to whatever base
+you supply.
+
+## Excluding models
+
+By default the plugin exposes every model that `umbra-rest` exposes.
+Built-in framework tables (`umbra_migrations`, `umbra_sessions`,
+`umbra_users`, and related auth tables) are always blocked regardless of any
+configuration.
+
+To block additional models:
+
+```rust
+OpenApiPlugin::default()
+    .exclude(["api_keys", "audit_log"])
+```
+
+Each string is matched against the model's table name. Excluded models produce
+no schema object and no operations in the spec.
+
+## Pairing with REST
+
+`umbra-openapi` declares `"rest"` in its `dependencies()`, so the plugin
+topological sort always places it after `RestPlugin`. The spec mirrors the
+routes that REST actually registers: if a model is excluded from REST, it will
+not appear in the spec either. If you exclude a model from REST but forget to
+exclude it from OpenAPI (or vice versa), the spec will reference an endpoint
+that returns 404 — exclude consistently on both plugins to stay in sync.
+
+If you want framework-wide trailing-slash normalisation rather than relying on
+the plugin registering both paths, opt in on the builder:
+
+```rust
+App::builder()
+    .slash_redirect(SlashRedirect::Append)
+    // ...
+```
+
+See [Trailing-slash redirect policy](../web/trailing-slash) for details.
+
+## What's not in v1
+
+<Callout type="info">
+The following are deferred to a later release:
+
+- **No `securitySchemes`** — the spec is unauthenticated. Bearer / API-key security definitions are not emitted yet.
+- **No per-operation tagging** — all operations appear in the default tag group.
+- **No response examples** — `200` responses describe the schema shape only; no inline example payloads.
+</Callout>

@@ -1,0 +1,151 @@
+---
+title: Error pages (404, 500)
+description: Django-shaped helpers for rendering custom 404 and 500 pages from templates.
+sidebar_position: 2
+icon: alert-triangle
+---
+
+In Django you drop a `404.html` or `500.html` in your templates dir
+and the framework picks it up. umbra ships the same shape — two
+builder methods, both opt-in, both pointing at templates the
+existing engine renders.
+
+## Quickstart
+
+```rust
+use umbra::prelude::*;
+
+let app = App::builder()
+    .templates_dir("templates")
+    .not_found_template("404.html")
+    .server_error_template("500.html")
+    .router(Router::new().route("/", get(home)))
+    .build()?;
+```
+
+That's it. Any path that doesn't match a route renders `404.html`;
+any handler that panics renders `500.html`. Both pages return the
+correct HTTP status (`404` and `500` respectively) with
+`Content-Type: text/html; charset=utf-8`.
+
+## Writing the templates
+
+`404.html` gets `{ path }` in scope — the request path that missed
+— so you can show the user exactly where they went wrong:
+
+```html
+{% extends "base.html" %}
+{% block content %}
+  <h1>Page not found</h1>
+  <p>The page <code>{{ path }}</code> doesn't exist.</p>
+  <a href="/">Go home</a>
+{% endblock %}
+```
+
+`500.html` gets **no context**. Panic details intentionally stay out
+of the user-facing response — they go to logs via
+`tracing::error!`. Look at your tracing output for the panic message
+and backtrace:
+
+```html
+{% extends "base.html" %}
+{% block content %}
+  <h1>Something went wrong</h1>
+  <p>We've been notified and are looking into it.</p>
+{% endblock %}
+```
+
+## What gets caught
+
+| Helper | Triggers on |
+|--------|-------------|
+| `not_found_template` | Any request whose URL didn't match a route. |
+| `server_error_template` | Any handler that **panics**. |
+
+`server_error_template` wraps the router in
+`tower_http::catch_panic::CatchPanicLayer`. A panic in a handler is
+turned into a 500 response carrying the rendered template body
+instead of crashing the worker or returning an empty 500.
+
+Handlers that return a `Result::Err` are **not** caught here — those
+get converted to a response by their `IntoResponse` impl. For
+typical error handling, define an `AppError` type with an
+`IntoResponse` impl and use `?` in your handlers:
+
+```rust
+struct AppError(anyhow::Error);
+
+impl IntoResponse for AppError {
+    fn into_response(self) -> Response {
+        tracing::error!("handler error: {:?}", self.0);
+        (StatusCode::INTERNAL_SERVER_ERROR,
+         Html("<h1>Something went wrong</h1>")).into_response()
+    }
+}
+```
+
+Use `server_error_template` for the **unexpected** path (panic = bug),
+and `AppError`/`IntoResponse` for the **expected** errors that flow
+through `?`.
+
+<Callout type="info">
+**Why no context on 500?** Exposing panic messages to the browser
+leaks internals and occasionally credentials (e.g. a panic in a SQL
+query string). The umbra default keeps the message in logs only. If
+you genuinely want to display a request ID or correlation token,
+generate it in a middleware and put it in a response header — then
+let your `500.html` reference it.
+</Callout>
+
+## Composing with the trailing-slash redirect
+
+If you also set [`slash_redirect`](./trailing-slash), the redirect
+runs **before** the 404 template. Order:
+
+1. Request `/articles` (no trailing slash) misses.
+2. Slash redirect probes `/articles/` (with slash). Matches → 308.
+3. Browser follows; second request succeeds. `404.html` never
+   renders.
+
+If neither form matches, the 404 template fires. One consistent
+404 page across both raw misses and redirect dead-ends.
+
+## What about Django's `handler403` / `handler400`?
+
+403 / 400 / 410 are deferred. The common case — typo'd URL and
+panicking handler — is what these two methods cover. If you need
+custom 403 / 400 pages today, return them from your handlers via
+`IntoResponse` (the manual axum way).
+
+## Falling back to the raw axum API
+
+The Django-shaped helpers cover the easy case. If you need more
+control — e.g. different 404 pages for `/api/...` vs everything
+else, or matching on the Accept header — use `Router::fallback`
+directly:
+
+```rust
+async fn custom_404(req: Request<Body>) -> Response {
+    if req.uri().path().starts_with("/api") {
+        (StatusCode::NOT_FOUND,
+         Json(json!({"error": "not found"}))).into_response()
+    } else {
+        (StatusCode::NOT_FOUND,
+         Html("<h1>404</h1>")).into_response()
+    }
+}
+
+let router = Router::new()
+    .route("/", get(home))
+    .fallback(custom_404);
+```
+
+When you call `.fallback()` yourself, the `not_found_template`
+helper still runs first — your fallback only fires if neither it
+nor the slash redirect (if enabled) handles the request.
+
+## See also
+
+- [Trailing-slash redirects](./trailing-slash) — composition order.
+- [Templates](../templates/quickstart) — how the engine resolves
+  template paths.

@@ -1,0 +1,77 @@
+---
+title: Admin plugin
+description: Auto-generated CRUD UI for your models. Django's admin in Rust.
+sidebar_position: 8
+icon: shield
+---
+
+`umbra-admin` mounts a ready-made HTML CRUD interface at `/admin/`. Every model
+that any registered plugin contributed to the migration registry gets list, detail,
+create, edit, and delete views — no extra code required.
+
+## What you get from `AdminPlugin::default()`
+
+The plugin contributes a router with these routes, all protected by HTTP Basic Auth:
+
+| Route | What it does |
+|---|---|
+| `GET /admin/` | Index — list every registered model |
+| `GET /admin/<table>/` | Row list (up to 200 rows, ordered by PK) |
+| `GET /admin/<table>/<id>` | Detail view for one row |
+| `GET /admin/<table>/new` | Create form |
+| `POST /admin/<table>/new` | Insert row |
+| `GET /admin/<table>/<id>/edit` | Edit form |
+| `POST /admin/<table>/<id>/edit` | Update row |
+| `POST /admin/<table>/<id>/delete` | Delete row |
+
+```rust
+App::builder()
+    .plugin(AuthPlugin::default())   // required — admin gates on auth
+    .plugin(AdminPlugin::default())
+    .build()?;
+```
+
+## Model discovery — nothing to register
+
+The admin walks `umbra::migrate::registered_plugins()` at request time and
+discovers every model every plugin declared via `Plugin::models()`. You do not
+register models explicitly with the admin. Add a plugin, its models appear in the
+admin automatically.
+
+## Auth gating
+
+Every admin route requires HTTP Basic Auth. The submitted credentials are verified
+via `umbra_auth::authenticate`. The user must have `is_staff = true`; non-staff
+accounts receive `403 Forbidden`. `AdminPlugin` declares `"auth"` in its
+`dependencies()`, so `App::build()` guarantees `umbra-auth` is initialized first.
+
+```rust
+// Create a staff user (e.g. in a management command or seed script).
+AuthUser::objects().create(NewUser {
+    username: "admin".into(),
+    password_hash: hash_password("secret"),
+    is_staff: true,
+    is_active: true,
+    ..Default::default()
+}).await?;
+```
+
+## Form widgets
+
+The admin dispatches HTML input types by `SqlType`. Nullable fields omit the
+`required` attribute; the PK column is hidden from create/edit forms.
+
+## What is NOT in v1
+
+- **Postgres-only field types.** Columns typed `Array`, `Inet`, `Cidr`, `MacAddr`,
+  or `FullText` trigger a boot-time system check failure — they cannot appear in an
+  SQLite-backed admin. A Postgres-aware admin upgrade is a later milestone.
+- **Custom widgets and readonly fields.** Every column renders with the default
+  widget for its `SqlType`. Per-field overrides and the `readonly` flag are
+  reserved for a future `AdminConfig` registration API.
+- **Per-row permissions.** Auth gating is binary: staff or not. Row-level
+  restrictions and per-model action gating are deferred.
+- **List filtering and search.** The list view returns the first 200 rows ordered
+  by PK. Filtering, search, and pagination land in a later admin upgrade.
+
+The spec lives in `docs/specs/02-plugin-contract.md`. Source: `plugins/umbra-admin/src/lib.rs`.

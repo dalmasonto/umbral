@@ -1,0 +1,146 @@
+---
+title: RLS plugin
+description: Postgres Row-Level Security policies declared in the App builder and applied idempotently at boot.
+sidebar_position: 5
+icon: shield
+---
+
+`umbra-rls` lets you declare Postgres Row-Level Security policies once, at
+`App::build()` time, and have them applied automatically every boot. The plugin
+handles `ALTER TABLE ... ENABLE ROW LEVEL SECURITY` and the idempotent
+`DROP POLICY IF EXISTS` + `CREATE POLICY` cycle so you never hand-write
+that boilerplate and never worry about the schema drifting between
+environments.
+
+## Quickstart
+
+Add `umbra-rls` to your `Cargo.toml`, then wire it in the builder:
+
+```rust
+use umbra::prelude::*;
+use umbra_rls::{Action, RlsPlugin};
+
+let app = App::builder()
+    .settings(settings)
+    .database("default", pool)
+    .plugin(
+        RlsPlugin::new()
+            .policy("post", "user_can_read", Action::Select,
+                "user_id = current_setting('app.user_id')::int")
+            .policy_with_check(
+                "post",
+                "user_can_insert",
+                Action::Insert,
+                "user_id = current_setting('app.user_id')::int",
+                "user_id = current_setting('app.user_id')::int AND status <> 'banned'",
+            ),
+    )
+    .build()?;
+```
+
+`.policy(table, name, action, using)` is enough for read-only predicates.
+`.policy_with_check(table, name, action, using, with_check)` adds an explicit
+`WITH CHECK` clause — useful when INSERT or UPDATE rules differ from the read
+predicate. Calling `.policy()` on a table auto-enables RLS on it; a separate
+`.enable_on("post")` call is only needed for tables that need RLS enabled
+without any policy attached yet.
+
+## The policy SQL
+
+At `on_ready` time the plugin runs these statements in order:
+
+```sql
+-- for every table registered via .enable_on() or .policy()
+ALTER TABLE "post" ENABLE ROW LEVEL SECURITY;
+
+-- for every policy
+DROP POLICY IF EXISTS "user_can_read" ON "post";
+CREATE POLICY "user_can_read" ON "post"
+    FOR SELECT
+    USING (user_id = current_setting('app.user_id')::int);
+```
+
+The `DROP IF EXISTS` + `CREATE` pair is the idempotency mechanism. Postgres
+has no `CREATE OR REPLACE POLICY`, so this is the correct pattern. Re-running
+the app (or restarting after a crash) applies the current definitions without
+error. Policy names and table names are double-quote escaped; the `USING` and
+`WITH CHECK` expressions are passed through verbatim — they are SQL you wrote
+and are responsible for.
+
+## Setting user context per request
+
+Policies referencing `current_setting('app.user_id')` only work when the GUC
+is set for the session or transaction. Postgres does not inherit that value
+from application code automatically. You set it per request in axum middleware:
+
+```rust
+use axum::{extract::State, middleware::Next, response::Response};
+use axum::http::Request;
+use sqlx::PgPool;
+
+async fn rls_user_context<B>(
+    State(pool): State<PgPool>,
+    // replace with whatever auth extractor your app uses
+    auth: AuthSession,
+    req: Request<B>,
+    next: Next<B>,
+) -> Response {
+    sqlx::query("SELECT set_config('app.user_id', $1, true)")
+        .bind(auth.user_id.to_string())
+        .execute(&pool)
+        .await
+        .ok();
+    next.run(req).await
+}
+```
+
+The third argument to `set_config` is `is_local`. `true` scopes the GUC to
+the current transaction; `false` scopes it to the session. For most pooled
+setups you want `true` so the value doesn't bleed across requests that reuse
+the same connection.
+
+<Callout type="info">
+The auth integration is your responsibility today. `umbra-rls` sets up the
+policy DDL; wiring your auth layer to the GUC is application code, not
+framework code.
+</Callout>
+
+## SQLite story
+
+<Callout type="warning">
+`umbra-rls` is Postgres-only. When the active backend is SQLite, the plugin
+logs a `tracing::warn` and returns `Ok(())` from `on_ready` — it does not
+refuse to boot. All declared tables and policies are silently skipped.
+
+This matches the Django convention for backend-specific features: the feature
+is absent, not fatal, on an incompatible backend. If you want a hard failure
+on misconfiguration, check the pool variant yourself in your boot path:
+
+```rust
+use umbra::db::{pool_dispatched, DbPool};
+
+match pool_dispatched() {
+    DbPool::Postgres(_) => { /* ok */ }
+    DbPool::Sqlite(_) => panic!("this app requires Postgres (RLS)"),
+}
+```
+</Callout>
+
+## Reboot semantics
+
+Policies are applied at every boot, but they are **not** removed when you
+delete them from the builder. If you drop a policy from the `RlsPlugin` chain,
+the Postgres policy object remains on the table until you remove it explicitly:
+
+```sql
+DROP POLICY "user_can_read" ON "post";
+```
+
+This is intentional. The plugin cannot diff what is in the database against
+what is in the builder without taking a broader migration ownership it doesn't
+have. Treating RLS policies like schema migrations — where removals produce
+`DROP` operations — is a planned enhancement; for now, explicit cleanup is the
+safe shape.
+
+The spec and implementation live in `plugins/umbra-rls/src/lib.rs` and
+`docs/specs/` (Phase 4.5).
