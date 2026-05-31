@@ -188,6 +188,21 @@ impl<T: Model> QuerySet<T> {
         sql
     }
 
+    /// Render the QuerySet's SQL against the **Postgres** dialect,
+    /// without running it. Companion to [`Self::to_sql`].
+    ///
+    /// The two render slightly different placeholder syntax (`?` for
+    /// SQLite, `$1..$N` for Postgres) and any Postgres-specific
+    /// operators like the array `@>` / `<@` / `&&` family only render
+    /// correctly through this entry point — `to_sql`'s SQLite path
+    /// leaves `$N` tokens in the template untouched. Use this when
+    /// debugging a Postgres query or asserting on the rendered shape
+    /// in tests.
+    pub fn to_sql_pg(&self) -> String {
+        let (sql, _values) = self.query.build_sqlx(PostgresQueryBuilder);
+        sql
+    }
+
     /// Run the SELECT and return every matching row.
     pub async fn fetch(self) -> Result<Vec<T>, sqlx::Error>
     where

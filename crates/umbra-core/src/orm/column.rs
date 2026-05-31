@@ -1261,6 +1261,59 @@ impl<T> ArrayCol<T> {
     pub fn desc(&self) -> OrderExpr<T> {
         OrderExpr::new(self.name, true)
     }
+
+    /// SQL `col @> ARRAY[elem]` (Postgres contains).
+    ///
+    /// Returns `true` if every element of `ARRAY[elem]` is present in
+    /// the column's array — i.e. `elem` appears in the array. Use
+    /// [`Self::contains_all`] when checking multiple elements at once.
+    ///
+    /// Postgres-only. ArrayCol is system-check-gated against SQLite, so
+    /// the SQL fragment this emits only ever renders against a
+    /// PostgresQueryBuilder.
+    pub fn contains<V: Into<sea_query::Value>>(&self, elem: V) -> Predicate<T> {
+        array_contains_predicate(self.name, std::iter::once(elem.into()))
+    }
+
+    /// SQL `col @> ARRAY[elems...]` (Postgres contains-all).
+    ///
+    /// Returns `true` if every element of `elems` is present in the
+    /// column's array. An empty `elems` returns vacuously `true` (the
+    /// empty set is contained by every set), which Postgres also
+    /// reports — but the renderer requires at least one element to
+    /// produce a typed `ARRAY[...]` literal; passing an empty iterator
+    /// returns a tautology predicate (`1 = 1`).
+    pub fn contains_all<I, V>(&self, elems: I) -> Predicate<T>
+    where
+        I: IntoIterator<Item = V>,
+        V: Into<sea_query::Value>,
+    {
+        array_contains_predicate(self.name, elems.into_iter().map(Into::into))
+    }
+
+    /// SQL `col <@ ARRAY[elems...]` (Postgres contained-by).
+    ///
+    /// Returns `true` if every element of the column's array is in
+    /// `elems` — i.e. the column is a subset of the supplied set.
+    pub fn contained_by<I, V>(&self, elems: I) -> Predicate<T>
+    where
+        I: IntoIterator<Item = V>,
+        V: Into<sea_query::Value>,
+    {
+        array_contained_by_predicate(self.name, elems.into_iter().map(Into::into))
+    }
+
+    /// SQL `col && ARRAY[elems...]` (Postgres overlaps).
+    ///
+    /// Returns `true` if the column's array and `elems` share at least
+    /// one element.
+    pub fn overlaps<I, V>(&self, elems: I) -> Predicate<T>
+    where
+        I: IntoIterator<Item = V>,
+        V: Into<sea_query::Value>,
+    {
+        array_overlaps_predicate(self.name, elems.into_iter().map(Into::into))
+    }
 }
 
 /// A nullable `Vec<T>`-typed column.
@@ -1298,4 +1351,113 @@ impl<T> NullableArrayCol<T> {
     pub fn desc(&self) -> OrderExpr<T> {
         OrderExpr::new(self.name, true)
     }
+
+    /// See [`ArrayCol::contains`]. NULL columns are excluded by SQL's
+    /// three-valued logic — same as every other column predicate.
+    pub fn contains<V: Into<sea_query::Value>>(&self, elem: V) -> Predicate<T> {
+        array_contains_predicate(self.name, std::iter::once(elem.into()))
+    }
+
+    /// See [`ArrayCol::contains_all`].
+    pub fn contains_all<I, V>(&self, elems: I) -> Predicate<T>
+    where
+        I: IntoIterator<Item = V>,
+        V: Into<sea_query::Value>,
+    {
+        array_contains_predicate(self.name, elems.into_iter().map(Into::into))
+    }
+
+    /// See [`ArrayCol::contained_by`].
+    pub fn contained_by<I, V>(&self, elems: I) -> Predicate<T>
+    where
+        I: IntoIterator<Item = V>,
+        V: Into<sea_query::Value>,
+    {
+        array_contained_by_predicate(self.name, elems.into_iter().map(Into::into))
+    }
+
+    /// See [`ArrayCol::overlaps`].
+    pub fn overlaps<I, V>(&self, elems: I) -> Predicate<T>
+    where
+        I: IntoIterator<Item = V>,
+        V: Into<sea_query::Value>,
+    {
+        array_overlaps_predicate(self.name, elems.into_iter().map(Into::into))
+    }
+}
+
+// =========================================================================
+// Internal helpers: array operator predicates.
+//
+// The three operators share the same shape — `"col" OP ARRAY[$1, $2,
+// ...]` — and differ only by the operator string. Factored so the
+// ArrayCol and NullableArrayCol impls stay short.
+//
+// Each helper builds a `sea_query::Expr::cust_with_values` SimpleExpr.
+// The column identifier is quoted into the SQL template (Postgres
+// double-quote escaping); the elements bind through sea-query's value
+// list. Empty element lists return a tautology (`1 = 1`) or a
+// guaranteed-false predicate as appropriate, so the caller doesn't
+// have to special-case empty input.
+//
+// **Postgres-only.** ArrayCol is system-check-gated against SQLite, so
+// these fragments only ever render against PostgresQueryBuilder.
+// =========================================================================
+
+fn array_op_predicate<T>(
+    col: &'static str,
+    op: &str,
+    values: Vec<sea_query::Value>,
+) -> Predicate<T> {
+    if values.is_empty() {
+        // Render as a constant boolean. `1 = 1` is true; `1 = 0` false.
+        // Each operator picks the right tautology in the caller.
+        return Predicate::new(Expr::cust("1 = 1"));
+    }
+    let placeholders: Vec<String> = (1..=values.len()).map(|i| format!("${i}")).collect();
+    let sql = format!(
+        "\"{}\" {op} ARRAY[{}]",
+        col.replace('"', "\"\""),
+        placeholders.join(", ")
+    );
+    Predicate::new(Expr::cust_with_values(&sql, values))
+}
+
+fn array_contains_predicate<T, I>(col: &'static str, elems: I) -> Predicate<T>
+where
+    I: IntoIterator<Item = sea_query::Value>,
+{
+    // `col @> ARRAY[]` is vacuously true on Postgres (empty set is
+    // contained by every set). Render as 1 = 1 to keep the QuerySet
+    // simple and predictable.
+    array_op_predicate::<T>(col, "@>", elems.into_iter().collect())
+}
+
+fn array_contained_by_predicate<T, I>(col: &'static str, elems: I) -> Predicate<T>
+where
+    I: IntoIterator<Item = sea_query::Value>,
+{
+    let values: Vec<sea_query::Value> = elems.into_iter().collect();
+    if values.is_empty() {
+        // `col <@ ARRAY[]` is true only when `col` is empty or NULL;
+        // 1 = 1 isn't right here. Use a guaranteed-false predicate
+        // so the caller sees zero rows for "subset of nothing" — the
+        // honest answer when the column has any rows at all. The
+        // empty-array-equality check belongs in a future `len()`
+        // op.
+        return Predicate::new(Expr::cust("1 = 0"));
+    }
+    array_op_predicate::<T>(col, "<@", values)
+}
+
+fn array_overlaps_predicate<T, I>(col: &'static str, elems: I) -> Predicate<T>
+where
+    I: IntoIterator<Item = sea_query::Value>,
+{
+    let values: Vec<sea_query::Value> = elems.into_iter().collect();
+    if values.is_empty() {
+        // Empty set overlaps nothing; predicate is always false.
+        return Predicate::new(Expr::cust("1 = 0"));
+    }
+    array_op_predicate::<T>(col, "&&", values)
 }
