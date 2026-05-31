@@ -1,3 +1,18 @@
+## Status
+
+**4 of 6 closed.** Last updated 2026-06-01.
+
+| # | Gap | Status |
+|---|-----|--------|
+| 1 | Email plugin attachments | open |
+| 2 | Django-style 404 / 500 pages | done — `e42f408` |
+| 3 | CLI: `umbra startproject` / `startapp` + dispatch shape | done — `95f0709` + `e5645a4` |
+| 4 | Plugin docs + REST custom field rendering | done — `1cdbc18` (docs) + `dc84dbf` (code) |
+| 5 | OpenAPI customisation params (`.description()`) | done — `e42f408` |
+| 6 | Security audit across system + plugins | open |
+
+The two open items are independent and well-scoped: gap 1 is bounded (one plugin, one feature), gap 6 benefits from a dedicated security-focused session.
+
 ## Seen/Known gaps
 
 1. [ ] Email plugin lacks the ability to do file attachments
