@@ -1,0 +1,19 @@
+[package]
+name = "umbra-rls"
+description = "Postgres Row-Level Security plugin for umbra. Declares policies once at App::build; the plugin's on_ready hook applies them via ALTER TABLE ENABLE ROW LEVEL SECURITY + CREATE POLICY."
+workspace = "../../crates"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+umbra = { path = "../../crates/umbra", version = "0.0.1" }
+sqlx = { version = "0.8", features = ["postgres", "runtime-tokio"] }
+tokio = { version = "1", features = ["rt"] }
+tracing = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }

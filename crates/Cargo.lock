@@ -2623,6 +2623,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "umbra-rls"
+version = "0.0.1"
+dependencies = [
+ "sqlx",
+ "tokio",
+ "tracing",
+ "umbra",
+]
+
+[[package]]
 name = "umbra-security"
 version = "0.0.1"
 dependencies = [
