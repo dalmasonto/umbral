@@ -203,7 +203,7 @@ pub mod inspect {
     pub use umbra_core::inspect::{
         INITIAL_MIGRATION_ID, INSPECTED_PLUGIN_NAME, InspectError, InspectOptions, InspectReport,
         IntrospectedColumn, IntrospectedSchema, IntrospectedTable, inspectdb, introspect_pool,
-        render_initial_migration, render_models, write_outputs,
+        introspect_pool_pg, render_initial_migration, render_models, write_outputs,
     };
 }
 

@@ -10,11 +10,19 @@
 //! After that, the introspected schema enters the M5 declare →
 //! migrate → change → migrate loop with no separate code path.
 //!
+//! ## Backend coverage
+//!
+//! - **SQLite (M6 v1).** [`introspect_pool`] reads `sqlite_master` for
+//!   table names and `PRAGMA table_info` for column descriptors.
+//! - **Postgres (Phase 3 of the rollout).** [`introspect_pool_pg`]
+//!   reads `information_schema.tables` / `information_schema.columns`
+//!   and joins `information_schema.table_constraints` + `key_column_usage`
+//!   for primary keys. Same `IntrospectedSchema` output; the
+//!   downstream pipeline (`render_models` / `render_initial_migration`
+//!   / `write_outputs`) is backend-agnostic.
+//!
 //! ## M6 v1 scope
 //!
-//! - **Backend.** SQLite only. The introspection uses `PRAGMA
-//!   table_info`. Postgres lands when the M4 [`DatabaseBackend`]
-//!   abstraction grows an `introspect` hook.
 //! - **Output.** A flat `models.rs` plus `migrations/0001_initial.json`
 //!   in the user-chosen output directory. No `Cargo.toml`, no `lib.rs`
 //!   with a `Plugin` impl: the plugin trait isn't shipped until M7,
@@ -40,7 +48,7 @@
 
 use std::path::{Path, PathBuf};
 
-use sqlx::{Row, SqlitePool};
+use sqlx::{PgPool, Row, SqlitePool};
 
 use crate::migrate::{self, Column, MigrationFile, ModelMeta, Operation, Snapshot};
 use crate::orm::SqlType;
@@ -192,12 +200,20 @@ pub struct InspectReport {
 // Top-level entry points. Bodies filled in by the M6 fan-out subagents.
 // =========================================================================
 
-/// Run the full `inspectdb` pipeline against the ambient SQLite pool:
-/// introspect, render `models.rs`, render `0001_initial.json`, write
-/// both to `opts.output`, and optionally mark applied.
+/// Run the full `inspectdb` pipeline against the ambient pool:
+/// introspect (dispatching on the active backend), render `models.rs`,
+/// render `0001_initial.json`, write both to `opts.output`, and
+/// optionally mark applied.
+///
+/// Phase 3 of the Postgres rollout taught this entry point to dispatch
+/// on `DbPool` — the SQLite path uses `PRAGMA table_info`; the
+/// Postgres path uses `information_schema`. The downstream pipeline
+/// (rendering + writing) is backend-agnostic and runs the same way.
 pub async fn inspectdb(opts: InspectOptions) -> Result<InspectReport, InspectError> {
-    let pool = crate::db::pool();
-    let schema = introspect_pool(&pool).await?;
+    let schema = match crate::db::pool_dispatched() {
+        crate::db::DbPool::Sqlite(pool) => introspect_pool(pool).await?,
+        crate::db::DbPool::Postgres(pool) => introspect_pool_pg(pool).await?,
+    };
     if schema.tables.is_empty() {
         return Err(InspectError::NoTables);
     }
@@ -246,6 +262,161 @@ pub async fn introspect_pool(pool: &SqlitePool) -> Result<IntrospectedSchema, In
     }
 
     Ok(IntrospectedSchema { tables })
+}
+
+/// Introspect the schema reachable through the given Postgres pool.
+/// Reads `information_schema.tables` for table names,
+/// `information_schema.columns` for column descriptors, and joins
+/// `information_schema.table_constraints` + `key_column_usage` for
+/// the primary-key flag. Scoped to the `public` schema by default;
+/// internal Postgres schemas and umbra's own `umbra_migrations`
+/// tracking table are skipped.
+///
+/// The output is the same `IntrospectedSchema` the SQLite path
+/// produces — downstream rendering doesn't know which backend the
+/// data came from.
+pub async fn introspect_pool_pg(pool: &PgPool) -> Result<IntrospectedSchema, InspectError> {
+    // List user tables in the `public` schema, lexically. Postgres
+    // information_schema is standard SQL; pg_catalog is the lower-
+    // level surface but information_schema is portable across
+    // Postgres-compatible servers and carries everything the
+    // SqlType catalogue needs.
+    let table_rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT table_name FROM information_schema.tables \
+         WHERE table_schema = 'public' \
+           AND table_type = 'BASE TABLE' \
+           AND table_name <> 'umbra_migrations' \
+         ORDER BY table_name",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let mut tables: Vec<IntrospectedTable> = Vec::with_capacity(table_rows.len());
+    for (table,) in table_rows {
+        let columns = introspect_columns_pg(pool, &table).await?;
+        tables.push(IntrospectedTable {
+            name: pascal_case(&table),
+            table,
+            columns,
+        });
+    }
+
+    Ok(IntrospectedSchema { tables })
+}
+
+/// Read one Postgres table's columns via `information_schema.columns`,
+/// plus a primary-key join over `information_schema.table_constraints`
+/// and `key_column_usage`. Columns come back in declaration order
+/// (`ordinal_position`).
+///
+/// `data_type` is the normalised type string Postgres exposes through
+/// information_schema (e.g. `"integer"`, `"character varying"`,
+/// `"timestamp with time zone"`); [`map_postgres_type`] maps it to the
+/// umbra `SqlType` catalogue. Anything unmapped surfaces as
+/// [`InspectError::UnsupportedColumnType`] with the table / column
+/// names and the raw type string.
+async fn introspect_columns_pg(
+    pool: &PgPool,
+    table: &str,
+) -> Result<Vec<IntrospectedColumn>, InspectError> {
+    // The primary-key lookup runs once per table. The set is typically
+    // tiny (one column for most tables, a handful for composite keys)
+    // so collecting it up-front into a Vec keeps the inner column loop
+    // O(columns × pk_columns) without an extra round trip per column.
+    let pk_rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT kcu.column_name \
+         FROM information_schema.table_constraints tc \
+         JOIN information_schema.key_column_usage kcu \
+           ON tc.constraint_name = kcu.constraint_name \
+          AND tc.table_schema = kcu.table_schema \
+         WHERE tc.constraint_type = 'PRIMARY KEY' \
+           AND tc.table_schema = 'public' \
+           AND tc.table_name = $1",
+    )
+    .bind(table)
+    .fetch_all(pool)
+    .await?;
+    let pk_columns: std::collections::HashSet<String> = pk_rows.into_iter().map(|(c,)| c).collect();
+
+    let column_rows: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT column_name, data_type, is_nullable \
+         FROM information_schema.columns \
+         WHERE table_schema = 'public' AND table_name = $1 \
+         ORDER BY ordinal_position",
+    )
+    .bind(table)
+    .fetch_all(pool)
+    .await?;
+
+    let mut columns: Vec<IntrospectedColumn> = Vec::with_capacity(column_rows.len());
+    for (name, data_type, is_nullable) in column_rows {
+        let ty =
+            map_postgres_type(&data_type).ok_or_else(|| InspectError::UnsupportedColumnType {
+                table: table.to_string(),
+                column: name.clone(),
+                sql_type: data_type.clone(),
+            })?;
+        let primary_key = pk_columns.contains(&name);
+        // Postgres `is_nullable` is the string "YES" or "NO". A primary
+        // key is non-nullable by definition (the server enforces it);
+        // we force `nullable = false` so a SERIAL/BIGSERIAL PK round-
+        // trips through the M3 derive (which rejects `Option<T>` PKs)
+        // matching the behavioural fix already in place on the SQLite
+        // path.
+        let nullable = if primary_key {
+            false
+        } else {
+            is_nullable.eq_ignore_ascii_case("YES")
+        };
+        columns.push(IntrospectedColumn {
+            name,
+            ty,
+            primary_key,
+            nullable,
+        });
+    }
+
+    Ok(columns)
+}
+
+/// Map a Postgres `information_schema.columns.data_type` value to the
+/// umbra `SqlType` catalogue. Postgres normalises the strings, so the
+/// match table is the canonical names rather than the optional aliases
+/// `pg_type.typname` would expose. The inverse of
+/// [`crate::backend::PostgresBackend::map_type`] — both stay in sync
+/// as new `SqlType` variants land.
+///
+/// Returns `None` on anything not in the catalogue (Postgres-specific
+/// types like `numeric`, `jsonb`, `bytea`, arrays, custom domains).
+/// The caller turns that into `UnsupportedColumnType` with enough
+/// context for the operator to fix by hand or wait for the field-
+/// type catalogue to grow.
+fn map_postgres_type(raw: &str) -> Option<SqlType> {
+    let normalised = raw.trim().to_ascii_lowercase();
+    match normalised.as_str() {
+        "smallint" => Some(SqlType::SmallInt),
+        "integer" => Some(SqlType::Integer),
+        "bigint" => Some(SqlType::BigInt),
+        "real" => Some(SqlType::Real),
+        "double precision" => Some(SqlType::Double),
+        "boolean" => Some(SqlType::Boolean),
+        // information_schema reports `text`, `character varying`, and
+        // `character` for VARCHAR / CHAR / TEXT. All round-trip through
+        // umbra's Text variant.
+        "text" | "character varying" | "character" => Some(SqlType::Text),
+        "date" => Some(SqlType::Date),
+        // Both timezone variants of TIME land on umbra's Time. The
+        // distinction is preserved in the database; the client-side
+        // type system doesn't model it yet.
+        "time without time zone" | "time with time zone" => Some(SqlType::Time),
+        // Likewise both timezone variants of TIMESTAMP land on
+        // Timestamptz. The umbra catalogue picks the with-tz variant
+        // as the default so chrono::DateTime<Utc> is the natural Rust
+        // type for either.
+        "timestamp without time zone" | "timestamp with time zone" => Some(SqlType::Timestamptz),
+        "uuid" => Some(SqlType::Uuid),
+        _ => None,
+    }
 }
 
 /// Read one table's columns via `PRAGMA table_info`. The PRAGMA returns
@@ -728,5 +899,90 @@ mod tests {
         assert!(out.contains("Generated by `umbra inspectdb`"));
         assert!(out.contains("edits made by hand will be lost"));
         assert!(out.contains("use umbra::prelude::*;"));
+    }
+
+    // --------------------------------------------------------------- //
+    // Postgres type-mapping coverage (Phase 3).                        //
+    // --------------------------------------------------------------- //
+
+    /// Every variant of the M5 SqlType catalogue has a mapping from
+    /// the canonical Postgres `information_schema.columns.data_type`
+    /// value back to the variant. Lockstep with
+    /// `crate::backend::PostgresBackend::map_type` — if a SqlType
+    /// variant lands, both `map_type` (outbound) and `map_postgres_type`
+    /// (inbound) need an arm.
+    #[test]
+    fn map_postgres_type_covers_the_full_catalogue() {
+        assert_eq!(map_postgres_type("smallint"), Some(SqlType::SmallInt));
+        assert_eq!(map_postgres_type("integer"), Some(SqlType::Integer));
+        assert_eq!(map_postgres_type("bigint"), Some(SqlType::BigInt));
+        assert_eq!(map_postgres_type("real"), Some(SqlType::Real));
+        assert_eq!(map_postgres_type("double precision"), Some(SqlType::Double));
+        assert_eq!(map_postgres_type("boolean"), Some(SqlType::Boolean));
+        assert_eq!(map_postgres_type("text"), Some(SqlType::Text));
+        assert_eq!(
+            map_postgres_type("character varying"),
+            Some(SqlType::Text),
+            "VARCHAR maps to Text",
+        );
+        assert_eq!(
+            map_postgres_type("character"),
+            Some(SqlType::Text),
+            "CHAR maps to Text",
+        );
+        assert_eq!(map_postgres_type("date"), Some(SqlType::Date));
+        assert_eq!(
+            map_postgres_type("time without time zone"),
+            Some(SqlType::Time),
+        );
+        assert_eq!(
+            map_postgres_type("time with time zone"),
+            Some(SqlType::Time)
+        );
+        assert_eq!(
+            map_postgres_type("timestamp without time zone"),
+            Some(SqlType::Timestamptz),
+        );
+        assert_eq!(
+            map_postgres_type("timestamp with time zone"),
+            Some(SqlType::Timestamptz),
+        );
+        assert_eq!(map_postgres_type("uuid"), Some(SqlType::Uuid));
+    }
+
+    /// Postgres-specific types umbra doesn't model yet surface as
+    /// `None` so the caller produces `UnsupportedColumnType` with the
+    /// raw type string preserved. Spec'd out the catalogue lookups
+    /// most likely to bite a Django port: numeric, jsonb, bytea,
+    /// arrays. The user fixes by hand or waits for the catalogue to
+    /// grow.
+    #[test]
+    fn map_postgres_type_returns_none_for_postgres_only_types() {
+        assert_eq!(map_postgres_type("numeric"), None);
+        assert_eq!(map_postgres_type("jsonb"), None);
+        assert_eq!(map_postgres_type("json"), None);
+        assert_eq!(map_postgres_type("bytea"), None);
+        assert_eq!(map_postgres_type("ARRAY"), None);
+        assert_eq!(map_postgres_type("inet"), None);
+    }
+
+    /// The mapping is case-insensitive on the input but matches against
+    /// the canonical lowercase form information_schema reports. Whether
+    /// the operator's DB returns `INTEGER` (uppercase, from a quoted
+    /// type) or `integer` shouldn't matter.
+    #[test]
+    fn map_postgres_type_is_case_insensitive_on_input() {
+        assert_eq!(map_postgres_type("INTEGER"), Some(SqlType::Integer));
+        assert_eq!(map_postgres_type("Bigint"), Some(SqlType::BigInt));
+        assert_eq!(map_postgres_type("UUID"), Some(SqlType::Uuid));
+    }
+
+    /// Surrounding whitespace doesn't break the lookup. Trimming
+    /// matches `map_sqlite_type`'s `trim()`; both functions parse
+    /// values straight from a sqlx row and the trim is a cheap
+    /// safety net.
+    #[test]
+    fn map_postgres_type_trims_whitespace() {
+        assert_eq!(map_postgres_type("  bigint  "), Some(SqlType::BigInt));
     }
 }
