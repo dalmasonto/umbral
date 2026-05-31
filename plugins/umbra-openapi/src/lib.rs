@@ -40,6 +40,7 @@ pub struct OpenApiPlugin {
     base_path: String,
     title: String,
     version: String,
+    description: Option<String>,
     extra_exclude: Vec<String>,
 }
 
@@ -55,6 +56,7 @@ impl OpenApiPlugin {
             base_path: "/openapi".to_string(),
             title: "umbra API".to_string(),
             version: "0.0.1".to_string(),
+            description: None,
             extra_exclude: Vec::new(),
         }
     }
@@ -81,6 +83,16 @@ impl OpenApiPlugin {
     /// Override `info.version` in the emitted spec.
     pub fn version(mut self, s: impl Into<String>) -> Self {
         self.version = s.into();
+        self
+    }
+
+    /// Set `info.description` in the emitted spec. Optional —
+    /// omitted from the JSON when unset. Markdown is permitted (per
+    /// OpenAPI 3.0.3); Swagger UI renders it above the operations
+    /// list, so this is the place to document API-wide auth, rate
+    /// limiting, conventions, etc.
+    pub fn description(mut self, s: impl Into<String>) -> Self {
+        self.description = Some(s.into());
         self
     }
 
@@ -205,12 +217,16 @@ fn build_spec(cfg: &OpenApiPlugin) -> Value {
         }
     }
 
+    let mut info = Map::new();
+    info.insert("title".into(), Value::String(cfg.title.clone()));
+    info.insert("version".into(), Value::String(cfg.version.clone()));
+    if let Some(desc) = &cfg.description {
+        info.insert("description".into(), Value::String(desc.clone()));
+    }
+
     json!({
         "openapi": "3.0.3",
-        "info": {
-            "title": cfg.title,
-            "version": cfg.version,
-        },
+        "info": Value::Object(info),
         "paths": Value::Object(paths),
         "components": {
             "schemas": Value::Object(schemas),

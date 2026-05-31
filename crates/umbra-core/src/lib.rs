@@ -10,6 +10,7 @@ pub mod backup;
 pub mod check;
 pub mod cli;
 pub mod db;
+pub mod errors;
 pub mod forms;
 pub mod inspect;
 pub mod migrate;

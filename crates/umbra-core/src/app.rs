@@ -71,6 +71,8 @@ pub struct AppBuilder {
     plugins: Vec<Box<dyn Plugin>>,
     templates_dir: Option<std::path::PathBuf>,
     slash_redirect: crate::slash::SlashRedirect,
+    not_found_template: Option<String>,
+    server_error_template: Option<String>,
 }
 
 impl AppBuilder {
@@ -170,6 +172,41 @@ impl AppBuilder {
     /// ```
     pub fn slash_redirect(mut self, policy: crate::slash::SlashRedirect) -> Self {
         self.slash_redirect = policy;
+        self
+    }
+
+    /// Set the template rendered on a 404. Mirrors Django's
+    /// `404.html` convention.
+    ///
+    /// The template gets `{ path }` in scope — the request path that
+    /// missed — so you can render `The page {{ path }} doesn't
+    /// exist.` without wiring extractors. When unset, 404s return
+    /// plain-text "Not Found". When set but the template fails to
+    /// render (missing file, parse error), the framework falls back
+    /// to the plain-text response and logs the render error.
+    ///
+    /// Composes with [`Self::slash_redirect`] — if a slash-redirect
+    /// probe finds the alternate, it 308s before the not-found
+    /// template fires.
+    pub fn not_found_template(mut self, name: impl Into<String>) -> Self {
+        self.not_found_template = Some(name.into());
+        self
+    }
+
+    /// Set the template rendered on a panicking handler. Mirrors
+    /// Django's `500.html` convention.
+    ///
+    /// Installs a `tower-http` `CatchPanic` layer around the router.
+    /// A panic in any handler is caught, logged via `tracing::error`,
+    /// and replaced with a 500 response carrying the rendered
+    /// template. When unset, panics use tower-http's default
+    /// behaviour (log + empty 500 body).
+    ///
+    /// The template gets NO context — panic details intentionally
+    /// stay out of the user-facing body. Look in logs for the
+    /// payload and backtrace.
+    pub fn server_error_template(mut self, name: impl Into<String>) -> Self {
+        self.server_error_template = Some(name.into());
         self
     }
 
@@ -377,19 +414,48 @@ impl AppBuilder {
             router = plugin.wrap_router(router);
         }
 
-        // Phase 5.6 — install the trailing-slash redirect fallback if
-        // the user opted in via `.slash_redirect()`. We snapshot the
-        // router BEFORE installing the fallback — the snapshot is what
-        // gets probed for the alternate path, and it can't recursively
-        // hit this fallback because it doesn't have one. axum
-        // `Router::layer()` wraps individual routes only; it doesn't
-        // run on requests that miss every route, so it can't catch
-        // those 404s. The fallback handler is the right surface for
-        // catching missed paths.
-        if self.slash_redirect != crate::slash::SlashRedirect::Off {
-            let snapshot = router.clone();
-            let fallback = crate::slash::slash_redirect_fallback(snapshot, self.slash_redirect);
-            router = router.fallback(fallback);
+        // Phase 5.6 — install the 404 fallback. Three cases:
+        //
+        // 1. slash_redirect = Off, not_found_template = None:
+        //    no-op. axum's built-in empty 404 is what users see.
+        // 2. slash_redirect = Off, not_found_template = Some(name):
+        //    install the not-found fallback directly. Renders the
+        //    template on every miss.
+        // 3. slash_redirect != Off:
+        //    install the slash-redirect fallback. It handles its own
+        //    404 path internally — when no alternate matches, it
+        //    renders the configured not-found template (or plain text
+        //    if unset).
+        //
+        // The slash-redirect fallback ALWAYS captures a router
+        // snapshot taken BEFORE the fallback is installed, so the
+        // alternate-path probe can't recursively re-hit the fallback.
+        match (self.slash_redirect, self.not_found_template.as_ref()) {
+            (crate::slash::SlashRedirect::Off, None) => {
+                // axum's default 404 — nothing to do.
+            }
+            (crate::slash::SlashRedirect::Off, Some(_)) => {
+                let fallback = crate::errors::not_found_fallback(self.not_found_template.clone());
+                router = router.fallback(fallback);
+            }
+            (policy, _) => {
+                let snapshot = router.clone();
+                let fallback = crate::slash::slash_redirect_fallback(
+                    snapshot,
+                    policy,
+                    self.not_found_template.clone(),
+                );
+                router = router.fallback(fallback);
+            }
+        }
+
+        // Phase 5.7 — wrap with the panic-catch layer if
+        // server_error_template is set. Comes AFTER the fallback
+        // wiring so a panicking fallback handler is also caught (the
+        // panic-catch layer wraps the entire router).
+        if let Some(template) = &self.server_error_template {
+            let handler = crate::errors::server_error_panic_handler(Some(template.clone()));
+            router = router.layer(tower_http::catch_panic::CatchPanicLayer::custom(handler));
         }
 
         // Phase 6 — fire each plugin's `on_ready` in topological order.

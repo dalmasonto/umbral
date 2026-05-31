@@ -20,7 +20,7 @@ fn router_with_fallback(router: Router, policy: SlashRedirect) -> Router {
         return router;
     }
     let snapshot = router.clone();
-    router.fallback(slash_redirect_fallback(snapshot, policy))
+    router.fallback(slash_redirect_fallback(snapshot, policy, None))
 }
 
 async fn oneshot(router: Router, method: Method, path: &str) -> axum::http::Response<Body> {

@@ -126,6 +126,7 @@ impl SlashRedirect {
 pub fn slash_redirect_fallback(
     snapshot: Router,
     policy: SlashRedirect,
+    not_found_template: Option<String>,
 ) -> impl Fn(Request<Body>) -> Pin<Box<dyn Future<Output = Response<Body>> + Send>>
 + Clone
 + Send
@@ -134,6 +135,7 @@ pub fn slash_redirect_fallback(
     move |req: Request<Body>| {
         let snapshot = snapshot.clone();
         let policy = policy;
+        let template = not_found_template.clone();
         Box::pin(async move {
             let original_path = req.uri().path().to_owned();
             let query = req
@@ -142,14 +144,10 @@ pub fn slash_redirect_fallback(
                 .map(|q| format!("?{q}"))
                 .unwrap_or_default();
 
-            // Build the default 404 response — we return this when
-            // the policy doesn't apply or the probe doesn't find an
-            // alternate route.
-            let default_404 = || {
-                let mut r = Response::new(Body::from("Not Found"));
-                *r.status_mut() = StatusCode::NOT_FOUND;
-                r
-            };
+            // 404 path. Uses the configured not-found template when
+            // present; otherwise plain text.
+            let default_404 =
+                || crate::errors::render_not_found(template.as_deref(), &original_path);
 
             // Don't fire the redirect unless the policy says so.
             let Some(alt) = policy.alternate_path(&original_path) else {
