@@ -134,17 +134,93 @@ what clients can write, gate the endpoint with auth middleware or hand-roll the
 handler.
 </Callout>
 
+## Pagination
+
+`RestPlugin` exposes a `Pagination` trait so list endpoints can be wrapped in any
+envelope shape. Three built-ins ship, plus a custom-trait escape hatch — the same
+shape DRF uses.
+
+### Built-ins
+
+```rust
+use umbra_rest::{LimitOffsetPagination, NoPagination, PageNumberPagination, RestPlugin};
+
+// Default — no pagination. Envelope: `{ results, count }` where count == results.len().
+// No LIMIT applied; no extra COUNT query runs.
+RestPlugin::default();
+
+// Django shape: `?page=N&page_size=M`.
+// Envelope: `{ count, total_pages, current_page, page_size, next, previous, results }`.
+RestPlugin::default()
+    .paginate(PageNumberPagination::new(20).with_max_page_size(100));
+
+// REST classic: `?limit=N&offset=M`.
+// Envelope: `{ count, limit, offset, next, previous, results }`.
+RestPlugin::default()
+    .paginate(LimitOffsetPagination::new(50));
+```
+
+For `PageNumberPagination`:
+
+| Query param | Default | Effect |
+|-------------|---------|--------|
+| `?page=N` | `1` | Page number. Invalid values fall back to `1`. |
+| `?page_size=M` | `page_size` config | Rows per page. Clamped to `max_page_size`. Disable client overrides via `.lock_page_size()`. |
+
+`next` and `previous` in the envelope are integer page numbers (not URLs) so the
+shape stays host-agnostic. Clients combine the path they already know with the
+returned page number to fetch the next/previous page.
+
+### Custom envelope
+
+Implement `Pagination` directly. The two methods are `extract_request` (URL params →
+limit / offset) and `paginate` (rows + total → JSON envelope):
+
+```rust
+use std::collections::HashMap;
+use serde_json::{json, Map, Value};
+use umbra_rest::{PageRequest, Pagination};
+
+struct WindowPagination { window: u64 }
+
+impl Pagination for WindowPagination {
+    fn extract_request(&self, params: &HashMap<String, String>) -> PageRequest {
+        let cursor = params.get("cursor").and_then(|s| s.parse().ok()).unwrap_or(0);
+        PageRequest { limit: self.window, offset: cursor, page: None }
+    }
+
+    fn paginate(&self, rows: Vec<Map<String, Value>>, total: i64, req: &PageRequest) -> Value {
+        let next_cursor = req.offset + req.limit;
+        json!({
+            "data": rows,
+            "meta": {
+                "total": total,
+                "next_cursor": (next_cursor as i64 < total).then_some(next_cursor),
+            },
+        })
+    }
+}
+
+RestPlugin::default().paginate(WindowPagination { window: 25 });
+```
+
+`extract_request` should be forgiving — return defaults on parse failure rather than
+raising errors, so a client typo on a query param doesn't 400 every list request.
+
+<Callout type="info">
+**Don't return URLs in `next` / `previous`.** Returning page numbers / cursors / offsets
+keeps the envelope identical whether the API is served from `localhost`, behind a
+reverse proxy, or via CDN. The client knows the path; let it build the URL.
+</Callout>
+
 ## What's not in v1
 
 <Callout type="info">
-The two items below are known follow-ons tracked in `bugs/gaps.md`. Each has a workable
-workaround today.
+The one item below is a known follow-on tracked in `bugs/gaps.md`.
 
 - **Auth gating.** Every exposed route is open in v1. Wrap the app router with a Tower
   middleware layer or an axum extractor to enforce authentication before requests reach the
   REST handlers.
-- **Pagination.** List endpoints return all rows in the table. High-row-count tables will
-  return everything in one response. Cursor or page-number pagination is a planned follow-on.
 </Callout>
 
 ## Pairing with OpenAPI

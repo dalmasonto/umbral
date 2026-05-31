@@ -472,7 +472,7 @@ impl<T: Model> QuerySet<T> {
             if field.primary_key {
                 continue;
             }
-            let sea_value = json_to_sea_value(field.ty, val, field.nullable, &field.name)?;
+            let sea_value = json_to_sea_value(field.ty, val, field.nullable, field.name)?;
             stmt.value(Alias::new(field.name), sea_value);
         }
         for p in &self.predicates {

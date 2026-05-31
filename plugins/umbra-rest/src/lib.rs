@@ -3,7 +3,8 @@
 //! Register [`RestPlugin`] on `App::builder()` and every registered
 //! model gets a standard REST surface at `/api/<table>/`:
 //!
-//! - `GET /api/<table>/`         — list (returns `{"results": [...], "count": N}`)
+//! - `GET /api/<table>/`         — list (envelope shape is configurable via
+//!   [`RestPlugin::paginate`]; defaults to `{"results": [...], "count": N}`)
 //! - `POST /api/<table>/`        — create, returns 201 + the new row
 //! - `GET /api/<table>/<id>`     — retrieve, 404 on miss
 //! - `PUT /api/<table>/<id>`     — update (full replacement), returns 200 + row
@@ -34,7 +35,8 @@
 //! `RestPlugin::require_staff()` that mirrors umbra-admin's Basic
 //! Auth gate.
 
-use std::sync::OnceLock;
+use std::collections::HashMap;
+use std::sync::{Arc, OnceLock};
 
 use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
 use serde::Serialize;
@@ -43,8 +45,13 @@ use sqlx::{Row, SqlitePool};
 use umbra::migrate::{Column, ModelMeta};
 use umbra::orm::SqlType;
 use umbra::prelude::*;
-use umbra::web::{Json, Path, Response, StatusCode};
+use umbra::web::{Json, Path, Query, Response, StatusCode};
 use uuid::Uuid;
+
+pub mod pagination;
+pub use pagination::{
+    LimitOffsetPagination, NoPagination, PageNumberPagination, PageRequest, Pagination,
+};
 
 /// The block-list every plugin starts with. Exposing these via REST
 /// would leak password hashes (auth_user), session IDs (session), or
@@ -80,18 +87,25 @@ pub struct RestPlugin {
     /// Applied AFTER hide + transform, so the computed closure sees
     /// the customised row.
     computed: Vec<(String, String, ComputedFn)>,
+    /// The pagination shape applied to every list endpoint. Defaults
+    /// to [`NoPagination`] so the v1 envelope (`{ results, count }`)
+    /// stays unchanged for apps that don't opt in. Configure via
+    /// [`Self::paginate`].
+    pagination: Arc<dyn Pagination>,
 }
 
 impl std::fmt::Debug for RestPlugin {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Closures aren't Debug; render placeholders for the override
-        // vecs so the Debug impl still works for tests / logs.
+        // Closures + trait objects aren't Debug; render placeholders
+        // for the dynamic fields so the Debug impl still works for
+        // tests / logs.
         f.debug_struct("RestPlugin")
             .field("include_only", &self.include_only)
             .field("extra_exclude", &self.extra_exclude)
             .field("hidden", &self.hidden)
             .field("transforms_count", &self.transforms.len())
             .field("computed_count", &self.computed.len())
+            .field("pagination", &"<dyn Pagination>")
             .finish()
     }
 }
@@ -110,7 +124,31 @@ impl RestPlugin {
             hidden: Vec::new(),
             transforms: Vec::new(),
             computed: Vec::new(),
+            pagination: Arc::new(NoPagination),
         }
+    }
+
+    /// Set the pagination shape applied to every list endpoint.
+    ///
+    /// Three built-ins ship:
+    /// - [`NoPagination`] (default) — `{ results, count }` envelope,
+    ///   no LIMIT applied, no extra COUNT query.
+    /// - [`PageNumberPagination::new(page_size)`] — Django default.
+    ///   `?page=N&page_size=M`.
+    /// - [`LimitOffsetPagination::new(default_limit)`] — REST classic.
+    ///   `?limit=N&offset=M`.
+    ///
+    /// Custom envelopes: implement [`Pagination`] on a unit struct or
+    /// configured type and pass it here. See the trait docs for the
+    /// extract + paginate contract.
+    ///
+    /// ```ignore
+    /// RestPlugin::default()
+    ///     .paginate(PageNumberPagination::new(20).with_max_page_size(100))
+    /// ```
+    pub fn paginate<P: Pagination>(mut self, p: P) -> Self {
+        self.pagination = Arc::new(p);
+        self
     }
 
     /// Restrict exposure to exactly this set of tables. Every other
@@ -349,25 +387,29 @@ fn pk_column(model: &ModelMeta) -> Result<&Column, ApiError> {
 // Handlers.
 // =========================================================================
 
-#[derive(Debug, Serialize)]
-struct ListResponse {
-    results: Vec<Map<String, Value>>,
-    count: usize,
-}
-
-async fn list(Path(table): Path<String>) -> Result<Json<ListResponse>, ApiError> {
+async fn list(
+    Path(table): Path<String>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<Json<Value>, ApiError> {
     let model = allowed_model(&table)?;
     let pool = umbra::db::pool();
-    let mut rows = fetch_rows(&pool, &model, None).await?;
     let cfg = CONFIG.get().expect("RestPlugin::routes was called");
+
+    let page_req = cfg.pagination.extract_request(&params);
+    let mut rows = fetch_rows(&pool, &model, None, Some(page_req)).await?;
     for row in &mut rows {
         cfg.apply_overrides(&table, row);
     }
-    let count = rows.len();
-    Ok(Json(ListResponse {
-        results: rows,
-        count,
-    }))
+    // Skip the extra COUNT round-trip for NoPagination — it would
+    // throw away the result anyway. Other paginators read the total
+    // for their envelope.
+    let total = if cfg.pagination.needs_total() {
+        count_rows(&pool, &model).await?
+    } else {
+        rows.len() as i64
+    };
+    let envelope = cfg.pagination.paginate(rows, total, &page_req);
+    Ok(Json(envelope))
 }
 
 async fn retrieve(
@@ -376,7 +418,7 @@ async fn retrieve(
     let model = allowed_model(&table)?;
     let pk = pk_column(&model)?;
     let pool = umbra::db::pool();
-    let mut rows = fetch_rows(&pool, &model, Some((&pk.name, &id))).await?;
+    let mut rows = fetch_rows(&pool, &model, Some((&pk.name, &id)), None).await?;
     let Some(mut row) = rows.pop() else {
         return Err(ApiError::NotFound(format!(
             "no row with {} = {} in {}",
@@ -396,7 +438,7 @@ async fn create(
     let pool = umbra::db::pool();
     let new_id = insert_row(&pool, &model, &body).await?;
     let pk = pk_column(&model)?;
-    let mut rows = fetch_rows(&pool, &model, Some((&pk.name, &new_id))).await?;
+    let mut rows = fetch_rows(&pool, &model, Some((&pk.name, &new_id)), None).await?;
     let Some(mut row) = rows.pop() else {
         return Err(ApiError::BadInput(
             "row inserted but disappeared on read-back".into(),
@@ -416,7 +458,7 @@ async fn update(
     let pool = umbra::db::pool();
 
     // 404 if the target row doesn't exist before we attempt the UPDATE.
-    let existing = fetch_rows(&pool, &model, Some((&pk.name, &id))).await?;
+    let existing = fetch_rows(&pool, &model, Some((&pk.name, &id)), None).await?;
     if existing.is_empty() {
         return Err(ApiError::NotFound(format!(
             "no row with {} = {} in {}",
@@ -425,7 +467,7 @@ async fn update(
     }
 
     update_row(&pool, &model, pk, &id, &body).await?;
-    let mut rows = fetch_rows(&pool, &model, Some((&pk.name, &id))).await?;
+    let mut rows = fetch_rows(&pool, &model, Some((&pk.name, &id)), None).await?;
     let Some(mut row) = rows.pop() else {
         return Err(ApiError::BadInput(
             "row updated but disappeared on read-back".into(),
@@ -477,6 +519,7 @@ async fn fetch_rows(
     pool: &SqlitePool,
     model: &ModelMeta,
     where_clause: Option<(&str, &str)>,
+    page: Option<PageRequest>,
 ) -> Result<Vec<Map<String, Value>>, ApiError> {
     let columns = model
         .fields
@@ -490,7 +533,22 @@ async fn fetch_rows(
             q(&model.table),
             q(col)
         ),
-        None => format!("SELECT {columns} FROM \"{}\" ORDER BY 1", q(&model.table)),
+        None => {
+            // Pagination applies only to the no-WHERE-clause list
+            // path. Single-row lookups (retrieve/update/delete) keep
+            // their existing `LIMIT 1` and bypass paging.
+            let (limit_clause, offset_clause) = match page {
+                Some(req) if req.limit != u64::MAX => (
+                    format!(" LIMIT {}", req.limit),
+                    format!(" OFFSET {}", req.offset),
+                ),
+                _ => (String::new(), String::new()),
+            };
+            format!(
+                "SELECT {columns} FROM \"{}\" ORDER BY 1{limit_clause}{offset_clause}",
+                q(&model.table)
+            )
+        }
     };
     let mut q = sqlx::query(&sql);
     if let Some((_, val)) = where_clause {
@@ -506,6 +564,16 @@ async fn fetch_rows(
         out.push(obj);
     }
     Ok(out)
+}
+
+/// `SELECT COUNT(*)` for the given model. Used by the pagination
+/// envelope to render `count` / `total_pages` / `next` links.
+/// Quote-doubles the table name for the same future-proofing
+/// reason `fetch_rows` does.
+async fn count_rows(pool: &SqlitePool, model: &ModelMeta) -> Result<i64, ApiError> {
+    let sql = format!("SELECT COUNT(*) FROM \"{}\"", q(&model.table));
+    let (n,): (i64,) = sqlx::query_as(&sql).fetch_one(pool).await?;
+    Ok(n)
 }
 
 fn column_to_json(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<Value, ApiError> {

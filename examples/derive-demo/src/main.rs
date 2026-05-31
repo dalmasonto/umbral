@@ -63,7 +63,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let pool = umbra::db::connect(&database_url).await?;
 
-    let app = App::builder()
+    let app = (App::builder()
         .settings(settings)
         .database("default", pool)
         // Hand the model to the migration engine.
@@ -78,8 +78,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Auto-generated JSON CRUD at /api/article/. The RestPlugin
         // walks the same model registry the migration engine uses,
         // so the surface stays in lockstep with the schema for free.
-        // .plugin(umbra_rest::RestPlugin::default())
-        .plugin(umbra_openapi::OpenApiPlugin::default())
+        .plugin(umbra_rest::RestPlugin::default())
+        .plugin(umbra_openapi::OpenApiPlugin::new())
         .router(
             Router::new()
                 .route("/", get(home))
@@ -87,9 +87,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .route("/articles/{id}", get(article_detail))
                 // Backwards-compat alias from the pre-RestPlugin era.
                 // New clients should hit /api/article/ instead.
-                .route("/api/articles", get(list_articles_json)),
-        )
-        .build()?;
+                .route("/api/articles", get(list_articles_json))
+                .fallback(not_found),
+        ))
+    .build()?;
 
     // Auto-migrate on startup. Demo-only convenience. Production
     // deployments split this from request-serving: `cargo run -p
@@ -109,6 +110,12 @@ async fn home() -> Result<Html<String>, (StatusCode, String)> {
     let body = umbra::templates::render("home.html", &context!(article_count => count))
         .map_err(internal_error)?;
     Ok(Html(body))
+}
+
+async fn not_found() -> (StatusCode, Html<String>) {
+    let html = umbra::templates::render("404.html", &context! { path => "" })
+        .unwrap_or_else(|_| "<h1>Not found</h1>".to_string());
+    (StatusCode::NOT_FOUND, Html(html))
 }
 
 /// HTML list view. Same QuerySet the JSON endpoint uses; the only
@@ -183,26 +190,46 @@ async fn auto_migrate() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-async fn seed_article_rows() -> Result<(), sqlx::Error> {
-    let pool = umbra::db::pool();
-    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM article")
-        .fetch_one(&pool)
-        .await?;
-    if count.0 > 0 {
+async fn seed_article_rows() -> Result<(), Box<dyn std::error::Error>> {
+    // Use the ORM's count() instead of a raw COUNT(*) so this stays
+    // backend-agnostic — the same call runs against either SQLite or
+    // Postgres without table-name escaping or dialect tweaks.
+    let count = Article::objects().count().await?;
+    if count > 0 {
         return Ok(());
     }
-    sqlx::query(
-        "INSERT INTO article (title, body, published_at) VALUES \
-         (?, ?, ?), \
-         (?, ?, ?)",
-    )
-    .bind("Deriving Model")
-    .bind("Article::objects().fetch() returned this row.")
-    .bind("2026-05-30T12:00:00Z")
-    .bind("User-defined struct")
-    .bind("No hand-written impl Model anywhere in this file.")
-    .bind(None::<String>)
-    .execute(&pool)
-    .await?;
+    // sqlx::query(
+    //     "INSERT INTO article (title, body, published_at) VALUES \
+    //      (?, ?, ?), \
+    //      (?, ?, ?)",
+    // )
+    // .bind("Deriving Model")
+    // .bind("Article::objects().fetch() returned this row.")
+    // .bind("2026-05-30T12:00:00Z")
+    // .bind("User-defined struct")
+    // .bind("No hand-written impl Model anywhere in this file.")
+    // .bind(None::<String>)
+    // .execute(&pool)
+    // .await?;
+
+    let articles = vec![
+        Article {
+            id: 1,
+            title: "Deriving Model".to_string(),
+            body: "Article::objects().fetch() returned this row.".to_string(),
+            published_at: Some(
+                chrono::DateTime::parse_from_rfc3339("2026-05-30T12:00:00Z")
+                    .unwrap()
+                    .with_timezone(&chrono::Utc),
+            ),
+        },
+        Article {
+            id: 2,
+            title: "User-defined struct".to_string(),
+            body: "No hand-written impl Model anywhere in this file.".to_string(),
+            published_at: None::<chrono::DateTime<chrono::Utc>>,
+        },
+    ];
+    Article::objects().bulk_create(articles).await?;
     Ok(())
 }
