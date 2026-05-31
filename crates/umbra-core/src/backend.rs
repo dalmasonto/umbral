@@ -160,6 +160,9 @@ impl DatabaseBackend for PostgresBackend {
             SqlType::Array(elem) => {
                 ColumnType::Array(std::sync::Arc::new(self.map_type(elem.to_sql_type())))
             }
+            SqlType::Inet => ColumnType::Inet,
+            SqlType::Cidr => ColumnType::Cidr,
+            SqlType::MacAddr => ColumnType::MacAddr,
         }
     }
 }
@@ -227,6 +230,13 @@ impl DatabaseBackend for SqliteBackend {
                  The field.backend system check should have failed boot; if you reached this \
                  panic, either the model registry wasn't initialised before map_type ran or \
                  the check was disabled. For portable list storage, use SqlType::Json instead."
+            ),
+            // Postgres-only network address types. field.backend gates
+            // these at boot; reaching the SQLite map_type means the
+            // boot path was bypassed.
+            SqlType::Inet | SqlType::Cidr | SqlType::MacAddr => panic!(
+                "umbra::backend::SqliteBackend::map_type: SqlType::Inet/Cidr/MacAddr are \
+                 Postgres-only. The field.backend system check should have failed boot."
             ),
         }
     }

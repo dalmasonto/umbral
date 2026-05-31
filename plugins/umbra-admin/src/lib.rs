@@ -559,6 +559,9 @@ fn column_to_string(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<Strin
                 .try_get::<Option<Value>, _>(name)?
                 .map_or(String::new(), |v| v.to_string()),
             SqlType::Array(_) => panic_array_unsupported(&col.name),
+            SqlType::Inet | SqlType::Cidr | SqlType::MacAddr => {
+                panic_pg_only_unsupported(&col.name)
+            }
         });
     }
     Ok(match col.ty {
@@ -579,6 +582,7 @@ fn column_to_string(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<Strin
         SqlType::Uuid => row.try_get::<Uuid, _>(name)?.to_string(),
         SqlType::Json => row.try_get::<Value, _>(name)?.to_string(),
         SqlType::Array(_) => panic_array_unsupported(&col.name),
+        SqlType::Inet | SqlType::Cidr | SqlType::MacAddr => panic_pg_only_unsupported(&col.name),
     })
 }
 
@@ -589,6 +593,15 @@ fn panic_array_unsupported(column: &str) -> ! {
         "umbra-admin: column `{column}` is a Postgres-only Array; the \
          field.backend system check should have failed boot. A \
          Postgres-aware admin upgrade is a Phase 4 follow-on."
+    )
+}
+
+/// Phase 4.4 sentinel for Inet/Cidr/MacAddr.
+fn panic_pg_only_unsupported(column: &str) -> ! {
+    panic!(
+        "umbra-admin: column `{column}` is a Postgres-only network type \
+         (Inet/Cidr/MacAddr); the field.backend system check should \
+         have failed boot."
     )
 }
 
@@ -726,6 +739,7 @@ fn bind_form_value<'q>(
                 .map_err(|e| AdminError::BadInput(format!("{}: {e}", col.name)))?,
         ),
         SqlType::Array(_) => panic_array_unsupported(&col.name),
+        SqlType::Inet | SqlType::Cidr | SqlType::MacAddr => panic_pg_only_unsupported(&col.name),
     })
 }
 
@@ -746,6 +760,7 @@ fn bind_null<'q>(
         SqlType::Uuid => q.bind(None::<Uuid>),
         SqlType::Json => q.bind(None::<Value>),
         SqlType::Array(_) => panic_array_unsupported(&col.name),
+        SqlType::Inet | SqlType::Cidr | SqlType::MacAddr => panic_pg_only_unsupported(&col.name),
     }
 }
 
@@ -803,6 +818,9 @@ fn input_kind(ty: SqlType) -> &'static str {
         // boot. Return a placeholder widget name; the template path
         // never sees this since boot failed first.
         SqlType::Array(_) => "textarea",
+        // Phase 4.4 network types — same SQLite-gated story. Widget
+        // is "text" since the values render as strings.
+        SqlType::Inet | SqlType::Cidr | SqlType::MacAddr => "text",
     }
 }
 

@@ -193,6 +193,17 @@ pub enum SqlType {
     /// (`Vec<Option<T>>`), and nested JSON arrays (`Vec<Value>`) are
     /// out of scope for v1.
     Array(ArrayElement),
+    /// `INET` — Postgres IP address column with optional netmask.
+    /// Maps to `ipnetwork::IpNetwork` in Rust. **Postgres-only.**
+    /// Closest Django analogue is `GenericIPAddressField`.
+    Inet,
+    /// `CIDR` — Postgres network address column. Same Rust type as
+    /// `Inet` (`ipnetwork::IpNetwork`) but with the constraint that
+    /// the host bits must be zero. **Postgres-only.**
+    Cidr,
+    /// `MACADDR` — Postgres MAC address column. Maps to
+    /// `mac_address::MacAddress` in Rust. **Postgres-only.**
+    MacAddr,
 }
 
 /// Element types valid inside [`SqlType::Array`].

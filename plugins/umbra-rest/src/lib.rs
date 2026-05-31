@@ -396,6 +396,9 @@ fn column_to_json(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<Value, 
             // against SQLite, so the column-to-JSON path never reaches
             // this arm in practice.
             SqlType::Array(_) => panic_array_unsupported(&col.name),
+            SqlType::Inet | SqlType::Cidr | SqlType::MacAddr => {
+                panic_pg_only_unsupported(&col.name)
+            }
         });
     }
     Ok(match col.ty {
@@ -411,6 +414,7 @@ fn column_to_json(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<Value, 
         SqlType::Uuid => Value::from(row.try_get::<Uuid, _>(name)?.to_string()),
         SqlType::Json => row.try_get::<Value, _>(name)?,
         SqlType::Array(_) => panic_array_unsupported(&col.name),
+        SqlType::Inet | SqlType::Cidr | SqlType::MacAddr => panic_pg_only_unsupported(&col.name),
     })
 }
 
@@ -425,6 +429,16 @@ fn panic_array_unsupported(column: &str) -> ! {
          field.backend system check should have failed boot. The REST \
          plugin's auto-CRUD path runs against SqlitePool today; a \
          Postgres-aware upgrade is a Phase 4 follow-on."
+    )
+}
+
+/// Phase 4.4 sentinel for Inet/Cidr/MacAddr — same gating story as
+/// arrays.
+fn panic_pg_only_unsupported(column: &str) -> ! {
+    panic!(
+        "umbra-rest: column `{column}` is a Postgres-only network type \
+         (Inet/Cidr/MacAddr); the field.backend system check should \
+         have failed boot."
     )
 }
 
@@ -622,6 +636,7 @@ fn bind_string<'q>(q: SqlxQuery<'q>, col: &Column, s: &str) -> Result<SqlxQuery<
                 .map_err(|e| ApiError::BadInput(format!("{}: {e}", col.name)))?,
         ),
         SqlType::Array(_) => panic_array_unsupported(&col.name),
+        SqlType::Inet | SqlType::Cidr | SqlType::MacAddr => panic_pg_only_unsupported(&col.name),
     })
 }
 
@@ -639,5 +654,6 @@ fn bind_null<'q>(q: SqlxQuery<'q>, col: &Column) -> SqlxQuery<'q> {
         SqlType::Uuid => q.bind(None::<Uuid>),
         SqlType::Json => q.bind(None::<Value>),
         SqlType::Array(_) => panic_array_unsupported(&col.name),
+        SqlType::Inet | SqlType::Cidr | SqlType::MacAddr => panic_pg_only_unsupported(&col.name),
     }
 }

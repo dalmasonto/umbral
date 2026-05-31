@@ -347,6 +347,10 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
 /// | `Option<chrono::DateTime<chrono::Utc>>`  | `NullableDateTime`    | `Timestamptz` | `NullableDateTimeCol<Self>`  |
 /// | `Option<uuid::Uuid>`                     | `NullableUuid`        | `Uuid`        | `NullableUuidCol<Self>`      |
 /// | `i128` / `u64` / `u128` / anything else  | `Unsupported(...)`    | (error)       | (error)                      |
+#[allow(dead_code)] // Cidr / NullableCidr are matched but the derive
+// doesn't yet emit them (Inet is the default for
+// `ipnetwork::IpNetwork`; Cidr opt-in via
+// `#[umbra(cidr)]` attribute is a follow-on).
 enum FieldKind {
     SmallInt,
     Integer,
@@ -380,6 +384,20 @@ enum FieldKind {
     /// boot when this lands on SQLite.
     Array(ArrayElementKind),
     NullableArray(ArrayElementKind),
+    /// `ipnetwork::IpNetwork` — Postgres INET column (Phase 4.4).
+    Inet,
+    NullableInet,
+    /// `ipnetwork::IpNetwork` declared as a CIDR — same Rust type as
+    /// Inet but with the constraint that host bits are zero. The
+    /// derive picks Inet by default; the `#[umbra(cidr)]` field-level
+    /// attribute switches to Cidr (deferred — for now users emit Cidr
+    /// fields by writing the FieldSpec by hand or via an
+    /// inspectdb-generated `models.rs`).
+    Cidr,
+    NullableCidr,
+    /// `mac_address::MacAddress` — Postgres MACADDR column.
+    MacAddr,
+    NullableMacAddr,
     /// Catch-all: not a recognised M3 catalogue type, or one of the
     /// explicitly-rejected wide / unsigned ints. Carries the exact
     /// diagnostic to emit at the field's span.
@@ -448,6 +466,11 @@ impl FieldKind {
                 let elem_tokens = array_element_tokens(*elem);
                 quote!(::umbra::orm::SqlType::Array(#elem_tokens))
             }
+            FieldKind::Inet | FieldKind::NullableInet => quote!(::umbra::orm::SqlType::Inet),
+            FieldKind::Cidr | FieldKind::NullableCidr => quote!(::umbra::orm::SqlType::Cidr),
+            FieldKind::MacAddr | FieldKind::NullableMacAddr => {
+                quote!(::umbra::orm::SqlType::MacAddr)
+            }
             FieldKind::Unsupported(_) => return None,
         };
         let nullable = if self.is_nullable() {
@@ -474,6 +497,9 @@ impl FieldKind {
                 | FieldKind::NullableUuid
                 | FieldKind::NullableJson
                 | FieldKind::NullableArray(_)
+                | FieldKind::NullableInet
+                | FieldKind::NullableCidr
+                | FieldKind::NullableMacAddr
         )
     }
 
@@ -556,6 +582,18 @@ fn classify_field_type(ty: &Type) -> FieldKind {
     if let Some(kind) = vec_element_kind(ty) {
         return FieldKind::Array(kind);
     }
+    // Phase 4.4 network-address types. `ipnetwork::IpNetwork` is the
+    // Rust binding for both INET and CIDR; the default classification
+    // is `Inet` (the more general type — host addresses with optional
+    // netmask). Users who need the CIDR constraint switch via the
+    // future `#[umbra(cidr)]` attribute or by writing the FieldSpec
+    // by hand. `mac_address::MacAddress` covers MACADDR.
+    if is_ipnetwork(ty) {
+        return FieldKind::Inet;
+    }
+    if is_mac_address(ty) {
+        return FieldKind::MacAddr;
+    }
     if is_wide_or_unsigned_int(ty) {
         return FieldKind::Unsupported(UnsupportedReason::WideOrUnsignedInt);
     }
@@ -599,6 +637,12 @@ fn classify_field_type(ty: &Type) -> FieldKind {
         }
         if let Some(kind) = vec_element_kind(inner) {
             return FieldKind::NullableArray(kind);
+        }
+        if is_ipnetwork(inner) {
+            return FieldKind::NullableInet;
+        }
+        if is_mac_address(inner) {
+            return FieldKind::NullableMacAddr;
         }
         if is_wide_or_unsigned_int(inner) {
             return FieldKind::Unsupported(UnsupportedReason::NullableOfWide);
@@ -678,6 +722,46 @@ fn array_element_tokens(kind: ArrayElementKind) -> TokenStream2 {
         ArrayElementKind::Text => quote!(::umbra::orm::ArrayElement::Text),
         ArrayElementKind::Uuid => quote!(::umbra::orm::ArrayElement::Uuid),
     }
+}
+
+/// True when `ty` is `ipnetwork::IpNetwork`. Phase 4.4 INET / CIDR
+/// catalogue type. Matches the leaf ident `IpNetwork` with the
+/// qualifier `ipnetwork` to avoid colliding with other crates that
+/// might also define a leaf type called `IpNetwork`.
+fn is_ipnetwork(ty: &Type) -> bool {
+    is_qualified_leaf(ty, "ipnetwork", "IpNetwork")
+}
+
+/// True when `ty` is `mac_address::MacAddress`. Phase 4.4 MACADDR
+/// catalogue type.
+fn is_mac_address(ty: &Type) -> bool {
+    is_qualified_leaf(ty, "mac_address", "MacAddress")
+}
+
+/// True when `ty` is a path ending in `qualifier::leaf` with no
+/// generic arguments on the leaf. The qualifier check is positional
+/// — the segment immediately before the leaf has to match. Used by
+/// `is_serde_json_value`, `is_ipnetwork`, `is_mac_address` so they
+/// all share one definition of "qualified-leaf match."
+fn is_qualified_leaf(ty: &Type, qualifier: &str, leaf: &str) -> bool {
+    let Type::Path(TypePath { qself: None, path }) = ty else {
+        return false;
+    };
+    let segments: Vec<&syn::PathSegment> = path.segments.iter().collect();
+    let Some(last) = segments.last() else {
+        return false;
+    };
+    if last.ident != leaf || !matches!(last.arguments, PathArguments::None) {
+        return false;
+    }
+    // The qualifier is required so a bare `IpNetwork` (which could
+    // be from any crate) isn't silently misclassified. Users opt in
+    // by writing `ipnetwork::IpNetwork` explicitly.
+    if segments.len() < 2 {
+        return false;
+    }
+    let prev = segments[segments.len() - 2];
+    prev.ident == qualifier
 }
 
 /// True when `ty` is `serde_json::Value` (regardless of the path
@@ -833,6 +917,12 @@ fn column_const_for(
         FieldKind::NullableJson => format_ident!("NullableJsonCol"),
         FieldKind::Array(_) => format_ident!("ArrayCol"),
         FieldKind::NullableArray(_) => format_ident!("NullableArrayCol"),
+        FieldKind::Inet => format_ident!("InetCol"),
+        FieldKind::NullableInet => format_ident!("NullableInetCol"),
+        FieldKind::Cidr => format_ident!("CidrCol"),
+        FieldKind::NullableCidr => format_ident!("NullableCidrCol"),
+        FieldKind::MacAddr => format_ident!("MacAddrCol"),
+        FieldKind::NullableMacAddr => format_ident!("NullableMacAddrCol"),
         FieldKind::Unsupported(_) => return TokenStream2::new(),
     };
     quote_spanned! { span =>

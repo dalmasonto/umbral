@@ -1349,10 +1349,7 @@ impl<T> JsonPathText<T> {
     /// NULL from `->>`, which is the Postgres semantic.
     pub fn is_null(&self) -> Predicate<T> {
         let (extract, values) = self.extract_template(1);
-        Predicate::new(Expr::cust_with_values(
-            format!("{extract} IS NULL"),
-            values,
-        ))
+        Predicate::new(Expr::cust_with_values(format!("{extract} IS NULL"), values))
     }
 
     /// SQL `<extracted> IS NOT NULL`.
@@ -1631,4 +1628,267 @@ where
         return Predicate::new(Expr::cust("1 = 0"));
     }
     array_op_predicate::<T>(col, "&&", values)
+}
+
+// =========================================================================
+// Network address columns — Phase 4.4, Postgres-only.
+//
+// Three pairs: `InetCol` / `NullableInetCol` for INET (`ipnetwork::
+// IpNetwork`); `CidrCol` / `NullableCidrCol` for CIDR (same Rust type
+// as Inet, just constrained to a network address); `MacAddrCol` /
+// `NullableMacAddrCol` for MACADDR (`mac_address::MacAddress`).
+//
+// v1 surface: equality / inequality, `IS NULL` / `IS NOT NULL` on the
+// nullable variants, plus the standard `asc()` / `desc()`. Network-
+// specific operators (`<<`, `>>`, `&`, `|` on inet types; `<<=` /
+// `>>=` for containment; `~` for MAC ranges) are deferred until a
+// real consumer surfaces them.
+//
+// Each `Col::eq(val)` takes the Rust binding type by value. sea-query
+// has built-in `Value::IpNetwork` and `Value::MacAddress` variants
+// (gated behind sqlx feature flags we've enabled on sea-query-binder
+// via the `with-ipnetwork` / `with-mac_address` route — sqlx pulls
+// the same types through and they implement `Into<sea_query::Value>`).
+// =========================================================================
+
+/// An `ipnetwork::IpNetwork`-typed column (Postgres INET).
+pub struct InetCol<T> {
+    pub(crate) name: &'static str,
+    _phantom: PhantomData<T>,
+}
+
+impl<T> InetCol<T> {
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            _phantom: PhantomData,
+        }
+    }
+
+    /// SQL `=`.
+    pub fn eq(&self, val: ipnetwork::IpNetwork) -> Predicate<T> {
+        // sea-query doesn't expose `Into<Value>` for `IpNetwork` from
+        // the `ipnetwork` crate directly; render the comparison via
+        // `cust_with_values` with the value bound positionally.
+        let sql = format!("\"{}\" = $1", self.name.replace('"', "\"\""));
+        // sea_query::Value carries an IpNetwork variant when its
+        // `with-ipnetwork` feature is enabled; cast through the
+        // `Into` impl.
+        Predicate::new(Expr::cust_with_values(&sql, vec![val]))
+    }
+
+    /// SQL `<>`.
+    pub fn ne(&self, val: ipnetwork::IpNetwork) -> Predicate<T> {
+        let sql = format!("\"{}\" <> $1", self.name.replace('"', "\"\""));
+        Predicate::new(Expr::cust_with_values(&sql, vec![val]))
+    }
+
+    /// SQL `ORDER BY ... ASC`.
+    pub fn asc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, false)
+    }
+
+    /// SQL `ORDER BY ... DESC`.
+    pub fn desc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, true)
+    }
+}
+
+/// A nullable INET column.
+pub struct NullableInetCol<T> {
+    pub(crate) name: &'static str,
+    _phantom: PhantomData<T>,
+}
+
+impl<T> NullableInetCol<T> {
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            _phantom: PhantomData,
+        }
+    }
+
+    /// SQL `=`. NULL rows are excluded by SQL's three-valued logic.
+    pub fn eq(&self, val: ipnetwork::IpNetwork) -> Predicate<T> {
+        let sql = format!("\"{}\" = $1", self.name.replace('"', "\"\""));
+        Predicate::new(Expr::cust_with_values(&sql, vec![val]))
+    }
+
+    /// SQL `<>`.
+    pub fn ne(&self, val: ipnetwork::IpNetwork) -> Predicate<T> {
+        let sql = format!("\"{}\" <> $1", self.name.replace('"', "\"\""));
+        Predicate::new(Expr::cust_with_values(&sql, vec![val]))
+    }
+
+    /// SQL `IS NULL`.
+    pub fn is_null(&self) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).is_null())
+    }
+
+    /// SQL `IS NOT NULL`.
+    pub fn is_not_null(&self) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).is_not_null())
+    }
+
+    /// SQL `ORDER BY ... ASC`.
+    pub fn asc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, false)
+    }
+
+    /// SQL `ORDER BY ... DESC`.
+    pub fn desc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, true)
+    }
+}
+
+/// An `ipnetwork::IpNetwork`-typed column declared as a Postgres CIDR.
+///
+/// Same Rust binding type as [`InetCol`]; the DDL renders as `cidr`
+/// (with the host-bits-zero constraint Postgres enforces). For
+/// general host-address storage, use `InetCol`.
+pub struct CidrCol<T> {
+    pub(crate) name: &'static str,
+    _phantom: PhantomData<T>,
+}
+
+impl<T> CidrCol<T> {
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            _phantom: PhantomData,
+        }
+    }
+
+    pub fn eq(&self, val: ipnetwork::IpNetwork) -> Predicate<T> {
+        let sql = format!("\"{}\" = $1", self.name.replace('"', "\"\""));
+        Predicate::new(Expr::cust_with_values(&sql, vec![val]))
+    }
+
+    pub fn ne(&self, val: ipnetwork::IpNetwork) -> Predicate<T> {
+        let sql = format!("\"{}\" <> $1", self.name.replace('"', "\"\""));
+        Predicate::new(Expr::cust_with_values(&sql, vec![val]))
+    }
+
+    pub fn asc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, false)
+    }
+
+    pub fn desc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, true)
+    }
+}
+
+/// A nullable CIDR column.
+pub struct NullableCidrCol<T> {
+    pub(crate) name: &'static str,
+    _phantom: PhantomData<T>,
+}
+
+impl<T> NullableCidrCol<T> {
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            _phantom: PhantomData,
+        }
+    }
+
+    pub fn eq(&self, val: ipnetwork::IpNetwork) -> Predicate<T> {
+        let sql = format!("\"{}\" = $1", self.name.replace('"', "\"\""));
+        Predicate::new(Expr::cust_with_values(&sql, vec![val]))
+    }
+
+    pub fn ne(&self, val: ipnetwork::IpNetwork) -> Predicate<T> {
+        let sql = format!("\"{}\" <> $1", self.name.replace('"', "\"\""));
+        Predicate::new(Expr::cust_with_values(&sql, vec![val]))
+    }
+
+    pub fn is_null(&self) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).is_null())
+    }
+
+    pub fn is_not_null(&self) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).is_not_null())
+    }
+
+    pub fn asc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, false)
+    }
+
+    pub fn desc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, true)
+    }
+}
+
+/// A `mac_address::MacAddress`-typed column (Postgres MACADDR).
+pub struct MacAddrCol<T> {
+    pub(crate) name: &'static str,
+    _phantom: PhantomData<T>,
+}
+
+impl<T> MacAddrCol<T> {
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            _phantom: PhantomData,
+        }
+    }
+
+    pub fn eq(&self, val: mac_address::MacAddress) -> Predicate<T> {
+        let sql = format!("\"{}\" = $1", self.name.replace('"', "\"\""));
+        Predicate::new(Expr::cust_with_values(&sql, vec![val]))
+    }
+
+    pub fn ne(&self, val: mac_address::MacAddress) -> Predicate<T> {
+        let sql = format!("\"{}\" <> $1", self.name.replace('"', "\"\""));
+        Predicate::new(Expr::cust_with_values(&sql, vec![val]))
+    }
+
+    pub fn asc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, false)
+    }
+
+    pub fn desc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, true)
+    }
+}
+
+/// A nullable MACADDR column.
+pub struct NullableMacAddrCol<T> {
+    pub(crate) name: &'static str,
+    _phantom: PhantomData<T>,
+}
+
+impl<T> NullableMacAddrCol<T> {
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            _phantom: PhantomData,
+        }
+    }
+
+    pub fn eq(&self, val: mac_address::MacAddress) -> Predicate<T> {
+        let sql = format!("\"{}\" = $1", self.name.replace('"', "\"\""));
+        Predicate::new(Expr::cust_with_values(&sql, vec![val]))
+    }
+
+    pub fn ne(&self, val: mac_address::MacAddress) -> Predicate<T> {
+        let sql = format!("\"{}\" <> $1", self.name.replace('"', "\"\""));
+        Predicate::new(Expr::cust_with_values(&sql, vec![val]))
+    }
+
+    pub fn is_null(&self) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).is_null())
+    }
+
+    pub fn is_not_null(&self) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).is_not_null())
+    }
+
+    pub fn asc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, false)
+    }
+
+    pub fn desc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, true)
+    }
 }

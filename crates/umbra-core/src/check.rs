@@ -302,11 +302,16 @@ fn field_backend(ctx: &CheckContext<'_>) -> Vec<SystemCheckFinding> {
     findings
 }
 
-/// True for `SqlType` variants that only work on Postgres. Today this
-/// is just `Array(_)`; future Postgres-only types (HStore, CIDR /
-/// INET, FullTextSearch) get added to this match.
+/// True for `SqlType` variants that only work on Postgres. Phase 4.1
+/// added `Array(_)`; Phase 4.4 adds `Inet`, `Cidr`, `MacAddr`. Future
+/// Postgres-only types (HStore, FullTextSearch) get added to this
+/// match.
 fn is_postgres_only(ty: crate::orm::SqlType) -> bool {
-    matches!(ty, crate::orm::SqlType::Array(_))
+    use crate::orm::SqlType;
+    matches!(
+        ty,
+        SqlType::Array(_) | SqlType::Inet | SqlType::Cidr | SqlType::MacAddr
+    )
 }
 
 /// Run every check in `checks` against `ctx`, accumulate findings, and

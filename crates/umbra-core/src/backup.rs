@@ -353,6 +353,7 @@ fn column_to_json(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<Value, 
             // them at boot; reaching this means the boot path was
             // bypassed.
             SqlType::Array(_) => unreachable_array(&col.name),
+            SqlType::Inet | SqlType::Cidr | SqlType::MacAddr => unreachable_network(&col.name),
         });
     }
     // Non-nullable: same dispatch without the Option layer.
@@ -369,6 +370,7 @@ fn column_to_json(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<Value, 
         SqlType::Uuid => Value::from(row.try_get::<Uuid, _>(name)?.to_string()),
         SqlType::Json => row.try_get::<Value, _>(name)?,
         SqlType::Array(_) => unreachable_array(&col.name),
+        SqlType::Inet | SqlType::Cidr | SqlType::MacAddr => unreachable_network(&col.name),
     })
 }
 
@@ -381,6 +383,15 @@ fn unreachable_array(column: &str) -> ! {
         "umbra backup: column `{column}` is a Postgres-only Array; \
          the field.backend system check should have failed boot. \
          For portable list storage use SqlType::Json instead."
+    )
+}
+
+/// Phase 4.4 counterpart for Inet/Cidr/MacAddr — same gating story.
+fn unreachable_network(column: &str) -> ! {
+    panic!(
+        "umbra backup: column `{column}` is a Postgres-only network \
+         address type (Inet/Cidr/MacAddr); the field.backend system \
+         check should have failed boot."
     )
 }
 
@@ -406,6 +417,7 @@ fn bind_value<'q>(
             SqlType::Uuid => q.bind(None::<Uuid>),
             SqlType::Json => q.bind(None::<Value>),
             SqlType::Array(_) => unreachable_array(&col.name),
+            SqlType::Inet | SqlType::Cidr | SqlType::MacAddr => unreachable_network(&col.name),
         });
     }
     let mismatch = |got: &str| BackupError::TypeMismatch {
@@ -462,6 +474,7 @@ fn bind_value<'q>(
         // a JSONB byte stream (Postgres) before hitting the wire.
         SqlType::Json => q.bind(val),
         SqlType::Array(_) => unreachable_array(&col.name),
+        SqlType::Inet | SqlType::Cidr | SqlType::MacAddr => unreachable_network(&col.name),
     })
 }
 

@@ -473,6 +473,10 @@ fn map_postgres_type(raw: &str) -> Option<SqlType> {
         // A re-migrate would normalize to `jsonb` if the user re-creates
         // the column, which matches the M5 declare-and-migrate loop.
         "json" | "jsonb" => Some(SqlType::Json),
+        // Phase 4.4: Postgres network address types.
+        "inet" => Some(SqlType::Inet),
+        "cidr" => Some(SqlType::Cidr),
+        "macaddr" => Some(SqlType::MacAddr),
         _ => None,
     }
 }
@@ -707,6 +711,12 @@ fn render_field_type(ty: SqlType, nullable: bool) -> String {
         // matches the derive's catalogue: a `Vec<i64>` declares an
         // `Array(ArrayElement::BigInt)` field.
         SqlType::Array(elem) => format!("Vec<{}>", render_field_type(elem.to_sql_type(), false)),
+        // Phase 4.4: Postgres network address types. Both `Inet` and
+        // `Cidr` round-trip through `ipnetwork::IpNetwork`; `MacAddr`
+        // uses the `mac_address` crate.
+        SqlType::Inet => "ipnetwork::IpNetwork".to_string(),
+        SqlType::Cidr => "ipnetwork::IpNetwork".to_string(),
+        SqlType::MacAddr => "mac_address::MacAddress".to_string(),
     };
     let base = base.as_str();
     if nullable {
@@ -1024,6 +1034,10 @@ mod tests {
         // SQLite).
         assert_eq!(map_postgres_type("json"), Some(SqlType::Json));
         assert_eq!(map_postgres_type("jsonb"), Some(SqlType::Json));
+        // Phase 4.4: Postgres network address types.
+        assert_eq!(map_postgres_type("inet"), Some(SqlType::Inet));
+        assert_eq!(map_postgres_type("cidr"), Some(SqlType::Cidr));
+        assert_eq!(map_postgres_type("macaddr"), Some(SqlType::MacAddr));
     }
 
     /// Postgres-specific types umbra doesn't model yet surface as
@@ -1033,15 +1047,16 @@ mod tests {
     /// user fixes by hand or waits for the catalogue to grow.
     ///
     /// Note `json`/`jsonb` are NOT on this list — Phase 4's `Json`
-    /// SqlType variant maps both back to `SqlType::Json`. The companion
-    /// arm in `map_postgres_type` is covered by
+    /// SqlType variant maps both back to `SqlType::Json`. Likewise
+    /// `inet`/`cidr`/`macaddr` left this list when Phase 4.4 added
+    /// the matching SqlType variants. The companion arms in
+    /// `map_postgres_type` are covered by
     /// `map_postgres_type_covers_the_full_catalogue` above.
     #[test]
     fn map_postgres_type_returns_none_for_postgres_only_types() {
         assert_eq!(map_postgres_type("numeric"), None);
         assert_eq!(map_postgres_type("bytea"), None);
         assert_eq!(map_postgres_type("ARRAY"), None);
-        assert_eq!(map_postgres_type("inet"), None);
     }
 
     /// The mapping is case-insensitive on the input but matches against

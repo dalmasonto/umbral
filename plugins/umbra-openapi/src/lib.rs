@@ -265,6 +265,11 @@ fn openapi_type(ty: SqlType) -> (&'static str, Option<&'static str>) {
         // detail. A future pass can recurse into the element type via
         // openapi_type for proper `items: { type, format }` nesting.
         SqlType::Array(_) => ("array", None),
+        // Phase 4.4 network address types. INET and CIDR render as
+        // OpenAPI `ipv4`/`ipv6` strings (we use the generic "string"
+        // shape since umbra doesn't distinguish v4 vs v6 at the type
+        // level). MACADDR likewise renders as a string.
+        SqlType::Inet | SqlType::Cidr | SqlType::MacAddr => ("string", None),
     }
 }
 
