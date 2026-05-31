@@ -171,6 +171,40 @@ The predicate surface ships `.eq(val)` / `.ne(val)` / `.asc()` / `.desc()`, plus
 Need portable IP storage without a Postgres dependency? Store addresses as `String` and call `.parse::<IpAddr>()` at the application layer. The network-specific predicates won't be available, but the model will compile and run against SQLite.
 </Callout>
 
+## Full-text search columns
+
+Postgres's `tsvector` type stores a pre-processed lexeme document that supports fast `@@` full-text matching. umbra exposes this as the `umbra::orm::TsVector` newtype — a `String` wrapper with sqlx `Type`/`Encode`/`Decode` impls that map to a `tsvector` column. Like array and network fields, `TsVector` is **Postgres-only**; the boot-time system check fails with a clear error if the field is registered against a SQLite backend.
+
+```rust
+use umbra::prelude::*;
+use umbra::orm::TsVector;
+
+#[derive(Debug, Clone, sqlx::FromRow, umbra::orm::Model)]
+pub struct Doc {
+    pub id: i64,
+    pub title: String,
+    pub search: TsVector,              // tsvector — required
+    pub extra: Option<TsVector>,      // tsvector — nullable
+}
+
+// User-friendly query syntax: spaces=AND, OR, -word, "quoted phrase"
+let results = Doc::objects()
+    .filter(doc::SEARCH.matches_websearch("rust framework"))
+    .fetch_pg(&pg_pool)
+    .await?;
+```
+
+Two matching predicates are available on every `TsVector` column:
+
+- `.matches_websearch(query)` — `col @@ websearch_to_tsquery($1)`. Accepts natural language: spaces mean AND, bare `OR` means OR, `-word` negates, `"quoted phrase"` requires adjacency. Preferred for search boxes.
+- `.matches(query)` — `col @@ to_tsquery($1)`. Requires strict `tsquery` syntax (`&`, `|`, `!`, `:*` for prefix). Use it when you control the query string programmatically.
+
+Both predicates compile only for Postgres; use the `_pg` terminal variants (`.fetch_pg`, `.first_pg`, etc.) on any model that includes a `TsVector` field.
+
+<Callout type="info">
+umbra's migration engine emits a bare `tsvector` column. Populating it is your responsibility: use a `GENERATED ALWAYS AS (to_tsvector('english', title)) STORED` clause in a hand-edited migration, or wire up a Postgres trigger. See the live-Postgres integration test in `crates/umbra-core/tests/fulltext_field.rs` for a working example.
+</Callout>
+
 ## The table name
 
 By default the table is snake_case of the struct name — `BlogPost` becomes
