@@ -1,3 +1,11 @@
 ## Seen/Known gaps
 
 1. [ ] Email plugin lacks the ability to do file attachments
+2. [x] Django has special way of doing pages ie 404, 500 (Internal server error) which is quite symbol and direct
+       — Shipped via `App::builder().not_found_template("404.html")` and `.server_error_template("500.html")`. Composes with `slash_redirect`. See `documentation/docs/v0.0.1/web/error-pages.mdx`.
+3. [ ] The current version does not make use of the cli. Ie instead of `cargo run`, you must use `umbra serve` to run the server. Or even better, I need something like umbra startproject, startapp commands to set up a new project like django. We need to make it easy to setup the app that way with `apps`. We talked about this, it might be implemented but docs are out of sync by far.
+4. [~] Docs are out of sync with the current version ie how to use plugins. There is no plugin section on how to use `rest` plugin for example. So the rest plugin should make it easy to create rest views with minimal effort and with the ability to use custom fields like in django we define the view and then the fields, currently it returns the whole struct/model. DRF classes make it easy to even redefine fields ie you can hide emails ie using a method like get_email(obj) and it returns "***@mail.com" instead of the actual email by spliting at the `@` symbol and replacing the username with `***`.
+       — Docs portion FIXED: rest.mdx + openapi.mdx + rls.mdx + sessions.mdx + tasks.mdx + admin.mdx + web/ section all landed (commit 1cdbc18). Custom-field rendering for the REST plugin is still deferred — flagged in the rest.mdx "What's not in v1" section. That's a real feature gap worth its own session.
+5. [x] The openapi plugin should allow the user to pass in params to customize the openapi schema. ie the base path, title, version, description, etc.
+       — `.description(s)` added in commit e42f408; `.at()`, `.title()`, `.version()`, `.exclude()` already existed.
+6. [ ] Security audit across the system and the plugins
