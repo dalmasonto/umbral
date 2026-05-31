@@ -54,6 +54,37 @@ pub struct Event {
 Equality, containment (`@>`), and path-access (`->`, `->>`) operators are not yet available. Cross-backend semantics (Postgres deep-equality vs SQLite byte-equality on TEXT) need to be pinned first. `is_null()` / `is_not_null()` and `asc()` / `desc()` ordering work today.
 </Callout>
 
+## Array columns
+
+A field typed `Vec<T>` maps to a native Postgres array column (`T[]`). `Option<Vec<T>>` produces a nullable array column. Array fields are **Postgres-only** — the boot-time system check fails with a clear error naming the model and field if an Array field is registered against a SQLite backend.
+
+Supported element types: `i16`, `i32`, `i64`, `f32`, `f64`, `bool`, `String`, `uuid::Uuid`.
+
+```rust
+use umbra::prelude::*;
+
+#[derive(Debug, Clone, sqlx::FromRow, umbra::orm::Model)]
+pub struct Event {
+    pub id: i64,
+    pub kind: String,
+    pub tags: Vec<String>,              // TEXT[] — required
+    pub scores: Option<Vec<i64>>,      // BIGINT[] — nullable
+}
+
+// Fetch rows — use the _pg terminal for models with PG-only fields
+let events: Vec<Event> = Event::objects().fetch_pg(&pg_pool).await?;
+```
+
+Models that include at least one PG-only field cannot use the cross-backend `.fetch()` / `.first()` / `.count()` / `.exists()` terminals. Use the `_pg` variants instead: `.fetch_pg(&pool)`, `.first_pg(&pool)`, `.count_pg(&pool)`, `.exists_pg(&pool)`. The pool is passed at the terminal, not on the manager. See `docs/specs/04-orm-model-and-fields.md` for the full `_pg` surface.
+
+<Callout type="info">
+Need portable list storage? Use a `serde_json::Value` field with a JSON array — see JSON columns above. The JSON type compiles and runs against both Postgres and SQLite.
+</Callout>
+
+<Callout type="warning">
+Postgres array operators (`@>` contains, `<@` contained-by, `&&` overlaps) are not yet available as QuerySet predicates. Ordering (`.asc()` / `.desc()`) and `.is_null()` / `.is_not_null()` on the nullable variant work today.
+</Callout>
+
 ## The table name
 
 By default the table is snake_case of the struct name — `BlogPost` becomes
