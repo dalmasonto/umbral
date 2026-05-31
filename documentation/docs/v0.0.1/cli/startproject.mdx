@@ -1,0 +1,129 @@
+---
+title: Scaffolding (startproject, startapp)
+description: The `umbra` global binary creates new projects and new plugins. Like `django-admin startproject` and `python manage.py startapp`.
+sidebar_position: 1
+icon: layers
+---
+
+umbra ships a global `umbra` binary that scaffolds new projects and
+new plugins. It's the framework's `django-admin` equivalent. Install
+once:
+
+```bash
+cargo install umbra-cli
+```
+
+You now have an `umbra` command on your PATH. It does two things:
+`startproject` and `startapp`. Everything else (`serve`, `migrate`,
+…) runs against your project's own binary via
+[`cargo run --`](./management-commands).
+
+## startproject
+
+```bash
+umbra startproject myblog
+cd myblog
+cargo run -- serve
+```
+
+This writes a fresh project directory:
+
+```
+myblog/
+├── Cargo.toml          # umbra + umbra-cli + tokio
+├── src/main.rs         # boots App and calls umbra_cli::dispatch
+├── umbra.toml          # framework settings
+├── .env.example        # env-variable cheat sheet
+├── .gitignore
+└── templates/
+    ├── base.html       # base layout {% block content %}
+    ├── 404.html        # rendered on path miss
+    └── 500.html        # rendered on handler panic
+```
+
+The generated `src/main.rs` wires up:
+
+- `tracing_subscriber` for logs.
+- `Settings::from_env()` for config.
+- `umbra::db::connect(...)` for the pool.
+- An `App::builder()` chain with `templates_dir("templates")`,
+  `not_found_template("404.html")`, `server_error_template("500.html")`,
+  and `slash_redirect(SlashRedirect::Append)` set.
+- `umbra_cli::dispatch(app).await` so `cargo run -- migrate` /
+  `serve` / `makemigrations` all work.
+
+Flags:
+
+| Flag | Effect |
+|---|---|
+| `--path <dir>` | Parent directory the new project goes under. Defaults to `.`. |
+
+The command refuses to overwrite an existing directory — pick a
+different name or move the old one aside.
+
+## startapp
+
+A plugin in umbra is what Django calls an app. `startapp` scaffolds a
+new plugin crate at `plugins/<name>/`:
+
+```bash
+umbra startapp posts
+```
+
+Generates:
+
+```
+plugins/posts/
+├── Cargo.toml          # umbra dep
+└── src/lib.rs          # PostsPlugin + Plugin trait stub
+```
+
+The generated `lib.rs` looks like:
+
+```rust
+use umbra::plugin::{AppContext, Plugin, PluginError};
+use umbra::web::Router;
+
+#[derive(Debug, Default, Clone)]
+pub struct PostsPlugin;
+
+impl Plugin for PostsPlugin {
+    fn name(&self) -> &'static str { "posts" }
+    fn routes(&self) -> Router { Router::new() }
+    fn on_ready(&self, _ctx: &AppContext) -> Result<(), PluginError> { Ok(()) }
+}
+```
+
+After scaffolding, the command prints two follow-up edits you make
+yourself:
+
+1. Add the plugin crate as a dependency in your project's `Cargo.toml`:
+
+   ```toml
+   posts = { path = "plugins/posts" }
+   ```
+
+2. Wire it into your `App::builder()` chain in `src/main.rs`:
+
+   ```rust
+   .plugin(posts::PostsPlugin::default())
+   ```
+
+We don't edit those files automatically — Cargo manifests and your
+`main.rs` can be in any shape, and silently rewriting them is more
+surprise than help. The two lines you add are explicit and easy to
+undo.
+
+<Callout type="info">
+Plugin names follow the same rules as Cargo crate names — ASCII
+alphanumeric, underscore, hyphen, can't start with a digit. The
+struct name is `pascal_case(name) + "Plugin"`, so `blog-engine`
+becomes `BlogEnginePlugin`.
+</Callout>
+
+## What's next
+
+Once you have a project, every other command runs through your
+binary. See [Management commands](./management-commands) for the
+full list (`serve`, `migrate`, `makemigrations`, `inspectdb`,
+`dumpdata`, `loaddata`).

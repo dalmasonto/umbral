@@ -1,49 +1,97 @@
 ---
 title: Management commands
-description: umbra-cli — the manage.py equivalent. serve, migrate, inspectdb, and the rest.
-sidebar_position: 1
+description: serve, migrate, makemigrations, inspectdb — every command runs against your project's own binary.
+sidebar_position: 2
 icon: terminal
 ---
 
-`umbra-cli` is the `manage.py` equivalent. Every subcommand boots the App
-(so the ambient pool, settings, and plugin registrations are live), then
-runs against the registered set.
+Every management subcommand runs **against your project's own
+binary**. Your `main.rs` hosts the commands via
+[`umbra_cli::dispatch`](#how-it-works); `cargo run -- <command>` is
+how you invoke them.
+
+This is the Django `manage.py` shape: a project-local script that
+imports project code, so the commands see your models and your
+plugins. The framework-global [`umbra`](./startproject) binary handles
+scaffolding (`startproject`, `startapp`) and nothing else — it can't
+manage your database because it doesn't know about your models.
 
 ## The subcommands
 
 <CardGrid cols={2}>
-  <Card icon="play" title="serve" description="Default. Boots the App and serves HTTP. cargo run -p umbra-cli with no args is the same thing." />
-  <Card icon="file-plus" title="makemigrations" description="Diff every registered plugin's models against the latest snapshot. Writes one JSON file per plugin that has changes; prints 'no changes detected' if nothing moved." />
-  <Card icon="play-circle" title="migrate" description="Apply every pending migration against the ambient pool, in topological plugin order. Each migration runs in its own transaction." />
-  <Card icon="list" title="showmigrations" description="Print per-plugin migration state. [X] applied, [ ] pending. Returns the pending count so a CI hook can fail when migrations are out of date." />
-  <Card icon="download" title="inspectdb" description="Introspect an existing SQLite database into models.rs + a 0001_initial.json migration. See the porting guide." />
+  <Card icon="play" title="serve" description="Boot the App and serve HTTP. The default when no subcommand is given." />
+  <Card icon="file-plus" title="makemigrations" description="Diff registered plugin models against the latest snapshot. Writes a migration file per plugin with changes." />
+  <Card icon="play-circle" title="migrate" description="Apply every pending migration against the ambient pool. Each migration runs in its own transaction." />
+  <Card icon="list" title="showmigrations" description="Print applied/pending state per plugin. [X] applied, [ ] pending." />
+  <Card icon="download" title="inspectdb" description="Introspect an existing database into models.rs + a 0001_initial migration. The porting on-ramp." />
+  <Card icon="archive" title="dumpdata / loaddata" description="Snapshot every model's rows to JSON; replay them into a fresh schema." />
 </CardGrid>
+
+## How it works
+
+Your `src/main.rs` (the one `umbra startproject` generates) ends
+with:
+
+```rust
+let app = App::builder()
+    .settings(settings)
+    .database("default", pool)
+    .model::<Article>()
+    .plugin(blog::BlogPlugin::default())
+    .build()?;
+
+umbra_cli::dispatch(app).await
+```
+
+`dispatch(app)` parses `argv`, picks the subcommand, and runs it
+against the already-built App. The pool, model registry, and plugin
+list are all published by `App::build` before the subcommand fires,
+so every command sees the same state your server would.
+
+Run them with `cargo run --`:
+
+```bash
+cargo run -- serve         # boot the HTTP server
+cargo run -- migrate       # apply pending migrations
+cargo run -- makemigrations  # write a new migration file
+cargo run -- showmigrations  # list per-plugin state
+```
 
 ## Settings come from the environment
 
-The CLI loads settings the same way the server does — defaults, an optional
+Settings load the same way the server does — defaults, an optional
 `umbra.toml`, and `UMBRA_`-prefixed environment variables (last wins).
 
 ```bash
 export UMBRA_SECRET_KEY=$(openssl rand -hex 32)
 export UMBRA_DATABASE_URL=sqlite://app.db?mode=rwc
 
-cargo run -p umbra-cli -- makemigrations
-cargo run -p umbra-cli -- migrate
+cargo run -- makemigrations
+cargo run -- migrate
 ```
 
 <Callout type="warning">
-Without `UMBRA_DATABASE_URL` set, the management subcommands fall back to
-`sqlite::memory:` — every invocation gets a fresh database. `migrate` will
-happily report `Applied 1 migration(s)` while applying to an in-memory pool
-that vanishes when the process exits. Export the URL once and forget about
-it.
+Without `UMBRA_DATABASE_URL` set, the management subcommands fall back
+to the `database_url` in `umbra.toml` (or `sqlite::memory:` if that's
+also unset). `migrate` will happily report `Applied 1 migration(s)`
+against an in-memory pool that vanishes when the process exits. Set
+the URL once in `umbra.toml` or your shell, and forget about it.
 </Callout>
+
+## serve flags
+
+```bash
+cargo run -- serve [--addr 0.0.0.0:3000]
+```
+
+| Flag | Effect |
+|---|---|
+| `--addr <host:port>` | Override `settings.bind_addr`. Useful for `0.0.0.0` to listen on all interfaces. Equivalent to setting `UMBRA_BIND_ADDR`. |
 
 ## inspectdb flags
 
 ```bash
-cargo run -p umbra-cli -- inspectdb \
+cargo run -- inspectdb \
     --output plugins/imported \
     [--mark-applied]
 ```
@@ -58,8 +106,8 @@ workflow.
 
 ## Errors
 
-Every subcommand prints errors through the `Display` impl, not the `Debug`
-repr. A failure reads as a single human-readable diagnostic:
+Every subcommand prints errors through the `Display` impl, not the
+`Debug` repr. A failure reads as a single human-readable diagnostic:
 
 ```
 error: umbra inspectdb: column `doc.payload` has unsupported SQL type
@@ -74,3 +122,7 @@ Exit code is `1` on any error, `0` on success.
 The deep spec for each subcommand lives alongside its subsystem:
 `docs/specs/06-migration-engine.md` for the migrate trio,
 `docs/specs/07-inspectdb.md` for inspectdb.
+
+See [Scaffolding a project](./startproject) for the global `umbra`
+binary that creates `src/main.rs` + the `umbra.toml` config in the
+first place.
