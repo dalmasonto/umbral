@@ -1,0 +1,24 @@
+[package]
+name = "umbra-testing"
+description = "Test helpers for umbra apps. TestClient, temp pools, response assertions."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+umbra = { path = "../umbra", version = "0.0.1" }
+axum = "0.8"
+http = "1"
+http-body-util = "0.1"
+tower = { version = "0.5", features = ["util"] }
+tokio = { version = "1", features = ["sync", "macros", "rt"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio"] }
+tempfile = "3"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }
