@@ -431,7 +431,22 @@ pub async fn send(message: &EmailMessage) -> Result<(), EmailError> {
     let composed = compose(&from, message)?;
 
     match cfg.backend {
-        BackendKind::Console => ConsoleBackend.deliver(&composed, message),
+        BackendKind::Console => {
+            // The console backend prints the full rendered RFC 822
+            // message — headers AND body — to stderr. That's the
+            // intended dev shape but it would leak password-reset
+            // tokens or magic-link URLs in a production log
+            // aggregator. Warn loudly when we're not in Dev.
+            if !matches!(umbra::settings::get().environment, umbra::Environment::Dev) {
+                tracing::warn!(
+                    "umbra-email: console backend active outside Dev environment — \
+                     email contents (including any tokens) will be printed to stderr. \
+                     Set UMBRA_EMAIL_SMTP_HOST in production or force console with \
+                     UMBRA_EMAIL_BACKEND=console intentionally.",
+                );
+            }
+            ConsoleBackend.deliver(&composed, message)
+        }
         BackendKind::Smtp => deliver_smtp(cfg, composed).await,
     }
 }

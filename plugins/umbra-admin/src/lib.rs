@@ -199,7 +199,14 @@ impl IntoResponse for AdminError {
             AdminError::NotFound(msg) => (StatusCode::NOT_FOUND, msg).into_response(),
             AdminError::Render(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
             AdminError::Sqlx(e) => {
-                (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
+                // sqlx errors can include the offending SQL fragment,
+                // constraint name, or (on connection failures) parts
+                // of the DSN. The admin is staff-only, but a
+                // compromised staff credential shouldn't gain a free
+                // SQL-reflection oracle on top of normal access. Log
+                // the full error server-side; return a fixed string.
+                tracing::error!(error = %e, "admin: database error");
+                (StatusCode::INTERNAL_SERVER_ERROR, "database error").into_response()
             }
             AdminError::BadInput(msg) => (StatusCode::BAD_REQUEST, msg).into_response(),
         }
@@ -364,7 +371,13 @@ async fn create(headers: HeaderMap, Path(table): Path<String>, body: String) -> 
                     fields => fields,
                     verb => "Create",
                     action => format!("/admin/{}/new", model.table),
-                    error => format!("{e:?}"),
+                    // Log the full error server-side; surface a
+                    // generic message to the browser. Debug formatting
+                    // of an AdminError can leak query fragments and
+                    // constraint names — autoescape protects against
+                    // XSS but the information disclosure is still
+                    // worth avoiding for staff-facing flows.
+                    error => sanitise_form_error(&e),
                 ),
             ) {
                 Ok(html) => (StatusCode::BAD_REQUEST, html).into_response(),
@@ -446,7 +459,13 @@ async fn update(
                     fields => fields,
                     verb => "Edit",
                     action => format!("/admin/{}/{}/edit", model.table, id),
-                    error => format!("{e:?}"),
+                    // Log the full error server-side; surface a
+                    // generic message to the browser. Debug formatting
+                    // of an AdminError can leak query fragments and
+                    // constraint names — autoescape protects against
+                    // XSS but the information disclosure is still
+                    // worth avoiding for staff-facing flows.
+                    error => sanitise_form_error(&e),
                 ),
             ) {
                 Ok(html) => (StatusCode::BAD_REQUEST, html).into_response(),
@@ -467,10 +486,40 @@ async fn delete(headers: HeaderMap, Path((table, id)): Path<(String, String)>) -
         return AdminError::Render(format!("model `{table}` has no primary key")).into_response();
     };
     let pool = umbra::db::pool();
-    let sql = format!("DELETE FROM \"{}\" WHERE \"{}\" = ?", model.table, pk.name);
+    let sql = format!(
+        "DELETE FROM \"{}\" WHERE \"{}\" = ?",
+        q(&model.table),
+        q(&pk.name)
+    );
     match sqlx::query(&sql).bind(&id).execute(&pool).await {
         Ok(_) => Redirect::to(&format!("/admin/{}/", model.table)).into_response(),
         Err(e) => AdminError::Sqlx(e).into_response(),
+    }
+}
+
+/// Double-quote-escape a SQL identifier. See umbra-rest's
+/// identically-named helper for the rationale.
+fn q(name: &str) -> String {
+    name.replace('"', "\"\"")
+}
+
+/// Convert an `AdminError` to a short user-facing message for the
+/// form-re-render path. The full error is also logged via
+/// `tracing::error!` so operators can debug.
+///
+/// `Sqlx` errors specifically are stripped to a generic "database
+/// error" — Debug-formatting them leaks query fragments and
+/// constraint names. The other variants are safe to surface (they
+/// carry user-authored input like "field X required").
+fn sanitise_form_error(e: &AdminError) -> String {
+    match e {
+        AdminError::Sqlx(sqlx_err) => {
+            tracing::error!(error = %sqlx_err, "admin: form submission database error");
+            "database error".to_string()
+        }
+        AdminError::NotFound(msg) | AdminError::Render(msg) | AdminError::BadInput(msg) => {
+            msg.clone()
+        }
     }
 }
 
@@ -493,11 +542,12 @@ async fn fetch_rows(
     let sql = match where_clause {
         Some((col, _)) => format!(
             "SELECT {columns} FROM \"{}\" WHERE \"{}\" = ? LIMIT 1",
-            model.table, col
+            q(&model.table),
+            q(col)
         ),
         None => format!(
             "SELECT {columns} FROM \"{}\" ORDER BY 1 LIMIT 200",
-            model.table
+            q(&model.table)
         ),
     };
     let mut q = sqlx::query(&sql);
@@ -633,7 +683,7 @@ async fn insert_row(
     let placeholders = writable.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
     let sql = format!(
         "INSERT INTO \"{}\" ({names}) VALUES ({placeholders})",
-        model.table
+        q(&model.table)
     );
     let mut q = sqlx::query(&sql);
     for col in &writable {
@@ -658,7 +708,8 @@ async fn update_row(
         .join(", ");
     let sql = format!(
         "UPDATE \"{}\" SET {setters} WHERE \"{}\" = ?",
-        model.table, pk.name
+        q(&model.table),
+        q(&pk.name)
     );
     let mut q = sqlx::query(&sql);
     for col in &writable {

@@ -127,59 +127,88 @@ impl From<serde_json::Error> for SessionError {
 // Public helpers.
 // =========================================================================
 
-/// Create a new session row for the given user. Returns the session
-/// id, which the caller writes into a Set-Cookie header via
-/// [`set_cookie_header`].
+/// SHA-256 hash the raw token, hex-encoded. The DB column holds this
+/// digest; the raw token only lives in the cookie. Constant-time
+/// comparison falls out for free — sqlite's `=` on equal-length
+/// hex digests doesn't leak meaningful timing across hash boundaries
+/// (the hash function pre-image collision is the actual barrier).
+///
+/// Plain SHA-256 is sufficient here: the input is already a
+/// 122-bit-entropy random token, not a low-entropy password, so the
+/// usual "use argon2 / bcrypt" advice doesn't apply. The whole point
+/// is that an attacker who exfiltrates the DB sees `hex(sha256(t))`
+/// instead of `t` and can't replay sessions.
+fn hash_token(raw: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(raw.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+/// Create a new session row for the given user. Returns the **raw**
+/// session token which the caller writes into a Set-Cookie header
+/// via [`set_cookie_header`]. The DB row stores `sha256(token)` so a
+/// DB leak doesn't surrender live sessions.
 ///
 /// `ttl` controls the row's `expires_at`. Pass `None` to use
 /// [`DEFAULT_TTL_SECONDS`] (14 days).
 pub async fn create_session(user_id: i64, ttl: Option<Duration>) -> Result<String, SessionError> {
     let pool = umbra::db::pool();
-    let id = Uuid::new_v4().to_string();
+    let raw_token = Uuid::new_v4().to_string();
+    let stored_id = hash_token(&raw_token);
     let now = Utc::now();
     let expires_at = now + ttl.unwrap_or_else(|| Duration::seconds(DEFAULT_TTL_SECONDS));
     sqlx::query(
         "INSERT INTO session (id, user_id, data, created_at, expires_at) \
          VALUES (?, ?, ?, ?, ?)",
     )
-    .bind(&id)
+    .bind(&stored_id)
     .bind(user_id)
     .bind("{}")
     .bind(now)
     .bind(expires_at)
     .execute(&pool)
     .await?;
-    Ok(id)
+    Ok(raw_token)
 }
 
-/// Look up a session by id. Returns `None` if the row doesn't exist
+/// Look up a session by its raw token (typically from the cookie).
+/// The token is hashed before the lookup so the column the row's
+/// indexed on can be looked up in O(1) without ever putting the raw
+/// value in DB query memory. Returns `None` if the row doesn't exist
 /// OR if it's expired (in which case the row is also deleted — lazy
 /// cleanup, no scheduled job needed).
-pub async fn read_session(id: &str) -> Result<Option<Session>, SessionError> {
+pub async fn read_session(token: &str) -> Result<Option<Session>, SessionError> {
     let pool = umbra::db::pool();
+    let stored_id = hash_token(token);
     let row: Option<Session> = sqlx::query_as::<_, Session>("SELECT * FROM session WHERE id = ?")
-        .bind(id)
+        .bind(&stored_id)
         .fetch_optional(&pool)
         .await?;
     if let Some(s) = &row
         && s.expires_at < Utc::now()
     {
-        destroy_session_with_pool(&pool, id).await?;
+        destroy_session_with_pool(&pool, &stored_id).await?;
         return Ok(None);
     }
     Ok(row)
 }
 
-/// Delete a session row. Used by logout. Idempotent: a non-existent
-/// id is treated as success.
-pub async fn destroy_session(id: &str) -> Result<(), SessionError> {
+/// Delete a session row by its raw token. Used by logout. Idempotent:
+/// a non-existent token is treated as success. The token is hashed
+/// before the DELETE so the same hash-on-write/hash-on-read invariant
+/// holds for destruction too.
+pub async fn destroy_session(token: &str) -> Result<(), SessionError> {
     let pool = umbra::db::pool();
-    destroy_session_with_pool(&pool, id).await
+    let stored_id = hash_token(token);
+    destroy_session_with_pool(&pool, &stored_id).await
 }
 
-async fn destroy_session_with_pool(pool: &SqlitePool, id: &str) -> Result<(), SessionError> {
+/// Internal: takes the already-hashed stored id, not the raw token.
+/// Used by `read_session`'s expiry-cleanup branch and `destroy_session`.
+async fn destroy_session_with_pool(pool: &SqlitePool, stored_id: &str) -> Result<(), SessionError> {
     sqlx::query("DELETE FROM session WHERE id = ?")
-        .bind(id)
+        .bind(stored_id)
         .execute(pool)
         .await?;
     Ok(())
@@ -287,16 +316,19 @@ pub fn get_data<T: serde::de::DeserializeOwned>(
 }
 
 /// Write a typed value into a session's `data` map by key. Reads the
-/// existing map, sets the key, writes the row back.
+/// existing map, sets the key, writes the row back. `session_token`
+/// is the raw token from the cookie; hashed before the WHERE clause
+/// like every other session-lookup path.
 pub async fn set_data<T: Serialize>(
-    session_id: &str,
+    session_token: &str,
     key: &str,
     value: &T,
 ) -> Result<(), SessionError> {
     let pool = umbra::db::pool();
+    let stored_id = hash_token(session_token);
     // Pull the current row so we don't clobber other keys.
     let row: Option<(String,)> = sqlx::query_as("SELECT data FROM session WHERE id = ?")
-        .bind(session_id)
+        .bind(&stored_id)
         .fetch_optional(&pool)
         .await?;
     let Some((current,)) = row else {
@@ -311,7 +343,7 @@ pub async fn set_data<T: Serialize>(
     let updated = serde_json::to_string(&map)?;
     sqlx::query("UPDATE session SET data = ? WHERE id = ?")
         .bind(&updated)
-        .bind(session_id)
+        .bind(&stored_id)
         .execute(&pool)
         .await?;
     Ok(())

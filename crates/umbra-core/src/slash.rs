@@ -198,6 +198,16 @@ pub fn slash_redirect_fallback(
             }
             // Issue a 308 redirect preserving method + body, with
             // the original query string carried across.
+            //
+            // CRLF injection is prevented by two layers: (a) axum's
+            // `Uri::path()` returns the percent-encoded path, so a
+            // malicious `%0d%0a` stays as the four-character escape
+            // sequence and never becomes raw CR+LF in our `location`
+            // string; (b) `HeaderValue` parsing rejects raw control
+            // chars, so even if (a) somehow flipped, `value` would
+            // fail to parse and the header wouldn't be inserted.
+            // Both layers are implicit — if axum ever changes how
+            // it decodes paths, this comment is the canary.
             let mut redirect = Response::new(Body::empty());
             *redirect.status_mut() = StatusCode::PERMANENT_REDIRECT;
             let location = format!("{alt}{query}");

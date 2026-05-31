@@ -442,7 +442,8 @@ async fn destroy(Path((table, id)): Path<(String, String)>) -> Result<StatusCode
     let pool = umbra::db::pool();
     let result = sqlx::query(&format!(
         "DELETE FROM \"{}\" WHERE \"{}\" = ?",
-        model.table, pk.name
+        q(&model.table),
+        q(&pk.name)
     ))
     .bind(&id)
     .execute(&pool)
@@ -454,6 +455,17 @@ async fn destroy(Path((table, id)): Path<(String, String)>) -> Result<StatusCode
         )));
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Double-quote-escape a SQL identifier (table or column name). All
+/// `"` chars inside the name become `""`. Apply this AT the
+/// interpolation site (`"{}", q(&model.table)`), never after — the
+/// returned string is meant to land inside the quotes, not include
+/// them. Latent safety today (table names are compile-time constants
+/// from the derive macro) but future-proofs against dynamic
+/// registrations.
+fn q(name: &str) -> String {
+    name.replace('"', "\"\"")
 }
 
 // =========================================================================
@@ -475,9 +487,10 @@ async fn fetch_rows(
     let sql = match where_clause {
         Some((col, _)) => format!(
             "SELECT {columns} FROM \"{}\" WHERE \"{}\" = ? LIMIT 1",
-            model.table, col
+            q(&model.table),
+            q(col)
         ),
-        None => format!("SELECT {columns} FROM \"{}\" ORDER BY 1", model.table),
+        None => format!("SELECT {columns} FROM \"{}\" ORDER BY 1", q(&model.table)),
     };
     let mut q = sqlx::query(&sql);
     if let Some((_, val)) = where_clause {
@@ -620,7 +633,7 @@ async fn insert_row(
     let placeholders = writable.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
     let sql = format!(
         "INSERT INTO \"{}\" ({names}) VALUES ({placeholders})",
-        model.table
+        q(&model.table)
     );
     let mut q = sqlx::query(&sql);
     for col in &writable {
@@ -677,7 +690,8 @@ async fn update_row(
         .join(", ");
     let sql = format!(
         "UPDATE \"{}\" SET {setters} WHERE \"{}\" = ?",
-        model.table, pk.name
+        q(&model.table),
+        q(&pk.name)
     );
     let mut q = sqlx::query(&sql);
     for col in &updates {

@@ -18,6 +18,11 @@ serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
 sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "chrono"] }
 uuid = { version = "1", features = ["serde", "v4", "v7"] }
+# Session tokens are SHA-256 hashed before DB storage so a DB leak
+# (backup, SQLi, exposed dump) doesn't surrender live session tokens.
+# The raw token only ever exists in the cookie and in the response
+# from `create_session`; the column holds only the digest.
+sha2 = "0.10"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync"] }

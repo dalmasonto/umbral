@@ -42,15 +42,15 @@ use minijinja::context;
 /// extractors. Other request state isn't exposed yet — the v1 shape
 /// is intentionally narrow.
 pub fn render_not_found(template: Option<&str>, path: &str) -> Response<Body> {
-    let body = template
+    // Derive Content-Type from whether render actually produced HTML,
+    // NOT from whether a template name was supplied. When the engine
+    // isn't initialised or the template fails to render, the
+    // fallback "Not Found" body is plaintext; it would be wrong to
+    // ship it as text/html.
+    let (body, content_type) = template
         .and_then(|name| crate::templates::render(name, &context! { path => path }).ok())
-        .unwrap_or_else(|| "Not Found".to_string());
-
-    let content_type = if template.is_some() {
-        "text/html; charset=utf-8"
-    } else {
-        "text/plain; charset=utf-8"
-    };
+        .map(|html| (html, "text/html; charset=utf-8"))
+        .unwrap_or_else(|| ("Not Found".to_string(), "text/plain; charset=utf-8"));
 
     let mut response = Response::new(Body::from(body));
     *response.status_mut() = StatusCode::NOT_FOUND;
@@ -112,18 +112,22 @@ pub fn server_error_panic_handler(
             "handler panicked; serving 500 page",
         );
 
-        let body = template
+        // Same Content-Type derivation as `render_not_found`: pick
+        // text/html ONLY when render actually succeeded. A configured
+        // template that fails to render falls back to plaintext, and
+        // shipping that plaintext as text/html would be a spec lie.
+        let (body, content_type) = template
             .as_deref()
             .and_then(|name| {
                 crate::templates::render(name, &context! { /* deliberately empty */ }).ok()
             })
-            .unwrap_or_else(|| "Internal Server Error".to_string());
-
-        let content_type = if template.is_some() {
-            "text/html; charset=utf-8"
-        } else {
-            "text/plain; charset=utf-8"
-        };
+            .map(|html| (html, "text/html; charset=utf-8"))
+            .unwrap_or_else(|| {
+                (
+                    "Internal Server Error".to_string(),
+                    "text/plain; charset=utf-8",
+                )
+            });
 
         (
             StatusCode::INTERNAL_SERVER_ERROR,

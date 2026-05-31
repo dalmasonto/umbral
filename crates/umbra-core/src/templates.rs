@@ -52,6 +52,13 @@ static ENGINE: OnceLock<Environment<'static>> = OnceLock::new();
 /// actually tries to render.
 pub(crate) fn init(templates_dir: &Path) -> Result<(), TemplateError> {
     let mut env = Environment::new();
+    // Autoescape extensions MUST stay in sync with the loader
+    // whitelist in `load_directory` (currently `html | htm | txt`).
+    // If you add `.svg` or `.xml` to the loader, add them HERE too
+    // — `.svg` carries inline-script XSS risk and `.xml` is generally
+    // parsed by something downstream that wants attribute escaping.
+    // `.txt` stays `None` because plaintext rendering shouldn't HTML-
+    // escape (would replace `<` with `&lt;` in plain email bodies).
     env.set_auto_escape_callback(|name| {
         if name.ends_with(".html") || name.ends_with(".htm") {
             AutoEscape::Html

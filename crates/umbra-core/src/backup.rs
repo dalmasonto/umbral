@@ -235,7 +235,10 @@ async fn dump_one(pool: &sqlx::SqlitePool, model: &ModelMeta) -> Result<ModelDum
         .map(|c| format!("\"{}\"", c.name.replace('"', "\"\"")))
         .collect::<Vec<_>>()
         .join(", ");
-    let sql = format!("SELECT {column_list} FROM \"{}\"", model.table);
+    let sql = format!(
+        "SELECT {column_list} FROM \"{}\"",
+        model.table.replace('"', "\"\"")
+    );
     let rows = sqlx::query(&sql).fetch_all(pool).await?;
 
     let mut out: Vec<Map<String, Value>> = Vec::with_capacity(rows.len());
@@ -274,7 +277,7 @@ async fn load_one(
         .join(", ");
     let sql = format!(
         "INSERT INTO \"{}\" ({column_list}) VALUES ({placeholders})",
-        model.table
+        model.table.replace('"', "\"\"")
     );
 
     let mut count: u64 = 0;

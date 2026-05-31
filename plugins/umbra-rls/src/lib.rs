@@ -69,9 +69,26 @@ pub struct Policy {
     /// The row is visible to the operation when the expression
     /// returns true. Refer to columns by name; refer to session
     /// state via `current_setting('app.user_id')` etc.
+    ///
+    /// # SQL injection warning
+    ///
+    /// This string is interpolated **verbatim** into the
+    /// `CREATE POLICY ... USING (...)` DDL — Postgres DDL has no
+    /// placeholder syntax for policy bodies, so no parameter binding
+    /// is possible. Treat it as developer-authored SQL only. Sourcing
+    /// any part of this from user input (e.g. an admin UI that
+    /// reflects request bodies into policy definitions) gives every
+    /// user `EXECUTE` on the server. If you genuinely need
+    /// user-driven row-filtering, reach for `WHERE` clauses in
+    /// application code, not RLS policies.
     pub using: String,
     /// Optional `WITH CHECK` clause. Required for INSERT to constrain
     /// new rows; defaults to the `USING` clause on UPDATE if unset.
+    ///
+    /// # SQL injection warning
+    ///
+    /// Same caveat as [`Self::using`] — verbatim interpolation into
+    /// DDL, no parameter binding. Developer-authored SQL only.
     pub with_check: Option<String>,
 }
 
@@ -137,6 +154,14 @@ impl RlsPlugin {
     /// the policy's table — users can skip the [`Self::enable_on`]
     /// call when every interesting table is already covered by at
     /// least one policy.
+    ///
+    /// # SQL injection warning
+    ///
+    /// `using` is **verbatim SQL** interpolated into a Postgres
+    /// `CREATE POLICY` statement. There is no parameter binding —
+    /// DDL doesn't support it. Pass developer-authored SQL only;
+    /// never source any part of this from user input. See [`Policy::using`]
+    /// for the full rationale.
     pub fn policy(
         mut self,
         table: impl Into<String>,
@@ -162,6 +187,13 @@ impl RlsPlugin {
     /// when INSERT or UPDATE rules differ from the read predicate
     /// — e.g. users can read all rows but only insert ones owned
     /// by themselves.
+    ///
+    /// # SQL injection warning
+    ///
+    /// Both `using` and `with_check` are **verbatim SQL** strings
+    /// interpolated into the `CREATE POLICY` DDL with no parameter
+    /// binding. Developer-authored SQL only; see [`Policy::using`]
+    /// for the full rationale.
     pub fn policy_with_check(
         mut self,
         table: impl Into<String>,

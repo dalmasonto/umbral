@@ -16,6 +16,13 @@ axum = "0.8"
 http = "1"
 getrandom = "0.2"
 hex = "0.4"
+# Constant-time token comparison. Without this, the lexicographic
+# short-circuit in String == leaks token-prefix matches over time.
+# CSRF tokens aren't direct credentials, but OWASP calls for
+# constant-time on all security tokens; the dep is tiny and the
+# alternative (writing the byte-by-byte loop ourselves) is too easy
+# to get wrong.
+subtle = "2"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync"] }

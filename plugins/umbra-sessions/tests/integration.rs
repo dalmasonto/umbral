@@ -87,15 +87,25 @@ async fn boot() -> i64 {
         .await
 }
 
-/// create_session writes a row keyed by the returned id, with the
-/// right user_id, an `{}` data string, and an expires_at in the
-/// future. read_session pulls the row back.
+/// create_session returns a raw token; the DB row is keyed by its
+/// SHA-256 digest. read_session looks the row up by hashing the
+/// passed-in token. The Session struct's `id` field carries the
+/// stored digest (not the raw token), so an attacker who exfiltrates
+/// the row never sees the live cookie value.
 #[tokio::test]
 async fn create_and_read_round_trip() {
     let user_id = boot().await;
-    let id = create_session(user_id, None).await.expect("create");
-    let s = read_session(&id).await.expect("read").expect("present");
-    assert_eq!(s.id, id);
+    let token = create_session(user_id, None).await.expect("create");
+    let s = read_session(&token).await.expect("read").expect("present");
+    // The raw token is a UUID; the stored id is a 64-char hex SHA-256.
+    // They must differ — if they matched the column would still hold
+    // the live token.
+    assert_ne!(
+        s.id, token,
+        "stored id should be the hashed token, not the raw token"
+    );
+    assert_eq!(s.id.len(), 64, "stored id should be a 64-char hex digest");
+    assert!(s.id.chars().all(|c| c.is_ascii_hexdigit()));
     assert_eq!(s.user_id, Some(user_id));
     assert_eq!(s.data, "{}");
     assert!(s.expires_at > chrono::Utc::now());

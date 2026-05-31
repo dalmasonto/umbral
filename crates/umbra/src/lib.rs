@@ -33,6 +33,14 @@ pub mod prelude {
 pub use umbra_core::app::{App, AppBuilder, BuildError};
 pub use umbra_core::settings::{Environment, Settings};
 
+/// Settings accessors — `get()` returns the live `Settings` published
+/// at `App::build` time. Used by plugin code that needs to branch on
+/// `environment` / `bind_addr` etc. (e.g. umbra-email checking whether
+/// to warn about console-backend usage in prod).
+pub mod settings {
+    pub use umbra_core::settings::get;
+}
+
 pub mod db {
     //! Database pool accessors.
     //!

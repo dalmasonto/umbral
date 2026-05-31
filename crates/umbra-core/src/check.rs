@@ -143,13 +143,26 @@ pub fn framework_checks() -> Vec<SystemCheck> {
     ]
 }
 
-/// Verify that `secret_key` is not the insecure dev default in
-/// `Environment::Prod`. Passes silently in Dev or Test.
+/// Verify that `secret_key` is not the insecure dev default. Two
+/// layers:
+///
+/// 1. **Hard error in `Environment::Prod`** — the original check.
+///    Blocks boot when the operator self-identifies as production.
+/// 2. **Warning when the bind address looks public** — defense in
+///    depth for the operator who forgot to set
+///    `UMBRA_ENVIRONMENT=Prod`. If `bind_addr` isn't `127.0.0.1` or
+///    `localhost`, the process is likely serving real network
+///    traffic, and the insecure dev key is dangerous regardless of
+///    the declared environment.
+///
+/// The boot-blocking error is intentionally reserved for explicit
+/// production declarations — surprising people with a build failure
+/// because they bound to `0.0.0.0` in a homelab test would be worse
+/// than the warning. The warning is the visible nudge.
 fn settings_required(ctx: &CheckContext<'_>) -> Vec<SystemCheckFinding> {
     let mut findings = Vec::new();
-    if matches!(ctx.settings.environment, Environment::Prod)
-        && ctx.settings.secret_key == INSECURE_DEV_SECRET_KEY
-    {
+    let insecure = ctx.settings.secret_key == INSECURE_DEV_SECRET_KEY;
+    if matches!(ctx.settings.environment, Environment::Prod) && insecure {
         findings.push(SystemCheckFinding {
             check_id: "settings.required",
             severity: Severity::Error,
@@ -157,8 +170,40 @@ fn settings_required(ctx: &CheckContext<'_>) -> Vec<SystemCheckFinding> {
             message: "Settings.secret_key is still set to the insecure dev default in Environment::Prod. This is a hard production risk.".to_string(),
             hint: Some("set UMBRA_SECRET_KEY in your production env, or change `secret_key` in umbra.toml.".to_string()),
         });
+        return findings;
+    }
+    // The default for Environment is Dev, so an operator who never
+    // sets UMBRA_ENVIRONMENT slips past the strict check above. Add a
+    // bind-address heuristic: if we're binding to something other than
+    // loopback, treat it as likely-public and warn.
+    if insecure && !is_loopback_bind(&ctx.settings.bind_addr) {
+        findings.push(SystemCheckFinding {
+            check_id: "settings.required",
+            severity: Severity::Warning,
+            location: CheckLocation::Settings,
+            message: format!(
+                "Settings.secret_key is the insecure dev default, but bind_addr `{}` doesn't look like loopback. Set UMBRA_ENVIRONMENT=Prod if this is a production deployment so the boot-check fails loudly instead of just warning.",
+                ctx.settings.bind_addr,
+            ),
+            hint: Some("set UMBRA_SECRET_KEY, or restrict bind_addr to 127.0.0.1 for local dev.".to_string()),
+        });
     }
     findings
+}
+
+/// True when `bind_addr` parses as the loopback interface — i.e.
+/// `127.0.0.1`, `::1`, or `localhost`. Anything else is treated as
+/// likely public-facing for the secret_key defence-in-depth check.
+fn is_loopback_bind(bind_addr: &str) -> bool {
+    // The setting is `host:port`; split off the port and inspect the
+    // host. Fall back to a string-prefix check for IPv6 brackets.
+    let host = bind_addr
+        .rsplit_once(':')
+        .map(|(host, _)| host)
+        .unwrap_or(bind_addr)
+        .trim_start_matches('[')
+        .trim_end_matches(']');
+    host == "127.0.0.1" || host == "::1" || host == "localhost" || host.is_empty()
 }
 
 /// Warn when `allowed_hosts` is still the dev default in

@@ -175,7 +175,7 @@ async fn csrf_middleware(req: Request, next: Next) -> Result<Response, Infallibl
         .map(str::to_string);
 
     match (cookie_token, header_token) {
-        (Some(c), Some(h)) if c == h => Ok(next.run(req).await),
+        (Some(c), Some(h)) if tokens_match(&c, &h) => Ok(next.run(req).await),
         _ => {
             let body = Body::from("CSRF verification failed");
             Ok(Response::builder()
@@ -184,4 +184,24 @@ async fn csrf_middleware(req: Request, next: Next) -> Result<Response, Infallibl
                 .expect("static response"))
         }
     }
+}
+
+/// Constant-time string equality. Short-circuit `==` on `String` is
+/// a timing side-channel — successive equal-prefix bytes take longer
+/// to fail than mismatched-first-byte comparisons, leaking
+/// prefix-match progress to an attacker who can measure latency.
+///
+/// CSRF tokens aren't credentials so the exploitability bar is high
+/// (you'd need a chosen-token timing oracle, which is rare in real
+/// deployments), but constant-time comparison costs nothing and
+/// closes the gap unconditionally. Per OWASP's "Use Constant-Time
+/// String Comparison" rule applied to all security tokens.
+fn tokens_match(a: &str, b: &str) -> bool {
+    use subtle::ConstantTimeEq;
+    // Length mismatch fails in constant time too — `ct_eq` on
+    // different-length slices short-circuits to a 0 mask before
+    // doing the byte loop, so the timing leak is bounded to "the
+    // lengths differ" which is information an attacker already has
+    // (they pick the header value).
+    a.as_bytes().ct_eq(b.as_bytes()).into()
 }

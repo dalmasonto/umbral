@@ -33,6 +33,11 @@ base64 = "0.22"
 # after `App::build` runs; a private env is cleaner anyway since the
 # admin's templates are an internal API.
 minijinja = "2"
+# Server-side logging of admin database errors. The error response
+# returns a fixed string to the browser; the full sqlx error goes
+# here so operators can debug without leaking query fragments to
+# (potentially compromised) staff sessions.
+tracing = "0.1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync"] }
