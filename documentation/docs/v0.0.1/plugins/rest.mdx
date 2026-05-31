@@ -92,18 +92,54 @@ The two methods are mutually exclusive in effect: `include_only` wins if both ar
 because any table not on the allowlist is hidden, so the extra `exclude` list is redundant.
 Use one or the other.
 
+## Customising the response shape
+
+Three builder methods let you reshape what the REST endpoints emit on a per-table,
+per-field basis. They apply to every outbound response (`list`, `retrieve`, `create`,
+`update`/`patch`) in order: **hide → transform → computed**.
+
+```rust
+use serde_json::json;
+
+let rest = RestPlugin::default()
+    .hide("user", "password_hash")
+    .transform("user", "email", |v| {
+        let s = v.as_str().unwrap_or("");
+        match s.split_once('@') {
+            Some((_, d)) => json!(format!("***@{d}")),
+            None => v.clone(),
+        }
+    })
+    .computed("user", "display_name", |row| {
+        let f = row.get("first_name").and_then(|v| v.as_str()).unwrap_or("");
+        let l = row.get("last_name").and_then(|v| v.as_str()).unwrap_or("");
+        json!(format!("{f} {l}").trim().to_string())
+    });
+```
+
+| Builder | Effect |
+|---------|--------|
+| `.hide(table, field)` | Strip the field from every response. The column stays writable via POST/PUT/PATCH and readable through the ORM — only the outbound JSON is shaped. |
+| `.transform(table, field, fn)` | Replace a field's value. The closure receives the raw `serde_json::Value`, returns the replacement. The key stays the same; the value changes. |
+| `.computed(table, name, fn)` | Add a derived field. The closure receives the (already-customised) row map and returns the value for the new key. No underlying column needed — the field exists only at the API. |
+
+The order is intentional. Hide first so the row doesn't carry secrets into the
+transform / computed closures. Computed runs last so it sees the masked /
+stripped row, not the raw one.
+
+<Callout type="info">
+**On inputs.** Hide / transform / computed only shape **outbound** responses. POST,
+PUT, and PATCH still accept and write the underlying columns as-is. To restrict
+what clients can write, gate the endpoint with auth middleware or hand-roll the
+handler.
+</Callout>
+
 ## What's not in v1
 
 <Callout type="info">
-The four items below are known follow-ons tracked in `bugs/gaps.md`. Each has a workable
+The two items below are known follow-ons tracked in `bugs/gaps.md`. Each has a workable
 workaround today.
 
-- **Custom serializer fields.** Endpoints serialize the whole struct as-is. There is no
-  `get_<field>(obj)` hook to reshape or hide individual fields. Workaround: write a
-  dedicated handler for that endpoint and register it on your own router before adding
-  `RestPlugin` (axum matches the first route that fits).
-- **Per-field exclusion** (e.g. hiding `password_hash` from a `User` response). Workaround:
-  keep sensitive columns in a separate model and call `.exclude()` on it.
 - **Auth gating.** Every exposed route is open in v1. Wrap the app router with a Tower
   middleware layer or an axum extractor to enforce authentication before requests reach the
   REST handlers.

@@ -51,11 +51,49 @@ use uuid::Uuid;
 /// the migration tracking table itself.
 const DEFAULT_BLOCKED_TABLES: &[&str] = &["auth_user", "session", "umbra_migrations"];
 
+/// Closure that transforms one field's JSON value to another. Used
+/// by [`RestPlugin::transform`]. The signature is `&Value -> Value`
+/// — the field's current value goes in, the replacement comes out.
+type TransformFn = std::sync::Arc<dyn Fn(&Value) -> Value + Send + Sync + 'static>;
+
+/// Closure that computes a derived field from the whole row. Used by
+/// [`RestPlugin::computed`]. The signature is `&Map -> Value` — the
+/// closure sees every present field (including computed ones added
+/// earlier in the chain) and returns the value for the new key.
+type ComputedFn = std::sync::Arc<dyn Fn(&Map<String, Value>) -> Value + Send + Sync + 'static>;
+
 /// The plugin. Mounts the REST routes at `/api`.
-#[derive(Debug, Clone)]
+///
+/// Field-level customisation is configured at builder time and applied
+/// to every outgoing JSON response (the list / retrieve / create /
+/// update payloads). See [`Self::hide`], [`Self::transform`], and
+/// [`Self::computed`].
+#[derive(Clone)]
 pub struct RestPlugin {
     include_only: Option<Vec<String>>,
     extra_exclude: Vec<String>,
+    /// `(table, field)` pairs that are stripped from response bodies.
+    hidden: Vec<(String, String)>,
+    /// `(table, field, transform_fn)` — replaces a field's value.
+    transforms: Vec<(String, String, TransformFn)>,
+    /// `(table, name, compute_fn)` — adds a derived field per row.
+    /// Applied AFTER hide + transform, so the computed closure sees
+    /// the customised row.
+    computed: Vec<(String, String, ComputedFn)>,
+}
+
+impl std::fmt::Debug for RestPlugin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Closures aren't Debug; render placeholders for the override
+        // vecs so the Debug impl still works for tests / logs.
+        f.debug_struct("RestPlugin")
+            .field("include_only", &self.include_only)
+            .field("extra_exclude", &self.extra_exclude)
+            .field("hidden", &self.hidden)
+            .field("transforms_count", &self.transforms.len())
+            .field("computed_count", &self.computed.len())
+            .finish()
+    }
 }
 
 impl Default for RestPlugin {
@@ -69,6 +107,9 @@ impl RestPlugin {
         Self {
             include_only: None,
             extra_exclude: Vec::new(),
+            hidden: Vec::new(),
+            transforms: Vec::new(),
+            computed: Vec::new(),
         }
     }
 
@@ -94,6 +135,100 @@ impl RestPlugin {
             self.extra_exclude.push(t.into());
         }
         self
+    }
+
+    /// Strip a field from every REST response for the given table.
+    /// The column is still readable through the ORM and writable via
+    /// POST/PUT/PATCH — this only changes the outgoing JSON shape.
+    ///
+    /// Common case: hiding `password_hash` from the `user` table so
+    /// it never reaches an API consumer.
+    ///
+    /// ```ignore
+    /// RestPlugin::new().hide("user", "password_hash")
+    /// ```
+    pub fn hide(mut self, table: &str, field: &str) -> Self {
+        self.hidden.push((table.to_string(), field.to_string()));
+        self
+    }
+
+    /// Replace a field's value in every REST response. The closure
+    /// receives the raw value and returns the replacement. The field
+    /// stays at the same JSON key.
+    ///
+    /// Common case: masking sensitive data (`email` → `***@domain`)
+    /// without removing the field entirely.
+    ///
+    /// ```ignore
+    /// RestPlugin::new()
+    ///     .transform("user", "email", |v| {
+    ///         let s = v.as_str().unwrap_or("");
+    ///         match s.split_once('@') {
+    ///             Some((_, d)) => json!(format!("***@{d}")),
+    ///             None => v.clone(),
+    ///         }
+    ///     })
+    /// ```
+    pub fn transform<F>(mut self, table: &str, field: &str, f: F) -> Self
+    where
+        F: Fn(&Value) -> Value + Send + Sync + 'static,
+    {
+        self.transforms
+            .push((table.to_string(), field.to_string(), std::sync::Arc::new(f)));
+        self
+    }
+
+    /// Add a derived field to every REST response. The closure
+    /// receives the (already hide+transform-processed) row map and
+    /// returns the value for the new key. The key has no underlying
+    /// column — it exists only in the API surface.
+    ///
+    /// Common case: synthesising a `display_name` from `first_name` +
+    /// `last_name` columns.
+    ///
+    /// ```ignore
+    /// RestPlugin::new()
+    ///     .computed("user", "display_name", |row| {
+    ///         let f = row.get("first_name").and_then(|v| v.as_str()).unwrap_or("");
+    ///         let l = row.get("last_name").and_then(|v| v.as_str()).unwrap_or("");
+    ///         json!(format!("{f} {l}").trim())
+    ///     })
+    /// ```
+    pub fn computed<F>(mut self, table: &str, name: &str, f: F) -> Self
+    where
+        F: Fn(&Map<String, Value>) -> Value + Send + Sync + 'static,
+    {
+        self.computed
+            .push((table.to_string(), name.to_string(), std::sync::Arc::new(f)));
+        self
+    }
+
+    /// Apply every configured override to a single row, in order:
+    /// hide → transform → computed. Run after the handlers build the
+    /// raw row map from the database; mutates in place.
+    ///
+    /// Public-by-virtue-of-being-pub-crate so the handlers in this
+    /// crate can reach it. Not exposed in the umbra facade.
+    pub(crate) fn apply_overrides(&self, table: &str, row: &mut Map<String, Value>) {
+        for (t, f) in &self.hidden {
+            if t == table {
+                row.remove(f);
+            }
+        }
+        for (t, f, func) in &self.transforms {
+            if t == table {
+                if let Some(v) = row.get(f) {
+                    let new_v = func(v);
+                    row.insert(f.clone(), new_v);
+                }
+            }
+        }
+        for (t, name, func) in &self.computed {
+            if t == table {
+                let v = func(row);
+                row.insert(name.clone(), v);
+            }
+        }
     }
 
     fn allow(&self, table: &str) -> bool {
@@ -223,7 +358,11 @@ struct ListResponse {
 async fn list(Path(table): Path<String>) -> Result<Json<ListResponse>, ApiError> {
     let model = allowed_model(&table)?;
     let pool = umbra::db::pool();
-    let rows = fetch_rows(&pool, &model, None).await?;
+    let mut rows = fetch_rows(&pool, &model, None).await?;
+    let cfg = CONFIG.get().expect("RestPlugin::routes was called");
+    for row in &mut rows {
+        cfg.apply_overrides(&table, row);
+    }
     let count = rows.len();
     Ok(Json(ListResponse {
         results: rows,
@@ -237,13 +376,15 @@ async fn retrieve(
     let model = allowed_model(&table)?;
     let pk = pk_column(&model)?;
     let pool = umbra::db::pool();
-    let rows = fetch_rows(&pool, &model, Some((&pk.name, &id))).await?;
-    let Some(row) = rows.into_iter().next() else {
+    let mut rows = fetch_rows(&pool, &model, Some((&pk.name, &id))).await?;
+    let Some(mut row) = rows.pop() else {
         return Err(ApiError::NotFound(format!(
             "no row with {} = {} in {}",
             pk.name, id, table
         )));
     };
+    let cfg = CONFIG.get().expect("RestPlugin::routes was called");
+    cfg.apply_overrides(&table, &mut row);
     Ok(Json(row))
 }
 
@@ -255,12 +396,14 @@ async fn create(
     let pool = umbra::db::pool();
     let new_id = insert_row(&pool, &model, &body).await?;
     let pk = pk_column(&model)?;
-    let rows = fetch_rows(&pool, &model, Some((&pk.name, &new_id))).await?;
-    let Some(row) = rows.into_iter().next() else {
+    let mut rows = fetch_rows(&pool, &model, Some((&pk.name, &new_id))).await?;
+    let Some(mut row) = rows.pop() else {
         return Err(ApiError::BadInput(
             "row inserted but disappeared on read-back".into(),
         ));
     };
+    let cfg = CONFIG.get().expect("RestPlugin::routes was called");
+    cfg.apply_overrides(&table, &mut row);
     Ok((StatusCode::CREATED, Json(row)))
 }
 
@@ -282,12 +425,14 @@ async fn update(
     }
 
     update_row(&pool, &model, pk, &id, &body).await?;
-    let rows = fetch_rows(&pool, &model, Some((&pk.name, &id))).await?;
-    let Some(row) = rows.into_iter().next() else {
+    let mut rows = fetch_rows(&pool, &model, Some((&pk.name, &id))).await?;
+    let Some(mut row) = rows.pop() else {
         return Err(ApiError::BadInput(
             "row updated but disappeared on read-back".into(),
         ));
     };
+    let cfg = CONFIG.get().expect("RestPlugin::routes was called");
+    cfg.apply_overrides(&table, &mut row);
     Ok(Json(row))
 }
 
