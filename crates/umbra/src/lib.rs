@@ -36,10 +36,20 @@ pub use umbra_core::settings::{Environment, Settings};
 pub mod db {
     //! Database pool accessors.
     //!
-    //! `connect` opens a new pool; `pool` and `pool_for` return the
-    //! ambient pools published by `App::build()`.
+    //! `connect` opens a new pool dispatched on the URL scheme,
+    //! returning a [`DbPool`] enum (sqlite or postgres). For callers
+    //! that want a typed sqlite pool directly, use [`connect_sqlite`].
+    //!
+    //! `pool` / `pool_for` keep returning [`sqlx::SqlitePool`]
+    //! through Phase 1 of the Postgres rollout so existing plugin
+    //! code continues to compile unchanged. The dispatched
+    //! versions ([`pool_dispatched`] and [`pool_for_dispatched`])
+    //! hand back a `&DbPool` for code that's ready to branch on the
+    //! backend.
 
-    pub use umbra_core::db::{connect, pool, pool_for};
+    pub use umbra_core::db::{
+        DbPool, connect, connect_sqlite, pool, pool_dispatched, pool_for, pool_for_dispatched,
+    };
 }
 
 pub mod backend {

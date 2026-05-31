@@ -231,7 +231,7 @@ async fn boot() -> &'static BootState {
         };
 
         let settings = Settings::from_env().expect("figment defaults always load in a test env");
-        let pool = umbra::db::connect("sqlite::memory:")
+        let pool = umbra::db::connect_sqlite("sqlite::memory:")
             .await
             .expect("in-memory sqlite should always connect");
 
@@ -457,7 +457,7 @@ async fn plugin_order_reflects_the_topological_sort() {
 /// before phase 3.
 async fn failing_build_settings_and_pool() -> (Settings, sqlx::SqlitePool) {
     let settings = Settings::from_env().expect("figment defaults always load in a test env");
-    let pool = umbra::db::connect("sqlite::memory:")
+    let pool = umbra::db::connect_sqlite("sqlite::memory:")
         .await
         .expect("in-memory sqlite should always connect");
     (settings, pool)

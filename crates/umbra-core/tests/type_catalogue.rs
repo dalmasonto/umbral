@@ -389,7 +389,7 @@ struct UuidRoundtrip {
 /// closes the loop on the Uuid PK path the static tests above type-check.
 #[tokio::test]
 async fn uuid_primary_key_roundtrips_through_sqlx() {
-    let pool = umbra_core::db::connect("sqlite::memory:")
+    let pool = umbra_core::db::connect_sqlite("sqlite::memory:")
         .await
         .expect("in-memory sqlite should always connect");
 

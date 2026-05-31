@@ -51,7 +51,7 @@ async fn boot() {
 
         // In-memory sqlite is fine: this plugin doesn't touch the
         // DB, but App::build() requires a default pool.
-        let pool = umbra::db::connect("sqlite::memory:")
+        let pool = umbra::db::connect_sqlite("sqlite::memory:")
             .await
             .expect("sqlite in-memory pool");
 

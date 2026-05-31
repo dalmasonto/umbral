@@ -39,7 +39,7 @@ async fn boot() {
     BOOT.get_or_init(|| async {
         let settings =
             umbra::Settings::from_env().expect("figment defaults always load in a test env");
-        let pool = umbra::db::connect("sqlite::memory:")
+        let pool = umbra::db::connect_sqlite("sqlite::memory:")
             .await
             .expect("in-memory sqlite should connect");
 

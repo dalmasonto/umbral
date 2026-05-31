@@ -211,7 +211,7 @@ fn field_spec_eq_distinguishes_different_names() {
 /// rather than just at the type level.
 #[tokio::test]
 async fn post_implements_fromrow() {
-    let pool = db::connect("sqlite::memory:")
+    let pool = db::connect_sqlite("sqlite::memory:")
         .await
         .expect("in-memory sqlite should always connect");
 

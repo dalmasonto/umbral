@@ -21,7 +21,7 @@ use umbra_core::settings::Settings;
 async fn build_succeeds_with_explicit_pool_and_router() {
     let settings = Settings::from_env().expect("figment defaults always load");
 
-    let pool = db::connect("sqlite::memory:")
+    let pool = db::connect_sqlite("sqlite::memory:")
         .await
         .expect("in-memory sqlite should always connect");
 

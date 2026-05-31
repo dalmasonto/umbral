@@ -176,7 +176,7 @@ fn run_all_handles_empty_checks() {
 #[tokio::test]
 async fn system_check_failed_build_returns_build_error_system_check_failed() {
     let settings = make_settings(Environment::Prod, INSECURE_DEV_SECRET_KEY);
-    let pool = umbra_core::db::connect("sqlite::memory:")
+    let pool = umbra_core::db::connect_sqlite("sqlite::memory:")
         .await
         .expect("in-memory sqlite should always connect");
 

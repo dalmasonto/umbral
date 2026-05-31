@@ -167,7 +167,12 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         settings.database_url.clone()
     };
-    let pool = umbra::db::connect(&database_url).await?;
+    // The demo path explicitly opens a SQLite-typed pool. `umbra::db::connect`
+    // returns a `DbPool` enum (Phase 1 of Postgres support), but the demo
+    // seed below uses sqlite-specific SQL (INSERT OR IGNORE), so we stay on
+    // the sqlite path here. A real user binary opening Postgres would
+    // call `umbra::db::connect` and pass the resulting DbPool through.
+    let pool = umbra::db::connect_sqlite(&database_url).await?;
 
     // Demo seed. CREATE TABLE IF NOT EXISTS + INSERT OR IGNORE so re-runs
     // are idempotent. The M5 migrate path supersedes this for users who

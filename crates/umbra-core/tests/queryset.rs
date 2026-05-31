@@ -41,7 +41,7 @@ use umbra_core::orm::post::post;
 /// `ilike` vs `contains` vs `icontains`, and a nullable datetime column
 /// for `is_null` / `is_not_null`.
 async fn fresh_pool() -> SqlitePool {
-    let pool = db::connect("sqlite::memory:")
+    let pool = db::connect_sqlite("sqlite::memory:")
         .await
         .expect("in-memory sqlite should always connect");
 

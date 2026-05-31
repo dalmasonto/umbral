@@ -1,9 +1,8 @@
 use axum::Router;
-use sqlx::SqlitePool;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 
-use crate::db;
+use crate::db::{self, DbPool};
 use crate::migrate::ModelMeta;
 use crate::orm::Model;
 use crate::plugin::Plugin;
@@ -66,7 +65,7 @@ impl App {
 #[derive(Default)]
 pub struct AppBuilder {
     settings: Option<Settings>,
-    databases: HashMap<String, SqlitePool>,
+    databases: HashMap<String, DbPool>,
     router: Option<Router>,
     models: Vec<ModelMeta>,
     plugins: Vec<Box<dyn Plugin>>,
@@ -87,8 +86,14 @@ impl AppBuilder {
     /// DefaultPoolMissing` if it isn't registered. The caller opens
     /// the pool via `umbra::db::connect(&url).await` and passes it
     /// here.
-    pub fn database(mut self, alias: &str, pool: SqlitePool) -> Self {
-        self.databases.insert(alias.to_owned(), pool);
+    ///
+    /// Accepts anything that converts into a [`DbPool`]: a typed
+    /// [`sqlx::SqlitePool`], a typed [`sqlx::PgPool`], or an already-
+    /// built `DbPool`. The [`From`] impls on `DbPool` make plain
+    /// SqlitePool callers (every test, every plugin example) work
+    /// unchanged.
+    pub fn database(mut self, alias: &str, pool: impl Into<DbPool>) -> Self {
+        self.databases.insert(alias.to_owned(), pool.into());
         self
     }
 
@@ -212,6 +217,22 @@ impl AppBuilder {
         // Phase 2 — detect backend from the configured URL.
         let backend =
             crate::backend::detect(&settings.database_url).map_err(BuildError::BackendDetect)?;
+
+        // Phase 2.1 — cross-check the registered default pool's
+        // backend against the URL-derived one. A mismatch (e.g. the
+        // URL says `sqlite://` but the caller passed in a `PgPool`)
+        // surfaces here with a clear name pair rather than as a
+        // confusing query-time error.
+        let default_pool = self
+            .databases
+            .get("default")
+            .expect("contains_key check above");
+        if default_pool.backend_name() != backend.name() {
+            return Err(BuildError::DatabaseBackendMismatch {
+                url_backend: backend.name(),
+                pool_backend: default_pool.backend_name(),
+            });
+        }
 
         // Phase 2.5 — validate every plugin's `database()` alias
         // against the registered pool set BEFORE phase 3 moves
@@ -509,6 +530,15 @@ pub enum BuildError {
         plugin: &'static str,
         alias: &'static str,
     },
+    /// The URL-derived backend (from `settings.database_url`) doesn't
+    /// match the runtime type of the default pool passed to
+    /// `.database("default", ...)`. Catches the case where the URL
+    /// says `postgres://` but a `SqlitePool` was registered, or vice
+    /// versa.
+    DatabaseBackendMismatch {
+        url_backend: &'static str,
+        pool_backend: &'static str,
+    },
 }
 
 impl std::fmt::Display for BuildError {
@@ -562,6 +592,16 @@ impl std::fmt::Display for BuildError {
                 f,
                 "umbra: plugin `{plugin}` requested database alias `{alias}`, which isn't \
                  registered; call .database(\"{alias}\", pool) on the builder before .build()"
+            ),
+            BuildError::DatabaseBackendMismatch {
+                url_backend,
+                pool_backend,
+            } => write!(
+                f,
+                "umbra: settings.database_url names backend `{url_backend}`, but the \
+                 default pool passed to .database(...) is a `{pool_backend}` pool. \
+                 Either change UMBRA_DATABASE_URL to match the pool, or open the pool \
+                 against a URL whose scheme matches umbra::db::connect."
             ),
         }
     }
