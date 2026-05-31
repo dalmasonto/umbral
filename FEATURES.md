@@ -26,6 +26,7 @@ A working list. Each item carries a status (open / shipped) plus rough scope, so
 - ✅ **umbra-static plugin.** Static file serving wrapping `tower_http::services::ServeDir`. `StaticPlugin::new("/static", "./assets")` mounts a directory at a URL prefix; ServeDir handles MIME sniffing, range requests, If-Modified-Since. Commit: `b97f4f1`.
 - ✅ **umbra-cache plugin.** Django's cache framework, the small slice that matters: `Cache` handle over a `CacheBackend` trait, in-memory + SQLite backends, generic `get<T>` / `set<T>` with serde encoding, TTL with lazy expiry-on-read plus opt-in `sweep()`. Commit: `43effa0`.
 - ✅ **umbra-security plugin.** CSRF protection (double-submit cookie) + default security headers (`X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`); opt-in HSTS. First consumer of `Plugin::wrap_router`. Commit: `03fb8dd`.
+- ✅ **umbra-testing crate.** Django `TestCase + Client` ergonomics: `TestClient` over an `axum::Router` with verb-shaped methods, a per-client cookie jar (Set-Cookie on response → Cookie on next request), default header pinning, JSON helpers. `TempPool` for tempfile-backed sqlite. `TestResponse` with `assert_status`, `assert_status_ok`, `assert_body_contains`, `assert_header`, `body_json::<T>` (body printed on parse error). Lives under `crates/` (not a plugin); consumers drop it in `[dev-dependencies]`. Commit: `12bb39c`.
 
 ## Open — large scope (multi-round work)
 
