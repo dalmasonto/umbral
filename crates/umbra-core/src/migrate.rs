@@ -39,6 +39,7 @@ use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
+use crate::backend::DatabaseBackend;
 use crate::orm::{FieldSpec, Model, SqlType};
 
 /// Per-process model registry. Published by `AppBuilder::build()`
@@ -533,9 +534,17 @@ pub async fn run() -> Result<u64, MigrateError> {
 /// standalone function. M8 lifts the limitation via a registry that
 /// remembers the toposorted order computed at `App::build()` time.
 pub async fn run_in(dir: &Path) -> Result<u64, MigrateError> {
-    let pool = crate::db::pool();
-    ensure_tracking_table(&pool).await?;
-    let applied = applied_names(&pool).await?;
+    match crate::db::pool_dispatched() {
+        crate::db::DbPool::Sqlite(p) => run_in_sqlite(dir, p).await,
+        crate::db::DbPool::Postgres(p) => run_in_postgres(dir, p).await,
+    }
+}
+
+/// SQLite path for [`run_in`]. Reads / writes the tracking table with
+/// `?` placeholders and `INSERT OR IGNORE`.
+async fn run_in_sqlite(dir: &Path, pool: &sqlx::SqlitePool) -> Result<u64, MigrateError> {
+    ensure_tracking_table_sqlite(pool).await?;
+    let applied = applied_names_sqlite(pool).await?;
 
     let mut applied_count: u64 = 0;
     for plugin in plugin_order() {
@@ -573,6 +582,49 @@ pub async fn run_in(dir: &Path) -> Result<u64, MigrateError> {
     Ok(applied_count)
 }
 
+/// Postgres path for [`run_in`]. The tracking-table DDL is dialect-
+/// neutral; placeholders are `$1..$N` and the conflict clause is
+/// `ON CONFLICT DO NOTHING` rather than SQLite's `INSERT OR IGNORE`.
+async fn run_in_postgres(dir: &Path, pool: &sqlx::PgPool) -> Result<u64, MigrateError> {
+    ensure_tracking_table_postgres(pool).await?;
+    let applied = applied_names_postgres(pool).await?;
+
+    let mut applied_count: u64 = 0;
+    for plugin in plugin_order() {
+        let plugin_dir = dir.join(&plugin);
+        let paths = list_migration_files(&plugin_dir)?;
+
+        for path in paths {
+            let file = read_migration_file(&path)?;
+            if applied.contains(&(file.plugin.clone(), file.id.clone())) {
+                continue;
+            }
+
+            let mut tx = pool.begin().await?;
+            for op in &file.operations {
+                for sql in render_operation(op) {
+                    sqlx::query(&sql).execute(&mut *tx).await?;
+                }
+            }
+            let snapshot_hash = file.snapshot_after.hash();
+            let applied_at = chrono::Utc::now().to_rfc3339();
+            sqlx::query(
+                "INSERT INTO umbra_migrations (plugin, name, applied_at, snapshot_hash) \
+                 VALUES ($1, $2, $3, $4)",
+            )
+            .bind(&file.plugin)
+            .bind(&file.id)
+            .bind(&applied_at)
+            .bind(&snapshot_hash)
+            .execute(&mut *tx)
+            .await?;
+            tx.commit().await?;
+            applied_count += 1;
+        }
+    }
+    Ok(applied_count)
+}
+
 /// Record a migration as applied in the `umbra_migrations` tracking
 /// table without running its operations. The "mark as applied" path
 /// `inspectdb --mark-applied` uses to register the introspected
@@ -583,19 +635,38 @@ pub async fn record_applied(
     name: &str,
     snapshot_hash: &str,
 ) -> Result<(), MigrateError> {
-    let pool = crate::db::pool();
-    ensure_tracking_table(&pool).await?;
     let applied_at = chrono::Utc::now().to_rfc3339();
-    sqlx::query(
-        "INSERT OR IGNORE INTO umbra_migrations (plugin, name, applied_at, snapshot_hash) \
-         VALUES (?, ?, ?, ?)",
-    )
-    .bind(plugin)
-    .bind(name)
-    .bind(&applied_at)
-    .bind(snapshot_hash)
-    .execute(&pool)
-    .await?;
+    match crate::db::pool_dispatched() {
+        crate::db::DbPool::Sqlite(pool) => {
+            ensure_tracking_table_sqlite(pool).await?;
+            sqlx::query(
+                "INSERT OR IGNORE INTO umbra_migrations \
+                 (plugin, name, applied_at, snapshot_hash) \
+                 VALUES (?, ?, ?, ?)",
+            )
+            .bind(plugin)
+            .bind(name)
+            .bind(&applied_at)
+            .bind(snapshot_hash)
+            .execute(pool)
+            .await?;
+        }
+        crate::db::DbPool::Postgres(pool) => {
+            ensure_tracking_table_postgres(pool).await?;
+            sqlx::query(
+                "INSERT INTO umbra_migrations \
+                 (plugin, name, applied_at, snapshot_hash) \
+                 VALUES ($1, $2, $3, $4) \
+                 ON CONFLICT (plugin, name) DO NOTHING",
+            )
+            .bind(plugin)
+            .bind(name)
+            .bind(&applied_at)
+            .bind(snapshot_hash)
+            .execute(pool)
+            .await?;
+        }
+    }
     Ok(())
 }
 
@@ -611,9 +682,16 @@ pub async fn show() -> Result<u64, MigrateError> {
 /// plugin that owns at least one migration file; empty plugins are
 /// skipped silently rather than emitting a bare header.
 pub async fn show_in(dir: &Path) -> Result<u64, MigrateError> {
-    let pool = crate::db::pool();
-    ensure_tracking_table(&pool).await?;
-    let applied = applied_names(&pool).await?;
+    let applied = match crate::db::pool_dispatched() {
+        crate::db::DbPool::Sqlite(pool) => {
+            ensure_tracking_table_sqlite(pool).await?;
+            applied_names_sqlite(pool).await?
+        }
+        crate::db::DbPool::Postgres(pool) => {
+            ensure_tracking_table_postgres(pool).await?;
+            applied_names_postgres(pool).await?
+        }
+    };
 
     let mut pending: u64 = 0;
     for plugin in plugin_order() {
@@ -839,11 +917,31 @@ fn suffix_for(ops: &[Operation]) -> String {
     }
 }
 
-/// Create the tracking table if it isn't there already. SQLite-shaped
-/// DDL kept inline because this table is a chicken-and-egg case: every
-/// other migration needs the tracking row written, so the table itself
-/// can't be a migration.
-async fn ensure_tracking_table(pool: &sqlx::SqlitePool) -> Result<(), MigrateError> {
+/// Create the tracking table if it isn't there already. The DDL is
+/// dialect-neutral (TEXT + composite PK is valid SQL on both shipped
+/// backends), but the executor type isn't — sqlx::query is generic
+/// over the database, so each backend gets its own thin wrapper.
+///
+/// Kept inline because this table is a chicken-and-egg case: every
+/// other migration needs the tracking row written, so the table
+/// itself can't be a migration.
+async fn ensure_tracking_table_sqlite(pool: &sqlx::SqlitePool) -> Result<(), MigrateError> {
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS umbra_migrations (
+            plugin TEXT NOT NULL,
+            name TEXT NOT NULL,
+            applied_at TEXT NOT NULL,
+            snapshot_hash TEXT NOT NULL,
+            PRIMARY KEY (plugin, name)
+        )",
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Postgres counterpart to [`ensure_tracking_table_sqlite`].
+async fn ensure_tracking_table_postgres(pool: &sqlx::PgPool) -> Result<(), MigrateError> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS umbra_migrations (
             plugin TEXT NOT NULL,
@@ -859,8 +957,8 @@ async fn ensure_tracking_table(pool: &sqlx::SqlitePool) -> Result<(), MigrateErr
 }
 
 /// Pull the set of `(plugin, name)` tuples already recorded in the
-/// tracking table.
-async fn applied_names(
+/// tracking table (SQLite).
+async fn applied_names_sqlite(
     pool: &sqlx::SqlitePool,
 ) -> Result<std::collections::HashSet<(String, String)>, MigrateError> {
     let rows: Vec<(String, String)> = sqlx::query_as("SELECT plugin, name FROM umbra_migrations")
@@ -869,11 +967,24 @@ async fn applied_names(
     Ok(rows.into_iter().collect())
 }
 
-/// Render one operation to a list of SQL statements via sea-query +
-/// the active backend's `map_type` mapping. Most ops produce one
-/// statement; `AlterColumn` produces the multi-statement SQLite
+/// Postgres counterpart to [`applied_names_sqlite`].
+async fn applied_names_postgres(
+    pool: &sqlx::PgPool,
+) -> Result<std::collections::HashSet<(String, String)>, MigrateError> {
+    let rows: Vec<(String, String)> = sqlx::query_as("SELECT plugin, name FROM umbra_migrations")
+        .fetch_all(pool)
+        .await?;
+    Ok(rows.into_iter().collect())
+}
+
+/// Render one operation to a list of SQL statements via sea-query.
+///
+/// Dispatches on the ambient backend's [`crate::backend::active`]
+/// name; SQLite and Postgres are the two shipped dialects. Most ops
+/// produce one statement; `AlterColumn` produces either the SQLite
 /// table-recreation dance (`CREATE _umbra_new` + `INSERT ... SELECT`
-/// + `DROP` + `RENAME`).
+/// + `DROP` + `RENAME`) or a single native `ALTER TABLE ... ALTER
+/// COLUMN ... SET/DROP NOT NULL` on Postgres.
 ///
 /// The apply loop in `run_in` executes each statement in order inside
 /// the same transaction.
@@ -885,6 +996,31 @@ async fn applied_names(
 /// migration that sets the flag is taken to mean "the user is taking
 /// responsibility".
 fn render_operation(op: &Operation) -> Vec<String> {
+    render_operation_for(op, crate::backend::active().name())
+}
+
+/// Render one operation against an explicit backend name. The
+/// dispatching seam — the public [`render_operation`] is just
+/// `render_operation_for(op, backend::active().name())`. Splitting
+/// the two lets tests render Postgres DDL without installing the
+/// process-wide ambient backend (the `OnceLock` can only be set once,
+/// so `App::build` and tests would otherwise collide).
+///
+/// Panics on unknown backend names; only `"sqlite"` and `"postgres"`
+/// are shipped in Phase 2.
+pub fn render_operation_for(op: &Operation, backend_name: &str) -> Vec<String> {
+    match backend_name {
+        "sqlite" => render_operation_sqlite(op),
+        "postgres" => render_operation_postgres(op),
+        other => panic!(
+            "umbra::migrate: no DDL renderer for backend `{other}`; \
+             Phase 2 ships sqlite and postgres only"
+        ),
+    }
+}
+
+/// SQLite-dialect rendering for one operation.
+fn render_operation_sqlite(op: &Operation) -> Vec<String> {
     use sea_query::{Alias, SqliteQueryBuilder, Table};
 
     match op {
@@ -892,7 +1028,7 @@ fn render_operation(op: &Operation) -> Vec<String> {
             let mut stmt = Table::create();
             stmt.table(Alias::new(table));
             for col in columns {
-                let mut def = build_column_def(col);
+                let mut def = build_column_def_sqlite(col);
                 stmt.col(&mut def);
             }
             vec![stmt.build(SqliteQueryBuilder)]
@@ -905,7 +1041,7 @@ fn render_operation(op: &Operation) -> Vec<String> {
         Operation::AddColumn { table, column } => {
             let mut stmt = Table::alter();
             stmt.table(Alias::new(table));
-            let mut def = build_column_def(column);
+            let mut def = build_column_def_sqlite(column);
             stmt.add_column(&mut def);
             vec![stmt.build(SqliteQueryBuilder)]
         }
@@ -919,7 +1055,53 @@ fn render_operation(op: &Operation) -> Vec<String> {
             table,
             column: _,
             new_columns,
-        } => render_alter_column_dance(table, new_columns),
+        } => render_alter_column_dance_sqlite(table, new_columns),
+    }
+}
+
+/// Postgres-dialect rendering for one operation.
+///
+/// Postgres has native `ALTER COLUMN` so `AlterColumn` doesn't need
+/// the SQLite table-recreation dance; it lowers to a single statement.
+/// Integer primary keys use sea-query's `auto_increment()` flag, which
+/// the Postgres query builder lowers to `BIGSERIAL` / `SERIAL` rather
+/// than SQLite's `INTEGER PRIMARY KEY AUTOINCREMENT` quirk.
+fn render_operation_postgres(op: &Operation) -> Vec<String> {
+    use sea_query::{Alias, PostgresQueryBuilder, Table};
+
+    match op {
+        Operation::CreateTable { table, columns } => {
+            let mut stmt = Table::create();
+            stmt.table(Alias::new(table));
+            for col in columns {
+                let mut def = build_column_def_postgres(col);
+                stmt.col(&mut def);
+            }
+            vec![stmt.build(PostgresQueryBuilder)]
+        }
+        Operation::DropTable { table } => vec![
+            Table::drop()
+                .table(Alias::new(table))
+                .build(PostgresQueryBuilder),
+        ],
+        Operation::AddColumn { table, column } => {
+            let mut stmt = Table::alter();
+            stmt.table(Alias::new(table));
+            let mut def = build_column_def_postgres(column);
+            stmt.add_column(&mut def);
+            vec![stmt.build(PostgresQueryBuilder)]
+        }
+        Operation::DropColumn { table, column } => vec![
+            Table::alter()
+                .table(Alias::new(table))
+                .drop_column(Alias::new(column))
+                .build(PostgresQueryBuilder),
+        ],
+        Operation::AlterColumn {
+            table,
+            column,
+            new_columns,
+        } => render_alter_column_postgres(table, column, new_columns),
     }
 }
 
@@ -940,7 +1122,7 @@ fn render_operation(op: &Operation) -> Vec<String> {
 /// Nullable `TRUE -> FALSE` fails at step 2 if any row holds NULL,
 /// which is the correct data-integrity behaviour. Nullable
 /// `FALSE -> TRUE` always succeeds.
-fn render_alter_column_dance(table: &str, new_columns: &[Column]) -> Vec<String> {
+fn render_alter_column_dance_sqlite(table: &str, new_columns: &[Column]) -> Vec<String> {
     use sea_query::{Alias, SqliteQueryBuilder, Table};
 
     let tmp = format!("_umbra_new_{table}");
@@ -949,7 +1131,7 @@ fn render_alter_column_dance(table: &str, new_columns: &[Column]) -> Vec<String>
     let mut create = Table::create();
     create.table(Alias::new(&tmp));
     for col in new_columns {
-        let mut def = build_column_def(col);
+        let mut def = build_column_def_sqlite(col);
         create.col(&mut def);
     }
 
@@ -983,39 +1165,76 @@ fn render_alter_column_dance(table: &str, new_columns: &[Column]) -> Vec<String>
     ]
 }
 
-/// Build a `sea_query::ColumnDef` for one column, applying every
-/// per-backend quirk in one place so CreateTable / AddColumn / the
-/// AlterColumn dance all stay consistent.
+/// Native Postgres `AlterColumn`. Postgres supports
+/// `ALTER TABLE x ALTER COLUMN y SET NOT NULL` and
+/// `ALTER TABLE x ALTER COLUMN y DROP NOT NULL` in place, so the
+/// SQLite table-recreation dance isn't needed. Lowers to a single
+/// statement.
 ///
-/// SQLite has one important quirk: its ROWID-alias mechanic (which
-/// gives a primary-key column auto-increment behaviour out of the
-/// box) only fires when the column's type is the exact text
-/// `INTEGER` — case-insensitive but no other variant. `BIGINT
-/// PRIMARY KEY`, even on a column the M3 derive declared as `i64`,
-/// does NOT auto-increment, so an `INSERT INTO t (other_col) VALUES
-/// (...)` without an explicit PK value fails the NOT NULL
-/// constraint. Every umbra user with an `id: i64` model would hit
-/// this without the override.
+/// `SET NOT NULL` fails at the server if any row holds NULL on `y`,
+/// matching SQLite's INSERT-time failure on the dance — the
+/// data-integrity contract is identical between backends.
 ///
-/// The fix: for SQLite, when a column is a primary key with an
-/// integer SqlType (Integer or BigInt), force the rendered type to
-/// `Integer` and attach `auto_increment()` so the generated DDL
-/// reads `"id" integer NOT NULL PRIMARY KEY AUTOINCREMENT`. SQLite
-/// stores both `i32` and `i64` as INTEGER affinity anyway, so the
-/// override is a no-op semantically — the rows that round-trip
-/// through `sqlx::FromRow` deserialize back into `i64` cleanly.
-fn build_column_def(col: &Column) -> sea_query::ColumnDef {
+/// `column` is the field name that triggered the flip; `new_columns`
+/// is the post-change schema (carried for parity with the SQLite
+/// dance, though Postgres only needs the one column).
+fn render_alter_column_postgres(table: &str, column: &str, new_columns: &[Column]) -> Vec<String> {
+    let new = new_columns.iter().find(|c| c.name == column).expect(
+        "umbra::migrate: AlterColumn op references a column missing from new_columns; \
+             this is a bug in `diff_columns`",
+    );
+
+    // Postgres treats `SET NOT NULL` and `DROP NOT NULL` as idempotent
+    // against a column whose flag already matches — flipping to the new
+    // state is always safe to issue.
+    let clause = if new.nullable {
+        "DROP NOT NULL"
+    } else {
+        "SET NOT NULL"
+    };
+
+    let q_table = quote_pg_ident(table);
+    let q_column = quote_pg_ident(column);
+
+    vec![format!(
+        "ALTER TABLE {q_table} ALTER COLUMN {q_column} {clause}"
+    )]
+}
+
+/// Quote a SQL identifier the Postgres way: wrap in double quotes,
+/// escape inner double quotes by doubling them. Matches sea-query's
+/// `PostgresQueryBuilder` output for identifiers so the rendered
+/// statements look uniform.
+fn quote_pg_ident(ident: &str) -> String {
+    format!("\"{}\"", ident.replace('"', "\"\""))
+}
+
+/// Build a SQLite `ColumnDef`. SQLite has one important quirk: its
+/// ROWID-alias mechanic (which gives a primary-key column auto-
+/// increment behaviour out of the box) only fires when the column's
+/// type is the exact text `INTEGER` — case-insensitive but no other
+/// variant. `BIGINT PRIMARY KEY`, even on a column the M3 derive
+/// declared as `i64`, does NOT auto-increment, so an `INSERT INTO t
+/// (other_col) VALUES (...)` without an explicit PK value fails the
+/// NOT NULL constraint. Every umbra user with an `id: i64` model
+/// would hit this without the override.
+///
+/// The fix: when a column is a primary key with an integer SqlType
+/// (Integer or BigInt), force the rendered type to `Integer` and
+/// attach `auto_increment()` so the generated DDL reads `"id" integer
+/// NOT NULL PRIMARY KEY AUTOINCREMENT`. SQLite stores both `i32` and
+/// `i64` as INTEGER affinity anyway, so the override is a no-op
+/// semantically — the rows that round-trip through `sqlx::FromRow`
+/// deserialize back into `i64` cleanly.
+fn build_column_def_sqlite(col: &Column) -> sea_query::ColumnDef {
     use sea_query::{Alias, ColumnDef, ColumnType};
 
-    let backend = crate::backend::active();
-    let is_sqlite_int_pk = backend.name() == "sqlite"
-        && col.primary_key
-        && matches!(col.ty, SqlType::Integer | SqlType::BigInt);
+    let is_int_pk = col.primary_key && matches!(col.ty, SqlType::Integer | SqlType::BigInt);
 
-    let column_type = if is_sqlite_int_pk {
+    let column_type = if is_int_pk {
         ColumnType::Integer
     } else {
-        backend.map_type(col.ty)
+        crate::backend::SqliteBackend.map_type(col.ty)
     };
 
     let mut def = ColumnDef::new_with_type(Alias::new(&col.name), column_type);
@@ -1024,7 +1243,33 @@ fn build_column_def(col: &Column) -> sea_query::ColumnDef {
     }
     if col.primary_key {
         def.primary_key();
-        if is_sqlite_int_pk {
+        if is_int_pk {
+            def.auto_increment();
+        }
+    }
+    def
+}
+
+/// Build a Postgres `ColumnDef`. Integer primary keys use the
+/// standard `auto_increment()` flag — sea-query's `PostgresQueryBuilder`
+/// lowers that to `BIGSERIAL` for `BigInt` and `SERIAL` for `Integer`.
+/// No SQLite-style INTEGER-type override needed; Postgres has proper
+/// `BIGSERIAL` / identity columns and respects the declared width.
+fn build_column_def_postgres(col: &Column) -> sea_query::ColumnDef {
+    use sea_query::{Alias, ColumnDef};
+
+    let column_type = crate::backend::PostgresBackend.map_type(col.ty);
+
+    let mut def = ColumnDef::new_with_type(Alias::new(&col.name), column_type);
+    if !col.nullable {
+        def.not_null();
+    }
+    if col.primary_key {
+        def.primary_key();
+        if matches!(
+            col.ty,
+            SqlType::Integer | SqlType::BigInt | SqlType::SmallInt
+        ) {
             def.auto_increment();
         }
     }
