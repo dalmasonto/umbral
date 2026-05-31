@@ -204,6 +204,17 @@ pub enum SqlType {
     /// `MACADDR` — Postgres MAC address column. Maps to
     /// `mac_address::MacAddress` in Rust. **Postgres-only.**
     MacAddr,
+    /// `TSVECTOR` — Postgres full-text search lexeme vector. Maps to
+    /// [`crate::orm::TsVector`] in Rust (a thin newtype around
+    /// `String` with sqlx Type/Encode/Decode impls). **Postgres-only.**
+    ///
+    /// The column is typically populated by a Postgres trigger or
+    /// `GENERATED ALWAYS AS (to_tsvector(...)) STORED` clause; umbra's
+    /// migration engine emits the bare `tsvector` type, leaving the
+    /// population mechanism to the user. Queries against a
+    /// `FullTextCol` use the `@@` match operator with `to_tsquery` /
+    /// `websearch_to_tsquery`.
+    FullText,
 }
 
 /// Element types valid inside [`SqlType::Array`].

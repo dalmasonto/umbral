@@ -477,6 +477,7 @@ fn map_postgres_type(raw: &str) -> Option<SqlType> {
         "inet" => Some(SqlType::Inet),
         "cidr" => Some(SqlType::Cidr),
         "macaddr" => Some(SqlType::MacAddr),
+        "tsvector" => Some(SqlType::FullText),
         _ => None,
     }
 }
@@ -717,6 +718,7 @@ fn render_field_type(ty: SqlType, nullable: bool) -> String {
         SqlType::Inet => "ipnetwork::IpNetwork".to_string(),
         SqlType::Cidr => "ipnetwork::IpNetwork".to_string(),
         SqlType::MacAddr => "mac_address::MacAddress".to_string(),
+        SqlType::FullText => "umbra::orm::TsVector".to_string(),
     };
     let base = base.as_str();
     if nullable {

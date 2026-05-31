@@ -2644,10 +2644,10 @@ space-separated-tokens@^2.0.0:
   resolved "https://registry.yarnpkg.com/space-separated-tokens/-/space-separated-tokens-2.0.2.tgz#1ecd9d2350a3844572c3f4a312bceb018348859f"
   integrity sha512-PEGlAwrG8yXGXRjW32fGbg66JAlOAwbObuqVoJpv/mRgoWDQfgH1wDPvtzWyUSNAXBGSk8h755YDbbcEy3SH2Q==
 
-specra@^0.2.9:
-  version "0.2.56"
-  resolved "https://registry.yarnpkg.com/specra/-/specra-0.2.56.tgz#a11b96966ef720cc7eb69ee38da6632dee1253a2"
-  integrity sha512-4d1l9IGsETR15TVFsfl19QDVLbhvTpFGHJrYTCNYvgTcR6/catvui6Ft/iIhwEvaKEHOjBkczqW6btD/Sn1lsw==
+specra@0.2.57:
+  version "0.2.57"
+  resolved "https://registry.yarnpkg.com/specra/-/specra-0.2.57.tgz#058fcc7d38d0740ae6fa8dd218dbf7a5eb6b9a8f"
+  integrity sha512-Ja6UVKq6Ofjgiirf+GSFsCjg3GQW+cRKDUgVwoJnlZVJb5mWd1Z2jaidFW35pq2K8iwxYWJow/d+yKCS3m0eFA==
   dependencies:
     bits-ui "^1.0.0"
     class-variance-authority "^0.7.1"

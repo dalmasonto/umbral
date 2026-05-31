@@ -396,7 +396,7 @@ fn column_to_json(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<Value, 
             // against SQLite, so the column-to-JSON path never reaches
             // this arm in practice.
             SqlType::Array(_) => panic_array_unsupported(&col.name),
-            SqlType::Inet | SqlType::Cidr | SqlType::MacAddr => {
+            SqlType::Inet | SqlType::Cidr | SqlType::MacAddr | SqlType::FullText => {
                 panic_pg_only_unsupported(&col.name)
             }
         });
@@ -414,7 +414,9 @@ fn column_to_json(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<Value, 
         SqlType::Uuid => Value::from(row.try_get::<Uuid, _>(name)?.to_string()),
         SqlType::Json => row.try_get::<Value, _>(name)?,
         SqlType::Array(_) => panic_array_unsupported(&col.name),
-        SqlType::Inet | SqlType::Cidr | SqlType::MacAddr => panic_pg_only_unsupported(&col.name),
+        SqlType::Inet | SqlType::Cidr | SqlType::MacAddr | SqlType::FullText => {
+            panic_pg_only_unsupported(&col.name)
+        }
     })
 }
 
@@ -636,7 +638,9 @@ fn bind_string<'q>(q: SqlxQuery<'q>, col: &Column, s: &str) -> Result<SqlxQuery<
                 .map_err(|e| ApiError::BadInput(format!("{}: {e}", col.name)))?,
         ),
         SqlType::Array(_) => panic_array_unsupported(&col.name),
-        SqlType::Inet | SqlType::Cidr | SqlType::MacAddr => panic_pg_only_unsupported(&col.name),
+        SqlType::Inet | SqlType::Cidr | SqlType::MacAddr | SqlType::FullText => {
+            panic_pg_only_unsupported(&col.name)
+        }
     })
 }
 
@@ -654,6 +658,8 @@ fn bind_null<'q>(q: SqlxQuery<'q>, col: &Column) -> SqlxQuery<'q> {
         SqlType::Uuid => q.bind(None::<Uuid>),
         SqlType::Json => q.bind(None::<Value>),
         SqlType::Array(_) => panic_array_unsupported(&col.name),
-        SqlType::Inet | SqlType::Cidr | SqlType::MacAddr => panic_pg_only_unsupported(&col.name),
+        SqlType::Inet | SqlType::Cidr | SqlType::MacAddr | SqlType::FullText => {
+            panic_pg_only_unsupported(&col.name)
+        }
     }
 }

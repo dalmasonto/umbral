@@ -1907,6 +1907,109 @@ impl<T> MacAddrCol<T> {
     }
 }
 
+// =========================================================================
+// Full-text search columns — Phase 4.3, Postgres-only.
+//
+// `FullTextCol<T>` / `NullableFullTextCol<T>` wrap a Postgres
+// `tsvector` column. v1 surface: `matches(query)` for plain
+// `to_tsquery` matching, `matches_websearch(query)` for the more
+// permissive `websearch_to_tsquery` form (handles user-typed search
+// strings with quoted phrases, OR, etc.). Storage is a text vector;
+// the column is typically populated via Postgres trigger or
+// GENERATED ALWAYS clause — umbra's migration engine emits the bare
+// `tsvector` declaration and leaves the population to the user.
+// =========================================================================
+
+/// A `umbra::orm::TsVector`-typed column (Postgres tsvector).
+pub struct FullTextCol<T> {
+    pub(crate) name: &'static str,
+    _phantom: PhantomData<T>,
+}
+
+impl<T> FullTextCol<T> {
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            _phantom: PhantomData,
+        }
+    }
+
+    /// SQL `col @@ to_tsquery($1)`. The query string follows
+    /// Postgres's `to_tsquery` syntax: `&` AND, `|` OR, `!` NOT,
+    /// `:*` prefix match. Strict — malformed queries error at the
+    /// server.
+    pub fn matches(&self, query: &str) -> Predicate<T> {
+        let col = self.name.replace('"', "\"\"");
+        let sql = format!("\"{col}\" @@ to_tsquery($1)");
+        let values = vec![sea_query::Value::String(Some(Box::new(query.to_string())))];
+        Predicate::new(Expr::cust_with_values(&sql, values))
+    }
+
+    /// SQL `col @@ websearch_to_tsquery($1)`. The query string follows
+    /// web-search conventions: space-separated terms (AND), `OR`,
+    /// `-term` for negation, `"quoted phrase"` for adjacency. More
+    /// forgiving than [`Self::matches`].
+    pub fn matches_websearch(&self, query: &str) -> Predicate<T> {
+        let col = self.name.replace('"', "\"\"");
+        let sql = format!("\"{col}\" @@ websearch_to_tsquery($1)");
+        let values = vec![sea_query::Value::String(Some(Box::new(query.to_string())))];
+        Predicate::new(Expr::cust_with_values(&sql, values))
+    }
+
+    pub fn asc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, false)
+    }
+
+    pub fn desc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, true)
+    }
+}
+
+/// A nullable tsvector column.
+pub struct NullableFullTextCol<T> {
+    pub(crate) name: &'static str,
+    _phantom: PhantomData<T>,
+}
+
+impl<T> NullableFullTextCol<T> {
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            _phantom: PhantomData,
+        }
+    }
+
+    pub fn matches(&self, query: &str) -> Predicate<T> {
+        let col = self.name.replace('"', "\"\"");
+        let sql = format!("\"{col}\" @@ to_tsquery($1)");
+        let values = vec![sea_query::Value::String(Some(Box::new(query.to_string())))];
+        Predicate::new(Expr::cust_with_values(&sql, values))
+    }
+
+    pub fn matches_websearch(&self, query: &str) -> Predicate<T> {
+        let col = self.name.replace('"', "\"\"");
+        let sql = format!("\"{col}\" @@ websearch_to_tsquery($1)");
+        let values = vec![sea_query::Value::String(Some(Box::new(query.to_string())))];
+        Predicate::new(Expr::cust_with_values(&sql, values))
+    }
+
+    pub fn is_null(&self) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).is_null())
+    }
+
+    pub fn is_not_null(&self) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).is_not_null())
+    }
+
+    pub fn asc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, false)
+    }
+
+    pub fn desc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, true)
+    }
+}
+
 /// A nullable MACADDR column.
 pub struct NullableMacAddrCol<T> {
     pub(crate) name: &'static str,

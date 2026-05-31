@@ -78,7 +78,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Auto-generated JSON CRUD at /api/article/. The RestPlugin
         // walks the same model registry the migration engine uses,
         // so the surface stays in lockstep with the schema for free.
-        .plugin(umbra_rest::RestPlugin::default())
+        // .plugin(umbra_rest::RestPlugin::default())
+        .plugin(umbra_openapi::OpenApiPlugin::default())
         .router(
             Router::new()
                 .route("/", get(home))
@@ -104,10 +105,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// Home page. Counts the rows so the template has something to show
 /// without re-listing the full set.
 async fn home() -> Result<Html<String>, (StatusCode, String)> {
-    let count = Article::objects()
-        .count()
-        .await
-        .map_err(internal_error)?;
+    let count = Article::objects().count().await.map_err(internal_error)?;
     let body = umbra::templates::render("home.html", &context!(article_count => count))
         .map_err(internal_error)?;
     Ok(Html(body))

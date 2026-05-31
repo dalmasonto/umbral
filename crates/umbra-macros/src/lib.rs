@@ -398,6 +398,10 @@ enum FieldKind {
     /// `mac_address::MacAddress` — Postgres MACADDR column.
     MacAddr,
     NullableMacAddr,
+    /// `umbra::orm::TsVector` — Postgres full-text-search tsvector
+    /// column (Phase 4.3).
+    FullText,
+    NullableFullText,
     /// Catch-all: not a recognised M3 catalogue type, or one of the
     /// explicitly-rejected wide / unsigned ints. Carries the exact
     /// diagnostic to emit at the field's span.
@@ -471,6 +475,9 @@ impl FieldKind {
             FieldKind::MacAddr | FieldKind::NullableMacAddr => {
                 quote!(::umbra::orm::SqlType::MacAddr)
             }
+            FieldKind::FullText | FieldKind::NullableFullText => {
+                quote!(::umbra::orm::SqlType::FullText)
+            }
             FieldKind::Unsupported(_) => return None,
         };
         let nullable = if self.is_nullable() {
@@ -500,6 +507,7 @@ impl FieldKind {
                 | FieldKind::NullableInet
                 | FieldKind::NullableCidr
                 | FieldKind::NullableMacAddr
+                | FieldKind::NullableFullText
         )
     }
 
@@ -594,6 +602,12 @@ fn classify_field_type(ty: &Type) -> FieldKind {
     if is_mac_address(ty) {
         return FieldKind::MacAddr;
     }
+    // Phase 4.3 — `umbra::orm::TsVector`. The qualifier is `orm`
+    // (matching the umbra facade re-export). Bare `TsVector` won't
+    // pick up, same as the other qualified-leaf checks.
+    if is_tsvector(ty) {
+        return FieldKind::FullText;
+    }
     if is_wide_or_unsigned_int(ty) {
         return FieldKind::Unsupported(UnsupportedReason::WideOrUnsignedInt);
     }
@@ -643,6 +657,9 @@ fn classify_field_type(ty: &Type) -> FieldKind {
         }
         if is_mac_address(inner) {
             return FieldKind::NullableMacAddr;
+        }
+        if is_tsvector(inner) {
+            return FieldKind::NullableFullText;
         }
         if is_wide_or_unsigned_int(inner) {
             return FieldKind::Unsupported(UnsupportedReason::NullableOfWide);
@@ -736,6 +753,14 @@ fn is_ipnetwork(ty: &Type) -> bool {
 /// catalogue type.
 fn is_mac_address(ty: &Type) -> bool {
     is_qualified_leaf(ty, "mac_address", "MacAddress")
+}
+
+/// True when `ty` is `umbra::orm::TsVector` (or `orm::TsVector` with
+/// the facade re-export). Phase 4.3 FullText catalogue type. The
+/// qualifier check accepts either `orm` (when user writes
+/// `umbra::orm::TsVector`) — i.e. the leaf parent matches `orm`.
+fn is_tsvector(ty: &Type) -> bool {
+    is_qualified_leaf(ty, "orm", "TsVector")
 }
 
 /// True when `ty` is a path ending in `qualifier::leaf` with no
@@ -923,6 +948,8 @@ fn column_const_for(
         FieldKind::NullableCidr => format_ident!("NullableCidrCol"),
         FieldKind::MacAddr => format_ident!("MacAddrCol"),
         FieldKind::NullableMacAddr => format_ident!("NullableMacAddrCol"),
+        FieldKind::FullText => format_ident!("FullTextCol"),
+        FieldKind::NullableFullText => format_ident!("NullableFullTextCol"),
         FieldKind::Unsupported(_) => return TokenStream2::new(),
     };
     quote_spanned! { span =>

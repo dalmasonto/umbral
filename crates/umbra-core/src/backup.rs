@@ -354,6 +354,7 @@ fn column_to_json(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<Value, 
             // bypassed.
             SqlType::Array(_) => unreachable_array(&col.name),
             SqlType::Inet | SqlType::Cidr | SqlType::MacAddr => unreachable_network(&col.name),
+            SqlType::FullText => unreachable_pg_only(&col.name, "FullText (tsvector)"),
         });
     }
     // Non-nullable: same dispatch without the Option layer.
@@ -371,6 +372,7 @@ fn column_to_json(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<Value, 
         SqlType::Json => row.try_get::<Value, _>(name)?,
         SqlType::Array(_) => unreachable_array(&col.name),
         SqlType::Inet | SqlType::Cidr | SqlType::MacAddr => unreachable_network(&col.name),
+        SqlType::FullText => unreachable_pg_only(&col.name, "FullText (tsvector)"),
     })
 }
 
@@ -392,6 +394,14 @@ fn unreachable_network(column: &str) -> ! {
         "umbra backup: column `{column}` is a Postgres-only network \
          address type (Inet/Cidr/MacAddr); the field.backend system \
          check should have failed boot."
+    )
+}
+
+/// Phase 4.3 generic sentinel for Postgres-only types (FullText today).
+fn unreachable_pg_only(column: &str, type_name: &str) -> ! {
+    panic!(
+        "umbra backup: column `{column}` is a Postgres-only {type_name} \
+         type; the field.backend system check should have failed boot."
     )
 }
 
@@ -418,6 +428,7 @@ fn bind_value<'q>(
             SqlType::Json => q.bind(None::<Value>),
             SqlType::Array(_) => unreachable_array(&col.name),
             SqlType::Inet | SqlType::Cidr | SqlType::MacAddr => unreachable_network(&col.name),
+            SqlType::FullText => unreachable_pg_only(&col.name, "FullText (tsvector)"),
         });
     }
     let mismatch = |got: &str| BackupError::TypeMismatch {
@@ -475,6 +486,7 @@ fn bind_value<'q>(
         SqlType::Json => q.bind(val),
         SqlType::Array(_) => unreachable_array(&col.name),
         SqlType::Inet | SqlType::Cidr | SqlType::MacAddr => unreachable_network(&col.name),
+        SqlType::FullText => unreachable_pg_only(&col.name, "FullText (tsvector)"),
     })
 }
 

@@ -227,7 +227,8 @@ pub mod orm {
     //! full query API by implementing one trait, by hand or via derive.
 
     pub use umbra_core::orm::{
-        ArrayElement, FieldSpec, Manager, Model, Post, PrimaryKey, QuerySet, SqlType, column,
+        ArrayElement, FieldSpec, Manager, Model, Post, PrimaryKey, QuerySet, SqlType, TsVector,
+        column,
     };
 
     /// The `#[derive(Model)]` proc macro. Shares the `Model` name with the

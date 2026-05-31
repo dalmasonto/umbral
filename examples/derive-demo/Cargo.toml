@@ -11,6 +11,7 @@ umbra = { path = "../../crates/umbra" }
 # Same Article data, two surfaces (HTML + JSON), zero per-model
 # serializer code.
 umbra-rest = { path = "../../plugins/umbra-rest" }
+umbra-openapi = { path = "../../plugins/umbra-openapi" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }

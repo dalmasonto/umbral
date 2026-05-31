@@ -270,6 +270,9 @@ fn openapi_type(ty: SqlType) -> (&'static str, Option<&'static str>) {
         // shape since umbra doesn't distinguish v4 vs v6 at the type
         // level). MACADDR likewise renders as a string.
         SqlType::Inet | SqlType::Cidr | SqlType::MacAddr => ("string", None),
+        // Phase 4.3 tsvector — opaque text lexeme vector. Render as
+        // plain string in the OpenAPI schema.
+        SqlType::FullText => ("string", None),
     }
 }
 

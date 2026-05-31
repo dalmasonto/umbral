@@ -310,7 +310,7 @@ fn is_postgres_only(ty: crate::orm::SqlType) -> bool {
     use crate::orm::SqlType;
     matches!(
         ty,
-        SqlType::Array(_) | SqlType::Inet | SqlType::Cidr | SqlType::MacAddr
+        SqlType::Array(_) | SqlType::Inet | SqlType::Cidr | SqlType::MacAddr | SqlType::FullText
     )
 }
 

@@ -559,7 +559,7 @@ fn column_to_string(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<Strin
                 .try_get::<Option<Value>, _>(name)?
                 .map_or(String::new(), |v| v.to_string()),
             SqlType::Array(_) => panic_array_unsupported(&col.name),
-            SqlType::Inet | SqlType::Cidr | SqlType::MacAddr => {
+            SqlType::Inet | SqlType::Cidr | SqlType::MacAddr | SqlType::FullText => {
                 panic_pg_only_unsupported(&col.name)
             }
         });
@@ -582,7 +582,9 @@ fn column_to_string(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<Strin
         SqlType::Uuid => row.try_get::<Uuid, _>(name)?.to_string(),
         SqlType::Json => row.try_get::<Value, _>(name)?.to_string(),
         SqlType::Array(_) => panic_array_unsupported(&col.name),
-        SqlType::Inet | SqlType::Cidr | SqlType::MacAddr => panic_pg_only_unsupported(&col.name),
+        SqlType::Inet | SqlType::Cidr | SqlType::MacAddr | SqlType::FullText => {
+            panic_pg_only_unsupported(&col.name)
+        }
     })
 }
 
@@ -739,7 +741,9 @@ fn bind_form_value<'q>(
                 .map_err(|e| AdminError::BadInput(format!("{}: {e}", col.name)))?,
         ),
         SqlType::Array(_) => panic_array_unsupported(&col.name),
-        SqlType::Inet | SqlType::Cidr | SqlType::MacAddr => panic_pg_only_unsupported(&col.name),
+        SqlType::Inet | SqlType::Cidr | SqlType::MacAddr | SqlType::FullText => {
+            panic_pg_only_unsupported(&col.name)
+        }
     })
 }
 
@@ -760,7 +764,9 @@ fn bind_null<'q>(
         SqlType::Uuid => q.bind(None::<Uuid>),
         SqlType::Json => q.bind(None::<Value>),
         SqlType::Array(_) => panic_array_unsupported(&col.name),
-        SqlType::Inet | SqlType::Cidr | SqlType::MacAddr => panic_pg_only_unsupported(&col.name),
+        SqlType::Inet | SqlType::Cidr | SqlType::MacAddr | SqlType::FullText => {
+            panic_pg_only_unsupported(&col.name)
+        }
     }
 }
 
@@ -821,6 +827,9 @@ fn input_kind(ty: SqlType) -> &'static str {
         // Phase 4.4 network types — same SQLite-gated story. Widget
         // is "text" since the values render as strings.
         SqlType::Inet | SqlType::Cidr | SqlType::MacAddr => "text",
+        // Phase 4.3 full-text — textarea since tsvector content is
+        // typically multi-line lexeme output.
+        SqlType::FullText => "textarea",
     }
 }
 

@@ -163,6 +163,11 @@ impl DatabaseBackend for PostgresBackend {
             SqlType::Inet => ColumnType::Inet,
             SqlType::Cidr => ColumnType::Cidr,
             SqlType::MacAddr => ColumnType::MacAddr,
+            // sea-query has no built-in `tsvector` variant — go through
+            // ColumnType::Custom to render it. Populate via Postgres
+            // trigger or GENERATED clause; umbra's migration engine
+            // emits the bare column declaration.
+            SqlType::FullText => ColumnType::custom("tsvector"),
         }
     }
 }
@@ -237,6 +242,10 @@ impl DatabaseBackend for SqliteBackend {
             SqlType::Inet | SqlType::Cidr | SqlType::MacAddr => panic!(
                 "umbra::backend::SqliteBackend::map_type: SqlType::Inet/Cidr/MacAddr are \
                  Postgres-only. The field.backend system check should have failed boot."
+            ),
+            SqlType::FullText => panic!(
+                "umbra::backend::SqliteBackend::map_type: SqlType::FullText is Postgres-only. \
+                 The field.backend system check should have failed boot."
             ),
         }
     }
