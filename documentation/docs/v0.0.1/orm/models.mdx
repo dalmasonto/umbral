@@ -50,9 +50,37 @@ pub struct Event {
 }
 ```
 
-<Callout type="info">
-Equality, containment (`@>`), and path-access (`->`, `->>`) operators are not yet available. Cross-backend semantics (Postgres deep-equality vs SQLite byte-equality on TEXT) need to be pinned first. `is_null()` / `is_not_null()` and `asc()` / `desc()` ordering work today.
-</Callout>
+### JSON operators
+
+Two Postgres-native predicates let you query inside a JSON column directly from a filter chain.
+
+- `path_text(keys: &[&str])` — extracts a nested value as text using chained `->` steps plus a final `->>`. Returns a builder; finalize with `.eq(s)`, `.ne(s)`, `.is_null()`, or `.is_not_null()`.
+- `has_key(key: &str)` — true when the JSON object contains the given top-level key (Postgres `?` operator). Returns a `Predicate` directly.
+
+```rust
+use umbra::prelude::*;
+use serde_json::Value;
+
+#[derive(Debug, Clone, sqlx::FromRow, umbra::orm::Model)]
+pub struct Event {
+    pub id: i64,
+    pub payload: Value,
+}
+
+// Deep path equality — renders as "payload" -> 'author' ->> 'name' = 'alice'
+let alice_rows = Event::objects()
+    .filter(event::PAYLOAD.path_text(&["author", "name"]).eq("alice"))
+    .fetch_pg(&pg_pool)
+    .await?;
+
+// Top-level key presence — renders as "payload" ? 'status'
+let has_status = Event::objects()
+    .filter(event::PAYLOAD.has_key("status"))
+    .fetch_pg(&pg_pool)
+    .await?;
+```
+
+SQLite JSON1 operator support is deferred; `is_null()` / `is_not_null()` and `asc()` / `desc()` ordering remain cross-backend today.
 
 ## Array columns
 
