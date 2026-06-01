@@ -11,21 +11,21 @@ This page catalogues the filters and globals umbra users reach for most, with ex
 
 ## String filters
 
-| Filter | Purpose |
-|--------|---------|
-| `upper` | Convert to uppercase |
-| `lower` | Convert to lowercase |
-| `title` | Title-case each word |
-| `capitalize` | Uppercase first character, lowercase the rest |
-| `trim` | Strip leading and trailing whitespace |
-| `replace(from, to)` | Replace all occurrences of `from` with `to` |
-| `truncate(length)` | Shorten to at most `length` characters, appending `...` |
-| `wordcount` | Count whitespace-delimited words |
-| `striptags` | Remove HTML tags from a string |
-| `safe` | Mark a value as HTML-safe, bypassing autoescape |
-| `escape` | HTML-escape the value (same as the autoescaper, but explicit) |
-| `urlencode` | Percent-encode a string for use in a URL query parameter |
-| `indent(width)` | Indent each line of a multiline string by `width` spaces |
+| Filter | Purpose | Usage |
+|--------|---------|-------|
+| `upper` | Convert to uppercase | `{{ name | upper }}` |
+| `lower` | Convert to lowercase | `{{ name | lower }}` |
+| `title` | Title-case each word | `{{ name | title }}` |
+| `capitalize` | Uppercase first character, lowercase the rest | `{{ name | capitalize }}` |
+| `trim` | Strip leading and trailing whitespace | `{{ text | trim }}` |
+| `replace(from, to)` | Replace all occurrences of `from` with `to` | `{{ s | replace("old", "new") }}` |
+| `truncate(length)` | Shorten to at most `length` characters, appending `...` | `{{ bio | truncate(120) }}` |
+| `wordcount` | Count whitespace-delimited words | `{{ body | wordcount }}` |
+| `striptags` | Remove HTML tags from a string | `{{ html | striptags }}` |
+| `safe` | Mark a value as HTML-safe, bypassing autoescape | `{{ content | safe }}` |
+| `escape` | HTML-escape the value (same as the autoescaper, but explicit) | `{{ text | escape }}` |
+| `urlencode` | Percent-encode a string for use in a URL query parameter | `{{ query | urlencode }}` |
+| `indent(width)` | Indent each line of a multiline string by `width` spaces | `{{ code | indent(4) }}` |
 
 ```html
 {# templates/profile.html #}
@@ -36,12 +36,12 @@ This page catalogues the filters and globals umbra users reach for most, with ex
 
 ## Number filters
 
-| Filter | Purpose |
-|--------|---------|
-| `abs` | Absolute value |
-| `round(precision)` | Round to `precision` decimal places (default 0) |
-| `float` | Cast to float |
-| `int` | Cast to integer |
+| Filter | Purpose | Usage |
+|--------|---------|-------|
+| `abs` | Absolute value | `{{ value | abs }}` |
+| `round(precision)` | Round to `precision` decimal places (default 0) | `{{ price | round(2) }}` |
+| `float` | Cast to float | `{{ value | float }}` |
+| `int` | Cast to integer | `{{ value | int }}` |
 
 ```html
 <p>Price: {{ product.price | round(2) }}</p>
@@ -50,24 +50,24 @@ This page catalogues the filters and globals umbra users reach for most, with ex
 
 ## List and collection filters
 
-| Filter | Purpose |
-|--------|---------|
-| `length` | Number of items in a sequence or characters in a string |
-| `first` | First element of a sequence |
-| `last` | Last element of a sequence |
-| `reverse` | Reverse a sequence |
-| `sort` | Sort a sequence (ascending by default) |
-| `unique` | Remove duplicate values from a sequence |
-| `join(sep)` | Join items with a separator string (default `""`) |
-| `list` | Coerce a value to a list |
-| `min` | Smallest value in a sequence |
-| `max` | Largest value in a sequence |
-| `sum` | Sum of numeric values in a sequence |
-| `map(attr)` | Extract an attribute from every item in a sequence |
-| `select(attr)` | Filter a sequence to items where `attr` is truthy |
-| `reject(attr)` | Filter a sequence to items where `attr` is falsy |
-| `batch(size)` | Group items into chunks of `size` |
-| `slice(count)` | Slice a sequence into `count` parts |
+| Filter | Purpose | Usage |
+|--------|---------|-------|
+| `length` | Number of items in a sequence or characters in a string | `{{ items | length }}` |
+| `first` | First element of a sequence | `{{ items | first }}` |
+| `last` | Last element of a sequence | `{{ items | last }}` |
+| `reverse` | Reverse a sequence | `{{ items | reverse }}` |
+| `sort` | Sort a sequence (ascending by default) | `{{ items | sort }}` |
+| `unique` | Remove duplicate values from a sequence | `{{ items | unique }}` |
+| `join(sep)` | Join items with a separator string (default `""`) | `{{ tags | join(", ") }}` |
+| `list` | Coerce a value to a list | `{{ value | list }}` |
+| `min` | Smallest value in a sequence | `{{ scores | min }}` |
+| `max` | Largest value in a sequence | `{{ scores | max }}` |
+| `sum` | Sum of numeric values in a sequence | `{{ prices | sum }}` |
+| `map(attr)` | Extract an attribute from every item in a sequence | `{{ items | map(attribute="name") }}` |
+| `select(attr)` | Filter a sequence to items where `attr` is truthy | `{{ items | select("active") }}` |
+| `reject(attr)` | Filter a sequence to items where `attr` is falsy | `{{ items | reject("archived") }}` |
+| `batch(size)` | Group items into chunks of `size` | `{{ items | batch(3) }}` |
+| `slice(count)` | Slice a sequence into `count` parts | `{{ items | slice(3) }}` |
 
 ```html
 {# Comma-separated tag names #}
@@ -84,13 +84,13 @@ This page catalogues the filters and globals umbra users reach for most, with ex
 
 ## Default and type-testing filters
 
-| Filter | Purpose |
-|--------|---------|
-| `default(value)` | Return `value` if the variable is undefined or falsy |
-| `d(value)` | Alias for `default` |
-| `dictsort` | Sort a dict by its keys |
-| `items` | Return `(key, value)` pairs from a dict |
-| `tojson` | Serialize the value to a JSON string |
+| Filter | Purpose | Usage |
+|--------|---------|-------|
+| `default(value)` | Return `value` if the variable is undefined or falsy | `{{ bio | default("No bio provided.") }}` |
+| `d(value)` | Alias for `default` | `{{ bio | d("No bio provided.") }}` |
+| `dictsort` | Sort a dict by its keys | `{{ mapping | dictsort }}` |
+| `items` | Return `(key, value)` pairs from a dict | `{{ mapping | items }}` |
+| `tojson` | Serialize the value to a JSON string | `{{ payload | tojson }}` |
 
 ```html
 <p>{{ user.bio | default("No bio provided.") }}</p>
@@ -124,12 +124,12 @@ These are Jinja2 tags, not pipe filters. They're included here because they solv
 
 minijinja exposes a small set of global functions callable anywhere in a template expression.
 
-| Function | Purpose |
-|----------|---------|
-| `range(start, stop, step)` | Generate an integer range (like Python's `range`) |
-| `dict(...)` | Construct a dictionary inline |
-| `namespace(...)` | A mutable namespace for storing values across loop iterations |
-| `lipsum(n)` | Generate `n` paragraphs of Lorem Ipsum (useful in layout prototyping) |
+| Function | Purpose | Usage |
+|----------|---------|-------|
+| `range(start, stop, step)` | Generate an integer range (like Python's `range`) | `{% for i in range(5) %}` |
+| `dict(...)` | Construct a dictionary inline | `{% set d = dict(key="value") %}` |
+| `namespace(...)` | A mutable namespace for storing values across loop iterations | `{% set ns = namespace(count=0) %}` |
+| `lipsum(n)` | Generate `n` paragraphs of Lorem Ipsum (useful in layout prototyping) | `{{ lipsum(2) }}` |
 
 ```html
 {% for i in range(1, 6) %}
