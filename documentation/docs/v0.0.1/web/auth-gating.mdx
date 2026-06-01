@@ -1,0 +1,64 @@
+---
+title: Auth gating (login_required)
+description: Gate handlers and Router subtrees behind authentication with LoggedIn<U> and LoginRequiredLayer.
+sidebar_position: 3
+icon: shield
+tags: [web, auth, middleware]
+---
+
+Two complementary shapes for the Django `@login_required` pattern: an axum **extractor** for per-handler gating and a tower::Layer **middleware** for gating whole Router subtrees. Both ship from `umbra-auth`. Both share one `LoginRequired` config that picks between two error responses — JSON 401 for APIs, 302 redirect for HTML pages.
+
+The full reference lives under the auth plugin: [Guarding views](/v0.0.1/plugins/auth#guarding-views).
+
+## The two shapes
+
+```rust
+use umbra_auth::{AuthUser, login_required::{LoggedIn, LoginRequired, login_required, login_required_html}};
+use umbra::web::{Router, get, Json, Html};
+
+// 1. Extractor — per-handler. Handler only runs on a valid session.
+async fn me(LoggedIn(user): LoggedIn<AuthUser>) -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "username": user.username }))
+}
+
+// 2. Layer — per-Router. Gates every route under it.
+let api = Router::new()
+    .route("/api/me", get(me))
+    .route("/api/posts", get(list_posts))
+    .layer(login_required());                  // 401 JSON on unauthenticated
+
+let app = Router::new()
+    .route("/dashboard", get(dashboard))
+    .route("/settings", get(settings_page))
+    .layer(login_required_html("/login"));     // 302 to /login?next=<uri>
+```
+
+## When to use which
+
+| Shape | Reach for it when ... |
+|---|---|
+| `LoggedIn<U>` extractor | One handler needs the authenticated user. The extractor is also what reads `user.id` or `user.is_staff` inside the handler body. |
+| `LoginRequiredLayer` | A whole router subtree (`/admin/*`, `/app/*`) should require login. The layer rejects unauthenticated requests before they reach the handler. |
+| Both together | The layer does the broad gate; the extractor inside the handler pulls out the user struct without re-authenticating. The layer's config flows to the extractor through request extensions. |
+
+## API vs HTML response shape
+
+`LoginRequired::API` (the default, returned by `login_required()`) responds with a 401 JSON envelope plus `WWW-Authenticate: Bearer`. `LoginRequired::html("/login")` (returned by `login_required_html(...)`) responds with a 302 to `/login?next=<original-uri>`. Drop the `?next=` with `.no_next()` if your login page does not use it.
+
+Mix both in one app: wrap `/api/*` with `login_required()` and `/app/*` with `login_required_html("/login")`.
+
+## Generic over the user model
+
+`LoggedIn<U>` is generic over any `U: UserModel`, so a [custom user model](/v0.0.1/plugins/auth#swapping-the-user-model) works without adapters:
+
+```rust
+async fn tenant_home(LoggedIn(user): LoggedIn<TenantUser>) -> Html<String> {
+    Html(format!("<h1>{} - tenant {}</h1>", user.username, user.tenant_id))
+}
+```
+
+## See also
+
+- [`umbra-auth` plugin docs](/v0.0.1/plugins/auth) - full reference for `LoginRequired`, `LoggedIn<U>`, `LoginRequiredLayer`.
+- [Users and passwords](/v0.0.1/auth/users-and-passwords) - the underlying user / session story.
+- [Sessions](/v0.0.1/plugins/sessions) - how the session cookie is created and validated.
