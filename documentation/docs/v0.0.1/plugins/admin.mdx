@@ -81,6 +81,29 @@ sqlx::query("UPDATE auth_user SET is_staff = 1 WHERE id = ?")
 The admin dispatches HTML input types by `SqlType`. Nullable fields omit the
 `required` attribute; the PK column is hidden from create/edit forms.
 
+## Model display name and sidebar icon
+
+Two attributes on the model struct control how it appears in the admin sidebar - no separate registration required.
+
+```rust
+#[derive(Debug, sqlx::FromRow, Serialize, Deserialize, Model)]
+#[umbra(plugin = "auth", display = "Users", icon = "users")]
+pub struct AuthUser {
+    pub id: i64,
+    pub username: String,
+    // ...
+}
+```
+
+| Attribute | Default | Effect |
+|---|---|---|
+| `display = "Users"` | Struct name (`"AuthUser"`) | Sidebar label for this model |
+| `icon = "users"` | `"database"` | Lucide icon slug shown beside the label |
+
+The values flow through `Model::DISPLAY` and `Model::ICON` into `ModelMeta` and from there into the auto-discovery path of `AdminRegistry::apps()`. An explicit `AdminModel::label(...)` or `AdminModel::icon(...)` call on a registered `AdminModel` overrides the struct-level defaults.
+
+Any valid [Lucide icon name](https://lucide.dev/icons/) works. Unknown names are silently ignored by Lucide's runtime.
+
 ## The `AdminModel` registration shape
 
 `AdminModel` (renamed from `AdminConfig` in phase 1 - the old name is kept as a type alias) is the admin equivalent of REST's `ResourceConfig` - one config per model, registered on the plugin before it is passed to `App::builder()`.

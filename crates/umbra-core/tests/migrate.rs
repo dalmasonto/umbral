@@ -655,6 +655,8 @@ fn post_model(fields: Vec<Column>) -> ModelMeta {
         name: "Post".to_string(),
         table: "post".to_string(),
         fields,
+        display: "Post".to_string(),
+        icon: "database".to_string(),
     }
 }
 

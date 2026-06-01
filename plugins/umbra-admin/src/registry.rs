@@ -10,6 +10,15 @@
 //! calls [`AdminRegistry::apps`] to get the sorted, permission-filtered
 //! sidebar tree.
 //!
+//! # Auto-discovery
+//!
+//! [`AdminRegistry::apps`] synthesises a default [`AdminRegistration`] for
+//! every model in the global model registry that does NOT have an explicit
+//! registration. The label comes from `ModelMeta::display` (which reflects
+//! `Model::DISPLAY`) and the icon from `ModelMeta::icon` (`Model::ICON`).
+//! Explicit registrations override the synthesised defaults — same table
+//! name means the explicit entry wins.
+//!
 //! # Permission gating
 //!
 //! Today, [`AdminRegistry::apps`] passes every entry through for any staff
@@ -69,12 +78,7 @@ impl AdminRegistry {
     pub fn register(&mut self, plugin: &str, model: AdminModel) {
         let label = model.label.clone().unwrap_or_else(|| {
             // Default: title-case the table name (replace `_` with space).
-            let t = model.table.replace('_', " ");
-            let mut c = t.chars();
-            match c.next() {
-                None => String::new(),
-                Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
-            }
+            titlecase(&model.table)
         });
         let icon = model.icon.clone();
         let table = model.table.clone();
@@ -91,8 +95,13 @@ impl AdminRegistry {
 
     /// Build the sidebar tree for the given viewer.
     ///
-    /// Returns plugins sorted by plugin name; models within each group
-    /// sorted by label.
+    /// Walks the full model registry and synthesises a default
+    /// [`AdminRegistration`] for every model not explicitly registered.
+    /// Explicit registrations override the synthesised defaults (same
+    /// table name = explicit wins).
+    ///
+    /// Ordering: plugins sorted alphabetically with the implicit `"app"`
+    /// bucket rendered last; models within each group sorted by label.
     ///
     /// # Permission filtering
     ///
@@ -100,15 +109,53 @@ impl AdminRegistry {
     /// lands, add per-model `view_<table>` permission checks here and
     /// filter `entries` accordingly before grouping.
     pub fn apps(&self, _viewer: &AuthUser) -> Vec<App> {
-        // Group by plugin.
-        let mut by_plugin: HashMap<String, Vec<AdminRegistration>> = HashMap::new();
-        for reg in self.entries.values() {
-            by_plugin
-                .entry(reg.plugin.clone())
-                .or_default()
-                .push(reg.clone());
+        // Build the merged map: start with synthesised defaults for every
+        // model in the global registry, then overlay explicit registrations.
+        let mut merged: HashMap<String, AdminRegistration> = HashMap::new();
+
+        // Walk every plugin known to the migration registry.
+        for plugin_name in umbra::migrate::registered_plugins() {
+            for meta in umbra::migrate::models_for_plugin(&plugin_name) {
+                let label = titlecase(&meta.display);
+                let icon = meta.icon.clone();
+                let table = meta.table.clone();
+                let reg = AdminRegistration {
+                    model: AdminModel::new(&table),
+                    plugin: plugin_name.clone(),
+                    label,
+                    icon: Some(icon),
+                };
+                merged.insert(table, reg);
+            }
         }
-        // Sort each group by label, then sort groups by plugin name.
+        // Also pick up models registered via `.model::<T>()` (the implicit
+        // `"app"` plugin). These land in `registered_models()` but may not
+        // appear in `registered_plugins()` if `"app"` contributed zero models
+        // via a Plugin impl.
+        for meta in umbra::migrate::registered_models() {
+            if !merged.contains_key(&meta.table) {
+                let label = titlecase(&meta.display);
+                let icon = meta.icon.clone();
+                let table = meta.table.clone();
+                let reg = AdminRegistration {
+                    model: AdminModel::new(&table),
+                    plugin: "app".to_string(),
+                    label,
+                    icon: Some(icon),
+                };
+                merged.insert(table, reg);
+            }
+        }
+        // Overlay explicit registrations — they always win.
+        for (table, explicit) in &self.entries {
+            merged.insert(table.clone(), explicit.clone());
+        }
+
+        // Group by plugin, sort, and produce the tree.
+        let mut by_plugin: HashMap<String, Vec<AdminRegistration>> = HashMap::new();
+        for reg in merged.into_values() {
+            by_plugin.entry(reg.plugin.clone()).or_default().push(reg);
+        }
         let mut apps: Vec<App> = by_plugin
             .into_iter()
             .map(|(plugin, mut models)| {
@@ -121,7 +168,13 @@ impl AdminRegistry {
                 }
             })
             .collect();
-        apps.sort_by(|a, b| a.plugin.cmp(&b.plugin));
+        // Named plugins alphabetically first; the implicit "app" bucket last.
+        apps.sort_by(|a, b| match (a.plugin.as_str(), b.plugin.as_str()) {
+            ("app", "app") => std::cmp::Ordering::Equal,
+            ("app", _) => std::cmp::Ordering::Greater,
+            (_, "app") => std::cmp::Ordering::Less,
+            _ => a.plugin.cmp(&b.plugin),
+        });
         apps
     }
 
@@ -135,4 +188,22 @@ impl AdminRegistry {
     pub fn all(&self) -> impl Iterator<Item = &AdminRegistration> {
         self.entries.values()
     }
+}
+
+/// Titlecase a string: replace `_` with space, capitalise the first
+/// character of each word (split on `_` and space).
+fn titlecase(s: &str) -> String {
+    if s.is_empty() {
+        return String::new();
+    }
+    s.split('_')
+        .map(|word| {
+            let mut c = word.chars();
+            match c.next() {
+                None => String::new(),
+                Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }

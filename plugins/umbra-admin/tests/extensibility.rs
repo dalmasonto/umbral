@@ -193,10 +193,17 @@ async fn send_full(
 }
 
 fn extract_csrf_token(html: &str) -> Option<String> {
-    let needle = r#"name="csrf_token" value=""#;
-    let start = html.find(needle)? + needle.len();
-    let end = html[start..].find('"')?;
-    Some(html[start..start + end].to_string())
+    // Find the input with name="csrf_token", then locate its value attribute
+    // within a small window after it. Tolerant of whitespace / line breaks
+    // between attributes so reformats of login.html don't break the test.
+    let name_marker = r#"name="csrf_token""#;
+    let pos = html.find(name_marker)?;
+    let window_end = pos.saturating_add(400).min(html.len());
+    let window = &html[pos..window_end];
+    let value_marker = "value=\"";
+    let vstart = window.find(value_marker)? + value_marker.len();
+    let vend = window[vstart..].find('"')?;
+    Some(window[vstart..vstart + vend].to_string())
 }
 
 async fn login_session(router: &axum::Router, username: &str, password: &str) -> String {

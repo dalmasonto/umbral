@@ -87,6 +87,19 @@ pub trait Model: Sized + Send + Sync + Unpin + 'static {
     /// engine (M5) for snapshot diffing.
     const FIELDS: &'static [FieldSpec];
 
+    /// Human-readable display name for this model, used by the admin
+    /// sidebar as the default label. Defaults to `Self::NAME`.
+    ///
+    /// Override via `#[umbra(display = "Users")]` on the struct.
+    const DISPLAY: &'static str = Self::NAME;
+
+    /// Lucide icon slug shown next to this model in the admin sidebar.
+    /// Defaults to `"database"`. Any valid Lucide icon name works; unknown
+    /// names are silently ignored by Lucide at render time.
+    ///
+    /// Override via `#[umbra(icon = "users")]` on the struct.
+    const ICON: &'static str = "database";
+
     /// Return the primary key of this instance.
     fn primary_key(&self) -> Self::PrimaryKey;
 }

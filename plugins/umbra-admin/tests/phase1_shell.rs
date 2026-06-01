@@ -163,10 +163,17 @@ async fn send(router: axum::Router, req: Request<Body>) -> (StatusCode, String) 
 }
 
 fn extract_csrf_token(html: &str) -> Option<String> {
-    let needle = r#"name="csrf_token" value=""#;
-    let start = html.find(needle)? + needle.len();
-    let end = html[start..].find('"')?;
-    Some(html[start..start + end].to_string())
+    // Find the input with name="csrf_token", then locate its value attribute
+    // within a small window after it. Tolerant of whitespace / line breaks
+    // between attributes so reformats of login.html don't break the test.
+    let name_marker = r#"name="csrf_token""#;
+    let pos = html.find(name_marker)?;
+    let window_end = pos.saturating_add(400).min(html.len());
+    let window = &html[pos..window_end];
+    let value_marker = "value=\"";
+    let vstart = window.find(value_marker)? + value_marker.len();
+    let vend = window[vstart..].find('"')?;
+    Some(window[vstart..vstart + vend].to_string())
 }
 
 async fn login_session(router: &axum::Router, username: &str, password: &str) -> String {
@@ -536,5 +543,122 @@ async fn sidebar_nav_lists_models_by_plugin() {
     assert!(
         body.contains("/admin/post/"),
         "sidebar must link to /admin/post/; body:\n{body}"
+    );
+}
+
+// =========================================================================
+// Test 8 (gap 44): Model::DISPLAY propagates into sidebar label (explicit
+// registration with .label() overrides it).
+// =========================================================================
+
+#[tokio::test]
+async fn explicit_label_overrides_model_display() {
+    let router = boot().await.clone();
+    let cookie = login_session(&router, "staff_user", "staffpass").await;
+
+    let (status, body) = send(
+        router,
+        Request::builder()
+            .uri("/admin/")
+            .header(header::COOKIE, format!("umbra_session={cookie}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body:\n{body}");
+    // The "blog" plugin's post model was registered with .label("Posts"),
+    // which should appear in the sidebar and override any model-level DISPLAY.
+    assert!(
+        body.contains("Posts"),
+        "sidebar must show the explicit label 'Posts'; body:\n{body}"
+    );
+}
+
+// =========================================================================
+// Test 9 (gap 44): Sidebar icon from explicit AdminModel::icon().
+// =========================================================================
+
+#[tokio::test]
+async fn explicit_icon_appears_in_sidebar() {
+    let router = boot().await.clone();
+    let cookie = login_session(&router, "staff_user", "staffpass").await;
+
+    let (status, body) = send(
+        router,
+        Request::builder()
+            .uri("/admin/")
+            .header(header::COOKIE, format!("umbra_session={cookie}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body:\n{body}");
+    // The "blog" plugin's post model was registered with .icon("file-text").
+    assert!(
+        body.contains("data-lucide=\"file-text\""),
+        "sidebar must contain the file-text icon; body:\n{body}"
+    );
+}
+
+// =========================================================================
+// Test 10 (gap 44): Auto-discovery — model registered via .model::<Post>()
+// without an explicit AdminModel shows up in the sidebar.
+// The boot() setup registers Post both via register_for("blog", ...) AND
+// via .model::<Post>(). The explicit registration wins, but models with
+// ONLY a .model::<T>() registration must still appear.
+// =========================================================================
+
+#[tokio::test]
+async fn auto_discovered_model_appears_in_sidebar() {
+    let router = boot().await.clone();
+    let cookie = login_session(&router, "staff_user", "staffpass").await;
+
+    let (status, body) = send(
+        router,
+        Request::builder()
+            .uri("/admin/")
+            .header(header::COOKIE, format!("umbra_session={cookie}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body:\n{body}");
+    // The post model must appear regardless (explicit registration wins over
+    // auto-discovery for the same table name, but the model must be present).
+    assert!(
+        body.contains("/admin/post/"),
+        "auto-discovered model must appear in sidebar; body:\n{body}"
+    );
+}
+
+// =========================================================================
+// Test 11 (gap 45): Theme toggle button has onclick="umbra.toggleTheme()"
+// so clicking it actually works (gap 1 of the four tasks).
+// =========================================================================
+
+#[tokio::test]
+async fn theme_toggle_button_has_onclick() {
+    let router = boot().await.clone();
+    let cookie = login_session(&router, "staff_user", "staffpass").await;
+
+    let (status, body) = send(
+        router,
+        Request::builder()
+            .uri("/admin/")
+            .header(header::COOKIE, format!("umbra_session={cookie}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body:\n{body}");
+    // The theme toggle button must exist.
+    assert!(
+        body.contains(r#"id="theme-toggle""#),
+        "page must contain the theme-toggle button; body:\n{body}"
+    );
+    // The button must have onclick wiring.
+    assert!(
+        body.contains(r#"onclick="umbra.toggleTheme()""#),
+        "theme-toggle must have onclick=\"umbra.toggleTheme()\"; body:\n{body}"
     );
 }

@@ -122,6 +122,8 @@ pub fn derive_model(input: TokenStream) -> TokenStream {
 /// opts into a `<plugin>_<table>` namespaced table name, preventing
 /// collisions when two plugins each declare a model with the same
 /// struct name (e.g. two `Post` models from different plugins).
+/// Gap 44 adds `display = "..."` (human-readable label for the admin
+/// sidebar) and `icon = "..."` (Lucide icon slug).
 ///
 /// Precedence: `table` > `plugin` > bare snake_case. An explicit
 /// `table = "..."` always wins regardless of whether `plugin = "..."`
@@ -129,12 +131,16 @@ pub fn derive_model(input: TokenStream) -> TokenStream {
 struct UmbraStructAttr {
     table: Option<String>,
     plugin: Option<String>,
+    display: Option<String>,
+    icon: Option<String>,
 }
 
 fn parse_umbra_struct_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraStructAttr> {
     let mut parsed = UmbraStructAttr {
         table: None,
         plugin: None,
+        display: None,
+        icon: None,
     };
     for attr in attrs {
         if !attr.path().is_ident("umbra") {
@@ -151,11 +157,22 @@ fn parse_umbra_struct_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraStructA
                 let lit: syn::LitStr = value.parse()?;
                 parsed.plugin = Some(lit.value());
                 Ok(())
+            } else if meta.path.is_ident("display") {
+                let value = meta.value()?;
+                let lit: syn::LitStr = value.parse()?;
+                parsed.display = Some(lit.value());
+                Ok(())
+            } else if meta.path.is_ident("icon") {
+                let value = meta.value()?;
+                let lit: syn::LitStr = value.parse()?;
+                parsed.icon = Some(lit.value());
+                Ok(())
             } else {
                 Err(meta.error(
-                    "umbra::Model derive accepts `table = \"...\"` and `plugin = \"...\"` \
-                     at M3.1+; other attributes (max_length, db_index, default, choices, \
-                     on_delete) land as plugin authors need them",
+                    "umbra::Model derive accepts `table = \"...\"`, `plugin = \"...\"`, \
+                     `display = \"...\"`, and `icon = \"...\"` attributes; other attributes \
+                     (max_length, db_index, default, choices, on_delete) land as plugin \
+                     authors need them",
                 ))
             }
         })?;
@@ -249,6 +266,13 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
     } else {
         bare_name
     };
+    // Gap 44: DISPLAY defaults to the struct name; overridden by
+    // `#[umbra(display = "...")]`. ICON defaults to `"database"`;
+    // overridden by `#[umbra(icon = "...")]`.
+    let display_lit = struct_attr
+        .display
+        .unwrap_or_else(|| struct_name.to_string());
+    let icon_lit = struct_attr.icon.unwrap_or_else(|| "database".to_string());
     // The sibling column module's identifier is always snake_case of
     // the struct name (the user-facing path is `<snake_struct>::FIELD`).
     // Leaving it untouched keeps existing user code working when a
@@ -369,6 +393,8 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             const FIELDS: &'static [::umbra::orm::FieldSpec] = &[
                 #(#field_specs),*
             ];
+            const DISPLAY: &'static str = #display_lit;
+            const ICON: &'static str = #icon_lit;
             fn primary_key(&self) -> #pk_ty_tokens {
                 // `.clone()` works for every PK type the trait accepts
                 // (the bound is `Clone`, not `Copy`). For `i32`, `i64`,

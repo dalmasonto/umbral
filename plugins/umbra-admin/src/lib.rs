@@ -193,6 +193,11 @@ fn engine() -> &'static Environment<'static> {
     ENGINE.get_or_init(|| {
         let mut env = Environment::new();
         env.set_auto_escape_callback(|_| minijinja::AutoEscape::Html);
+        env.add_template(
+            "admin/wrapper.html",
+            include_str!("../templates/wrapper.html"),
+        )
+        .expect("admin/wrapper.html parses");
         env.add_template("admin/base.html", include_str!("../templates/base.html"))
             .expect("admin/base.html parses");
         env.add_template("admin/login.html", include_str!("../templates/login.html"))

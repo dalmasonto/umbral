@@ -1,139 +1,26 @@
-<!doctype html>
-<html class="dark" lang="en" id="umbra-admin-root">
-<head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>{% block title %}umbra admin{% endblock %}</title>
-  <!-- HTMX: same-origin only -->
-  <meta name="htmx-config" content='{"selfRequestsOnly":true}'/>
-  <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
-  <script src="https://unpkg.com/htmx.org@2.0.4"></script>
-  <script src="https://unpkg.com/lucide@latest"></script>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+{% extends "admin/wrapper.html" %}
 
-  <!-- Design tokens + Tailwind config (matches DESIGN.md § tokens) -->
-  <script id="tailwind-config">
-    tailwind.config = {
-      darkMode: "class",
-      theme: {
-        extend: {
-          colors: {
-            "surface-container-lowest": "#0b0e15",
-            "surface-container-low":    "#191c23",
-            "surface-container":        "#1d2027",
-            "surface-container-high":   "#272a31",
-            "surface-container-highest":"#32353c",
-            "surface-bright":           "#363941",
-            "surface-dim":              "#10131a",
-            "surface":                  "#10131a",
-            "surface-variant":          "#32353c",
-            "surface-tint":             "#c2c1ff",
-            "on-surface":               "#e0e2ec",
-            "on-surface-variant":       "#c7c5d5",
-            "inverse-surface":          "#e0e2ec",
-            "inverse-on-surface":       "#2d3038",
-            "outline":                  "#918f9e",
-            "outline-variant":          "#464553",
-            "background":               "#10131a",
-            "on-background":            "#e0e2ec",
-            "primary":                  "#c2c1ff",
-            "on-primary":               "#1f1792",
-            "primary-container":        "#8484f8",
-            "on-primary-container":     "#16098d",
-            "primary-fixed":            "#e2dfff",
-            "primary-fixed-dim":        "#c2c1ff",
-            "on-primary-fixed":         "#0b006b",
-            "on-primary-fixed-variant": "#3835a8",
-            "inverse-primary":          "#504fc1",
-            "secondary":                "#bec7d7",
-            "on-secondary":             "#28313d",
-            "secondary-container":      "#3e4755",
-            "on-secondary-container":   "#adb6c5",
-            "secondary-fixed":          "#dae3f4",
-            "secondary-fixed-dim":      "#bec7d7",
-            "on-secondary-fixed":       "#131c28",
-            "on-secondary-fixed-variant":"#3e4755",
-            "tertiary":                 "#ffb3ad",
-            "on-tertiary":              "#68000a",
-            "tertiary-container":       "#ff5451",
-            "on-tertiary-container":    "#5c0008",
-            "tertiary-fixed":           "#ffdad7",
-            "tertiary-fixed-dim":       "#ffb3ad",
-            "on-tertiary-fixed":        "#410004",
-            "on-tertiary-fixed-variant":"#930013",
-            "error":                    "#ffb4ab",
-            "on-error":                 "#690005",
-            "error-container":          "#93000a",
-            "on-error-container":       "#ffdad6",
-          },
-          spacing: {
-            "sidebar-width":     "260px",
-            "sidebar-collapsed": "68px",
-            "topbar-height":     "56px",
-            "gutter":            "20px",
-            "base": "4px",
-            "xs":   "4px",
-            "sm":   "8px",
-            "md":   "16px",
-            "lg":   "24px",
-            "xl":   "32px",
-          },
-          borderRadius: {
-            DEFAULT:     "0.125rem",
-            sm:          "0.125rem",
-            lg:          "0.25rem",
-            xl:          "0.5rem",
-            "2xl":       "0.75rem",
-            "auth-card": "14px",
-            full:        "9999px",
-          },
-          fontFamily: {
-            display:    ["Inter"],
-            h1:         ["Inter"],
-            h2:         ["Inter"],
-            h3:         ["Inter"],
-            "body-lg":  ["Inter"],
-            "body-md":  ["Inter"],
-            "body-sm":  ["Inter"],
-            "label-md": ["Inter"],
-            "label-sm": ["Inter"],
-            "data-mono":["Inter"],
-          },
-          fontSize: {
-            display:    ["30px", { lineHeight:"38px", letterSpacing:"-0.02em",  fontWeight:"700" }],
-            h1:         ["24px", { lineHeight:"32px", letterSpacing:"-0.015em", fontWeight:"600" }],
-            h2:         ["20px", { lineHeight:"28px", letterSpacing:"-0.01em",  fontWeight:"600" }],
-            h3:         ["16px", { lineHeight:"24px",                           fontWeight:"600" }],
-            "body-lg":  ["16px", { lineHeight:"24px",                           fontWeight:"400" }],
-            "body-md":  ["14px", { lineHeight:"20px",                           fontWeight:"400" }],
-            "body-sm":  ["13px", { lineHeight:"18px",                           fontWeight:"400" }],
-            "label-md": ["12px", { lineHeight:"16px", letterSpacing:"0.01em",   fontWeight:"500" }],
-            "label-sm": ["11px", { lineHeight:"14px", letterSpacing:"0.03em",   fontWeight:"600" }],
-            "data-mono":["14px", { lineHeight:"20px",                           fontWeight:"400" }],
-          },
-        },
-      },
-    };
-  </script>
+{% block extra_head %}
+<style>
+  body { font-family: 'Inter', sans-serif; -webkit-font-smoothing: antialiased; }
+  /* Tabular numerals: apply on data-heavy contexts */
+  .tabular-nums { font-variant-numeric: tabular-nums; }
+  /* Custom thin scrollbar for the sidebar */
+  #umbra-admin-sidebar::-webkit-scrollbar { width: 4px; }
+  #umbra-admin-sidebar::-webkit-scrollbar-track { background: transparent; }
+  #umbra-admin-sidebar::-webkit-scrollbar-thumb { background: #464553; border-radius: 10px; }
+  /* Topbar glass effect (matches dashboard.html) */
+  .topbar-glass {
+    background: rgba(29, 32, 39, 0.85);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+  }
+</style>
+{% endblock %}
 
-  <style>
-    body { font-family: 'Inter', sans-serif; -webkit-font-smoothing: antialiased; }
-    /* Tabular numerals: apply on data-heavy contexts */
-    .tabular-nums { font-variant-numeric: tabular-nums; }
-    /* Custom thin scrollbar for the sidebar */
-    #umbra-admin-sidebar::-webkit-scrollbar { width: 4px; }
-    #umbra-admin-sidebar::-webkit-scrollbar-track { background: transparent; }
-    #umbra-admin-sidebar::-webkit-scrollbar-thumb { background: #464553; border-radius: 10px; }
-    /* Topbar glass effect (matches dashboard.html) */
-    .topbar-glass {
-      background: rgba(29, 32, 39, 0.85);
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
-    }
-  </style>
-</head>
-<body class="bg-background text-on-background antialiased flex" id="umbra-admin-body">
+{% block body_attrs %}class="bg-background text-on-background antialiased flex" id="umbra-admin-body"{% endblock %}
 
+{% block body %}
 <!-- ========================================================
      SIDEBAR  260px fixed left, full height, independent scroll
      ======================================================== -->
@@ -258,7 +145,7 @@
 
     <!-- Right: theme toggle + user menu -->
     <div class="flex items-center gap-md">
-      <!-- Theme toggle — persisted in localStorage -->
+      <!-- Theme toggle — persisted in localStorage under umbra-admin-theme -->
       <button
         id="theme-toggle"
         aria-label="Toggle light/dark theme"
@@ -292,64 +179,4 @@
   </main>
 
 </div><!-- end main wrapper -->
-
-<!-- ========================================================
-     Scripts: theme persistence, sidebar filter, lucide init
-     ======================================================== -->
-<script>
-  var umbra = (function() {
-    // ----- Theme toggle -----
-    function applyTheme(dark) {
-      var root = document.documentElement;
-      if (dark) {
-        root.classList.add('dark');
-        document.getElementById('theme-icon-light').classList.remove('hidden');
-        document.getElementById('theme-icon-dark').classList.add('hidden');
-      } else {
-        root.classList.remove('dark');
-        document.getElementById('theme-icon-light').classList.add('hidden');
-        document.getElementById('theme-icon-dark').classList.remove('hidden');
-      }
-    }
-    // Load persisted preference; default to dark.
-    var storedTheme = localStorage.getItem('umbra-admin-theme');
-    var isDark = storedTheme === null ? true : storedTheme === 'dark';
-    applyTheme(isDark);
-
-    function toggleTheme() {
-      isDark = !isDark;
-      localStorage.setItem('umbra-admin-theme', isDark ? 'dark' : 'light');
-      applyTheme(isDark);
-    }
-
-    // ----- Sidebar live model filter -----
-    function sidebarFilter(query) {
-      var q = query.trim().toLowerCase();
-      var links = document.querySelectorAll('.sidebar-model-link');
-      links.forEach(function(link) {
-        var name = (link.getAttribute('data-model-name') || '').toLowerCase();
-        var visible = q === '' || name.indexOf(q) !== -1;
-        link.style.display = visible ? '' : 'none';
-      });
-      // Hide groups that have no visible models (except the core group).
-      document.querySelectorAll('.sidebar-plugin-group').forEach(function(group) {
-        var anyVisible = Array.from(group.querySelectorAll('.sidebar-model-link'))
-          .some(function(l) { return l.style.display !== 'none'; });
-        group.style.display = anyVisible ? '' : 'none';
-      });
-    }
-
-    // ----- User menu (placeholder) -----
-    function toggleUserMenu() {
-      // Phase 4 will wire a real dropdown; for now clicking the avatar
-      // navigates to /admin/logout for simplicity.
-    }
-
-    return { toggleTheme: toggleTheme, sidebarFilter: sidebarFilter, toggleUserMenu: toggleUserMenu };
-  })();
-
-  // Initialise Lucide icons after the DOM is fully painted.
-  document.addEventListener('DOMContentLoaded', function() { lucide.createIcons(); });
-</script>
-</body>
-</html>
+{% endblock %}

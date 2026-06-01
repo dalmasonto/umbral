@@ -199,6 +199,17 @@ pub struct ModelMeta {
     /// Owned (`Column`, not the underlying static `FieldSpec`) so the
     /// snapshot round-trips cleanly through serde.
     pub fields: Vec<Column>,
+    /// Human-readable display name from `Model::DISPLAY`. Defaults to
+    /// `Model::NAME` when no `#[umbra(display = "...")]` is present.
+    #[serde(default)]
+    pub display: String,
+    /// Lucide icon slug from `Model::ICON`. Defaults to `"database"`.
+    #[serde(default = "default_icon")]
+    pub icon: String,
+}
+
+fn default_icon() -> String {
+    "database".to_string()
 }
 
 impl ModelMeta {
@@ -209,6 +220,8 @@ impl ModelMeta {
             name: T::NAME.to_string(),
             table: T::TABLE.to_string(),
             fields: T::FIELDS.iter().map(Column::from).collect(),
+            display: T::DISPLAY.to_string(),
+            icon: T::ICON.to_string(),
         }
     }
 }
@@ -2066,6 +2079,8 @@ mod tests {
                 name: "ZetaModel".to_string(),
                 table: "zeta".to_string(),
                 fields: Vec::new(),
+                display: "ZetaModel".to_string(),
+                icon: "database".to_string(),
             }],
         );
         per_plugin.insert(
@@ -2074,6 +2089,8 @@ mod tests {
                 name: "AlphaModel".to_string(),
                 table: "alpha".to_string(),
                 fields: Vec::new(),
+                display: "AlphaModel".to_string(),
+                icon: "database".to_string(),
             }],
         );
         init_plugins(per_plugin);

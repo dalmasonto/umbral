@@ -100,8 +100,11 @@ impl Plugin for TestPlugin {
         // exact column shape doesn't matter for the contract tests;
         // what matters is that this `ModelMeta` flows into the
         // per-plugin registry under `self.name`.
+        let model_name = format!("{}__Model", self.name);
         vec![ModelMeta {
-            name: format!("{}__Model", self.name),
+            display: model_name.clone(),
+            icon: "database".to_string(),
+            name: model_name,
             table: self.model_table.to_string(),
             fields: vec![Column {
                 name: "id".to_string(),

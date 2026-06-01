@@ -253,11 +253,18 @@ async fn login_session(router: &axum::Router, username: &str, password: &str) ->
 
 /// Extract the csrf_token value from a login page's hidden input.
 fn extract_csrf_token(html: &str) -> Option<String> {
-    // The form has: <input type="hidden" name="csrf_token" value="<token>"/>
-    let needle = r#"name="csrf_token" value=""#;
-    let start = html.find(needle)? + needle.len();
-    let end = html[start..].find('"')?;
-    Some(html[start..start + end].to_string())
+    // The form has an <input type="hidden" name="csrf_token" value="<token>"/>
+    // but template reformats may split the attributes across lines. Search
+    // for the name attribute then locate the matching value within a small
+    // window after it; tolerant of whitespace and attribute order.
+    let name_marker = r#"name="csrf_token""#;
+    let pos = html.find(name_marker)?;
+    let window_end = pos.saturating_add(400).min(html.len());
+    let window = &html[pos..window_end];
+    let value_marker = "value=\"";
+    let vstart = window.find(value_marker)? + value_marker.len();
+    let vend = window[vstart..].find('"')?;
+    Some(window[vstart..vstart + vend].to_string())
 }
 
 // =========================================================================
