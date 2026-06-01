@@ -52,11 +52,16 @@
 pub mod config;
 pub mod registry;
 
-pub use config::{Action, AdminConfig, AdminContext, AdminModel, InlineModel};
+pub use config::{
+    Action, ActionInvocation, ActionResult, ActionScope, ActionVariant, AdminConfig, AdminContext,
+    AdminModel, InlineModel, ToastLevel,
+};
 pub use registry::{AdminRegistration, AdminRegistry, App as AdminApp};
 
 use std::collections::HashMap;
 use std::sync::Arc;
+
+// Action types are re-exported via `pub use config::...` above; use them directly.
 
 use axum::extract::{Query, State};
 use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
@@ -201,6 +206,29 @@ impl Plugin for AdminPlugin {
             // Phase 2: DELETE method for HTMX delete button
             .route("/admin/{table}/{id}", axum::routing::delete(htmx_delete))
             .route("/admin/{table}/{id}/delete", post(delete))
+            // Phase 3: per-key action dispatch
+            .route(
+                "/admin/{table}/actions/{key}",
+                axum::routing::post(dispatch_action),
+            )
+            // Phase 3: FK/M2M async picker endpoints
+            .route(
+                "/admin/api/{table}/{field}/options/resolve",
+                axum::routing::get(fk_options_resolve),
+            )
+            .route(
+                "/admin/api/{table}/{field}/options",
+                axum::routing::get(fk_options),
+            )
+            // Phase 3: inline cell edit
+            .route(
+                "/admin/{table}/{id}/cell/{field}/edit",
+                axum::routing::get(cell_edit_get),
+            )
+            .route(
+                "/admin/{table}/{id}/cell/{field}",
+                axum::routing::post(cell_edit_post),
+            )
             .with_state(state)
     }
 }
@@ -874,14 +902,8 @@ async fn list(
         }
     }
 
-    let action_names: Vec<serde_json::Value> = cfg
-        .map(|c| {
-            c.actions
-                .iter()
-                .map(|a| serde_json::json!({ "name": a.name, "label": a.label }))
-                .collect()
-        })
-        .unwrap_or_default();
+    let action_names: Vec<serde_json::Value> =
+        cfg.map(|c| action_descriptors_json(c)).unwrap_or_default();
 
     let has_search = cfg.is_some_and(|c| !c.search_fields.is_empty());
     let search_val = search_term.unwrap_or_default();
@@ -987,10 +1009,7 @@ async fn run_action(
         Ok(m) => m,
         Err(e) => return AdminError::BadInput(e.to_string()).into_response(),
     };
-    let action_name = match form.get("action") {
-        Some(n) => n.clone(),
-        None => return AdminError::BadInput("missing 'action' field".to_string()).into_response(),
-    };
+    let action_key = form.get("action").cloned().unwrap_or_default();
     let selected_ids: Vec<i64> = form
         .iter()
         .filter(|(k, _)| k.as_str() == "selected")
@@ -998,21 +1017,25 @@ async fn run_action(
         .collect();
 
     let cfg = state.config_for(&table);
-    let action = cfg.and_then(|c| c.actions.iter().find(|a| a.name == action_name));
+    let action = cfg.and_then(|c| c.actions.iter().find(|a| a.key == action_key));
     let Some(action) = action else {
-        return AdminError::NotFound(format!("no action `{action_name}` for table `{table}`"))
+        return AdminError::NotFound(format!("no action `{action_key}` for table `{table}`"))
             .into_response();
     };
 
-    let ctx = AdminContext {
-        username: who.username,
+    let inv = ActionInvocation {
+        ids: selected_ids,
+        username: who.username.clone(),
         table: table.clone(),
+        pool: umbra::db::pool().clone(),
     };
     let handler = Arc::clone(&action.handler);
-    let flash = match handler(selected_ids, ctx).await {
-        Ok(msg) => msg,
+    let flash = match handler(inv).await {
+        Ok(ActionResult::Toast { message, .. }) => message,
+        Ok(ActionResult::RefreshTable) => "Done.".to_string(),
+        Ok(_) => "Done.".to_string(),
         Err(e) => {
-            tracing::error!(error = %e, "admin: action `{action_name}` failed");
+            tracing::error!(error = %e, "admin: action `{action_key}` failed");
             return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response();
         }
     };
@@ -1031,6 +1054,551 @@ fn urlencoding_simple(s: &str) -> String {
         }
     }
     out
+}
+
+// =========================================================================
+// Phase 3: action_descriptors_json helper
+// =========================================================================
+
+fn action_descriptors_json(cfg: &AdminConfig) -> Vec<serde_json::Value> {
+    cfg.actions
+        .iter()
+        .map(|a| {
+            serde_json::json!({
+                "key":     a.key,
+                "label":   a.label,
+                "icon":    a.icon,
+                "variant": match a.variant { ActionVariant::Danger => "danger", _ => "default" },
+                "scope":   match a.scope { ActionScope::Row => "row", ActionScope::Bulk => "bulk", ActionScope::Both => "both" },
+                "confirm": a.confirm,
+            })
+        })
+        .collect()
+}
+
+// =========================================================================
+// Phase 3: dispatch_action handler
+// =========================================================================
+
+/// `POST /admin/{table}/actions/{key}` — phase 3 action dispatch.
+///
+/// Body: `application/json` with `{ "ids": [1, 2, 3] }`.
+/// Response encoding follows `ActionResult`.
+async fn dispatch_action(
+    State(state): State<AdminState>,
+    headers: HeaderMap,
+    Path((table, key)): Path<(String, String)>,
+    body: String,
+) -> Response {
+    let path = format!("/admin/{table}/actions/{key}");
+    let who = match require_staff(&headers, &path).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+
+    // Parse body: try JSON first, fall back to form-encoded.
+    let ids: Vec<i64> = if body.trim_start().starts_with('{') {
+        match serde_json::from_str::<serde_json::Value>(&body) {
+            Ok(v) => v["ids"]
+                .as_array()
+                .map(|arr| arr.iter().filter_map(|x| x.as_i64()).collect())
+                .unwrap_or_default(),
+            Err(e) => return AdminError::BadInput(format!("bad JSON: {e}")).into_response(),
+        }
+    } else {
+        let form: HashMap<String, String> = serde_urlencoded::from_str(&body).unwrap_or_default();
+        form.iter()
+            .filter(|(k, _)| k.as_str() == "ids" || k.as_str() == "selected")
+            .filter_map(|(_, v)| v.parse::<i64>().ok())
+            .collect()
+    };
+
+    let cfg = state.config_for(&table);
+    let action = cfg.and_then(|c| c.actions.iter().find(|a| a.key == key));
+    let Some(action) = action else {
+        return AdminError::NotFound(format!("no action `{key}` for `{table}`")).into_response();
+    };
+
+    let inv = ActionInvocation {
+        ids,
+        username: who.username.clone(),
+        table: table.clone(),
+        pool: umbra::db::pool().clone(),
+    };
+    let handler = Arc::clone(&action.handler);
+    match handler(inv).await {
+        Ok(ActionResult::Toast { message, level }) => {
+            let trigger = serde_json::json!({
+                "showToast": { "message": message, "level": level.as_str() }
+            });
+            axum::response::Response::builder()
+                .status(StatusCode::OK)
+                .header("HX-Trigger", trigger.to_string())
+                .body(axum::body::Body::empty())
+                .unwrap_or_else(|_| StatusCode::OK.into_response())
+        }
+        Ok(ActionResult::RefreshTable) => {
+            // Signal HTMX to refresh the rows fragment.
+            let trigger = serde_json::json!({ "refreshTable": {} });
+            axum::response::Response::builder()
+                .status(StatusCode::OK)
+                .header("HX-Trigger", trigger.to_string())
+                .body(axum::body::Body::empty())
+                .unwrap_or_else(|_| StatusCode::OK.into_response())
+        }
+        Ok(ActionResult::OpenSheet { table: t, id }) => {
+            let trigger = serde_json::json!({ "openSheet": { "table": t, "id": id } });
+            axum::response::Response::builder()
+                .status(StatusCode::OK)
+                .header("HX-Trigger", trigger.to_string())
+                .body(axum::body::Body::empty())
+                .unwrap_or_else(|_| StatusCode::OK.into_response())
+        }
+        Ok(ActionResult::Download {
+            filename,
+            content_type,
+            bytes,
+        }) => axum::response::Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", content_type)
+            .header(
+                "Content-Disposition",
+                format!("attachment; filename=\"{filename}\""),
+            )
+            .body(axum::body::Body::from(bytes))
+            .unwrap_or_else(|_| StatusCode::OK.into_response()),
+        Ok(ActionResult::Redirect { url }) => axum::response::Response::builder()
+            .status(StatusCode::OK)
+            .header("HX-Redirect", url)
+            .body(axum::body::Body::empty())
+            .unwrap_or_else(|_| StatusCode::OK.into_response()),
+        Err(e) => {
+            tracing::error!(error = %e, "admin: action `{key}` failed");
+            let trigger = serde_json::json!({
+                "showToast": { "message": e, "level": "error" }
+            });
+            axum::response::Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .header("HX-Trigger", trigger.to_string())
+                .body(axum::body::Body::empty())
+                .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+        }
+    }
+}
+
+// =========================================================================
+// Phase 3: FK picker endpoints
+// =========================================================================
+
+/// `GET /admin/api/{table}/{field}/options?search=&page=&page_size=20`
+///
+/// Returns paginated label+value options for an FK field.
+/// Returns HTML (for HTMX swap) or JSON (for API consumers).
+async fn fk_options(
+    State(state): State<AdminState>,
+    headers: HeaderMap,
+    Path((table, field)): Path<(String, String)>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Response {
+    let path = format!("/admin/api/{table}/{field}/options");
+    if let Err(r) = require_staff(&headers, &path).await {
+        return r;
+    }
+    let Some((_, model)) = find_model(&table) else {
+        return AdminError::NotFound(format!("no model `{table}`")).into_response();
+    };
+    let col = model.fields.iter().find(|c| c.name == field);
+    let Some(col) = col else {
+        return AdminError::NotFound(format!("no field `{field}` on `{table}`")).into_response();
+    };
+    // Resolve the related table from fk_target or strip _id suffix.
+    let related_table = col
+        .fk_target
+        .clone()
+        .unwrap_or_else(|| field.trim_end_matches("_id").to_string());
+    let Some((_, related_model)) = find_model(&related_table) else {
+        return (
+            StatusCode::FORBIDDEN,
+            format!("related model `{related_table}` not found or not viewable"),
+        )
+            .into_response();
+    };
+
+    let search = params.get("search").map(|s| s.as_str()).unwrap_or("");
+    let page: usize = params
+        .get("page")
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(1)
+        .max(1);
+    let page_size: usize = params
+        .get("page_size")
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(20)
+        .clamp(1, 100);
+    let offset = (page - 1) * page_size;
+
+    // Pick a label column: first text column that isn't the PK.
+    let label_col = related_model
+        .fields
+        .iter()
+        .find(|c| !c.primary_key && matches!(c.ty, umbra::orm::SqlType::Text))
+        .map(|c| c.name.as_str())
+        .unwrap_or("id");
+
+    // Related model's search_fields from the admin config if registered.
+    let rel_cfg = state.config_for(&related_table);
+    let search_cols: Vec<String> = rel_cfg
+        .filter(|c| !c.search_fields.is_empty())
+        .map(|c| c.search_fields.clone())
+        .unwrap_or_else(|| vec![label_col.to_string()]);
+
+    let pool = umbra::db::pool();
+
+    // Build WHERE clause for search.
+    let mut conditions: Vec<String> = Vec::new();
+    let mut binds: Vec<String> = Vec::new();
+    if !search.is_empty() {
+        let like_clauses: Vec<String> = search_cols
+            .iter()
+            .map(|f| format!("\"{}\" LIKE ?", q(f)))
+            .collect();
+        if !like_clauses.is_empty() {
+            conditions.push(format!("({})", like_clauses.join(" OR ")));
+            let like_val = format!("%{search}%");
+            for _ in &like_clauses {
+                binds.push(like_val.clone());
+            }
+        }
+    }
+    let where_sql = if conditions.is_empty() {
+        String::new()
+    } else {
+        format!(" WHERE {}", conditions.join(" AND "))
+    };
+
+    // Count total for has_more.
+    let count_sql = format!("SELECT COUNT(*) FROM \"{}\"{where_sql}", q(&related_table));
+    let mut count_qb = sqlx::query(&count_sql);
+    for b in &binds {
+        count_qb = count_qb.bind(b.clone());
+    }
+    let total: i64 = match count_qb.fetch_one(&pool).await {
+        Ok(r) => r.try_get(0).unwrap_or(0),
+        Err(e) => return AdminError::Sqlx(e).into_response(),
+    };
+
+    // Fetch page.
+    let pk_col = pk_column(&related_model)
+        .map(|c| c.name.as_str())
+        .unwrap_or("id");
+    let select_sql = format!(
+        "SELECT \"{pk_col}\", \"{label_col}\" FROM \"{}\"{where_sql} ORDER BY \"{pk_col}\" DESC LIMIT ? OFFSET ?",
+        q(&related_table)
+    );
+    let mut qb = sqlx::query(&select_sql);
+    for b in &binds {
+        qb = qb.bind(b.clone());
+    }
+    qb = qb.bind(page_size as i64).bind(offset as i64);
+
+    let rows = match qb.fetch_all(&pool).await {
+        Ok(r) => r,
+        Err(e) => return AdminError::Sqlx(e).into_response(),
+    };
+
+    let items: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            let value: i64 = r.try_get(0).unwrap_or(0);
+            let label: String = r
+                .try_get::<String, _>(1)
+                .or_else(|_| r.try_get::<i64, _>(1).map(|v| v.to_string()))
+                .unwrap_or_else(|_| format!("#{value}"));
+            serde_json::json!({ "value": value, "label": label })
+        })
+        .collect();
+
+    let has_more = (offset + page_size) < total as usize;
+
+    // HTMX requests get HTML; plain requests get JSON.
+    if is_htmx(&headers) {
+        let mut html = String::new();
+        for item in &items {
+            let value = item["value"].as_i64().unwrap_or(0);
+            let label = item["label"].as_str().unwrap_or("");
+            html.push_str(&format!(
+                r#"<button type="button" data-fk-value="{value}" class="w-full text-left px-md py-sm hover:bg-surface-container-high font-body-md text-on-surface transition-colors">{}</button>"#,
+                html_escape(label)
+            ));
+        }
+        if html.is_empty() {
+            html.push_str(
+                r#"<p class="px-md py-sm text-outline text-body-sm italic">No results</p>"#,
+            );
+        }
+        return axum::response::Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", "text/html")
+            .body(axum::body::Body::from(html))
+            .unwrap_or_else(|_| StatusCode::OK.into_response());
+    }
+
+    Json(serde_json::json!({
+        "items": items,
+        "page": page,
+        "has_more": has_more,
+    }))
+    .into_response()
+}
+
+/// `GET /admin/api/{table}/{field}/options/resolve?ids=1,2,3`
+///
+/// Returns labels for pre-selected ids — used on edit-form load.
+async fn fk_options_resolve(
+    State(state): State<AdminState>,
+    headers: HeaderMap,
+    Path((table, field)): Path<(String, String)>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Response {
+    let path = format!("/admin/api/{table}/{field}/options/resolve");
+    if let Err(r) = require_staff(&headers, &path).await {
+        return r;
+    }
+    let Some((_, model)) = find_model(&table) else {
+        return AdminError::NotFound(format!("no model `{table}`")).into_response();
+    };
+    let col = model.fields.iter().find(|c| c.name == field);
+    let Some(col) = col else {
+        return AdminError::NotFound(format!("no field `{field}`")).into_response();
+    };
+    let related_table = col
+        .fk_target
+        .clone()
+        .unwrap_or_else(|| field.trim_end_matches("_id").to_string());
+    let Some((_, related_model)) = find_model(&related_table) else {
+        return (StatusCode::FORBIDDEN, "related model not found").into_response();
+    };
+
+    let ids_param = params.get("ids").cloned().unwrap_or_default();
+    let ids: Vec<i64> = ids_param
+        .split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .collect();
+    if ids.is_empty() {
+        return Json(serde_json::json!({ "items": [] })).into_response();
+    }
+
+    let label_col = related_model
+        .fields
+        .iter()
+        .find(|c| !c.primary_key && matches!(c.ty, umbra::orm::SqlType::Text))
+        .map(|c| c.name.as_str())
+        .unwrap_or("id");
+    let pk_col = pk_column(&related_model)
+        .map(|c| c.name.as_str())
+        .unwrap_or("id");
+
+    let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+    let sql = format!(
+        "SELECT \"{pk_col}\", \"{label_col}\" FROM \"{}\" WHERE \"{pk_col}\" IN ({placeholders})",
+        q(&related_table)
+    );
+    let pool = umbra::db::pool();
+    let mut qb = sqlx::query(&sql);
+    for id in &ids {
+        qb = qb.bind(*id);
+    }
+
+    // Suppress unused variable warning from state parameter
+    let _ = &state;
+
+    match qb.fetch_all(&pool).await {
+        Ok(rows) => {
+            let items: Vec<serde_json::Value> = rows
+                .iter()
+                .map(|r| {
+                    let value: i64 = r.try_get(0).unwrap_or(0);
+                    let label: String = r
+                        .try_get::<String, _>(1)
+                        .or_else(|_| r.try_get::<i64, _>(1).map(|v| v.to_string()))
+                        .unwrap_or_else(|_| format!("#{value}"));
+                    serde_json::json!({ "value": value, "label": label })
+                })
+                .collect();
+            Json(serde_json::json!({ "items": items })).into_response()
+        }
+        Err(e) => AdminError::Sqlx(e).into_response(),
+    }
+}
+
+// =========================================================================
+// Phase 3: inline cell edit handlers
+// =========================================================================
+
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#x27;")
+}
+
+/// `GET /admin/{table}/{id}/cell/{field}/edit`
+/// Returns the field editor for a single cell (HTMX swap into the <td>).
+async fn cell_edit_get(
+    State(state): State<AdminState>,
+    headers: HeaderMap,
+    Path((table, id, field)): Path<(String, String, String)>,
+) -> Response {
+    let path = format!("/admin/{table}/{id}/cell/{field}/edit");
+    if let Err(r) = require_staff(&headers, &path).await {
+        return r;
+    }
+    let Some((_, model)) = find_model(&table) else {
+        return AdminError::NotFound(format!("no model `{table}`")).into_response();
+    };
+    let Some(pk) = pk_column(&model) else {
+        return AdminError::Render("no pk".to_string()).into_response();
+    };
+    let col = model.fields.iter().find(|c| c.name == field);
+    let Some(col) = col else {
+        return AdminError::NotFound(format!("no field `{field}`")).into_response();
+    };
+    let cfg = state.config_for(&table);
+    let is_readonly = cfg.is_some_and(|c| c.readonly_fields.contains(&field));
+    if is_readonly {
+        return (StatusCode::FORBIDDEN, "field is read-only").into_response();
+    }
+
+    let pool = umbra::db::pool();
+    let all_cols: Vec<String> = model.fields.iter().map(|f| f.name.clone()).collect();
+    let rows = match fetch_rows_filtered(
+        &pool,
+        &model,
+        Some((&pk.name, &id)),
+        &all_cols,
+        "",
+        None,
+        None,
+        None,
+    )
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => return e.into_response(),
+    };
+    let Some(row) = rows.into_iter().next() else {
+        return AdminError::NotFound(format!("no row {id}")).into_response();
+    };
+    let value = row.get(&field).cloned().unwrap_or_default();
+    let input_type = input_kind(col.ty);
+
+    let html = format!(
+        r#"<form
+            hx-post="/admin/{table}/{id}/cell/{field}"
+            hx-target="closest td"
+            hx-swap="innerHTML"
+            class="flex items-center gap-xs"
+            onkeydown="if(event.key==='Escape'){{this.parentElement && (this.parentElement.innerHTML = '<span class=&quot;text-on-surface text-body-md tabular-nums&quot;>{escaped_value}</span>')}}"
+          >
+          <input type="{input_type}" name="{field}" value="{escaped_value}"
+            class="flex-1 bg-surface-container-low border border-primary rounded-lg px-sm py-xs text-on-surface text-body-md focus:outline-none focus:ring-1 focus:ring-primary"
+            autofocus
+            onblur="this.form.requestSubmit()"
+          />
+          <button type="submit" class="p-xs text-primary hover:bg-primary/10 rounded" title="Save">
+            <i data-lucide="check" class="w-3 h-3"></i>
+          </button>
+        </form>
+        <script>if(window.lucide)lucide.createIcons();</script>"#,
+        table = table,
+        id = id,
+        field = field,
+        input_type = input_type,
+        escaped_value = html_escape(&value),
+    );
+    axum::response::Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "text/html")
+        .body(axum::body::Body::from(html))
+        .unwrap_or_else(|_| StatusCode::OK.into_response())
+}
+
+/// `POST /admin/{table}/{id}/cell/{field}`
+/// Save inline cell edit. Returns the read-only cell value on success,
+/// or an error span on failure.
+async fn cell_edit_post(
+    State(state): State<AdminState>,
+    headers: HeaderMap,
+    Path((table, id, field)): Path<(String, String, String)>,
+    body: String,
+) -> Response {
+    let path = format!("/admin/{table}/{id}/cell/{field}");
+    if let Err(r) = require_staff(&headers, &path).await {
+        return r;
+    }
+    let Some((_, model)) = find_model(&table) else {
+        return AdminError::NotFound(format!("no model `{table}`")).into_response();
+    };
+    let Some(pk) = pk_column(&model) else {
+        return AdminError::Render("no pk".to_string()).into_response();
+    };
+    let col = model.fields.iter().find(|c| c.name == field);
+    let Some(col) = col else {
+        return AdminError::NotFound(format!("no field `{field}`")).into_response();
+    };
+    let cfg = state.config_for(&table);
+    if cfg.is_some_and(|c| c.readonly_fields.contains(&field)) {
+        return (StatusCode::FORBIDDEN, "field is read-only").into_response();
+    }
+    let form: HashMap<String, String> = serde_urlencoded::from_str(&body).unwrap_or_default();
+    let pool = umbra::db::pool();
+    let sql = format!(
+        "UPDATE \"{}\" SET \"{}\" = ? WHERE \"{}\" = ?",
+        q(&model.table),
+        q(&field),
+        q(&pk.name)
+    );
+    let qb = sqlx::query(&sql);
+    let qb = match bind_form_value(qb, col, &form) {
+        Ok(q) => q,
+        Err(e) => {
+            let err_html = format!(
+                r#"<span class="text-error text-body-sm">{}</span>"#,
+                html_escape(&sanitise_form_error(&e))
+            );
+            return axum::response::Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .header("Content-Type", "text/html")
+                .body(axum::body::Body::from(err_html))
+                .unwrap_or_else(|_| StatusCode::BAD_REQUEST.into_response());
+        }
+    };
+    match qb.bind(id.clone()).execute(&pool).await {
+        Ok(_) => {
+            let new_value = form.get(&field).cloned().unwrap_or_default();
+            let display = html_escape(&new_value);
+            let cell_html = format!(
+                r#"<span class="text-on-surface text-body-md tabular-nums">{display}</span>"#
+            );
+            axum::response::Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "text/html")
+                .body(axum::body::Body::from(cell_html))
+                .unwrap_or_else(|_| StatusCode::OK.into_response())
+        }
+        Err(e) => {
+            let err_html = format!(
+                r#"<span class="text-error text-body-sm">{}</span>"#,
+                html_escape(&e.to_string())
+            );
+            axum::response::Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .header("Content-Type", "text/html")
+                .body(axum::body::Body::from(err_html))
+                .unwrap_or_else(|_| StatusCode::BAD_REQUEST.into_response())
+        }
+    }
 }
 
 // ---- detail / new_form / create / edit_form / update / delete -------------
@@ -2388,6 +2956,8 @@ struct FormField {
     value: String,
     nullable: bool,
     readonly: bool,
+    /// For FK fields: the related table name. Empty string for non-FK fields.
+    fk_table: String,
 }
 
 fn form_fields_for(
@@ -2407,12 +2977,20 @@ fn form_fields_for(
                 .and_then(|m| m.get(&c.name))
                 .cloned()
                 .unwrap_or_default();
+            let fk_table = if matches!(c.ty, umbra::orm::SqlType::ForeignKey) {
+                c.fk_target
+                    .clone()
+                    .unwrap_or_else(|| c.name.trim_end_matches("_id").to_string())
+            } else {
+                String::new()
+            };
             FormField {
                 name: c.name.clone(),
                 kind: input_kind(c.ty),
                 value: format_for_input(&raw, c.ty),
                 nullable: c.nullable,
                 readonly: readonly_set.contains(c.name.as_str()),
+                fk_table,
             }
         })
         .collect()
@@ -2454,7 +3032,7 @@ fn input_kind(ty: SqlType) -> &'static str {
         SqlType::Array(_) => "textarea",
         SqlType::Inet | SqlType::Cidr | SqlType::MacAddr => "text",
         SqlType::FullText => "textarea",
-        SqlType::ForeignKey => "number",
+        SqlType::ForeignKey => "fk",
     }
 }
 

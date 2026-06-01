@@ -73,9 +73,17 @@ async fn boot() -> &'static axum::Router {
             .readonly_fields(&["created_at"])
             .actions(vec![
                 Action::delete_selected(),
-                Action::new("mark_published", "Mark published", |ids, _ctx| async move {
-                    Ok(format!("Marked {} article(s) as published.", ids.len()))
-                }),
+                Action::new(
+                    "mark_published",
+                    "Mark published",
+                    "check-circle",
+                    |inv| async move {
+                        Ok(umbra_admin::ActionResult::Toast {
+                            message: format!("Marked {} article(s) as published.", inv.ids.len()),
+                            level: umbra_admin::ToastLevel::Success,
+                        })
+                    },
+                ),
             ]);
 
         let admin = AdminPlugin::default().register(article_config);

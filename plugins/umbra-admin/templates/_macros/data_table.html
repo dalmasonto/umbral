@@ -35,7 +35,7 @@
   <768px: stacked card list via CSS (hidden when table visible).
 #}
 
-{% macro data_table(model, rows, columns, pk, facets, active_filter, has_search, search_val, actions, pagination, sort_col, sort_order, flash) %}
+{% macro data_table(model, rows, columns, pk, facets, active_filter, has_search, search_val, actions, pagination, sort_col, sort_order, flash, inline_edit_fields=[]) %}
 
 {# ================================================================
    Filter panel (collapsible, driven by Alpine.js-lite via x-data
@@ -310,7 +310,16 @@
 
             {# Data cells #}
             {% for col in columns %}
-            <td class="px-md py-md {% if not loop.first %}hidden lg:table-cell{% endif %} dt-col" data-col="{{ col.name }}">
+            <td class="px-md py-md {% if not loop.first %}hidden lg:table-cell{% endif %} dt-col" data-col="{{ col.name }}"
+              {% if col.name in inline_edit_fields %}
+              hx-trigger="dblclick"
+              hx-get="/admin/{{ model.table }}/{{ row[pk] }}/cell/{{ col.name }}/edit"
+              hx-target="this"
+              hx-swap="innerHTML"
+              title="Double-click to edit"
+              style="cursor: default"
+              {% endif %}
+            >
               {% set val = row[col.name] %}
               {% if col.name == "published" or col.name == "is_active" or col.name == "is_staff" %}
                 {# Boolean status pill #}
@@ -365,6 +374,52 @@
                 >
                   <i data-lucide="trash-2" class="w-4 h-4"></i>
                 </button>
+
+                {# Custom actions: up to 2 inline, rest in overflow menu #}
+                {% set row_actions = [] %}
+                {% for action in actions %}
+                  {% if action.scope == "row" or action.scope == "both" %}
+                    {% set row_actions = row_actions | list + [action] %}
+                  {% endif %}
+                {% endfor %}
+                {% for action in row_actions[:2] %}
+                <button
+                  type="button"
+                  hx-post="/admin/{{ model.table }}/actions/{{ action.key }}"
+                  hx-vals='{"ids": [{{ row[pk] }}]}'
+                  hx-swap="none"
+                  title="{{ action.label }}"
+                  class="p-sm transition-colors rounded-lg hover:bg-surface-container-high {% if action.variant == 'danger' %}text-error hover:text-error{% else %}text-on-surface-variant hover:text-primary{% endif %}"
+                  {% if action.confirm %}onclick="if(!confirm('{{ action.confirm }}'))return false;"{% endif %}
+                >
+                  <i data-lucide="{{ action.icon }}" class="w-4 h-4"></i>
+                </button>
+                {% endfor %}
+                {% if row_actions | length > 2 %}
+                <div class="relative">
+                  <button type="button"
+                    onclick="var m=this.nextElementSibling;m.classList.toggle('hidden');event.stopPropagation()"
+                    class="p-sm text-on-surface-variant hover:text-primary transition-colors rounded-lg hover:bg-surface-container-high"
+                    title="More actions"
+                  >
+                    <i data-lucide="more-horizontal" class="w-4 h-4"></i>
+                  </button>
+                  <div class="hidden absolute right-0 bottom-full mb-xs z-40 bg-surface-container border border-outline-variant rounded-xl shadow-lg py-xs min-w-[160px]">
+                    {% for action in row_actions[2:] %}
+                    <button type="button"
+                      hx-post="/admin/{{ model.table }}/actions/{{ action.key }}"
+                      hx-vals='{"ids": [{{ row[pk] }}]}'
+                      hx-swap="none"
+                      {% if action.confirm %}onclick="if(!confirm('{{ action.confirm }}'))return false;"{% endif %}
+                      class="w-full flex items-center gap-sm px-md py-sm text-left hover:bg-surface-container-high font-label-md text-label-md {% if action.variant == 'danger' %}text-error{% else %}text-on-surface{% endif %} transition-colors"
+                    >
+                      <i data-lucide="{{ action.icon }}" class="w-4 h-4"></i>
+                      {{ action.label }}
+                    </button>
+                    {% endfor %}
+                  </div>
+                </div>
+                {% endif %}
               </div>
             </td>
           </tr>
@@ -614,6 +669,36 @@
     }
   };
 
+  umbra.runBulkAction = function(btn) {
+    var key = btn.getAttribute('data-action-key');
+    var table = btn.getAttribute('data-table') || (btn.closest('[data-table]') && btn.closest('[data-table]').getAttribute('data-table'));
+    var confirmMsg = btn.getAttribute('data-action-confirm');
+    if (confirmMsg && !confirm(confirmMsg)) return;
+    var selected = Array.from(document.querySelectorAll('.row-cb:checked')).map(function(cb) {
+      return parseInt(cb.value, 10);
+    });
+    if (selected.length === 0) return;
+    fetch('/admin/' + table + '/actions/' + key, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'HX-Request': 'true' },
+      body: JSON.stringify({ ids: selected })
+    }).then(function(resp) {
+      var trigger = resp.headers.get('HX-Trigger');
+      if (trigger) {
+        try {
+          var obj = JSON.parse(trigger);
+          if (obj.showToast && window.umbra && umbra.showToast) umbra.showToast(obj.showToast.message, obj.showToast.level);
+        } catch(e) {}
+      }
+      var redirect = resp.headers.get('HX-Redirect');
+      if (redirect) { window.location.href = redirect; return; }
+      htmx.ajax('GET', '/admin/' + table + '/rows', { target: '#table-body', swap: 'innerHTML' });
+      umbra.selectAllRows(false);
+    }).catch(function(e) {
+      if (window.umbra && umbra.showToast) umbra.showToast('Action failed: ' + e, 'error');
+    });
+  };
+
   // Re-init after HTMX swaps the tbody.
   document.body.addEventListener('htmx:afterSwap', function(e) {
     if (e.detail && e.detail.target && e.detail.target.id === 'table-body') {
@@ -624,4 +709,74 @@
   if (window.lucide) lucide.createIcons();
 })();
 </script>
+
+{# ================================================================
+   Floating bulk-action toolbar — appears bottom-center on selection
+   ================================================================ #}
+<div
+  id="bulk-toolbar"
+  class="hidden fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-md px-lg py-sm bg-surface-container border border-outline-variant rounded-full shadow-2xl"
+  role="toolbar"
+  aria-label="Bulk actions"
+  data-table="{{ model.table }}"
+>
+  <span class="font-label-md text-label-md text-on-surface-variant">
+    <span class="bulk-count font-semibold text-on-surface">0</span> selected
+  </span>
+  <button
+    type="button"
+    onclick="umbra.selectAllRows(false)"
+    class="font-label-sm text-label-sm text-on-surface-variant hover:text-on-surface transition-colors"
+  >Clear</button>
+  <div class="w-px h-4 bg-outline-variant"></div>
+
+  {# Bulk-scope actions (up to 4 inline) #}
+  {% set bulk_actions = [] %}
+  {% for action in actions %}
+    {% if action.scope == "bulk" or action.scope == "both" %}
+      {% set bulk_actions = bulk_actions | list + [action] %}
+    {% endif %}
+  {% endfor %}
+  {% for action in bulk_actions[:4] %}
+  <button
+    type="button"
+    id="bulk-action-{{ action.key }}"
+    data-action-key="{{ action.key }}"
+    data-action-confirm="{{ action.confirm | default('') }}"
+    data-table="{{ model.table }}"
+    class="flex items-center gap-xs px-md py-xs rounded-lg font-label-md text-label-md {% if action.variant == 'danger' %}text-error hover:bg-error-container/10{% else %}text-on-surface hover:bg-surface-container-high{% endif %} transition-colors"
+    title="{{ action.label }}"
+    onclick="umbra.runBulkAction(this)"
+  >
+    <i data-lucide="{{ action.icon }}" class="w-4 h-4"></i>
+    <span class="hidden sm:inline">{{ action.label }}</span>
+  </button>
+  {% endfor %}
+
+  {% if bulk_actions | length > 4 %}
+  <div class="relative">
+    <button type="button"
+      onclick="var m=document.getElementById('bulk-overflow');m.classList.toggle('hidden');event.stopPropagation()"
+      class="p-sm text-on-surface-variant hover:text-on-surface transition-colors"
+      title="More"
+    >
+      <i data-lucide="more-horizontal" class="w-4 h-4"></i>
+    </button>
+    <div id="bulk-overflow" class="hidden absolute bottom-full right-0 mb-xs z-50 bg-surface-container border border-outline-variant rounded-xl shadow-lg py-xs min-w-[180px]">
+      {% for action in bulk_actions[4:] %}
+      <button type="button"
+        data-action-key="{{ action.key }}"
+        data-action-confirm="{{ action.confirm | default('') }}"
+        data-table="{{ model.table }}"
+        class="w-full flex items-center gap-sm px-md py-sm text-left hover:bg-surface-container-high font-label-md text-label-md {% if action.variant == 'danger' %}text-error{% else %}text-on-surface{% endif %} transition-colors"
+        onclick="umbra.runBulkAction(this)"
+      >
+        <i data-lucide="{{ action.icon }}" class="w-4 h-4"></i>
+        {{ action.label }}
+      </button>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+</div>
 {% endmacro %}

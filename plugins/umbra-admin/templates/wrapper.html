@@ -312,5 +312,112 @@
 </script>
 
 {% block extra_scripts %}{% endblock %}
+
+{# Toast notification container #}
+<div id="umbra-toast-container" class="fixed bottom-4 right-4 z-[300] flex flex-col gap-sm pointer-events-none" aria-live="polite"></div>
+
+<script>
+(function() {
+  window.umbra = window.umbra || {};
+
+  umbra.showToast = function(message, level) {
+    level = level || 'info';
+    var container = document.getElementById('umbra-toast-container');
+    if (!container) return;
+    var colors = {
+      info:    'bg-surface-container border-outline-variant text-on-surface',
+      success: 'bg-primary-container/20 border-primary/30 text-primary',
+      warning: 'bg-surface-container border-outline text-on-surface-variant',
+      error:   'bg-error-container/20 border-error/30 text-error'
+    };
+    var icons = { info: 'info', success: 'check-circle', warning: 'alert-triangle', error: 'alert-circle' };
+    var toast = document.createElement('div');
+    toast.className = 'pointer-events-auto flex items-center gap-sm px-lg py-sm rounded-xl border shadow-lg font-label-md text-label-md transition-all duration-300 ' + (colors[level] || colors.info);
+    toast.innerHTML = '<i data-lucide="' + (icons[level]||'info') + '" class="w-4 h-4 flex-shrink-0"></i><span>' + message + '</span>';
+    container.appendChild(toast);
+    if (window.lucide) lucide.createIcons({ el: toast });
+    setTimeout(function() {
+      toast.style.opacity = '0';
+      toast.style.transform = 'translateX(20px)';
+      setTimeout(function() { toast.remove(); }, 300);
+    }, 4000);
+  };
+
+  document.body.addEventListener('htmx:responseError', function() {
+    umbra.showToast('Server error', 'error');
+  });
+
+  document.body.addEventListener('showToast', function(e) {
+    if (e.detail) umbra.showToast(e.detail.message, e.detail.level);
+  });
+})();
+</script>
+
+<script>
+(function() {
+  // Sheet stack state machine.
+  window.umbra = window.umbra || {};
+  var stack = [];
+
+  umbra.openSheet = function(html) {
+    var slot = document.getElementById('umbra-sheet-slot');
+    if (!slot) return;
+    stack.push(slot.innerHTML);
+    slot.innerHTML = html;
+    document.body.classList.add('overflow-hidden');
+    if (window.lucide) lucide.createIcons({ el: slot });
+    umbra._applyStackOffsets();
+  };
+
+  umbra.popSheet = function() {
+    var slot = document.getElementById('umbra-sheet-slot');
+    if (!slot) return;
+    if (stack.length > 0) {
+      slot.innerHTML = stack.pop();
+      if (window.lucide) lucide.createIcons({ el: slot });
+      umbra._applyStackOffsets();
+    } else {
+      umbra.closeSheet();
+    }
+  };
+
+  umbra.closeSheet = function() {
+    var slot = document.getElementById('umbra-sheet-slot');
+    if (slot) slot.innerHTML = '';
+    stack = [];
+    document.body.classList.remove('overflow-hidden');
+  };
+
+  umbra._applyStackOffsets = function() {
+    var slot = document.getElementById('umbra-sheet-slot');
+    if (!slot) return;
+    var panels = slot.querySelectorAll('#umbra-sheet-panel');
+    panels.forEach(function(panel, i) {
+      panel.style.transform = 'translateX(-' + (i * 40) + 'px)';
+    });
+  };
+
+  umbra.openNestedSheet = function(table) {
+    htmx.ajax('GET', '/admin/' + table + '/new-sheet', {
+      handler: function(elt, info) {
+        umbra.openSheet(info.xhr.responseText);
+      }
+    });
+  };
+
+  umbra.closeDialog = function() {
+    var slot = document.getElementById('umbra-dialog-slot');
+    if (slot) slot.innerHTML = '';
+  };
+
+  // Escape: close top sheet only.
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+      var slot = document.getElementById('umbra-sheet-slot');
+      if (slot && slot.innerHTML.trim()) { umbra.popSheet(); e.preventDefault(); }
+    }
+  });
+})();
+</script>
 </body>
 </html>

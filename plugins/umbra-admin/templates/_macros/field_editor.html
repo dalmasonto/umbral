@@ -77,20 +77,71 @@
       {% endif %}
     </div>
 
+  {% elif field.kind == "fk" %}
+    {# Async FK combobox — never preloads the whole table.
+       Endpoint: /admin/api/<fk_table>/<field.name>/options powers search.
+       On edit-mode load, /options/resolve?ids=<current> resolves the label. #}
+    {% set fk_table = field.fk_table | default("") %}
+    <div class="relative fk-picker" data-field="{{ field.name }}" data-fk-table="{{ fk_table }}">
+      <input type="hidden" id="f_{{ field.name }}" name="{{ field.name }}" value="{{ value }}" />
+      <input
+        type="text"
+        id="fk_text_{{ field.name }}"
+        placeholder="Search {{ field.name | replace('_id', '') | replace('_', ' ') | title }}..."
+        autocomplete="off"
+        class="w-full bg-surface-container-low border {% if error %}border-error{% else %}border-outline-variant{% endif %} rounded-xl px-md py-sm text-on-surface text-body-md focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all placeholder:text-outline/50 {% if is_readonly %}opacity-70 cursor-default{% endif %}"
+        {% if is_readonly %}readonly{% endif %}
+        hx-get="/admin/api/{{ fk_table }}/{{ field.name }}/options"
+        hx-trigger="input changed delay:250ms, focus"
+        hx-target="next .fk-options"
+        hx-swap="innerHTML"
+        hx-include="this"
+        name="search"
+      />
+      {% if value and not is_readonly %}
+      <span id="fk_resolve_{{ field.name }}"
+        hx-get="/admin/api/{{ fk_table }}/{{ field.name }}/options/resolve?ids={{ value }}"
+        hx-trigger="load"
+        hx-swap="none"
+        hx-on:htmx:after-request="if(window.umbra&&umbra.fkResolve)umbra.fkResolve('{{ field.name }}', event)"
+      ></span>
+      {% endif %}
+      <div class="fk-options hidden absolute left-0 right-0 top-full mt-xs z-30 bg-surface-container border border-outline-variant rounded-xl shadow-lg max-h-48 overflow-y-auto">
+        {# Populated by HTMX #}
+      </div>
+    </div>
+
+  {% elif field.kind == "m2m" %}
+    {# M2M chip multi-select picker.
+       NOTE: M2M is wired but no Model field uses it until the ORM ships M2M.
+       The chip picker is ready for that day. #}
+    <div class="fk-picker m2m-picker relative" data-field="{{ field.name }}">
+      <div id="chips_{{ field.name }}" class="flex flex-wrap gap-xs mb-xs">
+        {# Chips rendered by JS from hidden input #}
+      </div>
+      <input type="hidden" id="f_{{ field.name }}" name="{{ field.name }}" value="{{ value }}" />
+      <input type="text"
+        id="m2m_text_{{ field.name }}"
+        placeholder="Add {{ field.name | replace('_', ' ') | title }}..."
+        autocomplete="off"
+        class="w-full bg-surface-container-low border border-outline-variant rounded-xl px-md py-sm text-on-surface text-body-md focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20"
+        {% if is_readonly %}readonly{% endif %}
+      />
+      <div class="fk-options hidden absolute left-0 right-0 top-full mt-xs z-30 bg-surface-container border border-outline-variant rounded-xl shadow-lg max-h-48 overflow-y-auto"></div>
+    </div>
+
   {% elif field.kind == "number" %}
-    {# Integer / BigInt / Real / Double / ForeignKey #}
+    {# Integer / BigInt / Real / Double #}
     <input
       type="number"
       id="f_{{ field.name }}"
       name="{{ field.name }}"
       value="{{ value }}"
-      {% if field.kind == "number" and (field.name | lower) != "id" %}step="any"{% endif %}
+      step="any"
       {% if not field.nullable and not is_readonly %}required{% endif %}
       {% if is_readonly %}readonly{% endif %}
       class="w-full bg-surface-container-low border {% if error %}border-error{% else %}border-outline-variant{% endif %} rounded-xl px-md py-sm text-on-surface text-data-mono focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all tabular-nums placeholder:text-outline/50 {% if is_readonly %}opacity-70 cursor-default{% endif %}"
     />
-    {# Phase 3: replace this number input with an async FK combobox. #}
-    <p class="text-[10px] text-outline mt-0.5">ID value. Async FK picker available in phase 3.</p>
 
   {% elif field.kind == "date" %}
     <input
@@ -147,3 +198,51 @@
   {% endif %}
 </div>
 {% endmacro %}
+
+{# FK combobox JS — wires up all .fk-picker instances on the page.
+   Runs once per page load; re-runs after HTMX swaps sheet content. #}
+<script>
+(function() {
+  function initFkPickers(root) {
+    root = root || document;
+    root.querySelectorAll('.fk-picker:not([data-fk-init])').forEach(function(picker) {
+      picker.setAttribute('data-fk-init', '1');
+      var textInput = picker.querySelector('input[type=text]');
+      var hiddenInput = picker.querySelector('input[type=hidden]');
+      var dropdown = picker.querySelector('.fk-options');
+      if (!textInput || !hiddenInput || !dropdown) return;
+
+      textInput.addEventListener('focus', function() { dropdown.classList.remove('hidden'); });
+      document.addEventListener('click', function(e) {
+        if (!picker.contains(e.target)) dropdown.classList.add('hidden');
+      });
+
+      picker.addEventListener('htmx:afterSwap', function() {
+        dropdown.classList.remove('hidden');
+        dropdown.querySelectorAll('[data-fk-value]').forEach(function(opt) {
+          opt.addEventListener('mousedown', function(e) {
+            e.preventDefault();
+            hiddenInput.value = opt.getAttribute('data-fk-value');
+            textInput.value = opt.textContent.trim();
+            dropdown.classList.add('hidden');
+          });
+        });
+      });
+    });
+  }
+
+  window.umbra = window.umbra || {};
+  umbra.fkResolve = function(field, event) {
+    try {
+      var data = JSON.parse(event.detail.xhr.responseText);
+      if (data.items && data.items[0]) {
+        var el = document.getElementById('fk_text_' + field);
+        if (el) el.value = data.items[0].label;
+      }
+    } catch(e) {}
+  };
+
+  initFkPickers();
+  document.body.addEventListener('htmx:afterSwap', function() { initFkPickers(); });
+})();
+</script>

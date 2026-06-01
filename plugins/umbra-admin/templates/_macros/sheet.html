@@ -7,16 +7,17 @@ Arguments: mode="preview"|"edit"|"create", model_name, table, instance_id, field
 Phase-3 deferred: sheet stacking requires a JS state machine.
 Drag-resize: ~50 LOC vanilla JS at the bottom; width in localStorage.
 #}
-{% macro sheet(mode, model_name, table, instance_id, fields, title="", error="") %}
+{% macro sheet(mode, model_name, table, instance_id, fields, title="", error="", depth=0) %}
 {% set sheet_title = title if title else ("New " ~ model_name if mode == "create" else ("Edit " ~ model_name ~ " #" ~ instance_id if mode == "edit" else (model_name ~ " #" ~ instance_id))) %}
 {% set is_edit = mode == "edit" or mode == "create" %}
+{% set offset = depth * 40 %}
 
 <div id="umbra-sheet-scrim" class="fixed inset-0 z-[100] bg-background/50 backdrop-blur-sm" onclick="if(event.target===this)umbra.closeSheet()" aria-hidden="true"></div>
 
 <div
   id="umbra-sheet-panel"
   class="fixed top-4 right-4 bottom-4 z-[110] flex flex-col bg-surface-container border border-outline-variant rounded-[14px] shadow-2xl overflow-hidden transition-transform duration-300"
-  style="width: var(--sheet-width, 640px);"
+  style="width: var(--sheet-width, 640px); transform: translateX(-{{ offset }}px);"
   role="dialog"
   aria-modal="true"
   aria-label="{{ sheet_title }}"
@@ -26,11 +27,22 @@ Drag-resize: ~50 LOC vanilla JS at the bottom; width in localStorage.
   <div id="sheet-drag-handle" class="absolute left-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-primary/20 transition-colors z-10" aria-hidden="true"></div>
 
   <header class="sticky top-0 z-10 flex items-center justify-between px-lg py-md bg-surface-container border-b border-outline-variant flex-shrink-0">
-    <div>
-      <h2 class="font-h3 text-h3 text-on-surface leading-tight">{{ sheet_title }}</h2>
-      {% if instance_id and mode != "create" %}
-      <p class="text-[11px] text-outline mt-0.5 font-label-sm tabular-nums">#{{ instance_id }}</p>
+    <div class="flex items-center gap-sm">
+      {% if depth > 0 %}
+      <button type="button"
+        onclick="umbra.popSheet()"
+        class="w-8 h-8 flex items-center justify-center rounded-xl text-on-surface-variant hover:bg-surface-container-high transition-all mr-xs"
+        aria-label="Back to previous"
+      >
+        <i data-lucide="chevron-left" class="w-4 h-4"></i>
+      </button>
       {% endif %}
+      <div>
+        <h2 class="font-h3 text-h3 text-on-surface leading-tight">{{ sheet_title }}</h2>
+        {% if instance_id and mode != "create" %}
+        <p class="text-[11px] text-outline mt-0.5 font-label-sm tabular-nums">#{{ instance_id }}</p>
+        {% endif %}
+      </div>
     </div>
     <div class="flex items-center gap-sm">
       {% if mode != "create" %}
@@ -232,10 +244,7 @@ Drag-resize: ~50 LOC vanilla JS at the bottom; width in localStorage.
     dragging = false; document.body.style.userSelect = '';
     localStorage.setItem('umbra-admin-sheet-width', panel.offsetWidth);
   });
-  function onEsc(e) {
-    if (e.key === 'Escape') { umbra.closeSheet(); document.removeEventListener('keydown', onEsc); }
-  }
-  document.addEventListener('keydown', onEsc);
+  // Esc is handled globally in wrapper.html (popSheet); no duplicate listener needed here.
   if (window.lucide) lucide.createIcons();
 })();
 </script>

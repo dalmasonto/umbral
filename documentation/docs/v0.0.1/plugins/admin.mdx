@@ -220,7 +220,7 @@ The `data_table` macro (`templates/_macros/data_table.html`) drives every model 
 - **States.** Empty (no rows yet — shows a "Create the first one" button), no-results (filters/search returned nothing — shows a "Clear filters" link), and pagination-aware.
 - **Full pagination.** Range text ("1-25 of 1,204"), page-size select (10/25/50/100, default from `list_per_page`), prev/next, first/last, windowed page number list.
 - **Selection.** Header checkbox selects all on page; per-row checkboxes. Selection state is preserved via `hx-preserve` on a hidden `#bulk-action-form`. The floating bulk-action toolbar appears when any rows are selected (phase 3 adds action descriptors to it).
-- **Responsive.** ≥1024px: full table. 768-1023px: low-priority columns hidden via `hidden lg:table-cell`. <768px: stacked card behavior (low-priority columns hidden; action column visible).
+- **Responsive.** ≥1024px: full table. 768-1023px: low-priority columns hidden via `hidden lg:table-cell`. < 768px: stacked card behavior (low-priority columns hidden; action column visible).
 
 `AdminModel` fields that drive it:
 
@@ -290,14 +290,109 @@ The `confirm_dialog` macro (`templates/_macros/confirm_dialog.html`) is a center
 
 To add a custom column type, add an `{% elif col.name == "..." %}` clause inside the cell-rendering block in `rows_fragment.html` and `data_table.html`. To add a custom row action, add it to the `AdminModel::actions` list and to the action column in the macros (phase 3 makes this declarative).
 
+## Phase 3: actions, async FK pickers, sheet stacking, inline cell edit
+
+### Action descriptor system
+
+Phase 3 replaces the simple bulk-action shim with a typed `Action` descriptor. Every action now carries an icon (Lucide), variant, scope, optional confirm message, and returns a structured `ActionResult`:
+
+```rust
+use umbra_admin::{Action, ActionInvocation, ActionResult, ActionScope, ToastLevel};
+
+let publish = Action::new(
+    "publish",      // URL-safe key
+    "Publish",      // Label shown in tooltips / overflow menus
+    "send",         // Lucide icon name
+    |inv: ActionInvocation| async move {
+        // inv.ids      — selected primary keys
+        // inv.pool     — ambient SqlitePool for mutations
+        // inv.username, inv.table — context
+        Ok(ActionResult::Toast {
+            message: format!("Published {} post(s).", inv.ids.len()),
+            level: ToastLevel::Success,
+        })
+    },
+)
+.scope(ActionScope::Both)            // Row | Bulk | Both
+.danger()                             // red styling
+.confirm("Publish selected posts?"); // confirm dialog before firing
+
+AdminModel::new("post")
+    .actions(vec![Action::delete_selected(), publish])
+```
+
+`ActionResult` variants and their HTMX encoding:
+
+| Variant | Effect |
+|---|---|
+| `Toast { message, level }` | `HX-Trigger: {"showToast": {...}}` header |
+| `RefreshTable` | `HX-Trigger: {"refreshTable": {}}` — JS refreshes `#table-body` |
+| `OpenSheet { table, id }` | `HX-Trigger: {"openSheet": {...}}` header |
+| `Download { filename, content_type, bytes }` | `Content-Disposition: attachment` response |
+| `Redirect { url }` | `HX-Redirect` header |
+
+### Row action column
+
+The DataTable renders the built-in eye/pencil/trash-2 buttons, then up to 2 custom row-scope actions as inline icon buttons. If more than 2 custom actions have `scope = Row | Both`, a `more-horizontal` overflow menu lists the rest. Danger-variant actions render in `text-error`.
+
+### Floating bulk-action toolbar
+
+When rows are selected, a pill-shaped toolbar rises from the bottom-center. It shows the selection count, a "Clear" link, and up to 4 bulk-scope actions. Additional bulk actions appear in an overflow menu. Clicking a button fires `POST /admin/{table}/actions/{key}` with `{"ids": [...]}` via `fetch()`.
+
+### Phase 3 action endpoints
+
+| Route | Purpose |
+|---|---|
+| `POST /admin/{table}/actions/{key}` | Run an action over `{ "ids": [...] }` (JSON body) |
+
+### Async FK picker
+
+ForeignKey fields in create/edit sheets now use a searchable combobox instead of a plain number input. The combobox calls:
+
+```
+GET /admin/api/{table}/{field}/options?search=&page=&page_size=20
+→ { "items": [{ "value": 1, "label": "My Post" }], "page": 1, "has_more": false }
+
+GET /admin/api/{table}/{field}/options/resolve?ids=1,2
+→ { "items": [{ "value": 1, "label": "My Post" }, ...] }
+```
+
+Both endpoints require `is_staff`. The `label` comes from the related model's first text column. `search` matches against the related `AdminModel`'s `search_fields` (or the first text column as fallback). The resolve endpoint loads pre-selected labels on edit-form open without a round-trip.
+
+### M2M chip picker
+
+The `field_editor` macro also renders a chip multi-select for `m2m` kind fields. No model uses this yet - the ORM's M2M support is deferred to a later milestone. The UI is wired and ready.
+
+### Sheet stacking
+
+Opening "+ Add new" inside an FK picker pushes the current sheet onto a JS stack and loads the create sheet for the related model, offset 40px to the left. The stacked sheet header shows a back chevron to pop. `Esc` closes the top sheet only. The stack state machine (~80 LOC vanilla JS) lives in `wrapper.html`.
+
+### Inline cell edit
+
+Opt specific columns into double-click inline editing:
+
+```rust
+AdminModel::new("post")
+    .inline_edit_fields(&["title", "slug"])
+```
+
+Double-clicking an enabled cell HTMX-swaps the cell content with a compact inline editor. Saving on blur or Enter POSTs the new value; the cell reverts to read-only on success. Validation errors appear inline as `text-error` spans.
+
+| Route | Purpose |
+|---|---|
+| `GET /admin/{table}/{id}/cell/{field}/edit` | Returns the editor fragment for one cell |
+| `POST /admin/{table}/{id}/cell/{field}` | Saves new value, returns read-only cell span |
+
+### Toast notifications
+
+All action results that produce a `Toast` trigger a bottom-right notification via the `showToast` HTMX event. Levels: `info` / `success` / `warning` / `error`. Auto-dismisses after 4 seconds. The renderer (~50 LOC vanilla JS) lives in `wrapper.html`.
+
+---
+
 ## Deferred admin features (phases 3-4)
 
 | Feature | Phase |
 |---|---|
-| Async FK combobox + M2M chip multi-select | 3 |
-| Inline edit cells (double-click a cell) | 3 |
-| Extensible row + bulk action descriptors (Lucide icon, variant, confirm, permission) | 3 |
-| Sheet stacking (related record opens a second offset sheet with back affordance) | 3 |
 | Dashboard widgets (KPI cards, charts, activity feed) | 3 |
 | File/media previews (image lightbox, PDF viewer, CSV table, code viewer) | 4 |
 | Command palette (`⌘K`) | 4 |

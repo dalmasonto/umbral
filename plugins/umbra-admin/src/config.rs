@@ -18,130 +18,222 @@
 //!             .actions(vec![Action::delete_selected()]),
 //!     )
 //! ```
-//!
-//! ## `AdminConfig` alias
-//!
-//! [`AdminConfig`] is a type alias for backwards compatibility. Code
-//! that was written against the old name continues to compile unchanged.
-//!
-//! ## Phase-2 stubs
-//!
-//! - [`InlineModel`] carries the data shape for related-model inline
-//!   editors. The actual inline renderer lands in phase 2; today the
-//!   field is stored on [`AdminModel`] but has no rendering path.
-//! - [`AdminModel::inlines`] is `Vec<InlineModel>` — a no-op for now.
 
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use sqlx::SqlitePool;
+
 // =========================================================================
-// Action
+// Action result / invocation types
 // =========================================================================
 
-/// Context available to bulk action handlers.
+/// Severity level for toast notifications.
+#[derive(Debug, Clone)]
+pub enum ToastLevel {
+    Info,
+    Success,
+    Warning,
+    Error,
+}
+
+impl ToastLevel {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ToastLevel::Info => "info",
+            ToastLevel::Success => "success",
+            ToastLevel::Warning => "warning",
+            ToastLevel::Error => "error",
+        }
+    }
+}
+
+/// The result an action handler returns to the admin runtime.
+///
+/// The runtime encodes each variant as HTMX response directives:
+/// - `Toast` → `HX-Trigger: {"showToast": {...}}`
+/// - `RefreshTable` → rows fragment swap
+/// - `OpenSheet` → `HX-Trigger: {"openSheet": {...}}`
+/// - `Download` → `Content-Disposition: attachment` bytes
+/// - `Redirect` → `HX-Redirect` header
+#[derive(Debug, Clone)]
+pub enum ActionResult {
+    Toast {
+        message: String,
+        level: ToastLevel,
+    },
+    RefreshTable,
+    OpenSheet {
+        table: String,
+        id: i64,
+    },
+    Download {
+        filename: String,
+        content_type: String,
+        bytes: Vec<u8>,
+    },
+    Redirect {
+        url: String,
+    },
+}
+
+/// Visual variant for an action button.
+#[derive(Debug, Clone)]
+pub enum ActionVariant {
+    Default,
+    Danger,
+}
+
+/// Which surfaces an action appears on.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ActionScope {
+    Row,
+    Bulk,
+    Both,
+}
+
+/// Context available to action handlers.
+#[derive(Debug, Clone)]
+pub struct ActionInvocation {
+    /// Selected primary keys.
+    pub ids: Vec<i64>,
+    /// Username of the currently-logged-in staff user.
+    pub username: String,
+    /// SQL table the action was invoked on.
+    pub table: String,
+    /// Ambient pool for DB mutations.
+    pub pool: SqlitePool,
+}
+
+/// Backwards-compatible context type used by phase 1/2 code paths.
 #[derive(Debug, Clone)]
 pub struct AdminContext {
-    /// Username of the currently logged-in staff user.
     pub username: String,
-    /// The SQL table the action was invoked on.
     pub table: String,
 }
 
-/// The boxed future every bulk action handler collapses to.
 pub(crate) type ActionFuture =
-    Pin<Box<dyn Future<Output = Result<String, String>> + Send + 'static>>;
+    Pin<Box<dyn Future<Output = Result<ActionResult, String>> + Send + 'static>>;
 
-/// The stored handler closure. Arc'd so the config can be cloned cheaply.
 pub(crate) type ActionHandlerFn =
-    Arc<dyn Fn(Vec<i64>, AdminContext) -> ActionFuture + Send + Sync + 'static>;
+    Arc<dyn Fn(ActionInvocation) -> ActionFuture + Send + Sync + 'static>;
 
-/// A bulk admin action, e.g. "publish selected", "delete selected".
+/// A row or bulk admin action.
 ///
-/// Each action has a URL-safe name displayed in the action dropdown and an
-/// async handler that receives the selected primary keys (as `Vec<i64>`) plus
-/// an [`AdminContext`] carrying the logged-in user and table name. The handler
-/// returns a flash message on success or an error string on failure.
-///
-/// Use [`Action::new`] to define a custom action. Use
-/// [`Action::delete_selected`] for the built-in bulk-delete.
+/// Build with [`Action::new`]; chain `.danger()`, `.scope()`, `.confirm()`,
+/// `.permission()` to configure. Use [`Action::delete_selected`] for the
+/// built-in bulk-delete.
 #[derive(Clone)]
 pub struct Action {
-    pub(crate) name: String,
+    pub(crate) key: String,
+    /// Display label shown in tooltips / overflow menus.
     pub(crate) label: String,
+    /// Lucide icon name (e.g. "send", "trash-2").
+    pub(crate) icon: String,
+    pub(crate) variant: ActionVariant,
+    pub(crate) scope: ActionScope,
+    /// If `Some`, a confirm dialog is shown before firing.
+    pub(crate) confirm: Option<String>,
+    /// Permission codename to check. `None` = any staff user may invoke.
+    /// Full umbra-permissions integration deferred (gap 33); today gated
+    /// on `is_staff` only. Field is stored for when permissions land.
+    pub(crate) permission: Option<String>,
     pub(crate) handler: ActionHandlerFn,
 }
 
 impl std::fmt::Debug for Action {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Action")
-            .field("name", &self.name)
+            .field("key", &self.key)
             .field("label", &self.label)
+            .field("icon", &self.icon)
             .finish()
     }
 }
 
 impl Action {
-    /// Create a new bulk action.
+    /// Create a new action.
     ///
-    /// `name` must be ASCII lowercase/digits/underscores/hyphens (validated
-    /// at construction; panics on an invalid name — it is always a bug).
-    ///
-    /// `handler` receives the selected PKs and context, returns a flash message
-    /// string (`Ok`) or an error string (`Err`).
-    ///
-    /// ```ignore
-    /// Action::new("publish", |ids, ctx| async move {
-    ///     // ids: the selected primary keys
-    ///     // ctx: AdminContext { username, table }
-    ///     Ok(format!("Published {} rows.", ids.len()))
-    /// })
-    /// ```
-    pub fn new<F, Fut>(name: impl Into<String>, label: impl Into<String>, f: F) -> Self
+    /// `key` must be ASCII lowercase/digits/underscores/hyphens.
+    pub fn new<F, Fut>(
+        key: impl Into<String>,
+        label: impl Into<String>,
+        icon: impl Into<String>,
+        f: F,
+    ) -> Self
     where
-        F: Fn(Vec<i64>, AdminContext) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Result<String, String>> + Send + 'static,
+        F: Fn(ActionInvocation) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<ActionResult, String>> + Send + 'static,
     {
-        let name = name.into();
-        let label = label.into();
+        let key = key.into();
         assert!(
-            !name.is_empty() && name.chars().all(is_action_name_char),
-            "Action::new: name {name:?} must be ASCII [a-z0-9_-]"
+            !key.is_empty() && key.chars().all(is_action_key_char),
+            "Action::new: key {key:?} must be ASCII [a-z0-9_-]"
         );
-        let handler: ActionHandlerFn = Arc::new(move |ids, ctx| Box::pin(f(ids, ctx)));
-        Self {
-            name,
-            label,
-            handler,
+        Action {
+            key,
+            label: label.into(),
+            icon: icon.into(),
+            variant: ActionVariant::Default,
+            scope: ActionScope::Both,
+            confirm: None,
+            permission: None,
+            handler: Arc::new(move |inv| Box::pin(f(inv))),
         }
     }
 
-    /// The built-in bulk-delete action. Equivalent to Django's
-    /// "Delete selected <model>" action that appears by default on every
-    /// model's change list.
-    ///
-    /// Issues a single `DELETE FROM "<table>" WHERE "id" IN (...)` SQL
-    /// statement for the selected PKs. Returns a flash message with the count.
+    /// Mark this action as danger variant (red styling).
+    pub fn danger(mut self) -> Self {
+        self.variant = ActionVariant::Danger;
+        self
+    }
+
+    /// Restrict this action to row-only or bulk-only scope.
+    pub fn scope(mut self, scope: ActionScope) -> Self {
+        self.scope = scope;
+        self
+    }
+
+    /// Require a confirm dialog before firing. `message` is shown in the dialog.
+    pub fn confirm(mut self, message: impl Into<String>) -> Self {
+        self.confirm = Some(message.into());
+        self
+    }
+
+    /// Require a permission codename (deferred; stored for future use).
+    pub fn permission(mut self, codename: impl Into<String>) -> Self {
+        self.permission = Some(codename.into());
+        self
+    }
+
+    /// Built-in bulk-delete. Equivalent to Django's "Delete selected" default.
     pub fn delete_selected() -> Self {
         Self::new(
             "delete_selected",
             "Delete selected",
-            |ids, ctx| async move {
-                if ids.is_empty() {
-                    return Ok("No rows selected.".to_string());
+            "trash-2",
+            |inv| async move {
+                if inv.ids.is_empty() {
+                    return Ok(ActionResult::Toast {
+                        message: "No rows selected.".to_string(),
+                        level: ToastLevel::Info,
+                    });
                 }
-                let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+                let placeholders = inv.ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
                 let sql = format!(
                     "DELETE FROM \"{}\" WHERE \"id\" IN ({placeholders})",
-                    ctx.table.replace('"', "\"\"")
+                    inv.table.replace('"', "\"\"")
                 );
-                let pool = umbra::db::pool();
                 let mut q = sqlx::query(&sql);
-                for id in &ids {
+                for id in &inv.ids {
                     q = q.bind(*id);
                 }
-                match q.execute(&pool).await {
-                    Ok(r) => Ok(format!("Deleted {} row(s).", r.rows_affected())),
+                match q.execute(&inv.pool).await {
+                    Ok(r) => Ok(ActionResult::Toast {
+                        message: format!("Deleted {} row(s).", r.rows_affected()),
+                        level: ToastLevel::Success,
+                    }),
                     Err(e) => {
                         tracing::error!(error = %e, "admin: delete_selected failed");
                         Err("database error during delete".to_string())
@@ -149,10 +241,18 @@ impl Action {
                 }
             },
         )
+        .danger()
+        .scope(ActionScope::Bulk)
+        .confirm("This will permanently delete the selected rows. Continue?")
+    }
+
+    /// The action key (URL-safe identifier).
+    pub fn key(&self) -> &str {
+        &self.key
     }
 }
 
-fn is_action_name_char(c: char) -> bool {
+fn is_action_key_char(c: char) -> bool {
     c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_'
 }
 
@@ -161,78 +261,36 @@ fn is_action_name_char(c: char) -> bool {
 // =========================================================================
 
 /// Data shape for a related-model inline editor.
-///
-/// Phase 2 will render this as an inline section on the edit form —
-/// the same concept as Django's `StackedInline` / `TabularInline`.
-/// Today the struct is stored on [`AdminModel`] but nothing renders it.
-///
-/// Example (future):
-/// ```ignore
-/// AdminModel::new("post")
-///     .inlines(vec![InlineModel {
-///         model: "comment".to_string(),
-///         fk_field: "post_id".to_string(),
-///         list_display: vec!["author".to_string(), "body".to_string()],
-///     }])
-/// ```
 #[derive(Debug, Clone)]
 pub struct InlineModel {
-    /// SQL table name of the related model to show inline.
     pub model: String,
-    /// The foreign key column on the related model pointing back to
-    /// this parent model.
     pub fk_field: String,
-    /// Columns to display in the inline section. Empty = all columns.
     pub list_display: Vec<String>,
 }
 
 // =========================================================================
-// AdminModel (the renamed AdminConfig)
+// AdminModel
 // =========================================================================
 
-/// Per-model admin customization. Build via [`Self::new`] + chainable methods,
-/// then register with [`crate::AdminPlugin::register`].
-///
-/// All methods are opt-in. An `AdminModel` with only `.new("post")` called
-/// behaves identically to the implicit default: all columns in the list,
-/// no filters, no search, DB-default ordering.
-///
-/// Renamed from `AdminConfig` in phase 1. The old name is kept as a
-/// type alias so existing code compiles without changes.
+/// Per-model admin customization. Build via [`Self::new`] + chainable methods.
 #[derive(Clone, Debug)]
 pub struct AdminModel {
-    /// SQL table name this config applies to.
     pub(crate) table: String,
-    /// Columns to show in the list view (in order). Empty = all columns.
     pub(crate) list_display: Vec<String>,
-    /// Columns that produce filter facets in the list sidebar. Empty = none.
     pub(crate) list_filter: Vec<String>,
-    /// Columns that are searched by the search box via LIKE %term%. Empty = search disabled.
     pub(crate) search_fields: Vec<String>,
-    /// Default sort columns. Leading `-` means descending. Empty = ORDER BY pk.
     pub(crate) ordering: Vec<String>,
-    /// Bulk actions available on the list view.
     pub(crate) actions: Vec<Action>,
-    /// Fields shown read-only on the edit/create form.
     pub(crate) readonly_fields: Vec<String>,
-    /// Number of rows per page in the list view. Defaults to 25.
     pub(crate) list_per_page: usize,
-    /// Related-model inline editors (phase 2 placeholder). Stored now;
-    /// rendered in phase 2.
     pub(crate) inlines: Vec<InlineModel>,
-    /// Optional human-readable label for the sidebar. Defaults to a
-    /// title-cased version of `table`.
     pub(crate) label: Option<String>,
-    /// Optional Lucide icon name for the sidebar. Defaults to `"database"`.
     pub(crate) icon: Option<String>,
+    /// Fields that support double-click inline edit in the DataTable.
+    pub(crate) inline_edit_fields: Vec<String>,
 }
 
 impl AdminModel {
-    /// Start a new `AdminModel` for the given SQL table name.
-    ///
-    /// ```ignore
-    /// AdminModel::new("post")
-    /// ```
     pub fn new(table: impl Into<String>) -> Self {
         Self {
             table: table.into(),
@@ -246,141 +304,70 @@ impl AdminModel {
             inlines: Vec::new(),
             label: None,
             icon: None,
+            inline_edit_fields: Vec::new(),
         }
     }
 
-    /// Pick which columns appear in the list view, in this exact order.
-    ///
-    /// Default (no call): all columns in declaration order.
-    ///
-    /// ```ignore
-    /// AdminModel::new("post")
-    ///     .list_display(&["title", "author", "published_at"])
-    /// ```
     pub fn list_display(mut self, fields: &[&str]) -> Self {
         self.list_display = fields.iter().map(|s| s.to_string()).collect();
         self
     }
 
-    /// Name the columns that become filter facets in the list sidebar.
-    ///
-    /// Each named field becomes a clickable facet whose values are the
-    /// distinct non-null values in that column (booleans render as
-    /// "true / false"; integers and text render their distinct values).
-    ///
-    /// ```ignore
-    /// AdminModel::new("post")
-    ///     .list_filter(&["published", "author"])
-    /// ```
     pub fn list_filter(mut self, fields: &[&str]) -> Self {
         self.list_filter = fields.iter().map(|s| s.to_string()).collect();
         self
     }
 
-    /// Enable a search box that ANDs `LIKE %term%` across these columns.
-    ///
-    /// When the `?q=` query parameter is present on the list URL, the
-    /// handler adds a `WHERE (col1 LIKE ? OR col2 LIKE ?)` clause to the
-    /// base query before pagination.
-    ///
-    /// ```ignore
-    /// AdminModel::new("post")
-    ///     .search_fields(&["title", "body"])
-    /// ```
     pub fn search_fields(mut self, fields: &[&str]) -> Self {
         self.search_fields = fields.iter().map(|s| s.to_string()).collect();
         self
     }
 
-    /// Set the default sort order for the list view.
-    ///
-    /// Each entry is a column name optionally prefixed with `-` for descending.
-    ///
-    /// ```ignore
-    /// AdminModel::new("post")
-    ///     .ordering(&["-published_at", "title"])
-    /// ```
     pub fn ordering(mut self, fields: &[&str]) -> Self {
         self.ordering = fields.iter().map(|s| s.to_string()).collect();
         self
     }
 
-    /// Register bulk actions available via the action dropdown on the list view.
-    ///
-    /// The built-in [`Action::delete_selected`] is always available as a
-    /// convenience; call this method to add custom actions *in addition to*
-    /// whatever the default list produces (or replace the defaults entirely by
-    /// passing only the actions you want).
-    ///
-    /// ```ignore
-    /// AdminModel::new("post")
-    ///     .actions(vec![
-    ///         Action::delete_selected(),
-    ///         Action::new("publish", "Publish selected", |ids, _ctx| async move {
-    ///             Ok(format!("Published {} posts.", ids.len()))
-    ///         }),
-    ///     ])
-    /// ```
     pub fn actions(mut self, actions: Vec<Action>) -> Self {
         self.actions = actions;
         self
     }
 
-    /// Mark fields as read-only on the create/edit form.
-    ///
-    /// These fields are still shown on the form (so the operator can see
-    /// the value) but render as `<input readonly>` so they cannot be
-    /// changed by the browser submission.
-    ///
-    /// ```ignore
-    /// AdminModel::new("post")
-    ///     .readonly_fields(&["created_at", "id"])
-    /// ```
     pub fn readonly_fields(mut self, fields: &[&str]) -> Self {
         self.readonly_fields = fields.iter().map(|s| s.to_string()).collect();
         self
     }
 
-    /// Set the number of rows per page in the list view.
-    ///
-    /// Defaults to 25. The actual pagination logic is deferred to phase 2;
-    /// this value is stored and available via [`AdminModel::get_list_per_page`].
     pub fn list_per_page(mut self, n: usize) -> Self {
         self.list_per_page = n;
         self
     }
 
-    /// Set related-model inline editors (phase 2 placeholder).
-    ///
-    /// The inlines are stored on the model for use in phase 2 but have
-    /// no rendering path in phase 1. Pass an empty vec or omit the call
-    /// to leave inlines disabled.
     pub fn inlines(mut self, inlines: Vec<InlineModel>) -> Self {
         self.inlines = inlines;
         self
     }
 
-    /// Override the sidebar display label. Defaults to a title-cased
-    /// version of the table name.
     pub fn label(mut self, label: impl Into<String>) -> Self {
         self.label = Some(label.into());
         self
     }
 
-    /// Set the Lucide icon name for the sidebar entry. Defaults to
-    /// `"database"`. Pass the Lucide icon slug (e.g. `"file-text"`,
-    /// `"users"`, `"settings"`).
     pub fn icon(mut self, icon: impl Into<String>) -> Self {
         self.icon = Some(icon.into());
         self
     }
 
-    /// The table this config applies to.
+    /// Enable double-click inline cell edit for these columns in the DataTable.
+    pub fn inline_edit_fields(mut self, fields: &[&str]) -> Self {
+        self.inline_edit_fields = fields.iter().map(|s| s.to_string()).collect();
+        self
+    }
+
     pub fn table(&self) -> &str {
         &self.table
     }
 
-    /// The page size for list views. Defaults to 25.
     pub fn get_list_per_page(&self) -> usize {
         self.list_per_page
     }
@@ -390,8 +377,4 @@ impl AdminModel {
 // Backwards-compat alias
 // =========================================================================
 
-/// Backwards-compatible type alias for [`AdminModel`].
-///
-/// All code written against the old `AdminConfig` name compiles
-/// unchanged — the types are identical at the Rust level.
 pub type AdminConfig = AdminModel;
