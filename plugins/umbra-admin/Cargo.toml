@@ -13,6 +13,9 @@ rust-version.workspace = true
 
 [dependencies]
 umbra = { path = "../../crates/umbra", version = "0.0.1" }
+# axum is needed for State + Query extractors used by the new AdminConfig
+# routing surface. umbra's web re-exports don't include State.
+axum = "0.8"
 # Required for the auth gate. The admin uses umbra-auth's
 # `authenticate` helper against the X-Forwarded-User / Basic Auth
 # header on every request.

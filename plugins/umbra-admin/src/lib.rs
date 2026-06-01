@@ -12,6 +12,12 @@
 //!
 //! Plus a registered-models index at `/admin/`.
 //!
+//! ## Customizing per-model display
+//!
+//! Register an [`AdminConfig`] for a model to control list columns, filter
+//! facets, search, ordering, bulk actions, and readonly fields. See
+//! [`AdminPlugin::register`] and the [`config`] module.
+//!
 //! ## Auth
 //!
 //! Every admin route requires HTTP Basic Auth against
@@ -43,8 +49,14 @@
 //!
 //! Nullable fields skip the `required` attribute.
 
-use std::collections::HashMap;
+pub mod config;
 
+pub use config::{Action, AdminConfig, AdminContext};
+
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use axum::extract::{Query, State};
 use base64::Engine;
 use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
 use minijinja::{Environment, context};
@@ -59,9 +71,65 @@ use umbra::web::{
 };
 use uuid::Uuid;
 
+// =========================================================================
+// Plugin struct — now holds per-model AdminConfigs.
+// =========================================================================
+
 /// The plugin. Mounts every admin route under `/admin`.
-#[derive(Debug, Default)]
-pub struct AdminPlugin;
+///
+/// Use [`AdminPlugin::register`] to attach an [`AdminConfig`] before
+/// passing the plugin to `App::builder().plugin(...)`.
+///
+/// ```ignore
+/// use umbra_admin::{AdminPlugin, AdminConfig, Action};
+///
+/// let admin = AdminPlugin::default()
+///     .register(
+///         AdminConfig::new("post")
+///             .list_display(&["title", "author", "published_at"])
+///             .list_filter(&["published"])
+///             .search_fields(&["title", "body"])
+///             .ordering(&["-published_at"])
+///             .readonly_fields(&["created_at"])
+///             .actions(vec![Action::delete_selected()]),
+///     );
+///
+/// App::builder()
+///     .plugin(AuthPlugin::default())
+///     .plugin(admin)
+///     .build()?;
+/// ```
+#[derive(Debug, Default, Clone)]
+pub struct AdminPlugin {
+    configs: Vec<AdminConfig>,
+}
+
+impl AdminPlugin {
+    /// Register an [`AdminConfig`] for one model. Chainable.
+    ///
+    /// If two configs are registered for the same table the last one wins
+    /// (same semantics as Django's `site.register` overwriting on duplicate).
+    pub fn register(mut self, config: AdminConfig) -> Self {
+        // Remove any prior config for the same table so the last one wins.
+        self.configs.retain(|c| c.table != config.table);
+        self.configs.push(config);
+        self
+    }
+}
+
+/// Shared state injected into every route via [`axum::extract::State`].
+///
+/// `Arc` makes the clone cheap; the configs are immutable after `build()`.
+#[derive(Clone, Debug)]
+struct AdminState {
+    configs: Arc<Vec<AdminConfig>>,
+}
+
+impl AdminState {
+    fn config_for(&self, table: &str) -> Option<&AdminConfig> {
+        self.configs.iter().find(|c| c.table == table)
+    }
+}
 
 impl Plugin for AdminPlugin {
     fn name(&self) -> &'static str {
@@ -76,14 +144,19 @@ impl Plugin for AdminPlugin {
     }
 
     fn routes(&self) -> Router {
+        let state = AdminState {
+            configs: Arc::new(self.configs.clone()),
+        };
         Router::new()
             .route("/admin", get(index))
             .route("/admin/", get(index))
             .route("/admin/{table}/", get(list))
             .route("/admin/{table}/new", get(new_form).post(create))
+            .route("/admin/{table}/action", post(run_action))
             .route("/admin/{table}/{id}", get(detail))
             .route("/admin/{table}/{id}/edit", get(edit_form).post(update))
             .route("/admin/{table}/{id}/delete", post(delete))
+            .with_state(state)
     }
 }
 
@@ -268,7 +341,21 @@ async fn index(headers: HeaderMap) -> Response {
     }
 }
 
-async fn list(headers: HeaderMap, Path(table): Path<String>) -> Response {
+// ---- list ------------------------------------------------------------------
+
+/// Template-facing representation of one filter facet.
+#[derive(Debug, Clone, Serialize)]
+struct FilterFacet {
+    field: String,
+    values: Vec<String>,
+}
+
+async fn list(
+    State(state): State<AdminState>,
+    headers: HeaderMap,
+    Path(table): Path<String>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Response {
     let who = match require_staff(&headers).await {
         Ok(u) => u,
         Err(r) => return r,
@@ -279,19 +366,214 @@ async fn list(headers: HeaderMap, Path(table): Path<String>) -> Response {
     let Some(pk) = pk_column(&model) else {
         return AdminError::Render(format!("model `{table}` has no primary key")).into_response();
     };
+
+    let cfg = state.config_for(&table);
+
+    // Determine displayed columns (list_display or all).
+    let display_cols: Vec<String> = if let Some(c) = cfg
+        && !c.list_display.is_empty()
+    {
+        c.list_display.clone()
+    } else {
+        model.fields.iter().map(|f| f.name.clone()).collect()
+    };
+
+    // Determine ordering.
+    let order_clause = build_order_clause(cfg, pk);
+
+    // Search term from ?q=...
+    let search_term = params.get("q").filter(|s| !s.is_empty()).cloned();
+
+    // Active filter from ?filter_<field>=<value>
+    let active_filter: Option<(String, String)> = params.iter().find_map(|(k, v)| {
+        k.strip_prefix("filter_")
+            .map(|field| (field.to_string(), v.clone()))
+    });
+
     let pool = umbra::db::pool();
-    let rows = match fetch_rows(&pool, &model, None).await {
+    let rows = match fetch_rows_filtered(
+        &pool,
+        &model,
+        None,
+        &display_cols,
+        &order_clause,
+        search_term.as_deref(),
+        cfg,
+        active_filter
+            .as_ref()
+            .map(|(f, v)| (f.as_str(), v.as_str())),
+    )
+    .await
+    {
         Ok(r) => r,
         Err(e) => return e.into_response(),
     };
+
+    // Build filter facets (distinct values per list_filter field).
+    let mut facets: Vec<FilterFacet> = Vec::new();
+    if let Some(c) = cfg {
+        for field in &c.list_filter {
+            let values: Vec<String> = fetch_distinct_values(&pool, &model.table, field)
+                .await
+                .unwrap_or_default();
+            facets.push(FilterFacet {
+                field: field.clone(),
+                values,
+            });
+        }
+    }
+
+    // Actions list for template.
+    let action_names: Vec<serde_json::Value> = cfg
+        .map(|c| {
+            c.actions
+                .iter()
+                .map(|a| {
+                    serde_json::json!({
+                        "name": a.name,
+                        "label": a.label,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let has_search = cfg.is_some_and(|c| !c.search_fields.is_empty());
+    let search_val = search_term.unwrap_or_default();
+
     match render(
         "admin/list.html",
-        context!(user => who, model => model_for_template(&model), rows => rows, pk => pk.name.clone()),
+        context!(
+            user => who,
+            model => model_for_template_cols(&model, &display_cols),
+            rows => rows,
+            pk => pk.name.clone(),
+            facets => facets,
+            actions => action_names,
+            has_search => has_search,
+            search_val => search_val,
+            active_filter => active_filter.map(|(f, v)| format!("{f}={v}")).unwrap_or_default(),
+        ),
     ) {
         Ok(html) => html.into_response(),
         Err(e) => e.into_response(),
     }
 }
+
+fn build_order_clause(cfg: Option<&AdminConfig>, pk: &Column) -> String {
+    let ordering = cfg.map(|c| c.ordering.as_slice()).unwrap_or(&[]);
+    if ordering.is_empty() {
+        return format!("\"{}\" ASC", q(&pk.name));
+    }
+    ordering
+        .iter()
+        .map(|s| {
+            if let Some(col) = s.strip_prefix('-') {
+                format!("\"{}\" DESC", q(col))
+            } else {
+                format!("\"{}\" ASC", q(s))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Fetch distinct non-null values for a column (used by list_filter facets).
+async fn fetch_distinct_values(
+    pool: &SqlitePool,
+    table: &str,
+    field: &str,
+) -> Result<Vec<String>, AdminError> {
+    let sql = format!(
+        "SELECT DISTINCT \"{}\" FROM \"{}\" WHERE \"{}\" IS NOT NULL ORDER BY 1 LIMIT 100",
+        q(field),
+        q(table),
+        q(field)
+    );
+    let rows = sqlx::query(&sql).fetch_all(pool).await?;
+    let mut out = Vec::new();
+    for row in rows {
+        // Try common types. Best-effort; the column might be any SqlType.
+        if let Ok(v) = row.try_get::<String, _>(0) {
+            out.push(v);
+        } else if let Ok(v) = row.try_get::<i64, _>(0) {
+            out.push(v.to_string());
+        } else if let Ok(v) = row.try_get::<bool, _>(0) {
+            out.push(if v { "true" } else { "false" }.to_string());
+        }
+    }
+    Ok(out)
+}
+
+// ---- run_action ------------------------------------------------------------
+
+async fn run_action(
+    State(state): State<AdminState>,
+    headers: HeaderMap,
+    Path(table): Path<String>,
+    body: String,
+) -> Response {
+    let who = match require_staff(&headers).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let form: HashMap<String, String> = match serde_urlencoded::from_str(&body) {
+        Ok(m) => m,
+        Err(e) => return AdminError::BadInput(e.to_string()).into_response(),
+    };
+    let action_name = match form.get("action") {
+        Some(n) => n.clone(),
+        None => return AdminError::BadInput("missing 'action' field".to_string()).into_response(),
+    };
+
+    // Parse selected PKs.
+    let selected_ids: Vec<i64> = form
+        .iter()
+        .filter(|(k, _)| k.as_str() == "selected")
+        .filter_map(|(_, v)| v.parse::<i64>().ok())
+        .collect();
+
+    // Look up the action in the registered config.
+    let cfg = state.config_for(&table);
+    let action = cfg.and_then(|c| c.actions.iter().find(|a| a.name == action_name));
+    let Some(action) = action else {
+        return AdminError::NotFound(format!("no action `{action_name}` for table `{table}`"))
+            .into_response();
+    };
+
+    let ctx = AdminContext {
+        username: who,
+        table: table.clone(),
+    };
+    let handler = Arc::clone(&action.handler);
+    let flash = match handler(selected_ids, ctx).await {
+        Ok(msg) => msg,
+        Err(e) => {
+            tracing::error!(error = %e, "admin: action `{action_name}` failed");
+            return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response();
+        }
+    };
+
+    // Redirect back to the list with a flash message in the query param.
+    let location = format!("/admin/{table}/?flash={}", urlencoding_simple(&flash));
+    Redirect::to(&location).into_response()
+}
+
+/// Minimal percent-encode for a flash message value (spaces and special chars).
+fn urlencoding_simple(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+// ---- detail / new_form / create / edit_form / update / delete -------------
 
 async fn detail(headers: HeaderMap, Path((table, id)): Path<(String, String)>) -> Response {
     let who = match require_staff(&headers).await {
@@ -305,7 +587,19 @@ async fn detail(headers: HeaderMap, Path((table, id)): Path<(String, String)>) -
         return AdminError::Render(format!("model `{table}` has no primary key")).into_response();
     };
     let pool = umbra::db::pool();
-    let rows = match fetch_rows(&pool, &model, Some((&pk.name, &id))).await {
+    let all_cols: Vec<String> = model.fields.iter().map(|f| f.name.clone()).collect();
+    let rows = match fetch_rows_filtered(
+        &pool,
+        &model,
+        Some((&pk.name, &id)),
+        &all_cols,
+        "",
+        None,
+        None,
+        None,
+    )
+    .await
+    {
         Ok(r) => r,
         Err(e) => return e.into_response(),
     };
@@ -321,7 +615,11 @@ async fn detail(headers: HeaderMap, Path((table, id)): Path<(String, String)>) -
     }
 }
 
-async fn new_form(headers: HeaderMap, Path(table): Path<String>) -> Response {
+async fn new_form(
+    State(state): State<AdminState>,
+    headers: HeaderMap,
+    Path(table): Path<String>,
+) -> Response {
     let who = match require_staff(&headers).await {
         Ok(u) => u,
         Err(r) => return r,
@@ -329,7 +627,8 @@ async fn new_form(headers: HeaderMap, Path(table): Path<String>) -> Response {
     let Some((_, model)) = find_model(&table) else {
         return AdminError::NotFound(format!("no model with table `{table}`")).into_response();
     };
-    let fields = form_fields_for(&model, None);
+    let cfg = state.config_for(&table);
+    let fields = form_fields_for(&model, None, cfg);
     match render(
         "admin/form.html",
         context!(
@@ -346,7 +645,12 @@ async fn new_form(headers: HeaderMap, Path(table): Path<String>) -> Response {
     }
 }
 
-async fn create(headers: HeaderMap, Path(table): Path<String>, body: String) -> Response {
+async fn create(
+    State(state): State<AdminState>,
+    headers: HeaderMap,
+    Path(table): Path<String>,
+    body: String,
+) -> Response {
     let who = match require_staff(&headers).await {
         Ok(u) => u,
         Err(r) => return r,
@@ -358,11 +662,12 @@ async fn create(headers: HeaderMap, Path(table): Path<String>, body: String) -> 
         Ok(m) => m,
         Err(e) => return AdminError::BadInput(e.to_string()).into_response(),
     };
+    let cfg = state.config_for(&table);
     let pool = umbra::db::pool();
-    match insert_row(&pool, &model, &form).await {
+    match insert_row(&pool, &model, &form, cfg).await {
         Ok(_) => Redirect::to(&format!("/admin/{}/", model.table)).into_response(),
         Err(e) => {
-            let fields = form_fields_for(&model, Some(&form));
+            let fields = form_fields_for(&model, Some(&form), cfg);
             match render(
                 "admin/form.html",
                 context!(
@@ -387,7 +692,11 @@ async fn create(headers: HeaderMap, Path(table): Path<String>, body: String) -> 
     }
 }
 
-async fn edit_form(headers: HeaderMap, Path((table, id)): Path<(String, String)>) -> Response {
+async fn edit_form(
+    State(state): State<AdminState>,
+    headers: HeaderMap,
+    Path((table, id)): Path<(String, String)>,
+) -> Response {
     let who = match require_staff(&headers).await {
         Ok(u) => u,
         Err(r) => return r,
@@ -399,7 +708,19 @@ async fn edit_form(headers: HeaderMap, Path((table, id)): Path<(String, String)>
         return AdminError::Render(format!("model `{table}` has no primary key")).into_response();
     };
     let pool = umbra::db::pool();
-    let rows = match fetch_rows(&pool, &model, Some((&pk.name, &id))).await {
+    let all_cols: Vec<String> = model.fields.iter().map(|f| f.name.clone()).collect();
+    let rows = match fetch_rows_filtered(
+        &pool,
+        &model,
+        Some((&pk.name, &id)),
+        &all_cols,
+        "",
+        None,
+        None,
+        None,
+    )
+    .await
+    {
         Ok(r) => r,
         Err(e) => return e.into_response(),
     };
@@ -408,7 +729,8 @@ async fn edit_form(headers: HeaderMap, Path((table, id)): Path<(String, String)>
     };
     let row_strings: HashMap<String, String> =
         row.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-    let fields = form_fields_for(&model, Some(&row_strings));
+    let cfg = state.config_for(&table);
+    let fields = form_fields_for(&model, Some(&row_strings), cfg);
     match render(
         "admin/form.html",
         context!(
@@ -428,6 +750,7 @@ async fn edit_form(headers: HeaderMap, Path((table, id)): Path<(String, String)>
 }
 
 async fn update(
+    State(state): State<AdminState>,
     headers: HeaderMap,
     Path((table, id)): Path<(String, String)>,
     body: String,
@@ -447,10 +770,11 @@ async fn update(
         Err(e) => return AdminError::BadInput(e.to_string()).into_response(),
     };
     let pool = umbra::db::pool();
-    match update_row(&pool, &model, pk, &id, &form).await {
+    let cfg = state.config_for(&table);
+    match update_row(&pool, &model, pk, &id, &form, cfg).await {
         Ok(_) => Redirect::to(&format!("/admin/{}/{}", model.table, id)).into_response(),
         Err(e) => {
-            let fields = form_fields_for(&model, Some(&form));
+            let fields = form_fields_for(&model, Some(&form), cfg);
             match render(
                 "admin/form.html",
                 context!(
@@ -528,38 +852,120 @@ fn sanitise_form_error(e: &AdminError) -> String {
 // the template; write rows back via per-column SqlType dispatch.
 // =========================================================================
 
-async fn fetch_rows(
+/// Fetch rows with optional search, filter, and ordering.
+///
+/// Arguments:
+/// - `where_pk`: primary-key equality filter for detail/edit views.
+/// - `display_cols`: the subset of columns to SELECT (list_display).
+/// - `order_clause`: pre-built `ORDER BY ...` fragment (empty string = omit).
+/// - `search_term`: value from `?q=` matched via LIKE against search_fields.
+/// - `cfg`: the registered `AdminConfig` for this table (for search_fields).
+/// - `active_filter`: `(field, value)` from a list_filter facet click.
+#[allow(clippy::too_many_arguments)]
+async fn fetch_rows_filtered(
     pool: &SqlitePool,
     model: &ModelMeta,
-    where_clause: Option<(&str, &str)>,
+    where_pk: Option<(&str, &str)>,
+    display_cols: &[String],
+    order_clause: &str,
+    search_term: Option<&str>,
+    cfg: Option<&AdminConfig>,
+    active_filter: Option<(&str, &str)>,
 ) -> Result<Vec<HashMap<String, String>>, AdminError> {
-    let columns = model
-        .fields
+    // Build the SELECT column list from display_cols (validated against model fields).
+    let valid_names: std::collections::HashSet<&str> =
+        model.fields.iter().map(|c| c.name.as_str()).collect();
+    let columns = display_cols
         .iter()
-        .map(|c| format!("\"{}\"", c.name))
+        .filter(|n| valid_names.contains(n.as_str()))
+        .map(|n| format!("\"{}\"", n))
         .collect::<Vec<_>>()
         .join(", ");
-    let sql = match where_clause {
-        Some((col, _)) => format!(
-            "SELECT {columns} FROM \"{}\" WHERE \"{}\" = ? LIMIT 1",
-            q(&model.table),
-            q(col)
-        ),
-        None => format!(
-            "SELECT {columns} FROM \"{}\" ORDER BY 1 LIMIT 200",
-            q(&model.table)
-        ),
+    let columns = if columns.is_empty() {
+        // Fallback: all columns.
+        model
+            .fields
+            .iter()
+            .map(|c| format!("\"{}\"", c.name))
+            .collect::<Vec<_>>()
+            .join(", ")
+    } else {
+        columns
     };
-    let mut q = sqlx::query(&sql);
-    if let Some((_, val)) = where_clause {
-        q = q.bind(val.to_string());
+
+    let mut conditions: Vec<String> = Vec::new();
+    let mut bind_strings: Vec<String> = Vec::new();
+
+    // PK equality (detail / edit).
+    if let Some((col, _val)) = where_pk {
+        conditions.push(format!("\"{}\" = ?", q(col)));
+        bind_strings.push(where_pk.unwrap().1.to_string());
     }
-    let rows = q.fetch_all(pool).await?;
+
+    // Search: LIKE %term% across search_fields, ORed together.
+    if let Some(term) = search_term
+        && let Some(c) = cfg
+        && !c.search_fields.is_empty()
+    {
+        let like_clauses: Vec<String> = c
+            .search_fields
+            .iter()
+            .filter(|f| valid_names.contains(f.as_str()))
+            .map(|f| format!("\"{}\" LIKE ?", q(f)))
+            .collect();
+        if !like_clauses.is_empty() {
+            conditions.push(format!("({})", like_clauses.join(" OR ")));
+            let like_val = format!("%{term}%");
+            for _ in 0..like_clauses.len() {
+                bind_strings.push(like_val.clone());
+            }
+        }
+    }
+
+    // Active filter from facet click.
+    if let Some((field, value)) = active_filter {
+        if valid_names.contains(field) {
+            conditions.push(format!("\"{}\" = ?", q(field)));
+            bind_strings.push(value.to_string());
+        }
+    }
+
+    let where_sql = if conditions.is_empty() {
+        String::new()
+    } else {
+        format!(" WHERE {}", conditions.join(" AND "))
+    };
+
+    let order_sql = if order_clause.is_empty() || where_pk.is_some() {
+        String::new()
+    } else {
+        format!(" ORDER BY {order_clause}")
+    };
+
+    let limit_sql = if where_pk.is_some() {
+        " LIMIT 1"
+    } else {
+        " LIMIT 200"
+    };
+
+    let sql = format!(
+        "SELECT {columns} FROM \"{}\"{where_sql}{order_sql}{limit_sql}",
+        q(&model.table)
+    );
+
+    let mut qb = sqlx::query(&sql);
+    for val in &bind_strings {
+        qb = qb.bind(val.clone());
+    }
+
+    let rows = qb.fetch_all(pool).await?;
     let mut out: Vec<HashMap<String, String>> = Vec::with_capacity(rows.len());
     for row in rows {
         let mut entry: HashMap<String, String> = HashMap::new();
-        for col in &model.fields {
-            entry.insert(col.name.clone(), column_to_string(&row, col)?);
+        for col_name in display_cols {
+            if let Some(col) = model.fields.iter().find(|c| &c.name == col_name) {
+                entry.insert(col.name.clone(), column_to_string(&row, col)?);
+            }
         }
         out.push(entry);
     }
@@ -667,18 +1073,25 @@ async fn insert_row(
     pool: &SqlitePool,
     model: &ModelMeta,
     form: &HashMap<String, String>,
+    cfg: Option<&AdminConfig>,
 ) -> Result<(), AdminError> {
     // Skip the PK column if it's an integer (SQLite assigns via
     // AUTOINCREMENT). For string/uuid PKs the form has to supply
     // the value. The form might supply it for integers too; in
     // that case let it through.
+    // Also skip readonly fields — they can't be submitted or changed.
+    let readonly: std::collections::HashSet<&str> = cfg
+        .map(|c| c.readonly_fields.iter().map(|s| s.as_str()).collect())
+        .unwrap_or_default();
+
     let writable: Vec<&Column> = model
         .fields
         .iter()
         .filter(|c| {
-            !(c.primary_key
-                && matches!(c.ty, SqlType::Integer | SqlType::BigInt | SqlType::SmallInt)
-                && form.get(&c.name).is_none_or(|v| v.is_empty()))
+            !(readonly.contains(c.name.as_str())
+                || (c.primary_key
+                    && matches!(c.ty, SqlType::Integer | SqlType::BigInt | SqlType::SmallInt)
+                    && form.get(&c.name).is_none_or(|v| v.is_empty())))
         })
         .collect();
     let names = writable
@@ -705,8 +1118,18 @@ async fn update_row(
     pk: &Column,
     pk_value: &str,
     form: &HashMap<String, String>,
+    cfg: Option<&AdminConfig>,
 ) -> Result<(), AdminError> {
-    let writable: Vec<&Column> = model.fields.iter().filter(|c| !c.primary_key).collect();
+    // Skip readonly fields in updates.
+    let readonly: std::collections::HashSet<&str> = cfg
+        .map(|c| c.readonly_fields.iter().map(|s| s.as_str()).collect())
+        .unwrap_or_default();
+
+    let writable: Vec<&Column> = model
+        .fields
+        .iter()
+        .filter(|c| !c.primary_key && !readonly.contains(c.name.as_str()))
+        .collect();
     let setters = writable
         .iter()
         .map(|c| format!("\"{}\" = ?", c.name))
@@ -847,7 +1270,15 @@ struct FormField {
     readonly: bool,
 }
 
-fn form_fields_for(model: &ModelMeta, prefill: Option<&HashMap<String, String>>) -> Vec<FormField> {
+fn form_fields_for(
+    model: &ModelMeta,
+    prefill: Option<&HashMap<String, String>>,
+    cfg: Option<&AdminConfig>,
+) -> Vec<FormField> {
+    let readonly_set: std::collections::HashSet<&str> = cfg
+        .map(|c| c.readonly_fields.iter().map(|s| s.as_str()).collect())
+        .unwrap_or_default();
+
     model
         .fields
         .iter()
@@ -860,7 +1291,7 @@ fn form_fields_for(model: &ModelMeta, prefill: Option<&HashMap<String, String>>)
                 .cloned()
                 .unwrap_or_default(),
             nullable: c.nullable,
-            readonly: false,
+            readonly: readonly_set.contains(c.name.as_str()),
         })
         .collect()
 }
@@ -913,6 +1344,7 @@ struct ColumnView {
     primary_key: bool,
 }
 
+/// Full model view with all fields (used by detail).
 fn model_for_template(model: &ModelMeta) -> ModelView {
     ModelView {
         name: model.name.clone(),
@@ -926,6 +1358,29 @@ fn model_for_template(model: &ModelMeta) -> ModelView {
                 primary_key: c.primary_key,
             })
             .collect(),
+    }
+}
+
+/// Filtered model view for list (only display_cols shown).
+fn model_for_template_cols(model: &ModelMeta, display_cols: &[String]) -> ModelView {
+    let valid: std::collections::HashSet<&str> =
+        model.fields.iter().map(|c| c.name.as_str()).collect();
+    let fields: Vec<ColumnView> = display_cols
+        .iter()
+        .filter(|n| valid.contains(n.as_str()))
+        .map(|n| {
+            let col = model.fields.iter().find(|c| &c.name == n).unwrap();
+            ColumnView {
+                name: col.name.clone(),
+                nullable: col.nullable,
+                primary_key: col.primary_key,
+            }
+        })
+        .collect();
+    ModelView {
+        name: model.name.clone(),
+        table: model.table.clone(),
+        fields,
     }
 }
 

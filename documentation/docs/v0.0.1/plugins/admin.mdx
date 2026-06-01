@@ -61,17 +61,103 @@ AuthUser::objects().create(NewUser {
 The admin dispatches HTML input types by `SqlType`. Nullable fields omit the
 `required` attribute; the PK column is hidden from create/edit forms.
 
+## Customizing the admin
+
+`AdminConfig` is the admin equivalent of REST's `ResourceConfig` - one config per model, registered on the plugin before it is passed to `App::builder()`.
+
+```rust
+use umbra_admin::{Action, AdminConfig, AdminPlugin};
+
+let admin = AdminPlugin::default()
+    .register(
+        AdminConfig::new("post")
+            .list_display(&["title", "author", "published_at"])
+            .list_filter(&["published", "author"])
+            .search_fields(&["title", "body"])
+            .ordering(&["-published_at", "title"])
+            .readonly_fields(&["created_at"])
+            .actions(vec![
+                Action::delete_selected(),
+                Action::new("publish", "Publish selected", |ids, _ctx| async move {
+                    Ok(format!("Published {} post(s).", ids.len()))
+                }),
+            ]),
+    );
+
+App::builder()
+    .plugin(AuthPlugin::default())
+    .plugin(admin)
+    .build()?;
+```
+
+### `list_display`
+
+```rust
+.list_display(&["title", "author", "published_at"])
+```
+
+Picks which columns appear on the list view, in this exact order. Default (no call): all columns in declaration order.
+
+### `list_filter`
+
+```rust
+.list_filter(&["published", "author"])
+```
+
+Each named field becomes a filter facet in the right sidebar. Clicking a value adds `?filter_<field>=<value>` to the URL and narrows the list. Values are the distinct non-null values currently in that column (booleans show `0`/`1` from SQLite storage; text columns show their distinct strings).
+
+### `search_fields`
+
+```rust
+.search_fields(&["title", "body"])
+```
+
+Enables a search box at the top of the list view. The `?q=` query parameter is matched via `LIKE %term%` across all listed columns, OR-ed together and AND-ed with any active filter.
+
+### `ordering`
+
+```rust
+.ordering(&["-published_at", "title"])
+```
+
+Default sort order for the list view. Each entry is a column name optionally prefixed with `-` for descending. Without this call the list orders by primary key ascending.
+
+### `actions`
+
+```rust
+.actions(vec![
+    Action::delete_selected(),
+    Action::new("publish", "Publish selected", |ids, _ctx| async move {
+        // ids: Vec<i64> - the selected primary keys
+        // _ctx: AdminContext { username, table }
+        Ok(format!("Published {} post(s).", ids.len()))
+    }),
+])
+```
+
+Registers bulk actions that appear in the action dropdown on the list view. Each selected row supplies its PK via a hidden checkbox; the handler receives `Vec<i64>` of selected PKs and an `AdminContext` with the logged-in username and table name. Returns a flash message on success or an error string on failure. `Action::delete_selected()` is the built-in bulk delete equivalent to Django's default.
+
+### `readonly_fields`
+
+```rust
+.readonly_fields(&["created_at", "id"])
+```
+
+Fields that appear on the create and edit form but render as `<input readonly>` so they cannot be changed. The field is visible to the operator but excluded from the INSERT and UPDATE SQL.
+
+### Deferred surfaces
+
+<Callout type="info">
+**`fieldsets`** - grouping fields into named sections on the edit form - is deferred. Low ROI relative to the five surfaces above; it will land as `.fieldsets(vec![...])` on `AdminConfig` when there is a real consumer. Other deferred features: `inlines` (inline related-model forms), `prepopulated_fields` (slug autofill from another field), `raw_id_fields` (FK input as a raw integer instead of a dropdown).
+</Callout>
+
 ## What is NOT in v1
 
 - **Postgres-only field types.** Columns typed `Array`, `Inet`, `Cidr`, `MacAddr`,
   or `FullText` trigger a boot-time system check failure - they cannot appear in an
   SQLite-backed admin. A Postgres-aware admin upgrade is a later milestone.
-- **Custom widgets and readonly fields.** Every column renders with the default
-  widget for its `SqlType`. Per-field overrides and the `readonly` flag are
-  reserved for a future `AdminConfig` registration API.
 - **Per-row permissions.** Auth gating is binary: staff or not. Row-level
   restrictions and per-model action gating are deferred.
-- **List filtering and search.** The list view returns the first 200 rows ordered
-  by PK. Filtering, search, and pagination land in a later admin upgrade.
+- **Pagination.** The list view returns up to 200 rows. Cursor-based pagination lands in a later upgrade.
 
-The spec lives in `docs/specs/02-plugin-contract.md`. Source: `plugins/umbra-admin/src/lib.rs`.
+The spec lives in `docs/specs/02-plugin-contract.md`. Source: `plugins/umbra-admin/src/lib.rs` and `plugins/umbra-admin/src/config.rs`.
