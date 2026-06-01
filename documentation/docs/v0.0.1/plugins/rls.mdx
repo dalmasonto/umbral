@@ -40,7 +40,7 @@ let app = App::builder()
 
 `.policy(table, name, action, using)` is enough for read-only predicates.
 `.policy_with_check(table, name, action, using, with_check)` adds an explicit
-`WITH CHECK` clause — useful when INSERT or UPDATE rules differ from the read
+`WITH CHECK` clause - useful when INSERT or UPDATE rules differ from the read
 predicate. Calling `.policy()` on a table auto-enables RLS on it; a separate
 `.enable_on("post")` call is only needed for tables that need RLS enabled
 without any policy attached yet.
@@ -64,7 +64,7 @@ The `DROP IF EXISTS` + `CREATE` pair is the idempotency mechanism. Postgres
 has no `CREATE OR REPLACE POLICY`, so this is the correct pattern. Re-running
 the app (or restarting after a crash) applies the current definitions without
 error. Policy names and table names are double-quote escaped; the `USING` and
-`WITH CHECK` expressions are passed through verbatim — they are SQL you wrote
+`WITH CHECK` expressions are passed through verbatim - they are SQL you wrote
 and are responsible for.
 
 ## Setting user context per request
@@ -109,7 +109,7 @@ framework code.
 
 <Callout type="warning">
 `umbra-rls` is Postgres-only. When the active backend is SQLite, the plugin
-logs a `tracing::warn` and returns `Ok(())` from `on_ready` — it does not
+logs a `tracing::warn` and returns `Ok(())` from `on_ready` - it does not
 refuse to boot. All declared tables and policies are silently skipped.
 
 This matches the Django convention for backend-specific features: the feature
@@ -138,8 +138,8 @@ DROP POLICY "user_can_read" ON "post";
 
 This is intentional. The plugin cannot diff what is in the database against
 what is in the builder without taking a broader migration ownership it doesn't
-have. Treating RLS policies like schema migrations — where removals produce
-`DROP` operations — is a planned enhancement; for now, explicit cleanup is the
+have. Treating RLS policies like schema migrations - where removals produce
+`DROP` operations - is a planned enhancement; for now, explicit cleanup is the
 safe shape.
 
 The spec and implementation live in `plugins/umbra-rls/src/lib.rs` and

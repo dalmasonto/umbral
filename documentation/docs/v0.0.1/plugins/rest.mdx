@@ -6,7 +6,7 @@ icon: api
 ---
 
 Register `RestPlugin` and every model your app declares gets a full JSON CRUD surface at
-`/api/<table>/` — no serializer code, no view functions, no router wiring. The cost is
+`/api/<table>/` - no serializer code, no view functions, no router wiring. The cost is
 zero control over the response shape in v1; the endpoints serialize the whole struct as-is.
 
 ## Minimal example
@@ -56,7 +56,7 @@ For each exposed model the plugin mounts five endpoints under `/api/<table>/`:
 | `PUT` / `PATCH` | `/api/<table>/{id}` | Update a row. Both methods update only the fields present in the request body. Returns `200` + the updated row. |
 | `DELETE` | `/api/<table>/{id}` | Destroy a row. Returns `204`. `404` if the row doesn't exist. |
 
-The table name in the URL is the snake-case table name the migration engine uses — the same
+The table name in the URL is the snake-case table name the migration engine uses - the same
 value as `#[umbra(table = "...")]` if you set one explicitly, otherwise the snake-case of the
 struct name.
 
@@ -70,7 +70,7 @@ By default every registered model is exposed except the three internal tables
 (`auth_user`, `session`, `umbra_migrations`). Those are always blocked regardless of what
 you configure.
 
-**Allowlist — only these tables:**
+**Allowlist - only these tables:**
 
 ```rust
 .plugin(
@@ -79,7 +79,7 @@ you configure.
 )
 ```
 
-**Blocklist — everything except these tables:**
+**Blocklist - everything except these tables:**
 
 ```rust
 .plugin(
@@ -134,11 +134,11 @@ let rest = RestPlugin::default()
 ```
 
 The DRF analogy: each Django app has a `serializers.py` next to its `models.py`.
-`ResourceConfig` plays the same role — per-model REST customisation lives next to
+`ResourceConfig` plays the same role - per-model REST customisation lives next to
 the model, not in the project's wiring layer.
 
 Multiple `.resource(...)` calls for the same table stack additively. Mixing
-`.resource(config)` with one-off `.hide(table, field)` calls in `main.rs` is fine —
+`.resource(config)` with one-off `.hide(table, field)` calls in `main.rs` is fine -
 everything lands in the same per-table vecs.
 
 ### Per-call builders (one-off cases)
@@ -164,9 +164,9 @@ let rest = RestPlugin::default()
 
 | Builder | Effect |
 |---------|--------|
-| `.hide(table, field)` | Strip the field from every response. The column stays writable via POST/PUT/PATCH and readable through the ORM — only the outbound JSON is shaped. |
+| `.hide(table, field)` | Strip the field from every response. The column stays writable via POST/PUT/PATCH and readable through the ORM - only the outbound JSON is shaped. |
 | `.transform(table, field, fn)` | Replace a field's value. The closure receives the raw `serde_json::Value`, returns the replacement. The key stays the same; the value changes. |
-| `.computed(table, name, fn)` | Add a derived field. The closure receives the (already-customised) row map and returns the value for the new key. No underlying column needed — the field exists only at the API. |
+| `.computed(table, name, fn)` | Add a derived field. The closure receives the (already-customised) row map and returns the value for the new key. No underlying column needed - the field exists only at the API. |
 
 The order is intentional. Hide first so the row doesn't carry secrets into the
 transform / computed closures. Computed runs last so it sees the masked /
@@ -182,7 +182,7 @@ handler.
 ## Pagination
 
 `RestPlugin` exposes a `Pagination` trait so list endpoints can be wrapped in any
-envelope shape. Three built-ins ship, plus a custom-trait escape hatch — the same
+envelope shape. Three built-ins ship, plus a custom-trait escape hatch - the same
 shape DRF uses.
 
 ### Built-ins
@@ -190,7 +190,7 @@ shape DRF uses.
 ```rust
 use umbra_rest::{LimitOffsetPagination, NoPagination, PageNumberPagination, RestPlugin};
 
-// Default — no pagination. Envelope: `{ results, count }` where count == results.len().
+// Default - no pagination. Envelope: `{ results, count }` where count == results.len().
 // No LIMIT applied; no extra COUNT query runs.
 RestPlugin::default();
 
@@ -249,7 +249,7 @@ impl Pagination for WindowPagination {
 RestPlugin::default().paginate(WindowPagination { window: 25 });
 ```
 
-`extract_request` should be forgiving — return defaults on parse failure rather than
+`extract_request` should be forgiving - return defaults on parse failure rather than
 raising errors, so a client typo on a query param doesn't 400 every list request.
 
 <Callout type="info">
@@ -262,7 +262,7 @@ reverse proxy, or via CDN. The client knows the path; let it build the URL.
 
 `RestPlugin::authenticate(impl Authentication)` wires an auth backend that runs on
 every request. The backend inspects request headers and returns
-`Option<Identity>` — `Some(...)` when a caller is recognised, `None` when the
+`Option<Identity>` - `Some(...)` when a caller is recognised, `None` when the
 request is anonymous. Permissions (next section) decide what that identity is
 allowed to do.
 
@@ -276,7 +276,7 @@ invalid credentials so failure modes don't leak info to the client).
 use umbra_rest::{Authentication, ChainAuthentication, FnAuthentication, Identity,
                  NoAuthentication, RestPlugin, parse_basic_credentials};
 
-// Default — every request is anonymous.
+// Default - every request is anonymous.
 RestPlugin::default();
 
 // Session-cookie auth (via umbra-sessions, the recommended browser path):
@@ -306,7 +306,7 @@ apps use exactly one; bundling all of them would force unused transitive deps
 on every user. The 5-line `FnAuthentication` closures above are the canonical
 shape.
 
-JWT, API key, mTLS, OAuth — same pattern. Wrap the verifier in
+JWT, API key, mTLS, OAuth - same pattern. Wrap the verifier in
 `FnAuthentication::new(...)`, return `Some(Identity)` on success.
 
 ## Permissions
@@ -364,7 +364,7 @@ ResourceConfig::new("post").permission(OrPermission::new(vec![
 
 Implement the trait directly. The signature is sync (`fn check(&self, Action,
 Option<&Identity>) -> Result<(), PermissionError>`) because permission checks
-walk in-memory rule sets — they don't hit the DB. If you need DB-driven checks
+walk in-memory rule sets - they don't hit the DB. If you need DB-driven checks
 (per-row ownership), do them in the route handler or in a `transform` after
 the row is loaded.
 
@@ -378,7 +378,7 @@ sense, scope the views explicitly:
 use umbra_rest::{Action, ResourceConfig};
 
 // Catalogue: list + retrieve only. Create/Update/Delete return 404
-// — the endpoint isn't conceptually mounted.
+// - the endpoint isn't conceptually mounted.
 ResourceConfig::new("product")
     .views([Action::List, Action::Retrieve])
 
@@ -388,7 +388,7 @@ ResourceConfig::new("audit_event")
 ```
 
 The unexposed-action body is `{"error": "action `Delete` is not exposed on
-`/api/product/`", "code": "not_found"}` — a 404 with an explanatory message,
+`/api/product/`", "code": "not_found"}` - a 404 with an explanatory message,
 which is the right semantic (the resource exists, but that operation isn't
 part of its API).
 
@@ -415,7 +415,7 @@ use serde_json::json;
 use umbra_rest::{ActionError, ActionScope, ResourceConfig};
 
 ResourceConfig::new("post")
-    // POST /api/post/{id}/publish/ — one row at a time.
+    // POST /api/post/{id}/publish/ - one row at a time.
     .action("publish", Method::POST, ActionScope::Detail, |ctx| async move {
         let id: i64 = ctx.pk.as_deref().unwrap_or("0").parse()
             .map_err(|_| ActionError::BadInput("bad id".into()))?;
@@ -428,7 +428,7 @@ ResourceConfig::new("post")
             .map_err(ActionError::internal)?;
         Ok(json!({ "id": id, "published": true }))
     })
-    // GET /api/post/recent/ — collection-scope.
+    // GET /api/post/recent/ - collection-scope.
     .action("recent", Method::GET, ActionScope::Collection, |ctx| async move {
         let limit: i64 = ctx.query.get("limit").and_then(|s| s.parse().ok()).unwrap_or(10);
         let rows = Post::objects()
@@ -444,17 +444,17 @@ ResourceConfig::new("post")
 | Scope | URL shape | Has `ctx.pk`? |
 |-------|-----------|---------------|
 | `Collection` | `/api/<table>/<name>/` | No |
-| `Detail` | `/api/<table>/<id>/<name>/` | Yes — the raw URL segment |
+| `Detail` | `/api/<table>/<id>/<name>/` | Yes - the raw URL segment |
 
 Both with and without the trailing slash are accepted.
 
 **The handler signature.** Any async closure of `Fn(ActionContext) -> impl Future<Output = Result<Value, ActionError>>`. The `ActionContext` carries:
 
-- `table`, `name` — the URL segments.
-- `pk` — `Some(string)` for detail-scope, `None` for collection-scope. Parse with `.parse::<i64>()` (or whatever your PK type is).
-- `identity` — the same `Option<Identity>` `Authentication` produces, after permission has approved the call.
-- `body` — the parsed JSON body, or `Value::Null` when the request had none.
-- `query` — `HashMap<String, String>` of the query string.
+- `table`, `name` - the URL segments.
+- `pk` - `Some(string)` for detail-scope, `None` for collection-scope. Parse with `.parse::<i64>()` (or whatever your PK type is).
+- `identity` - the same `Option<Identity>` `Authentication` produces, after permission has approved the call.
+- `body` - the parsed JSON body, or `Value::Null` when the request had none.
+- `query` - `HashMap<String, String>` of the query string.
 
 **The error variants** (`ActionError`) map onto the same JSON envelope the CRUD handlers use: `BadInput` → 400, `NotFound` → 404, `Unauthenticated` → 401, `Forbidden` → 403, `Internal` → 500.
 
@@ -474,7 +474,7 @@ impl Permission for PublishersOnly {
 }
 ```
 
-`Action::Custom(_)` is NOT subject to `.views([...])` — custom actions opt in by being registered, the view scope only filters the five built-in CRUD actions.
+`Action::Custom(_)` is NOT subject to `.views([...])` - custom actions opt in by being registered, the view scope only filters the five built-in CRUD actions.
 
 ## What's not in v1
 
@@ -491,6 +491,6 @@ follow-ons rather than gaps:
 
 ## Pairing with OpenAPI
 
-`RestPlugin`'s URLs are exactly what `umbra-openapi` documents — register both plugins and
+`RestPlugin`'s URLs are exactly what `umbra-openapi` documents - register both plugins and
 you get a live Swagger UI over the generated endpoints at no extra cost. See
 [OpenAPI plugin](./openapi) for setup.

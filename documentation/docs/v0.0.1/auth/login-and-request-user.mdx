@@ -24,7 +24,7 @@ spans the user's whole visit:
 `SessionsPlugin::default()` auto-applies a tower middleware
 (`session_layer`) on the router so every request lands with a
 `SessionToken` extension. Anonymous flash messages, cart, etc. all
-"just work" — they're already there.
+"just work" - they're already there.
 
 ```rust
 let app = App::builder()
@@ -96,7 +96,7 @@ async fn logout(headers: HeaderMap) -> Response {
 3. Sets a `Set-Cookie` header with `Max-Age=0` so the browser drops
    the cookie immediately.
 
-## `request.user` — `User` / `OptionalUser` extractors
+## `request.user` - `User` / `OptionalUser` extractors
 
 axum extractors give you Django's `request.user` ergonomics.
 
@@ -105,13 +105,13 @@ use umbra::prelude::*;
 use umbra::web::{Html, IntoResponse, StatusCode};
 use umbra_sessions::{User, OptionalUser};
 
-// Required — 401 if the request isn't authenticated. The handler
+// Required - 401 if the request isn't authenticated. The handler
 // literally cannot run without a logged-in user.
 async fn dashboard(User(user): User) -> Html<String> {
     Html(format!("<h1>Welcome, {}</h1>", user.username))
 }
 
-// Optional — runs either way; you decide what to do.
+// Optional - runs either way; you decide what to do.
 async fn home(OptionalUser(maybe): OptionalUser) -> Html<String> {
     match maybe {
         Some(user) => Html(format!("Hi, {}", user.username)),
@@ -128,14 +128,14 @@ just wraps `Option<AuthUser>`.
 <Callout type="info">
 **Why not a middleware that injects on every request?** That's what
 Django's `AuthenticationMiddleware` does. axum has a cleaner answer
-— the extractor pattern. Saying `User(user): User` in the handler
+- the extractor pattern. Saying `User(user): User` in the handler
 signature makes the auth requirement *visible at the call site*:
 you can tell from the type whether a route is gated without
 reading the middleware stack. The cost (a DB round-trip per request
 that needs `request.user`) is the same either way.
 </Callout>
 
-## Flash messages — Django's `contrib.messages` shape
+## Flash messages - Django's `contrib.messages` shape
 
 `umbra_sessions::Messages` is an extractor that lets any handler
 push flash messages into the session and any later handler drain
@@ -180,18 +180,18 @@ serialise as their lowercase names so templates can do
 **Anonymous flash messages just work.** With `SessionsPlugin::default()`
 auto-applied (the default), every browser has a session from its
 first visit. Flash messages added by anonymous handlers survive the
-redirect cycle naturally, including across login — the existing
+redirect cycle naturally, including across login - the existing
 session's `data` carries over to the post-login session when the
 fixation defense regenerates the token.
 
 The reserved key `_umbra_messages` inside `session.data` is owned
-by this framework — don't write to it via `set_data` directly,
+by this framework - don't write to it via `set_data` directly,
 use `Messages`.
 </Callout>
 
 ## See also
 
-- [Users and passwords (umbra-auth)](./users-and-passwords) — the
+- [Users and passwords (umbra-auth)](./users-and-passwords) - the
   `AuthUser` model, password hashing, `authenticate`.
-- [Sessions plugin](../plugins/sessions) — what the session row
+- [Sessions plugin](../plugins/sessions) - what the session row
   looks like, the cookie attributes, the data column.

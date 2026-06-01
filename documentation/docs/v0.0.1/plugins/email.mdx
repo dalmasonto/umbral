@@ -7,7 +7,7 @@ icon: mail
 
 `umbra-email` ships a single `send(&EmailMessage)` call backed by a
 configured SMTP transport. The dev default is a console backend that
-prints messages to stderr instead of opening connections — password
+prints messages to stderr instead of opening connections - password
 reset and welcome flows work on a fresh `cargo run` without anyone
 wiring credentials.
 
@@ -68,7 +68,7 @@ both are present so the recipient's client picks one.
 ## File attachments
 
 Pass raw bytes plus the MIME type. For a file on disk, read it
-yourself — the plugin doesn't take paths because it doesn't want to
+yourself - the plugin doesn't take paths because it doesn't want to
 guess at sync vs async I/O or content-type detection on your behalf.
 
 ```rust
@@ -83,7 +83,7 @@ let msg = EmailMessage::new("Your invoice", vec!["alice@example.com".into()])
 send(&msg).await?;
 ```
 
-Multiple attachments work — call `.attach(...)` once per file:
+Multiple attachments work - call `.attach(...)` once per file:
 
 ```rust
 let msg = EmailMessage::new("Quarterly reports", recipients)

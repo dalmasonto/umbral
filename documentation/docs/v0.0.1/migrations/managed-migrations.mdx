@@ -14,7 +14,7 @@ works from the first milestone that has models.
 
 `App::builder().model::<T>()` puts the model under the implicit `"app"`
 plugin's migration registry. Plugin-contributed models go through the
-`Plugin::models()` method instead — same registry, different source.
+`Plugin::models()` method instead - same registry, different source.
 
 ```rust
 App::builder()
@@ -52,7 +52,7 @@ diff produces the right operation:
 - New field → `AddColumn`
 - Removed field → `DropColumn`
 - Nullable flip → `AlterColumn` (M5.1; rendered via the SQLite table-
-  recreation dance — CREATE _umbra_new, INSERT SELECT, DROP, RENAME)
+  recreation dance - CREATE _umbra_new, INSERT SELECT, DROP, RENAME)
 - Type change or PK flip → `UnsafeAlter` error. Hand-write the migration
   with a data-preserving step.
 

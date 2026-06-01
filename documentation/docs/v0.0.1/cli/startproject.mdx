@@ -12,26 +12,26 @@ the install commands below:
 
 | Name | Kind | Where you see it | What it is |
 |------|------|------------------|-----------|
-| `umbra` | Library crate (framework) | `Cargo.toml` dep, `use umbra::prelude::*` | The framework itself — `App::builder`, ORM, web, plugins. |
+| `umbra` | Library crate (framework) | `Cargo.toml` dep, `use umbra::prelude::*` | The framework itself - `App::builder`, ORM, web, plugins. |
 | `umbra-cli` | Library + binary crate | `Cargo.toml` dep + `cargo install umbra-cli` | The CLI tooling. The **library half** exposes `umbra_cli::dispatch(app)` that your `main.rs` calls so `cargo run -- <cmd>` works. The **binary half** is what gets installed globally as `umbra` (next row). |
-| `umbra` | Executable on PATH | After `cargo install umbra-cli` | The scaffolding tool — `umbra startproject` / `umbra startapp`. Yes, the binary is called `umbra` but its crate is `umbra-cli`; same Cargo convention as `cargo` (crate name) vs `cargo-something` (subcommand). |
+| `umbra` | Executable on PATH | After `cargo install umbra-cli` | The scaffolding tool - `umbra startproject` / `umbra startapp`. Yes, the binary is called `umbra` but its crate is `umbra-cli`; same Cargo convention as `cargo` (crate name) vs `cargo-something` (subcommand). |
 
 So a real user touches umbra in **two distinct places**:
 
 ```bash
-# 1. ONCE globally — installs the `umbra` scaffolding binary on PATH:
+# 1. ONCE globally - installs the `umbra` scaffolding binary on PATH:
 cargo install umbra-cli
 ```
 
 ```toml
-# 2. Every project — both crates as deps in `Cargo.toml`
+# 2. Every project - both crates as deps in `Cargo.toml`
 #    (the project that `umbra startproject` generates already lists them):
 [dependencies]
 umbra = "..."        # the framework library
 umbra-cli = "..."    # for `umbra_cli::dispatch(app)` in main.rs
 ```
 
-There's no separate `cargo install umbra` step — the `umbra` *binary*
+There's no separate `cargo install umbra` step - the `umbra` *binary*
 comes from the `umbra-cli` *crate*. The `umbra` *crate* is a library
 you only ever depend on, never install.
 
@@ -44,7 +44,7 @@ project's own binary via
 
 <Callout type="info">
 **Two CLIs, one mental model.** The global `umbra` binary scaffolds
-projects and plugins — it doesn't need a project to run because it
+projects and plugins - it doesn't need a project to run because it
 *creates* one. Every other command (`serve`, `migrate`,
 `makemigrations`, `inspectdb`, `dumpdata`, `loaddata`,
 `createsuperuser`, `tasks-worker`, and any custom subcommand a
@@ -107,7 +107,7 @@ Flags:
 |---|---|
 | `--path <dir>` | Parent directory the new project goes under. Defaults to `.`. |
 
-The command refuses to overwrite an existing directory — pick a
+The command refuses to overwrite an existing directory - pick a
 different name or move the old one aside.
 
 ## startapp
@@ -158,13 +158,13 @@ yourself:
    .plugin(posts::PostsPlugin::default())
    ```
 
-We don't edit those files automatically — Cargo manifests and your
+We don't edit those files automatically - Cargo manifests and your
 `main.rs` can be in any shape, and silently rewriting them is more
 surprise than help. The two lines you add are explicit and easy to
 undo.
 
 <Callout type="info">
-Plugin names follow the same rules as Cargo crate names — ASCII
+Plugin names follow the same rules as Cargo crate names - ASCII
 alphanumeric, underscore, hyphen, can't start with a digit. The
 struct name is `pascal_case(name) + "Plugin"`, so `blog-engine`
 becomes `BlogEnginePlugin`.

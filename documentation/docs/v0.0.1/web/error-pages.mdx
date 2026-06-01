@@ -6,7 +6,7 @@ icon: alert-triangle
 ---
 
 In Django you drop a `404.html` or `500.html` in your templates dir
-and the framework picks it up. umbra ships the same shape — two
+and the framework picks it up. umbra ships the same shape - two
 builder methods, both opt-in, both pointing at templates the
 existing engine renders.
 
@@ -30,8 +30,8 @@ correct HTTP status (`404` and `500` respectively) with
 
 ## Writing the templates
 
-`404.html` gets `{ path }` in scope — the request path that missed
-— so you can show the user exactly where they went wrong:
+`404.html` gets `{ path }` in scope - the request path that missed
+- so you can show the user exactly where they went wrong:
 
 ```html
 {% extends "base.html" %}
@@ -43,7 +43,7 @@ correct HTTP status (`404` and `500` respectively) with
 ```
 
 `500.html` gets **no context**. Panic details intentionally stay out
-of the user-facing response — they go to logs via
+of the user-facing response - they go to logs via
 `tracing::error!`. Look at your tracing output for the panic message
 and backtrace:
 
@@ -67,7 +67,7 @@ and backtrace:
 turned into a 500 response carrying the rendered template body
 instead of crashing the worker or returning an empty 500.
 
-Handlers that return a `Result::Err` are **not** caught here — those
+Handlers that return a `Result::Err` are **not** caught here - those
 get converted to a response by their `IntoResponse` impl. For
 typical error handling, define an `AppError` type with an
 `IntoResponse` impl and use `?` in your handlers:
@@ -93,7 +93,7 @@ through `?`.
 leaks internals and occasionally credentials (e.g. a panic in a SQL
 query string). The umbra default keeps the message in logs only. If
 you genuinely want to display a request ID or correlation token,
-generate it in a middleware and put it in a response header — then
+generate it in a middleware and put it in a response header - then
 let your `500.html` reference it.
 </Callout>
 
@@ -112,16 +112,16 @@ If neither form matches, the 404 template fires. One consistent
 
 ## What about Django's `handler403` / `handler400`?
 
-403 / 400 / 410 are deferred. The common case — typo'd URL and
-panicking handler — is what these two methods cover. If you need
+403 / 400 / 410 are deferred. The common case - typo'd URL and
+panicking handler - is what these two methods cover. If you need
 custom 403 / 400 pages today, return them from your handlers via
 `IntoResponse` (the manual axum way).
 
 ## Falling back to the raw axum API
 
 The Django-shaped helpers cover the easy case. If you need more
-control — e.g. different 404 pages for `/api/...` vs everything
-else, or matching on the Accept header — use `Router::fallback`
+control - e.g. different 404 pages for `/api/...` vs everything
+else, or matching on the Accept header - use `Router::fallback`
 directly:
 
 ```rust
@@ -141,11 +141,11 @@ let router = Router::new()
 ```
 
 When you call `.fallback()` yourself, the `not_found_template`
-helper still runs first — your fallback only fires if neither it
+helper still runs first - your fallback only fires if neither it
 nor the slash redirect (if enabled) handles the request.
 
 ## See also
 
-- [Trailing-slash redirects](./trailing-slash) — composition order.
-- [Templates](../templates/quickstart) — how the engine resolves
+- [Trailing-slash redirects](./trailing-slash) - composition order.
+- [Templates](../templates/quickstart) - how the engine resolves
   template paths.

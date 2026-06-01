@@ -1,13 +1,13 @@
 ---
 title: Trailing-slash redirects
-description: Django's `APPEND_SLASH` for umbra — opt-in 308 redirects between `/foo` and `/foo/` so URL typos still reach the right handler.
+description: Django's `APPEND_SLASH` for umbra - opt-in 308 redirects between `/foo` and `/foo/` so URL typos still reach the right handler.
 sidebar_position: 1
 icon: arrow-right
 ---
 
 axum treats `/articles` and `/articles/` as distinct paths. A route
 registered as one returns 404 for the other. Most apps want both
-forms to reach the same handler — users shouldn't be able to break
+forms to reach the same handler - users shouldn't be able to break
 sharing a URL by typing or omitting a trailing slash.
 
 Django solved this with `APPEND_SLASH = True`: on a 404 for `/foo`,
@@ -47,7 +47,7 @@ zero overhead.
 | `Append` | Django shape. `/foo` (404) → 308 → `/foo/`. |
 | `Strip` | REST-API convention. `/foo/` (404) → 308 → `/foo`. |
 
-Pick one per app. Mixing isn't supported — the policy is global to
+Pick one per app. Mixing isn't supported - the policy is global to
 the App builder.
 
 <Callout type="info">
@@ -74,7 +74,7 @@ keeps the body intact.
 5. Otherwise returns the original 404.
 
 Query strings are preserved: `/articles?page=2` redirects to
-`/articles/?page=2`. No infinite loops — if both `/foo` and `/foo/`
+`/articles/?page=2`. No infinite loops - if both `/foo` and `/foo/`
 are 404, the second request just returns 404 cleanly (the snapshot
 doesn't have a fallback installed).
 
@@ -90,7 +90,7 @@ doesn't have a fallback installed).
 
 <Callout type="warning">
 The probe adds one extra service call per 404. That's negligible in
-practice — 404s should be rare — but if you have a very hot 404
+practice - 404s should be rare - but if you have a very hot 404
 path (e.g. a misconfigured monitor hammering a wrong URL), each one
 pays the probe cost. The fallback only fires when the original
 request didn't match any route, so steady-state traffic is
@@ -100,13 +100,13 @@ unaffected.
 ## Interaction with custom fallback handlers
 
 If you also call `Router::fallback(your_handler)`, the framework's
-slash-redirect fallback takes precedence — your handler only runs
+slash-redirect fallback takes precedence - your handler only runs
 when the slash redirect itself returns 404 (i.e. neither form
 matches). Custom 404 pages still work; see
 [Error pages](./error-pages) for the full pattern.
 
 ## See also
 
-- [Error pages](./error-pages) — 404 / 500 handling.
-- [The Plugin trait](../plugins/the-plugin-trait) — middleware order
+- [Error pages](./error-pages) - 404 / 500 handling.
+- [The Plugin trait](../plugins/the-plugin-trait) - middleware order
   when plugins ship their own layers.

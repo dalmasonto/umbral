@@ -7,7 +7,7 @@ icon: shield
 
 `umbra-admin` mounts a ready-made HTML CRUD interface at `/admin/`. Every model
 that any registered plugin contributed to the migration registry gets list, detail,
-create, edit, and delete views — no extra code required.
+create, edit, and delete views - no extra code required.
 
 ## What you get from `AdminPlugin::default()`
 
@@ -15,7 +15,7 @@ The plugin contributes a router with these routes, all protected by HTTP Basic A
 
 | Route | What it does |
 |---|---|
-| `GET /admin/` | Index — list every registered model |
+| `GET /admin/` | Index - list every registered model |
 | `GET /admin/<table>/` | Row list (up to 200 rows, ordered by PK) |
 | `GET /admin/<table>/<id>` | Detail view for one row |
 | `GET /admin/<table>/new` | Create form |
@@ -26,12 +26,12 @@ The plugin contributes a router with these routes, all protected by HTTP Basic A
 
 ```rust
 App::builder()
-    .plugin(AuthPlugin::default())   // required — admin gates on auth
+    .plugin(AuthPlugin::default())   // required - admin gates on auth
     .plugin(AdminPlugin::default())
     .build()?;
 ```
 
-## Model discovery — nothing to register
+## Model discovery - nothing to register
 
 The admin walks `umbra::migrate::registered_plugins()` at request time and
 discovers every model every plugin declared via `Plugin::models()`. You do not
@@ -64,7 +64,7 @@ The admin dispatches HTML input types by `SqlType`. Nullable fields omit the
 ## What is NOT in v1
 
 - **Postgres-only field types.** Columns typed `Array`, `Inet`, `Cidr`, `MacAddr`,
-  or `FullText` trigger a boot-time system check failure — they cannot appear in an
+  or `FullText` trigger a boot-time system check failure - they cannot appear in an
   SQLite-backed admin. A Postgres-aware admin upgrade is a later milestone.
 - **Custom widgets and readonly fields.** Every column renders with the default
   widget for its `SqlType`. Per-field overrides and the `readonly` flag are

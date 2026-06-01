@@ -1,6 +1,6 @@
 ---
 title: Management commands
-description: serve, migrate, makemigrations, inspectdb — every command runs against your project's own binary.
+description: serve, migrate, makemigrations, inspectdb - every command runs against your project's own binary.
 sidebar_position: 2
 icon: terminal
 ---
@@ -13,7 +13,7 @@ how you invoke them.
 This is the Django `manage.py` shape: a project-local script that
 imports project code, so the commands see your models and your
 plugins. The framework-global [`umbra`](./startproject) binary handles
-scaffolding (`startproject`, `startapp`) and nothing else — it can't
+scaffolding (`startproject`, `startapp`) and nothing else - it can't
 manage your database because it doesn't know about your models.
 
 ## The built-in subcommands
@@ -73,7 +73,7 @@ cargo run -- showmigrations  # list per-plugin state
 
 ## Settings come from the environment
 
-Settings load the same way the server does — defaults, an optional
+Settings load the same way the server does - defaults, an optional
 `umbra.toml`, and `UMBRA_`-prefixed environment variables (last wins).
 
 ```bash
@@ -161,7 +161,7 @@ impl Plugin for BlogPlugin {
 
 /// One management subcommand. The shape is identical to what
 /// umbra-auth's `createsuperuser` or umbra-tasks's `tasks-worker`
-/// use — there's no separate "framework command" vs "plugin
+/// use - there's no separate "framework command" vs "plugin
 /// command" distinction.
 #[derive(Debug, Default)]
 pub struct SeedBlogCommand;
@@ -189,7 +189,7 @@ impl PluginCommand for SeedBlogCommand {
     }
 
     /// Run the command. The ambient pool and model registry are
-    /// already published — `Post::objects()`, `Post::objects()
+    /// already published - `Post::objects()`, `Post::objects()
     /// .bulk_create(...)`, etc. all Just Work.
     async fn run(&self, matches: &ArgMatches) -> Result<(), CliError> {
         let count: u64 = matches
@@ -274,7 +274,7 @@ The handler runs **after** `App::build()` has finished, so:
 - Settings are live; `umbra::settings::get()` returns the resolved
   values.
 - Every other plugin's `on_ready` has fired (commands run after
-  on_ready by design — see the dispatch order in
+  on_ready by design - see the dispatch order in
   `crates/umbra-core/src/cli.rs`).
 
 What NOT to do: don't start the HTTP server, don't run migrations
@@ -284,7 +284,7 @@ thing and exit.
 ### Calling conventions
 
 - **Exit code 0 on success.** Return `Ok(())`.
-- **Exit code 1 on failure.** Return `Err(CliError)` — the dispatcher
+- **Exit code 1 on failure.** Return `Err(CliError)` - the dispatcher
   prints the error and sets the code.
 - **Read from stdin / write to stdout** if you want pipe-friendly
   output. Use stderr for progress messages so they don't pollute

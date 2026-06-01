@@ -6,7 +6,7 @@ icon: columns
 tags: [orm, types, columns, schema]
 ---
 
-`#[derive(Model)]` reads each field's Rust type and emits one column in the migration. The catalogue is closed by design — every supported type is in the table below. Off-catalogue types fail at derive time with a compile-time error that points at the field and names the issue.
+`#[derive(Model)]` reads each field's Rust type and emits one column in the migration. The catalogue is closed by design - every supported type is in the table below. Off-catalogue types fail at derive time with a compile-time error that points at the field and names the issue.
 
 ## Quick lookup
 
@@ -26,12 +26,12 @@ The cross-backend types compile and run against both Postgres and SQLite. The Po
 | `chrono::DateTime<Utc>` | `Timestamptz` | `TIMESTAMP WITH TIME ZONE` | `TEXT` (ISO 8601) |
 | `uuid::Uuid` | `Uuid` | `UUID` | `TEXT` (36-char canonical) |
 | `serde_json::Value` | `Json` | `JSONB` | `TEXT` (JSON-as-string) |
-| `Vec<T>` (Postgres-only) | `Array(T)` | `T[]` | — (boot fails) |
-| `ipnetwork::IpNetwork` (Postgres-only) | `Inet` | `INET` | — (boot fails) |
-| `mac_address::MacAddress` (Postgres-only) | `MacAddr` | `MACADDR` | — (boot fails) |
-| `umbra::orm::TsVector` (Postgres-only) | `FullText` | `TSVECTOR` | — (boot fails) |
+| `Vec<T>` (Postgres-only) | `Array(T)` | `T[]` | - (boot fails) |
+| `ipnetwork::IpNetwork` (Postgres-only) | `Inet` | `INET` | - (boot fails) |
+| `mac_address::MacAddress` (Postgres-only) | `MacAddr` | `MACADDR` | - (boot fails) |
+| `umbra::orm::TsVector` (Postgres-only) | `FullText` | `TSVECTOR` | - (boot fails) |
 
-Any of these types wrapped in `Option<T>` produces the nullable column. `Option` is the only path to a nullable column — there is no `null = true` attribute.
+Any of these types wrapped in `Option<T>` produces the nullable column. `Option` is the only path to a nullable column - there is no `null = true` attribute.
 
 Off-catalogue types and the explicitly-rejected wide / unsigned ints (`i128`, `u64`, `u128`) fail at derive time with a clear message pointing at the field's span.
 
@@ -39,7 +39,7 @@ Off-catalogue types and the explicitly-rejected wide / unsigned ints (`i128`, `u
 
 You don't, at the model level. `String` always maps to `TEXT`. Two reasons this is the umbra default:
 
-1. **Postgres `VARCHAR(N)` and `TEXT` are the same type underneath** — `VARCHAR(N)` just adds a CHECK constraint on length, and the Postgres docs explicitly recommend `TEXT` unless there's a hard reason otherwise. The performance and storage are identical.
+1. **Postgres `VARCHAR(N)` and `TEXT` are the same type underneath** - `VARCHAR(N)` just adds a CHECK constraint on length, and the Postgres docs explicitly recommend `TEXT` unless there's a hard reason otherwise. The performance and storage are identical.
 2. **Length is a validation concern, not a schema concern.** Different layers want different lengths (a `username` might be ≤32 in the form, but you'd never want a 33-char value silently truncated at the DB). umbra puts the validation knob where it can fire the right error.
 
 For length validation at the request boundary, use `#[derive(Form)]` with `max_length`:
@@ -56,9 +56,9 @@ pub struct CreatePost {
 }
 ```
 
-`Form` produces a typed validator that maps to a 400 with field-level errors when the request body doesn't satisfy the constraints. The model itself stays portable — it works on SQLite (which doesn't have a `VARCHAR(N)` check anyway) without divergence.
+`Form` produces a typed validator that maps to a 400 with field-level errors when the request body doesn't satisfy the constraints. The model itself stays portable - it works on SQLite (which doesn't have a `VARCHAR(N)` check anyway) without divergence.
 
-If you really need a database-level length constraint (regulatory requirement, third-party process that reads the schema), add a `CHECK` to the generated migration JSON directly. The migration engine doesn't round-trip CHECK constraints back to the model snapshot today, so the constraint will live in migrations only — and that's fine, because at that point the DB schema is the source of truth, not the Rust struct.
+If you really need a database-level length constraint (regulatory requirement, third-party process that reads the schema), add a `CHECK` to the generated migration JSON directly. The migration engine doesn't round-trip CHECK constraints back to the model snapshot today, so the constraint will live in migrations only - and that's fine, because at that point the DB schema is the source of truth, not the Rust struct.
 
 ## Picking the primary key
 
@@ -72,7 +72,7 @@ The `id` field is the primary key. Three types are supported:
 
 Autoincrement happens for `i32` / `i64` PKs only. Pass `id: 0` to `bulk_create` / `create` to let the DB assign; pass a non-zero value to force a specific ID. For `Uuid`, the framework expects you to generate the value: pass `Uuid::new_v4()` (or v7) at create time. The auto-generation sentinel (`Uuid::nil()` triggers DB-side default) only fires if you've manually added `DEFAULT gen_random_uuid()` to the migration; the derive doesn't emit a default at v1.
 
-Custom PK names (`pub user_id: i64` instead of `pub id: i64`) aren't supported at v1 — the derive looks for the literal field name `id`. Workaround: rename the field to `id` and add a getter, or write the `Model` impl by hand. Tracked as a deferred follow-on; tell us if you hit this.
+Custom PK names (`pub user_id: i64` instead of `pub id: i64`) aren't supported at v1 - the derive looks for the literal field name `id`. Workaround: rename the field to `id` and add a getter, or write the `Model` impl by hand. Tracked as a deferred follow-on; tell us if you hit this.
 
 ## Attributes the derive accepts today
 
@@ -99,7 +99,7 @@ Other Django-style per-field attributes (`max_length`, `db_index`, `default`, `c
 | `choices = [...]` | Use a Rust enum at the boundary and a `String` field on the model. Validate enum-shape via `#[derive(Form)]` or a hand-written deserialiser. |
 | `on_delete = CASCADE` | Foreign keys aren't part of the derive surface yet. Add the FK + the ON DELETE clause to the generated migration directly. Tracked as a major v0.1 item. |
 
-Foreign derive attributes (`#[serde(...)]`, `#[sqlx(...)]`, `#[validate(...)]`, etc.) are passed through untouched — the derive doesn't reject them.
+Foreign derive attributes (`#[serde(...)]`, `#[sqlx(...)]`, `#[validate(...)]`, etc.) are passed through untouched - the derive doesn't reject them.
 
 ## Nullability
 
@@ -135,13 +135,13 @@ This is the cross-backend ORM payoff: most models stay on the cross-backend type
 
 - Boots clean against a `PgPool`.
 - Fails the boot-time system check against a `SqlitePool` with an error pointing at the model and field name.
-- Forces the model's QuerySet to use the `_pg` terminal variants (`fetch_pg(&pool)`, `first_pg(&pool)`, etc.) — the cross-backend `fetch()` / `first()` can't satisfy the dual-backend FromRow bound.
+- Forces the model's QuerySet to use the `_pg` terminal variants (`fetch_pg(&pool)`, `first_pg(&pool)`, etc.) - the cross-backend `fetch()` / `first()` can't satisfy the dual-backend FromRow bound.
 
 The per-type predicate surface (array `.contains` / `.overlaps`, JSON `.path_text` / `.has_key`, INET `.eq`) lives on the [Declaring models](./models) page next to each section.
 
 ## See also
 
-- [Declaring models](./models) — the per-type sections with operator surfaces and concrete examples.
-- [PostgreSQL backend](../backends/postgres) — the full Postgres column-type table and DDL shapes.
-- [SQLite backend](../backends/sqlite) — the SQLite column-type table and what's missing vs Postgres.
-- [Managed migrations](../migrations/managed-migrations) — what the migration engine writes for each column and how to edit it when you need a CHECK / INDEX / FK the derive doesn't emit.
+- [Declaring models](./models) - the per-type sections with operator surfaces and concrete examples.
+- [PostgreSQL backend](../backends/postgres) - the full Postgres column-type table and DDL shapes.
+- [SQLite backend](../backends/sqlite) - the SQLite column-type table and what's missing vs Postgres.
+- [Managed migrations](../migrations/managed-migrations) - what the migration engine writes for each column and how to edit it when you need a CHECK / INDEX / FK the derive doesn't emit.

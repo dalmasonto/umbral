@@ -9,8 +9,8 @@ If you came to umbra from Django and went looking for `INSTALLED_APPS`, you
 probably didn't find it. The reason is naming, not a missing feature.
 
 **A `Plugin` is an app.** The umbra `Plugin` trait carries every contribution
-a Django app makes — models, routes, system checks, an `on_ready` hook, and
-(at later milestones) middleware, management commands, templates — through
+a Django app makes - models, routes, system checks, an `on_ready` hook, and
+(at later milestones) middleware, management commands, templates - through
 one trait, into one builder call. The built-in `umbra-auth` plugin is the
 canonical example: it ships a `User` model, password hashing helpers, a
 `Plugin` impl that registers the model under the `"auth"` namespace, and
@@ -27,15 +27,15 @@ identical to anything you'd write yourself.
 | `my_app/migrations/` | `plugins/my-app/migrations/<my-app>/` |
 | `my_app/urls.py` | `Plugin::routes()` returning an axum `Router` |
 | `apps.py` `ready()` | `Plugin::on_ready(&ctx)` |
-| `my_app/management/commands/` | `Plugin::commands()` (deferred — see the [Plugin trait page](/v0.0.1/plugins/the-plugin-trait)) |
-| `auth_user`, `auth_permission` (Django's auto-prefixed table names) | Up to you — `#[umbra(table = "...")]` overrides the snake-case default |
+| `my_app/management/commands/` | `Plugin::commands()` (deferred - see the [Plugin trait page](/v0.0.1/plugins/the-plugin-trait)) |
+| `auth_user`, `auth_permission` (Django's auto-prefixed table names) | Up to you - `#[umbra(table = "...")]` overrides the snake-case default |
 
 ## Where apps live
 
 The convention is `plugins/<name>/` at the repo root, as its own Cargo
 project. `plugins/umbra-auth/` is the live example. The pattern matches
 what every built-in plugin will look like (sessions, tasks, admin, REST),
-and what a third-party `cargo add umbra-blog` would look like — there's
+and what a third-party `cargo add umbra-blog` would look like - there's
 no special-casing between "built-in" and "third-party".
 
 A small project that doesn't yet need its own crate can register the
@@ -44,7 +44,7 @@ matters when you want the app to be reusable.
 
 ## Why the rename
 
-"App" is a Django-specific word — it overloads "application" (the whole
+"App" is a Django-specific word - it overloads "application" (the whole
 project) and creates a layer of confusion every Django newcomer asks
 about. "Plugin" is the broader, cross-ecosystem name for the same shape:
 a self-contained unit that extends a framework. The plugin contract spec
@@ -56,7 +56,7 @@ The mental model is the same. The keyword is different.
 
 ## A complete plugin
 
-Here's the whole shape in one file — a `blog` plugin (think Django's
+Here's the whole shape in one file - a `blog` plugin (think Django's
 `blog` app) that owns its own `Post` model, exposes a couple of
 routes that hit the ORM from the plugin code, customises REST via a
 `ResourceConfig`, and runs a one-shot seed on startup via
@@ -75,7 +75,7 @@ use umbra::web::{Html, Json, Path, Router, StatusCode, get};
 // --- Model -----------------------------------------------------------------
 
 /// The plugin owns its model. `App::builder()` auto-discovers it
-/// through the `Plugin::models()` hook below — no `.model::<Post>()`
+/// through the `Plugin::models()` hook below - no `.model::<Post>()`
 /// line on the builder.
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, umbra::orm::Model)]
 pub struct Post {
@@ -88,7 +88,7 @@ pub struct Post {
 // --- Route handlers -- accessing the ORM from inside the plugin ------------
 
 /// HTML list view. `Post::objects()` reaches the ambient pool that
-/// `App::build()` published — no `&Pool` arg through the handler chain,
+/// `App::build()` published - no `&Pool` arg through the handler chain,
 /// no `State<DbPool>` extractor, no global look-up at the call site.
 async fn list_posts() -> Result<Html<String>, (StatusCode, String)> {
     let posts = Post::objects()
@@ -100,13 +100,13 @@ async fn list_posts() -> Result<Html<String>, (StatusCode, String)> {
 
     let mut html = String::from("<h1>Posts</h1><ul>");
     for p in &posts {
-        html.push_str(&format!("<li>{} — {}</li>", p.id, p.title));
+        html.push_str(&format!("<li>{} - {}</li>", p.id, p.title));
     }
     html.push_str("</ul>");
     Ok(Html(html))
 }
 
-/// JSON detail view. Same ORM, different terminal — `.first()` rather than
+/// JSON detail view. Same ORM, different terminal - `.first()` rather than
 /// `.fetch()` because we want one row or 404.
 async fn post_detail(Path(id): Path<i64>) -> Result<Json<Post>, (StatusCode, String)> {
     let found = Post::objects()
@@ -154,7 +154,7 @@ impl Plugin for BlogPlugin {
 
     /// Auto-registration: every model this plugin owns goes here.
     /// `App::builder()` walks `Plugin::models()` on every registered
-    /// plugin and feeds the results into the migration registry —
+    /// plugin and feeds the results into the migration registry -
     /// you do NOT also call `.model::<Post>()` from main.rs.
     fn models(&self) -> Vec<umbra::migrate::ModelMeta> {
         vec![umbra::migrate::ModelMeta::for_::<Post>()]
@@ -168,7 +168,7 @@ impl Plugin for BlogPlugin {
 
     /// Runs after every other plugin has booted and the ambient pool
     /// + model registry are live. The classic "seed on first run"
-    /// idiom — bulk_create is idempotent here because we check count
+    /// idiom - bulk_create is idempotent here because we check count
     /// first; in production you'd guard this behind a feature flag
     /// or move it to a separate `seed` management command.
     fn on_ready(&self, _ctx: &AppContext) -> Result<(), PluginError> {
@@ -212,7 +212,7 @@ Four things that matter in this shape:
    the migration registry via `Plugin::models()`; you don't also write
    `.model::<Post>()`. `App::builder()` walks every registered plugin
    and collects its models in dependency order. `.model::<T>()` is for
-   models that live in `main.rs` itself (no owning plugin) — when in
+   models that live in `main.rs` itself (no owning plugin) - when in
    doubt, put the model on the plugin.
 2. **The ORM is ambient.** `Post::objects().fetch()` works inside a route
    handler with no plumbing. Same call works inside `on_ready`, inside

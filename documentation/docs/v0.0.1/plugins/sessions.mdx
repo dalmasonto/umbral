@@ -6,7 +6,7 @@ icon: cookie
 ---
 
 `umbra-sessions` gives you a DB-backed session table, a UUID cookie, and helpers
-for creating, reading, and destroying sessions — enough to implement login/logout
+for creating, reading, and destroying sessions - enough to implement login/logout
 without any additional infrastructure.
 
 ## What you get from `SessionsPlugin::default()`
@@ -66,7 +66,7 @@ let count: Option<u32> = umbra_sessions::get_data(&session, "cart_count")?;
   alternative is deferred until a real low-traffic use case asks for it.
 - **Session middleware.** Handlers call `current_user(&headers)` explicitly.
   `Plugin::middleware()` is the M7 deferral; the explicit extractor pattern is
-  intentional — auth checks are visible in the handler signature rather than
+  intentional - auth checks are visible in the handler signature rather than
   implicit.
 - **Automatic cleanup.** Expired rows are deleted lazily on read. A `clearsessions`
   management command or a `umbra-tasks` periodic job lands in a later milestone.

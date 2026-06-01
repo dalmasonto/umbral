@@ -64,9 +64,9 @@ fires `on_ready` in dependency order.
 
 The trait above is the M7 v1 shape. Deferred to later milestones:
 
-- `middleware()` — the cross-plugin layer-ordering open question is still
+- `middleware()` - the cross-plugin layer-ordering open question is still
   open. Lifts when sessions need it.
-- `commands()` — clap's dynamic-subcommand surface ergonomics. Lifts when
+- `commands()` - clap's dynamic-subcommand surface ergonomics. Lifts when
   tasks add a `worker` subcommand.
 - inventory / linkme auto-registration. Explicit `.plugin(...)` is the
   default recommendation; auto lands when a built-in opts in.

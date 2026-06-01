@@ -1,6 +1,6 @@
 ---
 title: PostgreSQL
-description: Point an umbra app at Postgres — connection URL, migrations, queries, and the Postgres-only field types.
+description: Point an umbra app at Postgres - connection URL, migrations, queries, and the Postgres-only field types.
 sidebar_position: 1
 icon: database
 tags: [postgres, backends, database]
@@ -49,7 +49,7 @@ The engine renders Postgres DDL automatically:
 - `BIGSERIAL` for `i64` primary keys (vs `INTEGER PRIMARY KEY AUTOINCREMENT` on SQLite).
 - `ALTER TABLE ... ALTER COLUMN SET / DROP NOT NULL` for nullability changes (vs SQLite's table-recreation dance).
 - `$1..$N` placeholders and `ON CONFLICT DO NOTHING` on the migration apply path.
-- Native types from the [Type catalogue](#type-catalogue) below — `JSONB`, `UUID`, `TIMESTAMPTZ`, arrays, INET/CIDR/MACADDR, TSVECTOR — instead of the `TEXT`/`BLOB` fallbacks SQLite uses.
+- Native types from the [Type catalogue](#type-catalogue) below - `JSONB`, `UUID`, `TIMESTAMPTZ`, arrays, INET/CIDR/MACADDR, TSVECTOR - instead of the `TEXT`/`BLOB` fallbacks SQLite uses.
 
 The migration files themselves are backend-agnostic JSON; the same file applies to both backends. Render the SQL for either one with `cargo run -- migrate --plan`.
 
@@ -67,7 +67,7 @@ If you hold a `PgPool` directly (integration tests, scripts that don't run throu
 let articles = Article::objects().on_pg(&pg_pool).fetch().await?;
 ```
 
-`.on_pg(&pool)` is the Postgres counterpart of `.on(&sqlite_pool)`. The `_pg` variants on the QuerySet (`fetch_pg`, `first_pg`, `get_pg`, `count_pg`, `exists_pg`) take an explicit `PgPool` and skip the dispatch entirely — useful for models whose fields are Postgres-only and so don't satisfy the dual `FromRow` bound.
+`.on_pg(&pool)` is the Postgres counterpart of `.on(&sqlite_pool)`. The `_pg` variants on the QuerySet (`fetch_pg`, `first_pg`, `get_pg`, `count_pg`, `exists_pg`) take an explicit `PgPool` and skip the dispatch entirely - useful for models whose fields are Postgres-only and so don't satisfy the dual `FromRow` bound.
 
 ## Postgres-only field types
 
@@ -75,10 +75,10 @@ Some workloads benefit enough from native PG features to make the SQLite story i
 
 | Type | Rust field | Postgres column | Notes |
 |------|------------|-----------------|-------|
-| Array | `Vec<T>` / `Option<Vec<T>>` | `T[]` | Element type is one of `i32`, `i64`, `String`, `Uuid`, `bool`. See [orm/models — Array columns](../orm/models#array-columns). |
+| Array | `Vec<T>` / `Option<Vec<T>>` | `T[]` | Element type is one of `i32`, `i64`, `String`, `Uuid`, `bool`. See [orm/models - Array columns](../orm/models#array-columns). |
 | JSONB | `serde_json::Value` (M3 `Json` SqlType) | `JSONB` | Indexed `@>`, `->`, `->>` operator surface; the QuerySet exposes them as `.has_key(...)` / `.contains(...)` / `.path("a.b")`. |
-| INET / CIDR / MACADDR | `IpNet`-style newtypes | `INET`, `CIDR`, `MACADDR` | Networking fields. [orm/models — Network address columns](../orm/models#network-address-columns). |
-| TSVECTOR | `umbra::orm::TsVector` | `TSVECTOR` | Full-text search. Populate via trigger or `GENERATED ALWAYS AS (to_tsvector(...))`. [orm/models — Full-text search columns](../orm/models#full-text-search-columns). |
+| INET / CIDR / MACADDR | `IpNet`-style newtypes | `INET`, `CIDR`, `MACADDR` | Networking fields. [orm/models - Network address columns](../orm/models#network-address-columns). |
+| TSVECTOR | `umbra::orm::TsVector` | `TSVECTOR` | Full-text search. Populate via trigger or `GENERATED ALWAYS AS (to_tsvector(...))`. [orm/models - Full-text search columns](../orm/models#full-text-search-columns). |
 
 Plus the standard cross-backend types (`Boolean`, `Uuid`, `Timestamptz`, etc.) all map to their native Postgres equivalents (`BOOLEAN`, `UUID`, `TIMESTAMP WITH TIME ZONE`) on this backend.
 
@@ -108,13 +108,13 @@ The complete `SqlType` → Postgres column-type mapping lives in `crates/umbra-c
 | `Text` | `TEXT` |
 | `Date` / `Time` / `Timestamptz` | `DATE` / `TIME` / `TIMESTAMP WITH TIME ZONE` |
 | `Uuid` | `UUID` |
-| `Json` | `JSONB` (always `JSONB`, never `JSON` — the operator + index story is the whole point) |
+| `Json` | `JSONB` (always `JSONB`, never `JSON` - the operator + index story is the whole point) |
 | `Array(T)` | `T[]` (recursively mapped) |
 | `Inet` / `Cidr` / `MacAddr` | `INET` / `CIDR` / `MACADDR` |
 | `FullText` | `TSVECTOR` (via `ColumnType::custom`) |
 
 ## See also
 
-- [SQLite backend](./sqlite) — the dev / test counterpart.
-- [Row-Level Security (umbra-rls)](../plugins/rls) — Postgres-only policy plugin.
-- [orm/models — Postgres-only column types](../orm/models#json-columns) — array / JSON / network / full-text field declarations and operator surface.
+- [SQLite backend](./sqlite) - the dev / test counterpart.
+- [Row-Level Security (umbra-rls)](../plugins/rls) - Postgres-only policy plugin.
+- [orm/models - Postgres-only column types](../orm/models#json-columns) - array / JSON / network / full-text field declarations and operator surface.
