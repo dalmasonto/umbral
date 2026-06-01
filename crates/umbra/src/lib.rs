@@ -97,10 +97,12 @@ pub mod migrate {
     //! ambient pool inside one transaction per file.
 
     pub use umbra_core::migrate::{
-        APP_PLUGIN_NAME, Column, MIGRATIONS_DIR, MigrateError, MigrationFile, MigrationRef,
-        ModelMeta, Operation, Snapshot, diff, make, make_in, model_alias, models_for_plugin,
-        plugin_order, record_applied, registered_models, registered_plugins, render_operation_for,
-        run, run_in, show, show_in,
+        APP_PLUGIN_NAME, Column, DriftReport, MIGRATIONS_DIR, MigrateError, MigrationEntry,
+        MigrationFile, MigrationRef, MigrationStatus, ModelMeta, Operation, Snapshot,
+        detect_all_drift, detect_drift, diff, fake_apply, fake_apply_in, fake_initial,
+        fake_initial_in, make, make_in, model_alias, models_for_plugin, plugin_order,
+        record_applied, registered_models, registered_plugins, render_operation_for, run,
+        run_checked, run_checked_in, run_in, show, show_in,
     };
 }
 

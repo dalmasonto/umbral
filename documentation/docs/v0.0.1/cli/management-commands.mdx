@@ -102,6 +102,44 @@ cargo run -- serve [--addr 0.0.0.0:3000]
 |---|---|
 | `--addr <host:port>` | Override `settings.bind_addr`. Useful for `0.0.0.0` to listen on all interfaces. Equivalent to setting `UMBRA_BIND_ADDR`. |
 
+## migrate flags
+
+```bash
+cargo run -- migrate [--fake <plugin/name>] [--fake-initial] [--allow-drift]
+```
+
+| Flag | Effect |
+|---|---|
+| *(none)* | Apply all pending migrations. Errors on drift (applied-but-missing-on-disk). |
+| `--fake <plugin/name>` | Mark one migration as applied in the tracking table without running its SQL. Format: `app/0001_create_post`. Recovery path when the schema already exists. |
+| `--fake-initial` | For each plugin, if the `0001_*` migration's tables already exist in the database, mark it applied without running SQL. Use when adopting a database bootstrapped outside umbra. |
+| `--allow-drift` | Proceed even when some applied migrations are missing from disk. Logs a warning per missing file and applies the genuinely-pending ones. |
+
+See the [migration drift recovery guide](/v0.0.1/migrations/migration-drift) for worked examples.
+
+## showmigrations
+
+```bash
+cargo run -- showmigrations
+```
+
+Prints each migration's state, grouped by plugin:
+
+```
+# plugin: app
+[X] app/0001_create_post    — applied
+[ ] app/0002_add_post_slug  — pending
+[!] app/0003_add_post_tag   — applied but file missing on disk (drift)
+[?] app/0004_add_post_body  — on disk but out of order
+```
+
+| Marker | State |
+|---|---|
+| `[X]` | Applied — in the tracking table and the file exists on disk. |
+| `[ ]` | Pending — on disk, newer than the last applied migration. |
+| `[!]` | Applied but missing on disk — tracking table is ahead of VCS. Critical drift. |
+| `[?]` | Out of order — on disk, not applied, but older than the last applied migration. Warning only. |
+
 ## inspectdb flags
 
 ```bash

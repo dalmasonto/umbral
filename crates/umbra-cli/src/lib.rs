@@ -81,8 +81,29 @@ enum Command {
     /// new migration file per plugin with changes.
     Makemigrations,
     /// Apply every pending migration against the ambient pool.
-    Migrate,
+    Migrate {
+        /// Mark a specific migration as applied in the tracking table
+        /// WITHOUT running its SQL. Recovery path when the schema
+        /// already exists (e.g. migrated outside umbra). Format:
+        /// `<plugin>/<migration_name>` (e.g. `app/0001_create_post`).
+        #[arg(long, value_name = "PLUGIN/NAME")]
+        fake: Option<String>,
+        /// For each plugin, if the first migration's tables already
+        /// exist in the database, mark it applied without running SQL.
+        /// Use when adopting a database bootstrapped outside umbra.
+        #[arg(long, default_value_t = false)]
+        fake_initial: bool,
+        /// Proceed even if some applied migrations are missing from
+        /// disk. Logs a warning for each missing file and applies the
+        /// genuinely-pending ones. Without this flag, `migrate` errors
+        /// on drift.
+        #[arg(long, default_value_t = false)]
+        allow_drift: bool,
+    },
     /// List applied vs pending migrations per plugin.
+    ///
+    /// Markers: [X] applied, [ ] pending, [!] applied-but-missing-on-disk,
+    /// [?] on-disk-but-out-of-order.
     Showmigrations,
     /// Introspect the ambient database into a `models.rs` plus an
     /// initial migration. Used to onboard an existing schema.
@@ -126,7 +147,11 @@ pub async fn dispatch(app: App) -> Result<(), Box<dyn std::error::Error>> {
     match cli.command.unwrap_or(Command::Serve { addr: None }) {
         Command::Serve { addr } => serve(app, addr).await,
         Command::Makemigrations => makemigrations().await,
-        Command::Migrate => migrate().await,
+        Command::Migrate {
+            fake,
+            fake_initial,
+            allow_drift,
+        } => migrate(fake, fake_initial, allow_drift).await,
         Command::Showmigrations => showmigrations().await,
         Command::Inspectdb {
             output,
@@ -165,18 +190,79 @@ async fn makemigrations() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
-async fn migrate() -> Result<(), Box<dyn std::error::Error>> {
-    let n = umbra::migrate::run().await?;
-    if n == 0 {
-        println!("No pending migrations");
-    } else {
-        println!("Applied {n} migration(s)");
+async fn migrate(
+    fake: Option<String>,
+    fake_initial: bool,
+    allow_drift: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // --fake <plugin/name>: mark one migration applied without running SQL.
+    if let Some(ref spec) = fake {
+        let (plugin, name) = parse_migration_spec(spec)?;
+        umbra::migrate::fake_apply(plugin, name).await?;
+        println!("Marked {spec} as applied (no SQL executed)");
+        return Ok(());
     }
-    Ok(())
+
+    // --fake-initial: for every plugin, if the 0001 tables exist, fake-apply.
+    if fake_initial {
+        let n = umbra::migrate::fake_initial().await?;
+        if n == 0 {
+            println!("No plugins needed fake-initial (either already applied or tables absent)");
+        } else {
+            println!("Fake-applied initial migration for {n} plugin(s)");
+        }
+        return Ok(());
+    }
+
+    // Normal migrate with optional --allow-drift.
+    match umbra::migrate::run_checked(allow_drift).await {
+        Ok(n) => {
+            if n == 0 {
+                println!("No pending migrations");
+            } else {
+                println!("Applied {n} migration(s)");
+            }
+            Ok(())
+        }
+        Err(MigrateError::DriftDetected { ref missing }) => {
+            let names: Vec<String> = missing.iter().map(|(p, n)| format!("{p}/{n}")).collect();
+            eprintln!("error: umbra migrate: drift detected");
+            eprintln!("  The following migrations are in the tracking table but missing on disk:");
+            for name in &names {
+                eprintln!("    [!] {name}");
+            }
+            eprintln!();
+            eprintln!(
+                "  Options:\n  \
+                 1. Restore the file(s) from VCS.\n  \
+                 2. Run `umbra migrate --allow-drift` to proceed and apply pending migrations.\n  \
+                 3. Run `umbra migrate --fake <plugin/name>` to mark an individual migration \
+                 as applied without running SQL."
+            );
+            Err(Box::new(MigrateError::DriftDetected {
+                missing: missing.clone(),
+            }))
+        }
+        Err(err) => Err(Box::new(err)),
+    }
+}
+
+/// Parse `"plugin/name"` into `(&str, &str)`. Returns an error if the
+/// format is wrong.
+fn parse_migration_spec(spec: &str) -> Result<(&str, &str), Box<dyn std::error::Error>> {
+    let mut parts = spec.splitn(2, '/');
+    let plugin = parts.next().ok_or("migration spec must be `plugin/name`")?;
+    let name = parts
+        .next()
+        .ok_or("migration spec must be `plugin/name`; missing name after `/`")?;
+    Ok((plugin, name))
 }
 
 async fn showmigrations() -> Result<(), Box<dyn std::error::Error>> {
-    umbra::migrate::show().await?;
+    let pending = umbra::migrate::show().await?;
+    if pending > 0 {
+        println!("\n{pending} migration(s) not yet applied.");
+    }
     Ok(())
 }
 

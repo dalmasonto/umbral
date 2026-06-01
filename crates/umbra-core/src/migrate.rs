@@ -375,6 +375,71 @@ pub const APP_PLUGIN_NAME: &str = "app";
 /// with `--migrations-dir` once the CLI grows real arg parsing (M5+).
 pub const MIGRATIONS_DIR: &str = "migrations";
 
+/// The state of a single migration from the perspective of drift detection.
+/// Returned inside [`DriftReport`] so callers can decide how to handle each
+/// state independently.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MigrationStatus {
+    /// The migration is recorded in the tracking table AND the file
+    /// exists on disk. Normal applied state.
+    Applied,
+    /// The migration is recorded in the tracking table BUT the
+    /// corresponding file is missing from disk. The database is ahead
+    /// of what version control has; recovering requires restoring the
+    /// file or running with `--allow-drift`.
+    AppliedButMissing,
+    /// The migration file exists on disk AND its sequence number is
+    /// lower than the highest applied migration for this plugin, but it
+    /// is not recorded in the tracking table. Looks like someone dropped
+    /// a migration file back into a directory after a teammate already
+    /// applied later ones. Should warn, not error.
+    OutOfOrder,
+    /// Normal pending state: the file is on disk and its sequence number
+    /// is higher than anything applied. Ready to apply.
+    Pending,
+}
+
+/// Per-migration entry inside a [`DriftReport`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MigrationEntry {
+    pub plugin: String,
+    pub name: String,
+    pub status: MigrationStatus,
+}
+
+/// The output of [`detect_drift`]: one entry per migration (applied or
+/// on-disk), categorised into the four states above.
+///
+/// The caller inspects `has_critical_drift()` to decide whether to abort
+/// before applying migrations. Surfaced by `show_in_with_drift` for
+/// `showmigrations` and checked by `run_in_with_drift_check` before
+/// executing any SQL.
+#[derive(Debug, Clone, Default)]
+pub struct DriftReport {
+    pub entries: Vec<MigrationEntry>,
+}
+
+impl DriftReport {
+    /// Returns true when at least one migration is `AppliedButMissing`.
+    /// This state means the tracking table references a file that no
+    /// longer exists on disk — the operator needs to act before it is
+    /// safe to continue applying new migrations.
+    pub fn has_critical_drift(&self) -> bool {
+        self.entries
+            .iter()
+            .any(|e| e.status == MigrationStatus::AppliedButMissing)
+    }
+
+    /// All migrations with `AppliedButMissing` status. Convenience
+    /// accessor for building the error message.
+    pub fn missing_on_disk(&self) -> Vec<&MigrationEntry> {
+        self.entries
+            .iter()
+            .filter(|e| e.status == MigrationStatus::AppliedButMissing)
+            .collect()
+    }
+}
+
 /// Errors the migration engine can produce.
 #[derive(Debug)]
 pub enum MigrateError {
@@ -404,6 +469,11 @@ pub enum MigrateError {
         column: String,
         reason: String,
     },
+    /// The tracking table records migrations that no longer have
+    /// corresponding files on disk. Carries the list of missing names.
+    /// The operator must either restore the files from VCS or run with
+    /// `--allow-drift` to proceed despite the inconsistency.
+    DriftDetected { missing: Vec<(String, String)> },
 }
 
 impl std::fmt::Display for MigrateError {
@@ -428,6 +498,20 @@ impl std::fmt::Display for MigrateError {
                 "umbra migrate: unsafe column change on `{model}.{column}`: {reason}; \
                  hand-write the migration with a data-preserving step"
             ),
+            MigrateError::DriftDetected { missing } => {
+                let names: Vec<String> = missing
+                    .iter()
+                    .map(|(plugin, name)| format!("{plugin}/{name}"))
+                    .collect();
+                write!(
+                    f,
+                    "umbra migrate: drift detected — the following migrations are recorded in \
+                     the tracking table but their files are missing from disk:\n  {}\n\
+                     Restore the files from VCS or run `umbra migrate --allow-drift` to \
+                     proceed despite the inconsistency.",
+                    names.join("\n  ")
+                )
+            }
         }
     }
 }
@@ -534,8 +618,31 @@ pub async fn make_in(dir: &Path) -> Result<Vec<PathBuf>, MigrateError> {
 ///
 /// Returns the total number of migrations applied (zero if every
 /// plugin's migrations were already in the tracking table).
+///
+/// This variant performs a drift check before executing any SQL. If
+/// any migration is `AppliedButMissing` (in the DB but not on disk),
+/// the call returns [`MigrateError::DriftDetected`] listing the
+/// missing names. Pass `allow_drift = true` (via [`run_checked_in`])
+/// to suppress the error and proceed anyway (with a warning printed to
+/// stderr).
 pub async fn run() -> Result<u64, MigrateError> {
-    run_in(Path::new(MIGRATIONS_DIR)).await
+    run_checked(false).await
+}
+
+/// Same as [`run`] but controls drift handling.
+/// `allow_drift = true` corresponds to the `--allow-drift` CLI flag:
+/// the command logs a warning and proceeds even if some applied
+/// migrations are missing on disk.
+pub async fn run_checked(allow_drift: bool) -> Result<u64, MigrateError> {
+    run_checked_in(Path::new(MIGRATIONS_DIR), allow_drift).await
+}
+
+/// Same as [`run_checked`] but takes an explicit base directory.
+pub async fn run_checked_in(dir: &Path, allow_drift: bool) -> Result<u64, MigrateError> {
+    match crate::db::pool_dispatched() {
+        crate::db::DbPool::Sqlite(p) => run_in_sqlite_checked(dir, p, allow_drift).await,
+        crate::db::DbPool::Postgres(p) => run_in_postgres_checked(dir, p, allow_drift).await,
+    }
 }
 
 /// Same as [`run`] but takes an explicit base directory. Used by
@@ -548,6 +655,10 @@ pub async fn run() -> Result<u64, MigrateError> {
 /// engine doesn't see `Plugin::dependencies()` from inside this
 /// standalone function. M8 lifts the limitation via a registry that
 /// remembers the toposorted order computed at `App::build()` time.
+///
+/// This legacy entry point does NOT perform drift checking so the
+/// existing tests (which bypass drift by design) keep passing. New
+/// callers should prefer [`run_checked_in`].
 pub async fn run_in(dir: &Path) -> Result<u64, MigrateError> {
     match crate::db::pool_dispatched() {
         crate::db::DbPool::Sqlite(p) => run_in_sqlite(dir, p).await,
@@ -640,6 +751,105 @@ async fn run_in_postgres(dir: &Path, pool: &sqlx::PgPool) -> Result<u64, Migrate
     Ok(applied_count)
 }
 
+/// SQLite drift-checking path for `run_checked_in`.
+///
+/// Reads the applied set, runs `detect_all_drift`, and either errors
+/// (if `allow_drift = false` and critical drift is found) or logs a
+/// warning and proceeds (if `allow_drift = true`). Then delegates to
+/// `run_in_sqlite` for the actual apply loop.
+async fn run_in_sqlite_checked(
+    dir: &Path,
+    pool: &sqlx::SqlitePool,
+    allow_drift: bool,
+) -> Result<u64, MigrateError> {
+    ensure_tracking_table_sqlite(pool).await?;
+    let applied = applied_names_sqlite(pool).await?;
+    let report = detect_all_drift(&applied, dir)?;
+
+    if report.has_critical_drift() {
+        if allow_drift {
+            let missing = report.missing_on_disk();
+            for entry in &missing {
+                eprintln!(
+                    "warning: umbra migrate --allow-drift: migration {}/{} is recorded in \
+                     the tracking table but the file is missing from disk; proceeding.",
+                    entry.plugin, entry.name
+                );
+            }
+        } else {
+            let missing: Vec<(String, String)> = report
+                .missing_on_disk()
+                .iter()
+                .map(|e| (e.plugin.clone(), e.name.clone()))
+                .collect();
+            return Err(MigrateError::DriftDetected { missing });
+        }
+    }
+
+    // Emit warnings for out-of-order files.
+    for entry in report
+        .entries
+        .iter()
+        .filter(|e| e.status == MigrationStatus::OutOfOrder)
+    {
+        eprintln!(
+            "warning: umbra migrate: migration {}/{} is on disk but appears before the \
+             last applied migration for this plugin; it looks like a file was restored \
+             after a teammate already applied later ones.",
+            entry.plugin, entry.name
+        );
+    }
+
+    run_in_sqlite(dir, pool).await
+}
+
+/// Postgres drift-checking path for `run_checked_in`. Same logic as
+/// `run_in_sqlite_checked` but uses the Postgres applied-set reader.
+async fn run_in_postgres_checked(
+    dir: &Path,
+    pool: &sqlx::PgPool,
+    allow_drift: bool,
+) -> Result<u64, MigrateError> {
+    ensure_tracking_table_postgres(pool).await?;
+    let applied = applied_names_postgres(pool).await?;
+    let report = detect_all_drift(&applied, dir)?;
+
+    if report.has_critical_drift() {
+        if allow_drift {
+            let missing = report.missing_on_disk();
+            for entry in &missing {
+                eprintln!(
+                    "warning: umbra migrate --allow-drift: migration {}/{} is recorded in \
+                     the tracking table but the file is missing from disk; proceeding.",
+                    entry.plugin, entry.name
+                );
+            }
+        } else {
+            let missing: Vec<(String, String)> = report
+                .missing_on_disk()
+                .iter()
+                .map(|e| (e.plugin.clone(), e.name.clone()))
+                .collect();
+            return Err(MigrateError::DriftDetected { missing });
+        }
+    }
+
+    for entry in report
+        .entries
+        .iter()
+        .filter(|e| e.status == MigrationStatus::OutOfOrder)
+    {
+        eprintln!(
+            "warning: umbra migrate: migration {}/{} is on disk but appears before the \
+             last applied migration for this plugin; it looks like a file was restored \
+             after a teammate already applied later ones.",
+            entry.plugin, entry.name
+        );
+    }
+
+    run_in_postgres(dir, pool).await
+}
+
 /// Record a migration as applied in the `umbra_migrations` tracking
 /// table without running its operations. The "mark as applied" path
 /// `inspectdb --mark-applied` uses to register the introspected
@@ -685,6 +895,342 @@ pub async fn record_applied(
     Ok(())
 }
 
+// =========================================================================
+// Drift detection — gap 24.
+// =========================================================================
+
+/// Compute the drift report for a single plugin directory. Compares the
+/// set of `(plugin, name)` pairs recorded in the tracking table against
+/// the migration files present on disk and classifies each into one of
+/// the four [`MigrationStatus`] states.
+///
+/// `applied` is the full set of `(plugin, name)` tuples already read
+/// from the tracking table (shared across plugins to avoid extra DB
+/// round-trips). `plugin_dir` is the on-disk directory for this plugin;
+/// an absent directory is treated the same as an empty one.
+///
+/// # Classification
+///
+/// - File present + in DB → `Applied`
+/// - File absent + in DB → `AppliedButMissing`
+/// - File present + not in DB + seq ≤ max_applied_seq → `OutOfOrder`
+/// - File present + not in DB + seq > max_applied_seq → `Pending`
+///
+/// The sequence number is the numeric prefix of the migration name
+/// (e.g. `0001` in `0001_create_post`). Absence of any applied
+/// migration for this plugin means `max_applied_seq = 0`.
+pub fn detect_drift(
+    plugin: &str,
+    applied: &std::collections::HashSet<(String, String)>,
+    plugin_dir: &Path,
+) -> Result<Vec<MigrationEntry>, MigrateError> {
+    // Collect on-disk migration names (the id, not the full path).
+    let paths = list_migration_files(plugin_dir)?;
+    let mut on_disk: Vec<String> = Vec::new();
+    for path in &paths {
+        let file = read_migration_file(path)?;
+        on_disk.push(file.id.clone());
+    }
+
+    // Pull every tracking-table entry for this plugin.
+    let plugin_applied: Vec<&str> = applied
+        .iter()
+        .filter(|(p, _)| p == plugin)
+        .map(|(_, n)| n.as_str())
+        .collect();
+
+    // Highest sequence number among applied migrations for this plugin.
+    let max_applied_seq: u32 = plugin_applied
+        .iter()
+        .filter_map(|name| name.split('_').next()?.parse::<u32>().ok())
+        .max()
+        .unwrap_or(0);
+
+    let on_disk_set: std::collections::HashSet<&str> = on_disk.iter().map(|s| s.as_str()).collect();
+
+    let mut entries: Vec<MigrationEntry> = Vec::new();
+
+    // Walk on-disk files in order.
+    for name in &on_disk {
+        let key = (plugin.to_string(), name.clone());
+        let status = if applied.contains(&key) {
+            MigrationStatus::Applied
+        } else {
+            // Determine this migration's sequence number.
+            let seq: u32 = name
+                .split('_')
+                .next()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
+            if seq <= max_applied_seq && max_applied_seq > 0 {
+                MigrationStatus::OutOfOrder
+            } else {
+                MigrationStatus::Pending
+            }
+        };
+        entries.push(MigrationEntry {
+            plugin: plugin.to_string(),
+            name: name.clone(),
+            status,
+        });
+    }
+
+    // Walk applied entries not present on disk.
+    for name in &plugin_applied {
+        if !on_disk_set.contains(*name) {
+            entries.push(MigrationEntry {
+                plugin: plugin.to_string(),
+                name: (*name).to_string(),
+                status: MigrationStatus::AppliedButMissing,
+            });
+        }
+    }
+
+    // Sort: applied-but-missing entries bubble after their expected
+    // position is not determinable; sort all entries by name for a
+    // deterministic order. In practice, applied-but-missing names
+    // are still prefixed with the numeric sequence so lexical sort
+    // yields the right display order.
+    entries.sort_by(|a, b| a.name.cmp(&b.name));
+
+    Ok(entries)
+}
+
+/// Detect drift across every registered plugin and return a combined
+/// [`DriftReport`]. Called by `run_in_checked` before executing SQL
+/// and by `show_in` when displaying the four-state list.
+///
+/// `applied` is already fetched from the DB; `dir` is the migrations
+/// root directory.
+pub fn detect_all_drift(
+    applied: &std::collections::HashSet<(String, String)>,
+    dir: &Path,
+) -> Result<DriftReport, MigrateError> {
+    let mut all_entries: Vec<MigrationEntry> = Vec::new();
+
+    // Also surface any tracking-table entries whose plugin directory
+    // doesn't appear in the registered-plugins list — a plugin was
+    // removed entirely but its DB rows remain.
+    let mut seen_plugins: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for plugin in plugin_order() {
+        seen_plugins.insert(plugin.clone());
+        let plugin_dir = dir.join(&plugin);
+        let entries = detect_drift(&plugin, applied, &plugin_dir)?;
+        all_entries.extend(entries);
+    }
+
+    // Any applied entries whose plugin is not in the registered set at
+    // all — treat them as AppliedButMissing (the whole plugin is gone).
+    for (plugin, name) in applied {
+        if !seen_plugins.contains(plugin.as_str()) {
+            all_entries.push(MigrationEntry {
+                plugin: plugin.clone(),
+                name: name.clone(),
+                status: MigrationStatus::AppliedButMissing,
+            });
+        }
+    }
+
+    Ok(DriftReport {
+        entries: all_entries,
+    })
+}
+
+/// Record a migration as applied in the tracking table WITHOUT running
+/// its SQL operations. The `--fake` recovery path: the schema already
+/// exists (e.g. the migration was run outside umbra, or the DB was
+/// bootstrapped from a dump) and the operator wants to bring the
+/// tracking table into sync without re-executing the DDL.
+///
+/// Idempotent: if `(plugin, name)` is already in the table the call
+/// is a no-op (same behaviour as `record_applied`).
+///
+/// The snapshot hash is derived from the migration file on disk.
+/// Returns `MigrateError::Io` if the file can't be found (the caller
+/// should verify the name before calling this).
+pub async fn fake_apply(plugin: &str, name: &str) -> Result<(), MigrateError> {
+    fake_apply_in(plugin, name, Path::new(MIGRATIONS_DIR)).await
+}
+
+/// Same as [`fake_apply`] but takes an explicit migrations base dir.
+/// Used by tests and by the CLI when `--migrations-dir` is passed.
+pub async fn fake_apply_in(plugin: &str, name: &str, dir: &Path) -> Result<(), MigrateError> {
+    let path = dir.join(plugin).join(format!("{name}.json"));
+    let file = read_migration_file(&path)?;
+    let snapshot_hash = file.snapshot_after.hash();
+    record_applied(plugin, name, &snapshot_hash).await
+}
+
+/// For every registered plugin's first migration (`0001_*`), check
+/// whether the tables that migration would create already exist in the
+/// database. If they do, fake-apply the migration (mark it applied
+/// without running its SQL).
+///
+/// This is Django's `--fake-initial` path: the operator has a database
+/// bootstrapped outside umbra (a dump restore, a manual `CREATE TABLE`,
+/// or a previous schema manager) and wants to bring the tracking table
+/// into sync so subsequent `migrate` calls apply only the genuine
+/// deltas.
+///
+/// Returns the number of plugins whose `0001_*` migration was
+/// fake-applied. Zero means either no `0001_*` file exists or the
+/// target tables were absent (in which case normal `migrate` should be
+/// run to create them).
+pub async fn fake_initial() -> Result<u64, MigrateError> {
+    fake_initial_in(Path::new(MIGRATIONS_DIR)).await
+}
+
+/// Same as [`fake_initial`] but takes an explicit migrations base dir.
+pub async fn fake_initial_in(dir: &Path) -> Result<u64, MigrateError> {
+    match crate::db::pool_dispatched() {
+        crate::db::DbPool::Sqlite(pool) => fake_initial_sqlite(dir, pool).await,
+        crate::db::DbPool::Postgres(pool) => fake_initial_postgres(dir, pool).await,
+    }
+}
+
+/// SQLite path for [`fake_initial_in`].
+async fn fake_initial_sqlite(dir: &Path, pool: &sqlx::SqlitePool) -> Result<u64, MigrateError> {
+    ensure_tracking_table_sqlite(pool).await?;
+    let applied = applied_names_sqlite(pool).await?;
+    let mut count: u64 = 0;
+
+    for plugin in plugin_order() {
+        let plugin_dir = dir.join(&plugin);
+        let paths = list_migration_files(&plugin_dir)?;
+
+        // Find the first migration file (lowest sequence number).
+        let first = paths.first();
+        let first = match first {
+            Some(p) => p,
+            None => continue,
+        };
+        let file = read_migration_file(first)?;
+
+        // Skip if already applied.
+        if applied.contains(&(file.plugin.clone(), file.id.clone())) {
+            continue;
+        }
+
+        // Check whether the tables the first migration would create
+        // already exist in the database.
+        let tables_to_create: Vec<&str> = file
+            .operations
+            .iter()
+            .filter_map(|op| match op {
+                Operation::CreateTable { table, .. } => Some(table.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        if tables_to_create.is_empty() {
+            continue;
+        }
+
+        // All tables present → fake-apply.
+        let mut all_present = true;
+        for table in &tables_to_create {
+            let exists: Option<(String,)> =
+                sqlx::query_as("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+                    .bind(*table)
+                    .fetch_optional(pool)
+                    .await?;
+            if exists.is_none() {
+                all_present = false;
+                break;
+            }
+        }
+
+        if all_present {
+            let snapshot_hash = file.snapshot_after.hash();
+            let applied_at = chrono::Utc::now().to_rfc3339();
+            sqlx::query(
+                "INSERT OR IGNORE INTO umbra_migrations \
+                 (plugin, name, applied_at, snapshot_hash) VALUES (?, ?, ?, ?)",
+            )
+            .bind(&file.plugin)
+            .bind(&file.id)
+            .bind(&applied_at)
+            .bind(&snapshot_hash)
+            .execute(pool)
+            .await?;
+            count += 1;
+        }
+    }
+
+    Ok(count)
+}
+
+/// Postgres path for [`fake_initial_in`].
+async fn fake_initial_postgres(dir: &Path, pool: &sqlx::PgPool) -> Result<u64, MigrateError> {
+    ensure_tracking_table_postgres(pool).await?;
+    let applied = applied_names_postgres(pool).await?;
+    let mut count: u64 = 0;
+
+    for plugin in plugin_order() {
+        let plugin_dir = dir.join(&plugin);
+        let paths = list_migration_files(&plugin_dir)?;
+
+        let first = paths.first();
+        let first = match first {
+            Some(p) => p,
+            None => continue,
+        };
+        let file = read_migration_file(first)?;
+
+        if applied.contains(&(file.plugin.clone(), file.id.clone())) {
+            continue;
+        }
+
+        let tables_to_create: Vec<&str> = file
+            .operations
+            .iter()
+            .filter_map(|op| match op {
+                Operation::CreateTable { table, .. } => Some(table.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        if tables_to_create.is_empty() {
+            continue;
+        }
+
+        let mut all_present = true;
+        for table in &tables_to_create {
+            let exists: Option<(String,)> = sqlx::query_as(
+                "SELECT table_name FROM information_schema.tables \
+                 WHERE table_schema = 'public' AND table_name = $1",
+            )
+            .bind(*table)
+            .fetch_optional(pool)
+            .await?;
+            if exists.is_none() {
+                all_present = false;
+                break;
+            }
+        }
+
+        if all_present {
+            let snapshot_hash = file.snapshot_after.hash();
+            let applied_at = chrono::Utc::now().to_rfc3339();
+            sqlx::query(
+                "INSERT INTO umbra_migrations \
+                 (plugin, name, applied_at, snapshot_hash) VALUES ($1, $2, $3, $4) \
+                 ON CONFLICT (plugin, name) DO NOTHING",
+            )
+            .bind(&file.plugin)
+            .bind(&file.id)
+            .bind(&applied_at)
+            .bind(&snapshot_hash)
+            .execute(pool)
+            .await?;
+            count += 1;
+        }
+    }
+
+    Ok(count)
+}
+
 /// Print the per-migration state, applied or pending. Output goes to
 /// stdout; the return value is the count of pending migrations so a
 /// CLI can `exit(n)` on need.
@@ -696,6 +1242,13 @@ pub async fn show() -> Result<u64, MigrateError> {
 /// registered plugin in sorted-by-name order, printing one section per
 /// plugin that owns at least one migration file; empty plugins are
 /// skipped silently rather than emitting a bare header.
+///
+/// Four-state output (gap 24):
+///
+/// - `[X]` applied and file present on disk (normal)
+/// - `[ ]` pending (on disk, not yet applied, sequence after last applied)
+/// - `[!]` applied but missing on disk (drift — tracking table ahead of VCS)
+/// - `[?]` on disk but out of order (sequence before last applied, not in DB)
 pub async fn show_in(dir: &Path) -> Result<u64, MigrateError> {
     let applied = match crate::db::pool_dispatched() {
         crate::db::DbPool::Sqlite(pool) => {
@@ -708,23 +1261,35 @@ pub async fn show_in(dir: &Path) -> Result<u64, MigrateError> {
         }
     };
 
+    let report = detect_all_drift(&applied, dir)?;
+
+    // Group by plugin for display.
+    let mut by_plugin: std::collections::BTreeMap<&str, Vec<&MigrationEntry>> =
+        std::collections::BTreeMap::new();
+    for entry in &report.entries {
+        by_plugin
+            .entry(entry.plugin.as_str())
+            .or_default()
+            .push(entry);
+    }
+
     let mut pending: u64 = 0;
-    for plugin in plugin_order() {
-        let plugin_dir = dir.join(&plugin);
-        let paths = list_migration_files(&plugin_dir)?;
-        if paths.is_empty() {
+    for (plugin, entries) in &by_plugin {
+        if entries.is_empty() {
             continue;
         }
         println!("# plugin: {plugin}");
-        for path in paths {
-            let file = read_migration_file(&path)?;
-            let key = (file.plugin.clone(), file.id.clone());
-            if applied.contains(&key) {
-                println!("[X] {}/{}", file.plugin, file.id);
-            } else {
-                println!("[ ] {}/{}", file.plugin, file.id);
-                pending += 1;
-            }
+        for entry in entries {
+            let marker = match entry.status {
+                MigrationStatus::Applied => "[X]",
+                MigrationStatus::Pending => {
+                    pending += 1;
+                    "[ ]"
+                }
+                MigrationStatus::AppliedButMissing => "[!]",
+                MigrationStatus::OutOfOrder => "[?]",
+            };
+            println!("{marker} {}/{}", entry.plugin, entry.name);
         }
     }
     Ok(pending)
