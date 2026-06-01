@@ -5,16 +5,23 @@
   body { font-family: 'Inter', sans-serif; -webkit-font-smoothing: antialiased; }
   /* Tabular numerals: apply on data-heavy contexts */
   .tabular-nums { font-variant-numeric: tabular-nums; }
-  /* Custom thin scrollbar for the sidebar */
+  /* Custom thin scrollbar for the sidebar — theme-aware via tokens */
   #umbra-admin-sidebar::-webkit-scrollbar { width: 4px; }
   #umbra-admin-sidebar::-webkit-scrollbar-track { background: transparent; }
-  #umbra-admin-sidebar::-webkit-scrollbar-thumb { background: #464553; border-radius: 10px; }
-  /* Topbar glass effect (matches dashboard.html) */
+  #umbra-admin-sidebar::-webkit-scrollbar-thumb { background: var(--outline-variant); border-radius: 10px; }
+  /* Topbar glass effect — translucent over the page background.
+     Uses var(--surface-container) so light mode gets a light glass,
+     dark mode a dark glass. */
   .topbar-glass {
-    background: rgba(29, 32, 39, 0.85);
+    background: color-mix(in srgb, var(--surface-container) 85%, transparent);
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
   }
+  /* Sidebar link sizing.
+     Non-active rows are rounded; the active row is a flat rectangle
+     with the 2px primary border on the leading edge — feels more
+     "rail-anchored" than a floating pill. */
+  .sidebar-model-link { font-size: 13px; line-height: 18px; }
 </style>
 {% endblock %}
 
@@ -63,7 +70,7 @@
       <div class="space-y-1">
         <a
           href="/admin/"
-          class="sidebar-model-link flex items-center gap-3 px-md py-2.5 rounded-xl {% if active_table == '' %}bg-primary-container/10 text-primary border-l-2 border-primary{% else %}text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface{% endif %} font-body-sm transition-all"
+          class="sidebar-model-link flex items-center gap-2 px-sm py-1.5 {% if active_table == '' %}bg-primary-container/10 text-primary border-l-2 border-primary rounded-none{% else %}text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface rounded-md{% endif %} font-body-sm transition-all"
           data-model-name="dashboard"
         >
           <i data-lucide="layout-dashboard" class="w-[18px] h-[18px]"></i>
@@ -80,7 +87,7 @@
         {%- for reg in app.models %}
         <a
           href="/admin/{{ reg.table }}/"
-          class="sidebar-model-link flex items-center gap-3 px-md py-2.5 rounded-xl {% if active_table == reg.table %}bg-primary-container/10 text-primary border-l-2 border-primary{% else %}text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface{% endif %} font-body-sm transition-all"
+          class="sidebar-model-link flex items-center gap-2 px-sm py-1.5 {% if active_table == reg.table %}bg-primary-container/10 text-primary border-l-2 border-primary rounded-none{% else %}text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface rounded-md{% endif %} font-body-sm transition-all"
           data-model-name="{{ reg.label | lower }}"
         >
           <i data-lucide="{{ reg.icon }}" class="w-[18px] h-[18px] flex-shrink-0"></i>
