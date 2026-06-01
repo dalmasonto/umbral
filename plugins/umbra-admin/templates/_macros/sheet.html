@@ -27,20 +27,20 @@ Drag-resize: ~50 LOC vanilla JS at the bottom; width in localStorage.
   <div id="sheet-drag-handle" class="absolute left-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-primary/20 transition-colors z-10" aria-hidden="true"></div>
 
   <header class="sticky top-0 z-10 flex items-center justify-between px-lg py-md bg-surface-container border-b border-outline-variant flex-shrink-0">
-    <div class="flex items-center gap-sm">
+    <div class="flex items-center gap-sm min-w-0 flex-1">
       {% if depth > 0 %}
       <button type="button"
         onclick="umbra.popSheet()"
-        class="w-8 h-8 flex items-center justify-center rounded-xl text-on-surface-variant hover:bg-surface-container-high transition-all mr-xs"
+        class="w-8 h-8 flex items-center justify-center rounded-xl text-on-surface-variant hover:bg-surface-container-high transition-all mr-xs flex-shrink-0"
         aria-label="Back to previous"
       >
         <i data-lucide="chevron-left" class="w-4 h-4"></i>
       </button>
       {% endif %}
-      <div>
-        <h2 class="font-h3 text-h3 text-on-surface leading-tight">{{ sheet_title }}</h2>
+      <div class="min-w-0 flex-1">
+        <h2 class="font-h3 text-h3 text-on-surface leading-tight truncate overflow-hidden text-ellipsis whitespace-nowrap" title="{{ sheet_title }}">{{ sheet_title }}</h2>
         {% if instance_id and mode != "create" %}
-        <p class="text-[11px] text-outline mt-0.5 font-label-sm tabular-nums">#{{ instance_id }}</p>
+        <p class="text-[11px] text-outline mt-0.5 font-label-sm tabular-nums truncate">#{{ instance_id }}</p>
         {% endif %}
       </div>
     </div>
@@ -165,7 +165,7 @@ Drag-resize: ~50 LOC vanilla JS at the bottom; width in localStorage.
         <dt class="font-label-md text-label-md text-on-surface-variant uppercase tracking-wide">
           {{ field.name | replace("_", " ") }}
         </dt>
-        <dd class="text-body-md text-on-surface {% if field.kind == 'number' or field.kind == 'datetime-local' or field.kind == 'date' or field.kind == 'time' %}tabular-nums font-data-mono{% endif %}">
+        <dd class="text-body-md text-on-surface break-words whitespace-pre-wrap min-w-0 {% if field.kind == 'number' or field.kind == 'datetime-local' or field.kind == 'date' or field.kind == 'time' %}tabular-nums font-data-mono{% endif %}">
           {% if field.kind == "bool" %}
             {% if field.value == "true" %}
             <span class="inline-flex items-center gap-xs px-sm py-xs bg-primary-container/10 text-primary border border-primary/20 rounded-full font-label-sm text-label-sm">

@@ -3,6 +3,11 @@
   Returned by GET /admin/{table}/rows?search=&filter=&sort=&order=&page=&page_size=
   Contains only the <tr> rows + pagination footer <tr>.
   The enclosing <tbody id="table-body"> lives in data_table.html (the full page).
+
+  Variables passed from the handler:
+    table, model_name, rows, pk, columns, pagination,
+    active_filter, search_val, sort_col, sort_order,
+    actions, inline_edit_fields
 #}
 
 {% if rows %}
@@ -28,7 +33,16 @@
     </td>
 
     {% for col in columns %}
-    <td class="px-md py-md {% if not loop.first %}hidden lg:table-cell{% endif %} dt-col" data-col="{{ col.name }}">
+    <td class="px-md py-md {% if not loop.first %}hidden lg:table-cell{% endif %} dt-col" data-col="{{ col.name }}"
+      {% if col.name in inline_edit_fields %}
+      hx-trigger="dblclick"
+      hx-get="/admin/{{ table }}/{{ row[pk] }}/cell/{{ col.name }}/edit"
+      hx-target="this"
+      hx-swap="innerHTML"
+      title="Double-click to edit"
+      style="cursor: default"
+      {% endif %}
+    >
       {% set val = row[col.name] %}
       {% if col.name == "published" or col.name == "is_active" or col.name == "is_staff" %}
         {% if val == "true" %}
@@ -44,6 +58,7 @@
     </td>
     {% endfor %}
 
+    {# Sticky actions column — always rendered so the column never disappears on HTMX swap #}
     <td
       class="px-md py-md sticky right-0 bg-surface transition-colors group-hover:bg-surface-container-lowest text-right"
       onclick="event.stopPropagation()"
@@ -70,6 +85,49 @@
           class="p-sm text-on-surface-variant hover:text-error transition-colors rounded-lg hover:bg-surface-container-high">
           <i data-lucide="trash-2" class="w-4 h-4"></i>
         </button>
+
+        {# Custom row-scope actions (up to 2 inline, rest in overflow menu) #}
+        {% set row_actions = [] %}
+        {% for action in actions %}
+          {% if action.scope == "row" or action.scope == "both" %}
+            {% set row_actions = row_actions | list + [action] %}
+          {% endif %}
+        {% endfor %}
+        {% for action in row_actions[:2] %}
+        <button type="button"
+          hx-post="/admin/{{ table }}/actions/{{ action.key }}"
+          hx-vals='{"ids": [{{ row[pk] }}]}'
+          hx-swap="none"
+          title="{{ action.label }}"
+          class="p-sm transition-colors rounded-lg hover:bg-surface-container-high {% if action.variant == 'danger' %}text-error hover:text-error{% else %}text-on-surface-variant hover:text-primary{% endif %}"
+          {% if action.confirm %}onclick="if(!confirm('{{ action.confirm }}'))return false;"{% endif %}
+        >
+          <i data-lucide="{{ action.icon }}" class="w-4 h-4"></i>
+        </button>
+        {% endfor %}
+        {% if row_actions | length > 2 %}
+        <div class="relative">
+          <button type="button"
+            onclick="var m=this.nextElementSibling;m.classList.toggle('hidden');event.stopPropagation()"
+            class="p-sm text-on-surface-variant hover:text-primary transition-colors rounded-lg hover:bg-surface-container-high"
+            title="More actions">
+            <i data-lucide="more-horizontal" class="w-4 h-4"></i>
+          </button>
+          <div class="hidden absolute right-0 bottom-full mb-xs z-40 bg-surface-container border border-outline-variant rounded-xl shadow-lg py-xs min-w-[160px]">
+            {% for action in row_actions[2:] %}
+            <button type="button"
+              hx-post="/admin/{{ table }}/actions/{{ action.key }}"
+              hx-vals='{"ids": [{{ row[pk] }}]}'
+              hx-swap="none"
+              {% if action.confirm %}onclick="if(!confirm('{{ action.confirm }}'))return false;"{% endif %}
+              class="w-full flex items-center gap-sm px-md py-sm text-left hover:bg-surface-container-high font-label-md text-label-md {% if action.variant == 'danger' %}text-error{% else %}text-on-surface{% endif %} transition-colors">
+              <i data-lucide="{{ action.icon }}" class="w-4 h-4"></i>
+              {{ action.label }}
+            </button>
+            {% endfor %}
+          </div>
+        </div>
+        {% endif %}
       </div>
     </td>
   </tr>

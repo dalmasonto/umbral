@@ -1,7 +1,7 @@
 {#
   dashboard.html
   ==============
-  Main dashboard page — 12-column widget grid.
+  Main dashboard page — model cards grid + 12-column widget grid.
   Each widget placeholder hx-gets its data endpoint on load.
 #}
 {% extends "admin/base.html" %}
@@ -13,28 +13,64 @@
   <p class="text-body-sm text-outline mt-xs">Welcome back, {{ user }}.</p>
 </div>
 
-{% if widgets %}
-<div class="grid grid-cols-12 gap-md auto-rows-[120px]">
-  {% for w in widgets %}
-  {%- set col_span = w.span.cols if w.span and w.span.cols else 3 -%}
-  {%- set row_span = w.span.rows if w.span and w.span.rows else 1 -%}
-  <div
-    class="col-span-{{ col_span }} row-span-{{ row_span }} bg-surface-container border border-outline-variant rounded-xl overflow-hidden shadow-sm"
-    id="widget-{{ w.key }}"
-    hx-get="/admin/api/dashboard/widgets/{{ w.key }}/data"
-    hx-trigger="load"
-    hx-swap="innerHTML"
-    hx-target="#widget-{{ w.key }}"
-  >
-    {# Loading skeleton #}
-    <div class="h-full p-md flex flex-col gap-sm animate-pulse">
-      <div class="h-3 bg-surface-container-high rounded w-1/3"></div>
-      <div class="flex-1 bg-surface-container-high rounded"></div>
-    </div>
+{# ================================================================
+   Model cards grid — one card per registered model with row count
+   ================================================================ #}
+{% if model_cards %}
+<section class="mb-xl">
+  <h2 class="font-h3 text-h3 text-on-surface mb-md">Models</h2>
+  <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-md">
+    {% for card in model_cards %}
+    <a
+      href="{{ card.url }}"
+      class="group flex flex-col gap-sm p-md bg-surface-container border border-outline-variant rounded-xl hover:border-primary/40 hover:bg-surface-container-high transition-all cursor-pointer no-underline"
+    >
+      <div class="flex items-center justify-between">
+        <div class="w-9 h-9 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center flex-shrink-0">
+          <i data-lucide="{{ card.icon }}" class="w-4 h-4 text-primary"></i>
+        </div>
+        <i data-lucide="arrow-right" class="w-4 h-4 text-outline opacity-0 group-hover:opacity-100 transition-opacity"></i>
+      </div>
+      <div class="min-w-0">
+        <p class="font-label-md text-label-md text-on-surface-variant uppercase tracking-wider truncate">{{ card.label }}</p>
+        <p class="font-h2 text-h2 text-on-surface tabular-nums leading-tight">{{ card.count }}</p>
+      </div>
+      <span class="text-label-sm text-label-sm text-primary opacity-0 group-hover:opacity-100 transition-opacity">View all →</span>
+    </a>
+    {% endfor %}
   </div>
-  {% endfor %}
-</div>
+</section>
+{% endif %}
+
+{# ================================================================
+   Widget grid
+   ================================================================ #}
+{% if widgets %}
+<section>
+  <h2 class="font-h3 text-h3 text-on-surface mb-md">Widgets</h2>
+  <div class="grid grid-cols-12 gap-md auto-rows-[120px]">
+    {% for w in widgets %}
+    {%- set col_span = w.span.cols if w.span and w.span.cols else 3 -%}
+    {%- set row_span = w.span.rows if w.span and w.span.rows else 1 -%}
+    <div
+      class="col-span-{{ col_span }} row-span-{{ row_span }} bg-surface-container border border-outline-variant rounded-xl overflow-hidden shadow-sm"
+      id="widget-{{ w.key }}"
+      hx-get="/admin/api/dashboard/widgets/{{ w.key }}/data"
+      hx-trigger="load"
+      hx-swap="innerHTML"
+      hx-target="#widget-{{ w.key }}"
+    >
+      {# Loading skeleton #}
+      <div class="h-full p-md flex flex-col gap-sm animate-pulse">
+        <div class="h-3 bg-surface-container-high rounded w-1/3"></div>
+        <div class="flex-1 bg-surface-container-high rounded"></div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</section>
 {% else %}
+{% if not model_cards %}
 <div class="flex flex-col items-center justify-center py-xl text-center">
   <div class="w-16 h-16 rounded-2xl bg-surface-container border border-outline-variant flex items-center justify-center mb-lg">
     <i data-lucide="layout-dashboard" class="w-8 h-8 text-outline"></i>
@@ -45,6 +81,7 @@
     to populate this dashboard.
   </p>
 </div>
+{% endif %}
 {% endif %}
 
 {# Command palette slot for ⌘K #}

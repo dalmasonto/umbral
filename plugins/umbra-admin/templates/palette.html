@@ -2,10 +2,15 @@
   palette.html
   ============
   Command palette fragment — loaded into #umbra-palette-slot by ⌘K / Ctrl-K.
-  Search filters client-side via the inline JS; no server round-trip per keystroke.
+  Search filters client-side; no server round-trip per keystroke.
 
-  `models` is a list of {table, label, icon} for jump targets.
-  `commands` is a list of {key, label, icon} for fixed commands.
+  Filtering behaviour: items whose label does not match the query are visually
+  dimmed (opacity reduced) but still rendered so the user can always browse.
+  A "Nothing found" banner appears at the top of the list when no items match,
+  but the list stays fully visible.
+
+  `models`   — list of {table, label, icon} for jump targets.
+  `commands` — list of {key, label, icon} for fixed commands.
 #}
 
 <div
@@ -24,9 +29,9 @@
     class="relative w-full max-w-[600px] mx-md bg-surface rounded-2xl border border-outline-variant shadow-2xl overflow-hidden"
     style="border-radius: 14px;"
   >
-    {# Search input #}
-    <div class="flex items-center gap-sm px-lg py-md border-b border-outline-variant">
-      <i data-lucide="search" class="w-5 h-5 text-outline flex-shrink-0"></i>
+    {# Search row: icon + input + Esc button all inside ONE bordered container #}
+    <div class="flex items-center gap-sm px-md py-sm border-b border-outline-variant bg-surface-container-low rounded-t-[14px]">
+      <i data-lucide="search" class="w-5 h-5 text-outline flex-shrink-0 pointer-events-none"></i>
       <input
         id="umbra-palette-input"
         type="text"
@@ -38,18 +43,31 @@
         oninput="umbra._paletteFilter(this.value)"
         onkeydown="umbra._paletteKeydown(event)"
       />
-      <kbd class="px-xs py-[2px] bg-surface-container-low border border-outline-variant rounded text-label-sm text-outline">Esc</kbd>
+      <button
+        type="button"
+        title="Close palette (Esc)"
+        onclick="umbra.closePalette()"
+        class="w-7 h-7 flex items-center justify-center rounded-lg bg-surface-container border border-outline-variant text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition-colors flex-shrink-0"
+        aria-label="Close"
+      >
+        <i data-lucide="x" class="w-4 h-4"></i>
+      </button>
     </div>
 
-    {# Results list #}
+    {# "Nothing found" banner — hidden by default, shown by JS when nothing matches #}
+    <div id="umbra-palette-empty" class="hidden px-lg py-sm bg-surface-container/50 border-b border-outline-variant">
+      <p class="text-body-sm text-outline italic">Nothing found — showing full list for browsing.</p>
+    </div>
+
+    {# Results list — scrollable, max 60vh #}
     <ul
       id="umbra-palette-results"
-      class="max-h-80 overflow-y-auto py-xs"
+      class="max-h-[60vh] overflow-y-auto py-xs"
       role="listbox"
     >
       {# Jump targets: registered models #}
       {% if models %}
-      <li class="px-lg py-xs">
+      <li id="palette-header-models" class="px-lg py-xs">
         <span class="text-label-sm text-outline uppercase tracking-wider">Models</span>
       </li>
       {% for m in models %}
@@ -71,7 +89,7 @@
       {% endif %}
 
       {# Fixed commands #}
-      <li class="px-lg py-xs mt-xs border-t border-outline-variant">
+      <li id="palette-header-commands" class="px-lg py-xs mt-xs border-t border-outline-variant">
         <span class="text-label-sm text-outline uppercase tracking-wider">Commands</span>
       </li>
       {% for cmd in commands %}
@@ -95,7 +113,7 @@
 
 <script>
 (function() {
-  // Autofocus the input after insertion
+  // Autofocus the input after insertion.
   var inp = document.getElementById('umbra-palette-input');
   if (inp) inp.focus();
 
@@ -106,32 +124,44 @@
     if (slot) slot.innerHTML = '';
   };
 
+  // Filter: dim non-matching items (opacity: 0.3) but keep them visible.
+  // When NOTHING matches show the "Nothing found" banner.
   umbra._paletteFilter = function(q) {
     q = q.trim().toLowerCase();
     var items = document.querySelectorAll('.palette-item');
+    var anyMatch = false;
+
     items.forEach(function(li) {
       var label = li.getAttribute('data-palette-label') || '';
-      li.style.display = (q === '' || label.indexOf(q) !== -1) ? '' : 'none';
-    });
-    // Hide empty group headers (basic approach)
-    document.querySelectorAll('#umbra-palette-results li').forEach(function(li) {
-      if (li.classList.contains('palette-item')) return; // skip items
-      // header: check if any following items are visible
-      var next = li.nextElementSibling;
-      var hasVisible = false;
-      while (next && next.classList.contains('palette-item')) {
-        if (next.style.display !== 'none') { hasVisible = true; break; }
-        next = next.nextElementSibling;
+      var matches = (q === '' || label.indexOf(q) !== -1);
+      if (matches) {
+        li.style.opacity = '';
+        li.style.pointerEvents = '';
+        anyMatch = true;
+      } else {
+        // Dim but keep visible so user can browse.
+        li.style.opacity = '0.3';
+        li.style.pointerEvents = 'none';
       }
-      li.style.display = hasVisible ? '' : 'none';
     });
+
+    // Show/hide the "Nothing found" banner.
+    var emptyBanner = document.getElementById('umbra-palette-empty');
+    if (emptyBanner) {
+      if (q !== '' && !anyMatch) {
+        emptyBanner.classList.remove('hidden');
+      } else {
+        emptyBanner.classList.add('hidden');
+      }
+    }
   };
 
   umbra._paletteKeydown = function(e) {
     if (e.key === 'Escape') { umbra.closePalette(); e.preventDefault(); return; }
+    // Navigate only through visible (non-dimmed) items.
     var results = document.getElementById('umbra-palette-results');
-    var items = Array.from(results.querySelectorAll('.palette-item[style=""], .palette-item:not([style])'))
-      .filter(function(li) { return li.style.display !== 'none'; });
+    var items = Array.from(results.querySelectorAll('.palette-item'))
+      .filter(function(li) { return li.style.opacity !== '0.3'; });
     var focused = document.activeElement;
     var idx = items.indexOf(focused);
     if (e.key === 'ArrowDown') {

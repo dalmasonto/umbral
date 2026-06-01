@@ -138,6 +138,24 @@
     html, body, button, input, select, textarea { font-family: 'Inter', sans-serif; }
     /* Tabular numerals for data-heavy contexts */
     .tabular-nums { font-variant-numeric: tabular-nums; }
+    /* ---- Focus ring — single source of truth ----
+       Remove browser default outline globally; apply a cohesive design-token
+       ring only on :focus-visible (keyboard/programmatic) so mouse users
+       never see a flash, and keyboard users always get a visible indicator. */
+    :focus { outline: none; }
+    :focus-visible {
+      outline: 2px solid var(--primary);
+      outline-offset: 2px;
+      border-radius: 6px;
+    }
+    /* Inputs, selects, textareas: focus-visible swaps border colour + soft glow
+       instead of the default outline so the element's own border stays intact. */
+    input:focus, select:focus, textarea:focus, button:focus { outline: none; }
+    input:focus-visible, select:focus-visible, textarea:focus-visible {
+      border-color: var(--primary) !important;
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 20%, transparent);
+      outline: none;
+    }
   </style>
 
   <!-- Tailwind config: maps every token to its CSS variable. -->

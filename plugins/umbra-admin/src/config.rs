@@ -288,6 +288,17 @@ pub struct AdminModel {
     pub(crate) icon: Option<String>,
     /// Fields that support double-click inline edit in the DataTable.
     pub(crate) inline_edit_fields: Vec<String>,
+    /// Optional per-column CSS widths rendered as `<col style="width: ...">`.
+    /// Each entry is `(column_name, css_width)` e.g. `("title", "40%")`.
+    pub(crate) column_widths: Vec<(String, String)>,
+}
+
+/// Names of sensitive columns that are always read-only by default.
+/// Any column whose name matches one of these patterns is added to
+/// `readonly_fields` automatically even if not explicitly listed.
+/// Pattern: exact match OR prefix match for `secret`.
+pub(crate) fn is_sensitive_column(name: &str) -> bool {
+    matches!(name, "password_hash" | "password" | "salt") || name.starts_with("secret")
 }
 
 impl AdminModel {
@@ -305,6 +316,7 @@ impl AdminModel {
             label: None,
             icon: None,
             inline_edit_fields: Vec::new(),
+            column_widths: Vec::new(),
         }
     }
 
@@ -336,6 +348,39 @@ impl AdminModel {
     pub fn readonly_fields(mut self, fields: &[&str]) -> Self {
         self.readonly_fields = fields.iter().map(|s| s.to_string()).collect();
         self
+    }
+
+    /// Set per-column CSS widths for the DataTable `<colgroup>`.
+    ///
+    /// Each entry is `(column_name, css_width)`.  The width is rendered as
+    /// `<col style="width: {css_width}">` so you can use any valid CSS value:
+    /// `"40%"`, `"120px"`, `"10rem"`, etc.
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// AdminModel::new("post")
+    ///     .column_widths(&[("title", "40%"), ("author", "120px")])
+    /// ```
+    pub fn column_widths(mut self, widths: &[(&str, &str)]) -> Self {
+        self.column_widths = widths
+            .iter()
+            .map(|(col, w)| (col.to_string(), w.to_string()))
+            .collect();
+        self
+    }
+
+    /// Return the merged readonly set: explicit `readonly_fields` plus any
+    /// columns whose names match the built-in sensitive defaults
+    /// (`password_hash`, `password`, `salt`, `secret*`).
+    pub fn effective_readonly_fields<'a>(&'a self, all_columns: &[&'a str]) -> Vec<&'a str> {
+        let mut set: std::collections::HashSet<&str> =
+            self.readonly_fields.iter().map(|s| s.as_str()).collect();
+        for col in all_columns {
+            if is_sensitive_column(col) {
+                set.insert(col);
+            }
+        }
+        set.into_iter().collect()
     }
 
     pub fn list_per_page(mut self, n: usize) -> Self {
@@ -370,6 +415,11 @@ impl AdminModel {
 
     pub fn get_list_per_page(&self) -> usize {
         self.list_per_page
+    }
+
+    /// Expose `column_widths` as a slice for use in templates and tests.
+    pub fn get_column_widths(&self) -> &[(String, String)] {
+        &self.column_widths
     }
 }
 

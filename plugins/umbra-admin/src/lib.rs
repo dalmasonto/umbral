@@ -970,11 +970,41 @@ async fn index(State(state): State<AdminState>, headers: HeaderMap) -> Response 
         })
         .collect();
 
+    // Build model cards: one card per registered model with a row count.
+    let pool = umbra::db::pool();
+    let model_cards: Vec<serde_json::Value> = {
+        let mut cards = Vec::new();
+        for app in &apps {
+            for sidebar_model in &app.models {
+                let count: i64 = {
+                    let sql = format!(
+                        "SELECT COUNT(*) FROM \"{}\"",
+                        sidebar_model.table.replace('"', "\"\"")
+                    );
+                    sqlx::query(&sql)
+                        .fetch_one(&pool)
+                        .await
+                        .and_then(|r| r.try_get::<i64, _>(0))
+                        .unwrap_or(0)
+                };
+                cards.push(serde_json::json!({
+                    "table":  sidebar_model.table,
+                    "label":  sidebar_model.label,
+                    "icon":   if sidebar_model.icon.is_empty() { "database".to_string() } else { sidebar_model.icon.clone() },
+                    "count":  count,
+                    "url":    format!("/admin/{}/", sidebar_model.table),
+                }));
+            }
+        }
+        cards
+    };
+
     match render(
         "admin/dashboard.html",
         context!(
             user         => user.username.clone(),
             widgets      => widgets,
+            model_cards  => model_cards,
             apps         => apps,
             active_table => "",
             breadcrumbs  => Vec::<serde_json::Value>::new(),
@@ -1084,8 +1114,7 @@ async fn list(
         }
     }
 
-    let action_names: Vec<serde_json::Value> =
-        cfg.map(|c| action_descriptors_json(c)).unwrap_or_default();
+    let action_names: Vec<serde_json::Value> = cfg.map(action_descriptors_json).unwrap_or_default();
 
     let has_search = cfg.is_some_and(|c| !c.search_fields.is_empty());
     let search_val = search_term.unwrap_or_default();
@@ -1103,27 +1132,45 @@ async fn list(
 
     let columns = model_for_template_cols(&model, &display_cols).fields;
 
+    // Serialize column_widths for template as a JSON object {col_name: css_width}
+    // so templates can do direct column_widths[col.name] lookups.
+    let column_widths_json: serde_json::Value = cfg
+        .map(|c| {
+            let mut map = serde_json::Map::new();
+            for (col, w) in &c.column_widths {
+                map.insert(col.clone(), serde_json::Value::String(w.clone()));
+            }
+            serde_json::Value::Object(map)
+        })
+        .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+
+    let inline_edit_fields: Vec<String> = cfg
+        .map(|c| c.inline_edit_fields.clone())
+        .unwrap_or_default();
+
     match render(
         "admin/changelist.html",
         context!(
-            user          => user.username.clone(),
-            model         => model_for_template_cols(&model, &display_cols),
-            rows          => rows,
-            columns       => columns,
-            pk            => pk.name.clone(),
-            facets        => facets,
-            actions       => action_names,
-            has_search    => has_search,
-            search_val    => search_val,
-            active_filter => active_filter_str,
-            pagination    => pagination,
-            sort_col      => sort_col,
-            sort_order    => sort_order,
-            flash         => flash,
-            open_row      => open_row,
-            apps          => apps,
-            active_table  => table,
-            breadcrumbs   => breadcrumbs,
+            user              => user.username.clone(),
+            model             => model_for_template_cols(&model, &display_cols),
+            rows              => rows,
+            columns           => columns,
+            pk                => pk.name.clone(),
+            facets            => facets,
+            actions           => action_names,
+            has_search        => has_search,
+            search_val        => search_val,
+            active_filter     => active_filter_str,
+            pagination        => pagination,
+            sort_col          => sort_col,
+            sort_order        => sort_order,
+            flash             => flash,
+            open_row          => open_row,
+            apps              => apps,
+            active_table      => table,
+            breadcrumbs       => breadcrumbs,
+            column_widths     => column_widths_json,
+            inline_edit_fields => inline_edit_fields,
         ),
     ) {
         Ok(html) => html.into_response(),
@@ -2059,26 +2106,16 @@ async fn update(
             if is_htmx(&headers) {
                 if form.contains_key("_save_continue") {
                     // Re-fetch + render the edit sheet inline.
-                    return edit_sheet_handler(
-                        State(state),
-                        headers,
-                        Path((table, id)),
-                    )
-                    .await;
+                    return edit_sheet_handler(State(state), headers, Path((table, id))).await;
                 }
                 // Default Save: tell the page to close the sheet + refresh rows.
                 let mut resp = axum::response::Response::builder()
                     .status(StatusCode::OK)
-                    .header(
-                        "HX-Trigger",
-                        r#"{"closeSheet": {}, "refreshTable": {}}"#,
-                    )
+                    .header("HX-Trigger", r#"{"closeSheet": {}, "refreshTable": {}}"#)
                     .body(axum::body::Body::empty())
                     .unwrap();
-                resp.headers_mut().insert(
-                    "Content-Type",
-                    "text/html; charset=utf-8".parse().unwrap(),
-                );
+                resp.headers_mut()
+                    .insert("Content-Type", "text/html; charset=utf-8".parse().unwrap());
                 return resp;
             }
 
@@ -2513,19 +2550,27 @@ async fn rows_fragment(
         .unwrap_or_default();
     let search_val = search_term.unwrap_or_default();
 
+    let action_names: Vec<serde_json::Value> = cfg.map(action_descriptors_json).unwrap_or_default();
+
+    let inline_edit_fields: Vec<String> = cfg
+        .map(|c| c.inline_edit_fields.clone())
+        .unwrap_or_default();
+
     match render(
         "admin/rows_fragment.html",
         context!(
-            table        => table,
-            model_name   => model.name.clone(),
-            rows         => rows,
-            pk           => pk.name.clone(),
-            columns      => columns,
-            pagination   => pagination,
-            active_filter => active_filter_str,
-            search_val   => search_val,
-            sort_col     => sort_col,
-            sort_order   => sort_order,
+            table              => table,
+            model_name         => model.name.clone(),
+            rows               => rows,
+            pk                 => pk.name.clone(),
+            columns            => columns,
+            pagination         => pagination,
+            active_filter      => active_filter_str,
+            search_val         => search_val,
+            sort_col           => sort_col,
+            sort_order         => sort_order,
+            actions            => action_names,
+            inline_edit_fields => inline_edit_fields,
         ),
     ) {
         Ok(html) => html.into_response(),
@@ -3044,9 +3089,21 @@ async fn insert_row(
     form: &HashMap<String, String>,
     cfg: Option<&AdminConfig>,
 ) -> Result<(), AdminError> {
-    let readonly: std::collections::HashSet<&str> = cfg
-        .map(|c| c.readonly_fields.iter().map(|s| s.as_str()).collect())
-        .unwrap_or_default();
+    let all_col_names: Vec<&str> = model.fields.iter().map(|c| c.name.as_str()).collect();
+    let readonly_owned: Vec<String> = if let Some(c) = cfg {
+        c.effective_readonly_fields(&all_col_names)
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect()
+    } else {
+        all_col_names
+            .iter()
+            .filter(|n| crate::config::is_sensitive_column(n))
+            .map(|s| s.to_string())
+            .collect()
+    };
+    let readonly: std::collections::HashSet<&str> =
+        readonly_owned.iter().map(|s| s.as_str()).collect();
     let writable: Vec<&Column> = model
         .fields
         .iter()
@@ -3083,9 +3140,21 @@ async fn update_row(
     form: &HashMap<String, String>,
     cfg: Option<&AdminConfig>,
 ) -> Result<(), AdminError> {
-    let readonly: std::collections::HashSet<&str> = cfg
-        .map(|c| c.readonly_fields.iter().map(|s| s.as_str()).collect())
-        .unwrap_or_default();
+    let all_col_names: Vec<&str> = model.fields.iter().map(|c| c.name.as_str()).collect();
+    let readonly_owned: Vec<String> = if let Some(c) = cfg {
+        c.effective_readonly_fields(&all_col_names)
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect()
+    } else {
+        all_col_names
+            .iter()
+            .filter(|n| crate::config::is_sensitive_column(n))
+            .map(|s| s.to_string())
+            .collect()
+    };
+    let readonly: std::collections::HashSet<&str> =
+        readonly_owned.iter().map(|s| s.as_str()).collect();
     let writable: Vec<&Column> = model
         .fields
         .iter()
@@ -3259,9 +3328,21 @@ fn form_fields_for(
     prefill: Option<&HashMap<String, String>>,
     cfg: Option<&AdminConfig>,
 ) -> Vec<FormField> {
-    let readonly_set: std::collections::HashSet<&str> = cfg
-        .map(|c| c.readonly_fields.iter().map(|s| s.as_str()).collect())
-        .unwrap_or_default();
+    // Build the merged readonly set: explicit config + sensitive-column defaults.
+    let all_col_names: Vec<&str> = model.fields.iter().map(|c| c.name.as_str()).collect();
+    let readonly_set: std::collections::HashSet<String> = if let Some(c) = cfg {
+        c.effective_readonly_fields(&all_col_names)
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect()
+    } else {
+        // No explicit config: still apply sensitive-column defaults.
+        all_col_names
+            .iter()
+            .filter(|n| crate::config::is_sensitive_column(n))
+            .map(|s| s.to_string())
+            .collect()
+    };
     model
         .fields
         .iter()
@@ -3283,7 +3364,7 @@ fn form_fields_for(
                 kind: input_kind(c.ty),
                 value: format_for_input(&raw, c.ty),
                 nullable: c.nullable,
-                readonly: readonly_set.contains(c.name.as_str()),
+                readonly: readonly_set.contains(&c.name),
                 fk_table,
             }
         })

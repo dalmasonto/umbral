@@ -35,7 +35,7 @@
   <768px: stacked card list via CSS (hidden when table visible).
 #}
 
-{% macro data_table(model, rows, columns, pk, facets, active_filter, has_search, search_val, actions, pagination, sort_col, sort_order, flash, inline_edit_fields=[]) %}
+{% macro data_table(model, rows, columns, pk, facets, active_filter, has_search, search_val, actions, pagination, sort_col, sort_order, flash, inline_edit_fields=[], column_widths=[]) %}
 
 {# ================================================================
    Filter panel (collapsible, driven by Alpine.js-lite via x-data
@@ -234,6 +234,28 @@
 <div class="bg-surface border border-outline-variant rounded-xl overflow-hidden">
   <div class="overflow-x-auto">
     <table class="w-full text-left border-collapse" id="dt-table" data-density="comfortable">
+      {#
+        colgroup: render per-column widths when column_widths is a non-empty object.
+        column_widths is a JSON object {col_name: css_width_string} or {} when not set.
+        Access: column_widths[col.name] returns the width or undefined.
+      #}
+      {% set has_widths = column_widths | length > 0 %}
+      {% if has_widths %}
+      <colgroup>
+        {# select-all checkbox column (fixed width) #}
+        <col style="width: 48px">
+        {% for col in columns %}
+          {% set w = column_widths[col.name] %}
+          {% if w %}
+          <col style="width: {{ w }}">
+          {% else %}
+          <col>
+          {% endif %}
+        {% endfor %}
+        {# actions column #}
+        <col style="width: 140px">
+      </colgroup>
+      {% endif %}
       <thead class="bg-surface-container-low border-b border-outline-variant sticky top-0 z-10">
         <tr>
           {# Selection header #}

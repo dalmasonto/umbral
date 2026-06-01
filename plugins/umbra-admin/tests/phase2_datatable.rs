@@ -372,6 +372,42 @@ async fn test_changelist_htmx_target_markup_present() {
     );
 }
 
+/// Bug 1 regression: the rows fragment (HTMX swap target) must include the
+/// sticky-right action column with eye / pencil / trash buttons so clicking a
+/// sortable column header never makes the actions disappear.
+#[tokio::test]
+async fn test_rows_fragment_includes_action_column() {
+    let router = boot().await.clone();
+    let session = login_session(router.clone(), "dt_admin", "password123").await;
+
+    let req = Request::builder()
+        .uri("/admin/post/rows?sort=title&order=asc&page_size=10")
+        .header(header::COOKIE, format!("umbra_session={session}"))
+        .header("hx-request", "true")
+        .body(Body::empty())
+        .unwrap();
+    let (status, body) = send(router, req).await;
+    assert_eq!(status, StatusCode::OK);
+    // All three action icons must be present in the fragment.
+    assert!(
+        body.contains("data-lucide=\"eye\""),
+        "eye icon present in rows fragment: {body}"
+    );
+    assert!(
+        body.contains("data-lucide=\"pencil\""),
+        "pencil icon present in rows fragment: {body}"
+    );
+    assert!(
+        body.contains("data-lucide=\"trash-2\""),
+        "trash icon present in rows fragment: {body}"
+    );
+    // The action <td> must be there even after a sort swap.
+    assert!(
+        body.contains("sticky right-0"),
+        "sticky-right action cell present in rows fragment: {body}"
+    );
+}
+
 #[tokio::test]
 async fn test_rows_htmx_fragment_only() {
     let router = boot().await.clone();

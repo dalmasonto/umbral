@@ -124,6 +124,16 @@ async fn prefs_get_returns_defaults_for_new_user() {
     let router = boot().await;
     let cookie = staff_cookie().await;
 
+    // Wipe any prefs row left behind by the PUT tests — tokio test
+    // ordering inside one binary isn't guaranteed even with the
+    // file-local mutex, so each test that asserts default state must
+    // reset that state first.
+    let pool = umbra::db::pool();
+    sqlx::query("DELETE FROM admin_user_pref")
+        .execute(&pool)
+        .await
+        .expect("wipe admin_user_pref");
+
     let req = Request::builder()
         .uri("/admin/api/prefs")
         .header(header::COOKIE, cookie)
