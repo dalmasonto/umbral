@@ -16,7 +16,7 @@ plugins. The framework-global [`umbra`](./startproject) binary handles
 scaffolding (`startproject`, `startapp`) and nothing else — it can't
 manage your database because it doesn't know about your models.
 
-## The subcommands
+## The built-in subcommands
 
 <CardGrid cols={2}>
   <Card icon="play" title="serve" description="Boot the App and serve HTTP. The default when no subcommand is given." />
@@ -26,6 +26,20 @@ manage your database because it doesn't know about your models.
   <Card icon="download" title="inspectdb" description="Introspect an existing database into models.rs + a 0001_initial migration. The porting on-ramp." />
   <Card icon="archive" title="dumpdata / loaddata" description="Snapshot every model's rows to JSON; replay them into a fresh schema." />
 </CardGrid>
+
+## Plugin-contributed subcommands
+
+Built-in plugins add their own subcommands through the
+[`Plugin::commands()`](../plugins/the-plugin-trait) hook. They share
+the same `cargo run -- <cmd>` form as the built-ins above:
+
+| Subcommand | Plugin | What it does |
+|------------|--------|-------------|
+| `createsuperuser` | `umbra-auth` | Interactive prompt for username / email / password; creates a user with `is_staff = is_superuser = true`. Pass `--username`, `--email`, and `UMBRA_SUPERUSER_PASSWORD` + `--noinput` for non-interactive CI use. |
+| `tasks-worker` | `umbra-tasks` | Drain the task queue. `--once` runs one iteration and exits (cron-friendly); without it the worker loops forever. |
+
+Third-party plugins contribute their own commands the same way; they
+show up in `cargo run -- --help` automatically.
 
 ## How it works
 
@@ -117,11 +131,175 @@ error: umbra inspectdb: column `doc.payload` has unsupported SQL type
 
 Exit code is `1` on any error, `0` on success.
 
+## Writing your own management command
+
+Any plugin (built-in or third-party) can contribute a CLI subcommand
+that shows up under `cargo run -- <name>`. The mechanism is the
+`Plugin::commands()` hook returning a `Vec<Box<dyn PluginCommand>>`,
+where each command exposes a `clap::Command` and an async `run`
+handler. The framework's dispatcher composes everything under a single
+top-level clap parser so plugin commands are first-class citizens
+alongside the built-ins.
+
+```rust
+use clap::{Arg, ArgAction, ArgMatches, Command};
+use umbra::cli::{CliError, PluginCommand};
+use umbra::plugin::{AppContext, Plugin, PluginError};
+use umbra::web::Router;
+
+pub struct BlogPlugin;
+
+impl Plugin for BlogPlugin {
+    fn name(&self) -> &'static str { "blog" }
+    fn routes(&self) -> Router { Router::new() }
+
+    /// The hook that exposes your subcommand to `cargo run --`.
+    fn commands(&self) -> Vec<Box<dyn PluginCommand>> {
+        vec![Box::new(SeedBlogCommand)]
+    }
+}
+
+/// One management subcommand. The shape is identical to what
+/// umbra-auth's `createsuperuser` or umbra-tasks's `tasks-worker`
+/// use — there's no separate "framework command" vs "plugin
+/// command" distinction.
+#[derive(Debug, Default)]
+pub struct SeedBlogCommand;
+
+#[async_trait::async_trait]
+impl PluginCommand for SeedBlogCommand {
+    /// Return the clap subcommand. The literal returned by
+    /// `Command::get_name()` is what the user types after `cargo
+    /// run --`.
+    fn command(&self) -> Command {
+        Command::new("seed-blog")
+            .about("Seed the blog with a few demo posts")
+            .arg(
+                Arg::new("count")
+                    .long("count")
+                    .help("How many posts to insert")
+                    .default_value("3"),
+            )
+            .arg(
+                Arg::new("dry-run")
+                    .long("dry-run")
+                    .help("Print the rows without writing them")
+                    .action(ArgAction::SetTrue),
+            )
+    }
+
+    /// Run the command. The ambient pool and model registry are
+    /// already published — `Post::objects()`, `Post::objects()
+    /// .bulk_create(...)`, etc. all Just Work.
+    async fn run(&self, matches: &ArgMatches) -> Result<(), CliError> {
+        let count: u64 = matches
+            .get_one::<String>("count")
+            .unwrap()
+            .parse()
+            .map_err(|e: std::num::ParseIntError| -> CliError { Box::new(e) })?;
+        let dry_run = matches.get_flag("dry-run");
+
+        let posts: Vec<Post> = (1..=count)
+            .map(|i| Post {
+                id: 0,
+                title: format!("Demo post {i}"),
+                body: "Lorem ipsum.".into(),
+            })
+            .collect();
+
+        if dry_run {
+            for p in &posts {
+                println!("would insert: {}", p.title);
+            }
+            return Ok(());
+        }
+
+        let inserted = Post::objects()
+            .bulk_create(posts)
+            .await
+            .map_err(|e| -> CliError { Box::new(e) })?;
+        println!("Inserted {inserted} demo post(s)");
+        Ok(())
+    }
+}
+```
+
+Wire it up in `main.rs` as usual:
+
+```rust
+let app = App::builder()
+    .plugin(BlogPlugin)
+    .build()?;
+
+umbra_cli::dispatch(app).await
+```
+
+Then:
+
+```bash
+cargo run -- seed-blog --count 10 --dry-run
+# -> would insert: Demo post 1
+# -> would insert: Demo post 2
+# ...
+
+cargo run -- seed-blog --count 10
+# -> Inserted 10 demo post(s)
+```
+
+### How dispatch routes args
+
+When `cargo run -- <name>` runs, the project's binary calls
+`umbra_cli::dispatch(app)`. The dispatcher:
+
+1. Walks every registered plugin in topological order, collecting
+   each one's `Plugin::commands()` Vec.
+2. Builds a single top-level clap parser with every plugin command
+   as a subcommand.
+3. Parses argv. If a plugin command matches, calls that command's
+   `run(&matches)`.
+4. If nothing matches, the framework's built-in subcommands
+   (`serve`, `migrate`, `inspectdb`, …) take over.
+
+A typo (`cargo run -- creatsuperuser`) surfaces as a clap parse
+error with a "did you mean `createsuperuser`?" suggestion, since
+clap sees every subcommand at once.
+
+### What to put in `run`
+
+The handler runs **after** `App::build()` has finished, so:
+
+- `umbra::db::pool()` returns the live pool.
+- The model registry is populated; `MyModel::objects().fetch().await`
+  works.
+- Settings are live; `umbra::settings::get()` returns the resolved
+  values.
+- Every other plugin's `on_ready` has fired (commands run after
+  on_ready by design — see the dispatch order in
+  `crates/umbra-core/src/cli.rs`).
+
+What NOT to do: don't start the HTTP server, don't run migrations
+yourself. Those are separate subcommands; your command should do one
+thing and exit.
+
+### Calling conventions
+
+- **Exit code 0 on success.** Return `Ok(())`.
+- **Exit code 1 on failure.** Return `Err(CliError)` — the dispatcher
+  prints the error and sets the code.
+- **Read from stdin / write to stdout** if you want pipe-friendly
+  output. Use stderr for progress messages so they don't pollute
+  pipes.
+- **Interactive prompts** are fine but ALWAYS provide a `--noinput`
+  flag that reads from env vars instead, so CI / containers / Ansible
+  can call your command non-interactively. `createsuperuser` is the
+  canonical example.
+
 ## What's next
 
 The deep spec for each subcommand lives alongside its subsystem:
 `docs/specs/06-migration-engine.md` for the migrate trio,
-`docs/specs/07-inspectdb.md` for inspectdb.
+`docs/specs/07-inspectdb.md` for inspectdb. The `PluginCommand` trait
+lives at `crates/umbra-core/src/cli.rs`.
 
 See [Scaffolding a project](./startproject) for the global `umbra`
 binary that creates `src/main.rs` + the `umbra.toml` config in the

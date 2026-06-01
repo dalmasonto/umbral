@@ -326,3 +326,109 @@ async fn auth_plugin_registers_the_authuser_model() {
     // above is hitting the same surface plugin authors see.
     let _from_model: umbra::migrate::ModelMeta = umbra::migrate::ModelMeta::for_::<AuthUser>();
 }
+
+/// End-to-end dispatch of `createsuperuser --noinput` through
+/// `umbra::cli::dispatch`. Proves the `Plugin::commands()` hook
+/// returns the `CreateSuperuserCommand`, that dispatch routes the
+/// args to it, and that the resulting row carries the staff +
+/// superuser flags.
+///
+/// Password comes from `UMBRA_SUPERUSER_PASSWORD` so the test runs
+/// without a TTY; username + email from `--username` / `--email`
+/// for the same reason. Mirrors what a CI / container superuser
+/// bootstrap would look like in production.
+#[tokio::test]
+async fn dispatch_routes_createsuperuser_command_with_noinput() {
+    boot().await;
+
+    // Setup: the auth_user table was created earlier in `boot()`. We
+    // need a clean slate so the username uniqueness constraint
+    // doesn't trip from another test.
+    let pool = umbra::db::pool();
+    sqlx::query("DELETE FROM auth_user WHERE username = 'admin'")
+        .execute(&pool)
+        .await
+        .expect("clean slate");
+
+    // SAFETY: tests in this binary that touch this env var must
+    // serialise; current test count is small enough that the noinput
+    // path is the only env-driven test, so a plain set+remove is
+    // safe.
+    unsafe {
+        std::env::set_var("UMBRA_SUPERUSER_PASSWORD", "swordfish-9-9");
+    }
+
+    let plugins: Vec<Box<dyn umbra::prelude::Plugin>> = vec![Box::new(umbra_auth::AuthPlugin)];
+    let outcome = umbra::cli::dispatch(
+        &plugins,
+        vec![
+            "umbra-cli",
+            "createsuperuser",
+            "--username",
+            "admin",
+            "--email",
+            "admin@example.com",
+            "--noinput",
+        ],
+    )
+    .await
+    .expect("dispatch ok");
+    match outcome {
+        umbra::cli::DispatchOutcome::Matched(name) => {
+            assert_eq!(name, "createsuperuser");
+        }
+        other => panic!("expected Matched(createsuperuser); got {other:?}"),
+    }
+
+    unsafe {
+        std::env::remove_var("UMBRA_SUPERUSER_PASSWORD");
+    }
+
+    // The user landed in the DB with the right flags. Read it back
+    // through the authenticate helper so we also verify the password
+    // hash round-trips.
+    let user = umbra_auth::authenticate("admin", "swordfish-9-9")
+        .await
+        .expect("authenticate");
+    assert_eq!(user.username, "admin");
+    assert_eq!(user.email, "admin@example.com");
+    assert!(user.is_staff, "createsuperuser must set is_staff = true");
+    assert!(
+        user.is_superuser,
+        "createsuperuser must set is_superuser = true"
+    );
+    assert!(user.is_active, "the new user should be active");
+}
+
+/// `--noinput` without `UMBRA_SUPERUSER_PASSWORD` set fails loudly
+/// rather than prompting (the whole point of the flag — CI safety).
+#[tokio::test]
+async fn createsuperuser_noinput_errors_without_password_env() {
+    boot().await;
+
+    // Make sure the var isn't accidentally set from the previous test.
+    unsafe {
+        std::env::remove_var("UMBRA_SUPERUSER_PASSWORD");
+    }
+
+    let plugins: Vec<Box<dyn umbra::prelude::Plugin>> = vec![Box::new(umbra_auth::AuthPlugin)];
+    let result = umbra::cli::dispatch(
+        &plugins,
+        vec![
+            "umbra-cli",
+            "createsuperuser",
+            "--username",
+            "ghost",
+            "--email",
+            "ghost@example.com",
+            "--noinput",
+        ],
+    )
+    .await;
+    let err = result.expect_err("dispatch should err when password isn't supplied");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("password not provided") || msg.contains("UMBRA_SUPERUSER_PASSWORD"),
+        "expected password-missing error; got: {msg}"
+    );
+}

@@ -21,6 +21,20 @@ argon2 = { version = "0.5", features = ["std"] }
 chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "chrono"] }
+# clap for the `createsuperuser` management command — Plugin::commands()
+# returns a Vec<Box<dyn PluginCommand>>, and each command exposes a
+# clap::Command for arg parsing.
+clap = "4"
+# async-trait for the PluginCommand impl. The trait itself is async in
+# `umbra::cli`, made object-safe via async-trait's Pin<Box<...>>
+# desugaring.
+async-trait = "0.1"
+# rpassword for the password prompt without echo. Tiny crate (~200 LOC)
+# that does the right thing for terminal password input — turn off
+# tty echo, read line, restore echo. The alternative (echoing the
+# password as the user types) is one of those small UX details that
+# people remember.
+rpassword = "7"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync"] }

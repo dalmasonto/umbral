@@ -15,8 +15,33 @@ cargo install umbra-cli
 
 You now have an `umbra` command on your PATH. It does two things:
 `startproject` and `startapp`. Everything else (`serve`, `migrate`,
-…) runs against your project's own binary via
+`createsuperuser`, …) runs against your project's own binary via
 [`cargo run --`](./management-commands).
+
+<Callout type="info">
+**Two CLIs, one mental model.** The global `umbra` binary scaffolds
+projects and plugins — it doesn't need a project to run because it
+*creates* one. Every other command (`serve`, `migrate`,
+`makemigrations`, `inspectdb`, `dumpdata`, `loaddata`,
+`createsuperuser`, `tasks-worker`, and any custom subcommand a
+plugin contributes) runs **inside your project** via
+`cargo run -- <command>`. Your binary hosts those by ending
+`main()` with `umbra_cli::dispatch(app).await`.
+
+```text
+GLOBAL  (cargo install umbra-cli; nothing else needed)
+  umbra startproject <name>
+  umbra startapp <name>
+
+PROJECT (inside a project, after umbra startproject)
+  cargo run -- serve
+  cargo run -- migrate / makemigrations / showmigrations
+  cargo run -- inspectdb / dumpdata / loaddata
+  cargo run -- createsuperuser            (from umbra-auth)
+  cargo run -- tasks-worker               (from umbra-tasks)
+  cargo run -- <your-custom-command>      (from any plugin you write)
+```
+</Callout>
 
 ## startproject
 
