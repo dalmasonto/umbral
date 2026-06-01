@@ -1283,17 +1283,68 @@ fn form_fields_for(
         .fields
         .iter()
         .filter(|c| !c.primary_key) // PK isn't editable in the form
-        .map(|c| FormField {
-            name: c.name.clone(),
-            kind: input_kind(c.ty),
-            value: prefill
+        .map(|c| {
+            let raw = prefill
                 .and_then(|m| m.get(&c.name))
                 .cloned()
-                .unwrap_or_default(),
-            nullable: c.nullable,
-            readonly: readonly_set.contains(c.name.as_str()),
+                .unwrap_or_default();
+            FormField {
+                name: c.name.clone(),
+                kind: input_kind(c.ty),
+                value: format_for_input(&raw, c.ty),
+                nullable: c.nullable,
+                readonly: readonly_set.contains(c.name.as_str()),
+            }
         })
         .collect()
+}
+
+/// Coerce a row value (as serialised by `column_to_string`) into the
+/// exact string the matching HTML5 input widget expects.
+///
+/// The display path renders `published_at` as RFC3339
+/// (`2026-05-30T12:00:00+00:00`) which the detail view shows
+/// faithfully. But `<input type="datetime-local">` only accepts
+/// `YYYY-MM-DDTHH:MM` — feed it RFC3339 and the browser silently
+/// blanks the field, dropping the user's existing value on save.
+/// Same trap with `<input type="date">` and `<input type="time">` if
+/// the column stringification adds extra precision.
+///
+/// This function is per-column-type so the conversion stays explicit:
+/// adding a new `SqlType` lands a new arm here (or falls through to
+/// pass-through). Empty values stay empty so nullable columns keep
+/// their "no value" semantics.
+fn format_for_input(raw: &str, ty: SqlType) -> String {
+    if raw.is_empty() {
+        return String::new();
+    }
+    match ty {
+        SqlType::Timestamptz => {
+            // RFC3339 `2026-05-30T12:00:00+00:00` → `2026-05-30T12:00`
+            // for datetime-local. We strip seconds and TZ, accepting
+            // a one-minute floor on the precision; the input widget
+            // doesn't expose seconds anyway.
+            match chrono::DateTime::parse_from_rfc3339(raw) {
+                Ok(dt) => dt.format("%Y-%m-%dT%H:%M").to_string(),
+                // Bad/empty/legacy formats fall through unmodified.
+                // The form save path validates again on submit.
+                Err(_) => raw.to_string(),
+            }
+        }
+        SqlType::Time => {
+            // HTML's `time` widget accepts `HH:MM` and `HH:MM:SS`. If
+            // the column stringification emitted sub-second precision,
+            // trim it back to seconds.
+            if let Some(dot) = raw.find('.') {
+                raw[..dot].to_string()
+            } else {
+                raw.to_string()
+            }
+        }
+        // Date, Text, integer kinds, etc. — pass through. The column
+        // stringification already emits the right form.
+        _ => raw.to_string(),
+    }
 }
 
 fn input_kind(ty: SqlType) -> &'static str {
@@ -1389,4 +1440,69 @@ fn model_for_template_cols(model: &ModelMeta, display_cols: &[String]) -> ModelV
 #[allow(dead_code)]
 fn _unused_json_marker() -> Option<Json<()>> {
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_for_input_coerces_rfc3339_to_datetime_local() {
+        // The actual bug: column_to_string emits RFC3339, but the
+        // `datetime-local` widget needs `YYYY-MM-DDTHH:MM`. Without
+        // the coercion, the browser silently shows an empty field
+        // and a Save would clear the column.
+        let coerced = format_for_input("2026-05-30T12:00:00+00:00", SqlType::Timestamptz);
+        assert_eq!(coerced, "2026-05-30T12:00");
+    }
+
+    #[test]
+    fn format_for_input_handles_rfc3339_with_offset() {
+        // Same as above but a non-UTC offset to confirm the offset is
+        // dropped (datetime-local has no timezone field).
+        let coerced = format_for_input("2026-05-30T17:00:00+05:00", SqlType::Timestamptz);
+        // 17:00+05:00 = 12:00Z, but datetime-local renders WALL TIME,
+        // not UTC. chrono's `format("%Y-%m-%dT%H:%M")` on a
+        // `DateTime<FixedOffset>` keeps the local wall time.
+        assert_eq!(coerced, "2026-05-30T17:00");
+    }
+
+    #[test]
+    fn format_for_input_empty_stays_empty() {
+        // Nullable column with no value must remain empty so the
+        // form shows the placeholder and the save path treats the
+        // unchecked input as NULL.
+        assert_eq!(format_for_input("", SqlType::Timestamptz), "");
+        assert_eq!(format_for_input("", SqlType::Time), "");
+        assert_eq!(format_for_input("", SqlType::Text), "");
+    }
+
+    #[test]
+    fn format_for_input_passes_through_simple_types() {
+        // Date, Text, integers, etc. are already in the right form
+        // when column_to_string emits them. Pass through untouched.
+        assert_eq!(format_for_input("2026-05-30", SqlType::Date), "2026-05-30");
+        assert_eq!(format_for_input("hello", SqlType::Text), "hello");
+        assert_eq!(format_for_input("42", SqlType::BigInt), "42");
+    }
+
+    #[test]
+    fn format_for_input_trims_subsecond_time() {
+        // `12:34:56.789012` → `12:34:56`. The widget accepts both
+        // `HH:MM` and `HH:MM:SS` but chokes on fractional seconds.
+        assert_eq!(format_for_input("12:34:56.789", SqlType::Time), "12:34:56");
+        // Already-clean values pass through.
+        assert_eq!(format_for_input("12:34:56", SqlType::Time), "12:34:56");
+        assert_eq!(format_for_input("12:34", SqlType::Time), "12:34");
+    }
+
+    #[test]
+    fn format_for_input_passes_through_bad_rfc3339_unchanged() {
+        // Defensive: if column_to_string ever emits a malformed
+        // timestamp (e.g., from a manual DB edit), don't drop the
+        // value — pass it through. The form save path validates
+        // again on submit.
+        let bad = "not-a-valid-timestamp";
+        assert_eq!(format_for_input(bad, SqlType::Timestamptz), bad);
+    }
 }
