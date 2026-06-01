@@ -5,18 +5,42 @@ sidebar_position: 1
 icon: layers
 ---
 
-umbra ships a global `umbra` binary that scaffolds new projects and
-new plugins. It's the framework's `django-admin` equivalent. Install
-once:
+## Three names, what each one is
+
+Three Cargo entities share the umbra name. Worth pinning down before
+the install commands below:
+
+| Name | Kind | Where you see it | What it is |
+|------|------|------------------|-----------|
+| `umbra` | Library crate (framework) | `Cargo.toml` dep, `use umbra::prelude::*` | The framework itself — `App::builder`, ORM, web, plugins. |
+| `umbra-cli` | Library + binary crate | `Cargo.toml` dep + `cargo install umbra-cli` | The CLI tooling. The **library half** exposes `umbra_cli::dispatch(app)` that your `main.rs` calls so `cargo run -- <cmd>` works. The **binary half** is what gets installed globally as `umbra` (next row). |
+| `umbra` | Executable on PATH | After `cargo install umbra-cli` | The scaffolding tool — `umbra startproject` / `umbra startapp`. Yes, the binary is called `umbra` but its crate is `umbra-cli`; same Cargo convention as `cargo` (crate name) vs `cargo-something` (subcommand). |
+
+So a real user touches umbra in **two distinct places**:
 
 ```bash
+# 1. ONCE globally — installs the `umbra` scaffolding binary on PATH:
 cargo install umbra-cli
 ```
 
-You now have an `umbra` command on your PATH. It does two things:
-`startproject` and `startapp`. Everything else (`serve`, `migrate`,
-`createsuperuser`, …) runs against your project's own binary via
-[`cargo run --`](./management-commands).
+```toml
+# 2. Every project — both crates as deps in `Cargo.toml`
+#    (the project that `umbra startproject` generates already lists them):
+[dependencies]
+umbra = "..."        # the framework library
+umbra-cli = "..."    # for `umbra_cli::dispatch(app)` in main.rs
+```
+
+There's no separate `cargo install umbra` step — the `umbra` *binary*
+comes from the `umbra-cli` *crate*. The `umbra` *crate* is a library
+you only ever depend on, never install.
+
+## What the global `umbra` binary does
+
+It does two things: `startproject` and `startapp`. Everything else
+(`serve`, `migrate`, `createsuperuser`, …) runs against your
+project's own binary via
+[`cargo run -- <command>`](./management-commands).
 
 <Callout type="info">
 **Two CLIs, one mental model.** The global `umbra` binary scaffolds
