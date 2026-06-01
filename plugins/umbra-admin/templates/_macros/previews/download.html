@@ -1,0 +1,55 @@
+{#
+  download.html
+  =============
+  Download-only card for unknown/binary file types.
+
+  Usage:
+    {% from "admin/_macros/previews/download.html" import download_card %}
+    {{ download_card(descriptor) }}
+#}
+
+{% macro download_card(descriptor) %}
+<div class="download-card flex flex-col items-center justify-center h-full p-xl gap-lg">
+  <div class="w-20 h-20 rounded-2xl bg-surface-container border border-outline-variant flex items-center justify-center">
+    <i data-lucide="file" class="w-9 h-9 text-outline"></i>
+  </div>
+  <div class="text-center">
+    <p class="text-body-md text-on-surface font-medium break-all">{{ descriptor.filename }}</p>
+    <div class="flex items-center justify-center gap-sm mt-xs text-label-sm text-outline">
+      <span>{{ descriptor.mime }}</span>
+      {% if descriptor.size %}
+      <span>&middot;</span>
+      <span>{{ descriptor.size | filesizeformat }}</span>
+      {% endif %}
+    </div>
+  </div>
+  <a
+    href="{{ descriptor.url }}"
+    download="{{ descriptor.filename }}"
+    class="inline-flex items-center gap-sm px-xl py-md bg-primary text-on-primary rounded-xl font-label-md text-label-md hover:opacity-90 transition-opacity shadow-sm"
+  >
+    <i data-lucide="download" class="w-4 h-4"></i>
+    Download
+  </a>
+</div>
+{% endmacro %}
+
+{% macro file_glyph(descriptor) %}
+{# Inline table-cell representation: type glyph + filename #}
+<div class="flex items-center gap-xs">
+  {% if descriptor.preview_kind == "pdf" %}
+    <i data-lucide="file-text" class="w-4 h-4 text-error flex-shrink-0"></i>
+  {% elif descriptor.preview_kind == "video" %}
+    <i data-lucide="video" class="w-4 h-4 text-secondary flex-shrink-0"></i>
+  {% elif descriptor.preview_kind == "audio" %}
+    <i data-lucide="music" class="w-4 h-4 text-secondary flex-shrink-0"></i>
+  {% elif descriptor.preview_kind == "code" %}
+    <i data-lucide="file-code" class="w-4 h-4 text-primary flex-shrink-0"></i>
+  {% elif descriptor.preview_kind == "text" %}
+    <i data-lucide="file-text" class="w-4 h-4 text-outline flex-shrink-0"></i>
+  {% else %}
+    <i data-lucide="file" class="w-4 h-4 text-outline flex-shrink-0"></i>
+  {% endif %}
+  <span class="text-body-sm text-on-surface-variant truncate max-w-[100px]">{{ descriptor.filename }}</span>
+</div>
+{% endmacro %}

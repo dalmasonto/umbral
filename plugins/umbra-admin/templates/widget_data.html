@@ -1,0 +1,25 @@
+{#
+  widget_data.html
+  ================
+  HTMX fragment returned by GET /admin/api/dashboard/widgets/{key}/data.
+  Renders the correct widget macro based on `kind`.
+#}
+{% from "admin/_macros/widgets/kpi.html" import kpi_widget, sparkline_svg %}
+{% from "admin/_macros/widgets/bar.html" import bar_widget %}
+{% from "admin/_macros/widgets/line.html" import line_widget %}
+{% from "admin/_macros/widgets/feed.html" import feed_widget %}
+{% from "admin/_macros/widgets/table.html" import table_widget %}
+
+{% if kind == "kpi" %}
+  {{ kpi_widget(title, payload) }}
+{% elif kind == "bar" %}
+  {{ bar_widget(title, payload) }}
+{% elif kind == "line" %}
+  {{ line_widget(title, payload) }}
+{% elif kind == "feed" %}
+  {{ feed_widget(title, payload) }}
+{% elif kind == "table" %}
+  {{ table_widget(title, payload) }}
+{% else %}
+  <div class="p-md text-label-sm text-outline">Unknown widget kind: {{ kind }}</div>
+{% endif %}

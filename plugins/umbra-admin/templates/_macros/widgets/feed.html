@@ -1,0 +1,37 @@
+{#
+  feed.html
+  =========
+  Activity feed widget renderer.
+  Expects payload: { items: [{actor, verb, object, object_link?, at}] }
+#}
+
+{% macro feed_widget(title, payload) %}
+<div class="feed-widget h-full flex flex-col p-md">
+  <p class="text-label-sm text-outline uppercase tracking-wider mb-sm flex-shrink-0">{{ title }}</p>
+  {% if payload.items and payload.items | length > 0 %}
+  <ul class="flex-1 overflow-y-auto space-y-xs">
+    {% for item in payload.items %}
+    <li class="flex items-start gap-sm py-xs border-b border-outline-variant/40 last:border-0">
+      <div class="w-6 h-6 rounded-full bg-primary-container flex items-center justify-center flex-shrink-0 mt-0.5">
+        <span class="text-[9px] font-semibold text-on-primary-container uppercase">{{ item.actor[:2] }}</span>
+      </div>
+      <div class="flex-1 min-w-0">
+        <p class="text-body-sm text-on-surface leading-snug">
+          <span class="font-medium">{{ item.actor }}</span>
+          <span class="text-on-surface-variant"> {{ item.verb }} </span>
+          {% if item.object_link %}
+          <a href="{{ item.object_link }}" class="text-primary hover:underline">{{ item.object }}</a>
+          {% else %}
+          <span class="text-on-surface">{{ item.object }}</span>
+          {% endif %}
+        </p>
+        <time class="text-label-sm text-outline tabular-nums">{{ item.at }}</time>
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="text-label-sm text-outline italic mt-auto">No recent activity.</p>
+  {% endif %}
+</div>
+{% endmacro %}

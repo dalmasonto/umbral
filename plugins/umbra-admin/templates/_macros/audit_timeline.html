@@ -1,0 +1,49 @@
+{#
+  audit_timeline.html
+  ===================
+  Reusable macro that renders an audit trail as a vertical timeline.
+
+  Usage:
+    {% from "admin/_macros/audit_timeline.html" import audit_timeline %}
+    {{ audit_timeline(entries) }}
+
+  `entries` is a list of AuditEntry structs with fields:
+    id, actor_user_id, action, model, object_id, diff_summary, created_at
+#}
+
+{% macro audit_timeline(entries) %}
+<div class="audit-timeline flex flex-col gap-0">
+  {% if entries %}
+    {% for entry in entries %}
+    <div class="audit-entry flex gap-md py-sm relative">
+      {# Timeline spine #}
+      <div class="flex flex-col items-center flex-shrink-0">
+        <div class="w-2 h-2 rounded-full mt-1
+          {% if entry.action == 'create' %}bg-primary
+          {% elif entry.action == 'delete' %}bg-error
+          {% elif entry.action[:6] == 'action' %}bg-tertiary
+          {% else %}bg-secondary
+          {% endif %}
+        "></div>
+        {% if not loop.last %}
+        <div class="flex-1 w-px bg-outline-variant mt-1"></div>
+        {% endif %}
+      </div>
+      {# Entry body #}
+      <div class="flex-1 min-w-0 pb-sm">
+        <p class="text-body-sm text-on-surface leading-snug">
+          {{ entry.diff_summary }}
+        </p>
+        <p class="text-label-sm text-outline mt-0.5">
+          <span class="font-medium text-on-surface-variant">user #{{ entry.actor_user_id }}</span>
+          &middot;
+          <time class="tabular-nums">{{ entry.created_at }}</time>
+        </p>
+      </div>
+    </div>
+    {% endfor %}
+  {% else %}
+    <p class="text-body-sm text-outline italic py-md text-center">No history recorded yet.</p>
+  {% endif %}
+</div>
+{% endmacro %}

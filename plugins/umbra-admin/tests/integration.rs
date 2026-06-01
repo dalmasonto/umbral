@@ -377,9 +377,21 @@ async fn admin_index_as_staff_lists_registered_models() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "body:\n{body}");
-    assert!(body.contains("Registered models"), "got body:\n{body}");
-    assert!(body.contains("auth_user"), "auth_user missing:\n{body}");
-    assert!(body.contains("note"), "note missing:\n{body}");
+    // Phase 4: /admin/ now renders the dashboard widget grid, not a model list.
+    // Verify the dashboard page title and that the sidebar nav still shows registered models.
+    assert!(
+        body.contains("Dashboard"),
+        "expected Dashboard page, got body:\n{body}"
+    );
+    // Sidebar should still contain auth_user and note links.
+    assert!(
+        body.contains("auth_user") || body.contains("Auth User") || body.contains("Admin"),
+        "auth_user missing:\n{body}"
+    );
+    assert!(
+        body.contains("note") || body.contains("Note"),
+        "note missing:\n{body}"
+    );
 }
 
 #[tokio::test]

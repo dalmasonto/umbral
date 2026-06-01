@@ -1,0 +1,72 @@
+{#
+  kpi.html
+  ========
+  KPI widget renderer.
+  Expects a `payload` object with:
+    value: String
+    unit:  String | null
+    delta: float | null   (positive = up, negative = down)
+    sparkline: [f64] | null
+#}
+
+{% macro kpi_widget(title, payload) %}
+<div class="kpi-widget h-full flex flex-col justify-between p-md">
+  <div>
+    <p class="text-label-sm text-outline uppercase tracking-wider mb-xs">{{ title }}</p>
+    <div class="flex items-baseline gap-xs">
+      <span class="text-display font-display text-on-surface tabular-nums leading-none">{{ payload.value }}</span>
+      {% if payload.unit %}
+      <span class="text-body-sm text-outline">{{ payload.unit }}</span>
+      {% endif %}
+    </div>
+    {% if payload.delta is not none %}
+    <div class="flex items-center gap-xs mt-xs">
+      {% if payload.delta > 0 %}
+      <i data-lucide="trending-up" class="w-3 h-3 text-primary"></i>
+      <span class="text-label-sm text-primary">+{{ payload.delta | round(1) }}%</span>
+      {% elif payload.delta < 0 %}
+      <i data-lucide="trending-down" class="w-3 h-3 text-error"></i>
+      <span class="text-label-sm text-error">{{ payload.delta | round(1) }}%</span>
+      {% else %}
+      <i data-lucide="minus" class="w-3 h-3 text-outline"></i>
+      <span class="text-label-sm text-outline">0%</span>
+      {% endif %}
+      <span class="text-label-sm text-outline">vs previous</span>
+    </div>
+    {% endif %}
+  </div>
+  {% if payload.sparkline and payload.sparkline | length > 1 %}
+  <div class="mt-sm h-8 overflow-hidden">
+    {{ sparkline_svg(payload.sparkline) }}
+  </div>
+  {% endif %}
+</div>
+{% endmacro %}
+
+{% macro sparkline_svg(points) %}
+{# Simple inline SVG sparkline — polyline from normalized points #}
+{%- set min_val = points | min -%}
+{%- set max_val = points | max -%}
+{%- set range = (max_val - min_val) | float -%}
+{%- set range = range if range > 0 else 1.0 -%}
+{%- set n = points | length -%}
+{%- set w = 120 -%}
+{%- set h = 32 -%}
+<svg viewBox="0 0 {{ w }} {{ h }}" xmlns="http://www.w3.org/2000/svg"
+     class="w-full h-full" preserveAspectRatio="none">
+  <polyline
+    fill="none"
+    stroke="var(--primary)"
+    stroke-width="1.5"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    opacity="0.7"
+    points="
+    {%- for v in points -%}
+      {{ (loop.index0 / (n - 1) * w) | round(1) }},{{ ((max_val - v) / range * (h - 4) + 2) | round(1) }}
+      {{ " " if not loop.last else "" }}
+    {%- endfor -%}
+    "
+  />
+</svg>
+{% endmacro %}

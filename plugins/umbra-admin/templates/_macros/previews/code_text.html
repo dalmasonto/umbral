@@ -1,0 +1,84 @@
+{#
+  code_text.html
+  ==============
+  Code / plain-text preview macro.
+  Content is pre-fetched server-side and passed as `content` string.
+  Syntax highlighting: loads Prism.js from CDN (TODO: vendor in a future pass).
+
+  Usage:
+    {% from "admin/_macros/previews/code_text.html" import code_preview, text_preview %}
+    {{ code_preview(descriptor, content) }}
+    {{ text_preview(descriptor, content) }}
+
+  descriptor.language controls the Prism language class.
+#}
+
+{% macro code_preview(descriptor, content) %}
+<div class="code-preview flex flex-col h-full">
+  <!-- Header -->
+  <div class="flex items-center justify-between px-md py-sm border-b border-outline-variant flex-shrink-0 bg-surface-container-low">
+    <div class="flex items-center gap-sm">
+      <i data-lucide="file-code" class="w-4 h-4 text-primary"></i>
+      <span class="text-body-sm text-on-surface font-medium truncate max-w-[160px]">{{ descriptor.filename }}</span>
+      {% if descriptor.language %}
+      <span class="px-xs py-[2px] bg-primary/10 text-primary text-label-sm rounded font-medium">{{ descriptor.language }}</span>
+      {% endif %}
+    </div>
+    <div class="flex items-center gap-xs">
+      <button
+        type="button"
+        onclick="umbra._copyCode()"
+        class="p-xs rounded-lg hover:bg-surface-container-high transition-colors text-outline hover:text-on-surface"
+        title="Copy to clipboard"
+      >
+        <i data-lucide="copy" class="w-4 h-4"></i>
+      </button>
+      <a href="{{ descriptor.url }}" download="{{ descriptor.filename }}"
+         class="p-xs rounded-lg hover:bg-surface-container-high transition-colors text-outline hover:text-on-surface"
+         title="Download">
+        <i data-lucide="download" class="w-4 h-4"></i>
+      </a>
+    </div>
+  </div>
+  <!-- Code area -->
+  <div class="flex-1 overflow-auto bg-surface-container-lowest">
+    <pre id="umbra-code-content" class="text-[12px] leading-relaxed p-md m-0 whitespace-pre font-mono text-on-surface overflow-visible"><code class="language-{{ descriptor.language | default('text') }}">{{ content }}</code></pre>
+  </div>
+</div>
+{# TODO: vendor Prism.js instead of loading from CDN #}
+<link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-core.min.js" defer></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/plugins/autoloader/prism-autoloader.min.js" defer></script>
+<script>
+umbra._copyCode = function() {
+  var el = document.getElementById('umbra-code-content');
+  if (!el) return;
+  navigator.clipboard.writeText(el.innerText).then(function() {
+    umbra.showToast('Copied to clipboard', 'success');
+  }).catch(function() {
+    umbra.showToast('Copy failed', 'error');
+  });
+};
+</script>
+{% endmacro %}
+
+{% macro text_preview(descriptor, content) %}
+<div class="text-preview flex flex-col h-full">
+  <!-- Header -->
+  <div class="flex items-center justify-between px-md py-sm border-b border-outline-variant flex-shrink-0 bg-surface-container-low">
+    <div class="flex items-center gap-sm">
+      <i data-lucide="file-text" class="w-4 h-4 text-on-surface-variant"></i>
+      <span class="text-body-sm text-on-surface font-medium truncate max-w-[200px]">{{ descriptor.filename }}</span>
+    </div>
+    <a href="{{ descriptor.url }}" download="{{ descriptor.filename }}"
+       class="p-xs rounded-lg hover:bg-surface-container-high transition-colors text-outline hover:text-on-surface"
+       title="Download">
+      <i data-lucide="download" class="w-4 h-4"></i>
+    </a>
+  </div>
+  <!-- Text area -->
+  <div class="flex-1 overflow-auto p-md">
+    <pre class="text-body-sm text-on-surface whitespace-pre-wrap font-mono leading-relaxed">{{ content }}</pre>
+  </div>
+</div>
+{% endmacro %}

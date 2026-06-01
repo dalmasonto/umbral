@@ -1,0 +1,65 @@
+{#
+  video_audio.html
+  ================
+  Video and audio preview macros — HTML5 native players.
+
+  Usage:
+    {% from "admin/_macros/previews/video_audio.html" import video_preview, audio_preview %}
+    {{ video_preview(descriptor) }}
+    {{ audio_preview(descriptor) }}
+#}
+
+{% macro video_preview(descriptor) %}
+<div class="video-preview flex flex-col h-full">
+  <!-- Header -->
+  <div class="flex items-center justify-between px-md py-sm border-b border-outline-variant flex-shrink-0 bg-surface-container-low">
+    <div class="flex items-center gap-sm">
+      <i data-lucide="video" class="w-4 h-4 text-secondary"></i>
+      <span class="text-body-sm text-on-surface font-medium truncate max-w-[200px]">{{ descriptor.filename }}</span>
+    </div>
+    <a href="{{ descriptor.url }}" download="{{ descriptor.filename }}"
+       class="p-xs rounded-lg hover:bg-surface-container-high transition-colors text-outline hover:text-on-surface"
+       title="Download">
+      <i data-lucide="download" class="w-4 h-4"></i>
+    </a>
+  </div>
+  <!-- Player -->
+  <div class="flex-1 flex items-center justify-center bg-surface-container-low p-md">
+    <video
+      controls
+      preload="metadata"
+      class="max-w-full max-h-full rounded-xl"
+      style="max-height: calc(100% - 2rem);"
+    >
+      <source src="{{ descriptor.url }}" type="{{ descriptor.mime }}"/>
+      <p class="text-body-sm text-outline">Your browser does not support video playback.
+        <a href="{{ descriptor.url }}" class="text-primary underline">Download</a>
+      </p>
+    </video>
+  </div>
+</div>
+{% endmacro %}
+
+{% macro audio_preview(descriptor) %}
+<div class="audio-preview flex flex-col h-full items-center justify-center p-xl gap-lg">
+  <div class="w-24 h-24 rounded-2xl bg-surface-container border border-outline-variant flex items-center justify-center">
+    <i data-lucide="music" class="w-10 h-10 text-primary"></i>
+  </div>
+  <div class="text-center">
+    <p class="text-body-md text-on-surface font-medium">{{ descriptor.filename }}</p>
+    <p class="text-label-sm text-outline mt-xs">{{ descriptor.mime }}</p>
+  </div>
+  <audio controls class="w-full max-w-md" preload="metadata">
+    <source src="{{ descriptor.url }}" type="{{ descriptor.mime }}"/>
+    <p class="text-body-sm text-outline">
+      Your browser does not support audio playback.
+      <a href="{{ descriptor.url }}" class="text-primary underline">Download</a>
+    </p>
+  </audio>
+  <a href="{{ descriptor.url }}" download="{{ descriptor.filename }}"
+     class="inline-flex items-center gap-sm px-lg py-sm bg-surface-container border border-outline-variant rounded-xl text-body-sm text-on-surface hover:bg-surface-container-high transition-colors">
+    <i data-lucide="download" class="w-4 h-4"></i>
+    Download
+  </a>
+</div>
+{% endmacro %}

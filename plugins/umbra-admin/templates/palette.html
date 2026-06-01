@@ -1,0 +1,162 @@
+{#
+  palette.html
+  ============
+  Command palette fragment — loaded into #umbra-palette-slot by ⌘K / Ctrl-K.
+  Search filters client-side via the inline JS; no server round-trip per keystroke.
+
+  `models` is a list of {table, label, icon} for jump targets.
+  `commands` is a list of {key, label, icon} for fixed commands.
+#}
+
+<div
+  id="umbra-palette"
+  class="fixed inset-0 z-[500] flex items-start justify-center pt-[15vh]"
+  role="dialog"
+  aria-modal="true"
+  aria-label="Command palette"
+  onclick="if(event.target===this)umbra.closePalette()"
+>
+  {# Scrim #}
+  <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" aria-hidden="true"></div>
+
+  {# Panel #}
+  <div
+    class="relative w-full max-w-[600px] mx-md bg-surface rounded-2xl border border-outline-variant shadow-2xl overflow-hidden"
+    style="border-radius: 14px;"
+  >
+    {# Search input #}
+    <div class="flex items-center gap-sm px-lg py-md border-b border-outline-variant">
+      <i data-lucide="search" class="w-5 h-5 text-outline flex-shrink-0"></i>
+      <input
+        id="umbra-palette-input"
+        type="text"
+        placeholder="Jump to model or run command..."
+        class="flex-1 bg-transparent text-body-md text-on-surface placeholder:text-outline focus:outline-none"
+        autocomplete="off"
+        aria-autocomplete="list"
+        aria-controls="umbra-palette-results"
+        oninput="umbra._paletteFilter(this.value)"
+        onkeydown="umbra._paletteKeydown(event)"
+      />
+      <kbd class="px-xs py-[2px] bg-surface-container-low border border-outline-variant rounded text-label-sm text-outline">Esc</kbd>
+    </div>
+
+    {# Results list #}
+    <ul
+      id="umbra-palette-results"
+      class="max-h-80 overflow-y-auto py-xs"
+      role="listbox"
+    >
+      {# Jump targets: registered models #}
+      {% if models %}
+      <li class="px-lg py-xs">
+        <span class="text-label-sm text-outline uppercase tracking-wider">Models</span>
+      </li>
+      {% for m in models %}
+      <li
+        role="option"
+        data-palette-label="{{ m.label | lower }}"
+        data-palette-href="/admin/{{ m.table }}/"
+        class="palette-item flex items-center gap-sm px-lg py-sm cursor-pointer hover:bg-surface-container-high transition-colors group"
+        onclick="umbra._paletteGo(this)"
+        tabindex="-1"
+      >
+        <div class="w-8 h-8 rounded-xl bg-surface-container border border-outline-variant flex items-center justify-center flex-shrink-0">
+          <i data-lucide="{{ m.icon | default('database') }}" class="w-4 h-4 text-on-surface-variant"></i>
+        </div>
+        <span class="text-body-md text-on-surface">{{ m.label }}</span>
+        <span class="ml-auto text-label-sm text-outline opacity-0 group-hover:opacity-100 transition-opacity">Jump</span>
+      </li>
+      {% endfor %}
+      {% endif %}
+
+      {# Fixed commands #}
+      <li class="px-lg py-xs mt-xs border-t border-outline-variant">
+        <span class="text-label-sm text-outline uppercase tracking-wider">Commands</span>
+      </li>
+      {% for cmd in commands %}
+      <li
+        role="option"
+        data-palette-label="{{ cmd.label | lower }}"
+        data-palette-action="{{ cmd.key }}"
+        class="palette-item flex items-center gap-sm px-lg py-sm cursor-pointer hover:bg-surface-container-high transition-colors"
+        onclick="umbra._paletteAction('{{ cmd.key }}')"
+        tabindex="-1"
+      >
+        <div class="w-8 h-8 rounded-xl bg-surface-container border border-outline-variant flex items-center justify-center flex-shrink-0">
+          <i data-lucide="{{ cmd.icon }}" class="w-4 h-4 text-on-surface-variant"></i>
+        </div>
+        <span class="text-body-md text-on-surface">{{ cmd.label }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
+</div>
+
+<script>
+(function() {
+  // Autofocus the input after insertion
+  var inp = document.getElementById('umbra-palette-input');
+  if (inp) inp.focus();
+
+  if (window.lucide) lucide.createIcons({ el: document.getElementById('umbra-palette') });
+
+  umbra.closePalette = function() {
+    var slot = document.getElementById('umbra-palette-slot');
+    if (slot) slot.innerHTML = '';
+  };
+
+  umbra._paletteFilter = function(q) {
+    q = q.trim().toLowerCase();
+    var items = document.querySelectorAll('.palette-item');
+    items.forEach(function(li) {
+      var label = li.getAttribute('data-palette-label') || '';
+      li.style.display = (q === '' || label.indexOf(q) !== -1) ? '' : 'none';
+    });
+    // Hide empty group headers (basic approach)
+    document.querySelectorAll('#umbra-palette-results li').forEach(function(li) {
+      if (li.classList.contains('palette-item')) return; // skip items
+      // header: check if any following items are visible
+      var next = li.nextElementSibling;
+      var hasVisible = false;
+      while (next && next.classList.contains('palette-item')) {
+        if (next.style.display !== 'none') { hasVisible = true; break; }
+        next = next.nextElementSibling;
+      }
+      li.style.display = hasVisible ? '' : 'none';
+    });
+  };
+
+  umbra._paletteKeydown = function(e) {
+    if (e.key === 'Escape') { umbra.closePalette(); e.preventDefault(); return; }
+    var results = document.getElementById('umbra-palette-results');
+    var items = Array.from(results.querySelectorAll('.palette-item[style=""], .palette-item:not([style])'))
+      .filter(function(li) { return li.style.display !== 'none'; });
+    var focused = document.activeElement;
+    var idx = items.indexOf(focused);
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      var next = items[idx + 1] || items[0];
+      if (next) next.focus();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      var prev = items[idx - 1] || items[items.length - 1];
+      if (prev) prev.focus();
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (focused && focused.classList.contains('palette-item')) focused.click();
+    }
+  };
+
+  umbra._paletteGo = function(el) {
+    var href = el.getAttribute('data-palette-href');
+    if (href) { umbra.closePalette(); window.location.href = href; }
+  };
+
+  umbra._paletteAction = function(key) {
+    umbra.closePalette();
+    if (key === 'toggle_theme') { umbra.toggleTheme(); }
+    else if (key === 'logout') { window.location.href = '/admin/logout'; }
+  };
+})();
+</script>

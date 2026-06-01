@@ -389,19 +389,159 @@ All action results that produce a `Toast` trigger a bottom-right notification vi
 
 ---
 
-## Deferred admin features (phases 3-4)
+## Phase 4: dashboard widgets, audit log, user prefs, file previews, command palette
 
-| Feature | Phase |
+### Admin-owned tables
+
+The admin plugin creates two tables on first boot via `Plugin::on_ready`:
+
+- `admin_user_pref` - one row per admin user. Stores theme (`light`/`dark`/`system`), density (`comfortable`/`compact`), sidebar-collapsed state, and the serialized dashboard layout (JSON).
+- `admin_audit_log` - one row per write operation. Records actor, action (`create`/`update`/`delete`/`action:<key>`), model table, object PK, and a short human diff summary.
+
+No migrations are required for these tables. They are created with `CREATE TABLE IF NOT EXISTS` on every boot.
+
+### Server-side user preferences
+
+```
+GET /admin/api/prefs  → { theme, density, sidebar_collapsed, dashboard_layout, updated_at }
+PUT /admin/api/prefs  ← { theme?, density?, sidebar_collapsed? }
+```
+
+The `GET` endpoint creates the row with defaults on first hit (theme=dark, density=comfortable, sidebar\_collapsed=false). The `PUT` endpoint accepts a partial JSON object and updates only the fields supplied. Invalid values for `theme` or `density` are silently ignored.
+
+The theme toggle in the topbar still writes `localStorage` as the fast path (no flash on page load), and additionally `PUT`s to `/admin/api/prefs` so the preference survives across browsers and sessions.
+
+### Audit log recording
+
+Every successful create, update, delete, and sheet-create operation writes one row to `admin_audit_log`. Bulk actions write one row summarizing the operation. The write is fire-and-forget (errors are logged but do not fail the originating request).
+
+Per-object history is available at:
+
+```
+GET /admin/{table}/{id}/history
+```
+
+This renders an audit timeline as a stacked sheet fragment (HTMX) or a standalone page (direct). Each entry shows actor, action, diff summary, and timestamp. A "History" link in the sheet preview header opens this.
+
+### Dashboard widget system
+
+`GET /admin/` now renders a 12-column widget grid instead of the static model index. Each widget is an HTMX-hydrating placeholder that fetches its data on load.
+
+**Registering a widget:**
+
+```rust
+use umbra_admin::{AdminPlugin, Widget, WidgetKind, WidgetDataFn, WidgetPayload, KpiPayload, Span};
+
+AdminPlugin::default()
+    .register_widget(Widget {
+        key:          "total_posts",
+        title:        "Total Posts".to_string(),
+        kind:         WidgetKind::Kpi,
+        default_span: Span { cols: 3, rows: 1 },
+        permission:   None,
+        data:         WidgetDataFn::new(|_user| async move {
+            WidgetPayload::Kpi(KpiPayload {
+                value:     "42".to_string(),
+                unit:      Some("posts".to_string()),
+                delta:     Some(12.5),
+                sparkline: None,
+            })
+        }),
+    })
+```
+
+**Widget kinds and their payload shapes:**
+
+| Kind | Payload |
 |---|---|
-| Dashboard widgets (KPI cards, charts, activity feed) | 3 |
-| File/media previews (image lightbox, PDF viewer, CSV table, code viewer) | 4 |
-| Command palette (`⌘K`) | 4 |
-| Per-user theme preference (server-side, `admin_user_prefs` table) | 4 |
-| Audit log (`admin_audit_log` table, per-object history) | 4 |
+| `Kpi` | `{ value, unit?, delta?, sparkline?: [f64] }` |
+| `Line` | `{ series: [{ name, points: [{x, y}] }], x_type }` |
+| `Bar` | same shape as Line |
+| `Table` | `{ columns: [{key, label}], rows: [{}] }` |
+| `Feed` | `{ items: [{ actor, verb, object, object_link?, at }] }` |
 
-At v0.0.1 the light/dark theme toggle persists per-browser via `localStorage`. Phase 4 moves this to a server-side `admin_user_prefs` table.
+**Dashboard API endpoints:**
 
-For the design spec see `docs/admin-backend/DESIGN.md`, `docs/admin-backend/backend-prd.md`, and `docs/admin-backend/design-prd.md`.
+| Endpoint | Purpose |
+|---|---|
+| `GET /admin/api/dashboard/catalog` | Widgets the user may add (key, title, kind, default_span) |
+| `GET /admin/api/dashboard/layout` | User's saved layout JSON (or default) |
+| `PUT /admin/api/dashboard/layout` | Save user's layout |
+| `GET /admin/api/dashboard/widgets/{key}/data` | Compute and return one widget's payload |
+
+The data endpoint returns JSON for API consumers and an HTML fragment for HTMX requests (swap target is the widget's container div).
+
+**Two built-in widgets** seed the catalog on every boot:
+
+- `umbra_total_models` (KPI) - count of all registered models.
+- `umbra_recent_users` (Feed) - last 5 `auth_user` signups.
+
+### File preview infrastructure
+
+A `preview_kind` is resolved server-side from the MIME type and file extension so the front-end never has to sniff bytes:
+
+```rust
+use umbra_admin::{file_descriptor, resolve_preview_kind};
+
+// Build a file descriptor JSON value for a given file.
+let desc = file_descriptor(
+    "report.pdf",
+    184320,
+    "application/pdf",
+    "/admin/api/files/tok123",
+    None, // thumbnail_url
+);
+// desc["preview_kind"] == "pdf"
+```
+
+| `preview_kind` | Resolved by |
+|---|---|
+| `image` | `image/*` MIME |
+| `pdf` | `application/pdf` MIME |
+| `video` | `video/*` MIME |
+| `audio` | `audio/*` MIME |
+| `code` | File extension: `.rs`, `.py`, `.js`, `.ts`, `.json`, `.toml`, `.yaml`, `.html`, `.css`, `.sql`, `.sh`, `.md`, `.mdx`, and more |
+| `text` | Extension `.txt`, `.log` or `text/plain` MIME |
+| `download` | Everything else (zip, tar, binaries, unknown) |
+
+Preview macros live in `templates/_macros/previews/`: `image.html` (thumbnail + lightbox), `pdf.html` (`<embed>`), `video_audio.html` (HTML5 players), `code_text.html` (syntax highlighted `<pre>`), `download.html` (download card with type glyph).
+
+<Callout type="info" title="ORM File field type is deferred">
+A first-class `File` / `Image` field type in the umbra ORM is scheduled for a future milestone. For now, store file paths in `Text` columns and supply a custom preview override per model if needed. The preview infrastructure (descriptor format, MIME resolution, preview macros) is fully wired.
+</Callout>
+
+### Command palette (`⌘K`)
+
+Pressing `⌘K` (macOS) or `Ctrl-K` (all platforms) opens a centered modal palette. The palette is also triggered by clicking the search bar in the topbar.
+
+Features:
+- Jump targets: every registered model in the sidebar (with its Lucide icon).
+- Fixed commands: Toggle theme, Logout.
+- Client-side search filtering (no server round-trip per keystroke).
+- Keyboard navigation: arrow keys move between items; Enter activates; Escape closes.
+
+The palette fragment is HTMX-loaded from:
+
+```
+GET /admin/api/palette
+→ HTML fragment injected into #umbra-palette-slot
+```
+
+The palette slot (`<div id="umbra-palette-slot">`) lives in `wrapper.html` so it is available on every authenticated admin page.
+
+---
+
+## Deferred admin features
+
+| Feature | Status |
+|---|---|
+| Per-user drag-resize dashboard layout editor | Deferred - data layer + endpoints are wired; a future JS drag-drop UI just calls `PUT /admin/api/dashboard/layout` |
+| Actual file serving (`GET /admin/api/files/{token}`) | Deferred - HMAC-signed token + streaming + range headers land when the ORM `File` field type lands |
+| Thumbnail generation | Deferred (same milestone as file serving) |
+| Postgres-only field types | Not supported in the SQLite admin |
+| Per-row permissions | Binary is-staff gating only |
+
+For the design spec see `docs/admin-backend/backend-prd.md` and `docs/admin-backend/design-prd.md`.
 
 ## What is NOT in v1
 

@@ -1,0 +1,38 @@
+{#
+  pdf.html
+  ========
+  PDF preview macro — embedded <embed> viewer + download button.
+
+  Usage:
+    {% from "admin/_macros/previews/pdf.html" import pdf_preview %}
+    {{ pdf_preview(descriptor) }}
+#}
+
+{% macro pdf_preview(descriptor) %}
+<div class="pdf-preview flex flex-col h-full">
+  <!-- Header -->
+  <div class="flex items-center justify-between px-md py-sm border-b border-outline-variant flex-shrink-0 bg-surface-container-low">
+    <div class="flex items-center gap-sm">
+      <i data-lucide="file-text" class="w-4 h-4 text-error"></i>
+      <span class="text-body-sm text-on-surface font-medium truncate max-w-[200px]">{{ descriptor.filename }}</span>
+    </div>
+    <div class="flex items-center gap-xs">
+      <span class="text-label-sm text-outline">PDF</span>
+      <a href="{{ descriptor.url }}" download="{{ descriptor.filename }}"
+         class="p-xs rounded-lg hover:bg-surface-container-high transition-colors text-outline hover:text-on-surface"
+         title="Download">
+        <i data-lucide="download" class="w-4 h-4"></i>
+      </a>
+    </div>
+  </div>
+  <!-- Embed -->
+  <div class="flex-1 overflow-hidden">
+    <embed
+      src="{{ descriptor.url }}"
+      type="application/pdf"
+      class="w-full h-full border-0"
+      title="{{ descriptor.filename }}"
+    />
+  </div>
+</div>
+{% endmacro %}

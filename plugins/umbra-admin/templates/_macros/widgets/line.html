@@ -1,0 +1,65 @@
+{#
+  line.html
+  =========
+  Line chart widget renderer — SVG polyline, no external deps.
+  Expects payload: { series: [{name, points: [{x, y}]}], x_type }
+  Renders the first series only for the minimal v1 shape.
+#}
+
+{% macro line_widget(title, payload) %}
+<div class="line-widget h-full flex flex-col p-md">
+  <p class="text-label-sm text-outline uppercase tracking-wider mb-sm flex-shrink-0">{{ title }}</p>
+  {% if payload.series and payload.series | length > 0 %}
+    {%- set series = payload.series[0] -%}
+    {%- set points = series.points -%}
+    {%- set n = points | length -%}
+    {% if n > 1 %}
+    {%- set max_y = points | map(attribute="y") | max -%}
+    {%- set min_y = points | map(attribute="y") | min -%}
+    {%- set range = (max_y - min_y) | float -%}
+    {%- set range = range if range > 0 else 1.0 -%}
+    {%- set chart_w = 100 -%}
+    {%- set chart_h = 64 -%}
+    <div class="flex-1 overflow-hidden">
+      <svg viewBox="0 0 {{ chart_w }} {{ chart_h }}" xmlns="http://www.w3.org/2000/svg"
+           class="w-full h-full" preserveAspectRatio="none">
+        {# Area fill #}
+        <defs>
+          <linearGradient id="line-grad-{{ title | replace(' ', '-') | lower }}" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="var(--primary)" stop-opacity="0.18"/>
+            <stop offset="100%" stop-color="var(--primary)" stop-opacity="0"/>
+          </linearGradient>
+        </defs>
+        <polygon
+          fill="url(#line-grad-{{ title | replace(' ', '-') | lower }})"
+          points="
+          0,{{ chart_h }}
+          {% for pt in points %}
+            {{ (loop.index0 / (n - 1) * chart_w) | round(1) }},{{ ((max_y - pt.y) / range * (chart_h - 6) + 3) | round(1) }}
+          {% endfor %}
+          {{ chart_w }},{{ chart_h }}
+          "
+        />
+        <polyline
+          fill="none"
+          stroke="var(--primary)"
+          stroke-width="1.5"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          points="
+          {%- for pt in points -%}
+            {{ (loop.index0 / (n - 1) * chart_w) | round(1) }},{{ ((max_y - pt.y) / range * (chart_h - 6) + 3) | round(1) }}
+            {{ " " if not loop.last else "" }}
+          {%- endfor -%}
+          "
+        />
+      </svg>
+    </div>
+    {% else %}
+    <p class="text-label-sm text-outline italic mt-auto">Not enough data</p>
+    {% endif %}
+  {% else %}
+  <p class="text-label-sm text-outline italic mt-auto">No data</p>
+  {% endif %}
+</div>
+{% endmacro %}

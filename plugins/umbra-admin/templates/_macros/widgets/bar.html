@@ -1,0 +1,52 @@
+{#
+  bar.html
+  ========
+  Bar chart widget renderer — SVG rects, no external deps.
+  Expects payload: { series: [{name, points: [{x, y}]}], x_type }
+  Renders the first series only for the minimal v1 shape.
+#}
+
+{% macro bar_widget(title, payload) %}
+<div class="bar-widget h-full flex flex-col p-md">
+  <p class="text-label-sm text-outline uppercase tracking-wider mb-sm flex-shrink-0">{{ title }}</p>
+  {% if payload.series and payload.series | length > 0 %}
+    {%- set series = payload.series[0] -%}
+    {%- set points = series.points -%}
+    {%- set n = points | length -%}
+    {% if n > 0 %}
+    {%- set max_y = points | map(attribute="y") | max -%}
+    {%- set max_y = max_y if max_y > 0 else 1.0 -%}
+    {%- set bar_w = 100 / n -%}
+    {%- set chart_h = 80 -%}
+    <div class="flex-1 overflow-hidden">
+      <svg viewBox="0 0 100 {{ chart_h }}" xmlns="http://www.w3.org/2000/svg"
+           class="w-full h-full" preserveAspectRatio="none">
+        {% for pt in points %}
+        {%- set bar_h = (pt.y / max_y * (chart_h - 8)) | round(1) -%}
+        {%- set x_pos = (loop.index0 * bar_w + bar_w * 0.1) | round(2) -%}
+        {%- set bar_width = (bar_w * 0.8) | round(2) -%}
+        <rect
+          x="{{ x_pos }}"
+          y="{{ (chart_h - bar_h - 2) | round(1) }}"
+          width="{{ bar_width }}"
+          height="{{ bar_h }}"
+          rx="1"
+          fill="var(--primary)"
+          opacity="0.8"
+        />
+        {% endfor %}
+      </svg>
+    </div>
+    <div class="flex justify-between mt-xs flex-shrink-0">
+      {% for pt in points %}
+      <span class="text-label-sm text-outline truncate" style="max-width: {{ (100 / n) | round(0) }}%">{{ pt.x }}</span>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="text-label-sm text-outline italic mt-auto">No data</p>
+    {% endif %}
+  {% else %}
+  <p class="text-label-sm text-outline italic mt-auto">No data</p>
+  {% endif %}
+</div>
+{% endmacro %}
