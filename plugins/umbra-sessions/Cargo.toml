@@ -23,7 +23,24 @@ uuid = { version = "1", features = ["serde", "v4", "v7"] }
 # The raw token only ever exists in the cookie and in the response
 # from `create_session`; the column holds only the digest.
 sha2 = "0.10"
+# axum-core has the FromRequestParts trait we need for the User /
+# OptionalUser extractors. The full axum facade comes through
+# `umbra::web::*` already; we depend on axum-core directly so the
+# trait impl writes cleanly without a transitive umbra-rest hop.
+axum-core = "0.5"
+async-trait = "0.1"
+# `http` for the `Parts` type axum-core's FromRequestParts uses.
+http = "1"
+# `tracing::warn!` in the login() helper when last_login update
+# fails (the login itself still succeeded; we just log the secondary
+# failure).
+tracing = "0.1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync"] }
 tempfile = "3"
+# The extractor + messages tests build synthetic axum requests via
+# the `http` crate's Request builder and exercise the `FromRequestParts`
+# impl directly (no full router needed).
+axum-core = "0.5"
+http = "1"

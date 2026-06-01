@@ -348,3 +348,367 @@ pub async fn set_data<T: Serialize>(
         .await?;
     Ok(())
 }
+
+// =========================================================================
+// Login / logout bundles. The three-call dance — authenticate ->
+// create_session -> set_cookie_header — collapsed into one function so
+// route handlers don't have to reimplement it.
+// =========================================================================
+
+/// Establish a session for the given authenticated user and set the
+/// `Set-Cookie` header on the outgoing response. Updates
+/// `last_login` on the user row as a side effect.
+///
+/// `response_headers` is mutated in place — pass the headers from an
+/// already-constructed response (e.g. `redirect.headers_mut()`).
+/// `user` should come from `umbra_auth::authenticate(...)`; this
+/// helper does not re-verify credentials.
+///
+/// Returns the raw session token so the caller can log it or stash
+/// it in a test fixture. In production code you can ignore the
+/// returned value.
+///
+/// ```ignore
+/// async fn login_handler(Form(form): Form<LoginForm>)
+///     -> Result<Response, StatusCode>
+/// {
+///     let user = umbra_auth::authenticate(&form.username, &form.password)
+///         .await
+///         .map_err(|_| StatusCode::UNAUTHORIZED)?;
+///     let mut response = Redirect::to("/").into_response();
+///     umbra_sessions::login(response.headers_mut(), &user)
+///         .await
+///         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+///     Ok(response)
+/// }
+/// ```
+pub async fn login(
+    response_headers: &mut HeaderMap,
+    user: &AuthUser,
+) -> Result<String, SessionError> {
+    let token = create_session(user.id, None).await?;
+    let cookie = set_cookie_header(&token, None);
+    response_headers.insert(
+        header::SET_COOKIE,
+        cookie.parse().expect("cookie value parses"),
+    );
+    // Update last_login. Best-effort — a failure here doesn't
+    // invalidate the login (the session was created and the cookie
+    // was set), so we swallow the error after logging.
+    let pool = umbra::db::pool();
+    if let Err(e) = sqlx::query("UPDATE auth_user SET last_login = ? WHERE id = ?")
+        .bind(chrono::Utc::now())
+        .bind(user.id)
+        .execute(&pool)
+        .await
+    {
+        tracing::warn!(
+            error = %e,
+            user_id = user.id,
+            "umbra-sessions::login: failed to update last_login (session still active)",
+        );
+    }
+    Ok(token)
+}
+
+/// End a session. Reads the session token from the request headers,
+/// destroys the row, and sets a `Set-Cookie` header on the response
+/// that immediately expires the client-side cookie.
+///
+/// Both halves are safe to call without a current session — if the
+/// user isn't logged in, the destroy is a no-op and the cookie
+/// expiration still lands harmlessly.
+///
+/// ```ignore
+/// async fn logout_handler(headers: HeaderMap) -> Response {
+///     let mut response = Redirect::to("/").into_response();
+///     umbra_sessions::logout(&headers, response.headers_mut())
+///         .await
+///         .ok();
+///     response
+/// }
+/// ```
+pub async fn logout(
+    request_headers: &HeaderMap,
+    response_headers: &mut HeaderMap,
+) -> Result<(), SessionError> {
+    if let Some(token) = cookie_from_headers(request_headers) {
+        destroy_session(&token).await?;
+    }
+    response_headers.insert(
+        header::SET_COOKIE,
+        clear_cookie_header().parse().expect("cookie value parses"),
+    );
+    Ok(())
+}
+
+// =========================================================================
+// Extractors — `User` and `OptionalUser` for `request.user` ergonomics.
+// =========================================================================
+
+/// axum extractors that resolve the current session cookie into an
+/// `AuthUser`.
+///
+/// - [`User`]: required. Returns 401 if the request is anonymous —
+///   the route literally cannot run without a logged-in user.
+/// - [`OptionalUser`]: optional. Wraps `Option<AuthUser>` — `None`
+///   for anonymous; `Some` for authenticated. The route runs either
+///   way and decides what to do.
+///
+/// Both implementations share one helper. The handler signature
+/// becomes the request.user-like ergonomics you'd see in Django:
+///
+/// ```ignore
+/// async fn dashboard(User(user): User) -> Html<String> {
+///     Html(format!("Welcome, {}!", user.username))
+/// }
+///
+/// async fn home(OptionalUser(maybe): OptionalUser) -> Html<String> {
+///     match maybe {
+///         Some(u) => Html(format!("Hi, {}", u.username)),
+///         None    => Html("<a href=\"/login\">Log in</a>".into()),
+///     }
+/// }
+/// ```
+pub mod extractors {
+    use axum_core::extract::FromRequestParts;
+    use http::StatusCode;
+    use http::request::Parts;
+    use umbra::web::HeaderMap;
+    use umbra_auth::AuthUser;
+
+    /// Required-user extractor. 401 on anonymous requests.
+    #[derive(Debug, Clone)]
+    pub struct User(pub AuthUser);
+
+    /// Optional-user extractor. Anonymous requests get `None`.
+    #[derive(Debug, Clone)]
+    pub struct OptionalUser(pub Option<AuthUser>);
+
+    /// Helper that does the actual cookie-lookup. Both extractors
+    /// route through this so the cookie-name / session-resolution
+    /// path stays one definition.
+    async fn resolve(headers: &HeaderMap) -> Option<AuthUser> {
+        super::current_user(headers).await.ok().flatten()
+    }
+
+    impl<S> FromRequestParts<S> for User
+    where
+        S: Send + Sync,
+    {
+        type Rejection = (StatusCode, &'static str);
+
+        async fn from_request_parts(
+            parts: &mut Parts,
+            _state: &S,
+        ) -> Result<Self, Self::Rejection> {
+            match resolve(&parts.headers).await {
+                Some(u) => Ok(User(u)),
+                None => Err((StatusCode::UNAUTHORIZED, "authentication required")),
+            }
+        }
+    }
+
+    impl<S> FromRequestParts<S> for OptionalUser
+    where
+        S: Send + Sync,
+    {
+        type Rejection = std::convert::Infallible;
+
+        async fn from_request_parts(
+            parts: &mut Parts,
+            _state: &S,
+        ) -> Result<Self, Self::Rejection> {
+            Ok(OptionalUser(resolve(&parts.headers).await))
+        }
+    }
+}
+
+pub use extractors::{OptionalUser, User};
+
+// =========================================================================
+// Messages — Django's `contrib.messages` shape.
+// =========================================================================
+
+/// Flash messages that survive one redirect cycle, stored under a
+/// reserved key in the session's `data` map. Any plugin or app can
+/// reach for `Messages` from a handler:
+///
+/// ```ignore
+/// async fn save_post(messages: Messages, Form(form): Form<PostForm>) -> Response {
+///     Post::objects().create(...).await?;
+///     messages.success("Post saved.").await;
+///     Redirect::to("/posts").into_response()
+/// }
+///
+/// async fn list_posts(messages: Messages) -> Html<String> {
+///     let flash = messages.drain().await;  // pulls all + clears
+///     render("list.html", &context!(messages => flash, ...))
+/// }
+/// ```
+///
+/// Requires a session cookie — anonymous requests silently no-op
+/// (the message can't outlive the request without somewhere to
+/// store it). Apps that want anonymous flash messages create an
+/// anonymous session on first visit.
+pub mod messages {
+    use axum_core::extract::FromRequestParts;
+    use http::request::Parts;
+    use serde::{Deserialize, Serialize};
+
+    /// The reserved key inside `session.data` where the flash queue
+    /// lives. Don't write to this key directly via `set_data` — use
+    /// the `Messages` API.
+    pub const SESSION_KEY: &str = "_umbra_messages";
+
+    /// Severity / intent of a flash message. Matches Django's
+    /// constants so existing templates port over.
+    #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+    #[serde(rename_all = "lowercase")]
+    pub enum MessageLevel {
+        Debug,
+        Info,
+        Success,
+        Warning,
+        Error,
+    }
+
+    impl MessageLevel {
+        /// The CSS-class-friendly lowercase string. Templates can do
+        /// `<div class="alert alert-{{ msg.level }}">` directly.
+        pub fn as_str(self) -> &'static str {
+            match self {
+                Self::Debug => "debug",
+                Self::Info => "info",
+                Self::Success => "success",
+                Self::Warning => "warning",
+                Self::Error => "error",
+            }
+        }
+    }
+
+    /// One flash message. Serialised into the session's `data` JSON.
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct Message {
+        pub level: MessageLevel,
+        pub text: String,
+    }
+
+    /// Handle for adding and draining flash messages. Extracted from
+    /// the request — see the module-level example.
+    ///
+    /// The handle captures the session token at extractor time. All
+    /// `add` / `success` / etc. calls write to that session;
+    /// `drain` reads + clears. No background flush, no on-drop
+    /// magic — what you call is what hits the DB.
+    #[derive(Debug, Clone)]
+    pub struct Messages {
+        token: Option<String>,
+    }
+
+    impl Messages {
+        /// Construct manually. Use the extractor in real code;
+        /// this constructor is public for tests.
+        pub fn new(token: Option<String>) -> Self {
+            Self { token }
+        }
+
+        /// True when there's a session backing this handle. Useful
+        /// for templates that want to fall back to a different UX
+        /// when flash storage isn't available.
+        pub fn is_active(&self) -> bool {
+            self.token.is_some()
+        }
+
+        /// Append a flash message. Silently no-ops if there's no
+        /// session backing this request, or if the session was
+        /// destroyed concurrently.
+        pub async fn add(&self, level: MessageLevel, text: impl Into<String>) {
+            let Some(token) = self.token.as_deref() else {
+                return;
+            };
+            let mut current = self.read(token).await.unwrap_or_default();
+            current.push(Message {
+                level,
+                text: text.into(),
+            });
+            let _ = super::set_data(token, SESSION_KEY, &current).await;
+        }
+
+        /// Convenience for `add(Success, text)`.
+        pub async fn success(&self, text: impl Into<String>) {
+            self.add(MessageLevel::Success, text).await;
+        }
+
+        /// Convenience for `add(Info, text)`.
+        pub async fn info(&self, text: impl Into<String>) {
+            self.add(MessageLevel::Info, text).await;
+        }
+
+        /// Convenience for `add(Warning, text)`.
+        pub async fn warning(&self, text: impl Into<String>) {
+            self.add(MessageLevel::Warning, text).await;
+        }
+
+        /// Convenience for `add(Error, text)`.
+        pub async fn error(&self, text: impl Into<String>) {
+            self.add(MessageLevel::Error, text).await;
+        }
+
+        /// Convenience for `add(Debug, text)`.
+        pub async fn debug(&self, text: impl Into<String>) {
+            self.add(MessageLevel::Debug, text).await;
+        }
+
+        /// Read every pending message, then clear them from the
+        /// session. The classic "show once, then forget" shape.
+        /// Returns an empty Vec when there's no session backing
+        /// this handle.
+        pub async fn drain(&self) -> Vec<Message> {
+            let Some(token) = self.token.as_deref() else {
+                return Vec::new();
+            };
+            let current = self.read(token).await.unwrap_or_default();
+            let _ = super::set_data(token, SESSION_KEY, &Vec::<Message>::new()).await;
+            current
+        }
+
+        /// Read without clearing. Useful when a partial pipeline
+        /// (e.g. a template fragment) wants to inspect but not
+        /// consume the queue.
+        pub async fn peek(&self) -> Vec<Message> {
+            let Some(token) = self.token.as_deref() else {
+                return Vec::new();
+            };
+            self.read(token).await.unwrap_or_default()
+        }
+
+        async fn read(&self, token: &str) -> Result<Vec<Message>, super::SessionError> {
+            let session = match super::read_session(token).await? {
+                Some(s) => s,
+                None => return Ok(Vec::new()),
+            };
+            match super::get_data::<Vec<Message>>(&session, SESSION_KEY)? {
+                Some(v) => Ok(v),
+                None => Ok(Vec::new()),
+            }
+        }
+    }
+
+    impl<S> FromRequestParts<S> for Messages
+    where
+        S: Send + Sync,
+    {
+        type Rejection = std::convert::Infallible;
+
+        async fn from_request_parts(
+            parts: &mut Parts,
+            _state: &S,
+        ) -> Result<Self, Self::Rejection> {
+            let token = super::cookie_from_headers(&parts.headers);
+            Ok(Self::new(token))
+        }
+    }
+}
+
+pub use messages::{Message, MessageLevel, Messages};

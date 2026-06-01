@@ -263,3 +263,244 @@ async fn data_round_trip_through_json_column() {
 fn _unused_pathbuf_marker() -> Option<PathBuf> {
     None
 }
+
+// =====================================================================
+// login / logout helpers — the three-call dance, bundled.
+// =====================================================================
+
+#[tokio::test]
+async fn login_creates_session_sets_cookie_and_bumps_last_login() {
+    let user_id = boot().await;
+    // Fetch the user via the auth helper so the row is fresh.
+    let pool = umbra::db::pool();
+    let user: AuthUser = sqlx::query_as("SELECT * FROM auth_user WHERE id = ?")
+        .bind(user_id)
+        .fetch_one(&pool)
+        .await
+        .expect("fetch user");
+    let before_login = user.last_login;
+
+    let mut response_headers = HeaderMap::new();
+    let token = umbra_sessions::login(&mut response_headers, &user)
+        .await
+        .expect("login ok");
+
+    // The token is a real UUID-shape string.
+    assert!(!token.is_empty());
+    // Set-Cookie header was added with the session cookie.
+    let set_cookie = response_headers
+        .get(header::SET_COOKIE)
+        .expect("Set-Cookie header set")
+        .to_str()
+        .unwrap();
+    assert!(set_cookie.starts_with(&format!("{COOKIE_NAME}=")));
+    assert!(set_cookie.contains("HttpOnly"));
+    assert!(set_cookie.contains("Secure"));
+
+    // The session row is readable via the returned token.
+    let session = read_session(&token).await.expect("read").expect("present");
+    assert_eq!(session.user_id, Some(user_id));
+
+    // last_login was updated.
+    let user_after: AuthUser = sqlx::query_as("SELECT * FROM auth_user WHERE id = ?")
+        .bind(user_id)
+        .fetch_one(&pool)
+        .await
+        .expect("fetch user after login");
+    assert!(
+        user_after.last_login.is_some(),
+        "login should populate last_login"
+    );
+    if let Some(before) = before_login {
+        assert!(user_after.last_login.unwrap() > before, "should advance");
+    }
+}
+
+#[tokio::test]
+async fn logout_destroys_session_and_clears_cookie() {
+    let user_id = boot().await;
+    // First log in.
+    let user: AuthUser = sqlx::query_as("SELECT * FROM auth_user WHERE id = ?")
+        .bind(user_id)
+        .fetch_one(&umbra::db::pool())
+        .await
+        .unwrap();
+    let mut login_headers = HeaderMap::new();
+    let token = umbra_sessions::login(&mut login_headers, &user)
+        .await
+        .expect("login");
+
+    // Simulate the browser sending the cookie back.
+    let mut request_headers = HeaderMap::new();
+    request_headers.insert(
+        header::COOKIE,
+        format!("{COOKIE_NAME}={token}").parse().unwrap(),
+    );
+
+    let mut response_headers = HeaderMap::new();
+    umbra_sessions::logout(&request_headers, &mut response_headers)
+        .await
+        .expect("logout ok");
+
+    // The session row is gone.
+    assert!(read_session(&token).await.unwrap().is_none());
+
+    // The response carries a Max-Age=0 cookie that expires the browser-side value.
+    let cleared = response_headers
+        .get(header::SET_COOKIE)
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert!(cleared.contains("Max-Age=0"));
+}
+
+#[tokio::test]
+async fn logout_is_safe_without_a_cookie() {
+    let _user_id = boot().await;
+    let request_headers = HeaderMap::new();
+    let mut response_headers = HeaderMap::new();
+    umbra_sessions::logout(&request_headers, &mut response_headers)
+        .await
+        .expect("logout without cookie should be a no-op-with-cookie-clear");
+    // The clear-cookie header still gets set (browser may have a stale value).
+    assert!(
+        response_headers.contains_key(header::SET_COOKIE),
+        "logout always clears the client-side cookie",
+    );
+}
+
+// =====================================================================
+// User / OptionalUser extractors via axum FromRequestParts.
+// =====================================================================
+
+#[tokio::test]
+async fn optional_user_returns_some_when_session_cookie_resolves() {
+    use axum_core::extract::FromRequestParts;
+    let user_id = boot().await;
+    let user: AuthUser = sqlx::query_as("SELECT * FROM auth_user WHERE id = ?")
+        .bind(user_id)
+        .fetch_one(&umbra::db::pool())
+        .await
+        .unwrap();
+    let mut login_headers = HeaderMap::new();
+    let token = umbra_sessions::login(&mut login_headers, &user)
+        .await
+        .unwrap();
+
+    let req = http::Request::builder()
+        .uri("/")
+        .header(header::COOKIE, format!("{COOKIE_NAME}={token}"))
+        .body(())
+        .unwrap();
+    let (mut parts, _) = req.into_parts();
+    let umbra_sessions::OptionalUser(opt) =
+        umbra_sessions::OptionalUser::from_request_parts(&mut parts, &())
+            .await
+            .unwrap();
+    assert!(opt.is_some(), "session cookie should resolve to a user");
+    assert_eq!(opt.unwrap().id, user_id);
+}
+
+#[tokio::test]
+async fn optional_user_returns_none_for_anonymous_request() {
+    use axum_core::extract::FromRequestParts;
+    let _user_id = boot().await;
+    let req = http::Request::builder().uri("/").body(()).unwrap();
+    let (mut parts, _) = req.into_parts();
+    let umbra_sessions::OptionalUser(opt) =
+        umbra_sessions::OptionalUser::from_request_parts(&mut parts, &())
+            .await
+            .unwrap();
+    assert!(opt.is_none(), "anonymous → None, not 401");
+}
+
+#[tokio::test]
+async fn user_required_extractor_returns_401_for_anonymous() {
+    use axum_core::extract::FromRequestParts;
+    let _user_id = boot().await;
+    let req = http::Request::builder().uri("/").body(()).unwrap();
+    let (mut parts, _) = req.into_parts();
+    let err = umbra_sessions::User::from_request_parts(&mut parts, &())
+        .await
+        .expect_err("anonymous should 401");
+    assert_eq!(err.0, http::StatusCode::UNAUTHORIZED);
+}
+
+// =====================================================================
+// Messages framework — flash messages over the session data store.
+// =====================================================================
+
+#[tokio::test]
+async fn messages_add_and_drain_round_trip() {
+    use umbra_sessions::{MessageLevel, Messages};
+    let user_id = boot().await;
+    let user: AuthUser = sqlx::query_as("SELECT * FROM auth_user WHERE id = ?")
+        .bind(user_id)
+        .fetch_one(&umbra::db::pool())
+        .await
+        .unwrap();
+    let mut login_headers = HeaderMap::new();
+    let token = umbra_sessions::login(&mut login_headers, &user)
+        .await
+        .unwrap();
+
+    let msgs = Messages::new(Some(token.clone()));
+    assert!(msgs.is_active());
+    msgs.success("Post saved!").await;
+    msgs.warning("Quota at 80%").await;
+
+    // peek doesn't clear.
+    let peeked = msgs.peek().await;
+    assert_eq!(peeked.len(), 2);
+    assert_eq!(peeked[0].level, MessageLevel::Success);
+    assert_eq!(peeked[1].level, MessageLevel::Warning);
+
+    // drain returns them then empties the queue.
+    let drained = msgs.drain().await;
+    assert_eq!(drained.len(), 2);
+    assert_eq!(drained[0].text, "Post saved!");
+    assert!(msgs.drain().await.is_empty(), "second drain is empty");
+}
+
+#[tokio::test]
+async fn messages_extractor_returns_handle_when_session_cookie_present() {
+    use axum_core::extract::FromRequestParts;
+    use umbra_sessions::Messages;
+    let user_id = boot().await;
+    let user: AuthUser = sqlx::query_as("SELECT * FROM auth_user WHERE id = ?")
+        .bind(user_id)
+        .fetch_one(&umbra::db::pool())
+        .await
+        .unwrap();
+    let mut login_headers = HeaderMap::new();
+    let token = umbra_sessions::login(&mut login_headers, &user)
+        .await
+        .unwrap();
+
+    let req = http::Request::builder()
+        .uri("/")
+        .header(header::COOKIE, format!("{COOKIE_NAME}={token}"))
+        .body(())
+        .unwrap();
+    let (mut parts, _) = req.into_parts();
+    let msgs = Messages::from_request_parts(&mut parts, &()).await.unwrap();
+    assert!(msgs.is_active());
+
+    msgs.info("Welcome back").await;
+    let drained = msgs.drain().await;
+    assert_eq!(drained.len(), 1);
+    assert_eq!(drained[0].text, "Welcome back");
+}
+
+#[tokio::test]
+async fn messages_silently_noops_without_a_session() {
+    use umbra_sessions::Messages;
+    let _user_id = boot().await;
+    let msgs = Messages::new(None);
+    assert!(!msgs.is_active());
+    // These all silently no-op.
+    msgs.success("vanishing").await;
+    msgs.error("also vanishing").await;
+    // drain returns empty.
+    assert!(msgs.drain().await.is_empty());
+}

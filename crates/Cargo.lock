@@ -2684,13 +2684,17 @@ dependencies = [
 name = "umbra-sessions"
 version = "0.0.1"
 dependencies = [
+ "async-trait",
+ "axum-core",
  "chrono",
+ "http",
  "serde",
  "serde_json",
  "sha2",
  "sqlx",
  "tempfile",
  "tokio",
+ "tracing",
  "umbra",
  "umbra-auth",
  "uuid",
