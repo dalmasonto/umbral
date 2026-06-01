@@ -1,0 +1,392 @@
+---
+title: Batteries included
+description: Everything wired — ORM, REST + OpenAPI, admin, auth, sessions, email, tasks. The kitchen-sink reference.
+sidebar_position: 2
+icon: package-2
+tags: [examples, full-stack]
+---
+
+Every built-in plugin wired into one app. Use this as the reference for "what does a complete umbra app look like" and trim down from there. The point is to show every surface in one place; a real app uses some subset.
+
+## Project layout
+
+```
+full-app/
+  Cargo.toml
+  src/
+    main.rs
+    blog.rs           # plugin module: model + routes + REST customisation
+  templates/
+    base.html
+    home.html
+    404.html
+    500.html
+```
+
+## `Cargo.toml`
+
+```toml
+[package]
+name = "full-app"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+umbra = "0.0.1"
+umbra-auth = "0.0.1"
+umbra-sessions = "0.0.1"
+umbra-admin = "0.0.1"
+umbra-rest = "0.0.1"
+umbra-openapi = "0.0.1"
+umbra-tasks = "0.0.1"
+umbra-email = "0.0.1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio"] }
+chrono = { version = "0.4", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+http = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+```
+
+## `src/blog.rs` — the app's domain plugin
+
+```rust
+//! The blog plugin — owns the Post model, mounts /blog routes,
+//! bundles REST customisation (hide/transform/computed) and a
+//! DRF-style @action endpoint for publishing.
+
+use http::Method;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Map, Value};
+
+use umbra::plugin::{AppContext, Plugin, PluginError};
+use umbra::web::{Html, Json, Path, Router, StatusCode, get};
+
+use umbra_rest::{ActionError, ActionScope, ResourceConfig};
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, umbra::orm::Model)]
+pub struct Post {
+    pub id: i64,
+    pub title: String,
+    pub body: String,
+    pub author_email: String,
+    pub published: bool,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+async fn list_posts() -> Result<Html<String>, (StatusCode, String)> {
+    let posts = Post::objects()
+        .filter(post::PUBLISHED.eq(true))
+        .order_by(post::CREATED_AT.desc())
+        .fetch()
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let body = umbra::templates::render(
+        "home.html",
+        &umbra::templates::context!(posts => posts),
+    )
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Html(body))
+}
+
+async fn post_detail(Path(id): Path<i64>) -> Result<Json<Post>, (StatusCode, String)> {
+    match Post::objects().get(post::ID.eq(id)).await {
+        Ok(p) => Ok(Json(p)),
+        Err(umbra::orm::GetError::NotFound) => Err((StatusCode::NOT_FOUND, "not found".into())),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
+    }
+}
+
+/// Per-table REST config — bundled with the plugin so main.rs doesn't
+/// thread customisation per-table.
+pub fn rest_resource() -> ResourceConfig {
+    ResourceConfig::new("post")
+        // Hide raw author email; expose masked form.
+        .transform("author_email", |v| {
+            let s = v.as_str().unwrap_or("");
+            match s.split_once('@') {
+                Some((_, d)) => json!(format!("***@{d}")),
+                None => v.clone(),
+            }
+        })
+        // Add a `summary` field derived from the body.
+        .computed("summary", |row: &Map<String, Value>| {
+            let body = row.get("body").and_then(|v| v.as_str()).unwrap_or("");
+            json!(body.chars().take(120).collect::<String>())
+        })
+        // Public read, staff write.
+        .permission(umbra_rest::OrPermission::new(vec![
+            Box::new(umbra_rest::ReadOnly),
+            Box::new(umbra_rest::IsStaff),
+        ]))
+        // DRF @action: POST /api/post/{id}/publish/
+        .action(
+            "publish",
+            Method::POST,
+            ActionScope::Detail,
+            |ctx| async move {
+                let id: i64 = ctx
+                    .pk
+                    .as_deref()
+                    .unwrap_or_default()
+                    .parse()
+                    .map_err(|_| ActionError::BadInput("bad id".into()))?;
+                let mut patch = serde_json::Map::new();
+                patch.insert("published".into(), json!(true));
+                let affected = Post::objects()
+                    .filter(post::ID.eq(id))
+                    .update_values(patch)
+                    .await
+                    .map_err(ActionError::internal)?;
+                if affected == 0 {
+                    return Err(ActionError::NotFound(format!("no post {id}")));
+                }
+                Ok(json!({ "id": id, "published": true }))
+            },
+        )
+}
+
+pub struct BlogPlugin;
+
+impl Plugin for BlogPlugin {
+    fn name(&self) -> &'static str {
+        "blog"
+    }
+
+    fn models(&self) -> Vec<umbra::migrate::ModelMeta> {
+        vec![umbra::migrate::ModelMeta::for_::<Post>()]
+    }
+
+    fn routes(&self) -> Router {
+        Router::new()
+            .route("/", get(list_posts))
+            .route("/posts/{id}", get(post_detail))
+    }
+
+    fn on_ready(&self, _ctx: &AppContext) -> Result<(), PluginError> {
+        tracing::info!(plugin = "blog", "ready");
+        Ok(())
+    }
+}
+```
+
+## `src/main.rs`
+
+```rust
+mod blog;
+
+use std::sync::Arc;
+
+use umbra::prelude::*;
+use umbra::web::{Form, Html, IntoResponse, Redirect, StatusCode};
+
+use umbra_rest::FnAuthentication;
+use umbra_sessions::{Messages, OptionalUser, User};
+
+#[derive(serde::Deserialize)]
+struct LoginForm {
+    username: String,
+    password: String,
+}
+
+async fn login(Form(form): Form<LoginForm>) -> Result<umbra::web::Response, StatusCode> {
+    let user = umbra_auth::authenticate(&form.username, &form.password)
+        .await
+        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+    let mut response = Redirect::to("/").into_response();
+    umbra_sessions::login(response.headers_mut(), &user)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(response)
+}
+
+async fn logout(headers: umbra::web::HeaderMap) -> umbra::web::Response {
+    let mut response = Redirect::to("/").into_response();
+    umbra_sessions::logout(&headers, response.headers_mut()).await.ok();
+    response
+}
+
+async fn me(OptionalUser(maybe): OptionalUser) -> Html<String> {
+    match maybe {
+        Some(u) => Html(format!("<p>hi, {}</p>", u.username)),
+        None => Html(r#"<a href="/login">log in</a>"#.into()),
+    }
+}
+
+/// Background task — would normally live in a `tasks.rs` module.
+#[umbra_tasks::task]
+async fn send_welcome(email: String) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let backend = umbra_email::ConsoleBackend::default();
+    let msg = umbra_email::EmailMessage::builder()
+        .from("no-reply@example.com")
+        .to(&email)
+        .subject("Welcome")
+        .body("Glad you signed up.")
+        .build()?;
+    backend.send(&msg).await?;
+    Ok(())
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
+
+    let settings = Settings::from_env()?;
+    let pool = umbra::db::connect("sqlite://full-app.db?mode=rwc").await?;
+
+    let app = App::builder()
+        .settings(settings)
+        .database("default", pool)
+        .templates_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/templates"))
+        .not_found_template("404.html")
+        .server_error_template("500.html")
+        // Domain plugin: model + routes + REST customisation.
+        .plugin(blog::BlogPlugin)
+        // Auth: users + password hashing.
+        .plugin(umbra_auth::AuthPlugin)
+        // Sessions: anonymous on every visit, fresh token on login.
+        .plugin(umbra_sessions::SessionsPlugin::default())
+        // REST: /api/post/ CRUD + /api/post/{id}/publish/ action.
+        // The REST resource is teed into umbra-openapi automatically.
+        .plugin(
+            umbra_rest::RestPlugin::default()
+                .resource(blog::rest_resource())
+                .paginate(umbra_rest::PageNumberPagination::new(20))
+                .authenticate(FnAuthentication::new(|headers| async move {
+                    let user = umbra_sessions::current_user(&headers).await.ok().flatten()?;
+                    Some(umbra_rest::Identity::user(user.id).with_staff(user.is_staff))
+                })),
+        )
+        // OpenAPI: schema at /openapi.json + Swagger UI at /docs.
+        .plugin(
+            umbra_openapi::OpenApiPlugin::new()
+                .title("Full-app API")
+                .version("0.1.0")
+                .description("Auto-generated from registered models + REST resources."),
+        )
+        // Admin: CRUD UI at /admin/, staff-only.
+        .plugin(umbra_admin::AdminPlugin::default())
+        // Background tasks: DB-backed queue.
+        .plugin(umbra_tasks::TasksPlugin::default().register(send_welcome))
+        // Email: console in dev, swap to SMTP backend in prod.
+        .plugin(umbra_email::EmailPlugin::new(Arc::new(
+            umbra_email::ConsoleBackend::default(),
+        )))
+        .router(
+            Router::new()
+                .route("/me", get(me))
+                .route("/login", post(login))
+                .route("/logout", post(logout)),
+        )
+        .build()?;
+
+    umbra::migrate::make().await.ok();
+    umbra::migrate::run().await?;
+
+    let addr = "127.0.0.1:3000".parse::<std::net::SocketAddr>()?;
+    println!("listening on http://{addr}");
+    println!("  /                       — blog (HTML)");
+    println!("  /api/post/              — REST CRUD");
+    println!("  /api/post/{{id}}/publish/  — @action publish");
+    println!("  /admin/                 — admin UI (staff only)");
+    println!("  /docs                   — OpenAPI / Swagger UI");
+    println!("  /openapi.json           — OpenAPI schema");
+    println!("  /me                     — request.user demo");
+    println!("  /login · /logout        — auth");
+
+    app.serve(addr).await?;
+    Ok(())
+}
+```
+
+## `templates/base.html`
+
+```html
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>{% block title %}Full app{% endblock %}</title>
+  </head>
+  <body>
+    <header>
+      <a href="/">home</a> · <a href="/admin/">admin</a> · <a href="/docs">api</a>
+    </header>
+    <main>{% block content %}{% endblock %}</main>
+  </body>
+</html>
+```
+
+## `templates/home.html`
+
+```html
+{% extends "base.html" %}
+{% block title %}Posts{% endblock %}
+{% block content %}
+  <h1>Posts</h1>
+  <ul>
+    {% for p in posts %}
+      <li><a href="/posts/{{ p.id }}">{{ p.title }}</a></li>
+    {% endfor %}
+  </ul>
+{% endblock %}
+```
+
+## `templates/404.html`
+
+```html
+{% extends "base.html" %}
+{% block content %}<h1>Not found</h1><p>That URL doesn't exist.</p>{% endblock %}
+```
+
+## `templates/500.html`
+
+```html
+{% extends "base.html" %}
+{% block content %}<h1>Internal error</h1><p>Sorry, something broke.</p>{% endblock %}
+```
+
+## Run it
+
+```bash
+cargo run
+# listening on http://127.0.0.1:3000
+
+# Public surface
+curl http://127.0.0.1:3000/api/post/
+curl http://127.0.0.1:3000/openapi.json
+
+# Auth flow (needs an AuthUser; create via `cargo run -- createsuperuser`)
+curl -X POST -d "username=alice&password=secret" http://127.0.0.1:3000/login
+```
+
+## What this example shows
+
+| Surface | Where it comes from |
+|---------|---------------------|
+| HTML pages with templates | `templates/` + `umbra::templates::render` |
+| ORM + managed migrations | `#[derive(Model)]` + `umbra::migrate::*` |
+| Custom 404 / 500 pages | `not_found_template` / `server_error_template` |
+| REST CRUD | `umbra_rest::RestPlugin::default()` + `ResourceConfig` |
+| REST `@action` | `ResourceConfig::action("publish", POST, Detail, ...)` |
+| REST pagination + auth + permissions | `paginate(...).authenticate(...).resource(... .permission(...))` |
+| OpenAPI schema + Swagger UI | `umbra_openapi::OpenApiPlugin` |
+| Admin UI at `/admin/` | `umbra_admin::AdminPlugin` |
+| Users + password hashing | `umbra_auth::AuthPlugin` + `authenticate(...)` |
+| Sessions + `request.user` | `umbra_sessions::SessionsPlugin::default()` + `OptionalUser` / `User` extractors |
+| Login / logout helpers | `umbra_sessions::login(...)` / `logout(...)` |
+| Background tasks | `umbra_tasks::TasksPlugin` + `#[umbra_tasks::task]` |
+| Email | `umbra_email::EmailPlugin::new(backend)` |
+
+## Next
+
+- For the smaller-but-runnable shape, see [Basic](./basic).
+- For an API-only variant (no HTML, no admin), see [REST API service](./rest-api-service).
+- For a deeper look at any one plugin, see its page under [Plugins](../plugins/plugins-are-apps).

@@ -1,0 +1,344 @@
+---
+title: REST API service
+description: API-only umbra app — REST + OpenAPI + token auth, no HTML, no admin. The "Rust microservice" shape.
+sidebar_position: 3
+icon: cloud
+tags: [examples, rest, api, openapi]
+---
+
+The shape most "Rust web framework" benchmarks compare: an API-only service. No HTML, no templates, no admin. Just `/api/<table>` CRUD with auth, permissions, pagination, and a real OpenAPI document. Postgres-backed for production-style realism.
+
+## Project layout
+
+```
+api-service/
+  Cargo.toml
+  .env
+  src/
+    main.rs
+    models.rs       # the domain types
+    auth.rs         # bearer-token authentication
+```
+
+## `Cargo.toml`
+
+```toml
+[package]
+name = "api-service"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+umbra = "0.0.1"
+umbra-auth = "0.0.1"
+umbra-rest = "0.0.1"
+umbra-openapi = "0.0.1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+sqlx = { version = "0.8", features = ["postgres", "runtime-tokio"] }
+chrono = { version = "0.4", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["serde", "v4"] }
+http = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+```
+
+## `.env`
+
+```bash
+DATABASE_URL=postgres://api:api@localhost:5432/api_service
+UMBRA_BIND_ADDR=0.0.0.0:8000
+UMBRA_SECRET_KEY=replace-me-with-`openssl rand -hex 32`
+UMBRA_ENVIRONMENT=dev
+```
+
+## `src/models.rs`
+
+```rust
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, umbra::orm::Model)]
+pub struct Project {
+    pub id: i64,
+    pub slug: String,
+    pub name: String,
+    pub owner_id: i64,
+    pub archived: bool,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, umbra::orm::Model)]
+pub struct Task {
+    pub id: i64,
+    pub project_id: i64,
+    pub title: String,
+    pub status: String,                            // "todo" | "doing" | "done"
+    pub assignee_id: Option<i64>,
+    pub due_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+```
+
+## `src/auth.rs`
+
+```rust
+//! Bearer-token authentication. Tokens live in an `api_token` table;
+//! production would store hashed tokens and rotate them.
+
+use umbra_rest::{Authentication, Identity};
+
+#[derive(Debug, Clone, sqlx::FromRow, umbra::orm::Model)]
+pub struct ApiToken {
+    pub id: i64,
+    pub user_id: i64,
+    pub token: String,        // bearer string; hash in real systems
+    pub is_staff: bool,
+    pub revoked: bool,
+}
+
+#[derive(Default)]
+pub struct BearerAuth;
+
+#[umbra::async_trait::async_trait]
+impl Authentication for BearerAuth {
+    async fn authenticate(&self, headers: &umbra::web::HeaderMap) -> Option<Identity> {
+        let auth = headers.get(http::header::AUTHORIZATION)?.to_str().ok()?;
+        let token = auth.strip_prefix("Bearer ")?;
+        let row = ApiToken::objects()
+            .filter(api_token::TOKEN.eq(token))
+            .filter(api_token::REVOKED.eq(false))
+            .first()
+            .await
+            .ok()??;
+        Some(Identity::user(row.user_id).with_staff(row.is_staff))
+    }
+}
+```
+
+## `src/main.rs`
+
+```rust
+mod auth;
+mod models;
+
+use http::Method;
+use serde_json::{json, Map, Value};
+
+use umbra::prelude::*;
+
+use umbra_rest::{
+    ActionError, ActionScope, IsAuthenticated, IsStaff, OrPermission, PageNumberPagination,
+    ReadOnly, ResourceConfig, RestPlugin,
+};
+
+use models::{Project, Task, project, task};
+
+fn project_resource() -> ResourceConfig {
+    ResourceConfig::new("project")
+        // Public read for archived=false, staff-only write.
+        .permission(OrPermission::new(vec![
+            Box::new(ReadOnly),
+            Box::new(IsStaff),
+        ]))
+        // Computed field: how many open tasks the project has.
+        .computed("open_task_count", |row: &Map<String, Value>| {
+            // In a real codebase this would batch via a JOIN; here we
+            // illustrate the shape with a stub.
+            let _ = row;
+            json!(null)
+        })
+        // /api/project/{id}/archive/  — soft-delete pattern.
+        .action(
+            "archive",
+            Method::POST,
+            ActionScope::Detail,
+            |ctx| async move {
+                let id: i64 = ctx
+                    .pk
+                    .as_deref()
+                    .unwrap_or_default()
+                    .parse()
+                    .map_err(|_| ActionError::BadInput("bad id".into()))?;
+                let mut patch = serde_json::Map::new();
+                patch.insert("archived".into(), json!(true));
+                let affected = Project::objects()
+                    .filter(project::ID.eq(id))
+                    .update_values(patch)
+                    .await
+                    .map_err(ActionError::internal)?;
+                if affected == 0 {
+                    return Err(ActionError::NotFound(format!("no project {id}")));
+                }
+                Ok(json!({ "id": id, "archived": true }))
+            },
+        )
+}
+
+fn task_resource() -> ResourceConfig {
+    ResourceConfig::new("task")
+        // Auth required for every operation.
+        .permission(IsAuthenticated)
+        // /api/task/mine/  — collection scope: tasks assigned to me.
+        .action(
+            "mine",
+            Method::GET,
+            ActionScope::Collection,
+            |ctx| async move {
+                let identity = ctx
+                    .identity
+                    .ok_or(ActionError::Unauthenticated)?;
+                let rows = Task::objects()
+                    .filter(task::ASSIGNEE_ID.eq(identity.user_id))
+                    .order_by(task::CREATED_AT.desc())
+                    .limit(100)
+                    .fetch()
+                    .await
+                    .map_err(ActionError::internal)?;
+                Ok(json!({ "results": rows }))
+            },
+        )
+        // /api/task/{id}/done/  — flip status to "done".
+        .action(
+            "done",
+            Method::POST,
+            ActionScope::Detail,
+            |ctx| async move {
+                let id: i64 = ctx
+                    .pk
+                    .as_deref()
+                    .unwrap_or_default()
+                    .parse()
+                    .map_err(|_| ActionError::BadInput("bad id".into()))?;
+                let mut patch = serde_json::Map::new();
+                patch.insert("status".into(), json!("done"));
+                let affected = Task::objects()
+                    .filter(task::ID.eq(id))
+                    .update_values(patch)
+                    .await
+                    .map_err(ActionError::internal)?;
+                if affected == 0 {
+                    return Err(ActionError::NotFound(format!("no task {id}")));
+                }
+                Ok(json!({ "id": id, "status": "done" }))
+            },
+        )
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
+
+    let settings = Settings::from_env()?;
+    let pool = umbra::db::connect(&settings.database_url).await?;
+
+    let app = App::builder()
+        .settings(settings)
+        .database("default", pool)
+        // Auth plugin: ships the AuthUser model and password hashing.
+        // We don't expose its routes — this is an API-only service.
+        .plugin(umbra_auth::AuthPlugin)
+        // Register the bearer-token model so migrations track it.
+        .model::<auth::ApiToken>()
+        .model::<Project>()
+        .model::<Task>()
+        // REST plugin with bearer-token authentication on every request,
+        // page-number pagination on every list endpoint, and per-resource
+        // permission classes via the ResourceConfigs above.
+        .plugin(
+            RestPlugin::default()
+                .authenticate(auth::BearerAuth::default())
+                .paginate(PageNumberPagination::new(50).with_max_page_size(200))
+                .resource(project_resource())
+                .resource(task_resource())
+                // Block the auth user table from /api/auth_user/ entirely.
+                .exclude(["auth_user"]),
+        )
+        // OpenAPI schema + Swagger UI.
+        .plugin(
+            umbra_openapi::OpenApiPlugin::new()
+                .at("/openapi.json")
+                .title("API Service")
+                .version("1.0.0")
+                .description("Project / task tracker — bearer-token authenticated."),
+        )
+        .build()?;
+
+    umbra::migrate::run().await?;
+
+    let addr = "0.0.0.0:8000".parse::<std::net::SocketAddr>()?;
+    println!("api-service listening on http://{addr}");
+    app.serve(addr).await?;
+    Ok(())
+}
+```
+
+## Run it
+
+```bash
+# 1) Apply migrations to a fresh Postgres database
+cargo run -- makemigrations
+cargo run -- migrate
+
+# 2) Seed an API token directly (production: a /token POST handler)
+psql $DATABASE_URL <<'SQL'
+INSERT INTO auth_user (username, email, password_hash, is_staff, is_superuser, is_active, date_joined)
+VALUES ('alice', 'alice@example.com', 'argon2-hidden', true, true, true, NOW());
+INSERT INTO api_token (user_id, token, is_staff, revoked)
+VALUES (1, 'demo-token-please-rotate', true, false);
+SQL
+
+# 3) Boot
+cargo run
+
+# 4) Hit endpoints
+TOKEN='demo-token-please-rotate'
+
+# Anonymous reads on /api/project/ (ReadOnly permission lets it through)
+curl http://localhost:8000/api/project/
+
+# Authenticated reads on /api/task/  (IsAuthenticated permission)
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/api/task/
+
+# Detail-scope @action: archive a project
+curl -X POST -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8000/api/project/1/archive/
+
+# Collection-scope @action: tasks assigned to me
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/api/task/mine/
+
+# OpenAPI schema
+curl http://localhost:8000/openapi.json | jq '.paths | keys'
+```
+
+## What this example shows
+
+| Concern | Where it lives |
+|---------|----------------|
+| API-only surface (no HTML) | No `templates_dir`, no HTML handlers, REST plugin is the whole router |
+| Bearer-token auth | Custom `Authentication` impl on `BearerAuth` in `src/auth.rs` |
+| Per-resource permissions | `ResourceConfig::permission(...)` with `OrPermission`, `ReadOnly`, `IsAuthenticated`, `IsStaff` |
+| Pagination | `RestPlugin::paginate(PageNumberPagination::new(50))` |
+| Soft delete via `@action` | `archive` detail action flips `archived = true` |
+| "Mine" filter via `@action` | `mine` collection action reads `ctx.identity.user_id` |
+| Workflow transition | `done` detail action sets `status = "done"` |
+| Hiding internal tables | `RestPlugin::exclude(["auth_user"])` |
+| OpenAPI document | `umbra_openapi::OpenApiPlugin::new().title(...).version(...)` |
+| Per-route security headers + CSRF defaults | On by default — see [Web → Error pages](../web/error-pages) |
+
+## What it deliberately doesn't ship
+
+- **No HTML rendering.** Add `templates_dir(...)` + a handler that returns `Html<String>` if you need a docs landing.
+- **No admin UI.** Add `.plugin(umbra_admin::AdminPlugin::default())` if you want one.
+- **No background tasks / email.** Both plug in with one line — see [Batteries included](./batteries-included).
+
+## Next
+
+- Pair this with a frontend: the API surface here is exactly what `umbra-openapi`'s schema describes. Plug it into [openapi-typescript](https://github.com/drwpow/openapi-typescript) or any other generator.
+- Swap the bearer token for sessions: see the auth flow in [Batteries included](./batteries-included).
+- For the same shape with HTML + admin, see [Batteries included](./batteries-included).
