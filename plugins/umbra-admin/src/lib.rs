@@ -54,6 +54,25 @@ pub mod models;
 pub mod registry;
 pub mod widgets;
 
+mod auth;
+mod discovery;
+mod engine;
+mod error;
+mod pagination;
+mod static_assets;
+mod util;
+
+pub mod files;
+
+pub(crate) use auth::{login_get, login_post, logout_handler, require_staff};
+pub(crate) use discovery::{discover_models, find_model, pk_column, user_theme};
+pub(crate) use engine::render;
+pub(crate) use error::AdminError;
+pub use files::{file_descriptor, resolve_preview_kind};
+pub(crate) use pagination::{Pagination, build_order_clause_phase2, parse_list_params};
+pub(crate) use static_assets::serve_admin_css;
+pub(crate) use util::{html_escape, is_htmx, q, urlencoding_simple};
+
 pub use config::{
     Action, ActionInvocation, ActionResult, ActionScope, ActionVariant, AdminConfig, AdminContext,
     AdminModel, InlineModel, ToastLevel,
@@ -71,14 +90,14 @@ use std::sync::Arc;
 
 use axum::extract::{Query, State};
 use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
-use minijinja::{Environment, context};
+use minijinja::context;
 use serde::Serialize;
 use serde_json::Value;
 use sqlx::{Row, SqlitePool};
 use umbra::migrate::{Column, ModelMeta};
 use umbra::orm::SqlType;
 use umbra::prelude::*;
-use umbra::web::{HeaderMap, Html, IntoResponse, Json, Path, Redirect, Response, StatusCode, post};
+use umbra::web::{HeaderMap, IntoResponse, Json, Path, Redirect, Response, StatusCode, post};
 use uuid::Uuid;
 
 // =========================================================================
@@ -334,205 +353,6 @@ impl Plugin for AdminPlugin {
 }
 
 // =========================================================================
-// Template environment.
-// =========================================================================
-
-static ENGINE: std::sync::OnceLock<Environment<'static>> = std::sync::OnceLock::new();
-
-fn engine() -> &'static Environment<'static> {
-    ENGINE.get_or_init(|| {
-        let mut env = Environment::new();
-        env.set_auto_escape_callback(|_| minijinja::AutoEscape::Html);
-        env.add_template(
-            "admin/wrapper.html",
-            include_str!("../templates/wrapper.html"),
-        )
-        .expect("admin/wrapper.html parses");
-        env.add_template("admin/base.html", include_str!("../templates/base.html"))
-            .expect("admin/base.html parses");
-        env.add_template("admin/login.html", include_str!("../templates/login.html"))
-            .expect("admin/login.html parses");
-        env.add_template("admin/index.html", include_str!("../templates/index.html"))
-            .expect("admin/index.html parses");
-        env.add_template("admin/list.html", include_str!("../templates/list.html"))
-            .expect("admin/list.html parses");
-        env.add_template(
-            "admin/detail.html",
-            include_str!("../templates/detail.html"),
-        )
-        .expect("admin/detail.html parses");
-        env.add_template("admin/form.html", include_str!("../templates/form.html"))
-            .expect("admin/form.html parses");
-        env.add_template(
-            "admin/changelist.html",
-            include_str!("../templates/changelist.html"),
-        )
-        .expect("admin/changelist.html parses");
-        env.add_template(
-            "admin/sheet_preview.html",
-            include_str!("../templates/sheet_preview.html"),
-        )
-        .expect("admin/sheet_preview.html parses");
-        env.add_template(
-            "admin/sheet_edit.html",
-            include_str!("../templates/sheet_edit.html"),
-        )
-        .expect("admin/sheet_edit.html parses");
-        env.add_template(
-            "admin/sheet_create.html",
-            include_str!("../templates/sheet_create.html"),
-        )
-        .expect("admin/sheet_create.html parses");
-        env.add_template(
-            "admin/confirm_delete.html",
-            include_str!("../templates/confirm_delete.html"),
-        )
-        .expect("admin/confirm_delete.html parses");
-        env.add_template(
-            "admin/rows_fragment.html",
-            include_str!("../templates/rows_fragment.html"),
-        )
-        .expect("admin/rows_fragment.html parses");
-        env.add_template(
-            "admin/_macros/data_table.html",
-            include_str!("../templates/_macros/data_table.html"),
-        )
-        .expect("admin/_macros/data_table.html parses");
-        env.add_template(
-            "admin/_macros/sheet.html",
-            include_str!("../templates/_macros/sheet.html"),
-        )
-        .expect("admin/_macros/sheet.html parses");
-        env.add_template(
-            "admin/_macros/field_editor.html",
-            include_str!("../templates/_macros/field_editor.html"),
-        )
-        .expect("admin/_macros/field_editor.html parses");
-        env.add_template(
-            "admin/_macros/confirm_dialog.html",
-            include_str!("../templates/_macros/confirm_dialog.html"),
-        )
-        .expect("admin/_macros/confirm_dialog.html parses");
-        env.add_template(
-            "admin/_macros/filter_dialog.html",
-            include_str!("../templates/_macros/filter_dialog.html"),
-        )
-        .expect("admin/_macros/filter_dialog.html parses");
-        env.add_template(
-            "admin/filter_dialog_fragment.html",
-            include_str!("../templates/filter_dialog_fragment.html"),
-        )
-        .expect("admin/filter_dialog_fragment.html parses");
-
-        // Phase 4 templates
-        env.add_template(
-            "admin/_macros/audit_timeline.html",
-            include_str!("../templates/_macros/audit_timeline.html"),
-        )
-        .expect("admin/_macros/audit_timeline.html parses");
-        env.add_template(
-            "admin/history.html",
-            include_str!("../templates/history.html"),
-        )
-        .expect("admin/history.html parses");
-        env.add_template(
-            "admin/dashboard.html",
-            include_str!("../templates/dashboard.html"),
-        )
-        .expect("admin/dashboard.html parses");
-        env.add_template(
-            "admin/widget_data.html",
-            include_str!("../templates/widget_data.html"),
-        )
-        .expect("admin/widget_data.html parses");
-        env.add_template(
-            "admin/palette.html",
-            include_str!("../templates/palette.html"),
-        )
-        .expect("admin/palette.html parses");
-        // Widget macros
-        env.add_template(
-            "admin/_macros/widgets/kpi.html",
-            include_str!("../templates/_macros/widgets/kpi.html"),
-        )
-        .expect("admin/_macros/widgets/kpi.html parses");
-        env.add_template(
-            "admin/_macros/widgets/bar.html",
-            include_str!("../templates/_macros/widgets/bar.html"),
-        )
-        .expect("admin/_macros/widgets/bar.html parses");
-        env.add_template(
-            "admin/_macros/widgets/line.html",
-            include_str!("../templates/_macros/widgets/line.html"),
-        )
-        .expect("admin/_macros/widgets/line.html parses");
-        env.add_template(
-            "admin/_macros/widgets/feed.html",
-            include_str!("../templates/_macros/widgets/feed.html"),
-        )
-        .expect("admin/_macros/widgets/feed.html parses");
-        env.add_template(
-            "admin/_macros/widgets/table.html",
-            include_str!("../templates/_macros/widgets/table.html"),
-        )
-        .expect("admin/_macros/widgets/table.html parses");
-        // Preview macros
-        env.add_template(
-            "admin/_macros/previews/image.html",
-            include_str!("../templates/_macros/previews/image.html"),
-        )
-        .expect("admin/_macros/previews/image.html parses");
-        env.add_template(
-            "admin/_macros/previews/pdf.html",
-            include_str!("../templates/_macros/previews/pdf.html"),
-        )
-        .expect("admin/_macros/previews/pdf.html parses");
-        env.add_template(
-            "admin/_macros/previews/video_audio.html",
-            include_str!("../templates/_macros/previews/video_audio.html"),
-        )
-        .expect("admin/_macros/previews/video_audio.html parses");
-        env.add_template(
-            "admin/_macros/previews/code_text.html",
-            include_str!("../templates/_macros/previews/code_text.html"),
-        )
-        .expect("admin/_macros/previews/code_text.html parses");
-        env.add_template(
-            "admin/_macros/previews/download.html",
-            include_str!("../templates/_macros/previews/download.html"),
-        )
-        .expect("admin/_macros/previews/download.html parses");
-
-        // Expose the runtime environment ("dev" / "test" / "prod") as a
-        // template global. wrapper.html gates the Tailwind CDN script
-        // on this: dev loads the CDN, prod expects /admin/static/admin.css.
-        // Read from `umbra::settings::get_opt()` (Optional) so the engine
-        // builds even before `App::build` ran — tests bypass App::build
-        // and would otherwise panic in `settings::get()`.
-        let env_name: &'static str = umbra::settings::get_opt()
-            .map(|s| match s.environment {
-                umbra::Environment::Dev => "dev",
-                umbra::Environment::Test => "test",
-                umbra::Environment::Prod => "prod",
-            })
-            .unwrap_or("dev");
-        env.add_global("environment", minijinja::Value::from(env_name));
-
-        env
-    })
-}
-
-fn render(name: &str, ctx: minijinja::Value) -> Result<Html<String>, AdminError> {
-    let tmpl = engine()
-        .get_template(name)
-        .map_err(|e| AdminError::Render(e.to_string()))?;
-    let body = tmpl
-        .render(ctx)
-        .map_err(|e| AdminError::Render(e.to_string()))?;
-    Ok(Html(body))
-}
-
-// =========================================================================
 // Sidebar context helpers.
 //
 // Every handler that renders the authenticated shell calls `sidebar_apps`
@@ -576,402 +396,6 @@ fn sidebar_apps(state: &AdminState, user: &umbra_auth::AuthUser) -> Vec<SidebarA
         .collect()
 }
 
-// =========================================================================
-// CSRF helpers for the login form.
-//
-// umbra-security's CSRF middleware uses double-submit-cookie with the
-// `x-csrf-token` header. HTML forms can't set custom headers, so the
-// login page needs its own per-session token stored in the session `data`
-// map and submitted as a hidden form field.
-// =========================================================================
-
-const ADMIN_CSRF_SESSION_KEY: &str = "_umbra_admin_csrf";
-
-/// Issue a CSRF token for the admin login form.
-///
-/// Generates a fresh token, stores it in the session `data` map,
-/// and returns the token for embedding in the login template.
-///
-/// The session token must be the raw token from the request cookie
-/// (used by `umbra_sessions::set_data`).
-async fn issue_login_csrf(session_token: &str) -> String {
-    let token = umbra_security::generate_token();
-    let _ = umbra_sessions::set_data(session_token, ADMIN_CSRF_SESSION_KEY, &token).await;
-    token
-}
-
-/// Verify the login form CSRF token.
-///
-/// Returns `true` if the submitted form token matches what we stored
-/// in the session. Constant-time comparison via `subtle::ConstantTimeEq`
-/// is not needed here because an attacker who can read the session DB
-/// already has the token — the protection is purely against CSRF
-/// (cross-site forms that can't read the session cookie).
-async fn verify_login_csrf(session_token: &str, submitted: &str) -> bool {
-    if submitted.is_empty() {
-        return false;
-    }
-    let session = match umbra_sessions::read_session(session_token).await {
-        Ok(Some(s)) => s,
-        _ => return false,
-    };
-    match umbra_sessions::get_data::<String>(&session, ADMIN_CSRF_SESSION_KEY) {
-        Ok(Some(stored)) => stored == submitted,
-        _ => false,
-    }
-}
-
-// =========================================================================
-// Auth gate — session-based.
-//
-// require_staff looks up the session cookie, reads the session row,
-// hydrates the AuthUser, and checks is_staff. On any failure it
-// redirects to /admin/login?next=<path> instead of issuing a
-// WWW-Authenticate challenge.
-// =========================================================================
-
-/// Check that the request carries a valid staff session.
-///
-/// On success: returns the authenticated [`umbra_auth::AuthUser`].
-/// On failure: returns a [`Response`] that redirects to the login page
-/// (307 Temporary Redirect with `?next=<requested_path>`).
-async fn require_staff(
-    headers: &HeaderMap,
-    current_path: &str,
-) -> Result<umbra_auth::AuthUser, Response> {
-    // Encode the `next` parameter: drop double-slash / external URLs.
-    let next = sanitise_next(current_path);
-    let login_redirect = || {
-        let location = format!("/admin/login?next={}", urlencoding_simple(&next));
-        Redirect::to(&location).into_response()
-    };
-
-    let user = match umbra_sessions::current_user(headers).await {
-        Ok(Some(u)) => u,
-        _ => return Err(login_redirect()),
-    };
-    if !user.is_staff {
-        return Err((StatusCode::FORBIDDEN, "umbra-admin: not a staff user").into_response());
-    }
-    Ok(user)
-}
-
-// =========================================================================
-// Login / Logout handlers.
-// =========================================================================
-
-/// `GET /admin/login` — render the login form.
-///
-/// If the request has no session cookie, a fresh anonymous session is
-/// created and a `Set-Cookie` header is added to the response. This
-/// ensures there is always a session available to anchor the CSRF token,
-/// even when the `SessionsPlugin` auto-layer is disabled (the common
-/// case for admin-only deployments that don't want every request to
-/// create a session row).
-async fn login_get(headers: HeaderMap, Query(params): Query<HashMap<String, String>>) -> Response {
-    // If already logged in as staff, redirect straight to /admin/.
-    if let Ok(Some(user)) = umbra_sessions::current_user(&headers).await {
-        if user.is_staff {
-            let next = params
-                .get("next")
-                .map(|n| sanitise_next(n))
-                .filter(|n| !n.is_empty())
-                .unwrap_or_else(|| "/admin/".to_string());
-            return Redirect::to(&next).into_response();
-        }
-    }
-
-    let next = params
-        .get("next")
-        .map(|n| sanitise_next(n))
-        .unwrap_or_default();
-
-    // Obtain a session token for the CSRF anchor.
-    // If the request already has a valid session cookie, reuse it.
-    // Otherwise create a fresh anonymous session so we have somewhere
-    // to store the CSRF token.
-    let existing_token = umbra_sessions::cookie_from_headers(&headers);
-
-    // Validate the existing cookie if present.
-    let valid_existing = if let Some(ref tok) = existing_token {
-        umbra_sessions::read_session(tok)
-            .await
-            .ok()
-            .flatten()
-            .is_some()
-    } else {
-        false
-    };
-
-    let (session_token, new_cookie) = if valid_existing {
-        (existing_token.unwrap(), None)
-    } else {
-        // Create a fresh anonymous session.
-        match umbra_sessions::create_session(None, None).await {
-            Ok(raw) => {
-                let cookie_str = umbra_sessions::set_cookie_header(&raw, None);
-                (raw, Some(cookie_str))
-            }
-            Err(e) => {
-                tracing::error!(error = %e, "admin: login_get: failed to create anonymous session");
-                // Fallback: render without CSRF protection. The POST
-                // will reject the empty token and redirect back here.
-                let html = render(
-                    "admin/login.html",
-                    context!(csrf_token => "", next => next, error => "", prefill_username => ""),
-                );
-                return match html {
-                    Ok(h) => h.into_response(),
-                    Err(e2) => e2.into_response(),
-                };
-            }
-        }
-    };
-
-    let csrf_token = issue_login_csrf(&session_token).await;
-
-    let html = match render(
-        "admin/login.html",
-        context!(
-            csrf_token       => csrf_token,
-            next             => next,
-            error            => "",
-            prefill_username => "",
-        ),
-    ) {
-        Ok(h) => h,
-        Err(e) => return e.into_response(),
-    };
-
-    // If we minted a new session, attach it to the response.
-    if let Some(cookie_str) = new_cookie {
-        let mut resp = html.into_response();
-        if let Ok(value) = cookie_str.parse::<axum::http::HeaderValue>() {
-            resp.headers_mut()
-                .insert(axum::http::header::SET_COOKIE, value);
-        }
-        resp
-    } else {
-        html.into_response()
-    }
-}
-
-/// `POST /admin/login` — verify credentials, create session, redirect.
-async fn login_post(headers: HeaderMap, body: String) -> Response {
-    let form: HashMap<String, String> = match serde_urlencoded::from_str(&body) {
-        Ok(m) => m,
-        Err(_) => return bad_login_response("Invalid form submission.", "", ""),
-    };
-
-    let username = form.get("username").map(|s| s.as_str()).unwrap_or("");
-    let password = form.get("password").map(|s| s.as_str()).unwrap_or("");
-    let next_raw = form.get("next").map(|s| s.as_str()).unwrap_or("");
-    let next = sanitise_next(next_raw);
-    let submitted_csrf = form.get("csrf_token").map(|s| s.as_str()).unwrap_or("");
-
-    // CSRF check.
-    let session_token = umbra_sessions::cookie_from_headers(&headers);
-    let csrf_ok = if let Some(ref tok) = session_token {
-        verify_login_csrf(tok, submitted_csrf).await
-    } else {
-        false
-    };
-    if !csrf_ok {
-        // Refresh the csrf token and re-render the form.
-        let new_csrf = if let Some(ref tok) = session_token {
-            issue_login_csrf(tok).await
-        } else {
-            String::new()
-        };
-        return bad_login_response_with_csrf(
-            "Your session expired. Please try again.",
-            username,
-            &next,
-            &new_csrf,
-        );
-    }
-
-    // Authenticate credentials. Same error message regardless of which
-    // field is wrong — timing-safe because we call the hash comparison
-    // unconditionally when the user exists (umbra_auth handles this).
-    let user = match umbra_auth::authenticate::<umbra_auth::AuthUser>(username, password).await {
-        Ok(u) => u,
-        Err(_) => {
-            let new_csrf = if let Some(ref tok) = session_token {
-                issue_login_csrf(tok).await
-            } else {
-                String::new()
-            };
-            return bad_login_response_with_csrf(
-                "The username or password you entered is incorrect.",
-                username,
-                &next,
-                &new_csrf,
-            );
-        }
-    };
-
-    if !user.is_staff {
-        let new_csrf = if let Some(ref tok) = session_token {
-            issue_login_csrf(tok).await
-        } else {
-            String::new()
-        };
-        return bad_login_response_with_csrf(
-            "This account does not have admin access.",
-            username,
-            &next,
-            &new_csrf,
-        );
-    }
-
-    // Login: create session + set cookie.
-    let redirect_to = if next.is_empty() {
-        "/admin/".to_string()
-    } else {
-        next.clone()
-    };
-    let mut response = Redirect::to(&redirect_to).into_response();
-    if let Err(e) =
-        umbra_sessions::login_with_request(&headers, response.headers_mut(), &user).await
-    {
-        tracing::error!(error = %e, "admin: login: session creation failed");
-        return (StatusCode::INTERNAL_SERVER_ERROR, "session error").into_response();
-    }
-    response
-}
-
-/// Render the login template with a generic error banner.
-fn bad_login_response(error: &str, prefill_username: &str, next: &str) -> Response {
-    bad_login_response_with_csrf(error, prefill_username, next, "")
-}
-
-fn bad_login_response_with_csrf(
-    error: &str,
-    prefill_username: &str,
-    next: &str,
-    csrf_token: &str,
-) -> Response {
-    match render(
-        "admin/login.html",
-        context!(
-            csrf_token       => csrf_token,
-            next             => next,
-            error            => error,
-            prefill_username => prefill_username,
-        ),
-    ) {
-        Ok(html) => (StatusCode::UNPROCESSABLE_ENTITY, html).into_response(),
-        Err(e) => e.into_response(),
-    }
-}
-
-/// `GET /admin/logout` — destroy session, redirect to login.
-async fn logout_handler(headers: HeaderMap) -> Response {
-    let mut response = Redirect::to("/admin/login").into_response();
-    let _ = umbra_sessions::logout(&headers, response.headers_mut()).await;
-    response
-}
-
-// =========================================================================
-// Validate the `next` redirect target.
-//
-// Accept only same-origin relative paths starting with `/admin/` or `/admin`.
-// Reject: protocol-relative `//`, absolute `http://`, or anything that
-// doesn't start with the admin prefix.
-// =========================================================================
-
-fn sanitise_next(raw: &str) -> String {
-    let trimmed = raw.trim();
-    // Must be a relative path starting with /admin (not // or http://).
-    if trimmed.is_empty() {
-        return String::new();
-    }
-    if trimmed.starts_with("//") || trimmed.contains("://") {
-        return "/admin/".to_string();
-    }
-    if !trimmed.starts_with("/admin") {
-        return "/admin/".to_string();
-    }
-    trimmed.to_string()
-}
-
-// =========================================================================
-// Errors.
-// =========================================================================
-
-#[derive(Debug)]
-enum AdminError {
-    NotFound(String),
-    Render(String),
-    Sqlx(sqlx::Error),
-    BadInput(String),
-}
-
-impl From<sqlx::Error> for AdminError {
-    fn from(e: sqlx::Error) -> Self {
-        Self::Sqlx(e)
-    }
-}
-
-impl IntoResponse for AdminError {
-    fn into_response(self) -> Response {
-        match self {
-            AdminError::NotFound(msg) => (StatusCode::NOT_FOUND, msg).into_response(),
-            AdminError::Render(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
-            AdminError::Sqlx(e) => {
-                tracing::error!(error = %e, "admin: database error");
-                (StatusCode::INTERNAL_SERVER_ERROR, "database error").into_response()
-            }
-            AdminError::BadInput(msg) => (StatusCode::BAD_REQUEST, msg).into_response(),
-        }
-    }
-}
-
-// =========================================================================
-// Theme helper — resolves the user's saved theme for server-side rendering.
-// =========================================================================
-
-/// Return the user's saved theme preference ("dark" | "light" | "system").
-/// Falls back to "dark" on any error so the page always renders something.
-async fn user_theme(user: &umbra_auth::AuthUser) -> String {
-    crate::models::fetch_or_default(user.id)
-        .await
-        .map(|p| p.theme)
-        .unwrap_or_else(|_| "dark".to_string())
-}
-
-// =========================================================================
-// Model discovery.
-// =========================================================================
-
-#[derive(Debug, Clone, Serialize)]
-#[allow(dead_code)]
-struct ModelEntry {
-    plugin: String,
-    name: String,
-    table: String,
-}
-
-fn discover_models() -> Vec<(String, ModelMeta)> {
-    let mut out: Vec<(String, ModelMeta)> = Vec::new();
-    for plugin in umbra::migrate::registered_plugins() {
-        for model in umbra::migrate::models_for_plugin(&plugin) {
-            out.push((plugin.clone(), model));
-        }
-    }
-    out
-}
-
-fn find_model(table: &str) -> Option<(String, ModelMeta)> {
-    discover_models()
-        .into_iter()
-        .find(|(_, m)| m.table == table)
-}
-
-fn pk_column(model: &ModelMeta) -> Option<&Column> {
-    model.fields.iter().find(|c| c.primary_key)
-}
 
 // =========================================================================
 // Handlers.
@@ -1216,24 +640,6 @@ async fn list(
     }
 }
 
-fn build_order_clause(cfg: Option<&AdminConfig>, pk: &Column) -> String {
-    let ordering = cfg.map(|c| c.ordering.as_slice()).unwrap_or(&[]);
-    if ordering.is_empty() {
-        return format!("\"{}\" ASC", q(&pk.name));
-    }
-    ordering
-        .iter()
-        .map(|s| {
-            if let Some(col) = s.strip_prefix('-') {
-                format!("\"{}\" DESC", q(col))
-            } else {
-                format!("\"{}\" ASC", q(s))
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
 async fn fetch_distinct_values(
     pool: &SqlitePool,
     table: &str,
@@ -1308,19 +714,6 @@ async fn run_action(
     };
     let location = format!("/admin/{table}/?flash={}", urlencoding_simple(&flash));
     Redirect::to(&location).into_response()
-}
-
-fn urlencoding_simple(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char)
-            }
-            _ => out.push_str(&format!("%{b:02X}")),
-        }
-    }
-    out
 }
 
 // =========================================================================
@@ -1701,14 +1094,6 @@ async fn fk_options_resolve(
 // =========================================================================
 // Phase 3: inline cell edit handlers
 // =========================================================================
-
-fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#x27;")
-}
 
 /// `GET /admin/{table}/{id}/cell/{field}/edit`
 /// Returns the field editor for a single cell (HTMX swap into the <td>).
@@ -2235,21 +1620,6 @@ async fn delete(
     }
 }
 
-fn q(name: &str) -> String {
-    name.replace('"', "\"\"")
-}
-
-// =========================================================================
-// HTMX detection.
-// =========================================================================
-
-fn is_htmx(headers: &HeaderMap) -> bool {
-    headers
-        .get("hx-request")
-        .and_then(|v| v.to_str().ok())
-        .map(|v| v == "true")
-        .unwrap_or(false)
-}
 
 // =========================================================================
 // Phase 2 — count helper.
@@ -2405,92 +1775,6 @@ async fn fetch_rows_paged(
         out.push(entry);
     }
     Ok(out)
-}
-
-/// Parsed query parameters for list views.
-/// `(search, active_filter, sort_col, sort_order, page, page_size)`
-type ListParams = (
-    Option<String>,
-    Option<(String, String)>,
-    String,
-    String,
-    usize,
-    usize,
-);
-
-// Parse common query params for list views (search, filter, sort, page, page_size).
-fn parse_list_params(
-    params: &HashMap<String, String>,
-    cfg: Option<&AdminConfig>,
-    pk: &Column,
-) -> ListParams {
-    // Accept both `search=` (phase 2) and `q=` (phase 1 backward compat).
-    let search_term = params
-        .get("search")
-        .filter(|s| !s.is_empty())
-        .or_else(|| params.get("q").filter(|s| !s.is_empty()))
-        .cloned();
-    // Accept both new `filter=field=value` (phase 2) and old `filter_<field>=<value>` (phase 1).
-    let active_filter: Option<(String, String)> = params
-        .get("filter")
-        .filter(|s| !s.is_empty())
-        .and_then(|s| {
-            let mut parts = s.splitn(2, '=');
-            let field = parts.next()?.to_string();
-            let value = parts.next()?.to_string();
-            Some((field, value))
-        })
-        .or_else(|| {
-            // Phase 1 style: filter_<field>=<value>
-            params.iter().find_map(|(k, v)| {
-                k.strip_prefix("filter_")
-                    .map(|field| (field.to_string(), v.clone()))
-            })
-        });
-    let sort_col = params.get("sort").cloned().unwrap_or_default();
-    let sort_order = params
-        .get("order")
-        .map(|o| {
-            if o == "desc" {
-                "desc".to_string()
-            } else {
-                "asc".to_string()
-            }
-        })
-        .unwrap_or_else(|| "asc".to_string());
-    let page = params
-        .get("page")
-        .and_then(|p| p.parse::<usize>().ok())
-        .unwrap_or(1);
-    let default_page_size = cfg.map(|c| c.list_per_page).unwrap_or(25);
-    let page_size = params
-        .get("page_size")
-        .and_then(|p| p.parse::<usize>().ok())
-        .unwrap_or(default_page_size)
-        .clamp(1, 200);
-
-    let _ = pk; // pk used for default ordering at call-site
-    (
-        search_term,
-        active_filter,
-        sort_col,
-        sort_order,
-        page,
-        page_size,
-    )
-}
-
-fn build_order_clause_phase2(
-    cfg: Option<&AdminConfig>,
-    pk: &Column,
-    sort_col: &str,
-    sort_order: &str,
-) -> String {
-    if !sort_col.is_empty() {
-        let dir = if sort_order == "desc" { "DESC" } else { "ASC" };
-        return format!("\"{}\" {}", q(sort_col), dir);
-    }
-    build_order_clause(cfg, pk)
 }
 
 // =========================================================================
@@ -3510,33 +2794,6 @@ fn bind_null<'q>(
 // Pagination helpers.
 // =========================================================================
 
-/// Template-facing pagination context.
-#[derive(Debug, Clone, Serialize)]
-struct Pagination {
-    page: usize,
-    page_size: usize,
-    total: usize,
-    total_pages: usize,
-}
-
-impl Pagination {
-    fn new(total: usize, page: usize, page_size: usize) -> Self {
-        let page_size = page_size.max(1);
-        let total_pages = total.div_ceil(page_size).max(1);
-        let page = page.max(1).min(total_pages);
-        Self {
-            page,
-            page_size,
-            total,
-            total_pages,
-        }
-    }
-
-    fn offset(&self) -> usize {
-        (self.page - 1) * self.page_size
-    }
-}
-
 // =========================================================================
 // Template helpers.
 // =========================================================================
@@ -4250,98 +3507,6 @@ async fn palette_search(
 }
 
 // =========================================================================
-// Phase 4: file descriptor helpers.
-//
-// NOTE: A proper File/Image ORM field type is deferred to a future ORM phase.
-// This infrastructure ships the descriptor format and MIME resolution. Store
-// file paths in Text columns for now; supply a preview override per-model.
-// =========================================================================
-
-/// Resolve the `preview_kind` from a MIME type and file extension.
-///
-/// Returns a `&'static str` matching one of: image, pdf, video, audio,
-/// text, code, download.
-pub fn resolve_preview_kind(mime: &str, filename: &str) -> &'static str {
-    let ext = filename.rsplit('.').next().unwrap_or("").to_lowercase();
-    // Check extension-based code/text first so that e.g. "text/plain; charset=utf-8"
-    // on a .py file resolves to "code" rather than "text".
-    match ext.as_str() {
-        "rs" | "py" | "js" | "ts" | "jsx" | "tsx" | "json" | "toml" | "yaml" | "yml" | "html"
-        | "css" | "sql" | "sh" | "bash" | "zsh" | "fish" | "md" | "mdx" => return "code",
-        "txt" | "log" => return "text",
-        _ => {}
-    }
-    // Then MIME-based rules.
-    if mime.starts_with("image/") {
-        return "image";
-    }
-    if mime == "application/pdf" {
-        return "pdf";
-    }
-    if mime.starts_with("video/") {
-        return "video";
-    }
-    if mime.starts_with("audio/") {
-        return "audio";
-    }
-    if mime.starts_with("text/plain") {
-        return "text";
-    }
-    "download"
-}
-
-// =========================================================================
-// Static asset: embedded admin.css (served in prod; CDN in dev).
-// =========================================================================
-
-static ADMIN_CSS: &str = include_str!("assets/admin.css");
-
-/// `GET /admin/static/admin.css` — serve the embedded production stylesheet.
-///
-/// In `dev` mode the wrapper template loads the Tailwind CDN instead, but
-/// the route still works. Build the CSS with:
-///
-/// ```sh
-/// cd plugins/umbra-admin/css && npm install && npm run build
-/// ```
-async fn serve_admin_css() -> impl IntoResponse {
-    axum::response::Response::builder()
-        .status(StatusCode::OK)
-        .header("Content-Type", "text/css; charset=utf-8")
-        .header("Cache-Control", "public, max-age=86400")
-        .body(axum::body::Body::from(ADMIN_CSS))
-        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
-}
-
-/// Build a file descriptor JSON value.
-///
-/// `url` is the pre-signed/auth-checked URL; `thumbnail_url` is optional
-/// (only set for `image` kind where a thumbnail has been generated).
-pub fn file_descriptor(
-    filename: &str,
-    size: u64,
-    mime: &str,
-    url: &str,
-    thumbnail_url: Option<&str>,
-) -> serde_json::Value {
-    let preview_kind = resolve_preview_kind(mime, filename);
-    let language: Option<&str> = if preview_kind == "code" {
-        Some(filename.rsplit('.').next().unwrap_or("text"))
-    } else {
-        None
-    };
-    serde_json::json!({
-        "filename":      filename,
-        "size":          size,
-        "mime":          mime,
-        "preview_kind":  preview_kind,
-        "url":           url,
-        "thumbnail_url": thumbnail_url,
-        "language":      language,
-    })
-}
-
-// =========================================================================
 // Unit tests (pure logic — no DB needed).
 // =========================================================================
 
@@ -4386,32 +3551,6 @@ mod tests {
     fn format_for_input_passes_through_bad_rfc3339_unchanged() {
         let bad = "not-a-valid-timestamp";
         assert_eq!(format_for_input(bad, SqlType::Timestamptz), bad);
-    }
-
-    #[test]
-    fn sanitise_next_rejects_external_urls() {
-        assert_eq!(sanitise_next("http://evil.com/"), "/admin/");
-        assert_eq!(sanitise_next("https://evil.com/"), "/admin/");
-        assert_eq!(sanitise_next("//evil.com/"), "/admin/");
-    }
-
-    #[test]
-    fn sanitise_next_rejects_non_admin_paths() {
-        assert_eq!(sanitise_next("/app/dashboard"), "/admin/");
-        assert_eq!(sanitise_next("/login"), "/admin/");
-    }
-
-    #[test]
-    fn sanitise_next_accepts_admin_paths() {
-        assert_eq!(sanitise_next("/admin/"), "/admin/");
-        assert_eq!(sanitise_next("/admin/note/"), "/admin/note/");
-        assert_eq!(sanitise_next("/admin"), "/admin");
-    }
-
-    #[test]
-    fn sanitise_next_empty_stays_empty() {
-        assert_eq!(sanitise_next(""), "");
-        assert_eq!(sanitise_next("   "), "");
     }
 
     #[test]
