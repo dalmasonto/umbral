@@ -9,6 +9,8 @@ A model is a struct with `#[derive(Model)]`. The derive generates the trait
 impl, the per-field column constants, and an `objects()` Manager that picks
 up the ambient database pool.
 
+For the full list of supported field types, what each maps to on Postgres vs SQLite, and how to handle constraints the derive doesn't accept yet (`varchar(64)`, `default`, `unique`, etc.), see [Column types](./column-types).
+
 ## The minimal model
 
 ```rust
@@ -26,7 +28,7 @@ pub struct Post {
 
 The rules the derive enforces:
 
-- Exactly one field named `id`, typed `i32`, `i64`, or `uuid::Uuid` — that's
+- Exactly one field named `id`, typed `i32`, `i64`, or `uuid::Uuid` - that's
   the primary key.
 - Field types come from the M3 catalogue: signed ints (`i16` / `i32` / `i64`),
   `f32` / `f64`, `bool`, `String`, `chrono::NaiveDate` / `NaiveTime` /
@@ -45,7 +47,7 @@ use umbra::prelude::*;
 pub struct Event {
     pub id: i64,
     pub kind: String,
-    pub payload: serde_json::Value,          // JSONB / TEXT — required
+    pub payload: serde_json::Value,          // JSONB / TEXT - required
     pub meta: Option<serde_json::Value>,     // nullable JSON
 }
 ```
@@ -54,8 +56,8 @@ pub struct Event {
 
 Two Postgres-native predicates let you query inside a JSON column directly from a filter chain.
 
-- `path_text(keys: &[&str])` — extracts a nested value as text using chained `->` steps plus a final `->>`. Returns a builder; finalize with `.eq(s)`, `.ne(s)`, `.is_null()`, or `.is_not_null()`.
-- `has_key(key: &str)` — true when the JSON object contains the given top-level key (Postgres `?` operator). Returns a `Predicate` directly.
+- `path_text(keys: &[&str])` - extracts a nested value as text using chained `->` steps plus a final `->>`. Returns a builder; finalize with `.eq(s)`, `.ne(s)`, `.is_null()`, or `.is_not_null()`.
+- `has_key(key: &str)` - true when the JSON object contains the given top-level key (Postgres `?` operator). Returns a `Predicate` directly.
 
 ```rust
 use umbra::prelude::*;
@@ -67,13 +69,13 @@ pub struct Event {
     pub payload: Value,
 }
 
-// Deep path equality — renders as "payload" -> 'author' ->> 'name' = 'alice'
+// Deep path equality - renders as "payload" -> 'author' ->> 'name' = 'alice'
 let alice_rows = Event::objects()
     .filter(event::PAYLOAD.path_text(&["author", "name"]).eq("alice"))
     .fetch_pg(&pg_pool)
     .await?;
 
-// Top-level key presence — renders as "payload" ? 'status'
+// Top-level key presence - renders as "payload" ? 'status'
 let has_status = Event::objects()
     .filter(event::PAYLOAD.has_key("status"))
     .fetch_pg(&pg_pool)
@@ -84,7 +86,7 @@ SQLite JSON1 operator support is deferred; `is_null()` / `is_not_null()` and `as
 
 ## Array columns
 
-A field typed `Vec<T>` maps to a native Postgres array column (`T[]`). `Option<Vec<T>>` produces a nullable array column. Array fields are **Postgres-only** — the boot-time system check fails with a clear error naming the model and field if an Array field is registered against a SQLite backend.
+A field typed `Vec<T>` maps to a native Postgres array column (`T[]`). `Option<Vec<T>>` produces a nullable array column. Array fields are **Postgres-only** - the boot-time system check fails with a clear error naming the model and field if an Array field is registered against a SQLite backend.
 
 Supported element types: `i16`, `i32`, `i64`, `f32`, `f64`, `bool`, `String`, `uuid::Uuid`.
 
@@ -95,28 +97,28 @@ use umbra::prelude::*;
 pub struct Event {
     pub id: i64,
     pub kind: String,
-    pub tags: Vec<String>,              // TEXT[] — required
-    pub scores: Option<Vec<i64>>,      // BIGINT[] — nullable
+    pub tags: Vec<String>,              // TEXT[] - required
+    pub scores: Option<Vec<i64>>,      // BIGINT[] - nullable
 }
 
-// Fetch rows — use the _pg terminal for models with PG-only fields
+// Fetch rows - use the _pg terminal for models with PG-only fields
 let events: Vec<Event> = Event::objects().fetch_pg(&pg_pool).await?;
 ```
 
 Models that include at least one PG-only field cannot use the cross-backend `.fetch()` / `.first()` / `.count()` / `.exists()` terminals. Use the `_pg` variants instead: `.fetch_pg(&pool)`, `.first_pg(&pool)`, `.count_pg(&pool)`, `.exists_pg(&pool)`. The pool is passed at the terminal, not on the manager. See `docs/specs/04-orm-model-and-fields.md` for the full `_pg` surface.
 
 <Callout type="info">
-Need portable list storage? Use a `serde_json::Value` field with a JSON array — see JSON columns above. The JSON type compiles and runs against both Postgres and SQLite.
+Need portable list storage? Use a `serde_json::Value` field with a JSON array - see JSON columns above. The JSON type compiles and runs against both Postgres and SQLite.
 </Callout>
 
 ### Array operators
 
 Filter on array contents with four Postgres-native predicates:
 
-- `.contains(elem)` — column array contains the given element (`@>`).
-- `.contains_all(iter)` — column contains every value in the iterator (`@>`).
-- `.contained_by(iter)` — column is a subset of the iterator's values (`<@`).
-- `.overlaps(iter)` — column shares at least one value with the iterator (`&&`).
+- `.contains(elem)` - column array contains the given element (`@>`).
+- `.contains_all(iter)` - column contains every value in the iterator (`@>`).
+- `.contained_by(iter)` - column is a subset of the iterator's values (`<@`).
+- `.overlaps(iter)` - column shares at least one value with the iterator (`&&`).
 
 ```rust
 let info_events = Event::objects()
@@ -138,9 +140,9 @@ Postgres natively stores and indexes IP addresses and MAC addresses. Three **Pos
 
 | Rust type | SqlType | Postgres column |
 |---|---|---|
-| `ipnetwork::IpNetwork` | `Inet` | `INET` — IPv4 or IPv6 host address, optional prefix length |
-| `ipnetwork::IpNetwork` | `Cidr` | `CIDR` — network address, host bits enforced zero by Postgres |
-| `mac_address::MacAddress` | `MacAddr` | `MACADDR` — 6-byte hardware address |
+| `ipnetwork::IpNetwork` | `Inet` | `INET` - IPv4 or IPv6 host address, optional prefix length |
+| `ipnetwork::IpNetwork` | `Cidr` | `CIDR` - network address, host bits enforced zero by Postgres |
+| `mac_address::MacAddress` | `MacAddr` | `MACADDR` - 6-byte hardware address |
 
 The derive defaults `ipnetwork::IpNetwork` to `Inet`. Opt-in to `CIDR` semantics is deferred to a future `#[umbra(cidr)]` attribute; until then, edit the generated migration directly if you need the stricter constraint.
 
@@ -152,12 +154,12 @@ use mac_address::MacAddress;
 #[derive(Debug, Clone, sqlx::FromRow, umbra::orm::Model)]
 pub struct Node {
     pub id: i64,
-    pub addr: IpNetwork,                  // INET — required
-    pub mac: MacAddress,                  // MACADDR — required
-    pub fallback: Option<IpNetwork>,      // INET — nullable
+    pub addr: IpNetwork,                  // INET - required
+    pub mac: MacAddress,                  // MACADDR - required
+    pub fallback: Option<IpNetwork>,      // INET - nullable
 }
 
-// Filter by exact address — use _pg terminals for PG-only models
+// Filter by exact address - use _pg terminals for PG-only models
 let target = "10.0.0.1/24".parse::<IpNetwork>()?;
 let nodes: Vec<Node> = Node::objects()
     .filter(node::ADDR.eq(target))
@@ -173,7 +175,7 @@ Need portable IP storage without a Postgres dependency? Store addresses as `Stri
 
 ## Full-text search columns
 
-Postgres's `tsvector` type stores a pre-processed lexeme document that supports fast `@@` full-text matching. umbra exposes this as the `umbra::orm::TsVector` newtype — a `String` wrapper with sqlx `Type`/`Encode`/`Decode` impls that map to a `tsvector` column. Like array and network fields, `TsVector` is **Postgres-only**; the boot-time system check fails with a clear error if the field is registered against a SQLite backend.
+Postgres's `tsvector` type stores a pre-processed lexeme document that supports fast `@@` full-text matching. umbra exposes this as the `umbra::orm::TsVector` newtype - a `String` wrapper with sqlx `Type`/`Encode`/`Decode` impls that map to a `tsvector` column. Like array and network fields, `TsVector` is **Postgres-only**; the boot-time system check fails with a clear error if the field is registered against a SQLite backend.
 
 ```rust
 use umbra::prelude::*;
@@ -183,8 +185,8 @@ use umbra::orm::TsVector;
 pub struct Doc {
     pub id: i64,
     pub title: String,
-    pub search: TsVector,              // tsvector — required
-    pub extra: Option<TsVector>,      // tsvector — nullable
+    pub search: TsVector,              // tsvector - required
+    pub extra: Option<TsVector>,      // tsvector - nullable
 }
 
 // User-friendly query syntax: spaces=AND, OR, -word, "quoted phrase"
@@ -196,8 +198,8 @@ let results = Doc::objects()
 
 Two matching predicates are available on every `TsVector` column:
 
-- `.matches_websearch(query)` — `col @@ websearch_to_tsquery($1)`. Accepts natural language: spaces mean AND, bare `OR` means OR, `-word` negates, `"quoted phrase"` requires adjacency. Preferred for search boxes.
-- `.matches(query)` — `col @@ to_tsquery($1)`. Requires strict `tsquery` syntax (`&`, `|`, `!`, `:*` for prefix). Use it when you control the query string programmatically.
+- `.matches_websearch(query)` - `col @@ websearch_to_tsquery($1)`. Accepts natural language: spaces mean AND, bare `OR` means OR, `-word` negates, `"quoted phrase"` requires adjacency. Preferred for search boxes.
+- `.matches(query)` - `col @@ to_tsquery($1)`. Requires strict `tsquery` syntax (`&`, `|`, `!`, `:*` for prefix). Use it when you control the query string programmatically.
 
 Both predicates compile only for Postgres; use the `_pg` terminal variants (`.fetch_pg`, `.first_pg`, etc.) on any model that includes a `TsVector` field.
 
@@ -207,7 +209,7 @@ umbra's migration engine emits a bare `tsvector` column. Populating it is your r
 
 ## The table name
 
-By default the table is snake_case of the struct name — `BlogPost` becomes
+By default the table is snake_case of the struct name - `BlogPost` becomes
 `blog_post`. Override with the struct-level attribute when you need a
 different name:
 
@@ -227,7 +229,7 @@ them ship.
 ## Reading rows
 
 `Post::objects()` returns a `Manager<Post>` that builds a `QuerySet`. No pool
-argument — the manager reaches the ambient pool published by `App::build()`.
+argument - the manager reaches the ambient pool published by `App::build()`.
 
 ```rust
 let recent = Post::objects()
@@ -242,17 +244,17 @@ Each field gets a typed column constant under the snake_case module:
 `post::id`, `post::title`, `post::body`, `post::published_at`. The
 comparison methods are checked at compile time.
 
-### Terminals — `.fetch()`, `.first()`, `.get()`, `.count()`, `.exists()`
+### Terminals - `.fetch()`, `.first()`, `.get()`, `.count()`, `.exists()`
 
 | Terminal | Returns | When to reach for it |
 |----------|---------|----------------------|
-| `.fetch()` | `Result<Vec<T>, sqlx::Error>` | The collection — list views, anything that maps over rows. |
+| `.fetch()` | `Result<Vec<T>, sqlx::Error>` | The collection - list views, anything that maps over rows. |
 | `.first()` | `Result<Option<T>, sqlx::Error>` | "Give me one if there is one." `None` is a normal case. |
 | `.get()` | `Result<T, GetError>` | Django's exactly-one. Three branches: `Ok(row)`, `Err(NotFound)`, `Err(MultipleObjectsReturned)`. |
 | `.count()` | `Result<i64, sqlx::Error>` | A row count without materializing rows. |
 | `.exists()` | `Result<bool, sqlx::Error>` | A `LIMIT 1` existence probe. |
 
-`.get()` is the Django shape for "this filter should pin one row exactly." `MultipleObjectsReturned` is a data-integrity signal, not a control-flow case — it fires when filters that should hit a UNIQUE constraint stop being unique.
+`.get()` is the Django shape for "this filter should pin one row exactly." `MultipleObjectsReturned` is a data-integrity signal, not a control-flow case - it fires when filters that should hit a UNIQUE constraint stop being unique.
 
 ```rust
 use umbra::orm::GetError;
@@ -278,7 +280,7 @@ Four write primitives complement the read side. All return a
 field on type mismatch / null-on-required-column / unknown-column
 errors.
 
-### `create(instance)` — INSERT one row
+### `create(instance)` - INSERT one row
 
 ```rust
 let new_post = Post {
@@ -293,7 +295,7 @@ assert!(inserted.id > 0); // autoincrement PK populated
 ```
 
 The integer `0`, the nil UUID, and the empty `String` are all treated
-as autoincrement-PK sentinels — the column is omitted from the INSERT
+as autoincrement-PK sentinels - the column is omitted from the INSERT
 so the database assigns one. An explicit non-default PK (`id = 999`)
 is bound as-is, so callers with UUID PKs or slug PKs can set them
 themselves.
@@ -301,7 +303,7 @@ themselves.
 The returned struct comes from `RETURNING *`, so timestamps that
 default to `NOW()` server-side land populated.
 
-### `bulk_create([...])` — INSERT many in one statement
+### `bulk_create([...])` - INSERT many in one statement
 
 ```rust
 let rows = (1..=100)
@@ -312,12 +314,12 @@ let count = Post::objects().bulk_create(rows).await?;
 assert_eq!(count, 100);
 ```
 
-One INSERT with N value tuples — far faster than calling `.create()`
+One INSERT with N value tuples - far faster than calling `.create()`
 in a loop. Returns the affected-rows count rather than the populated
 rows; if you need the inserted IDs, follow up with a
 `.filter(...).fetch()`.
 
-### `.delete()` — DELETE matching rows
+### `.delete()` - DELETE matching rows
 
 ```rust
 let removed = Post::objects()
@@ -331,7 +333,7 @@ returns the deleted-rows count. **Without `.filter(...)`, deletes
 every row.** The type system can't tell "I forgot the filter" from
 "I really meant to truncate."
 
-### `.update_values(map)` — UPDATE matching rows
+### `.update_values(map)` - UPDATE matching rows
 
 ```rust
 use serde_json::{json, Map};
@@ -348,7 +350,7 @@ let touched = Post::objects()
 
 Takes a `serde_json::Map<String, Value>` of column → new value.
 Each value is converted to the right sea-query type per the column's
-`SqlType`. PATCH semantics — columns absent from the map keep their
+`SqlType`. PATCH semantics - columns absent from the map keep their
 current values. The PK column is silently skipped if present in the
 map (rewriting the PK while filtering on the old one is a footgun).
 
