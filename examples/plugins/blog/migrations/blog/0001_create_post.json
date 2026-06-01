@@ -1,0 +1,95 @@
+{
+  "id": "0001_create_post",
+  "plugin": "blog",
+  "depends_on": [],
+  "operations": [
+    {
+      "kind": "CreateTable",
+      "table": "post",
+      "columns": [
+        {
+          "name": "id",
+          "ty": "BigInt",
+          "primary_key": true,
+          "nullable": false
+        },
+        {
+          "name": "title",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": false
+        },
+        {
+          "name": "body",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": false
+        },
+        {
+          "name": "author_email",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": false
+        },
+        {
+          "name": "published",
+          "ty": "Boolean",
+          "primary_key": false,
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "ty": "Timestamptz",
+          "primary_key": false,
+          "nullable": false
+        }
+      ]
+    }
+  ],
+  "snapshot_after": {
+    "models": [
+      {
+        "name": "Post",
+        "table": "post",
+        "fields": [
+          {
+            "name": "id",
+            "ty": "BigInt",
+            "primary_key": true,
+            "nullable": false
+          },
+          {
+            "name": "title",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": false
+          },
+          {
+            "name": "body",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": false
+          },
+          {
+            "name": "author_email",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": false
+          },
+          {
+            "name": "published",
+            "ty": "Boolean",
+            "primary_key": false,
+            "nullable": false
+          },
+          {
+            "name": "created_at",
+            "ty": "Timestamptz",
+            "primary_key": false,
+            "nullable": false
+          }
+        ]
+      }
+    ]
+  }
+}
