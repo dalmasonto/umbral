@@ -2130,6 +2130,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "tower-http"
+version = "0.6.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4cfcf7e2740e6fc6d4d688b4ef00650406bb94adf4731e43c096c3a19fe40840"
+dependencies = [
+ "bitflags",
+ "bytes",
+ "futures-util",
+ "http",
+ "http-body",
+ "http-body-util",
+ "pin-project-lite",
+ "tower-layer",
+ "tower-service",
+ "tracing",
+]
+
+[[package]]
 name = "tower-layer"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2238,6 +2256,8 @@ dependencies = [
  "sqlx",
  "tokio",
  "toml",
+ "tower",
+ "tower-http",
  "tracing",
  "uuid",
 ]
@@ -2278,6 +2298,8 @@ dependencies = [
 name = "umbra-rest"
 version = "0.0.1"
 dependencies = [
+ "async-trait",
+ "base64",
  "chrono",
  "serde",
  "serde_json",

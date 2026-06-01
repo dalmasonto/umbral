@@ -47,7 +47,7 @@ on day one:
 
 <Callout type="warning">
 The `sqlite::memory:` default doesn't persist between subcommand invocations,
-which makes `cargo run -p umbra-cli -- migrate` quietly target a throwaway
+which makes `cargo run -- migrate` quietly target a throwaway
 database. Export `UMBRA_DATABASE_URL=sqlite://app.db?mode=rwc` for any
 real work.
 </Callout>

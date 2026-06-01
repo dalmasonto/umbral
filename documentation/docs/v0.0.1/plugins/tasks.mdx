@@ -15,7 +15,8 @@ of one `.plugin(TasksPlugin)` line.
 Registering the plugin creates one migration: a `task_row` table that tracks
 every enqueued job — its name, JSON payload, status, attempt count, schedule
 time, and error message on failure. The plugin also contributes a `tasks-worker`
-management command so `umbra-cli` can drain the queue.
+management subcommand reachable via `cargo run -- tasks-worker` (your project's
+binary dispatches it through `umbra_cli::dispatch(app)`).
 
 ```rust
 App::builder()
@@ -53,10 +54,10 @@ let _task_id = enqueue("send_welcome_email", WelcomePayload { user_id: 42 }, Enq
 
 ```bash
 # Run continuously — polls every second, handles Ctrl-C gracefully.
-cargo run -p umbra-cli -- tasks-worker
+cargo run -- tasks-worker
 
 # Run exactly one claim/dispatch iteration and exit (useful for tests or cron).
-cargo run -p umbra-cli -- tasks-worker --once
+cargo run -- tasks-worker --once
 ```
 
 The worker claims one pending row at a time inside a transaction, dispatches the

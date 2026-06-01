@@ -29,13 +29,13 @@ App::builder()
 From your project root:
 
 ```bash
-cargo run -p umbra-cli -- makemigrations
+cargo run -- makemigrations
 # -> Wrote migrations/app/0001_create_post.json
 
-cargo run -p umbra-cli -- migrate
+cargo run -- migrate
 # -> Applied 1 migration(s)
 
-cargo run -p umbra-cli -- showmigrations
+cargo run -- showmigrations
 # -> # plugin: app
 # -> [X] app/0001_create_post
 ```
