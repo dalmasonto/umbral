@@ -35,6 +35,18 @@ struct Comment {
 
 static BOOT: OnceCell<()> = OnceCell::const_new();
 
+/// Serialises tests that mutate the shared `post` / `comment` tables.
+///
+/// The ambient pool is process-wide (via `App::build`'s OnceLock), so
+/// every test in this file points at the same SQLite database. Two of
+/// them seed rows and assert counts; one of them runs `DELETE FROM
+/// post` mid-test to exercise the load path. Without this mutex, the
+/// DELETE races the row-count assertion and one test reports 0 rows.
+///
+/// Tests that don't touch tables (`load_rejects_unsupported_dump_version`,
+/// `load_skips_unknown_tables`) skip the lock and run in parallel.
+static TABLES_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 async fn boot() {
     BOOT.get_or_init(|| async {
         let settings =
@@ -89,7 +101,20 @@ async fn boot() {
 #[tokio::test]
 async fn dump_walks_every_registered_model() {
     boot().await;
+    // Lock the shared tables for the duration of this test - the
+    // round-trip test wipes them, which races our row-count assertion.
+    let _guard = TABLES_LOCK.lock().await;
     let pool = umbra::db::pool();
+
+    // Start clean: another test in this binary may have left rows.
+    sqlx::query("DELETE FROM post")
+        .execute(&pool)
+        .await
+        .expect("clean post");
+    sqlx::query("DELETE FROM comment")
+        .execute(&pool)
+        .await
+        .expect("clean comment");
 
     // Seed two rows in each table.
     sqlx::query("INSERT INTO post (title, body, published_at) VALUES (?, ?, ?)")
@@ -154,7 +179,21 @@ async fn dump_walks_every_registered_model() {
 #[tokio::test]
 async fn round_trip_through_disk_preserves_rows() {
     boot().await;
+    // The round-trip wipes both tables mid-test; serialise against
+    // `dump_walks_every_registered_model` which seeds rows and asserts
+    // counts.
+    let _guard = TABLES_LOCK.lock().await;
     let pool = umbra::db::pool();
+
+    // Start clean.
+    sqlx::query("DELETE FROM post")
+        .execute(&pool)
+        .await
+        .expect("clean post");
+    sqlx::query("DELETE FROM comment")
+        .execute(&pool)
+        .await
+        .expect("clean comment");
 
     // Seed a deterministic comment row we'll look for after the
     // round-trip.
