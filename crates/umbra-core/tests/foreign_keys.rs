@@ -120,6 +120,8 @@ fn create_table_emits_references_sqlite() {
                 primary_key: true,
                 nullable: false,
                 fk_target: None,
+                noform: false,
+                noedit: false,
             },
             Column {
                 name: "title".to_string(),
@@ -127,6 +129,8 @@ fn create_table_emits_references_sqlite() {
                 primary_key: false,
                 nullable: false,
                 fk_target: None,
+                noform: false,
+                noedit: false,
             },
             Column {
                 name: "author".to_string(),
@@ -134,6 +138,8 @@ fn create_table_emits_references_sqlite() {
                 primary_key: false,
                 nullable: false,
                 fk_target: Some("fk_user".to_string()),
+                noform: false,
+                noedit: false,
             },
         ],
     };
@@ -174,6 +180,8 @@ fn create_table_emits_references_postgres() {
                 primary_key: true,
                 nullable: false,
                 fk_target: None,
+                noform: false,
+                noedit: false,
             },
             Column {
                 name: "title".to_string(),
@@ -181,6 +189,8 @@ fn create_table_emits_references_postgres() {
                 primary_key: false,
                 nullable: false,
                 fk_target: None,
+                noform: false,
+                noedit: false,
             },
             Column {
                 name: "author".to_string(),
@@ -188,6 +198,8 @@ fn create_table_emits_references_postgres() {
                 primary_key: false,
                 nullable: false,
                 fk_target: Some("fk_user".to_string()),
+                noform: false,
+                noedit: false,
             },
         ],
     };

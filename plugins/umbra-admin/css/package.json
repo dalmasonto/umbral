@@ -1,0 +1,14 @@
+{
+  "name": "umbra-admin-css",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Tailwind CSS build for umbra-admin",
+  "scripts": {
+    "build": "tailwindcss -c tailwind.config.js -i input.css -o ../src/assets/admin.css --minify",
+    "watch": "tailwindcss -c tailwind.config.js -i input.css -o ../src/assets/admin.css --watch"
+  },
+  "devDependencies": {
+    "tailwindcss": "^3.4.0"
+  },
+  "dependencies": {}
+}

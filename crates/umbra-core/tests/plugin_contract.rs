@@ -112,6 +112,8 @@ impl Plugin for TestPlugin {
                 primary_key: true,
                 nullable: false,
                 fk_target: None,
+                noform: false,
+                noedit: false,
             }],
         }]
     }

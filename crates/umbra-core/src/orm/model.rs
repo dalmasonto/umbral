@@ -178,6 +178,18 @@ pub struct FieldSpec {
     /// this at DDL-emit time to produce `REFERENCES "<target>"("id")`.
     /// `None` for all non-FK fields.
     pub fk_target: Option<&'static str>,
+
+    /// When `true`, this field is never rendered on any form (create or
+    /// edit). Use for columns the user should never touch directly — e.g.
+    /// `password_hash`, `internal_token`. Set via `#[umbra(noform)]`.
+    ///
+    /// If `noform` is true, `noedit` is moot (noform takes precedence).
+    pub noform: bool,
+
+    /// When `true`, this field appears on the edit form as read-only.
+    /// The user can see the value but not change it. Set via
+    /// `#[umbra(noedit)]`. Has no effect when `noform` is also set.
+    pub noedit: bool,
 }
 
 /// The SQL type kind of a column.

@@ -59,6 +59,8 @@ impl crate::orm::Model for Post {
             nullable: false,
             supported_backends: &[],
             fk_target: None,
+            noform: false,
+            noedit: false,
         },
         crate::orm::FieldSpec {
             name: "title",
@@ -67,6 +69,8 @@ impl crate::orm::Model for Post {
             nullable: false,
             supported_backends: &[],
             fk_target: None,
+            noform: false,
+            noedit: false,
         },
         crate::orm::FieldSpec {
             name: "body",
@@ -75,6 +79,8 @@ impl crate::orm::Model for Post {
             nullable: false,
             supported_backends: &[],
             fk_target: None,
+            noform: false,
+            noedit: false,
         },
         crate::orm::FieldSpec {
             name: "published_at",
@@ -83,6 +89,8 @@ impl crate::orm::Model for Post {
             nullable: true,
             supported_backends: &[],
             fk_target: None,
+            noform: false,
+            noedit: false,
         },
     ];
 

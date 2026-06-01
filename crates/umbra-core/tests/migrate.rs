@@ -137,6 +137,8 @@ async fn migrated_dir() -> &'static Path {
                 primary_key: false,
                 nullable: true,
                 fk_target: None,
+                noform: false,
+                noedit: false,
             };
             let file = MigrationFile {
                 id: M8_ADD_COLUMN_MIGRATION_ID.to_string(),
@@ -187,6 +189,8 @@ async fn migrated_dir() -> &'static Path {
                     primary_key: true,
                     nullable: false,
                     fk_target: None,
+                    noform: false,
+                    noedit: false,
                 },
                 Column {
                     name: "note".to_string(),
@@ -194,6 +198,8 @@ async fn migrated_dir() -> &'static Path {
                     primary_key: false,
                     nullable: true,
                     fk_target: None,
+                    noform: false,
+                    noedit: false,
                 },
             ];
             let file = MigrationFile {
@@ -669,6 +675,8 @@ fn id_column() -> Column {
         primary_key: true,
         nullable: false,
         fk_target: None,
+        noform: false,
+        noedit: false,
     }
 }
 
@@ -681,6 +689,8 @@ fn text_column(name: &str) -> Column {
         primary_key: false,
         nullable: false,
         fk_target: None,
+        noform: false,
+        noedit: false,
     }
 }
 
@@ -802,6 +812,8 @@ fn diff_returns_unsafe_alter_for_a_type_change() {
             primary_key: false,
             nullable: false,
             fk_target: None,
+            noform: false,
+            noedit: false,
         },
     ]));
 
@@ -838,6 +850,8 @@ fn diff_emits_alter_column_for_a_nullable_flip() {
             primary_key: false,
             nullable: true,
             fk_target: None,
+            noform: false,
+            noedit: false,
         },
     ]));
 

@@ -49,6 +49,8 @@ fn postgres_ddl_renders_tsvector_type() {
                 primary_key: true,
                 nullable: false,
                 fk_target: None,
+                noform: false,
+                noedit: false,
             },
             Column {
                 name: "search".to_string(),
@@ -56,6 +58,8 @@ fn postgres_ddl_renders_tsvector_type() {
                 primary_key: false,
                 nullable: false,
                 fk_target: None,
+                noform: false,
+                noedit: false,
             },
         ],
     };

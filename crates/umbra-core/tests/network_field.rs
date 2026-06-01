@@ -64,6 +64,8 @@ fn postgres_ddl_renders_inet_and_macaddr_types() {
                 primary_key: true,
                 nullable: false,
                 fk_target: None,
+                noform: false,
+                noedit: false,
             },
             Column {
                 name: "addr".to_string(),
@@ -71,6 +73,8 @@ fn postgres_ddl_renders_inet_and_macaddr_types() {
                 primary_key: false,
                 nullable: false,
                 fk_target: None,
+                noform: false,
+                noedit: false,
             },
             Column {
                 name: "mac".to_string(),
@@ -78,6 +82,8 @@ fn postgres_ddl_renders_inet_and_macaddr_types() {
                 primary_key: false,
                 nullable: false,
                 fk_target: None,
+                noform: false,
+                noedit: false,
             },
             Column {
                 name: "net".to_string(),
@@ -85,6 +91,8 @@ fn postgres_ddl_renders_inet_and_macaddr_types() {
                 primary_key: false,
                 nullable: true,
                 fk_target: None,
+                noform: false,
+                noedit: false,
             },
         ],
     };

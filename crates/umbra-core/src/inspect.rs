@@ -826,6 +826,8 @@ impl From<&IntrospectedColumn> for Column {
             primary_key: c.primary_key,
             nullable: c.nullable,
             fk_target: None,
+            noform: false,
+            noedit: false,
         }
     }
 }

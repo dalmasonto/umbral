@@ -156,6 +156,52 @@ pub struct Post {
 
 At query time, `post::AUTHOR.eq(42)` filters by the raw FK integer. To load the referenced row, call `.resolve(&pool)` on the field value. Full details on the [Relationships](./relationships) page.
 
+## Form-level field attributes
+
+Two field-level attributes tell the admin how to render (or suppress) a column on create and edit forms. They are declared on the struct field alongside your normal Rust type, and take effect automatically in the admin UI.
+
+### `#[umbra(noform)]`
+
+The column never appears on any form — neither create nor edit. Use this for fields the user should never touch directly:
+
+```rust
+#[derive(Debug, sqlx::FromRow, umbra::orm::Model)]
+pub struct AuthUser {
+    pub id: i64,
+    pub username: String,
+    #[umbra(noform)]       // the admin hides this column on all forms
+    pub password_hash: String,
+}
+```
+
+When `noform` is set, `noedit` is moot (noform takes precedence). Sensitive columns like `password_hash` benefit from the `password_field("password_hash")` AdminModel builder instead, which adds a dedicated "Change password" dialog on edit forms.
+
+### `#[umbra(noedit)]`
+
+The column appears on the edit form as a read-only display, but cannot be changed. The user sees the value without being able to modify it. On create forms the column is omitted entirely (it has no value yet):
+
+```rust
+#[derive(Debug, sqlx::FromRow, umbra::orm::Model)]
+pub struct AuthUser {
+    pub id: i64,
+    pub username: String,
+    #[umbra(noedit)]       // shown read-only on edit; hidden on create
+    pub email: String,
+    #[umbra(noform)]       // never shown
+    pub password_hash: String,
+}
+```
+
+The admin renders a `(read-only)` badge next to the label and disables the input element.
+
+### Order of precedence
+
+1. If `noform` is set, the field is skipped on all forms. `noedit` is not checked.
+2. If `noedit` is set (and `noform` is not), the field is shown read-only on edit and hidden on create.
+3. If `AdminModel::readonly_fields(&["..."])` also lists the column, it is always read-only regardless of `noedit`.
+
+See the [admin reference](../plugins/admin) for the `password_field(...)` builder that combines `noform` with a dedicated password-change flow.
+
 ## See also
 
 - [Relationships](./relationships) - declaring foreign keys, `.resolve()`, column constants, what is deferred.

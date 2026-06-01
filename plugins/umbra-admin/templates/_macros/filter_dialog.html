@@ -1,0 +1,264 @@
+{#
+  filter_dialog(model, facets, search_val, sort_col, sort_order, active_filter)
+  ------------------------------------------------------------------------------
+  Modal filter dialog. Opened by the "Filter" button in the DataTable toolbar.
+  Only renders controls for filterable field types:
+    - Boolean   → tri-state segmented control (any / true / false)
+    - Choice    → checkbox list of distinct values
+    - ForeignKey → searchable async picker (reuses FK options endpoint)
+    - Date/DateTime → date-range picker (from / to)
+  Text/numeric fields in list_filter are silently skipped (search covers them).
+#}
+
+{% macro filter_dialog(model, facets, columns, search_val, sort_col, sort_order, active_filter) %}
+<div
+  id="umbra-filter-dialog"
+  class="fixed inset-0 z-[400] flex items-center justify-center"
+  role="dialog"
+  aria-modal="true"
+  aria-labelledby="filter-dialog-title"
+  onclick="if(event.target===this)umbra.closeFilterDialog()"
+>
+  {# Scrim #}
+  <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" aria-hidden="true"></div>
+
+  {# Panel #}
+  <div class="relative w-full max-w-lg mx-md bg-surface-container border border-outline-variant rounded-[14px] shadow-2xl overflow-hidden">
+    {# Header #}
+    <div class="flex items-center justify-between px-lg py-md border-b border-outline-variant">
+      <h2 id="filter-dialog-title" class="font-h3 text-h3 text-on-surface">Filter</h2>
+      <button
+        type="button"
+        onclick="umbra.closeFilterDialog()"
+        class="p-sm text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high rounded-xl transition-colors"
+        aria-label="Close"
+      >
+        <i data-lucide="x" class="w-4 h-4"></i>
+      </button>
+    </div>
+
+    {# Filter controls — one per filterable facet #}
+    <div class="px-lg py-md space-y-lg max-h-[60vh] overflow-y-auto" id="filter-dialog-body">
+      {% set has_filterable = false %}
+      {% for facet in facets %}
+        {# Determine the column type for this facet #}
+        {% set col_type = "" %}
+        {% for col in columns %}
+          {% if col.name == facet.field %}
+            {% set col_type = col.sql_type | default("") %}
+          {% endif %}
+        {% endfor %}
+
+        {# Skip text/numeric — search covers those. col_type comes from ColumnView.sql_type #}
+        {% if col_type != "text" and col_type != "number" and col_type != "integer" and col_type != "bigint" %}
+          {% set has_filterable = true %}
+          <div class="space-y-sm">
+            <p class="font-label-sm text-label-sm text-outline uppercase tracking-wider">
+              {{ facet.field | replace("_", " ") | title }}
+            </p>
+
+            {# Boolean: tri-state segmented control #}
+            {% if col_type == "boolean" %}
+            <div class="flex gap-xs" role="group" aria-label="{{ facet.field }} filter">
+              {% for opt in ["any", "true", "false"] %}
+              {% set filter_val = facet.field ~ "=" ~ opt %}
+              <button
+                type="button"
+                data-filter-field="{{ facet.field }}"
+                data-filter-value="{{ opt }}"
+                onclick="umbra._filterSelectBool(this)"
+                class="flex-1 px-md py-sm rounded-xl border font-label-md text-label-md transition-colors {% if (opt == 'any' and not active_filter) or active_filter == filter_val %}bg-primary text-on-primary border-primary{% else %}border-outline-variant text-on-surface-variant hover:border-primary hover:text-primary{% endif %}"
+              >{{ opt | title }}</button>
+              {% endfor %}
+            </div>
+
+            {# Date / DateTime: range picker #}
+            {% elif col_type == "date" or col_type == "datetime" or col_type == "time" %}
+            <div class="flex items-center gap-sm">
+              <input
+                type="date"
+                id="filter-date-from-{{ facet.field }}"
+                data-filter-field="{{ facet.field }}"
+                data-filter-op="from"
+                class="flex-1 bg-surface-container-low border border-outline-variant rounded-xl px-sm py-xs text-body-md text-on-surface focus:outline-none focus:ring-1 focus:ring-primary"
+                placeholder="From"
+              />
+              <span class="text-on-surface-variant font-label-sm">to</span>
+              <input
+                type="date"
+                id="filter-date-to-{{ facet.field }}"
+                data-filter-field="{{ facet.field }}"
+                data-filter-op="to"
+                class="flex-1 bg-surface-container-low border border-outline-variant rounded-xl px-sm py-xs text-body-md text-on-surface focus:outline-none focus:ring-1 focus:ring-primary"
+                placeholder="To"
+              />
+            </div>
+
+            {# FK: searchable async picker #}
+            {% elif col_type == "fk" %}
+            <div class="relative">
+              <input
+                type="text"
+                id="filter-fk-search-{{ facet.field }}"
+                data-filter-field="{{ facet.field }}"
+                placeholder="Search..."
+                class="w-full bg-surface-container-low border border-outline-variant rounded-xl px-sm py-xs text-body-md text-on-surface focus:outline-none focus:ring-1 focus:ring-primary"
+                oninput="umbra._filterFkSearch('{{ facet.field }}', '{{ model.table }}', this.value)"
+              />
+              <div
+                id="filter-fk-results-{{ facet.field }}"
+                class="mt-xs max-h-40 overflow-y-auto border border-outline-variant rounded-xl bg-surface-container-low divide-y divide-outline-variant/30"
+              >
+                {% for val in facet.values %}
+                <button
+                  type="button"
+                  data-filter-field="{{ facet.field }}"
+                  data-filter-value="{{ val }}"
+                  onclick="umbra._filterSelectValue(this)"
+                  class="w-full text-left px-sm py-xs text-body-md text-on-surface hover:bg-surface-container-high transition-colors {% if active_filter == facet.field ~ '=' ~ val %}bg-primary/10 text-primary{% endif %}"
+                >{{ val }}</button>
+                {% endfor %}
+              </div>
+            </div>
+
+            {# Choice / enum: checkbox list (default for unknown/uuid etc.) #}
+            {% else %}
+            <div class="space-y-xs">
+              {% for val in facet.values %}
+              <label class="flex items-center gap-sm cursor-pointer hover:bg-surface-container-high px-sm py-xs rounded-lg transition-colors">
+                <input
+                  type="checkbox"
+                  name="filter_choice_{{ facet.field }}"
+                  value="{{ val }}"
+                  data-filter-field="{{ facet.field }}"
+                  {% if active_filter == facet.field ~ "=" ~ val %}checked{% endif %}
+                  class="w-4 h-4 rounded border-outline-variant text-primary focus:ring-primary"
+                  onchange="umbra._filterChoiceChange(this)"
+                />
+                <span class="text-body-md text-on-surface">{{ val }}</span>
+              </label>
+              {% endfor %}
+            </div>
+            {% endif %}
+          </div>
+        {% endif %}
+      {% endfor %}
+
+      {% if not has_filterable %}
+      <p class="text-body-sm text-on-surface-variant italic py-md text-center">No filterable fields configured for this model.</p>
+      {% endif %}
+    </div>
+
+    {# Footer buttons #}
+    <div class="flex items-center justify-between gap-md px-lg py-md border-t border-outline-variant">
+      <button
+        type="button"
+        onclick="umbra._filterClear('{{ model.table }}', '{{ search_val }}', '{{ sort_col }}', '{{ sort_order }}')"
+        class="px-lg py-sm rounded-xl border border-outline-variant text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high font-label-md text-label-md transition-all"
+      >Clear</button>
+      <div class="flex gap-sm">
+        <button
+          type="button"
+          onclick="umbra.closeFilterDialog()"
+          class="px-lg py-sm rounded-xl border border-outline-variant text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high font-label-md text-label-md transition-all"
+        >Cancel</button>
+        <button
+          type="button"
+          id="filter-apply-btn"
+          onclick="umbra._filterApply('{{ model.table }}', '{{ search_val }}', '{{ sort_col }}', '{{ sort_order }}')"
+          class="px-lg py-sm rounded-xl bg-primary text-on-primary hover:opacity-90 font-label-md text-label-md transition-all"
+        >Apply</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function() {
+  if (window.lucide) lucide.createIcons({ el: document.getElementById('umbra-filter-dialog') });
+
+  // Currently pending filter selection.
+  var _pendingFilter = { field: '', value: '' };
+
+  umbra.closeFilterDialog = function() {
+    var el = document.getElementById('umbra-filter-dialog');
+    if (el) el.remove();
+  };
+
+  umbra._filterSelectBool = function(btn) {
+    var field = btn.getAttribute('data-filter-field');
+    var val = btn.getAttribute('data-filter-value');
+    _pendingFilter = { field: field, value: val };
+    btn.closest('[role="group"]').querySelectorAll('button').forEach(function(b) {
+      b.className = b.className
+        .replace('bg-primary text-on-primary border-primary', '')
+        .replace('border-outline-variant text-on-surface-variant hover:border-primary hover:text-primary', '')
+        .trim();
+      b.classList.add('border-outline-variant', 'text-on-surface-variant', 'hover:border-primary', 'hover:text-primary');
+    });
+    btn.classList.remove('border-outline-variant', 'text-on-surface-variant', 'hover:border-primary', 'hover:text-primary');
+    btn.classList.add('bg-primary', 'text-on-primary', 'border-primary');
+  };
+
+  umbra._filterSelectValue = function(btn) {
+    var field = btn.getAttribute('data-filter-field');
+    var val = btn.getAttribute('data-filter-value');
+    _pendingFilter = { field: field, value: val };
+    btn.parentElement.querySelectorAll('button').forEach(function(b) {
+      b.classList.remove('bg-primary/10', 'text-primary');
+    });
+    btn.classList.add('bg-primary/10', 'text-primary');
+  };
+
+  umbra._filterChoiceChange = function(cb) {
+    if (cb.checked) {
+      _pendingFilter = { field: cb.getAttribute('data-filter-field'), value: cb.value };
+    } else if (_pendingFilter.field === cb.getAttribute('data-filter-field')) {
+      _pendingFilter = { field: '', value: '' };
+    }
+  };
+
+  umbra._filterFkSearch = function(field, table, query) {
+    var relTable = field.replace(/_id$/, '');
+    var url = '/admin/api/' + table + '/' + field + '/options?search=' + encodeURIComponent(query) + '&page_size=10';
+    fetch(url, { headers: { 'HX-Request': 'true' } })
+      .then(function(r) { return r.text(); })
+      .then(function(html) {
+        var container = document.getElementById('filter-fk-results-' + field);
+        if (container) container.innerHTML = html;
+      });
+  };
+
+  umbra._filterApply = function(table, search, sort, order) {
+    var filter = '';
+    if (_pendingFilter.field && _pendingFilter.value && _pendingFilter.value !== 'any') {
+      filter = _pendingFilter.field + '=' + _pendingFilter.value;
+    }
+    umbra.closeFilterDialog();
+    var url = '/admin/' + table + '/rows?search=' + encodeURIComponent(search)
+      + '&filter=' + encodeURIComponent(filter)
+      + '&sort=' + encodeURIComponent(sort)
+      + '&order=' + encodeURIComponent(order)
+      + '&page=1';
+    htmx.ajax('GET', url, { target: '#table-body', swap: 'innerHTML', pushUrl: true });
+  };
+
+  umbra._filterClear = function(table, search, sort, order) {
+    umbra.closeFilterDialog();
+    var url = '/admin/' + table + '/rows?search=' + encodeURIComponent(search)
+      + '&sort=' + encodeURIComponent(sort)
+      + '&order=' + encodeURIComponent(order)
+      + '&page=1';
+    htmx.ajax('GET', url, { target: '#table-body', swap: 'innerHTML', pushUrl: true });
+  };
+
+  // Escape to close.
+  (function() {
+    function onEsc(e) {
+      if (e.key === 'Escape') { umbra.closeFilterDialog(); document.removeEventListener('keydown', onEsc); }
+    }
+    document.addEventListener('keydown', onEsc);
+  })();
+})();
+</script>
+{% endmacro %}

@@ -14,9 +14,9 @@
     known footgun, documented in docs/v0.0.1/plugins/admin.mdx.
   #}
   {% if environment == "dev" or environment is undefined %}
-  <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
-  {% else %}
   <link href="/admin/static/admin.css" rel="stylesheet"/>
+  {% else %}
+  <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
   {% endif %}
   <script src="https://unpkg.com/htmx.org@2.0.4"></script>
   <script src="https://unpkg.com/lucide@latest"></script>
@@ -449,6 +449,33 @@
   umbra.closeDialog = function() {
     var slot = document.getElementById('umbra-dialog-slot');
     if (slot) slot.innerHTML = '';
+  };
+
+  // ---- Change password dialog ----
+  umbra._openChangePasswordDialog = function(table, id) {
+    var slot = document.getElementById('umbra-dialog-slot');
+    if (!slot) return;
+    slot.innerHTML =
+      '<div id="umbra-dialog-overlay" class="fixed inset-0 z-[200] flex items-center justify-center bg-background/60 backdrop-blur-sm" onclick="if(event.target===this)umbra.closeDialog()" role="dialog" aria-modal="true">' +
+      '<div class="bg-surface-container border border-outline-variant rounded-[14px] shadow-2xl w-full max-w-sm mx-md p-xl flex flex-col gap-lg">' +
+      '<div class="flex items-center gap-md">' +
+      '<div class="w-10 h-10 rounded-xl bg-primary-container/20 border border-primary/20 flex items-center justify-center flex-shrink-0">' +
+      '<i data-lucide="key" class="w-5 h-5 text-primary"></i></div>' +
+      '<h2 class="font-h3 text-h3 text-on-surface">Change password</h2></div>' +
+      '<form id="change-pw-form" class="space-y-sm"' +
+      ' hx-post="/admin/' + table + '/' + id + '/change-password"' +
+      ' hx-swap="none"' +
+      ' hx-on::after-request="umbra.closeDialog()">' +
+      '<input type="password" name="new_password" placeholder="New password" required autocomplete="new-password"' +
+      ' class="w-full bg-surface-container-low border border-outline-variant rounded-xl px-md py-sm text-body-md text-on-surface focus:outline-none focus:ring-1 focus:ring-primary" />' +
+      '<input type="password" name="confirm_password" placeholder="Confirm password" required autocomplete="new-password"' +
+      ' class="w-full bg-surface-container-low border border-outline-variant rounded-xl px-md py-sm text-body-md text-on-surface focus:outline-none focus:ring-1 focus:ring-primary" />' +
+      '<div class="flex justify-end gap-md pt-sm">' +
+      '<button type="button" onclick="umbra.closeDialog()" class="px-lg py-sm rounded-xl border border-outline-variant text-on-surface-variant hover:bg-surface-container-high font-label-md text-label-md transition-all">Cancel</button>' +
+      '<button type="submit" class="px-lg py-sm rounded-xl bg-primary text-on-primary hover:opacity-90 font-label-md text-label-md transition-all">Change</button>' +
+      '</div></form></div></div>';
+    if (window.lucide) lucide.createIcons({ el: slot });
+    htmx.process(slot);
   };
 
   // Escape: close top sheet only.

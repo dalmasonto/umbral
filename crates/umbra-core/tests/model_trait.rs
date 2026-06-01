@@ -161,6 +161,8 @@ fn field_spec_is_copy_and_eq() {
         nullable: false,
         supported_backends: &[],
         fk_target: None,
+        noform: false,
+        noedit: false,
     };
     let b = FieldSpec {
         name: "x",
@@ -169,6 +171,8 @@ fn field_spec_is_copy_and_eq() {
         nullable: false,
         supported_backends: &[],
         fk_target: None,
+        noform: false,
+        noedit: false,
     };
 
     assert_eq!(
@@ -195,6 +199,8 @@ fn field_spec_eq_distinguishes_different_names() {
         nullable: false,
         supported_backends: &[],
         fk_target: None,
+        noform: false,
+        noedit: false,
     };
     let b = FieldSpec {
         name: "y",
@@ -203,6 +209,8 @@ fn field_spec_eq_distinguishes_different_names() {
         nullable: false,
         supported_backends: &[],
         fk_target: None,
+        noform: false,
+        noedit: false,
     };
 
     assert_ne!(a, b, "FieldSpecs differing in name must not compare equal");

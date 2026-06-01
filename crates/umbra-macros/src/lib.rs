@@ -135,6 +135,41 @@ struct UmbraStructAttr {
     icon: Option<String>,
 }
 
+/// Field-level `#[umbra(...)]` attribute parsed from a struct field.
+struct UmbraFieldAttr {
+    /// `#[umbra(noform)]` — never show on any form.
+    noform: bool,
+    /// `#[umbra(noedit)]` — show on edit form read-only, never on create.
+    noedit: bool,
+}
+
+fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAttr> {
+    let mut parsed = UmbraFieldAttr {
+        noform: false,
+        noedit: false,
+    };
+    for attr in attrs {
+        if !attr.path().is_ident("umbra") {
+            continue;
+        }
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("noform") {
+                parsed.noform = true;
+                Ok(())
+            } else if meta.path.is_ident("noedit") {
+                parsed.noedit = true;
+                Ok(())
+            } else {
+                // Ignore unrecognised keys (including struct-level keys that
+                // might appear on a field by mistake) rather than erroring, so
+                // adding new field attributes is non-breaking.
+                Ok(())
+            }
+        })?;
+    }
+    Ok(parsed)
+}
+
 fn parse_umbra_struct_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraStructAttr> {
     let mut parsed = UmbraStructAttr {
         table: None,
@@ -169,10 +204,10 @@ fn parse_umbra_struct_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraStructA
                 Ok(())
             } else {
                 Err(meta.error(
-                    "umbra::Model derive accepts `table = \"...\"`, `plugin = \"...\"`, \
-                     `display = \"...\"`, and `icon = \"...\"` attributes; other attributes \
-                     (max_length, db_index, default, choices, on_delete) land as plugin \
-                     authors need them",
+                    "umbra::Model derive accepts struct-level `table = \"...\"`, `plugin = \"...\"`, \
+                     `display = \"...\"`, and `icon = \"...\"`; and field-level `noform` and `noedit`. \
+                     Other attributes (max_length, db_index, default, choices, on_delete) land as \
+                     plugin authors need them",
                 ))
             }
         })?;
@@ -292,6 +327,26 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
 
         let kind = classify_field_type(&field.ty);
 
+        // Parse field-level `#[umbra(noform)]` / `#[umbra(noedit)]`.
+        let field_attr = match parse_umbra_field_attr(&field.attrs) {
+            Ok(a) => a,
+            Err(e) => {
+                field_specs.push(e.to_compile_error());
+                column_consts.push(e.to_compile_error());
+                continue;
+            }
+        };
+        let noform_lit = if field_attr.noform {
+            quote!(true)
+        } else {
+            quote!(false)
+        };
+        let noedit_lit = if field_attr.noedit {
+            quote!(true)
+        } else {
+            quote!(false)
+        };
+
         let (sql_ty_tokens, nullable_lit) = match kind.sql_type_tokens() {
             Some((ty, nullable)) => (ty, nullable),
             None => {
@@ -332,6 +387,8 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                 nullable: #nullable_lit,
                 supported_backends: &[],
                 fk_target: #fk_target_tokens,
+                noform: #noform_lit,
+                noedit: #noedit_lit,
             }
         });
 

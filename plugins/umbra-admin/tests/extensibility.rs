@@ -306,7 +306,9 @@ async fn list_display_filters_columns() {
 }
 
 // =========================================================================
-// 2. list_filter: filter facets appear in the sidebar HTML.
+// 2. list_filter: filter button appears in the toolbar.
+// The filter dialog itself is a separate HTMX fragment loaded on demand,
+// not embedded in the initial changelist HTML.
 // =========================================================================
 
 #[tokio::test]
@@ -314,7 +316,7 @@ async fn list_filter_shows_facets_in_sidebar() {
     let router = boot().await.clone();
     let cookie = login_session(&router, "admin_ext", "password123").await;
     let (status, body) = send(
-        router,
+        router.clone(),
         Request::builder()
             .uri("/admin/article/")
             .header(header::COOKIE, format!("umbra_session={cookie}"))
@@ -323,22 +325,29 @@ async fn list_filter_shows_facets_in_sidebar() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "body:\n{body}");
-    // Phase 2: filter links use new `filter=field=value` format.
-    // Accept both old `filter_published` and new `filter=published=` format.
+    // The Filter button (with sliders-horizontal icon) should be visible
+    // because `list_filter` is configured.
     assert!(
-        body.contains("filter_published")
-            || body.contains("filter=published")
-            || body.contains("published"),
-        "list_filter facet links missing:\n{body}"
+        body.contains("filter-dialog")
+            || body.contains("sliders-horizontal")
+            || body.contains("Filter"),
+        "filter button missing when list_filter is configured:\n{body}"
     );
-    assert!(
-        body.contains("filter_published=0")
-            || body.contains("filter_published=1")
-            || body.contains("filter=published=0")
-            || body.contains("filter=published=1")
-            || body.contains("published=0")
-            || body.contains("published=1"),
-        "published filter values missing:\n{body}"
+    // The filter dialog endpoint should return 200 for authenticated requests.
+    let (dialog_status, dialog_body) = send(
+        router,
+        Request::builder()
+            .uri("/admin/article/filter-dialog")
+            .header(header::COOKIE, format!("umbra_session={cookie}"))
+            .header("HX-Request", "true")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(
+        dialog_status,
+        StatusCode::OK,
+        "filter-dialog endpoint failed:\n{dialog_body}"
     );
 }
 

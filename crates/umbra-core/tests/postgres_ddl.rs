@@ -24,6 +24,8 @@ fn id_pk() -> Column {
         primary_key: true,
         nullable: false,
         fk_target: None,
+        noform: false,
+        noedit: false,
     }
 }
 
@@ -35,6 +37,8 @@ fn text_not_null(name: &str) -> Column {
         primary_key: false,
         nullable: false,
         fk_target: None,
+        noform: false,
+        noedit: false,
     }
 }
 
@@ -46,6 +50,8 @@ fn text_nullable(name: &str) -> Column {
         primary_key: false,
         nullable: true,
         fk_target: None,
+        noform: false,
+        noedit: false,
     }
 }
 

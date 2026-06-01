@@ -222,6 +222,11 @@ impl Plugin for AdminPlugin {
             .route("/admin/{table}/action", post(run_action))
             // Phase 2: fragment-only rows endpoint (search/sort/filter/paginate)
             .route("/admin/{table}/rows", axum::routing::get(rows_fragment))
+            // Filter dialog fragment
+            .route(
+                "/admin/{table}/filter-dialog",
+                axum::routing::get(filter_dialog_handler),
+            )
             // Phase 2: new-record sheet (create mode)
             .route("/admin/{table}/new-sheet", axum::routing::get(new_sheet))
             // Phase 2: delete confirm dialog fragment
@@ -271,6 +276,11 @@ impl Plugin for AdminPlugin {
                 "/admin/{table}/{id}/cell/{field}",
                 axum::routing::post(cell_edit_post),
             )
+            // Password change for models with password_field set
+            .route(
+                "/admin/{table}/{id}/change-password",
+                axum::routing::post(change_password_handler),
+            )
             // Phase 4: user prefs
             .route(
                 "/admin/api/prefs",
@@ -296,6 +306,11 @@ impl Plugin for AdminPlugin {
             )
             // Phase 4: command palette fragment
             .route("/admin/api/palette", axum::routing::get(palette_fragment))
+            // Static CSS (embedded at compile time; served in prod, CDN used in dev)
+            .route(
+                "/admin/static/admin.css",
+                axum::routing::get(serve_admin_css),
+            )
             .with_state(state)
     }
 
@@ -404,6 +419,16 @@ fn engine() -> &'static Environment<'static> {
             include_str!("../templates/_macros/confirm_dialog.html"),
         )
         .expect("admin/_macros/confirm_dialog.html parses");
+        env.add_template(
+            "admin/_macros/filter_dialog.html",
+            include_str!("../templates/_macros/filter_dialog.html"),
+        )
+        .expect("admin/_macros/filter_dialog.html parses");
+        env.add_template(
+            "admin/filter_dialog_fragment.html",
+            include_str!("../templates/filter_dialog_fragment.html"),
+        )
+        .expect("admin/filter_dialog_fragment.html parses");
 
         // Phase 4 templates
         env.add_template(
@@ -2578,6 +2603,96 @@ async fn rows_fragment(
     }
 }
 
+/// `GET /admin/{table}/filter-dialog` — filter dialog fragment.
+///
+/// Renders the filter dialog modal for the given table. Only filterable
+/// field types are shown; text fields in list_filter are silently dropped
+/// with a debug log message.
+async fn filter_dialog_handler(
+    State(state): State<AdminState>,
+    headers: HeaderMap,
+    Path(table): Path<String>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Response {
+    let path = format!("/admin/{table}/filter-dialog");
+    if let Err(r) = require_staff(&headers, &path).await {
+        return r;
+    }
+    let Some((_, model)) = find_model(&table) else {
+        return AdminError::NotFound(format!("no model `{table}`")).into_response();
+    };
+    let cfg = state.config_for(&table);
+
+    // Build facets — same as in list handler.
+    let pool = umbra::db::pool();
+    let mut facets: Vec<FilterFacet> = Vec::new();
+    if let Some(c) = cfg {
+        for field in &c.list_filter {
+            // Find the column type.
+            let col_ty = model
+                .fields
+                .iter()
+                .find(|col| &col.name == field)
+                .map(|col| col.ty);
+            // Silently drop plain text and numeric fields.
+            if let Some(ty) = col_ty {
+                match ty {
+                    SqlType::Text => {
+                        tracing::debug!(
+                            field = field.as_str(),
+                            table = table.as_str(),
+                            "text fields are not filterable; use search_fields"
+                        );
+                        continue;
+                    }
+                    SqlType::SmallInt
+                    | SqlType::Integer
+                    | SqlType::BigInt
+                    | SqlType::Real
+                    | SqlType::Double => {
+                        tracing::debug!(
+                            field = field.as_str(),
+                            table = table.as_str(),
+                            "numeric fields are not filterable via the filter dialog; use search_fields"
+                        );
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
+            let values = fetch_distinct_values(&pool, &model.table, field)
+                .await
+                .unwrap_or_default();
+            facets.push(FilterFacet {
+                field: field.clone(),
+                values,
+            });
+        }
+    }
+
+    let search_val = params.get("search").cloned().unwrap_or_default();
+    let sort_col = params.get("sort").cloned().unwrap_or_default();
+    let sort_order = params.get("order").cloned().unwrap_or_default();
+    let active_filter = params.get("active_filter").cloned().unwrap_or_default();
+    let columns = model_for_template(&model).fields;
+
+    match render(
+        "admin/filter_dialog_fragment.html",
+        context!(
+            model         => model_for_template(&model),
+            facets        => facets,
+            columns       => columns,
+            search_val    => search_val,
+            sort_col      => sort_col,
+            sort_order    => sort_order,
+            active_filter => active_filter,
+        ),
+    ) {
+        Ok(html) => html.into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
 /// `GET /admin/{table}/{id}/sheet` — preview sheet fragment (or full page for non-HTMX).
 async fn preview_sheet(
     State(state): State<AdminState>,
@@ -2684,14 +2799,17 @@ async fn edit_sheet_handler(
     let fields = form_fields_for(&model, Some(&row_strings), cfg);
     let model_view = model_for_template(&model);
 
+    let password_field = cfg.and_then(|c| c.password_field.as_deref()).unwrap_or("");
+
     if is_htmx(&headers) {
         match render(
             "admin/sheet_edit.html",
             context!(
-                model       => model_view,
-                instance_id => id,
-                fields      => fields,
-                error       => "",
+                model          => model_view,
+                instance_id    => id,
+                fields         => fields,
+                error          => "",
+                password_field => password_field,
             ),
         ) {
             Ok(html) => html.into_response(),
@@ -2875,6 +2993,76 @@ async fn htmx_delete(
         }
         Err(e) => AdminError::Sqlx(e).into_response(),
     }
+}
+
+/// `POST /admin/{table}/{id}/change-password`
+///
+/// Accepts `new_password` + `confirm_password` form fields. Hashes and
+/// writes the new password if they match. Returns an HTMX-friendly
+/// response with a toast trigger on success.
+async fn change_password_handler(
+    State(state): State<AdminState>,
+    headers: HeaderMap,
+    Path((table, id)): Path<(String, String)>,
+    body: String,
+) -> Response {
+    let path = format!("/admin/{table}/{id}/change-password");
+    if let Err(r) = require_staff(&headers, &path).await {
+        return r;
+    }
+    let cfg = state.config_for(&table);
+    let pw_col = match cfg.and_then(|c| c.password_field.as_deref()) {
+        Some(col) => col,
+        None => {
+            return AdminError::BadInput("no password_field configured for this model".to_string())
+                .into_response();
+        }
+    };
+    let form: HashMap<String, String> = serde_urlencoded::from_str(&body).unwrap_or_default();
+    let new_pw = form.get("new_password").map(|s| s.as_str()).unwrap_or("");
+    let confirm_pw = form
+        .get("confirm_password")
+        .map(|s| s.as_str())
+        .unwrap_or("");
+
+    if new_pw.is_empty() {
+        return AdminError::BadInput("Password cannot be empty".to_string()).into_response();
+    }
+    if new_pw != confirm_pw {
+        return AdminError::BadInput("Passwords do not match".to_string()).into_response();
+    }
+    let hash = match umbra_auth::hash_password(new_pw) {
+        Ok(h) => h,
+        Err(e) => {
+            return AdminError::BadInput(format!("password hashing failed: {e}")).into_response();
+        }
+    };
+    let Some((_, model)) = find_model(&table) else {
+        return AdminError::NotFound(format!("no model `{table}`")).into_response();
+    };
+    let Some(pk) = pk_column(&model) else {
+        return AdminError::Render("no pk".to_string()).into_response();
+    };
+    let pool = umbra::db::pool();
+    let sql = format!(
+        "UPDATE \"{}\" SET \"{}\" = ? WHERE \"{}\" = ?",
+        q(&model.table),
+        q(pw_col),
+        q(&pk.name)
+    );
+    if let Err(e) = sqlx::query(&sql).bind(hash).bind(&id).execute(&pool).await {
+        return AdminError::Sqlx(e).into_response();
+    }
+    // Return a toast trigger so the UI shows a success message.
+    let trigger = serde_json::json!({
+        "showToast": { "message": "Password changed successfully.", "level": "success" },
+        "closeDialog": {}
+    });
+    axum::response::Response::builder()
+        .status(StatusCode::OK)
+        .header("HX-Trigger", trigger.to_string())
+        .body(axum::body::Body::empty())
+        .unwrap_or_else(|_| StatusCode::OK.into_response())
 }
 
 fn sanitise_form_error(e: &AdminError) -> String {
@@ -3089,6 +3277,29 @@ async fn insert_row(
     form: &HashMap<String, String>,
     cfg: Option<&AdminConfig>,
 ) -> Result<(), AdminError> {
+    // If a password_field is configured and the form contains a plaintext
+    // password value, hash it before binding. Also validate confirm match.
+    let form_owned: HashMap<String, String>;
+    let form = if let Some(pw_col) = cfg.and_then(|c| c.password_field.as_deref()) {
+        if let Some(plaintext) = form.get(pw_col).filter(|v| !v.is_empty()) {
+            let confirm_key = format!("{pw_col}_confirm");
+            let confirm = form.get(&confirm_key).map(|s| s.as_str()).unwrap_or("");
+            if plaintext != confirm {
+                return Err(AdminError::BadInput("Passwords do not match.".to_string()));
+            }
+            let hash = umbra_auth::hash_password(plaintext)
+                .map_err(|e| AdminError::BadInput(format!("password hashing failed: {e}")))?;
+            let mut owned = form.clone();
+            owned.insert(pw_col.to_string(), hash);
+            form_owned = owned;
+            &form_owned
+        } else {
+            form
+        }
+    } else {
+        form
+    };
+
     let all_col_names: Vec<&str> = model.fields.iter().map(|c| c.name.as_str()).collect();
     let readonly_owned: Vec<String> = if let Some(c) = cfg {
         c.effective_readonly_fields(&all_col_names)
@@ -3321,6 +3532,10 @@ struct FormField {
     readonly: bool,
     /// For FK fields: the related table name. Empty string for non-FK fields.
     fk_table: String,
+    /// When `true`, this is the synthetic "password" field emitted for
+    /// models that have `password_field` set. The field editor renders
+    /// two inputs (password + confirm) instead of a plain text input.
+    is_password: bool,
 }
 
 fn form_fields_for(
@@ -3343,10 +3558,27 @@ fn form_fields_for(
             .map(|s| s.to_string())
             .collect()
     };
-    model
+    let mut result: Vec<FormField> = model
         .fields
         .iter()
-        .filter(|c| !c.primary_key)
+        .filter(|c| {
+            // Primary key never appears on forms.
+            if c.primary_key {
+                return false;
+            }
+            // noform: never on any form.
+            if c.noform {
+                return false;
+            }
+            // password_field column is also suppressed from normal rendering;
+            // it gets its own synthetic field below (create only).
+            if let Some(c2) = cfg.and_then(|cfg| cfg.password_field.as_deref()) {
+                if c.name == c2 {
+                    return false;
+                }
+            }
+            true
+        })
         .map(|c| {
             let raw = prefill
                 .and_then(|m| m.get(&c.name))
@@ -3359,16 +3591,40 @@ fn form_fields_for(
             } else {
                 String::new()
             };
+            // noedit: shown read-only on edit forms (also when in readonly_set).
+            let is_readonly = readonly_set.contains(&c.name) || c.noedit;
             FormField {
                 name: c.name.clone(),
                 kind: input_kind(c.ty),
                 value: format_for_input(&raw, c.ty),
                 nullable: c.nullable,
-                readonly: readonly_set.contains(&c.name),
+                readonly: is_readonly,
                 fk_table,
+                is_password: false,
             }
         })
-        .collect()
+        .collect();
+
+    // Append the synthetic password field for create forms only.
+    // On edit forms (prefill.is_some()), the "Change password" button
+    // in the sheet handles password changes via a dedicated endpoint.
+    if let Some(c) = cfg {
+        if let Some(ref pw_col) = c.password_field {
+            if prefill.is_none() {
+                result.push(FormField {
+                    name: pw_col.clone(),
+                    kind: "password",
+                    value: String::new(),
+                    nullable: false,
+                    readonly: false,
+                    fk_table: String::new(),
+                    is_password: true,
+                });
+            }
+        }
+    }
+
+    result
 }
 
 fn format_for_input(raw: &str, ty: SqlType) -> String {
@@ -3423,6 +3679,27 @@ struct ColumnView {
     name: String,
     nullable: bool,
     primary_key: bool,
+    /// Lowercase SQL type name for template filter logic.
+    sql_type: String,
+}
+
+fn sql_type_name(ty: SqlType) -> &'static str {
+    match ty {
+        SqlType::SmallInt | SqlType::Integer => "integer",
+        SqlType::BigInt => "bigint",
+        SqlType::Real | SqlType::Double => "number",
+        SqlType::Boolean => "boolean",
+        SqlType::Text => "text",
+        SqlType::Date => "date",
+        SqlType::Time => "time",
+        SqlType::Timestamptz => "datetime",
+        SqlType::Uuid => "uuid",
+        SqlType::Json => "json",
+        SqlType::ForeignKey => "fk",
+        SqlType::Array(_) => "array",
+        SqlType::Inet | SqlType::Cidr | SqlType::MacAddr => "text",
+        SqlType::FullText => "text",
+    }
 }
 
 fn model_for_template(model: &ModelMeta) -> ModelView {
@@ -3436,6 +3713,7 @@ fn model_for_template(model: &ModelMeta) -> ModelView {
                 name: c.name.clone(),
                 nullable: c.nullable,
                 primary_key: c.primary_key,
+                sql_type: sql_type_name(c.ty).to_string(),
             })
             .collect(),
     }
@@ -3453,6 +3731,7 @@ fn model_for_template_cols(model: &ModelMeta, display_cols: &[String]) -> ModelV
                 name: col.name.clone(),
                 nullable: col.nullable,
                 primary_key: col.primary_key,
+                sql_type: sql_type_name(col.ty).to_string(),
             }
         })
         .collect();
@@ -3856,6 +4135,29 @@ pub fn resolve_preview_kind(mime: &str, filename: &str) -> &'static str {
         return "text";
     }
     "download"
+}
+
+// =========================================================================
+// Static asset: embedded admin.css (served in prod; CDN in dev).
+// =========================================================================
+
+static ADMIN_CSS: &str = include_str!("assets/admin.css");
+
+/// `GET /admin/static/admin.css` — serve the embedded production stylesheet.
+///
+/// In `dev` mode the wrapper template loads the Tailwind CDN instead, but
+/// the route still works. Build the CSS with:
+///
+/// ```sh
+/// cd plugins/umbra-admin/css && npm install && npm run build
+/// ```
+async fn serve_admin_css() -> impl IntoResponse {
+    axum::response::Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "text/css; charset=utf-8")
+        .header("Cache-Control", "public, max-age=86400")
+        .body(axum::body::Body::from(ADMIN_CSS))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
 /// Build a file descriptor JSON value.

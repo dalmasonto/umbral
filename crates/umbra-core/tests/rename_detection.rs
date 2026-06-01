@@ -38,6 +38,8 @@ fn id_col() -> Column {
         primary_key: true,
         nullable: false,
         fk_target: None,
+        noform: false,
+        noedit: false,
     }
 }
 
@@ -48,6 +50,8 @@ fn title_col() -> Column {
         primary_key: false,
         nullable: false,
         fk_target: None,
+        noform: false,
+        noedit: false,
     }
 }
 
@@ -135,6 +139,8 @@ fn name_match_wins_over_shape_match_when_columns_differ() {
         primary_key: false,
         nullable: true,
         fk_target: None,
+        noform: false,
+        noedit: false,
     };
 
     let prev = make_snapshot(vec![make_meta("Foo", "foo", vec![id_col(), title_col()])]);
@@ -201,6 +207,8 @@ fn no_rename_when_shapes_differ() {
         primary_key: false,
         nullable: false,
         fk_target: None,
+        noform: false,
+        noedit: false,
     };
 
     let prev = make_snapshot(vec![make_meta("Foo", "foo", vec![id_col(), title_col()])]);

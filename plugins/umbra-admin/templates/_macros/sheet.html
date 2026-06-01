@@ -7,7 +7,7 @@ Arguments: mode="preview"|"edit"|"create", model_name, table, instance_id, field
 Phase-3 deferred: sheet stacking requires a JS state machine.
 Drag-resize: ~50 LOC vanilla JS at the bottom; width in localStorage.
 #}
-{% macro sheet(mode, model_name, table, instance_id, fields, title="", error="", depth=0) %}
+{% macro sheet(mode, model_name, table, instance_id, fields, title="", error="", depth=0, password_field="") %}
 {% set sheet_title = title if title else ("New " ~ model_name if mode == "create" else ("Edit " ~ model_name ~ " #" ~ instance_id if mode == "edit" else (model_name ~ " #" ~ instance_id))) %}
 {% set is_edit = mode == "edit" or mode == "create" %}
 {% set offset = depth * 40 %}
@@ -210,6 +210,14 @@ Drag-resize: ~50 LOC vanilla JS at the bottom; width in localStorage.
         <i data-lucide="pencil" class="w-4 h-4 inline-block mr-xs"></i>Edit
       </button>
       {% elif is_edit %}
+      {% if password_field and mode == "edit" %}
+      <button type="button"
+        onclick="umbra._openChangePasswordDialog('{{ table }}', '{{ instance_id }}')"
+        class="px-md py-sm border border-outline-variant rounded-xl text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high font-label-md text-label-md transition-all flex items-center gap-xs">
+        <i data-lucide="key" class="w-4 h-4"></i>
+        Change password
+      </button>
+      {% endif %}
       <button type="button" onclick="umbra.closeSheet()"
         class="px-lg py-sm text-on-surface-variant hover:text-on-surface font-label-md text-label-md transition-colors">Cancel</button>
       <button type="submit" form="sheet-form" name="_save_continue" value="1"

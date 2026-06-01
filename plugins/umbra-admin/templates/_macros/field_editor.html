@@ -37,7 +37,29 @@
   </div>
 
   {# --- Input by kind --- #}
-  {% if field.kind == "bool" %}
+  {% if field.kind == "password" %}
+    {# Password + confirm pair (create forms only for password_field models) #}
+    <div class="space-y-sm">
+      <input
+        type="password"
+        id="f_{{ field.name }}"
+        name="{{ field.name }}"
+        placeholder="New password"
+        required
+        autocomplete="new-password"
+        class="w-full bg-surface-container-low border border-outline-variant rounded-xl px-md py-sm text-on-surface text-body-md focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all placeholder:text-outline/50"
+      />
+      <input
+        type="password"
+        name="{{ field.name }}_confirm"
+        placeholder="Confirm password"
+        required
+        autocomplete="new-password"
+        class="w-full bg-surface-container-low border border-outline-variant rounded-xl px-md py-sm text-on-surface text-body-md focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all placeholder:text-outline/50"
+      />
+    </div>
+
+  {% elif field.kind == "bool" %}
     {# Toggle switch #}
     <label class="inline-flex items-center gap-sm cursor-pointer {% if is_readonly %}opacity-60 pointer-events-none{% endif %}">
       <div class="relative">

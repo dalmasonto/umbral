@@ -348,6 +348,14 @@ pub struct Column {
     /// referenced model. `None` for all non-FK columns.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fk_target: Option<String>,
+    /// When `true`, this field is never shown on any admin form (create or
+    /// edit). Propagated from `FieldSpec::noform`.
+    #[serde(default)]
+    pub noform: bool,
+    /// When `true`, this field appears on the edit form as read-only.
+    /// Propagated from `FieldSpec::noedit`.
+    #[serde(default)]
+    pub noedit: bool,
 }
 
 impl From<&FieldSpec> for Column {
@@ -358,6 +366,8 @@ impl From<&FieldSpec> for Column {
             primary_key: f.primary_key,
             nullable: f.nullable,
             fk_target: f.fk_target.map(|s| s.to_string()),
+            noform: f.noform,
+            noedit: f.noedit,
         }
     }
 }

@@ -35,42 +35,12 @@
   <768px: stacked card list via CSS (hidden when table visible).
 #}
 
+{% from "admin/_macros/filter_dialog.html" import filter_dialog %}
+
 {% macro data_table(model, rows, columns, pk, facets, active_filter, has_search, search_val, actions, pagination, sort_col, sort_order, flash, inline_edit_fields=[], column_widths=[]) %}
 
-{# ================================================================
-   Filter panel (collapsible, driven by Alpine.js-lite via x-data
-   — we keep it pure vanilla since no Alpine is loaded).
-   ================================================================ #}
-<div id="filter-panel" class="hidden mb-md bg-surface-container border border-outline-variant rounded-xl p-md">
-  <div class="flex flex-wrap gap-md">
-    {% for facet in facets %}
-    <div>
-      <p class="font-label-sm text-label-sm text-outline uppercase tracking-wider mb-xs">{{ facet.field | replace("_", " ") | title }}</p>
-      <div class="flex flex-wrap gap-xs">
-        <a
-          href="?search={{ search_val }}&sort={{ sort_col }}&order={{ sort_order }}"
-          hx-get="/admin/{{ model.table }}/rows?search={{ search_val }}&sort={{ sort_col }}&order={{ sort_order }}"
-          hx-target="#table-body"
-          hx-swap="innerHTML"
-          hx-push-url="true"
-          class="px-sm py-xs rounded-full font-label-sm text-label-sm border {% if not active_filter or not active_filter | startswith(facet.field ~ '=') %}bg-primary-container/10 text-primary border-primary/20{% else %}border-outline-variant text-on-surface-variant hover:border-primary hover:text-primary{% endif %} transition-colors cursor-pointer"
-        >All</a>
-        {% for val in facet.values %}
-        {% set this_filter = facet.field ~ "=" ~ val %}
-        <a
-          href="?search={{ search_val }}&filter={{ this_filter }}&sort={{ sort_col }}&order={{ sort_order }}"
-          hx-get="/admin/{{ model.table }}/rows?search={{ search_val }}&filter={{ this_filter }}&sort={{ sort_col }}&order={{ sort_order }}"
-          hx-target="#table-body"
-          hx-swap="innerHTML"
-          hx-push-url="true"
-          class="px-sm py-xs rounded-full font-label-sm text-label-sm border {% if active_filter == this_filter %}bg-primary-container/10 text-primary border-primary/20{% else %}border-outline-variant text-on-surface-variant hover:border-primary hover:text-primary{% endif %} transition-colors cursor-pointer"
-        >{{ val }}</a>
-        {% endfor %}
-      </div>
-    </div>
-    {% endfor %}
-  </div>
-</div>
+{# Filter dialog slot — rendered here, populated by JS when filter button is clicked #}
+<div id="umbra-filter-dialog-slot"></div>
 
 {# ================================================================
    Active filter chips (above the table)
@@ -154,11 +124,13 @@
     </div>
     {% endif %}
 
-    {# Filter toggle #}
+    {# Filter button — opens the filter dialog modal #}
     {% if facets %}
     <button
       type="button"
-      onclick="var p=document.getElementById('filter-panel');p.classList.toggle('hidden')"
+      hx-get="/admin/{{ model.table }}/filter-dialog?search={{ search_val }}&sort={{ sort_col }}&order={{ sort_order }}&active_filter={{ active_filter }}"
+      hx-target="#umbra-filter-dialog-slot"
+      hx-swap="innerHTML"
       class="flex items-center gap-sm px-md py-sm hover:bg-surface-container-high rounded-xl text-on-surface transition-colors font-label-md text-label-md border border-outline-variant"
     >
       <i data-lucide="sliders-horizontal" class="w-4 h-4"></i>
@@ -642,14 +614,45 @@
   var savedDensity = localStorage.getItem('umbra-admin-density');
   if (savedDensity) umbra.setDensity(savedDensity);
 
-  // ---- Column visibility ---
+  // ---- Column visibility (with localStorage persistence) ---
+  var TABLE_ID = '{{ model.table }}';
+  var COL_STORAGE_KEY = 'umbra-col-hidden-' + TABLE_ID;
+
+  function applyColVisibility(col, show) {
+    document.querySelectorAll('.dt-col[data-col="' + col + '"]').forEach(function(el) {
+      el.style.display = show ? '' : 'none';
+    });
+  }
+
+  // Restore saved hidden columns on load.
+  (function() {
+    var raw = localStorage.getItem(COL_STORAGE_KEY);
+    if (!raw) return;
+    try {
+      var hiddenCols = JSON.parse(raw);
+      hiddenCols.forEach(function(col) {
+        applyColVisibility(col, false);
+        var cb = document.querySelector('.col-visibility-cb[data-col="' + col + '"]');
+        if (cb) cb.checked = false;
+      });
+    } catch(e) {}
+  })();
+
   document.querySelectorAll('.col-visibility-cb').forEach(function(cb) {
     cb.addEventListener('change', function() {
       var col = this.getAttribute('data-col');
       var show = this.checked;
-      document.querySelectorAll('.dt-col[data-col="' + col + '"]').forEach(function(el) {
-        el.style.display = show ? '' : 'none';
-      });
+      applyColVisibility(col, show);
+      // Persist to localStorage.
+      var raw = localStorage.getItem(COL_STORAGE_KEY);
+      var hiddenCols = [];
+      try { hiddenCols = JSON.parse(raw) || []; } catch(e) {}
+      if (!show) {
+        if (hiddenCols.indexOf(col) === -1) hiddenCols.push(col);
+      } else {
+        hiddenCols = hiddenCols.filter(function(c) { return c !== col; });
+      }
+      localStorage.setItem(COL_STORAGE_KEY, JSON.stringify(hiddenCols));
     });
   });
 
@@ -725,6 +728,17 @@
   document.body.addEventListener('htmx:afterSwap', function(e) {
     if (e.detail && e.detail.target && e.detail.target.id === 'table-body') {
       if (window.lucide) lucide.createIcons();
+      // Re-apply density after tbody swap.
+      var sd = localStorage.getItem('umbra-admin-density');
+      if (sd && umbra.setDensity) umbra.setDensity(sd);
+      // Re-apply column visibility after tbody swap.
+      var raw2 = localStorage.getItem(COL_STORAGE_KEY);
+      if (raw2) {
+        try {
+          JSON.parse(raw2).forEach(function(col) { applyColVisibility(col, false); });
+        } catch(e2) {}
+      }
+      // Push URL if not already done by HTMX (ensures state preservation on refresh).
     }
   });
 

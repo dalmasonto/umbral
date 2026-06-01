@@ -291,6 +291,14 @@ pub struct AdminModel {
     /// Optional per-column CSS widths rendered as `<col style="width: ...">`.
     /// Each entry is `(column_name, css_width)` e.g. `("title", "40%")`.
     pub(crate) column_widths: Vec<(String, String)>,
+    /// When set, this column carries an argon2 password hash and should
+    /// never be rendered as a plain input. The admin will:
+    /// - Hide the column on edit forms (implicitly noform for the column).
+    /// - Show a "Change password" button on the edit sheet that opens
+    ///   a dedicated dialog.
+    /// - On create forms, render a "Password" + "Confirm password" pair
+    ///   that hashes the value on save.
+    pub(crate) password_field: Option<String>,
 }
 
 /// Names of sensitive columns that are always read-only by default.
@@ -317,6 +325,7 @@ impl AdminModel {
             icon: None,
             inline_edit_fields: Vec::new(),
             column_widths: Vec::new(),
+            password_field: None,
         }
     }
 
@@ -406,6 +415,25 @@ impl AdminModel {
     /// Enable double-click inline cell edit for these columns in the DataTable.
     pub fn inline_edit_fields(mut self, fields: &[&str]) -> Self {
         self.inline_edit_fields = fields.iter().map(|s| s.to_string()).collect();
+        self
+    }
+
+    /// Mark `column` as carrying an argon2 password hash.
+    ///
+    /// The admin will never render this column as a plain text input.
+    /// Instead:
+    /// - Create forms receive a "Password" + "Confirm password" pair that
+    ///   hashes the value before writing.
+    /// - Edit forms show a "Change password" button that opens a dedicated
+    ///   dialog (separate request).
+    ///
+    /// Set this on `AuthUser` or any model that carries a password column:
+    ///
+    /// ```ignore
+    /// AdminModel::new("auth_user").password_field("password_hash")
+    /// ```
+    pub fn password_field(mut self, column: impl Into<String>) -> Self {
+        self.password_field = Some(column.into());
         self
     }
 

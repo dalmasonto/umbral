@@ -98,6 +98,8 @@ fn int_pk_column() -> Column {
         primary_key: true,
         nullable: false,
         fk_target: None,
+        noform: false,
+        noedit: false,
     }
 }
 
@@ -108,6 +110,8 @@ fn uuid_pk_column() -> Column {
         primary_key: true,
         nullable: false,
         fk_target: None,
+        noform: false,
+        noedit: false,
     }
 }
 
@@ -118,6 +122,8 @@ fn string_pk_column() -> Column {
         primary_key: true,
         nullable: false,
         fk_target: None,
+        noform: false,
+        noedit: false,
     }
 }
 
@@ -128,6 +134,8 @@ fn label_column() -> Column {
         primary_key: false,
         nullable: false,
         fk_target: None,
+        noform: false,
+        noedit: false,
     }
 }
 

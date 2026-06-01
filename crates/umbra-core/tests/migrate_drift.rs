@@ -91,6 +91,8 @@ fn write_migration(dir: &Path, plugin: &str, id: &str, table: &str) {
                     primary_key: true,
                     nullable: false,
                     fk_target: None,
+                    noform: false,
+                    noedit: false,
                 },
                 Column {
                     name: "title".to_string(),
@@ -98,6 +100,8 @@ fn write_migration(dir: &Path, plugin: &str, id: &str, table: &str) {
                     primary_key: false,
                     nullable: false,
                     fk_target: None,
+                    noform: false,
+                    noedit: false,
                 },
             ],
         }],
