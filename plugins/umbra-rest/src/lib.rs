@@ -56,6 +56,18 @@ pub use pagination::{
 pub mod resource;
 pub use resource::ResourceConfig;
 
+pub mod auth;
+pub use auth::{
+    Authentication, ChainAuthentication, FnAuthentication, Identity, NoAuthentication,
+    parse_basic_credentials,
+};
+
+pub mod permission;
+pub use permission::{
+    Action, AllowAny, AndPermission, IsAuthenticated, IsStaff, OrPermission, Permission,
+    PermissionError, ReadOnly,
+};
+
 /// The block-list every plugin starts with. Exposing these via REST
 /// would leak password hashes (auth_user), session IDs (session), or
 /// the migration tracking table itself.
@@ -98,6 +110,21 @@ pub struct RestPlugin {
     /// stays unchanged for apps that don't opt in. Configure via
     /// [`Self::paginate`].
     pagination: Arc<dyn Pagination>,
+    /// The authentication backend run on every request before the
+    /// permission check. Defaults to [`NoAuthentication`] — every
+    /// request looks anonymous. Configure via
+    /// [`Self::authenticate`].
+    authentication: Arc<dyn Authentication>,
+    /// Per-table permission classes, keyed by table name. Populated
+    /// when a [`ResourceConfig`] with `.permission(...)` is merged
+    /// via [`Self::resource`]. Tables without an entry default to
+    /// [`AllowAny`].
+    permissions: HashMap<String, Arc<dyn Permission>>,
+    /// Per-table opt-in view scope, keyed by table name. `None` (no
+    /// entry) means "all actions exposed" — backward-compatible.
+    /// `Some(set)` restricts the table to exactly that set of
+    /// actions; everything else returns 404 from the handler.
+    view_scope: HashMap<String, std::collections::HashSet<Action>>,
 }
 
 impl std::fmt::Debug for RestPlugin {
@@ -123,6 +150,51 @@ impl Default for RestPlugin {
 }
 
 impl RestPlugin {
+    /// Resolve the permission class for a table, defaulting to
+    /// [`AllowAny`] if no `ResourceConfig::permission(...)` was set.
+    fn permission_for(&self, table: &str) -> Arc<dyn Permission> {
+        self.permissions
+            .get(table)
+            .cloned()
+            .unwrap_or_else(|| Arc::new(AllowAny))
+    }
+
+    /// True when this action is mounted for this table. Tables
+    /// without an explicit `.views(...)` scope expose every action
+    /// (backward-compatible default). Tables with a scope expose
+    /// exactly the actions in the set.
+    fn view_exposed(&self, table: &str, action: Action) -> bool {
+        match self.view_scope.get(table) {
+            Some(scope) => scope.contains(&action),
+            None => true,
+        }
+    }
+
+    /// Authenticate + permission-check for one (table, action). The
+    /// caller passes the resolved identity (already pulled from the
+    /// auth backend at request entry). Returns the right `ApiError`
+    /// variant for the failure mode so the handler's `?` operator
+    /// surfaces 401 / 403 / 404 with the right shape.
+    fn gate(
+        &self,
+        table: &str,
+        action: Action,
+        identity: Option<&Identity>,
+    ) -> Result<(), ApiError> {
+        if !self.view_exposed(table, action) {
+            return Err(ApiError::NotFound(format!(
+                "action `{action:?}` is not exposed on `/api/{table}/`"
+            )));
+        }
+        match self.permission_for(table).check(action, identity) {
+            Ok(()) => Ok(()),
+            Err(PermissionError::Unauthenticated) => Err(ApiError::Unauthenticated),
+            Err(PermissionError::Forbidden) => Err(ApiError::Forbidden),
+        }
+    }
+}
+
+impl RestPlugin {
     pub fn new() -> Self {
         Self {
             include_only: None,
@@ -131,7 +203,29 @@ impl RestPlugin {
             transforms: Vec::new(),
             computed: Vec::new(),
             pagination: Arc::new(NoPagination),
+            authentication: Arc::new(NoAuthentication),
+            permissions: HashMap::new(),
+            view_scope: HashMap::new(),
         }
+    }
+
+    /// Set the authentication backend run on every request. Default
+    /// is [`NoAuthentication`]; opt in with one of the built-ins or
+    /// supply a [`FnAuthentication`] / [`ChainAuthentication`].
+    ///
+    /// Resource-level permissions ([`ResourceConfig::permission`])
+    /// see the `Option<Identity>` this produces.
+    ///
+    /// ```ignore
+    /// RestPlugin::default()
+    ///     .authenticate(FnAuthentication::new(|headers| async move {
+    ///         let user = umbra_sessions::current_user(&headers).await.ok().flatten()?;
+    ///         Some(Identity::user(user.id).with_staff(user.is_staff))
+    ///     }))
+    /// ```
+    pub fn authenticate<A: Authentication>(mut self, auth: A) -> Self {
+        self.authentication = Arc::new(auth);
+        self
     }
 
     /// Set the pagination shape applied to every list endpoint.
@@ -212,6 +306,8 @@ impl RestPlugin {
             hidden,
             transforms,
             computed,
+            permission,
+            view_scope,
         } = config;
         for field in hidden {
             self.hidden.push((table.clone(), field));
@@ -221,6 +317,17 @@ impl RestPlugin {
         }
         for (name, func) in computed {
             self.computed.push((table.clone(), name, func));
+        }
+        if let Some(perm) = permission {
+            // Repeated `.resource(...)` calls for the same table
+            // overwrite — last one wins. The alternative (storing a
+            // Vec and AND-ing) would mean a Vec<Arc<dyn Permission>>
+            // per table, which the AndPermission combinator already
+            // covers explicitly on the user side.
+            self.permissions.insert(table.clone(), perm);
+        }
+        if let Some(scope) = view_scope {
+            self.view_scope.insert(table.clone(), scope);
         }
         self
     }
@@ -376,6 +483,16 @@ enum ApiError {
     BadInput(String),
     Sqlx(sqlx::Error),
     Json(serde_json::Error),
+    /// 401 — authentication required. Raised when a Permission
+    /// returned `PermissionError::Unauthenticated` for an anonymous
+    /// request. Includes `WWW-Authenticate: Basic realm="api"`
+    /// when the auth chain wants Basic Auth, but the generic case
+    /// just signals "you need to authenticate."
+    Unauthenticated,
+    /// 403 — authenticated, but the permission rule denied this
+    /// action. Returned when a Permission produced
+    /// `PermissionError::Forbidden` on an authenticated identity.
+    Forbidden,
 }
 
 impl From<sqlx::Error> for ApiError {
@@ -401,6 +518,12 @@ impl umbra::web::IntoResponse for ApiError {
                 e.to_string(),
             ),
             ApiError::Json(e) => (StatusCode::BAD_REQUEST, "invalid_json", e.to_string()),
+            ApiError::Unauthenticated => (
+                StatusCode::UNAUTHORIZED,
+                "unauthenticated",
+                "authentication required".to_string(),
+            ),
+            ApiError::Forbidden => (StatusCode::FORBIDDEN, "forbidden", "forbidden".to_string()),
         };
         (status, Json(ApiErrorBody { error: msg, code })).into_response()
     }
@@ -440,10 +563,13 @@ fn pk_column(model: &ModelMeta) -> Result<&Column, ApiError> {
 async fn list(
     Path(table): Path<String>,
     Query(params): Query<HashMap<String, String>>,
+    headers: umbra::web::HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
-    let model = allowed_model(&table)?;
-    let pool = umbra::db::pool();
     let cfg = CONFIG.get().expect("RestPlugin::routes was called");
+    let identity = cfg.authentication.authenticate(&headers).await;
+    let model = allowed_model(&table)?;
+    cfg.gate(&table, Action::List, identity.as_ref())?;
+    let pool = umbra::db::pool();
 
     let page_req = cfg.pagination.extract_request(&params);
     let mut rows = fetch_rows(&pool, &model, None, Some(page_req)).await?;
@@ -464,8 +590,12 @@ async fn list(
 
 async fn retrieve(
     Path((table, id)): Path<(String, String)>,
+    headers: umbra::web::HeaderMap,
 ) -> Result<Json<Map<String, Value>>, ApiError> {
+    let cfg = CONFIG.get().expect("RestPlugin::routes was called");
+    let identity = cfg.authentication.authenticate(&headers).await;
     let model = allowed_model(&table)?;
+    cfg.gate(&table, Action::Retrieve, identity.as_ref())?;
     let pk = pk_column(&model)?;
     let pool = umbra::db::pool();
     let mut rows = fetch_rows(&pool, &model, Some((&pk.name, &id)), None).await?;
@@ -482,9 +612,13 @@ async fn retrieve(
 
 async fn create(
     Path(table): Path<String>,
+    headers: umbra::web::HeaderMap,
     Json(body): Json<Map<String, Value>>,
 ) -> Result<(StatusCode, Json<Map<String, Value>>), ApiError> {
+    let cfg = CONFIG.get().expect("RestPlugin::routes was called");
+    let identity = cfg.authentication.authenticate(&headers).await;
     let model = allowed_model(&table)?;
+    cfg.gate(&table, Action::Create, identity.as_ref())?;
     let pool = umbra::db::pool();
     let new_id = insert_row(&pool, &model, &body).await?;
     let pk = pk_column(&model)?;
@@ -494,16 +628,19 @@ async fn create(
             "row inserted but disappeared on read-back".into(),
         ));
     };
-    let cfg = CONFIG.get().expect("RestPlugin::routes was called");
     cfg.apply_overrides(&table, &mut row);
     Ok((StatusCode::CREATED, Json(row)))
 }
 
 async fn update(
     Path((table, id)): Path<(String, String)>,
+    headers: umbra::web::HeaderMap,
     Json(body): Json<Map<String, Value>>,
 ) -> Result<Json<Map<String, Value>>, ApiError> {
+    let cfg = CONFIG.get().expect("RestPlugin::routes was called");
+    let identity = cfg.authentication.authenticate(&headers).await;
     let model = allowed_model(&table)?;
+    cfg.gate(&table, Action::Update, identity.as_ref())?;
     let pk = pk_column(&model)?;
     let pool = umbra::db::pool();
 
@@ -523,13 +660,18 @@ async fn update(
             "row updated but disappeared on read-back".into(),
         ));
     };
-    let cfg = CONFIG.get().expect("RestPlugin::routes was called");
     cfg.apply_overrides(&table, &mut row);
     Ok(Json(row))
 }
 
-async fn destroy(Path((table, id)): Path<(String, String)>) -> Result<StatusCode, ApiError> {
+async fn destroy(
+    Path((table, id)): Path<(String, String)>,
+    headers: umbra::web::HeaderMap,
+) -> Result<StatusCode, ApiError> {
+    let cfg = CONFIG.get().expect("RestPlugin::routes was called");
+    let identity = cfg.authentication.authenticate(&headers).await;
     let model = allowed_model(&table)?;
+    cfg.gate(&table, Action::Delete, identity.as_ref())?;
     let pk = pk_column(&model)?;
     let pool = umbra::db::pool();
     let result = sqlx::query(&format!(

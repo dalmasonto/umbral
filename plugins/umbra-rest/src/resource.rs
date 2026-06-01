@@ -46,8 +46,12 @@
 //! REST shape lives next to the model, not in the project's wiring
 //! layer.
 
+use std::collections::HashSet;
+use std::sync::Arc;
+
 use serde_json::{Map, Value};
 
+use crate::permission::{Action, Permission};
 use crate::{ComputedFn, TransformFn};
 
 /// Bundled REST customization for one table. Build via
@@ -63,6 +67,13 @@ pub struct ResourceConfig {
     pub(crate) hidden: Vec<String>,
     pub(crate) transforms: Vec<(String, TransformFn)>,
     pub(crate) computed: Vec<(String, ComputedFn)>,
+    /// Permission class for this resource. `None` defaults to
+    /// [`crate::permission::AllowAny`] at merge time.
+    pub(crate) permission: Option<Arc<dyn Permission>>,
+    /// Opt-in view scope. `None` means "all actions exposed" — the
+    /// backward-compatible default. `Some(set)` restricts the
+    /// resource to exactly that set; everything else 404s.
+    pub(crate) view_scope: Option<HashSet<Action>>,
 }
 
 impl std::fmt::Debug for ResourceConfig {
@@ -84,7 +95,49 @@ impl ResourceConfig {
             hidden: Vec::new(),
             transforms: Vec::new(),
             computed: Vec::new(),
+            permission: None,
+            view_scope: None,
         }
+    }
+
+    /// Attach a permission class to this resource. Every request to
+    /// any action on this table will be authorised through the
+    /// permission's `check(action, identity)` before the actual
+    /// handler runs.
+    ///
+    /// Override examples:
+    ///
+    /// ```ignore
+    /// // Only authenticated callers can do anything.
+    /// ResourceConfig::new("post").permission(IsAuthenticated)
+    ///
+    /// // Public-read, staff-write (and only staff CRUD).
+    /// ResourceConfig::new("post").permission(OrPermission::new(vec![
+    ///     Box::new(ReadOnly),
+    ///     Box::new(IsStaff),
+    /// ]))
+    /// ```
+    pub fn permission<P: Permission>(mut self, perm: P) -> Self {
+        self.permission = Some(Arc::new(perm));
+        self
+    }
+
+    /// Restrict this resource to a specific set of REST actions —
+    /// the opt-in alternative to having every model expose all five
+    /// (`List` / `Retrieve` / `Create` / `Update` / `Delete`). Any
+    /// action not in the set returns 404 from the handler.
+    ///
+    /// Default (no call) is "every action exposed" so existing
+    /// resources don't change shape on upgrade.
+    ///
+    /// ```ignore
+    /// // Read-only public catalogue: no create/update/delete endpoints
+    /// // even mount.
+    /// ResourceConfig::new("product").views([Action::List, Action::Retrieve])
+    /// ```
+    pub fn views<I: IntoIterator<Item = Action>>(mut self, actions: I) -> Self {
+        self.view_scope = Some(actions.into_iter().collect());
+        self
     }
 
     /// The table this config is for. Used by [`crate::RestPlugin::

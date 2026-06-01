@@ -258,15 +258,152 @@ keeps the envelope identical whether the API is served from `localhost`, behind 
 reverse proxy, or via CDN. The client knows the path; let it build the URL.
 </Callout>
 
+## Authentication
+
+`RestPlugin::authenticate(impl Authentication)` wires an auth backend that runs on
+every request. The backend inspects request headers and returns
+`Option<Identity>` — `Some(...)` when a caller is recognised, `None` when the
+request is anonymous. Permissions (next section) decide what that identity is
+allowed to do.
+
+The trait is intentionally narrow: header-only inspection, async (because most
+backends hit the DB to verify credentials), no error variants (silent `None` on
+invalid credentials so failure modes don't leak info to the client).
+
+### Built-ins
+
+```rust
+use umbra_rest::{Authentication, ChainAuthentication, FnAuthentication, Identity,
+                 NoAuthentication, RestPlugin, parse_basic_credentials};
+
+// Default — every request is anonymous.
+RestPlugin::default();
+
+// Session-cookie auth (via umbra-sessions, the recommended browser path):
+RestPlugin::default().authenticate(FnAuthentication::new(|headers| async move {
+    let user = umbra_sessions::current_user(&headers).await.ok().flatten()?;
+    Some(Identity::user(user.id).with_staff(user.is_staff))
+}));
+
+// HTTP Basic Auth (via umbra-auth, the curl path):
+RestPlugin::default().authenticate(FnAuthentication::new(|headers| async move {
+    let (user, pass) = parse_basic_credentials(&headers)?;
+    let auth_user = umbra_auth::authenticate(&user, &pass).await.ok()?;
+    Some(Identity::user(auth_user.id).with_staff(auth_user.is_staff))
+}));
+
+// Try session first, fall back to Basic Auth:
+use std::sync::Arc;
+let auth = ChainAuthentication::new(vec![
+    Arc::new(session_auth) as Arc<dyn Authentication>,
+    Arc::new(basic_auth)   as Arc<dyn Authentication>,
+]);
+RestPlugin::default().authenticate(auth);
+```
+
+The plugin doesn't bundle a session-cookie or Basic-Auth helper because most
+apps use exactly one; bundling all of them would force unused transitive deps
+on every user. The 5-line `FnAuthentication` closures above are the canonical
+shape.
+
+JWT, API key, mTLS, OAuth — same pattern. Wrap the verifier in
+`FnAuthentication::new(...)`, return `Some(Identity)` on success.
+
+## Permissions
+
+Permissions sit on the `ResourceConfig` so they live next to the model:
+
+```rust
+use umbra_rest::{IsAuthenticated, IsStaff, ReadOnly, ResourceConfig};
+
+// Public read, no write at all.
+ResourceConfig::new("article").permission(ReadOnly)
+
+// Every action requires a logged-in user.
+ResourceConfig::new("comment").permission(IsAuthenticated)
+
+// Staff-only.
+ResourceConfig::new("audit_log").permission(IsStaff)
+```
+
+### Built-ins
+
+| Permission | Anonymous | Authenticated (non-staff) | Staff |
+|-----------|-----------|--------------------------|-------|
+| `AllowAny` (default) | ✓ everything | ✓ everything | ✓ everything |
+| `IsAuthenticated` | 401 | ✓ everything | ✓ everything |
+| `IsStaff` | 401 | 403 | ✓ everything |
+| `ReadOnly` | ✓ List/Retrieve, 403 writes | ✓ List/Retrieve, 403 writes | ✓ List/Retrieve, 403 writes |
+
+### Combinators
+
+`AndPermission::new(vec![Box::new(P1), Box::new(P2)])` requires every check.
+`OrPermission` allows when any check passes (short-circuits on first success).
+The right shape for "staff OR owner" rules:
+
+```rust
+use umbra_rest::{IsStaff, OrPermission};
+
+struct IsOwner;
+impl umbra_rest::Permission for IsOwner {
+    fn check(&self, _action: umbra_rest::Action, id: Option<&umbra_rest::Identity>)
+        -> Result<(), umbra_rest::PermissionError>
+    {
+        // Custom check against id.user_id + the requested row's owner column.
+        # Ok(())
+    }
+}
+
+ResourceConfig::new("post").permission(OrPermission::new(vec![
+    Box::new(IsStaff),
+    Box::new(IsOwner),
+]))
+```
+
+### Custom permission classes
+
+Implement the trait directly. The signature is sync (`fn check(&self, Action,
+Option<&Identity>) -> Result<(), PermissionError>`) because permission checks
+walk in-memory rule sets — they don't hit the DB. If you need DB-driven checks
+(per-row ownership), do them in the route handler or in a `transform` after
+the row is loaded.
+
+## Opt-in views
+
+By default every model exposes all five actions (`List` / `Retrieve` /
+`Create` / `Update` / `Delete`). For resources where some methods don't make
+sense, scope the views explicitly:
+
+```rust
+use umbra_rest::{Action, ResourceConfig};
+
+// Catalogue: list + retrieve only. Create/Update/Delete return 404
+// — the endpoint isn't conceptually mounted.
+ResourceConfig::new("product")
+    .views([Action::List, Action::Retrieve])
+
+// Append-only audit log.
+ResourceConfig::new("audit_event")
+    .views([Action::List, Action::Retrieve, Action::Create])
+```
+
+The unexposed-action body is `{"error": "action `Delete` is not exposed on
+`/api/product/`", "code": "not_found"}` — a 404 with an explanatory message,
+which is the right semantic (the resource exists, but that operation isn't
+part of its API).
+
 ## What's not in v1
 
-<Callout type="info">
-The one item below is a known follow-on tracked in `bugs/gaps.md`.
+The REST plugin is feature-complete for v1. The roadmap items below are
+follow-ons rather than gaps:
 
-- **Auth gating.** Every exposed route is open in v1. Wrap the app router with a Tower
-  middleware layer or an axum extractor to enforce authentication before requests reach the
-  REST handlers.
-</Callout>
+- **Per-row permissions in the SQL filter.** `IsOwner`-style rules currently
+  run in user code after the row is loaded. A future hook lets a permission
+  inject a WHERE clause so the database does the filtering and never returns
+  unauthorised rows.
+- **`OPTIONS` introspection.** Currently REST doesn't reply to `OPTIONS
+  /api/<table>/` with a permission summary; DRF's "OPTIONS prints the schema"
+  pattern lands when there's a concrete consumer.
 
 ## Pairing with OpenAPI
 

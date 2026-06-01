@@ -2613,7 +2613,9 @@ dependencies = [
 name = "umbra-rest"
 version = "0.0.1"
 dependencies = [
+ "async-trait",
  "axum",
+ "base64",
  "chrono",
  "http",
  "http-body-util",

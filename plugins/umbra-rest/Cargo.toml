@@ -16,6 +16,15 @@ serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
 sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "chrono", "uuid"] }
 uuid = { version = "1", features = ["serde", "v7"] }
+# async-trait makes the Authentication trait object-safe (`dyn
+# Authentication`). Rust's native async fn in traits doesn't yet
+# work in dyn-compatible position without explicit Pin<Box<...>>
+# return types; async-trait does that boxing for us so the trait
+# looks clean at the call site.
+async-trait = "0.1"
+# Base64 decoding for the HTTP Basic Auth credential parsing in
+# `auth::parse_basic_credentials`.
+base64 = "0.22"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync"] }
