@@ -100,7 +100,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .plugin(umbra_rest::RestPlugin::default())
         .plugin(umbra_openapi::OpenApiPlugin::new())
         .plugin(umbra_auth::AuthPlugin::<AuthUser>::default())
-        .plugin(umbra_admin::AdminPlugin::default())
+        .plugin(umbra_sessions::SessionsPlugin::default())
+        // Register Article with the admin so the datatable renders a
+        // search box (search_fields driven) and the list view shows the
+        // columns we actually care about. Without `.register(...)` the
+        // admin falls back to auto-discovery — every column listed, no
+        // search input, no per-column tweaks.
+        .plugin(
+            umbra_admin::AdminPlugin::default().register(
+                umbra_admin::AdminModel::new("article")
+                    .list_display(&["id", "title", "published_at"])
+                    .search_fields(&["title", "body"])
+                    .ordering(&["-published_at", "id"]),
+            ),
+        )
         .router(
             Router::new()
                 .route("/", get(home))
@@ -156,7 +169,7 @@ async fn list_articles_html() -> Result<Html<String>, (StatusCode, String)> {
 
 async fn test_500_html() -> Result<Html<String>, (StatusCode, String)> {
     // let body = umbra::templates::render("test-500.html", &context!()).map_err(internal_error)?;
-    panic!("Something went south");
+    panic!("Something went south ofcourse");
     // Ok(Html(body))
 }
 
@@ -211,6 +224,16 @@ async fn auto_migrate() -> Result<(), Box<dyn std::error::Error + Send + Sync>> 
         }
         Err(MigrateError::NoChanges) => {}
         Err(err) => return Err(Box::new(err)),
+    }
+    // Self-heal the "DB exists from before umbra started tracking it"
+    // case: for every plugin whose first migration's tables are already
+    // present in the DB, record that migration as applied without
+    // running its CREATE TABLE. Idempotent — does nothing on a fresh DB
+    // or one that's already in sync. This is the same recovery path the
+    // CLI exposes as `migrate --fake-initial`.
+    let faked = umbra::migrate::fake_initial().await?;
+    if faked > 0 {
+        eprintln!("auto-migrate: fake-applied initial migration for {faked} plugin(s)");
     }
     let n = umbra::migrate::run().await?;
     if n > 0 {

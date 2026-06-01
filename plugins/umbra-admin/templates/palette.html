@@ -2,12 +2,12 @@
   palette.html
   ============
   Command palette fragment — loaded into #umbra-palette-slot by ⌘K / Ctrl-K.
-  Search filters client-side; no server round-trip per keystroke.
 
-  Filtering behaviour: items whose label does not match the query are visually
-  dimmed (opacity reduced) but still rendered so the user can always browse.
-  A "Nothing found" banner appears at the top of the list when no items match,
-  but the list stays fully visible.
+  Two-tier search:
+  - Models + Commands: always visible at full opacity; client-side filter just
+    shows a "Nothing found" hint, never dims/disables items.
+  - Records: debounced 200ms hx-get to /admin/api/palette/search?q=... returns
+    up to 10 matching rows across all registered models with search_fields.
 
   `models`   — list of {table, label, icon} for jump targets.
   `commands` — list of {key, label, icon} for fixed commands.
@@ -29,34 +29,35 @@
     class="relative w-full max-w-[600px] mx-md bg-surface rounded-2xl border border-outline-variant shadow-2xl overflow-hidden"
     style="border-radius: 14px;"
   >
-    {# Search row: icon + input + Esc button all inside ONE bordered container #}
-    <div class="flex items-center gap-sm px-md py-sm border-b border-outline-variant bg-surface-container-low rounded-t-[14px]">
+    {# Search row: single outer border, inner input has no border (Bug 3 fix) #}
+    <div class="flex items-center gap-sm bg-surface-container-low border border-outline-variant rounded-t-[14px] px-md py-sm">
       <i data-lucide="search" class="w-5 h-5 text-outline flex-shrink-0 pointer-events-none"></i>
       <input
         id="umbra-palette-input"
         type="text"
-        placeholder="Jump to model or run command..."
-        class="flex-1 bg-transparent text-body-md text-on-surface placeholder:text-outline focus:outline-none"
+        placeholder="Jump to model, run command, or search records..."
+        class="flex-1 border-0 bg-transparent text-body-md text-on-surface placeholder:text-outline focus:outline-none focus:ring-0"
         autocomplete="off"
         aria-autocomplete="list"
         aria-controls="umbra-palette-results"
         oninput="umbra._paletteFilter(this.value)"
         onkeydown="umbra._paletteKeydown(event)"
+        hx-get="/admin/api/palette/search"
+        hx-trigger="input changed delay:200ms"
+        hx-target="#umbra-palette-records"
+        hx-swap="innerHTML"
+        hx-include="this"
+        name="q"
       />
       <button
         type="button"
         title="Close palette (Esc)"
         onclick="umbra.closePalette()"
-        class="w-7 h-7 flex items-center justify-center rounded-lg bg-surface-container border border-outline-variant text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition-colors flex-shrink-0"
+        class="hover:bg-surface-container-high rounded-md p-1 text-on-surface-variant hover:text-on-surface transition-colors flex-shrink-0"
         aria-label="Close"
       >
         <i data-lucide="x" class="w-4 h-4"></i>
       </button>
-    </div>
-
-    {# "Nothing found" banner — hidden by default, shown by JS when nothing matches #}
-    <div id="umbra-palette-empty" class="hidden px-lg py-sm bg-surface-container/50 border-b border-outline-variant">
-      <p class="text-body-sm text-outline italic">Nothing found — showing full list for browsing.</p>
     </div>
 
     {# Results list — scrollable, max 60vh #}
@@ -65,7 +66,23 @@
       class="max-h-[60vh] overflow-y-auto py-xs"
       role="listbox"
     >
-      {# Jump targets: registered models #}
+      {#
+        Records section — populated by the backend search endpoint via HTMX.
+        Empty initially; filled after the user types 2+ chars.
+      #}
+      <li id="umbra-palette-records-header" class="hidden px-lg py-xs">
+        <span class="text-label-sm text-outline uppercase tracking-wider">Records</span>
+      </li>
+      <li id="umbra-palette-records" class="list-none"></li>
+
+      {# "Nothing found" banner — hidden by default, shown by JS when nothing matches static items #}
+      <li>
+        <div id="umbra-palette-empty" class="hidden px-lg py-sm bg-surface-container/50 border-b border-outline-variant">
+          <p class="text-body-sm text-outline italic">No models or commands match — try searching records above.</p>
+        </div>
+      </li>
+
+      {# Jump targets: registered models — ALWAYS visible at full opacity #}
       {% if models %}
       <li id="palette-header-models" class="px-lg py-xs">
         <span class="text-label-sm text-outline uppercase tracking-wider">Models</span>
@@ -88,7 +105,7 @@
       {% endfor %}
       {% endif %}
 
-      {# Fixed commands #}
+      {# Fixed commands — ALWAYS visible at full opacity #}
       <li id="palette-header-commands" class="px-lg py-xs mt-xs border-t border-outline-variant">
         <span class="text-label-sm text-outline uppercase tracking-wider">Commands</span>
       </li>
@@ -115,7 +132,7 @@
 (function() {
   // Autofocus the input after insertion.
   var inp = document.getElementById('umbra-palette-input');
-  if (inp) inp.focus();
+  if (inp) { inp.focus(); htmx.process(inp); }
 
   if (window.lucide) lucide.createIcons({ el: document.getElementById('umbra-palette') });
 
@@ -124,8 +141,10 @@
     if (slot) slot.innerHTML = '';
   };
 
-  // Filter: dim non-matching items (opacity: 0.3) but keep them visible.
-  // When NOTHING matches show the "Nothing found" banner.
+  // Filter static items (Models + Commands) client-side.
+  // Items are NEVER dimmed or disabled — they stay at full opacity always.
+  // A "Nothing found" hint appears only when static labels don't match.
+  // Record search is handled server-side via hx-get on the input (debounced).
   umbra._paletteFilter = function(q) {
     q = q.trim().toLowerCase();
     var items = document.querySelectorAll('.palette-item');
@@ -134,18 +153,13 @@
     items.forEach(function(li) {
       var label = li.getAttribute('data-palette-label') || '';
       var matches = (q === '' || label.indexOf(q) !== -1);
-      if (matches) {
-        li.style.opacity = '';
-        li.style.pointerEvents = '';
-        anyMatch = true;
-      } else {
-        // Dim but keep visible so user can browse.
-        li.style.opacity = '0.3';
-        li.style.pointerEvents = 'none';
-      }
+      // Always keep items fully visible — no dimming (Bug 2a fix).
+      li.style.opacity = '';
+      li.style.pointerEvents = '';
+      if (matches) anyMatch = true;
     });
 
-    // Show/hide the "Nothing found" banner.
+    // Show/hide the "Nothing found" hint for static list.
     var emptyBanner = document.getElementById('umbra-palette-empty');
     if (emptyBanner) {
       if (q !== '' && !anyMatch) {
@@ -154,14 +168,31 @@
         emptyBanner.classList.add('hidden');
       }
     }
+
+    // Show/hide the Records section header based on query length.
+    var recHeader = document.getElementById('umbra-palette-records-header');
+    if (recHeader) {
+      recHeader.classList.toggle('hidden', q.length < 2);
+    }
+    // Clear records immediately when query is too short.
+    if (q.length < 2) {
+      var rec = document.getElementById('umbra-palette-records');
+      if (rec) rec.innerHTML = '';
+    }
   };
+
+  // After HTMX swaps the records section, re-init Lucide icons.
+  document.body.addEventListener('htmx:afterSwap', function(e) {
+    if (e.detail && e.detail.target && e.detail.target.id === 'umbra-palette-records') {
+      if (window.lucide) lucide.createIcons({ el: e.detail.target });
+    }
+  });
 
   umbra._paletteKeydown = function(e) {
     if (e.key === 'Escape') { umbra.closePalette(); e.preventDefault(); return; }
-    // Navigate only through visible (non-dimmed) items.
+    // Navigate through all visible palette items (records + static).
     var results = document.getElementById('umbra-palette-results');
-    var items = Array.from(results.querySelectorAll('.palette-item'))
-      .filter(function(li) { return li.style.opacity !== '0.3'; });
+    var items = Array.from(results.querySelectorAll('.palette-item'));
     var focused = document.activeElement;
     var idx = items.indexOf(focused);
     if (e.key === 'ArrowDown') {

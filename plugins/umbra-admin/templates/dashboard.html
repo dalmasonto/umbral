@@ -23,19 +23,21 @@
     {% for card in model_cards %}
     <a
       href="{{ card.url }}"
-      class="group flex flex-col gap-sm p-md bg-surface-container border border-outline-variant rounded-xl hover:border-primary/40 hover:bg-surface-container-high transition-all cursor-pointer no-underline"
+      class="group relative flex flex-col gap-md p-lg bg-surface-container border border-outline-variant rounded-2xl hover:border-primary/40 hover:bg-surface-container-high transition-all cursor-pointer no-underline overflow-hidden"
     >
       <div class="flex items-center justify-between">
-        <div class="w-9 h-9 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center flex-shrink-0">
-          <i data-lucide="{{ card.icon }}" class="w-4 h-4 text-primary"></i>
+        <div class="w-10 h-10 rounded-xl bg-surface-container-low border border-outline-variant/60 flex items-center justify-center flex-shrink-0 group-hover:border-primary/30 group-hover:bg-primary/5 transition-colors">
+          <i data-lucide="{{ card.icon }}" class="w-[18px] h-[18px] text-on-surface-variant group-hover:text-primary transition-colors"></i>
         </div>
-        <i data-lucide="arrow-right" class="w-4 h-4 text-outline opacity-0 group-hover:opacity-100 transition-opacity"></i>
+        <i data-lucide="arrow-up-right" class="w-4 h-4 text-outline/60 group-hover:text-primary group-hover:-translate-y-0.5 group-hover:translate-x-0.5 transition-all"></i>
       </div>
       <div class="min-w-0">
-        <p class="font-label-md text-label-md text-on-surface-variant uppercase tracking-wider truncate">{{ card.label }}</p>
-        <p class="font-h2 text-h2 text-on-surface tabular-nums leading-tight">{{ card.count }}</p>
+        <p class="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider truncate mb-xs">{{ card.label }}</p>
+        <div class="flex items-baseline gap-xs">
+          <p class="font-display text-3xl text-on-surface tabular-nums leading-none">{{ card.count }}</p>
+          <span class="text-label-sm text-outline">{{ "row" if card.count == 1 else "rows" }}</span>
+        </div>
       </div>
-      <span class="text-label-sm text-label-sm text-primary opacity-0 group-hover:opacity-100 transition-opacity">View all →</span>
     </a>
     {% endfor %}
   </div>

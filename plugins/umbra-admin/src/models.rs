@@ -1,42 +1,70 @@
 //! Admin-owned models: user preferences and audit log.
 //!
-//! These are registered via `AdminPlugin::models()` so they land in
-//! migrations automatically. No special-casing — same path as any plugin.
+//! Registered via [`crate::AdminPlugin::models`] so they flow through the
+//! framework's migration engine like any other plugin's models. No raw
+//! `CREATE TABLE`, no `on_ready` bootstrap — the same path Django takes
+//! for `django.contrib.admin.LogEntry`.
 //!
 //! ## AdminUserPref
-//! One row per admin user. Created on first `GET /admin/api/prefs` with
-//! defaults. Persists theme, density, sidebar-collapsed state, and the
-//! serialized dashboard layout (JSON blob).
+//! One row per admin user. Created the first time a user lands on
+//! `GET /admin/api/prefs`. Holds theme, density, sidebar-collapsed
+//! state, and the serialized dashboard layout.
 //!
 //! ## AdminAuditLog
 //! One row per write operation (create / update / delete / bulk action).
-//! The actor is the `AuthUser` resolved from the session at call time.
-//! `diff_summary` is a short human description synthesized from context;
-//! no field-level diffing in v1 (that is deferred).
+//! The actor is the `AuthUser` resolved from the session at call time;
+//! `diff_summary` is a short human description synthesized from context
+//! (no field-level diffing in v1).
+//!
+//! ## Why the model is `noedit`
+//! Every field on both models is marked `#[umbra(noedit)]` so the admin
+//! exposes them as read-only — users see preferences and audit history
+//! in the UI but cannot mutate them through the form path. Writes flow
+//! exclusively through this module's typed helpers.
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use umbra::orm::Model;
+
+// =========================================================================
+// AdminUserPref
+// =========================================================================
 
 /// Per-user admin preferences row.
 ///
-/// Stored in `admin_user_pref`. Created with defaults on first access.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// One row per admin user, keyed by `user_id`. The framework cannot yet
+/// express a UNIQUE constraint via `#[derive(Model)]`, so the
+/// one-row-per-user invariant is enforced at the application layer in
+/// [`fetch_or_default`] + [`upsert`]: a fetch-then-save flow with
+/// last-write-wins semantics. When the macro grows `#[umbra(unique)]`,
+/// `user_id` gets the attribute and the race window closes.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
+#[umbra(display = "User preference", icon = "settings-2")]
 pub struct AdminUserPref {
     pub id: i64,
-    /// FK to the auth_user table. Plain `i64` until M2M / typed FK lands.
+    /// FK to `auth_user` (typed FK at the Model level is a follow-on;
+    /// `i64` for now).
+    #[umbra(noedit)]
     pub user_id: i64,
     /// One of "light" | "dark" | "system".
+    #[umbra(noedit)]
     pub theme: String,
     /// One of "comfortable" | "compact".
+    #[umbra(noedit)]
     pub density: String,
     /// Whether the sidebar is collapsed to the icon rail.
+    #[umbra(noedit)]
     pub sidebar_collapsed: bool,
     /// Serialized `Vec<WidgetInstance>` JSON blob.
+    #[umbra(noedit)]
     pub dashboard_layout: String,
-    pub updated_at: chrono::DateTime<chrono::Utc>,
+    #[umbra(noedit)]
+    pub updated_at: DateTime<Utc>,
 }
 
 impl AdminUserPref {
-    /// Default prefs for a brand-new admin user.
+    /// Default prefs for a brand-new admin user. The struct is returned
+    /// with `id = 0` so a subsequent `.save()` becomes an INSERT.
     pub fn default_for(user_id: i64) -> Self {
         Self {
             id: 0,
@@ -45,49 +73,162 @@ impl AdminUserPref {
             density: "comfortable".to_string(),
             sidebar_collapsed: false,
             dashboard_layout: "[]".to_string(),
-            updated_at: chrono::Utc::now(),
+            updated_at: Utc::now(),
         }
     }
 }
 
-/// One entry in the admin audit trail.
+/// Fetch the prefs row for `user_id`, or return a struct filled with
+/// defaults (the row is **not** inserted; the caller decides whether to
+/// persist). `id == 0` distinguishes the unsaved-default case.
+pub async fn fetch_or_default(user_id: i64) -> Result<AdminUserPref, sqlx::Error> {
+    let existing = AdminUserPref::objects()
+        .filter(admin_user_pref::USER_ID.eq(user_id))
+        .first()
+        .await?;
+    Ok(existing.unwrap_or_else(|| AdminUserPref::default_for(user_id)))
+}
+
+/// Insert or update the prefs row.
 ///
-/// Stored in `admin_audit_log`. Written by CRUD handlers after every
-/// successful mutating operation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AdminAuditLog {
-    pub id: i64,
-    /// FK to auth_user. Plain `i64` until typed FK lands.
-    pub actor_user_id: i64,
-    /// One of: "create" | "update" | "delete" | "action:<key>".
-    pub action: String,
-    /// SQL table name the operation touched.
-    pub model: String,
-    /// PK of the affected row, NULL for bulk/non-row operations.
-    pub object_id: Option<i64>,
-    /// Short human description, e.g. "created Post #42".
-    pub diff_summary: String,
-    pub created_at: chrono::DateTime<chrono::Utc>,
+/// Uses [`umbra::orm::Manager::save`] which dispatches by primary key:
+/// `id == 0` → INSERT, otherwise UPDATE. The caller is responsible for
+/// loading the row via [`fetch_or_default`] before mutating + persisting
+/// so the `id` round-trips correctly.
+pub async fn upsert(prefs: AdminUserPref) -> Result<AdminUserPref, sqlx::Error> {
+    let mut prefs = prefs;
+    prefs.updated_at = Utc::now();
+    AdminUserPref::objects()
+        .save(prefs)
+        .await
+        .map_err(|e| match e {
+            umbra::orm::SaveError::Write(umbra::orm::WriteError::Sqlx(e)) => e,
+            other => sqlx::Error::Protocol(other.to_string()),
+        })
 }
 
 // =========================================================================
-// DB helpers — raw SQL against the ambient pool.
-//
-// The ORM isn't used here because the admin plugin must bootstrap its own
-// tables before the ORM's table-existence checks run. Raw sqlx is safe
-// because the table names are constants.
+// AdminAuditLog
 // =========================================================================
 
-/// Ensure the admin tables exist. Called from `AdminPlugin::on_ready`.
+/// One entry in the admin audit trail.
 ///
-/// Uses `CREATE TABLE IF NOT EXISTS` so it is idempotent and safe to run
-/// on every boot before a proper migration engine is in place for this
-/// plugin's tables.
-pub async fn ensure_tables(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> {
+/// Append-only via [`log`]. The admin surfaces the table read-only;
+/// every column carries `#[umbra(noedit)]` so the form path can't mutate
+/// rows even if someone navigates directly to the edit URL.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
+#[umbra(display = "Audit log", icon = "scroll-text")]
+pub struct AdminAuditLog {
+    pub id: i64,
+    /// FK to `auth_user`.
+    #[umbra(noedit)]
+    pub actor_user_id: i64,
+    /// One of: `"create"` | `"update"` | `"delete"` | `"action:<key>"`.
+    #[umbra(noedit)]
+    pub action: String,
+    /// SQL table name the operation touched.
+    #[umbra(noedit)]
+    pub model: String,
+    /// PK of the affected row, NULL for bulk / non-row operations.
+    #[umbra(noedit)]
+    pub object_id: Option<i64>,
+    /// Short human description, e.g. `"created Post #42"`.
+    #[umbra(noedit)]
+    pub diff_summary: String,
+    #[umbra(noedit)]
+    pub created_at: DateTime<Utc>,
+}
+
+/// Append one audit entry. Fire-and-forget: errors are logged but never
+/// surfaced to the caller, so a CRUD handler that succeeds at its real
+/// work isn't undone by an audit-write hiccup.
+pub async fn log(
+    actor_user_id: i64,
+    action: &str,
+    model: &str,
+    object_id: Option<i64>,
+    diff_summary: &str,
+) {
+    let entry = AdminAuditLog {
+        id: 0,
+        actor_user_id,
+        action: action.to_string(),
+        model: model.to_string(),
+        object_id,
+        diff_summary: diff_summary.to_string(),
+        created_at: Utc::now(),
+    };
+    if let Err(e) = AdminAuditLog::objects().save(entry).await {
+        tracing::error!(error = %e, "admin: audit log insert failed");
+    }
+}
+
+/// Fetch the last `limit` audit entries for one object, newest first.
+/// Returned as template-friendly [`AuditEntry`] values (timestamps
+/// formatted as strings) for direct rendering by minijinja.
+pub async fn audit_for_object(
+    model: &str,
+    object_id: i64,
+    limit: u64,
+) -> Result<Vec<AuditEntry>, sqlx::Error> {
+    let rows = AdminAuditLog::objects()
+        .filter(admin_audit_log::MODEL.eq(model.to_string()))
+        .filter(admin_audit_log::OBJECT_ID.eq(object_id))
+        .order_by(admin_audit_log::CREATED_AT.desc())
+        .limit(limit)
+        .fetch()
+        .await?;
+    Ok(rows.into_iter().map(AuditEntry::from).collect())
+}
+
+/// Template-friendly audit entry — `created_at` rendered as RFC 3339
+/// for minijinja, which has no `DateTime` codec.
+#[derive(Debug, Clone, Serialize)]
+pub struct AuditEntry {
+    pub id: i64,
+    pub actor_user_id: i64,
+    pub action: String,
+    pub model: String,
+    pub object_id: Option<i64>,
+    pub diff_summary: String,
+    pub created_at: String,
+}
+
+impl From<AdminAuditLog> for AuditEntry {
+    fn from(row: AdminAuditLog) -> Self {
+        Self {
+            id: row.id,
+            actor_user_id: row.actor_user_id,
+            action: row.action,
+            model: row.model,
+            object_id: row.object_id,
+            diff_summary: row.diff_summary,
+            created_at: row.created_at.to_rfc3339(),
+        }
+    }
+}
+
+// =========================================================================
+// Test-fixture helper
+// =========================================================================
+
+/// Create the admin tables on a raw pool, bypassing the migration engine.
+///
+/// Production code never calls this — `AdminPlugin::models()` exposes the
+/// two models to the framework and the migration engine creates the
+/// schema on `migrate run` like everything else. The helper exists for
+/// integration tests that boot `App::builder()` without running
+/// `umbra::migrate::run()` (creating migration files inside `target/`
+/// every test run is the wrong tradeoff).
+///
+/// Idempotent — `CREATE TABLE IF NOT EXISTS` so repeated calls within a
+/// single test process are safe.
+#[doc(hidden)]
+pub async fn ensure_tables_for_tests(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS admin_user_pref (
             id                INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id           INTEGER NOT NULL UNIQUE,
+            user_id           INTEGER NOT NULL,
             theme             TEXT    NOT NULL DEFAULT 'dark',
             density           TEXT    NOT NULL DEFAULT 'comfortable',
             sidebar_collapsed INTEGER NOT NULL DEFAULT 0,
@@ -113,150 +254,4 @@ pub async fn ensure_tables(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> {
     .await?;
 
     Ok(())
-}
-
-/// Fetch the prefs row for `user_id`, or return a struct with defaults
-/// (the row is NOT inserted; the caller decides whether to persist).
-pub async fn get_prefs(
-    pool: &sqlx::SqlitePool,
-    user_id: i64,
-) -> Result<AdminUserPref, sqlx::Error> {
-    use sqlx::Row;
-    let row = sqlx::query(
-        "SELECT id, user_id, theme, density, sidebar_collapsed, dashboard_layout, updated_at
-         FROM admin_user_pref WHERE user_id = ?",
-    )
-    .bind(user_id)
-    .fetch_optional(pool)
-    .await?;
-
-    Ok(match row {
-        Some(r) => {
-            let updated_raw: String = r.try_get("updated_at").unwrap_or_default();
-            AdminUserPref {
-                id: r.try_get("id").unwrap_or(0),
-                user_id: r.try_get("user_id").unwrap_or(user_id),
-                theme: r.try_get("theme").unwrap_or_else(|_| "dark".to_string()),
-                density: r
-                    .try_get("density")
-                    .unwrap_or_else(|_| "comfortable".to_string()),
-                sidebar_collapsed: r.try_get::<bool, _>("sidebar_collapsed").unwrap_or(false),
-                dashboard_layout: r
-                    .try_get("dashboard_layout")
-                    .unwrap_or_else(|_| "[]".to_string()),
-                updated_at: updated_raw
-                    .parse::<chrono::DateTime<chrono::Utc>>()
-                    .unwrap_or_else(|_| chrono::Utc::now()),
-            }
-        }
-        None => AdminUserPref::default_for(user_id),
-    })
-}
-
-/// Upsert the prefs row for `user_id`.
-///
-/// SQLite `INSERT OR REPLACE` will reuse the existing row's `id` when
-/// the `user_id` UNIQUE constraint matches.
-pub async fn upsert_prefs(
-    pool: &sqlx::SqlitePool,
-    prefs: &AdminUserPref,
-) -> Result<(), sqlx::Error> {
-    let sidebar_int: i64 = if prefs.sidebar_collapsed { 1 } else { 0 };
-    let now = chrono::Utc::now().to_rfc3339();
-    sqlx::query(
-        "INSERT INTO admin_user_pref
-            (user_id, theme, density, sidebar_collapsed, dashboard_layout, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?)
-         ON CONFLICT(user_id) DO UPDATE SET
-            theme             = excluded.theme,
-            density           = excluded.density,
-            sidebar_collapsed = excluded.sidebar_collapsed,
-            dashboard_layout  = excluded.dashboard_layout,
-            updated_at        = excluded.updated_at",
-    )
-    .bind(prefs.user_id)
-    .bind(&prefs.theme)
-    .bind(&prefs.density)
-    .bind(sidebar_int)
-    .bind(&prefs.dashboard_layout)
-    .bind(&now)
-    .execute(pool)
-    .await?;
-    Ok(())
-}
-
-/// Append one audit log row. Fire-and-forget: log errors but don't fail
-/// the originating request if the audit insert fails.
-pub async fn log_audit(
-    pool: &sqlx::SqlitePool,
-    actor_user_id: i64,
-    action: &str,
-    model: &str,
-    object_id: Option<i64>,
-    diff_summary: &str,
-) {
-    let now = chrono::Utc::now().to_rfc3339();
-    let res = sqlx::query(
-        "INSERT INTO admin_audit_log
-            (actor_user_id, action, model, object_id, diff_summary, created_at)
-         VALUES (?, ?, ?, ?, ?, ?)",
-    )
-    .bind(actor_user_id)
-    .bind(action)
-    .bind(model)
-    .bind(object_id)
-    .bind(diff_summary)
-    .bind(&now)
-    .execute(pool)
-    .await;
-    if let Err(e) = res {
-        tracing::error!(error = %e, "admin: audit log insert failed");
-    }
-}
-
-/// Fetch the last `limit` audit entries for a specific object, newest first.
-pub async fn audit_for_object(
-    pool: &sqlx::SqlitePool,
-    model: &str,
-    object_id: i64,
-    limit: i64,
-) -> Result<Vec<AuditEntry>, sqlx::Error> {
-    let rows = sqlx::query(
-        "SELECT id, actor_user_id, action, model, object_id, diff_summary, created_at
-         FROM admin_audit_log
-         WHERE model = ? AND object_id = ?
-         ORDER BY created_at DESC
-         LIMIT ?",
-    )
-    .bind(model)
-    .bind(object_id)
-    .bind(limit)
-    .fetch_all(pool)
-    .await?;
-
-    use sqlx::Row;
-    Ok(rows
-        .into_iter()
-        .map(|r| AuditEntry {
-            id: r.try_get("id").unwrap_or(0),
-            actor_user_id: r.try_get("actor_user_id").unwrap_or(0),
-            action: r.try_get("action").unwrap_or_default(),
-            model: r.try_get("model").unwrap_or_default(),
-            object_id: r.try_get("object_id").ok(),
-            diff_summary: r.try_get("diff_summary").unwrap_or_default(),
-            created_at: r.try_get("created_at").unwrap_or_default(),
-        })
-        .collect())
-}
-
-/// Template-friendly audit entry (all fields are strings for minijinja).
-#[derive(Debug, Clone, Serialize)]
-pub struct AuditEntry {
-    pub id: i64,
-    pub actor_user_id: i64,
-    pub action: String,
-    pub model: String,
-    pub object_id: Option<i64>,
-    pub diff_summary: String,
-    pub created_at: String,
 }

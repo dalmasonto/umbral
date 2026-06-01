@@ -161,10 +161,11 @@ Drag-resize: ~50 LOC vanilla JS at the bottom; width in localStorage.
     </form>
 
     {% else %}
-    <dl class="space-y-sm">
+    {# Preview field pairs — clear label/value separation (Bug 6) #}
+    <dl class="space-y-md">
       {% for field in fields %}
-      <div class="flex flex-col gap-0.5">
-        <dt class="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wide leading-tight">
+      <div class="flex flex-col gap-xs pb-sm border-b border-outline-variant/30 last:border-b-0 last:pb-0">
+        <dt class="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider leading-tight">
           {{ field.name | replace("_", " ") }}
         </dt>
         <dd class="text-body-md text-on-surface break-words min-w-0 {% if field.kind == 'number' or field.kind == 'datetime-local' or field.kind == 'date' or field.kind == 'time' %}tabular-nums font-data-mono{% endif %}">

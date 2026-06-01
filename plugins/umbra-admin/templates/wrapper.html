@@ -1,12 +1,32 @@
 <!doctype html>
-<html class="dark" lang="en" id="umbra-admin-root">
+<html class="{% if initial_theme == 'light' %}{% else %}dark{% endif %}" lang="en" id="umbra-admin-root" data-theme="{{ initial_theme | default('dark') }}">
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>{% block title %}umbra admin{% endblock %}</title>
   <!-- HTMX: same-origin only -->
   <meta name="htmx-config" content='{"selfRequestsOnly":true}'/>
-  <!-- Bug 1: declare window.umbra early so inline scripts in child
+  <!--
+    FOUC prevention (Bug 4): apply theme from localStorage BEFORE any paint.
+    This runs synchronously in <head> so the browser never renders the wrong
+    theme class. localStorage is the fast-path mirror; server prefs are the
+    source of truth and set the initial class above.
+  -->
+  <script>
+    (function() {
+      var stored = localStorage.getItem('umbra-admin-theme');
+      var root = document.documentElement;
+      if (stored === 'light') {
+        root.classList.remove('dark');
+        root.setAttribute('data-theme', 'light');
+      } else if (stored === 'dark') {
+        root.classList.add('dark');
+        root.setAttribute('data-theme', 'dark');
+      }
+      // If no localStorage key, the server-rendered class on <html> stays.
+    })();
+  </script>
+  <!-- declare window.umbra early so inline scripts in child
        templates that reference umbra.closeSheet / umbra.closeDialog
        don't throw "umbra is not defined" before the IIFE at the
        bottom of <body> has run. The IIFE below extends this object
@@ -312,32 +332,46 @@
   // Extend the early-declared window.umbra stub with the full IIFE exports.
   // The stub was declared in <head> so child-template inline scripts are safe.
   (function() {
-    // ----- Theme toggle -----
+    // ----- Theme toggle (Bug 4) -----
+    // Source of truth: server prefs (data-theme attr set at render time).
+    // localStorage mirrors for instant FOUC-free apply on next load.
     function applyTheme(dark) {
       var root = document.documentElement;
+      var themeName = dark ? 'dark' : 'light';
       if (dark) {
         root.classList.add('dark');
-        var light = document.getElementById('theme-icon-light');
-        var moon  = document.getElementById('theme-icon-dark');
+      } else {
+        root.classList.remove('dark');
+      }
+      root.setAttribute('data-theme', themeName);
+      var light = document.getElementById('theme-icon-light');
+      var moon  = document.getElementById('theme-icon-dark');
+      if (dark) {
         if (light) light.classList.remove('hidden');
         if (moon)  moon.classList.add('hidden');
       } else {
-        root.classList.remove('dark');
-        var light2 = document.getElementById('theme-icon-light');
-        var moon2  = document.getElementById('theme-icon-dark');
-        if (light2) light2.classList.add('hidden');
-        if (moon2)  moon2.classList.remove('hidden');
+        if (light) light.classList.add('hidden');
+        if (moon)  moon.classList.remove('hidden');
       }
     }
-    // Load persisted preference on every page load; default to dark.
+    // Initial theme: read from data-theme (server-rendered); fall back to localStorage.
+    var serverTheme = document.documentElement.getAttribute('data-theme');
     var storedTheme = localStorage.getItem('umbra-admin-theme');
-    var isDark = storedTheme === null ? true : storedTheme === 'dark';
+    var resolvedTheme = storedTheme || serverTheme || 'dark';
+    var isDark = resolvedTheme !== 'light';
     applyTheme(isDark);
 
     function toggleTheme() {
       isDark = !isDark;
-      localStorage.setItem('umbra-admin-theme', isDark ? 'dark' : 'light');
+      var themeName = isDark ? 'dark' : 'light';
+      localStorage.setItem('umbra-admin-theme', themeName);
       applyTheme(isDark);
+      // Persist to server so the next hard refresh renders the correct class.
+      fetch('/admin/api/prefs', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ theme: themeName })
+      }).catch(function() { /* ignore; localStorage mirror is sufficient */ });
     }
 
     // ----- Sidebar live model filter -----

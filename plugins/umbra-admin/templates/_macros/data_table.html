@@ -247,24 +247,29 @@
             class="px-md py-md font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider {% if not loop.first %}hidden lg:table-cell{% endif %} dt-col"
             data-col="{{ col.name }}"
           >
+            {#
+              Sort button: use JS to read the CURRENT sort state from the live hidden inputs
+              (#dt-sort-col, #dt-sort-order) rather than the stale server-rendered values.
+              This ensures clicking DESC after an HTMX swap actually sends order=desc.
+            #}
             <button
               type="button"
-              hx-get="/admin/{{ model.table }}/rows?search={{ search_val }}&filter={{ active_filter }}&sort={{ col.name }}&order={% if sort_col == col.name and sort_order == 'asc' %}desc{% else %}asc{% endif %}&page=1&page_size={{ pagination.page_size }}"
-              hx-target="#table-body"
-              hx-swap="innerHTML"
-              hx-push-url="true"
-              class="flex items-center gap-xs hover:text-on-surface transition-colors"
+              data-sort-col="{{ col.name }}"
+              data-sort-page-size="{{ pagination.page_size }}"
+              data-table="{{ model.table }}"
+              onclick="umbra._sortByCol(this)"
+              class="flex items-center gap-xs hover:text-on-surface transition-colors sort-header-btn"
               aria-label="Sort by {{ col.name }}"
             >
               {{ col.name | replace("_", " ") | title }}
               {% if sort_col == col.name %}
                 {% if sort_order == "asc" %}
-                  <i data-lucide="chevron-up" class="w-3 h-3 text-primary"></i>
+                  <i data-lucide="chevron-up" class="w-3 h-3 text-primary sort-icon"></i>
                 {% else %}
-                  <i data-lucide="chevron-down" class="w-3 h-3 text-primary"></i>
+                  <i data-lucide="chevron-down" class="w-3 h-3 text-primary sort-icon"></i>
                 {% endif %}
               {% else %}
-                <i data-lucide="chevrons-up-down" class="w-3 h-3 opacity-30"></i>
+                <i data-lucide="chevrons-up-down" class="w-3 h-3 opacity-30 sort-icon"></i>
               {% endif %}
             </button>
           </th>
@@ -694,6 +699,61 @@
     }
   };
 
+  // Bulk delete: show a confirm dialog then DELETE all selected ids (Bug 5).
+  umbra._bulkDeleteSelected = function(btn) {
+    var table = btn.getAttribute('data-table') || btn.closest('[data-table]').getAttribute('data-table');
+    var selected = Array.from(document.querySelectorAll('.row-cb:checked')).map(function(cb) {
+      return parseInt(cb.value, 10);
+    });
+    if (selected.length === 0) return;
+    var count = selected.length;
+    var noun = count === 1 ? 'record' : 'records';
+    // Build confirm dialog HTML and inject into dialog slot.
+    var slot = document.getElementById('umbra-dialog-slot');
+    if (!slot) return;
+    slot.innerHTML =
+      '<div id="umbra-dialog-overlay" class="fixed inset-0 z-[200] flex items-center justify-center bg-background/60 backdrop-blur-sm" onclick="if(event.target===this)umbra.closeDialog()" role="dialog" aria-modal="true" aria-labelledby="bulk-del-title" aria-describedby="bulk-del-desc">' +
+      '<div class="bg-surface-container border border-outline-variant rounded-[14px] shadow-2xl w-full max-w-md mx-md p-xl flex flex-col gap-lg">' +
+      '<div class="flex items-start gap-md">' +
+      '<div class="w-10 h-10 rounded-xl bg-error-container/20 border border-error/20 flex items-center justify-center flex-shrink-0"><i data-lucide="trash-2" class="w-5 h-5 text-error"></i></div>' +
+      '<div><h2 id="bulk-del-title" class="font-h3 text-h3 text-on-surface leading-snug">Delete ' + count + ' ' + noun + '?</h2>' +
+      '<p id="bulk-del-desc" class="text-body-sm text-on-surface-variant mt-xs">This action cannot be undone. All ' + count + ' selected ' + noun + ' will be permanently deleted.</p></div></div>' +
+      '<div class="flex items-center justify-end gap-md">' +
+      '<button type="button" autofocus onclick="umbra.closeDialog()" class="px-lg py-sm rounded-xl border border-outline-variant text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high font-label-md text-label-md transition-all focus:outline-none focus:ring-2 focus:ring-primary/40">Cancel</button>' +
+      '<button type="button" id="bulk-del-confirm" class="px-lg py-sm rounded-xl bg-error text-on-error hover:opacity-90 active:scale-[0.98] font-label-md text-label-md transition-all focus:outline-none focus:ring-2 focus:ring-error/40">Delete</button>' +
+      '</div></div></div>';
+    if (window.lucide) lucide.createIcons({ el: slot });
+    // Confirm handler.
+    document.getElementById('bulk-del-confirm').addEventListener('click', function() {
+      umbra.closeDialog();
+      // Delete each selected row sequentially via DELETE requests.
+      var pending = selected.slice();
+      function deleteNext() {
+        if (pending.length === 0) {
+          htmx.ajax('GET', '/admin/' + table + '/rows', { target: '#table-body', swap: 'innerHTML' });
+          umbra.selectAllRows(false);
+          if (umbra.showToast) umbra.showToast('Deleted ' + count + ' ' + noun + '.', 'success');
+          return;
+        }
+        var id = pending.shift();
+        fetch('/admin/' + table + '/' + id, {
+          method: 'DELETE',
+          headers: { 'HX-Request': 'true' }
+        }).then(deleteNext).catch(function(err) {
+          if (umbra.showToast) umbra.showToast('Delete failed: ' + err, 'error');
+        });
+      }
+      deleteNext();
+    });
+    // Escape to cancel.
+    (function() {
+      function onEsc(e) {
+        if (e.key === 'Escape') { umbra.closeDialog(); document.removeEventListener('keydown', onEsc); }
+      }
+      document.addEventListener('keydown', onEsc);
+    })();
+  };
+
   umbra.runBulkAction = function(btn) {
     var key = btn.getAttribute('data-action-key');
     var table = btn.getAttribute('data-table') || (btn.closest('[data-table]') && btn.closest('[data-table]').getAttribute('data-table'));
@@ -724,6 +784,32 @@
     });
   };
 
+  // ---- Sort column header (Bug 1 fix) ---
+  // Read CURRENT sort state from live hidden inputs so that toggling desc
+  // works correctly even after an HTMX tbody swap updates the URL without
+  // re-rendering the static column headers.
+  umbra._sortByCol = function(btn) {
+    var col       = btn.getAttribute('data-sort-col');
+    var table     = btn.getAttribute('data-table');
+    var pageSize  = btn.getAttribute('data-sort-page-size') || '25';
+    var sortColEl   = document.getElementById('dt-sort-col');
+    var sortOrderEl = document.getElementById('dt-sort-order');
+    var searchEl    = document.getElementById('dt-search');
+    var filterEl    = document.getElementById('dt-active-filter');
+    var curCol   = sortColEl   ? sortColEl.value   : '';
+    var curOrder = sortOrderEl ? sortOrderEl.value : 'asc';
+    var search   = searchEl   ? searchEl.value     : '';
+    var filter   = filterEl   ? filterEl.value     : '';
+    // Toggle: same col + asc => desc; everything else => asc on new col.
+    var newOrder = (curCol === col && curOrder === 'asc') ? 'desc' : 'asc';
+    var url = '/admin/' + table + '/rows?search=' + encodeURIComponent(search) +
+              '&filter=' + encodeURIComponent(filter) +
+              '&sort=' + encodeURIComponent(col) +
+              '&order=' + newOrder +
+              '&page=1&page_size=' + pageSize;
+    htmx.ajax('GET', url, { target: '#table-body', swap: 'innerHTML', pushUrl: true });
+  };
+
   // Re-init after HTMX swaps the tbody.
   document.body.addEventListener('htmx:afterSwap', function(e) {
     if (e.detail && e.detail.target && e.detail.target.id === 'table-body') {
@@ -731,6 +817,28 @@
       // Re-apply density after tbody swap.
       var sd = localStorage.getItem('umbra-admin-density');
       if (sd && umbra.setDensity) umbra.setDensity(sd);
+      // Update sort-header icons to reflect the new live sort state (Bug 1).
+      (function updateSortIcons() {
+        var sortColEl   = document.getElementById('dt-sort-col');
+        var sortOrderEl = document.getElementById('dt-sort-order');
+        var curCol   = sortColEl   ? sortColEl.value   : '';
+        var curOrder = sortOrderEl ? sortOrderEl.value : 'asc';
+        document.querySelectorAll('.sort-header-btn').forEach(function(btn) {
+          var col = btn.getAttribute('data-sort-col');
+          var icon = btn.querySelector('.sort-icon');
+          if (!icon) return;
+          var isActive = (col === curCol);
+          if (isActive) {
+            var iconName = curOrder === 'asc' ? 'chevron-up' : 'chevron-down';
+            icon.setAttribute('data-lucide', iconName);
+            icon.className = 'w-3 h-3 text-primary sort-icon';
+          } else {
+            icon.setAttribute('data-lucide', 'chevrons-up-down');
+            icon.className = 'w-3 h-3 opacity-30 sort-icon';
+          }
+        });
+        if (window.lucide) lucide.createIcons();
+      })();
       // Re-apply column visibility after tbody swap.
       var raw2 = localStorage.getItem(COL_STORAGE_KEY);
       if (raw2) {
@@ -785,11 +893,25 @@
   <span class="font-label-md text-label-md text-on-surface-variant">
     <span class="bulk-count font-semibold text-on-surface">0</span> selected
   </span>
+  {# Clear selection (secondary, keeps items) #}
   <button
     type="button"
     onclick="umbra.selectAllRows(false)"
     class="font-label-sm text-label-sm text-on-surface-variant hover:text-on-surface transition-colors"
   >Clear</button>
+  <div class="w-px h-4 bg-outline-variant"></div>
+  {# Bulk delete — danger styling + confirm dialog (Bug 5) #}
+  <button
+    type="button"
+    id="bulk-delete-btn"
+    data-table="{{ model.table }}"
+    onclick="umbra._bulkDeleteSelected(this)"
+    class="flex items-center gap-xs px-md py-xs rounded-lg font-label-md text-label-md text-error bg-error/10 hover:bg-error/20 transition-colors"
+    title="Delete selected records"
+  >
+    <i data-lucide="trash-2" class="w-4 h-4"></i>
+    <span class="hidden sm:inline">Delete</span>
+  </button>
   <div class="w-px h-4 bg-outline-variant"></div>
 
   {# Bulk-scope actions (up to 4 inline) #}

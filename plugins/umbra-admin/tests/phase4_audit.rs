@@ -101,7 +101,7 @@ async fn boot() -> &'static axum::Router {
         .await
         .ok();
 
-        umbra_admin::models::ensure_tables(&pool)
+        umbra_admin::models::ensure_tables_for_tests(&pool)
             .await
             .expect("ensure_tables");
 

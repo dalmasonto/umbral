@@ -194,6 +194,13 @@ impl Plugin for AdminPlugin {
         &["auth", "sessions"]
     }
 
+    fn models(&self) -> Vec<umbra::migrate::ModelMeta> {
+        vec![
+            umbra::migrate::ModelMeta::for_::<crate::models::AdminUserPref>(),
+            umbra::migrate::ModelMeta::for_::<crate::models::AdminAuditLog>(),
+        ]
+    }
+
     fn routes(&self) -> Router {
         // Seed the catalog with the two built-in widgets, then append
         // developer-registered ones.
@@ -304,8 +311,12 @@ impl Plugin for AdminPlugin {
                 "/admin/api/dashboard/widgets/{key}/data",
                 axum::routing::get(dashboard_widget_data),
             )
-            // Phase 4: command palette fragment
+            // Phase 4: command palette fragment + global record search
             .route("/admin/api/palette", axum::routing::get(palette_fragment))
+            .route(
+                "/admin/api/palette/search",
+                axum::routing::get(palette_search),
+            )
             // Static CSS (embedded at compile time; served in prod, CDN used in dev)
             .route(
                 "/admin/static/admin.css",
@@ -314,27 +325,10 @@ impl Plugin for AdminPlugin {
             .with_state(state)
     }
 
-    fn on_ready(&self, ctx: &umbra::plugin::AppContext) -> Result<(), umbra::plugin::PluginError> {
-        // Ensure admin tables exist on first boot. We block on the async
-        // call using the pool from the AppContext.
-        let pool = ctx.pool.clone();
-        let rt = tokio::runtime::Handle::try_current();
-        match rt {
-            Ok(handle) => {
-                handle.spawn(async move {
-                    if let Err(e) = crate::models::ensure_tables(&pool).await {
-                        tracing::error!(error = %e, "admin: failed to create admin tables on boot");
-                    }
-                });
-            }
-            Err(_) => {
-                // No async runtime available at call time; skip table creation.
-                // Tables will be created on the first DB access instead.
-                tracing::warn!(
-                    "admin: on_ready called without tokio runtime; admin tables not created"
-                );
-            }
-        }
+    fn on_ready(&self, _ctx: &umbra::plugin::AppContext) -> Result<(), umbra::plugin::PluginError> {
+        // Tables are produced by the migration engine off
+        // `Self::models()` — same path as every other plugin's models.
+        // No bootstrap DDL here.
         Ok(())
     }
 }
@@ -935,6 +929,19 @@ impl IntoResponse for AdminError {
 }
 
 // =========================================================================
+// Theme helper — resolves the user's saved theme for server-side rendering.
+// =========================================================================
+
+/// Return the user's saved theme preference ("dark" | "light" | "system").
+/// Falls back to "dark" on any error so the page always renders something.
+async fn user_theme(user: &umbra_auth::AuthUser) -> String {
+    crate::models::fetch_or_default(user.id)
+        .await
+        .map(|p| p.theme)
+        .unwrap_or_else(|_| "dark".to_string())
+}
+
+// =========================================================================
 // Model discovery.
 // =========================================================================
 
@@ -1024,15 +1031,18 @@ async fn index(State(state): State<AdminState>, headers: HeaderMap) -> Response 
         cards
     };
 
+    let initial_theme = user_theme(&user).await;
+
     match render(
         "admin/dashboard.html",
         context!(
-            user         => user.username.clone(),
-            widgets      => widgets,
-            model_cards  => model_cards,
-            apps         => apps,
-            active_table => "",
-            breadcrumbs  => Vec::<serde_json::Value>::new(),
+            user          => user.username.clone(),
+            widgets       => widgets,
+            model_cards   => model_cards,
+            apps          => apps,
+            active_table  => "",
+            breadcrumbs   => Vec::<serde_json::Value>::new(),
+            initial_theme => initial_theme,
         ),
     ) {
         Ok(html) => html.into_response(),
@@ -1173,29 +1183,32 @@ async fn list(
         .map(|c| c.inline_edit_fields.clone())
         .unwrap_or_default();
 
+    let initial_theme = user_theme(&user).await;
+
     match render(
         "admin/changelist.html",
         context!(
-            user              => user.username.clone(),
-            model             => model_for_template_cols(&model, &display_cols),
-            rows              => rows,
-            columns           => columns,
-            pk                => pk.name.clone(),
-            facets            => facets,
-            actions           => action_names,
-            has_search        => has_search,
-            search_val        => search_val,
-            active_filter     => active_filter_str,
-            pagination        => pagination,
-            sort_col          => sort_col,
-            sort_order        => sort_order,
-            flash             => flash,
-            open_row          => open_row,
-            apps              => apps,
-            active_table      => table,
-            breadcrumbs       => breadcrumbs,
-            column_widths     => column_widths_json,
+            user               => user.username.clone(),
+            model              => model_for_template_cols(&model, &display_cols),
+            rows               => rows,
+            columns            => columns,
+            pk                 => pk.name.clone(),
+            facets             => facets,
+            actions            => action_names,
+            has_search         => has_search,
+            search_val         => search_val,
+            active_filter      => active_filter_str,
+            pagination         => pagination,
+            sort_col           => sort_col,
+            sort_order         => sort_order,
+            flash              => flash,
+            open_row           => open_row,
+            apps               => apps,
+            active_table       => table,
+            breadcrumbs        => breadcrumbs,
+            column_widths      => column_widths_json,
             inline_edit_fields => inline_edit_fields,
+            initial_theme      => initial_theme,
         ),
     ) {
         Ok(html) => html.into_response(),
@@ -1898,16 +1911,18 @@ async fn detail(
         serde_json::json!({ "label": model.name.clone(), "url": format!("/admin/{table}/") }),
         serde_json::json!({ "label": format!("#{id}"), "url": format!("/admin/{table}/{id}") }),
     ];
+    let initial_theme = user_theme(&user).await;
     match render(
         "admin/detail.html",
         context!(
-            user         => user.username.clone(),
-            model        => model_for_template(&model),
-            row          => row,
-            pk           => pk.name.clone(),
-            apps         => apps,
-            active_table => table,
-            breadcrumbs  => breadcrumbs,
+            user          => user.username.clone(),
+            model         => model_for_template(&model),
+            row           => row,
+            pk            => pk.name.clone(),
+            apps          => apps,
+            active_table  => table,
+            breadcrumbs   => breadcrumbs,
+            initial_theme => initial_theme,
         ),
     ) {
         Ok(html) => html.into_response(),
@@ -1935,18 +1950,20 @@ async fn new_form(
         serde_json::json!({ "label": model.name.clone(), "url": format!("/admin/{table}/") }),
         serde_json::json!({ "label": "Add", "url": format!("/admin/{table}/new") }),
     ];
+    let initial_theme = user_theme(&user).await;
     match render(
         "admin/form.html",
         context!(
-            user         => user.username.clone(),
-            model        => model_for_template(&model),
-            fields       => fields,
-            verb         => "Create",
-            action       => format!("/admin/{}/new", model.table),
-            error        => "",
-            apps         => apps,
-            active_table => table,
-            breadcrumbs  => breadcrumbs,
+            user          => user.username.clone(),
+            model         => model_for_template(&model),
+            fields        => fields,
+            verb          => "Create",
+            action        => format!("/admin/{}/new", model.table),
+            error         => "",
+            apps          => apps,
+            active_table  => table,
+            breadcrumbs   => breadcrumbs,
+            initial_theme => initial_theme,
         ),
     ) {
         Ok(html) => html.into_response(),
@@ -1977,8 +1994,7 @@ async fn create(
     match insert_row(&pool, &model, &form, cfg).await {
         Ok(_) => {
             // Audit log
-            crate::models::log_audit(
-                &pool,
+            crate::models::log(
                 user.id,
                 "create",
                 &table,
@@ -1995,18 +2011,20 @@ async fn create(
                 serde_json::json!({ "label": model.name.clone(), "url": format!("/admin/{table}/") }),
                 serde_json::json!({ "label": "Add", "url": format!("/admin/{table}/new") }),
             ];
+            let initial_theme = user_theme(&user).await;
             match render(
                 "admin/form.html",
                 context!(
-                    user         => user.username.clone(),
-                    model        => model_for_template(&model),
-                    fields       => fields,
-                    verb         => "Create",
-                    action       => format!("/admin/{}/new", model.table),
-                    error        => sanitise_form_error(&e),
-                    apps         => apps,
-                    active_table => table,
-                    breadcrumbs  => breadcrumbs,
+                    user          => user.username.clone(),
+                    model         => model_for_template(&model),
+                    fields        => fields,
+                    verb          => "Create",
+                    action        => format!("/admin/{}/new", model.table),
+                    error         => sanitise_form_error(&e),
+                    apps          => apps,
+                    active_table  => table,
+                    breadcrumbs   => breadcrumbs,
+                    initial_theme => initial_theme,
                 ),
             ) {
                 Ok(html) => (StatusCode::BAD_REQUEST, html).into_response(),
@@ -2062,20 +2080,22 @@ async fn edit_form(
         serde_json::json!({ "label": format!("#{id}"), "url": format!("/admin/{table}/{id}") }),
         serde_json::json!({ "label": "Edit", "url": format!("/admin/{table}/{id}/edit") }),
     ];
+    let initial_theme = user_theme(&user).await;
     match render(
         "admin/form.html",
         context!(
-            user         => user.username.clone(),
-            model        => model_for_template(&model),
-            fields       => fields,
-            verb         => "Edit",
-            action       => format!("/admin/{}/{}/edit", model.table, id),
-            row          => row,
-            pk           => pk.name.clone(),
-            error        => "",
-            apps         => apps,
-            active_table => table,
-            breadcrumbs  => breadcrumbs,
+            user          => user.username.clone(),
+            model         => model_for_template(&model),
+            fields        => fields,
+            verb          => "Edit",
+            action        => format!("/admin/{}/{}/edit", model.table, id),
+            row           => row,
+            pk            => pk.name.clone(),
+            error         => "",
+            apps          => apps,
+            active_table  => table,
+            breadcrumbs   => breadcrumbs,
+            initial_theme => initial_theme,
         ),
     ) {
         Ok(html) => html.into_response(),
@@ -2110,8 +2130,7 @@ async fn update(
         Ok(_) => {
             // Audit log
             let object_id = id.parse::<i64>().ok();
-            crate::models::log_audit(
-                &pool,
+            crate::models::log(
                 user.id,
                 "update",
                 &table,
@@ -2154,18 +2173,20 @@ async fn update(
                 serde_json::json!({ "label": format!("#{id}"), "url": format!("/admin/{table}/{id}") }),
                 serde_json::json!({ "label": "Edit", "url": format!("/admin/{table}/{id}/edit") }),
             ];
+            let initial_theme = user_theme(&user).await;
             match render(
                 "admin/form.html",
                 context!(
-                    user         => user.username.clone(),
-                    model        => model_for_template(&model),
-                    fields       => fields,
-                    verb         => "Edit",
-                    action       => format!("/admin/{}/{}/edit", model.table, id),
-                    error        => sanitise_form_error(&e),
-                    apps         => apps,
-                    active_table => table,
-                    breadcrumbs  => breadcrumbs,
+                    user          => user.username.clone(),
+                    model         => model_for_template(&model),
+                    fields        => fields,
+                    verb          => "Edit",
+                    action        => format!("/admin/{}/{}/edit", model.table, id),
+                    error         => sanitise_form_error(&e),
+                    apps          => apps,
+                    active_table  => table,
+                    breadcrumbs   => breadcrumbs,
+                    initial_theme => initial_theme,
                 ),
             ) {
                 Ok(html) => (StatusCode::BAD_REQUEST, html).into_response(),
@@ -2200,8 +2221,7 @@ async fn delete(
     match sqlx::query(&sql).bind(&id).execute(&pool).await {
         Ok(_) => {
             let object_id = id.parse::<i64>().ok();
-            crate::models::log_audit(
-                &pool,
+            crate::models::log(
                 who.id,
                 "delete",
                 &table,
@@ -2907,8 +2927,7 @@ async fn sheet_create(
     match insert_row(&pool, &model, &form, cfg).await {
         Ok(_) => {
             // Audit log
-            crate::models::log_audit(
-                &pool,
+            crate::models::log(
                 who.id,
                 "create",
                 &table,
@@ -2974,8 +2993,7 @@ async fn htmx_delete(
     match sqlx::query(&sql).bind(&id).execute(&pool).await {
         Ok(_) => {
             let object_id = id.parse::<i64>().ok();
-            crate::models::log_audit(
-                &pool,
+            crate::models::log(
                 who.id,
                 "delete",
                 &table,
@@ -3655,7 +3673,14 @@ fn input_kind(ty: SqlType) -> &'static str {
         | SqlType::Real
         | SqlType::Double => "number",
         SqlType::Boolean => "bool",
-        SqlType::Text | SqlType::Uuid => "text",
+        // String columns map to a small multi-line textarea by default —
+        // SQL `TEXT` is unbounded in both backends so a single-line input
+        // truncates long content visually; a 2-row textarea handles names
+        // and bodies equally well. UUID / Inet / Cidr / MacAddr stay as
+        // single-line inputs because their values are fixed-format and
+        // never benefit from extra height.
+        SqlType::Text => "string",
+        SqlType::Uuid => "text",
         SqlType::Date => "date",
         SqlType::Time => "time",
         SqlType::Timestamptz => "datetime-local",
@@ -3829,8 +3854,7 @@ async fn get_prefs_handler(headers: HeaderMap) -> Response {
         Ok(u) => u,
         Err(r) => return r,
     };
-    let pool = umbra::db::pool();
-    match crate::models::get_prefs(&pool, user.id).await {
+    match crate::models::fetch_or_default(user.id).await {
         Ok(prefs) => Json(serde_json::json!({
             "theme": prefs.theme,
             "density": prefs.density,
@@ -3854,10 +3878,9 @@ async fn put_prefs_handler(headers: HeaderMap, body: String) -> Response {
         Ok(u) => u,
         Err(r) => return r,
     };
-    let pool = umbra::db::pool();
 
     // Fetch existing (or default) prefs, then overlay the submitted fields.
-    let mut prefs = match crate::models::get_prefs(&pool, user.id).await {
+    let mut prefs = match crate::models::fetch_or_default(user.id).await {
         Ok(p) => p,
         Err(e) => {
             tracing::error!(error = %e, "admin: put_prefs fetch failed");
@@ -3884,7 +3907,7 @@ async fn put_prefs_handler(headers: HeaderMap, body: String) -> Response {
         }
     }
 
-    match crate::models::upsert_prefs(&pool, &prefs).await {
+    match crate::models::upsert(prefs).await {
         Ok(_) => Json(serde_json::json!({ "ok": true })).into_response(),
         Err(e) => {
             tracing::error!(error = %e, "admin: put_prefs upsert failed");
@@ -3916,8 +3939,7 @@ async fn history_handler(
         Ok(v) => v,
         Err(_) => return AdminError::BadInput(format!("invalid id: {id}")).into_response(),
     };
-    let pool = umbra::db::pool();
-    let entries = match crate::models::audit_for_object(&pool, &table, object_id, 50).await {
+    let entries = match crate::models::audit_for_object(&table, object_id, 50).await {
         Ok(e) => e,
         Err(e) => {
             tracing::error!(error = %e, "admin: audit_for_object failed");
@@ -3926,15 +3948,17 @@ async fn history_handler(
     };
 
     let apps = sidebar_apps(&state, &user);
+    let initial_theme = user_theme(&user).await;
     match render(
         "admin/history.html",
         context!(
-            model_name => model.name.clone(),
-            object_id  => object_id,
-            entries    => entries,
-            apps       => apps,
-            active_table => table,
-            breadcrumbs  => Vec::<serde_json::Value>::new(),
+            model_name    => model.name.clone(),
+            object_id     => object_id,
+            entries       => entries,
+            apps          => apps,
+            active_table  => table,
+            breadcrumbs   => Vec::<serde_json::Value>::new(),
+            initial_theme => initial_theme,
         ),
     ) {
         Ok(html) => html.into_response(),
@@ -3970,8 +3994,7 @@ async fn dashboard_layout_get(headers: HeaderMap) -> Response {
         Ok(u) => u,
         Err(r) => return r,
     };
-    let pool = umbra::db::pool();
-    let prefs = match crate::models::get_prefs(&pool, user.id).await {
+    let prefs = match crate::models::fetch_or_default(user.id).await {
         Ok(p) => p,
         Err(e) => {
             tracing::error!(error = %e, "admin: dashboard_layout_get failed");
@@ -3996,8 +4019,7 @@ async fn dashboard_layout_put(headers: HeaderMap, body: String) -> Response {
     if serde_json::from_str::<serde_json::Value>(&body).is_err() {
         return (StatusCode::BAD_REQUEST, "invalid JSON layout").into_response();
     }
-    let pool = umbra::db::pool();
-    let mut prefs = match crate::models::get_prefs(&pool, user.id).await {
+    let mut prefs = match crate::models::fetch_or_default(user.id).await {
         Ok(p) => p,
         Err(e) => {
             tracing::error!(error = %e, "admin: dashboard_layout_put fetch failed");
@@ -4005,7 +4027,7 @@ async fn dashboard_layout_put(headers: HeaderMap, body: String) -> Response {
         }
     };
     prefs.dashboard_layout = body;
-    match crate::models::upsert_prefs(&pool, &prefs).await {
+    match crate::models::upsert(prefs).await {
         Ok(_) => Json(serde_json::json!({ "ok": true })).into_response(),
         Err(e) => {
             tracing::error!(error = %e, "admin: dashboard_layout_put save failed");
@@ -4104,6 +4126,127 @@ async fn palette_fragment(State(state): State<AdminState>, headers: HeaderMap) -
         Ok(html) => html.into_response(),
         Err(e) => e.into_response(),
     }
+}
+
+// =========================================================================
+// Phase 4: palette global record search.
+// =========================================================================
+
+/// `GET /admin/api/palette/search?q=<term>` — search across all registered
+/// models that have `search_fields` configured and return up to 10 matching
+/// rows as palette items (HTML fragment for HTMX swap into #umbra-palette-records).
+async fn palette_search(
+    State(state): State<AdminState>,
+    headers: HeaderMap,
+    Query(params): Query<HashMap<String, String>>,
+) -> Response {
+    if let Err(r) = require_staff(&headers, "/admin/api/palette/search").await {
+        return r;
+    }
+    let q = params.get("q").map(|s| s.as_str()).unwrap_or("").trim();
+    if q.len() < 2 {
+        // Return empty fragment for short queries.
+        return axum::response::Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", "text/html")
+            .body(axum::body::Body::empty())
+            .unwrap_or_else(|_| StatusCode::OK.into_response());
+    }
+
+    let pool = umbra::db::pool();
+    let mut html = String::new();
+    let mut total_found = 0usize;
+    const MAX_RESULTS: usize = 10;
+
+    for (_, model) in discover_models() {
+        if total_found >= MAX_RESULTS {
+            break;
+        }
+        let cfg = state.config_for(&model.table);
+        let search_fields: Vec<String> = cfg
+            .filter(|c| !c.search_fields.is_empty())
+            .map(|c| c.search_fields.clone())
+            .unwrap_or_default();
+        if search_fields.is_empty() {
+            continue;
+        }
+
+        let valid_names: std::collections::HashSet<&str> =
+            model.fields.iter().map(|c| c.name.as_str()).collect();
+        let pk = match pk_column(&model) {
+            Some(p) => p,
+            None => continue,
+        };
+
+        // Pick a human-readable label column: first non-pk text column.
+        let label_col = model
+            .fields
+            .iter()
+            .find(|c| !c.primary_key && matches!(c.ty, umbra::orm::SqlType::Text))
+            .map(|c| c.name.as_str())
+            .unwrap_or(pk.name.as_str());
+
+        let like_clauses: Vec<String> = search_fields
+            .iter()
+            .filter(|f| valid_names.contains(f.as_str()))
+            .map(|f| format!("\"{}\" LIKE ?", crate::q(f)))
+            .collect();
+        if like_clauses.is_empty() {
+            continue;
+        }
+
+        let where_sql = format!("WHERE ({})", like_clauses.join(" OR "));
+        let sql = format!(
+            "SELECT \"{pk_col}\", \"{label_col}\" FROM \"{table}\" {where_sql} LIMIT ?",
+            pk_col = crate::q(&pk.name),
+            label_col = crate::q(label_col),
+            table = crate::q(&model.table),
+        );
+        let like_val = format!("%{q}%");
+        let remaining = MAX_RESULTS - total_found;
+
+        let mut qb = sqlx::query(&sql);
+        for _ in &like_clauses {
+            qb = qb.bind(like_val.clone());
+        }
+        qb = qb.bind(remaining as i64);
+
+        if let Ok(rows) = qb.fetch_all(&pool).await {
+            for row in rows {
+                if total_found >= MAX_RESULTS {
+                    break;
+                }
+                let id: String = row
+                    .try_get::<i64, _>(0)
+                    .map(|v| v.to_string())
+                    .or_else(|_| row.try_get::<String, _>(0))
+                    .unwrap_or_default();
+                let label: String = row
+                    .try_get::<String, _>(1)
+                    .unwrap_or_else(|_| format!("#{id}"));
+                let item_label = format!("{}: {}", model.name, label);
+                let href = format!("/admin/{}/{}/sheet", model.table, id);
+                html.push_str(&format!(
+                    r#"<li role="option" data-palette-href="{href}" class="palette-item flex items-center gap-sm px-lg py-sm cursor-pointer hover:bg-surface-container-high transition-colors group" onclick="umbra._paletteGo(this)" tabindex="-1">
+  <div class="w-8 h-8 rounded-xl bg-primary-container/10 border border-primary/20 flex items-center justify-center flex-shrink-0">
+    <i data-lucide="file-search" class="w-4 h-4 text-primary"></i>
+  </div>
+  <span class="text-body-md text-on-surface">{label}</span>
+  <span class="ml-auto text-label-sm text-outline opacity-0 group-hover:opacity-100 transition-opacity">Open</span>
+</li>"#,
+                    href = html_escape(&href),
+                    label = html_escape(&item_label),
+                ));
+                total_found += 1;
+            }
+        }
+    }
+
+    axum::response::Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "text/html")
+        .body(axum::body::Body::from(html))
+        .unwrap_or_else(|_| StatusCode::OK.into_response())
 }
 
 // =========================================================================

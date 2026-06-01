@@ -10,11 +10,16 @@
 #}
 
 {% macro kpi_widget(title, payload) %}
-<div class="kpi-widget h-full flex flex-col justify-between p-md">
+<div class="kpi-widget h-full flex flex-col justify-between p-lg">
+  <div class="flex items-start justify-between gap-sm mb-md">
+    <p class="text-label-sm text-outline uppercase tracking-wider">{{ title }}</p>
+    <div class="w-8 h-8 rounded-lg bg-surface-container-low border border-outline-variant/60 flex items-center justify-center flex-shrink-0">
+      <i data-lucide="bar-chart-3" class="w-4 h-4 text-on-surface-variant"></i>
+    </div>
+  </div>
   <div>
-    <p class="text-label-sm text-outline uppercase tracking-wider mb-xs">{{ title }}</p>
     <div class="flex items-baseline gap-xs">
-      <span class="text-display font-display text-on-surface tabular-nums leading-none">{{ payload.value }}</span>
+      <span class="font-display text-4xl text-on-surface tabular-nums leading-none">{{ payload.value }}</span>
       {% if payload.unit %}
       <span class="text-body-sm text-outline">{{ payload.unit }}</span>
       {% endif %}
