@@ -33,13 +33,16 @@
 //! a generic-over-`R` impl, so a user struct with standard field
 //! types satisfies both bounds without any per-backend ceremony.
 
+use std::collections::HashMap;
 use std::marker::PhantomData;
 
 use sea_query::{Alias, Expr, Func, Order, PostgresQueryBuilder, Query, SqliteQueryBuilder};
 use sea_query_binder::SqlxBinder;
+use serde_json::Value as JsonValue;
+use sqlx::Column as _;
 
 use crate::db::DbPool;
-use crate::orm::{Model, OrderExpr, Predicate};
+use crate::orm::{FExpr, HydrateRelated, Model, OrderExpr, Predicate};
 
 /// Entry point for queries on a model.
 ///
@@ -82,6 +85,11 @@ pub struct QuerySet<T> {
     /// (for SQLite, if set) at terminal time.
     pub(crate) predicates: Vec<Predicate<T>>,
     pub(crate) explicit_pool: Option<DbPool>,
+    /// FK field names requested for eager loading via `select_related`.
+    /// After the main query returns rows, a batch `IN (...)` query
+    /// fetches the related rows for each named field and calls
+    /// `HydrateRelated::hydrate_fk` to populate `ForeignKey.resolved`.
+    pub(crate) select_related: Vec<String>,
     _phantom: PhantomData<T>,
 }
 
@@ -91,6 +99,7 @@ impl<T> QuerySet<T> {
             query,
             predicates: Vec::new(),
             explicit_pool: None,
+            select_related: Vec::new(),
             _phantom: PhantomData,
         }
     }
@@ -163,6 +172,41 @@ impl<T> QuerySet<T> {
     /// Postgres instance) reach for this directly.
     pub fn on_pg(mut self, pool: &sqlx::PgPool) -> Self {
         self.explicit_pool = Some(DbPool::Postgres(pool.clone()));
+        self
+    }
+
+    /// Eagerly load a single FK field by name.
+    ///
+    /// After the main SELECT returns rows, a batch `SELECT ... FROM <related_table>
+    /// WHERE id IN (...)` fetches all referenced rows in one round-trip. Each
+    /// returned row is deserialised as the target model and stored in
+    /// `ForeignKey<U>.resolved` so template rendering (`{{ post.author.username }}`)
+    /// and `serde_json::to_value(&post)["author"]["username"]` both work without
+    /// additional queries.
+    ///
+    /// Calling `select_related` multiple times accumulates the names:
+    /// `.select_related("author").select_related("editor")` works the same as
+    /// `.select_related_many(&["author", "editor"])`.
+    ///
+    /// ## What is NOT in scope
+    ///
+    /// - Nested traversal (`"author__manager"`) — deferred. Only one-hop FKs
+    ///   are supported. Chains require successive `.select_related` calls on
+    ///   the resolved row, not a dot-notation shorthand.
+    /// - Reverse FK (`prefetch_related`) — deferred. See gap 28 docs.
+    /// - Many-to-many joins — deferred.
+    pub fn select_related(mut self, field_name: impl Into<String>) -> Self {
+        self.select_related.push(field_name.into());
+        self
+    }
+
+    /// Eagerly load multiple FK fields in one call.
+    ///
+    /// Sugar for chained `.select_related(name)` calls.
+    pub fn select_related_many(mut self, field_names: &[&str]) -> Self {
+        for name in field_names {
+            self.select_related.push(name.to_string());
+        }
         self
     }
 }
@@ -278,58 +322,79 @@ impl<T: Model> QuerySet<T> {
     }
 
     /// Run the SELECT and return every matching row.
+    ///
+    /// If `.select_related(name)` was called, a follow-up batch query
+    /// populates `ForeignKey<U>.resolved` for each named field before
+    /// the rows are returned.
     pub async fn fetch(self) -> Result<Vec<T>, sqlx::Error>
     where
         T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
-            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
+            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>
+            + HydrateRelated,
     {
+        let sr_fields = self.select_related.clone();
         // The turbofish on `query_as_with::<DB, _, _>` is load-bearing:
         // with both `sqlx-sqlite` and `sqlx-postgres` features on
         // sea-query-binder, `SqlxValues` implements `IntoArguments` for
         // both backends, so the compiler can't infer DB from the values
         // alone. Naming DB explicitly pins which `FromRow` bound is
         // checked.
-        match resolve_pool::<T>(self.explicit_pool.clone()) {
+        let mut rows = match resolve_pool::<T>(self.explicit_pool.clone()) {
             DbPool::Sqlite(pool) => {
                 let q = self.build_query_for("sqlite");
                 let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
                 sqlx::query_as_with::<sqlx::Sqlite, T, _>(&sql, values)
                     .fetch_all(&pool)
-                    .await
+                    .await?
             }
             DbPool::Postgres(pool) => {
                 let q = self.build_query_for("postgres");
                 let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
                 sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
                     .fetch_all(&pool)
-                    .await
+                    .await?
             }
+        };
+        if !sr_fields.is_empty() {
+            let pool = resolve_pool::<T>(self.explicit_pool.clone());
+            hydrate_select_related::<T>(&mut rows, &sr_fields, &pool).await?;
         }
+        Ok(rows)
     }
 
     /// Run the SELECT with LIMIT 1 and return the first row, if any.
     pub async fn first(mut self) -> Result<Option<T>, sqlx::Error>
     where
         T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
-            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
+            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>
+            + HydrateRelated,
     {
+        let sr_fields = self.select_related.clone();
         self.query.limit(1);
-        match resolve_pool::<T>(self.explicit_pool.clone()) {
+        let row = match resolve_pool::<T>(self.explicit_pool.clone()) {
             DbPool::Sqlite(pool) => {
                 let q = self.build_query_for("sqlite");
                 let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
                 sqlx::query_as_with::<sqlx::Sqlite, T, _>(&sql, values)
                     .fetch_optional(&pool)
-                    .await
+                    .await?
             }
             DbPool::Postgres(pool) => {
                 let q = self.build_query_for("postgres");
                 let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
                 sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
                     .fetch_optional(&pool)
-                    .await
+                    .await?
             }
+        };
+        if sr_fields.is_empty() || row.is_none() {
+            return Ok(row);
         }
+        // Hydrate the single row.
+        let mut rows = vec![row.unwrap()];
+        let pool = resolve_pool::<T>(self.explicit_pool.clone());
+        hydrate_select_related::<T>(&mut rows, &sr_fields, &pool).await?;
+        Ok(Some(rows.pop().unwrap()))
     }
 
     /// Run `SELECT COUNT(*)` against the same FROM + WHERE.
@@ -379,7 +444,8 @@ impl<T: Model> QuerySet<T> {
     pub async fn exists(self) -> Result<bool, sqlx::Error>
     where
         T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
-            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
+            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>
+            + HydrateRelated,
     {
         let rows = self.limit(1).fetch().await?;
         Ok(!rows.is_empty())
@@ -416,7 +482,8 @@ impl<T: Model> QuerySet<T> {
     pub async fn get(self) -> Result<T, GetError>
     where
         T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
-            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
+            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>
+            + HydrateRelated,
     {
         let mut rows = self.limit(2).fetch().await.map_err(GetError::Sqlx)?;
         match rows.len() {
@@ -465,6 +532,73 @@ impl<T: Model> QuerySet<T> {
         let pool = resolve_pool::<T>(self.explicit_pool.clone());
         let backend = pool.backend_name();
         let stmt = self.build_delete_for(backend);
+        match pool {
+            DbPool::Sqlite(pool) => {
+                let (sql, values) = stmt.build_sqlx(SqliteQueryBuilder);
+                let result = sqlx::query_with::<sqlx::Sqlite, _>(&sql, values)
+                    .execute(&pool)
+                    .await?;
+                Ok(result.rows_affected())
+            }
+            DbPool::Postgres(pool) => {
+                let (sql, values) = stmt.build_sqlx(PostgresQueryBuilder);
+                let result = sqlx::query_with::<sqlx::Postgres, _>(&sql, values)
+                    .execute(&pool)
+                    .await?;
+                Ok(result.rows_affected())
+            }
+        }
+    }
+
+    /// `UPDATE table SET col = <expr> WHERE <predicates>` using an
+    /// F-expression for the new value.
+    ///
+    /// This is the companion to `update_values` for atomic column
+    /// arithmetic. `F::col("views").add(1)` produces an [`FExpr`] that
+    /// renders as `SET views = views + 1` — the database computes the
+    /// increment atomically on the server side rather than needing a
+    /// read-modify-write round-trip in application code.
+    ///
+    /// ```rust,ignore
+    /// use umbra::orm::F;
+    ///
+    /// Post::objects()
+    ///     .filter(post::ID.eq(42))
+    ///     .update_expr("views", F::col("views").add(1))
+    ///     .await?;
+    /// ```
+    ///
+    /// Mixing `update_values` and `update_expr` for different columns in
+    /// one statement requires two separate calls. A combined API (a map
+    /// where values can be either JSON or FExpr) would require a new sum
+    /// type; deferred until a consumer surfaces the need.
+    pub async fn update_expr(
+        self,
+        col_name: &str,
+        expr: FExpr,
+    ) -> Result<u64, crate::orm::write::WriteError> {
+        use crate::orm::write::WriteError;
+        // Validate the column exists on the model.
+        let field = T::FIELDS
+            .iter()
+            .find(|f| f.name == col_name)
+            .ok_or_else(|| WriteError::UnknownColumn {
+                field: col_name.to_string(),
+            })?;
+        if field.primary_key {
+            // Silently skip PK rewrites, same as update_values.
+            return Ok(0);
+        }
+        let pool = resolve_pool::<T>(self.explicit_pool.clone());
+        let backend = pool.backend_name();
+
+        let mut stmt = sea_query::Query::update();
+        stmt.table(Alias::new(T::TABLE));
+        stmt.value(Alias::new(field.name), expr.to_simple_expr());
+        for p in &self.predicates {
+            stmt.and_where(p.cond_for(backend));
+        }
+
         match pool {
             DbPool::Sqlite(pool) => {
                 let (sql, values) = stmt.build_sqlx(SqliteQueryBuilder);
@@ -685,7 +819,8 @@ impl<T: Model> Manager<T> {
     pub async fn fetch(&self) -> Result<Vec<T>, sqlx::Error>
     where
         T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
-            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
+            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>
+            + HydrateRelated,
     {
         self.queryset().fetch().await
     }
@@ -694,7 +829,8 @@ impl<T: Model> Manager<T> {
     pub async fn first(&self) -> Result<Option<T>, sqlx::Error>
     where
         T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
-            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
+            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>
+            + HydrateRelated,
     {
         self.queryset().first().await
     }
@@ -708,7 +844,8 @@ impl<T: Model> Manager<T> {
     pub async fn exists(&self) -> Result<bool, sqlx::Error>
     where
         T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
-            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
+            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>
+            + HydrateRelated,
     {
         self.queryset().exists().await
     }
@@ -720,7 +857,8 @@ impl<T: Model> Manager<T> {
     pub async fn get(&self, p: Predicate<T>) -> Result<T, GetError>
     where
         T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
-            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
+            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>
+            + HydrateRelated,
     {
         self.queryset().filter(p).get().await
     }
@@ -890,6 +1028,189 @@ impl<T: Model> Manager<T> {
             .await?;
         Ok(result.rows_affected())
     }
+}
+
+// =========================================================================
+// select_related hydration
+//
+// After the main query returns rows, for each FK field name in
+// `select_related`:
+//
+// 1. Look up the field's `fk_target` table name from `T::FIELDS`.
+// 2. Serialize all main rows to JSON and collect the FK integer values for
+//    that field (using the field name as a JSON key).
+// 3. Run `SELECT <cols> FROM <target_table> WHERE id IN (...)` to load all
+//    referenced rows in one batch.
+// 4. Build a `HashMap<i64, JsonValue>` from the fetched rows.
+// 5. Call `HydrateRelated::hydrate_fk` on each main row with the matching
+//    resolved JSON object.
+//
+// This approach requires no JOIN changes to the main query and no macro
+// changes to `FromRow`. The cost is one extra round-trip per FK field
+// named in `select_related` (not one per row).
+// =========================================================================
+
+/// Fetch related rows for each FK field name in `sr_fields` and hydrate
+/// `HydrateRelated::hydrate_fk` on each main row.
+///
+/// Generic parameters:
+/// - `T`: the main model type. Bound on `HydrateRelated` so we can call
+///   `fk_id_for` and `hydrate_fk` on each row.
+async fn hydrate_select_related<T: Model + HydrateRelated>(
+    rows: &mut [T],
+    sr_fields: &[String],
+    pool: &DbPool,
+) -> Result<(), sqlx::Error> {
+    for field_name in sr_fields {
+        // Look up the FK field spec to get the target table name.
+        let field_spec = match T::FIELDS.iter().find(|f| f.name == field_name.as_str()) {
+            Some(f) => f,
+            None => continue, // Unknown field — skip silently.
+        };
+        let fk_target = match field_spec.fk_target {
+            Some(t) => t,
+            None => continue, // Not a FK field — skip silently.
+        };
+
+        // Collect all FK IDs from the main rows via `HydrateRelated::fk_id_for`.
+        // This avoids serializing the whole row just to read one integer.
+        let mut ids: Vec<i64> = Vec::with_capacity(rows.len());
+        for row in rows.iter() {
+            if let Some(id) = row.fk_id_for(field_name.as_str()) {
+                ids.push(id);
+            }
+        }
+        if ids.is_empty() {
+            continue;
+        }
+        ids.sort_unstable();
+        ids.dedup();
+
+        // Build `SELECT * FROM <target_table> WHERE id IN (...)`.
+        // We use sqlx raw queries here so we can read the rows as JSON
+        // maps via the backup-style column-by-column extraction.
+        let related_rows = fetch_related_as_json(fk_target, &ids, pool).await?;
+
+        // Build id → JSON map.
+        let id_to_json: HashMap<i64, JsonValue> = related_rows
+            .into_iter()
+            .filter_map(|obj| {
+                if let JsonValue::Object(ref map) = obj {
+                    if let Some(JsonValue::Number(n)) = map.get("id") {
+                        if let Some(id) = n.as_i64() {
+                            return Some((id, obj.clone()));
+                        }
+                    }
+                }
+                None
+            })
+            .collect();
+
+        // Hydrate each main row.
+        for row in rows.iter_mut() {
+            if let Some(fk_id) = row.fk_id_for(field_name.as_str()) {
+                if let Some(resolved_json) = id_to_json.get(&fk_id) {
+                    row.hydrate_fk(field_name.as_str(), resolved_json);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Fetch rows from `table` where `id IN ids` and return them as a `Vec` of
+/// `serde_json::Value::Object`. Uses the backup-style column-walk approach to
+/// avoid needing a `FromRow` bound on the target model type.
+async fn fetch_related_as_json(
+    table: &str,
+    ids: &[i64],
+    pool: &DbPool,
+) -> Result<Vec<JsonValue>, sqlx::Error> {
+    if ids.is_empty() {
+        return Ok(vec![]);
+    }
+    // Build a raw SQL query: SELECT * FROM <table> WHERE id IN (?, ?, ...)
+    // using positional placeholders appropriate for the backend.
+    match pool {
+        DbPool::Sqlite(pool) => {
+            let placeholders: Vec<String> = (0..ids.len()).map(|_| "?".to_string()).collect();
+            let sql = format!(
+                "SELECT * FROM \"{}\" WHERE id IN ({})",
+                table.replace('"', "\"\""),
+                placeholders.join(", ")
+            );
+            let mut query = sqlx::query(&sql);
+            for id in ids {
+                query = query.bind(*id);
+            }
+            let rows = query.fetch_all(pool).await?;
+            let result = rows.iter().map(sqlite_row_to_json).collect::<Vec<_>>();
+            Ok(result)
+        }
+        DbPool::Postgres(pool) => {
+            let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("${i}")).collect();
+            let sql = format!(
+                "SELECT * FROM \"{}\" WHERE id IN ({})",
+                table.replace('"', "\"\""),
+                placeholders.join(", ")
+            );
+            let mut query = sqlx::query(&sql);
+            for id in ids {
+                query = query.bind(*id);
+            }
+            let rows = query.fetch_all(pool).await?;
+            let result = rows.iter().map(postgres_row_to_json).collect::<Vec<_>>();
+            Ok(result)
+        }
+    }
+}
+
+/// Convert a SQLite row to a `serde_json::Value::Object`. Reads every column
+/// by index and maps the SQLite type to the closest JSON primitive.
+fn sqlite_row_to_json(row: &sqlx::sqlite::SqliteRow) -> JsonValue {
+    use sqlx::Row;
+    let mut map = serde_json::Map::new();
+    let cols = row.columns();
+    for col in cols {
+        let name = col.name().to_string();
+        // Try the types from most to least specific.
+        let val: JsonValue = if let Ok(v) = row.try_get::<i64, _>(col.ordinal()) {
+            JsonValue::Number(v.into())
+        } else if let Ok(v) = row.try_get::<f64, _>(col.ordinal()) {
+            serde_json::json!(v)
+        } else if let Ok(v) = row.try_get::<bool, _>(col.ordinal()) {
+            JsonValue::Bool(v)
+        } else if let Ok(v) = row.try_get::<String, _>(col.ordinal()) {
+            JsonValue::String(v)
+        } else {
+            JsonValue::Null
+        };
+        map.insert(name, val);
+    }
+    JsonValue::Object(map)
+}
+
+/// Convert a Postgres row to a `serde_json::Value::Object`.
+fn postgres_row_to_json(row: &sqlx::postgres::PgRow) -> JsonValue {
+    use sqlx::Row;
+    let mut map = serde_json::Map::new();
+    let cols = row.columns();
+    for col in cols {
+        let name = col.name().to_string();
+        let val: JsonValue = if let Ok(v) = row.try_get::<i64, _>(col.ordinal()) {
+            JsonValue::Number(v.into())
+        } else if let Ok(v) = row.try_get::<f64, _>(col.ordinal()) {
+            serde_json::json!(v)
+        } else if let Ok(v) = row.try_get::<bool, _>(col.ordinal()) {
+            JsonValue::Bool(v)
+        } else if let Ok(v) = row.try_get::<String, _>(col.ordinal()) {
+            JsonValue::String(v)
+        } else {
+            JsonValue::Null
+        };
+        map.insert(name, val);
+    }
+    JsonValue::Object(map)
 }
 
 /// Convert a `T: Serialize` instance to a `Map<String, Value>` for

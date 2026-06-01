@@ -20,6 +20,39 @@
 //! See `docs/specs/04-orm-model-and-fields.md` for the target shape and
 //! the M2→M3→M4→M5 progression.
 
+/// Trait for eagerly hydrating `ForeignKey<U>.resolved` fields by name.
+///
+/// `#[derive(Model)]` emits this impl for every model. Models with no FK
+/// fields get a no-op impl; models with FK fields get a `hydrate_fk` body
+/// that matches on `field_name` and a `fk_id_for` body that returns the raw
+/// FK integer for a named field.
+///
+/// The `select_related` machinery in `QuerySet` calls these two methods in
+/// sequence: first `fk_id_for` to collect the IDs to batch-fetch, then
+/// `hydrate_fk` with the fetched JSON to populate `ForeignKey<U>.resolved`.
+///
+/// `U` must implement `serde::Deserialize` for `hydrate_fk` to succeed.
+/// All umbra models already derive `Deserialize`, so this bound is always
+/// satisfied in practice.
+pub trait HydrateRelated {
+    /// Return the raw FK integer stored in the field named `field_name`,
+    /// or `None` if the field doesn't exist on this model or is not a FK.
+    ///
+    /// Used by `select_related` to collect all FK IDs from the result set
+    /// before running the batch `IN (...)` lookup.
+    fn fk_id_for(&self, field_name: &str) -> Option<i64>;
+
+    /// Set `ForeignKey<U>.resolved` for the field named `field_name` by
+    /// deserialising `row` as the target model type.
+    ///
+    /// A field name that doesn't match any FK on this model is silently
+    /// ignored (a noop). Deserialisation errors are also silently swallowed —
+    /// the FK keeps its raw-integer form without a resolved object. This
+    /// matches Django's behaviour: a bad `select_related` name is a
+    /// programming error caught in tests, not a runtime panic.
+    fn hydrate_fk(&mut self, field_name: &str, row: &serde_json::Value);
+}
+
 /// The trait every model implements.
 ///
 /// Read at runtime to build queries (`T::TABLE`, `T::FIELDS`), at boot

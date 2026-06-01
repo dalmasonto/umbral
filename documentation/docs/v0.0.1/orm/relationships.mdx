@@ -102,13 +102,61 @@ println!("written by {}", author.name);
 { "id": 1, "title": "Hello", "author": 42 }
 ```
 
-## What is deferred
+## Eager loading with select_related
 
-The following are out of scope at v1 and tracked in `docs/specs/relationships.md`:
+By default, a fetched `Post` carries only the raw integer in its `author` FK field. Accessing `post.author.resolve(&pool)` requires a second database round-trip. When you need the referenced row without an extra query — especially when rendering templates — call `.select_related("author")` on the QuerySet.
 
-- Many-to-many relationships (need a join-table helper type).
-- Reverse accessors (`User::posts` that fetches all posts by a user).
-- `ON DELETE` behaviour beyond the default RESTRICT.
-- FK columns referencing a non-`i64` primary key.
+```rust
+let post = Post::objects()
+    .filter(post::ID.eq(42))
+    .select_related("author")
+    .get()
+    .await?;
+
+// Rust: resolved() is Some without a second query.
+let author = post.author.resolved().expect("populated by select_related");
+println!("{}", author.username);
+
+// Template context: ctx["author"]["username"] is the username string.
+let ctx = serde_json::to_value(&post)?;
+// ctx["author"]["username"] == "alice"
+```
+
+Under the hood, `select_related` runs a single batch `SELECT ... FROM user WHERE id IN (...)` after the main query. If the result set contains 50 posts, one batch query fetches all referenced users — not 50 individual queries.
+
+### Multiple FK fields
+
+```rust
+let post = Post::objects()
+    .filter(post::ID.eq(42))
+    .select_related_many(&["author", "reviewer"])
+    .get()
+    .await?;
+
+println!("{}", post.author.resolved().unwrap().username);
+println!("{}", post.reviewer.resolved().unwrap().username);
+```
+
+Each named FK generates one batch query. Two FKs = two batch queries + the main query.
+
+### Template rendering (gap 37)
+
+`ForeignKey<T>` serialises as a bare integer when `resolved` is `None` (the default without `select_related`). After `select_related`, it serialises as the full `T` object:
+
+| State | `serde_json::to_value(&post)["author"]` |
+|-------|----------------------------------------|
+| Without `select_related` | `42` (bare integer) |
+| With `select_related("author")` | `{"id":42,"username":"alice","name":"Alice"}` |
+
+This means `{{ post.author.username }}` in a minijinja template renders correctly when the template context was built from a post fetched with `select_related("author")`.
+
+### What is deferred
+
+- **`prefetch_related`** — for reverse FKs (all posts by a user) and M2M. Requires a separate query per related set and a reverse-accessor mechanism that doesn't exist yet. Tracked in `docs/specs/relationships.md`.
+- **Nested traversal** (`select_related("author__manager")`) — single-hop only at v1. Chains require calling `select_related` on the resolved row after the first fetch.
+- **Many-to-many relationships** — need a join-table helper type.
+- **Reverse accessors** (`User::posts`) — tracked in `docs/specs/relationships.md`.
+- **`ON DELETE` behaviour beyond the default RESTRICT.**
+- **FK columns referencing a non-`i64` primary key.**
 
 For the design rationale see [`arch.md`](../../../../arch.md) §M9 and `docs/specs/relationships.md`.

@@ -1,0 +1,116 @@
+---
+title: Expressions
+description: F-expressions for column references and atomic arithmetic, Q-objects for composable predicates.
+sidebar_position: 4
+icon: formula
+tags: [orm, f-expressions, q-objects, queryset, filter, update]
+---
+
+Umbra ships two expression helpers that mirror Django's `F()` and `Q()` — both are in scope via `use umbra::prelude::*` or `use umbra::orm::{F, FColExt, Q}`.
+
+## F-expressions
+
+An `F` expression wraps a column name so it can appear on the right-hand side of a comparison or inside an atomic UPDATE. The key distinction: the value is evaluated **in the database** at query time, not read into Rust first.
+
+### Column-vs-column WHERE
+
+Use `FColExt::eq_f` or `ne_f` to compare two columns on the same row:
+
+```rust
+use umbra::orm::{F, FColExt};
+
+// WHERE author = editor
+let posts = Post::objects()
+    .filter(post::AUTHOR.eq_f(F::col("editor")))
+    .fetch()
+    .await?;
+```
+
+`FColExt` is automatically in scope for `IntCol`, `ForeignKeyCol`, and `StrCol`. The trait is re-exported from `umbra::prelude`.
+
+### Atomic update arithmetic
+
+`F::col("views").add(1)` returns an `FExpr` that encodes `views + 1` as a SQL expression tree. Pass it to `QuerySet::update_expr`:
+
+```rust
+use umbra::orm::F;
+
+// SET views = views + 1 — no read-modify-write round-trip
+Post::objects()
+    .filter(post::ID.eq(42))
+    .update_expr("views", F::col("views").add(1))
+    .await?;
+```
+
+`FExpr` supports four arithmetic operations — `.add(n)`, `.sub(n)`, `.mul(n)`, `.div(n)` — each taking an `i64` operand. Chaining is supported: `F::col("x").add(3).mul(2)` emits `(x + 3) * 2`.
+
+`update_expr` returns `WriteError::UnknownColumn` when the column name is not present on the model. It silently skips the PK column (same as `update_values`).
+
+For updates that mix JSON values and F-expressions on different columns, call `update_values` and `update_expr` separately; a combined API is deferred until a consumer surfaces the need.
+
+---
+
+## Q-objects
+
+`Q` provides named constructors for the three logical connectives. The existing `&` / `|` operator overloads on `Predicate<T>` continue to work; `Q` adds `Q::not` and makes deeply-nested trees more readable.
+
+### Q::or
+
+```rust
+use umbra::orm::Q;
+
+// Published OR authored by this user
+Post::objects()
+    .filter(Q::or(
+        post::PUBLISHED.eq(true),
+        post::AUTHOR.eq(user_id),
+    ))
+    .fetch()
+    .await?;
+```
+
+### Q::and
+
+```rust
+// Published AND authored by this user (same as two .filter() calls)
+Post::objects()
+    .filter(Q::and(
+        post::PUBLISHED.eq(true),
+        post::AUTHOR.eq(user_id),
+    ))
+    .fetch()
+    .await?;
+```
+
+### Q::not
+
+```rust
+// NOT authored by the spam user
+Post::objects()
+    .filter(Q::not(post::AUTHOR.eq(spam_id)))
+    .fetch()
+    .await?;
+```
+
+### Nesting
+
+`Q` methods compose recursively:
+
+```rust
+// (Published AND authored by me) OR (not published)
+Post::objects()
+    .filter(Q::or(
+        Q::and(post::PUBLISHED.eq(true), post::AUTHOR.eq(my_id)),
+        Q::not(post::PUBLISHED.eq(true)),
+    ))
+    .fetch()
+    .await?;
+```
+
+Chained `.filter()` calls still AND together as before — `Q` is purely additive.
+
+---
+
+## Design rationale
+
+See [`arch.md`](../../../../arch.md) §M1 (QuerySet design) and `docs/specs/03-orm-querysets.md` for the predicate composition model.

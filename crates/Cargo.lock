@@ -2488,6 +2488,7 @@ name = "umbra"
 version = "0.0.1"
 dependencies = [
  "minijinja",
+ "serde_json",
  "umbra-core",
  "umbra-macros",
 ]

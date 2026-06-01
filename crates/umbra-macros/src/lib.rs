@@ -286,6 +286,46 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         column_consts.push(column_const_for(struct_name, &field_name_str, field, &kind));
     }
 
+    // Collect the FK field names and their target types for the
+    // HydrateRelated impl. We need (field_name_str, inner_ty) pairs for
+    // each ForeignKey<U> or Option<ForeignKey<U>> field.
+    let mut hydrate_arms: Vec<TokenStream2> = Vec::new();
+    let mut fk_id_arms: Vec<TokenStream2> = Vec::new();
+    for field in fields.iter() {
+        let field_name = field.ident.as_ref().unwrap();
+        let field_name_str = field_name.to_string();
+        let kind = classify_field_type(&field.ty);
+        match &kind {
+            FieldKind::ForeignKey(inner_ty) => {
+                hydrate_arms.push(quote! {
+                    #field_name_str => {
+                        if let Ok(resolved) = ::umbra::_serde_json::from_value::<#inner_ty>(row.clone()) {
+                            self.#field_name.set_resolved(resolved);
+                        }
+                    }
+                });
+                fk_id_arms.push(quote! {
+                    #field_name_str => ::core::option::Option::Some(self.#field_name.id()),
+                });
+            }
+            FieldKind::NullableForeignKey(inner_ty) => {
+                hydrate_arms.push(quote! {
+                    #field_name_str => {
+                        if let ::core::option::Option::Some(ref mut fk_mut) = self.#field_name {
+                            if let Ok(resolved) = ::umbra::_serde_json::from_value::<#inner_ty>(row.clone()) {
+                                fk_mut.set_resolved(resolved);
+                            }
+                        }
+                    }
+                });
+                fk_id_arms.push(quote! {
+                    #field_name_str => self.#field_name.as_ref().map(|fk| fk.id()),
+                });
+            }
+            _ => {}
+        }
+    }
+
     // Sibling module name collision with the struct ident is harmless
     // because Rust's type and value namespaces are separate, but the
     // module-inception clippy lint trips when the snake_case happens to
@@ -308,6 +348,21 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                 // a copy; for `String` the clone is the work the call
                 // site would have done anyway.
                 self.id.clone()
+            }
+        }
+
+        impl ::umbra::orm::HydrateRelated for #struct_name {
+            fn fk_id_for(&self, field_name: &str) -> ::core::option::Option<i64> {
+                match field_name {
+                    #(#fk_id_arms)*
+                    _ => ::core::option::Option::None,
+                }
+            }
+            fn hydrate_fk(&mut self, field_name: &str, row: &::umbra::_serde_json::Value) {
+                match field_name {
+                    #(#hydrate_arms)*
+                    _ => {}
+                }
             }
         }
 

@@ -1,10 +1,23 @@
 //! `ForeignKey<T>` — a typed foreign-key field for umbra models.
 //!
 //! A `ForeignKey<T>` field stores the `i64` primary key of a row in the
-//! table owned by model `T`. It serialises and deserialises transparently
+//! table owned by model `T`. Without eager loading it serialises transparently
 //! as `i64` so the REST layer, backup, and JSON round-trips all see a plain
-//! integer. The extra `.id()` / `.set()` accessors and the async `.resolve()`
-//! helper give callers a typed surface on top.
+//! integer. When `select_related` has populated the `resolved` slot,
+//! serialisation emits the full `T` object instead — this is what makes
+//! `{{ post.author.first_name }}` work in templates after
+//! `select_related("author")`.
+//!
+//! ## Behaviour summary
+//!
+//! | `resolved` | `serde::Serialize` output | `.id()` | `.resolved()` |
+//! |------------|--------------------------|---------|---------------|
+//! | `None`     | `42` (bare integer)       | `42`    | `None`        |
+//! | `Some(u)`  | `{"id":42,"name":"Alice"}` | `42`   | `Some(&u)`    |
+//!
+//! The backward-compat rule: code that doesn't call `select_related` sees
+//! the same integer serialisation as before gap 14. Callers that need the
+//! full object opt in explicitly.
 //!
 //! ## Usage
 //!
@@ -23,29 +36,25 @@
 //!     pub title: String,
 //!     pub author: ForeignKey<User>,
 //! }
+//!
+//! // Lazy: only stores the integer.
+//! let post = Post::objects().filter(post::ID.eq(1)).get().await?;
+//! assert_eq!(post.author.id(), 7);
+//! assert!(post.author.resolved().is_none());
+//!
+//! // Eager: resolved slot is populated by the JOIN.
+//! let post = Post::objects()
+//!     .filter(post::ID.eq(1))
+//!     .select_related("author")
+//!     .get()
+//!     .await?;
+//! assert_eq!(post.author.resolved().unwrap().name, "Alice");
+//!
+//! // Template context: ctx["author"]["name"] == "Alice"
+//! let ctx = serde_json::to_value(&post)?;
 //! ```
 //!
-//! ## What the migration engine emits
-//!
-//! For an `i64` FK field the `CREATE TABLE` DDL includes a `REFERENCES` clause:
-//!
-//! ```sql
-//! -- SQLite
-//! CREATE TABLE "post" (
-//!   "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
-//!   "title" text NOT NULL,
-//!   "author" bigint NOT NULL REFERENCES "user"("id")
-//! )
-//!
-//! -- Postgres
-//! CREATE TABLE "post" (
-//!   "id" bigserial PRIMARY KEY,
-//!   "title" text NOT NULL,
-//!   "author" bigint NOT NULL REFERENCES "user"("id")
-//! )
-//! ```
-//!
-//! ## What's deferred
+//! ## What is deferred
 //!
 //! Many-to-many relationships, reverse accessors (`User::posts`), `ON DELETE`
 //! beyond RESTRICT, and FK columns with non-`i64` targets are all deferred.
@@ -60,26 +69,42 @@ use super::Model;
 /// A foreign-key field that stores an `i64` reference to the primary key of
 /// model `T`.
 ///
-/// Transparently serialises / deserialises as `i64` (same as the raw integer)
-/// so the REST and backup layers don't need special handling. The `sqlx`
-/// `FromRow` derive picks it up via the `ForeignKey::from(i64)` impl (the
-/// derive calls `i64::decode` then wraps through `From`).
+/// When `resolved` is `None` (the common case without `select_related`),
+/// this type serialises and deserialises transparently as `i64` — the REST
+/// layer, backup, and JSON round-trips all see a plain integer.
 ///
-/// The type parameter `T: Model` is phantom — it carries the referenced model
-/// type at the Rust level so `.resolve()` knows which table to query and the
-/// column constant in the sibling module has the right `ForeignKeyCol<T>`
-/// type.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// When `select_related` populates `resolved`, `Serialize` emits the full `T`
+/// value instead, enabling `{{ post.author.first_name }}` in templates and
+/// `ctx["author"]["name"]` in Rust code that uses `serde_json::to_value`.
+///
+/// The `sqlx::Encode` / `sqlx::Decode` impls remain bound to `i64` regardless
+/// of the `resolved` slot: the database stores only the integer PK, never the
+/// nested object.
+#[derive(Debug, Clone)]
 pub struct ForeignKey<T: Model> {
+    /// The raw i64 primary-key value stored in the database column.
     raw: i64,
+    /// Optional eagerly-loaded referenced row. Populated by `select_related`.
+    /// Boxed so the FK field doesn't bloat the model struct when `resolved`
+    /// is `None` (the common case).
+    resolved: Option<Box<T>>,
     _phantom: PhantomData<T>,
 }
+
+impl<T: Model + PartialEq> PartialEq for ForeignKey<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.raw == other.raw
+    }
+}
+
+impl<T: Model + PartialEq + Eq> Eq for ForeignKey<T> {}
 
 impl<T: Model> ForeignKey<T> {
     /// Create a new FK value wrapping the given raw primary-key integer.
     pub fn new(raw: i64) -> Self {
         Self {
             raw,
+            resolved: None,
             _phantom: PhantomData,
         }
     }
@@ -94,17 +119,37 @@ impl<T: Model> ForeignKey<T> {
         self.raw = raw;
     }
 
+    /// Return a reference to the eagerly-loaded model row, if any.
+    ///
+    /// `None` means `select_related` was not called (or was called but this
+    /// FK field was not named). `Some(&T)` means the JOIN was executed and
+    /// the full row is available without a round-trip.
+    pub fn resolved(&self) -> Option<&T> {
+        self.resolved.as_deref()
+    }
+
+    /// Attach an already-fetched model row to this FK.
+    ///
+    /// Called internally by the `select_related` machinery in `QuerySet`
+    /// after the JOIN rows are split and hydrated. Not intended for direct
+    /// user call sites, but `pub` so the ORM layer (different module) can
+    /// reach it.
+    pub fn set_resolved(&mut self, row: T) {
+        self.resolved = Some(Box::new(row));
+    }
+
     /// Fetch the referenced row from the database.
     ///
-    /// Runs `SELECT * FROM <T::TABLE> WHERE id = $1 LIMIT 1`.
-    /// Returns `Ok(row)` when exactly one matching row exists. Maps
-    /// directly to a sqlx error when the query fails; no `GetError`
-    /// wrapping — this is a point-lookup, so `RowNotFound` is the only
-    /// distinguished case callers usually branch on.
+    /// If `resolved` is already populated (via `select_related`), returns a
+    /// clone of the cached row without a database round-trip. Otherwise runs
+    /// `SELECT * FROM <T::TABLE> WHERE id = ? LIMIT 1`.
     pub async fn resolve(&self, pool: &sqlx::SqlitePool) -> Result<T, sqlx::Error>
     where
-        T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>,
+        T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> + Clone,
     {
+        if let Some(cached) = &self.resolved {
+            return Ok(*cached.clone());
+        }
         let columns: Vec<&str> = T::FIELDS.iter().map(|f| f.name).collect();
         let col_list = columns.join(", ");
         let sql = format!("SELECT {} FROM {} WHERE id = ? LIMIT 1", col_list, T::TABLE);
@@ -116,12 +161,15 @@ impl<T: Model> ForeignKey<T> {
 
     /// Fetch the referenced row from a Postgres pool.
     ///
-    /// Postgres counterpart of [`Self::resolve`]. Uses `$1` placeholder
-    /// syntax via sqlx's Postgres query builder.
+    /// Postgres counterpart of [`Self::resolve`]. Returns a clone of the
+    /// cached `resolved` row when available.
     pub async fn resolve_pg(&self, pool: &sqlx::PgPool) -> Result<T, sqlx::Error>
     where
-        T: for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
+        T: for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> + Clone,
     {
+        if let Some(cached) = &self.resolved {
+            return Ok(*cached.clone());
+        }
         let columns: Vec<&str> = T::FIELDS.iter().map(|f| f.name).collect();
         let col_list = columns.join(", ");
         let sql = format!(
@@ -149,17 +197,32 @@ impl<T: Model> From<ForeignKey<T>> for i64 {
 }
 
 // =========================================================================
-// serde: transparent i64 serialisation.
+// serde: transparent i64 serialisation by default; full T when resolved.
 //
-// `ForeignKey<T>` serialises as a plain JSON integer, matching how every
-// other ORM with a FK column behaves — the REST layer sees numbers, not
-// objects. The `Serialize` / `Deserialize` impls delegate to `i64`
-// directly so the round-trip is lossless and unambiguous.
+// The two behaviours are:
+//
+// - `resolved = None`: serialise as `i64` exactly as before gap 14.
+//   Backward-compatible; the REST layer, backup, and template contexts all
+//   continue to see a plain integer.
+//
+// - `resolved = Some(row)`: serialise as the full `T` object so template
+//   `{{ post.author.username }}` and `ctx["author"]["username"]` both work
+//   after `select_related`.
+//
+// Deserialisation always reads from an `i64`. There is no round-trip
+// symmetry when `resolved` is `Some` — the serialised form is the full
+// object, but loading it back reads only the integer PK. This is
+// intentional: the resolved slot is a runtime annotation produced by
+// `select_related`, not a persisted field.
 // =========================================================================
 
-impl<T: Model> Serialize for ForeignKey<T> {
+impl<T: Model + Serialize> Serialize for ForeignKey<T> {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        self.raw.serialize(s)
+        if let Some(resolved) = &self.resolved {
+            resolved.serialize(s)
+        } else {
+            self.raw.serialize(s)
+        }
     }
 }
 
@@ -177,6 +240,7 @@ impl<'de, T: Model> Deserialize<'de> for ForeignKey<T> {
 // By implementing `sqlx::Type`, `Encode`, and `Decode` as thin wrappers
 // around `i64`, a `ForeignKey<T>` column round-trips through the database
 // with no special-case logic in the QuerySet or the write path.
+// The `resolved` slot is not involved — the DB only ever sees the integer.
 // =========================================================================
 
 impl<T: Model> sqlx::Type<sqlx::Sqlite> for ForeignKey<T> {

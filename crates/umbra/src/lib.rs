@@ -22,13 +22,22 @@ pub mod prelude {
     //! raw pool accessors are reached as `umbra::db::pool()` so they do
     //! not pollute the prelude with bare names like `pool`.
 
-    pub use crate::orm::{ForeignKey, Model};
+    pub use crate::orm::{F, FColExt, ForeignKey, Model, Q};
     pub use crate::plugin::{AppContext, Plugin};
     pub use crate::web::{
         Form, IntoResponse, Json, JsonResponse, Path, Query, Router, delete, get, patch, post, put,
     };
     pub use crate::{App, AppBuilder, Environment, Settings};
 }
+
+/// Re-export of `serde_json` for use in macro-generated code.
+///
+/// The `#[derive(Model)]` macro emits `::umbra::_serde_json::from_value`
+/// in `HydrateRelated::hydrate_fk` bodies. Routing through this re-export
+/// means user crates don't need a direct `serde_json` dep for the generated
+/// code to compile (umbra already depends on it).
+#[doc(hidden)]
+pub use serde_json as _serde_json;
 
 pub use umbra_core::app::{App, AppBuilder, BuildError};
 pub use umbra_core::settings::{Environment, Settings};
@@ -239,8 +248,8 @@ pub mod orm {
 
     pub use umbra_core::orm::write::WriteError;
     pub use umbra_core::orm::{
-        ArrayElement, FieldSpec, ForeignKey, GetError, Manager, Model, Post, PrimaryKey, QuerySet,
-        SqlType, TsVector, column, write,
+        ArrayElement, F, FColExt, FExpr, FieldSpec, ForeignKey, GetError, HydrateRelated, Manager,
+        Model, Post, PrimaryKey, Q, QuerySet, SqlType, TsVector, column, write,
     };
 
     /// The `#[derive(Model)]` proc macro. Shares the `Model` name with the
