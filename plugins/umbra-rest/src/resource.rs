@@ -202,6 +202,10 @@ pub struct ResourceConfig {
     /// Merged into the plugin's per-table action map at `.resource()`
     /// time; mounted as new axum routes at `RestPlugin::routes()`.
     pub(crate) actions: Vec<ActionDef>,
+    /// Whether django-filter-style query-string filtering is enabled
+    /// for the list endpoint. Off by default; opt in with
+    /// `.enable_filters()`.
+    pub(crate) filters_enabled: bool,
 }
 
 impl std::fmt::Debug for ResourceConfig {
@@ -227,7 +231,33 @@ impl ResourceConfig {
             permission: None,
             view_scope: None,
             actions: Vec::new(),
+            filters_enabled: false,
         }
+    }
+
+    /// Opt in to django-filter-style query-string filtering on the list
+    /// endpoint for this resource.
+    ///
+    /// When enabled, query-string keys of the form `<field>` or
+    /// `<field>__<lookup>` are parsed into SQL WHERE predicates and
+    /// ANDed together before pagination is applied. Unrecognised field
+    /// names, inapplicable lookups, and malformed values all return
+    /// HTTP 400 with a descriptive JSON error.
+    ///
+    /// ```ignore
+    /// RestPlugin::default()
+    ///     .resource(
+    ///         ResourceConfig::new("post")
+    ///             .enable_filters()
+    ///     )
+    /// ```
+    ///
+    /// Supported lookups: `eq` (default), `ne`, `gte`, `lte`, `gt`,
+    /// `lt`, `in` (comma-separated), `contains`, `icontains`,
+    /// `startswith`, `isnull`.
+    pub fn enable_filters(mut self) -> Self {
+        self.filters_enabled = true;
+        self
     }
 
     /// Attach a permission class to this resource. Every request to

@@ -4,7 +4,7 @@ use serde::Deserialize;
 use std::sync::OnceLock;
 
 /// Ambient settings, published during `AppBuilder::build()`.
-static SETTINGS: OnceLock<Settings> = OnceLock::new();
+pub(crate) static SETTINGS: OnceLock<Settings> = OnceLock::new();
 
 /// Initialize ambient settings. Called by `AppBuilder::build()` only.
 pub(crate) fn init(settings: &Settings) {

@@ -48,6 +48,9 @@ use umbra::prelude::*;
 use umbra::web::{Json, Path, Query, Response, StatusCode};
 use uuid::Uuid;
 
+pub mod filtering;
+pub(crate) use filtering::{FilterClause, FilterValue, parse_filters};
+
 pub mod pagination;
 pub use pagination::{
     LimitOffsetPagination, NoPagination, PageNumberPagination, PageRequest, Pagination,
@@ -130,6 +133,10 @@ pub struct RestPlugin {
     /// and the dispatch handler looks the (table, action_name)
     /// lookup back out at request time.
     actions: HashMap<String, Vec<crate::resource::ActionDef>>,
+    /// Tables that have opted in to query-string filtering via
+    /// `ResourceConfig::enable_filters()`. Keyed by table name.
+    /// Tables not in this set ignore filter keys on the list endpoint.
+    filters_enabled: std::collections::HashSet<String>,
 }
 
 impl std::fmt::Debug for RestPlugin {
@@ -144,6 +151,7 @@ impl std::fmt::Debug for RestPlugin {
             .field("transforms_count", &self.transforms.len())
             .field("computed_count", &self.computed.len())
             .field("pagination", &"<dyn Pagination>")
+            .field("filters_enabled", &self.filters_enabled)
             .finish()
     }
 }
@@ -219,6 +227,7 @@ impl RestPlugin {
             permissions: HashMap::new(),
             view_scope: HashMap::new(),
             actions: HashMap::new(),
+            filters_enabled: std::collections::HashSet::new(),
         }
     }
 
@@ -322,6 +331,7 @@ impl RestPlugin {
             permission,
             view_scope,
             actions,
+            filters_enabled,
         } = config;
         for field in hidden {
             self.hidden.push((table.clone(), field));
@@ -348,6 +358,9 @@ impl RestPlugin {
                 .entry(table.clone())
                 .or_default()
                 .extend(actions);
+        }
+        if filters_enabled {
+            self.filters_enabled.insert(table.clone());
         }
         self
     }
@@ -658,8 +671,12 @@ async fn list(
     cfg.gate(&table, &Action::List, identity.as_ref())?;
     let pool = umbra::db::pool();
 
+    // Parse query-string filters when this resource has opted in.
+    let filters_on = cfg.filters_enabled.contains(&table);
+    let filter = parse_filters(&params, &model.fields, filters_on)?;
+
     let page_req = cfg.pagination.extract_request(&params);
-    let mut rows = fetch_rows(&pool, &model, None, Some(page_req)).await?;
+    let mut rows = fetch_rows(&pool, &model, None, Some(page_req), &filter).await?;
     for row in &mut rows {
         cfg.apply_overrides(&table, row);
     }
@@ -667,7 +684,7 @@ async fn list(
     // throw away the result anyway. Other paginators read the total
     // for their envelope.
     let total = if cfg.pagination.needs_total() {
-        count_rows(&pool, &model).await?
+        count_rows_filtered(&pool, &model, &filter).await?
     } else {
         rows.len() as i64
     };
@@ -685,7 +702,8 @@ async fn retrieve(
     cfg.gate(&table, &Action::Retrieve, identity.as_ref())?;
     let pk = pk_column(&model)?;
     let pool = umbra::db::pool();
-    let mut rows = fetch_rows(&pool, &model, Some((&pk.name, &id)), None).await?;
+    let no_filter = FilterClause::default();
+    let mut rows = fetch_rows(&pool, &model, Some((&pk.name, &id)), None, &no_filter).await?;
     let Some(mut row) = rows.pop() else {
         return Err(ApiError::NotFound(format!(
             "no row with {} = {} in {}",
@@ -709,7 +727,8 @@ async fn create(
     let pool = umbra::db::pool();
     let new_id = insert_row(&pool, &model, &body).await?;
     let pk = pk_column(&model)?;
-    let mut rows = fetch_rows(&pool, &model, Some((&pk.name, &new_id)), None).await?;
+    let no_filter = FilterClause::default();
+    let mut rows = fetch_rows(&pool, &model, Some((&pk.name, &new_id)), None, &no_filter).await?;
     let Some(mut row) = rows.pop() else {
         return Err(ApiError::BadInput(
             "row inserted but disappeared on read-back".into(),
@@ -732,7 +751,8 @@ async fn update(
     let pool = umbra::db::pool();
 
     // 404 if the target row doesn't exist before we attempt the UPDATE.
-    let existing = fetch_rows(&pool, &model, Some((&pk.name, &id)), None).await?;
+    let no_filter = FilterClause::default();
+    let existing = fetch_rows(&pool, &model, Some((&pk.name, &id)), None, &no_filter).await?;
     if existing.is_empty() {
         return Err(ApiError::NotFound(format!(
             "no row with {} = {} in {}",
@@ -741,7 +761,7 @@ async fn update(
     }
 
     update_row(&pool, &model, pk, &id, &body).await?;
-    let mut rows = fetch_rows(&pool, &model, Some((&pk.name, &id)), None).await?;
+    let mut rows = fetch_rows(&pool, &model, Some((&pk.name, &id)), None, &no_filter).await?;
     let Some(mut row) = rows.pop() else {
         return Err(ApiError::BadInput(
             "row updated but disappeared on read-back".into(),
@@ -893,6 +913,7 @@ async fn fetch_rows(
     model: &ModelMeta,
     where_clause: Option<(&str, &str)>,
     page: Option<PageRequest>,
+    filter: &FilterClause,
 ) -> Result<Vec<Map<String, Value>>, ApiError> {
     let columns = model
         .fields
@@ -917,8 +938,13 @@ async fn fetch_rows(
                 ),
                 _ => (String::new(), String::new()),
             };
+            let where_part = if filter.is_empty() {
+                String::new()
+            } else {
+                format!(" WHERE {}", filter.where_sql)
+            };
             format!(
-                "SELECT {columns} FROM \"{}\" ORDER BY 1{limit_clause}{offset_clause}",
+                "SELECT {columns} FROM \"{}\"{where_part} ORDER BY 1{limit_clause}{offset_clause}",
                 q(&model.table)
             )
         }
@@ -926,6 +952,9 @@ async fn fetch_rows(
     let mut q = sqlx::query(&sql);
     if let Some((_, val)) = where_clause {
         q = q.bind(val.to_string());
+    } else {
+        // Bind filter values in order for the list path.
+        q = bind_filter_values(q, &filter.bindings);
     }
     let rows = q.fetch_all(pool).await?;
     let mut out: Vec<Map<String, Value>> = Vec::with_capacity(rows.len());
@@ -939,14 +968,59 @@ async fn fetch_rows(
     Ok(out)
 }
 
-/// `SELECT COUNT(*)` for the given model. Used by the pagination
-/// envelope to render `count` / `total_pages` / `next` links.
-/// Quote-doubles the table name for the same future-proofing
-/// reason `fetch_rows` does.
-async fn count_rows(pool: &SqlitePool, model: &ModelMeta) -> Result<i64, ApiError> {
-    let sql = format!("SELECT COUNT(*) FROM \"{}\"", q(&model.table));
-    let (n,): (i64,) = sqlx::query_as(&sql).fetch_one(pool).await?;
+/// `SELECT COUNT(*)` for the given model, respecting any active
+/// filter predicates so the paginator's total reflects the filtered
+/// result set rather than the whole table.
+async fn count_rows_filtered(
+    pool: &SqlitePool,
+    model: &ModelMeta,
+    filter: &FilterClause,
+) -> Result<i64, ApiError> {
+    let where_part = if filter.is_empty() {
+        String::new()
+    } else {
+        format!(" WHERE {}", filter.where_sql)
+    };
+    let sql = format!("SELECT COUNT(*) FROM \"{}\"{}", q(&model.table), where_part);
+    let mut q = sqlx::query(&sql);
+    q = bind_filter_values(q, &filter.bindings);
+    let row = q.fetch_one(pool).await?;
+    let n: i64 = row.try_get(0)?;
     Ok(n)
+}
+
+/// Bind all `FilterValue` entries to a `sqlx::query::Query` in order.
+/// The `InTexts` / `InInts` variants expand to multiple `.bind()` calls
+/// (one per element) to match the `IN (?, ?, ...)` placeholders emitted
+/// by `build_in_predicate`.
+fn bind_filter_values<'q>(mut q: SqlxQuery<'q>, bindings: &'q [FilterValue]) -> SqlxQuery<'q> {
+    for val in bindings {
+        match val {
+            FilterValue::Text(s) => q = q.bind(s.as_str()),
+            FilterValue::Int(n) => q = q.bind(*n),
+            FilterValue::Float(f) => q = q.bind(*f),
+            FilterValue::Bool(b) => q = q.bind(*b),
+            FilterValue::InTexts(texts) => {
+                for s in texts {
+                    q = q.bind(s.as_str());
+                }
+            }
+            FilterValue::InInts(ints) => {
+                for n in ints {
+                    q = q.bind(*n);
+                }
+            }
+        }
+    }
+    q
+}
+
+/// Unused but kept to preserve the original simpler call-site; callers
+/// that don't have a filter use the new `count_rows_filtered` with an
+/// empty clause instead.
+#[allow(dead_code)]
+async fn count_rows(pool: &SqlitePool, model: &ModelMeta) -> Result<i64, ApiError> {
+    count_rows_filtered(pool, model, &FilterClause::default()).await
 }
 
 fn column_to_json(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<Value, ApiError> {

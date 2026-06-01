@@ -179,6 +179,72 @@ what clients can write, gate the endpoint with auth middleware or hand-roll the
 handler.
 </Callout>
 
+## Filtering
+
+By default the list endpoint (`GET /api/<table>/`) ignores all query-string parameters except the pagination keys. Opt in to django-filter-style filtering per resource with `.enable_filters()` on the `ResourceConfig`:
+
+```rust
+use umbra_rest::{ResourceConfig, RestPlugin};
+
+RestPlugin::default()
+    .resource(
+        ResourceConfig::new("post")
+            .enable_filters()
+    )
+```
+
+Once enabled, every query-string key of the form `<field>` or `<field>__<lookup>` is parsed into a SQL WHERE predicate and all predicates are ANDed together before pagination is applied.
+
+### Worked example
+
+```
+GET /api/post/?published=true&title__contains=hello
+```
+
+Returns rows where `published = true` AND `title LIKE '%hello%'`. Combine with pagination:
+
+```
+GET /api/post/?published=true&page=2&page_size=10
+```
+
+Filter predicates are applied first; the page count reflects the filtered total.
+
+### Lookup grammar
+
+| Suffix | SQL | Available on |
+|--------|-----|--------------|
+| (none / `__eq`) | `=` | every type |
+| `__ne` | `<>` | every type |
+| `__gte` | `>=` | numeric, date, datetime |
+| `__lte` | `<=` | numeric, date, datetime |
+| `__gt` | `>` | numeric, date, datetime |
+| `__lt` | `<` | numeric, date, datetime |
+| `__in` | `IN (...)` | every type (comma-separated value) |
+| `__contains` | `LIKE %v%` | text columns |
+| `__icontains` | `UPPER(col) LIKE UPPER(%v%)` | text columns |
+| `__startswith` | `LIKE v%` | text columns |
+| `__isnull` | `IS NULL` / `IS NOT NULL` | nullable columns only |
+
+### Error handling
+
+Unknown field names, lookups inapplicable to the column type, and malformed values all return HTTP 400 with a descriptive JSON error:
+
+```json
+{"error": "unknown field `nonsense_field`; valid fields are: id, title, published", "code": "bad_input"}
+```
+
+An empty value (`?published=`) also returns 400 ("missing value for filter").
+
+### Pairing with pagination
+
+Filtering and pagination compose transparently. The `count` in the paginated envelope reflects the filtered row count, not the full table size, so page arithmetic stays correct.
+
+```
+GET /api/post/?author=42&page=1&page_size=20
+```
+
+Spec: [arch.md](/docs/v0.0.1/architecture) — filtering lives inside `umbra-rest` as a built-in extension; the filter logic is in `plugins/umbra-rest/src/filtering.rs`.
+
 ## Pagination
 
 `RestPlugin` exposes a `Pagination` trait so list endpoints can be wrapped in any
