@@ -2,7 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/SpecraDocs/specra-sdk/main/config/specra.config.schema.json",
   "site": {
     "title": "Umbra",
-    "description": "A Django-shape web framework for Rust.",
+    "description": "Batteries-included Rust web framework: ORM, managed migrations, REST API, admin, auth, sessions, tasks, email. Built on axum + sqlx.",
     "url": "http://localhost:5173",
     "baseUrl": "/",
     "language": "en",
