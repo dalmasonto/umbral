@@ -167,7 +167,7 @@ Drag-resize: ~50 LOC vanilla JS at the bottom; width in localStorage.
         <dt class="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wide leading-tight">
           {{ field.name | replace("_", " ") }}
         </dt>
-        <dd class="text-body-md text-on-surface break-words whitespace-pre-wrap min-w-0 {% if field.kind == 'number' or field.kind == 'datetime-local' or field.kind == 'date' or field.kind == 'time' %}tabular-nums font-data-mono{% endif %}">
+        <dd class="text-body-md text-on-surface break-words min-w-0 {% if field.kind == 'number' or field.kind == 'datetime-local' or field.kind == 'date' or field.kind == 'time' %}tabular-nums font-data-mono{% endif %}">
           {% if field.kind == "bool" %}
             {% if field.value == "true" %}
             <span class="inline-flex items-center gap-xs px-sm py-xs bg-primary-container/10 text-primary border border-primary/20 rounded-full font-label-sm text-label-sm">

@@ -176,7 +176,7 @@
             hx-swap="innerHTML"
             hx-include="#dt-search, #dt-active-filter, #dt-sort-col, #dt-sort-order"
             hx-push-url="true"
-            class="bg-surface-container border border-outline-variant rounded-lg px-sm py-xs font-label-md text-label-md text-on-surface focus:outline-none focus:ring-1 focus:ring-primary">
+            class="bg-surface-container border border-outline-variant rounded-lg px-sm py-xs pr-8 min-w-[5rem] font-label-md text-label-md text-on-surface focus:outline-none focus:ring-1 focus:ring-primary">
             {% for sz in [10, 25, 50, 100] %}
             <option value="{{ sz }}" {% if sz == pagination.page_size %}selected{% endif %}>{{ sz }}</option>
             {% endfor %}

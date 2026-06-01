@@ -475,7 +475,7 @@
                     hx-swap="innerHTML"
                     hx-include="#dt-search, #dt-active-filter, #dt-sort-col, #dt-sort-order"
                     hx-push-url="true"
-                    class="bg-surface-container border border-outline-variant rounded-lg px-sm py-xs font-label-md text-label-md text-on-surface focus:outline-none focus:ring-1 focus:ring-primary"
+                    class="bg-surface-container border border-outline-variant rounded-lg px-sm py-xs pr-8 min-w-[5rem] font-label-md text-label-md text-on-surface focus:outline-none focus:ring-1 focus:ring-primary"
                   >
                     {% for sz in [10, 25, 50, 100] %}
                     <option value="{{ sz }}" {% if sz == pagination.page_size %}selected{% endif %}>{{ sz }}</option>
@@ -738,7 +738,33 @@
           JSON.parse(raw2).forEach(function(col) { applyColVisibility(col, false); });
         } catch(e2) {}
       }
-      // Push URL if not already done by HTMX (ensures state preservation on refresh).
+      // Sync the persistent hidden inputs from the current URL so that the
+      // page-size <select> (which uses hx-include on these inputs) always
+      // carries the latest sort/filter/search state — even after a sort swap
+      // updated the URL but left the server-rendered hidden inputs stale.
+      (function syncHiddenInputsFromUrl() {
+        var qs = window.location.search;
+        if (!qs) return;
+        var params = {};
+        qs.replace(/^\?/, '').split('&').forEach(function(pair) {
+          var idx = pair.indexOf('=');
+          if (idx === -1) return;
+          var k = decodeURIComponent(pair.slice(0, idx));
+          var v = decodeURIComponent(pair.slice(idx + 1).replace(/\+/g, ' '));
+          params[k] = v;
+        });
+        var map = {
+          'search': 'dt-search',
+          'filter': 'dt-active-filter',
+          'sort':   'dt-sort-col',
+          'order':  'dt-sort-order'
+        };
+        Object.keys(map).forEach(function(param) {
+          var el = document.getElementById(map[param]);
+          if (el && params[param] !== undefined) el.value = params[param];
+          else if (el && params[param] === undefined) el.value = '';
+        });
+      })();
     }
   });
 
