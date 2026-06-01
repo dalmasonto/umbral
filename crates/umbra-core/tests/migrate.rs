@@ -285,7 +285,8 @@ fn create_table_names(ops: &[Operation]) -> Vec<String> {
             Operation::DropTable { .. }
             | Operation::AddColumn { .. }
             | Operation::DropColumn { .. }
-            | Operation::AlterColumn { .. } => None,
+            | Operation::AlterColumn { .. }
+            | Operation::RenameTable { .. } => None,
         })
         .collect();
     names.sort();

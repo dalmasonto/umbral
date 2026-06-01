@@ -308,6 +308,17 @@ pub enum Operation {
         column: String,
         new_columns: Vec<Column>,
     },
+    /// Rename an existing table. Emitted by `diff` when a model's table
+    /// name changes but its `Model::NAME` (the Rust struct name) stays
+    /// the same (first-pass detection), or when the column shapes are
+    /// bit-identical and the struct name changed too (second-pass
+    /// heuristic detection). Both SQLite and Postgres render as
+    /// `ALTER TABLE "<from>" RENAME TO "<to>"`.
+    ///
+    /// The migration tracking table records `(plugin, name)` of each
+    /// applied migration — it is not affected by a table rename inside
+    /// the migration.
+    RenameTable { from: String, to: String },
 }
 
 /// One column inside a [`Operation::CreateTable`].
@@ -1335,16 +1346,32 @@ fn read_migration_file(path: &Path) -> Result<MigrationFile, MigrateError> {
 /// the same but whose type or nullable flag changed surfaces as
 /// [`MigrateError::UnsafeAlter`]: SQLite can't ALTER COLUMN TYPE in
 /// place, and a nullable flip on a populated table is destructive.
-/// Renames are still handled as drop+add (the heuristic detector that
-/// disambiguates rename vs drop+add is deferred past M8 v1).
 ///
-/// `pub` (not `pub(crate)`) so the M8 integration tests can drive the
-/// diff directly with hand-built snapshots. Spec 06 calls the diff
-/// the engine's contract; exposing it lets the tests pin every column-
-/// level scenario without laundering snapshots through the process-
-/// wide registry first.
+/// Gap 30 adds two-pass rename detection. `Model::NAME` (the Rust struct
+/// name) is the stable identity key across snapshots; the SQL table name
+/// in `Model::TABLE` may change (e.g. via the `#[umbra(plugin = "...")]`
+/// opt-in). The two passes are:
+///
+/// - **First pass — struct-name match.** If a model present in `current`
+///   but absent from `previous` (by `Model::NAME`) has the same NAME as
+///   a model present in `previous` but absent from `current`, the table
+///   name changed: emit `RenameTable { from, to }` instead of DropTable +
+///   CreateTable. A stdout message names the rename so the developer can
+///   audit `makemigrations` output.
+/// - **Second pass — column-shape match.** Among unpaired drops and
+///   creates, if a drop candidate and a create candidate have bit-identical
+///   column shapes (same column names, types, nullable, fk_target), emit
+///   `RenameTable` and log a warning so the developer can verify the
+///   intent. Struct names differ; the shape heuristic fills in for cases
+///   like a wholesale model rename (Foo → Bar, identical fields).
+/// - **No-match.** Drop and create as today.
+///
+/// `pub` (not `pub(crate)`) so integration tests can drive the diff
+/// directly with hand-built snapshots. Spec 06 calls the diff the
+/// engine's contract; exposing it lets the tests pin every scenario
+/// without laundering snapshots through the process-wide registry.
 pub fn diff(previous: &Snapshot, current: &Snapshot) -> Result<Vec<Operation>, MigrateError> {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, HashSet};
 
     let prev_by_name: BTreeMap<&str, &ModelMeta> = previous
         .models
@@ -1359,13 +1386,36 @@ pub fn diff(previous: &Snapshot, current: &Snapshot) -> Result<Vec<Operation>, M
 
     let mut ops: Vec<Operation> = Vec::new();
 
+    // ---- Pass 0: Walk models present in both snapshots (same NAME). ----
+    // Same-name models with a different table produce a first-pass rename.
+    // Same-name models with identical table+columns produce nothing.
+    // Same-name models with column changes produce column-level ops.
+
+    let mut drop_candidates: Vec<&ModelMeta> = Vec::new(); // in prev, not curr
+    let mut create_candidates: Vec<&ModelMeta> = Vec::new(); // in curr, not prev
+
     // Creates and column-level diffs, in deterministic name order.
     for (name, curr) in &curr_by_name {
         match prev_by_name.get(name) {
-            None => ops.push(Operation::CreateTable {
-                table: curr.table.clone(),
-                columns: curr.fields.clone(),
-            }),
+            None => {
+                // In current but not previous — might be a create or a first-pass rename.
+                create_candidates.push(curr);
+            }
+            Some(prev) if prev.table != curr.table => {
+                // Same struct name, different table name → first-pass rename.
+                println!(
+                    "umbra makemigrations: rename detected (struct-name match): \
+                     table `{}` → `{}`",
+                    prev.table, curr.table
+                );
+                ops.push(Operation::RenameTable {
+                    from: prev.table.clone(),
+                    to: curr.table.clone(),
+                });
+                // After the rename the columns might also have changed; diff them.
+                let col_ops = diff_columns(name, prev, curr)?;
+                ops.extend(col_ops);
+            }
             Some(prev) if prev == curr => {}
             Some(prev) => {
                 ops.extend(diff_columns(name, prev, curr)?);
@@ -1373,16 +1423,82 @@ pub fn diff(previous: &Snapshot, current: &Snapshot) -> Result<Vec<Operation>, M
         }
     }
 
-    // Drops, also in deterministic name order.
+    // Drops — models in prev but not curr (by NAME).
     for (name, prev) in &prev_by_name {
         if !curr_by_name.contains_key(name) {
+            drop_candidates.push(prev);
+        }
+    }
+
+    // ---- Pass 1: Column-shape heuristic for unpaired drops + creates. ----
+    // A sorted, canonical serialisation of (name, ty, nullable, fk_target)
+    // is the "shape" fingerprint. Bit-identical shapes → likely a model
+    // rename where the struct name also changed.
+
+    let mut paired_drop_tables: HashSet<&str> = HashSet::new();
+    let mut paired_create_tables: HashSet<&str> = HashSet::new();
+
+    for create in &create_candidates {
+        let create_shape = column_shape(&create.fields);
+        for drop in &drop_candidates {
+            if paired_drop_tables.contains(drop.table.as_str()) {
+                continue;
+            }
+            let drop_shape = column_shape(&drop.fields);
+            if create_shape == drop_shape {
+                eprintln!(
+                    "umbra makemigrations: rename detected (column-shape match): \
+                     `{}` → `{}` — please verify this is a rename and not a coincidental \
+                     column-shape match between two unrelated models",
+                    drop.table, create.table
+                );
+                ops.push(Operation::RenameTable {
+                    from: drop.table.clone(),
+                    to: create.table.clone(),
+                });
+                paired_drop_tables.insert(drop.table.as_str());
+                paired_create_tables.insert(create.table.as_str());
+                break;
+            }
+        }
+    }
+
+    // ---- Pass 2: Emit plain CreateTable for unpaired creates. ----
+    for create in &create_candidates {
+        if !paired_create_tables.contains(create.table.as_str()) {
+            ops.push(Operation::CreateTable {
+                table: create.table.clone(),
+                columns: create.fields.clone(),
+            });
+        }
+    }
+
+    // ---- Pass 3: Emit plain DropTable for unpaired drops. ----
+    for drop in &drop_candidates {
+        if !paired_drop_tables.contains(drop.table.as_str()) {
             ops.push(Operation::DropTable {
-                table: prev.table.clone(),
+                table: drop.table.clone(),
             });
         }
     }
 
     Ok(ops)
+}
+
+/// Compute a canonical, sorted column-shape fingerprint for rename
+/// heuristic detection in `diff`. Two models whose column fingerprints
+/// are identical are candidates for a rename (second-pass detection).
+///
+/// The fingerprint is a sorted `Vec` of `(name, ty, nullable, fk_target)`
+/// tuples. Sorting by name ensures the fingerprint is independent of
+/// declaration order.
+fn column_shape(fields: &[Column]) -> Vec<(String, SqlType, bool, Option<String>)> {
+    let mut shape: Vec<(String, SqlType, bool, Option<String>)> = fields
+        .iter()
+        .map(|c| (c.name.clone(), c.ty, c.nullable, c.fk_target.clone()))
+        .collect();
+    shape.sort_by(|a, b| a.0.cmp(&b.0));
+    shape
 }
 
 /// Per-model column diff. Same-name columns whose type or nullable
@@ -1493,6 +1609,7 @@ fn suffix_for(ops: &[Operation]) -> String {
         [Operation::AddColumn { table, column }] => format!("add_{}_{}", table, column.name),
         [Operation::DropColumn { table, column }] => format!("drop_{table}_{column}"),
         [Operation::AlterColumn { table, column, .. }] => format!("alter_{table}_{column}"),
+        [Operation::RenameTable { from, to }] => format!("rename_{from}_to_{to}"),
         _ => "auto".to_string(),
     }
 }
@@ -1636,6 +1753,16 @@ fn render_operation_sqlite(op: &Operation) -> Vec<String> {
             column: _,
             new_columns,
         } => render_alter_column_dance_sqlite(table, new_columns),
+        Operation::RenameTable { from, to } => {
+            // SQLite: ALTER TABLE "<from>" RENAME TO "<to>"
+            // sea-query's Table::rename() emits the right form.
+            use sea_query::{Alias, SqliteQueryBuilder, Table};
+            vec![
+                Table::rename()
+                    .table(Alias::new(from.as_str()), Alias::new(to.as_str()))
+                    .build(SqliteQueryBuilder),
+            ]
+        }
     }
 }
 
@@ -1682,6 +1809,16 @@ fn render_operation_postgres(op: &Operation) -> Vec<String> {
             column,
             new_columns,
         } => render_alter_column_postgres(table, column, new_columns),
+        Operation::RenameTable { from, to } => {
+            // Postgres: ALTER TABLE "<from>" RENAME TO "<to>"
+            // sea-query's Table::rename() emits the right form.
+            use sea_query::{Alias, PostgresQueryBuilder, Table};
+            vec![
+                Table::rename()
+                    .table(Alias::new(from.as_str()), Alias::new(to.as_str()))
+                    .build(PostgresQueryBuilder),
+            ]
+        }
     }
 }
 

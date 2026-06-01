@@ -800,7 +800,8 @@ pub async fn write_outputs(
                 Operation::DropTable { .. }
                 | Operation::AddColumn { .. }
                 | Operation::DropColumn { .. }
-                | Operation::AlterColumn { .. } => (t, c),
+                | Operation::AlterColumn { .. }
+                | Operation::RenameTable { .. } => (t, c),
             });
 
     Ok(InspectReport {

@@ -216,9 +216,7 @@ umbra's migration engine emits a bare `tsvector` column. Populating it is your r
 
 ## The table name
 
-By default the table is snake_case of the struct name - `BlogPost` becomes
-`blog_post`. Override with the struct-level attribute when you need a
-different name:
+By default the table is snake_case of the struct name - `BlogPost` becomes `blog_post`. Override with the struct-level attribute when you need a different name:
 
 ```rust
 #[derive(Debug, Clone, sqlx::FromRow, umbra::orm::Model)]
@@ -229,9 +227,37 @@ pub struct User {
 }
 ```
 
-The attribute lands at M3.1; per-field attributes (`max_length`, `db_index`,
-`default`, `choices`, `on_delete`) are scheduled as the plugins that need
-them ship.
+The attribute lands at M3.1; per-field attributes (`max_length`, `db_index`, `default`, `choices`, `on_delete`) are scheduled as the plugins that need them ship.
+
+## Plugin-namespaced tables
+
+When two plugins each ship a model with the same struct name (for example, a `blog` plugin and a `shop` plugin both defining `Post`), the SQL table names collide. Add `plugin = "..."` to opt into a `<plugin>_<table>` prefix:
+
+```rust
+#[derive(Debug, Clone, sqlx::FromRow, umbra::orm::Model)]
+#[umbra(plugin = "blog")]
+pub struct Post {
+    pub id: i64,
+    pub title: String,
+    pub body: String,
+}
+// Model::TABLE == "blog_post"
+```
+
+The prefix rule:
+
+| Attributes set | Result |
+|---|---|
+| neither `plugin` nor `table` | bare snake_case (`post`) |
+| `plugin = "blog"` only | `"blog_post"` |
+| `table = "custom"` only | `"custom"` (explicit always wins) |
+| `plugin = "blog"` + `table = "custom"` | `"custom"` (explicit always wins) |
+
+When to reach for `plugin = "..."`: multi-plugin apps where two or more plugins ship a model with the same struct name, or any time you want the table name to advertise which plugin owns it. The trade-off is longer table names in the DB.
+
+**Built-in plugins keep their bare names.** `umbra-auth`, `umbra-sessions`, `umbra-admin`, and `umbra-tasks` do NOT use this attribute. Their table names (`auth_user`, `session`, etc.) are stable DB identifiers; switching them would break every existing database. If you are writing a third-party plugin, you should opt into `plugin = "..."` for every model the plugin ships to avoid future collisions with other plugins.
+
+`Model::NAME` (the Rust struct name) is not affected by the `plugin` attribute - it stays `"Post"` regardless of which table name is used. The migration engine uses `Model::NAME` as the stable identity key when detecting table renames (see [Managed migrations](/docs/v0.0.1/migrations/managed-migrations#rename-detection)).
 
 ## Reading rows
 

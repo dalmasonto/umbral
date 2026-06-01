@@ -117,17 +117,25 @@ pub fn derive_model(input: TokenStream) -> TokenStream {
 }
 
 /// Parse the struct-level `#[umbra(...)]` attribute. M3.1 ships
-/// exactly one key: `table = "..."` to override the snake_case-of-
-/// struct-name default for the SQL table name. More keys land as
-/// plugin authors need them (per-field `max_length`, `db_index`,
-/// `default`, `choices`, `on_delete` — all deferred until a real
-/// plugin needs each).
+/// `table = "..."` to override the default snake_case-of-struct-name
+/// table name. Gap 30 adds `plugin = "..."` so a plugin-owned model
+/// opts into a `<plugin>_<table>` namespaced table name, preventing
+/// collisions when two plugins each declare a model with the same
+/// struct name (e.g. two `Post` models from different plugins).
+///
+/// Precedence: `table` > `plugin` > bare snake_case. An explicit
+/// `table = "..."` always wins regardless of whether `plugin = "..."`
+/// is also present.
 struct UmbraStructAttr {
     table: Option<String>,
+    plugin: Option<String>,
 }
 
 fn parse_umbra_struct_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraStructAttr> {
-    let mut parsed = UmbraStructAttr { table: None };
+    let mut parsed = UmbraStructAttr {
+        table: None,
+        plugin: None,
+    };
     for attr in attrs {
         if !attr.path().is_ident("umbra") {
             continue;
@@ -138,11 +146,16 @@ fn parse_umbra_struct_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraStructA
                 let lit: syn::LitStr = value.parse()?;
                 parsed.table = Some(lit.value());
                 Ok(())
+            } else if meta.path.is_ident("plugin") {
+                let value = meta.value()?;
+                let lit: syn::LitStr = value.parse()?;
+                parsed.plugin = Some(lit.value());
+                Ok(())
             } else {
                 Err(meta.error(
-                    "umbra::Model derive only accepts `table = \"...\"` at M3.1; \
-                     other attributes (max_length, db_index, default, choices, on_delete) \
-                     land as plugin authors need them",
+                    "umbra::Model derive accepts `table = \"...\"` and `plugin = \"...\"` \
+                     at M3.1+; other attributes (max_length, db_index, default, choices, \
+                     on_delete) land as plugin authors need them",
                 ))
             }
         })?;
@@ -212,15 +225,30 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
     // bare `Uuid`) round-trip unchanged through the emitted tokens.
     let pk_ty_tokens = &id_field.ty;
 
-    // The default table name is snake_case of the struct name; a
-    // struct-level `#[umbra(table = "...")]` overrides it. Plugin
-    // authors hit the override path when they want a prefix the
-    // snake_case round-trip can't produce (e.g. struct `User` with
-    // table `auth_user`).
+    // The default table name is snake_case of the struct name. Two opt-in
+    // attribute keys change this, with explicit-table winning over plugin
+    // prefix:
+    //
+    //   1. `#[umbra(plugin = "blog")]` — prefixes the snake_case struct
+    //      name: `Post` → `"blog_post"`. Prevents table collisions when
+    //      multiple plugins each ship a model with the same struct name.
+    //   2. `#[umbra(table = "...")]` — explicit override, always wins.
+    //      Even if `plugin` is also set, the explicit table is used.
+    //
+    // Built-in plugins (auth, sessions, admin, tasks) keep their existing
+    // bare names and do NOT use `plugin = "..."` — their table names are
+    // stable DB identifiers that existing users must not have renamed.
     let struct_attr = parse_umbra_struct_attr(&input.attrs)?;
-    let table_name = struct_attr
-        .table
-        .unwrap_or_else(|| to_snake_case(&struct_name.to_string()));
+    let bare_name = to_snake_case(&struct_name.to_string());
+    let table_name = if let Some(explicit) = struct_attr.table {
+        // Explicit table always wins over the plugin prefix.
+        explicit
+    } else if let Some(plugin_prefix) = struct_attr.plugin {
+        // Plugin prefix: "<plugin>_<snake_case_struct>".
+        format!("{}_{}", plugin_prefix, bare_name)
+    } else {
+        bare_name
+    };
     // The sibling column module's identifier is always snake_case of
     // the struct name (the user-facing path is `<snake_struct>::FIELD`).
     // Leaving it untouched keeps existing user code working when a
