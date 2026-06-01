@@ -1,89 +1,120 @@
 ---
 title: PostgreSQL
-description: Point an umbra app at Postgres — connect, migrate, and query.
+description: Point an umbra app at Postgres — connection URL, migrations, queries, and the Postgres-only field types.
 sidebar_position: 1
 icon: database
 tags: [postgres, backends, database]
 ---
 
-Umbra ships with first-class PostgreSQL support. This page covers the three things you need to run an existing umbra app against Postgres: configuring the connection URL, running migrations, and issuing queries.
+PostgreSQL is umbra's first-class production backend. The plain `Article::objects().fetch()` you write against SQLite runs unchanged against Postgres; the migration engine emits Postgres-flavoured DDL; and a set of Postgres-only field types (arrays, INET/CIDR/MACADDR, JSONB operators, full-text search) opens up the engine where the workload calls for it.
 
 ## Configure
 
-Set `DATABASE_URL` to a `postgres://` (or `postgresql://`) URL in your environment or `umbra.toml`. `umbra::db::connect` dispatches on the URL scheme and returns the matching `DbPool` variant.
+Point `DATABASE_URL` (env or `umbra.toml`) at a `postgres://` (or `postgresql://`) URL. `umbra::db::connect` dispatches on the URL scheme and returns the matching [`DbPool`] variant.
 
 ```rust
 use umbra::prelude::*;
-use umbra::db::connect;
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let settings = Settings::from_env()?;
-    let pool = connect("postgres://user:pass@localhost/mydb").await?;
+    let pool = umbra::db::connect(&settings.database_url).await?;
 
-    App::builder()
+    let app = App::builder()
         .settings(settings)
         .database("default", pool)
-        .model::<Article>()
-        .build()?
-        .serve()
-        .await?;
+        .plugin(blog::BlogPlugin)
+        .build()?;
 
+    app.serve("127.0.0.1:8000".parse::<std::net::SocketAddr>()?).await?;
     Ok(())
 }
 ```
 
-At `.build()` time umbra cross-checks `settings.database_url` against the pool's runtime backend. A mismatch (e.g. the URL says `sqlite:` but the pool is `DbPool::Postgres`) is a hard `BuildError::DatabaseBackendMismatch` at boot, not a silent failure at runtime.
+`App::build()` cross-checks `settings.database_url` against the pool's runtime backend. A mismatch (URL says `postgres://` but the pool is `DbPool::Sqlite`, or vice versa) is a hard `BuildError::DatabaseBackendMismatch` at boot, not a silent failure on the first query.
 
-## What works today
+<Callout type="info">
+**Pooling.** `connect` returns a sqlx `PgPool` wrapped in the `DbPool` enum. The pool is process-wide, lazily-initialised, and shared between every handler. For pool size and connection lifetime tuning, build the `sqlx::PgPool` yourself with `PgPoolOptions::new()` and hand it in via `.database("default", pool.into())`.
+</Callout>
 
-These three phases shipped together and give you the full Postgres path end-to-end:
-
-- **Phase 1** (`3228f57`) — `DbPool` enum, URL-scheme dispatch in `connect`, `AppBuilder::database` accepts `impl Into<DbPool>`, boot-time backend mismatch check. See `crates/umbra-core/src/db.rs`.
-- **Phase 2** (`1dfdd97`) — The migration engine renders Postgres DDL: `bigserial` for `i64` PKs, native `ALTER COLUMN SET/DROP NOT NULL` instead of the SQLite table-recreation dance. The apply loop branches on the `DbPool` variant and uses `$1..$N` placeholders and `ON CONFLICT DO NOTHING` on Postgres. See `crates/umbra-core/src/migrate.rs`.
-- **Phase 2.5** (`6f24fbd`) — `Model` is no longer pinned to `SqliteRow`. QuerySet terminals (`fetch`, `first`, `count`, `exists`) dispatch on the `DbPool` variant. `QuerySet::on_pg(&PgPool)` and `Manager::on_pg(&PgPool)` are the explicit-pool overrides, mirroring the existing `.on(&SqlitePool)`. See `crates/umbra-core/src/orm/queryset.rs`.
-
-A model declared with the standard derive just works on both backends:
-
-```rust
-#[derive(Debug, Clone, sqlx::FromRow, umbra::orm::Model)]
-pub struct Article {
-    pub id: i64,
-    pub title: String,
-    pub body: String,
-}
-```
-
-`#[derive(sqlx::FromRow)]` emits a generic-over-row-type impl, so no per-backend code is needed in the model itself.
-
-### Running migrations
+## Migrations
 
 ```bash
-# from your project root
-cargo run -- migrate
-# -> Applied N migration(s)   (Postgres DDL rendered automatically)
+cargo run -- makemigrations    # writes a JSON migration under migrations/<plugin>/
+cargo run -- migrate           # applies pending migrations against $DATABASE_URL
 ```
 
-### Querying
+The engine renders Postgres DDL automatically:
 
-The ambient path uses whatever pool `App::build()` registered:
+- `BIGSERIAL` for `i64` primary keys (vs `INTEGER PRIMARY KEY AUTOINCREMENT` on SQLite).
+- `ALTER TABLE ... ALTER COLUMN SET / DROP NOT NULL` for nullability changes (vs SQLite's table-recreation dance).
+- `$1..$N` placeholders and `ON CONFLICT DO NOTHING` on the migration apply path.
+- Native types from the [Type catalogue](#type-catalogue) below — `JSONB`, `UUID`, `TIMESTAMPTZ`, arrays, INET/CIDR/MACADDR, TSVECTOR — instead of the `TEXT`/`BLOB` fallbacks SQLite uses.
+
+The migration files themselves are backend-agnostic JSON; the same file applies to both backends. Render the SQL for either one with `cargo run -- migrate --plan`.
+
+## Querying
 
 ```rust
 let articles = Article::objects().fetch().await?;
 ```
 
-If you hold a `PgPool` directly (integration tests, scripts outside an `App`):
+The ambient `pool()` reads through whichever `DbPool` variant `App::build()` registered. No per-backend code in the handler.
+
+If you hold a `PgPool` directly (integration tests, scripts that don't run through `App::build()`):
 
 ```rust
 let articles = Article::objects().on_pg(&pg_pool).fetch().await?;
 ```
 
-## What's not there yet
+`.on_pg(&pool)` is the Postgres counterpart of `.on(&sqlite_pool)`. The `_pg` variants on the QuerySet (`fetch_pg`, `first_pg`, `get_pg`, `count_pg`, `exists_pg`) take an explicit `PgPool` and skip the dispatch entirely — useful for models whose fields are Postgres-only and so don't satisfy the dual `FromRow` bound.
 
-<Callout type="info">
-These items are in the backlog. See `FEATURES.md` for current status.
-</Callout>
+## Postgres-only field types
 
-- **`inspectdb` for Postgres** (Phase 3) — the `inspectdb` command currently uses SQLite `PRAGMA` introspection. A `pg_catalog` path that produces the same `IntrospectedSchema` output is next.
-- **Postgres-specific field types** (Phase 4) — `Array`, `HStore`, `Jsonb`, `Cidr`, and other network types are not yet in the `SqlType` catalogue.
-- **Row-Level Security plugin** (Phase 4) — will land as a third-party plugin crate via the standard `Plugin::on_ready` hook; no framework changes required.
+Some workloads benefit enough from native PG features to make the SQLite story irrelevant. Umbra exposes them as first-class field types; the boot-time system check refuses to start if you register one against a SQLite pool, with a clear error pointing at the offending model.
+
+| Type | Rust field | Postgres column | Notes |
+|------|------------|-----------------|-------|
+| Array | `Vec<T>` / `Option<Vec<T>>` | `T[]` | Element type is one of `i32`, `i64`, `String`, `Uuid`, `bool`. See [orm/models — Array columns](../orm/models#array-columns). |
+| JSONB | `serde_json::Value` (M3 `Json` SqlType) | `JSONB` | Indexed `@>`, `->`, `->>` operator surface; the QuerySet exposes them as `.has_key(...)` / `.contains(...)` / `.path("a.b")`. |
+| INET / CIDR / MACADDR | `IpNet`-style newtypes | `INET`, `CIDR`, `MACADDR` | Networking fields. [orm/models — Network address columns](../orm/models#network-address-columns). |
+| TSVECTOR | `umbra::orm::TsVector` | `TSVECTOR` | Full-text search. Populate via trigger or `GENERATED ALWAYS AS (to_tsvector(...))`. [orm/models — Full-text search columns](../orm/models#full-text-search-columns). |
+
+Plus the standard cross-backend types (`Boolean`, `Uuid`, `Timestamptz`, etc.) all map to their native Postgres equivalents (`BOOLEAN`, `UUID`, `TIMESTAMP WITH TIME ZONE`) on this backend.
+
+## inspectdb (Postgres)
+
+`inspectdb` walks `pg_catalog` and `information_schema` to produce umbra `Model` definitions for every table in an existing database:
+
+```bash
+cargo run -- inspectdb > src/legacy_models.rs
+```
+
+The output is a Rust source file with one `#[derive(Model)]` struct per table, ready to drop into a module and register from a plugin (or via `.model::<T>()`). Round-trip integration coverage lives in `crates/umbra-core/tests/postgres_inspect.rs`.
+
+## Row-Level Security
+
+Postgres's Row-Level Security is the right tool for per-row access control that the database enforces regardless of how the row is queried. The `umbra-rls` plugin ([Row-Level Security (umbra-rls)](../plugins/rls)) wraps the `CREATE POLICY` shape and runs at `Plugin::on_ready` time. On a SQLite backend the plugin logs and skips, so RLS-using apps stay dev-portable.
+
+## Type catalogue
+
+The complete `SqlType` → Postgres column-type mapping lives in `crates/umbra-core/src/backend.rs`. Highlights:
+
+| `SqlType` | Postgres column |
+|-----------|-----------------|
+| `SmallInt` / `Integer` / `BigInt` | `SMALLINT` / `INTEGER` / `BIGINT` |
+| `Real` / `Double` | `FLOAT` / `DOUBLE PRECISION` |
+| `Boolean` | `BOOLEAN` |
+| `Text` | `TEXT` |
+| `Date` / `Time` / `Timestamptz` | `DATE` / `TIME` / `TIMESTAMP WITH TIME ZONE` |
+| `Uuid` | `UUID` |
+| `Json` | `JSONB` (always `JSONB`, never `JSON` — the operator + index story is the whole point) |
+| `Array(T)` | `T[]` (recursively mapped) |
+| `Inet` / `Cidr` / `MacAddr` | `INET` / `CIDR` / `MACADDR` |
+| `FullText` | `TSVECTOR` (via `ColumnType::custom`) |
+
+## See also
+
+- [SQLite backend](./sqlite) — the dev / test counterpart.
+- [Row-Level Security (umbra-rls)](../plugins/rls) — Postgres-only policy plugin.
+- [orm/models — Postgres-only column types](../orm/models#json-columns) — array / JSON / network / full-text field declarations and operator surface.

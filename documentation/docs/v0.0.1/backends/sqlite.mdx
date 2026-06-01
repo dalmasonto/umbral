@@ -1,0 +1,139 @@
+---
+title: SQLite
+description: The default umbra backend — zero-config local development, instant tests, and the same QuerySet API as Postgres.
+sidebar_position: 2
+icon: database
+tags: [sqlite, backends, database]
+---
+
+SQLite is umbra's default backend. The framework starts there because it gives you a working app with no installed services and no connection string to manage — the first `cargo run -- migrate` creates a file and writes the schema. Production workloads that outgrow SQLite move to [Postgres](./postgres) by changing the `DATABASE_URL`; the model definitions, QuerySet calls, and migration files all carry over unchanged.
+
+## When to use it
+
+Reach for SQLite when:
+
+- **You're building locally.** `cargo run` works with no services to start.
+- **You're running tests.** The `sqlite::memory:` URL gives every test process a fresh database in microseconds. The pattern: each `#[tokio::test]` calls `umbra::db::connect_sqlite("sqlite::memory:").await?` and threads the pool through `.on(&pool)` so the ambient `OnceLock` stays untouched between tests.
+- **You're shipping an embedded / single-process app.** CLI tools, single-tenant SaaS, internal admin dashboards. SQLite handles meaningful write traffic per process; the concurrency story is "one writer, many readers" at the file level.
+
+Reach for [Postgres](./postgres) when you outgrow any of:
+
+- More than one process needs to write concurrently.
+- You need Postgres-only field types (arrays, JSONB operators, INET/CIDR/MACADDR, full-text search).
+- You want database-enforced per-row security (`umbra-rls`).
+- You want the standard "OLTP at scale" toolchain (logical replication, pgbouncer, point-in-time recovery, etc.).
+
+The migration files and `Model` impls don't change either way — the move is a `DATABASE_URL` swap plus a fresh `migrate` against the new database.
+
+## Configure
+
+Three URL forms:
+
+| Form | What it does |
+|------|--------------|
+| `sqlite::memory:` | Fresh in-process database that disappears when the connection closes. The default for tests. |
+| `sqlite://path/to/app.db` | File-backed. `?mode=rwc` (read-write-create) is a common suffix when you want the file auto-created on first connect. |
+| `sqlite:` (alias) | Same as `sqlite::memory:` — kept for the historical shorthand. |
+
+```rust
+use umbra::prelude::*;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let settings = Settings::from_env()?;
+    // Default DATABASE_URL is `sqlite::memory:`; override with `sqlite://app.db?mode=rwc`
+    // (or the env var) to get a file-backed pool that survives restarts.
+    let pool = umbra::db::connect(&settings.database_url).await?;
+
+    let app = App::builder()
+        .settings(settings)
+        .database("default", pool)
+        .plugin(blog::BlogPlugin)
+        .build()?;
+
+    app.serve("127.0.0.1:8000".parse::<std::net::SocketAddr>()?).await?;
+    Ok(())
+}
+```
+
+`App::build()` cross-checks `settings.database_url` against the pool's runtime backend. A mismatch (URL says `sqlite://` but you handed in a `PgPool`) is a hard `BuildError::DatabaseBackendMismatch` at boot.
+
+For callers that want a typed `SqlitePool` without the `DbPool` enum wrapper (tests that need to call sqlite-specific APIs straight after connecting):
+
+```rust
+let sqlite_pool: sqlx::SqlitePool = umbra::db::connect_sqlite("sqlite::memory:").await?;
+```
+
+## Migrations
+
+```bash
+cargo run -- makemigrations    # writes migrations/<plugin>/0001_…json
+cargo run -- migrate           # applies pending migrations against $DATABASE_URL
+```
+
+The engine renders SQLite-appropriate DDL automatically. Differences from the Postgres path:
+
+- `INTEGER PRIMARY KEY AUTOINCREMENT` for `i64` PKs (vs Postgres's `BIGSERIAL`).
+- Nullability changes route through SQLite's "create-new-table-copy-rename" dance instead of `ALTER COLUMN`. SQLite has no in-place `SET NOT NULL`; the migration engine hides this.
+- The same `RETURNING *` syntax that drives `Manager::create` works (SQLite ≥ 3.35).
+- `ON CONFLICT DO NOTHING` works (SQLite ≥ 3.24).
+
+The migration files are backend-agnostic JSON; the same file applies cleanly to both backends.
+
+## Querying
+
+```rust
+let articles = Article::objects().fetch().await?;
+```
+
+The ambient pool reads through whichever `DbPool` variant `App::build()` registered. No per-backend code in handler code.
+
+If you hold a `SqlitePool` directly (test code, scripts outside an `App`):
+
+```rust
+let articles = Article::objects().on(&sqlite_pool).fetch().await?;
+```
+
+`.on(&sqlite_pool)` is the explicit-pool override. The cross-backend terminals (`.fetch`, `.first`, `.get`, `.count`, `.exists`) all dispatch on the resolved pool variant — the same terminal works on both backends.
+
+## inspectdb (SQLite)
+
+`inspectdb` introspects via `PRAGMA table_info` / `PRAGMA foreign_key_list` and produces umbra `Model` definitions for every table in an existing SQLite database:
+
+```bash
+cargo run -- inspectdb > src/legacy_models.rs
+```
+
+Useful when porting an existing SQLite-backed app onto umbra: the generated structs feed straight into the declare → migrate loop. Round-trip integration coverage lives in `crates/umbra-core/tests/inspect.rs`.
+
+## Limits
+
+SQLite doesn't have:
+
+- **Native arrays.** A `Vec<T>` field is Postgres-only; the boot-time system check refuses to start with a clear error pointing at the offending model and field.
+- **HSTORE / JSONB.** The `Json` SqlType maps to `TEXT` on SQLite. The QuerySet's JSON-operator surface uses `json_extract(col, '$.a.b')` instead of Postgres's `->` / `->>`; the predicate carries both renderings and picks the right one at terminal time.
+- **Full-text search.** The `TsVector` field is Postgres-only. SQLite has FTS5 as a virtual-table extension, but umbra doesn't surface it as a first-class field type at v1.
+- **Native UUIDs.** UUID columns land on `TEXT` with the canonical 36-char hex representation. The `Uuid` Rust type still works transparently — sqlx encodes/decodes it.
+- **INET / CIDR / MACADDR.** All Postgres-only.
+- **Row-Level Security.** `umbra-rls` logs and skips on SQLite. Use application-layer permissions ([umbra-rest's Permissions section](../plugins/rest)).
+
+The cross-backend `SqlType` catalogue handles the rest — booleans, dates, timestamps, integers, floats, text — with the right native SQLite affinity per column.
+
+## Type catalogue
+
+The complete `SqlType` → SQLite column-type mapping lives in `crates/umbra-core/src/backend.rs`. Highlights:
+
+| `SqlType` | SQLite column |
+|-----------|---------------|
+| `SmallInt` / `Integer` / `BigInt` | `SMALLINT` / `INTEGER` / `BIGINT` (all alias to `INTEGER` affinity) |
+| `Real` / `Double` | `REAL` / `DOUBLE` |
+| `Boolean` | `BOOLEAN` (stored as `0`/`1`, sqlx-decoded as `bool`) |
+| `Text` | `TEXT` |
+| `Date` / `Time` / `Timestamptz` | `TEXT` (ISO 8601, sqlx-decoded as `chrono::*`) |
+| `Uuid` | `TEXT` (canonical 36-char form) |
+| `Json` | `TEXT` (`serde_json::Value` round-trips as JSON text) |
+
+## See also
+
+- [PostgreSQL backend](./postgres) — the production counterpart, including the field types this page lists as missing.
+- [orm/models](../orm/models) — model declaration, the cross-backend `SqlType` catalogue, and the Postgres-only sections you'll see fail loudly here.
