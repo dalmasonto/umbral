@@ -134,7 +134,10 @@
       --error-container:          #93000a;
       --on-error-container:       #ffdad6;
     }
-    body { background-color: var(--background); color: var(--on-background); }
+    body { background-color: var(--background); color: var(--on-background); font-family: 'Inter', sans-serif; -webkit-font-smoothing: antialiased; }
+    html, body, button, input, select, textarea { font-family: 'Inter', sans-serif; }
+    /* Tabular numerals for data-heavy contexts */
+    .tabular-nums { font-variant-numeric: tabular-nums; }
   </style>
 
   <!-- Tailwind config: maps every token to its CSS variable. -->
@@ -313,6 +316,9 @@
 
 {% block extra_scripts %}{% endblock %}
 
+{# Command palette slot — loaded by ⌘K / Ctrl-K #}
+<div id="umbra-palette-slot"></div>
+
 {# Toast notification container #}
 <div id="umbra-toast-container" class="fixed bottom-4 right-4 z-[300] flex flex-col gap-sm pointer-events-none" aria-live="polite"></div>
 
@@ -388,6 +394,23 @@
     document.body.classList.remove('overflow-hidden');
   };
 
+  // HX-Trigger handlers — the update handler emits these after a
+  // successful Save (closes the sheet + refreshes the table) so the
+  // changelist updates without a full page nav.
+  document.body.addEventListener('closeSheet', function() {
+    umbra.closeSheet();
+  });
+  document.body.addEventListener('refreshTable', function() {
+    // Re-issue the same GET that built the current table body.
+    var body = document.getElementById('table-body');
+    if (body && body.getAttribute('hx-get')) {
+      htmx.ajax('GET', body.getAttribute('hx-get'), { target: '#table-body', swap: 'innerHTML' });
+    } else {
+      // Fallback: reload the page.
+      window.location.reload();
+    }
+  });
+
   umbra._applyStackOffsets = function() {
     var slot = document.getElementById('umbra-sheet-slot');
     if (!slot) return;
@@ -413,8 +436,24 @@
   // Escape: close top sheet only.
   document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') {
+      // Close palette first if open.
+      var palSlot = document.getElementById('umbra-palette-slot');
+      if (palSlot && palSlot.innerHTML.trim()) { umbra.closePalette && umbra.closePalette(); e.preventDefault(); return; }
       var slot = document.getElementById('umbra-sheet-slot');
       if (slot && slot.innerHTML.trim()) { umbra.popSheet(); e.preventDefault(); }
+    }
+    // ⌘K / Ctrl-K: open command palette.
+    if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+      e.preventDefault();
+      var palSlot2 = document.getElementById('umbra-palette-slot');
+      if (palSlot2 && palSlot2.innerHTML.trim()) {
+        umbra.closePalette && umbra.closePalette();
+      } else {
+        htmx.ajax('GET', '/admin/api/palette', {
+          target: '#umbra-palette-slot',
+          swap: 'innerHTML'
+        });
+      }
     }
   });
 })();

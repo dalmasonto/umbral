@@ -2,6 +2,7 @@
 {% block title %}{{ model.name }} — umbra admin{% endblock %}
 
 {% block extra_head %}
+{{ super() }}
 <style>
   /* HTMX indicator */
   .htmx-indicator { opacity: 0; transition: opacity 200ms; }

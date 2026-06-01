@@ -53,6 +53,43 @@ When `templates_dir` isn't called the engine looks for `./templates` relative to
 
 Inheritance, loops, conditionals, and variable interpolation are all standard Jinja2.
 
+<Callout type="warning" title="Overriding a block replaces it - use `super()` to extend">
+When a deeper template overrides a block its parent already defined, the parent's contents are wiped. If `base.html` puts `<style>body { font-family: Inter; }</style>` in `{% block extra_head %}` and `child.html` writes `{% block extra_head %}<style>.foo {}</style>{% endblock %}`, the Inter font declaration disappears - the child only has `.foo`.
+
+To extend rather than replace, call `{{ super() }}` at the top of the child's block:
+
+```html
+{% extends "base.html" %}
+{% block extra_head %}
+  {{ super() }}
+  <style>.foo { color: red; }</style>
+{% endblock %}
+```
+
+This bites hardest with multi-level inheritance (`wrapper.html` → `base.html` → `child.html`). Each child that overrides a block needs `{{ super() }}` for the parent's contents to survive. Forgetting it produces pages with missing fonts, missing scripts, broken layouts - all because one intermediate template silently wiped the chain. The umbra-admin shell hit this exact bug: the changelist's `extra_head` override wiped the font-family and scrollbar styles base.html had set.
+
+If you find yourself wanting `super()` in every override, consider whether the styles belong in `wrapper.html` (the root) instead, where they can't be wiped.
+</Callout>
+
+## Fragment templates and direct browser navigation
+
+A "fragment" template (no `{% extends %}`) is meant to be swapped into an existing page via HTMX (or returned as a partial). Serving a fragment to a direct browser nav (back button, bookmark, copy-paste URL) produces a naked HTML response with no `<head>`, no CSS, no fonts - the browser falls back to OS defaults and the page looks broken.
+
+The pattern in umbra-admin: handlers that return fragments check the `HX-Request` header and redirect to a full page when the request is a direct nav:
+
+```rust
+async fn rows_fragment(headers: HeaderMap, ...) -> Response {
+    if !is_htmx(&headers) {
+        // Direct nav - redirect to the full page that wraps these rows.
+        return Redirect::to("/admin/post/?...").into_response();
+    }
+    // HTMX swap - return just the tbody.
+    render("admin/rows_fragment.html", ...).into_response()
+}
+```
+
+The full-page template is responsible for emitting the HTMX call that loads the fragment back in. This way every URL is reachable both as a fragment (for HTMX) and as a usable page (for direct nav).
+
 ## Render from a handler
 
 ```rust

@@ -146,6 +146,26 @@ async fn send(router: axum::Router, req: Request<Body>) -> (StatusCode, String) 
     (status, String::from_utf8_lossy(&bytes).into_owned())
 }
 
+async fn send_full(
+    router: axum::Router,
+    req: Request<Body>,
+) -> (StatusCode, axum::http::HeaderMap, String) {
+    let resp = router.oneshot(req).await.expect("oneshot");
+    let status = resp.status();
+    let headers = resp.headers().clone();
+    let bytes = resp
+        .into_body()
+        .collect()
+        .await
+        .expect("collect")
+        .to_bytes();
+    (
+        status,
+        headers,
+        String::from_utf8_lossy(&bytes).into_owned(),
+    )
+}
+
 fn extract_csrf(html: &str) -> Option<String> {
     let marker = r#"name="csrf_token""#;
     let pos = html.find(marker)?;
@@ -370,13 +390,30 @@ async fn test_rows_htmx_fragment_only() {
     assert!(!body.contains("<!doctype html>"), "not a full page: {body}");
     assert!(!body.contains("<html"), "not a full page: {body}");
 
-    // Non-HTMX request to same endpoint should also return fragment
-    // (rows endpoint always returns fragment)
+    // Non-HTMX request to the same endpoint REDIRECTS to the
+    // changelist with the same query string preserved. The /rows
+    // endpoint returns a naked tbody fragment that has no <head>,
+    // no fonts, no Tailwind — useless when a user navigates to it
+    // directly (back button, bookmark, copy-paste). The changelist
+    // page itself HTMX-loads the rows on mount.
     let req2 = Request::builder()
         .uri("/admin/post/rows?page_size=10")
         .header(header::COOKIE, format!("umbra_session={session}"))
         .body(Body::empty())
         .unwrap();
-    let (status2, _) = send(router, req2).await;
-    assert_eq!(status2, StatusCode::OK);
+    let (status2, headers2, _) = send_full(router, req2).await;
+    assert!(
+        status2 == StatusCode::SEE_OTHER
+            || status2 == StatusCode::TEMPORARY_REDIRECT
+            || status2 == StatusCode::FOUND,
+        "expected redirect status, got: {status2}"
+    );
+    let location = headers2
+        .get(header::LOCATION)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(
+        location.starts_with("/admin/post/"),
+        "redirect target should be the changelist; got: {location}"
+    );
 }

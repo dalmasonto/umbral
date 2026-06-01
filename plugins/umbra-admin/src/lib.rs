@@ -50,13 +50,19 @@
 //! Nullable fields skip the `required` attribute.
 
 pub mod config;
+pub mod models;
 pub mod registry;
+pub mod widgets;
 
 pub use config::{
     Action, ActionInvocation, ActionResult, ActionScope, ActionVariant, AdminConfig, AdminContext,
     AdminModel, InlineModel, ToastLevel,
 };
 pub use registry::{AdminRegistration, AdminRegistry, App as AdminApp};
+pub use widgets::{
+    BarPayload, CatalogEntry, FeedItem, FeedPayload, KpiPayload, LinePayload, Series, Span,
+    TableColumn, TablePayload, Widget, WidgetDataFn, WidgetInstance, WidgetKind, WidgetPayload,
+};
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -106,6 +112,7 @@ use uuid::Uuid;
 #[derive(Debug, Default, Clone)]
 pub struct AdminPlugin {
     registry: AdminRegistry,
+    widget_catalog: Vec<Widget>,
 }
 
 impl AdminPlugin {
@@ -131,6 +138,33 @@ impl AdminPlugin {
         self.registry.register(plugin_name, model);
         self
     }
+
+    /// Register a dashboard widget. Chainable.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use umbra_admin::{AdminPlugin, Widget, WidgetKind, WidgetDataFn, WidgetPayload, KpiPayload, Span};
+    ///
+    /// AdminPlugin::default()
+    ///     .register_widget(Widget {
+    ///         key:          "total_posts",
+    ///         title:        "Total Posts".to_string(),
+    ///         kind:         WidgetKind::Kpi,
+    ///         default_span: Span { cols: 3, rows: 1 },
+    ///         permission:   None,
+    ///         data:         WidgetDataFn::new(|_user| async move {
+    ///             WidgetPayload::Kpi(KpiPayload {
+    ///                 value: "0".to_string(),
+    ///                 unit: None, delta: None, sparkline: None,
+    ///             })
+    ///         }),
+    ///     });
+    /// ```
+    pub fn register_widget(mut self, widget: Widget) -> Self {
+        self.widget_catalog.push(widget);
+        self
+    }
 }
 
 /// Shared state injected into every route via [`axum::extract::State`].
@@ -139,6 +173,8 @@ impl AdminPlugin {
 #[derive(Clone, Debug)]
 struct AdminState {
     registry: Arc<AdminRegistry>,
+    /// Dashboard widget catalog — registered at plugin-build time.
+    widget_catalog: Arc<Vec<Widget>>,
 }
 
 impl AdminState {
@@ -159,8 +195,14 @@ impl Plugin for AdminPlugin {
     }
 
     fn routes(&self) -> Router {
+        // Seed the catalog with the two built-in widgets, then append
+        // developer-registered ones.
+        let mut catalog = vec![builtin_total_models_widget(), builtin_recent_users_widget()];
+        catalog.extend(self.widget_catalog.iter().cloned());
+
         let state = AdminState {
             registry: Arc::new(self.registry.clone()),
+            widget_catalog: Arc::new(catalog),
         };
         Router::new()
             // Login / logout (no auth required)
@@ -229,7 +271,56 @@ impl Plugin for AdminPlugin {
                 "/admin/{table}/{id}/cell/{field}",
                 axum::routing::post(cell_edit_post),
             )
+            // Phase 4: user prefs
+            .route(
+                "/admin/api/prefs",
+                axum::routing::get(get_prefs_handler).put(put_prefs_handler),
+            )
+            // Phase 4: audit history
+            .route(
+                "/admin/{table}/{id}/history",
+                axum::routing::get(history_handler),
+            )
+            // Phase 4: dashboard
+            .route(
+                "/admin/api/dashboard/catalog",
+                axum::routing::get(dashboard_catalog),
+            )
+            .route(
+                "/admin/api/dashboard/layout",
+                axum::routing::get(dashboard_layout_get).put(dashboard_layout_put),
+            )
+            .route(
+                "/admin/api/dashboard/widgets/{key}/data",
+                axum::routing::get(dashboard_widget_data),
+            )
+            // Phase 4: command palette fragment
+            .route("/admin/api/palette", axum::routing::get(palette_fragment))
             .with_state(state)
+    }
+
+    fn on_ready(&self, ctx: &umbra::plugin::AppContext) -> Result<(), umbra::plugin::PluginError> {
+        // Ensure admin tables exist on first boot. We block on the async
+        // call using the pool from the AppContext.
+        let pool = ctx.pool.clone();
+        let rt = tokio::runtime::Handle::try_current();
+        match rt {
+            Ok(handle) => {
+                handle.spawn(async move {
+                    if let Err(e) = crate::models::ensure_tables(&pool).await {
+                        tracing::error!(error = %e, "admin: failed to create admin tables on boot");
+                    }
+                });
+            }
+            Err(_) => {
+                // No async runtime available at call time; skip table creation.
+                // Tables will be created on the first DB access instead.
+                tracing::warn!(
+                    "admin: on_ready called without tokio runtime; admin tables not created"
+                );
+            }
+        }
+        Ok(())
     }
 }
 
@@ -313,6 +404,85 @@ fn engine() -> &'static Environment<'static> {
             include_str!("../templates/_macros/confirm_dialog.html"),
         )
         .expect("admin/_macros/confirm_dialog.html parses");
+
+        // Phase 4 templates
+        env.add_template(
+            "admin/_macros/audit_timeline.html",
+            include_str!("../templates/_macros/audit_timeline.html"),
+        )
+        .expect("admin/_macros/audit_timeline.html parses");
+        env.add_template(
+            "admin/history.html",
+            include_str!("../templates/history.html"),
+        )
+        .expect("admin/history.html parses");
+        env.add_template(
+            "admin/dashboard.html",
+            include_str!("../templates/dashboard.html"),
+        )
+        .expect("admin/dashboard.html parses");
+        env.add_template(
+            "admin/widget_data.html",
+            include_str!("../templates/widget_data.html"),
+        )
+        .expect("admin/widget_data.html parses");
+        env.add_template(
+            "admin/palette.html",
+            include_str!("../templates/palette.html"),
+        )
+        .expect("admin/palette.html parses");
+        // Widget macros
+        env.add_template(
+            "admin/_macros/widgets/kpi.html",
+            include_str!("../templates/_macros/widgets/kpi.html"),
+        )
+        .expect("admin/_macros/widgets/kpi.html parses");
+        env.add_template(
+            "admin/_macros/widgets/bar.html",
+            include_str!("../templates/_macros/widgets/bar.html"),
+        )
+        .expect("admin/_macros/widgets/bar.html parses");
+        env.add_template(
+            "admin/_macros/widgets/line.html",
+            include_str!("../templates/_macros/widgets/line.html"),
+        )
+        .expect("admin/_macros/widgets/line.html parses");
+        env.add_template(
+            "admin/_macros/widgets/feed.html",
+            include_str!("../templates/_macros/widgets/feed.html"),
+        )
+        .expect("admin/_macros/widgets/feed.html parses");
+        env.add_template(
+            "admin/_macros/widgets/table.html",
+            include_str!("../templates/_macros/widgets/table.html"),
+        )
+        .expect("admin/_macros/widgets/table.html parses");
+        // Preview macros
+        env.add_template(
+            "admin/_macros/previews/image.html",
+            include_str!("../templates/_macros/previews/image.html"),
+        )
+        .expect("admin/_macros/previews/image.html parses");
+        env.add_template(
+            "admin/_macros/previews/pdf.html",
+            include_str!("../templates/_macros/previews/pdf.html"),
+        )
+        .expect("admin/_macros/previews/pdf.html parses");
+        env.add_template(
+            "admin/_macros/previews/video_audio.html",
+            include_str!("../templates/_macros/previews/video_audio.html"),
+        )
+        .expect("admin/_macros/previews/video_audio.html parses");
+        env.add_template(
+            "admin/_macros/previews/code_text.html",
+            include_str!("../templates/_macros/previews/code_text.html"),
+        )
+        .expect("admin/_macros/previews/code_text.html parses");
+        env.add_template(
+            "admin/_macros/previews/download.html",
+            include_str!("../templates/_macros/previews/download.html"),
+        )
+        .expect("admin/_macros/previews/download.html parses");
 
         // Expose the runtime environment ("dev" / "test" / "prod") as a
         // template global. wrapper.html gates the Tailwind CDN script
@@ -744,6 +914,7 @@ impl IntoResponse for AdminError {
 // =========================================================================
 
 #[derive(Debug, Clone, Serialize)]
+#[allow(dead_code)]
 struct ModelEntry {
     plugin: String,
     name: String,
@@ -779,20 +950,31 @@ async fn index(State(state): State<AdminState>, headers: HeaderMap) -> Response 
         Ok(u) => u,
         Err(r) => return r,
     };
-    let entries: Vec<ModelEntry> = discover_models()
-        .into_iter()
-        .map(|(plugin, m)| ModelEntry {
-            plugin,
-            name: m.name,
-            table: m.table,
+    let apps = sidebar_apps(&state, &user);
+
+    // Build the widget list for the dashboard from the user's layout
+    // (or default = all widgets in catalog order).
+    let catalog = state.widget_catalog.as_ref();
+    let widgets: Vec<serde_json::Value> = catalog
+        .iter()
+        .map(|w| {
+            serde_json::json!({
+                "key":  w.key,
+                "title": w.title,
+                "kind": w.kind.as_str(),
+                "span": {
+                    "cols": w.default_span.cols,
+                    "rows": w.default_span.rows,
+                },
+            })
         })
         .collect();
-    let apps = sidebar_apps(&state, &user);
+
     match render(
-        "admin/index.html",
+        "admin/dashboard.html",
         context!(
             user         => user.username.clone(),
-            models       => entries,
+            widgets      => widgets,
             apps         => apps,
             active_table => "",
             breadcrumbs  => Vec::<serde_json::Value>::new(),
@@ -1721,7 +1903,19 @@ async fn create(
     let cfg = state.config_for(&table);
     let pool = umbra::db::pool();
     match insert_row(&pool, &model, &form, cfg).await {
-        Ok(_) => Redirect::to(&format!("/admin/{}/", model.table)).into_response(),
+        Ok(_) => {
+            // Audit log
+            crate::models::log_audit(
+                &pool,
+                user.id,
+                "create",
+                &table,
+                None,
+                &format!("created {} (via form)", model.name),
+            )
+            .await;
+            Redirect::to(&format!("/admin/{}/", model.table)).into_response()
+        }
         Err(e) => {
             let fields = form_fields_for(&model, Some(&form), cfg);
             let apps = sidebar_apps(&state, &user);
@@ -1841,7 +2035,55 @@ async fn update(
     let pool = umbra::db::pool();
     let cfg = state.config_for(&table);
     match update_row(&pool, &model, pk, &id, &form, cfg).await {
-        Ok(_) => Redirect::to(&format!("/admin/{}/{}", model.table, id)).into_response(),
+        Ok(_) => {
+            // Audit log
+            let object_id = id.parse::<i64>().ok();
+            crate::models::log_audit(
+                &pool,
+                user.id,
+                "update",
+                &table,
+                object_id,
+                &format!("updated {} #{}", model.name, id),
+            )
+            .await;
+
+            // HTMX from the Sheet form. Two cases:
+            //   1. `_save_continue` is set: re-render the edit-sheet
+            //      fragment so the sheet stays open with the saved
+            //      values + a "Saved" flash banner. The user can keep
+            //      editing.
+            //   2. Plain Save: emit an HX-Trigger that closes the sheet
+            //      and refreshes the table body, all without a full
+            //      page nav.
+            if is_htmx(&headers) {
+                if form.contains_key("_save_continue") {
+                    // Re-fetch + render the edit sheet inline.
+                    return edit_sheet_handler(
+                        State(state),
+                        headers,
+                        Path((table, id)),
+                    )
+                    .await;
+                }
+                // Default Save: tell the page to close the sheet + refresh rows.
+                let mut resp = axum::response::Response::builder()
+                    .status(StatusCode::OK)
+                    .header(
+                        "HX-Trigger",
+                        r#"{"closeSheet": {}, "refreshTable": {}}"#,
+                    )
+                    .body(axum::body::Body::empty())
+                    .unwrap();
+                resp.headers_mut().insert(
+                    "Content-Type",
+                    "text/html; charset=utf-8".parse().unwrap(),
+                );
+                return resp;
+            }
+
+            Redirect::to(&format!("/admin/{}/{}", model.table, id)).into_response()
+        }
         Err(e) => {
             let fields = form_fields_for(&model, Some(&form), cfg);
             let apps = sidebar_apps(&state, &user);
@@ -1877,9 +2119,10 @@ async fn delete(
     Path((table, id)): Path<(String, String)>,
 ) -> Response {
     let path = format!("/admin/{table}/{id}/delete");
-    if let Err(r) = require_staff(&headers, &path).await {
-        return r;
-    }
+    let who = match require_staff(&headers, &path).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
     let Some((_, model)) = find_model(&table) else {
         return AdminError::NotFound(format!("no model with table `{table}`")).into_response();
     };
@@ -1893,7 +2136,19 @@ async fn delete(
         q(&pk.name)
     );
     match sqlx::query(&sql).bind(&id).execute(&pool).await {
-        Ok(_) => Redirect::to(&format!("/admin/{}/", model.table)).into_response(),
+        Ok(_) => {
+            let object_id = id.parse::<i64>().ok();
+            crate::models::log_audit(
+                &pool,
+                who.id,
+                "delete",
+                &table,
+                object_id,
+                &format!("deleted {} #{}", model.name, id),
+            )
+            .await;
+            Redirect::to(&format!("/admin/{}/", model.table)).into_response()
+        }
         Err(e) => AdminError::Sqlx(e).into_response(),
     }
 }
@@ -2170,6 +2425,20 @@ async fn rows_fragment(
     let path = format!("/admin/{table}/rows");
     if let Err(r) = require_staff(&headers, &path).await {
         return r;
+    }
+    // Direct browser navigation to /rows would render the naked tbody
+    // fragment without any chrome (no <head>, no fonts, no Tailwind,
+    // default browser checkbox styling). Redirect to the changelist
+    // page with the same query string preserved; the page itself will
+    // HTMX-load the rows.
+    if !is_htmx(&headers) {
+        let qs = serde_urlencoded::to_string(&params).unwrap_or_default();
+        let target = if qs.is_empty() {
+            format!("/admin/{table}/")
+        } else {
+            format!("/admin/{table}/?{qs}")
+        };
+        return Redirect::to(&target).into_response();
     }
     let Some((_, model)) = find_model(&table) else {
         return AdminError::NotFound(format!("no model with table `{table}`")).into_response();
@@ -2459,7 +2728,7 @@ async fn sheet_create(
     body: String,
 ) -> Response {
     let path = format!("/admin/{table}/create");
-    let _user = match require_staff(&headers, &path).await {
+    let who = match require_staff(&headers, &path).await {
         Ok(u) => u,
         Err(r) => return r,
     };
@@ -2474,6 +2743,16 @@ async fn sheet_create(
     let pool = umbra::db::pool();
     match insert_row(&pool, &model, &form, cfg).await {
         Ok(_) => {
+            // Audit log
+            crate::models::log_audit(
+                &pool,
+                who.id,
+                "create",
+                &table,
+                None,
+                &format!("created {} (via sheet)", model.name),
+            )
+            .await;
             // Return HX-Redirect so HTMX refreshes the full changelist.
             if is_htmx(&headers) {
                 axum::response::Response::builder()
@@ -2513,9 +2792,10 @@ async fn htmx_delete(
     Path((table, id)): Path<(String, String)>,
 ) -> Response {
     let path = format!("/admin/{table}/{id}");
-    if let Err(r) = require_staff(&headers, &path).await {
-        return r;
-    }
+    let who = match require_staff(&headers, &path).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
     let Some((_, model)) = find_model(&table) else {
         return AdminError::NotFound(format!("no model with table `{table}`")).into_response();
     };
@@ -2529,11 +2809,25 @@ async fn htmx_delete(
         q(&pk.name)
     );
     match sqlx::query(&sql).bind(&id).execute(&pool).await {
-        Ok(_) => axum::response::Response::builder()
-            .status(StatusCode::OK)
-            .header("HX-Redirect", format!("/admin/{}/", model.table))
-            .body(axum::body::Body::empty())
-            .unwrap_or_else(|_| Redirect::to(&format!("/admin/{}/", model.table)).into_response()),
+        Ok(_) => {
+            let object_id = id.parse::<i64>().ok();
+            crate::models::log_audit(
+                &pool,
+                who.id,
+                "delete",
+                &table,
+                object_id,
+                &format!("deleted {} #{}", model.name, id),
+            )
+            .await;
+            axum::response::Response::builder()
+                .status(StatusCode::OK)
+                .header("HX-Redirect", format!("/admin/{}/", model.table))
+                .body(axum::body::Body::empty())
+                .unwrap_or_else(|_| {
+                    Redirect::to(&format!("/admin/{}/", model.table)).into_response()
+                })
+        }
         Err(e) => AdminError::Sqlx(e).into_response(),
     }
 }
@@ -3091,6 +3385,424 @@ fn model_for_template_cols(model: &ModelMeta, display_cols: &[String]) -> ModelV
 #[allow(dead_code)]
 fn _unused_json_marker() -> Option<Json<()>> {
     None
+}
+
+// =========================================================================
+// Phase 4: built-in dashboard widget definitions.
+// =========================================================================
+
+fn builtin_total_models_widget() -> Widget {
+    Widget {
+        key: "umbra_total_models",
+        title: "Total Models".to_string(),
+        kind: WidgetKind::Kpi,
+        default_span: Span { cols: 3, rows: 1 },
+        permission: None,
+        data: WidgetDataFn::new(|_user| async move {
+            let count = discover_models().len();
+            WidgetPayload::Kpi(KpiPayload {
+                value: count.to_string(),
+                unit: Some("models".to_string()),
+                delta: None,
+                sparkline: None,
+            })
+        }),
+    }
+}
+
+fn builtin_recent_users_widget() -> Widget {
+    Widget {
+        key: "umbra_recent_users",
+        title: "Recent Signups".to_string(),
+        kind: WidgetKind::Feed,
+        default_span: Span { cols: 4, rows: 2 },
+        permission: None,
+        data: WidgetDataFn::new(|_user| async move {
+            // Attempt to read from auth_user table; gracefully degrade if absent.
+            let pool = umbra::db::pool();
+            let rows_result = sqlx::query(
+                "SELECT username, created_at FROM auth_user ORDER BY created_at DESC LIMIT 5",
+            )
+            .fetch_all(&pool)
+            .await;
+            let items = match rows_result {
+                Ok(rows) => rows
+                    .into_iter()
+                    .map(|r| {
+                        use sqlx::Row;
+                        let actor: String = r.try_get("username").unwrap_or_default();
+                        let at: String = r.try_get("created_at").unwrap_or_default();
+                        crate::widgets::FeedItem {
+                            actor,
+                            verb: "signed up".to_string(),
+                            object: "account".to_string(),
+                            object_link: None,
+                            at,
+                        }
+                    })
+                    .collect(),
+                Err(_) => vec![],
+            };
+            WidgetPayload::Feed(FeedPayload { items })
+        }),
+    }
+}
+
+// =========================================================================
+// Phase 4: user preferences handlers.
+// =========================================================================
+
+/// `GET /admin/api/prefs` — return the current user's prefs row, creating
+/// defaults on first access.
+async fn get_prefs_handler(headers: HeaderMap) -> Response {
+    let user = match require_staff(&headers, "/admin/api/prefs").await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let pool = umbra::db::pool();
+    match crate::models::get_prefs(&pool, user.id).await {
+        Ok(prefs) => Json(serde_json::json!({
+            "theme": prefs.theme,
+            "density": prefs.density,
+            "sidebar_collapsed": prefs.sidebar_collapsed,
+            "dashboard_layout": prefs.dashboard_layout,
+            "updated_at": prefs.updated_at,
+        }))
+        .into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "admin: get_prefs failed");
+            (StatusCode::INTERNAL_SERVER_ERROR, "prefs error").into_response()
+        }
+    }
+}
+
+/// `PUT /admin/api/prefs` — update the current user's prefs.
+///
+/// Body: `application/json` with `{theme?, density?, sidebar_collapsed?}`.
+async fn put_prefs_handler(headers: HeaderMap, body: String) -> Response {
+    let user = match require_staff(&headers, "/admin/api/prefs").await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let pool = umbra::db::pool();
+
+    // Fetch existing (or default) prefs, then overlay the submitted fields.
+    let mut prefs = match crate::models::get_prefs(&pool, user.id).await {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!(error = %e, "admin: put_prefs fetch failed");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "prefs error").into_response();
+        }
+    };
+
+    if let Ok(patch) = serde_json::from_str::<serde_json::Value>(&body) {
+        if let Some(t) = patch.get("theme").and_then(|v| v.as_str()) {
+            if matches!(t, "light" | "dark" | "system") {
+                prefs.theme = t.to_string();
+            }
+        }
+        if let Some(d) = patch.get("density").and_then(|v| v.as_str()) {
+            if matches!(d, "comfortable" | "compact") {
+                prefs.density = d.to_string();
+            }
+        }
+        if let Some(sc) = patch.get("sidebar_collapsed").and_then(|v| v.as_bool()) {
+            prefs.sidebar_collapsed = sc;
+        }
+        if let Some(layout) = patch.get("dashboard_layout").and_then(|v| v.as_str()) {
+            prefs.dashboard_layout = layout.to_string();
+        }
+    }
+
+    match crate::models::upsert_prefs(&pool, &prefs).await {
+        Ok(_) => Json(serde_json::json!({ "ok": true })).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "admin: put_prefs upsert failed");
+            (StatusCode::INTERNAL_SERVER_ERROR, "prefs save error").into_response()
+        }
+    }
+}
+
+// =========================================================================
+// Phase 4: audit history handler.
+// =========================================================================
+
+/// `GET /admin/{table}/{id}/history` — audit timeline for one object.
+async fn history_handler(
+    State(state): State<AdminState>,
+    headers: HeaderMap,
+    Path((table, id)): Path<(String, String)>,
+) -> Response {
+    let path = format!("/admin/{table}/{id}/history");
+    let user = match require_staff(&headers, &path).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let _ = &user; // actor known but not needed here
+    let Some((_, model)) = find_model(&table) else {
+        return AdminError::NotFound(format!("no model `{table}`")).into_response();
+    };
+    let object_id: i64 = match id.parse() {
+        Ok(v) => v,
+        Err(_) => return AdminError::BadInput(format!("invalid id: {id}")).into_response(),
+    };
+    let pool = umbra::db::pool();
+    let entries = match crate::models::audit_for_object(&pool, &table, object_id, 50).await {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::error!(error = %e, "admin: audit_for_object failed");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "audit error").into_response();
+        }
+    };
+
+    let apps = sidebar_apps(&state, &user);
+    match render(
+        "admin/history.html",
+        context!(
+            model_name => model.name.clone(),
+            object_id  => object_id,
+            entries    => entries,
+            apps       => apps,
+            active_table => table,
+            breadcrumbs  => Vec::<serde_json::Value>::new(),
+        ),
+    ) {
+        Ok(html) => html.into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+// =========================================================================
+// Phase 4: dashboard API handlers.
+// =========================================================================
+
+/// `GET /admin/api/dashboard/catalog` — list widgets the user may add.
+async fn dashboard_catalog(State(state): State<AdminState>, headers: HeaderMap) -> Response {
+    if let Err(r) = require_staff(&headers, "/admin/api/dashboard/catalog").await {
+        return r;
+    }
+    let entries: Vec<CatalogEntry> = state
+        .widget_catalog
+        .iter()
+        .map(|w| CatalogEntry {
+            key: w.key,
+            title: w.title.clone(),
+            kind: w.kind.as_str().to_string(),
+            default_span: w.default_span.clone(),
+        })
+        .collect();
+    Json(entries).into_response()
+}
+
+/// `GET /admin/api/dashboard/layout` — user's saved layout or default.
+async fn dashboard_layout_get(headers: HeaderMap) -> Response {
+    let user = match require_staff(&headers, "/admin/api/dashboard/layout").await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let pool = umbra::db::pool();
+    let prefs = match crate::models::get_prefs(&pool, user.id).await {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!(error = %e, "admin: dashboard_layout_get failed");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "layout error").into_response();
+        }
+    };
+    // Return as raw JSON string (the layout is stored serialized).
+    axum::response::Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "application/json")
+        .body(axum::body::Body::from(prefs.dashboard_layout))
+        .unwrap_or_else(|_| (StatusCode::OK, "[]").into_response())
+}
+
+/// `PUT /admin/api/dashboard/layout` — save user's layout.
+async fn dashboard_layout_put(headers: HeaderMap, body: String) -> Response {
+    let user = match require_staff(&headers, "/admin/api/dashboard/layout").await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    // Validate that the body is valid JSON (an array of widget instances).
+    if serde_json::from_str::<serde_json::Value>(&body).is_err() {
+        return (StatusCode::BAD_REQUEST, "invalid JSON layout").into_response();
+    }
+    let pool = umbra::db::pool();
+    let mut prefs = match crate::models::get_prefs(&pool, user.id).await {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!(error = %e, "admin: dashboard_layout_put fetch failed");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "layout error").into_response();
+        }
+    };
+    prefs.dashboard_layout = body;
+    match crate::models::upsert_prefs(&pool, &prefs).await {
+        Ok(_) => Json(serde_json::json!({ "ok": true })).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "admin: dashboard_layout_put save failed");
+            (StatusCode::INTERNAL_SERVER_ERROR, "layout save error").into_response()
+        }
+    }
+}
+
+/// `GET /admin/api/dashboard/widgets/{key}/data` — compute + return one widget's payload.
+///
+/// Returns either JSON (API consumers) or an HTML fragment (HTMX swap).
+async fn dashboard_widget_data(
+    State(state): State<AdminState>,
+    headers: HeaderMap,
+    Path(key): Path<String>,
+) -> Response {
+    let user = match require_staff(&headers, "/admin/api/dashboard/widgets/.../data").await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let widget = state.widget_catalog.iter().find(|w| w.key == key.as_str());
+    let Some(widget) = widget else {
+        return AdminError::NotFound(format!("no widget `{key}`")).into_response();
+    };
+
+    let data_fn = widget.data.0.clone();
+    let payload = data_fn(user).await;
+
+    // For HTMX requests render the HTML fragment; otherwise return JSON.
+    if is_htmx(&headers) {
+        let kind = widget.kind.as_str().to_string();
+        let title = widget.title.clone();
+        let payload_json = serde_json::to_value(&payload).unwrap_or(serde_json::Value::Null);
+        match render(
+            "admin/widget_data.html",
+            context!(
+                kind    => kind,
+                title   => title,
+                payload => payload_json,
+            ),
+        ) {
+            Ok(html) => html.into_response(),
+            Err(e) => e.into_response(),
+        }
+    } else {
+        Json(serde_json::json!({
+            "key": key,
+            "kind": widget.kind.as_str(),
+            "title": widget.title,
+            "payload": serde_json::to_value(&payload).unwrap_or(serde_json::Value::Null),
+        }))
+        .into_response()
+    }
+}
+
+// =========================================================================
+// Phase 4: command palette fragment.
+// =========================================================================
+
+/// `GET /admin/api/palette` — returns the command palette HTML fragment.
+///
+/// Jump targets = registered models from the sidebar. Fixed commands = toggle
+/// theme + logout.
+async fn palette_fragment(State(state): State<AdminState>, headers: HeaderMap) -> Response {
+    let user = match require_staff(&headers, "/admin/api/palette").await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let sidebar = sidebar_apps(&state, &user);
+
+    // Flatten all model entries into a simple list for jump targets.
+    let models: Vec<serde_json::Value> = sidebar
+        .into_iter()
+        .flat_map(|app| app.models)
+        .map(|r| {
+            serde_json::json!({
+                "table": r.table,
+                "label": r.label,
+                "icon": r.icon,
+            })
+        })
+        .collect();
+
+    let commands = vec![
+        serde_json::json!({ "key": "toggle_theme", "label": "Toggle theme", "icon": "sun-moon" }),
+        serde_json::json!({ "key": "logout",       "label": "Logout",       "icon": "log-out" }),
+    ];
+
+    match render(
+        "admin/palette.html",
+        context!(
+            models   => models,
+            commands => commands,
+        ),
+    ) {
+        Ok(html) => html.into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+// =========================================================================
+// Phase 4: file descriptor helpers.
+//
+// NOTE: A proper File/Image ORM field type is deferred to a future ORM phase.
+// This infrastructure ships the descriptor format and MIME resolution. Store
+// file paths in Text columns for now; supply a preview override per-model.
+// =========================================================================
+
+/// Resolve the `preview_kind` from a MIME type and file extension.
+///
+/// Returns a `&'static str` matching one of: image, pdf, video, audio,
+/// text, code, download.
+pub fn resolve_preview_kind(mime: &str, filename: &str) -> &'static str {
+    let ext = filename.rsplit('.').next().unwrap_or("").to_lowercase();
+    // Check extension-based code/text first so that e.g. "text/plain; charset=utf-8"
+    // on a .py file resolves to "code" rather than "text".
+    match ext.as_str() {
+        "rs" | "py" | "js" | "ts" | "jsx" | "tsx" | "json" | "toml" | "yaml" | "yml" | "html"
+        | "css" | "sql" | "sh" | "bash" | "zsh" | "fish" | "md" | "mdx" => return "code",
+        "txt" | "log" => return "text",
+        _ => {}
+    }
+    // Then MIME-based rules.
+    if mime.starts_with("image/") {
+        return "image";
+    }
+    if mime == "application/pdf" {
+        return "pdf";
+    }
+    if mime.starts_with("video/") {
+        return "video";
+    }
+    if mime.starts_with("audio/") {
+        return "audio";
+    }
+    if mime.starts_with("text/plain") {
+        return "text";
+    }
+    "download"
+}
+
+/// Build a file descriptor JSON value.
+///
+/// `url` is the pre-signed/auth-checked URL; `thumbnail_url` is optional
+/// (only set for `image` kind where a thumbnail has been generated).
+pub fn file_descriptor(
+    filename: &str,
+    size: u64,
+    mime: &str,
+    url: &str,
+    thumbnail_url: Option<&str>,
+) -> serde_json::Value {
+    let preview_kind = resolve_preview_kind(mime, filename);
+    let language: Option<&str> = if preview_kind == "code" {
+        Some(filename.rsplit('.').next().unwrap_or("text"))
+    } else {
+        None
+    };
+    serde_json::json!({
+        "filename":      filename,
+        "size":          size,
+        "mime":          mime,
+        "preview_kind":  preview_kind,
+        "url":           url,
+        "thumbnail_url": thumbnail_url,
+        "language":      language,
+    })
 }
 
 // =========================================================================
