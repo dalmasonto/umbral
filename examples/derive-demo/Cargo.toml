@@ -12,6 +12,13 @@ umbra = { path = "../../crates/umbra" }
 # serializer code.
 umbra-rest = { path = "../../plugins/umbra-rest" }
 umbra-openapi = { path = "../../plugins/umbra-openapi" }
+umbra-admin = {path = "../../plugins/umbra-admin"}
+umbra-auth = {path = "../../plugins/umbra-auth"}
+# umbra-cli's library surface exposes the `dispatch(app)` entry point
+# that routes argv to plugin-contributed subcommands (createsuperuser
+# from umbra-auth, etc.) or falls through to the built-in `serve` /
+# `migrate` / `makemigrations` set.
+umbra-cli = { path = "../../crates/umbra-cli" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }

@@ -31,6 +31,7 @@ use umbra::migrate::MigrateError;
 use umbra::prelude::*;
 use umbra::templates::context;
 use umbra::web::{Html, StatusCode};
+use umbra_auth::AuthUser;
 
 /// A small article model.
 ///
@@ -98,9 +99,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // so the surface stays in lockstep with the schema for free.
         .plugin(umbra_rest::RestPlugin::default())
         .plugin(umbra_openapi::OpenApiPlugin::new())
+        .plugin(umbra_auth::AuthPlugin::<AuthUser>::default())
+        .plugin(umbra_admin::AdminPlugin::default())
         .router(
             Router::new()
                 .route("/", get(home))
+                .route("/500", get(test_500_html))
                 .route("/articles", get(list_articles_html))
                 .route("/articles/{id}", get(article_detail))
                 // Backwards-compat alias from the pre-RestPlugin era.
@@ -118,8 +122,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     auto_migrate().await?;
     seed_article_rows().await?;
 
-    app.serve("127.0.0.1:3001".parse::<std::net::SocketAddr>()?)
-        .await?;
+    // Hand argv to the CLI dispatcher. With no subcommand it serves on
+    // `settings.bind_addr`; with a subcommand like `createsuperuser`
+    // (contributed by umbra-auth via Plugin::commands()), `migrate`,
+    // `makemigrations`, etc., it routes to the matching handler.
+    // Calling `app.serve(...)` directly would bypass the dispatcher
+    // and ignore argv entirely.
+    umbra_cli::dispatch(app).await?;
     Ok(())
 }
 
@@ -143,6 +152,12 @@ async fn list_articles_html() -> Result<Html<String>, (StatusCode, String)> {
     let body = umbra::templates::render("articles_list.html", &context!(articles))
         .map_err(internal_error)?;
     Ok(Html(body))
+}
+
+async fn test_500_html() -> Result<Html<String>, (StatusCode, String)> {
+    // let body = umbra::templates::render("test-500.html", &context!()).map_err(internal_error)?;
+    panic!("Something went south");
+    // Ok(Html(body))
 }
 
 /// HTML detail view. The path param is the article id; a row that

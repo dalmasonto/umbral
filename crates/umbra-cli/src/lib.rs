@@ -143,7 +143,45 @@ enum Command {
 /// them register plugins / models / databases freely before
 /// dispatching.
 pub async fn dispatch(app: App) -> Result<(), Box<dyn std::error::Error>> {
-    let cli = Cli::parse();
+    let argv: Vec<std::ffi::OsString> = std::env::args_os().collect();
+
+    // Step 1: try plugin-contributed subcommands first. Each registered
+    // plugin's `commands()` is queried; if argv matches one of them
+    // (e.g. `createsuperuser` from `umbra-auth`, `worker` from
+    // `umbra-tasks`), that command's `run` fires and we return. If no
+    // plugin command matches argv, fall through to the built-in
+    // subcommand set below.
+    if !app.plugins().is_empty() {
+        match umbra_core::cli::dispatch(app.plugins(), argv.clone()).await {
+            Ok(umbra_core::cli::DispatchOutcome::Matched(_)) => return Ok(()),
+            Ok(umbra_core::cli::DispatchOutcome::Help(msg)) => {
+                // A plugin command's --help was requested. Print and exit clean.
+                print!("{msg}");
+                return Ok(());
+            }
+            Ok(umbra_core::cli::DispatchOutcome::Unmatched) => {
+                // Fall through to the built-in subcommands.
+            }
+            // CliError is `Box<dyn Error + Send + Sync>`; our return is
+            // `Box<dyn Error>`. Stringify to bridge — the Send + Sync
+            // bound isn't otherwise observable on the error path.
+            Err(e) => return Err(e.to_string().into()),
+        }
+    }
+
+    // Step 2: built-in subcommands. clap parses argv against the fixed
+    // `Command` enum. If argv has a token that's neither a built-in
+    // subcommand nor a plugin command, clap surfaces a usage error here.
+    let cli = match Cli::try_parse_from(&argv) {
+        Ok(c) => c,
+        Err(e) => {
+            // clap formats the error (usage / suggestion / --help body)
+            // and returns it as the error message.
+            e.print()?;
+            // Exit 0 for --help/--version; otherwise exit 2 for usage.
+            std::process::exit(if e.use_stderr() { 2 } else { 0 });
+        }
+    };
     match cli.command.unwrap_or(Command::Serve { addr: None }) {
         Command::Serve { addr } => serve(app, addr).await,
         Command::Makemigrations => makemigrations().await,
