@@ -173,11 +173,33 @@ impl Plugin for AdminPlugin {
                 axum::routing::get(new_form).post(create),
             )
             .route("/admin/{table}/action", post(run_action))
+            // Phase 2: fragment-only rows endpoint (search/sort/filter/paginate)
+            .route("/admin/{table}/rows", axum::routing::get(rows_fragment))
+            // Phase 2: new-record sheet (create mode)
+            .route("/admin/{table}/new-sheet", axum::routing::get(new_sheet))
+            // Phase 2: delete confirm dialog fragment
+            .route(
+                "/admin/{table}/{id}/_confirm-delete",
+                axum::routing::get(confirm_delete_dialog),
+            )
+            // Phase 2: sheet fragments (preview + edit)
+            .route(
+                "/admin/{table}/{id}/sheet",
+                axum::routing::get(preview_sheet),
+            )
+            .route(
+                "/admin/{table}/{id}/edit-sheet",
+                axum::routing::get(edit_sheet_handler),
+            )
             .route("/admin/{table}/{id}", axum::routing::get(detail))
             .route(
                 "/admin/{table}/{id}/edit",
                 axum::routing::get(edit_form).post(update),
             )
+            // Phase 2: create via sheet (POST)
+            .route("/admin/{table}/create", axum::routing::post(sheet_create))
+            // Phase 2: DELETE method for HTMX delete button
+            .route("/admin/{table}/{id}", axum::routing::delete(htmx_delete))
             .route("/admin/{table}/{id}/delete", post(delete))
             .with_state(state)
     }
@@ -213,6 +235,56 @@ fn engine() -> &'static Environment<'static> {
         .expect("admin/detail.html parses");
         env.add_template("admin/form.html", include_str!("../templates/form.html"))
             .expect("admin/form.html parses");
+        env.add_template(
+            "admin/changelist.html",
+            include_str!("../templates/changelist.html"),
+        )
+        .expect("admin/changelist.html parses");
+        env.add_template(
+            "admin/sheet_preview.html",
+            include_str!("../templates/sheet_preview.html"),
+        )
+        .expect("admin/sheet_preview.html parses");
+        env.add_template(
+            "admin/sheet_edit.html",
+            include_str!("../templates/sheet_edit.html"),
+        )
+        .expect("admin/sheet_edit.html parses");
+        env.add_template(
+            "admin/sheet_create.html",
+            include_str!("../templates/sheet_create.html"),
+        )
+        .expect("admin/sheet_create.html parses");
+        env.add_template(
+            "admin/confirm_delete.html",
+            include_str!("../templates/confirm_delete.html"),
+        )
+        .expect("admin/confirm_delete.html parses");
+        env.add_template(
+            "admin/rows_fragment.html",
+            include_str!("../templates/rows_fragment.html"),
+        )
+        .expect("admin/rows_fragment.html parses");
+        env.add_template(
+            "admin/_macros/data_table.html",
+            include_str!("../templates/_macros/data_table.html"),
+        )
+        .expect("admin/_macros/data_table.html parses");
+        env.add_template(
+            "admin/_macros/sheet.html",
+            include_str!("../templates/_macros/sheet.html"),
+        )
+        .expect("admin/_macros/sheet.html parses");
+        env.add_template(
+            "admin/_macros/field_editor.html",
+            include_str!("../templates/_macros/field_editor.html"),
+        )
+        .expect("admin/_macros/field_editor.html parses");
+        env.add_template(
+            "admin/_macros/confirm_dialog.html",
+            include_str!("../templates/_macros/confirm_dialog.html"),
+        )
+        .expect("admin/_macros/confirm_dialog.html parses");
 
         // Expose the runtime environment ("dev" / "test" / "prod") as a
         // template global. wrapper.html gates the Tailwind CDN script
@@ -739,25 +811,49 @@ async fn list(
         model.fields.iter().map(|f| f.name.clone()).collect()
     };
 
-    let order_clause = build_order_clause(cfg, pk);
-    let search_term = params.get("q").filter(|s| !s.is_empty()).cloned();
-    let active_filter: Option<(String, String)> = params.iter().find_map(|(k, v)| {
-        k.strip_prefix("filter_")
-            .map(|field| (field.to_string(), v.clone()))
-    });
+    let (search_term, active_filter, sort_col, sort_order, page, page_size) =
+        parse_list_params(&params, cfg, pk);
 
+    // Always fetch the pk column even if it's not in list_display.
+    let fetch_cols: Vec<String> = {
+        let mut cols = display_cols.clone();
+        if !cols.contains(&pk.name) {
+            cols.push(pk.name.clone());
+        }
+        cols
+    };
+
+    let order_clause = build_order_clause_phase2(cfg, pk, &sort_col, &sort_order);
     let pool = umbra::db::pool();
-    let rows = match fetch_rows_filtered(
+
+    let total = match count_rows_filtered(
         &pool,
         &model,
-        None,
-        &display_cols,
+        search_term.as_deref(),
+        cfg,
+        active_filter
+            .as_ref()
+            .map(|(f, v)| (f.as_str(), v.as_str())),
+    )
+    .await
+    {
+        Ok(t) => t,
+        Err(e) => return e.into_response(),
+    };
+    let pagination = Pagination::new(total, page, page_size);
+
+    let rows = match fetch_rows_paged(
+        &pool,
+        &model,
+        &fetch_cols,
         &order_clause,
         search_term.as_deref(),
         cfg,
         active_filter
             .as_ref()
             .map(|(f, v)| (f.as_str(), v.as_str())),
+        pagination.page_size,
+        pagination.offset(),
     )
     .await
     {
@@ -789,25 +885,41 @@ async fn list(
 
     let has_search = cfg.is_some_and(|c| !c.search_fields.is_empty());
     let search_val = search_term.unwrap_or_default();
+    let active_filter_str = active_filter
+        .as_ref()
+        .map(|(f, v)| format!("{f}={v}"))
+        .unwrap_or_default();
     let apps = sidebar_apps(&state, &user);
     let breadcrumbs =
         vec![serde_json::json!({ "label": model.name.clone(), "url": format!("/admin/{table}/") })];
+    let flash = params.get("flash").cloned().unwrap_or_default();
+
+    // Check if we need to auto-open a sheet (e.g. redirected from preview_sheet)
+    let open_row = params.get("row").cloned().unwrap_or_default();
+
+    let columns = model_for_template_cols(&model, &display_cols).fields;
 
     match render(
-        "admin/list.html",
+        "admin/changelist.html",
         context!(
-            user         => user.username.clone(),
-            model        => model_for_template_cols(&model, &display_cols),
-            rows         => rows,
-            pk           => pk.name.clone(),
-            facets       => facets,
-            actions      => action_names,
-            has_search   => has_search,
-            search_val   => search_val,
-            active_filter => active_filter.map(|(f, v)| format!("{f}={v}")).unwrap_or_default(),
-            apps         => apps,
-            active_table => table,
-            breadcrumbs  => breadcrumbs,
+            user          => user.username.clone(),
+            model         => model_for_template_cols(&model, &display_cols),
+            rows          => rows,
+            columns       => columns,
+            pk            => pk.name.clone(),
+            facets        => facets,
+            actions       => action_names,
+            has_search    => has_search,
+            search_val    => search_val,
+            active_filter => active_filter_str,
+            pagination    => pagination,
+            sort_col      => sort_col,
+            sort_order    => sort_order,
+            flash         => flash,
+            open_row      => open_row,
+            apps          => apps,
+            active_table  => table,
+            breadcrumbs   => breadcrumbs,
         ),
     ) {
         Ok(html) => html.into_response(),
@@ -1222,6 +1334,642 @@ fn q(name: &str) -> String {
     name.replace('"', "\"\"")
 }
 
+// =========================================================================
+// HTMX detection.
+// =========================================================================
+
+fn is_htmx(headers: &HeaderMap) -> bool {
+    headers
+        .get("hx-request")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v == "true")
+        .unwrap_or(false)
+}
+
+// =========================================================================
+// Phase 2 — count helper.
+// =========================================================================
+
+async fn count_rows_filtered(
+    pool: &SqlitePool,
+    model: &ModelMeta,
+    search_term: Option<&str>,
+    cfg: Option<&AdminConfig>,
+    active_filter: Option<(&str, &str)>,
+) -> Result<usize, AdminError> {
+    let valid_names: std::collections::HashSet<&str> =
+        model.fields.iter().map(|c| c.name.as_str()).collect();
+
+    let mut conditions: Vec<String> = Vec::new();
+    let mut bind_strings: Vec<String> = Vec::new();
+
+    if let Some(term) = search_term
+        && let Some(c) = cfg
+        && !c.search_fields.is_empty()
+    {
+        let like_clauses: Vec<String> = c
+            .search_fields
+            .iter()
+            .filter(|f| valid_names.contains(f.as_str()))
+            .map(|f| format!("\"{}\" LIKE ?", q(f)))
+            .collect();
+        if !like_clauses.is_empty() {
+            conditions.push(format!("({})", like_clauses.join(" OR ")));
+            let like_val = format!("%{term}%");
+            for _ in 0..like_clauses.len() {
+                bind_strings.push(like_val.clone());
+            }
+        }
+    }
+
+    if let Some((field, value)) = active_filter {
+        if valid_names.contains(field) {
+            conditions.push(format!("\"{}\" = ?", q(field)));
+            bind_strings.push(value.to_string());
+        }
+    }
+
+    let where_sql = if conditions.is_empty() {
+        String::new()
+    } else {
+        format!(" WHERE {}", conditions.join(" AND "))
+    };
+
+    let sql = format!("SELECT COUNT(*) FROM \"{}\"{where_sql}", q(&model.table));
+    let mut qb = sqlx::query(&sql);
+    for val in &bind_strings {
+        qb = qb.bind(val.clone());
+    }
+    let row = qb.fetch_one(pool).await?;
+    let count: i64 = row.try_get(0)?;
+    Ok(count as usize)
+}
+
+// Fetch rows with explicit LIMIT/OFFSET for pagination.
+#[allow(clippy::too_many_arguments)]
+async fn fetch_rows_paged(
+    pool: &SqlitePool,
+    model: &ModelMeta,
+    display_cols: &[String],
+    order_clause: &str,
+    search_term: Option<&str>,
+    cfg: Option<&AdminConfig>,
+    active_filter: Option<(&str, &str)>,
+    limit: usize,
+    offset: usize,
+) -> Result<Vec<HashMap<String, String>>, AdminError> {
+    let valid_names: std::collections::HashSet<&str> =
+        model.fields.iter().map(|c| c.name.as_str()).collect();
+    let columns = display_cols
+        .iter()
+        .filter(|n| valid_names.contains(n.as_str()))
+        .map(|n| format!("\"{}\"", n))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let columns = if columns.is_empty() {
+        model
+            .fields
+            .iter()
+            .map(|c| format!("\"{}\"", c.name))
+            .collect::<Vec<_>>()
+            .join(", ")
+    } else {
+        columns
+    };
+
+    let mut conditions: Vec<String> = Vec::new();
+    let mut bind_strings: Vec<String> = Vec::new();
+
+    if let Some(term) = search_term
+        && let Some(c) = cfg
+        && !c.search_fields.is_empty()
+    {
+        let like_clauses: Vec<String> = c
+            .search_fields
+            .iter()
+            .filter(|f| valid_names.contains(f.as_str()))
+            .map(|f| format!("\"{}\" LIKE ?", q(f)))
+            .collect();
+        if !like_clauses.is_empty() {
+            conditions.push(format!("({})", like_clauses.join(" OR ")));
+            let like_val = format!("%{term}%");
+            for _ in 0..like_clauses.len() {
+                bind_strings.push(like_val.clone());
+            }
+        }
+    }
+
+    if let Some((field, value)) = active_filter {
+        if valid_names.contains(field) {
+            conditions.push(format!("\"{}\" = ?", q(field)));
+            bind_strings.push(value.to_string());
+        }
+    }
+
+    let where_sql = if conditions.is_empty() {
+        String::new()
+    } else {
+        format!(" WHERE {}", conditions.join(" AND "))
+    };
+    let order_sql = if order_clause.is_empty() {
+        String::new()
+    } else {
+        format!(" ORDER BY {order_clause}")
+    };
+
+    let sql = format!(
+        "SELECT {columns} FROM \"{}\"{where_sql}{order_sql} LIMIT ? OFFSET ?",
+        q(&model.table)
+    );
+
+    let mut qb = sqlx::query(&sql);
+    for val in &bind_strings {
+        qb = qb.bind(val.clone());
+    }
+    qb = qb.bind(limit as i64).bind(offset as i64);
+
+    let rows = qb.fetch_all(pool).await?;
+    let mut out: Vec<HashMap<String, String>> = Vec::with_capacity(rows.len());
+    for row in rows {
+        let mut entry: HashMap<String, String> = HashMap::new();
+        for col_name in display_cols {
+            if let Some(col) = model.fields.iter().find(|c| &c.name == col_name) {
+                entry.insert(col.name.clone(), column_to_string(&row, col)?);
+            }
+        }
+        out.push(entry);
+    }
+    Ok(out)
+}
+
+/// Parsed query parameters for list views.
+/// `(search, active_filter, sort_col, sort_order, page, page_size)`
+type ListParams = (
+    Option<String>,
+    Option<(String, String)>,
+    String,
+    String,
+    usize,
+    usize,
+);
+
+// Parse common query params for list views (search, filter, sort, page, page_size).
+fn parse_list_params(
+    params: &HashMap<String, String>,
+    cfg: Option<&AdminConfig>,
+    pk: &Column,
+) -> ListParams {
+    // Accept both `search=` (phase 2) and `q=` (phase 1 backward compat).
+    let search_term = params
+        .get("search")
+        .filter(|s| !s.is_empty())
+        .or_else(|| params.get("q").filter(|s| !s.is_empty()))
+        .cloned();
+    // Accept both new `filter=field=value` (phase 2) and old `filter_<field>=<value>` (phase 1).
+    let active_filter: Option<(String, String)> = params
+        .get("filter")
+        .filter(|s| !s.is_empty())
+        .and_then(|s| {
+            let mut parts = s.splitn(2, '=');
+            let field = parts.next()?.to_string();
+            let value = parts.next()?.to_string();
+            Some((field, value))
+        })
+        .or_else(|| {
+            // Phase 1 style: filter_<field>=<value>
+            params.iter().find_map(|(k, v)| {
+                k.strip_prefix("filter_")
+                    .map(|field| (field.to_string(), v.clone()))
+            })
+        });
+    let sort_col = params.get("sort").cloned().unwrap_or_default();
+    let sort_order = params
+        .get("order")
+        .map(|o| {
+            if o == "desc" {
+                "desc".to_string()
+            } else {
+                "asc".to_string()
+            }
+        })
+        .unwrap_or_else(|| "asc".to_string());
+    let page = params
+        .get("page")
+        .and_then(|p| p.parse::<usize>().ok())
+        .unwrap_or(1);
+    let default_page_size = cfg.map(|c| c.list_per_page).unwrap_or(25);
+    let page_size = params
+        .get("page_size")
+        .and_then(|p| p.parse::<usize>().ok())
+        .unwrap_or(default_page_size)
+        .clamp(1, 200);
+
+    let _ = pk; // pk used for default ordering at call-site
+    (
+        search_term,
+        active_filter,
+        sort_col,
+        sort_order,
+        page,
+        page_size,
+    )
+}
+
+fn build_order_clause_phase2(
+    cfg: Option<&AdminConfig>,
+    pk: &Column,
+    sort_col: &str,
+    sort_order: &str,
+) -> String {
+    if !sort_col.is_empty() {
+        let dir = if sort_order == "desc" { "DESC" } else { "ASC" };
+        return format!("\"{}\" {}", q(sort_col), dir);
+    }
+    build_order_clause(cfg, pk)
+}
+
+// =========================================================================
+// Phase 2 handlers.
+// =========================================================================
+
+/// `GET /admin/{table}/rows` — HTMX fragment: tbody + pagination footer.
+async fn rows_fragment(
+    State(state): State<AdminState>,
+    headers: HeaderMap,
+    Path(table): Path<String>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Response {
+    let path = format!("/admin/{table}/rows");
+    if let Err(r) = require_staff(&headers, &path).await {
+        return r;
+    }
+    let Some((_, model)) = find_model(&table) else {
+        return AdminError::NotFound(format!("no model with table `{table}`")).into_response();
+    };
+    let Some(pk) = pk_column(&model) else {
+        return AdminError::Render(format!("model `{table}` has no primary key")).into_response();
+    };
+
+    let cfg = state.config_for(&table);
+    let (search_term, active_filter, sort_col, sort_order, page, page_size) =
+        parse_list_params(&params, cfg, pk);
+
+    let display_cols: Vec<String> = if let Some(c) = cfg
+        && !c.list_display.is_empty()
+    {
+        c.list_display.clone()
+    } else {
+        model.fields.iter().map(|f| f.name.clone()).collect()
+    };
+
+    // Always fetch the pk column so row actions have a valid ID.
+    let fetch_cols: Vec<String> = {
+        let mut cols = display_cols.clone();
+        if !cols.contains(&pk.name) {
+            cols.push(pk.name.clone());
+        }
+        cols
+    };
+
+    let order_clause = build_order_clause_phase2(cfg, pk, &sort_col, &sort_order);
+
+    let pool = umbra::db::pool();
+    let total = match count_rows_filtered(
+        &pool,
+        &model,
+        search_term.as_deref(),
+        cfg,
+        active_filter
+            .as_ref()
+            .map(|(f, v)| (f.as_str(), v.as_str())),
+    )
+    .await
+    {
+        Ok(t) => t,
+        Err(e) => return e.into_response(),
+    };
+    let pagination = Pagination::new(total, page, page_size);
+
+    let rows = match fetch_rows_paged(
+        &pool,
+        &model,
+        &fetch_cols,
+        &order_clause,
+        search_term.as_deref(),
+        cfg,
+        active_filter
+            .as_ref()
+            .map(|(f, v)| (f.as_str(), v.as_str())),
+        pagination.page_size,
+        pagination.offset(),
+    )
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => return e.into_response(),
+    };
+
+    let columns = model_for_template_cols(&model, &display_cols).fields;
+    let active_filter_str = active_filter
+        .as_ref()
+        .map(|(f, v)| format!("{f}={v}"))
+        .unwrap_or_default();
+    let search_val = search_term.unwrap_or_default();
+
+    match render(
+        "admin/rows_fragment.html",
+        context!(
+            table        => table,
+            model_name   => model.name.clone(),
+            rows         => rows,
+            pk           => pk.name.clone(),
+            columns      => columns,
+            pagination   => pagination,
+            active_filter => active_filter_str,
+            search_val   => search_val,
+            sort_col     => sort_col,
+            sort_order   => sort_order,
+        ),
+    ) {
+        Ok(html) => html.into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+/// `GET /admin/{table}/{id}/sheet` — preview sheet fragment (or full page for non-HTMX).
+async fn preview_sheet(
+    State(state): State<AdminState>,
+    headers: HeaderMap,
+    Path((table, id)): Path<(String, String)>,
+) -> Response {
+    let path = format!("/admin/{table}/{id}/sheet");
+    let _user = match require_staff(&headers, &path).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let Some((_, model)) = find_model(&table) else {
+        return AdminError::NotFound(format!("no model with table `{table}`")).into_response();
+    };
+    let Some(pk) = pk_column(&model) else {
+        return AdminError::Render(format!("model `{table}` has no primary key")).into_response();
+    };
+    let pool = umbra::db::pool();
+    let all_cols: Vec<String> = model.fields.iter().map(|f| f.name.clone()).collect();
+    let rows = match fetch_rows_filtered(
+        &pool,
+        &model,
+        Some((&pk.name, &id)),
+        &all_cols,
+        "",
+        None,
+        None,
+        None,
+    )
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => return e.into_response(),
+    };
+    let Some(row) = rows.into_iter().next() else {
+        return AdminError::NotFound(format!("no row with {} = {}", pk.name, id)).into_response();
+    };
+    let row_strings: HashMap<String, String> =
+        row.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    let cfg = state.config_for(&table);
+    let fields = form_fields_for(&model, Some(&row_strings), cfg);
+    let model_view = model_for_template(&model);
+
+    if is_htmx(&headers) {
+        match render(
+            "admin/sheet_preview.html",
+            context!(
+                model       => model_view,
+                instance_id => id,
+                fields      => fields,
+            ),
+        ) {
+            Ok(html) => html.into_response(),
+            Err(e) => e.into_response(),
+        }
+    } else {
+        // Non-HTMX: render the full changelist with the sheet pre-opened via JS.
+        // Simplest approach: redirect to changelist with ?row=id so the page
+        // can open the sheet on load via a small inline script.
+        Redirect::to(&format!("/admin/{table}/?row={id}")).into_response()
+    }
+}
+
+/// `GET /admin/{table}/{id}/edit-sheet` — edit sheet fragment (or full page).
+async fn edit_sheet_handler(
+    State(state): State<AdminState>,
+    headers: HeaderMap,
+    Path((table, id)): Path<(String, String)>,
+) -> Response {
+    let path = format!("/admin/{table}/{id}/edit-sheet");
+    let _user = match require_staff(&headers, &path).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let Some((_, model)) = find_model(&table) else {
+        return AdminError::NotFound(format!("no model with table `{table}`")).into_response();
+    };
+    let Some(pk) = pk_column(&model) else {
+        return AdminError::Render(format!("model `{table}` has no primary key")).into_response();
+    };
+    let pool = umbra::db::pool();
+    let all_cols: Vec<String> = model.fields.iter().map(|f| f.name.clone()).collect();
+    let rows = match fetch_rows_filtered(
+        &pool,
+        &model,
+        Some((&pk.name, &id)),
+        &all_cols,
+        "",
+        None,
+        None,
+        None,
+    )
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => return e.into_response(),
+    };
+    let Some(row) = rows.into_iter().next() else {
+        return AdminError::NotFound(format!("no row with {} = {}", pk.name, id)).into_response();
+    };
+    let row_strings: HashMap<String, String> =
+        row.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    let cfg = state.config_for(&table);
+    let fields = form_fields_for(&model, Some(&row_strings), cfg);
+    let model_view = model_for_template(&model);
+
+    if is_htmx(&headers) {
+        match render(
+            "admin/sheet_edit.html",
+            context!(
+                model       => model_view,
+                instance_id => id,
+                fields      => fields,
+                error       => "",
+            ),
+        ) {
+            Ok(html) => html.into_response(),
+            Err(e) => e.into_response(),
+        }
+    } else {
+        Redirect::to(&format!("/admin/{table}/?row={id}")).into_response()
+    }
+}
+
+/// `GET /admin/{table}/new-sheet` — create sheet fragment.
+async fn new_sheet(
+    State(state): State<AdminState>,
+    headers: HeaderMap,
+    Path(table): Path<String>,
+) -> Response {
+    let path = format!("/admin/{table}/new-sheet");
+    let _user = match require_staff(&headers, &path).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let Some((_, model)) = find_model(&table) else {
+        return AdminError::NotFound(format!("no model with table `{table}`")).into_response();
+    };
+    let cfg = state.config_for(&table);
+    let fields = form_fields_for(&model, None, cfg);
+    let model_view = model_for_template(&model);
+
+    match render(
+        "admin/sheet_create.html",
+        context!(
+            model       => model_view,
+            instance_id => "",
+            fields      => fields,
+            error       => "",
+        ),
+    ) {
+        Ok(html) => html.into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+/// `GET /admin/{table}/{id}/_confirm-delete` — delete confirm dialog fragment.
+async fn confirm_delete_dialog(
+    State(_state): State<AdminState>,
+    headers: HeaderMap,
+    Path((table, id)): Path<(String, String)>,
+) -> Response {
+    let path = format!("/admin/{table}/{id}/_confirm-delete");
+    if let Err(r) = require_staff(&headers, &path).await {
+        return r;
+    }
+    let Some((_, model)) = find_model(&table) else {
+        return AdminError::NotFound(format!("no model with table `{table}`")).into_response();
+    };
+    let model_view = model_for_template(&model);
+    // Use the id as the display label — FK label resolution is phase 3.
+    let display_label = format!("#{id}");
+    match render(
+        "admin/confirm_delete.html",
+        context!(
+            model         => model_view,
+            instance_id   => id,
+            display_label => display_label,
+        ),
+    ) {
+        Ok(html) => html.into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+/// `POST /admin/{table}/create` — sheet create flow.
+/// On success: returns updated rows fragment for the full changelist.
+/// On failure: returns the create sheet with errors.
+async fn sheet_create(
+    State(state): State<AdminState>,
+    headers: HeaderMap,
+    Path(table): Path<String>,
+    body: String,
+) -> Response {
+    let path = format!("/admin/{table}/create");
+    let _user = match require_staff(&headers, &path).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let Some((_, model)) = find_model(&table) else {
+        return AdminError::NotFound(format!("no model with table `{table}`")).into_response();
+    };
+    let form: HashMap<String, String> = match serde_urlencoded::from_str(&body) {
+        Ok(m) => m,
+        Err(e) => return AdminError::BadInput(e.to_string()).into_response(),
+    };
+    let cfg = state.config_for(&table);
+    let pool = umbra::db::pool();
+    match insert_row(&pool, &model, &form, cfg).await {
+        Ok(_) => {
+            // Return HX-Redirect so HTMX refreshes the full changelist.
+            if is_htmx(&headers) {
+                axum::response::Response::builder()
+                    .status(StatusCode::OK)
+                    .header("HX-Redirect", format!("/admin/{}/", model.table))
+                    .body(axum::body::Body::empty())
+                    .unwrap_or_else(|_| {
+                        Redirect::to(&format!("/admin/{}/", model.table)).into_response()
+                    })
+            } else {
+                Redirect::to(&format!("/admin/{}/", model.table)).into_response()
+            }
+        }
+        Err(e) => {
+            let fields = form_fields_for(&model, Some(&form), cfg);
+            let model_view = model_for_template(&model);
+            match render(
+                "admin/sheet_create.html",
+                context!(
+                    model       => model_view,
+                    instance_id => "",
+                    fields      => fields,
+                    error       => sanitise_form_error(&e),
+                ),
+            ) {
+                Ok(html) => (StatusCode::BAD_REQUEST, html).into_response(),
+                Err(e2) => e2.into_response(),
+            }
+        }
+    }
+}
+
+/// `DELETE /admin/{table}/{id}` — HTMX delete (returns HX-Redirect to refresh list).
+async fn htmx_delete(
+    State(_state): State<AdminState>,
+    headers: HeaderMap,
+    Path((table, id)): Path<(String, String)>,
+) -> Response {
+    let path = format!("/admin/{table}/{id}");
+    if let Err(r) = require_staff(&headers, &path).await {
+        return r;
+    }
+    let Some((_, model)) = find_model(&table) else {
+        return AdminError::NotFound(format!("no model with table `{table}`")).into_response();
+    };
+    let Some(pk) = pk_column(&model) else {
+        return AdminError::Render(format!("model `{table}` has no primary key")).into_response();
+    };
+    let pool = umbra::db::pool();
+    let sql = format!(
+        "DELETE FROM \"{}\" WHERE \"{}\" = ?",
+        q(&model.table),
+        q(&pk.name)
+    );
+    match sqlx::query(&sql).bind(&id).execute(&pool).await {
+        Ok(_) => axum::response::Response::builder()
+            .status(StatusCode::OK)
+            .header("HX-Redirect", format!("/admin/{}/", model.table))
+            .body(axum::body::Body::empty())
+            .unwrap_or_else(|_| Redirect::to(&format!("/admin/{}/", model.table)).into_response()),
+        Err(e) => AdminError::Sqlx(e).into_response(),
+    }
+}
+
 fn sanitise_form_error(e: &AdminError) -> String {
     match e {
         AdminError::Sqlx(sqlx_err) => {
@@ -1595,6 +2343,37 @@ fn bind_null<'q>(
             panic_pg_only_unsupported(&col.name)
         }
         SqlType::ForeignKey => q.bind(None::<i64>),
+    }
+}
+
+// =========================================================================
+// Pagination helpers.
+// =========================================================================
+
+/// Template-facing pagination context.
+#[derive(Debug, Clone, Serialize)]
+struct Pagination {
+    page: usize,
+    page_size: usize,
+    total: usize,
+    total_pages: usize,
+}
+
+impl Pagination {
+    fn new(total: usize, page: usize, page_size: usize) -> Self {
+        let page_size = page_size.max(1);
+        let total_pages = total.div_ceil(page_size).max(1);
+        let page = page.max(1).min(total_pages);
+        Self {
+            page,
+            page_size,
+            total,
+            total_pages,
+        }
+    }
+
+    fn offset(&self) -> usize {
+        (self.page - 1) * self.page_size
     }
 }
 

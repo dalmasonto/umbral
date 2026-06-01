@@ -204,19 +204,102 @@ Fields that appear on the create and edit form but render as `<input readonly>` 
 - **`raw_id_fields`** - FK input as a raw integer. Phase 3.
 </Callout>
 
-## Deferred admin features (phases 2-4)
+## Phase 2: changelist + sheet
 
-The following are out of scope for the current release. They are documented here so you know what is coming:
+Phase 2 ships the three reusable primitives that drive every model list view: the DataTable, the right-side Sheet, and the field-editor catalog.
+
+### DataTable
+
+The `data_table` macro (`templates/_macros/data_table.html`) drives every model changelist. What it does:
+
+- **Header bar.** Model name, live record count, and an "Add `<Model>`" button that opens the create sheet.
+- **Toolbar.** Search input (HTMX-debounced, 300ms), filter panel toggle, column-visibility menu, density toggle (comfortable/compact).
+- **Sortable columns.** Clicking any header sends a new `?sort=col&order=asc/desc` request that HTMX-swaps only the `<tbody id="table-body">`. Active sort shows a chevron; neutral shows a dimmed double-chevron.
+- **Filter chips.** One chip per active filter, each with an `×` to clear. Active filters are encoded as `?filter=field=value`.
+- **Row actions.** Three Lucide icons on each row (sticky right column): `eye` opens the preview sheet, `pencil` opens the edit sheet, `trash-2` opens the delete confirm dialog. The whole row is clickable (outside buttons/checkboxes) and also opens the preview sheet.
+- **States.** Empty (no rows yet — shows a "Create the first one" button), no-results (filters/search returned nothing — shows a "Clear filters" link), and pagination-aware.
+- **Full pagination.** Range text ("1-25 of 1,204"), page-size select (10/25/50/100, default from `list_per_page`), prev/next, first/last, windowed page number list.
+- **Selection.** Header checkbox selects all on page; per-row checkboxes. Selection state is preserved via `hx-preserve` on a hidden `#bulk-action-form`. The floating bulk-action toolbar appears when any rows are selected (phase 3 adds action descriptors to it).
+- **Responsive.** ≥1024px: full table. 768-1023px: low-priority columns hidden via `hidden lg:table-cell`. <768px: stacked card behavior (low-priority columns hidden; action column visible).
+
+`AdminModel` fields that drive it:
+
+| Field | Effect |
+|---|---|
+| `list_display` | Which columns appear and in what order |
+| `list_filter` | Columns that get filter facets |
+| `search_fields` | Columns the search box matches against |
+| `ordering` | Initial sort order |
+| `list_per_page` | Default page size |
+
+### HTMX endpoints added in phase 2
+
+| Route | Returns |
+|---|---|
+| `GET /admin/<table>/` | Full changelist page (extends `base.html`) |
+| `GET /admin/<table>/rows?search=&filter=&sort=&order=&page=&page_size=` | Fragment: `<tbody>` rows + pagination footer row. HX-request → fragment; direct → also fragment |
+| `GET /admin/<table>/<id>/sheet` | Fragment: preview sheet. HX-request → fragment; direct → redirect to changelist with `?row=<id>` |
+| `GET /admin/<table>/<id>/edit-sheet` | Fragment: edit sheet |
+| `GET /admin/<table>/new-sheet` | Fragment: create sheet |
+| `GET /admin/<table>/<id>/_confirm-delete` | Fragment: delete confirm dialog |
+| `POST /admin/<table>/create` | On success: `HX-Redirect` to refresh changelist. On failure: create sheet with errors |
+| `DELETE /admin/<table>/<id>` | `HX-Redirect` to refresh changelist after delete |
+
+All previous phase-1 routes (`/new`, `/<id>/edit`, `/<id>/delete`, `/action`) remain working for backward compatibility and full-page fallback.
+
+### The Sheet
+
+The `sheet` macro (`templates/_macros/sheet.html`) is a floating right-side panel, anchored at `top-4 right-4 bottom-4`, 640px wide by default.
+
+- **Header.** Title + record identity + Preview/Edit segmented toggle + close ✕.
+- **Preview mode.** Fields as labelled values. Booleans render as Yes/No pills. Empty values show "—". Numbers use tabular numerals.
+- **Edit mode.** Full form with per-type field editors.
+- **Footer.** In preview: "Edit" button. In edit: Cancel / Save & continue / Save. In edit (non-create): Delete button that opens the confirm dialog.
+- **Drag-resize.** A left-edge drag handle lets users resize the sheet. Width is persisted in `localStorage` under `umbra-admin-sheet-width`.
+- **Esc to close.** Vanilla JS listener inside the rendered fragment.
+
+<Callout type="info" title="Sheet stacking is phase 3">
+Opening a related record (e.g. clicking an FK value) stacking a second sheet offset left with a back affordance requires a small JS state machine. Phase 2 shows one sheet at a time only.
+</Callout>
+
+### Field editor catalog
+
+The `field_editor` macro (`templates/_macros/field_editor.html`) dispatches per `SqlType`:
+
+| `kind` | Renders |
+|---|---|
+| `text`, `uuid`, network types | `<input type="text">` |
+| `number` (SmallInt, Integer, BigInt, Real, Double, ForeignKey) | `<input type="number" step="any">` |
+| `bool` | Styled toggle switch (Tailwind utility-built, no checkbox) |
+| `date` | `<input type="date">` |
+| `time` | `<input type="time">` |
+| `datetime-local` | `<input type="datetime-local">` (value pre-coerced via `format_for_input`) |
+| `textarea` (Json, FullText, Array) | `<textarea>` + Format JSON button |
+
+Each editor: label row (with `*` for required, "(nullable)", "(read-only)" badge), the input, inline validation error area.
+
+<Callout type="info" title="FK async picker is phase 3">
+ForeignKey fields currently render a plain `<input type="number">` showing the FK id. The async searchable combobox that never preloads the full table lands in phase 3. Phase 2 documents this cut inline in the template.
+</Callout>
+
+### Confirm dialog
+
+The `confirm_dialog` macro (`templates/_macros/confirm_dialog.html`) is a centered alert dialog (14px radius, danger styling). Used by trash-2 in the DataTable and the Delete button in the Sheet. Injected into `<div id="umbra-dialog-slot">`. Escape key and scrim click cancel. Cancel is the default-focused button (danger action is never auto-focused).
+
+### Extending the DataTable
+
+To add a custom column type, add an `{% elif col.name == "..." %}` clause inside the cell-rendering block in `rows_fragment.html` and `data_table.html`. To add a custom row action, add it to the `AdminModel::actions` list and to the action column in the macros (phase 3 makes this declarative).
+
+## Deferred admin features (phases 3-4)
 
 | Feature | Phase |
 |---|---|
-| DataTable component (sort, search, faceted filters, column control, density, pagination) | 2 |
-| Right-side sheet for preview/edit (no page reload) | 2 |
-| Full field-editor catalog (async FK combobox, M2M chips, date picker, JSON editor, ...) | 2 |
-| Inline related-model editing | 2 |
+| Async FK combobox + M2M chip multi-select | 3 |
+| Inline edit cells (double-click a cell) | 3 |
+| Extensible row + bulk action descriptors (Lucide icon, variant, confirm, permission) | 3 |
+| Sheet stacking (related record opens a second offset sheet with back affordance) | 3 |
 | Dashboard widgets (KPI cards, charts, activity feed) | 3 |
-| File/media previews (image lightbox, PDF viewer, CSV table, code viewer) | 3 |
-| Action system (row + bulk actions, confirm dialog, toast results) | 3 |
+| File/media previews (image lightbox, PDF viewer, CSV table, code viewer) | 4 |
 | Command palette (`⌘K`) | 4 |
 | Per-user theme preference (server-side, `admin_user_prefs` table) | 4 |
 | Audit log (`admin_audit_log` table, per-object history) | 4 |

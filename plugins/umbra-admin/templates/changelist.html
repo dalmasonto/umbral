@@ -1,0 +1,62 @@
+{% extends "admin/base.html" %}
+{% block title %}{{ model.name }} — umbra admin{% endblock %}
+
+{% block extra_head %}
+<style>
+  /* HTMX indicator */
+  .htmx-indicator { opacity: 0; transition: opacity 200ms; }
+  .htmx-request .htmx-indicator { opacity: 1; }
+  .htmx-request.htmx-indicator  { opacity: 1; }
+</style>
+{% endblock %}
+
+{% block content %}
+{# Import DataTable macro #}
+{% from "admin/_macros/data_table.html" import data_table %}
+
+{# Sheet slot: HTMX swaps sheet fragments here #}
+<aside id="umbra-sheet-slot"></aside>
+
+{# Dialog slot: HTMX swaps confirm dialog here #}
+<div id="umbra-dialog-slot"></div>
+
+{# Bulk-action floating toolbar (phase 3: action descriptors) — selection wired now #}
+<div
+  id="bulk-toolbar"
+  class="hidden fixed bottom-lg left-1/2 -translate-x-1/2 z-[90]"
+>
+  <div class="bg-surface-container-highest/90 backdrop-blur-xl border border-outline-variant rounded-full px-lg py-md shadow-2xl flex items-center gap-lg">
+    <div class="flex items-center gap-md border-r border-outline-variant pr-lg">
+      <div class="w-6 h-6 bg-primary text-on-primary rounded flex items-center justify-center font-label-md text-label-md tabular-nums bulk-count">0</div>
+      <span class="font-label-md text-label-md text-on-surface">Selected</span>
+    </div>
+    <div class="flex items-center gap-md">
+      {# Phase 3: extensible bulk actions go here #}
+      <span class="font-label-sm text-label-sm text-on-surface-variant italic">Bulk actions in phase 3</span>
+    </div>
+    <div class="border-l border-outline-variant pl-lg">
+      <button
+        type="button"
+        onclick="umbra.selectAllRows(false)"
+        class="text-on-surface-variant hover:text-on-surface transition-colors"
+        title="Clear selection"
+      >
+        <i data-lucide="x" class="w-4 h-4"></i>
+      </button>
+    </div>
+  </div>
+</div>
+
+{# DataTable macro invocation #}
+{{ data_table(model, rows, columns, pk, facets, active_filter, has_search, search_val, actions, pagination, sort_col, sort_order, flash) }}
+
+{# Close-sheet helper — appended once to the page #}
+<script>
+  umbra.closeSheet = function() {
+    document.getElementById('umbra-sheet-slot').innerHTML = '';
+  };
+  umbra.closeDialog = function() {
+    document.getElementById('umbra-dialog-slot').innerHTML = '';
+  };
+</script>
+{% endblock %}

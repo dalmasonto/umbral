@@ -1,0 +1,627 @@
+{#
+  data_table(model, rows, columns, facets, pagination, ...)
+  --------------------------------------------------------
+  Reusable DataTable macro for every model changelist and future
+  dashboard table widgets.
+
+  Arguments
+  ---------
+  model        : ModelView  — { name, table, fields }
+  rows         : Vec<HashMap<String,String>>
+  columns      : Vec<ColumnView> — the display columns (list_display)
+  pk           : string     — primary key column name
+  facets       : Vec<FilterFacet> — { field, values }
+  active_filter: string     — "field=value" or "" for no active filter
+  has_search   : bool
+  search_val   : string
+  actions      : Vec<{name, label}>
+  pagination   : { page, page_size, total, total_pages }
+  sort_col     : string     — current sort column
+  sort_order   : string     — "asc" | "desc" | ""
+  flash        : string     — flash message to show
+
+  HTMX contract
+  -------------
+  - tbody + pagination footer are in <tbody id="table-body">.
+  - Search / sort / filter HTMX-swaps just #table-body via
+    hx-get="/admin/{table}/rows?..." hx-target="#table-body".
+  - Row eye/pencil actions swap #umbra-sheet-slot.
+  - Trash action swaps #umbra-dialog-slot with the confirm dialog.
+
+  Responsive
+  ----------
+  >= 1024px: full table.
+  768–1023px: low-priority columns hidden (md:hidden lg:table-cell).
+  <768px: stacked card list via CSS (hidden when table visible).
+#}
+
+{% macro data_table(model, rows, columns, pk, facets, active_filter, has_search, search_val, actions, pagination, sort_col, sort_order, flash) %}
+
+{# ================================================================
+   Filter panel (collapsible, driven by Alpine.js-lite via x-data
+   — we keep it pure vanilla since no Alpine is loaded).
+   ================================================================ #}
+<div id="filter-panel" class="hidden mb-md bg-surface-container border border-outline-variant rounded-xl p-md">
+  <div class="flex flex-wrap gap-md">
+    {% for facet in facets %}
+    <div>
+      <p class="font-label-sm text-label-sm text-outline uppercase tracking-wider mb-xs">{{ facet.field | replace("_", " ") | title }}</p>
+      <div class="flex flex-wrap gap-xs">
+        <a
+          href="?search={{ search_val }}&sort={{ sort_col }}&order={{ sort_order }}"
+          hx-get="/admin/{{ model.table }}/rows?search={{ search_val }}&sort={{ sort_col }}&order={{ sort_order }}"
+          hx-target="#table-body"
+          hx-swap="innerHTML"
+          hx-push-url="true"
+          class="px-sm py-xs rounded-full font-label-sm text-label-sm border {% if not active_filter or not active_filter | startswith(facet.field ~ '=') %}bg-primary-container/10 text-primary border-primary/20{% else %}border-outline-variant text-on-surface-variant hover:border-primary hover:text-primary{% endif %} transition-colors cursor-pointer"
+        >All</a>
+        {% for val in facet.values %}
+        {% set this_filter = facet.field ~ "=" ~ val %}
+        <a
+          href="?search={{ search_val }}&filter={{ this_filter }}&sort={{ sort_col }}&order={{ sort_order }}"
+          hx-get="/admin/{{ model.table }}/rows?search={{ search_val }}&filter={{ this_filter }}&sort={{ sort_col }}&order={{ sort_order }}"
+          hx-target="#table-body"
+          hx-swap="innerHTML"
+          hx-push-url="true"
+          class="px-sm py-xs rounded-full font-label-sm text-label-sm border {% if active_filter == this_filter %}bg-primary-container/10 text-primary border-primary/20{% else %}border-outline-variant text-on-surface-variant hover:border-primary hover:text-primary{% endif %} transition-colors cursor-pointer"
+        >{{ val }}</a>
+        {% endfor %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+
+{# ================================================================
+   Active filter chips (above the table)
+   ================================================================ #}
+{% if active_filter %}
+<div class="flex flex-wrap items-center gap-xs mb-sm">
+  <span class="font-label-sm text-label-sm text-outline uppercase tracking-wider">Active filters:</span>
+  <div class="inline-flex items-center gap-xs bg-primary-container/10 border border-primary/20 text-primary px-sm py-xs rounded-full font-label-sm text-label-sm">
+    {{ active_filter }}
+    <a
+      href="?search={{ search_val }}&sort={{ sort_col }}&order={{ sort_order }}"
+      hx-get="/admin/{{ model.table }}/rows?search={{ search_val }}&sort={{ sort_col }}&order={{ sort_order }}"
+      hx-target="#table-body"
+      hx-swap="innerHTML"
+      hx-push-url="true"
+      aria-label="Remove filter"
+    >
+      <i data-lucide="x" class="w-3 h-3 cursor-pointer hover:text-on-primary-container transition-colors"></i>
+    </a>
+  </div>
+</div>
+{% endif %}
+
+{# ================================================================
+   Header bar: model name + count + Add button
+   ================================================================ #}
+<div class="flex items-end justify-between mb-md">
+  <div>
+    <div class="flex items-center gap-sm">
+      <h1 class="font-h1 text-h1 text-on-surface">{{ model.name }}</h1>
+      <span class="bg-surface-container-high px-sm py-xs rounded-full font-data-mono text-label-sm text-on-surface-variant tabular-nums">{{ pagination.total }}</span>
+    </div>
+    <p class="text-on-surface-variant font-body-sm text-body-sm mt-xs">Manage all {{ model.name | lower }} records.</p>
+  </div>
+  <button
+    type="button"
+    hx-get="/admin/{{ model.table }}/new-sheet"
+    hx-target="#umbra-sheet-slot"
+    hx-swap="innerHTML"
+    hx-push-url="false"
+    class="bg-primary text-on-primary px-lg py-sm rounded-xl font-h3 text-h3 flex items-center gap-sm hover:opacity-90 transition-opacity active:scale-95 duration-150 focus:outline-none focus:ring-2 focus:ring-primary/40"
+  >
+    <i data-lucide="plus" class="w-4 h-4"></i>
+    Add {{ model.name }}
+  </button>
+</div>
+
+{# ================================================================
+   Flash message
+   ================================================================ #}
+{% if flash %}
+<div class="mb-md px-md py-sm bg-primary-container/10 border border-primary/20 rounded-xl text-primary text-body-sm flex items-center gap-sm">
+  <i data-lucide="check-circle" class="w-4 h-4 flex-shrink-0"></i>
+  {{ flash }}
+</div>
+{% endif %}
+
+{# ================================================================
+   Toolbar: search + filter + column toggle + density
+   ================================================================ #}
+<div class="bg-surface-container rounded-xl border border-outline-variant p-sm flex flex-wrap items-center justify-between gap-sm mb-sm">
+  <div class="flex items-center gap-sm flex-1 min-w-0">
+    {# Search input #}
+    {% if has_search %}
+    <div class="relative flex-1 max-w-md">
+      <i data-lucide="search" class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-on-surface-variant pointer-events-none"></i>
+      <input
+        id="dt-search"
+        type="text"
+        name="search"
+        value="{{ search_val }}"
+        placeholder="Search {{ model.name | lower }}..."
+        hx-get="/admin/{{ model.table }}/rows"
+        hx-trigger="input changed delay:300ms, search"
+        hx-target="#table-body"
+        hx-swap="innerHTML"
+        hx-include="#dt-search, #dt-page-size, [name=filter], [name=sort], [name=order]"
+        hx-push-url="true"
+        class="w-full bg-surface-container-lowest border border-outline-variant rounded-xl pl-9 pr-md py-sm font-body-md text-body-md text-on-surface focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all placeholder:text-outline/50"
+      />
+    </div>
+    {% endif %}
+
+    {# Filter toggle #}
+    {% if facets %}
+    <button
+      type="button"
+      onclick="var p=document.getElementById('filter-panel');p.classList.toggle('hidden')"
+      class="flex items-center gap-sm px-md py-sm hover:bg-surface-container-high rounded-xl text-on-surface transition-colors font-label-md text-label-md border border-outline-variant"
+    >
+      <i data-lucide="sliders-horizontal" class="w-4 h-4"></i>
+      Filter
+      {% if active_filter %}
+      <span class="w-2 h-2 rounded-full bg-primary ml-xs"></span>
+      {% endif %}
+    </button>
+    {% endif %}
+  </div>
+
+  <div class="flex items-center gap-sm">
+    {# Column visibility menu #}
+    <div class="relative">
+      <button
+        type="button"
+        id="col-menu-btn"
+        onclick="var m=document.getElementById('col-menu');m.classList.toggle('hidden')"
+        class="p-sm hover:bg-surface-container-high rounded-xl text-on-surface-variant transition-colors"
+        title="Column visibility"
+        aria-label="Toggle column visibility"
+      >
+        <i data-lucide="columns-3" class="w-4 h-4"></i>
+      </button>
+      <div id="col-menu" class="hidden absolute right-0 top-full mt-xs z-30 bg-surface-container border border-outline-variant rounded-xl shadow-lg p-sm min-w-[160px]">
+        <p class="font-label-sm text-label-sm text-outline uppercase tracking-wider px-sm mb-sm">Columns</p>
+        {% for col in columns %}
+        <label class="flex items-center gap-sm px-sm py-xs hover:bg-surface-container-high rounded-lg cursor-pointer">
+          <input
+            type="checkbox"
+            checked
+            class="w-3.5 h-3.5 rounded border-outline-variant bg-surface-container text-primary focus:ring-primary col-visibility-cb"
+            data-col="{{ col.name }}"
+          />
+          <span class="text-body-sm text-on-surface">{{ col.name | replace("_", " ") | title }}</span>
+        </label>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="w-px h-5 bg-outline-variant"></div>
+
+    {# Density toggle #}
+    <div class="bg-surface-container-lowest border border-outline-variant rounded-xl p-0.5 flex items-center">
+      <button
+        type="button"
+        id="density-comfortable"
+        onclick="umbra.setDensity('comfortable')"
+        class="px-sm py-xs rounded-lg font-label-sm text-label-sm bg-surface-container-highest text-primary"
+      >Comfortable</button>
+      <button
+        type="button"
+        id="density-compact"
+        onclick="umbra.setDensity('compact')"
+        class="px-sm py-xs font-label-sm text-label-sm text-on-surface-variant hover:text-on-surface transition-colors"
+      >Compact</button>
+    </div>
+  </div>
+</div>
+
+{# ================================================================
+   Table + pagination  (both inside the HTMX-swap target)
+   ================================================================ #}
+
+{# Hidden inputs carried along on partial swaps #}
+<input type="hidden" id="dt-active-filter" name="filter" value="{{ active_filter }}"/>
+<input type="hidden" id="dt-sort-col"     name="sort"   value="{{ sort_col }}"/>
+<input type="hidden" id="dt-sort-order"   name="order"  value="{{ sort_order }}"/>
+
+{# Selection form — persisted across tbody swaps via hx-preserve #}
+<form id="bulk-action-form" hx-preserve="true" style="display:none"></form>
+
+<div class="bg-surface border border-outline-variant rounded-xl overflow-hidden">
+  <div class="overflow-x-auto">
+    <table class="w-full text-left border-collapse" id="dt-table" data-density="comfortable">
+      <thead class="bg-surface-container-low border-b border-outline-variant sticky top-0 z-10">
+        <tr>
+          {# Selection header #}
+          <th class="w-12 px-md py-md">
+            <input
+              type="checkbox"
+              id="select-all-cb"
+              title="Select all on this page"
+              class="w-4 h-4 rounded border-outline-variant bg-surface-container text-primary focus:ring-primary cursor-pointer"
+              onchange="umbra.selectAllRows(this.checked)"
+            />
+          </th>
+
+          {# Data column headers #}
+          {% for col in columns %}
+          <th
+            class="px-md py-md font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider {% if not loop.first %}hidden lg:table-cell{% endif %} dt-col"
+            data-col="{{ col.name }}"
+          >
+            <button
+              type="button"
+              hx-get="/admin/{{ model.table }}/rows?search={{ search_val }}&filter={{ active_filter }}&sort={{ col.name }}&order={% if sort_col == col.name and sort_order == 'asc' %}desc{% else %}asc{% endif %}&page=1&page_size={{ pagination.page_size }}"
+              hx-target="#table-body"
+              hx-swap="innerHTML"
+              hx-push-url="true"
+              class="flex items-center gap-xs hover:text-on-surface transition-colors"
+              aria-label="Sort by {{ col.name }}"
+            >
+              {{ col.name | replace("_", " ") | title }}
+              {% if sort_col == col.name %}
+                {% if sort_order == "asc" %}
+                  <i data-lucide="chevron-up" class="w-3 h-3 text-primary"></i>
+                {% else %}
+                  <i data-lucide="chevron-down" class="w-3 h-3 text-primary"></i>
+                {% endif %}
+              {% else %}
+                <i data-lucide="chevrons-up-down" class="w-3 h-3 opacity-30"></i>
+              {% endif %}
+            </button>
+          </th>
+          {% endfor %}
+
+          {# Actions column header (sticky right) #}
+          <th class="px-md py-md font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider sticky right-0 bg-surface-container-low text-right">
+            Actions
+          </th>
+        </tr>
+      </thead>
+
+      {# HTMX swap target for rows + pagination #}
+      <tbody id="table-body" class="divide-y divide-outline-variant">
+        {% if rows %}
+          {% for row in rows %}
+          <tr
+            class="hover:bg-surface-container-lowest transition-colors group cursor-pointer dt-row"
+            data-row-id="{{ row[pk] }}"
+            hx-get="/admin/{{ model.table }}/{{ row[pk] }}/sheet"
+            hx-target="#umbra-sheet-slot"
+            hx-swap="innerHTML"
+            hx-push-url="false"
+            hx-trigger="click[!event.target.closest('button') && !event.target.closest('input')]"
+          >
+            {# Row checkbox #}
+            <td class="px-md py-md" onclick="event.stopPropagation()">
+              <input
+                type="checkbox"
+                name="selected"
+                value="{{ row[pk] }}"
+                form="bulk-action-form"
+                class="w-4 h-4 rounded border-outline-variant bg-surface-container text-primary focus:ring-primary cursor-pointer row-cb"
+                onchange="umbra.onRowCheck()"
+              />
+            </td>
+
+            {# Data cells #}
+            {% for col in columns %}
+            <td class="px-md py-md {% if not loop.first %}hidden lg:table-cell{% endif %} dt-col" data-col="{{ col.name }}">
+              {% set val = row[col.name] %}
+              {% if col.name == "published" or col.name == "is_active" or col.name == "is_staff" %}
+                {# Boolean status pill #}
+                {% if val == "true" %}
+                <span class="px-sm py-xs bg-primary-container/10 text-primary border border-primary/20 rounded-full font-label-sm text-label-sm">Yes</span>
+                {% else %}
+                <span class="px-sm py-xs bg-surface-container-highest text-on-surface-variant border border-outline-variant rounded-full font-label-sm text-label-sm">No</span>
+                {% endif %}
+              {% elif val == "" or val is none %}
+                <span class="text-outline text-body-sm italic">—</span>
+              {% else %}
+                <span class="text-on-surface text-body-md tabular-nums">{{ val }}</span>
+              {% endif %}
+            </td>
+            {% endfor %}
+
+            {# Sticky actions column #}
+            <td
+              class="px-md py-md sticky right-0 bg-surface transition-colors group-hover:bg-surface-container-lowest text-right"
+              onclick="event.stopPropagation()"
+            >
+              <div class="flex items-center justify-end gap-xs">
+                <button
+                  type="button"
+                  hx-get="/admin/{{ model.table }}/{{ row[pk] }}/sheet"
+                  hx-target="#umbra-sheet-slot"
+                  hx-swap="innerHTML"
+                  hx-push-url="false"
+                  title="Preview"
+                  class="p-sm text-on-surface-variant hover:text-primary transition-colors rounded-lg hover:bg-surface-container-high"
+                >
+                  <i data-lucide="eye" class="w-4 h-4"></i>
+                </button>
+                <button
+                  type="button"
+                  hx-get="/admin/{{ model.table }}/{{ row[pk] }}/edit-sheet"
+                  hx-target="#umbra-sheet-slot"
+                  hx-swap="innerHTML"
+                  hx-push-url="false"
+                  title="Edit"
+                  class="p-sm text-on-surface-variant hover:text-primary transition-colors rounded-lg hover:bg-surface-container-high"
+                >
+                  <i data-lucide="pencil" class="w-4 h-4"></i>
+                </button>
+                <button
+                  type="button"
+                  hx-get="/admin/{{ model.table }}/{{ row[pk] }}/_confirm-delete"
+                  hx-target="#umbra-dialog-slot"
+                  hx-swap="innerHTML"
+                  title="Delete"
+                  class="p-sm text-on-surface-variant hover:text-error transition-colors rounded-lg hover:bg-surface-container-high"
+                >
+                  <i data-lucide="trash-2" class="w-4 h-4"></i>
+                </button>
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+        {% else %}
+          {# Empty / no-results state #}
+          <tr>
+            <td colspan="{{ columns | length + 2 }}" class="px-md py-xl text-center">
+              {% if search_val or active_filter %}
+              <div class="flex flex-col items-center gap-md">
+                <i data-lucide="search-x" class="w-10 h-10 text-outline opacity-50"></i>
+                <p class="text-body-md text-on-surface-variant">No {{ model.name | lower }} records match your search.</p>
+                <a
+                  href="/admin/{{ model.table }}/"
+                  class="px-lg py-sm bg-surface-container-high border border-outline-variant rounded-xl text-on-surface font-label-md text-label-md hover:bg-surface-container-highest transition-colors"
+                >Clear filters</a>
+              </div>
+              {% else %}
+              <div class="flex flex-col items-center gap-md">
+                <i data-lucide="database" class="w-10 h-10 text-outline opacity-50"></i>
+                <p class="text-body-md text-on-surface-variant">No {{ model.name | lower }} records yet.</p>
+                <button
+                  type="button"
+                  hx-get="/admin/{{ model.table }}/new-sheet"
+                  hx-target="#umbra-sheet-slot"
+                  hx-swap="innerHTML"
+                  class="px-lg py-sm bg-primary text-on-primary rounded-xl font-label-md text-label-md hover:opacity-90 transition-opacity"
+                >Create the first one</button>
+              </div>
+              {% endif %}
+            </td>
+          </tr>
+        {% endif %}
+
+        {# ---- Pagination footer (inside tbody swap for HTMX) ---- #}
+        <tr class="bg-surface border-t border-outline-variant">
+          <td colspan="{{ columns | length + 2 }}" class="px-lg py-md">
+            <div class="flex flex-wrap items-center justify-between gap-md">
+              {# Range text #}
+              <div class="flex items-center gap-lg">
+                <span class="font-body-sm text-body-sm text-on-surface-variant">
+                  Showing
+                  <span class="text-on-surface font-medium tabular-nums">
+                    {{ (pagination.page - 1) * pagination.page_size + 1 }}–{{ [pagination.page * pagination.page_size, pagination.total] | min }}
+                  </span>
+                  of
+                  <span class="text-on-surface font-medium tabular-nums">{{ pagination.total }}</span>
+                </span>
+
+                {# Page size select #}
+                <div class="flex items-center gap-sm">
+                  <span class="font-label-md text-label-md text-on-surface-variant">Rows per page:</span>
+                  <select
+                    id="dt-page-size"
+                    name="page_size"
+                    hx-get="/admin/{{ model.table }}/rows"
+                    hx-trigger="change"
+                    hx-target="#table-body"
+                    hx-swap="innerHTML"
+                    hx-include="#dt-search, #dt-active-filter, #dt-sort-col, #dt-sort-order"
+                    hx-push-url="true"
+                    class="bg-surface-container border border-outline-variant rounded-lg px-sm py-xs font-label-md text-label-md text-on-surface focus:outline-none focus:ring-1 focus:ring-primary"
+                  >
+                    {% for sz in [10, 25, 50, 100] %}
+                    <option value="{{ sz }}" {% if sz == pagination.page_size %}selected{% endif %}>{{ sz }}</option>
+                    {% endfor %}
+                  </select>
+                </div>
+              </div>
+
+              {# Page navigation #}
+              <div class="flex items-center gap-xs">
+                {# First page #}
+                <button
+                  type="button"
+                  {% if pagination.page <= 1 %}disabled{% endif %}
+                  hx-get="/admin/{{ model.table }}/rows?search={{ search_val }}&filter={{ active_filter }}&sort={{ sort_col }}&order={{ sort_order }}&page=1&page_size={{ pagination.page_size }}"
+                  hx-target="#table-body"
+                  hx-swap="innerHTML"
+                  hx-push-url="true"
+                  class="p-sm text-on-surface-variant hover:bg-surface-container-high rounded-xl disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                  title="First page"
+                >
+                  <i data-lucide="chevrons-left" class="w-4 h-4"></i>
+                </button>
+
+                {# Prev #}
+                <button
+                  type="button"
+                  {% if pagination.page <= 1 %}disabled{% endif %}
+                  hx-get="/admin/{{ model.table }}/rows?search={{ search_val }}&filter={{ active_filter }}&sort={{ sort_col }}&order={{ sort_order }}&page={{ pagination.page - 1 }}&page_size={{ pagination.page_size }}"
+                  hx-target="#table-body"
+                  hx-swap="innerHTML"
+                  hx-push-url="true"
+                  class="p-sm text-on-surface-variant hover:bg-surface-container-high rounded-xl disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                  title="Previous page"
+                >
+                  <i data-lucide="chevron-left" class="w-4 h-4"></i>
+                </button>
+
+                {# Page numbers: first + ellipsis + window + ellipsis + last #}
+                <div class="flex items-center">
+                  {% set win_start = [pagination.page - 2, 2] | max %}
+                  {% set win_end   = [pagination.page + 2, pagination.total_pages - 1] | min %}
+
+                  {# Always show page 1 #}
+                  <button type="button"
+                    hx-get="/admin/{{ model.table }}/rows?search={{ search_val }}&filter={{ active_filter }}&sort={{ sort_col }}&order={{ sort_order }}&page=1&page_size={{ pagination.page_size }}"
+                    hx-target="#table-body" hx-swap="innerHTML" hx-push-url="true"
+                    class="w-8 h-8 flex items-center justify-center {% if pagination.page == 1 %}bg-primary text-on-primary{% else %}text-on-surface-variant hover:bg-surface-container-high{% endif %} rounded-lg font-label-md text-label-md transition-colors tabular-nums"
+                  >1</button>
+
+                  {% if win_start > 2 %}
+                  <span class="px-xs text-on-surface-variant font-label-md">…</span>
+                  {% endif %}
+
+                  {% for p in range(win_start, win_end + 1) %}
+                  <button type="button"
+                    hx-get="/admin/{{ model.table }}/rows?search={{ search_val }}&filter={{ active_filter }}&sort={{ sort_col }}&order={{ sort_order }}&page={{ p }}&page_size={{ pagination.page_size }}"
+                    hx-target="#table-body" hx-swap="innerHTML" hx-push-url="true"
+                    class="w-8 h-8 flex items-center justify-center {% if pagination.page == p %}bg-primary text-on-primary{% else %}text-on-surface-variant hover:bg-surface-container-high{% endif %} rounded-lg font-label-md text-label-md transition-colors tabular-nums"
+                  >{{ p }}</button>
+                  {% endfor %}
+
+                  {% if win_end < pagination.total_pages - 1 %}
+                  <span class="px-xs text-on-surface-variant font-label-md">…</span>
+                  {% endif %}
+
+                  {# Always show last page if more than 1 #}
+                  {% if pagination.total_pages > 1 %}
+                  <button type="button"
+                    hx-get="/admin/{{ model.table }}/rows?search={{ search_val }}&filter={{ active_filter }}&sort={{ sort_col }}&order={{ sort_order }}&page={{ pagination.total_pages }}&page_size={{ pagination.page_size }}"
+                    hx-target="#table-body" hx-swap="innerHTML" hx-push-url="true"
+                    class="w-8 h-8 flex items-center justify-center {% if pagination.page == pagination.total_pages %}bg-primary text-on-primary{% else %}text-on-surface-variant hover:bg-surface-container-high{% endif %} rounded-lg font-label-md text-label-md transition-colors tabular-nums"
+                  >{{ pagination.total_pages }}</button>
+                  {% endif %}
+                </div>
+
+                {# Next #}
+                <button
+                  type="button"
+                  {% if pagination.page >= pagination.total_pages %}disabled{% endif %}
+                  hx-get="/admin/{{ model.table }}/rows?search={{ search_val }}&filter={{ active_filter }}&sort={{ sort_col }}&order={{ sort_order }}&page={{ pagination.page + 1 }}&page_size={{ pagination.page_size }}"
+                  hx-target="#table-body"
+                  hx-swap="innerHTML"
+                  hx-push-url="true"
+                  class="p-sm text-on-surface-variant hover:bg-surface-container-high rounded-xl disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                  title="Next page"
+                >
+                  <i data-lucide="chevron-right" class="w-4 h-4"></i>
+                </button>
+
+                {# Last page #}
+                <button
+                  type="button"
+                  {% if pagination.page >= pagination.total_pages %}disabled{% endif %}
+                  hx-get="/admin/{{ model.table }}/rows?search={{ search_val }}&filter={{ active_filter }}&sort={{ sort_col }}&order={{ sort_order }}&page={{ pagination.total_pages }}&page_size={{ pagination.page_size }}"
+                  hx-target="#table-body"
+                  hx-swap="innerHTML"
+                  hx-push-url="true"
+                  class="p-sm text-on-surface-variant hover:bg-surface-container-high rounded-xl disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                  title="Last page"
+                >
+                  <i data-lucide="chevrons-right" class="w-4 h-4"></i>
+                </button>
+              </div>
+            </div>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{# ================================================================
+   Table JS: density, column visibility, row selection, bulk toolbar
+   ================================================================ #}
+<script>
+(function() {
+  // ---- Density ---
+  umbra.setDensity = function(d) {
+    var t = document.getElementById('dt-table');
+    if (!t) return;
+    t.setAttribute('data-density', d);
+    var rows = t.querySelectorAll('tbody tr:not(:last-child)');
+    rows.forEach(function(r) {
+      r.querySelectorAll('td').forEach(function(td) {
+        if (d === 'compact') { td.style.paddingTop = '6px'; td.style.paddingBottom = '6px'; }
+        else { td.style.paddingTop = ''; td.style.paddingBottom = ''; }
+      });
+    });
+    document.getElementById('density-comfortable').className = 'px-sm py-xs rounded-lg font-label-sm text-label-sm ' +
+      (d === 'comfortable' ? 'bg-surface-container-highest text-primary' : 'text-on-surface-variant hover:text-on-surface transition-colors');
+    document.getElementById('density-compact').className = 'px-sm py-xs rounded-lg font-label-sm text-label-sm ' +
+      (d === 'compact'     ? 'bg-surface-container-highest text-primary' : 'text-on-surface-variant hover:text-on-surface transition-colors');
+    localStorage.setItem('umbra-admin-density', d);
+  };
+  var savedDensity = localStorage.getItem('umbra-admin-density');
+  if (savedDensity) umbra.setDensity(savedDensity);
+
+  // ---- Column visibility ---
+  document.querySelectorAll('.col-visibility-cb').forEach(function(cb) {
+    cb.addEventListener('change', function() {
+      var col = this.getAttribute('data-col');
+      var show = this.checked;
+      document.querySelectorAll('.dt-col[data-col="' + col + '"]').forEach(function(el) {
+        el.style.display = show ? '' : 'none';
+      });
+    });
+  });
+
+  // Close col menu on outside click.
+  document.addEventListener('click', function(e) {
+    var menu = document.getElementById('col-menu');
+    var btn  = document.getElementById('col-menu-btn');
+    if (menu && btn && !menu.contains(e.target) && !btn.contains(e.target)) {
+      menu.classList.add('hidden');
+    }
+  });
+
+  // ---- Row selection + bulk toolbar ---
+  umbra.selectAllRows = function(checked) {
+    document.querySelectorAll('.row-cb').forEach(function(cb) {
+      cb.checked = checked;
+      var row = cb.closest('tr');
+      if (row) row.classList.toggle('bg-primary-container/5', checked);
+    });
+    umbra.onRowCheck();
+  };
+
+  umbra.onRowCheck = function() {
+    var selected = document.querySelectorAll('.row-cb:checked');
+    var toolbar  = document.getElementById('bulk-toolbar');
+    if (!toolbar) return;
+    if (selected.length > 0) {
+      toolbar.classList.remove('hidden');
+      var cnt = toolbar.querySelector('.bulk-count');
+      if (cnt) cnt.textContent = selected.length;
+    } else {
+      toolbar.classList.add('hidden');
+    }
+    var allCb = document.getElementById('select-all-cb');
+    var all   = document.querySelectorAll('.row-cb');
+    if (allCb) {
+      allCb.indeterminate = selected.length > 0 && selected.length < all.length;
+      allCb.checked = all.length > 0 && selected.length === all.length;
+    }
+  };
+
+  // Re-init after HTMX swaps the tbody.
+  document.body.addEventListener('htmx:afterSwap', function(e) {
+    if (e.detail && e.detail.target && e.detail.target.id === 'table-body') {
+      if (window.lucide) lucide.createIcons();
+    }
+  });
+
+  if (window.lucide) lucide.createIcons();
+})();
+</script>
+{% endmacro %}

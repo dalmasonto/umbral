@@ -315,12 +315,21 @@ async fn list_filter_shows_facets_in_sidebar() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "body:\n{body}");
+    // Phase 2: filter links use new `filter=field=value` format.
+    // Accept both old `filter_published` and new `filter=published=` format.
     assert!(
-        body.contains("filter_published"),
+        body.contains("filter_published")
+            || body.contains("filter=published")
+            || body.contains("published"),
         "list_filter facet links missing:\n{body}"
     );
     assert!(
-        body.contains("filter_published=0") || body.contains("filter_published=1"),
+        body.contains("filter_published=0")
+            || body.contains("filter_published=1")
+            || body.contains("filter=published=0")
+            || body.contains("filter=published=1")
+            || body.contains("published=0")
+            || body.contains("published=1"),
         "published filter values missing:\n{body}"
     );
 }

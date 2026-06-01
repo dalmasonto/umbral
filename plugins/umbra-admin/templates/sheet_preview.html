@@ -1,0 +1,8 @@
+{#
+  Sheet preview fragment — returned for HTMX requests to
+  GET /admin/{table}/{id}/sheet
+
+  For full-page (non-HTMX) requests, changelist.html wraps this.
+#}
+{% from "admin/_macros/sheet.html" import sheet %}
+{{ sheet("preview", model.name, model.table, instance_id, fields) }}

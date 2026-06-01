@@ -1,0 +1,10 @@
+{#
+  Delete confirm dialog fragment — returned for HTMX requests to
+  GET /admin/{table}/{id}/_confirm-delete
+#}
+{% from "admin/_macros/confirm_dialog.html" import confirm_dialog %}
+{{ confirm_dialog(
+  "Delete " ~ model.name ~ "?",
+  "You are about to permanently delete \"" ~ display_label ~ "\" (#" ~ instance_id ~ "). This action cannot be undone.",
+  "/admin/" ~ model.table ~ "/" ~ instance_id
+) }}

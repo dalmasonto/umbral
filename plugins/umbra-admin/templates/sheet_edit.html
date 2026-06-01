@@ -1,0 +1,8 @@
+{#
+  Sheet edit fragment — returned for HTMX requests to
+  GET /admin/{table}/{id}/edit-sheet
+
+  For full-page (non-HTMX) requests, changelist.html wraps this.
+#}
+{% from "admin/_macros/sheet.html" import sheet %}
+{{ sheet("edit", model.name, model.table, instance_id, fields, error=error) }}

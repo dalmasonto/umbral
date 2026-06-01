@@ -1,0 +1,242 @@
+{#
+sheet(mode, model_name, table, instance_id, fields, title, error)
+Floating right-side panel for preview and edit.
+
+Arguments: mode="preview"|"edit"|"create", model_name, table, instance_id, fields, title="", error=""
+
+Phase-3 deferred: sheet stacking requires a JS state machine.
+Drag-resize: ~50 LOC vanilla JS at the bottom; width in localStorage.
+#}
+{% macro sheet(mode, model_name, table, instance_id, fields, title="", error="") %}
+{% set sheet_title = title if title else ("New " ~ model_name if mode == "create" else ("Edit " ~ model_name ~ " #" ~ instance_id if mode == "edit" else (model_name ~ " #" ~ instance_id))) %}
+{% set is_edit = mode == "edit" or mode == "create" %}
+
+<div id="umbra-sheet-scrim" class="fixed inset-0 z-[100] bg-background/50 backdrop-blur-sm" onclick="if(event.target===this)umbra.closeSheet()" aria-hidden="true"></div>
+
+<div
+  id="umbra-sheet-panel"
+  class="fixed top-4 right-4 bottom-4 z-[110] flex flex-col bg-surface-container border border-outline-variant rounded-[14px] shadow-2xl overflow-hidden transition-transform duration-300"
+  style="width: var(--sheet-width, 640px);"
+  role="dialog"
+  aria-modal="true"
+  aria-label="{{ sheet_title }}"
+  data-table="{{ table }}"
+  data-id="{{ instance_id }}"
+>
+  <div id="sheet-drag-handle" class="absolute left-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-primary/20 transition-colors z-10" aria-hidden="true"></div>
+
+  <header class="sticky top-0 z-10 flex items-center justify-between px-lg py-md bg-surface-container border-b border-outline-variant flex-shrink-0">
+    <div>
+      <h2 class="font-h3 text-h3 text-on-surface leading-tight">{{ sheet_title }}</h2>
+      {% if instance_id and mode != "create" %}
+      <p class="text-[11px] text-outline mt-0.5 font-label-sm tabular-nums">#{{ instance_id }}</p>
+      {% endif %}
+    </div>
+    <div class="flex items-center gap-sm">
+      {% if mode != "create" %}
+      <div class="flex bg-surface-container-high rounded-lg p-0.5">
+        <button type="button"
+          hx-get="/admin/{{ table }}/{{ instance_id }}/sheet"
+          hx-target="#umbra-sheet-slot" hx-swap="innerHTML" hx-push-url="false"
+          class="px-sm py-1 {% if mode == 'preview' %}bg-surface-container-highest text-primary{% else %}text-on-surface-variant hover:text-on-surface{% endif %} font-label-md text-label-md rounded-md transition-all"
+        >Preview</button>
+        <button type="button"
+          hx-get="/admin/{{ table }}/{{ instance_id }}/edit-sheet"
+          hx-target="#umbra-sheet-slot" hx-swap="innerHTML" hx-push-url="false"
+          class="px-sm py-1 {% if mode == 'edit' %}bg-surface-container-highest text-primary{% else %}text-on-surface-variant hover:text-on-surface{% endif %} font-label-md text-label-md rounded-md transition-all"
+        >Edit</button>
+      </div>
+      {% endif %}
+      <button type="button" onclick="umbra.closeSheet()" aria-label="Close sheet"
+        class="w-8 h-8 flex items-center justify-center rounded-xl text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface transition-all">
+        <i data-lucide="x" class="w-4 h-4"></i>
+      </button>
+    </div>
+  </header>
+
+  <div class="flex-1 overflow-y-auto px-lg py-xl">
+    {% if error %}
+    <div class="mb-lg px-md py-sm bg-error-container/10 border border-error/20 rounded-xl flex items-center gap-sm text-error text-body-sm">
+      <i data-lucide="alert-circle" class="w-4 h-4 flex-shrink-0"></i>
+      {{ error }}
+    </div>
+    {% endif %}
+
+    {% if is_edit %}
+    <form id="sheet-form" method="post"
+      {% if mode == "create" %}
+      action="/admin/{{ table }}/create"
+      hx-post="/admin/{{ table }}/create"
+      {% else %}
+      action="/admin/{{ table }}/{{ instance_id }}/edit"
+      hx-post="/admin/{{ table }}/{{ instance_id }}/edit"
+      {% endif %}
+      hx-target="#umbra-sheet-slot" hx-swap="innerHTML" hx-push-url="false"
+      class="space-y-xs"
+    >
+      {% for field in fields %}
+      {% set is_readonly = field.readonly %}
+      <div class="space-y-1.5 mb-md">
+        <div class="flex items-center gap-xs">
+          <label for="f_{{ field.name }}" class="font-label-md text-label-md text-on-surface-variant select-none">
+            {{ field.name | replace("_", " ") | title }}
+          </label>
+          {% if not field.nullable and not is_readonly %}
+          <span class="text-error font-label-sm text-label-sm" aria-label="required">*</span>
+          {% endif %}
+          {% if field.nullable %}
+          <span class="text-[10px] text-outline bg-surface-container-high px-1.5 py-0.5 rounded font-label-sm">(nullable)</span>
+          {% endif %}
+          {% if is_readonly %}
+          <span class="text-[10px] text-outline bg-surface-container-high px-1.5 py-0.5 rounded font-label-sm">(read-only)</span>
+          {% endif %}
+        </div>
+
+        {% if field.kind == "bool" %}
+        <label class="inline-flex items-center gap-sm cursor-pointer {% if is_readonly %}opacity-60 pointer-events-none{% endif %}">
+          <div class="relative">
+            <input type="checkbox" id="f_{{ field.name }}" name="{{ field.name }}" value="true"
+              {% if field.value == "true" %}checked{% endif %}
+              {% if is_readonly %}disabled{% endif %}
+              class="sr-only peer"/>
+            <div class="w-10 h-5 bg-surface-container-high border border-outline-variant rounded-full peer-checked:bg-primary peer-checked:border-primary transition-all"></div>
+            <div class="absolute top-0.5 left-0.5 w-4 h-4 bg-outline rounded-full peer-checked:bg-on-primary peer-checked:translate-x-5 transition-all"></div>
+          </div>
+          <span class="text-body-sm text-on-surface-variant">{{ field.name | replace("_", " ") | title }}</span>
+        </label>
+        {% elif field.kind == "textarea" %}
+        <div class="relative">
+          <textarea id="f_{{ field.name }}" name="{{ field.name }}" rows="5"
+            {% if not field.nullable and not is_readonly %}required{% endif %}
+            {% if is_readonly %}readonly{% endif %}
+            class="w-full bg-surface-container-low border border-outline-variant rounded-xl px-md py-sm text-on-surface text-body-md font-mono focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all resize-y {% if is_readonly %}opacity-70 cursor-default{% endif %}"
+          >{{ field.value }}</textarea>
+          <button type="button"
+            class="absolute top-2 right-2 px-sm py-xs text-[10px] bg-surface-container-high border border-outline-variant rounded text-on-surface-variant hover:text-on-surface transition-colors font-label-sm"
+            onclick="(function(btn){var ta=btn.closest('.relative').querySelector('textarea');try{ta.value=JSON.stringify(JSON.parse(ta.value),null,2);}catch(e){}})(this)"
+          >Format</button>
+        </div>
+        {% elif field.kind == "number" %}
+        <input type="number" id="f_{{ field.name }}" name="{{ field.name }}" value="{{ field.value }}" step="any"
+          {% if not field.nullable and not is_readonly %}required{% endif %}
+          {% if is_readonly %}readonly{% endif %}
+          class="w-full bg-surface-container-low border border-outline-variant rounded-xl px-md py-sm text-on-surface text-data-mono tabular-nums focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all {% if is_readonly %}opacity-70 cursor-default{% endif %}"/>
+        {% elif field.kind == "date" %}
+        <input type="date" id="f_{{ field.name }}" name="{{ field.name }}" value="{{ field.value }}"
+          {% if not field.nullable and not is_readonly %}required{% endif %}
+          {% if is_readonly %}readonly{% endif %}
+          class="w-full bg-surface-container-low border border-outline-variant rounded-xl px-md py-sm text-on-surface text-body-md focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all {% if is_readonly %}opacity-70 cursor-default{% endif %}"/>
+        {% elif field.kind == "time" %}
+        <input type="time" id="f_{{ field.name }}" name="{{ field.name }}" value="{{ field.value }}"
+          {% if not field.nullable and not is_readonly %}required{% endif %}
+          {% if is_readonly %}readonly{% endif %}
+          class="w-full bg-surface-container-low border border-outline-variant rounded-xl px-md py-sm text-on-surface text-body-md focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all {% if is_readonly %}opacity-70 cursor-default{% endif %}"/>
+        {% elif field.kind == "datetime-local" %}
+        <input type="datetime-local" id="f_{{ field.name }}" name="{{ field.name }}" value="{{ field.value }}"
+          {% if not field.nullable and not is_readonly %}required{% endif %}
+          {% if is_readonly %}readonly{% endif %}
+          class="w-full bg-surface-container-low border border-outline-variant rounded-xl px-md py-sm text-on-surface text-body-md focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all {% if is_readonly %}opacity-70 cursor-default{% endif %}"/>
+        {% else %}
+        <input type="text" id="f_{{ field.name }}" name="{{ field.name }}" value="{{ field.value }}"
+          {% if not field.nullable and not is_readonly %}required{% endif %}
+          {% if is_readonly %}readonly{% endif %}
+          class="w-full bg-surface-container-low border border-outline-variant rounded-xl px-md py-sm text-on-surface text-body-md focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all placeholder:text-outline/50 {% if is_readonly %}opacity-70 cursor-default{% endif %}"/>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </form>
+
+    {% else %}
+    <dl class="space-y-md">
+      {% for field in fields %}
+      <div class="flex flex-col gap-xs">
+        <dt class="font-label-md text-label-md text-on-surface-variant uppercase tracking-wide">
+          {{ field.name | replace("_", " ") }}
+        </dt>
+        <dd class="text-body-md text-on-surface {% if field.kind == 'number' or field.kind == 'datetime-local' or field.kind == 'date' or field.kind == 'time' %}tabular-nums font-data-mono{% endif %}">
+          {% if field.kind == "bool" %}
+            {% if field.value == "true" %}
+            <span class="inline-flex items-center gap-xs px-sm py-xs bg-primary-container/10 text-primary border border-primary/20 rounded-full font-label-sm text-label-sm">
+              <i data-lucide="check" class="w-3 h-3"></i> Yes
+            </span>
+            {% else %}
+            <span class="inline-flex items-center gap-xs px-sm py-xs bg-surface-container-high text-on-surface-variant border border-outline-variant rounded-full font-label-sm text-label-sm">
+              <i data-lucide="x" class="w-3 h-3"></i> No
+            </span>
+            {% endif %}
+          {% elif field.value == "" or field.value is none %}
+            <span class="text-outline italic text-body-sm">—</span>
+          {% else %}
+            {{ field.value }}
+          {% endif %}
+        </dd>
+      </div>
+      {% endfor %}
+    </dl>
+    {% endif %}
+  </div>
+
+  <footer class="sticky bottom-0 z-10 flex items-center justify-between px-lg py-md bg-surface-container/95 backdrop-blur-sm border-t border-outline-variant flex-shrink-0">
+    {% if is_edit and mode != "create" %}
+    <button type="button"
+      hx-get="/admin/{{ table }}/{{ instance_id }}/_confirm-delete"
+      hx-target="#umbra-dialog-slot" hx-swap="innerHTML"
+      class="flex items-center gap-sm px-md py-sm text-error hover:bg-error-container/10 transition-colors rounded-xl font-label-md text-label-md focus:outline-none focus:ring-2 focus:ring-error/40">
+      <i data-lucide="trash-2" class="w-4 h-4"></i>
+      Delete
+    </button>
+    {% else %}
+    <span></span>
+    {% endif %}
+
+    <div class="flex items-center gap-md">
+      {% if mode == "preview" %}
+      <button type="button"
+        hx-get="/admin/{{ table }}/{{ instance_id }}/edit-sheet"
+        hx-target="#umbra-sheet-slot" hx-swap="innerHTML"
+        class="px-lg py-sm bg-primary text-on-primary rounded-xl font-label-md text-label-md hover:opacity-90 active:scale-[0.98] transition-all focus:outline-none focus:ring-2 focus:ring-primary/40">
+        <i data-lucide="pencil" class="w-4 h-4 inline-block mr-xs"></i>Edit
+      </button>
+      {% elif is_edit %}
+      <button type="button" onclick="umbra.closeSheet()"
+        class="px-lg py-sm text-on-surface-variant hover:text-on-surface font-label-md text-label-md transition-colors">Cancel</button>
+      <button type="submit" form="sheet-form" name="_save_continue" value="1"
+        class="px-md py-sm border border-outline-variant rounded-xl text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high font-label-md text-label-md transition-all">Save &amp; continue</button>
+      <button type="submit" form="sheet-form"
+        class="px-lg py-sm bg-primary text-on-primary rounded-xl font-label-md text-label-md hover:opacity-90 active:scale-[0.98] transition-all focus:outline-none focus:ring-2 focus:ring-primary/40">Save</button>
+      {% endif %}
+    </div>
+  </footer>
+</div>
+
+<script>
+(function() {
+  var handle = document.getElementById('sheet-drag-handle');
+  var panel  = document.getElementById('umbra-sheet-panel');
+  if (!handle || !panel) return;
+  var saved = localStorage.getItem('umbra-admin-sheet-width');
+  if (saved) { panel.style.width = saved + 'px'; document.documentElement.style.setProperty('--sheet-width', saved + 'px'); }
+  var dragging = false, startX = 0, startW = 0;
+  handle.addEventListener('mousedown', function(e) {
+    dragging = true; startX = e.clientX; startW = panel.offsetWidth;
+    document.body.style.userSelect = 'none'; e.preventDefault();
+  });
+  document.addEventListener('mousemove', function(e) {
+    if (!dragging) return;
+    var newW = Math.min(Math.max(startW + (startX - e.clientX), 320), window.innerWidth * 0.9);
+    panel.style.width = newW + 'px';
+    document.documentElement.style.setProperty('--sheet-width', newW + 'px');
+  });
+  document.addEventListener('mouseup', function() {
+    if (!dragging) return;
+    dragging = false; document.body.style.userSelect = '';
+    localStorage.setItem('umbra-admin-sheet-width', panel.offsetWidth);
+  });
+  function onEsc(e) {
+    if (e.key === 'Escape') { umbra.closeSheet(); document.removeEventListener('keydown', onEsc); }
+  }
+  document.addEventListener('keydown', onEsc);
+  if (window.lucide) lucide.createIcons();
+})();
+</script>
+{% endmacro %}
