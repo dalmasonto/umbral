@@ -71,7 +71,7 @@ async fn boot() -> &'static axum::Router {
             .settings(settings)
             .database("default", pool)
             .plugin(AuthPlugin::<AuthUser>::default())
-            .plugin(AdminPlugin)
+            .plugin(AdminPlugin::default())
             .model::<Note>()
             .build()
             .expect("App::build with AuthPlugin + AdminPlugin");

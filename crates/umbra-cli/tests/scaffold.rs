@@ -19,14 +19,18 @@ fn scaffold_project_writes_expected_files() {
     assert_eq!(report.root, root);
     assert!(root.is_dir());
 
-    // The 8 files the scaffolder is contracted to produce.
+    // All files the scaffolder is contracted to produce.
     let expected = [
         "Cargo.toml",
         "src/main.rs",
         "umbra.toml",
+        ".env",
         ".env.example",
         ".gitignore",
+        "README.md",
         "templates/base.html",
+        "templates/home.html",
+        "templates/dashboard.html",
         "templates/404.html",
         "templates/500.html",
     ];
@@ -34,6 +38,96 @@ fn scaffold_project_writes_expected_files() {
         let full = root.join(path);
         assert!(full.is_file(), "expected file at {}", full.display());
     }
+}
+
+// gap 20: Comprehensive scaffold — all plugin deps in Cargo.toml.
+#[test]
+fn scaffold_project_cargo_toml_references_all_plugins() {
+    let tmp = TempDir::new().unwrap();
+    let report = scaffold_project("testapp", tmp.path()).unwrap();
+    let cargo = fs::read_to_string(report.root.join("Cargo.toml")).unwrap();
+
+    for dep in &[
+        "umbra-auth",
+        "umbra-sessions",
+        "umbra-admin",
+        "umbra-rest",
+        "umbra-openapi",
+    ] {
+        assert!(
+            cargo.contains(dep),
+            "Cargo.toml should list {dep} as a dep; got:\n{cargo}"
+        );
+    }
+}
+
+// gap 20: main.rs references all major plugin and auth surfaces.
+#[test]
+fn scaffold_project_main_rs_references_all_plugins() {
+    let tmp = TempDir::new().unwrap();
+    let report = scaffold_project("testapp", tmp.path()).unwrap();
+    let main_rs = fs::read_to_string(report.root.join("src/main.rs")).unwrap();
+
+    let markers = &[
+        "AuthPlugin",
+        "SessionsPlugin",
+        "AdminPlugin",
+        "RestPlugin",
+        "OpenApiPlugin",
+        "login_required_html",
+        "LoggedIn",
+        "ForeignKey",
+        "umbra::transaction",
+        "ResourceConfig",
+        "enable_filters",
+        "umbra_cli::dispatch(app).await",
+        "#[tokio::main]",
+        "auto_migrate",
+    ];
+    for marker in markers {
+        assert!(
+            main_rs.contains(marker),
+            "main.rs should contain `{marker}`;\ngot:\n{main_rs}"
+        );
+    }
+}
+
+// gap 20: base.html contains the Tailwind CDN link.
+#[test]
+fn scaffold_project_base_html_has_tailwind_cdn() {
+    let tmp = TempDir::new().unwrap();
+    let report = scaffold_project("testapp", tmp.path()).unwrap();
+    let base = fs::read_to_string(report.root.join("templates/base.html")).unwrap();
+    assert!(
+        base.contains("cdn.tailwindcss.com"),
+        "templates/base.html should include the Tailwind CDN link; got:\n{base}"
+    );
+}
+
+// gap 20: template substitution — project name appears in base.html title
+// and in Cargo.toml.
+#[test]
+fn scaffold_project_substitutes_project_name() {
+    let tmp = TempDir::new().unwrap();
+    let report = scaffold_project("acmecorp", tmp.path()).unwrap();
+
+    let base = fs::read_to_string(report.root.join("templates/base.html")).unwrap();
+    assert!(
+        base.contains("acmecorp"),
+        "base.html should include the project name 'acmecorp'; got:\n{base}"
+    );
+
+    let cargo = fs::read_to_string(report.root.join("Cargo.toml")).unwrap();
+    assert!(
+        cargo.contains("name = \"acmecorp\""),
+        "Cargo.toml should set name = \"acmecorp\"; got:\n{cargo}"
+    );
+
+    let env = fs::read_to_string(report.root.join(".env")).unwrap();
+    assert!(
+        env.contains("acmecorp.db"),
+        ".env should reference acmecorp.db; got:\n{env}"
+    );
 }
 
 #[test]

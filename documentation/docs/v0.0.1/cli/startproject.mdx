@@ -72,34 +72,48 @@ PROJECT (inside a project, after umbra startproject)
 ```bash
 umbra startproject myblog
 cd myblog
-cargo run -- serve
+cargo run -- migrate   # apply auth, sessions, and Post migrations
+cargo run -- serve     # boot at http://127.0.0.1:8000
 ```
 
-This writes a fresh project directory:
+What you get is a **complete blog-style demo** — not a hello-world skeleton.
+The first `cargo run -- serve` boots into a working application that exercises
+every major umbra surface.
 
 ```
 myblog/
-├── Cargo.toml          # umbra + umbra-cli + tokio
-├── src/main.rs         # boots App and calls umbra_cli::dispatch
+├── Cargo.toml          # umbra + all built-in plugins + tokio
+├── src/main.rs         # ~110 lines wiring every surface (see tour below)
 ├── umbra.toml          # framework settings
+├── .env                # working dev env file (do not commit)
 ├── .env.example        # env-variable cheat sheet
 ├── .gitignore
+├── README.md           # what's in the project, how to run
 └── templates/
-    ├── base.html       # base layout {% block content %}
+    ├── base.html       # Tailwind CDN, nav bar, {% block content %}
+    ├── home.html       # home page with post count
+    ├── dashboard.html  # login-gated view with post list
     ├── 404.html        # rendered on path miss
     └── 500.html        # rendered on handler panic
 ```
 
-The generated `src/main.rs` wires up:
+### What the scaffold demonstrates
 
-- `tracing_subscriber` for logs.
-- `Settings::from_env()` for config.
-- `umbra::db::connect(...)` for the pool.
-- An `App::builder()` chain with `templates_dir("templates")`,
-  `not_found_template("404.html")`, `server_error_template("500.html")`,
-  and `slash_redirect(SlashRedirect::Append)` set.
-- `umbra_cli::dispatch(app).await` so `cargo run -- migrate` /
-  `serve` / `makemigrations` all work.
+| Surface | Where |
+|---|---|
+| `Post` model with `ForeignKey<AuthUser>` | `struct Post` in `main.rs` |
+| Migrations auto-run on boot | `auto_migrate()` in `main.rs` |
+| Public home route | `GET /` → `home()` handler + `home.html` |
+| JSON API endpoint | `GET /api/posts` → `api_list_posts()` |
+| `login_required_html("/login")` layer | `/dashboard` route in the router |
+| `LoggedIn<AuthUser>` extractor | `dashboard()` handler signature |
+| `umbra::transaction` | inside `dashboard()` wrapping the ORM fetch |
+| `AuthPlugin` + `SessionsPlugin` | `.plugin(...)` in the builder |
+| `RestPlugin` with `enable_filters()` | `.plugin(RestPlugin::default().resource(...))` |
+| `AdminPlugin` | `.plugin(AdminPlugin::default())` |
+| `OpenApiPlugin` (Swagger UI at `/api/docs/`) | `.plugin(OpenApiPlugin::new())` |
+| Custom 404 / 500 templates | `.not_found_template("404.html")` + `.server_error_template("500.html")` |
+| Tailwind classes (CDN) | `templates/base.html` |
 
 Flags:
 
@@ -109,6 +123,44 @@ Flags:
 
 The command refuses to overwrite an existing directory - pick a
 different name or move the old one aside.
+
+## Tour of the scaffold
+
+### src/main.rs
+
+The generated `main.rs` is intentionally readable in one pass. It is structured
+in three sections: **models**, **app wiring**, and **handlers**.
+
+**Models section** declares a `Post` struct with a `ForeignKey<AuthUser>` author
+field. The `#[derive(Model)]` macro generates the `Model` trait impl, the ORM
+manager, and the typed column constants (`post::ID`, `post::TITLE`,
+`post::PUBLISHED`, `post::AUTHOR`).
+
+**App wiring** calls `App::builder()` with every plugin registered in order:
+`AuthPlugin`, `SessionsPlugin`, `AdminPlugin`, `RestPlugin`, and `OpenApiPlugin`.
+The `RestPlugin` call chains `.resource(ResourceConfig::new("post").enable_filters())`
+so query-string filters (`?published=true`, `?title__icontains=rust`) work on the
+`/api/post/` endpoint out of the box.
+
+**Handlers** show three patterns: a public HTML page (`home`), a plain JSON
+response (`api_list_posts`), and a login-gated view (`dashboard`) that uses both
+the `LoggedIn<AuthUser>` extractor and `umbra::transaction` to wrap a DB fetch
+atomically.
+
+### templates/
+
+`base.html` loads Tailwind via CDN so the generated pages look reasonable without
+a build step. Replace the CDN tag with a compiled stylesheet for production.
+`home.html` and `dashboard.html` demonstrate template inheritance (`{% extends
+"base.html" %}`), context variables (`{{ post_count }}`), and Jinja-style loops.
+
+### .env vs umbra.toml
+
+`umbra.toml` holds configuration that is safe to commit (bind address, dev
+environment flag, dev secret key). `.env` holds the same values but is listed in
+`.gitignore` — it is the working override file you never check in. In production,
+set `UMBRA_SECRET_KEY`, `UMBRA_DATABASE_URL`, and `UMBRA_ENVIRONMENT=prod` in
+your environment directly.
 
 ## startapp
 
