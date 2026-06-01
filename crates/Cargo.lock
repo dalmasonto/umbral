@@ -2710,7 +2710,6 @@ name = "umbra-admin"
 version = "0.0.1"
 dependencies = [
  "axum",
- "base64",
  "chrono",
  "http",
  "http-body-util",
@@ -2725,6 +2724,8 @@ dependencies = [
  "tracing",
  "umbra",
  "umbra-auth",
+ "umbra-security",
+ "umbra-sessions",
  "uuid",
 ]
 

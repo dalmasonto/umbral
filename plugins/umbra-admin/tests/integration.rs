@@ -1,11 +1,16 @@
 //! End-to-end coverage for umbra-admin. Boot the App once with
-//! AuthPlugin + AdminPlugin registered, seed a staff user via the
-//! umbra-auth helpers, then drive every admin route through axum's
+//! AuthPlugin + SessionsPlugin + AdminPlugin registered, seed a staff
+//! user, then drive every admin route through axum's
 //! `ServiceExt::oneshot` without a TCP listener.
+//!
+//! Auth is now session-based (HTML form flow) instead of Basic Auth.
+//! Tests use a `login_session` helper that POSTs to `GET /admin/login`
+//! to get a CSRF token and then POSTs credentials to obtain a session
+//! cookie, which is passed on subsequent requests.
 //!
 //! Covers the full Django-shape flow:
 //!
-//! - GET /admin without auth → 401 + WWW-Authenticate prompt
+//! - GET /admin without session → 302 to /admin/login
 //! - GET /admin with a non-staff user → 403
 //! - GET /admin as staff → 200 with the registered-models index
 //! - POST /admin/<table>/new (create) → 303 → row appears
@@ -14,16 +19,12 @@
 //! - POST /admin/<table>/<id>/edit (update) → 303 → row reflects edit
 //! - POST /admin/<table>/<id>/delete (delete) → 303 → row gone
 
-// The local `Note` model is private but `#[derive(Model)]` emits a
-// `pub const` column module that references it. Same lint dodge the
-// migrate / type_catalogue / backup tests use.
 #![allow(dead_code, private_interfaces)]
 
 use std::path::PathBuf;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
-use base64::Engine;
 use chrono::{DateTime, Utc};
 use http_body_util::BodyExt;
 use serde::{Deserialize, Serialize};
@@ -33,6 +34,7 @@ use tower::ServiceExt;
 
 use umbra_admin::AdminPlugin;
 use umbra_auth::{AuthPlugin, AuthUser, create_user};
+use umbra_sessions::SessionsPlugin;
 
 /// A second model in addition to AuthUser so the admin's
 /// list-models index shows >1 entry.
@@ -51,9 +53,6 @@ async fn boot() -> &'static axum::Router {
         let settings =
             umbra::Settings::from_env().expect("figment defaults always load in a test env");
 
-        // Tempfile-backed sqlite so every pool connection sees the
-        // same database (the same pattern umbra-auth's integration
-        // tests use).
         let tmp = tempfile::tempdir().expect("tempdir for the test DB");
         let path = tmp.path().join("admin_integration.sqlite");
         std::mem::forget(tmp);
@@ -71,13 +70,14 @@ async fn boot() -> &'static axum::Router {
             .settings(settings)
             .database("default", pool)
             .plugin(AuthPlugin::<AuthUser>::default())
+            .plugin(SessionsPlugin::default().without_auto_layer())
             .plugin(AdminPlugin::default())
             .model::<Note>()
             .build()
-            .expect("App::build with AuthPlugin + AdminPlugin");
+            .expect("App::build with AuthPlugin + SessionsPlugin + AdminPlugin");
 
-        // Schema: every registered model + the umbra-auth user.
         let pool = umbra::db::pool();
+        // Create tables manually (no migrate runner in test harness).
         sqlx::query(
             "CREATE TABLE auth_user (\
                 id INTEGER PRIMARY KEY AUTOINCREMENT,\
@@ -94,6 +94,20 @@ async fn boot() -> &'static axum::Router {
         .execute(&pool)
         .await
         .expect("create auth_user");
+
+        sqlx::query(
+            "CREATE TABLE session (\
+                id TEXT PRIMARY KEY,\
+                user_id INTEGER,\
+                data TEXT NOT NULL DEFAULT '{}',\
+                created_at TEXT NOT NULL,\
+                expires_at TEXT NOT NULL\
+             )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create session");
+
         sqlx::query(
             "CREATE TABLE note (\
                 id INTEGER PRIMARY KEY AUTOINCREMENT,\
@@ -124,11 +138,9 @@ async fn boot() -> &'static axum::Router {
     .await
 }
 
-fn basic_auth(username: &str, password: &str) -> String {
-    let creds = format!("{username}:{password}");
-    let encoded = base64::engine::general_purpose::STANDARD.encode(creds);
-    format!("Basic {encoded}")
-}
+// =========================================================================
+// Test helpers.
+// =========================================================================
 
 async fn send(router: axum::Router, req: Request<Body>) -> (StatusCode, String) {
     let resp = router.oneshot(req).await.expect("oneshot");
@@ -143,10 +155,119 @@ async fn send(router: axum::Router, req: Request<Body>) -> (StatusCode, String) 
     (status, body)
 }
 
+async fn send_full(
+    router: axum::Router,
+    req: Request<Body>,
+) -> (StatusCode, axum::http::HeaderMap, String) {
+    let resp = router.oneshot(req).await.expect("oneshot");
+    let status = resp.status();
+    let headers = resp.headers().clone();
+    let body_bytes = resp
+        .into_body()
+        .collect()
+        .await
+        .expect("collect")
+        .to_bytes();
+    let body = String::from_utf8_lossy(&body_bytes).into_owned();
+    (status, headers, body)
+}
+
+/// Log in via the admin HTML form and return the session cookie value.
+///
+/// Steps:
+/// 1. GET /admin/login to pick up an anonymous session cookie + CSRF token.
+/// 2. POST /admin/login with credentials + CSRF token.
+/// 3. Extract the session cookie from the response Set-Cookie header.
+async fn login_session(router: &axum::Router, username: &str, password: &str) -> String {
+    // Step 1: GET the login page to get an anonymous session + CSRF token.
+    let (status, headers, body) = send_full(
+        router.clone(),
+        Request::builder()
+            .uri("/admin/login")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "GET /admin/login should 200; body:\n{body}"
+    );
+
+    // Extract the session cookie issued by umbra_sessions::create_session.
+    let anon_cookie = headers
+        .get(header::SET_COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| {
+            // The Set-Cookie value is like: umbra_session=<token>; Path=...; ...
+            s.split(';')
+                .next()
+                .and_then(|pair| pair.split_once('='))
+                .map(|(_, v)| v.to_string())
+        })
+        .expect("GET /admin/login must set a session cookie");
+
+    // Extract CSRF token from the hidden form field.
+    let csrf_token =
+        extract_csrf_token(&body).expect("login page must contain a csrf_token hidden input");
+
+    // Step 2: POST credentials + CSRF token with the session cookie.
+    let form_body = serde_urlencoded::to_string([
+        ("username", username),
+        ("password", password),
+        ("csrf_token", &csrf_token),
+        ("next", "/admin/"),
+    ])
+    .unwrap();
+
+    let cookie_header = format!("umbra_session={anon_cookie}");
+    let (status2, headers2, _) = send_full(
+        router.clone(),
+        Request::builder()
+            .method("POST")
+            .uri("/admin/login")
+            .header(header::COOKIE, &cookie_header)
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from(form_body))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(
+        status2,
+        StatusCode::SEE_OTHER,
+        "POST /admin/login should 303 on success"
+    );
+
+    // Step 3: The response sets a new session cookie.
+    headers2
+        .get(header::SET_COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| {
+            s.split(';')
+                .next()
+                .and_then(|pair| pair.split_once('='))
+                .map(|(_, v)| v.to_string())
+        })
+        .expect("POST /admin/login must set a session cookie on success")
+}
+
+/// Extract the csrf_token value from a login page's hidden input.
+fn extract_csrf_token(html: &str) -> Option<String> {
+    // The form has: <input type="hidden" name="csrf_token" value="<token>"/>
+    let needle = r#"name="csrf_token" value=""#;
+    let start = html.find(needle)? + needle.len();
+    let end = html[start..].find('"')?;
+    Some(html[start..start + end].to_string())
+}
+
+// =========================================================================
+// Tests.
+// =========================================================================
+
 #[tokio::test]
-async fn admin_index_without_auth_returns_401() {
+async fn admin_index_without_session_redirects_to_login() {
     let router = boot().await.clone();
-    let (status, _) = send(
+    let (status, headers, _) = send_full(
         router,
         Request::builder()
             .uri("/admin/")
@@ -154,54 +275,102 @@ async fn admin_index_without_auth_returns_401() {
             .unwrap(),
     )
     .await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        status,
+        StatusCode::SEE_OTHER,
+        "unauthenticated /admin/ should 302"
+    );
+    let location = headers.get(header::LOCATION).unwrap().to_str().unwrap();
+    assert!(
+        location.contains("/admin/login"),
+        "redirect should go to /admin/login; got {location}"
+    );
 }
 
 #[tokio::test]
-async fn admin_with_non_staff_user_returns_403() {
+async fn admin_login_page_returns_200_with_form() {
     let router = boot().await.clone();
-    let (status, _) = send(
+    let (status, _, body) = send_full(
         router,
         Request::builder()
-            .uri("/admin/")
-            .header(header::AUTHORIZATION, basic_auth("bob", "secret"))
+            .uri("/admin/login")
             .body(Body::empty())
             .unwrap(),
     )
     .await;
-    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(status, StatusCode::OK, "GET /admin/login should 200");
+    assert!(body.contains("<form"), "login page must contain a <form");
+    assert!(
+        body.contains(r#"name="csrf_token""#),
+        "login page must have csrf_token field; body:\n{body}"
+    );
 }
 
 #[tokio::test]
-async fn admin_with_wrong_password_returns_401() {
+async fn admin_with_wrong_password_returns_error() {
     let router = boot().await.clone();
-    let (status, _) = send(
-        router,
+
+    // Get a session + CSRF token.
+    let (_, headers, body) = send_full(
+        router.clone(),
         Request::builder()
-            .uri("/admin/")
-            .header(header::AUTHORIZATION, basic_auth("alice", "wrong"))
+            .uri("/admin/login")
             .body(Body::empty())
             .unwrap(),
     )
     .await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let anon_cookie = headers
+        .get(header::SET_COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| {
+            s.split(';')
+                .next()
+                .and_then(|p| p.split_once('=').map(|(_, v)| v.to_string()))
+        })
+        .unwrap();
+    let csrf_token = extract_csrf_token(&body).unwrap();
+
+    let form_body = serde_urlencoded::to_string([
+        ("username", "alice"),
+        ("password", "wrongpass"),
+        ("csrf_token", &csrf_token),
+        ("next", "/admin/"),
+    ])
+    .unwrap();
+    let (status2, _, body2) = send_full(
+        router,
+        Request::builder()
+            .method("POST")
+            .uri("/admin/login")
+            .header(header::COOKIE, format!("umbra_session={anon_cookie}"))
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from(form_body))
+            .unwrap(),
+    )
+    .await;
+    // Should re-render the form with a generic error (not reveal username vs password).
+    assert_eq!(status2, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        body2.contains("incorrect"),
+        "error message should say 'incorrect':\n{body2}"
+    );
 }
 
 #[tokio::test]
 async fn admin_index_as_staff_lists_registered_models() {
     let router = boot().await.clone();
+    let cookie = login_session(&router, "alice", "hunter2").await;
     let (status, body) = send(
         router,
         Request::builder()
             .uri("/admin/")
-            .header(header::AUTHORIZATION, basic_auth("alice", "hunter2"))
+            .header(header::COOKIE, format!("umbra_session={cookie}"))
             .body(Body::empty())
             .unwrap(),
     )
     .await;
-    assert_eq!(status, StatusCode::OK);
+    assert_eq!(status, StatusCode::OK, "body:\n{body}");
     assert!(body.contains("Registered models"), "got body:\n{body}");
-    // Both registered models should show up.
     assert!(body.contains("auth_user"), "auth_user missing:\n{body}");
     assert!(body.contains("note"), "note missing:\n{body}");
 }
@@ -209,7 +378,8 @@ async fn admin_index_as_staff_lists_registered_models() {
 #[tokio::test]
 async fn full_crud_flow_against_note_model() {
     let router = boot().await.clone();
-    let auth = basic_auth("alice", "hunter2");
+    let cookie = login_session(&router, "alice", "hunter2").await;
+    let auth_cookie = format!("umbra_session={cookie}");
 
     // 1. Create via POST /admin/note/new
     let create_body = serde_urlencoded::to_string([
@@ -224,7 +394,7 @@ async fn full_crud_flow_against_note_model() {
             Request::builder()
                 .method("POST")
                 .uri("/admin/note/new")
-                .header(header::AUTHORIZATION, &auth)
+                .header(header::COOKIE, &auth_cookie)
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
                 .body(Body::from(create_body))
                 .unwrap(),
@@ -246,7 +416,7 @@ async fn full_crud_flow_against_note_model() {
         router.clone(),
         Request::builder()
             .uri("/admin/note/")
-            .header(header::AUTHORIZATION, &auth)
+            .header(header::COOKIE, &auth_cookie)
             .body(Body::empty())
             .unwrap(),
     )
@@ -257,12 +427,12 @@ async fn full_crud_flow_against_note_model() {
         "list missing seeded note:\n{body}"
     );
 
-    // 3. Detail view by id (we just created the only note, so id=1).
+    // 3. Detail view by id.
     let (status, body) = send(
         router.clone(),
         Request::builder()
             .uri("/admin/note/1")
-            .header(header::AUTHORIZATION, &auth)
+            .header(header::COOKIE, &auth_cookie)
             .body(Body::empty())
             .unwrap(),
     )
@@ -286,7 +456,7 @@ async fn full_crud_flow_against_note_model() {
             Request::builder()
                 .method("POST")
                 .uri("/admin/note/1/edit")
-                .header(header::AUTHORIZATION, &auth)
+                .header(header::COOKIE, &auth_cookie)
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
                 .body(Body::from(edit_body))
                 .unwrap(),
@@ -295,12 +465,11 @@ async fn full_crud_flow_against_note_model() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::SEE_OTHER, "POST edit should 303");
 
-    // Detail after edit reflects the change.
     let (_, body) = send(
         router.clone(),
         Request::builder()
             .uri("/admin/note/1")
-            .header(header::AUTHORIZATION, &auth)
+            .header(header::COOKIE, &auth_cookie)
             .body(Body::empty())
             .unwrap(),
     )
@@ -318,7 +487,7 @@ async fn full_crud_flow_against_note_model() {
             Request::builder()
                 .method("POST")
                 .uri("/admin/note/1/delete")
-                .header(header::AUTHORIZATION, &auth)
+                .header(header::COOKIE, &auth_cookie)
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -330,12 +499,11 @@ async fn full_crud_flow_against_note_model() {
         "POST delete should 303"
     );
 
-    // The note is gone.
     let (status, _) = send(
         router.clone(),
         Request::builder()
             .uri("/admin/note/1")
-            .header(header::AUTHORIZATION, &auth)
+            .header(header::COOKIE, &auth_cookie)
             .body(Body::empty())
             .unwrap(),
     )
@@ -347,8 +515,6 @@ async fn full_crud_flow_against_note_model() {
     );
 }
 
-// Quiet a probable unused-import warning for `PathBuf` if Rust ever
-// reshuffles which test references it.
 #[allow(dead_code)]
 fn _unused_pathbuf_marker() -> Option<PathBuf> {
     None

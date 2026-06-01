@@ -14,24 +14,24 @@
 //!
 //! ## Customizing per-model display
 //!
-//! Register an [`AdminConfig`] for a model to control list columns, filter
+//! Register an [`AdminModel`] for a model to control list columns, filter
 //! facets, search, ordering, bulk actions, and readonly fields. See
 //! [`AdminPlugin::register`] and the [`config`] module.
 //!
 //! ## Auth
 //!
-//! Every admin route requires HTTP Basic Auth against
-//! [`umbra_auth::authenticate`]. The user has to be `is_staff = 1`
-//! (matching Django's `auth_user.is_staff` gate). A 401 returns the
-//! browser's basic-auth prompt; a non-staff user gets 403.
+//! Every admin route requires a session-backed staff user. If the
+//! session is missing or the user is not staff, the handler redirects
+//! to `GET /admin/login?next=<current-url>`. `POST /admin/login` verifies
+//! credentials via [`umbra_auth::authenticate`], creates a session via
+//! [`umbra_sessions::login`], then redirects to `next`.
 //!
 //! ## Templates
 //!
-//! Five `include_str!`-embedded Jinja templates live in
-//! `templates/`. The admin owns its own minijinja `Environment` so
-//! it can render without registering into the framework's
-//! `OnceLock`-protected global engine. `admin/base.html` is the
-//! shared chrome; the other four extend it.
+//! Six `include_str!`-embedded Jinja templates live in `templates/`.
+//! The admin owns its own minijinja `Environment`. `admin/base.html`
+//! is the shell (sidebar + topbar + content slot); the other five
+//! extend it.
 //!
 //! ## Form widgets
 //!
@@ -50,14 +50,15 @@
 //! Nullable fields skip the `required` attribute.
 
 pub mod config;
+pub mod registry;
 
-pub use config::{Action, AdminConfig, AdminContext};
+pub use config::{Action, AdminConfig, AdminContext, AdminModel, InlineModel};
+pub use registry::{AdminRegistration, AdminRegistry, App as AdminApp};
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::extract::{Query, State};
-use base64::Engine;
 use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
 use minijinja::{Environment, context};
 use serde::Serialize;
@@ -66,26 +67,24 @@ use sqlx::{Row, SqlitePool};
 use umbra::migrate::{Column, ModelMeta};
 use umbra::orm::SqlType;
 use umbra::prelude::*;
-use umbra::web::{
-    HeaderMap, Html, IntoResponse, Json, Path, Redirect, Response, StatusCode, header, post,
-};
+use umbra::web::{HeaderMap, Html, IntoResponse, Json, Path, Redirect, Response, StatusCode, post};
 use uuid::Uuid;
 
 // =========================================================================
-// Plugin struct — now holds per-model AdminConfigs.
+// Plugin struct
 // =========================================================================
 
 /// The plugin. Mounts every admin route under `/admin`.
 ///
-/// Use [`AdminPlugin::register`] to attach an [`AdminConfig`] before
+/// Use [`AdminPlugin::register`] to attach an [`AdminModel`] before
 /// passing the plugin to `App::builder().plugin(...)`.
 ///
 /// ```ignore
-/// use umbra_admin::{AdminPlugin, AdminConfig, Action};
+/// use umbra_admin::{AdminPlugin, AdminModel, Action};
 ///
 /// let admin = AdminPlugin::default()
 ///     .register(
-///         AdminConfig::new("post")
+///         AdminModel::new("post")
 ///             .list_display(&["title", "author", "published_at"])
 ///             .list_filter(&["published"])
 ///             .search_fields(&["title", "body"])
@@ -101,33 +100,45 @@ use uuid::Uuid;
 /// ```
 #[derive(Debug, Default, Clone)]
 pub struct AdminPlugin {
-    configs: Vec<AdminConfig>,
+    registry: AdminRegistry,
 }
 
 impl AdminPlugin {
-    /// Register an [`AdminConfig`] for one model. Chainable.
+    /// Register an [`AdminModel`] for one model. Chainable.
     ///
     /// If two configs are registered for the same table the last one wins
     /// (same semantics as Django's `site.register` overwriting on duplicate).
-    pub fn register(mut self, config: AdminConfig) -> Self {
-        // Remove any prior config for the same table so the last one wins.
-        self.configs.retain(|c| c.table != config.table);
-        self.configs.push(config);
+    ///
+    /// The plugin name defaults to `"admin"` for models registered before
+    /// the plugin is installed into the app. From M7+ plugins will pass
+    /// their own name via `Plugin::admin_register` on the registry.
+    pub fn register(mut self, model: AdminModel) -> Self {
+        self.registry.register("admin", model);
+        self
+    }
+
+    /// Register an [`AdminModel`] for a specific plugin name.
+    ///
+    /// This is the method the `Plugin::routes` / `on_ready` pathway uses
+    /// when a plugin contributes its own admin registrations. The sidebar
+    /// groups models by the `plugin_name` supplied here.
+    pub fn register_for(mut self, plugin_name: &str, model: AdminModel) -> Self {
+        self.registry.register(plugin_name, model);
         self
     }
 }
 
 /// Shared state injected into every route via [`axum::extract::State`].
 ///
-/// `Arc` makes the clone cheap; the configs are immutable after `build()`.
+/// `Arc` makes the clone cheap; the registry is immutable after `build()`.
 #[derive(Clone, Debug)]
 struct AdminState {
-    configs: Arc<Vec<AdminConfig>>,
+    registry: Arc<AdminRegistry>,
 }
 
 impl AdminState {
     fn config_for(&self, table: &str) -> Option<&AdminConfig> {
-        self.configs.iter().find(|c| c.table == table)
+        self.registry.get(table).map(|r| &r.model)
     }
 }
 
@@ -137,32 +148,43 @@ impl Plugin for AdminPlugin {
     }
 
     fn dependencies(&self) -> &'static [&'static str] {
-        // Auth is required: the admin gates every route through
-        // umbra_auth::authenticate. App::build's topological sort
-        // ensures auth loads first.
-        &["auth"]
+        // Auth is required: login verifies credentials via umbra-auth.
+        // Sessions is required: login creates sessions.
+        &["auth", "sessions"]
     }
 
     fn routes(&self) -> Router {
         let state = AdminState {
-            configs: Arc::new(self.configs.clone()),
+            registry: Arc::new(self.registry.clone()),
         };
         Router::new()
-            .route("/admin", get(index))
-            .route("/admin/", get(index))
-            .route("/admin/{table}/", get(list))
-            .route("/admin/{table}/new", get(new_form).post(create))
+            // Login / logout (no auth required)
+            .route(
+                "/admin/login",
+                axum::routing::get(login_get).post(login_post),
+            )
+            .route("/admin/logout", axum::routing::get(logout_handler))
+            // Index + CRUD routes (all require staff session)
+            .route("/admin", axum::routing::get(index))
+            .route("/admin/", axum::routing::get(index))
+            .route("/admin/{table}/", axum::routing::get(list))
+            .route(
+                "/admin/{table}/new",
+                axum::routing::get(new_form).post(create),
+            )
             .route("/admin/{table}/action", post(run_action))
-            .route("/admin/{table}/{id}", get(detail))
-            .route("/admin/{table}/{id}/edit", get(edit_form).post(update))
+            .route("/admin/{table}/{id}", axum::routing::get(detail))
+            .route(
+                "/admin/{table}/{id}/edit",
+                axum::routing::get(edit_form).post(update),
+            )
             .route("/admin/{table}/{id}/delete", post(delete))
             .with_state(state)
     }
 }
 
 // =========================================================================
-// Template environment. One Environment, built once at first use via
-// OnceLock + an init function that registers every include_str! source.
+// Template environment.
 // =========================================================================
 
 static ENGINE: std::sync::OnceLock<Environment<'static>> = std::sync::OnceLock::new();
@@ -173,6 +195,8 @@ fn engine() -> &'static Environment<'static> {
         env.set_auto_escape_callback(|_| minijinja::AutoEscape::Html);
         env.add_template("admin/base.html", include_str!("../templates/base.html"))
             .expect("admin/base.html parses");
+        env.add_template("admin/login.html", include_str!("../templates/login.html"))
+            .expect("admin/login.html parses");
         env.add_template("admin/index.html", include_str!("../templates/index.html"))
             .expect("admin/index.html parses");
         env.add_template("admin/list.html", include_str!("../templates/list.html"))
@@ -199,57 +223,371 @@ fn render(name: &str, ctx: minijinja::Value) -> Result<Html<String>, AdminError>
 }
 
 // =========================================================================
-// Auth gate. Every admin handler calls require_staff() before doing
-// any work. Returns either the authenticated user's name or an
-// IntoResponse that 401s with the WWW-Authenticate prompt.
+// Sidebar context helpers.
+//
+// Every handler that renders the authenticated shell calls `sidebar_apps`
+// to pass the nav tree into the template.
 // =========================================================================
 
-async fn require_staff(headers: &HeaderMap) -> Result<String, Response> {
-    let creds = extract_basic_auth(headers).ok_or_else(challenge)?;
-    let user = umbra_auth::authenticate::<umbra_auth::AuthUser>(&creds.username, &creds.password)
-        .await
-        .map_err(|_| challenge())?;
+/// Template-facing representation of one sidebar model link.
+#[derive(Debug, Clone, Serialize)]
+struct SidebarModel {
+    table: String,
+    label: String,
+    icon: String,
+}
+
+/// Template-facing group of models for one plugin.
+#[derive(Debug, Clone, Serialize)]
+struct SidebarApp {
+    plugin: String,
+    label: String,
+    models: Vec<SidebarModel>,
+}
+
+fn sidebar_apps(state: &AdminState, user: &umbra_auth::AuthUser) -> Vec<SidebarApp> {
+    state
+        .registry
+        .apps(user)
+        .into_iter()
+        .map(|app| SidebarApp {
+            plugin: app.plugin.clone(),
+            label: app.label.clone(),
+            models: app
+                .models
+                .into_iter()
+                .map(|r| SidebarModel {
+                    table: r.model.table.clone(),
+                    label: r.label.clone(),
+                    icon: r.icon.clone().unwrap_or_else(|| "database".to_string()),
+                })
+                .collect(),
+        })
+        .collect()
+}
+
+// =========================================================================
+// CSRF helpers for the login form.
+//
+// umbra-security's CSRF middleware uses double-submit-cookie with the
+// `x-csrf-token` header. HTML forms can't set custom headers, so the
+// login page needs its own per-session token stored in the session `data`
+// map and submitted as a hidden form field.
+// =========================================================================
+
+const ADMIN_CSRF_SESSION_KEY: &str = "_umbra_admin_csrf";
+
+/// Issue a CSRF token for the admin login form.
+///
+/// Generates a fresh token, stores it in the session `data` map,
+/// and returns the token for embedding in the login template.
+///
+/// The session token must be the raw token from the request cookie
+/// (used by `umbra_sessions::set_data`).
+async fn issue_login_csrf(session_token: &str) -> String {
+    let token = umbra_security::generate_token();
+    let _ = umbra_sessions::set_data(session_token, ADMIN_CSRF_SESSION_KEY, &token).await;
+    token
+}
+
+/// Verify the login form CSRF token.
+///
+/// Returns `true` if the submitted form token matches what we stored
+/// in the session. Constant-time comparison via `subtle::ConstantTimeEq`
+/// is not needed here because an attacker who can read the session DB
+/// already has the token — the protection is purely against CSRF
+/// (cross-site forms that can't read the session cookie).
+async fn verify_login_csrf(session_token: &str, submitted: &str) -> bool {
+    if submitted.is_empty() {
+        return false;
+    }
+    let session = match umbra_sessions::read_session(session_token).await {
+        Ok(Some(s)) => s,
+        _ => return false,
+    };
+    match umbra_sessions::get_data::<String>(&session, ADMIN_CSRF_SESSION_KEY) {
+        Ok(Some(stored)) => stored == submitted,
+        _ => false,
+    }
+}
+
+// =========================================================================
+// Auth gate — session-based.
+//
+// require_staff looks up the session cookie, reads the session row,
+// hydrates the AuthUser, and checks is_staff. On any failure it
+// redirects to /admin/login?next=<path> instead of issuing a
+// WWW-Authenticate challenge.
+// =========================================================================
+
+/// Check that the request carries a valid staff session.
+///
+/// On success: returns the authenticated [`umbra_auth::AuthUser`].
+/// On failure: returns a [`Response`] that redirects to the login page
+/// (307 Temporary Redirect with `?next=<requested_path>`).
+async fn require_staff(
+    headers: &HeaderMap,
+    current_path: &str,
+) -> Result<umbra_auth::AuthUser, Response> {
+    // Encode the `next` parameter: drop double-slash / external URLs.
+    let next = sanitise_next(current_path);
+    let login_redirect = || {
+        let location = format!("/admin/login?next={}", urlencoding_simple(&next));
+        Redirect::to(&location).into_response()
+    };
+
+    let user = match umbra_sessions::current_user(headers).await {
+        Ok(Some(u)) => u,
+        _ => return Err(login_redirect()),
+    };
     if !user.is_staff {
         return Err((StatusCode::FORBIDDEN, "umbra-admin: not a staff user").into_response());
     }
-    Ok(user.username)
-}
-
-fn challenge() -> Response {
-    let mut resp = (
-        StatusCode::UNAUTHORIZED,
-        "umbra-admin: authentication required",
-    )
-        .into_response();
-    resp.headers_mut().insert(
-        header::WWW_AUTHENTICATE,
-        "Basic realm=\"umbra admin\"".parse().unwrap(),
-    );
-    resp
-}
-
-struct BasicCreds {
-    username: String,
-    password: String,
-}
-
-fn extract_basic_auth(headers: &HeaderMap) -> Option<BasicCreds> {
-    let header = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
-    let encoded = header.strip_prefix("Basic ")?;
-    let decoded = base64::engine::general_purpose::STANDARD
-        .decode(encoded)
-        .ok()?;
-    let decoded = String::from_utf8(decoded).ok()?;
-    let (username, password) = decoded.split_once(':')?;
-    Some(BasicCreds {
-        username: username.to_string(),
-        password: password.to_string(),
-    })
+    Ok(user)
 }
 
 // =========================================================================
-// Errors. Mapped to Response via IntoResponse so every handler can use
-// `?` and get a sensible HTTP code.
+// Login / Logout handlers.
+// =========================================================================
+
+/// `GET /admin/login` — render the login form.
+///
+/// If the request has no session cookie, a fresh anonymous session is
+/// created and a `Set-Cookie` header is added to the response. This
+/// ensures there is always a session available to anchor the CSRF token,
+/// even when the `SessionsPlugin` auto-layer is disabled (the common
+/// case for admin-only deployments that don't want every request to
+/// create a session row).
+async fn login_get(headers: HeaderMap, Query(params): Query<HashMap<String, String>>) -> Response {
+    // If already logged in as staff, redirect straight to /admin/.
+    if let Ok(Some(user)) = umbra_sessions::current_user(&headers).await {
+        if user.is_staff {
+            let next = params
+                .get("next")
+                .map(|n| sanitise_next(n))
+                .filter(|n| !n.is_empty())
+                .unwrap_or_else(|| "/admin/".to_string());
+            return Redirect::to(&next).into_response();
+        }
+    }
+
+    let next = params
+        .get("next")
+        .map(|n| sanitise_next(n))
+        .unwrap_or_default();
+
+    // Obtain a session token for the CSRF anchor.
+    // If the request already has a valid session cookie, reuse it.
+    // Otherwise create a fresh anonymous session so we have somewhere
+    // to store the CSRF token.
+    let existing_token = umbra_sessions::cookie_from_headers(&headers);
+
+    // Validate the existing cookie if present.
+    let valid_existing = if let Some(ref tok) = existing_token {
+        umbra_sessions::read_session(tok)
+            .await
+            .ok()
+            .flatten()
+            .is_some()
+    } else {
+        false
+    };
+
+    let (session_token, new_cookie) = if valid_existing {
+        (existing_token.unwrap(), None)
+    } else {
+        // Create a fresh anonymous session.
+        match umbra_sessions::create_session(None, None).await {
+            Ok(raw) => {
+                let cookie_str = umbra_sessions::set_cookie_header(&raw, None);
+                (raw, Some(cookie_str))
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "admin: login_get: failed to create anonymous session");
+                // Fallback: render without CSRF protection. The POST
+                // will reject the empty token and redirect back here.
+                let html = render(
+                    "admin/login.html",
+                    context!(csrf_token => "", next => next, error => "", prefill_username => ""),
+                );
+                return match html {
+                    Ok(h) => h.into_response(),
+                    Err(e2) => e2.into_response(),
+                };
+            }
+        }
+    };
+
+    let csrf_token = issue_login_csrf(&session_token).await;
+
+    let html = match render(
+        "admin/login.html",
+        context!(
+            csrf_token       => csrf_token,
+            next             => next,
+            error            => "",
+            prefill_username => "",
+        ),
+    ) {
+        Ok(h) => h,
+        Err(e) => return e.into_response(),
+    };
+
+    // If we minted a new session, attach it to the response.
+    if let Some(cookie_str) = new_cookie {
+        let mut resp = html.into_response();
+        if let Ok(value) = cookie_str.parse::<axum::http::HeaderValue>() {
+            resp.headers_mut()
+                .insert(axum::http::header::SET_COOKIE, value);
+        }
+        resp
+    } else {
+        html.into_response()
+    }
+}
+
+/// `POST /admin/login` — verify credentials, create session, redirect.
+async fn login_post(headers: HeaderMap, body: String) -> Response {
+    let form: HashMap<String, String> = match serde_urlencoded::from_str(&body) {
+        Ok(m) => m,
+        Err(_) => return bad_login_response("Invalid form submission.", "", ""),
+    };
+
+    let username = form.get("username").map(|s| s.as_str()).unwrap_or("");
+    let password = form.get("password").map(|s| s.as_str()).unwrap_or("");
+    let next_raw = form.get("next").map(|s| s.as_str()).unwrap_or("");
+    let next = sanitise_next(next_raw);
+    let submitted_csrf = form.get("csrf_token").map(|s| s.as_str()).unwrap_or("");
+
+    // CSRF check.
+    let session_token = umbra_sessions::cookie_from_headers(&headers);
+    let csrf_ok = if let Some(ref tok) = session_token {
+        verify_login_csrf(tok, submitted_csrf).await
+    } else {
+        false
+    };
+    if !csrf_ok {
+        // Refresh the csrf token and re-render the form.
+        let new_csrf = if let Some(ref tok) = session_token {
+            issue_login_csrf(tok).await
+        } else {
+            String::new()
+        };
+        return bad_login_response_with_csrf(
+            "Your session expired. Please try again.",
+            username,
+            &next,
+            &new_csrf,
+        );
+    }
+
+    // Authenticate credentials. Same error message regardless of which
+    // field is wrong — timing-safe because we call the hash comparison
+    // unconditionally when the user exists (umbra_auth handles this).
+    let user = match umbra_auth::authenticate::<umbra_auth::AuthUser>(username, password).await {
+        Ok(u) => u,
+        Err(_) => {
+            let new_csrf = if let Some(ref tok) = session_token {
+                issue_login_csrf(tok).await
+            } else {
+                String::new()
+            };
+            return bad_login_response_with_csrf(
+                "The username or password you entered is incorrect.",
+                username,
+                &next,
+                &new_csrf,
+            );
+        }
+    };
+
+    if !user.is_staff {
+        let new_csrf = if let Some(ref tok) = session_token {
+            issue_login_csrf(tok).await
+        } else {
+            String::new()
+        };
+        return bad_login_response_with_csrf(
+            "This account does not have admin access.",
+            username,
+            &next,
+            &new_csrf,
+        );
+    }
+
+    // Login: create session + set cookie.
+    let redirect_to = if next.is_empty() {
+        "/admin/".to_string()
+    } else {
+        next.clone()
+    };
+    let mut response = Redirect::to(&redirect_to).into_response();
+    if let Err(e) =
+        umbra_sessions::login_with_request(&headers, response.headers_mut(), &user).await
+    {
+        tracing::error!(error = %e, "admin: login: session creation failed");
+        return (StatusCode::INTERNAL_SERVER_ERROR, "session error").into_response();
+    }
+    response
+}
+
+/// Render the login template with a generic error banner.
+fn bad_login_response(error: &str, prefill_username: &str, next: &str) -> Response {
+    bad_login_response_with_csrf(error, prefill_username, next, "")
+}
+
+fn bad_login_response_with_csrf(
+    error: &str,
+    prefill_username: &str,
+    next: &str,
+    csrf_token: &str,
+) -> Response {
+    match render(
+        "admin/login.html",
+        context!(
+            csrf_token       => csrf_token,
+            next             => next,
+            error            => error,
+            prefill_username => prefill_username,
+        ),
+    ) {
+        Ok(html) => (StatusCode::UNPROCESSABLE_ENTITY, html).into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+/// `GET /admin/logout` — destroy session, redirect to login.
+async fn logout_handler(headers: HeaderMap) -> Response {
+    let mut response = Redirect::to("/admin/login").into_response();
+    let _ = umbra_sessions::logout(&headers, response.headers_mut()).await;
+    response
+}
+
+// =========================================================================
+// Validate the `next` redirect target.
+//
+// Accept only same-origin relative paths starting with `/admin/` or `/admin`.
+// Reject: protocol-relative `//`, absolute `http://`, or anything that
+// doesn't start with the admin prefix.
+// =========================================================================
+
+fn sanitise_next(raw: &str) -> String {
+    let trimmed = raw.trim();
+    // Must be a relative path starting with /admin (not // or http://).
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    if trimmed.starts_with("//") || trimmed.contains("://") {
+        return "/admin/".to_string();
+    }
+    if !trimmed.starts_with("/admin") {
+        return "/admin/".to_string();
+    }
+    trimmed.to_string()
+}
+
+// =========================================================================
+// Errors.
 // =========================================================================
 
 #[derive(Debug)]
@@ -272,12 +610,6 @@ impl IntoResponse for AdminError {
             AdminError::NotFound(msg) => (StatusCode::NOT_FOUND, msg).into_response(),
             AdminError::Render(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg).into_response(),
             AdminError::Sqlx(e) => {
-                // sqlx errors can include the offending SQL fragment,
-                // constraint name, or (on connection failures) parts
-                // of the DSN. The admin is staff-only, but a
-                // compromised staff credential shouldn't gain a free
-                // SQL-reflection oracle on top of normal access. Log
-                // the full error server-side; return a fixed string.
                 tracing::error!(error = %e, "admin: database error");
                 (StatusCode::INTERNAL_SERVER_ERROR, "database error").into_response()
             }
@@ -287,8 +619,7 @@ impl IntoResponse for AdminError {
 }
 
 // =========================================================================
-// Model discovery. Walks the migration registry and filters out the
-// `umbra_migrations` tracking table and any internal SQLite tables.
+// Model discovery.
 // =========================================================================
 
 #[derive(Debug, Clone, Serialize)]
@@ -322,8 +653,8 @@ fn pk_column(model: &ModelMeta) -> Option<&Column> {
 // Handlers.
 // =========================================================================
 
-async fn index(headers: HeaderMap) -> Response {
-    let who = match require_staff(&headers).await {
+async fn index(State(state): State<AdminState>, headers: HeaderMap) -> Response {
+    let user = match require_staff(&headers, "/admin/").await {
         Ok(u) => u,
         Err(r) => return r,
     };
@@ -335,7 +666,17 @@ async fn index(headers: HeaderMap) -> Response {
             table: m.table,
         })
         .collect();
-    match render("admin/index.html", context!(user => who, models => entries)) {
+    let apps = sidebar_apps(&state, &user);
+    match render(
+        "admin/index.html",
+        context!(
+            user         => user.username.clone(),
+            models       => entries,
+            apps         => apps,
+            active_table => "",
+            breadcrumbs  => Vec::<serde_json::Value>::new(),
+        ),
+    ) {
         Ok(html) => html.into_response(),
         Err(e) => e.into_response(),
     }
@@ -343,7 +684,6 @@ async fn index(headers: HeaderMap) -> Response {
 
 // ---- list ------------------------------------------------------------------
 
-/// Template-facing representation of one filter facet.
 #[derive(Debug, Clone, Serialize)]
 struct FilterFacet {
     field: String,
@@ -356,7 +696,8 @@ async fn list(
     Path(table): Path<String>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Response {
-    let who = match require_staff(&headers).await {
+    let path = format!("/admin/{table}/");
+    let user = match require_staff(&headers, &path).await {
         Ok(u) => u,
         Err(r) => return r,
     };
@@ -369,7 +710,6 @@ async fn list(
 
     let cfg = state.config_for(&table);
 
-    // Determine displayed columns (list_display or all).
     let display_cols: Vec<String> = if let Some(c) = cfg
         && !c.list_display.is_empty()
     {
@@ -378,13 +718,8 @@ async fn list(
         model.fields.iter().map(|f| f.name.clone()).collect()
     };
 
-    // Determine ordering.
     let order_clause = build_order_clause(cfg, pk);
-
-    // Search term from ?q=...
     let search_term = params.get("q").filter(|s| !s.is_empty()).cloned();
-
-    // Active filter from ?filter_<field>=<value>
     let active_filter: Option<(String, String)> = params.iter().find_map(|(k, v)| {
         k.strip_prefix("filter_")
             .map(|field| (field.to_string(), v.clone()))
@@ -409,11 +744,10 @@ async fn list(
         Err(e) => return e.into_response(),
     };
 
-    // Build filter facets (distinct values per list_filter field).
     let mut facets: Vec<FilterFacet> = Vec::new();
     if let Some(c) = cfg {
         for field in &c.list_filter {
-            let values: Vec<String> = fetch_distinct_values(&pool, &model.table, field)
+            let values = fetch_distinct_values(&pool, &model.table, field)
                 .await
                 .unwrap_or_default();
             facets.push(FilterFacet {
@@ -423,36 +757,36 @@ async fn list(
         }
     }
 
-    // Actions list for template.
     let action_names: Vec<serde_json::Value> = cfg
         .map(|c| {
             c.actions
                 .iter()
-                .map(|a| {
-                    serde_json::json!({
-                        "name": a.name,
-                        "label": a.label,
-                    })
-                })
+                .map(|a| serde_json::json!({ "name": a.name, "label": a.label }))
                 .collect()
         })
         .unwrap_or_default();
 
     let has_search = cfg.is_some_and(|c| !c.search_fields.is_empty());
     let search_val = search_term.unwrap_or_default();
+    let apps = sidebar_apps(&state, &user);
+    let breadcrumbs =
+        vec![serde_json::json!({ "label": model.name.clone(), "url": format!("/admin/{table}/") })];
 
     match render(
         "admin/list.html",
         context!(
-            user => who,
-            model => model_for_template_cols(&model, &display_cols),
-            rows => rows,
-            pk => pk.name.clone(),
-            facets => facets,
-            actions => action_names,
-            has_search => has_search,
-            search_val => search_val,
+            user         => user.username.clone(),
+            model        => model_for_template_cols(&model, &display_cols),
+            rows         => rows,
+            pk           => pk.name.clone(),
+            facets       => facets,
+            actions      => action_names,
+            has_search   => has_search,
+            search_val   => search_val,
             active_filter => active_filter.map(|(f, v)| format!("{f}={v}")).unwrap_or_default(),
+            apps         => apps,
+            active_table => table,
+            breadcrumbs  => breadcrumbs,
         ),
     ) {
         Ok(html) => html.into_response(),
@@ -478,7 +812,6 @@ fn build_order_clause(cfg: Option<&AdminConfig>, pk: &Column) -> String {
         .join(", ")
 }
 
-/// Fetch distinct non-null values for a column (used by list_filter facets).
 async fn fetch_distinct_values(
     pool: &SqlitePool,
     table: &str,
@@ -493,7 +826,6 @@ async fn fetch_distinct_values(
     let rows = sqlx::query(&sql).fetch_all(pool).await?;
     let mut out = Vec::new();
     for row in rows {
-        // Try common types. Best-effort; the column might be any SqlType.
         if let Ok(v) = row.try_get::<String, _>(0) {
             out.push(v);
         } else if let Ok(v) = row.try_get::<i64, _>(0) {
@@ -513,7 +845,8 @@ async fn run_action(
     Path(table): Path<String>,
     body: String,
 ) -> Response {
-    let who = match require_staff(&headers).await {
+    let path = format!("/admin/{table}/action");
+    let who = match require_staff(&headers, &path).await {
         Ok(u) => u,
         Err(r) => return r,
     };
@@ -525,15 +858,12 @@ async fn run_action(
         Some(n) => n.clone(),
         None => return AdminError::BadInput("missing 'action' field".to_string()).into_response(),
     };
-
-    // Parse selected PKs.
     let selected_ids: Vec<i64> = form
         .iter()
         .filter(|(k, _)| k.as_str() == "selected")
         .filter_map(|(_, v)| v.parse::<i64>().ok())
         .collect();
 
-    // Look up the action in the registered config.
     let cfg = state.config_for(&table);
     let action = cfg.and_then(|c| c.actions.iter().find(|a| a.name == action_name));
     let Some(action) = action else {
@@ -542,7 +872,7 @@ async fn run_action(
     };
 
     let ctx = AdminContext {
-        username: who,
+        username: who.username,
         table: table.clone(),
     };
     let handler = Arc::clone(&action.handler);
@@ -553,13 +883,10 @@ async fn run_action(
             return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response();
         }
     };
-
-    // Redirect back to the list with a flash message in the query param.
     let location = format!("/admin/{table}/?flash={}", urlencoding_simple(&flash));
     Redirect::to(&location).into_response()
 }
 
-/// Minimal percent-encode for a flash message value (spaces and special chars).
 fn urlencoding_simple(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
@@ -575,8 +902,13 @@ fn urlencoding_simple(s: &str) -> String {
 
 // ---- detail / new_form / create / edit_form / update / delete -------------
 
-async fn detail(headers: HeaderMap, Path((table, id)): Path<(String, String)>) -> Response {
-    let who = match require_staff(&headers).await {
+async fn detail(
+    State(state): State<AdminState>,
+    headers: HeaderMap,
+    Path((table, id)): Path<(String, String)>,
+) -> Response {
+    let path = format!("/admin/{table}/{id}");
+    let user = match require_staff(&headers, &path).await {
         Ok(u) => u,
         Err(r) => return r,
     };
@@ -606,9 +938,22 @@ async fn detail(headers: HeaderMap, Path((table, id)): Path<(String, String)>) -
     let Some(row) = rows.into_iter().next() else {
         return AdminError::NotFound(format!("no row with {} = {}", pk.name, id)).into_response();
     };
+    let apps = sidebar_apps(&state, &user);
+    let breadcrumbs = vec![
+        serde_json::json!({ "label": model.name.clone(), "url": format!("/admin/{table}/") }),
+        serde_json::json!({ "label": format!("#{id}"), "url": format!("/admin/{table}/{id}") }),
+    ];
     match render(
         "admin/detail.html",
-        context!(user => who, model => model_for_template(&model), row => row, pk => pk.name.clone()),
+        context!(
+            user         => user.username.clone(),
+            model        => model_for_template(&model),
+            row          => row,
+            pk           => pk.name.clone(),
+            apps         => apps,
+            active_table => table,
+            breadcrumbs  => breadcrumbs,
+        ),
     ) {
         Ok(html) => html.into_response(),
         Err(e) => e.into_response(),
@@ -620,7 +965,8 @@ async fn new_form(
     headers: HeaderMap,
     Path(table): Path<String>,
 ) -> Response {
-    let who = match require_staff(&headers).await {
+    let path = format!("/admin/{table}/new");
+    let user = match require_staff(&headers, &path).await {
         Ok(u) => u,
         Err(r) => return r,
     };
@@ -629,15 +975,23 @@ async fn new_form(
     };
     let cfg = state.config_for(&table);
     let fields = form_fields_for(&model, None, cfg);
+    let apps = sidebar_apps(&state, &user);
+    let breadcrumbs = vec![
+        serde_json::json!({ "label": model.name.clone(), "url": format!("/admin/{table}/") }),
+        serde_json::json!({ "label": "Add", "url": format!("/admin/{table}/new") }),
+    ];
     match render(
         "admin/form.html",
         context!(
-            user => who,
-            model => model_for_template(&model),
-            fields => fields,
-            verb => "Create",
-            action => format!("/admin/{}/new", model.table),
-            error => "",
+            user         => user.username.clone(),
+            model        => model_for_template(&model),
+            fields       => fields,
+            verb         => "Create",
+            action       => format!("/admin/{}/new", model.table),
+            error        => "",
+            apps         => apps,
+            active_table => table,
+            breadcrumbs  => breadcrumbs,
         ),
     ) {
         Ok(html) => html.into_response(),
@@ -651,7 +1005,8 @@ async fn create(
     Path(table): Path<String>,
     body: String,
 ) -> Response {
-    let who = match require_staff(&headers).await {
+    let path = format!("/admin/{table}/new");
+    let user = match require_staff(&headers, &path).await {
         Ok(u) => u,
         Err(r) => return r,
     };
@@ -668,21 +1023,23 @@ async fn create(
         Ok(_) => Redirect::to(&format!("/admin/{}/", model.table)).into_response(),
         Err(e) => {
             let fields = form_fields_for(&model, Some(&form), cfg);
+            let apps = sidebar_apps(&state, &user);
+            let breadcrumbs = vec![
+                serde_json::json!({ "label": model.name.clone(), "url": format!("/admin/{table}/") }),
+                serde_json::json!({ "label": "Add", "url": format!("/admin/{table}/new") }),
+            ];
             match render(
                 "admin/form.html",
                 context!(
-                    user => who,
-                    model => model_for_template(&model),
-                    fields => fields,
-                    verb => "Create",
-                    action => format!("/admin/{}/new", model.table),
-                    // Log the full error server-side; surface a
-                    // generic message to the browser. Debug formatting
-                    // of an AdminError can leak query fragments and
-                    // constraint names — autoescape protects against
-                    // XSS but the information disclosure is still
-                    // worth avoiding for staff-facing flows.
-                    error => sanitise_form_error(&e),
+                    user         => user.username.clone(),
+                    model        => model_for_template(&model),
+                    fields       => fields,
+                    verb         => "Create",
+                    action       => format!("/admin/{}/new", model.table),
+                    error        => sanitise_form_error(&e),
+                    apps         => apps,
+                    active_table => table,
+                    breadcrumbs  => breadcrumbs,
                 ),
             ) {
                 Ok(html) => (StatusCode::BAD_REQUEST, html).into_response(),
@@ -697,7 +1054,8 @@ async fn edit_form(
     headers: HeaderMap,
     Path((table, id)): Path<(String, String)>,
 ) -> Response {
-    let who = match require_staff(&headers).await {
+    let path = format!("/admin/{table}/{id}/edit");
+    let user = match require_staff(&headers, &path).await {
         Ok(u) => u,
         Err(r) => return r,
     };
@@ -731,17 +1089,26 @@ async fn edit_form(
         row.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
     let cfg = state.config_for(&table);
     let fields = form_fields_for(&model, Some(&row_strings), cfg);
+    let apps = sidebar_apps(&state, &user);
+    let breadcrumbs = vec![
+        serde_json::json!({ "label": model.name.clone(), "url": format!("/admin/{table}/") }),
+        serde_json::json!({ "label": format!("#{id}"), "url": format!("/admin/{table}/{id}") }),
+        serde_json::json!({ "label": "Edit", "url": format!("/admin/{table}/{id}/edit") }),
+    ];
     match render(
         "admin/form.html",
         context!(
-            user => who,
-            model => model_for_template(&model),
-            fields => fields,
-            verb => "Edit",
-            action => format!("/admin/{}/{}/edit", model.table, id),
-            row => row,
-            pk => pk.name.clone(),
-            error => "",
+            user         => user.username.clone(),
+            model        => model_for_template(&model),
+            fields       => fields,
+            verb         => "Edit",
+            action       => format!("/admin/{}/{}/edit", model.table, id),
+            row          => row,
+            pk           => pk.name.clone(),
+            error        => "",
+            apps         => apps,
+            active_table => table,
+            breadcrumbs  => breadcrumbs,
         ),
     ) {
         Ok(html) => html.into_response(),
@@ -755,7 +1122,8 @@ async fn update(
     Path((table, id)): Path<(String, String)>,
     body: String,
 ) -> Response {
-    let who = match require_staff(&headers).await {
+    let path = format!("/admin/{table}/{id}/edit");
+    let user = match require_staff(&headers, &path).await {
         Ok(u) => u,
         Err(r) => return r,
     };
@@ -775,21 +1143,24 @@ async fn update(
         Ok(_) => Redirect::to(&format!("/admin/{}/{}", model.table, id)).into_response(),
         Err(e) => {
             let fields = form_fields_for(&model, Some(&form), cfg);
+            let apps = sidebar_apps(&state, &user);
+            let breadcrumbs = vec![
+                serde_json::json!({ "label": model.name.clone(), "url": format!("/admin/{table}/") }),
+                serde_json::json!({ "label": format!("#{id}"), "url": format!("/admin/{table}/{id}") }),
+                serde_json::json!({ "label": "Edit", "url": format!("/admin/{table}/{id}/edit") }),
+            ];
             match render(
                 "admin/form.html",
                 context!(
-                    user => who,
-                    model => model_for_template(&model),
-                    fields => fields,
-                    verb => "Edit",
-                    action => format!("/admin/{}/{}/edit", model.table, id),
-                    // Log the full error server-side; surface a
-                    // generic message to the browser. Debug formatting
-                    // of an AdminError can leak query fragments and
-                    // constraint names — autoescape protects against
-                    // XSS but the information disclosure is still
-                    // worth avoiding for staff-facing flows.
-                    error => sanitise_form_error(&e),
+                    user         => user.username.clone(),
+                    model        => model_for_template(&model),
+                    fields       => fields,
+                    verb         => "Edit",
+                    action       => format!("/admin/{}/{}/edit", model.table, id),
+                    error        => sanitise_form_error(&e),
+                    apps         => apps,
+                    active_table => table,
+                    breadcrumbs  => breadcrumbs,
                 ),
             ) {
                 Ok(html) => (StatusCode::BAD_REQUEST, html).into_response(),
@@ -799,8 +1170,13 @@ async fn update(
     }
 }
 
-async fn delete(headers: HeaderMap, Path((table, id)): Path<(String, String)>) -> Response {
-    if let Err(r) = require_staff(&headers).await {
+async fn delete(
+    State(_state): State<AdminState>,
+    headers: HeaderMap,
+    Path((table, id)): Path<(String, String)>,
+) -> Response {
+    let path = format!("/admin/{table}/{id}/delete");
+    if let Err(r) = require_staff(&headers, &path).await {
         return r;
     }
     let Some((_, model)) = find_model(&table) else {
@@ -821,20 +1197,10 @@ async fn delete(headers: HeaderMap, Path((table, id)): Path<(String, String)>) -
     }
 }
 
-/// Double-quote-escape a SQL identifier. See umbra-rest's
-/// identically-named helper for the rationale.
 fn q(name: &str) -> String {
     name.replace('"', "\"\"")
 }
 
-/// Convert an `AdminError` to a short user-facing message for the
-/// form-re-render path. The full error is also logged via
-/// `tracing::error!` so operators can debug.
-///
-/// `Sqlx` errors specifically are stripped to a generic "database
-/// error" — Debug-formatting them leaks query fragments and
-/// constraint names. The other variants are safe to surface (they
-/// carry user-authored input like "field X required").
 fn sanitise_form_error(e: &AdminError) -> String {
     match e {
         AdminError::Sqlx(sqlx_err) => {
@@ -848,19 +1214,9 @@ fn sanitise_form_error(e: &AdminError) -> String {
 }
 
 // =========================================================================
-// Row marshalling. Read rows out as `Vec<HashMap<String, String>>` for
-// the template; write rows back via per-column SqlType dispatch.
+// Row marshalling.
 // =========================================================================
 
-/// Fetch rows with optional search, filter, and ordering.
-///
-/// Arguments:
-/// - `where_pk`: primary-key equality filter for detail/edit views.
-/// - `display_cols`: the subset of columns to SELECT (list_display).
-/// - `order_clause`: pre-built `ORDER BY ...` fragment (empty string = omit).
-/// - `search_term`: value from `?q=` matched via LIKE against search_fields.
-/// - `cfg`: the registered `AdminConfig` for this table (for search_fields).
-/// - `active_filter`: `(field, value)` from a list_filter facet click.
 #[allow(clippy::too_many_arguments)]
 async fn fetch_rows_filtered(
     pool: &SqlitePool,
@@ -872,7 +1228,6 @@ async fn fetch_rows_filtered(
     cfg: Option<&AdminConfig>,
     active_filter: Option<(&str, &str)>,
 ) -> Result<Vec<HashMap<String, String>>, AdminError> {
-    // Build the SELECT column list from display_cols (validated against model fields).
     let valid_names: std::collections::HashSet<&str> =
         model.fields.iter().map(|c| c.name.as_str()).collect();
     let columns = display_cols
@@ -882,7 +1237,6 @@ async fn fetch_rows_filtered(
         .collect::<Vec<_>>()
         .join(", ");
     let columns = if columns.is_empty() {
-        // Fallback: all columns.
         model
             .fields
             .iter()
@@ -896,13 +1250,11 @@ async fn fetch_rows_filtered(
     let mut conditions: Vec<String> = Vec::new();
     let mut bind_strings: Vec<String> = Vec::new();
 
-    // PK equality (detail / edit).
     if let Some((col, _val)) = where_pk {
         conditions.push(format!("\"{}\" = ?", q(col)));
         bind_strings.push(where_pk.unwrap().1.to_string());
     }
 
-    // Search: LIKE %term% across search_fields, ORed together.
     if let Some(term) = search_term
         && let Some(c) = cfg
         && !c.search_fields.is_empty()
@@ -922,7 +1274,6 @@ async fn fetch_rows_filtered(
         }
     }
 
-    // Active filter from facet click.
     if let Some((field, value)) = active_filter {
         if valid_names.contains(field) {
             conditions.push(format!("\"{}\" = ?", q(field)));
@@ -935,13 +1286,11 @@ async fn fetch_rows_filtered(
     } else {
         format!(" WHERE {}", conditions.join(" AND "))
     };
-
     let order_sql = if order_clause.is_empty() || where_pk.is_some() {
         String::new()
     } else {
         format!(" ORDER BY {order_clause}")
     };
-
     let limit_sql = if where_pk.is_some() {
         " LIMIT 1"
     } else {
@@ -1006,11 +1355,6 @@ fn column_to_string(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<Strin
             SqlType::Uuid => row
                 .try_get::<Option<Uuid>, _>(name)?
                 .map_or(String::new(), |v| v.to_string()),
-            // Json columns render in the admin as a compact JSON
-            // string so the operator can read and edit in the textarea
-            // widget. Pretty-printing would be friendlier visually but
-            // breaks the textarea's single-row width in the list view;
-            // a richer JSON editor is a future admin upgrade.
             SqlType::Json => row
                 .try_get::<Option<Value>, _>(name)?
                 .map_or(String::new(), |v| v.to_string()),
@@ -1018,7 +1362,6 @@ fn column_to_string(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<Strin
             SqlType::Inet | SqlType::Cidr | SqlType::MacAddr | SqlType::FullText => {
                 panic_pg_only_unsupported(&col.name)
             }
-            // ForeignKey renders as i64 — same as BigInt.
             SqlType::ForeignKey => row
                 .try_get::<Option<i64>, _>(name)?
                 .map_or(String::new(), |v| v.to_string()),
@@ -1045,22 +1388,17 @@ fn column_to_string(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<Strin
         SqlType::Inet | SqlType::Cidr | SqlType::MacAddr | SqlType::FullText => {
             panic_pg_only_unsupported(&col.name)
         }
-        // ForeignKey renders as i64 — same as BigInt.
         SqlType::ForeignKey => row.try_get::<i64, _>(name)?.to_string(),
     })
 }
 
-/// Boot-path-bypassed sentinel for Array fields. The admin plugin runs
-/// against SqlitePool today; field.backend should have failed boot.
 fn panic_array_unsupported(column: &str) -> ! {
     panic!(
         "umbra-admin: column `{column}` is a Postgres-only Array; the \
-         field.backend system check should have failed boot. A \
-         Postgres-aware admin upgrade is a Phase 4 follow-on."
+         field.backend system check should have failed boot."
     )
 }
 
-/// Phase 4.4 sentinel for Inet/Cidr/MacAddr.
 fn panic_pg_only_unsupported(column: &str) -> ! {
     panic!(
         "umbra-admin: column `{column}` is a Postgres-only network type \
@@ -1075,15 +1413,9 @@ async fn insert_row(
     form: &HashMap<String, String>,
     cfg: Option<&AdminConfig>,
 ) -> Result<(), AdminError> {
-    // Skip the PK column if it's an integer (SQLite assigns via
-    // AUTOINCREMENT). For string/uuid PKs the form has to supply
-    // the value. The form might supply it for integers too; in
-    // that case let it through.
-    // Also skip readonly fields — they can't be submitted or changed.
     let readonly: std::collections::HashSet<&str> = cfg
         .map(|c| c.readonly_fields.iter().map(|s| s.as_str()).collect())
         .unwrap_or_default();
-
     let writable: Vec<&Column> = model
         .fields
         .iter()
@@ -1104,11 +1436,11 @@ async fn insert_row(
         "INSERT INTO \"{}\" ({names}) VALUES ({placeholders})",
         q(&model.table)
     );
-    let mut q = sqlx::query(&sql);
+    let mut qb = sqlx::query(&sql);
     for col in &writable {
-        q = bind_form_value(q, col, form)?;
+        qb = bind_form_value(qb, col, form)?;
     }
-    q.execute(pool).await?;
+    qb.execute(pool).await?;
     Ok(())
 }
 
@@ -1120,11 +1452,9 @@ async fn update_row(
     form: &HashMap<String, String>,
     cfg: Option<&AdminConfig>,
 ) -> Result<(), AdminError> {
-    // Skip readonly fields in updates.
     let readonly: std::collections::HashSet<&str> = cfg
         .map(|c| c.readonly_fields.iter().map(|s| s.as_str()).collect())
         .unwrap_or_default();
-
     let writable: Vec<&Column> = model
         .fields
         .iter()
@@ -1140,12 +1470,12 @@ async fn update_row(
         q(&model.table),
         q(&pk.name)
     );
-    let mut q = sqlx::query(&sql);
+    let mut qb = sqlx::query(&sql);
     for col in &writable {
-        q = bind_form_value(q, col, form)?;
+        qb = bind_form_value(qb, col, form)?;
     }
-    q = q.bind(pk_value.to_string());
-    q.execute(pool).await?;
+    qb = qb.bind(pk_value.to_string());
+    qb.execute(pool).await?;
     Ok(())
 }
 
@@ -1155,9 +1485,6 @@ fn bind_form_value<'q>(
     form: &HashMap<String, String>,
 ) -> Result<sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>>, AdminError> {
     let raw = form.get(&col.name).cloned().unwrap_or_default();
-    // Empty + nullable → NULL. Empty + boolean → false (HTML form
-    // omits the checkbox when unchecked). Empty + non-nullable
-    // non-boolean → reject.
     if raw.is_empty() {
         return Ok(match col.ty {
             SqlType::Boolean => q.bind(false),
@@ -1198,8 +1525,6 @@ fn bind_form_value<'q>(
                 .map_err(|e| AdminError::BadInput(format!("{}: {e}", col.name)))?,
         ),
         SqlType::Timestamptz => {
-            // HTML's `datetime-local` emits `2026-05-30T17:00` with
-            // no timezone. Assume UTC.
             let s = if raw.contains(':') && !raw.contains('+') && !raw.ends_with('Z') {
                 format!("{raw}:00Z")
             } else {
@@ -1213,9 +1538,6 @@ fn bind_form_value<'q>(
             Uuid::parse_str(&raw)
                 .map_err(|e| AdminError::BadInput(format!("{}: {e}", col.name)))?,
         ),
-        // The admin textarea returned the JSON document as a string.
-        // Parse it back to a serde_json::Value so the binder stores
-        // structured JSON rather than the literal text.
         SqlType::Json => q.bind(
             serde_json::from_str::<Value>(&raw)
                 .map_err(|e| AdminError::BadInput(format!("{}: {e}", col.name)))?,
@@ -1224,7 +1546,6 @@ fn bind_form_value<'q>(
         SqlType::Inet | SqlType::Cidr | SqlType::MacAddr | SqlType::FullText => {
             panic_pg_only_unsupported(&col.name)
         }
-        // ForeignKey fields store i64 PKs — parse and bind the same as BigInt.
         SqlType::ForeignKey => q.bind(
             raw.parse::<i64>()
                 .map_err(|e| AdminError::BadInput(format!("{}: {e}", col.name)))?,
@@ -1252,7 +1573,6 @@ fn bind_null<'q>(
         SqlType::Inet | SqlType::Cidr | SqlType::MacAddr | SqlType::FullText => {
             panic_pg_only_unsupported(&col.name)
         }
-        // ForeignKey stores i64 — bind as nullable i64.
         SqlType::ForeignKey => q.bind(None::<i64>),
     }
 }
@@ -1278,11 +1598,10 @@ fn form_fields_for(
     let readonly_set: std::collections::HashSet<&str> = cfg
         .map(|c| c.readonly_fields.iter().map(|s| s.as_str()).collect())
         .unwrap_or_default();
-
     model
         .fields
         .iter()
-        .filter(|c| !c.primary_key) // PK isn't editable in the form
+        .filter(|c| !c.primary_key)
         .map(|c| {
             let raw = prefill
                 .and_then(|m| m.get(&c.name))
@@ -1299,50 +1618,22 @@ fn form_fields_for(
         .collect()
 }
 
-/// Coerce a row value (as serialised by `column_to_string`) into the
-/// exact string the matching HTML5 input widget expects.
-///
-/// The display path renders `published_at` as RFC3339
-/// (`2026-05-30T12:00:00+00:00`) which the detail view shows
-/// faithfully. But `<input type="datetime-local">` only accepts
-/// `YYYY-MM-DDTHH:MM` — feed it RFC3339 and the browser silently
-/// blanks the field, dropping the user's existing value on save.
-/// Same trap with `<input type="date">` and `<input type="time">` if
-/// the column stringification adds extra precision.
-///
-/// This function is per-column-type so the conversion stays explicit:
-/// adding a new `SqlType` lands a new arm here (or falls through to
-/// pass-through). Empty values stay empty so nullable columns keep
-/// their "no value" semantics.
 fn format_for_input(raw: &str, ty: SqlType) -> String {
     if raw.is_empty() {
         return String::new();
     }
     match ty {
-        SqlType::Timestamptz => {
-            // RFC3339 `2026-05-30T12:00:00+00:00` → `2026-05-30T12:00`
-            // for datetime-local. We strip seconds and TZ, accepting
-            // a one-minute floor on the precision; the input widget
-            // doesn't expose seconds anyway.
-            match chrono::DateTime::parse_from_rfc3339(raw) {
-                Ok(dt) => dt.format("%Y-%m-%dT%H:%M").to_string(),
-                // Bad/empty/legacy formats fall through unmodified.
-                // The form save path validates again on submit.
-                Err(_) => raw.to_string(),
-            }
-        }
+        SqlType::Timestamptz => match chrono::DateTime::parse_from_rfc3339(raw) {
+            Ok(dt) => dt.format("%Y-%m-%dT%H:%M").to_string(),
+            Err(_) => raw.to_string(),
+        },
         SqlType::Time => {
-            // HTML's `time` widget accepts `HH:MM` and `HH:MM:SS`. If
-            // the column stringification emitted sub-second precision,
-            // trim it back to seconds.
             if let Some(dot) = raw.find('.') {
                 raw[..dot].to_string()
             } else {
                 raw.to_string()
             }
         }
-        // Date, Text, integer kinds, etc. — pass through. The column
-        // stringification already emits the right form.
         _ => raw.to_string(),
     }
 }
@@ -1359,24 +1650,10 @@ fn input_kind(ty: SqlType) -> &'static str {
         SqlType::Date => "date",
         SqlType::Time => "time",
         SqlType::Timestamptz => "datetime-local",
-        // JSON columns render as a textarea — same widget the admin
-        // already uses for long-form Text overrides could pick when
-        // they land. The form template keys on this string; the
-        // "textarea" value is new and the template needs the matching
-        // branch landed alongside.
         SqlType::Json => "textarea",
-        // Array fields are Postgres-only; the admin form path runs on
-        // SqlitePool today and the field.backend system check fires at
-        // boot. Return a placeholder widget name; the template path
-        // never sees this since boot failed first.
         SqlType::Array(_) => "textarea",
-        // Phase 4.4 network types — same SQLite-gated story. Widget
-        // is "text" since the values render as strings.
         SqlType::Inet | SqlType::Cidr | SqlType::MacAddr => "text",
-        // Phase 4.3 full-text — textarea since tsvector content is
-        // typically multi-line lexeme output.
         SqlType::FullText => "textarea",
-        // ForeignKey renders as a numeric input — same as BigInt.
         SqlType::ForeignKey => "number",
     }
 }
@@ -1395,7 +1672,6 @@ struct ColumnView {
     primary_key: bool,
 }
 
-/// Full model view with all fields (used by detail).
 fn model_for_template(model: &ModelMeta) -> ModelView {
     ModelView {
         name: model.name.clone(),
@@ -1412,7 +1688,6 @@ fn model_for_template(model: &ModelMeta) -> ModelView {
     }
 }
 
-/// Filtered model view for list (only display_cols shown).
 fn model_for_template_cols(model: &ModelMeta, display_cols: &[String]) -> ModelView {
     let valid: std::collections::HashSet<&str> =
         model.fields.iter().map(|c| c.name.as_str()).collect();
@@ -1435,12 +1710,14 @@ fn model_for_template_cols(model: &ModelMeta, display_cols: &[String]) -> ModelV
     }
 }
 
-// Quiet unused-import lints in case axum's `Json` isn't referenced
-// after a future refactor. Keeping the import line stable.
 #[allow(dead_code)]
 fn _unused_json_marker() -> Option<Json<()>> {
     None
 }
+
+// =========================================================================
+// Unit tests (pure logic — no DB needed).
+// =========================================================================
 
 #[cfg(test)]
 mod tests {
@@ -1448,30 +1725,18 @@ mod tests {
 
     #[test]
     fn format_for_input_coerces_rfc3339_to_datetime_local() {
-        // The actual bug: column_to_string emits RFC3339, but the
-        // `datetime-local` widget needs `YYYY-MM-DDTHH:MM`. Without
-        // the coercion, the browser silently shows an empty field
-        // and a Save would clear the column.
         let coerced = format_for_input("2026-05-30T12:00:00+00:00", SqlType::Timestamptz);
         assert_eq!(coerced, "2026-05-30T12:00");
     }
 
     #[test]
     fn format_for_input_handles_rfc3339_with_offset() {
-        // Same as above but a non-UTC offset to confirm the offset is
-        // dropped (datetime-local has no timezone field).
         let coerced = format_for_input("2026-05-30T17:00:00+05:00", SqlType::Timestamptz);
-        // 17:00+05:00 = 12:00Z, but datetime-local renders WALL TIME,
-        // not UTC. chrono's `format("%Y-%m-%dT%H:%M")` on a
-        // `DateTime<FixedOffset>` keeps the local wall time.
         assert_eq!(coerced, "2026-05-30T17:00");
     }
 
     #[test]
     fn format_for_input_empty_stays_empty() {
-        // Nullable column with no value must remain empty so the
-        // form shows the placeholder and the save path treats the
-        // unchecked input as NULL.
         assert_eq!(format_for_input("", SqlType::Timestamptz), "");
         assert_eq!(format_for_input("", SqlType::Time), "");
         assert_eq!(format_for_input("", SqlType::Text), "");
@@ -1479,8 +1744,6 @@ mod tests {
 
     #[test]
     fn format_for_input_passes_through_simple_types() {
-        // Date, Text, integers, etc. are already in the right form
-        // when column_to_string emits them. Pass through untouched.
         assert_eq!(format_for_input("2026-05-30", SqlType::Date), "2026-05-30");
         assert_eq!(format_for_input("hello", SqlType::Text), "hello");
         assert_eq!(format_for_input("42", SqlType::BigInt), "42");
@@ -1488,21 +1751,55 @@ mod tests {
 
     #[test]
     fn format_for_input_trims_subsecond_time() {
-        // `12:34:56.789012` → `12:34:56`. The widget accepts both
-        // `HH:MM` and `HH:MM:SS` but chokes on fractional seconds.
         assert_eq!(format_for_input("12:34:56.789", SqlType::Time), "12:34:56");
-        // Already-clean values pass through.
         assert_eq!(format_for_input("12:34:56", SqlType::Time), "12:34:56");
         assert_eq!(format_for_input("12:34", SqlType::Time), "12:34");
     }
 
     #[test]
     fn format_for_input_passes_through_bad_rfc3339_unchanged() {
-        // Defensive: if column_to_string ever emits a malformed
-        // timestamp (e.g., from a manual DB edit), don't drop the
-        // value — pass it through. The form save path validates
-        // again on submit.
         let bad = "not-a-valid-timestamp";
         assert_eq!(format_for_input(bad, SqlType::Timestamptz), bad);
+    }
+
+    #[test]
+    fn sanitise_next_rejects_external_urls() {
+        assert_eq!(sanitise_next("http://evil.com/"), "/admin/");
+        assert_eq!(sanitise_next("https://evil.com/"), "/admin/");
+        assert_eq!(sanitise_next("//evil.com/"), "/admin/");
+    }
+
+    #[test]
+    fn sanitise_next_rejects_non_admin_paths() {
+        assert_eq!(sanitise_next("/app/dashboard"), "/admin/");
+        assert_eq!(sanitise_next("/login"), "/admin/");
+    }
+
+    #[test]
+    fn sanitise_next_accepts_admin_paths() {
+        assert_eq!(sanitise_next("/admin/"), "/admin/");
+        assert_eq!(sanitise_next("/admin/note/"), "/admin/note/");
+        assert_eq!(sanitise_next("/admin"), "/admin");
+    }
+
+    #[test]
+    fn sanitise_next_empty_stays_empty() {
+        assert_eq!(sanitise_next(""), "");
+        assert_eq!(sanitise_next("   "), "");
+    }
+
+    #[test]
+    fn admin_model_defaults() {
+        let m = AdminModel::new("post");
+        assert_eq!(m.get_list_per_page(), 25);
+        assert!(m.inlines.is_empty());
+        assert!(m.label.is_none());
+        assert!(m.icon.is_none());
+    }
+
+    #[test]
+    fn admin_config_alias_compiles() {
+        // The type alias must be identical to AdminModel at the Rust level.
+        let _: AdminConfig = AdminModel::new("test");
     }
 }

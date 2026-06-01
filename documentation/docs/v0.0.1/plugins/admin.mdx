@@ -11,10 +11,11 @@ create, edit, and delete views - no extra code required.
 
 ## What you get from `AdminPlugin::default()`
 
-The plugin contributes a router with these routes, all protected by HTTP Basic Auth:
-
 | Route | What it does |
 |---|---|
+| `GET /admin/login` | Login form |
+| `POST /admin/login` | Authenticate, create session, redirect |
+| `GET /admin/logout` | Destroy session, redirect to login |
 | `GET /admin/` | Index - list every registered model |
 | `GET /admin/<table>/` | Row list (up to 200 rows, ordered by PK) |
 | `GET /admin/<table>/<id>` | Detail view for one row |
@@ -26,10 +27,36 @@ The plugin contributes a router with these routes, all protected by HTTP Basic A
 
 ```rust
 App::builder()
-    .plugin(AuthPlugin::default())   // required - admin gates on auth
+    .plugin(AuthPlugin::default())     // required: login verifies against auth_user
+    .plugin(SessionsPlugin::default()) // required: login creates a session
     .plugin(AdminPlugin::default())
     .build()?;
 ```
+
+## The admin shell (phase 1)
+
+The admin ships a dark-mode shell matching a production back-office aesthetic:
+
+- **Fixed 260px sidebar** with a live model search box and model groups, one per plugin. Active models are highlighted with the primary accent. The sidebar is independently scrollable.
+- **Sticky 56px topbar** with breadcrumbs on the left, a `⌘K` command-palette placeholder in the center, and a theme toggle + user menu on the right.
+- **Light/dark theme** with a toggle that persists the preference in `localStorage`. Default is dark. Phase 4 will move this to per-user server-side prefs.
+- **HTMX loaded** via CDN so later phases can target and swap fragments without restructuring the shell.
+- **Lucide icons** throughout (MIT, consistent 24px grid, matches the design PRD §2).
+
+The shell is implemented in `templates/base.html` and all existing admin templates extend it.
+
+## Login flow (HTML form, not Basic Auth)
+
+Phase 1 replaces the old HTTP Basic Auth challenge with a proper HTML form flow:
+
+1. Unauthenticated requests to any admin route redirect to `GET /admin/login?next=<path>`.
+2. `GET /admin/login` renders a login form. If no session cookie is present, a fresh anonymous session is created so the CSRF token has somewhere to live.
+3. The form submits `username`, `password`, `csrf_token`, and `next` to `POST /admin/login`.
+4. The handler verifies the CSRF token against the session, then calls `umbra_auth::authenticate`. On success it calls `umbra_sessions::login_with_request` (which also handles session-fixation defense) and redirects to `next`.
+5. On failure, the form re-renders with a generic error message - the wording never reveals whether the username or the password was wrong.
+6. `GET /admin/logout` destroys the session and redirects to `/admin/login`.
+
+The `next` parameter is validated server-side: only paths starting with `/admin` are accepted; `//evil.com/` and absolute URLs are silently replaced with `/admin/`.
 
 ## Model discovery - nothing to register
 
@@ -40,20 +67,13 @@ admin automatically.
 
 ## Auth gating
 
-Every admin route requires HTTP Basic Auth. The submitted credentials are verified
-via `umbra_auth::authenticate`. The user must have `is_staff = true`; non-staff
-accounts receive `403 Forbidden`. `AdminPlugin` declares `"auth"` in its
-`dependencies()`, so `App::build()` guarantees `umbra-auth` is initialized first.
+Every admin route requires a valid session cookie carrying an `is_staff = true` user. Missing or expired sessions redirect to `/admin/login?next=<path>`. Non-staff authenticated sessions receive `403 Forbidden`.
 
 ```rust
 // Create a staff user (e.g. in a management command or seed script).
-AuthUser::objects().create(NewUser {
-    username: "admin".into(),
-    password_hash: hash_password("secret"),
-    is_staff: true,
-    is_active: true,
-    ..Default::default()
-}).await?;
+let user = umbra_auth::create_user("admin", "admin@example.com", "secret").await?;
+sqlx::query("UPDATE auth_user SET is_staff = 1 WHERE id = ?")
+    .bind(user.id).execute(&pool).await?;
 ```
 
 ## Form widgets
@@ -61,16 +81,16 @@ AuthUser::objects().create(NewUser {
 The admin dispatches HTML input types by `SqlType`. Nullable fields omit the
 `required` attribute; the PK column is hidden from create/edit forms.
 
-## Customizing the admin
+## The `AdminModel` registration shape
 
-`AdminConfig` is the admin equivalent of REST's `ResourceConfig` - one config per model, registered on the plugin before it is passed to `App::builder()`.
+`AdminModel` (renamed from `AdminConfig` in phase 1 - the old name is kept as a type alias) is the admin equivalent of REST's `ResourceConfig` - one config per model, registered on the plugin before it is passed to `App::builder()`.
 
 ```rust
-use umbra_admin::{Action, AdminConfig, AdminPlugin};
+use umbra_admin::{Action, AdminModel, AdminPlugin};
 
 let admin = AdminPlugin::default()
     .register(
-        AdminConfig::new("post")
+        AdminModel::new("post")
             .list_display(&["title", "author", "published_at"])
             .list_filter(&["published", "author"])
             .search_fields(&["title", "body"])
@@ -148,8 +168,35 @@ Fields that appear on the create and edit form but render as `<input readonly>` 
 ### Deferred surfaces
 
 <Callout type="info">
-**`fieldsets`** - grouping fields into named sections on the edit form - is deferred. Low ROI relative to the five surfaces above; it will land as `.fieldsets(vec![...])` on `AdminConfig` when there is a real consumer. Other deferred features: `inlines` (inline related-model forms), `prepopulated_fields` (slug autofill from another field), `raw_id_fields` (FK input as a raw integer instead of a dropdown).
+**Phase 2+ only.** The following fields are stored on `AdminModel` but have no rendering path in phase 1:
+
+- **`inlines`** - inline related-model editors (`InlineModel { model, fk_field, list_display }`). Phase 2 renders them as collapsible sections on the edit form.
+- **`list_per_page`** - stored (default 25) but pagination is not yet rendered. Phase 2 adds the full paginator.
+- **`fieldsets`** - grouping fields into named sections on the edit form. Lands in phase 2 as `.fieldsets(vec![...])`.
+- **`prepopulated_fields`** - slug autofill from another field. Phase 3.
+- **`raw_id_fields`** - FK input as a raw integer. Phase 3.
 </Callout>
+
+## Deferred admin features (phases 2-4)
+
+The following are out of scope for the current release. They are documented here so you know what is coming:
+
+| Feature | Phase |
+|---|---|
+| DataTable component (sort, search, faceted filters, column control, density, pagination) | 2 |
+| Right-side sheet for preview/edit (no page reload) | 2 |
+| Full field-editor catalog (async FK combobox, M2M chips, date picker, JSON editor, ...) | 2 |
+| Inline related-model editing | 2 |
+| Dashboard widgets (KPI cards, charts, activity feed) | 3 |
+| File/media previews (image lightbox, PDF viewer, CSV table, code viewer) | 3 |
+| Action system (row + bulk actions, confirm dialog, toast results) | 3 |
+| Command palette (`⌘K`) | 4 |
+| Per-user theme preference (server-side, `admin_user_prefs` table) | 4 |
+| Audit log (`admin_audit_log` table, per-object history) | 4 |
+
+At v0.0.1 the light/dark theme toggle persists per-browser via `localStorage`. Phase 4 moves this to a server-side `admin_user_prefs` table.
+
+For the design spec see `docs/admin-backend/DESIGN.md`, `docs/admin-backend/backend-prd.md`, and `docs/admin-backend/design-prd.md`.
 
 ## What is NOT in v1
 

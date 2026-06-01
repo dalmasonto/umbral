@@ -17,9 +17,15 @@ umbra = { path = "../../crates/umbra", version = "0.0.1" }
 # routing surface. umbra's web re-exports don't include State.
 axum = "0.8"
 # Required for the auth gate. The admin uses umbra-auth's
-# `authenticate` helper against the X-Forwarded-User / Basic Auth
-# header on every request.
+# `authenticate` helper to verify credentials on login.
 umbra-auth = { path = "../umbra-auth", version = "0.0.1" }
+# Session management: create_session, login, logout, current_user.
+# Used by the HTML login flow to replace the old Basic Auth challenge.
+umbra-sessions = { path = "../umbra-sessions", version = "0.0.1" }
+# CSRF token generation for the login form. The admin embeds a
+# hidden csrf_token field and verifies it on POST /admin/login.
+# We reuse umbra-security's generate_token() rather than rolling our own.
+umbra-security = { path = "../umbra-security", version = "0.0.1" }
 # Form decoding + row marshalling. The admin parses POST bodies
 # through `serde_urlencoded` (axum's `Form` extractor under the
 # hood) and writes them back through dynamic sqlx::query calls.
@@ -29,7 +35,6 @@ serde_urlencoded = "0.7"
 chrono = { version = "0.4", features = ["serde"] }
 sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "chrono", "uuid"] }
 uuid = { version = "1", features = ["serde", "v7"] }
-base64 = "0.22"
 # Admin owns its own minijinja Environment with the embedded
 # templates from `templates/`. The framework's ambient template
 # engine is OnceLock-protected so the admin can't register into it
@@ -50,3 +55,4 @@ http = "1"
 http-body-util = "0.1"
 axum = "0.8"
 serde_urlencoded = "0.7"
+umbra-sessions = { path = "../umbra-sessions", version = "0.0.1" }

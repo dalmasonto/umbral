@@ -1,0 +1,351 @@
+<!doctype html>
+<html class="dark" lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Sign in | Umbra Admin</title>
+        <!-- HTMX config: only allow same-origin requests -->
+        <meta name="htmx-config" content='{"selfRequestsOnly":true}' />
+        <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+        <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+        <script src="https://unpkg.com/lucide@latest"></script>
+        <link
+            href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+            rel="stylesheet"
+        />
+        <script id="tailwind-config">
+            tailwind.config = {
+                darkMode: "class",
+                theme: {
+                    extend: {
+                        colors: {
+                            "surface-container-lowest": "#0b0e15",
+                            "surface-container-low": "#191c23",
+                            "surface-container": "#1d2027",
+                            "surface-container-high": "#272a31",
+                            "surface-container-highest": "#32353c",
+                            "surface-bright": "#363941",
+                            "surface-dim": "#10131a",
+                            surface: "#10131a",
+                            "surface-variant": "#32353c",
+                            "surface-tint": "#c2c1ff",
+                            "on-surface": "#e0e2ec",
+                            "on-surface-variant": "#c7c5d5",
+                            "inverse-surface": "#e0e2ec",
+                            "inverse-on-surface": "#2d3038",
+                            outline: "#918f9e",
+                            "outline-variant": "#464553",
+                            background: "#10131a",
+                            "on-background": "#e0e2ec",
+                            primary: "#c2c1ff",
+                            "on-primary": "#1f1792",
+                            "primary-container": "#8484f8",
+                            "on-primary-container": "#16098d",
+                            "primary-fixed": "#e2dfff",
+                            "primary-fixed-dim": "#c2c1ff",
+                            "on-primary-fixed": "#0b006b",
+                            "on-primary-fixed-variant": "#3835a8",
+                            "inverse-primary": "#504fc1",
+                            secondary: "#bec7d7",
+                            "on-secondary": "#28313d",
+                            "secondary-container": "#3e4755",
+                            "on-secondary-container": "#adb6c5",
+                            "secondary-fixed": "#dae3f4",
+                            "secondary-fixed-dim": "#bec7d7",
+                            "on-secondary-fixed": "#131c28",
+                            "on-secondary-fixed-variant": "#3e4755",
+                            tertiary: "#ffb3ad",
+                            "on-tertiary": "#68000a",
+                            "tertiary-container": "#ff5451",
+                            "on-tertiary-container": "#5c0008",
+                            "tertiary-fixed": "#ffdad7",
+                            "tertiary-fixed-dim": "#ffb3ad",
+                            "on-tertiary-fixed": "#410004",
+                            "on-tertiary-fixed-variant": "#930013",
+                            error: "#ffb4ab",
+                            "on-error": "#690005",
+                            "error-container": "#93000a",
+                            "on-error-container": "#ffdad6",
+                        },
+                        spacing: {
+                            "sidebar-width": "260px",
+                            "sidebar-collapsed": "68px",
+                            "topbar-height": "56px",
+                            gutter: "20px",
+                            base: "4px",
+                            xs: "4px",
+                            sm: "8px",
+                            md: "16px",
+                            lg: "24px",
+                            xl: "32px",
+                        },
+                        borderRadius: {
+                            DEFAULT: "0.125rem",
+                            sm: "0.125rem",
+                            lg: "0.25rem",
+                            xl: "0.5rem",
+                            "auth-card": "14px",
+                            full: "9999px",
+                        },
+                        fontFamily: {
+                            display: ["Inter"],
+                            h1: ["Inter"],
+                            h2: ["Inter"],
+                            h3: ["Inter"],
+                            "body-lg": ["Inter"],
+                            "body-md": ["Inter"],
+                            "body-sm": ["Inter"],
+                            "label-md": ["Inter"],
+                            "label-sm": ["Inter"],
+                            "data-mono": ["Inter"],
+                        },
+                        fontSize: {
+                            display: [
+                                "30px",
+                                {
+                                    lineHeight: "38px",
+                                    letterSpacing: "-0.02em",
+                                    fontWeight: "700",
+                                },
+                            ],
+                            h1: [
+                                "24px",
+                                {
+                                    lineHeight: "32px",
+                                    letterSpacing: "-0.015em",
+                                    fontWeight: "600",
+                                },
+                            ],
+                            h2: [
+                                "20px",
+                                {
+                                    lineHeight: "28px",
+                                    letterSpacing: "-0.01em",
+                                    fontWeight: "600",
+                                },
+                            ],
+                            h3: [
+                                "16px",
+                                { lineHeight: "24px", fontWeight: "600" },
+                            ],
+                            "body-lg": [
+                                "16px",
+                                { lineHeight: "24px", fontWeight: "400" },
+                            ],
+                            "body-md": [
+                                "14px",
+                                { lineHeight: "20px", fontWeight: "400" },
+                            ],
+                            "body-sm": [
+                                "13px",
+                                { lineHeight: "18px", fontWeight: "400" },
+                            ],
+                            "label-md": [
+                                "12px",
+                                {
+                                    lineHeight: "16px",
+                                    letterSpacing: "0.01em",
+                                    fontWeight: "500",
+                                },
+                            ],
+                            "label-sm": [
+                                "11px",
+                                {
+                                    lineHeight: "14px",
+                                    letterSpacing: "0.03em",
+                                    fontWeight: "600",
+                                },
+                            ],
+                            "data-mono": [
+                                "14px",
+                                { lineHeight: "20px", fontWeight: "400" },
+                            ],
+                        },
+                    },
+                },
+            };
+        </script>
+        <style>
+            body {
+                font-family: "Inter", sans-serif;
+                -webkit-font-smoothing: antialiased;
+            }
+            .mesh-gradient {
+                background-color: #0b0e15;
+                background-image:
+                    radial-gradient(
+                        at 0% 0%,
+                        rgba(194, 193, 255, 0.05) 0px,
+                        transparent 50%
+                    ),
+                    radial-gradient(
+                        at 100% 100%,
+                        rgba(132, 132, 248, 0.03) 0px,
+                        transparent 50%
+                    );
+            }
+            /* Tabular numerals for any numeric context. */
+            .tabular-nums {
+                font-variant-numeric: tabular-nums;
+            }
+        </style>
+    </head>
+    <body
+        class="mesh-gradient min-h-screen flex items-center justify-center p-md text-on-surface"
+    >
+        <!-- Auth container -->
+        <div class="w-full max-w-105">
+            <!-- Brand identity -->
+            <div class="flex flex-col items-center mb-xl">
+                <div
+                    class="w-12 h-12 bg-primary-container rounded-xl flex items-center justify-center mb-md shadow-lg"
+                >
+                    <i
+                        data-lucide="layers"
+                        class="w-6 h-6 text-on-primary-container"
+                    ></i>
+                </div>
+                <h1 class="font-h1 text-h1 text-on-surface tracking-tight">
+                    Umbra Admin
+                </h1>
+                <p
+                    class="font-body-md text-body-md text-on-surface-variant mt-xs"
+                >
+                    Precision infrastructure management
+                </p>
+            </div>
+
+            <!-- Login card -->
+            <main
+                class="bg-surface-container border border-outline-variant rounded-auth-card p-xl shadow-2xl"
+            >
+                <header class="mb-xl">
+                    <h2 class="font-h2 text-h2 mb-xs">Welcome back</h2>
+                    <p
+                        class="font-body-sm text-body-sm text-on-surface-variant"
+                    >
+                        Enter your credentials to access your dashboard
+                    </p>
+                </header>
+
+                {%- if error %}
+                <!-- Error banner: never reveals whether username or password was wrong -->
+                <div
+                    class="mb-md p-md rounded-lg border border-error-container bg-error-container/20 flex items-center gap-sm"
+                >
+                    <i
+                        data-lucide="alert-circle"
+                        class="w-4 h-4 text-error flex-shrink-0"
+                    ></i>
+                    <p class="font-body-sm text-body-sm text-error">
+                        {{ error }}
+                    </p>
+                </div>
+                {%- endif %}
+
+                <form method="post" action="/admin/login" class="space-y-md">
+                    <!-- CSRF token — per-session, verified on POST -->
+                    <input
+                        type="hidden"
+                        name="csrf_token"
+                        value="{{ csrf_token }}"
+                    />
+                    <!-- next redirect target (validated server-side) -->
+                    <input type="hidden" name="next" value="{{ next }}" />
+
+                    <!-- Username field -->
+                    <div class="space-y-sm">
+                        <label
+                            class="font-label-md text-label-md text-on-surface-variant block"
+                            for="username"
+                            >Username</label
+                        >
+                        <div class="relative group">
+                            <div
+                                class="absolute inset-y-0 left-0 pl-md flex items-center pointer-events-none"
+                            >
+                                <i
+                                    data-lucide="user"
+                                    class="w-4 h-4 text-outline group-focus-within:text-primary transition-colors"
+                                ></i>
+                            </div>
+                            <input
+                                class="w-full bg-surface-container-lowest border border-outline-variant rounded-xl py-[10px] pl-[42px] pr-md font-body-md text-body-md text-on-surface focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all placeholder:text-outline/50"
+                                id="username"
+                                name="username"
+                                type="text"
+                                autocomplete="username"
+                                placeholder="your-username"
+                                value="{{ prefill_username }}"
+                                required
+                            />
+                        </div>
+                    </div>
+
+                    <!-- Password field -->
+                    <div class="space-y-sm">
+                        <label
+                            class="font-label-md text-label-md text-on-surface-variant block"
+                            for="password"
+                            >Password</label
+                        >
+                        <div class="relative group">
+                            <div
+                                class="absolute inset-y-0 left-0 pl-md flex items-center pointer-events-none"
+                            >
+                                <i
+                                    data-lucide="lock"
+                                    class="w-4 h-4 text-outline group-focus-within:text-primary transition-colors"
+                                ></i>
+                            </div>
+                            <input
+                                class="w-full bg-surface-container-lowest border border-outline-variant rounded-xl py-[10px] pl-[42px] pr-md font-body-md text-body-md text-on-surface focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all placeholder:text-outline/50"
+                                id="password"
+                                name="password"
+                                type="password"
+                                autocomplete="current-password"
+                                placeholder="••••••••"
+                                required
+                            />
+                        </div>
+                    </div>
+
+                    <!-- Submit -->
+                    <button
+                        type="submit"
+                        class="w-full bg-primary-container hover:opacity-90 active:scale-[0.98] text-on-primary-container font-h3 text-h3 py-md rounded-xl transition-all shadow-lg mt-md"
+                    >
+                        Sign in
+                    </button>
+                </form>
+            </main>
+
+            <!-- Footer -->
+            <footer class="mt-xl flex justify-center items-center space-x-md">
+                <span class="font-label-md text-label-md text-outline"
+                    >Umbra v0.0.1</span
+                >
+            </footer>
+        </div>
+
+        <!-- Background decorative blur -->
+        <div
+            class="fixed top-0 left-0 w-full h-full pointer-events-none -z-10 overflow-hidden"
+            aria-hidden="true"
+        >
+            <div
+                class="absolute top-[-10%] right-[-10%] w-[40%] h-[40%] bg-primary/5 blur-[120px] rounded-full"
+            ></div>
+            <div
+                class="absolute bottom-[-10%] left-[-10%] w-[40%] h-[40%] bg-tertiary-container/5 blur-[120px] rounded-full"
+            ></div>
+        </div>
+
+        <script>
+            // Initialise Lucide icons after DOM is ready.
+            document.addEventListener("DOMContentLoaded", function () {
+                lucide.createIcons();
+            });
+        </script>
+    </body>
+</html>

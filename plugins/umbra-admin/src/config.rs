@@ -1,15 +1,15 @@
 //! Per-model admin customization bundles.
 //!
-//! [`AdminConfig`] is the admin's equivalent of `umbra_rest::ResourceConfig`.
-//! One config per registered model. Build via [`AdminConfig::new`] + chainable
+//! [`AdminModel`] is the admin's equivalent of `umbra_rest::ResourceConfig`.
+//! One config per registered model. Build via [`AdminModel::new`] + chainable
 //! methods, then register with [`crate::AdminPlugin::register`]:
 //!
 //! ```ignore
-//! use umbra_admin::{AdminPlugin, AdminConfig, Action};
+//! use umbra_admin::{AdminPlugin, AdminModel, Action};
 //!
 //! AdminPlugin::default()
 //!     .register(
-//!         AdminConfig::new("post")
+//!         AdminModel::new("post")
 //!             .list_display(&["title", "author", "published_at"])
 //!             .list_filter(&["published", "author"])
 //!             .search_fields(&["title", "body"])
@@ -19,10 +19,17 @@
 //!     )
 //! ```
 //!
-//! ## Fields that are not called out here
+//! ## `AdminConfig` alias
 //!
-//! - **`fieldsets`** — grouping fields into sections on the edit form. Low ROI,
-//!   deferred. When it lands, add `.fieldsets(vec![...])` to `AdminConfig`.
+//! [`AdminConfig`] is a type alias for backwards compatibility. Code
+//! that was written against the old name continues to compile unchanged.
+//!
+//! ## Phase-2 stubs
+//!
+//! - [`InlineModel`] carries the data shape for related-model inline
+//!   editors. The actual inline renderer lands in phase 2; today the
+//!   field is stored on [`AdminModel`] but has no rendering path.
+//! - [`AdminModel::inlines`] is `Vec<InlineModel>` — a no-op for now.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -150,17 +157,50 @@ fn is_action_name_char(c: char) -> bool {
 }
 
 // =========================================================================
-// AdminConfig
+// InlineModel (phase 2 stub)
+// =========================================================================
+
+/// Data shape for a related-model inline editor.
+///
+/// Phase 2 will render this as an inline section on the edit form —
+/// the same concept as Django's `StackedInline` / `TabularInline`.
+/// Today the struct is stored on [`AdminModel`] but nothing renders it.
+///
+/// Example (future):
+/// ```ignore
+/// AdminModel::new("post")
+///     .inlines(vec![InlineModel {
+///         model: "comment".to_string(),
+///         fk_field: "post_id".to_string(),
+///         list_display: vec!["author".to_string(), "body".to_string()],
+///     }])
+/// ```
+#[derive(Debug, Clone)]
+pub struct InlineModel {
+    /// SQL table name of the related model to show inline.
+    pub model: String,
+    /// The foreign key column on the related model pointing back to
+    /// this parent model.
+    pub fk_field: String,
+    /// Columns to display in the inline section. Empty = all columns.
+    pub list_display: Vec<String>,
+}
+
+// =========================================================================
+// AdminModel (the renamed AdminConfig)
 // =========================================================================
 
 /// Per-model admin customization. Build via [`Self::new`] + chainable methods,
 /// then register with [`crate::AdminPlugin::register`].
 ///
-/// All methods are opt-in. An `AdminConfig` with only `.new("post")` called
+/// All methods are opt-in. An `AdminModel` with only `.new("post")` called
 /// behaves identically to the implicit default: all columns in the list,
 /// no filters, no search, DB-default ordering.
+///
+/// Renamed from `AdminConfig` in phase 1. The old name is kept as a
+/// type alias so existing code compiles without changes.
 #[derive(Clone, Debug)]
-pub struct AdminConfig {
+pub struct AdminModel {
     /// SQL table name this config applies to.
     pub(crate) table: String,
     /// Columns to show in the list view (in order). Empty = all columns.
@@ -175,13 +215,23 @@ pub struct AdminConfig {
     pub(crate) actions: Vec<Action>,
     /// Fields shown read-only on the edit/create form.
     pub(crate) readonly_fields: Vec<String>,
+    /// Number of rows per page in the list view. Defaults to 25.
+    pub(crate) list_per_page: usize,
+    /// Related-model inline editors (phase 2 placeholder). Stored now;
+    /// rendered in phase 2.
+    pub(crate) inlines: Vec<InlineModel>,
+    /// Optional human-readable label for the sidebar. Defaults to a
+    /// title-cased version of `table`.
+    pub(crate) label: Option<String>,
+    /// Optional Lucide icon name for the sidebar. Defaults to `"database"`.
+    pub(crate) icon: Option<String>,
 }
 
-impl AdminConfig {
-    /// Start a new `AdminConfig` for the given SQL table name.
+impl AdminModel {
+    /// Start a new `AdminModel` for the given SQL table name.
     ///
     /// ```ignore
-    /// AdminConfig::new("post")
+    /// AdminModel::new("post")
     /// ```
     pub fn new(table: impl Into<String>) -> Self {
         Self {
@@ -192,6 +242,10 @@ impl AdminConfig {
             ordering: Vec::new(),
             actions: Vec::new(),
             readonly_fields: Vec::new(),
+            list_per_page: 25,
+            inlines: Vec::new(),
+            label: None,
+            icon: None,
         }
     }
 
@@ -200,7 +254,7 @@ impl AdminConfig {
     /// Default (no call): all columns in declaration order.
     ///
     /// ```ignore
-    /// AdminConfig::new("post")
+    /// AdminModel::new("post")
     ///     .list_display(&["title", "author", "published_at"])
     /// ```
     pub fn list_display(mut self, fields: &[&str]) -> Self {
@@ -215,7 +269,7 @@ impl AdminConfig {
     /// "true / false"; integers and text render their distinct values).
     ///
     /// ```ignore
-    /// AdminConfig::new("post")
+    /// AdminModel::new("post")
     ///     .list_filter(&["published", "author"])
     /// ```
     pub fn list_filter(mut self, fields: &[&str]) -> Self {
@@ -230,7 +284,7 @@ impl AdminConfig {
     /// base query before pagination.
     ///
     /// ```ignore
-    /// AdminConfig::new("post")
+    /// AdminModel::new("post")
     ///     .search_fields(&["title", "body"])
     /// ```
     pub fn search_fields(mut self, fields: &[&str]) -> Self {
@@ -243,7 +297,7 @@ impl AdminConfig {
     /// Each entry is a column name optionally prefixed with `-` for descending.
     ///
     /// ```ignore
-    /// AdminConfig::new("post")
+    /// AdminModel::new("post")
     ///     .ordering(&["-published_at", "title"])
     /// ```
     pub fn ordering(mut self, fields: &[&str]) -> Self {
@@ -259,7 +313,7 @@ impl AdminConfig {
     /// passing only the actions you want).
     ///
     /// ```ignore
-    /// AdminConfig::new("post")
+    /// AdminModel::new("post")
     ///     .actions(vec![
     ///         Action::delete_selected(),
     ///         Action::new("publish", "Publish selected", |ids, _ctx| async move {
@@ -279,7 +333,7 @@ impl AdminConfig {
     /// changed by the browser submission.
     ///
     /// ```ignore
-    /// AdminConfig::new("post")
+    /// AdminModel::new("post")
     ///     .readonly_fields(&["created_at", "id"])
     /// ```
     pub fn readonly_fields(mut self, fields: &[&str]) -> Self {
@@ -287,8 +341,57 @@ impl AdminConfig {
         self
     }
 
+    /// Set the number of rows per page in the list view.
+    ///
+    /// Defaults to 25. The actual pagination logic is deferred to phase 2;
+    /// this value is stored and available via [`AdminModel::get_list_per_page`].
+    pub fn list_per_page(mut self, n: usize) -> Self {
+        self.list_per_page = n;
+        self
+    }
+
+    /// Set related-model inline editors (phase 2 placeholder).
+    ///
+    /// The inlines are stored on the model for use in phase 2 but have
+    /// no rendering path in phase 1. Pass an empty vec or omit the call
+    /// to leave inlines disabled.
+    pub fn inlines(mut self, inlines: Vec<InlineModel>) -> Self {
+        self.inlines = inlines;
+        self
+    }
+
+    /// Override the sidebar display label. Defaults to a title-cased
+    /// version of the table name.
+    pub fn label(mut self, label: impl Into<String>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+
+    /// Set the Lucide icon name for the sidebar entry. Defaults to
+    /// `"database"`. Pass the Lucide icon slug (e.g. `"file-text"`,
+    /// `"users"`, `"settings"`).
+    pub fn icon(mut self, icon: impl Into<String>) -> Self {
+        self.icon = Some(icon.into());
+        self
+    }
+
     /// The table this config applies to.
     pub fn table(&self) -> &str {
         &self.table
     }
+
+    /// The page size for list views. Defaults to 25.
+    pub fn get_list_per_page(&self) -> usize {
+        self.list_per_page
+    }
 }
+
+// =========================================================================
+// Backwards-compat alias
+// =========================================================================
+
+/// Backwards-compatible type alias for [`AdminModel`].
+///
+/// All code written against the old `AdminConfig` name compiles
+/// unchanged — the types are identical at the Rust level.
+pub type AdminConfig = AdminModel;

@@ -1,27 +1,38 @@
 {% extends "admin/base.html" %}
 {% block title %}umbra admin{% endblock %}
 {% block content %}
-  <div class="panel">
-    <h2>Registered models</h2>
+  <div class="panel bg-surface-container border border-outline-variant rounded-xl p-md mb-lg">
+    <h2 class="font-h2 text-h2 text-on-surface mb-md">Registered models</h2>
     {% if models %}
-      <table>
-        <thead><tr><th>Plugin</th><th>Model</th><th>Table</th><th>Actions</th></tr></thead>
+      <table class="w-full border-collapse">
+        <thead>
+          <tr>
+            <th class="font-label-sm text-label-sm text-outline uppercase tracking-wider text-left pb-sm border-b border-outline-variant px-sm">Plugin</th>
+            <th class="font-label-sm text-label-sm text-outline uppercase tracking-wider text-left pb-sm border-b border-outline-variant px-sm">Model</th>
+            <th class="font-label-sm text-label-sm text-outline uppercase tracking-wider text-left pb-sm border-b border-outline-variant px-sm">Table</th>
+            <th class="font-label-sm text-label-sm text-outline uppercase tracking-wider text-left pb-sm border-b border-outline-variant px-sm">Actions</th>
+          </tr>
+        </thead>
         <tbody>
         {% for m in models %}
-          <tr>
-            <td><code>{{ m.plugin }}</code></td>
-            <td>{{ m.name }}</td>
-            <td><code>{{ m.table }}</code></td>
-            <td class="actions">
-              <a class="btn" href="/admin/{{ m.table }}/">Browse</a>
-              <a class="btn btn-primary" href="/admin/{{ m.table }}/new">Add</a>
+          <tr class="border-b border-outline-variant/50 hover:bg-surface-container-high transition-colors">
+            <td class="px-sm py-sm font-body-sm text-body-sm text-on-surface-variant"><code class="bg-surface-container-lowest px-xs py-[2px] rounded text-primary">{{ m.plugin }}</code></td>
+            <td class="px-sm py-sm font-body-sm text-body-sm text-on-surface">{{ m.name }}</td>
+            <td class="px-sm py-sm font-body-sm text-body-sm text-on-surface-variant"><code class="bg-surface-container-lowest px-xs py-[2px] rounded">{{ m.table }}</code></td>
+            <td class="px-sm py-sm">
+              <div class="flex gap-sm">
+                <a class="inline-flex items-center gap-xs px-sm py-xs bg-surface-container-high hover:bg-surface-container-highest border border-outline-variant rounded-lg font-label-md text-label-md text-on-surface transition-colors" href="/admin/{{ m.table }}/">Browse</a>
+                <a class="inline-flex items-center gap-xs px-sm py-xs bg-primary-container hover:opacity-90 border border-transparent rounded-lg font-label-md text-label-md text-on-primary-container transition-colors" href="/admin/{{ m.table }}/new">Add</a>
+              </div>
             </td>
           </tr>
         {% endfor %}
         </tbody>
       </table>
     {% else %}
-      <p class="empty">No models registered yet. Call <code>App::builder().model::&lt;T&gt;()</code> or register a plugin that contributes models.</p>
+      <p class="font-body-sm text-body-sm text-on-surface-variant italic text-center py-xl">
+        No models registered yet. Call <code class="bg-surface-container-lowest px-xs py-[2px] rounded">App::builder().model::&lt;T&gt;()</code> or register a plugin that contributes models.
+      </p>
     {% endif %}
   </div>
 {% endblock %}

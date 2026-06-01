@@ -1,50 +1,355 @@
 <!doctype html>
-<html lang="en">
+<html class="dark" lang="en" id="umbra-admin-root">
 <head>
-  <meta charset="utf-8">
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>{% block title %}umbra admin{% endblock %}</title>
+  <!-- HTMX: same-origin only -->
+  <meta name="htmx-config" content='{"selfRequestsOnly":true}'/>
+  <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+  <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+
+  <!-- Design tokens + Tailwind config (matches DESIGN.md § tokens) -->
+  <script id="tailwind-config">
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          colors: {
+            "surface-container-lowest": "#0b0e15",
+            "surface-container-low":    "#191c23",
+            "surface-container":        "#1d2027",
+            "surface-container-high":   "#272a31",
+            "surface-container-highest":"#32353c",
+            "surface-bright":           "#363941",
+            "surface-dim":              "#10131a",
+            "surface":                  "#10131a",
+            "surface-variant":          "#32353c",
+            "surface-tint":             "#c2c1ff",
+            "on-surface":               "#e0e2ec",
+            "on-surface-variant":       "#c7c5d5",
+            "inverse-surface":          "#e0e2ec",
+            "inverse-on-surface":       "#2d3038",
+            "outline":                  "#918f9e",
+            "outline-variant":          "#464553",
+            "background":               "#10131a",
+            "on-background":            "#e0e2ec",
+            "primary":                  "#c2c1ff",
+            "on-primary":               "#1f1792",
+            "primary-container":        "#8484f8",
+            "on-primary-container":     "#16098d",
+            "primary-fixed":            "#e2dfff",
+            "primary-fixed-dim":        "#c2c1ff",
+            "on-primary-fixed":         "#0b006b",
+            "on-primary-fixed-variant": "#3835a8",
+            "inverse-primary":          "#504fc1",
+            "secondary":                "#bec7d7",
+            "on-secondary":             "#28313d",
+            "secondary-container":      "#3e4755",
+            "on-secondary-container":   "#adb6c5",
+            "secondary-fixed":          "#dae3f4",
+            "secondary-fixed-dim":      "#bec7d7",
+            "on-secondary-fixed":       "#131c28",
+            "on-secondary-fixed-variant":"#3e4755",
+            "tertiary":                 "#ffb3ad",
+            "on-tertiary":              "#68000a",
+            "tertiary-container":       "#ff5451",
+            "on-tertiary-container":    "#5c0008",
+            "tertiary-fixed":           "#ffdad7",
+            "tertiary-fixed-dim":       "#ffb3ad",
+            "on-tertiary-fixed":        "#410004",
+            "on-tertiary-fixed-variant":"#930013",
+            "error":                    "#ffb4ab",
+            "on-error":                 "#690005",
+            "error-container":          "#93000a",
+            "on-error-container":       "#ffdad6",
+          },
+          spacing: {
+            "sidebar-width":     "260px",
+            "sidebar-collapsed": "68px",
+            "topbar-height":     "56px",
+            "gutter":            "20px",
+            "base": "4px",
+            "xs":   "4px",
+            "sm":   "8px",
+            "md":   "16px",
+            "lg":   "24px",
+            "xl":   "32px",
+          },
+          borderRadius: {
+            DEFAULT:     "0.125rem",
+            sm:          "0.125rem",
+            lg:          "0.25rem",
+            xl:          "0.5rem",
+            "2xl":       "0.75rem",
+            "auth-card": "14px",
+            full:        "9999px",
+          },
+          fontFamily: {
+            display:    ["Inter"],
+            h1:         ["Inter"],
+            h2:         ["Inter"],
+            h3:         ["Inter"],
+            "body-lg":  ["Inter"],
+            "body-md":  ["Inter"],
+            "body-sm":  ["Inter"],
+            "label-md": ["Inter"],
+            "label-sm": ["Inter"],
+            "data-mono":["Inter"],
+          },
+          fontSize: {
+            display:    ["30px", { lineHeight:"38px", letterSpacing:"-0.02em",  fontWeight:"700" }],
+            h1:         ["24px", { lineHeight:"32px", letterSpacing:"-0.015em", fontWeight:"600" }],
+            h2:         ["20px", { lineHeight:"28px", letterSpacing:"-0.01em",  fontWeight:"600" }],
+            h3:         ["16px", { lineHeight:"24px",                           fontWeight:"600" }],
+            "body-lg":  ["16px", { lineHeight:"24px",                           fontWeight:"400" }],
+            "body-md":  ["14px", { lineHeight:"20px",                           fontWeight:"400" }],
+            "body-sm":  ["13px", { lineHeight:"18px",                           fontWeight:"400" }],
+            "label-md": ["12px", { lineHeight:"16px", letterSpacing:"0.01em",   fontWeight:"500" }],
+            "label-sm": ["11px", { lineHeight:"14px", letterSpacing:"0.03em",   fontWeight:"600" }],
+            "data-mono":["14px", { lineHeight:"20px",                           fontWeight:"400" }],
+          },
+        },
+      },
+    };
+  </script>
+
   <style>
-    :root { --bg: #f7f8fa; --panel: #fff; --border: #e1e5ea; --ink: #1a1d23; --muted: #6b7380; --accent: #2a6e94; --danger: #b8453d; }
-    * { box-sizing: border-box; }
-    body { font-family: system-ui, -apple-system, sans-serif; margin: 0; background: var(--bg); color: var(--ink); }
-    header { background: var(--ink); color: #fff; padding: 0.75rem 1.5rem; display: flex; align-items: center; gap: 1rem; }
-    header h1 { margin: 0; font-size: 1rem; font-weight: 500; }
-    header h1 a { color: #fff; text-decoration: none; }
-    header .who { margin-left: auto; color: #9ca3af; font-size: 0.85rem; }
-    main { max-width: 960px; margin: 1.5rem auto; padding: 0 1rem; }
-    .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 1.25rem 1.5rem; margin-bottom: 1.5rem; }
-    .panel h2 { margin-top: 0; font-size: 1.1rem; }
-    a { color: var(--accent); }
-    table { width: 100%; border-collapse: collapse; }
-    th, td { padding: 0.5rem 0.6rem; border-bottom: 1px solid var(--border); text-align: left; font-size: 0.92rem; }
-    th { color: var(--muted); font-weight: 500; text-transform: uppercase; font-size: 0.75rem; letter-spacing: 0.05em; }
-    tr:last-child td { border-bottom: none; }
-    tr:hover td { background: #f9fafb; }
-    .actions { display: flex; gap: 0.5rem; }
-    .btn { display: inline-block; padding: 0.4rem 0.75rem; border-radius: 4px; border: 1px solid var(--border); background: #fff; color: var(--ink); text-decoration: none; font-size: 0.85rem; cursor: pointer; font-family: inherit; }
-    .btn:hover { background: #f0f3f6; }
-    .btn-primary { background: var(--accent); color: #fff; border-color: var(--accent); }
-    .btn-primary:hover { background: #235873; }
-    .btn-danger { color: var(--danger); border-color: var(--danger); }
-    .btn-danger:hover { background: var(--danger); color: #fff; }
-    form .field { margin-bottom: 1rem; }
-    form label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 0.25rem; }
-    form input[type=text], form input[type=number], form input[type=date], form input[type=time], form input[type=datetime-local] { width: 100%; padding: 0.5rem; border: 1px solid var(--border); border-radius: 4px; font-family: inherit; font-size: 0.95rem; }
-    form .checkbox-row { display: flex; align-items: center; gap: 0.5rem; }
-    form .checkbox-row label { margin-bottom: 0; }
-    .meta { color: var(--muted); font-size: 0.85rem; }
-    .empty { color: var(--muted); font-style: italic; padding: 2rem; text-align: center; }
-    .breadcrumb { color: var(--muted); font-size: 0.85rem; margin-bottom: 1rem; }
-    .breadcrumb a { color: var(--accent); }
+    body { font-family: 'Inter', sans-serif; -webkit-font-smoothing: antialiased; }
+    /* Tabular numerals: apply on data-heavy contexts */
+    .tabular-nums { font-variant-numeric: tabular-nums; }
+    /* Custom thin scrollbar for the sidebar */
+    #umbra-admin-sidebar::-webkit-scrollbar { width: 4px; }
+    #umbra-admin-sidebar::-webkit-scrollbar-track { background: transparent; }
+    #umbra-admin-sidebar::-webkit-scrollbar-thumb { background: #464553; border-radius: 10px; }
+    /* Topbar glass effect (matches dashboard.html) */
+    .topbar-glass {
+      background: rgba(29, 32, 39, 0.85);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+    }
   </style>
 </head>
-<body>
-  <header>
-    <h1><a href="/admin">umbra admin</a></h1>
-    {% if user %}<div class="who">Signed in as <strong>{{ user }}</strong></div>{% endif %}
+<body class="bg-background text-on-background antialiased flex" id="umbra-admin-body">
+
+<!-- ========================================================
+     SIDEBAR  260px fixed left, full height, independent scroll
+     ======================================================== -->
+<aside
+  id="umbra-admin-sidebar"
+  class="fixed left-0 top-0 h-full w-sidebar-width bg-surface-container border-r border-outline-variant flex flex-col z-50 transition-all duration-300 overflow-y-auto"
+  aria-label="Admin navigation"
+>
+  <!-- Logo area -->
+  <div class="p-lg flex items-center gap-sm flex-shrink-0">
+    <div class="w-8 h-8 rounded-xl bg-primary-container flex items-center justify-center">
+      <i data-lucide="layers" class="w-[18px] h-[18px] text-on-primary-container"></i>
+    </div>
+    <div>
+      <h2 class="font-h3 text-h3 text-on-surface leading-none">Umbra Admin</h2>
+      <p class="text-[10px] text-outline tracking-widest uppercase mt-0.5">v0.0.1</p>
+    </div>
+  </div>
+
+  <!-- Model search box -->
+  <div class="px-md mb-md flex-shrink-0">
+    <div class="relative group">
+      <i data-lucide="search" class="absolute left-3 top-1/2 -translate-y-1/2 w-[16px] h-[16px] text-outline pointer-events-none"></i>
+      <input
+        id="sidebar-search"
+        type="text"
+        placeholder="Search models..."
+        oninput="umbra.sidebarFilter(this.value)"
+        class="w-full bg-surface-container-low border border-outline-variant rounded-xl pl-9 pr-md py-2 text-body-sm text-on-surface focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary transition-all placeholder:text-outline/60"
+        aria-label="Filter sidebar models"
+      />
+    </div>
+  </div>
+
+  <!-- Navigation scroll area -->
+  <nav class="flex-1 overflow-y-auto px-sm space-y-md pb-md" id="sidebar-nav" aria-label="Models">
+    <!-- Pinned dashboard link -->
+    <div id="sidebar-group-core">
+      <p class="px-md mb-xs font-label-sm text-label-sm text-outline uppercase tracking-wider">Core</p>
+      <div class="space-y-1">
+        <a
+          href="/admin/"
+          class="sidebar-model-link flex items-center gap-3 px-md py-2.5 rounded-xl {% if active_table == '' %}bg-primary-container/10 text-primary border-l-2 border-primary{% else %}text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface{% endif %} font-body-sm transition-all"
+          data-model-name="dashboard"
+        >
+          <i data-lucide="layout-dashboard" class="w-[18px] h-[18px]"></i>
+          <span>Dashboard</span>
+        </a>
+      </div>
+    </div>
+
+    <!-- Per-plugin model groups from AdminRegistry -->
+    {%- for app in apps %}
+    <div class="sidebar-plugin-group" id="sidebar-group-{{ app.plugin }}">
+      <p class="px-md mb-xs font-label-sm text-label-sm text-outline uppercase tracking-wider">{{ app.label }}</p>
+      <div class="space-y-1">
+        {%- for reg in app.models %}
+        <a
+          href="/admin/{{ reg.table }}/"
+          class="sidebar-model-link flex items-center gap-3 px-md py-2.5 rounded-xl {% if active_table == reg.table %}bg-primary-container/10 text-primary border-l-2 border-primary{% else %}text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface{% endif %} font-body-sm transition-all"
+          data-model-name="{{ reg.label | lower }}"
+        >
+          <i data-lucide="{{ reg.icon }}" class="w-[18px] h-[18px] flex-shrink-0"></i>
+          <span class="flex-1 truncate">{{ reg.label }}</span>
+        </a>
+        {%- endfor %}
+      </div>
+    </div>
+    {%- endfor %}
+  </nav>
+
+  <!-- Sidebar footer -->
+  <div class="p-md border-t border-outline-variant bg-surface-container-low flex-shrink-0">
+    <a
+      href="/admin/logout"
+      class="flex items-center gap-3 px-md py-2 rounded-xl text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high font-body-sm transition-all"
+    >
+      <i data-lucide="log-out" class="w-[18px] h-[18px]"></i>
+      <span>Sign out</span>
+    </a>
+  </div>
+</aside>
+
+<!-- ========================================================
+     MAIN WRAPPER — everything to the right of the sidebar
+     ======================================================== -->
+<div class="ml-sidebar-width flex-1 flex flex-col min-h-screen">
+
+  <!-- TOPBAR: sticky 56px -->
+  <header
+    id="umbra-admin-topbar"
+    class="sticky top-0 z-40 h-topbar-height topbar-glass border-b border-outline-variant flex items-center justify-between px-lg"
+    aria-label="Admin top bar"
+  >
+    <!-- Breadcrumbs (set by each handler via context variable `breadcrumbs`) -->
+    <nav class="flex items-center gap-xs font-label-md text-label-md" aria-label="Breadcrumb">
+      <a href="/admin/" class="text-outline hover:text-on-surface transition-colors">Home</a>
+      {%- for crumb in breadcrumbs %}
+      <i data-lucide="chevron-right" class="w-[14px] h-[14px] text-outline"></i>
+      {%- if loop.last %}
+      <span class="text-primary font-semibold">{{ crumb.label }}</span>
+      {%- else %}
+      <a href="{{ crumb.url }}" class="text-outline hover:text-on-surface transition-colors">{{ crumb.label }}</a>
+      {%- endif %}
+      {%- endfor %}
+    </nav>
+
+    <!-- Center: command palette trigger (phase 4 placeholder) -->
+    <button
+      id="cmd-palette-trigger"
+      aria-label="Open command palette (Cmd+K)"
+      class="bg-surface-container-low border border-outline-variant px-md py-1.5 rounded-xl flex items-center gap-xl hover:bg-surface-container transition-colors"
+      onclick="/* phase 4 */"
+      type="button"
+    >
+      <div class="flex items-center gap-sm">
+        <i data-lucide="search" class="w-[16px] h-[16px] text-outline"></i>
+        <span class="text-body-sm text-outline">Search everything...</span>
+      </div>
+      <kbd class="text-[10px] bg-outline-variant/30 text-on-surface border border-outline-variant/50 px-1.5 py-0.5 rounded ml-sm">⌘K</kbd>
+    </button>
+
+    <!-- Right: theme toggle + user menu -->
+    <div class="flex items-center gap-md">
+      <!-- Theme toggle — persisted in localStorage -->
+      <button
+        id="theme-toggle"
+        aria-label="Toggle light/dark theme"
+        type="button"
+        onclick="umbra.toggleTheme()"
+        class="w-9 h-9 flex items-center justify-center rounded-xl text-on-surface-variant hover:bg-surface-container-lowest transition-all"
+      >
+        <i data-lucide="sun" id="theme-icon-light" class="w-[18px] h-[18px] hidden"></i>
+        <i data-lucide="moon" id="theme-icon-dark"  class="w-[18px] h-[18px]"></i>
+      </button>
+
+      <div class="w-px h-6 bg-outline-variant"></div>
+
+      <!-- User menu -->
+      <div class="flex items-center gap-3 cursor-pointer group" role="button" tabindex="0" aria-label="User menu" onclick="umbra.toggleUserMenu()">
+        <div class="text-right">
+          <p class="text-body-sm font-semibold text-on-surface leading-none">{{ user }}</p>
+          <p class="text-[10px] text-outline uppercase tracking-wider mt-0.5">Staff</p>
+        </div>
+        <!-- Avatar initials circle -->
+        <div class="w-9 h-9 rounded-xl bg-primary-container flex items-center justify-center border border-outline-variant group-hover:border-primary transition-colors">
+          <span class="font-label-sm text-label-sm text-on-primary-container uppercase">{{ user[:2] }}</span>
+        </div>
+      </div>
+    </div>
   </header>
-  <main>
+
+  <!-- CONTENT region -->
+  <main id="umbra-admin-content" class="flex-1 p-lg">
     {% block content %}{% endblock %}
   </main>
+
+</div><!-- end main wrapper -->
+
+<!-- ========================================================
+     Scripts: theme persistence, sidebar filter, lucide init
+     ======================================================== -->
+<script>
+  var umbra = (function() {
+    // ----- Theme toggle -----
+    function applyTheme(dark) {
+      var root = document.documentElement;
+      if (dark) {
+        root.classList.add('dark');
+        document.getElementById('theme-icon-light').classList.remove('hidden');
+        document.getElementById('theme-icon-dark').classList.add('hidden');
+      } else {
+        root.classList.remove('dark');
+        document.getElementById('theme-icon-light').classList.add('hidden');
+        document.getElementById('theme-icon-dark').classList.remove('hidden');
+      }
+    }
+    // Load persisted preference; default to dark.
+    var storedTheme = localStorage.getItem('umbra-admin-theme');
+    var isDark = storedTheme === null ? true : storedTheme === 'dark';
+    applyTheme(isDark);
+
+    function toggleTheme() {
+      isDark = !isDark;
+      localStorage.setItem('umbra-admin-theme', isDark ? 'dark' : 'light');
+      applyTheme(isDark);
+    }
+
+    // ----- Sidebar live model filter -----
+    function sidebarFilter(query) {
+      var q = query.trim().toLowerCase();
+      var links = document.querySelectorAll('.sidebar-model-link');
+      links.forEach(function(link) {
+        var name = (link.getAttribute('data-model-name') || '').toLowerCase();
+        var visible = q === '' || name.indexOf(q) !== -1;
+        link.style.display = visible ? '' : 'none';
+      });
+      // Hide groups that have no visible models (except the core group).
+      document.querySelectorAll('.sidebar-plugin-group').forEach(function(group) {
+        var anyVisible = Array.from(group.querySelectorAll('.sidebar-model-link'))
+          .some(function(l) { return l.style.display !== 'none'; });
+        group.style.display = anyVisible ? '' : 'none';
+      });
+    }
+
+    // ----- User menu (placeholder) -----
+    function toggleUserMenu() {
+      // Phase 4 will wire a real dropdown; for now clicking the avatar
+      // navigates to /admin/logout for simplicity.
+    }
+
+    return { toggleTheme: toggleTheme, sidebarFilter: sidebarFilter, toggleUserMenu: toggleUserMenu };
+  })();
+
+  // Initialise Lucide icons after the DOM is fully painted.
+  document.addEventListener('DOMContentLoaded', function() { lucide.createIcons(); });
+</script>
 </body>
 </html>
