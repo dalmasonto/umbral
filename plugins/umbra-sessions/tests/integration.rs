@@ -43,7 +43,7 @@ async fn boot() -> i64 {
                 .settings(settings)
                 .database("default", pool)
                 .plugin(AuthPlugin)
-                .plugin(SessionsPlugin)
+                .plugin(SessionsPlugin::default())
                 .build()
                 .expect("App::build with AuthPlugin + SessionsPlugin");
 
@@ -95,7 +95,7 @@ async fn boot() -> i64 {
 #[tokio::test]
 async fn create_and_read_round_trip() {
     let user_id = boot().await;
-    let token = create_session(user_id, None).await.expect("create");
+    let token = create_session(Some(user_id), None).await.expect("create");
     let s = read_session(&token).await.expect("read").expect("present");
     // The raw token is a UUID; the stored id is a 64-char hex SHA-256.
     // They must differ — if they matched the column would still hold
@@ -118,7 +118,7 @@ async fn create_and_read_round_trip() {
 async fn read_session_returns_none_for_expired_and_deletes_the_row() {
     let user_id = boot().await;
     // Create with a negative TTL so the row is already expired.
-    let id = create_session(user_id, Some(Duration::seconds(-1)))
+    let id = create_session(Some(user_id), Some(Duration::seconds(-1)))
         .await
         .expect("create");
     let result = read_session(&id).await.expect("read");
@@ -144,7 +144,7 @@ async fn read_session_returns_none_for_expired_and_deletes_the_row() {
 #[tokio::test]
 async fn destroy_session_removes_the_row() {
     let user_id = boot().await;
-    let id = create_session(user_id, None).await.expect("create");
+    let id = create_session(Some(user_id), None).await.expect("create");
     assert!(read_session(&id).await.unwrap().is_some());
     destroy_session(&id).await.expect("destroy");
     assert!(read_session(&id).await.unwrap().is_none());
@@ -192,7 +192,7 @@ fn clear_cookie_header_zeroes_max_age() {
 #[tokio::test]
 async fn current_user_round_trip_hydrates_the_logged_in_user() {
     let user_id = boot().await;
-    let id = create_session(user_id, None).await.expect("create");
+    let id = create_session(Some(user_id), None).await.expect("create");
 
     let mut headers = HeaderMap::new();
     headers.insert(
@@ -222,7 +222,7 @@ async fn current_user_returns_none_when_no_cookie() {
 #[tokio::test]
 async fn current_user_returns_none_for_destroyed_session() {
     let user_id = boot().await;
-    let id = create_session(user_id, None).await.expect("create");
+    let id = create_session(Some(user_id), None).await.expect("create");
     destroy_session(&id).await.expect("destroy");
 
     let mut headers = HeaderMap::new();
@@ -240,7 +240,7 @@ async fn current_user_returns_none_for_destroyed_session() {
 #[tokio::test]
 async fn data_round_trip_through_json_column() {
     let user_id = boot().await;
-    let id = create_session(user_id, None).await.expect("create");
+    let id = create_session(Some(user_id), None).await.expect("create");
 
     set_data(&id, "cart_id", &42i64).await.expect("set cart_id");
     set_data(&id, "flash", &"welcome back")
@@ -503,4 +503,172 @@ async fn messages_silently_noops_without_a_session() {
     msgs.error("also vanishing").await;
     // drain returns empty.
     assert!(msgs.drain().await.is_empty());
+}
+
+// =====================================================================
+// Anonymous sessions, the SessionLayer middleware, and the
+// login-fixation defense.
+// =====================================================================
+
+/// `create_session(None, ...)` produces a session row with
+/// `user_id = NULL`. That's the anonymous-session base case the
+/// middleware uses on first visit.
+#[tokio::test]
+async fn create_session_with_none_produces_anonymous_row() {
+    let _ = boot().await;
+    let token = create_session(None, None).await.expect("create anon");
+    let s = read_session(&token).await.unwrap().unwrap();
+    assert!(s.user_id.is_none(), "anonymous session has no user_id");
+    assert_eq!(s.data, "{}");
+}
+
+/// Drive a full request through an axum Router wrapped by
+/// `SessionsPlugin`. The first visit (no cookie) gets a Set-Cookie
+/// header in the response; the second visit reuses the same session.
+#[tokio::test]
+async fn router_through_sessions_plugin_creates_anon_session_on_first_visit() {
+    use axum::body::Body;
+    use axum::http::Request;
+    use axum::routing::get;
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+
+    let _ = boot().await;
+
+    // Build a tiny router and let the plugin wrap it (auto layer = on).
+    let inner = axum::Router::new().route("/", get(|| async { "ok" }));
+    let plugin = SessionsPlugin::default();
+    use umbra::plugin::Plugin;
+    let router = plugin.wrap_router(inner);
+
+    // First request: no cookie. Expect a Set-Cookie in the response.
+    let req = Request::builder().uri("/").body(Body::empty()).unwrap();
+    let resp = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), http::StatusCode::OK);
+    let set_cookie = resp
+        .headers()
+        .get(header::SET_COOKIE)
+        .expect("anonymous session cookie should be set")
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(set_cookie.starts_with(&format!("{COOKIE_NAME}=")));
+
+    // The token from the response cookie should resolve to a real
+    // anonymous session row.
+    let token = set_cookie
+        .strip_prefix(&format!("{COOKIE_NAME}="))
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string();
+    let _bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let session = read_session(&token).await.unwrap().expect("present");
+    assert!(session.user_id.is_none(), "should be anonymous");
+
+    // Second request: send the cookie back. No new Set-Cookie
+    // expected (session already exists).
+    let req2 = Request::builder()
+        .uri("/")
+        .header(header::COOKIE, format!("{COOKIE_NAME}={token}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp2 = router.oneshot(req2).await.unwrap();
+    assert!(
+        resp2.headers().get(header::SET_COOKIE).is_none(),
+        "existing session should not trigger another Set-Cookie",
+    );
+}
+
+/// Messages that an anonymous user adds (e.g. a "you signed up
+/// successfully" toast before redirect to /login) survive across
+/// requests — the whole point of having anonymous sessions.
+#[tokio::test]
+async fn anonymous_user_can_write_and_drain_flash_messages() {
+    use umbra_sessions::Messages;
+    let _ = boot().await;
+    let token = create_session(None, None).await.expect("create anon");
+
+    let msgs = Messages::new(Some(token.clone()));
+    assert!(msgs.is_active());
+    msgs.success("Welcome!").await;
+
+    // Simulate a follow-up request by constructing a fresh handle
+    // with the same token.
+    let msgs2 = Messages::new(Some(token));
+    let drained = msgs2.drain().await;
+    assert_eq!(drained.len(), 1);
+    assert_eq!(drained[0].text, "Welcome!");
+}
+
+/// Session-fixation defense: when a user logs in, the existing
+/// anonymous session is destroyed and a new authenticated session
+/// is created with a fresh token. A pre-login attacker holding the
+/// anonymous cookie can't ride it into the authed account.
+#[tokio::test]
+async fn login_destroys_anonymous_session_and_issues_new_token() {
+    let user_id = boot().await;
+    let user: AuthUser = sqlx::query_as("SELECT * FROM auth_user WHERE id = ?")
+        .bind(user_id)
+        .fetch_one(&umbra::db::pool())
+        .await
+        .unwrap();
+
+    // Simulate the browser arriving with an anonymous session.
+    let anon_token = create_session(None, None).await.expect("create anon");
+    let mut req_headers = HeaderMap::new();
+    req_headers.insert(
+        header::COOKIE,
+        format!("{COOKIE_NAME}={anon_token}").parse().unwrap(),
+    );
+
+    let mut resp_headers = HeaderMap::new();
+    let new_token = umbra_sessions::login_with_request(&req_headers, &mut resp_headers, &user)
+        .await
+        .expect("login_with_request");
+
+    // The anon token is gone (fixation defense).
+    assert!(
+        read_session(&anon_token).await.unwrap().is_none(),
+        "anonymous session must be destroyed on login"
+    );
+    // The new authed token is alive.
+    let new_session = read_session(&new_token).await.unwrap().unwrap();
+    assert_eq!(new_session.user_id, Some(user_id));
+    // They differ — fresh token = fresh cookie = no fixation surface.
+    assert_ne!(anon_token, new_token);
+}
+
+/// Flash messages added before login should survive the
+/// login-induced token regeneration (the data column transfers).
+#[tokio::test]
+async fn flash_messages_survive_login_token_regeneration() {
+    use umbra_sessions::Messages;
+    let user_id = boot().await;
+    let user: AuthUser = sqlx::query_as("SELECT * FROM auth_user WHERE id = ?")
+        .bind(user_id)
+        .fetch_one(&umbra::db::pool())
+        .await
+        .unwrap();
+
+    let anon_token = create_session(None, None).await.unwrap();
+    Messages::new(Some(anon_token.clone()))
+        .info("Saved your draft before login")
+        .await;
+
+    let mut req_headers = HeaderMap::new();
+    req_headers.insert(
+        header::COOKIE,
+        format!("{COOKIE_NAME}={anon_token}").parse().unwrap(),
+    );
+    let mut resp_headers = HeaderMap::new();
+    let new_token = umbra_sessions::login_with_request(&req_headers, &mut resp_headers, &user)
+        .await
+        .unwrap();
+
+    // The new authed session carries the pre-login flash.
+    let drained = Messages::new(Some(new_token)).drain().await;
+    assert_eq!(drained.len(), 1);
+    assert_eq!(drained[0].text, "Saved your draft before login");
 }

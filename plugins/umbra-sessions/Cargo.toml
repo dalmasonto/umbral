@@ -31,6 +31,11 @@ axum-core = "0.5"
 async-trait = "0.1"
 # `http` for the `Parts` type axum-core's FromRequestParts uses.
 http = "1"
+# axum proper for `middleware::from_fn` — the cleanest way to wire
+# SessionLayer. The `Plugin::wrap_router` hook receives an
+# `axum::Router`, and `Router::layer(middleware::from_fn(...))` is
+# how axum-shaped middleware plugs in.
+axum = "0.8"
 # `tracing::warn!` in the login() helper when last_login update
 # fails (the login itself still succeeded; we just log the secondary
 # failure).
@@ -44,3 +49,9 @@ tempfile = "3"
 # impl directly (no full router needed).
 axum-core = "0.5"
 http = "1"
+# The router-middleware test drives a real `axum::Router` via tower's
+# `oneshot` to exercise `SessionsPlugin::wrap_router` + `session_layer`
+# end-to-end.
+axum = "0.8"
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

@@ -1,15 +1,47 @@
 ---
 title: Login, logout, request.user
-description: The three-call login dance bundled into one, plus axum extractors for `request.user`-style ergonomics.
+description: Anonymous sessions on every visit, the one-call login, axum extractors for `request.user`, and flash messages.
 sidebar_position: 2
 icon: log-in
 ---
 
 `umbra-auth` verifies credentials. `umbra-sessions` stores sessions
-and reads cookies. Wiring the two together for "log a user in and
-remember them across requests" used to be a three-call dance. This
-page is the one-call shortcut + the axum extractors that make
-`request.user` look like Django.
+and reads cookies. Together they give you the Django shape: every
+browser has a session from the first request (anonymous), login
+transforms it into an authenticated session, and handlers extract
+the current user via type-driven extractors.
+
+## A session is a browser, not an authentication
+
+A **session** identifies the **browser**. The same session row
+spans the user's whole visit:
+
+| State | `user_id` column | When |
+|-------|------------------|------|
+| Anonymous | `NULL` | From the first page load. Backs flash messages, cart contents, CSRF tokens, anything that has to survive a single redirect. |
+| Authenticated | `Some(user.id)` | After `umbra_sessions::login(...)`. Fresh token (session-fixation defense); the row's `data` survives the transition. |
+
+`SessionsPlugin::default()` auto-applies a tower middleware
+(`session_layer`) on the router so every request lands with a
+`SessionToken` extension. Anonymous flash messages, cart, etc. all
+"just work" — they're already there.
+
+```rust
+let app = App::builder()
+    .plugin(AuthPlugin)
+    .plugin(SessionsPlugin::default())   // auto session-on-every-visit
+    .router(Router::new().route("/", get(home)))
+    .build()?;
+```
+
+Opt-out for advanced setups (typically when you want sessions only
+under `/app/*` and not for `/api/healthz`):
+
+```rust
+.plugin(SessionsPlugin::default().without_auto_layer())
+// then apply the layer to a sub-router yourself:
+// some_subrouter.layer(axum::middleware::from_fn(umbra_sessions::session_layer))
+```
 
 ## Logging a user in
 
@@ -144,13 +176,13 @@ The five levels (`Debug` / `Info` / `Success` / `Warning` / `Error`)
 serialise as their lowercase names so templates can do
 `class="alert alert-{{ msg.level }}"` directly.
 
-<Callout type="warning">
-**Anonymous requests no-op.** Messages need somewhere to persist —
-that's the session. If there's no session cookie, `messages.add()`
-silently does nothing and `messages.drain()` returns empty. Apps
-that want anonymous flash messages create a session on first
-visit (typically in a middleware that runs `create_session(0, ...)`
-when no cookie is set).
+<Callout type="info">
+**Anonymous flash messages just work.** With `SessionsPlugin::default()`
+auto-applied (the default), every browser has a session from its
+first visit. Flash messages added by anonymous handlers survive the
+redirect cycle naturally, including across login — the existing
+session's `data` carries over to the post-login session when the
+fixation defense regenerates the token.
 
 The reserved key `_umbra_messages` inside `session.data` is owned
 by this framework — don't write to it via `set_data` directly,

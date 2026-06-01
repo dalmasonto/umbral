@@ -8,8 +8,13 @@
 //! ## Surface
 //!
 //! - `Session` model (id, user_id, data, created_at, expires_at)
-//! - `SessionsPlugin` registers the model
-//! - `create_session(user_id, ttl)` -> new id (write to Set-Cookie)
+//! - `SessionsPlugin` registers the model AND auto-applies
+//!   `session_layer` so every browser gets a session on first visit
+//!   (anonymous or authed — same row, same cookie). Opt out via
+//!   `SessionsPlugin::default().without_auto_layer()`.
+//! - `create_session(user_id, ttl)` -> new id (write to Set-Cookie).
+//!   `user_id` is `Option<i64>`: `None` is anonymous, `Some(id)` is
+//!   authenticated.
 //! - `read_session(id)` -> `Option<Session>` (filters out expired)
 //! - `destroy_session(id)` -> Delete
 //! - `cookie_from_headers(headers)` -> extract session id from
@@ -69,10 +74,31 @@ pub struct Session {
     pub expires_at: DateTime<Utc>,
 }
 
-/// The plugin. Registers the `Session` model so `makemigrations`
-/// generates the right CREATE TABLE.
-#[derive(Debug, Default)]
-pub struct SessionsPlugin;
+/// The plugin. Registers the `Session` model and (by default)
+/// auto-applies [`session_layer`] so every browser gets a session
+/// on first visit. Opt out with [`Self::without_auto_layer`] if
+/// you want to control session creation by hand (rare).
+#[derive(Debug, Clone)]
+pub struct SessionsPlugin {
+    auto_layer: bool,
+}
+
+impl Default for SessionsPlugin {
+    fn default() -> Self {
+        Self { auto_layer: true }
+    }
+}
+
+impl SessionsPlugin {
+    /// Disable auto-application of [`session_layer`]. Use when you
+    /// want to scope session creation to a sub-router (e.g. apply
+    /// the layer manually only to `/app/*` so unauthed REST routes
+    /// don't get a session DB row on every health check).
+    pub fn without_auto_layer(mut self) -> Self {
+        self.auto_layer = false;
+        self
+    }
+}
 
 impl Plugin for SessionsPlugin {
     fn name(&self) -> &'static str {
@@ -88,6 +114,14 @@ impl Plugin for SessionsPlugin {
 
     fn models(&self) -> Vec<umbra::migrate::ModelMeta> {
         vec![umbra::migrate::ModelMeta::for_::<Session>()]
+    }
+
+    fn wrap_router(&self, router: umbra::web::Router) -> umbra::web::Router {
+        if self.auto_layer {
+            router.layer(axum::middleware::from_fn(session_layer))
+        } else {
+            router
+        }
     }
 }
 
@@ -145,14 +179,24 @@ fn hash_token(raw: &str) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-/// Create a new session row for the given user. Returns the **raw**
-/// session token which the caller writes into a Set-Cookie header
-/// via [`set_cookie_header`]. The DB row stores `sha256(token)` so a
+/// Create a new session row. Returns the **raw** session token
+/// which the caller writes into a Set-Cookie header via
+/// [`set_cookie_header`]. The DB row stores `sha256(token)` so a
 /// DB leak doesn't surrender live sessions.
+///
+/// `user_id`:
+/// - `Some(id)` — authenticated session, `user_id` column set.
+/// - `None` — **anonymous session**, `user_id` column NULL. Used
+///   by [`SessionLayer`] to ensure every browser has a session on
+///   first visit so flash messages, anonymous cart contents, CSRF
+///   tokens, etc. have somewhere to live.
 ///
 /// `ttl` controls the row's `expires_at`. Pass `None` to use
 /// [`DEFAULT_TTL_SECONDS`] (14 days).
-pub async fn create_session(user_id: i64, ttl: Option<Duration>) -> Result<String, SessionError> {
+pub async fn create_session(
+    user_id: Option<i64>,
+    ttl: Option<Duration>,
+) -> Result<String, SessionError> {
     let pool = umbra::db::pool();
     let raw_token = Uuid::new_v4().to_string();
     let stored_id = hash_token(&raw_token);
@@ -386,7 +430,56 @@ pub async fn login(
     response_headers: &mut HeaderMap,
     user: &AuthUser,
 ) -> Result<String, SessionError> {
-    let token = create_session(user.id, None).await?;
+    login_with_request(&HeaderMap::new(), response_headers, user).await
+}
+
+/// `login` variant that takes the **request** headers too. Used to
+/// defend against session fixation: if the request already carries
+/// an anonymous session (created by `session_layer`), the row is
+/// destroyed before the new authenticated session is created.
+/// Carries over the existing session's `data` (flash messages, cart
+/// contents, etc.) so they survive the login.
+///
+/// Most apps call [`login`] directly; this variant exists for
+/// handlers that have a `HeaderMap` extractor and want the fixation
+/// defense to apply.
+pub async fn login_with_request(
+    request_headers: &HeaderMap,
+    response_headers: &mut HeaderMap,
+    user: &AuthUser,
+) -> Result<String, SessionError> {
+    // Capture data from the anonymous session before destroying it,
+    // so flash messages etc. don't vanish across login.
+    let carry_over_data: Option<String> =
+        if let Some(old_token) = cookie_from_headers(request_headers) {
+            let data = match read_session(&old_token).await {
+                Ok(Some(s)) => Some(s.data),
+                _ => None,
+            };
+            // Session fixation defense: destroy the row keyed by the old
+            // (potentially attacker-known) token so a leaked cookie
+            // can't grant authed access.
+            let _ = destroy_session(&old_token).await;
+            data
+        } else {
+            None
+        };
+
+    let token = create_session(Some(user.id), None).await?;
+
+    // Restore the carry-over data onto the new session, if any.
+    if let Some(data) = carry_over_data
+        && data != "{}"
+    {
+        let pool = umbra::db::pool();
+        let stored_id = hash_token(&token);
+        let _ = sqlx::query("UPDATE session SET data = ? WHERE id = ?")
+            .bind(&data)
+            .bind(&stored_id)
+            .execute(&pool)
+            .await;
+    }
+
     let cookie = set_cookie_header(&token, None);
     response_headers.insert(
         header::SET_COOKIE,
@@ -474,7 +567,6 @@ pub mod extractors {
     use axum_core::extract::FromRequestParts;
     use http::StatusCode;
     use http::request::Parts;
-    use umbra::web::HeaderMap;
     use umbra_auth::AuthUser;
 
     /// Required-user extractor. 401 on anonymous requests.
@@ -485,11 +577,33 @@ pub mod extractors {
     #[derive(Debug, Clone)]
     pub struct OptionalUser(pub Option<AuthUser>);
 
-    /// Helper that does the actual cookie-lookup. Both extractors
-    /// route through this so the cookie-name / session-resolution
-    /// path stays one definition.
-    async fn resolve(headers: &HeaderMap) -> Option<AuthUser> {
-        super::current_user(headers).await.ok().flatten()
+    /// Helper that does the actual session-lookup. Both extractors
+    /// route through this so the resolution order stays one
+    /// definition.
+    ///
+    /// Order:
+    /// 1. `SessionToken` extension (set by `session_layer`) — single
+    ///    source of truth when the middleware is wired.
+    /// 2. Cookie header — backward-compat for handlers that don't
+    ///    use the middleware.
+    ///
+    /// Anonymous sessions resolve to `None` here (the session row
+    /// has `user_id = NULL`).
+    async fn resolve(parts: &Parts) -> Option<AuthUser> {
+        let token = parts
+            .extensions
+            .get::<super::SessionToken>()
+            .map(|t| t.0.clone())
+            .or_else(|| super::cookie_from_headers(&parts.headers))?;
+        let session = super::read_session(&token).await.ok().flatten()?;
+        let user_id = session.user_id?;
+        let pool = umbra::db::pool();
+        sqlx::query_as::<_, AuthUser>("SELECT * FROM auth_user WHERE id = ? AND is_active = 1")
+            .bind(user_id)
+            .fetch_optional(&pool)
+            .await
+            .ok()
+            .flatten()
     }
 
     impl<S> FromRequestParts<S> for User
@@ -502,7 +616,7 @@ pub mod extractors {
             parts: &mut Parts,
             _state: &S,
         ) -> Result<Self, Self::Rejection> {
-            match resolve(&parts.headers).await {
+            match resolve(parts).await {
                 Some(u) => Ok(User(u)),
                 None => Err((StatusCode::UNAUTHORIZED, "authentication required")),
             }
@@ -519,7 +633,7 @@ pub mod extractors {
             parts: &mut Parts,
             _state: &S,
         ) -> Result<Self, Self::Rejection> {
-            Ok(OptionalUser(resolve(&parts.headers).await))
+            Ok(OptionalUser(resolve(parts).await))
         }
     }
 }
@@ -705,10 +819,122 @@ pub mod messages {
             parts: &mut Parts,
             _state: &S,
         ) -> Result<Self, Self::Rejection> {
-            let token = super::cookie_from_headers(&parts.headers);
+            // Prefer the SessionToken extension set by session_layer
+            // — that's the live session for THIS request. Fall back
+            // to the raw cookie for handlers that don't wire the
+            // middleware (still useful for ad-hoc auth flows).
+            let token = parts
+                .extensions
+                .get::<super::SessionToken>()
+                .map(|t| t.0.clone())
+                .or_else(|| super::cookie_from_headers(&parts.headers));
             Ok(Self::new(token))
         }
     }
 }
 
 pub use messages::{Message, MessageLevel, Messages};
+
+// =========================================================================
+// SessionLayer middleware — auto-creates anonymous sessions.
+//
+// The architectural principle:
+// - A SESSION identifies the BROWSER. Anonymous (user_id = NULL) or
+//   authenticated (user_id = Some(id)) — same row, same cookie, just a
+//   different value in one column.
+// - Every browser gets a session on first visit. Cart contents, flash
+//   messages, CSRF tokens — they all live somewhere now.
+// - Login transforms an anonymous session into an authenticated one
+//   (with a fresh token, see the session-fixation defense in `login`).
+// =========================================================================
+
+/// The session token injected into request extensions by
+/// [`session_layer`]. Extractors prefer this over the raw cookie so
+/// the middleware is the single source of truth.
+///
+/// Newtype wrapper so it doesn't collide with any other `String`
+/// extension a downstream layer might insert.
+#[derive(Debug, Clone)]
+pub struct SessionToken(pub String);
+
+/// Marker injected when the session was freshly created by this
+/// request (i.e. the cookie was missing or stale on entry).
+/// SessionLayer reads this on the response side to decide whether to
+/// emit a `Set-Cookie` header.
+#[derive(Debug, Clone, Copy)]
+struct SessionFresh;
+
+/// axum middleware that ensures every request has a session.
+///
+/// On entry:
+/// 1. Read the session cookie from the request.
+/// 2. If absent OR the cookie value doesn't resolve to a live
+///    session row (stale / expired / destroyed), create a fresh
+///    **anonymous** session (`user_id = NULL`) and flag the
+///    response.
+/// 3. Inject the resolved [`SessionToken`] into request extensions
+///    so extractors find it.
+///
+/// On exit:
+/// 4. If the session was newly created, set the `Set-Cookie`
+///    header on the response.
+///
+/// Apply to your router with `axum::middleware::from_fn`:
+///
+/// ```ignore
+/// use axum::{middleware, Router, routing::get};
+/// let router = Router::new()
+///     .route("/", get(home))
+///     .layer(middleware::from_fn(umbra_sessions::session_layer));
+/// ```
+///
+/// Or — the typical case — let [`SessionsPlugin`] apply it
+/// automatically via its `wrap_router` hook (default behaviour).
+pub async fn session_layer(
+    mut req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::http::header;
+    let cookie_token = cookie_from_headers(req.headers());
+
+    let (token, fresh) = match cookie_token {
+        Some(t) => match read_session(&t).await {
+            Ok(Some(_)) => (t, false),
+            _ => {
+                // Cookie present but session is gone (expired or
+                // destroyed). Create a fresh anonymous session so the
+                // browser doesn't go without one for the entire request.
+                match create_session(None, None).await {
+                    Ok(new) => (new, true),
+                    Err(_) => return next.run(req).await, // best-effort
+                }
+            }
+        },
+        None => match create_session(None, None).await {
+            Ok(new) => (new, true),
+            Err(_) => return next.run(req).await, // best-effort
+        },
+    };
+
+    req.extensions_mut().insert(SessionToken(token.clone()));
+    if fresh {
+        req.extensions_mut().insert(SessionFresh);
+    }
+
+    let mut response = next.run(req).await;
+
+    // Set-Cookie on the way out for newly-created sessions. We check
+    // both: the original cookie was absent/stale AND no later layer
+    // already replaced it (login() sets its own Set-Cookie via the
+    // response headers, which would have landed on `response` already
+    // — but it ALSO inserts a SessionFresh marker via login_with_layer
+    // when called inside the SessionLayer scope. For now the rule is
+    // simple: if we minted the token, we set the cookie.
+    if fresh {
+        let cookie = set_cookie_header(&token, None);
+        if let Ok(value) = cookie.parse() {
+            response.headers_mut().insert(header::SET_COOKIE, value);
+        }
+    }
+    response
+}
