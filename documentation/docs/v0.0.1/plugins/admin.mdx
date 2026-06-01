@@ -39,8 +39,12 @@ The admin ships a dark-mode shell matching a production back-office aesthetic:
 
 - **Fixed 260px sidebar** with a live model search box and model groups, one per plugin. Active models are highlighted with the primary accent. The sidebar is independently scrollable.
 - **Sticky 56px topbar** with breadcrumbs on the left, a `⌘K` command-palette placeholder in the center, and a theme toggle + user menu on the right.
-- **Light/dark theme** with a toggle that persists the preference in `localStorage`. Default is dark. Phase 4 will move this to per-user server-side prefs.
+- **Light/dark theme** driven by CSS variables. `:root` holds the light palette; `.dark` overrides with dark values. Every Tailwind utility maps to a `var(--token)` reference, so toggling `html.dark` actually flips every color in place — no `dark:` prefix sprinkled through every template. The toggle persists in `localStorage`. Default is dark. Phase 4 will move this to per-user server-side prefs.
 - **HTMX loaded** via CDN so later phases can target and swap fragments without restructuring the shell.
+
+<Callout type="warning" title="Tailwind CDN is dev-only">
+The shell loads Tailwind from `cdn.tailwindcss.com` in development so the framework works zero-config out of the box. In production (`settings.environment == "prod"`), the wrapper template instead loads `/admin/static/admin.css` — a pre-compiled stylesheet shipped with the admin plugin. Until that file is wired (a phase-4 hardening task), production deployments will see a broken admin until they either set `UMBRA_ENVIRONMENT=dev` or supply their own `admin.css` at the expected route. The CDN script also emits a "do not use in production" warning to the browser console — that's by design.
+</Callout>
 - **Lucide icons** throughout (MIT, consistent 24px grid, matches the design PRD §2).
 
 The shell is implemented in `templates/base.html` and all existing admin templates extend it.

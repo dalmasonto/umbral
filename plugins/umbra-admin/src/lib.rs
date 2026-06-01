@@ -213,6 +213,22 @@ fn engine() -> &'static Environment<'static> {
         .expect("admin/detail.html parses");
         env.add_template("admin/form.html", include_str!("../templates/form.html"))
             .expect("admin/form.html parses");
+
+        // Expose the runtime environment ("dev" / "test" / "prod") as a
+        // template global. wrapper.html gates the Tailwind CDN script
+        // on this: dev loads the CDN, prod expects /admin/static/admin.css.
+        // Read from `umbra::settings::get_opt()` (Optional) so the engine
+        // builds even before `App::build` ran — tests bypass App::build
+        // and would otherwise panic in `settings::get()`.
+        let env_name: &'static str = umbra::settings::get_opt()
+            .map(|s| match s.environment {
+                umbra::Environment::Dev => "dev",
+                umbra::Environment::Test => "test",
+                umbra::Environment::Prod => "prod",
+            })
+            .unwrap_or("dev");
+        env.add_global("environment", minijinja::Value::from(env_name));
+
         env
     })
 }

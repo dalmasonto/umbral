@@ -6,65 +6,191 @@
   <title>{% block title %}umbra admin{% endblock %}</title>
   <!-- HTMX: same-origin only -->
   <meta name="htmx-config" content='{"selfRequestsOnly":true}'/>
+  {#
+    Tailwind CDN is loaded only in development. In production
+    (settings.environment == "prod"), the framework expects a
+    pre-compiled stylesheet at /admin/static/admin.css. Until that
+    lands as a phase-4 hardening task, the CDN warning in dev is a
+    known footgun, documented in docs/v0.0.1/plugins/admin.mdx.
+  #}
+  {% if environment == "dev" or environment is undefined %}
   <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+  {% else %}
+  <link href="/admin/static/admin.css" rel="stylesheet"/>
+  {% endif %}
   <script src="https://unpkg.com/htmx.org@2.0.4"></script>
   <script src="https://unpkg.com/lucide@latest"></script>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
 
-  <!-- Design tokens + Tailwind config (matches DESIGN.md § tokens) -->
+  <!--
+    Theme tokens as CSS variables.
+
+    `:root` carries the LIGHT palette; `.dark` overrides with DARK
+    values. Tailwind's `colors` config (below) references `var(--token)`
+    so every utility like `bg-surface` re-resolves the moment `html.dark`
+    is toggled — that's why the toggle actually works.
+
+    The dark values mirror the Material-style palette in DESIGN.md;
+    light values are derived following Material 3 light/dark contracts
+    (high-contrast text on light surfaces, accents shifted to AA on
+    light backgrounds).
+  -->
+  <style>
+    :root {
+      --surface-container-lowest: #ffffff;
+      --surface-container-low:    #f8f9fa;
+      --surface-container:        #f0f2f5;
+      --surface-container-high:   #e5e8ec;
+      --surface-container-highest:#d8dcdf;
+      --surface-bright:           #ffffff;
+      --surface-dim:              #ecedf0;
+      --surface:                  #ffffff;
+      --surface-variant:          #e5e8ec;
+      --surface-tint:             #5b5bd6;
+      --on-surface:               #10131a;
+      --on-surface-variant:       #4c505b;
+      --inverse-surface:          #10131a;
+      --inverse-on-surface:       #e0e2ec;
+      --outline:                  #767680;
+      --outline-variant:          #cbcdd2;
+      --background:               #fafbfc;
+      --on-background:            #10131a;
+      --primary:                  #5b5bd6;
+      --on-primary:               #ffffff;
+      --primary-container:        #e2dfff;
+      --on-primary-container:     #16098d;
+      --primary-fixed:            #e2dfff;
+      --primary-fixed-dim:        #c2c1ff;
+      --on-primary-fixed:         #0b006b;
+      --on-primary-fixed-variant: #3835a8;
+      --inverse-primary:          #c2c1ff;
+      --secondary:                #5b6472;
+      --on-secondary:             #ffffff;
+      --secondary-container:      #dae3f4;
+      --on-secondary-container:   #131c28;
+      --secondary-fixed:          #dae3f4;
+      --secondary-fixed-dim:      #bec7d7;
+      --on-secondary-fixed:       #131c28;
+      --on-secondary-fixed-variant:#3e4755;
+      --tertiary:                 #c2310a;
+      --on-tertiary:              #ffffff;
+      --tertiary-container:       #ffdad7;
+      --on-tertiary-container:    #410004;
+      --tertiary-fixed:           #ffdad7;
+      --tertiary-fixed-dim:       #ffb3ad;
+      --on-tertiary-fixed:        #410004;
+      --on-tertiary-fixed-variant:#930013;
+      --error:                    #ba1a1a;
+      --on-error:                 #ffffff;
+      --error-container:          #ffdad6;
+      --on-error-container:       #410002;
+    }
+    .dark {
+      --surface-container-lowest: #0b0e15;
+      --surface-container-low:    #191c23;
+      --surface-container:        #1d2027;
+      --surface-container-high:   #272a31;
+      --surface-container-highest:#32353c;
+      --surface-bright:           #363941;
+      --surface-dim:              #10131a;
+      --surface:                  #10131a;
+      --surface-variant:          #32353c;
+      --surface-tint:             #c2c1ff;
+      --on-surface:               #e0e2ec;
+      --on-surface-variant:       #c7c5d5;
+      --inverse-surface:          #e0e2ec;
+      --inverse-on-surface:       #2d3038;
+      --outline:                  #918f9e;
+      --outline-variant:          #464553;
+      --background:               #10131a;
+      --on-background:            #e0e2ec;
+      --primary:                  #c2c1ff;
+      --on-primary:               #1f1792;
+      --primary-container:        #8484f8;
+      --on-primary-container:     #16098d;
+      --primary-fixed:            #e2dfff;
+      --primary-fixed-dim:        #c2c1ff;
+      --on-primary-fixed:         #0b006b;
+      --on-primary-fixed-variant: #3835a8;
+      --inverse-primary:          #504fc1;
+      --secondary:                #bec7d7;
+      --on-secondary:             #28313d;
+      --secondary-container:      #3e4755;
+      --on-secondary-container:   #adb6c5;
+      --secondary-fixed:          #dae3f4;
+      --secondary-fixed-dim:      #bec7d7;
+      --on-secondary-fixed:       #131c28;
+      --on-secondary-fixed-variant:#3e4755;
+      --tertiary:                 #ffb3ad;
+      --on-tertiary:              #68000a;
+      --tertiary-container:       #ff5451;
+      --on-tertiary-container:    #5c0008;
+      --tertiary-fixed:           #ffdad7;
+      --tertiary-fixed-dim:       #ffb3ad;
+      --on-tertiary-fixed:        #410004;
+      --on-tertiary-fixed-variant:#930013;
+      --error:                    #ffb4ab;
+      --on-error:                 #690005;
+      --error-container:          #93000a;
+      --on-error-container:       #ffdad6;
+    }
+    body { background-color: var(--background); color: var(--on-background); }
+  </style>
+
+  <!-- Tailwind config: maps every token to its CSS variable. -->
   <script id="tailwind-config">
     tailwind.config = {
       darkMode: "class",
       theme: {
         extend: {
           colors: {
-            "surface-container-lowest": "#0b0e15",
-            "surface-container-low":    "#191c23",
-            "surface-container":        "#1d2027",
-            "surface-container-high":   "#272a31",
-            "surface-container-highest":"#32353c",
-            "surface-bright":           "#363941",
-            "surface-dim":              "#10131a",
-            "surface":                  "#10131a",
-            "surface-variant":          "#32353c",
-            "surface-tint":             "#c2c1ff",
-            "on-surface":               "#e0e2ec",
-            "on-surface-variant":       "#c7c5d5",
-            "inverse-surface":          "#e0e2ec",
-            "inverse-on-surface":       "#2d3038",
-            "outline":                  "#918f9e",
-            "outline-variant":          "#464553",
-            "background":               "#10131a",
-            "on-background":            "#e0e2ec",
-            "primary":                  "#c2c1ff",
-            "on-primary":               "#1f1792",
-            "primary-container":        "#8484f8",
-            "on-primary-container":     "#16098d",
-            "primary-fixed":            "#e2dfff",
-            "primary-fixed-dim":        "#c2c1ff",
-            "on-primary-fixed":         "#0b006b",
-            "on-primary-fixed-variant": "#3835a8",
-            "inverse-primary":          "#504fc1",
-            "secondary":                "#bec7d7",
-            "on-secondary":             "#28313d",
-            "secondary-container":      "#3e4755",
-            "on-secondary-container":   "#adb6c5",
-            "secondary-fixed":          "#dae3f4",
-            "secondary-fixed-dim":      "#bec7d7",
-            "on-secondary-fixed":       "#131c28",
-            "on-secondary-fixed-variant":"#3e4755",
-            "tertiary":                 "#ffb3ad",
-            "on-tertiary":              "#68000a",
-            "tertiary-container":       "#ff5451",
-            "on-tertiary-container":    "#5c0008",
-            "tertiary-fixed":           "#ffdad7",
-            "tertiary-fixed-dim":       "#ffb3ad",
-            "on-tertiary-fixed":        "#410004",
-            "on-tertiary-fixed-variant":"#930013",
-            "error":                    "#ffb4ab",
-            "on-error":                 "#690005",
-            "error-container":          "#93000a",
-            "on-error-container":       "#ffdad6",
+            "surface-container-lowest":   "var(--surface-container-lowest)",
+            "surface-container-low":      "var(--surface-container-low)",
+            "surface-container":          "var(--surface-container)",
+            "surface-container-high":     "var(--surface-container-high)",
+            "surface-container-highest":  "var(--surface-container-highest)",
+            "surface-bright":             "var(--surface-bright)",
+            "surface-dim":                "var(--surface-dim)",
+            "surface":                    "var(--surface)",
+            "surface-variant":            "var(--surface-variant)",
+            "surface-tint":               "var(--surface-tint)",
+            "on-surface":                 "var(--on-surface)",
+            "on-surface-variant":         "var(--on-surface-variant)",
+            "inverse-surface":            "var(--inverse-surface)",
+            "inverse-on-surface":         "var(--inverse-on-surface)",
+            "outline":                    "var(--outline)",
+            "outline-variant":            "var(--outline-variant)",
+            "background":                 "var(--background)",
+            "on-background":              "var(--on-background)",
+            "primary":                    "var(--primary)",
+            "on-primary":                 "var(--on-primary)",
+            "primary-container":          "var(--primary-container)",
+            "on-primary-container":       "var(--on-primary-container)",
+            "primary-fixed":              "var(--primary-fixed)",
+            "primary-fixed-dim":          "var(--primary-fixed-dim)",
+            "on-primary-fixed":           "var(--on-primary-fixed)",
+            "on-primary-fixed-variant":   "var(--on-primary-fixed-variant)",
+            "inverse-primary":            "var(--inverse-primary)",
+            "secondary":                  "var(--secondary)",
+            "on-secondary":               "var(--on-secondary)",
+            "secondary-container":        "var(--secondary-container)",
+            "on-secondary-container":     "var(--on-secondary-container)",
+            "secondary-fixed":            "var(--secondary-fixed)",
+            "secondary-fixed-dim":        "var(--secondary-fixed-dim)",
+            "on-secondary-fixed":         "var(--on-secondary-fixed)",
+            "on-secondary-fixed-variant": "var(--on-secondary-fixed-variant)",
+            "tertiary":                   "var(--tertiary)",
+            "on-tertiary":                "var(--on-tertiary)",
+            "tertiary-container":         "var(--tertiary-container)",
+            "on-tertiary-container":      "var(--on-tertiary-container)",
+            "tertiary-fixed":             "var(--tertiary-fixed)",
+            "tertiary-fixed-dim":         "var(--tertiary-fixed-dim)",
+            "on-tertiary-fixed":          "var(--on-tertiary-fixed)",
+            "on-tertiary-fixed-variant":  "var(--on-tertiary-fixed-variant)",
+            "error":                      "var(--error)",
+            "on-error":                   "var(--on-error)",
+            "error-container":            "var(--error-container)",
+            "on-error-container":         "var(--on-error-container)",
           },
           spacing: {
             "sidebar-width":     "260px",
