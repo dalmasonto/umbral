@@ -392,6 +392,90 @@ The unexposed-action body is `{"error": "action `Delete` is not exposed on
 which is the right semantic (the resource exists, but that operation isn't
 part of its API).
 
+## Custom actions (`@action`)
+
+CRUD covers most resources but not all. Django REST Framework hangs the not-CRUD endpoints off the same viewset via `@action`:
+
+```python
+class PostViewSet(ViewSet):
+    @action(detail=True, methods=['post'])
+    def publish(self, request, pk=None):
+        ...
+
+    @action(detail=False, methods=['get'])
+    def recent(self, request):
+        ...
+```
+
+The umbra-rest shape is a builder call on `ResourceConfig`:
+
+```rust
+use http::Method;
+use serde_json::json;
+use umbra_rest::{ActionError, ActionScope, ResourceConfig};
+
+ResourceConfig::new("post")
+    // POST /api/post/{id}/publish/ — one row at a time.
+    .action("publish", Method::POST, ActionScope::Detail, |ctx| async move {
+        let id: i64 = ctx.pk.as_deref().unwrap_or("0").parse()
+            .map_err(|_| ActionError::BadInput("bad id".into()))?;
+        // Hit the ORM; flip a flag; return whatever JSON the client needs.
+        Post::objects().filter(post::ID.eq(id))
+            .update_values(serde_json::Map::from_iter([
+                ("published".into(), json!(true)),
+            ]))
+            .await
+            .map_err(ActionError::internal)?;
+        Ok(json!({ "id": id, "published": true }))
+    })
+    // GET /api/post/recent/ — collection-scope.
+    .action("recent", Method::GET, ActionScope::Collection, |ctx| async move {
+        let limit: i64 = ctx.query.get("limit").and_then(|s| s.parse().ok()).unwrap_or(10);
+        let rows = Post::objects()
+            .order_by(post::CREATED_AT.desc())
+            .limit(limit as u64)
+            .fetch()
+            .await
+            .map_err(ActionError::internal)?;
+        Ok(json!({ "results": rows }))
+    })
+```
+
+| Scope | URL shape | Has `ctx.pk`? |
+|-------|-----------|---------------|
+| `Collection` | `/api/<table>/<name>/` | No |
+| `Detail` | `/api/<table>/<id>/<name>/` | Yes — the raw URL segment |
+
+Both with and without the trailing slash are accepted.
+
+**The handler signature.** Any async closure of `Fn(ActionContext) -> impl Future<Output = Result<Value, ActionError>>`. The `ActionContext` carries:
+
+- `table`, `name` — the URL segments.
+- `pk` — `Some(string)` for detail-scope, `None` for collection-scope. Parse with `.parse::<i64>()` (or whatever your PK type is).
+- `identity` — the same `Option<Identity>` `Authentication` produces, after permission has approved the call.
+- `body` — the parsed JSON body, or `Value::Null` when the request had none.
+- `query` — `HashMap<String, String>` of the query string.
+
+**The error variants** (`ActionError`) map onto the same JSON envelope the CRUD handlers use: `BadInput` → 400, `NotFound` → 404, `Unauthenticated` → 401, `Forbidden` → 403, `Internal` → 500.
+
+**Permissions.** Custom actions run through the same `Permission::check` the built-in actions do, with `Action::Custom("publish")` (or whatever the name is). A resource gated by `IsAuthenticated` rejects anonymous calls to `/publish/` just like it rejects anonymous `POST /` to create. A permission that wants to special-case a specific action can match on the variant:
+
+```rust
+struct PublishersOnly;
+impl Permission for PublishersOnly {
+    fn check(&self, action: &Action, identity: Option<&Identity>) -> Result<(), PermissionError> {
+        // Only authenticated callers can publish; reads are open.
+        if action.is_read() { return Ok(()); }
+        if action.is_custom("publish") {
+            return identity.map(|_| ()).ok_or(PermissionError::Unauthenticated);
+        }
+        Err(PermissionError::Forbidden)
+    }
+}
+```
+
+`Action::Custom(_)` is NOT subject to `.views([...])` — custom actions opt in by being registered, the view scope only filters the five built-in CRUD actions.
+
 ## What's not in v1
 
 The REST plugin is feature-complete for v1. The roadmap items below are

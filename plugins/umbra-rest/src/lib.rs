@@ -54,7 +54,7 @@ pub use pagination::{
 };
 
 pub mod resource;
-pub use resource::ResourceConfig;
+pub use resource::{ActionContext, ActionError, ActionScope, ResourceConfig};
 
 pub mod auth;
 pub use auth::{
@@ -125,6 +125,11 @@ pub struct RestPlugin {
     /// `Some(set)` restricts the table to exactly that set of
     /// actions; everything else returns 404 from the handler.
     view_scope: HashMap<String, std::collections::HashSet<Action>>,
+    /// Per-table `@action` definitions, keyed by table name. The
+    /// `RestPlugin::routes` walk mounts one axum route per entry,
+    /// and the dispatch handler looks the (table, action_name)
+    /// lookup back out at request time.
+    actions: HashMap<String, Vec<crate::resource::ActionDef>>,
 }
 
 impl std::fmt::Debug for RestPlugin {
@@ -163,9 +168,16 @@ impl RestPlugin {
     /// without an explicit `.views(...)` scope expose every action
     /// (backward-compatible default). Tables with a scope expose
     /// exactly the actions in the set.
-    fn view_exposed(&self, table: &str, action: Action) -> bool {
+    ///
+    /// Custom actions are NOT subject to `view_scope` — they're
+    /// opt-in by being registered at all, and the scope only filters
+    /// the five built-in CRUD actions.
+    fn view_exposed(&self, table: &str, action: &Action) -> bool {
+        if matches!(action, Action::Custom(_)) {
+            return true;
+        }
         match self.view_scope.get(table) {
-            Some(scope) => scope.contains(&action),
+            Some(scope) => scope.contains(action),
             None => true,
         }
     }
@@ -178,7 +190,7 @@ impl RestPlugin {
     fn gate(
         &self,
         table: &str,
-        action: Action,
+        action: &Action,
         identity: Option<&Identity>,
     ) -> Result<(), ApiError> {
         if !self.view_exposed(table, action) {
@@ -206,6 +218,7 @@ impl RestPlugin {
             authentication: Arc::new(NoAuthentication),
             permissions: HashMap::new(),
             view_scope: HashMap::new(),
+            actions: HashMap::new(),
         }
     }
 
@@ -308,6 +321,7 @@ impl RestPlugin {
             computed,
             permission,
             view_scope,
+            actions,
         } = config;
         for field in hidden {
             self.hidden.push((table.clone(), field));
@@ -328,6 +342,12 @@ impl RestPlugin {
         }
         if let Some(scope) = view_scope {
             self.view_scope.insert(table.clone(), scope);
+        }
+        if !actions.is_empty() {
+            self.actions
+                .entry(table.clone())
+                .or_default()
+                .extend(actions);
         }
         self
     }
@@ -457,13 +477,80 @@ impl Plugin for RestPlugin {
         // setting it here is safe.
         let _ = CONFIG.set(self.clone());
 
-        Router::new()
+        let mut router = Router::new()
             .route("/api/{table}/", get(list).post(create))
             .route("/api/{table}", get(list).post(create))
             .route(
                 "/api/{table}/{id}",
                 get(retrieve).put(update).patch(update).delete(destroy),
-            )
+            );
+
+        // Mount the `@action`-style custom endpoints. We register
+        // each one with the table name and action name baked into
+        // the path as LITERAL segments — axum's matchit router
+        // prefers literal over `{param}` when both exist at the
+        // same level, so collection actions on `/api/post/recent`
+        // win over `/api/{table}/{id}` cleanly.
+        //
+        // The handler is a single dispatch fn shared by every
+        // action; it pulls the `(table, name)` pair from the URL
+        // segments and looks the closure back out of CONFIG.
+        for (table, action_list) in &self.actions {
+            for def in action_list {
+                let path = match def.scope {
+                    ActionScope::Collection => {
+                        format!("/api/{}/{}", q_seg(table), q_seg(&def.name))
+                    }
+                    ActionScope::Detail => {
+                        format!("/api/{}/{{id}}/{}", q_seg(table), q_seg(&def.name))
+                    }
+                };
+                let method_router =
+                    axum::routing::on(method_filter(&def.method), custom_action_dispatch);
+                // axum panics on duplicate (path, method); we accept that —
+                // a duplicate action registration is a programming
+                // error, not a runtime case to recover from.
+                router = router.route(&path, method_router);
+                // Trailing-slash mirror so `/api/post/recent/` works too.
+                router = router.route(
+                    &format!("{path}/"),
+                    axum::routing::on(method_filter(&def.method), custom_action_dispatch),
+                );
+            }
+        }
+
+        router
+    }
+}
+
+/// Validate the URL segment is safe to splice into a route path
+/// literally — axum 0.8's matchit treats `{` `}` as syntax. We
+/// already gated action names through [`is_action_name_char`] in
+/// the builder, so this is defense-in-depth for the table name.
+fn q_seg(s: &str) -> String {
+    assert!(
+        !s.contains(['{', '}', '/', '?', '#']),
+        "URL segment {s:?} contains a reserved path character"
+    );
+    s.to_string()
+}
+
+/// Translate `http::Method` to axum's `MethodFilter`. Panics on
+/// `CONNECT` / `TRACE` (not supported on `@action` routes); other
+/// uncommon methods (HEAD / OPTIONS) are wired through anyway.
+fn method_filter(m: &http::Method) -> axum::routing::MethodFilter {
+    use axum::routing::MethodFilter;
+    match *m {
+        http::Method::GET => MethodFilter::GET,
+        http::Method::POST => MethodFilter::POST,
+        http::Method::PUT => MethodFilter::PUT,
+        http::Method::PATCH => MethodFilter::PATCH,
+        http::Method::DELETE => MethodFilter::DELETE,
+        http::Method::HEAD => MethodFilter::HEAD,
+        http::Method::OPTIONS => MethodFilter::OPTIONS,
+        ref other => {
+            panic!("umbra-rest: method {other} isn't supported as an `@action` HTTP method")
+        }
     }
 }
 
@@ -568,7 +655,7 @@ async fn list(
     let cfg = CONFIG.get().expect("RestPlugin::routes was called");
     let identity = cfg.authentication.authenticate(&headers).await;
     let model = allowed_model(&table)?;
-    cfg.gate(&table, Action::List, identity.as_ref())?;
+    cfg.gate(&table, &Action::List, identity.as_ref())?;
     let pool = umbra::db::pool();
 
     let page_req = cfg.pagination.extract_request(&params);
@@ -595,7 +682,7 @@ async fn retrieve(
     let cfg = CONFIG.get().expect("RestPlugin::routes was called");
     let identity = cfg.authentication.authenticate(&headers).await;
     let model = allowed_model(&table)?;
-    cfg.gate(&table, Action::Retrieve, identity.as_ref())?;
+    cfg.gate(&table, &Action::Retrieve, identity.as_ref())?;
     let pk = pk_column(&model)?;
     let pool = umbra::db::pool();
     let mut rows = fetch_rows(&pool, &model, Some((&pk.name, &id)), None).await?;
@@ -618,7 +705,7 @@ async fn create(
     let cfg = CONFIG.get().expect("RestPlugin::routes was called");
     let identity = cfg.authentication.authenticate(&headers).await;
     let model = allowed_model(&table)?;
-    cfg.gate(&table, Action::Create, identity.as_ref())?;
+    cfg.gate(&table, &Action::Create, identity.as_ref())?;
     let pool = umbra::db::pool();
     let new_id = insert_row(&pool, &model, &body).await?;
     let pk = pk_column(&model)?;
@@ -640,7 +727,7 @@ async fn update(
     let cfg = CONFIG.get().expect("RestPlugin::routes was called");
     let identity = cfg.authentication.authenticate(&headers).await;
     let model = allowed_model(&table)?;
-    cfg.gate(&table, Action::Update, identity.as_ref())?;
+    cfg.gate(&table, &Action::Update, identity.as_ref())?;
     let pk = pk_column(&model)?;
     let pool = umbra::db::pool();
 
@@ -671,7 +758,7 @@ async fn destroy(
     let cfg = CONFIG.get().expect("RestPlugin::routes was called");
     let identity = cfg.authentication.authenticate(&headers).await;
     let model = allowed_model(&table)?;
-    cfg.gate(&table, Action::Delete, identity.as_ref())?;
+    cfg.gate(&table, &Action::Delete, identity.as_ref())?;
     let pk = pk_column(&model)?;
     let pool = umbra::db::pool();
     let result = sqlx::query(&format!(
@@ -689,6 +776,100 @@ async fn destroy(
         )));
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+// =========================================================================
+// Custom-action dispatch.
+//
+// One generic handler that's mounted at every (table, action) path
+// the user registered via `ResourceConfig::action(...)`. It reads
+// the path's table + action segments (literal, baked-in at routes()
+// time) and looks the closure back out of CONFIG. Detail-scope
+// actions get the `{id}` path param too.
+//
+// Why a single handler instead of one per action: axum can mount
+// closures, but they have to satisfy `Handler` — which means picking
+// extractors at compile time. With a dynamic count of registered
+// actions, we'd need either a per-action handler factory (ugly,
+// would need to be macro-generated) or a single dispatch that pulls
+// state from the static CONFIG. The latter is what every other
+// handler already does, so it's the consistent choice.
+// =========================================================================
+
+async fn custom_action_dispatch(
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    headers: umbra::web::HeaderMap,
+    body: Option<Json<Value>>,
+) -> Result<Json<Value>, ApiError> {
+    let (table, name, pk) = parse_action_route(uri.path())?;
+    let cfg = CONFIG.get().expect("RestPlugin::routes was called");
+
+    // Locate the registered action by (table, name, method). The
+    // request's HTTP method has to match the one the user passed at
+    // registration time; a method mismatch falls through axum to a
+    // 405, so we shouldn't see one here, but be defensive.
+    let def = cfg
+        .actions
+        .get(&table)
+        .and_then(|list| list.iter().find(|d| d.name == name && d.method == method))
+        .ok_or_else(|| ApiError::NotFound(format!("no @action `{name}` on `{table}`")))?;
+
+    // Permission gate runs with `Action::Custom(name)` so the
+    // resource's permission can deny or allow per-action.
+    let identity = cfg.authentication.authenticate(&headers).await;
+    cfg.gate(&table, &Action::Custom(name.clone()), identity.as_ref())?;
+
+    let query = parse_query_string(uri.query().unwrap_or(""));
+    let ctx = ActionContext {
+        table: table.clone(),
+        name: name.clone(),
+        pk,
+        identity,
+        body: body.map(|Json(v)| v).unwrap_or(Value::Null),
+        query,
+    };
+
+    let result = (def.handler)(ctx).await;
+    match result {
+        Ok(v) => Ok(Json(v)),
+        Err(ActionError::BadInput(m)) => Err(ApiError::BadInput(m)),
+        Err(ActionError::NotFound(m)) => Err(ApiError::NotFound(m)),
+        Err(ActionError::Unauthenticated) => Err(ApiError::Unauthenticated),
+        Err(ActionError::Forbidden) => Err(ApiError::Forbidden),
+        Err(ActionError::Internal(m)) => Err(ApiError::Sqlx(sqlx::Error::Protocol(m))),
+    }
+}
+
+/// Decode a `key=value&key=value` query string into a HashMap.
+/// Percent-decoding the values is left to consumers — the v1 contract
+/// is that `ActionContext::query` carries raw URL-encoded bytes; if
+/// real-world consumers want it decoded by default we can swap later.
+fn parse_query_string(q: &str) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    for pair in q.split('&').filter(|p| !p.is_empty()) {
+        if let Some((k, v)) = pair.split_once('=') {
+            out.insert(k.to_string(), v.to_string());
+        } else {
+            out.insert(pair.to_string(), String::new());
+        }
+    }
+    out
+}
+
+/// Parse `/api/<table>/<name>` and `/api/<table>/<id>/<name>` —
+/// trailing slash tolerated. Returns `(table, action_name, pk)`
+/// where `pk` is `Some(id)` for detail-scope.
+fn parse_action_route(path: &str) -> Result<(String, String, Option<String>), ApiError> {
+    let trimmed = path.trim_end_matches('/');
+    let segments: Vec<&str> = trimmed.split('/').filter(|s| !s.is_empty()).collect();
+    match segments.as_slice() {
+        ["api", table, name] => Ok((table.to_string(), name.to_string(), None)),
+        ["api", table, id, name] => Ok((table.to_string(), name.to_string(), Some(id.to_string()))),
+        _ => Err(ApiError::NotFound(format!(
+            "{path} is not a recognised @action route"
+        ))),
+    }
 }
 
 /// Double-quote-escape a SQL identifier (table or column name). All

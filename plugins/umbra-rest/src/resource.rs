@@ -47,12 +47,136 @@
 //! layer.
 
 use std::collections::HashSet;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
+use http::Method;
 use serde_json::{Map, Value};
 
+use crate::auth::Identity;
 use crate::permission::{Action, Permission};
 use crate::{ComputedFn, TransformFn};
+
+/// Whether a custom action is mounted on the collection
+/// (`/api/<table>/<name>/`) or on a single row
+/// (`/api/<table>/<id>/<name>/`). DRF's `detail=False` / `detail=True`
+/// flag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ActionScope {
+    /// Mounted on the resource as a whole: no `{id}` segment. Use for
+    /// "recent posts", "search", "stats", anything keyed off the
+    /// collection or query params, not one row.
+    Collection,
+    /// Mounted on a single row: the URL carries `{id}` before the
+    /// action name. Use for "publish this post", "archive this user",
+    /// anything that takes a single primary key.
+    Detail,
+}
+
+/// Context handed to every `@action` handler at invocation time.
+/// Bundles the resolved identity, the parsed JSON body (`null` when
+/// the request body was empty), the query-string map, and — for
+/// detail-scope actions — the primary-key string the client sent.
+#[derive(Debug, Clone)]
+pub struct ActionContext {
+    /// The table the action is mounted on (e.g. `"post"`).
+    pub table: String,
+    /// The custom action's name as written in the URL
+    /// (e.g. `"publish"`).
+    pub name: String,
+    /// Detail-scope only: the primary-key value the client sent, as
+    /// the raw URL segment. Parse with `.parse::<i64>()` (or whatever
+    /// matches your PK type). `None` for collection-scope actions.
+    pub pk: Option<String>,
+    /// Whoever the auth backend resolved. `None` is anonymous.
+    pub identity: Option<Identity>,
+    /// The JSON body. `Value::Null` when the request had no body or
+    /// the body was literally `null`.
+    pub body: Value,
+    /// The query-string parameters as `(key, value)` pairs.
+    pub query: std::collections::HashMap<String, String>,
+}
+
+/// Errors a custom action handler can return. Maps to the same JSON
+/// envelope the built-in handlers use.
+#[derive(Debug)]
+pub enum ActionError {
+    /// 400 — bad input. Use for unprocessable bodies or missing
+    /// required fields.
+    BadInput(String),
+    /// 404 — target row missing (detail-scope actions on a deleted
+    /// row, etc.).
+    NotFound(String),
+    /// 401 — authentication required. Permission rules raise this
+    /// before the handler runs; you can also raise it from a handler
+    /// that needs to enforce its own auth.
+    Unauthenticated,
+    /// 403 — authenticated but forbidden.
+    Forbidden,
+    /// 500 — internal failure, with a short message. Database
+    /// errors and other unexpected failures.
+    Internal(String),
+}
+
+impl ActionError {
+    /// Wrap any `Display` value into an `Internal(...)` variant, the
+    /// shortcut for `.map_err(ActionError::internal)` on `?` chains.
+    pub fn internal(e: impl std::fmt::Display) -> Self {
+        ActionError::Internal(e.to_string())
+    }
+}
+
+impl std::fmt::Display for ActionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::BadInput(m) => write!(f, "{m}"),
+            Self::NotFound(m) => write!(f, "{m}"),
+            Self::Unauthenticated => write!(f, "authentication required"),
+            Self::Forbidden => write!(f, "forbidden"),
+            Self::Internal(m) => write!(f, "{m}"),
+        }
+    }
+}
+
+impl std::error::Error for ActionError {}
+
+impl From<sqlx::Error> for ActionError {
+    fn from(e: sqlx::Error) -> Self {
+        ActionError::Internal(e.to_string())
+    }
+}
+
+/// The boxed-future shape every registered action collapses to.
+/// Internal-only — users go through the `.action(...)` builder.
+pub(crate) type ActionFuture =
+    Pin<Box<dyn Future<Output = Result<Value, ActionError>> + Send + 'static>>;
+
+/// The stored action-handler closure. `Arc<dyn Fn>` so the plugin
+/// can clone refs cheaply when mounting routes.
+pub(crate) type ActionHandler = Arc<dyn Fn(ActionContext) -> ActionFuture + Send + Sync + 'static>;
+
+/// One registered `@action` endpoint: HTTP method, collection-or-detail
+/// scope, action name, and the handler closure. Stored on
+/// `ResourceConfig`; the plugin merges them into its own per-table
+/// vec during `RestPlugin::resource(...)`.
+#[derive(Clone)]
+pub(crate) struct ActionDef {
+    pub(crate) name: String,
+    pub(crate) method: Method,
+    pub(crate) scope: ActionScope,
+    pub(crate) handler: ActionHandler,
+}
+
+impl std::fmt::Debug for ActionDef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ActionDef")
+            .field("name", &self.name)
+            .field("method", &self.method)
+            .field("scope", &self.scope)
+            .finish()
+    }
+}
 
 /// Bundled REST customization for one table. Build via
 /// [`Self::new`] + chainable methods; register with
@@ -74,6 +198,10 @@ pub struct ResourceConfig {
     /// backward-compatible default. `Some(set)` restricts the
     /// resource to exactly that set; everything else 404s.
     pub(crate) view_scope: Option<HashSet<Action>>,
+    /// DRF-style `@action` endpoints registered on this resource.
+    /// Merged into the plugin's per-table action map at `.resource()`
+    /// time; mounted as new axum routes at `RestPlugin::routes()`.
+    pub(crate) actions: Vec<ActionDef>,
 }
 
 impl std::fmt::Debug for ResourceConfig {
@@ -83,6 +211,7 @@ impl std::fmt::Debug for ResourceConfig {
             .field("hidden", &self.hidden)
             .field("transforms_count", &self.transforms.len())
             .field("computed_count", &self.computed.len())
+            .field("actions", &self.actions)
             .finish()
     }
 }
@@ -97,6 +226,7 @@ impl ResourceConfig {
             computed: Vec::new(),
             permission: None,
             view_scope: None,
+            actions: Vec::new(),
         }
     }
 
@@ -178,4 +308,73 @@ impl ResourceConfig {
             .push((name.to_string(), std::sync::Arc::new(f)));
         self
     }
+
+    /// Register a DRF-style `@action` endpoint.
+    ///
+    /// In Django REST Framework you write:
+    ///
+    /// ```python
+    /// class PostViewSet(ViewSet):
+    ///     @action(detail=True, methods=['post'])
+    ///     def publish(self, request, pk=None):
+    ///         ...
+    /// ```
+    ///
+    /// The umbra-rest shape is a builder call on the resource:
+    ///
+    /// ```ignore
+    /// use http::Method;
+    /// use umbra_rest::{ActionScope, ResourceConfig};
+    /// use serde_json::json;
+    ///
+    /// ResourceConfig::new("post")
+    ///     // POST /api/post/{id}/publish/ — one row at a time.
+    ///     .action("publish", Method::POST, ActionScope::Detail, |ctx| async move {
+    ///         let id: i64 = ctx.pk.as_deref().unwrap_or_default().parse()
+    ///             .map_err(|_| umbra_rest::ActionError::BadInput("bad id".into()))?;
+    ///         // hit the ORM, update state, return a JSON response
+    ///         Ok(json!({ "id": id, "published": true }))
+    ///     })
+    ///     // GET /api/post/recent/ — collection-scope endpoint.
+    ///     .action("recent", Method::GET, ActionScope::Collection, |_ctx| async move {
+    ///         Ok(json!({ "results": [] }))
+    ///     });
+    /// ```
+    ///
+    /// The handler runs AFTER the resource's `Permission::check` has
+    /// approved the call with `Action::Custom(name)`. Inside the
+    /// handler you have full async access to the ORM, sqlx, and
+    /// whatever else you need.
+    ///
+    /// **URL shapes:**
+    /// - `ActionScope::Collection` → `/api/<table>/<name>/`
+    /// - `ActionScope::Detail`     → `/api/<table>/<id>/<name>/`
+    ///
+    /// Both with and without trailing slash are accepted.
+    ///
+    /// **Action names** must be URL-safe ASCII (`a-z`, `0-9`, `-`,
+    /// `_`); the builder panics at registration time on anything else
+    /// (validation is cheap and the wrong name is always a bug).
+    pub fn action<F, Fut>(mut self, name: &str, method: Method, scope: ActionScope, f: F) -> Self
+    where
+        F: Fn(ActionContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Value, ActionError>> + Send + 'static,
+    {
+        assert!(
+            !name.is_empty() && name.chars().all(is_action_name_char),
+            "ResourceConfig::action: name {name:?} must be ASCII [a-z0-9_-]"
+        );
+        let handler: ActionHandler = Arc::new(move |ctx| Box::pin(f(ctx)));
+        self.actions.push(ActionDef {
+            name: name.to_string(),
+            method,
+            scope,
+            handler,
+        });
+        self
+    }
+}
+
+fn is_action_name_char(c: char) -> bool {
+    c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_'
 }

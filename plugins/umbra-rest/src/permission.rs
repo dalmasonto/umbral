@@ -35,10 +35,18 @@
 
 use crate::auth::Identity;
 
-/// The five operations a REST resource exposes. Permission checks
-/// dispatch on this enum so a single `Permission` impl can vary by
-/// method (`ReadOnly` is the canonical case).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// The operations a REST resource can expose. The five built-ins
+/// (`List` / `Retrieve` / `Create` / `Update` / `Delete`) cover the
+/// standard CRUD surface; `Custom(name)` is the DRF `@action` shape
+/// for endpoints that don't fit CRUD (publish, archive, recent,
+/// etc.).
+///
+/// Permission impls dispatch on this enum so one `Permission` can
+/// vary behaviour by action — `ReadOnly` is the canonical case;
+/// custom-action authors usually treat `Custom(_)` as a write
+/// (because it isn't List/Retrieve), but a permission can also
+/// special-case `Custom("recent")` if it wants.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Action {
     /// `GET /api/<table>/` — list all matching rows.
     List,
@@ -50,12 +58,26 @@ pub enum Action {
     Update,
     /// `DELETE /api/<table>/<id>` — remove a row.
     Delete,
+    /// A `@action`-style custom endpoint registered via
+    /// [`crate::ResourceConfig::action`]. The string is the action
+    /// name (e.g. `"publish"`, `"recent"`) and matches the URL
+    /// segment.
+    Custom(String),
 }
 
 impl Action {
-    /// True for read-only actions (List, Retrieve).
-    pub fn is_read(self) -> bool {
+    /// True for the read-only built-ins (List, Retrieve). Custom
+    /// actions return false here — declare them with a permission
+    /// that special-cases the name if you need read-only semantics.
+    pub fn is_read(&self) -> bool {
         matches!(self, Action::List | Action::Retrieve)
+    }
+
+    /// True iff this is a custom (`@action`) endpoint with the given
+    /// name. Useful in `Permission::check` impls that want to allow
+    /// or deny specific custom actions.
+    pub fn is_custom(&self, name: &str) -> bool {
+        matches!(self, Action::Custom(n) if n == name)
     }
 }
 
@@ -83,8 +105,12 @@ impl std::error::Error for PermissionError {}
 /// deny. Sync because permission checks don't hit the database —
 /// they walk an in-memory rule set against the (already-resolved)
 /// `Identity`.
+///
+/// Takes `&Action` (not `Action`) because `Action::Custom(String)`
+/// is the action variant for `@action`-style endpoints — passing by
+/// reference avoids a clone per request.
 pub trait Permission: Send + Sync + 'static {
-    fn check(&self, action: Action, identity: Option<&Identity>) -> Result<(), PermissionError>;
+    fn check(&self, action: &Action, identity: Option<&Identity>) -> Result<(), PermissionError>;
 }
 
 // =========================================================================
@@ -96,7 +122,7 @@ pub trait Permission: Send + Sync + 'static {
 pub struct AllowAny;
 
 impl Permission for AllowAny {
-    fn check(&self, _action: Action, _identity: Option<&Identity>) -> Result<(), PermissionError> {
+    fn check(&self, _action: &Action, _identity: Option<&Identity>) -> Result<(), PermissionError> {
         Ok(())
     }
 }
@@ -106,7 +132,7 @@ impl Permission for AllowAny {
 pub struct IsAuthenticated;
 
 impl Permission for IsAuthenticated {
-    fn check(&self, _action: Action, identity: Option<&Identity>) -> Result<(), PermissionError> {
+    fn check(&self, _action: &Action, identity: Option<&Identity>) -> Result<(), PermissionError> {
         if identity.is_some() {
             Ok(())
         } else {
@@ -121,7 +147,7 @@ impl Permission for IsAuthenticated {
 pub struct IsStaff;
 
 impl Permission for IsStaff {
-    fn check(&self, _action: Action, identity: Option<&Identity>) -> Result<(), PermissionError> {
+    fn check(&self, _action: &Action, identity: Option<&Identity>) -> Result<(), PermissionError> {
         match identity {
             None => Err(PermissionError::Unauthenticated),
             Some(id) if id.is_staff => Ok(()),
@@ -137,7 +163,7 @@ impl Permission for IsStaff {
 pub struct ReadOnly;
 
 impl Permission for ReadOnly {
-    fn check(&self, action: Action, _identity: Option<&Identity>) -> Result<(), PermissionError> {
+    fn check(&self, action: &Action, _identity: Option<&Identity>) -> Result<(), PermissionError> {
         if action.is_read() {
             Ok(())
         } else {
@@ -163,7 +189,7 @@ impl OrPermission {
 }
 
 impl Permission for OrPermission {
-    fn check(&self, action: Action, identity: Option<&Identity>) -> Result<(), PermissionError> {
+    fn check(&self, action: &Action, identity: Option<&Identity>) -> Result<(), PermissionError> {
         let mut last_err = PermissionError::Forbidden;
         for p in &self.perms {
             match p.check(action, identity) {
@@ -191,7 +217,7 @@ impl AndPermission {
 }
 
 impl Permission for AndPermission {
-    fn check(&self, action: Action, identity: Option<&Identity>) -> Result<(), PermissionError> {
+    fn check(&self, action: &Action, identity: Option<&Identity>) -> Result<(), PermissionError> {
         for p in &self.perms {
             p.check(action, identity)?;
         }
@@ -219,56 +245,63 @@ mod tests {
             Action::Update,
             Action::Delete,
         ] {
-            assert!(AllowAny.check(action, None).is_ok());
-            assert!(AllowAny.check(action, Some(&alice())).is_ok());
+            assert!(AllowAny.check(&action, None).is_ok());
+            assert!(AllowAny.check(&action, Some(&alice())).is_ok());
         }
     }
 
     #[test]
     fn is_authenticated_demands_identity() {
         assert_eq!(
-            IsAuthenticated.check(Action::List, None),
+            IsAuthenticated.check(&Action::List, None),
             Err(PermissionError::Unauthenticated)
         );
-        assert!(IsAuthenticated.check(Action::List, Some(&alice())).is_ok());
+        assert!(IsAuthenticated.check(&Action::List, Some(&alice())).is_ok());
     }
 
     #[test]
     fn is_staff_requires_staff_flag() {
         assert_eq!(
-            IsStaff.check(Action::List, None),
+            IsStaff.check(&Action::List, None),
             Err(PermissionError::Unauthenticated)
         );
         assert_eq!(
-            IsStaff.check(Action::List, Some(&alice())),
+            IsStaff.check(&Action::List, Some(&alice())),
             Err(PermissionError::Forbidden)
         );
-        assert!(IsStaff.check(Action::List, Some(&admin())).is_ok());
+        assert!(IsStaff.check(&Action::List, Some(&admin())).is_ok());
     }
 
     #[test]
     fn read_only_allows_reads_denies_writes() {
         for read_action in [Action::List, Action::Retrieve] {
-            assert!(ReadOnly.check(read_action, None).is_ok());
-            assert!(ReadOnly.check(read_action, Some(&admin())).is_ok());
+            assert!(ReadOnly.check(&read_action, None).is_ok());
+            assert!(ReadOnly.check(&read_action, Some(&admin())).is_ok());
         }
         for write_action in [Action::Create, Action::Update, Action::Delete] {
             assert_eq!(
-                ReadOnly.check(write_action, Some(&admin())),
+                ReadOnly.check(&write_action, Some(&admin())),
                 Err(PermissionError::Forbidden)
             );
         }
+        // ReadOnly's "is_read" check returns false for Custom — a
+        // custom action is treated as a write by default and gets
+        // denied.
+        assert_eq!(
+            ReadOnly.check(&Action::Custom("publish".into()), Some(&admin())),
+            Err(PermissionError::Forbidden)
+        );
     }
 
     #[test]
     fn or_permission_short_circuits_on_success() {
         let perm = OrPermission::new(vec![Box::new(IsStaff), Box::new(IsAuthenticated)]);
         // Alice isn't staff but is authenticated → OR passes.
-        assert!(perm.check(Action::List, Some(&alice())).is_ok());
+        assert!(perm.check(&Action::List, Some(&alice())).is_ok());
         // Anonymous fails both, surfaces as Unauthenticated (the last
         // error from IsAuthenticated).
         assert_eq!(
-            perm.check(Action::List, None),
+            perm.check(&Action::List, None),
             Err(PermissionError::Unauthenticated)
         );
     }
@@ -278,10 +311,18 @@ mod tests {
         let perm = AndPermission::new(vec![Box::new(IsAuthenticated), Box::new(IsStaff)]);
         // Alice authenticated but not staff → fails on IsStaff.
         assert_eq!(
-            perm.check(Action::List, Some(&alice())),
+            perm.check(&Action::List, Some(&alice())),
             Err(PermissionError::Forbidden)
         );
         // Admin satisfies both.
-        assert!(perm.check(Action::List, Some(&admin())).is_ok());
+        assert!(perm.check(&Action::List, Some(&admin())).is_ok());
+    }
+
+    #[test]
+    fn action_is_custom_matches_the_name() {
+        let a = Action::Custom("publish".into());
+        assert!(a.is_custom("publish"));
+        assert!(!a.is_custom("recent"));
+        assert!(!Action::List.is_custom("publish"));
     }
 }
