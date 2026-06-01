@@ -115,7 +115,7 @@ cargo run -- migrate [--fake <plugin/name>] [--fake-initial] [--allow-drift]
 | `--fake-initial` | For each plugin, if the `0001_*` migration's tables already exist in the database, mark it applied without running SQL. Use when adopting a database bootstrapped outside umbra. |
 | `--allow-drift` | Proceed even when some applied migrations are missing from disk. Logs a warning per missing file and applies the genuinely-pending ones. |
 
-See the [migration drift recovery guide](/v0.0.1/migrations/migration-drift) for worked examples.
+See the [migration drift recovery guide](/docs/v0.0.1/migrations/migration-drift) for worked examples.
 
 ## showmigrations
 
@@ -153,7 +153,7 @@ cargo run -- inspectdb \
 | `--output <path>` | Where `models.rs` and `migrations/app/0001_initial.json` land. Required. |
 | `--mark-applied` | Record `0001_initial` in `umbra_migrations` without running the SQL. Pass when the target DB already holds the introspected tables. |
 
-See [the inspectdb guide](/v0.0.1/migrations/inspectdb) for the full
+See [the inspectdb guide](/docs/v0.0.1/migrations/inspectdb) for the full
 workflow.
 
 ## Errors

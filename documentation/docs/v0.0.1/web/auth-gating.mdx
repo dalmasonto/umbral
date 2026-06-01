@@ -8,7 +8,7 @@ tags: [web, auth, middleware]
 
 Two complementary shapes for the Django `@login_required` pattern: an axum **extractor** for per-handler gating and a tower::Layer **middleware** for gating whole Router subtrees. Both ship from `umbra-auth`. Both share one `LoginRequired` config that picks between two error responses — JSON 401 for APIs, 302 redirect for HTML pages.
 
-The full reference lives under the auth plugin: [Guarding views](/v0.0.1/plugins/auth#guarding-views).
+The full reference lives under the auth plugin: [Guarding views](/docs/v0.0.1/plugins/auth#guarding-views).
 
 ## The two shapes
 
@@ -49,7 +49,7 @@ Mix both in one app: wrap `/api/*` with `login_required()` and `/app/*` with `lo
 
 ## Generic over the user model
 
-`LoggedIn<U>` is generic over any `U: UserModel`, so a [custom user model](/v0.0.1/plugins/auth#swapping-the-user-model) works without adapters:
+`LoggedIn<U>` is generic over any `U: UserModel`, so a [custom user model](/docs/v0.0.1/plugins/auth#swapping-the-user-model) works without adapters:
 
 ```rust
 async fn tenant_home(LoggedIn(user): LoggedIn<TenantUser>) -> Html<String> {
@@ -59,6 +59,6 @@ async fn tenant_home(LoggedIn(user): LoggedIn<TenantUser>) -> Html<String> {
 
 ## See also
 
-- [`umbra-auth` plugin docs](/v0.0.1/plugins/auth) - full reference for `LoginRequired`, `LoggedIn<U>`, `LoginRequiredLayer`.
-- [Users and passwords](/v0.0.1/auth/users-and-passwords) - the underlying user / session story.
-- [Sessions](/v0.0.1/plugins/sessions) - how the session cookie is created and validated.
+- [`umbra-auth` plugin docs](/docs/v0.0.1/plugins/auth) - full reference for `LoginRequired`, `LoggedIn<U>`, `LoginRequiredLayer`.
+- [Users and passwords](/docs/v0.0.1/auth/users-and-passwords) - the underlying user / session story.
+- [Sessions](/docs/v0.0.1/plugins/sessions) - how the session cookie is created and validated.

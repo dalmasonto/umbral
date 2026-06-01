@@ -27,7 +27,7 @@ identical to anything you'd write yourself.
 | `my_app/migrations/` | `plugins/my-app/migrations/<my-app>/` |
 | `my_app/urls.py` | `Plugin::routes()` returning an axum `Router` |
 | `apps.py` `ready()` | `Plugin::on_ready(&ctx)` |
-| `my_app/management/commands/` | `Plugin::commands()` (deferred - see the [Plugin trait page](/v0.0.1/plugins/the-plugin-trait)) |
+| `my_app/management/commands/` | `Plugin::commands()` (deferred - see the [Plugin trait page](/docs/v0.0.1/plugins/the-plugin-trait)) |
 | `auth_user`, `auth_permission` (Django's auto-prefixed table names) | Up to you - `#[umbra(table = "...")]` overrides the snake-case default |
 
 ## Where apps live
@@ -230,6 +230,6 @@ Four things that matter in this shape:
 
 ## Next
 
-- The trait surface in detail: [The Plugin trait](/v0.0.1/plugins/the-plugin-trait).
-- The canonical built-in plugin: [Users and passwords (umbra-auth)](/v0.0.1/auth/users-and-passwords).
+- The trait surface in detail: [The Plugin trait](/docs/v0.0.1/plugins/the-plugin-trait).
+- The canonical built-in plugin: [Users and passwords (umbra-auth)](/docs/v0.0.1/auth/users-and-passwords).
 - The dependency-inversion rationale: `arch.md §3`.
