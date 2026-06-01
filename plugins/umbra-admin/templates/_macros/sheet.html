@@ -105,7 +105,7 @@ Drag-resize: ~50 LOC vanilla JS at the bottom; width in localStorage.
         </div>
 
         {% if field.kind == "bool" %}
-        <label class="inline-flex items-center gap-sm cursor-pointer {% if is_readonly %}opacity-60 pointer-events-none{% endif %}">
+        <label class="inline-flex items-center gap-sm {% if is_readonly %}opacity-50 pointer-events-none cursor-not-allowed{% else %}cursor-pointer{% endif %}">
           <div class="relative">
             <input type="checkbox" id="f_{{ field.name }}" name="{{ field.name }}" value="true"
               {% if field.value == "true" %}checked{% endif %}
@@ -118,51 +118,53 @@ Drag-resize: ~50 LOC vanilla JS at the bottom; width in localStorage.
         </label>
         {% elif field.kind == "textarea" %}
         <div class="relative">
-          <textarea id="f_{{ field.name }}" name="{{ field.name }}" rows="5"
+          <textarea id="f_{{ field.name }}" {% if not is_readonly %}name="{{ field.name }}"{% endif %} rows="5"
             {% if not field.nullable and not is_readonly %}required{% endif %}
-            {% if is_readonly %}readonly{% endif %}
-            class="w-full bg-surface-container-low border border-outline-variant rounded-xl px-md py-sm text-on-surface text-body-md font-mono focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all resize-y {% if is_readonly %}opacity-70 cursor-default{% endif %}"
+            {% if is_readonly %}disabled{% endif %}
+            class="w-full bg-surface-container-low border border-outline-variant rounded-xl px-md py-sm text-on-surface text-body-md font-mono focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all resize-y {% if is_readonly %}opacity-50 cursor-not-allowed{% endif %}"
           >{{ field.value }}</textarea>
+          {% if not is_readonly %}
           <button type="button"
             class="absolute top-2 right-2 px-sm py-xs text-[10px] bg-surface-container-high border border-outline-variant rounded text-on-surface-variant hover:text-on-surface transition-colors font-label-sm"
             onclick="(function(btn){var ta=btn.closest('.relative').querySelector('textarea');try{ta.value=JSON.stringify(JSON.parse(ta.value),null,2);}catch(e){}})(this)"
           >Format</button>
+          {% endif %}
         </div>
         {% elif field.kind == "number" %}
-        <input type="number" id="f_{{ field.name }}" name="{{ field.name }}" value="{{ field.value }}" step="any"
+        <input type="number" id="f_{{ field.name }}" {% if not is_readonly %}name="{{ field.name }}"{% endif %} value="{{ field.value }}" step="any"
           {% if not field.nullable and not is_readonly %}required{% endif %}
-          {% if is_readonly %}readonly{% endif %}
-          class="w-full bg-surface-container-low border border-outline-variant rounded-xl px-md py-sm text-on-surface text-data-mono tabular-nums focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all {% if is_readonly %}opacity-70 cursor-default{% endif %}"/>
+          {% if is_readonly %}disabled{% endif %}
+          class="w-full bg-surface-container-low border border-outline-variant rounded-xl px-md py-sm text-on-surface text-data-mono tabular-nums focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all {% if is_readonly %}opacity-50 cursor-not-allowed{% endif %}"/>
         {% elif field.kind == "date" %}
-        <input type="date" id="f_{{ field.name }}" name="{{ field.name }}" value="{{ field.value }}"
+        <input type="date" id="f_{{ field.name }}" {% if not is_readonly %}name="{{ field.name }}"{% endif %} value="{{ field.value }}"
           {% if not field.nullable and not is_readonly %}required{% endif %}
-          {% if is_readonly %}readonly{% endif %}
-          class="w-full bg-surface-container-low border border-outline-variant rounded-xl px-md py-sm text-on-surface text-body-md focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all {% if is_readonly %}opacity-70 cursor-default{% endif %}"/>
+          {% if is_readonly %}disabled{% endif %}
+          class="w-full bg-surface-container-low border border-outline-variant rounded-xl px-md py-sm text-on-surface text-body-md focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all {% if is_readonly %}opacity-50 cursor-not-allowed{% endif %}"/>
         {% elif field.kind == "time" %}
-        <input type="time" id="f_{{ field.name }}" name="{{ field.name }}" value="{{ field.value }}"
+        <input type="time" id="f_{{ field.name }}" {% if not is_readonly %}name="{{ field.name }}"{% endif %} value="{{ field.value }}"
           {% if not field.nullable and not is_readonly %}required{% endif %}
-          {% if is_readonly %}readonly{% endif %}
-          class="w-full bg-surface-container-low border border-outline-variant rounded-xl px-md py-sm text-on-surface text-body-md focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all {% if is_readonly %}opacity-70 cursor-default{% endif %}"/>
+          {% if is_readonly %}disabled{% endif %}
+          class="w-full bg-surface-container-low border border-outline-variant rounded-xl px-md py-sm text-on-surface text-body-md focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all {% if is_readonly %}opacity-50 cursor-not-allowed{% endif %}"/>
         {% elif field.kind == "datetime-local" %}
-        <input type="datetime-local" id="f_{{ field.name }}" name="{{ field.name }}" value="{{ field.value }}"
+        <input type="datetime-local" id="f_{{ field.name }}" {% if not is_readonly %}name="{{ field.name }}"{% endif %} value="{{ field.value }}"
           {% if not field.nullable and not is_readonly %}required{% endif %}
-          {% if is_readonly %}readonly{% endif %}
-          class="w-full bg-surface-container-low border border-outline-variant rounded-xl px-md py-sm text-on-surface text-body-md focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all {% if is_readonly %}opacity-70 cursor-default{% endif %}"/>
+          {% if is_readonly %}disabled{% endif %}
+          class="w-full bg-surface-container-low border border-outline-variant rounded-xl px-md py-sm text-on-surface text-body-md focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all {% if is_readonly %}opacity-50 cursor-not-allowed{% endif %}"/>
         {% else %}
-        <input type="text" id="f_{{ field.name }}" name="{{ field.name }}" value="{{ field.value }}"
+        <input type="text" id="f_{{ field.name }}" {% if not is_readonly %}name="{{ field.name }}"{% endif %} value="{{ field.value }}"
           {% if not field.nullable and not is_readonly %}required{% endif %}
-          {% if is_readonly %}readonly{% endif %}
-          class="w-full bg-surface-container-low border border-outline-variant rounded-xl px-md py-sm text-on-surface text-body-md focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all placeholder:text-outline/50 {% if is_readonly %}opacity-70 cursor-default{% endif %}"/>
+          {% if is_readonly %}disabled{% endif %}
+          class="w-full bg-surface-container-low border border-outline-variant rounded-xl px-md py-sm text-on-surface text-body-md focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all placeholder:text-outline/50 {% if is_readonly %}opacity-50 cursor-not-allowed{% endif %}"/>
         {% endif %}
       </div>
       {% endfor %}
     </form>
 
     {% else %}
-    <dl class="space-y-md">
+    <dl class="space-y-sm">
       {% for field in fields %}
-      <div class="flex flex-col gap-xs">
-        <dt class="font-label-md text-label-md text-on-surface-variant uppercase tracking-wide">
+      <div class="flex flex-col gap-0.5">
+        <dt class="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wide leading-tight">
           {{ field.name | replace("_", " ") }}
         </dt>
         <dd class="text-body-md text-on-surface break-words whitespace-pre-wrap min-w-0 {% if field.kind == 'number' or field.kind == 'datetime-local' or field.kind == 'date' or field.kind == 'time' %}tabular-nums font-data-mono{% endif %}">

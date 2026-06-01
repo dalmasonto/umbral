@@ -6,6 +6,12 @@
   <title>{% block title %}umbra admin{% endblock %}</title>
   <!-- HTMX: same-origin only -->
   <meta name="htmx-config" content='{"selfRequestsOnly":true}'/>
+  <!-- Bug 1: declare window.umbra early so inline scripts in child
+       templates that reference umbra.closeSheet / umbra.closeDialog
+       don't throw "umbra is not defined" before the IIFE at the
+       bottom of <body> has run. The IIFE below extends this object
+       rather than replacing it. -->
+  <script>window.umbra = window.umbra || {};</script>
   {#
     Tailwind CDN is loaded only in development. In production
     (settings.environment == "prod"), the framework expects a
@@ -14,9 +20,9 @@
     known footgun, documented in docs/v0.0.1/plugins/admin.mdx.
   #}
   {% if environment == "dev" or environment is undefined %}
-  <link href="/admin/static/admin.css" rel="stylesheet"/>
-  {% else %}
   <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+  {% else %}
+  <link href="/admin/static/admin.css" rel="stylesheet"/>
   {% endif %}
   <script src="https://unpkg.com/htmx.org@2.0.4"></script>
   <script src="https://unpkg.com/lucide@latest"></script>
@@ -156,6 +162,36 @@
       box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 20%, transparent);
       outline: none;
     }
+    /* Bug 3a: disabled inputs must not show focus ring or interactive cursor. */
+    input:disabled, select:disabled, textarea:disabled {
+      outline: none !important;
+      box-shadow: none !important;
+      cursor: not-allowed;
+    }
+    input:disabled:focus-visible, select:disabled:focus-visible, textarea:disabled:focus-visible {
+      border-color: var(--outline-variant) !important;
+      box-shadow: none !important;
+      outline: none !important;
+    }
+    /* Bug 4: date/time native inputs — consistent styling across browsers. */
+    input[type="date"], input[type="datetime-local"], input[type="time"] {
+      background-color: var(--surface-container-low);
+      border: 1px solid var(--outline-variant);
+      border-radius: 0.75rem;
+      padding: 8px 16px;
+      color: var(--on-surface);
+      font-family: 'Inter', sans-serif;
+      font-size: 14px;
+      line-height: 20px;
+    }
+    input[type="date"]::-webkit-calendar-picker-indicator,
+    input[type="datetime-local"]::-webkit-calendar-picker-indicator,
+    input[type="time"]::-webkit-calendar-picker-indicator {
+      filter: invert(0.5);
+      cursor: pointer;
+    }
+    /* Bug 9: main content must not overflow horizontally; tables scroll within. */
+    #umbra-admin-content { overflow-x: hidden; }
   </style>
 
   <!-- Tailwind config: maps every token to its CSS variable. -->
@@ -273,7 +309,9 @@
      Scripts: theme persistence, lucide init
      ======================================================== -->
 <script>
-  var umbra = (function() {
+  // Extend the early-declared window.umbra stub with the full IIFE exports.
+  // The stub was declared in <head> so child-template inline scripts are safe.
+  (function() {
     // ----- Theme toggle -----
     function applyTheme(dark) {
       var root = document.documentElement;
@@ -325,7 +363,11 @@
       // navigates to /admin/logout for simplicity.
     }
 
-    return { toggleTheme: toggleTheme, sidebarFilter: sidebarFilter, toggleUserMenu: toggleUserMenu };
+    Object.assign(window.umbra, {
+      toggleTheme: toggleTheme,
+      sidebarFilter: sidebarFilter,
+      toggleUserMenu: toggleUserMenu,
+    });
   })();
 
   // Initialise Lucide icons after the DOM is fully painted.

@@ -262,11 +262,12 @@ async fn test_password_hash_is_readonly_by_default() {
     let (status, body) = send(router, req).await;
     assert_eq!(status, StatusCode::OK, "edit sheet loads");
 
-    // The `password_hash` field should carry `readonly` attribute (not just absent).
-    // The sheet macro renders readonly fields with the `readonly` HTML attribute.
+    // The `password_hash` field should carry `disabled` attribute (bug 3a fix:
+    // readonly fields now use `disabled` so they can't receive focus and can't
+    // be submitted). The `readonly` label badge is still rendered in the label row.
     assert!(
-        body.contains("readonly"),
-        "password_hash field is marked readonly: snippet={}",
+        body.contains("disabled"),
+        "password_hash field is marked disabled: snippet={}",
         &body[..body.len().min(3000)]
     );
     // Also verify the field IS shown (readonly, not hidden) — the label must be present.

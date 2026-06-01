@@ -1,3 +1,31 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* Bug 4: native date / time inputs — consistent visual styling. */
+input[type="date"],
+input[type="datetime-local"],
+input[type="time"] {
+  @apply bg-surface-container-low border border-outline-variant rounded-xl px-md py-sm text-on-surface;
+  font-family: 'Inter', sans-serif;
+}
+input[type="date"]::-webkit-calendar-picker-indicator,
+input[type="datetime-local"]::-webkit-calendar-picker-indicator,
+input[type="time"]::-webkit-calendar-picker-indicator {
+  filter: invert(0.5);
+  cursor: pointer;
+}
+
+/* Bug 3a: disabled inputs must not receive focus styling. */
+input:disabled,
+select:disabled,
+textarea:disabled {
+  outline: none !important;
+  box-shadow: none !important;
+  @apply cursor-not-allowed;
+}
+
+/* Bug 9: main content overflow containment. */
+#umbra-admin-content {
+  overflow-x: hidden;
+}

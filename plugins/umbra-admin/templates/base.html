@@ -280,8 +280,9 @@ antialiased flex" id="umbra-admin-body"{% endblock %} {% block body %}
         </div>
     </header>
 
-    <!-- CONTENT region -->
-    <main id="umbra-admin-content" class="flex-1 p-lg">
+    <!-- CONTENT region — overflow-x-hidden so wide tables don't push
+         the entire main area; the table wrapper has overflow-x-auto. -->
+    <main id="umbra-admin-content" class="flex-1 p-lg overflow-x-hidden">
         {% block content %}{% endblock %}
     </main>
 </div>

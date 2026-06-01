@@ -3779,9 +3779,11 @@ fn builtin_recent_users_widget() -> Widget {
         permission: None,
         data: WidgetDataFn::new(|_user| async move {
             // Attempt to read from auth_user table; gracefully degrade if absent.
+            // Column is `date_joined` (as defined in umbra-auth); fall back to
+            // empty list on any error so the dashboard still renders.
             let pool = umbra::db::pool();
             let rows_result = sqlx::query(
-                "SELECT username, created_at FROM auth_user ORDER BY created_at DESC LIMIT 5",
+                "SELECT username, date_joined FROM auth_user ORDER BY date_joined DESC LIMIT 5",
             )
             .fetch_all(&pool)
             .await;
@@ -3791,17 +3793,25 @@ fn builtin_recent_users_widget() -> Widget {
                     .map(|r| {
                         use sqlx::Row;
                         let actor: String = r.try_get("username").unwrap_or_default();
-                        let at: String = r.try_get("created_at").unwrap_or_default();
+                        // date_joined is a Timestamptz; format as a short string.
+                        let at: String = r
+                            .try_get::<DateTime<Utc>, _>("date_joined")
+                            .map(|dt| dt.format("%Y-%m-%d %H:%M UTC").to_string())
+                            .or_else(|_| r.try_get::<String, _>("date_joined"))
+                            .unwrap_or_default();
                         crate::widgets::FeedItem {
                             actor,
-                            verb: "signed up".to_string(),
+                            verb: "joined".to_string(),
                             object: "account".to_string(),
                             object_link: None,
                             at,
                         }
                     })
                     .collect(),
-                Err(_) => vec![],
+                Err(e) => {
+                    tracing::debug!(error = %e, "umbra_recent_users: auth_user query failed; returning empty feed");
+                    vec![]
+                }
             };
             WidgetPayload::Feed(FeedPayload { items })
         }),
