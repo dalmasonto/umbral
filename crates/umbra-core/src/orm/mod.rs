@@ -31,7 +31,7 @@ use std::ops::{BitAnd, BitOr};
 
 pub use model::{ArrayElement, FieldSpec, Model, PrimaryKey, SqlType};
 pub use post::Post;
-pub use queryset::{Manager, QuerySet};
+pub use queryset::{GetError, Manager, QuerySet};
 pub use tsvector::TsVector;
 
 /// A typed boolean condition on rows of `T`.

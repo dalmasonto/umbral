@@ -237,8 +237,8 @@ pub mod orm {
 
     pub use umbra_core::orm::write::WriteError;
     pub use umbra_core::orm::{
-        ArrayElement, FieldSpec, Manager, Model, Post, PrimaryKey, QuerySet, SqlType, TsVector,
-        column, write,
+        ArrayElement, FieldSpec, GetError, Manager, Model, Post, PrimaryKey, QuerySet, SqlType,
+        TsVector, column, write,
     };
 
     /// The `#[derive(Model)]` proc macro. Shares the `Model` name with the

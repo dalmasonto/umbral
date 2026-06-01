@@ -405,6 +405,60 @@ async fn exists_returns_false_when_no_match() {
     assert!(!found, "id=999 is not seeded, so exists() must be false");
 }
 
+/// `.get()` returns the row when exactly one matches.
+#[tokio::test]
+async fn get_returns_row_when_exactly_one_matches() {
+    use umbra_core::orm::GetError;
+    let pool = fresh_pool().await;
+
+    let row = Post::objects()
+        .on(&pool)
+        .filter(post::ID.eq(2))
+        .get()
+        .await
+        .expect("get() should succeed on a unique PK match");
+
+    assert_eq!(row.id, 2);
+    assert_eq!(row.title, "Rust at last");
+    let _ = GetError::NotFound;
+}
+
+/// `.get()` returns `GetError::NotFound` when zero rows match.
+#[tokio::test]
+async fn get_returns_not_found_when_zero_rows_match() {
+    use umbra_core::orm::GetError;
+    let pool = fresh_pool().await;
+
+    let err = Post::objects()
+        .on(&pool)
+        .filter(post::ID.eq(999))
+        .get()
+        .await
+        .expect_err("get() should error on no match");
+
+    assert!(matches!(err, GetError::NotFound), "got {err:?}");
+}
+
+/// `.get()` returns `GetError::MultipleObjectsReturned` when more than
+/// one row matches — a non-unique filter is the classic case.
+#[tokio::test]
+async fn get_returns_multiple_when_filter_is_not_unique() {
+    use umbra_core::orm::GetError;
+    let pool = fresh_pool().await;
+
+    // No filter — table has 5 rows, so .get() must reject.
+    let err = Post::objects()
+        .on(&pool)
+        .get()
+        .await
+        .expect_err("get() with no filter on a multi-row table should error");
+
+    assert!(
+        matches!(err, GetError::MultipleObjectsReturned),
+        "got {err:?}"
+    );
+}
+
 /// `first` returns `Some` when at least one row matches.
 #[tokio::test]
 async fn first_returns_some_when_match() {

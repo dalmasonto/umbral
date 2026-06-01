@@ -184,6 +184,53 @@ fn resolve_pool<T: Model>(explicit: Option<DbPool>) -> DbPool {
     crate::db::pool_dispatched().clone()
 }
 
+/// Error type for [`QuerySet::get`] / [`Manager::get`] (Django's
+/// exactly-one shape).
+///
+/// `.get()` deliberately returns this rather than `Result<Option<T>,
+/// sqlx::Error>` because three outcomes need three branches:
+///
+/// - `Ok(row)` — exactly one matched.
+/// - `Err(NotFound)` — zero matched. The common 404 path.
+/// - `Err(MultipleObjectsReturned)` — more than one matched. A
+///   data-integrity signal: filters that should pin a unique row
+///   (PK lookup, UNIQUE-constrained column) hitting this variant
+///   means an invariant has already broken upstream.
+/// - `Err(Sqlx)` — the DB itself returned an error.
+#[derive(Debug)]
+pub enum GetError {
+    NotFound,
+    MultipleObjectsReturned,
+    Sqlx(sqlx::Error),
+}
+
+impl std::fmt::Display for GetError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotFound => write!(f, "no matching row"),
+            Self::MultipleObjectsReturned => {
+                write!(f, "expected exactly one row, found more")
+            }
+            Self::Sqlx(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for GetError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Sqlx(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+impl From<sqlx::Error> for GetError {
+    fn from(e: sqlx::Error) -> Self {
+        Self::Sqlx(e)
+    }
+}
+
 /// Terminal methods for every `QuerySet<T>` where `T: Model`.
 ///
 /// Each terminal that materializes `T` carries a FromRow bound on the
@@ -336,6 +383,47 @@ impl<T: Model> QuerySet<T> {
     {
         let rows = self.limit(1).fetch().await?;
         Ok(!rows.is_empty())
+    }
+
+    /// `.get()` — Django's exactly-one terminal.
+    ///
+    /// Returns `Ok(row)` when the filter chain matches exactly one
+    /// row. The two not-exactly-one cases each get their own
+    /// `GetError` variant so the caller can branch deliberately:
+    ///
+    /// - [`GetError::NotFound`] — zero rows matched. The right
+    ///   choice for "fetch the row this user just clicked on; 404
+    ///   if it's gone."
+    /// - [`GetError::MultipleObjectsReturned`] — more than one row
+    ///   matched. The right choice for filters that should be
+    ///   uniquely-keyed (e.g. `.filter(user::EMAIL.eq("..."))`
+    ///   when email has a UNIQUE constraint); a result of 2+ is a
+    ///   data-integrity bug worth crashing on.
+    /// - The underlying sqlx error wraps as [`GetError::Sqlx`].
+    ///
+    /// Internally this issues `SELECT ... LIMIT 2` — the cheapest
+    /// way to distinguish "one row" from "many." The second row, if
+    /// it exists, isn't materialised beyond the bare FromRow call.
+    ///
+    /// ```ignore
+    /// match Post::objects().filter(post::ID.eq(42)).get().await {
+    ///     Ok(p)                                            => /* render */,
+    ///     Err(GetError::NotFound)                          => /* 404 */,
+    ///     Err(GetError::MultipleObjectsReturned)           => unreachable!("ID is unique"),
+    ///     Err(GetError::Sqlx(e))                           => /* 500 */,
+    /// }
+    /// ```
+    pub async fn get(self) -> Result<T, GetError>
+    where
+        T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
+            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
+    {
+        let mut rows = self.limit(2).fetch().await.map_err(GetError::Sqlx)?;
+        match rows.len() {
+            0 => Err(GetError::NotFound),
+            1 => Ok(rows.pop().unwrap()),
+            _ => Err(GetError::MultipleObjectsReturned),
+        }
     }
 
     // =====================================================================
@@ -531,6 +619,20 @@ impl<T: Model> QuerySet<T> {
         let rows = self.limit(1).fetch_pg(pool).await?;
         Ok(!rows.is_empty())
     }
+
+    /// Exactly-one terminal against an explicit `PgPool`.
+    /// See [`QuerySet::get`] for the error-variant semantics.
+    pub async fn get_pg(self, pool: &sqlx::PgPool) -> Result<T, GetError>
+    where
+        T: for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
+    {
+        let mut rows = self.limit(2).fetch_pg(pool).await.map_err(GetError::Sqlx)?;
+        match rows.len() {
+            0 => Err(GetError::NotFound),
+            1 => Ok(rows.pop().unwrap()),
+            _ => Err(GetError::MultipleObjectsReturned),
+        }
+    }
 }
 
 /// Delegating chainable + terminal surface on `Manager<T>`.
@@ -611,6 +713,18 @@ impl<T: Model> Manager<T> {
         self.queryset().exists().await
     }
 
+    /// `.get(predicate)` — sugar for `.filter(predicate).get()`.
+    ///
+    /// The Django-shape one-liner: `User::objects().get(user::ID.eq(1))`.
+    /// See [`QuerySet::get`] for error-variant semantics.
+    pub async fn get(&self, p: Predicate<T>) -> Result<T, GetError>
+    where
+        T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
+            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
+    {
+        self.queryset().filter(p).get().await
+    }
+
     /// See [`QuerySet::fetch_pg`].
     pub async fn fetch_pg(&self, pool: &sqlx::PgPool) -> Result<Vec<T>, sqlx::Error>
     where
@@ -638,6 +752,14 @@ impl<T: Model> Manager<T> {
         T: for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
     {
         self.queryset().exists_pg(pool).await
+    }
+
+    /// Postgres-only sugar for `.filter(predicate).get_pg(pool)`.
+    pub async fn get_pg(&self, pool: &sqlx::PgPool, p: Predicate<T>) -> Result<T, GetError>
+    where
+        T: for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
+    {
+        self.queryset().filter(p).get_pg(pool).await
     }
 
     // =====================================================================

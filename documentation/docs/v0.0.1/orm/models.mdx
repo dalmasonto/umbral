@@ -242,6 +242,35 @@ Each field gets a typed column constant under the snake_case module:
 `post::id`, `post::title`, `post::body`, `post::published_at`. The
 comparison methods are checked at compile time.
 
+### Terminals — `.fetch()`, `.first()`, `.get()`, `.count()`, `.exists()`
+
+| Terminal | Returns | When to reach for it |
+|----------|---------|----------------------|
+| `.fetch()` | `Result<Vec<T>, sqlx::Error>` | The collection — list views, anything that maps over rows. |
+| `.first()` | `Result<Option<T>, sqlx::Error>` | "Give me one if there is one." `None` is a normal case. |
+| `.get()` | `Result<T, GetError>` | Django's exactly-one. Three branches: `Ok(row)`, `Err(NotFound)`, `Err(MultipleObjectsReturned)`. |
+| `.count()` | `Result<i64, sqlx::Error>` | A row count without materializing rows. |
+| `.exists()` | `Result<bool, sqlx::Error>` | A `LIMIT 1` existence probe. |
+
+`.get()` is the Django shape for "this filter should pin one row exactly." `MultipleObjectsReturned` is a data-integrity signal, not a control-flow case — it fires when filters that should hit a UNIQUE constraint stop being unique.
+
+```rust
+use umbra::orm::GetError;
+
+match Post::objects().filter(post::id.eq(42)).get().await {
+    Ok(p)                                  => render(p),
+    Err(GetError::NotFound)                => not_found(),
+    Err(GetError::MultipleObjectsReturned) => unreachable!("id is unique"),
+    Err(GetError::Sqlx(e))                 => internal_error(e),
+}
+```
+
+`Manager::get(predicate)` is the one-liner sugar:
+
+```rust
+let user = User::objects().get(user::email.eq(addr)).await?;
+```
+
 ## Writing rows
 
 Four write primitives complement the read side. All return a
