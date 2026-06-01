@@ -1,8 +1,25 @@
 //! Server-side HTML rendering via minijinja.
 //!
-//! Templates live under one or more directories on disk. The default v1
-//! shape is a single project-level `templates/` directory (configurable
-//! via [`AppBuilder::templates_dir`](crate::app::AppBuilder::templates_dir)).
+//! Templates live under one or more directories on disk. At boot,
+//! `App::build()` assembles an ordered search list:
+//!
+//! 1. The project-level directory configured via
+//!    `AppBuilder::templates_dir` (default `./templates`).
+//! 2. Each registered plugin's `Plugin::templates_dirs()` contributions,
+//!    in topological dependency order.
+//!
+//! The first directory that contains a given template name wins. This
+//! makes cross-plugin `{% extends "base.html" %}` work automatically —
+//! the extends lookup searches every directory the same way a direct
+//! render call does. Plugin A can extend `base.html` from plugin B as
+//! long as B's directory appears in the search list.
+//!
+//! When two directories both provide a template with the same name, the
+//! first-match-wins policy applies and a `tracing::warn!` is emitted at
+//! boot so the collision is visible in the log. This matches Django's
+//! `APP_DIRS` loader semantics. Silently-overridden templates are a
+//! well-known footgun, so the warning is non-optional.
+//!
 //! Rendering goes through one ambient accessor, [`render`], which reads
 //! the engine the App builder published into an `OnceLock` during build.
 //!
@@ -10,31 +27,29 @@
 //! let html = umbra::templates::render("articles_list.html", &context!(articles))?;
 //! ```
 //!
+//! ## Autoescape
+//!
+//! Any template whose name ends in `.html` or `.htm` renders with
+//! autoescape on. Text templates (`.txt`) render verbatim. The autoescape
+//! callback extension whitelist MUST stay in sync with the loader's
+//! `load_directory` filter (currently `html | htm | txt`).
+//!
 //! ## v1 scope
 //!
 //! - One project-level templates directory (default `./templates/`,
-//!   relative to the binary's cwd).
+//!   relative to the binary's cwd) plus per-plugin directories.
 //! - Jinja2-compatible syntax via minijinja: `{% extends %}`, `{% block %}`,
 //!   `{% if %}`, `{% for %}`, `{{ value }}`, the standard filter set.
-//! - Autoescape for any template whose name ends in `.html`. Other
-//!   extensions render verbatim (text emails, JSON, etc.). The XSS
-//!   guarantee from `arch.md §4.5` lands here: a `<script>` value
-//!   rendered into an `.html` template emits `&lt;script&gt;`.
-//! - Init is best-effort: if the templates directory doesn't exist,
-//!   the engine boots with zero templates. Calls to [`render`] then
-//!   return `TemplateError::Missing` with a clear diagnostic.
+//! - Autoescape for any template whose name ends in `.html` or `.htm`.
+//! - Init is best-effort: if no directory exists the engine boots empty.
+//!   Calls to [`render`] then return `TemplateError::Missing`.
 //!
 //! ## Deferred
 //!
-//! - Per-plugin `templates/` directories with plugin-dependency-ordered
-//!   search paths (the natural Django shape; ships with the admin plugin
-//!   at M11 since the admin needs override behaviour).
-//! - Custom filters and tests registered through `Plugin::on_ready` —
-//!   the engine's interior mutability requires a different ambient
-//!   pattern than the current `OnceLock<Environment>`; deferred until
-//!   the first plugin needs it.
+//! - Custom filters and tests registered through `Plugin::on_ready`.
 //! - Hot reload in development via `minijinja-autoreload`.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -44,13 +59,24 @@ use serde::Serialize;
 static ENGINE: OnceLock<Environment<'static>> = OnceLock::new();
 
 /// Publish the template engine into the process-wide ambient handle.
-/// Called by `App::build()` after the templates dir has been resolved.
 ///
-/// If the directory doesn't exist, init succeeds with an empty engine
-/// (zero templates loaded). This is the right default for binaries
-/// that don't render HTML — the absence isn't an error until something
-/// actually tries to render.
-pub(crate) fn init(templates_dir: &Path) -> Result<(), TemplateError> {
+/// `dirs` is the ordered list of directories to search — the first
+/// entry is searched first (highest priority). Typically this is:
+/// `[app_templates_dir, plugin_a_dir, plugin_b_dir, ...]`.
+///
+/// For each directory in order, every `.html` / `.htm` / `.txt` file is
+/// registered under its path-relative-to-that-dir name. If a name was
+/// already registered by an earlier directory, the later file is skipped
+/// and a `tracing::warn!` is emitted so the collision is visible.
+///
+/// If none of the directories exist, init succeeds with an empty engine.
+/// This is the right default for binaries that don't render HTML.
+///
+/// Returns the list of template names that collided (appeared in more
+/// than one directory). The caller (`App::build`) logs these via tracing.
+/// Tests can inspect the returned list to assert collision detection
+/// without needing a tracing subscriber.
+pub fn init(dirs: &[PathBuf]) -> Result<Vec<String>, TemplateError> {
     let mut env = Environment::new();
     // Autoescape extensions MUST stay in sync with the loader
     // whitelist in `load_directory` (currently `html | htm | txt`).
@@ -66,18 +92,33 @@ pub(crate) fn init(templates_dir: &Path) -> Result<(), TemplateError> {
             AutoEscape::None
         }
     });
-    if templates_dir.exists() {
-        load_directory(&mut env, templates_dir, templates_dir)?;
+
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut collisions: Vec<String> = Vec::new();
+
+    for dir in dirs {
+        if dir.exists() {
+            load_directory(&mut env, dir, dir, &mut seen, &mut collisions)?;
+        }
     }
+
+    for name in &collisions {
+        tracing::warn!(
+            template = %name,
+            "umbra templates: template `{name}` is provided by multiple directories; \
+             the first-registered copy wins"
+        );
+    }
+
     ENGINE
         .set(env)
         .map_err(|_| TemplateError::AlreadyInitialised)?;
-    Ok(())
+    Ok(collisions)
 }
 
 /// Render a template by name with a serde-serializable context value.
 ///
-/// The name is the path relative to the templates directory, with
+/// The name is the path relative to its templates directory, with
 /// forward slashes regardless of host OS. `articles_list.html`,
 /// `admin/base.html`, etc.
 ///
@@ -98,16 +139,24 @@ pub fn render<C: Serialize>(name: &str, ctx: &C) -> Result<String, TemplateError
 /// Walk a directory recursively and register every `.html` / `.htm` /
 /// `.txt` file as a template under its path-relative-to-root name.
 /// Subdirectories are reachable via forward-slash names: `admin/base.html`.
+///
+/// `seen` tracks which names have already been registered across all
+/// directories. When a name collision is detected (a later directory
+/// ships a template with the same relative name as an earlier one),
+/// the duplicate is skipped and the name is appended to `collisions`.
+/// First-match-wins.
 fn load_directory(
     env: &mut Environment<'static>,
     root: &Path,
     dir: &Path,
+    seen: &mut HashSet<String>,
+    collisions: &mut Vec<String>,
 ) -> Result<(), TemplateError> {
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
         if path.is_dir() {
-            load_directory(env, root, &path)?;
+            load_directory(env, root, &path, seen, collisions)?;
             continue;
         }
         let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
@@ -128,9 +177,21 @@ fn load_directory(
             .map(|c| c.as_os_str().to_string_lossy().to_string())
             .collect::<Vec<_>>()
             .join("/");
+
+        if seen.contains(&name) {
+            // Collision: a higher-priority directory already registered
+            // this name. Record it and skip; init will log after all
+            // dirs are processed.
+            if !collisions.contains(&name) {
+                collisions.push(name.clone());
+            }
+            continue;
+        }
+
         let source = std::fs::read_to_string(&path)?;
-        env.add_template_owned(name, source)
+        env.add_template_owned(name.clone(), source)
             .map_err(TemplateError::Render)?;
+        seen.insert(name);
     }
     Ok(())
 }

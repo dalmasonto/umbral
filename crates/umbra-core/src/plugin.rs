@@ -36,6 +36,8 @@
 //! routes / models / system_checks, and fires `on_ready` in dependency
 //! order.
 
+use std::path::PathBuf;
+
 use axum::Router;
 use sqlx::SqlitePool;
 
@@ -114,6 +116,25 @@ pub trait Plugin: Send + Sync + 'static {
     /// `BuildError::PluginDatabaseAlias` at boot.
     fn database(&self) -> Option<&'static str> {
         None
+    }
+
+    /// Template directories this plugin contributes.
+    ///
+    /// Each path is added to the global template search list in plugin
+    /// registration order. The app-level `templates_dir` (set via
+    /// `AppBuilder::templates_dir`) is always searched first; plugin
+    /// directories follow in topological dependency order so a plugin
+    /// with no dependencies appears before its dependents.
+    ///
+    /// When two plugins (or the app directory and a plugin) ship a
+    /// template with the same name, the first directory in the list wins
+    /// and a tracing warning is emitted at boot so the collision is
+    /// visible. This matches Django's `APP_DIRS` loader semantics.
+    ///
+    /// Default: no directories. A plugin that renders no HTML leaves
+    /// this alone.
+    fn templates_dirs(&self) -> Vec<PathBuf> {
+        Vec::new()
     }
 
     /// Wrap the app router with the plugin's middleware layers.

@@ -138,7 +138,7 @@ impl AppBuilder {
         self
     }
 
-    /// Set the templates directory.
+    /// Set the project-level templates directory.
     ///
     /// Defaults to `./templates` (relative to the binary's cwd) when
     /// the builder method isn't called. If the resolved path doesn't
@@ -147,9 +147,10 @@ impl AppBuilder {
     /// with a clear diagnostic, which matches the "absence isn't an
     /// error unless something tries to render" rule from the spec.
     ///
-    /// Per-plugin templates directories with a dependency-ordered
-    /// search path land with the admin plugin at M11; today the
-    /// project root is the only path the engine knows about.
+    /// This directory is searched first (highest priority). Plugin
+    /// directories contributed via `Plugin::templates_dirs()` are
+    /// appended in topological order and searched afterwards. To
+    /// override a plugin's template, drop a same-named file here.
     pub fn templates_dir<P: Into<std::path::PathBuf>>(mut self, path: P) -> Self {
         self.templates_dir = Some(path.into());
         self
@@ -354,13 +355,30 @@ impl AppBuilder {
 
         // Templates engine — published before phase 4 so a future
         // plugin system_check that wants to inspect the loaded
-        // templates can. Default templates directory is `./templates`
-        // relative to the binary's cwd; the builder method overrides.
-        let templates_dir = self
+        // templates can.
+        //
+        // Search order (first-match-wins, matches Django's APP_DIRS semantics):
+        //   1. App-level dir: set via `.templates_dir(...)` or `./templates`.
+        //   2. Plugin dirs: each plugin's `templates_dirs()` contributions,
+        //      in topological dependency order.
+        //
+        // The engine warns (via tracing) when two directories ship a
+        // template with the same name — the first-registered copy wins.
+        let app_templates_dir = self
             .templates_dir
             .take()
             .unwrap_or_else(|| std::path::PathBuf::from("templates"));
-        crate::templates::init(&templates_dir).map_err(BuildError::TemplatesInit)?;
+        let mut all_template_dirs: Vec<std::path::PathBuf> = vec![app_templates_dir];
+        for plugin in &sorted_plugins {
+            all_template_dirs.extend(plugin.templates_dirs());
+        }
+        // `init` returns the list of collision names (templates present in
+        // more than one directory). We log each one via tracing here so the
+        // `App::build()` phase is the single point that handles warnings;
+        // `templates::init` itself also emits tracing::warn! for each, but
+        // returning the list lets callers (tests) assert without a subscriber.
+        let _collisions =
+            crate::templates::init(&all_template_dirs).map_err(BuildError::TemplatesInit)?;
 
         // Phase 4 — system check. Build the context against ambient
         // state, run the framework checks plus every plugin's

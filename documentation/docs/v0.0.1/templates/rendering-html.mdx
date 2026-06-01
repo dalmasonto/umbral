@@ -5,13 +5,7 @@ sidebar_position: 1
 icon: file-text
 ---
 
-`umbra::templates` is the server-side HTML rendering substrate. Templates live
-on disk under a project-level directory, load at boot, and render through one
-ambient accessor that picks up the engine from `App::build()`'s `OnceLock` -
-the same pattern as the DB pool. The engine is
-[minijinja](https://docs.rs/minijinja), which speaks Jinja2 syntax (`{% %}` /
-`{{ }}`), so anyone who's used Django or Flask templates will recognise the
-shape immediately.
+`umbra::templates` is the server-side HTML rendering substrate. Templates live on disk under one or more directories, load at boot, and render through one ambient accessor that picks up the engine from `App::build()`'s `OnceLock` - the same pattern as the DB pool. The engine is [minijinja](https://docs.rs/minijinja), which speaks Jinja2 syntax (`{% %}` / `{{ }}`), so anyone who's used Django or Flask templates will recognise the shape immediately.
 
 ## Point the builder at a templates directory
 
@@ -26,9 +20,7 @@ App::builder()
     .build()?;
 ```
 
-When `templates_dir` isn't called the engine looks for `./templates` relative
-to the binary's cwd. If the directory doesn't exist the engine still boots
-(empty) - the absence isn't an error until something tries to render.
+When `templates_dir` isn't called the engine looks for `./templates` relative to the binary's cwd. If the directory doesn't exist the engine still boots (empty) - the absence isn't an error until something tries to render.
 
 ## A base template and a child
 
@@ -59,8 +51,7 @@ to the binary's cwd. If the directory doesn't exist the engine still boots
 {% endblock %}
 ```
 
-Inheritance, loops, conditionals, and variable interpolation are all standard
-Jinja2.
+Inheritance, loops, conditionals, and variable interpolation are all standard Jinja2.
 
 ## Render from a handler
 
@@ -78,38 +69,76 @@ async fn list_articles() -> Result<Html<String>, (StatusCode, String)> {
 }
 ```
 
-`context!` is minijinja's macro, re-exported through the facade so your crate
-doesn't need a direct minijinja dependency. `umbra::web::Html` is an axum
-re-export that sets the response's `Content-Type: text/html`.
+`context!` is minijinja's macro, re-exported through the facade so your crate doesn't need a direct minijinja dependency. `umbra::web::Html` is an axum re-export that sets the response's `Content-Type: text/html`.
 
 ## Autoescape is on by default
 
-Any template whose name ends in `.html` or `.htm` renders with autoescape on.
-A value containing `<script>` comes out as `&lt;script&gt;` - the XSS
-guarantee from `arch.md §4.5`. Text templates (`.txt`) render verbatim, so an
-email-body template that wants raw output works the same way.
+Any template whose name ends in `.html` or `.htm` renders with autoescape on. A value containing `<script>` comes out as `&lt;script&gt;` - the XSS guarantee from `arch.md §4.5`. Text templates (`.txt`) render verbatim, so an email-body template that wants raw output works the same way.
 
 <Callout type="warning">
-Opting out of autoescape for one value is a deliberate keystroke: pipe
-through the `safe` filter (`{{ value|safe }}`). There's no global escape
-hatch. If you find yourself reaching for `safe` often, you're probably one
-helper function away from a cleaner data shape.
+Opting out of autoescape for one value is a deliberate keystroke: pipe through the `safe` filter (`{{ value|safe }}`). There's no global escape hatch. If you find yourself reaching for `safe` often, you're probably one helper function away from a cleaner data shape.
 </Callout>
 
-## What ships at v1 vs deferred
+## Cross-plugin templates
+
+Plugins can contribute their own `templates/` directories by overriding `Plugin::templates_dirs()`. The template engine searches all registered directories in order and the first directory that contains a given template name wins.
+
+```rust
+use umbra::prelude::*;
+use std::path::PathBuf;
+
+pub struct AdminPlugin;
+
+impl Plugin for AdminPlugin {
+    fn name(&self) -> &'static str { "admin" }
+
+    fn templates_dirs(&self) -> Vec<PathBuf> {
+        // Bundled templates ship alongside the plugin's source.
+        vec![PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("templates")]
+    }
+}
+```
+
+### Search order
+
+The full search order at boot is:
+
+1. The app-level directory set via `AppBuilder::templates_dir` (or `./templates`). Always first - the app developer gets the final word.
+2. Each registered plugin's `templates_dirs()` contribution, in topological dependency order (dependencies before dependents).
+
+### Cross-plugin `{% extends %}`
+
+Because every directory is in a single search list, `{% extends "base.html" %}` in plugin A resolves `base.html` from plugin B automatically - no special syntax needed. The Jinja2 inheritance lookup uses the same path the initial render call does.
+
+```html
+{/* plugin_a/templates/article.html */}
+{% extends "base.html" %}
+{% block content %}
+  <article>{{ post.title }}</article>
+{% endblock %}
+```
+
+If `base.html` lives in plugin B's templates directory and plugin B is registered before plugin A, the render finds it.
+
+### Collision policy: first-match-wins with a boot warning
+
+When two directories ship a template with the same name, the first directory in the search order wins and umbra emits a `tracing::warn!` at boot so the shadowing is visible in the log:
+
+```
+WARN umbra templates: template `base.html` is provided by multiple directories; the first-registered copy wins
+```
+
+This matches Django's `APP_DIRS` loader behaviour. To override a plugin's template intentionally, place a same-named file in the app-level `templates/` directory - it is always searched first. Namespace-prefixed paths (`admin/base.html`) are the conventional way to avoid accidental collisions between unrelated plugins.
+
+## What ships at v1
 
 <CardGrid cols={2}>
-  <Card icon="folder" title="Shipped" description="One project-level templates directory. Jinja2 syntax (extends, block, for, if, set, filters). Autoescape on .html. Template names use forward-slashes (admin/base.html) on every OS." />
-  <Card icon="clock" title="Deferred" description="Per-plugin templates/ directories with override search paths (lands with the admin plugin at M11). Custom filter / test registration through Plugin::on_ready. Hot reload in dev via minijinja-autoreload." />
+  <Card icon="folder" title="Shipped" description="App-level templates directory. Per-plugin templates directories via Plugin::templates_dirs(). First-match-wins search with collision warnings. Cross-plugin extends/block inheritance. Autoescape on .html. Forward-slash names on every OS." />
+  <Card icon="clock" title="Deferred" description="Custom filter and test registration through Plugin::on_ready. Hot reload in dev via minijinja-autoreload." />
 </CardGrid>
 
 ## Worked example
 
-`examples/derive-demo` exercises this end-to-end: five templates under
-`templates/` (base + home + articles list + article detail + 404), four
-routes serving HTML, one keeping the JSON shape, plus the XSS guard
-verified by injecting `<script>` into a row body and watching it render as
-`&lt;script&gt;`.
+`examples/derive-demo` exercises this end-to-end: five templates under `templates/` (base + home + articles list + article detail + 404), four routes serving HTML, one keeping the JSON shape, plus the XSS guard verified by injecting `<script>` into a row body and watching it render as `&lt;script&gt;`.
 
-The substrate spec promotes from the outline at
-`docs/specs/outlines/templates.md` when the admin plugin lands.
+The substrate spec promotes from the outline at `docs/specs/outlines/templates.md` when the admin plugin lands.
