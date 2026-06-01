@@ -17,6 +17,7 @@ pub mod migrate;
 pub mod orm;
 pub mod plugin;
 pub mod settings;
+pub mod signals;
 pub mod slash;
 pub mod templates;
 pub mod web;

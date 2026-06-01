@@ -1,6 +1,6 @@
 ## Status
 
-**40 of 41 closed (gaps 1-18, 20-41; open: 19 — Tailwind admin, deferred by user).** Last updated 2026-06-01.
+**41 of 42 closed (gaps 1-18, 20-42; open: 19 — Tailwind admin, deferred by user).** Last updated 2026-06-01.
 
 | # | Gap | Status |
 |---|-----|--------|
@@ -139,4 +139,5 @@ Though we can still keep the current state as is, if it has no harm to the syste
        (4) **`tasks.mdx` rewritten** to put `#[task]` as the recommended path; the stringly-typed `register_handler("name", closure)` form demoted to "advanced / dynamic registration" use cases. Added "Combining with signals" callout pointing at the durable-fire-and-forget pattern. The cross-link between signals → tasks → settings is now bidirectional.
 41. [x] The commands are not well explained, even with basic usage. http://localhost:5173/docs/v0.0.1/cli/management-commands, ie there is serve command but I have no idea how to pass in the port or even `0.0.0.0:8080`
        — Shipped: `documentation/docs/v0.0.1/cli/management-commands.mdx` rewritten so every subcommand leads with copy-pasteable invocations before listing flags. `serve` section shows four common cases (default 127.0.0.1:3000, custom localhost port, 0.0.0.0:8080 for production / Docker / LAN, env-var equivalent) plus precedence rules (`--addr` > `UMBRA_BIND_ADDR` > `umbra.toml` > default). New dedicated sections for `makemigrations`, `dev`, `dumpdata` / `loaddata`, `createsuperuser`, and `tasks-worker` — each starts with a real command, then a flags table with defaults. `dev` covers the watch-path syntax explicitly: each path needs its own `-w` flag, comma-separated values are NOT supported (would be read as one path literally named "src/,templates/"). Cross-references the in-process template hot-reload so users know they don't need `dev` for `.html` edits. The old "Plugin-contributed subcommands" table collapsed to a pointer at the dedicated sections.
-42. [ ] No doc illustrating use of umbra.toml or .env anywhere. This is part of env and settings module
+42. [x] No doc illustrating use of umbra.toml or .env anywhere. This is part of env and settings module
+       — Shipped in commit `1cc47fc` as part of gap 40's `documentation/docs/v0.0.1/getting-started/settings-and-env.mdx`. The page has dedicated sections "umbra.toml" (with a copy-pasteable example covering database_url, bind_addr, secret_key, environment, log_level, allowed_hosts, and a `[databases]` named-pool block) and "A `.env` file is not loaded automatically" (with the explicit non-support callout and the recommended `set -a; source .env; set +a` workaround). Plus a precedence table showing umbra.toml is layered between built-in defaults and UMBRA_-prefixed env vars. The sibling section "Custom settings (the `extra` field)" shows both env-var and `umbra.toml` paths for app-defined keys (`UMBRA_OPENAI_API_KEY` vs `[external.openai]`). No new docs work needed; this gap was already closed by the time it was filed.

@@ -1,159 +1,256 @@
-//! umbra-signals — in-process pub/sub for umbra plugins.
+//! umbra-signals — Django-style per-model lifecycle signals + generic
+//! name-keyed pub/sub.
 //!
-//! Django's signals (`post_save`, `pre_delete`, custom application
-//! events) in the Rust shape. Plugins emit named events; other
-//! plugins or the application subscribe by name. Strictly
-//! in-process v1 — no cross-process broker, no persistence, no
-//! replay. Use [`umbra_tasks::enqueue`] for work that needs to
-//! survive the process.
+//! ## Quick start — model signals
 //!
-//! ## Surface
+//! Subscribe to lifecycle hooks for a specific model type using the
+//! typed `on_model::<M>()` API:
 //!
-//! - [`emit(name, payload)`] — fire a named signal. Returns the
-//!   number of listeners that received it.
-//! - [`subscribe<F>(name, handler)`] — register a handler. The
-//!   handler runs on the same task that calls `emit`, sync, in
-//!   registration order. For async work the handler spawns a
-//!   tokio task itself.
-//! - [`subscribe_async<F, Fut>(name, handler)`] — same but the
-//!   handler returns a Future; the emitter awaits all subscribers
-//!   in series (matches Django's `dispatcher.send` semantics).
-//! - [`SignalsPlugin`] — empty Plugin impl, exists so the app
-//!   builder can name the dependency for ordering (`auth` ->
-//!   `signals` for post-login signal plumbing).
+//! ```rust,ignore
+//! use umbra_signals::on_model;
+//! use my_app::models::Post;
 //!
-//! ## Payload shape
+//! on_model::<Post>().post_save(|post, created| async move {
+//!     if created {
+//!         tracing::info!(id = post.id, "new post created");
+//!     }
+//! });
+//! ```
 //!
-//! Payloads are `serde_json::Value`. The flexibility cost (no
-//! compile-time check that emitter and subscriber agree) is a
-//! known tradeoff against the per-event-type generic gymnastics a
-//! typed event bus would force. Document the payload shape in the
-//! emitter's plugin docs.
+//! The ORM fires the signals automatically when you call
+//! `Post::objects().save(instance).await` or
+//! `Post::objects().delete_instance(&instance).await`.
+//!
+//! ## Signal lifecycle
+//!
+//! | Method | Fires | Triggered by |
+//! |--------|-------|--------------|
+//! | `pre_save`    | before INSERT or UPDATE   | `Manager::save` |
+//! | `post_save`   | after INSERT or UPDATE    | `Manager::save` |
+//! | `pre_delete`  | before per-row DELETE     | `Manager::delete_instance` |
+//! | `post_delete` | after per-row DELETE      | `Manager::delete_instance` |
+//!
+//! **Bulk methods do NOT fire signals.** `Manager::create`,
+//! `Manager::bulk_create`, `QuerySet::update_values`, and
+//! `QuerySet::delete` are signal-free for performance reasons,
+//! matching Django's own behaviour. See the doc callout in the
+//! user-facing docs at `documentation/docs/v0.0.1/plugins/signals.mdx`.
+//!
+//! ## Signal name format
+//!
+//! Internally the typed API subscribes under `<event>:<table>` names:
+//! `pre_save:post`, `post_save:auth_user`, etc. The generic
+//! `subscribe` / `emit` functions operate on the same namespace, so
+//! app-defined signals should NOT use the `<event>:<table>` format to
+//! avoid accidental collisions with ORM signals.
+//!
+//! ## Generic pub/sub
+//!
+//! The lower-level `subscribe` / `subscribe_async` / `emit` functions
+//! are still available for application-defined signals that aren't
+//! tied to a model lifecycle:
+//!
+//! ```rust,ignore
+//! use umbra_signals::{emit, subscribe_async};
+//!
+//! subscribe_async("order_placed", |payload| async move {
+//!     // payload is serde_json::Value
+//!     let order_id = payload["id"].as_i64().unwrap_or(0);
+//!     // ...
+//! });
+//!
+//! emit("order_placed", serde_json::json!({ "id": 42 })).await;
+//! ```
+//!
+//! ## In-process only at v1
+//!
+//! Signals are strictly in-process. For work that must survive a
+//! process crash, pair signals with `umbra-tasks`: the signal handler
+//! enqueues a task; the worker runs it durably.
 //!
 //! ## Deferred past v1
 //!
-//! - Typed events via `enum AppEvent { ... }` with associated type
-//!   on the trait. Lands when the first real plugin chain needs
-//!   compile-time event-type guarantees.
-//! - Cross-process broadcast (Redis / NATS adapter). Lands when a
-//!   horizontally-scaled deployment needs it.
+//! - Typed event enums with compile-time emitter/subscriber agreement.
+//! - Cross-process broadcast (Redis / NATS adapter).
+//! - Signal `disconnect` / per-call `disable` for testing.
+//! - `m2m_changed` signals for many-to-many relationships.
 
-use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::future::Future;
+use std::marker::PhantomData;
 
-use serde_json::Value;
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 use umbra::prelude::*;
 
-type SyncHandler = Box<dyn Fn(&Value) + Send + Sync + 'static>;
-type AsyncHandler = Box<
-    dyn Fn(&Value) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
-        + Send
-        + Sync
-        + 'static,
->;
+// Re-export the bare registry from umbra-core so user code that
+// imports from umbra-signals gets everything in one place.
+pub use umbra::signals::{clear_for_tests, emit, subscribe, subscribe_async};
 
-struct Registry {
-    sync: HashMap<String, Vec<SyncHandler>>,
-    r#async: HashMap<String, Vec<AsyncHandler>>,
-}
-
-impl Registry {
-    fn new() -> Self {
-        Self {
-            sync: HashMap::new(),
-            r#async: HashMap::new(),
-        }
-    }
-}
-
-fn registry() -> &'static Mutex<Registry> {
-    static REGISTRY: OnceLock<Mutex<Registry>> = OnceLock::new();
-    REGISTRY.get_or_init(|| Mutex::new(Registry::new()))
-}
-
-/// Register a sync handler for `name`. Multiple handlers per name
-/// stack in registration order.
-pub fn subscribe<F>(name: &str, handler: F)
-where
-    F: Fn(&Value) + Send + Sync + 'static,
-{
-    let mut reg = registry().lock().expect("signals registry poisoned");
-    reg.sync
-        .entry(name.to_string())
-        .or_default()
-        .push(Box::new(handler));
-}
-
-/// Register an async handler for `name`. The emitter awaits each
-/// handler's future in series before returning.
-pub fn subscribe_async<F, Fut>(name: &str, handler: F)
-where
-    F: Fn(&Value) -> Fut + Send + Sync + 'static,
-    Fut: std::future::Future<Output = ()> + Send + 'static,
-{
-    let mut reg = registry().lock().expect("signals registry poisoned");
-    let wrapped: AsyncHandler = Box::new(move |payload| {
-        let fut = handler(payload);
-        Box::pin(fut)
-    });
-    reg.r#async
-        .entry(name.to_string())
-        .or_default()
-        .push(wrapped);
-}
-
-/// Emit a named signal. Runs every sync handler then awaits every
-/// async handler. Returns the total subscriber count that received
-/// the event.
+/// Entry point for typed per-model signals.
 ///
-/// The async handlers are awaited serially. Concurrent dispatch
-/// lands behind a feature flag once a real workload needs it.
-pub async fn emit(name: &str, payload: Value) -> usize {
-    // Take the lock once, run sync handlers under it, collect the
-    // async futures, drop the lock, then await. Holding the lock
-    // across `.await` would block other emitters / subscribes for
-    // the duration of every future; the collect-then-drop shape
-    // is the standard pattern.
-    let (futures, total) = {
-        let reg = registry().lock().expect("signals registry poisoned");
-        let mut count = 0;
-        if let Some(handlers) = reg.sync.get(name) {
-            for h in handlers {
-                h(&payload);
-                count += 1;
+/// Returns a [`ModelSignals<M>`] builder on which you attach handlers
+/// for `pre_save`, `post_save`, `pre_delete`, and `post_delete`.
+///
+/// ```rust,ignore
+/// use umbra_signals::on_model;
+/// use my_app::models::AuthUser;
+///
+/// on_model::<AuthUser>().post_save(|user, created| async move {
+///     if created {
+///         // Enqueue a welcome-email task.
+///         umbra_tasks::enqueue(
+///             "send_welcome_email",
+///             &WelcomeEmailPayload { user_id: user.id },
+///         ).await.ok();
+///     }
+/// });
+/// ```
+pub fn on_model<M: Model>() -> ModelSignals<M> {
+    ModelSignals { _m: PhantomData }
+}
+
+/// Typed handler builder for a single model type `M`.
+///
+/// Obtained via [`on_model::<M>()`]. Each method registers one handler
+/// under the corresponding ORM signal name (`pre_save:<table>`, etc.).
+/// The handler receives a deserialised `&M` (not a raw `serde_json::Value`),
+/// so the caller never writes manual JSON field access.
+///
+/// All four methods take an async closure that returns a `Future<Output = ()>`
+/// and is `Send + Sync + 'static`. Handlers are awaited in series by the
+/// emitter (same semantics as Django's `Signal.send`). Spawn a
+/// `tokio::task::spawn` inside the handler for fire-and-forget work.
+pub struct ModelSignals<M: Model> {
+    _m: PhantomData<M>,
+}
+
+impl<M> ModelSignals<M>
+where
+    M: Model + Serialize + DeserializeOwned + Send + Sync + 'static,
+{
+    /// Register a handler called **before** INSERT or UPDATE for this model.
+    ///
+    /// `handler(instance, created)` receives a reference to the
+    /// instance that is about to be written and `created = true` if
+    /// this is an INSERT or `false` if it is an UPDATE.
+    ///
+    /// Signal name: `pre_save:<M::TABLE>`.
+    pub fn pre_save<F, Fut>(&self, handler: F)
+    where
+        F: Fn(&M, bool) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        let name = format!("pre_save:{}", M::TABLE);
+        subscribe_async(&name, move |payload| {
+            let instance: Option<M> = payload["instance"]
+                .as_object()
+                .and_then(|_| serde_json::from_value(payload["instance"].clone()).ok());
+            let created = payload["created"].as_bool().unwrap_or(false);
+            let fut = instance.map(|inst| handler(&inst, created));
+            async move {
+                if let Some(f) = fut {
+                    f.await;
+                }
             }
-        }
-        let mut futs: Vec<std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>> =
-            Vec::new();
-        if let Some(handlers) = reg.r#async.get(name) {
-            for h in handlers {
-                futs.push(h(&payload));
-                count += 1;
-            }
-        }
-        (futs, count)
-    };
-    for fut in futures {
-        fut.await;
+        });
     }
-    total
+
+    /// Register a handler called **after** INSERT or UPDATE for this model.
+    ///
+    /// `handler(instance, created)` receives a reference to the
+    /// row as it now exists in the database and `created = true` if the
+    /// write was an INSERT or `false` if it was an UPDATE.
+    ///
+    /// Signal name: `post_save:<M::TABLE>`.
+    pub fn post_save<F, Fut>(&self, handler: F)
+    where
+        F: Fn(&M, bool) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        let name = format!("post_save:{}", M::TABLE);
+        subscribe_async(&name, move |payload| {
+            let instance: Option<M> = payload["instance"]
+                .as_object()
+                .and_then(|_| serde_json::from_value(payload["instance"].clone()).ok());
+            let created = payload["created"].as_bool().unwrap_or(false);
+            let fut = instance.map(|inst| handler(&inst, created));
+            async move {
+                if let Some(f) = fut {
+                    f.await;
+                }
+            }
+        });
+    }
+
+    /// Register a handler called **before** a per-row DELETE for this model.
+    ///
+    /// `handler(instance)` receives a reference to the instance that is
+    /// about to be deleted.
+    ///
+    /// **Note:** only fires for `Manager::delete_instance`. Bulk
+    /// `QuerySet::delete()` calls do NOT fire this signal.
+    ///
+    /// Signal name: `pre_delete:<M::TABLE>`.
+    pub fn pre_delete<F, Fut>(&self, handler: F)
+    where
+        F: Fn(&M) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        let name = format!("pre_delete:{}", M::TABLE);
+        subscribe_async(&name, move |payload| {
+            let instance: Option<M> = payload["instance"]
+                .as_object()
+                .and_then(|_| serde_json::from_value(payload["instance"].clone()).ok());
+            let fut = instance.map(|inst| handler(&inst));
+            async move {
+                if let Some(f) = fut {
+                    f.await;
+                }
+            }
+        });
+    }
+
+    /// Register a handler called **after** a per-row DELETE for this model.
+    ///
+    /// `handler(instance)` receives a reference to the instance that
+    /// was just deleted (as it was at call time — not a DB read-back).
+    ///
+    /// **Note:** only fires for `Manager::delete_instance`. Bulk
+    /// `QuerySet::delete()` calls do NOT fire this signal.
+    ///
+    /// Signal name: `post_delete:<M::TABLE>`.
+    pub fn post_delete<F, Fut>(&self, handler: F)
+    where
+        F: Fn(&M) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        let name = format!("post_delete:{}", M::TABLE);
+        subscribe_async(&name, move |payload| {
+            let instance: Option<M> = payload["instance"]
+                .as_object()
+                .and_then(|_| serde_json::from_value(payload["instance"].clone()).ok());
+            let fut = instance.map(|inst| handler(&inst));
+            async move {
+                if let Some(f) = fut {
+                    f.await;
+                }
+            }
+        });
+    }
 }
 
-/// Test-only helper: drop every registered handler. The signals
-/// registry is process-wide, so a `#[tokio::test]` that registers
-/// handlers can interfere with other tests in the same binary;
-/// calling `clear` at the top of each test isolates them.
-#[doc(hidden)]
-pub fn clear_for_tests() {
-    let mut reg = registry().lock().expect("signals registry poisoned");
-    reg.sync.clear();
-    reg.r#async.clear();
-}
-
-/// The plugin. Carries no models, no routes, no system_checks.
-/// Exists so other plugins can declare `dependencies = &["signals"]`
-/// when they want to be sure the registry is alive before their
-/// `on_ready` fires.
+/// The plugin marker. Carries no models, no routes, no system checks.
+///
+/// Register it so other plugins can declare `"signals"` as a dependency
+/// and be confident the registry is initialised before their `on_ready`
+/// fires.
+///
+/// ```rust,ignore
+/// App::builder()
+///     .plugin(SignalsPlugin)
+///     .plugin(AuthPlugin::default())
+///     .build()?;
+/// ```
 #[derive(Debug, Default)]
 pub struct SignalsPlugin;
 

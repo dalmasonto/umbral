@@ -2954,9 +2954,13 @@ dependencies = [
 name = "umbra-signals"
 version = "0.0.1"
 dependencies = [
+ "serde",
  "serde_json",
+ "sqlx",
+ "tempfile",
  "tokio",
  "umbra",
+ "umbra-signals",
 ]
 
 [[package]]

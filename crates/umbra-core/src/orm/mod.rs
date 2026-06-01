@@ -37,6 +37,7 @@ pub use model::{ArrayElement, FieldSpec, HydrateRelated, Model, PrimaryKey, SqlT
 pub use post::Post;
 pub use queryset::{GetError, Manager, QuerySet, QuerySetTx};
 pub use tsvector::TsVector;
+pub use write::SaveError;
 
 /// A typed boolean condition on rows of `T`.
 ///

@@ -1399,6 +1399,217 @@ impl<T: Model> Manager<T> {
             }
         }
     }
+
+    // =====================================================================
+    // Per-instance signal-firing write methods.
+    //
+    // `save(instance)` and `delete_instance(instance)` are the methods that
+    // fire the ORM lifecycle signals (`pre_save` / `post_save` /
+    // `pre_delete` / `post_delete`). The existing bulk methods
+    // (`create`, `bulk_create`, `QuerySet::update_values`,
+    // `QuerySet::delete`) remain signal-free, matching Django's own
+    // behaviour: bulk operations bypass signals for performance.
+    //
+    // Signal name format: `<event>:<table>` — e.g. `post_save:post`.
+    // Payload shapes:
+    //   save:   `{ "instance": <M as JSON>, "created": bool }`
+    //   delete: `{ "instance": <M as JSON> }`
+    //
+    // The `created` flag on save follows Django's convention:
+    //   `true`  when the PK is the default sentinel → INSERT path.
+    //   `false` when the PK is non-default           → UPDATE path.
+    // =====================================================================
+
+    /// Save one instance, firing `pre_save` + `post_save` signals.
+    ///
+    /// Determines INSERT vs UPDATE by checking whether the primary key
+    /// is the autoincrement sentinel (`0` for integers, nil UUID, empty
+    /// string). If it is, an INSERT is performed (`created = true`);
+    /// otherwise an `UPDATE ... WHERE pk = <value>` is run (`created = false`).
+    ///
+    /// Returns the row as it exists in the database after the write
+    /// (populated PK for inserts, same row for updates).
+    ///
+    /// ## Signal contract
+    ///
+    /// - `pre_save` fires before the database write with `{ "instance": ..., "created": bool }`.
+    /// - `post_save` fires after the database write with the DB-read-back row.
+    ///
+    /// ## Bulk paths do NOT fire signals
+    ///
+    /// `Manager::create`, `Manager::bulk_create`, and
+    /// `QuerySet::update_values` / `QuerySet::delete` are signal-free.
+    /// Use `save` / `delete_instance` when per-row signal semantics are needed.
+    pub async fn save(&self, instance: T) -> Result<T, crate::orm::write::SaveError>
+    where
+        T: serde::Serialize
+            + for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
+            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
+    {
+        use crate::orm::write::{SaveError, is_default_pk};
+        // Determine INSERT vs UPDATE by inspecting the PK field.
+        let pk_field = T::FIELDS
+            .iter()
+            .find(|f| f.primary_key)
+            .ok_or(SaveError::NoPrimaryKey)?;
+        let map = serialize_to_map(&instance).map_err(SaveError::Write)?;
+        let pk_val = map
+            .get(pk_field.name)
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        let created = is_default_pk(pk_field.ty, &pk_val);
+
+        // Fire pre_save before the write.
+        crate::signals::emit_pre_save::<T>(&instance, created).await;
+
+        let pool = resolve_pool::<T>(None);
+        let backend = pool.backend_name();
+
+        if created {
+            // INSERT path.
+            let stmt = build_insert_one_for::<T>(backend, &map).map_err(SaveError::Write)?;
+            let row = match pool {
+                DbPool::Sqlite(pool) => {
+                    let (sql, values) = stmt.build_sqlx(SqliteQueryBuilder);
+                    sqlx::query_as_with::<sqlx::Sqlite, T, _>(&sql, values)
+                        .fetch_one(&pool)
+                        .await
+                        .map_err(|e| SaveError::Write(crate::orm::write::WriteError::Sqlx(e)))?
+                }
+                DbPool::Postgres(pool) => {
+                    let (sql, values) = stmt.build_sqlx(PostgresQueryBuilder);
+                    sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
+                        .fetch_one(&pool)
+                        .await
+                        .map_err(|e| SaveError::Write(crate::orm::write::WriteError::Sqlx(e)))?
+                }
+            };
+            // Fire post_save with the DB-populated row.
+            crate::signals::emit_post_save::<T>(&row, true).await;
+            Ok(row)
+        } else {
+            // UPDATE path: UPDATE ... WHERE <pk> = <value> RETURNING *.
+            use sea_query::{Alias, Expr, Query};
+            let mut stmt = Query::update();
+            stmt.table(Alias::new(T::TABLE));
+            for field in T::FIELDS {
+                if field.primary_key {
+                    continue;
+                }
+                let val = map
+                    .get(field.name)
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
+                let sea_val = crate::orm::write::json_to_sea_value(
+                    field.ty,
+                    &val,
+                    field.nullable,
+                    field.name,
+                )
+                .map_err(SaveError::Write)?;
+                stmt.value(Alias::new(field.name), sea_val);
+            }
+            // WHERE pk = <value>
+            let pk_sea =
+                crate::orm::write::json_to_sea_value(pk_field.ty, &pk_val, false, pk_field.name)
+                    .map_err(SaveError::Write)?;
+            stmt.and_where(Expr::col(Alias::new(pk_field.name)).eq(pk_sea));
+            // RETURNING * so we can return the updated row.
+            stmt.returning_all();
+
+            let row = match pool {
+                DbPool::Sqlite(pool) => {
+                    let (sql, values) = stmt.build_sqlx(SqliteQueryBuilder);
+                    sqlx::query_as_with::<sqlx::Sqlite, T, _>(&sql, values)
+                        .fetch_one(&pool)
+                        .await
+                        .map_err(|e| SaveError::Write(crate::orm::write::WriteError::Sqlx(e)))?
+                }
+                DbPool::Postgres(pool) => {
+                    let (sql, values) = stmt.build_sqlx(PostgresQueryBuilder);
+                    sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
+                        .fetch_one(&pool)
+                        .await
+                        .map_err(|e| SaveError::Write(crate::orm::write::WriteError::Sqlx(e)))?
+                }
+            };
+            // Fire post_save with created=false.
+            crate::signals::emit_post_save::<T>(&row, false).await;
+            Ok(row)
+        }
+    }
+
+    /// Delete one instance by primary key, firing `pre_delete` +
+    /// `post_delete` signals.
+    ///
+    /// Issues `DELETE FROM <table> WHERE <pk> = <value>`. Returns the
+    /// number of rows affected (0 if the row was already gone, 1 otherwise).
+    ///
+    /// ## Signal contract
+    ///
+    /// - `pre_delete` fires before the DELETE with `{ "instance": ... }`.
+    /// - `post_delete` fires after the DELETE with `{ "instance": ... }`.
+    ///
+    /// The instance value passed to both signals is the value supplied by
+    /// the caller — not a DB read-back. If you need the freshest DB state
+    /// before deletion, fetch it first with `.get(...)` then pass to this method.
+    ///
+    /// ## Bulk paths do NOT fire signals
+    ///
+    /// `QuerySet::delete()` (which deletes all rows matching a filter chain)
+    /// is signal-free. Use `delete_instance` for per-row signal semantics.
+    pub async fn delete_instance(&self, instance: &T) -> Result<u64, crate::orm::write::SaveError>
+    where
+        T: serde::Serialize,
+    {
+        use crate::orm::write::SaveError;
+        let pk_field = T::FIELDS
+            .iter()
+            .find(|f| f.primary_key)
+            .ok_or(SaveError::NoPrimaryKey)?;
+        let map = serialize_to_map(instance).map_err(SaveError::Write)?;
+        let pk_val = map
+            .get(pk_field.name)
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+
+        // Fire pre_delete before the write.
+        crate::signals::emit_pre_delete::<T>(instance).await;
+
+        let pk_sea =
+            crate::orm::write::json_to_sea_value(pk_field.ty, &pk_val, false, pk_field.name)
+                .map_err(SaveError::Write)?;
+
+        use sea_query::{Alias, Expr, Query};
+        let mut stmt = Query::delete();
+        stmt.from_table(Alias::new(T::TABLE));
+        stmt.and_where(Expr::col(Alias::new(pk_field.name)).eq(pk_sea));
+
+        let pool = resolve_pool::<T>(None);
+        let affected = match pool {
+            DbPool::Sqlite(pool) => {
+                let (sql, values) = stmt.build_sqlx(SqliteQueryBuilder);
+                sqlx::query_with::<sqlx::Sqlite, _>(&sql, values)
+                    .execute(&pool)
+                    .await
+                    .map_err(|e| SaveError::Write(crate::orm::write::WriteError::Sqlx(e)))?
+                    .rows_affected()
+            }
+            DbPool::Postgres(pool) => {
+                let (sql, values) = stmt.build_sqlx(PostgresQueryBuilder);
+                sqlx::query_with::<sqlx::Postgres, _>(&sql, values)
+                    .execute(&pool)
+                    .await
+                    .map_err(|e| SaveError::Write(crate::orm::write::WriteError::Sqlx(e)))?
+                    .rows_affected()
+            }
+        };
+
+        // Fire post_delete after the write.
+        crate::signals::emit_post_delete::<T>(instance).await;
+
+        Ok(affected)
+    }
 }
 
 // =========================================================================

@@ -248,6 +248,18 @@ pub mod templates {
     pub use umbra_core::templates::{TemplateError, render};
 }
 
+pub mod signals {
+    //! In-process signal registry.
+    //!
+    //! The generic name-keyed pub/sub that the ORM write paths call
+    //! automatically for per-row lifecycle events. Use
+    //! `umbra_signals::on_model::<M>()` from the `umbra-signals` plugin
+    //! for the typed per-model API; reach `umbra::signals::subscribe`
+    //! directly only for application-defined (non-model-tied) signals.
+
+    pub use umbra_core::signals::{clear_for_tests, emit, subscribe, subscribe_async};
+}
+
 pub mod inspect {
     //! `inspectdb` (M6): introspect an existing database into umbra
     //! models that drop straight into the M5 migration loop.
@@ -285,7 +297,7 @@ pub mod orm {
     //! is generic over `T: Model`, so plugin authors and users get the
     //! full query API by implementing one trait, by hand or via derive.
 
-    pub use umbra_core::orm::write::WriteError;
+    pub use umbra_core::orm::write::{SaveError, WriteError};
     pub use umbra_core::orm::{
         ArrayElement, F, FColExt, FExpr, FieldSpec, ForeignKey, GetError, HydrateRelated, Manager,
         Model, Post, PrimaryKey, Q, QuerySet, QuerySetTx, SqlType, TsVector, column, write,

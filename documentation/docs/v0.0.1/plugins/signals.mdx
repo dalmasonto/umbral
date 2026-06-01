@@ -1,16 +1,14 @@
 ---
 title: Signals
-description: In-process pub/sub - emit named events from anywhere, subscribe from any plugin. Django's signals shape.
+description: Per-model lifecycle hooks (pre_save, post_save, pre_delete, post_delete) that fire automatically from the ORM, plus a generic name-keyed pub/sub escape hatch for app-defined events.
 sidebar_position: 12
 icon: radio
-tags: [plugins, signals, events]
+tags: [plugins, signals, events, orm]
 ---
 
-`umbra-signals` is Django's signals in the Rust shape: plugins emit named events (`post_user_signup`, `before_email_send`, ...) and any other plugin or the application subscribes by name. It's strictly **in-process** at v1 — no cross-process broker, no persistence, no replay. For work that needs to survive the process, pair signals with [`umbra-tasks`](/docs/v0.0.1/plugins/tasks): the signal handler enqueues a task; the worker runs it.
+`umbra-signals` brings Django's signal shape to Rust: subscribe to per-model lifecycle events and the ORM fires your handler automatically on every `save` or `delete`. It's strictly **in-process** at v1 — no cross-process broker, no persistence, no replay. For work that must survive a process crash, pair signals with [`umbra-tasks`](/docs/v0.0.1/plugins/tasks): the signal handler enqueues a task; the worker runs it.
 
 ## Register the plugin
-
-`SignalsPlugin` is empty — it exists so the app builder can order other plugins relative to it ("auth → signals" so auth fires its `post_login` signals after the signals registry is up).
 
 ```rust
 use umbra::prelude::*;
@@ -18,119 +16,182 @@ use umbra_signals::SignalsPlugin;
 
 App::builder()
     .plugin(SignalsPlugin)
-    .plugin(AuthPlugin::default())
     .build()?;
 ```
 
-Subscriptions register via `umbra_signals::subscribe` / `subscribe_async` from anywhere — typically `Plugin::on_ready` for plugins, or right before `App::build` for app-level handlers.
+`SignalsPlugin` carries no models or routes. It exists so other plugins can declare `"signals"` as a dependency and be confident the registry is alive before their `on_ready` fires.
 
-## Emit a signal
+## Per-model signals — the primary API
+
+Subscribe per model type using `on_model::<M>()`. The ORM fires the handler automatically — no manual `emit` calls needed.
 
 ```rust
-use umbra_signals::emit;
-use serde_json::json;
+use umbra_signals::on_model;
+use my_app::models::Post;
 
-// Anywhere in your code (a handler, a Plugin::on_ready, a task body):
-let listeners = emit(
-    "post_user_signup",
-    json!({ "user_id": user.id, "email": user.email }),
-).await;
-// `listeners` is the count of subscribers that received the signal.
+// In Plugin::on_ready, or anywhere before App::build:
+on_model::<Post>().post_save(|post, created| async move {
+    if created {
+        tracing::info!(id = post.id, title = %post.title, "new post created");
+    }
+});
 ```
 
-`emit` is async because it awaits async subscribers. It returns the number of handlers that fired, mostly for logging.
+### The four lifecycle hooks
 
-## Subscribe — sync
+| Method | Fires | `created` flag |
+|--------|-------|---------------|
+| `pre_save(handler(instance, created))` | before INSERT or UPDATE | `true` = INSERT, `false` = UPDATE |
+| `post_save(handler(instance, created))` | after INSERT or UPDATE (DB row) | same |
+| `pre_delete(handler(instance))` | before per-row DELETE | — |
+| `post_delete(handler(instance))` | after per-row DELETE | — |
+
+**Trigger methods:**
+
+- `Model::objects().save(instance).await` — fires `pre_save` + `post_save`.
+- `Model::objects().delete_instance(&instance).await` — fires `pre_delete` + `post_delete`.
+
+### Handler signature
+
+All four methods take an async closure:
+
+```rust
+on_model::<M>().post_save(|instance: &M, created: bool| async move {
+    // ...
+});
+
+on_model::<M>().pre_delete(|instance: &M| async move {
+    // ...
+});
+```
+
+`M` must implement `serde::Serialize + serde::Deserialize`. Any model with `#[derive(Model, Serialize, Deserialize)]` already satisfies this.
+
+## Worked example — welcome email on user signup
+
+The canonical pattern for "send a welcome email when a new user registers":
+
+```rust
+use umbra::task;
+use umbra_signals::on_model;
+use umbra_tasks::enqueue;
+use umbra_auth::AuthUser;
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize)]
+struct WelcomeEmailPayload {
+    user_id: i64,
+    email: String,
+}
+
+#[task]
+async fn send_welcome_email(payload: WelcomeEmailPayload) -> Result<(), String> {
+    // ... send the email ...
+    Ok(())
+}
+
+// In Plugin::on_ready or main, before App::build:
+register_send_welcome_email();
+
+on_model::<AuthUser>().post_save(|user, created| async move {
+    if created {
+        let _ = enqueue(
+            "send_welcome_email",
+            &WelcomeEmailPayload {
+                user_id: user.id,
+                email: user.email.clone(),
+            },
+        )
+        .await;
+    }
+});
+```
+
+The signal handler's only job is to enqueue a row. The task worker handles retry, backoff, and dead-letter accounting. See [`umbra-tasks`](/docs/v0.0.1/plugins/tasks) for the worker side.
+
+<Callout type="warning" title="Bulk methods do NOT fire signals">
+The following write paths bypass signals entirely — matching Django's own behaviour:
+
+- `Manager::create(instance)` — use `Manager::save(instance)` instead if you need signals.
+- `Manager::bulk_create(vec)` — never fires signals; use per-row `save` in a loop if needed.
+- `QuerySet::update_values(map)` — bulk UPDATE, no signals.
+- `QuerySet::delete()` — bulk DELETE, no signals.
+
+**If you need per-row signals on a bulk path:** fetch the rows first, then iterate calling `delete_instance` per row inside a transaction:
+
+```rust
+umbra::db::transaction(|tx| Box::pin(async move {
+    let posts = Post::objects().on_tx(tx).filter(...).fetch().await?;
+    for post in posts {
+        Post::objects().delete_instance(&post).await?;
+    }
+    Ok::<_, MyError>(())
+})).await?;
+```
+
+This is intentionally verbose — bulk deletes are usually hot paths where the cost of serialising every row to JSON and calling N signal handlers would be a surprise.
+</Callout>
+
+## Generic pub/sub — the escape hatch
+
+For application-defined events that aren't tied to a model lifecycle, the lower-level name-keyed API is still available:
+
+```rust
+use umbra_signals::{subscribe_async, emit};
+
+subscribe_async("order_placed", |payload| async move {
+    let order_id = payload["id"].as_i64().unwrap_or(0);
+    // ...
+});
+
+// Anywhere:
+emit("order_placed", serde_json::json!({ "id": 42 })).await;
+```
+
+Use any name except the ORM-reserved `<event>:<table>` format (`pre_save:post`, `post_save:auth_user`, etc.) to avoid collisions.
+
+A sync variant is also available for cheap, non-I/O handlers:
 
 ```rust
 use umbra_signals::subscribe;
 
-subscribe("post_user_signup", |payload| {
-    let user_id = payload["user_id"].as_i64().unwrap_or(0);
-    tracing::info!(user_id, "new user signed up");
+subscribe("page_view", |payload| {
+    // Runs inline on the emitter's task. No await.
+    tracing::debug!("page viewed: {:?}", payload["path"]);
 });
 ```
 
-Sync handlers run inline on the emitter's task, in registration order. Cheap operations only — anything I/O-bound should be `subscribe_async` so the emitter doesn't block.
+## Signal name format
 
-## Subscribe — async
+ORM signals use `<event>:<table>`:
 
-```rust
-use umbra_signals::subscribe_async;
+| Signal | Table |
+|--------|-------|
+| `pre_save:post` | `post` |
+| `post_save:auth_user` | `auth_user` |
+| `pre_delete:comment` | `comment` |
 
-subscribe_async("post_user_signup", |payload| async move {
-    let user_id = payload["user_id"].as_i64().unwrap();
-    // Look up the user, send a welcome email, etc.
-    let user = AuthUser::objects()
-        .filter(auth_user::ID.eq(user_id))
-        .get().await.unwrap();
-    let _ = umbra_email::send(
-        &user.email,
-        "Welcome!",
-        "Glad to have you.",
-    ).await;
-});
-```
-
-Async handlers are awaited by `emit` in series. If you need fire-and-forget (don't block the emitter), spawn a `tokio::task::spawn(...)` inside the handler.
-
-## Combining with tasks — the durable pattern
-
-Signals are in-process and lost if the process crashes mid-handler. For anything that must survive — sending a confirmation email, charging a card, kicking off a long-running job — enqueue a task from the signal handler:
-
-```rust
-use umbra::task;
-use umbra_signals::subscribe_async;
-use umbra_tasks::enqueue;
-
-#[derive(serde::Serialize, serde::Deserialize)]
-struct WelcomeEmail {
-    user_id: i64,
-    locale: String,
-}
-
-#[task]
-async fn send_welcome_email(payload: WelcomeEmail) -> Result<(), String> {
-    // ... do the work; runs in the task worker, not on the emitter's task
-    Ok(())
-}
-
-// In on_ready (or main):
-register_send_welcome_email();
-
-subscribe_async("post_user_signup", |payload| async move {
-    let user_id = payload["user_id"].as_i64().unwrap();
-    let _ = enqueue(
-        "send_welcome_email",
-        &WelcomeEmail { user_id, locale: "en".into() },
-    ).await;
-});
-```
-
-Failure modes are now bounded: the signal-handler's only job is to enqueue a row. The worker handles retry, backoff, and dead-letter accounting. See [`umbra-tasks`](/docs/v0.0.1/plugins/tasks) for the worker side and the `#[task]` macro shape.
+The `on_model::<M>()` API handles naming automatically. You only need the raw names if you're subscribing at the registry level with `subscribe` / `subscribe_async`.
 
 ## Payload shape
 
-Payloads are `serde_json::Value`. The flexibility cost — no compile-time check that emitter and subscriber agree on the shape — is a deliberate trade against the per-event-type generic gymnastics a typed event bus would force on every consumer. Document each signal's payload shape in the emitting plugin's docs.
+For reference — the `on_model` API deserialises these for you, so you only need this when subscribing via the raw `subscribe` / `subscribe_async` functions:
 
-Built-in signals shipped at v0.0.1:
-
-| Signal | Emitted by | Payload |
-|---|---|---|
-| `post_login` | `umbra-auth` | `{ "user_id": i64, "username": "..." }` after successful authentication |
-| `post_logout` | `umbra-sessions` | `{ "user_id": i64 }` after session destruction |
-| `post_signup` | `umbra-auth` | `{ "user_id": i64, "email": "..." }` after `create_user` returns |
-
-(The auth/sessions emit points are wired in their respective `on_ready` setup paths.)
+| Signal | Payload |
+|--------|---------|
+| `pre_save`, `post_save` | `{ "instance": <M as JSON>, "created": bool }` |
+| `pre_delete`, `post_delete` | `{ "instance": <M as JSON> }` |
 
 ## What's not shipped at v0.0.1
 
-- **Typed events.** Future: `enum AppEvent { PostSignup { user_id: i64 } }` with a trait associated type so emit/subscribe see the same concrete type. Lands when a real plugin chain needs the compile-time guarantee.
-- **Cross-process broadcast.** Future: a Redis or NATS adapter so signals propagate across replicas. Lands when a horizontally-scaled deployment surfaces the need.
-- **Persistence / replay.** Use `umbra-tasks` if you need durable delivery — that's its job.
+- **Signal disconnect / per-call disable.** Testing a handler today requires `umbra_signals::clear_for_tests()` to wipe all handlers and re-register. Targeted disconnect lands when tests need finer control.
+- **`m2m_changed` signals.** Many-to-many relationships aren't in scope until a later milestone.
+- **Cross-process broadcast.** A Redis or NATS adapter for horizontally-scaled deployments. Use `umbra-tasks` for cross-process work until then.
+- **Typed events.** An `enum AppEvent { ... }` shape with associated types so emitter and subscriber agree at compile time. Lands when a real plugin chain needs the guarantee.
 
 ## See also
 
 - [`umbra-tasks` plugin docs](/docs/v0.0.1/plugins/tasks) — the durable side of fire-and-forget work.
-- [Plugin trait](/docs/v0.0.1/plugins/the-plugin-trait) — `on_ready` is the canonical place to register subscriptions.
 - [Settings and environment](/docs/v0.0.1/getting-started/settings-and-env) — reading config inside a signal handler.
+- [Plugin trait](/docs/v0.0.1/plugins/the-plugin-trait) — `on_ready` is the canonical place to register subscriptions.
+- [`arch.md`](https://github.com/umbra-framework/umbra/blob/main/arch.md) — design rationale for the core-vs-plugin dependency inversion that makes the registry live in `umbra-core`.

@@ -339,6 +339,49 @@ fn coerce_string(value: &JsonValue, field_name: &str) -> Result<String, WriteErr
     }
 }
 
+/// Error type for the signal-firing per-instance write methods
+/// ([`Manager::save`] and [`Manager::delete_instance`]).
+///
+/// Wraps [`WriteError`] for the underlying SQL errors and adds one
+/// framework-level variant for models with no primary key declared.
+#[derive(Debug)]
+pub enum SaveError {
+    /// The model has no field with `primary_key = true`. Returned
+    /// by `save` and `delete_instance` which need the PK to build
+    /// the WHERE clause for UPDATE / DELETE.
+    NoPrimaryKey,
+    /// An underlying write-layer error (type mismatch, sqlx error,
+    /// etc.). See [`WriteError`] for the full variant list.
+    Write(WriteError),
+}
+
+impl std::fmt::Display for SaveError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SaveError::NoPrimaryKey => write!(
+                f,
+                "umbra::orm::save: model has no primary key — cannot determine INSERT vs UPDATE"
+            ),
+            SaveError::Write(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for SaveError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            SaveError::Write(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+impl From<WriteError> for SaveError {
+    fn from(e: WriteError) -> Self {
+        Self::Write(e)
+    }
+}
+
 /// True when this JSON value represents the "default" PK that should
 /// trigger autoincrement rather than be bound as an explicit value.
 ///
