@@ -222,6 +222,15 @@ struct name is `pascal_case(name) + "Plugin"`, so `blog-engine`
 becomes `BlogEnginePlugin`.
 </Callout>
 
+### Names umbra refuses to scaffold
+
+`startapp` rejects two classes of names up front so you don't get a half-broken plugin you have to delete and recreate:
+
+1. **A plugin with the same name already exists** at `plugins/<name>/`. Move it aside or pick a different name.
+2. **The name collides with a built-in umbra plugin.** `startapp` refuses these so you can never end up trying to register both `.plugin(my_auth::AuthPlugin)` and `.plugin(umbra_auth::AuthPlugin)` in the same builder chain (the route mounts and migration table names would collide at boot). Reserved names: `admin`, `app`, `auth`, `cache`, `email`, `openapi`, `permissions`, `rest`, `rls`, `security`, `sessions`, `signals`, `static`, `tasks`.
+
+Pick a name that names your domain (`blog`, `billing`, `inventory`) rather than the capability the built-in already provides.
+
 ## What's next
 
 Once you have a project, every other command runs through your

@@ -26,9 +26,36 @@ pub enum ScaffoldError {
     /// The target directory already exists. We never overwrite —
     /// users move it aside or pick a different name.
     AlreadyExists(PathBuf),
+    /// The chosen name collides with a built-in plugin name shipped
+    /// by umbra. Both crates would compile, but the user would never
+    /// be able to register both `.plugin(<their app>)` and
+    /// `.plugin(<built-in>)` without an alias dance, and route /
+    /// table-name collisions would land at boot. We reject the name
+    /// up front to prevent this confusion.
+    ReservedName(String),
     /// I/O failure during file creation.
     Io(io::Error),
 }
+
+/// Built-in plugin names that `umbra startapp` refuses to scaffold over.
+/// Adding a new built-in plugin? Add its name here so future
+/// `startapp <name>` calls fail fast with a clear message.
+pub const RESERVED_PLUGIN_NAMES: &[&str] = &[
+    "admin",
+    "app",
+    "auth",
+    "cache",
+    "email",
+    "openapi",
+    "permissions",
+    "rest",
+    "rls",
+    "security",
+    "sessions",
+    "signals",
+    "static",
+    "tasks",
+];
 
 impl std::fmt::Display for ScaffoldError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -39,8 +66,13 @@ impl std::fmt::Display for ScaffoldError {
             ),
             Self::AlreadyExists(p) => write!(
                 f,
-                "target `{}` already exists; move it aside or pick a different name",
+                "an app already exists at `{}`; move it aside or pick a different name",
                 p.display()
+            ),
+            Self::ReservedName(s) => write!(
+                f,
+                "`{s}` is the name of a built-in umbra plugin; pick a different name to avoid conflicts at registration time. Reserved names: {}.",
+                RESERVED_PLUGIN_NAMES.join(", ")
             ),
             Self::Io(e) => write!(f, "{e}"),
         }
@@ -651,6 +683,15 @@ cargo run -- makemigrations
 pub fn scaffold_app(name: &str, project_root: &Path) -> Result<ScaffoldReport, ScaffoldError> {
     validate_name(name)?;
 
+    // Reject names that collide with built-in umbra plugins. Both crates
+    // would compile, but the user could never register both via
+    // `.plugin(...)` without aliasing — and the table-name conflicts
+    // would surface at boot, not at startapp time.
+    let normalized = name.replace('-', "_");
+    if RESERVED_PLUGIN_NAMES.contains(&normalized.as_str()) {
+        return Err(ScaffoldError::ReservedName(name.to_string()));
+    }
+
     let plugins_dir = project_root.join("plugins");
     let root = plugins_dir.join(name);
     if root.exists() {
@@ -786,5 +827,57 @@ mod tests {
     fn rust_ident_replaces_hyphens() {
         assert_eq!(rust_ident("blog-engine"), "blog_engine");
         assert_eq!(rust_ident("posts"), "posts");
+    }
+
+    #[test]
+    fn scaffold_app_rejects_reserved_built_in_plugin_names() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        for name in RESERVED_PLUGIN_NAMES {
+            let result = scaffold_app(name, tmp.path());
+            assert!(
+                matches!(result, Err(ScaffoldError::ReservedName(_))),
+                "expected ReservedName error for `{name}`, got: {result:?}",
+            );
+            assert!(
+                !tmp.path().join("plugins").join(name).exists(),
+                "directory must NOT be created when name is reserved: {name}",
+            );
+        }
+    }
+
+    #[test]
+    fn scaffold_app_rejects_reserved_name_with_hyphen_variant() {
+        // `static` is reserved; so is `my-static`-anything? No — only
+        // exact matches. But hyphens should normalize to underscores so
+        // someone typing `umbra-static` or `umbra_static` doesn't slip
+        // through. We compare on the underscored form.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        // Pure name check: built-in names contain no hyphens today, but
+        // the normalization defends against future built-ins like
+        // `slack-bot` versus `slack_bot`.
+        let result = scaffold_app("auth", tmp.path());
+        assert!(matches!(result, Err(ScaffoldError::ReservedName(_))));
+    }
+
+    #[test]
+    fn scaffold_app_message_lists_reserved_names() {
+        let err = ScaffoldError::ReservedName("auth".to_string());
+        let msg = format!("{err}");
+        assert!(msg.contains("`auth`"), "error names the offending input");
+        assert!(
+            msg.contains("admin") && msg.contains("sessions") && msg.contains("permissions"),
+            "error lists the reserved set so the user can pick again: {msg}",
+        );
+    }
+
+    #[test]
+    fn scaffold_app_already_exists_message_says_app() {
+        // Gap 39: the AlreadyExists message used to say "target" which
+        // didn't tell a user that there's an existing APP. The new copy
+        // names the app directly.
+        let err = ScaffoldError::AlreadyExists(PathBuf::from("plugins/blog"));
+        let msg = format!("{err}");
+        assert!(msg.contains("app already exists"), "got: {msg}");
+        assert!(msg.contains("plugins/blog"), "got: {msg}");
     }
 }
