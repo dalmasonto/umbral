@@ -63,24 +63,28 @@ fn postgres_ddl_renders_inet_and_macaddr_types() {
                 ty: SqlType::BigInt,
                 primary_key: true,
                 nullable: false,
+                fk_target: None,
             },
             Column {
                 name: "addr".to_string(),
                 ty: SqlType::Inet,
                 primary_key: false,
                 nullable: false,
+                fk_target: None,
             },
             Column {
                 name: "mac".to_string(),
                 ty: SqlType::MacAddr,
                 primary_key: false,
                 nullable: false,
+                fk_target: None,
             },
             Column {
                 name: "net".to_string(),
                 ty: SqlType::Cidr,
                 primary_key: false,
                 nullable: true,
+                fk_target: None,
             },
         ],
     };

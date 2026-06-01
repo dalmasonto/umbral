@@ -20,6 +20,7 @@
 //! crossing each other.
 
 pub mod column;
+pub mod foreign_key;
 pub mod model;
 pub mod post;
 pub mod queryset;
@@ -29,6 +30,7 @@ pub mod write;
 use std::marker::PhantomData;
 use std::ops::{BitAnd, BitOr};
 
+pub use foreign_key::ForeignKey;
 pub use model::{ArrayElement, FieldSpec, Model, PrimaryKey, SqlType};
 pub use post::Post;
 pub use queryset::{GetError, Manager, QuerySet};

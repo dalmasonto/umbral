@@ -108,6 +108,7 @@ impl Plugin for TestPlugin {
                 ty: SqlType::BigInt,
                 primary_key: true,
                 nullable: false,
+                fk_target: None,
             }],
         }]
     }

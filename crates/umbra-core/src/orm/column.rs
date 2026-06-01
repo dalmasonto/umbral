@@ -2050,3 +2050,134 @@ impl<T> NullableMacAddrCol<T> {
         OrderExpr::new(self.name, true)
     }
 }
+
+// =========================================================================
+// Foreign-key columns — gap 14.
+//
+// `ForeignKeyCol<T>` is the column type emitted by `#[derive(Model)]` for
+// fields of type `ForeignKey<U>`. Because `ForeignKey<U>` is stored as
+// `i64` in SQL, the predicate surface is identical to `IntCol<T>`: equality,
+// inequality, range comparisons, and `IN`. Ordering and `ASC` / `DESC` are
+// also present.
+//
+// The `T` phantom parameter ties the column to its *owning* model (as every
+// column type does); the referenced model type lives only in the Rust field
+// declaration and is erased at the column-constant level.
+// =========================================================================
+
+/// A foreign-key column — stored as `i64`, referencing the primary key of
+/// another model's table.
+pub struct ForeignKeyCol<T> {
+    pub(crate) name: &'static str,
+    _phantom: PhantomData<T>,
+}
+
+impl<T> ForeignKeyCol<T> {
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            _phantom: PhantomData,
+        }
+    }
+
+    /// SQL `=`.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// Post::objects().filter(post::AUTHOR.eq(1))
+    /// ```
+    pub fn eq(&self, val: i64) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).eq(val))
+    }
+
+    /// SQL `<>`.
+    pub fn ne(&self, val: i64) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).ne(val))
+    }
+
+    /// SQL `<`.
+    pub fn lt(&self, val: i64) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).lt(val))
+    }
+
+    /// SQL `<=`.
+    pub fn le(&self, val: i64) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).lte(val))
+    }
+
+    /// SQL `>`.
+    pub fn gt(&self, val: i64) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).gt(val))
+    }
+
+    /// SQL `>=`.
+    pub fn ge(&self, val: i64) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).gte(val))
+    }
+
+    /// SQL `IN (...)`.
+    pub fn in_(&self, vals: &[i64]) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).is_in(vals.iter().copied()))
+    }
+
+    /// SQL `ORDER BY ... ASC`.
+    pub fn asc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, false)
+    }
+
+    /// SQL `ORDER BY ... DESC`.
+    pub fn desc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, true)
+    }
+}
+
+/// A nullable foreign-key column — the `Option<ForeignKey<U>>` shape.
+pub struct NullableForeignKeyCol<T> {
+    pub(crate) name: &'static str,
+    _phantom: PhantomData<T>,
+}
+
+impl<T> NullableForeignKeyCol<T> {
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            _phantom: PhantomData,
+        }
+    }
+
+    /// SQL `=`. NULL rows are excluded by SQL's NULL semantics.
+    pub fn eq(&self, val: i64) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).eq(val))
+    }
+
+    /// SQL `<>`.
+    pub fn ne(&self, val: i64) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).ne(val))
+    }
+
+    /// SQL `IN (...)`.
+    pub fn in_(&self, vals: &[i64]) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).is_in(vals.iter().copied()))
+    }
+
+    /// SQL `IS NULL`.
+    pub fn is_null(&self) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).is_null())
+    }
+
+    /// SQL `IS NOT NULL`.
+    pub fn is_not_null(&self) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).is_not_null())
+    }
+
+    /// SQL `ORDER BY ... ASC`.
+    pub fn asc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, false)
+    }
+
+    /// SQL `ORDER BY ... DESC`.
+    pub fn desc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, true)
+    }
+}

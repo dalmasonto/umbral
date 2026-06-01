@@ -1,0 +1,114 @@
+---
+title: Relationships
+description: Declare foreign keys with ForeignKey<T>, what DDL gets emitted, and how to load the referenced row at runtime.
+sidebar_position: 3
+icon: link
+tags: [orm, foreign-key, relationships, schema]
+---
+
+A `ForeignKey<T>` field declares that one row in the current model references a row in model `T`. Umbra stores the referenced primary key as a `BIGINT` column and emits a `REFERENCES "<table>"("id")` constraint in the migration.
+
+## Declaring a foreign key
+
+```rust
+use umbra::orm::{ForeignKey, Model};
+
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbra::orm::Model)]
+pub struct User {
+    pub id: i64,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbra::orm::Model)]
+pub struct Post {
+    pub id: i64,
+    pub title: String,
+    pub author: ForeignKey<User>,          // stores user.id as BIGINT
+    pub reviewer: Option<ForeignKey<User>>, // nullable FK
+}
+```
+
+The `ForeignKey<T>` type is in scope via `use umbra::orm::ForeignKey` or `use umbra::prelude::*`.
+
+## What the migration engine emits
+
+`makemigrations` produces a `CREATE TABLE` that includes the `REFERENCES` clause.
+
+SQLite:
+
+```sql
+CREATE TABLE "post" (
+  "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+  "title" text NOT NULL,
+  "author" bigint NOT NULL REFERENCES "user"("id"),
+  "reviewer" bigint REFERENCES "user"("id")
+)
+```
+
+Postgres:
+
+```sql
+CREATE TABLE "post" (
+  "id" bigserial PRIMARY KEY,
+  "title" text NOT NULL,
+  "author" bigint NOT NULL REFERENCES "user"("id"),
+  "reviewer" bigint REFERENCES "user"("id")
+)
+```
+
+## Querying with a foreign key
+
+The column constant emitted by `#[derive(Model)]` for a `ForeignKey<T>` field is a `ForeignKeyCol`, which accepts `i64` comparisons:
+
+```rust
+// All posts by user with id = 42
+let posts = Post::objects()
+    .filter(post::AUTHOR.eq(42))
+    .fetch()
+    .await?;
+
+// All posts where reviewer is one of [1, 2, 3]
+let reviewed = Post::objects()
+    .filter(post::REVIEWER.in_(&[1, 2, 3]))
+    .fetch()
+    .await?;
+```
+
+## Reading the raw ID and resolving the referenced row
+
+`ForeignKey<T>` exposes `.id()` to read the raw integer and `.resolve(&pool)` to fetch the referenced row:
+
+```rust
+let post = Post::objects()
+    .filter(post::ID.eq(1))
+    .get()
+    .await?;
+
+// Read the stored integer without a database round-trip.
+println!("author id = {}", post.author.id());
+
+// Load the full User row from the database.
+let author: User = post.author.resolve(&pool).await?;
+println!("written by {}", author.name);
+```
+
+`.resolve(&pool)` runs `SELECT ... FROM user WHERE id = ? LIMIT 1`. For a Postgres pool use `.resolve_pg(&pg_pool)`.
+
+## Serialisation
+
+`ForeignKey<T>` serialises and deserialises as a plain JSON integer. The REST layer and the backup tool see it as an `i64` - no nested object, no special envelope.
+
+```json
+{ "id": 1, "title": "Hello", "author": 42 }
+```
+
+## What is deferred
+
+The following are out of scope at v1 and tracked in `docs/specs/relationships.md`:
+
+- Many-to-many relationships (need a join-table helper type).
+- Reverse accessors (`User::posts` that fetches all posts by a user).
+- `ON DELETE` behaviour beyond the default RESTRICT.
+- FK columns referencing a non-`i64` primary key.
+
+For the design rationale see [`arch.md`](../../../../arch.md) §M9 and `docs/specs/relationships.md`.

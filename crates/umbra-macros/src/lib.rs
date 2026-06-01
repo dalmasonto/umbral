@@ -260,6 +260,18 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             quote!(false)
         };
 
+        // For ForeignKey<T> fields, emit `fk_target: Some(<T as Model>::TABLE)`.
+        // For all other fields, emit `fk_target: None`.
+        let fk_target_tokens = match &kind {
+            FieldKind::ForeignKey(inner_ty) => {
+                quote! { Some(<#inner_ty as ::umbra::orm::Model>::TABLE) }
+            }
+            FieldKind::NullableForeignKey(inner_ty) => {
+                quote! { Some(<#inner_ty as ::umbra::orm::Model>::TABLE) }
+            }
+            _ => quote! { None },
+        };
+
         field_specs.push(quote! {
             ::umbra::orm::FieldSpec {
                 name: #field_name_str,
@@ -267,6 +279,7 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                 primary_key: #pk_lit,
                 nullable: #nullable_lit,
                 supported_backends: &[],
+                fk_target: #fk_target_tokens,
             }
         });
 
@@ -315,7 +328,8 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
     Ok(output)
 }
 
-/// The classification a field's Rust type lands in for M3.
+/// The classification a field's Rust type lands in for M3 (extended at gap 14
+/// with `ForeignKey`).
 ///
 /// This is the single switchboard for the type → column-type mapping.
 /// The new column type lands here, its SqlType picks up an arm in
@@ -384,6 +398,12 @@ enum FieldKind {
     /// boot when this lands on SQLite.
     Array(ArrayElementKind),
     NullableArray(ArrayElementKind),
+    /// `ForeignKey<T>` — an i64 FK reference to model `T`'s primary key.
+    /// The inner `Type` is the generic argument `T`, used to derive
+    /// `T::TABLE` for the `FieldSpec.fk_target` slot.
+    ForeignKey(Box<Type>),
+    /// `Option<ForeignKey<T>>` — a nullable FK column.
+    NullableForeignKey(Box<Type>),
     /// `ipnetwork::IpNetwork` — Postgres INET column (Phase 4.4).
     Inet,
     NullableInet,
@@ -478,6 +498,9 @@ impl FieldKind {
             FieldKind::FullText | FieldKind::NullableFullText => {
                 quote!(::umbra::orm::SqlType::FullText)
             }
+            FieldKind::ForeignKey(_) | FieldKind::NullableForeignKey(_) => {
+                quote!(::umbra::orm::SqlType::ForeignKey)
+            }
             FieldKind::Unsupported(_) => return None,
         };
         let nullable = if self.is_nullable() {
@@ -508,6 +531,7 @@ impl FieldKind {
                 | FieldKind::NullableCidr
                 | FieldKind::NullableMacAddr
                 | FieldKind::NullableFullText
+                | FieldKind::NullableForeignKey(_)
         )
     }
 
@@ -608,6 +632,13 @@ fn classify_field_type(ty: &Type) -> FieldKind {
     if is_tsvector(ty) {
         return FieldKind::FullText;
     }
+    // Gap 14 — `ForeignKey<T>`. Detected by the leaf ident `ForeignKey`
+    // with exactly one generic type argument `T`. The qualifier check
+    // accepts either `orm::ForeignKey` or bare `ForeignKey` to let user
+    // code write `ForeignKey<User>` after `use umbra::orm::ForeignKey`.
+    if let Some(inner) = foreign_key_inner(ty) {
+        return FieldKind::ForeignKey(Box::new(inner.clone()));
+    }
     if is_wide_or_unsigned_int(ty) {
         return FieldKind::Unsupported(UnsupportedReason::WideOrUnsignedInt);
     }
@@ -661,6 +692,9 @@ fn classify_field_type(ty: &Type) -> FieldKind {
         if is_tsvector(inner) {
             return FieldKind::NullableFullText;
         }
+        if let Some(fk_inner) = foreign_key_inner(inner) {
+            return FieldKind::NullableForeignKey(Box::new(fk_inner.clone()));
+        }
         if is_wide_or_unsigned_int(inner) {
             return FieldKind::Unsupported(UnsupportedReason::NullableOfWide);
         }
@@ -668,6 +702,34 @@ fn classify_field_type(ty: &Type) -> FieldKind {
     }
 
     FieldKind::Unsupported(UnsupportedReason::NotInCatalogue)
+}
+
+/// If `ty` is `ForeignKey<T>` (with or without the `orm::` qualifier),
+/// return the inner type `T`. Returns `None` for any other type.
+///
+/// Matches the leaf segment ident `ForeignKey` with exactly one generic
+/// type argument. We don't require the `orm::` qualifier so user code
+/// that writes `use umbra::orm::ForeignKey; field: ForeignKey<User>` works.
+fn foreign_key_inner(ty: &Type) -> Option<&Type> {
+    let Type::Path(TypePath { qself: None, path }) = ty else {
+        return None;
+    };
+    let last = path.segments.last()?;
+    if last.ident != "ForeignKey" {
+        return None;
+    }
+    let PathArguments::AngleBracketed(ref args) = last.arguments else {
+        return None;
+    };
+    let mut type_args = args.args.iter().filter_map(|a| match a {
+        GenericArgument::Type(t) => Some(t),
+        _ => None,
+    });
+    let inner = type_args.next()?;
+    if type_args.next().is_some() {
+        return None; // more than one type arg — not our ForeignKey
+    }
+    Some(inner)
 }
 
 /// If `ty` is `Vec<T>` and `T` is one of the [`ArrayElementKind`]
@@ -950,6 +1012,8 @@ fn column_const_for(
         FieldKind::NullableMacAddr => format_ident!("NullableMacAddrCol"),
         FieldKind::FullText => format_ident!("FullTextCol"),
         FieldKind::NullableFullText => format_ident!("NullableFullTextCol"),
+        FieldKind::ForeignKey(_) => format_ident!("ForeignKeyCol"),
+        FieldKind::NullableForeignKey(_) => format_ident!("NullableForeignKeyCol"),
         FieldKind::Unsupported(_) => return TokenStream2::new(),
     };
     quote_spanned! { span =>

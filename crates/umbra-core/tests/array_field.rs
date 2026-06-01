@@ -72,12 +72,14 @@ fn postgres_ddl_renders_array_suffix() {
                 ty: SqlType::BigInt,
                 primary_key: true,
                 nullable: false,
+                fk_target: None,
             },
             Column {
                 name: "tags".to_string(),
                 ty: SqlType::Array(ArrayElement::Text),
                 primary_key: false,
                 nullable: false,
+                fk_target: None,
             },
         ],
     };

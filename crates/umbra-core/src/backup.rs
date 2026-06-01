@@ -358,6 +358,10 @@ fn column_to_json(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<Value, 
             SqlType::Array(_) => unreachable_array(&col.name),
             SqlType::Inet | SqlType::Cidr | SqlType::MacAddr => unreachable_network(&col.name),
             SqlType::FullText => unreachable_pg_only(&col.name, "FullText (tsvector)"),
+            // ForeignKey stores as i64 — same as BigInt.
+            SqlType::ForeignKey => row
+                .try_get::<Option<i64>, _>(name)?
+                .map_or(Value::Null, Value::from),
         });
     }
     // Non-nullable: same dispatch without the Option layer.
@@ -376,6 +380,8 @@ fn column_to_json(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<Value, 
         SqlType::Array(_) => unreachable_array(&col.name),
         SqlType::Inet | SqlType::Cidr | SqlType::MacAddr => unreachable_network(&col.name),
         SqlType::FullText => unreachable_pg_only(&col.name, "FullText (tsvector)"),
+        // ForeignKey stores as i64 — same as BigInt.
+        SqlType::ForeignKey => Value::from(row.try_get::<i64, _>(name)?),
     })
 }
 
@@ -432,6 +438,8 @@ fn bind_value<'q>(
             SqlType::Array(_) => unreachable_array(&col.name),
             SqlType::Inet | SqlType::Cidr | SqlType::MacAddr => unreachable_network(&col.name),
             SqlType::FullText => unreachable_pg_only(&col.name, "FullText (tsvector)"),
+            // ForeignKey stores as i64 — same as BigInt.
+            SqlType::ForeignKey => q.bind(None::<i64>),
         });
     }
     let mismatch = |got: &str| BackupError::TypeMismatch {
@@ -490,6 +498,8 @@ fn bind_value<'q>(
         SqlType::Array(_) => unreachable_array(&col.name),
         SqlType::Inet | SqlType::Cidr | SqlType::MacAddr => unreachable_network(&col.name),
         SqlType::FullText => unreachable_pg_only(&col.name, "FullText (tsvector)"),
+        // ForeignKey stores as i64 — same as BigInt.
+        SqlType::ForeignKey => q.bind(val.as_i64().ok_or_else(|| mismatch(json_type_name(&val)))?),
     })
 }
 

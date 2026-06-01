@@ -58,6 +58,7 @@ impl crate::orm::Model for Post {
             primary_key: true,
             nullable: false,
             supported_backends: &[],
+            fk_target: None,
         },
         crate::orm::FieldSpec {
             name: "title",
@@ -65,6 +66,7 @@ impl crate::orm::Model for Post {
             primary_key: false,
             nullable: false,
             supported_backends: &[],
+            fk_target: None,
         },
         crate::orm::FieldSpec {
             name: "body",
@@ -72,6 +74,7 @@ impl crate::orm::Model for Post {
             primary_key: false,
             nullable: false,
             supported_backends: &[],
+            fk_target: None,
         },
         crate::orm::FieldSpec {
             name: "published_at",
@@ -79,6 +82,7 @@ impl crate::orm::Model for Post {
             primary_key: false,
             nullable: true,
             supported_backends: &[],
+            fk_target: None,
         },
     ];
 

@@ -48,12 +48,14 @@ fn postgres_ddl_renders_tsvector_type() {
                 ty: SqlType::BigInt,
                 primary_key: true,
                 nullable: false,
+                fk_target: None,
             },
             Column {
                 name: "search".to_string(),
                 ty: SqlType::FullText,
                 primary_key: false,
                 nullable: false,
+                fk_target: None,
             },
         ],
     };

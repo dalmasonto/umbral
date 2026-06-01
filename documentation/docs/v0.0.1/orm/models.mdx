@@ -28,13 +28,20 @@ pub struct Post {
 
 The rules the derive enforces:
 
-- Exactly one field named `id`, typed `i32`, `i64`, or `uuid::Uuid` - that's
-  the primary key.
-- Field types come from the M3 catalogue: signed ints (`i16` / `i32` / `i64`),
-  `f32` / `f64`, `bool`, `String`, `chrono::NaiveDate` / `NaiveTime` /
-  `DateTime<Utc>`, `uuid::Uuid`.
+- Exactly one field named `id` - that is the primary key. Supported PK types: `i32`, `i64` (auto-increment), `uuid::Uuid` (no auto-generation - you supply the value), `String` (no auto-generation - you supply the value).
+- Field types come from the M3 catalogue: signed ints (`i16` / `i32` / `i64`), `f32` / `f64`, `bool`, `String`, `chrono::NaiveDate` / `NaiveTime` / `DateTime<Utc>`, `uuid::Uuid`, `ForeignKey<T>`.
 - `serde_json::Value` for a JSON column; `Option<serde_json::Value>` for a nullable one.
 - `Option<T>` of any of the above is the only path to a nullable column.
+
+**PK auto-generation rule.** `Manager::create(instance)` skips the `id` column in the INSERT when the value is the "default" sentinel, letting the database assign it:
+
+| PK type | Sentinel value | Result |
+|---------|----------------|--------|
+| `i64` / `i32` | `0` | Database assigns the next autoincrement value. |
+| `uuid::Uuid` | `Uuid::nil()` (all zeros) | Column is omitted from INSERT. Supply a real UUID or add a DB-side default. |
+| `String` | `""` (empty string) | Column is omitted from INSERT. Supply the slug at create time. |
+
+Pass a non-sentinel value to force a specific PK (useful for seeding or test fixtures).
 
 ## JSON columns
 

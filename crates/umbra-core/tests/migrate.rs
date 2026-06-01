@@ -136,6 +136,7 @@ async fn migrated_dir() -> &'static Path {
                 ty: SqlType::Text,
                 primary_key: false,
                 nullable: true,
+                fk_target: None,
             };
             let file = MigrationFile {
                 id: M8_ADD_COLUMN_MIGRATION_ID.to_string(),
@@ -185,12 +186,14 @@ async fn migrated_dir() -> &'static Path {
                     ty: SqlType::BigInt,
                     primary_key: true,
                     nullable: false,
+                    fk_target: None,
                 },
                 Column {
                     name: "note".to_string(),
                     ty: SqlType::Text,
                     primary_key: false,
                     nullable: true,
+                    fk_target: None,
                 },
             ];
             let file = MigrationFile {
@@ -662,6 +665,7 @@ fn id_column() -> Column {
         ty: SqlType::BigInt,
         primary_key: true,
         nullable: false,
+        fk_target: None,
     }
 }
 
@@ -673,6 +677,7 @@ fn text_column(name: &str) -> Column {
         ty: SqlType::Text,
         primary_key: false,
         nullable: false,
+        fk_target: None,
     }
 }
 
@@ -793,6 +798,7 @@ fn diff_returns_unsafe_alter_for_a_type_change() {
             ty: SqlType::Integer,
             primary_key: false,
             nullable: false,
+            fk_target: None,
         },
     ]));
 
@@ -828,6 +834,7 @@ fn diff_emits_alter_column_for_a_nullable_flip() {
             ty: SqlType::Text,
             primary_key: false,
             nullable: true,
+            fk_target: None,
         },
     ]));
 

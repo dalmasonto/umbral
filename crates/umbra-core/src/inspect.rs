@@ -719,6 +719,9 @@ fn render_field_type(ty: SqlType, nullable: bool) -> String {
         SqlType::Cidr => "ipnetwork::IpNetwork".to_string(),
         SqlType::MacAddr => "mac_address::MacAddress".to_string(),
         SqlType::FullText => "umbra::orm::TsVector".to_string(),
+        // ForeignKey inspectdb renders as i64 for now; the FK relationship
+        // introspection that would emit ForeignKey<T> is deferred.
+        SqlType::ForeignKey => "i64".to_string(),
     };
     let base = base.as_str();
     if nullable {
@@ -819,6 +822,7 @@ impl From<&IntrospectedColumn> for Column {
             ty: c.ty,
             primary_key: c.primary_key,
             nullable: c.nullable,
+            fk_target: None,
         }
     }
 }

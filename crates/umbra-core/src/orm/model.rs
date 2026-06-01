@@ -126,6 +126,12 @@ pub struct FieldSpec {
     /// M4 boot system check rejects models that use a field on an
     /// unsupported backend.
     pub supported_backends: &'static [&'static str],
+
+    /// For `SqlType::ForeignKey` fields: the SQL table name of the
+    /// referenced model (i.e. `T::TABLE`). The migration engine reads
+    /// this at DDL-emit time to produce `REFERENCES "<target>"("id")`.
+    /// `None` for all non-FK fields.
+    pub fk_target: Option<&'static str>,
 }
 
 /// The SQL type kind of a column.
@@ -144,6 +150,18 @@ pub struct FieldSpec {
 /// at M4 when the system check exists to gate them at boot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SqlType {
+    /// A foreign-key reference to another table. Stored as `i64` (the
+    /// referenced row's primary key). Renders as `BIGINT REFERENCES
+    /// "<target_table>"("id")` on both Postgres and SQLite.
+    ///
+    /// The referenced table name is carried separately in
+    /// [`FieldSpec::fk_target`] so this enum stays `Copy`. The migration
+    /// engine reads `fk_target` at DDL-emit time.
+    ///
+    /// Out of scope at v1: non-`i64` FK targets, `ON DELETE` behaviours
+    /// beyond the default RESTRICT, reverse accessors (`User::posts`),
+    /// and many-to-many join tables. See `docs/specs/relationships.md`.
+    ForeignKey,
     /// 16-bit signed integer. `i8` / `i16` / `u8` in Rust.
     SmallInt,
     /// 32-bit signed integer. `i32` / `u16` in Rust.

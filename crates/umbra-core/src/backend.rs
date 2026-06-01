@@ -168,6 +168,11 @@ impl DatabaseBackend for PostgresBackend {
             // trigger or GENERATED clause; umbra's migration engine
             // emits the bare column declaration.
             SqlType::FullText => ColumnType::custom("tsvector"),
+            // ForeignKey is stored as BIGINT in the DB; the REFERENCES
+            // clause is appended separately by the migration engine's
+            // `build_column_def_*` helpers (sea-query doesn't have a
+            // first-class FK DDL API at our version).
+            SqlType::ForeignKey => ColumnType::BigInteger,
         }
     }
 }
@@ -216,6 +221,9 @@ impl DatabaseBackend for SqliteBackend {
             SqlType::Time => ColumnType::Time,
             SqlType::Timestamptz => ColumnType::TimestampWithTimeZone,
             SqlType::Uuid => ColumnType::Text,
+            // ForeignKey stored as BIGINT; the REFERENCES clause is
+            // appended by the migration engine separately.
+            SqlType::ForeignKey => ColumnType::BigInteger,
             // SQLite has no native JSON column type — the JSON1 extension
             // operates on TEXT values. Storing the document as TEXT keeps
             // the round-trip portable through sqlx's `json` feature (which

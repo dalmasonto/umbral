@@ -23,6 +23,7 @@ fn id_pk() -> Column {
         ty: SqlType::BigInt,
         primary_key: true,
         nullable: false,
+        fk_target: None,
     }
 }
 
@@ -33,6 +34,7 @@ fn text_not_null(name: &str) -> Column {
         ty: SqlType::Text,
         primary_key: false,
         nullable: false,
+        fk_target: None,
     }
 }
 
@@ -43,6 +45,7 @@ fn text_nullable(name: &str) -> Column {
         ty: SqlType::Text,
         primary_key: false,
         nullable: true,
+        fk_target: None,
     }
 }
 

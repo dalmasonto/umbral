@@ -612,6 +612,10 @@ fn column_to_string(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<Strin
             SqlType::Inet | SqlType::Cidr | SqlType::MacAddr | SqlType::FullText => {
                 panic_pg_only_unsupported(&col.name)
             }
+            // ForeignKey renders as i64 — same as BigInt.
+            SqlType::ForeignKey => row
+                .try_get::<Option<i64>, _>(name)?
+                .map_or(String::new(), |v| v.to_string()),
         });
     }
     Ok(match col.ty {
@@ -635,6 +639,8 @@ fn column_to_string(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<Strin
         SqlType::Inet | SqlType::Cidr | SqlType::MacAddr | SqlType::FullText => {
             panic_pg_only_unsupported(&col.name)
         }
+        // ForeignKey renders as i64 — same as BigInt.
+        SqlType::ForeignKey => row.try_get::<i64, _>(name)?.to_string(),
     })
 }
 
@@ -795,6 +801,11 @@ fn bind_form_value<'q>(
         SqlType::Inet | SqlType::Cidr | SqlType::MacAddr | SqlType::FullText => {
             panic_pg_only_unsupported(&col.name)
         }
+        // ForeignKey fields store i64 PKs — parse and bind the same as BigInt.
+        SqlType::ForeignKey => q.bind(
+            raw.parse::<i64>()
+                .map_err(|e| AdminError::BadInput(format!("{}: {e}", col.name)))?,
+        ),
     })
 }
 
@@ -818,6 +829,8 @@ fn bind_null<'q>(
         SqlType::Inet | SqlType::Cidr | SqlType::MacAddr | SqlType::FullText => {
             panic_pg_only_unsupported(&col.name)
         }
+        // ForeignKey stores i64 — bind as nullable i64.
+        SqlType::ForeignKey => q.bind(None::<i64>),
     }
 }
 
@@ -881,6 +894,8 @@ fn input_kind(ty: SqlType) -> &'static str {
         // Phase 4.3 full-text — textarea since tsvector content is
         // typically multi-line lexeme output.
         SqlType::FullText => "textarea",
+        // ForeignKey renders as a numeric input — same as BigInt.
+        SqlType::ForeignKey => "number",
     }
 }
 

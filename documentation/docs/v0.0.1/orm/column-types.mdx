@@ -30,6 +30,7 @@ The cross-backend types compile and run against both Postgres and SQLite. The Po
 | `ipnetwork::IpNetwork` (Postgres-only) | `Inet` | `INET` | - (boot fails) |
 | `mac_address::MacAddress` (Postgres-only) | `MacAddr` | `MACADDR` | - (boot fails) |
 | `umbra::orm::TsVector` (Postgres-only) | `FullText` | `TSVECTOR` | - (boot fails) |
+| `ForeignKey<T>` | `ForeignKey` | `BIGINT REFERENCES "t"("id")` | `BIGINT REFERENCES "t"("id")` |
 
 Any of these types wrapped in `Option<T>` produces the nullable column. `Option` is the only path to a nullable column - there is no `null = true` attribute.
 
@@ -139,8 +140,25 @@ This is the cross-backend ORM payoff: most models stay on the cross-backend type
 
 The per-type predicate surface (array `.contains` / `.overlaps`, JSON `.path_text` / `.has_key`, INET `.eq`) lives on the [Declaring models](./models) page next to each section.
 
+## Foreign keys
+
+`ForeignKey<T>` is a cross-backend column type that stores an `i64` reference to the primary key of model `T`. The migration engine emits `BIGINT REFERENCES "<table>"("id")` for both Postgres and SQLite.
+
+```rust
+#[derive(Model)]
+pub struct Post {
+    pub id: i64,
+    pub title: String,
+    pub author: ForeignKey<User>,          // BIGINT NOT NULL REFERENCES "user"("id")
+    pub reviewer: Option<ForeignKey<User>>, // BIGINT REFERENCES "user"("id")  (nullable)
+}
+```
+
+At query time, `post::AUTHOR.eq(42)` filters by the raw FK integer. To load the referenced row, call `.resolve(&pool)` on the field value. Full details on the [Relationships](./relationships) page.
+
 ## See also
 
+- [Relationships](./relationships) - declaring foreign keys, `.resolve()`, column constants, what is deferred.
 - [Declaring models](./models) - the per-type sections with operator surfaces and concrete examples.
 - [PostgreSQL backend](../backends/postgres) - the full Postgres column-type table and DDL shapes.
 - [SQLite backend](../backends/sqlite) - the SQLite column-type table and what's missing vs Postgres.

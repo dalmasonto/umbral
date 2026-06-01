@@ -998,6 +998,10 @@ fn column_to_json(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<Value, 
             SqlType::Inet | SqlType::Cidr | SqlType::MacAddr | SqlType::FullText => {
                 panic_pg_only_unsupported(&col.name)
             }
+            // ForeignKey stores as i64.
+            SqlType::ForeignKey => row
+                .try_get::<Option<i64>, _>(name)?
+                .map_or(Value::Null, Value::from),
         });
     }
     Ok(match col.ty {
@@ -1016,6 +1020,8 @@ fn column_to_json(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<Value, 
         SqlType::Inet | SqlType::Cidr | SqlType::MacAddr | SqlType::FullText => {
             panic_pg_only_unsupported(&col.name)
         }
+        // ForeignKey stores as i64.
+        SqlType::ForeignKey => Value::from(row.try_get::<i64, _>(name)?),
     })
 }
 
@@ -1170,7 +1176,7 @@ fn bind_json_value<'q>(
                 ApiError::BadInput(format!("field `{}` must be an integer", col.name))
             })? as i32)
         }
-        Value::Number(n) if matches!(col.ty, SqlType::BigInt) => {
+        Value::Number(n) if matches!(col.ty, SqlType::BigInt | SqlType::ForeignKey) => {
             q.bind(n.as_i64().ok_or_else(|| {
                 ApiError::BadInput(format!("field `{}` must be an integer", col.name))
             })?)
@@ -1241,13 +1247,18 @@ fn bind_string<'q>(q: SqlxQuery<'q>, col: &Column, s: &str) -> Result<SqlxQuery<
         SqlType::Inet | SqlType::Cidr | SqlType::MacAddr | SqlType::FullText => {
             panic_pg_only_unsupported(&col.name)
         }
+        // ForeignKey binds as i64.
+        SqlType::ForeignKey => q.bind(
+            s.parse::<i64>()
+                .map_err(|e| ApiError::BadInput(format!("{}: {e}", col.name)))?,
+        ),
     })
 }
 
 fn bind_null<'q>(q: SqlxQuery<'q>, col: &Column) -> SqlxQuery<'q> {
     match col.ty {
         SqlType::SmallInt | SqlType::Integer => q.bind(None::<i32>),
-        SqlType::BigInt => q.bind(None::<i64>),
+        SqlType::BigInt | SqlType::ForeignKey => q.bind(None::<i64>),
         SqlType::Real => q.bind(None::<f32>),
         SqlType::Double => q.bind(None::<f64>),
         SqlType::Boolean => q.bind(None::<bool>),

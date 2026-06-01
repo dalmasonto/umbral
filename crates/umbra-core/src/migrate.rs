@@ -320,6 +320,10 @@ pub struct Column {
     pub ty: SqlType,
     pub primary_key: bool,
     pub nullable: bool,
+    /// For `SqlType::ForeignKey` columns: the SQL table name of the
+    /// referenced model. `None` for all non-FK columns.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fk_target: Option<String>,
 }
 
 impl From<&FieldSpec> for Column {
@@ -329,6 +333,7 @@ impl From<&FieldSpec> for Column {
             ty: f.ty,
             primary_key: f.primary_key,
             nullable: f.nullable,
+            fk_target: f.fk_target.map(|s| s.to_string()),
         }
     }
 }
@@ -1236,8 +1241,32 @@ fn quote_pg_ident(ident: &str) -> String {
 /// `i64` as INTEGER affinity anyway, so the override is a no-op
 /// semantically — the rows that round-trip through `sqlx::FromRow`
 /// deserialize back into `i64` cleanly.
+///
+/// For `SqlType::Uuid` PKs: SQLite stores UUIDs as TEXT. No
+/// `DEFAULT gen_random_uuid()` is emitted; the application must supply
+/// the UUID at create time (or pass `Uuid::nil()` to trigger the
+/// omit-on-insert sentinel that leaves the column to a future default).
+///
+/// For `SqlType::ForeignKey` columns: rendered as `BIGINT` with a
+/// `REFERENCES "<target>"("id")` suffix appended via `.extra()`. The
+/// target table name comes from `col.fk_target`.
 fn build_column_def_sqlite(col: &Column) -> sea_query::ColumnDef {
     use sea_query::{Alias, ColumnDef, ColumnType};
+
+    // ForeignKey gets a special path: BIGINT + inline REFERENCES clause.
+    if matches!(col.ty, SqlType::ForeignKey) {
+        let fk_target = col
+            .fk_target
+            .as_deref()
+            .unwrap_or("_unknown_")
+            .replace('"', "\"\"");
+        let mut def = ColumnDef::new_with_type(Alias::new(&col.name), ColumnType::BigInteger);
+        if !col.nullable {
+            def.not_null();
+        }
+        def.extra(format!("REFERENCES \"{fk_target}\"(\"id\")"));
+        return def;
+    }
 
     let is_int_pk = col.primary_key && matches!(col.ty, SqlType::Integer | SqlType::BigInt);
 
@@ -1265,8 +1294,30 @@ fn build_column_def_sqlite(col: &Column) -> sea_query::ColumnDef {
 /// lowers that to `BIGSERIAL` for `BigInt` and `SERIAL` for `Integer`.
 /// No SQLite-style INTEGER-type override needed; Postgres has proper
 /// `BIGSERIAL` / identity columns and respects the declared width.
+///
+/// For `SqlType::ForeignKey` columns: rendered as `BIGINT` with a
+/// `REFERENCES "<target>"("id")` suffix. The target table name comes
+/// from `col.fk_target`.
 fn build_column_def_postgres(col: &Column) -> sea_query::ColumnDef {
     use sea_query::{Alias, ColumnDef};
+
+    // ForeignKey gets a special path: BIGINT + inline REFERENCES clause.
+    if matches!(col.ty, SqlType::ForeignKey) {
+        let fk_target = col
+            .fk_target
+            .as_deref()
+            .unwrap_or("_unknown_")
+            .replace('"', "\"\"");
+        let mut def = ColumnDef::new_with_type(
+            Alias::new(&col.name),
+            crate::backend::PostgresBackend.map_type(SqlType::BigInt),
+        );
+        if !col.nullable {
+            def.not_null();
+        }
+        def.extra(format!("REFERENCES \"{fk_target}\"(\"id\")"));
+        return def;
+    }
 
     let column_type = crate::backend::PostgresBackend.map_type(col.ty);
 

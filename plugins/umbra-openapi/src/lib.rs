@@ -300,6 +300,9 @@ fn openapi_type(ty: SqlType) -> (&'static str, Option<&'static str>) {
         // Phase 4.3 tsvector — opaque text lexeme vector. Render as
         // plain string in the OpenAPI schema.
         SqlType::FullText => ("string", None),
+        // ForeignKey columns expose as integer (i64) in the REST/OpenAPI
+        // schema — the raw PK value, not a nested object.
+        SqlType::ForeignKey => ("integer", Some("int64")),
     }
 }
 

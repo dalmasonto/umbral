@@ -143,7 +143,10 @@ pub fn json_to_sea_value(
         SqlType::SmallInt | SqlType::Integer => {
             coerce_i32(value, field_name).map(|v| SeaValue::Int(Some(v)))
         }
-        SqlType::BigInt => coerce_i64(value, field_name).map(|v| SeaValue::BigInt(Some(v))),
+        // ForeignKey columns store i64 — same path as BigInt.
+        SqlType::BigInt | SqlType::ForeignKey => {
+            coerce_i64(value, field_name).map(|v| SeaValue::BigInt(Some(v)))
+        }
         SqlType::Real => coerce_f32(value, field_name).map(|v| SeaValue::Float(Some(v))),
         SqlType::Double => coerce_f64(value, field_name).map(|v| SeaValue::Double(Some(v))),
         SqlType::Text => {
@@ -219,7 +222,7 @@ fn null_for(sql_type: SqlType) -> SeaValue {
     match sql_type {
         SqlType::Boolean => SeaValue::Bool(None),
         SqlType::SmallInt | SqlType::Integer => SeaValue::Int(None),
-        SqlType::BigInt => SeaValue::BigInt(None),
+        SqlType::BigInt | SqlType::ForeignKey => SeaValue::BigInt(None),
         SqlType::Real => SeaValue::Float(None),
         SqlType::Double => SeaValue::Double(None),
         SqlType::Text | SqlType::Json => SeaValue::String(None),
