@@ -1,0 +1,176 @@
+---
+title: Template Filters and Helpers
+description: Built-in filters, tests, and globals available in umbra templates via minijinja 2.
+sidebar_position: 2
+tags: [templates, filters, helpers, minijinja]
+---
+
+umbra templates run on [minijinja 2](https://docs.rs/minijinja/latest/minijinja/), which ships a Jinja2-compatible filter set out of the box. umbra does not yet register any custom filters of its own — the full set you have available today is the minijinja standard library. Custom filter registration through `Plugin::on_ready` is [deferred](rendering-html#what-ships-at-v1-vs-deferred) until the admin plugin lands at M11.
+
+This page catalogues the filters and globals umbra users reach for most, with examples written in the umbra template style.
+
+## String filters
+
+| Filter | Purpose |
+|--------|---------|
+| `upper` | Convert to uppercase |
+| `lower` | Convert to lowercase |
+| `title` | Title-case each word |
+| `capitalize` | Uppercase first character, lowercase the rest |
+| `trim` | Strip leading and trailing whitespace |
+| `replace(from, to)` | Replace all occurrences of `from` with `to` |
+| `truncate(length)` | Shorten to at most `length` characters, appending `...` |
+| `wordcount` | Count whitespace-delimited words |
+| `striptags` | Remove HTML tags from a string |
+| `safe` | Mark a value as HTML-safe, bypassing autoescape |
+| `escape` | HTML-escape the value (same as the autoescaper, but explicit) |
+| `urlencode` | Percent-encode a string for use in a URL query parameter |
+| `indent(width)` | Indent each line of a multiline string by `width` spaces |
+
+```html
+{# templates/profile.html #}
+<h1>{{ user.name | title }}</h1>
+<p>{{ bio | truncate(120) }}</p>
+<p>{{ description | striptags | truncate(200) }}</p>
+```
+
+## Number filters
+
+| Filter | Purpose |
+|--------|---------|
+| `abs` | Absolute value |
+| `round(precision)` | Round to `precision` decimal places (default 0) |
+| `float` | Cast to float |
+| `int` | Cast to integer |
+
+```html
+<p>Price: {{ product.price | round(2) }}</p>
+<p>In stock: {{ inventory | abs }}</p>
+```
+
+## List and collection filters
+
+| Filter | Purpose |
+|--------|---------|
+| `length` | Number of items in a sequence or characters in a string |
+| `first` | First element of a sequence |
+| `last` | Last element of a sequence |
+| `reverse` | Reverse a sequence |
+| `sort` | Sort a sequence (ascending by default) |
+| `unique` | Remove duplicate values from a sequence |
+| `join(sep)` | Join items with a separator string (default `""`) |
+| `list` | Coerce a value to a list |
+| `min` | Smallest value in a sequence |
+| `max` | Largest value in a sequence |
+| `sum` | Sum of numeric values in a sequence |
+| `map(attr)` | Extract an attribute from every item in a sequence |
+| `select(attr)` | Filter a sequence to items where `attr` is truthy |
+| `reject(attr)` | Filter a sequence to items where `attr` is falsy |
+| `batch(size)` | Group items into chunks of `size` |
+| `slice(count)` | Slice a sequence into `count` parts |
+
+```html
+{# Comma-separated tag names #}
+<p>Tags: {{ article.tags | map(attribute="name") | join(", ") }}</p>
+
+{# First three items only #}
+{% for item in items | list | slice(3) | first %}
+  <li>{{ item.title }}</li>
+{% endfor %}
+
+{# Total pages: 12 #}
+<p>Total pages: {{ pages | length }}</p>
+```
+
+## Default and type-testing filters
+
+| Filter | Purpose |
+|--------|---------|
+| `default(value)` | Return `value` if the variable is undefined or falsy |
+| `d(value)` | Alias for `default` |
+| `dictsort` | Sort a dict by its keys |
+| `items` | Return `(key, value)` pairs from a dict |
+| `tojson` | Serialize the value to a JSON string |
+
+```html
+<p>{{ user.bio | default("No bio provided.") }}</p>
+<script>
+  const data = {{ payload | tojson }};
+</script>
+```
+
+## Control-flow tags (not filters, but commonly confused)
+
+These are Jinja2 tags, not pipe filters. They're included here because they solve the same problems humanize helpers solve in Django.
+
+```html
+{# Conditional blocks #}
+{% if articles | length == 0 %}
+  <p>No articles yet.</p>
+{% else %}
+  <p>{{ articles | length }} article{% if articles | length != 1 %}s{% endif %}</p>
+{% endif %}
+
+{# Loop helpers inside a for block #}
+{% for item in items %}
+  {# loop.index is 1-based; loop.index0 is 0-based #}
+  <li class="{% if loop.first %}first{% endif %} {% if loop.last %}last{% endif %}">
+    {{ loop.index }}. {{ item.name }}
+  </li>
+{% endfor %}
+```
+
+## Global functions
+
+minijinja exposes a small set of global functions callable anywhere in a template expression.
+
+| Function | Purpose |
+|----------|---------|
+| `range(start, stop, step)` | Generate an integer range (like Python's `range`) |
+| `dict(...)` | Construct a dictionary inline |
+| `namespace(...)` | A mutable namespace for storing values across loop iterations |
+| `lipsum(n)` | Generate `n` paragraphs of Lorem Ipsum (useful in layout prototyping) |
+
+```html
+{% for i in range(1, 6) %}
+  <p>Item {{ i }}</p>
+{% endfor %}
+```
+
+## The `safe` filter and autoescape
+
+umbra enables autoescape on every `.html` and `.htm` template. A value that contains `<script>` will be emitted as `&lt;script&gt;` automatically. To render pre-trusted HTML — for example, a sanitised rich-text field — pipe it through `safe`:
+
+```html
+{# Only do this for content you have already sanitised server-side #}
+<div class="body">{{ article.rendered_html | safe }}</div>
+```
+
+There is no global escape bypass. See [Rendering HTML](rendering-html#autoescape-is-on-by-default) for the security rationale.
+
+## What is missing today: humanize helpers
+
+Django's `django.contrib.humanize` provides filters like `naturalday`, `naturaltime`, `intcomma`, `ordinal`, and `filesizeformat`. minijinja 2 does not ship these, and umbra has not yet added them as custom filters. The deferred design (in `rendering-html.mdx` and `arch.md §4.5`) shows that custom filters will come through `Plugin::on_ready` once the engine's ambient pattern supports mutable registration. When humanize filters land they will be documented here.
+
+In the meantime, compute humanized representations in the handler and pass them as context values:
+
+```rust
+// handler: pre-compute the human-readable string
+let context = context! {
+    article,
+    created_label => humantime::format_duration(elapsed).to_string(),
+};
+let html = umbra::templates::render("article.html", &context)?;
+```
+
+```html
+{# template: consume it like any other variable #}
+<time>{{ created_label }}</time>
+```
+
+## See also
+
+- [minijinja filter reference](https://docs.rs/minijinja/latest/minijinja/filters/index.html) - full API docs for every built-in filter, including type signatures and edge cases.
+- [minijinja test reference](https://docs.rs/minijinja/latest/minijinja/tests/index.html) - built-in tests usable in `{% if value is defined %}` / `{% if value is divisibleby(3) %}` style.
+- [Rendering HTML](rendering-html) - the engine wiring, autoescape policy, and handler integration.
+- `arch.md §4.5` - the template security rationale and the deferred custom-filter design.
