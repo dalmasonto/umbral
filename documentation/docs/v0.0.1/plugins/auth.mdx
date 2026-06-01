@@ -113,6 +113,127 @@ cargo run -- createsuperuser --username admin --email admin@example.com --noinpu
 # reads password from UMBRA_SUPERUSER_PASSWORD
 ```
 
+## Guarding views
+
+Django has a `@login_required` decorator that gates a view behind authentication. umbra ships the same idea in two complementary shapes: a per-handler extractor and a per-Router layer. Both share one config struct that controls the unauthenticated response.
+
+### The `LoginRequired` config
+
+Two constants/constructors choose the unauthenticated response:
+
+```rust
+// REST/API: return 401 JSON + WWW-Authenticate: Bearer
+LoginRequired::API
+
+// HTML: 302 redirect to /login?next=<original-uri>
+LoginRequired::html("/login")
+```
+
+`LoginRequired::html` always appends a `?next=<uri>` parameter so the login handler can redirect back after success. Drop it with `.no_next()` if your login page does not use it.
+
+### Per-handler: `LoggedIn<U>` extractor
+
+Drop `LoggedIn<U>` into a handler signature. The handler only runs when the request carries a valid, non-expired, authenticated session. On failure the extractor returns the configured rejection response.
+
+```rust
+use umbra_auth::{AuthUser, login_required::LoggedIn};
+
+// REST handler — 401 JSON when unauthenticated (default config).
+async fn me(LoggedIn(user): LoggedIn<AuthUser>) -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "username": user.username }))
+}
+
+// HTML handler — same extractor, different rejection when the
+// LoginRequiredLayer above it has set LoginRequired::html.
+async fn dashboard(LoggedIn(user): LoggedIn<AuthUser>) -> Html<String> {
+    Html(format!("<h1>Hello, {}!</h1>", user.username))
+}
+```
+
+`LoggedIn<U>` is generic over any `U: UserModel`, so a custom user model (see "Swapping the user model") uses `LoggedIn<TenantUser>` without extra adapters.
+
+When used without a layer, the extractor falls back to `LoginRequired::API` (401 JSON). Pair it with `LoginRequiredLayer` to get the HTML redirect shape — the layer injects its config into request extensions and the extractor picks it up automatically.
+
+### Per-router: `LoginRequiredLayer`
+
+Wrap a Router subtree with `LoginRequiredLayer` to gate every route in one call. Unauthenticated requests are rejected before the inner handler is called at all.
+
+```rust
+use umbra_auth::login_required::{login_required, login_required_html};
+use umbra::web::{Router, get};
+
+// API subtree — 401 JSON.
+let api_routes = Router::new()
+    .route("/api/me", get(me))
+    .route("/api/posts", get(list_posts))
+    .layer(login_required());
+
+// HTML subtree — 302 to /login?next=<uri>.
+let app_routes = Router::new()
+    .route("/dashboard", get(dashboard))
+    .route("/settings", get(settings_page))
+    .layer(login_required_html("/login"));
+
+// Open routes — no layer.
+let public_routes = Router::new()
+    .route("/", get(home))
+    .route("/login", get(login_page));
+
+let router = public_routes.merge(api_routes).merge(app_routes);
+```
+
+`login_required()` and `login_required_html(path)` are convenience wrappers over `LoginRequiredLayer::new(LoginRequired::API)` and `LoginRequiredLayer::new(LoginRequired::html(path))`.
+
+If you need to build the layer explicitly:
+
+```rust
+use umbra_auth::login_required::{LoginRequired, LoginRequiredLayer};
+
+let layer = LoginRequiredLayer::new(LoginRequired::html("/auth/login").no_next());
+let router = LoginRequiredLayer::new(LoginRequired::html("/auth/login"))
+    .apply(my_router);
+```
+
+### Both shapes side by side
+
+The two shapes compose naturally. A Router subtree can use the layer for the broad gate and then use the extractor in specific handlers for fine-grained access to the user:
+
+```rust
+use umbra_auth::{AuthUser, login_required::{LoggedIn, login_required_html}};
+use umbra::web::{Router, get, Html};
+
+// Layer gates the whole subtree (unauthenticated → 302 /login).
+// LoggedIn in the handler gives us the authenticated user.
+async fn dashboard(LoggedIn(user): LoggedIn<AuthUser>) -> Html<String> {
+    Html(format!("<h1>Welcome back, {}!</h1>", user.username))
+}
+
+async fn profile_edit(LoggedIn(user): LoggedIn<AuthUser>) -> Html<String> {
+    Html(format!("<form><!-- editing {} --></form>", user.username))
+}
+
+let protected = Router::new()
+    .route("/dashboard", get(dashboard))
+    .route("/profile/edit", get(profile_edit))
+    .layer(login_required_html("/login"));
+```
+
+The layer checks the session once at the middleware boundary; the extractor hydrates the full user struct in the handler. No double database round-trip — the layer only reads the `session` table; the extractor reads both `session` and `auth_user` (or your custom user table).
+
+### `API` vs `html(...)` — which to use
+
+| Shape | When to reach for it |
+|---|---|
+| `LoginRequired::API` | REST endpoints, JSON API, SPA backends. Clients inspect the status code and the `WWW-Authenticate` header. |
+| `LoginRequired::html(url)` | Server-rendered HTML pages. Browsers follow the 302 automatically; the login form reads `?next=` to redirect back. |
+
+Mix both in one app: wrap the `/api/*` subtree with `login_required()` and the `/app/*` subtree with `login_required_html("/login")`.
+
+### See also
+
+- `plugins/umbra-auth/src/login_required.rs` — implementation with inline docs.
+- [Sessions](./sessions) — how the session cookie is created and how `current_user` works.
+
 ## Swapping the user model
 
 This is umbra's equivalent of Django's `AUTH_USER_MODEL`. In Django you set a string (`AUTH_USER_MODEL = "myapp.CustomUser"`); in umbra you use the type parameter directly, so the swap is validated at compile time with no runtime reflection involved.

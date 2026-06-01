@@ -2521,14 +2521,22 @@ version = "0.0.1"
 dependencies = [
  "argon2",
  "async-trait",
+ "axum",
+ "axum-core",
  "chrono",
  "clap",
+ "http",
+ "http-body-util",
  "rpassword",
  "serde",
+ "serde_json",
+ "sha2",
  "sqlx",
  "tempfile",
  "tokio",
+ "tower",
  "umbra",
+ "uuid",
 ]
 
 [[package]]

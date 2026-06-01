@@ -1,0 +1,403 @@
+//! `@login_required` equivalent for umbra handlers.
+//!
+//! Django's `@login_required` decorator gates a view behind authentication.
+//! umbra ships the same idea in two composable shapes:
+//!
+//! - [`LoggedIn<U>`] — a per-handler axum extractor. Drop it in a handler
+//!   signature and the handler only runs when a valid session exists.
+//! - [`LoginRequiredLayer`] — a per-Router tower middleware layer. Every
+//!   route in the wrapped subtree is gated; unauthenticated requests never
+//!   reach the inner handler.
+//!
+//! Both shapes share [`LoginRequired`] for the redirect vs. 401 fork.
+//!
+//! ## Design decisions
+//!
+//! - `LoggedIn<U: UserModel>` is **fully generic** over the user model
+//!   (option a from the spec). The cookie/session reading is ~25 lines of
+//!   direct logic (read cookie, hash it, query session table, hydrate U).
+//!   Keeping it generic means a custom user model (`TenantUser` etc.) can
+//!   use `LoggedIn<TenantUser>` without any wrapper or code duplication.
+//!
+//! - The `LoginRequired` config is read from `request.extensions()` when
+//!   set by `LoginRequiredLayer`, or falls back to `LoginRequired::API`
+//!   (401 JSON) if the extractor is used directly without the layer.
+//!
+//! - `LoginRequiredLayer` implements `tower::Layer<S>` directly so it
+//!   works with `Router::layer(login_required())` and
+//!   `Router::layer(login_required_html("/login"))` without extra
+//!   wrapping.
+//!
+//! - The layer gate does NOT load the full user struct — it checks only
+//!   the session table (`user_id IS NOT NULL AND expires_at > now`). The
+//!   `LoggedIn<U>` extractor does the full hydration. This avoids the `U`
+//!   bound at the layer level, so `login_required()` works with any user
+//!   model without a type parameter on the layer.
+//!
+//! ## Deferred
+//!
+//! - `permission_required(perm)` and `staff_member_required` are deferred
+//!   pending gap 33 (groups + content-type model). They can be added as
+//!   thin wrappers once permission objects exist.
+
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
+use axum::body::Body;
+use axum::http::{StatusCode, Uri};
+use axum::response::{IntoResponse, Response};
+use axum_core::extract::FromRequestParts;
+use chrono::{DateTime, Utc};
+use http::request::Parts;
+use serde_json::json;
+use sha2::{Digest, Sha256};
+use tower::{Layer, Service};
+
+use crate::UserModel;
+
+// =========================================================================
+// LoginRequired — shared config struct
+// =========================================================================
+
+/// Configuration shared by both the extractor and the middleware.
+///
+/// Controls whether an unauthenticated request gets a JSON 401 (REST/API
+/// behaviour) or a 302 redirect to a login page (server-rendered HTML
+/// behaviour).
+#[derive(Debug, Clone)]
+pub struct LoginRequired {
+    /// `None` = return 401 JSON. `Some("/login")` = 302 to
+    /// `login_url?next=<uri>`.
+    pub login_url: Option<String>,
+    /// The query-string parameter name to append with the original URI.
+    /// `Some("next")` appends `?next=<uri>`; `None` redirects without it.
+    /// Only used when `login_url` is `Some`.
+    pub next_param: Option<String>,
+}
+
+impl LoginRequired {
+    /// API/REST shape: return a JSON 401 with a `WWW-Authenticate: Bearer`
+    /// header.
+    pub const API: Self = Self {
+        login_url: None,
+        next_param: None,
+    };
+
+    /// HTML shape: redirect to `login_url?next=<original-uri>`. The `next`
+    /// parameter is named `"next"` by default, matching Django's convention.
+    pub fn html(login_url: impl Into<String>) -> Self {
+        Self {
+            login_url: Some(login_url.into()),
+            next_param: Some("next".to_string()),
+        }
+    }
+
+    /// Drop the `next` parameter from the redirect.
+    pub fn no_next(mut self) -> Self {
+        self.next_param = None;
+        self
+    }
+
+    /// Build the rejection response.
+    pub(crate) fn rejection_response(&self, uri: &Uri) -> Response {
+        match &self.login_url {
+            None => {
+                let body = json!({"error": "authentication required"}).to_string();
+                axum::http::Response::builder()
+                    .status(StatusCode::UNAUTHORIZED)
+                    .header("content-type", "application/json")
+                    .header("www-authenticate", "Bearer")
+                    .body(Body::from(body))
+                    .expect("building 401 response cannot fail")
+                    .into_response()
+            }
+            Some(url) => {
+                let location = match &self.next_param {
+                    Some(param) => {
+                        let original = uri.to_string();
+                        format!("{url}?{param}={}", urlencoded(original.as_str()))
+                    }
+                    None => url.clone(),
+                };
+                axum::http::Response::builder()
+                    .status(StatusCode::FOUND)
+                    .header("location", location)
+                    .body(Body::empty())
+                    .expect("building 302 response cannot fail")
+                    .into_response()
+            }
+        }
+    }
+}
+
+/// Percent-encode a URI for safe embedding in a query-string value.
+fn urlencoded(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '?' => out.push_str("%3F"),
+            '&' => out.push_str("%26"),
+            '=' => out.push_str("%3D"),
+            '+' => out.push_str("%2B"),
+            '%' => out.push_str("%25"),
+            ' ' => out.push_str("%20"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+// =========================================================================
+// LoggedIn<U> extractor
+// =========================================================================
+
+/// Per-handler axum extractor that resolves the session cookie into a user
+/// of type `U`.
+///
+/// ```rust,ignore
+/// use umbra_auth::{AuthUser, login_required::LoggedIn};
+///
+/// async fn dashboard(LoggedIn(user): LoggedIn<AuthUser>) -> String {
+///     format!("Hello, {}!", user.username())
+/// }
+/// ```
+///
+/// If no valid session exists the extractor returns the configured rejection
+/// response. The config is read from `request.extensions()` (set by
+/// [`LoginRequiredLayer`]) or falls back to [`LoginRequired::API`].
+pub struct LoggedIn<U: UserModel>(pub U);
+
+impl<U, S> FromRequestParts<S> for LoggedIn<U>
+where
+    U: UserModel + for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> + Unpin + Send,
+    S: Send + Sync,
+{
+    type Rejection = Response;
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        let config = parts
+            .extensions
+            .get::<LoginRequired>()
+            .cloned()
+            .unwrap_or(LoginRequired::API);
+
+        let uri = parts.uri.clone();
+
+        match resolve_user::<U>(&parts.headers).await {
+            Some(user) => Ok(LoggedIn(user)),
+            None => Err(config.rejection_response(&uri)),
+        }
+    }
+}
+
+// =========================================================================
+// Session resolution helpers
+// =========================================================================
+
+/// SHA-256 hash the raw session token. Mirrors `umbra-sessions`'s
+/// `hash_token`. umbra-auth must not depend on umbra-sessions (the dep
+/// arrow runs the other way), so we re-implement the trivial hash step.
+fn hash_token(raw: &str) -> String {
+    let mut h = Sha256::new();
+    h.update(raw.as_bytes());
+    format!("{:x}", h.finalize())
+}
+
+/// Extract the `umbra_session` cookie from the request headers.
+fn cookie_from_headers(headers: &http::HeaderMap) -> Option<String> {
+    let header = headers.get(http::header::COOKIE)?.to_str().ok()?;
+    for pair in header.split(';') {
+        let pair = pair.trim();
+        if let Some(value) = pair.strip_prefix("umbra_session=") {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
+/// Load a user of type `U` from the session cookie in the given headers.
+async fn resolve_user<U>(headers: &http::HeaderMap) -> Option<U>
+where
+    U: UserModel + for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> + Unpin + Send,
+{
+    let raw_token = cookie_from_headers(headers)?;
+    let stored_id = hash_token(&raw_token);
+
+    let pool = umbra::db::pool();
+
+    let row: Option<(Option<i64>, DateTime<Utc>)> =
+        sqlx::query_as("SELECT user_id, expires_at FROM session WHERE id = ?")
+            .bind(&stored_id)
+            .fetch_optional(&pool)
+            .await
+            .ok()
+            .flatten();
+
+    let (user_id_opt, expires_at) = row?;
+    let user_id = user_id_opt?; // None = anonymous session
+
+    if expires_at < Utc::now() {
+        return None;
+    }
+
+    let table = U::TABLE;
+    let sql = format!("SELECT * FROM {table} WHERE id = ? AND is_active = 1");
+    sqlx::query_as::<_, U>(&sql)
+        .bind(user_id)
+        .fetch_optional(&pool)
+        .await
+        .ok()
+        .flatten()
+}
+
+/// Check whether headers carry a valid authenticated session.
+/// Returns `true` iff a valid, non-expired, non-anonymous session is present.
+pub(crate) async fn is_authenticated(headers: &http::HeaderMap) -> bool {
+    let Some(raw_token) = cookie_from_headers(headers) else {
+        return false;
+    };
+    let stored_id = hash_token(&raw_token);
+    let pool = umbra::db::pool();
+
+    let row: Option<(Option<i64>, DateTime<Utc>)> =
+        match sqlx::query_as("SELECT user_id, expires_at FROM session WHERE id = ?")
+            .bind(&stored_id)
+            .fetch_optional(&pool)
+            .await
+        {
+            Ok(r) => r,
+            Err(_) => return false,
+        };
+
+    let Some((user_id_opt, expires_at)) = row else {
+        return false;
+    };
+    if user_id_opt.is_none() {
+        return false;
+    }
+    expires_at >= Utc::now()
+}
+
+// =========================================================================
+// LoginRequiredLayer — tower::Layer impl
+// =========================================================================
+
+/// Per-router middleware layer that gates every route in the wrapped subtree.
+///
+/// ```rust,ignore
+/// use umbra_auth::login_required::{login_required, login_required_html};
+///
+/// // REST subtree — 401 JSON on unauthenticated.
+/// let api_router = Router::new()
+///     .route("/api/me", get(me_handler))
+///     .layer(login_required());
+///
+/// // HTML subtree — 302 to /login?next=<uri>.
+/// let app_router = Router::new()
+///     .route("/dashboard", get(dashboard_handler))
+///     .layer(login_required_html("/login"));
+/// ```
+///
+/// The layer also inserts the [`LoginRequired`] config into request
+/// extensions so nested [`LoggedIn<U>`] extractors pick it up without
+/// re-declaration.
+#[derive(Clone)]
+pub struct LoginRequiredLayer {
+    config: LoginRequired,
+}
+
+impl LoginRequiredLayer {
+    /// Build a layer with an explicit config.
+    pub fn new(config: LoginRequired) -> Self {
+        Self { config }
+    }
+
+    /// Apply this layer to a Router, returning the gated router.
+    ///
+    /// ```rust,ignore
+    /// let gated = LoginRequiredLayer::new(LoginRequired::html("/login"))
+    ///     .apply(my_router);
+    /// ```
+    pub fn apply(self, router: axum::Router) -> axum::Router {
+        router.layer(self)
+    }
+}
+
+impl<S> Layer<S> for LoginRequiredLayer {
+    type Service = LoginRequiredService<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        LoginRequiredService {
+            inner,
+            config: self.config.clone(),
+        }
+    }
+}
+
+/// The tower `Service` produced by [`LoginRequiredLayer`].
+#[derive(Clone)]
+pub struct LoginRequiredService<S> {
+    inner: S,
+    config: LoginRequired,
+}
+
+impl<S> Service<axum::extract::Request> for LoginRequiredService<S>
+where
+    S: Service<axum::extract::Request, Response = Response> + Clone + Send + 'static,
+    S::Future: Send + 'static,
+{
+    type Response = Response;
+    type Error = S::Error;
+    type Future = Pin<Box<dyn Future<Output = Result<Response, S::Error>> + Send + 'static>>;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), S::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, mut req: axum::extract::Request) -> Self::Future {
+        let config = self.config.clone();
+        // Clone inner for the async block — `self.inner` is consumed
+        // by `call()` semantically and must be driven after `poll_ready`.
+        let mut inner = self.inner.clone();
+
+        Box::pin(async move {
+            let uri = req.uri().clone();
+
+            if !is_authenticated(req.headers()).await {
+                return Ok(config.rejection_response(&uri));
+            }
+
+            // Insert config so LoggedIn<U> extractors can find it.
+            req.extensions_mut().insert(config);
+
+            inner.call(req).await
+        })
+    }
+}
+
+// =========================================================================
+// Convenience constructors
+// =========================================================================
+
+/// Returns a [`LoginRequiredLayer`] configured for REST/API use (401 JSON).
+///
+/// ```rust,ignore
+/// Router::new()
+///     .route("/api/me", get(me_handler))
+///     .layer(login_required())
+/// ```
+pub fn login_required() -> LoginRequiredLayer {
+    LoginRequiredLayer::new(LoginRequired::API)
+}
+
+/// Returns a [`LoginRequiredLayer`] configured for HTML use (302 redirect).
+///
+/// ```rust,ignore
+/// Router::new()
+///     .route("/dashboard", get(dashboard_handler))
+///     .layer(login_required_html("/login"))
+/// ```
+pub fn login_required_html(login_url: impl Into<String>) -> LoginRequiredLayer {
+    LoginRequiredLayer::new(LoginRequired::html(login_url))
+}

@@ -21,6 +21,10 @@
 //! - [`AuthPlugin`] registers the user model and contributes one system
 //!   check. The type parameter defaults to [`AuthUser`] so existing apps
 //!   need no changes.
+//! - [`login_required`] module: `LoginRequired` config, `LoggedIn<U>`
+//!   extractor, `LoginRequiredLayer` middleware, and the
+//!   `login_required()` / `login_required_html()` convenience
+//!   constructors. Django's `@login_required` in two shapes.
 //!
 //! ## Custom user models
 //!
@@ -57,6 +61,12 @@
 //! - Login / logout / password-reset HTTP flows. Needs the full
 //!   `umbra-sessions` session middleware wired end-to-end.
 //! - Periodic session cleanup via `umbra-tasks`.
+
+pub mod login_required;
+
+pub use login_required::{
+    LoggedIn, LoginRequired, LoginRequiredLayer, login_required, login_required_html,
+};
 
 use std::marker::PhantomData;
 

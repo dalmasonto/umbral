@@ -20,6 +20,7 @@ umbra = { path = "../../crates/umbra", version = "0.0.1" }
 argon2 = { version = "0.5", features = ["std"] }
 chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "chrono"] }
 # clap for the `createsuperuser` management command — Plugin::commands()
 # returns a Vec<Box<dyn PluginCommand>>, and each command exposes a
@@ -29,13 +30,30 @@ clap = "4"
 # `umbra::cli`, made object-safe via async-trait's Pin<Box<...>>
 # desugaring.
 async-trait = "0.1"
-# rpassword for the password prompt without echo. Tiny crate (~200 LOC)
-# that does the right thing for terminal password input — turn off
-# tty echo, read line, restore echo. The alternative (echoing the
-# password as the user types) is one of those small UX details that
-# people remember.
+# rpassword for the password prompt without echo.
 rpassword = "7"
+# axum-core for FromRequestParts (the LoggedIn<U> extractor).
+axum-core = "0.5"
+# axum proper for middleware::from_fn (LoginRequiredLayer).
+axum = "0.8"
+# http for Parts, HeaderMap, Uri in the extractor and middleware.
+http = "1"
+# SHA-256 to hash session tokens before the DB lookup. umbra-auth
+# must not depend on umbra-sessions (the dep arrow runs the other way),
+# so we re-implement the trivial hash step used by sessions.
+sha2 = "0.10"
+# tower for the Layer + Service impl on LoginRequiredLayer so it works
+# directly with Router::layer(...).
+tower = "0.5"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync"] }
 tempfile = "3"
+# Test helpers for the login_required tests.
+axum = "0.8"
+http = "1"
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+sha2 = "0.10"
+uuid = { version = "1", features = ["v4"] }
