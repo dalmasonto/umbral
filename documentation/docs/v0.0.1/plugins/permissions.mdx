@@ -1,0 +1,120 @@
+---
+title: Permissions (RBAC)
+description: Django-style groups, permissions, and content types for umbra. The has_perm query layer.
+sidebar_position: 11
+icon: shield-check
+tags: [plugins, auth, permissions, rbac]
+---
+
+`umbra-permissions` ships the role-based access control primitives — `ContentType`, `Permission`, `Group`, and the three M2M tables linking users to permissions both directly and via groups. The `has_perm` query layer lets any handler check `has_perm(user_id, "blog.publish_post")` against the union of direct and group-mediated grants.
+
+The admin UI for managing groups and permissions is deferred (it depends on the Tailwind admin work tracked separately). RLS predicate injection — using permissions to constrain DB rows — is `umbra-rls`'s job; this plugin provides the data the RLS layer reads.
+
+## Register the plugin
+
+```rust
+use umbra::prelude::*;
+use umbra_auth::AuthPlugin;
+use umbra_permissions::PermissionsPlugin;
+
+App::builder()
+    .plugin(AuthPlugin::default())
+    .plugin(PermissionsPlugin::default())  // standard perms auto-create on boot
+    .build()?;
+```
+
+`PermissionsPlugin::on_ready` walks the registered models and creates four standard permissions per model on first boot: `add_<model>`, `change_<model>`, `delete_<model>`, `view_<model>`.
+
+## Data model
+
+| Model | Purpose |
+|---|---|
+| `ContentType` | One row per registered Model. Holds `app_label` (plugin name) and `model` (lowercased struct name). |
+| `Permission` | One row per (ContentType, codename). The four standard ones auto-create; custom ones land via direct INSERT or future `Meta.permissions` declarations. |
+| `Group` | Named permission bundle. Users in a group inherit every permission the group holds. |
+| `GroupPermission` | M2M: which permissions belong to which groups. |
+| `UserGroup` | M2M: which users belong to which groups. |
+| `UserPermission` | M2M: direct grants that bypass groups. Use sparingly. |
+
+## Checking permissions
+
+```rust
+use umbra_permissions::{has_perm, user_perms};
+
+// One specific permission
+if !has_perm(user.id(), "blog.publish_post").await? {
+    return Err((StatusCode::FORBIDDEN, "missing publish permission").into());
+}
+
+// All permissions a user has (for caching in a request scope)
+let perms: HashSet<String> = user_perms(user.id()).await?;
+if perms.contains("blog.publish_post") && perms.contains("blog.delete_post") {
+    // ...
+}
+```
+
+`has_perm` issues a single JOIN across `user_permission`, `user_group`, `group_permission`, `permission`, and `content_type` — direct and group-mediated permissions are checked in one round trip.
+
+### Superuser shortcut
+
+`has_perm` does NOT read `is_superuser` from the user row — this crate doesn't depend on `umbra-auth` (see "Design notes" below). The caller is responsible for the superuser bypass at the handler level:
+
+```rust
+if user.is_superuser() {
+    // skip the has_perm check entirely
+} else if !has_perm(user.id(), "blog.publish_post").await? {
+    return Err(StatusCode::FORBIDDEN.into());
+}
+```
+
+In practice you'd wrap this in a helper function on your app side.
+
+## Custom permissions
+
+Standard permissions auto-create. Custom ones (e.g., `"blog.feature_post"` for a non-CRUD action) need a manual INSERT, typically in a data migration:
+
+```rust
+use umbra_permissions::{Permission, ContentType};
+
+let ct = ContentType::objects()
+    .filter(content_type::APP_LABEL.eq("blog"))
+    .filter(content_type::MODEL.eq("post"))
+    .get().await?;
+
+Permission::objects().on(&pool).create(Permission {
+    id: 0,
+    content_type_id: ct.id.into(),
+    codename: "feature_post".to_string(),
+    name: "Can feature post on homepage".to_string(),
+}).await?;
+```
+
+## Design notes
+
+### Why `has_perm` is a free function, not a `UserModel` trait method
+
+Putting `has_perm` on the [`UserModel`](/docs/v0.0.1/plugins/auth#swapping-the-user-model) trait would require `umbra-auth` to call into `umbra-permissions` (to query permissions) *and* `umbra-permissions` to read `UserModel` from `umbra-auth` (for the receiver type). That's a circular crate dependency Cargo refuses to compile.
+
+The clean resolution: `has_perm(user_id: i64, codename: &str)` is a free function that takes the bare ID. The dependency arrow stays one-way (`umbra-permissions` → `umbra-auth` would be needed if at all, but isn't). Apps using a [custom user model](/docs/v0.0.1/plugins/auth#swapping-the-user-model) work without adapters.
+
+### M2M tables, not ForeignKey collections
+
+The M2M tables (`GroupPermission`, `UserGroup`, `UserPermission`) are plain models with two foreign keys each — matching Django's intermediate-table shape. umbra's [`ForeignKey<T>`](/docs/v0.0.1/orm/relationships) does the heavy lifting; reverse-accessor M2M syntax (`user.groups()` returning `Vec<Group>`) is deferred until the ORM has reverse accessors generally.
+
+## Pairing with `login_required`
+
+A `permission_required(perm)` layer is a natural follow-up — wrap a Router subtree, the layer reads the session, calls `has_perm`, and 403s on denial. Tracked alongside the existing [`LoginRequiredLayer`](/docs/v0.0.1/web/auth-gating). For now, gate at the handler level using the snippet above.
+
+## What's not shipped at v0.0.1
+
+- Admin UI for managing groups, permissions, and group assignments — deferred (depends on Tailwind admin).
+- `permission_required(perm)` axum layer / decorator — natural follow-up now that the data layer exists.
+- `Meta.permissions = [...]` syntax for declaring custom perms on a model — for now custom perms ship via direct INSERT in a data migration.
+- RLS predicate injection from permissions — that's `umbra-rls`'s responsibility.
+- Object-level permissions (per-row grants) — Django needs `django-guardian` for this; we'd do the same as a follow-up crate.
+
+## See also
+
+- [`umbra-auth` plugin docs](/docs/v0.0.1/plugins/auth) — the `UserModel` trait and the `LoggedIn<U>` extractor this composes with.
+- [`umbra-rls` plugin docs](/docs/v0.0.1/plugins/rls) — row-level security; reads permissions for predicate injection.
+- [Web → Auth gating](/docs/v0.0.1/web/auth-gating) — `login_required` patterns.
