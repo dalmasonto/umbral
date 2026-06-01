@@ -393,9 +393,15 @@ async fn dispatch_returns_unmatched_for_unknown_command() {
     let plugins: Vec<Box<dyn umbra::prelude::Plugin>> = vec![Box::new(TasksPlugin)];
     let outcome = umbra::cli::dispatch(&plugins, vec!["umbra-cli", "no-such-cmd"])
         .await
-        .map_err(|e| format!("{e}"));
-    // clap reports an unknown subcommand as a parse error, which the
-    // dispatcher bubbles out as Err. That's the contract: clap surfaces
-    // the typo at the boundary.
-    assert!(outcome.is_err(), "got: {outcome:?}");
+        .expect("dispatch should return DispatchOutcome::Unmatched, not Err");
+    // Updated contract: when argv references a subcommand that's not in
+    // the registered plugins' command set, dispatch returns Unmatched
+    // so the caller (umbra-cli's own clap parser) gets to try the
+    // built-in subcommands like `serve`, `migrate`, `dev`. The old
+    // behavior of propagating clap's InvalidSubcommand error meant
+    // built-in subcommands could never coexist with plugin subcommands.
+    assert!(
+        matches!(outcome, umbra::cli::DispatchOutcome::Unmatched),
+        "expected Unmatched for an unknown subcommand, got: {outcome:?}",
+    );
 }

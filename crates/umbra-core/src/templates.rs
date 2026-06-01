@@ -54,6 +54,11 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use minijinja::{AutoEscape, Environment};
+
+/// Watched template directories captured at `init` time. Stored
+/// separately so the dev-mode render path can rebuild the environment
+/// from the same sources without re-publishing the OnceLock.
+static WATCHED_DIRS: OnceLock<Vec<PathBuf>> = OnceLock::new();
 use serde::Serialize;
 
 static ENGINE: OnceLock<Environment<'static>> = OnceLock::new();
@@ -116,6 +121,30 @@ fn register_default_templates(
 /// Tests can inspect the returned list to assert collision detection
 /// without needing a tracing subscriber.
 pub fn init(dirs: &[PathBuf]) -> Result<Vec<String>, TemplateError> {
+    let (env, collisions) = build_env(dirs)?;
+
+    for name in &collisions {
+        tracing::warn!(
+            template = %name,
+            "umbra templates: template `{name}` is provided by multiple directories; \
+             the first-registered copy wins"
+        );
+    }
+
+    // Stash the dirs so the dev-mode render path can rebuild the env
+    // on demand without re-running the (more expensive) init flow.
+    let _ = WATCHED_DIRS.set(dirs.to_vec());
+
+    ENGINE
+        .set(env)
+        .map_err(|_| TemplateError::AlreadyInitialised)?;
+    Ok(collisions)
+}
+
+/// Build a fresh `Environment` from the given dirs. Shared by the
+/// init path and the dev-mode hot-reload path; both produce
+/// bit-identical engines from the same input.
+fn build_env(dirs: &[PathBuf]) -> Result<(Environment<'static>, Vec<String>), TemplateError> {
     let mut env = Environment::new();
     // Autoescape extensions MUST stay in sync with the loader
     // whitelist in `load_directory` (currently `html | htm | txt`).
@@ -149,18 +178,7 @@ pub fn init(dirs: &[PathBuf]) -> Result<Vec<String>, TemplateError> {
         }
     }
 
-    for name in &collisions {
-        tracing::warn!(
-            template = %name,
-            "umbra templates: template `{name}` is provided by multiple directories; \
-             the first-registered copy wins"
-        );
-    }
-
-    ENGINE
-        .set(env)
-        .map_err(|_| TemplateError::AlreadyInitialised)?;
-    Ok(collisions)
+    Ok((env, collisions))
 }
 
 /// Render a template by name with a serde-serializable context value.
@@ -175,7 +193,50 @@ pub fn init(dirs: &[PathBuf]) -> Result<Vec<String>, TemplateError> {
 /// reported issue (syntax error, missing variable when strict undefined
 /// is on, etc.).
 pub fn render<C: Serialize>(name: &str, ctx: &C) -> Result<String, TemplateError> {
+    // Dev-mode hot reload: when settings.environment == Dev, rebuild
+    // the environment from disk on every render so template edits are
+    // picked up without a server restart. This makes the dev loop —
+    // edit `home.html`, hit reload, see the change — work without
+    // `cargo run`-ing again. Production stays on the cached engine
+    // for the fast path.
+    //
+    // Cost: one disk walk + minijinja parse per render in dev. For a
+    // typical handler doing one render per request at ~10 RPS during
+    // development, that's negligible. We chose this over per-file
+    // stat checks because the per-render rebuild is dependency-free
+    // and the staleness window is zero (a save followed instantly
+    // by a reload always sees the new content).
+    if dev_mode_active() {
+        if let Some(dirs) = WATCHED_DIRS.get() {
+            // Rebuild fresh; ignore collisions log here (init already
+            // logged them once; we don't spam every render).
+            match build_env(dirs) {
+                Ok((env, _collisions)) => return render_with(&env, name, ctx),
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
     let env = ENGINE.get().ok_or(TemplateError::NotInitialised)?;
+    render_with(env, name, ctx)
+}
+
+/// True when the ambient settings say we're in Dev. Returns false if
+/// settings haven't been initialised (production-style binaries that
+/// never went through `App::build()`).
+fn dev_mode_active() -> bool {
+    crate::settings::get_opt()
+        .map(|s| matches!(s.environment, crate::settings::Environment::Dev))
+        .unwrap_or(false)
+}
+
+/// Render a named template against the given env. Extracted so dev-mode
+/// (fresh env per render) and prod (cached env) share one error mapping.
+fn render_with<C: Serialize>(
+    env: &Environment<'_>,
+    name: &str,
+    ctx: &C,
+) -> Result<String, TemplateError> {
     let tmpl = env.get_template(name).map_err(|e| match e.kind() {
         minijinja::ErrorKind::TemplateNotFound => TemplateError::Missing(name.to_string()),
         _ => TemplateError::Render(e),

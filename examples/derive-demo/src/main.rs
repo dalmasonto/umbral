@@ -50,7 +50,7 @@ pub struct Article {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -202,7 +202,7 @@ fn internal_error<E: std::fmt::Display>(err: E) -> (StatusCode, String) {
     (StatusCode::INTERNAL_SERVER_ERROR, err.to_string())
 }
 
-async fn auto_migrate() -> Result<(), Box<dyn std::error::Error>> {
+async fn auto_migrate() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     match umbra::migrate::make().await {
         Ok(paths) => {
             for path in paths {
@@ -219,7 +219,7 @@ async fn auto_migrate() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-async fn seed_article_rows() -> Result<(), Box<dyn std::error::Error>> {
+async fn seed_article_rows() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Use the ORM's count() instead of a raw COUNT(*) so this stays
     // backend-agnostic — the same call runs against either SQLite or
     // Postgres without table-name escaping or dialect tweaks.

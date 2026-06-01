@@ -156,13 +156,21 @@ where
     let matches = match root.clone().try_get_matches_from(owned) {
         Ok(m) => m,
         Err(e) => {
-            // --help / --version / parse error all become an error
-            // type. For --help we surface the rendered text so the
-            // caller can print it; everything else propagates.
+            // --help / --version / parse errors. For --help we surface
+            // the rendered text so the caller can print it. For
+            // "subcommand not one of mine" — InvalidSubcommand /
+            // UnknownArgument — we return Unmatched so the caller's
+            // own clap parser (umbra-cli's built-in subcommands like
+            // serve / migrate / dev) gets a chance to match. Without
+            // this, `cargo run -- dev` errors out at this layer
+            // because plugin-dispatch claims authority over argv but
+            // doesn't know what `dev` is, and `dev` is a built-in.
             return match e.kind() {
                 clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion => {
                     Ok(DispatchOutcome::Help(e.render().to_string()))
                 }
+                clap::error::ErrorKind::InvalidSubcommand
+                | clap::error::ErrorKind::UnknownArgument => Ok(DispatchOutcome::Unmatched),
                 _ => Err(Box::new(e)),
             };
         }

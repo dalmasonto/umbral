@@ -130,6 +130,22 @@ enum Command {
         /// Path to the JSON envelope.
         input: PathBuf,
     },
+    /// Dev-loop runner: watches `src/` and re-runs `cargo run` on
+    /// change. Wraps `cargo-watch`; if not installed, prints the
+    /// install hint and exits. Templates hot-reload in-process when
+    /// `settings.environment == Dev`, so editing an `.html` file
+    /// doesn't need a restart at all.
+    Dev {
+        /// Watch additional paths beyond the default (`src/`,
+        /// `Cargo.toml`). Repeatable.
+        #[arg(long, short = 'w')]
+        watch: Vec<String>,
+        /// Pass-through args to `cargo run`. After `--`, e.g.
+        /// `umbra dev -- migrate` re-runs `cargo run -- migrate`
+        /// on every change.
+        #[arg(last = true)]
+        run_args: Vec<String>,
+    },
 }
 
 /// Parse argv and run the requested management subcommand against the
@@ -208,7 +224,70 @@ pub async fn dispatch_with_argv(
         } => inspectdb(output, mark_applied).await,
         Command::Dumpdata { output } => dumpdata(output).await,
         Command::Loaddata { input } => loaddata(input).await,
+        Command::Dev { watch, run_args } => dev(watch, run_args).await,
     }
+}
+
+/// `umbra dev` — wraps `cargo-watch` to re-run `cargo run` on source
+/// changes. If `cargo-watch` isn't installed, prints the install hint
+/// and exits non-zero so the user notices.
+///
+/// Template edits don't need this command — they hot-reload in-process
+/// when `settings.environment == Dev` (see `umbra-core/src/templates.rs`).
+/// `dev` exists for the Rust-source case where the binary needs a
+/// rebuild + restart.
+async fn dev(
+    extra_watches: Vec<String>,
+    run_args: Vec<String>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Probe for cargo-watch up front so the failure message is clear.
+    let probe = std::process::Command::new("cargo")
+        .args(["watch", "--version"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+    if probe.is_err() || probe.as_ref().map(|s| !s.success()).unwrap_or(true) {
+        eprintln!(
+            "umbra dev: `cargo-watch` is not installed.\n\n\
+             Install with:\n\n\
+             \x20\x20\x20\x20cargo install cargo-watch\n\n\
+             Then re-run `cargo run -- dev`.\n\n\
+             Workaround without cargo-watch: leave one terminal running\n\
+             `cargo run` and Ctrl-C + re-run after each edit. Templates\n\
+             still hot-reload in dev mode without any restart.",
+        );
+        std::process::exit(1);
+    }
+
+    // Build the cargo-watch invocation. -x runs the given cargo command;
+    // -w adds extra watch paths. Default watches are cargo-watch's own
+    // (Cargo.toml + src/) so we don't pile -w on every invocation.
+    let mut cmd = std::process::Command::new("cargo");
+    cmd.arg("watch");
+    for path in &extra_watches {
+        cmd.arg("-w").arg(path);
+    }
+    let cargo_cmd = if run_args.is_empty() {
+        "run".to_string()
+    } else {
+        format!("run -- {}", run_args.join(" "))
+    };
+    cmd.arg("-x").arg(&cargo_cmd);
+
+    eprintln!("umbra dev: watching for changes, running `cargo {cargo_cmd}` on each save");
+    eprintln!("umbra dev: templates also hot-reload in-process; no restart needed for .html edits");
+    eprintln!("umbra dev: Ctrl-C to stop");
+    eprintln!();
+
+    let status = cmd.status()?;
+    if !status.success() {
+        return Err(format!(
+            "cargo-watch exited with status {}",
+            status.code().map(|c| c.to_string()).unwrap_or_else(|| "<signal>".to_string())
+        )
+        .into());
+    }
+    Ok(())
 }
 
 async fn serve(app: App, addr_override: Option<String>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
