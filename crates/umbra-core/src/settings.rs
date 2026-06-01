@@ -27,6 +27,15 @@ pub fn get() -> &'static Settings {
         .expect("umbra: settings not initialised — did you call App::build()?")
 }
 
+/// Return the ambient settings if they have been initialised, or `None`.
+///
+/// Unlike [`get`], this function never panics. Useful in plugin code
+/// that may run before `App::build()` (e.g. during tests or in
+/// route-builder helpers that check the environment at build time).
+pub fn get_opt() -> Option<&'static Settings> {
+    SETTINGS.get()
+}
+
 fn default_database_url() -> String {
     // In-memory SQLite so first-run with all defaults works without any
     // filesystem assumptions (a sqlite:// URL pointing at a non-existent

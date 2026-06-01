@@ -11,7 +11,9 @@ rust-version.workspace = true
 
 [dependencies]
 umbra = { path = "../../crates/umbra", version = "0.0.1" }
-tower-http = { version = "0.6", features = ["fs"] }
+tower-http = { version = "0.6", features = ["fs", "set-header"] }
+tower = { version = "0.5", default-features = false }
+http = "1"
 tracing = "0.1"
 
 [dev-dependencies]

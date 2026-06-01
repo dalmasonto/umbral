@@ -1,6 +1,6 @@
 [package]
 name = "umbra-cache"
-description = "Pluggable cache backend for umbra. In-memory + DB-backed implementations."
+description = "Pluggable cache backend for umbra. In-memory, SQLite, and Redis backends, plus view-level cache_page middleware."
 workspace = "../../crates"
 version.workspace = true
 edition.workspace = true
@@ -8,6 +8,13 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 rust-version.workspace = true
+
+[features]
+default = []
+# Enable the Redis backend. Requires a Redis server reachable at the
+# configured URL. Adds the `redis` crate with tokio-comp (async connection
+# manager support). Activate with `--features redis` in cargo commands.
+redis = ["dep:redis"]
 
 [dependencies]
 umbra = { path = "../../crates/umbra", version = "0.0.1" }
@@ -17,7 +24,26 @@ chrono = { version = "0.4", features = ["serde"] }
 sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "chrono"] }
 tokio = { version = "1", features = ["sync", "rt", "macros"] }
 async-trait = "0.1"
+# HTTP types for the cache_page tower layer
+axum = "0.8"
+tower = { version = "0.5", default-features = false }
+http = "1"
+http-body-util = "0.1"
+bytes = "1"
+futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
+
+# Optional Redis backend dep. Only compiled when the `redis` feature is
+# enabled. Connection manager handles reconnect transparently and avoids
+# the overhead of a new connection per command.
+[dependencies.redis]
+version = "0.27"
+features = ["tokio-comp", "connection-manager"]
+optional = true
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync"] }
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
 tempfile = "3"
+axum = "0.8"
+tower = { version = "0.5", features = ["util"] }
+http = "1"
+http-body-util = "0.1"

@@ -1,0 +1,47 @@
+---
+title: Static Files
+description: Serve CSS, JS, and image assets from a directory with optional Cache-Control headers.
+sidebar_position: 10
+tags: [static, assets, cache, middleware]
+---
+
+# Static Files
+
+`umbra-static` serves a directory of assets at a URL prefix, wrapping `tower_http::services::ServeDir`. Mount it on the app builder and every file under the directory is reachable at the prefix:
+
+```rust
+App::builder()
+    .plugin(StaticPlugin::new("/static", "./assets"))
+    .build()
+    .await?;
+```
+
+`ServeDir` handles MIME sniffing, range requests, `If-Modified-Since`, and ETags out of the box.
+
+## Cache headers
+
+By default no `Cache-Control` header is added and browsers apply their own heuristics. Call `.max_age(duration)` to add `Cache-Control: public, max-age=<seconds>` on every response:
+
+```rust
+use std::time::Duration;
+
+StaticPlugin::new("/static", "./assets")
+    .max_age(Duration::from_secs(86400)) // 1 day
+```
+
+### Dev-mode opt-out
+
+When `settings.environment == Dev`, the effective `max-age` is forced to `0` regardless of the configured value. Browsers re-validate every asset on every request in development, preventing stale CSS/JS from masking changes.
+
+```rust
+// In production this sends Cache-Control: public, max-age=604800 (1 week).
+// In development it sends Cache-Control: public, max-age=0.
+StaticPlugin::new("/static", "./assets")
+    .max_age(Duration::from_secs(60 * 60 * 24 * 7))
+```
+
+The dev-mode check reads the ambient settings at route-build time (when `Plugin::routes` is called), not at constructor time.
+
+## Production note
+
+Behind a reverse proxy (nginx, Caddy, Cloudflare), serve static files from the proxy and skip this plugin in prod. It exists for development, single-binary deployments, and apps small enough that the ops overhead of a separate file server is not worth it.

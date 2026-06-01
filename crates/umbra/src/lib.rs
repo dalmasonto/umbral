@@ -46,8 +46,13 @@ pub use umbra_core::settings::{Environment, Settings};
 /// at `App::build` time. Used by plugin code that needs to branch on
 /// `environment` / `bind_addr` etc. (e.g. umbra-email checking whether
 /// to warn about console-backend usage in prod).
+///
+/// `get_opt()` is the non-panicking variant; returns `None` when
+/// `App::build()` has not been called yet. Useful in plugin helpers that
+/// run at route-build time (before boot) and need to check the environment
+/// without forcing the app to be fully initialised.
 pub mod settings {
-    pub use umbra_core::settings::get;
+    pub use umbra_core::settings::{get, get_opt};
 }
 
 pub mod db {

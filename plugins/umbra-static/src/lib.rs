@@ -12,11 +12,31 @@
 //!     .await?;
 //! ```
 //!
-//! The plugin is a thin wrapper around `tower_http::services::ServeDir`.
-//! That crate already handles MIME sniffing, range requests, and
-//! `If-Modified-Since`. The plugin's job is to expose it through the
-//! Plugin trait so the app builder, plugin ordering, and
-//! `system_checks()` apply uniformly.
+//! ## Cache headers
+//!
+//! By default every response carries no cache headers — the browser
+//! decides. Call [`StaticPlugin::max_age`] to add
+//! `Cache-Control: public, max-age=<seconds>` on every response:
+//!
+//! ```ignore
+//! use std::time::Duration;
+//!
+//! StaticPlugin::new("/static", "./assets")
+//!     .max_age(Duration::from_secs(86400)) // 1 day
+//! ```
+//!
+//! **Dev-mode opt-out.** When [`umbra::settings::get`] returns
+//! `Environment::Dev`, the effective `max_age` is forced to `0`
+//! regardless of the configured value. This means browsers re-validate
+//! every asset on every request in development, which prevents stale
+//! CSS/JS from masking changes. In `Prod` and `Test` the configured
+//! value is used as-is.
+//!
+//! The dev-mode check reads the live ambient settings, so it happens
+//! at route-build time (when [`Plugin::routes`] is called), not at
+//! constructor time. An app that calls `StaticPlugin::new` before
+//! `App::build` but builds routes after will always see the correct
+//! environment.
 //!
 //! ## Production note
 //!
@@ -25,10 +45,18 @@
 //! development, single-binary deployments, and apps small enough
 //! that the framework serving its own assets is cheaper than the
 //! ops overhead of a separate file server.
+//!
+//! tower-http's [`ServeDir`] already handles MIME sniffing, range
+//! requests, `If-Modified-Since`, and ETags — the plugin's job is to
+//! expose it through the `Plugin` trait so the app builder, plugin
+//! ordering, and `system_checks()` apply uniformly.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
+use http::header::{CACHE_CONTROL, HeaderValue};
 use tower_http::services::ServeDir;
+use tower_http::set_header::SetResponseHeaderLayer;
 use umbra::prelude::*;
 
 /// Serve every file under `dir` at the URL prefix `mount`.
@@ -38,10 +66,18 @@ use umbra::prelude::*;
 /// if it's missing. `dir` is any `AsRef<Path>` and is resolved at
 /// route-build time, not boot time, so a relative path is relative
 /// to the app's CWD when the request fires.
+///
+/// Call `.max_age(duration)` to add `Cache-Control: public,
+/// max-age=<seconds>` headers. Omit it (or pass `None`) to serve
+/// with no cache directives. In `Environment::Dev` the effective
+/// `max-age` is always 0 regardless of the configured value.
 #[derive(Debug, Clone)]
 pub struct StaticPlugin {
     mount: String,
     dir: PathBuf,
+    /// `None` means no Cache-Control header is added.
+    /// `Some(0)` means `Cache-Control: public, max-age=0` (disable caching).
+    max_age_secs: Option<u64>,
 }
 
 impl StaticPlugin {
@@ -49,7 +85,20 @@ impl StaticPlugin {
         Self {
             mount: mount.into(),
             dir: dir.as_ref().to_path_buf(),
+            max_age_secs: None,
         }
+    }
+
+    /// Set a `Cache-Control: public, max-age=<duration>` header on every
+    /// static response.
+    ///
+    /// In `Environment::Dev` the effective max-age is forced to `0`,
+    /// preventing stale assets from masking changes during development.
+    /// Pass `Duration::ZERO` explicitly to opt into that behaviour
+    /// in all environments.
+    pub fn max_age(mut self, duration: Duration) -> Self {
+        self.max_age_secs = Some(duration.as_secs());
+        self
     }
 
     /// Mount path this plugin will serve from.
@@ -60,6 +109,24 @@ impl StaticPlugin {
     /// On-disk directory this plugin will read from.
     pub fn dir(&self) -> &Path {
         &self.dir
+    }
+
+    /// The effective `max-age` in seconds after applying the dev-mode
+    /// override. Returns `None` when no cache header should be added.
+    fn effective_max_age(&self) -> Option<u64> {
+        let configured = self.max_age_secs?;
+
+        // Dev-mode override: always 0, regardless of the configured value.
+        // We read the ambient settings; if they haven't been initialised
+        // yet (test environment without a full App::build), fall back to
+        // using the configured value as-is.
+        if let Some(settings) = umbra::settings::get_opt() {
+            if matches!(settings.environment, umbra::Environment::Dev) {
+                return Some(0);
+            }
+        }
+
+        Some(configured)
     }
 }
 
@@ -83,10 +150,26 @@ impl Plugin for StaticPlugin {
                 self.mount,
             );
         }
-        // ServeDir is a tower Service, not an axum Handler. Mounting
-        // via nest_service avoids axum's handler-trait coercion and
-        // forwards the full path remainder to the service so files
-        // in nested directories resolve correctly.
-        Router::new().nest_service(&self.mount, ServeDir::new(&self.dir))
+
+        let serve_dir = ServeDir::new(&self.dir);
+
+        // Conditionally add Cache-Control based on effective max_age.
+        match self.effective_max_age() {
+            None => {
+                // No cache header configured — serve as-is.
+                Router::new().nest_service(&self.mount, serve_dir)
+            }
+            Some(secs) => {
+                let header_value = HeaderValue::from_str(&format!("public, max-age={secs}"))
+                    .unwrap_or_else(|_| HeaderValue::from_static("public, max-age=0"));
+                let cache_layer = SetResponseHeaderLayer::overriding(CACHE_CONTROL, header_value);
+                Router::new().nest_service(
+                    &self.mount,
+                    tower::ServiceBuilder::new()
+                        .layer(cache_layer)
+                        .service(serve_dir),
+                )
+            }
+        }
     }
 }

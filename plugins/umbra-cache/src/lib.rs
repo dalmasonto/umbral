@@ -1,22 +1,35 @@
 //! umbra-cache — pluggable cache for umbra.
 //!
-//! Django's cache framework, the small slice that matters for v0:
-//! a [`Cache`] handle over a [`CacheBackend`] trait, plus two
-//! built-in backends (in-memory and SQLite). Plugins and views call
-//! `cache.get` / `cache.set` against `Cache`; the backend choice is
-//! plumbed once at app boot and never appears at the call site.
+//! Django's cache framework, the slice that matters for production:
+//! a [`Cache`] handle over a [`CacheBackend`] trait, three built-in
+//! backends (in-memory, SQLite, Redis), and a [`cache_page`] view
+//! middleware that caches full GET responses, matching Django's
+//! `@cache_page` decorator.
 //!
 //! ```ignore
+//! // Boot wiring (App::builder)
 //! let cache = Cache::memory();
+//! // … or for Redis in production:
+//! // let cache = Cache::redis("redis://localhost:6379/0").await?;
+//! CachePlugin::init(cache.clone());
+//!
+//! // In a handler — explicit cache access
 //! cache.set("homepage:html", &rendered, Some(Duration::from_secs(60))).await;
 //! if let Some(html) = cache.get::<String>("homepage:html").await {
 //!     return Ok(Html(html));
 //! }
+//!
+//! // View-level caching (wraps a Router subtree)
+//! use umbra_cache::cache_page;
+//! let public = Router::new()
+//!     .route("/", get(home))
+//!     .layer(cache_page(Duration::from_secs(60)));
 //! ```
 //!
 //! ## Surface
 //!
 //! - [`CacheBackend`] — the trait. Bytes in, bytes out, async.
+//! - [`CacheError`] — unified error type for backends that can fail.
 //! - [`Cache`] — the handle. Generic-over-T methods wrap the backend
 //!   with serde encoding so callers traffic in their own types.
 //! - [`MemoryBackend`] — `tokio::sync::Mutex<HashMap>` with per-key
@@ -25,18 +38,25 @@
 //! - [`SqliteBackend`] — table-backed, durable across restarts.
 //!   Expired rows are lazily skipped on read and cleared on a
 //!   background pass when [`SqliteBackend::sweep`] is called.
+//! - [`RedisBackend`] — (feature = `"redis"`) production backend via
+//!   `redis::aio::ConnectionManager`. Handles reconnect transparently.
+//! - [`cache_page`] — tower [`Layer`] that caches full GET/HEAD responses.
+//!   Only status 200 is cached; skips when `Cache-Control: no-store`
+//!   or `Set-Cookie` appears on the response.
 //! - [`CachePlugin`] — empty Plugin impl so other plugins can name
 //!   "cache" as a dependency.
 //!
 //! ## Deferred past v0
 //!
-//! - Redis backend (lands as a separate crate, same trait).
-//! - `get_or_set` helper that fills on miss inside a single
-//!   round-trip. Lands once a real read path needs it.
+//! - `get_or_set` helper that fills on miss inside a single round-trip.
 //! - Versioned keys + `incr/decr` atomic ops.
+//! - Memcached backend.
+//! - Distributed cache invalidation (tag-based).
+//! - ETag / 304 conditional caching inside `cache_page` — the current
+//!   implementation always serves the cached body in full.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -46,8 +66,70 @@ use sqlx::SqlitePool;
 use tokio::sync::Mutex;
 use umbra::prelude::*;
 
+pub mod cache_page;
+pub use cache_page::cache_page;
+
+// ── Ambient cache handle ─────────────────────────────────────────────────────
+
+/// Process-wide ambient cache, set once during `App::build()` (or manually
+/// by calling [`CachePlugin::init`]). `cache_page` reads this automatically.
+static AMBIENT_CACHE: OnceLock<Cache> = OnceLock::new();
+
+/// Return the ambient cache, or `None` if [`CachePlugin::init`] hasn't run.
+pub fn ambient() -> Option<&'static Cache> {
+    AMBIENT_CACHE.get()
+}
+
+// ── Error type ───────────────────────────────────────────────────────────────
+
+/// Error variants emitted by cache backends that can fail (Redis, SQLite).
+/// `MemoryBackend` is infallible — its methods are fire-and-forget.
+#[derive(Debug)]
+pub enum CacheError {
+    /// A Redis-level error (connection, protocol, server).
+    #[cfg(feature = "redis")]
+    Redis(redis::RedisError),
+    /// A SQLite-level error.
+    Sqlx(sqlx::Error),
+    /// Any other I/O or configuration error.
+    Other(String),
+}
+
+impl std::fmt::Display for CacheError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            #[cfg(feature = "redis")]
+            CacheError::Redis(e) => write!(f, "cache redis error: {e}"),
+            CacheError::Sqlx(e) => write!(f, "cache sqlite error: {e}"),
+            CacheError::Other(s) => write!(f, "cache error: {s}"),
+        }
+    }
+}
+
+impl std::error::Error for CacheError {}
+
+#[cfg(feature = "redis")]
+impl From<redis::RedisError> for CacheError {
+    fn from(e: redis::RedisError) -> Self {
+        CacheError::Redis(e)
+    }
+}
+
+impl From<sqlx::Error> for CacheError {
+    fn from(e: sqlx::Error) -> Self {
+        CacheError::Sqlx(e)
+    }
+}
+
+// ── CacheBackend trait ───────────────────────────────────────────────────────
+
 /// Bytes-in / bytes-out backend. All methods are async because the
-/// SQLite (and future Redis) implementations need to be.
+/// SQLite and Redis implementations need to be.
+///
+/// `get_bytes` / `set_bytes` / `delete` / `clear` are infallible at the
+/// trait level — backends swallow errors internally and log them rather
+/// than propagating. Constructors (`new`, `connect`) surface errors via
+/// [`CacheError`] so misconfiguration is caught at boot.
 #[async_trait]
 pub trait CacheBackend: Send + Sync {
     async fn get(&self, key: &str) -> Option<Vec<u8>>;
@@ -56,8 +138,11 @@ pub trait CacheBackend: Send + Sync {
     async fn clear(&self);
 }
 
+// ── Cache handle ─────────────────────────────────────────────────────────────
+
 /// Public handle. Owns its backend behind an Arc so views can clone
-/// it freely (it's typically stashed in the request context).
+/// it freely (typically stashed in the request context or accessed via
+/// the ambient [`AMBIENT_CACHE`]).
 #[derive(Clone)]
 pub struct Cache {
     backend: Arc<dyn CacheBackend>,
@@ -73,8 +158,24 @@ impl Cache {
 
     /// Build a cache backed by a SQLite table. The constructor
     /// creates the table on first call; it's idempotent.
-    pub async fn sqlite(pool: SqlitePool) -> Result<Self, sqlx::Error> {
+    pub async fn sqlite(pool: SqlitePool) -> Result<Self, CacheError> {
         let backend = SqliteBackend::new(pool).await?;
+        Ok(Self {
+            backend: Arc::new(backend),
+        })
+    }
+
+    /// Build a cache backed by Redis.
+    ///
+    /// `url` is a Redis connection string: `redis://[user:pass@]host:port/[db]`.
+    /// Examples: `redis://localhost:6379/0`, `redis://:password@redis.example.com:6379`.
+    ///
+    /// The underlying [`redis::aio::ConnectionManager`] reconnects automatically
+    /// on dropped connections so the handle is safe to clone and reuse for the
+    /// lifetime of the process.
+    #[cfg(feature = "redis")]
+    pub async fn redis(url: &str) -> Result<Self, CacheError> {
+        let backend = RedisBackend::connect(url).await?;
         Ok(Self {
             backend: Arc::new(backend),
         })
@@ -113,7 +214,19 @@ impl Cache {
     pub async fn clear(&self) {
         self.backend.clear().await;
     }
+
+    // ── Raw bytes access for cache_page (avoids double-serialisation) ──
+
+    pub(crate) async fn get_bytes_raw(&self, key: &str) -> Option<Vec<u8>> {
+        self.backend.get(key).await
+    }
+
+    pub(crate) async fn set_bytes_raw(&self, key: &str, bytes: Vec<u8>, ttl: Option<Duration>) {
+        self.backend.set(key, bytes, ttl).await;
+    }
 }
+
+// ── MemoryBackend ────────────────────────────────────────────────────────────
 
 struct MemoryEntry {
     value: Vec<u8>,
@@ -162,6 +275,8 @@ impl CacheBackend for MemoryBackend {
     }
 }
 
+// ── SqliteBackend ────────────────────────────────────────────────────────────
+
 /// SQLite-backed cache. Table: `umbra_cache(key TEXT PRIMARY KEY,
 /// value BLOB NOT NULL, expires_at TIMESTAMP NULL)`. Expired rows
 /// are skipped on read and removed by [`SqliteBackend::sweep`] for
@@ -171,7 +286,7 @@ pub struct SqliteBackend {
 }
 
 impl SqliteBackend {
-    pub async fn new(pool: SqlitePool) -> Result<Self, sqlx::Error> {
+    pub async fn new(pool: SqlitePool) -> Result<Self, CacheError> {
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS umbra_cache (
                 key        TEXT PRIMARY KEY,
@@ -180,19 +295,21 @@ impl SqliteBackend {
             )",
         )
         .execute(&pool)
-        .await?;
+        .await
+        .map_err(CacheError::Sqlx)?;
         Ok(Self { pool })
     }
 
     /// Remove every expired row. Call from a periodic task; reads
     /// already skip expired rows so a call is never required for
     /// correctness, only for keeping the table small.
-    pub async fn sweep(&self) -> Result<u64, sqlx::Error> {
+    pub async fn sweep(&self) -> Result<u64, CacheError> {
         let result =
             sqlx::query("DELETE FROM umbra_cache WHERE expires_at IS NOT NULL AND expires_at <= ?")
                 .bind(Utc::now())
                 .execute(&self.pool)
-                .await?;
+                .await
+                .map_err(CacheError::Sqlx)?;
         Ok(result.rows_affected())
     }
 }
@@ -209,10 +326,6 @@ impl CacheBackend for SqliteBackend {
         let (value, expires_at) = row?;
         if let Some(exp) = expires_at {
             if Utc::now() >= exp {
-                // Treat the read as a miss and let `sweep` clean up
-                // the row eventually. Doing the DELETE here would
-                // turn every GET against an expired key into a
-                // write, which is a poor tradeoff.
                 return None;
             }
         }
@@ -250,11 +363,98 @@ impl CacheBackend for SqliteBackend {
     }
 }
 
-/// The plugin. Carries no models, no routes; its job is to be
-/// nameable as a dependency by other plugins that need to know the
-/// cache subsystem is wired up (e.g. a future rate-limiter plugin).
+// ── RedisBackend ─────────────────────────────────────────────────────────────
+
+/// Redis-backed cache. Requires the `redis` cargo feature.
+///
+/// Uses `redis::aio::ConnectionManager` for automatic reconnection. TTL
+/// is stored natively via Redis `SETEX` when a duration is supplied, so
+/// expiry is handled server-side and does not require a background sweep.
+///
+/// `clear()` uses `FLUSHDB` which removes ALL keys in the selected
+/// database — use a dedicated Redis database (e.g. `/1`) when sharing
+/// a Redis instance with other data.
+#[cfg(feature = "redis")]
+pub struct RedisBackend {
+    client: redis::aio::ConnectionManager,
+}
+
+#[cfg(feature = "redis")]
+impl RedisBackend {
+    /// Connect to Redis at `url`. Returns a ready-to-use backend or a
+    /// [`CacheError::Redis`] if the initial connection fails.
+    ///
+    /// `url` form: `redis://[user:pass@]host:port/[db]`
+    /// Example: `redis://localhost:6379/0`
+    pub async fn connect(url: &str) -> Result<Self, CacheError> {
+        let client = redis::Client::open(url).map_err(CacheError::Redis)?;
+        let manager = redis::aio::ConnectionManager::new(client)
+            .await
+            .map_err(CacheError::Redis)?;
+        Ok(Self { client: manager })
+    }
+}
+
+#[cfg(feature = "redis")]
+#[async_trait]
+impl CacheBackend for RedisBackend {
+    async fn get(&self, key: &str) -> Option<Vec<u8>> {
+        use redis::AsyncCommands;
+        let mut conn = self.client.clone();
+        conn.get::<_, Option<Vec<u8>>>(key).await.ok().flatten()
+    }
+
+    async fn set(&self, key: &str, value: Vec<u8>, ttl: Option<Duration>) {
+        use redis::AsyncCommands;
+        let mut conn = self.client.clone();
+        if let Some(dur) = ttl {
+            let secs = dur.as_secs().max(1);
+            let _: Result<(), _> = conn.set_ex(key, value, secs).await;
+        } else {
+            let _: Result<(), _> = conn.set(key, value).await;
+        }
+    }
+
+    async fn delete(&self, key: &str) {
+        use redis::AsyncCommands;
+        let mut conn = self.client.clone();
+        let _: Result<(), _> = conn.del(key).await;
+    }
+
+    async fn clear(&self) {
+        use redis::AsyncCommands;
+        let mut conn = self.client.clone();
+        // FLUSHDB removes all keys in the currently selected database.
+        // Document this prominently: use a dedicated Redis DB for cache.
+        let _: Result<(), _> = redis::cmd("FLUSHDB").query_async::<()>(&mut conn).await;
+    }
+}
+
+// ── CachePlugin ──────────────────────────────────────────────────────────────
+
+/// The plugin. Carries no models, no routes. Initialise it with a
+/// ready-to-use `Cache` handle at app boot so `cache_page` and any
+/// handler that calls [`ambient()`] can find it without explicit
+/// dependency injection.
+///
+/// ```ignore
+/// CachePlugin::init(Cache::memory());
+/// // or for Redis:
+/// CachePlugin::init(Cache::redis("redis://localhost:6379/0").await?);
+/// ```
 #[derive(Debug, Default)]
 pub struct CachePlugin;
+
+impl CachePlugin {
+    /// Store `cache` as the ambient handle. Must be called before the
+    /// first request; calling it twice panics (same contract as
+    /// `settings::init`).
+    pub fn init(cache: Cache) {
+        if AMBIENT_CACHE.set(cache).is_err() {
+            panic!("CachePlugin::init called more than once");
+        }
+    }
+}
 
 impl Plugin for CachePlugin {
     fn name(&self) -> &'static str {
