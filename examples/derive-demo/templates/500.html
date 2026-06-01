@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+
+{% block title %}500 — Internal server error — umbra derive-demo{% endblock %}
+
+{% block content %}
+  <div class="text-center py-12 sm:py-20">
+    <p class="text-7xl sm:text-8xl font-extrabold tracking-tight bg-gradient-to-br from-red-500 via-rose-500 to-orange-500 bg-clip-text text-transparent">500</p>
+    <h1 class="mt-6 text-3xl sm:text-4xl font-bold text-gray-900 dark:text-white">Internal server error</h1>
+    <p class="mt-4 text-base text-gray-600 dark:text-gray-300 max-w-md mx-auto">
+      Something went wrong on our end. The error has been logged;
+      please try again in a moment.
+    </p>
+
+    <div class="mt-10 flex flex-col sm:flex-row items-center justify-center gap-3">
+      <a href="/" class="inline-flex items-center justify-center rounded-md bg-red-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-red-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-600 transition-colors">
+        ← Back to home
+      </a>
+      <a href="/articles" class="inline-flex items-center justify-center rounded-md bg-white dark:bg-gray-800 px-5 py-2.5 text-sm font-semibold text-gray-700 dark:text-gray-200 shadow-sm ring-1 ring-inset ring-gray-300 dark:ring-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
+        Browse articles
+      </a>
+    </div>
+
+    {% if dev_mode %}
+    <div class="mt-12 text-left max-w-2xl mx-auto">
+      <details class="rounded-lg border border-red-200 dark:border-red-900/60 bg-red-50 dark:bg-red-950/30 overflow-hidden" open>
+        <summary class="px-4 py-3 text-sm font-semibold text-red-800 dark:text-red-200 bg-red-100 dark:bg-red-950/60 border-b border-red-200 dark:border-red-900/60 select-none cursor-pointer">
+          Developer detail
+          <span class="ml-2 text-xs font-normal text-red-600 dark:text-red-400">(hidden in production)</span>
+        </summary>
+        <div class="px-4 py-4 space-y-4">
+          {% if request_path %}
+          <div>
+            <p class="text-xs font-semibold uppercase tracking-wide text-red-700 dark:text-red-300 mb-1">Request path</p>
+            <code class="block text-sm font-mono text-red-900 dark:text-red-200 bg-white dark:bg-gray-900 border border-red-200 dark:border-red-900/60 rounded px-3 py-2 break-all">{{ request_path }}</code>
+          </div>
+          {% endif %}
+
+          {% if error_display %}
+          <div>
+            <p class="text-xs font-semibold uppercase tracking-wide text-red-700 dark:text-red-300 mb-1">Error</p>
+            <code class="block text-sm font-mono text-red-900 dark:text-red-200 bg-white dark:bg-gray-900 border border-red-200 dark:border-red-900/60 rounded px-3 py-2 break-all whitespace-pre-wrap">{{ error_display }}</code>
+          </div>
+          {% endif %}
+
+          {% if error_chain and error_chain|length > 1 %}
+          <div>
+            <p class="text-xs font-semibold uppercase tracking-wide text-red-700 dark:text-red-300 mb-1">Cause chain</p>
+            <ol class="list-decimal list-inside space-y-1">
+              {% for cause in error_chain %}
+              <li class="text-sm font-mono text-red-900 dark:text-red-200 bg-white dark:bg-gray-900 border border-red-200 dark:border-red-900/60 rounded px-3 py-1 break-all">{{ cause }}</li>
+              {% endfor %}
+            </ol>
+          </div>
+          {% endif %}
+        </div>
+      </details>
+    </div>
+    {% endif %}
+
+    <p class="mt-12 text-xs text-gray-400 dark:text-gray-500">
+      Served by <code class="font-mono">server_error_template("500.html")</code> —
+      the framework's panic-catching 500 fallback.
+    </p>
+  </div>
+{% endblock %}

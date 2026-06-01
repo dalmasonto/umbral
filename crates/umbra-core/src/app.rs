@@ -62,7 +62,6 @@ impl App {
 ///
 /// Collects settings, database pools, and routes, then locks everything
 /// into place at [`build`](AppBuilder::build).
-#[derive(Default)]
 pub struct AppBuilder {
     settings: Option<Settings>,
     databases: HashMap<String, DbPool>,
@@ -73,6 +72,29 @@ pub struct AppBuilder {
     slash_redirect: crate::slash::SlashRedirect,
     not_found_template: Option<String>,
     server_error_template: Option<String>,
+    /// Optional hook called before the 500 template is rendered.
+    server_error_hook: Option<crate::errors::ServerErrorHook>,
+    /// When `true` (the default), the embedded default 404/500 templates
+    /// are used as fallbacks when the user hasn't supplied their own.
+    default_error_pages: bool,
+}
+
+impl Default for AppBuilder {
+    fn default() -> Self {
+        Self {
+            settings: None,
+            databases: HashMap::new(),
+            router: None,
+            models: Vec::new(),
+            plugins: Vec::new(),
+            templates_dir: None,
+            slash_redirect: crate::slash::SlashRedirect::default(),
+            not_found_template: None,
+            server_error_template: None,
+            server_error_hook: None,
+            default_error_pages: true,
+        }
+    }
 }
 
 impl AppBuilder {
@@ -203,11 +225,58 @@ impl AppBuilder {
     /// template. When unset, panics use tower-http's default
     /// behaviour (log + empty 500 body).
     ///
-    /// The template gets NO context — panic details intentionally
-    /// stay out of the user-facing body. Look in logs for the
-    /// payload and backtrace.
+    /// In dev mode (`settings.environment == Dev`), the template receives
+    /// `dev_mode`, `error_display`, `error_chain`, and `request_path`
+    /// context variables. In prod those variables are empty.
+    ///
+    /// See [`Self::on_server_error`] for a hook that fires before the
+    /// template renders.
     pub fn server_error_template(mut self, name: impl Into<String>) -> Self {
         self.server_error_template = Some(name.into());
+        self
+    }
+
+    /// Register a hook that fires on every internal server error (500).
+    ///
+    /// The closure receives:
+    /// - `error_display: &str` — the `Display` form of the error or the
+    ///   stringified panic payload.
+    /// - `request_path: &str` — the URI path of the failing request (empty
+    ///   for panic-path errors where path isn't yet available).
+    ///
+    /// The hook runs synchronously before the 500 template is rendered. It
+    /// cannot change the response — use it to log to an external service
+    /// (Sentry, Datadog, a file, etc.).
+    ///
+    /// ```ignore
+    /// App::builder()
+    ///     .on_server_error(|err, path| {
+    ///         tracing::error!(err, path, "500 error");
+    ///     })
+    ///     .build()?
+    /// ```
+    pub fn on_server_error<F>(mut self, hook: F) -> Self
+    where
+        F: Fn(&str, &str) + Send + Sync + 'static,
+    {
+        self.server_error_hook = Some(std::sync::Arc::new(hook));
+        self
+    }
+
+    /// Disable the built-in default 404/500 templates.
+    ///
+    /// By default, when the user hasn't called `.not_found_template(...)` or
+    /// `.server_error_template(...)`, umbra renders its own embedded Tailwind
+    /// error pages. Call this method to revert to axum's built-in behaviour:
+    /// a plain-text "Not Found" on 404 and an empty 500 body on panic.
+    ///
+    /// ```ignore
+    /// App::builder()
+    ///     .disable_default_error_pages()
+    ///     .build()?
+    /// ```
+    pub fn disable_default_error_pages(mut self) -> Self {
+        self.default_error_pages = false;
         self
     }
 
@@ -315,6 +384,11 @@ impl AppBuilder {
                 model_aliases.insert(model.name, alias.to_string());
             }
         }
+
+        // Phase 2.6 — publish the default-error-pages flag before the
+        // templates engine starts so `errors::default_pages_enabled()` is
+        // correct the moment any 404/500 helper is called.
+        crate::errors::init_default_pages(self.default_error_pages);
 
         // Phase 3 — publish ambient state. The model registry now carries
         // one entry per registered plugin (the implicit `"app"` plugin
@@ -432,27 +506,31 @@ impl AppBuilder {
             router = plugin.wrap_router(router);
         }
 
-        // Phase 5.6 — install the 404 fallback. Three cases:
+        // Phase 5.6 — install the 404 fallback. Four cases:
         //
-        // 1. slash_redirect = Off, not_found_template = None:
+        // 1. slash_redirect = Off, not_found_template = None, default pages off:
         //    no-op. axum's built-in empty 404 is what users see.
-        // 2. slash_redirect = Off, not_found_template = Some(name):
+        // 2. slash_redirect = Off, not_found_template = None, default pages ON:
+        //    install the not-found fallback; render_not_found will use the
+        //    embedded default_404 template.
+        // 3. slash_redirect = Off, not_found_template = Some(name):
         //    install the not-found fallback directly. Renders the
         //    template on every miss.
-        // 3. slash_redirect != Off:
+        // 4. slash_redirect != Off:
         //    install the slash-redirect fallback. It handles its own
         //    404 path internally — when no alternate matches, it
-        //    renders the configured not-found template (or plain text
-        //    if unset).
+        //    renders the configured not-found template (or the default
+        //    if enabled, or plain text if both are absent).
         //
         // The slash-redirect fallback ALWAYS captures a router
         // snapshot taken BEFORE the fallback is installed, so the
         // alternate-path probe can't recursively re-hit the fallback.
-        match (self.slash_redirect, self.not_found_template.as_ref()) {
-            (crate::slash::SlashRedirect::Off, None) => {
+        let need_not_found_fallback = self.not_found_template.is_some() || self.default_error_pages;
+        match (self.slash_redirect, need_not_found_fallback) {
+            (crate::slash::SlashRedirect::Off, false) => {
                 // axum's default 404 — nothing to do.
             }
-            (crate::slash::SlashRedirect::Off, Some(_)) => {
+            (crate::slash::SlashRedirect::Off, true) => {
                 let fallback = crate::errors::not_found_fallback(self.not_found_template.clone());
                 router = router.fallback(fallback);
             }
@@ -467,12 +545,21 @@ impl AppBuilder {
             }
         }
 
-        // Phase 5.7 — wrap with the panic-catch layer if
-        // server_error_template is set. Comes AFTER the fallback
-        // wiring so a panicking fallback handler is also caught (the
-        // panic-catch layer wraps the entire router).
-        if let Some(template) = &self.server_error_template {
-            let handler = crate::errors::server_error_panic_handler(Some(template.clone()));
+        // Phase 5.7 — wrap with the panic-catch layer. Comes AFTER the
+        // fallback wiring so a panicking fallback handler is also caught
+        // (the panic-catch layer wraps the entire router).
+        //
+        // Always installed when: a user-supplied server_error_template is
+        // set, OR default pages are enabled (the embedded default_500 fires
+        // in that case), OR an on_server_error hook is registered.
+        let need_panic_layer = self.server_error_template.is_some()
+            || self.default_error_pages
+            || self.server_error_hook.is_some();
+        if need_panic_layer {
+            let handler = crate::errors::server_error_panic_handler(
+                self.server_error_template.clone(),
+                self.server_error_hook.clone(),
+            );
             router = router.layer(tower_http::catch_panic::CatchPanicLayer::custom(handler));
         }
 

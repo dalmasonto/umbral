@@ -76,7 +76,7 @@ async fn not_found_fallback_passes_matched_routes_through() {
 
 #[tokio::test]
 async fn panic_handler_converts_panic_to_500_with_default_body() {
-    let handler = server_error_panic_handler(None);
+    let handler = server_error_panic_handler(None, None);
     let router = Router::new()
         .route(
             "/boom",
@@ -95,7 +95,7 @@ async fn panic_handler_converts_panic_to_500_with_default_body() {
 
 #[tokio::test]
 async fn panic_handler_lets_non_panicking_handlers_through() {
-    let handler = server_error_panic_handler(None);
+    let handler = server_error_panic_handler(None, None);
     let router = Router::new()
         .route("/ok", get(|| async { "all good" }))
         .layer(tower_http::catch_panic::CatchPanicLayer::custom(handler));

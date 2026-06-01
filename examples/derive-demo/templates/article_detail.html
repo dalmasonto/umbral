@@ -3,19 +3,43 @@
 {% block title %}{{ article.title }} — umbra derive-demo{% endblock %}
 
 {% block content %}
-  <article>
-    <h2 style="font-size:1.4rem;margin-top:0">{{ article.title }}</h2>
-    <div class="meta">
-      Article #{{ article.id }} •
-      {% if article.published_at %}
-        Published {{ article.published_at }}
-      {% else %}
-        Draft
-      {% endif %}
+  <article class="max-w-2xl mx-auto">
+    <a href="/articles" class="inline-flex items-center text-sm text-gray-500 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 mb-6 transition-colors">
+      <span aria-hidden="true">←</span>
+      <span class="ml-1">All articles</span>
+    </a>
+
+    <header class="mb-8">
+      <h1 class="text-3xl sm:text-4xl font-bold tracking-tight text-gray-900 dark:text-white leading-tight">{{ article.title }}</h1>
+
+      <div class="mt-4 flex items-center gap-3 text-sm text-gray-500 dark:text-gray-400">
+        <span class="inline-flex items-center justify-center w-7 h-7 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 text-white text-xs font-semibold">#{{ article.id }}</span>
+        <span aria-hidden="true">·</span>
+        {% if article.published_at %}
+          <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 dark:bg-green-900/40 text-green-800 dark:text-green-300">
+            Published {{ article.published_at }}
+          </span>
+        {% else %}
+          <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-300">
+            Draft
+          </span>
+        {% endif %}
+      </div>
+    </header>
+
+    <div class="prose-body text-lg text-gray-700 dark:text-gray-300 leading-relaxed">
+      <p>{{ article.body }}</p>
     </div>
-    <p>{{ article.body }}</p>
+
+    <hr class="my-10 border-gray-200 dark:border-gray-800">
+
+    <footer class="flex items-center justify-between text-sm">
+      <a href="/articles" class="text-indigo-600 dark:text-indigo-400 hover:text-indigo-500 dark:hover:text-indigo-300 transition-colors">
+        ← Back to articles
+      </a>
+      <a href="/api/articles" class="font-mono text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 transition-colors">
+        View as JSON →
+      </a>
+    </footer>
   </article>
-  <p style="margin-top:2rem">
-    <a href="/articles">← Back to articles</a>
-  </p>
 {% endblock %}

@@ -1,14 +1,11 @@
 ---
 title: Error pages (404, 500)
-description: Django-shaped helpers for rendering custom 404 and 500 pages from templates.
+description: Default Tailwind error pages, an on_server_error hook, panic safety, and dev-mode error detail.
 sidebar_position: 2
 icon: alert-triangle
 ---
 
-In Django you drop a `404.html` or `500.html` in your templates dir
-and the framework picks it up. umbra ships the same shape - two
-builder methods, both opt-in, both pointing at templates the
-existing engine renders.
+In Django you drop a `404.html` or `500.html` in your templates dir and the framework picks it up. umbra ships the same shape — two builder methods, both opt-in, both pointing at templates the existing engine renders. Out of the box, umbra also ships its own Tailwind-styled default pages that fire automatically when you haven't provided your own.
 
 ## Quickstart
 
@@ -23,15 +20,60 @@ let app = App::builder()
     .build()?;
 ```
 
-That's it. Any path that doesn't match a route renders `404.html`;
-any handler that panics renders `500.html`. Both pages return the
-correct HTTP status (`404` and `500` respectively) with
-`Content-Type: text/html; charset=utf-8`.
+Any path that doesn't match a route renders `404.html`; any handler that panics renders `500.html`. Both pages return the correct HTTP status (`404` and `500` respectively) with `Content-Type: text/html; charset=utf-8`.
+
+## Default error pages
+
+If you don't call `.not_found_template(...)` or `.server_error_template(...)`, umbra renders its own built-in pages. They use inline Tailwind utility classes and degrade gracefully when Tailwind isn't loaded — the HTML structure is functional without any CSS.
+
+The default pages activate automatically. To opt out and revert to axum's bare behaviour (plain-text "Not Found" and empty 500 bodies):
+
+```rust
+App::builder()
+    .disable_default_error_pages()
+    .build()?
+```
+
+The inline classes follow the same Tailwind vocabulary as gap 19 (cross-referenced: gap 19 defers a Tailwind build step; these pages use utility classes without requiring a build pipeline — they work with the Tailwind CDN or any pre-compiled stylesheet that includes the same class names).
+
+## Catching internal errors
+
+### `on_server_error` hook
+
+Register a closure that fires on every 500 response — both handler panics and any other 500 path — before the template renders. Use it to ship errors to Sentry, Datadog, a log file, or any external sink:
+
+```rust
+App::builder()
+    .on_server_error(|err, path| {
+        tracing::error!(err, path, "internal server error");
+        // sentry::capture_message(err, sentry::Level::Error);
+    })
+    .build()?
+```
+
+The hook receives two `&str` arguments:
+
+| Argument | Description |
+|----------|-------------|
+| `err` | The panic payload as a string, or the `Display` form of the error. |
+| `path` | The request URI path. Empty string for panic-path errors where the path isn't available. |
+
+The hook is **synchronous** and runs on the error path before the response is assembled. It cannot change the response — if you need to alter the response shape, use `AppError`/`IntoResponse` for the expected-error path instead.
+
+### Panic safety
+
+umbra wraps the entire router in `tower_http::catch_panic::CatchPanicLayer`. A handler that panics produces a graceful 500 response instead of aborting the connection. The panic message is logged via `tracing::error!` and (in dev mode) surfaced in the page body.
+
+Before gap 35, the panic layer was only installed when `.server_error_template(...)` was explicitly set. Now it is installed whenever:
+- A user-supplied `server_error_template` is set, OR
+- Default error pages are enabled (the default), OR
+- An `on_server_error` hook is registered.
+
+In other words: if you use umbra's defaults, you get panic safety for free.
 
 ## Writing the templates
 
-`404.html` gets `{ path }` in scope - the request path that missed
-- so you can show the user exactly where they went wrong:
+`404.html` gets `{ path }` in scope — the request path that missed — so you can show the user exactly where they went wrong:
 
 ```html
 {% extends "base.html" %}
@@ -42,17 +84,50 @@ correct HTTP status (`404` and `500` respectively) with
 {% endblock %}
 ```
 
-`500.html` gets **no context**. Panic details intentionally stay out
-of the user-facing response - they go to logs via
-`tracing::error!`. Look at your tracing output for the panic message
-and backtrace:
+`500.html` receives the context variables below. In prod, the dev-only block is simply empty — the template section never renders.
 
 ```html
 {% extends "base.html" %}
 {% block content %}
   <h1>Something went wrong</h1>
   <p>We've been notified and are looking into it.</p>
+
+  {% if dev_mode %}
+  <details>
+    <summary>Developer detail</summary>
+    <p>{{ error_display }}</p>
+    <ol>
+      {% for cause in error_chain %}
+      <li>{{ cause }}</li>
+      {% endfor %}
+    </ol>
+  </details>
+  {% endif %}
 {% endblock %}
+```
+
+## Dev mode error detail
+
+When `settings.environment` is `Dev` (the default), the 500 template receives extra context so you can inspect what went wrong without leaving the browser:
+
+| Variable | Type | Description |
+|----------|------|-------------|
+| `dev_mode` | `bool` | `true` in dev, `false` in prod. |
+| `error_display` | `string` | The panic message or error `Display` form. |
+| `error_chain` | `list[string]` | The full `std::error::Error::source()` chain. |
+| `request_path` | `string` | The path of the failing request. |
+
+In `Prod` (or `Test`) mode all four variables are empty / false — the template's `{% if dev_mode %}` block collapses to nothing, so no internal detail leaks to end users.
+
+Set the environment in `umbra.toml` or via the environment variable:
+
+```toml
+# umbra.toml
+environment = "Prod"
+```
+
+```bash
+UMBRA_ENVIRONMENT=Prod cargo run
 ```
 
 ## What gets caught
@@ -61,22 +136,21 @@ and backtrace:
 |--------|-------------|
 | `not_found_template` | Any request whose URL didn't match a route. |
 | `server_error_template` | Any handler that **panics**. |
+| `on_server_error` hook | Both panics and any 500 constructed by the handler. |
 
-`server_error_template` wraps the router in
-`tower_http::catch_panic::CatchPanicLayer`. A panic in a handler is
-turned into a 500 response carrying the rendered template body
-instead of crashing the worker or returning an empty 500.
-
-Handlers that return a `Result::Err` are **not** caught here - those
-get converted to a response by their `IntoResponse` impl. For
-typical error handling, define an `AppError` type with an
-`IntoResponse` impl and use `?` in your handlers:
+Handlers that return a `Result::Err` are converted to a response by their `IntoResponse` impl. For typical error handling, define an `AppError` type that calls the hook and renders the template:
 
 ```rust
 struct AppError(anyhow::Error);
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
+        // Optionally fire the hook manually for Err paths:
+        umbra_core::errors::fire_server_error_hook(
+            &Some(my_hook.clone()),
+            &self.0.to_string(),
+            "/",
+        );
         tracing::error!("handler error: {:?}", self.0);
         (StatusCode::INTERNAL_SERVER_ERROR,
          Html("<h1>Something went wrong</h1>")).into_response()
@@ -84,45 +158,29 @@ impl IntoResponse for AppError {
 }
 ```
 
-Use `server_error_template` for the **unexpected** path (panic = bug),
-and `AppError`/`IntoResponse` for the **expected** errors that flow
-through `?`.
+Use `server_error_template` for the **unexpected** path (panic = bug), and `AppError`/`IntoResponse` for **expected** errors that flow through `?`.
 
 <Callout type="info">
-**Why no context on 500?** Exposing panic messages to the browser
-leaks internals and occasionally credentials (e.g. a panic in a SQL
-query string). The umbra default keeps the message in logs only. If
-you genuinely want to display a request ID or correlation token,
-generate it in a middleware and put it in a response header - then
-let your `500.html` reference it.
+**Why no context on 500 in prod?** Exposing panic messages to the browser leaks internals and occasionally credentials (e.g. a panic in a SQL query string). The umbra default keeps the message in logs only and exposes it only in dev mode. If you want to display a request ID or correlation token in prod, generate it in middleware and put it in a response header — then let your `500.html` reference it.
 </Callout>
 
 ## Composing with the trailing-slash redirect
 
-If you also set [`slash_redirect`](./trailing-slash), the redirect
-runs **before** the 404 template. Order:
+If you also set [`slash_redirect`](./trailing-slash), the redirect runs **before** the 404 template. Order:
 
 1. Request `/articles` (no trailing slash) misses.
 2. Slash redirect probes `/articles/` (with slash). Matches → 308.
-3. Browser follows; second request succeeds. `404.html` never
-   renders.
+3. Browser follows; second request succeeds. `404.html` never renders.
 
-If neither form matches, the 404 template fires. One consistent
-404 page across both raw misses and redirect dead-ends.
+If neither form matches, the 404 template fires. One consistent 404 page across both raw misses and redirect dead-ends.
 
 ## What about Django's `handler403` / `handler400`?
 
-403 / 400 / 410 are deferred. The common case - typo'd URL and
-panicking handler - is what these two methods cover. If you need
-custom 403 / 400 pages today, return them from your handlers via
-`IntoResponse` (the manual axum way).
+403 / 400 / 410 are deferred. The common case — typo'd URL and panicking handler — is what these methods cover. If you need custom 403 / 400 pages today, return them from your handlers via `IntoResponse` (the manual axum way).
 
 ## Falling back to the raw axum API
 
-The Django-shaped helpers cover the easy case. If you need more
-control - e.g. different 404 pages for `/api/...` vs everything
-else, or matching on the Accept header - use `Router::fallback`
-directly:
+The Django-shaped helpers cover the easy case. If you need more control — e.g. different 404 pages for `/api/...` vs everything else, or matching on the Accept header — use `Router::fallback` directly:
 
 ```rust
 async fn custom_404(req: Request<Body>) -> Response {
@@ -140,12 +198,10 @@ let router = Router::new()
     .fallback(custom_404);
 ```
 
-When you call `.fallback()` yourself, the `not_found_template`
-helper still runs first - your fallback only fires if neither it
-nor the slash redirect (if enabled) handles the request.
+When you call `.fallback()` yourself, the `not_found_template` helper still runs first — your fallback only fires if neither it nor the slash redirect (if enabled) handles the request.
 
 ## See also
 
 - [Trailing-slash redirects](./trailing-slash) - composition order.
-- [Templates](../templates/quickstart) - how the engine resolves
-  template paths.
+- [Templates](../templates/quickstart) - how the engine resolves template paths.
+- [Auth gating](./auth-gating) - protecting routes with `LoginRequiredLayer`.

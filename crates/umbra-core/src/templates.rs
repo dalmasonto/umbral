@@ -58,6 +58,45 @@ use serde::Serialize;
 
 static ENGINE: OnceLock<Environment<'static>> = OnceLock::new();
 
+/// Register the built-in default 404/500 templates into an environment.
+///
+/// Called from `init` before any disk directories are scanned. The names
+/// use the `__umbra__/` prefix so they can never collide with a user's
+/// `templates/` directory (slashes aren't meaningful to the engine's name
+/// lookup — `__umbra__/default_404.html` is just a unique string key).
+///
+/// Because the user's disk directories are added after this call and
+/// first-match-wins is enforced by the `seen` set, a user who places a
+/// file named `__umbra__/default_404.html` in their own templates dir will
+/// silently replace the built-in — which is the intended escape hatch.
+/// (Callers who want a cleaner opt-out should use
+/// `App::builder().disable_default_error_pages()` instead.)
+fn register_default_templates(
+    env: &mut Environment<'static>,
+    seen: &mut std::collections::HashSet<String>,
+) {
+    let entries = [
+        (
+            crate::errors::DEFAULT_404_TEMPLATE_NAME,
+            crate::errors::DEFAULT_404_HTML,
+        ),
+        (
+            crate::errors::DEFAULT_500_TEMPLATE_NAME,
+            crate::errors::DEFAULT_500_HTML,
+        ),
+    ];
+    for (name, source) in entries {
+        if seen.contains(name) {
+            continue; // already provided by user — skip
+        }
+        // These are compile-time constants so they're `&'static str`; we can
+        // add them without cloning via `add_template` (non-owned variant).
+        if env.add_template(name, source).is_ok() {
+            seen.insert(name.to_string());
+        }
+    }
+}
+
 /// Publish the template engine into the process-wide ambient handle.
 ///
 /// `dirs` is the ordered list of directories to search — the first
@@ -95,6 +134,14 @@ pub fn init(dirs: &[PathBuf]) -> Result<Vec<String>, TemplateError> {
 
     let mut seen: HashSet<String> = HashSet::new();
     let mut collisions: Vec<String> = Vec::new();
+
+    // Register the built-in default error templates before scanning disk
+    // directories. Because disk directories are first-match-wins and are
+    // scanned after this call, a user template with the same name (unlikely,
+    // since the `__umbra__/` prefix is reserved) would silently replace the
+    // built-in. Callers who want a clean opt-out should use
+    // `App::builder().disable_default_error_pages()`.
+    register_default_templates(&mut env, &mut seen);
 
     for dir in dirs {
         if dir.exists() {

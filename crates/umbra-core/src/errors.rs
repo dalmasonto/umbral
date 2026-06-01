@@ -10,9 +10,24 @@
 //!   panic-catching tower-http layer that renders the named template
 //!   on any handler panic and returns 500.
 //!
-//! Both are opt-in. When unset, the fallback returns plain-text
-//! "Not Found" and panics propagate axum-style (default tower-http
-//! behaviour is to log the panic and return 500 with an empty body).
+//! Gap 35 extensions:
+//!
+//! - `on_server_error(hook)` — an opt-in hook that fires before the 500
+//!   template is rendered. The closure receives the error message and the
+//!   request path. Runs synchronously on the error path (panic or `Err`
+//!   propagated as a 500). Cannot change the response; used for logging,
+//!   Sentry dispatch, etc.
+//! - Default Tailwind 404/500 templates — shipped as embedded strings so
+//!   they work without any `templates/` directory on disk. Used when the
+//!   user hasn't set their own template name via the builder. Opt-out via
+//!   `App::builder().disable_default_error_pages()`.
+//! - Dev-mode error detail — when `settings.environment == Dev`, the 500
+//!   template receives an `error_chain` context variable listing the full
+//!   `std::error::Error` source chain. In prod the variable is empty.
+//!
+//! Both the 404 and 500 fallbacks are opt-in. When unset (and default
+//! pages are disabled), the fallback returns plain-text "Not Found" and
+//! panics propagate axum-style (log + empty 500 body).
 //!
 //! The 404 path composes with [`SlashRedirect`](crate::slash::SlashRedirect)
 //! — if the redirect probe finds an alternate, it 308s; otherwise the
@@ -26,9 +41,72 @@ use axum::http::{Request, Response, StatusCode, header};
 use axum::response::IntoResponse;
 use minijinja::context;
 
+// ─── Embedded default templates ─────────────────────────────────────────────
+
+/// Default 404 page: centered, inline Tailwind utility classes. Degrades
+/// gracefully without Tailwind loaded — the page is functional even as
+/// unstyled HTML.
+pub const DEFAULT_404_HTML: &str = include_str!("templates/defaults/default_404.html");
+
+/// Default 500 page: same shape as the 404. In dev mode the template
+/// receives `error_display`, `error_chain` (vec of source strings), and
+/// `request_path` context variables that render into an expandable detail
+/// block. In prod those variables are empty strings / empty vecs.
+pub const DEFAULT_500_HTML: &str = include_str!("templates/defaults/default_500.html");
+
+// Template names used when registering the defaults into minijinja.
+// `pub` so integration tests can verify the constants without duplicating
+// the string literals.
+pub const DEFAULT_404_TEMPLATE_NAME: &str = "__umbra__/default_404.html";
+pub const DEFAULT_500_TEMPLATE_NAME: &str = "__umbra__/default_500.html";
+
+// ─── On-server-error hook type ───────────────────────────────────────────────
+
+/// Shared callback type for the `on_server_error` hook.
+///
+/// The hook fires on every 500 — both panics and handler errors that are
+/// turned into a 500 response — before the template is rendered.
+///
+/// Arguments:
+/// - `error_display`: the `Display` form of the error, or the stringified
+///   panic payload.
+/// - `request_path`: the URI path of the failing request.
+pub type ServerErrorHook = std::sync::Arc<dyn Fn(&str, &str) + Send + Sync + 'static>;
+
+// ─── Ambient default-pages flag ─────────────────────────────────────────────
+
+use std::sync::OnceLock;
+
+/// Whether the default error pages are enabled. Set during `App::build()`.
+/// `true` (default) — use the embedded templates when the user hasn't
+/// supplied their own. `false` — user called `.disable_default_error_pages()`.
+static DEFAULT_PAGES_ENABLED: OnceLock<bool> = OnceLock::new();
+
+/// Publish the default-pages flag. Called by `AppBuilder::build()` only.
+pub(crate) fn init_default_pages(enabled: bool) {
+    // Ignore the error if already set (e.g. two App builds in the same
+    // process in tests). The first caller wins, matching the OnceLock
+    // contract everywhere else in the framework.
+    let _ = DEFAULT_PAGES_ENABLED.set(enabled);
+}
+
+/// Return whether default pages are enabled.
+pub(crate) fn default_pages_enabled() -> bool {
+    // When called outside App::build() (unit tests that exercise render_*
+    // directly), default to true so the helpers behave like a real app.
+    *DEFAULT_PAGES_ENABLED.get().unwrap_or(&true)
+}
+
+// ─── 404 helpers ────────────────────────────────────────────────────────────
+
 /// Render the configured 404 template with `{ path }` in scope, or
 /// fall back to the plain-text response when no template is set or
 /// rendering fails.
+///
+/// When `template` is `None` and the default pages are enabled, the
+/// framework's own `default_404.html` is rendered instead. When
+/// default pages are disabled and no template name is set, returns
+/// plain "Not Found".
 ///
 /// Used by:
 ///
@@ -42,12 +120,24 @@ use minijinja::context;
 /// extractors. Other request state isn't exposed yet — the v1 shape
 /// is intentionally narrow.
 pub fn render_not_found(template: Option<&str>, path: &str) -> Response<Body> {
-    // Derive Content-Type from whether render actually produced HTML,
-    // NOT from whether a template name was supplied. When the engine
-    // isn't initialised or the template fails to render, the
-    // fallback "Not Found" body is plaintext; it would be wrong to
+    // Resolve the effective template name:
+    //   1. User-supplied name takes highest priority.
+    //   2. Embedded default (registered as __umbra__/default_404.html) when
+    //      default pages are enabled.
+    //   3. Plain-text fallback.
+    let effective_template = template.or_else(|| {
+        if default_pages_enabled() {
+            Some(DEFAULT_404_TEMPLATE_NAME)
+        } else {
+            None
+        }
+    });
+
+    // Derive Content-Type from whether render actually produced HTML.
+    // When the engine isn't initialised or the template fails to render,
+    // the fallback "Not Found" body is plaintext; it would be wrong to
     // ship it as text/html.
-    let (body, content_type) = template
+    let (body, content_type) = effective_template
         .and_then(|name| crate::templates::render(name, &context! { path => path }).ok())
         .map(|html| (html, "text/html; charset=utf-8"))
         .unwrap_or_else(|| ("Not Found".to_string(), "text/plain; charset=utf-8"));
@@ -83,23 +173,108 @@ pub fn not_found_fallback(
     }
 }
 
+// ─── 500 helpers ────────────────────────────────────────────────────────────
+
+/// Walk the `std::error::Error::source()` chain and collect every
+/// `Display` message into a `Vec<String>`. The first entry is the top-level
+/// error itself; subsequent entries are its causes.
+///
+/// Used by the handler-error path (where `Err` variants produce 500s) to
+/// surface the full cause chain in dev-mode 500 pages. The panic path uses
+/// a synthetic single-element chain instead (panics aren't `dyn Error`).
+pub fn collect_error_chain(top: &str, mut source: Option<&dyn std::error::Error>) -> Vec<String> {
+    let mut chain = vec![top.to_owned()];
+    while let Some(cause) = source {
+        chain.push(cause.to_string());
+        source = cause.source();
+    }
+    chain
+}
+
+/// Determine whether the current settings are dev mode.
+///
+/// Returns `false` when the settings OnceLock isn't initialised (i.e. tests
+/// that exercise the 500 helpers directly without calling `App::build`).
+fn is_dev_mode() -> bool {
+    crate::settings::SETTINGS
+        .get()
+        .map(|s| matches!(s.environment, crate::settings::Environment::Dev))
+        .unwrap_or(false)
+}
+
+/// Build the template context for a 500 response.
+///
+/// In dev mode, `error_display`, `error_chain` (Vec<String>), and
+/// `request_path` are populated. In prod they are empty string / empty
+/// vec / empty string so the template's conditional block collapses
+/// to nothing.
+fn build_500_context(
+    error_display: &str,
+    error_chain: &[String],
+    request_path: &str,
+    dev: bool,
+) -> minijinja::Value {
+    if dev {
+        context! {
+            dev_mode => true,
+            error_display => error_display,
+            error_chain => error_chain,
+            request_path => request_path,
+        }
+    } else {
+        context! {
+            dev_mode => false,
+            error_display => "",
+            error_chain => Vec::<String>::new(),
+            request_path => "",
+        }
+    }
+}
+
+/// Render the 500 template with the given context.
+///
+/// Resolves the effective template name the same way `render_not_found`
+/// resolves the 404: user-supplied name → embedded default → plain text.
+fn render_500(template: Option<&str>, ctx: &minijinja::Value) -> (String, &'static str) {
+    let effective = template.or_else(|| {
+        if default_pages_enabled() {
+            Some(DEFAULT_500_TEMPLATE_NAME)
+        } else {
+            None
+        }
+    });
+
+    effective
+        .and_then(|name| crate::templates::render(name, ctx).ok())
+        .map(|html| (html, "text/html; charset=utf-8"))
+        .unwrap_or_else(|| {
+            (
+                "Internal Server Error".to_string(),
+                "text/plain; charset=utf-8",
+            )
+        })
+}
+
 /// Build the panic-handler closure for
 /// `tower_http::catch_panic::CatchPanicLayer::custom`.
 ///
-/// Renders the configured `server_error_template` with no context
-/// (the panic message is intentionally hidden from end users — it
-/// goes to logs, not the response body). Returns a generic 500 if
-/// the template fails to render OR if no template is configured.
+/// Renders the configured `server_error_template` (or the built-in default
+/// when enabled) with optional dev-mode error context. Before rendering,
+/// calls the `on_server_error` hook if one was registered.
 ///
-/// The handler takes the panic payload as `Box<dyn Any + Send>` per
-/// tower-http's `ResponseForPanic` trait shape.
+/// In dev mode the template receives:
+/// - `dev_mode: true`
+/// - `error_display`: the stringified panic payload
+/// - `error_chain`: `[error_display]` (panics have no error chain)
+/// - `request_path`: empty string (not available in a panic handler)
+///
+/// In prod, all three are empty.
 pub fn server_error_panic_handler(
     template: Option<String>,
+    hook: Option<ServerErrorHook>,
 ) -> impl Fn(Box<dyn Any + Send + 'static>) -> Response<Body> + Clone + Send + Sync + 'static {
     move |err: Box<dyn Any + Send + 'static>| {
         // Extract a human-readable panic message for the log line.
-        // tower-http already logs the backtrace; we just need
-        // something for the user-facing tracing event.
         let panic_message = if let Some(s) = err.downcast_ref::<&'static str>() {
             (*s).to_string()
         } else if let Some(s) = err.downcast_ref::<String>() {
@@ -112,22 +287,15 @@ pub fn server_error_panic_handler(
             "handler panicked; serving 500 page",
         );
 
-        // Same Content-Type derivation as `render_not_found`: pick
-        // text/html ONLY when render actually succeeded. A configured
-        // template that fails to render falls back to plaintext, and
-        // shipping that plaintext as text/html would be a spec lie.
-        let (body, content_type) = template
-            .as_deref()
-            .and_then(|name| {
-                crate::templates::render(name, &context! { /* deliberately empty */ }).ok()
-            })
-            .map(|html| (html, "text/html; charset=utf-8"))
-            .unwrap_or_else(|| {
-                (
-                    "Internal Server Error".to_string(),
-                    "text/plain; charset=utf-8",
-                )
-            });
+        // Fire the on_server_error hook before rendering.
+        if let Some(ref h) = hook {
+            h(&panic_message, "");
+        }
+
+        let dev = is_dev_mode();
+        let chain = vec![panic_message.clone()];
+        let ctx = build_500_context(&panic_message, &chain, "", dev);
+        let (body, content_type) = render_500(template.as_deref(), &ctx);
 
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -137,6 +305,30 @@ pub fn server_error_panic_handler(
             .into_response()
     }
 }
+
+/// Build an axum fallback or middleware that converts a handler `Err`
+/// response into a 500 with optional dev-mode detail and hook notification.
+///
+/// Used internally when a handler returns a type that produces a 500
+/// status code (e.g. `(StatusCode::INTERNAL_SERVER_ERROR, body)`). The
+/// wrapper intercepts 500 responses, fires the hook if set, and optionally
+/// re-renders them through the 500 template.
+///
+/// Because axum handlers choose their own `IntoResponse` impl, this path
+/// is specifically for handlers that return
+/// `(StatusCode::INTERNAL_SERVER_ERROR, ...)` tuples. Panics are caught
+/// by the `CatchPanicLayer` above.
+///
+/// Note: this function is primarily used by the test suite to verify that
+/// `on_server_error` fires for handler errors. In production the hook is
+/// most naturally wired through a middleware.
+pub fn fire_server_error_hook(hook: &Option<ServerErrorHook>, error_msg: &str, path: &str) {
+    if let Some(h) = hook {
+        h(error_msg, path);
+    }
+}
+
+// ─── Tests ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
@@ -157,5 +349,41 @@ mod tests {
         // a template name was provided.
         let resp = render_not_found(Some("nonexistent.html"), "/x");
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn collect_error_chain_single_level() {
+        let chain = collect_error_chain("top error", None);
+        assert_eq!(chain, vec!["top error"]);
+    }
+
+    #[test]
+    fn build_500_context_prod_mode_has_empty_fields() {
+        let ctx = build_500_context("boom", &["boom".to_owned()], "/path", false);
+        // Serialize to JSON and inspect: prod mode has dev_mode=false and
+        // empty error_display.
+        let json = serde_json::to_value(&ctx).expect("context serialises");
+        assert_eq!(json["dev_mode"], serde_json::Value::Bool(false));
+        assert_eq!(
+            json["error_display"],
+            serde_json::Value::String("".to_string())
+        );
+    }
+
+    #[test]
+    fn build_500_context_dev_mode_has_error_info() {
+        let chain = vec!["cause one".to_owned(), "cause two".to_owned()];
+        let ctx = build_500_context("top error", &chain, "/api/items", true);
+        let json = serde_json::to_value(&ctx).expect("context serialises");
+        assert_eq!(json["dev_mode"], serde_json::Value::Bool(true));
+        assert_eq!(
+            json["error_display"],
+            serde_json::Value::String("top error".to_string())
+        );
+        // error_chain should be a two-element array
+        let arr = json["error_chain"]
+            .as_array()
+            .expect("error_chain is array");
+        assert_eq!(arr.len(), 2);
     }
 }

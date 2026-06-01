@@ -3,25 +3,83 @@
 {% block title %}Home — umbra derive-demo{% endblock %}
 
 {% block content %}
-  <p>
-    This demo walks the full umbra loop end-to-end against a single
-    <code>Article</code> model:
-  </p>
-  <ul>
-    <li><code>#[derive(Model)]</code> generates the trait impl, the
-      <code>Article::objects()</code> Manager, and the typed column
-      constants — see <code>src/main.rs</code>.</li>
-    <li>The migration engine wrote
-      <code>migrations/app/0001_create_article.json</code> at startup
-      and applied it; SQLite assigned ids via
-      <code>INTEGER PRIMARY KEY AUTOINCREMENT</code>.</li>
-    <li>The templates engine loaded everything under
-      <code>templates/</code> at boot. This page extends
-      <code>base.html</code> and renders {{ article_count }} seeded
-      article(s).</li>
-  </ul>
-  <p>
-    Open the <a href="/articles">articles index</a> for the HTML view,
-    or hit <a href="/api/articles">/api/articles</a> for the JSON shape.
-  </p>
+  <section class="mb-10">
+    <p class="text-sm font-semibold uppercase tracking-wider text-indigo-600 dark:text-indigo-400 mb-3">Demo</p>
+    <h1 class="text-4xl sm:text-5xl font-bold tracking-tight text-gray-900 dark:text-white">The full umbra loop, on a single model.</h1>
+    <p class="mt-4 text-lg text-gray-600 dark:text-gray-300 max-w-2xl">
+      This page walks the framework end-to-end against one
+      <code class="font-mono text-sm bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded text-indigo-700 dark:text-indigo-300">Article</code>
+      model. {{ article_count }} seeded article{{ article_count|length == 1 and "" or "s" }} below.
+    </p>
+  </section>
+
+  <section class="prose-body text-gray-700 dark:text-gray-300 space-y-5">
+    <p>
+      Every part of the stack is exercised in this single binary — no glue code, no
+      <code class="font-mono text-sm bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded">main</code>-shaped boilerplate:
+    </p>
+
+    <ol class="space-y-4 list-none counter-reset-step">
+      <li class="flex gap-4">
+        <span class="flex-shrink-0 inline-flex items-center justify-center w-7 h-7 rounded-full bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 text-sm font-semibold">1</span>
+        <div>
+          <p class="font-medium text-gray-900 dark:text-white">The derive macro</p>
+          <p class="text-sm text-gray-600 dark:text-gray-400">
+            <code class="font-mono text-xs bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded">#[derive(Model)]</code> emits
+            <code class="font-mono text-xs bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded">impl Model</code>,
+            the <code class="font-mono text-xs bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded">Article::objects()</code> manager,
+            and the typed column module
+            <code class="font-mono text-xs bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded">article</code> —
+            all of which is hand-written in
+            <code class="font-mono text-xs bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded">src/main.rs</code>'s
+            <code class="font-mono text-xs bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded">Article</code> declaration alone.
+          </p>
+        </div>
+      </li>
+      <li class="flex gap-4">
+        <span class="flex-shrink-0 inline-flex items-center justify-center w-7 h-7 rounded-full bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 text-sm font-semibold">2</span>
+        <div>
+          <p class="font-medium text-gray-900 dark:text-white">The migration engine</p>
+          <p class="text-sm text-gray-600 dark:text-gray-400">
+            Wrote
+            <code class="font-mono text-xs bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded">migrations/app/0001_create_article.json</code>
+            at startup and applied it. SQLite assigned ids via
+            <code class="font-mono text-xs bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded">INTEGER PRIMARY KEY AUTOINCREMENT</code>.
+          </p>
+        </div>
+      </li>
+      <li class="flex gap-4">
+        <span class="flex-shrink-0 inline-flex items-center justify-center w-7 h-7 rounded-full bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 text-sm font-semibold">3</span>
+        <div>
+          <p class="font-medium text-gray-900 dark:text-white">The templates engine</p>
+          <p class="text-sm text-gray-600 dark:text-gray-400">
+            Loaded everything under
+            <code class="font-mono text-xs bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded">templates/</code>
+            at boot. This page extends
+            <code class="font-mono text-xs bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded">base.html</code>
+            and renders
+            <code class="font-mono text-xs bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded">{{ article_count }}</code>
+            seeded article(s).
+          </p>
+        </div>
+      </li>
+    </ol>
+  </section>
+
+  <section class="mt-10 grid sm:grid-cols-2 gap-4">
+    <a href="/articles" class="group block rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 p-5 hover:border-indigo-300 dark:hover:border-indigo-700 hover:shadow-md transition-all">
+      <div class="flex items-center justify-between">
+        <h2 class="font-semibold text-gray-900 dark:text-white">Articles index</h2>
+        <span class="text-indigo-600 dark:text-indigo-400 group-hover:translate-x-0.5 transition-transform">→</span>
+      </div>
+      <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">The HTML view, rendered through the templates engine.</p>
+    </a>
+    <a href="/api/articles" class="group block rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 p-5 hover:border-indigo-300 dark:hover:border-indigo-700 hover:shadow-md transition-all">
+      <div class="flex items-center justify-between">
+        <h2 class="font-semibold text-gray-900 dark:text-white">JSON shape</h2>
+        <span class="text-indigo-600 dark:text-indigo-400 group-hover:translate-x-0.5 transition-transform">→</span>
+      </div>
+      <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">The same query, the same data, a different response shape.</p>
+    </a>
+  </section>
 {% endblock %}

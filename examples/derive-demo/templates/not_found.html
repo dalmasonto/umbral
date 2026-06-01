@@ -1,9 +1,20 @@
 {% extends "base.html" %}
 
-{% block title %}Not found — umbra derive-demo{% endblock %}
+{% block title %}Article not found — umbra derive-demo{% endblock %}
 
 {% block content %}
-  <h2 style="margin-top:0">Article not found</h2>
-  <p>No article with id <code>{{ id }}</code>.
-  <a href="/articles">Back to the list.</a></p>
+  <div class="text-center py-12">
+    <p class="text-6xl font-extrabold tracking-tight text-gray-300 dark:text-gray-700">404</p>
+    <h1 class="mt-4 text-2xl font-bold text-gray-900 dark:text-white">Article not found</h1>
+    <p class="mt-3 text-base text-gray-600 dark:text-gray-300">
+      No article with id
+      <code class="font-mono text-sm bg-gray-100 dark:bg-gray-800 px-2 py-0.5 rounded text-indigo-700 dark:text-indigo-300">{{ id }}</code>
+      exists in the database.
+    </p>
+    <div class="mt-8">
+      <a href="/articles" class="inline-flex items-center justify-center rounded-md bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 transition-colors">
+        ← Back to articles
+      </a>
+    </div>
+  </div>
 {% endblock %}

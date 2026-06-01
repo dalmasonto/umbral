@@ -3,25 +3,50 @@
 {% block title %}Articles — umbra derive-demo{% endblock %}
 
 {% block content %}
-  <h2 style="margin-top:0">Articles</h2>
+  <header class="mb-8 flex items-end justify-between gap-4">
+    <div>
+      <p class="text-sm font-semibold uppercase tracking-wider text-indigo-600 dark:text-indigo-400 mb-2">Index</p>
+      <h1 class="text-3xl sm:text-4xl font-bold tracking-tight text-gray-900 dark:text-white">Articles</h1>
+      <p class="mt-2 text-sm text-gray-500 dark:text-gray-400">
+        {% if articles %}
+          {{ articles|length }} article{{ articles|length == 1 and "" or "s" }} seeded against the demo.
+        {% else %}
+          No articles in the database yet.
+        {% endif %}
+      </p>
+    </div>
+    <a href="/api/articles" class="hidden sm:inline-flex items-center font-mono text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 transition-colors">
+      /api/articles →
+    </a>
+  </header>
+
   {% if articles %}
-    {% for article in articles %}
-      <article>
-        <h2>
-          <a href="/articles/{{ article.id }}">{{ article.title }}</a>
-        </h2>
-        <div class="meta">
-          {% if article.published_at %}
-            Published {{ article.published_at }}
-          {% else %}
-            Draft
-          {% endif %}
+    {# TODO: design the article card.
+       Variables in scope: `article` (Article struct with id, title, body, published_at).
+       Constraints:
+         - Use Tailwind utility classes (the page is already styled with Tailwind).
+         - Surface the title prominently — it links to /articles/{{ article.id }}.
+         - Show the published/draft state (article.published_at is Option<DateTime>).
+         - Keep body text to a short preview; the detail page is the full read.
+         - Group cards with consistent vertical rhythm (space-y-*).
+       Aim for 8–15 lines of HTML + Tailwind. #}
+    <div class="space-y-4">
+      {% for article in articles %}
+        {# ↓↓↓ your article card lives here ↓↓↓ #}
+        <div class="rounded-xl border border-dashed border-gray-300 dark:border-gray-700 bg-white/50 dark:bg-gray-900/50 p-6 text-sm text-gray-500 dark:text-gray-400">
+          <p class="font-mono text-xs text-indigo-600 dark:text-indigo-400">TODO: article card for "{{ article.title }}"</p>
+          <p class="mt-1">id={{ article.id }} · published_at={{ article.published_at }}</p>
         </div>
-        <p>{{ article.body }}</p>
-      </article>
-    {% endfor %}
+        {# ↑↑↑ your article card lives here ↑↑↑ #}
+      {% endfor %}
+    </div>
   {% else %}
-    <p>No articles yet. The auto-migrate seed must have skipped — check
-    the binary's stderr for <code>auto-migrate</code> lines.</p>
+    <div class="rounded-xl border border-amber-200 dark:border-amber-900/60 bg-amber-50 dark:bg-amber-950/30 p-6 text-sm text-amber-800 dark:text-amber-200">
+      <p class="font-semibold">No articles yet.</p>
+      <p class="mt-1 text-amber-700 dark:text-amber-300">
+        The auto-migrate seed must have skipped — check the binary's stderr for
+        <code class="font-mono text-xs bg-amber-100 dark:bg-amber-900/40 px-1.5 py-0.5 rounded">auto-migrate</code> lines.
+      </p>
+    </div>
   {% endif %}
 {% endblock %}

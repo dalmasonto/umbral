@@ -18,6 +18,12 @@
 //! - Rendering HTML pages with `umbra::templates`: a `base.html` carrying
 //!   the layout, child templates extending it with `{% block content %}`,
 //!   and autoescape on by default for the XSS guarantee.
+//! - Wiring the Django-shaped 404/500 fallback: drop a `404.html` and
+//!   `500.html` in the templates dir, point at them with
+//!   `not_found_template` / `server_error_template`, and the framework
+//!   renders them for unhandled routes and handler panics. The user
+//!   just authors the HTML — the request path and dev-mode error
+//!   details show up in template context automatically.
 //! - Coexisting HTML and JSON surfaces: `/articles` renders the list
 //!   page, `/api/articles` returns the same data as JSON.
 
@@ -75,6 +81,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // at an absolute path or use the default `./templates`
         // relative to its deploy layout).
         .templates_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/templates"))
+        // Django-shaped 404: the framework renders `templates/404.html`
+        // for any route that doesn't match. The request path lands in
+        // the template's `path` context variable. Replaces the
+        // pre-builtin `not_found` fallback handler this example used
+        // to carry inline.
+        .not_found_template("404.html")
+        // Django-shaped 500: a `tower_http::catch_panic` layer
+        // installed by the builder turns handler panics into a 500
+        // response rendered through `templates/500.html`. In dev mode
+        // the template receives `error_display`, `error_chain`, and
+        // `request_path` for an expandable detail block.
+        .server_error_template("500.html")
         // Auto-generated JSON CRUD at /api/article/. The RestPlugin
         // walks the same model registry the migration engine uses,
         // so the surface stays in lockstep with the schema for free.
@@ -87,8 +105,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .route("/articles/{id}", get(article_detail))
                 // Backwards-compat alias from the pre-RestPlugin era.
                 // New clients should hit /api/article/ instead.
-                .route("/api/articles", get(list_articles_json))
-                .fallback(not_found),
+                .route("/api/articles", get(list_articles_json)),
+            // Unhandled routes fall through to the framework's
+            // `not_found_template` fallback (installed above), which
+            // renders 404.html with the request path in scope.
         ))
     .build()?;
 
@@ -110,12 +130,6 @@ async fn home() -> Result<Html<String>, (StatusCode, String)> {
     let body = umbra::templates::render("home.html", &context!(article_count => count))
         .map_err(internal_error)?;
     Ok(Html(body))
-}
-
-async fn not_found() -> (StatusCode, Html<String>) {
-    let html = umbra::templates::render("404.html", &context! { path => "" })
-        .unwrap_or_else(|_| "<h1>Not found</h1>".to_string());
-    (StatusCode::NOT_FOUND, Html(html))
 }
 
 /// HTML list view. Same QuerySet the JSON endpoint uses; the only
