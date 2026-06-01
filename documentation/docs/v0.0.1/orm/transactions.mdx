@@ -1,0 +1,133 @@
+---
+title: Transactions
+description: Atomic multi-statement operations — commit on Ok, roll back on Err.
+sidebar_position: 5
+tags: [orm, database, transactions, atomicity]
+---
+
+# Transactions
+
+A transaction wraps several database statements so they either all commit or all roll back together. Without a transaction, a failure mid-way through a multi-step operation (charge card, create order, decrement stock) leaves the database in a partial state. With a transaction, the database never sees half the work.
+
+## The `transaction(...)` closure
+
+```rust
+use umbra::db::transaction;
+
+let order = transaction(|tx| Box::pin(async move {
+    // All three statements join the same transaction.
+    let order = Order::objects().on_tx(tx).create(new_order).await?;
+    Payment::objects().on_tx(tx).create(payment).await?;
+    Stock::objects()
+        .filter(stock::SKU.eq(order.sku.clone()))
+        .on_tx(tx)
+        .update_values(delta)
+        .await?;
+    Ok::<_, MyError>(order)
+})).await?;
+```
+
+`transaction` reads the ambient pool (set by `App::build()`), starts a transaction, runs the closure, and commits on `Ok` or rolls back on `Err`. It returns the closure's `Ok` value on success.
+
+`umbra::transaction_sqlite(pool, ...)` and `umbra::transaction_pg(pool, ...)` are the backend-pinned variants for code that works with an explicit pool (or runs outside `App::build()`).
+
+## Threading the transaction into queries
+
+`QuerySet::on_tx(&mut tx)` replaces `.on(&pool)`. It attaches the transaction to the query so the statement executes inside the open transaction rather than on a connection from the pool.
+
+```rust
+// Read terminal inside a transaction.
+let rows = Post::objects()
+    .filter(post::PUBLISHED.eq(true))
+    .on_tx(tx)
+    .fetch()
+    .await?;
+
+// Write terminals also accept on_tx.
+Post::objects()
+    .filter(post::ID.eq(42))
+    .on_tx(tx)
+    .delete()
+    .await?;
+
+Post::objects()
+    .filter(post::ID.eq(42))
+    .on_tx(tx)
+    .update_values(updates)
+    .await?;
+```
+
+All chainable methods (`filter`, `order_by`, `limit`, `offset`) compose with `on_tx` the same way they compose with `on`:
+
+```rust
+let recent = Post::objects()
+    .filter(post::PUBLISHED.eq(true))
+    .order_by(post::CREATED_AT.desc())
+    .limit(10)
+    .on_tx(tx)
+    .fetch()
+    .await?;
+```
+
+## Manager-level transaction writes
+
+`Manager::create_in_tx(instance, &mut tx)` and `Manager::bulk_create_in_tx(instances, &mut tx)` are the transactional equivalents of `Manager::create` and `Manager::bulk_create`.
+
+```rust
+let post = Post::objects()
+    .create_in_tx(new_post, tx)
+    .await?;
+
+let n = Tag::objects()
+    .bulk_create_in_tx(tags, tx)
+    .await?;
+```
+
+Using `on_tx(tx).create(instance)` is equivalent and preferred when you are already on a `QuerySet` chain. The `create_in_tx` method is a direct-Manager shorthand that skips the intermediate `QuerySet`.
+
+## Commit and rollback semantics
+
+The closure-based helpers (`transaction`, `transaction_sqlite`, `transaction_pg`) handle the lifecycle automatically:
+
+- Closure returns `Ok(value)` — the transaction is committed; `Ok(value)` is returned to the caller.
+- Closure returns `Err(e)` — a best-effort rollback is attempted; `Err(e)` is returned to the caller.
+- The rollback in the `Err` path is best-effort: if the rollback itself fails (e.g. the connection was dropped), the original error is still surfaced.
+
+For manual control, use `begin_sqlite` / `begin_pg` / `begin` to open a transaction and call `tx.commit()` or `tx.rollback()` yourself:
+
+```rust
+use umbra::db::begin_sqlite;
+
+let mut tx = begin_sqlite(&pool).await?;
+Post::objects().on_tx(&mut tx).create(post).await?;
+tx.commit().await?;
+```
+
+## The `Box::pin` wrapper
+
+Because Rust's async closures do not yet support capturing mutable references across the closure boundary on stable Rust, the closure must return a pinned boxed future. Wrap the `async move` block in `Box::pin(...)`:
+
+```rust
+transaction(|tx| Box::pin(async move {
+    // ...
+}))
+```
+
+This is the `TxFuture<'_, T, E>` type alias. If your project already uses the `futures` crate you can write `.boxed()` instead: `|tx| async move { ... }.boxed()`.
+
+## Pitfalls
+
+**Cross-task transactions are not supported.** The `&mut Transaction` borrow must stay on a single task. Passing it to a `tokio::spawn` closure is a compile error — and rightly so: the spawned task might outlive the transaction.
+
+**Do not hold a transaction across a long I/O wait.** Databases lock resources for the duration of a transaction. Awaiting an external HTTP call or a slow computation inside a transaction holds those locks for its duration. If you need to do slow I/O, complete the external call before opening the transaction.
+
+**Savepoints are not supported at v1.** All work inside a `transaction(...)` closure is one unit. Nested transactions (savepoints, `BEGIN SAVEPOINT`) are deferred. If you need partial-rollback within a transaction, use multiple outer transactions.
+
+**Isolation level control is deferred.** The transaction starts with the database's default isolation level (SQLite: serializable; Postgres: read committed). Changing the isolation level per-transaction is a deferred feature.
+
+## See also
+
+- `arch.md` — ambient pool design and the `OnceLock`-backed global.
+- `docs/specs/03-orm-querysets.md` — the QuerySet surface.
+- `documentation/docs/v0.0.1/orm/models.mdx` — model declarations.
+- `documentation/docs/v0.0.1/backends/sqlite.mdx` — SQLite backend.

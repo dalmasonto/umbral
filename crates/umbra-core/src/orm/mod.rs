@@ -35,7 +35,7 @@ pub use expr::{F, FColExt, FExpr, Q};
 pub use foreign_key::ForeignKey;
 pub use model::{ArrayElement, FieldSpec, HydrateRelated, Model, PrimaryKey, SqlType};
 pub use post::Post;
-pub use queryset::{GetError, Manager, QuerySet};
+pub use queryset::{GetError, Manager, QuerySet, QuerySetTx};
 pub use tsvector::TsVector;
 
 /// A typed boolean condition on rows of `T`.

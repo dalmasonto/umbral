@@ -43,6 +43,7 @@
 //! limping along and producing wrong results.
 
 use std::collections::HashMap;
+use std::pin::Pin;
 use std::sync::OnceLock;
 
 use sqlx::{PgPool, SqlitePool};
@@ -222,6 +223,267 @@ pub async fn connect(url: &str) -> Result<DbPool, sqlx::Error> {
 /// sqlite-specific APIs immediately after connecting).
 pub async fn connect_sqlite(url: &str) -> Result<SqlitePool, sqlx::Error> {
     SqlitePool::connect(url).await
+}
+
+// =============================================================================
+// Transaction support
+// =============================================================================
+
+/// An active database transaction, typed by backend.
+///
+/// `Transaction` wraps either a `sqlx::Transaction<'static, sqlx::Sqlite>` or
+/// a `sqlx::Transaction<'static, sqlx::Postgres>` and provides the executor
+/// surface needed by the ORM's query terminals.
+///
+/// ## How to obtain one
+///
+/// The typical path is through the top-level closure helpers:
+///
+/// ```rust,ignore
+/// use umbra::db::transaction;
+///
+/// let order = transaction(|tx| async move {
+///     let o = Order::objects().on_tx(tx).create(new_order).await?;
+///     Inventory::objects().on_tx(tx).filter(...).update_values(...).await?;
+///     Ok::<_, MyError>(o)
+/// }).await?;
+/// ```
+///
+/// For manual control (committing or rolling back yourself) call
+/// [`begin`] / [`begin_sqlite`] / [`begin_pg`] directly.
+///
+/// ## Executor contract
+///
+/// The `as_sqlite_mut` / `as_pg_mut` accessors return a mutable reference to
+/// the underlying sqlx transaction so ORM internals can call
+/// `sqlx::query(...).execute(&mut *inner)`. Both the `QuerySet::on_tx` and
+/// `Manager::create_in_tx` methods receive `&mut Transaction` and dispatch
+/// through these accessors.
+pub struct Transaction {
+    inner: TransactionInner,
+}
+
+enum TransactionInner {
+    Sqlite(sqlx::Transaction<'static, sqlx::Sqlite>),
+    Postgres(sqlx::Transaction<'static, sqlx::Postgres>),
+}
+
+impl Transaction {
+    /// Return a mutable reference to the inner SQLite transaction, or `None`
+    /// when this is a Postgres transaction.
+    pub fn as_sqlite_mut(&mut self) -> Option<&mut sqlx::Transaction<'static, sqlx::Sqlite>> {
+        match &mut self.inner {
+            TransactionInner::Sqlite(tx) => Some(tx),
+            TransactionInner::Postgres(_) => None,
+        }
+    }
+
+    /// Return a mutable reference to the inner Postgres transaction, or `None`
+    /// when this is a SQLite transaction.
+    pub fn as_pg_mut(&mut self) -> Option<&mut sqlx::Transaction<'static, sqlx::Postgres>> {
+        match &mut self.inner {
+            TransactionInner::Sqlite(_) => None,
+            TransactionInner::Postgres(tx) => Some(tx),
+        }
+    }
+
+    /// The backend name — `"sqlite"` or `"postgres"`. Mirrors
+    /// [`DbPool::backend_name`] so shared dispatch helpers can use the same
+    /// match arm.
+    pub fn backend_name(&self) -> &'static str {
+        match &self.inner {
+            TransactionInner::Sqlite(_) => "sqlite",
+            TransactionInner::Postgres(_) => "postgres",
+        }
+    }
+
+    /// Commit the transaction explicitly.
+    ///
+    /// The closure-based helpers ([`transaction`] / [`transaction_sqlite`] /
+    /// [`transaction_pg`]) call this automatically on `Ok`. Use this only
+    /// when you obtained the transaction via [`begin`] / [`begin_sqlite`] /
+    /// [`begin_pg`] and are driving the lifecycle yourself.
+    pub async fn commit(self) -> Result<(), sqlx::Error> {
+        match self.inner {
+            TransactionInner::Sqlite(tx) => tx.commit().await,
+            TransactionInner::Postgres(tx) => tx.commit().await,
+        }
+    }
+
+    /// Roll back the transaction explicitly.
+    ///
+    /// The closure-based helpers call this automatically on `Err`. Use this
+    /// only in the manual-control pattern.
+    pub async fn rollback(self) -> Result<(), sqlx::Error> {
+        match self.inner {
+            TransactionInner::Sqlite(tx) => tx.rollback().await,
+            TransactionInner::Postgres(tx) => tx.rollback().await,
+        }
+    }
+}
+
+/// Begin a transaction against the ambient pool.
+///
+/// The `Transaction` is dropped-and-rolled-back if neither `commit` nor
+/// `rollback` is called before it goes out of scope (sqlx's drop impl).
+/// Most callers use the higher-level [`transaction`] / [`transaction_sqlite`]
+/// / [`transaction_pg`] closures instead.
+///
+/// # Panics
+///
+/// Panics if `App::build()` hasn't run.
+pub async fn begin() -> Result<Transaction, sqlx::Error> {
+    match pool_dispatched() {
+        DbPool::Sqlite(pool) => {
+            let tx = pool.begin().await?;
+            Ok(Transaction {
+                inner: TransactionInner::Sqlite(tx),
+            })
+        }
+        DbPool::Postgres(pool) => {
+            let tx = pool.begin().await?;
+            Ok(Transaction {
+                inner: TransactionInner::Postgres(tx),
+            })
+        }
+    }
+}
+
+/// Begin a transaction against an explicit SQLite pool.
+pub async fn begin_sqlite(pool: &sqlx::SqlitePool) -> Result<Transaction, sqlx::Error> {
+    let tx = pool.begin().await?;
+    Ok(Transaction {
+        inner: TransactionInner::Sqlite(tx),
+    })
+}
+
+/// Begin a transaction against an explicit Postgres pool.
+pub async fn begin_pg(pool: &sqlx::PgPool) -> Result<Transaction, sqlx::Error> {
+    let tx = pool.begin().await?;
+    Ok(Transaction {
+        inner: TransactionInner::Postgres(tx),
+    })
+}
+
+/// Pinned, boxed `Future` with a lifetime parameter.
+///
+/// This is the required shape for the closure argument to
+/// [`transaction`] / [`transaction_sqlite`] / [`transaction_pg`].
+/// The lifetime `'a` ties the future to the `&'a mut Transaction`
+/// reference so the borrow checker can verify that the transaction
+/// outlives the async work being done inside it.
+///
+/// Call sites construct this by calling `.boxed()` or wrapping the
+/// `async move` block:
+///
+/// ```rust,ignore
+/// use futures::FutureExt;
+/// use umbra::db::{transaction, TxFuture};
+///
+/// transaction(|tx| {
+///     Box::pin(async move {
+///         Post::objects().on_tx(tx).create(new_post).await?;
+///         Ok::<_, MyError>(())
+///     })
+/// }).await?;
+/// ```
+///
+/// The `async move { ... }` block captures the `&mut Transaction` by
+/// move and the `Box::pin(...)` wrapper satisfies the HRTB bound.
+pub type TxFuture<'a, T, E> = Pin<Box<dyn std::future::Future<Output = Result<T, E>> + Send + 'a>>;
+
+/// Run an async closure inside a database transaction against the ambient pool.
+///
+/// The closure receives `&mut Transaction`. On `Ok` the transaction is
+/// committed; on `Err` it is rolled back. Returns the closure's `Ok` value
+/// on success.
+///
+/// The closure must return a `TxFuture` (a `Pin<Box<dyn Future>>`).
+/// Use `Box::pin(async move { ... })`:
+///
+/// ```rust,ignore
+/// use umbra::db::transaction;
+///
+/// let order = transaction(|tx| Box::pin(async move {
+///     let o = Order::objects().on_tx(tx).create(new_order).await?;
+///     Inventory::objects()
+///         .on_tx(tx)
+///         .filter(inv::PRODUCT_ID.eq(sku))
+///         .update_values(delta)
+///         .await?;
+///     Ok::<_, MyError>(o)
+/// })).await?;
+/// ```
+///
+/// # Panics
+///
+/// Panics if `App::build()` hasn't run.
+pub async fn transaction<F, T, E>(f: F) -> Result<T, E>
+where
+    for<'a> F: FnOnce(&'a mut Transaction) -> TxFuture<'a, T, E>,
+    E: From<sqlx::Error>,
+{
+    let mut tx = begin().await.map_err(E::from)?;
+    match f(&mut tx).await {
+        Ok(val) => {
+            tx.commit().await.map_err(E::from)?;
+            Ok(val)
+        }
+        Err(e) => {
+            // Best-effort rollback — if it fails we surface the original error.
+            let _ = tx.rollback().await;
+            Err(e)
+        }
+    }
+}
+
+/// Run an async closure inside a SQLite transaction against an explicit pool.
+///
+/// The SQLite-specific variant of [`transaction`] for callers that want to
+/// pin to SQLite regardless of what the ambient pool is, or that are running
+/// outside of `App::build()` (e.g. tests).
+///
+/// See [`transaction`] for the closure shape.
+pub async fn transaction_sqlite<F, T, E>(pool: &sqlx::SqlitePool, f: F) -> Result<T, E>
+where
+    for<'a> F: FnOnce(&'a mut Transaction) -> TxFuture<'a, T, E>,
+    E: From<sqlx::Error>,
+{
+    let mut tx = begin_sqlite(pool).await.map_err(E::from)?;
+    match f(&mut tx).await {
+        Ok(val) => {
+            tx.commit().await.map_err(E::from)?;
+            Ok(val)
+        }
+        Err(e) => {
+            let _ = tx.rollback().await;
+            Err(e)
+        }
+    }
+}
+
+/// Run an async closure inside a Postgres transaction against an explicit pool.
+///
+/// The Postgres-specific variant of [`transaction`] for callers that want to
+/// pin to Postgres or run outside `App::build()`.
+///
+/// See [`transaction`] for the closure shape.
+pub async fn transaction_pg<F, T, E>(pool: &sqlx::PgPool, f: F) -> Result<T, E>
+where
+    for<'a> F: FnOnce(&'a mut Transaction) -> TxFuture<'a, T, E>,
+    E: From<sqlx::Error>,
+{
+    let mut tx = begin_pg(pool).await.map_err(E::from)?;
+    match f(&mut tx).await {
+        Ok(val) => {
+            tx.commit().await.map_err(E::from)?;
+            Ok(val)
+        }
+        Err(e) => {
+            let _ = tx.rollback().await;
+            Err(e)
+        }
+    }
 }
 
 #[cfg(test)]

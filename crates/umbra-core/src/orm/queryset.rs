@@ -175,6 +175,29 @@ impl<T> QuerySet<T> {
         self
     }
 
+    /// Attach this `QuerySet` to an open transaction.
+    ///
+    /// Returns a [`QuerySetTx`] that holds both the query and a mutable
+    /// reference to the transaction. Every terminal on `QuerySetTx`
+    /// (`fetch`, `first`, `count`, `exists`, `get`, `delete`,
+    /// `update_values`) executes inside the open transaction so all
+    /// operations in the same closure commit or roll back as a unit.
+    ///
+    /// ```rust,ignore
+    /// umbra::db::transaction(|tx| async move {
+    ///     let order = Order::objects().on_tx(tx).create(new_order).await?;
+    ///     Stock::objects()
+    ///         .on_tx(tx)
+    ///         .filter(stock::SKU.eq(sku))
+    ///         .update_values(delta)
+    ///         .await?;
+    ///     Ok::<_, MyError>(order)
+    /// }).await?;
+    /// ```
+    pub fn on_tx(self, tx: &mut crate::db::Transaction) -> QuerySetTx<'_, T> {
+        QuerySetTx { qs: self, tx }
+    }
+
     /// Eagerly load a single FK field by name.
     ///
     /// After the main SELECT returns rows, a batch `SELECT ... FROM <related_table>
@@ -1027,6 +1050,354 @@ impl<T: Model> Manager<T> {
             .execute(pool)
             .await?;
         Ok(result.rows_affected())
+    }
+}
+
+// =========================================================================
+// QuerySetTx — a QuerySet bound to an open transaction
+// =========================================================================
+
+/// A `QuerySet` bound to an open transaction.
+///
+/// Obtained via [`QuerySet::on_tx`]. All terminals execute inside the
+/// transaction so they commit or roll back as a unit with every other
+/// operation in the same `umbra::db::transaction(...)` closure.
+///
+/// The struct borrows `&mut Transaction` so the borrow checker enforces
+/// that only one `QuerySetTx` uses the transaction at a time, and that
+/// the transaction stays alive for the duration of each terminal call.
+pub struct QuerySetTx<'tx, T> {
+    qs: QuerySet<T>,
+    tx: &'tx mut crate::db::Transaction,
+}
+
+impl<'tx, T: Model> QuerySetTx<'tx, T> {
+    // -----------------------------------------------------------------------
+    // Read terminals
+    // -----------------------------------------------------------------------
+
+    /// SELECT all matching rows inside the transaction.
+    pub async fn fetch(self) -> Result<Vec<T>, sqlx::Error>
+    where
+        T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
+            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
+    {
+        let q = self.qs.build_query_for(self.tx.backend_name());
+        match self.tx.backend_name() {
+            "sqlite" => {
+                let tx = self.tx.as_sqlite_mut().unwrap();
+                let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
+                sqlx::query_as_with::<sqlx::Sqlite, T, _>(&sql, values)
+                    .fetch_all(&mut **tx)
+                    .await
+            }
+            _ => {
+                let tx = self.tx.as_pg_mut().unwrap();
+                let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
+                sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
+                    .fetch_all(&mut **tx)
+                    .await
+            }
+        }
+    }
+
+    /// SELECT LIMIT 1 and return the first row, if any.
+    pub async fn first(mut self) -> Result<Option<T>, sqlx::Error>
+    where
+        T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
+            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
+    {
+        self.qs.query.limit(1);
+        let q = self.qs.build_query_for(self.tx.backend_name());
+        match self.tx.backend_name() {
+            "sqlite" => {
+                let tx = self.tx.as_sqlite_mut().unwrap();
+                let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
+                sqlx::query_as_with::<sqlx::Sqlite, T, _>(&sql, values)
+                    .fetch_optional(&mut **tx)
+                    .await
+            }
+            _ => {
+                let tx = self.tx.as_pg_mut().unwrap();
+                let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
+                sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
+                    .fetch_optional(&mut **tx)
+                    .await
+            }
+        }
+    }
+
+    /// SELECT COUNT(*) inside the transaction.
+    pub async fn count(self) -> Result<i64, sqlx::Error> {
+        let backend = self.tx.backend_name();
+        let mut rebuilt = self.qs.build_query_for(backend);
+        rebuilt.clear_selects();
+        rebuilt.expr(Func::count(Expr::col(Alias::new("*"))));
+        rebuilt.reset_limit();
+        rebuilt.reset_offset();
+        match backend {
+            "sqlite" => {
+                let tx = self.tx.as_sqlite_mut().unwrap();
+                let (sql, values) = rebuilt.build_sqlx(SqliteQueryBuilder);
+                let (n,): (i64,) = sqlx::query_as_with::<sqlx::Sqlite, (i64,), _>(&sql, values)
+                    .fetch_one(&mut **tx)
+                    .await?;
+                Ok(n)
+            }
+            _ => {
+                let tx = self.tx.as_pg_mut().unwrap();
+                let (sql, values) = rebuilt.build_sqlx(PostgresQueryBuilder);
+                let (n,): (i64,) = sqlx::query_as_with::<sqlx::Postgres, (i64,), _>(&sql, values)
+                    .fetch_one(&mut **tx)
+                    .await?;
+                Ok(n)
+            }
+        }
+    }
+
+    /// Return whether any row matches, inside the transaction.
+    pub async fn exists(mut self) -> Result<bool, sqlx::Error>
+    where
+        T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
+            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
+    {
+        self.qs.query.limit(1);
+        let backend = self.tx.backend_name();
+        let q = self.qs.build_query_for(backend);
+        let row_opt: Option<T> = match backend {
+            "sqlite" => {
+                let tx = self.tx.as_sqlite_mut().unwrap();
+                let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
+                sqlx::query_as_with::<sqlx::Sqlite, T, _>(&sql, values)
+                    .fetch_optional(&mut **tx)
+                    .await?
+            }
+            _ => {
+                let tx = self.tx.as_pg_mut().unwrap();
+                let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
+                sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
+                    .fetch_optional(&mut **tx)
+                    .await?
+            }
+        };
+        Ok(row_opt.is_some())
+    }
+
+    /// Exactly-one terminal inside the transaction. See [`QuerySet::get`].
+    pub async fn get(mut self) -> Result<T, GetError>
+    where
+        T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
+            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
+    {
+        self.qs.query.limit(2);
+        let q = self.qs.build_query_for(self.tx.backend_name());
+        let mut rows: Vec<T> = match self.tx.backend_name() {
+            "sqlite" => {
+                let tx = self.tx.as_sqlite_mut().unwrap();
+                let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
+                sqlx::query_as_with::<sqlx::Sqlite, T, _>(&sql, values)
+                    .fetch_all(&mut **tx)
+                    .await
+                    .map_err(GetError::Sqlx)?
+            }
+            _ => {
+                let tx = self.tx.as_pg_mut().unwrap();
+                let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
+                sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
+                    .fetch_all(&mut **tx)
+                    .await
+                    .map_err(GetError::Sqlx)?
+            }
+        };
+        match rows.len() {
+            0 => Err(GetError::NotFound),
+            1 => Ok(rows.pop().unwrap()),
+            _ => Err(GetError::MultipleObjectsReturned),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Write terminals
+    // -----------------------------------------------------------------------
+
+    /// DELETE inside the transaction. Returns the number of rows deleted.
+    pub async fn delete(self) -> Result<u64, sqlx::Error> {
+        let stmt = self.qs.build_delete_for(self.tx.backend_name());
+        match self.tx.backend_name() {
+            "sqlite" => {
+                let tx = self.tx.as_sqlite_mut().unwrap();
+                let (sql, values) = stmt.build_sqlx(SqliteQueryBuilder);
+                let result = sqlx::query_with::<sqlx::Sqlite, _>(&sql, values)
+                    .execute(&mut **tx)
+                    .await?;
+                Ok(result.rows_affected())
+            }
+            _ => {
+                let tx = self.tx.as_pg_mut().unwrap();
+                let (sql, values) = stmt.build_sqlx(PostgresQueryBuilder);
+                let result = sqlx::query_with::<sqlx::Postgres, _>(&sql, values)
+                    .execute(&mut **tx)
+                    .await?;
+                Ok(result.rows_affected())
+            }
+        }
+    }
+
+    /// UPDATE inside the transaction. Takes the same `column → JSON value`
+    /// map as [`QuerySet::update_values`].
+    pub async fn update_values(
+        self,
+        values: serde_json::Map<String, serde_json::Value>,
+    ) -> Result<u64, crate::orm::write::WriteError> {
+        let stmt = self.qs.build_update_for(self.tx.backend_name(), &values)?;
+        match self.tx.backend_name() {
+            "sqlite" => {
+                let tx = self.tx.as_sqlite_mut().unwrap();
+                let (sql, values) = stmt.build_sqlx(SqliteQueryBuilder);
+                let result = sqlx::query_with::<sqlx::Sqlite, _>(&sql, values)
+                    .execute(&mut **tx)
+                    .await?;
+                Ok(result.rows_affected())
+            }
+            _ => {
+                let tx = self.tx.as_pg_mut().unwrap();
+                let (sql, values) = stmt.build_sqlx(PostgresQueryBuilder);
+                let result = sqlx::query_with::<sqlx::Postgres, _>(&sql, values)
+                    .execute(&mut **tx)
+                    .await?;
+                Ok(result.rows_affected())
+            }
+        }
+    }
+
+    /// INSERT one row and return the populated row, inside the transaction.
+    ///
+    /// This is the `Manager::create_in_tx` equivalent called through the
+    /// QuerySet API: `Post::objects().on_tx(tx).create(instance).await?`.
+    pub async fn create(self, instance: T) -> Result<T, crate::orm::write::WriteError>
+    where
+        T: serde::Serialize
+            + for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
+            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
+    {
+        let map = serialize_to_map(&instance)?;
+        let stmt = build_insert_one_for::<T>(self.tx.backend_name(), &map)?;
+        match self.tx.backend_name() {
+            "sqlite" => {
+                let tx = self.tx.as_sqlite_mut().unwrap();
+                let (sql, values) = stmt.build_sqlx(SqliteQueryBuilder);
+                let row = sqlx::query_as_with::<sqlx::Sqlite, T, _>(&sql, values)
+                    .fetch_one(&mut **tx)
+                    .await?;
+                Ok(row)
+            }
+            _ => {
+                let tx = self.tx.as_pg_mut().unwrap();
+                let (sql, values) = stmt.build_sqlx(PostgresQueryBuilder);
+                let row = sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
+                    .fetch_one(&mut **tx)
+                    .await?;
+                Ok(row)
+            }
+        }
+    }
+}
+
+impl<T: Model> Manager<T> {
+    /// Begin a new query on this manager attached to the given open transaction.
+    ///
+    /// Sugar for `T::objects().on_tx(tx)` — lets callers skip the intermediate
+    /// `QuerySet` construction when they want to go straight to a terminal:
+    ///
+    /// ```rust,ignore
+    /// umbra::db::transaction(|tx| async move {
+    ///     let post = Post::objects().on_tx(tx).create(new_post).await?;
+    ///     Ok::<_, MyError>(post)
+    /// }).await?;
+    /// ```
+    pub fn on_tx<'a>(&self, tx: &'a mut crate::db::Transaction) -> QuerySetTx<'a, T> {
+        self.queryset().on_tx(tx)
+    }
+
+    /// INSERT one row inside `tx` and return the populated row.
+    ///
+    /// This is the primary Manager-level entry point for transactional writes.
+    /// Equivalent to `Post::objects().on_tx(tx).create(instance)` but more
+    /// ergonomic when you only need the one INSERT (no filter chain needed).
+    ///
+    /// ```rust,ignore
+    /// umbra::db::transaction(|tx| async move {
+    ///     let post = Post::objects().create_in_tx(new_post, tx).await?;
+    ///     Ok::<_, MyError>(post)
+    /// }).await?;
+    /// ```
+    pub async fn create_in_tx(
+        &self,
+        instance: T,
+        tx: &mut crate::db::Transaction,
+    ) -> Result<T, crate::orm::write::WriteError>
+    where
+        T: serde::Serialize
+            + for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
+            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
+    {
+        let map = serialize_to_map(&instance)?;
+        let stmt = build_insert_one_for::<T>(tx.backend_name(), &map)?;
+        match tx.backend_name() {
+            "sqlite" => {
+                let inner = tx.as_sqlite_mut().unwrap();
+                let (sql, values) = stmt.build_sqlx(SqliteQueryBuilder);
+                let row = sqlx::query_as_with::<sqlx::Sqlite, T, _>(&sql, values)
+                    .fetch_one(&mut **inner)
+                    .await?;
+                Ok(row)
+            }
+            _ => {
+                let inner = tx.as_pg_mut().unwrap();
+                let (sql, values) = stmt.build_sqlx(PostgresQueryBuilder);
+                let row = sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
+                    .fetch_one(&mut **inner)
+                    .await?;
+                Ok(row)
+            }
+        }
+    }
+
+    /// INSERT many rows inside `tx`.
+    ///
+    /// Returns the number of rows inserted. Empty input is a no-op.
+    pub async fn bulk_create_in_tx(
+        &self,
+        instances: Vec<T>,
+        tx: &mut crate::db::Transaction,
+    ) -> Result<u64, crate::orm::write::WriteError>
+    where
+        T: serde::Serialize,
+    {
+        if instances.is_empty() {
+            return Ok(0);
+        }
+        let maps: Result<Vec<_>, _> = instances.iter().map(serialize_to_map).collect();
+        let maps = maps?;
+        let stmt = build_insert_many_for::<T>(tx.backend_name(), &maps)?;
+        match tx.backend_name() {
+            "sqlite" => {
+                let inner = tx.as_sqlite_mut().unwrap();
+                let (sql, values) = stmt.build_sqlx(SqliteQueryBuilder);
+                let result = sqlx::query_with::<sqlx::Sqlite, _>(&sql, values)
+                    .execute(&mut **inner)
+                    .await?;
+                Ok(result.rows_affected())
+            }
+            _ => {
+                let inner = tx.as_pg_mut().unwrap();
+                let (sql, values) = stmt.build_sqlx(PostgresQueryBuilder);
+                let result = sqlx::query_with::<sqlx::Postgres, _>(&sql, values)
+                    .execute(&mut **inner)
+                    .await?;
+                Ok(result.rows_affected())
+            }
+        }
     }
 }
 

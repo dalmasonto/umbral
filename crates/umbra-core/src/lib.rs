@@ -20,3 +20,9 @@ pub mod settings;
 pub mod slash;
 pub mod templates;
 pub mod web;
+
+/// Top-level transaction helper. Sugar for `umbra_core::db::transaction`.
+///
+/// Exposes `umbra_core::transaction(|tx| async { ... })` at the crate root
+/// so the facade re-export becomes `umbra::transaction(...)`.
+pub use db::{transaction, transaction_pg, transaction_sqlite};

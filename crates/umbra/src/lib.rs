@@ -51,7 +51,7 @@ pub mod settings {
 }
 
 pub mod db {
-    //! Database pool accessors.
+    //! Database pool accessors and transaction helpers.
     //!
     //! `connect` opens a new pool dispatched on the URL scheme,
     //! returning a [`DbPool`] enum (sqlite or postgres). For callers
@@ -63,11 +63,45 @@ pub mod db {
     //! versions ([`pool_dispatched`] and [`pool_for_dispatched`])
     //! hand back a `&DbPool` for code that's ready to branch on the
     //! backend.
+    //!
+    //! ## Transactions
+    //!
+    //! Use [`transaction`] to run a multi-statement business operation
+    //! that commits on `Ok` and rolls back on `Err`:
+    //!
+    //! ```rust,ignore
+    //! use umbra::db::transaction;
+    //!
+    //! let order = transaction(|tx| Box::pin(async move {
+    //!     let o = Order::objects().on_tx(tx).create(new_order).await?;
+    //!     Stock::objects()
+    //!         .on_tx(tx)
+    //!         .filter(stock::SKU.eq(sku))
+    //!         .update_values(delta)
+    //!         .await?;
+    //!     Ok::<_, MyError>(o)
+    //! })).await?;
+    //! ```
 
     pub use umbra_core::db::{
-        DbPool, connect, connect_sqlite, pool, pool_dispatched, pool_for, pool_for_dispatched,
+        DbPool, Transaction, TxFuture, begin, begin_pg, begin_sqlite, connect, connect_sqlite,
+        pool, pool_dispatched, pool_for, pool_for_dispatched, transaction, transaction_pg,
+        transaction_sqlite,
     };
 }
+
+/// Run an async closure inside a database transaction against the ambient pool.
+///
+/// Sugar for `umbra::db::transaction(...)`. See that function for full docs.
+///
+/// ```rust,ignore
+/// let order = umbra::transaction(|tx| Box::pin(async move {
+///     let o = Order::objects().on_tx(tx).create(new_order).await?;
+///     Stock::objects().on_tx(tx).filter(...).update_values(...).await?;
+///     Ok::<_, MyError>(o)
+/// })).await?;
+/// ```
+pub use umbra_core::db::{transaction, transaction_pg, transaction_sqlite};
 
 pub mod backend {
     //! The database backend abstraction (M4).
@@ -249,7 +283,7 @@ pub mod orm {
     pub use umbra_core::orm::write::WriteError;
     pub use umbra_core::orm::{
         ArrayElement, F, FColExt, FExpr, FieldSpec, ForeignKey, GetError, HydrateRelated, Manager,
-        Model, Post, PrimaryKey, Q, QuerySet, SqlType, TsVector, column, write,
+        Model, Post, PrimaryKey, Q, QuerySet, QuerySetTx, SqlType, TsVector, column, write,
     };
 
     /// The `#[derive(Model)]` proc macro. Shares the `Model` name with the
