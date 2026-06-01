@@ -74,10 +74,9 @@ use umbra::web::{Html, Json, Path, Router, StatusCode, get};
 
 // --- Model -----------------------------------------------------------------
 
-/// The plugin owns its model. `App::builder()` discovers it through the
-/// `Plugin::models()` hook (not shown here — for now register with
-/// `App::builder().model::<blog::Post>()` from main.rs; the auto-discovery
-/// path lands when M7 ships full plugin model registration).
+/// The plugin owns its model. `App::builder()` auto-discovers it
+/// through the `Plugin::models()` hook below — no `.model::<Post>()`
+/// line on the builder.
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, umbra::orm::Model)]
 pub struct Post {
     pub id: i64,
@@ -153,6 +152,14 @@ impl Plugin for BlogPlugin {
         "blog"
     }
 
+    /// Auto-registration: every model this plugin owns goes here.
+    /// `App::builder()` walks `Plugin::models()` on every registered
+    /// plugin and feeds the results into the migration registry —
+    /// you do NOT also call `.model::<Post>()` from main.rs.
+    fn models(&self) -> Vec<umbra::migrate::ModelMeta> {
+        vec![umbra::migrate::ModelMeta::for_::<Post>()]
+    }
+
     fn routes(&self) -> Router {
         Router::new()
             .route("/blog", get(list_posts))
@@ -191,8 +198,7 @@ Wire it in `main.rs`:
 let app = App::builder()
     .settings(settings)
     .database("default", pool)
-    .model::<blog::Post>()                       // register the model
-    .plugin(blog::BlogPlugin)                     // routes + on_ready
+    .plugin(blog::BlogPlugin)                     // model + routes + on_ready
     .plugin(
         umbra_rest::RestPlugin::default()
             .resource(blog::rest_resource()),    // REST customisation
@@ -200,18 +206,24 @@ let app = App::builder()
     .build()?;
 ```
 
-Three things that matter in this shape:
+Four things that matter in this shape:
 
-1. **The ORM is ambient.** `Post::objects().fetch()` works inside a route
+1. **One `.plugin(...)` line is enough.** The plugin's models flow into
+   the migration registry via `Plugin::models()`; you don't also write
+   `.model::<Post>()`. `App::builder()` walks every registered plugin
+   and collects its models in dependency order. `.model::<T>()` is for
+   models that live in `main.rs` itself (no owning plugin) — when in
+   doubt, put the model on the plugin.
+2. **The ORM is ambient.** `Post::objects().fetch()` works inside a route
    handler with no plumbing. Same call works inside `on_ready`, inside
    another plugin's handler, inside a CLI subcommand. The pool was
    published by `App::build()`; everything reads through the same
    `OnceLock`.
-2. **REST customisation lives with the plugin.** `rest_resource()` is a
+3. **REST customisation lives with the plugin.** `rest_resource()` is a
    free function the plugin exposes. Adding the second plugin's REST
    customisation is one more line in `main.rs`, not a 30-line builder
    chain.
-3. **`on_ready` bridges sync to async.** The trait method is sync; sqlx
+4. **`on_ready` bridges sync to async.** The trait method is sync; sqlx
    is async; `Handle::current().block_on(...)` is the canonical bridge.
    It works because `App::build()` runs inside `#[tokio::main]`. The
    `umbra-rls` plugin uses the same pattern.
