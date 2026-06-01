@@ -44,3 +44,5 @@ clap = { version = "4", features = ["derive"] }
 
 [dev-dependencies]
 tempfile = "3"
+# For the plugin-command dispatch smoke test in tests/dispatch_smoke.rs.
+async-trait = "0.1"

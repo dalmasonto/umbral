@@ -17,7 +17,7 @@
 //! use umbra::prelude::*;
 //!
 //! #[tokio::main]
-//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 //!     tracing_subscriber::fmt::init();
 //!
 //!     let settings = Settings::from_env()?;
@@ -142,9 +142,23 @@ enum Command {
 /// an `AppBuilder` keeps the boot order in the user's hands and lets
 /// them register plugins / models / databases freely before
 /// dispatching.
-pub async fn dispatch(app: App) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn dispatch(app: App) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let argv: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    dispatch_with_argv(app, argv).await
+}
 
+/// Same as [`dispatch`] but argv is passed explicitly instead of read
+/// from the process. Lets tests exercise the routing without spawning
+/// a subprocess. User code should call [`dispatch`] (which reads
+/// `std::env::args_os()` and delegates here).
+///
+/// The dispatch order is the same as [`dispatch`]: plugin-contributed
+/// commands first via [`umbra_core::cli::dispatch`], then the built-in
+/// subcommand set (`serve` / `migrate` / etc.).
+pub async fn dispatch_with_argv(
+    app: App,
+    argv: Vec<std::ffi::OsString>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Step 1: try plugin-contributed subcommands first. Each registered
     // plugin's `commands()` is queried; if argv matches one of them
     // (e.g. `createsuperuser` from `umbra-auth`, `worker` from
@@ -162,10 +176,7 @@ pub async fn dispatch(app: App) -> Result<(), Box<dyn std::error::Error>> {
             Ok(umbra_core::cli::DispatchOutcome::Unmatched) => {
                 // Fall through to the built-in subcommands.
             }
-            // CliError is `Box<dyn Error + Send + Sync>`; our return is
-            // `Box<dyn Error>`. Stringify to bridge — the Send + Sync
-            // bound isn't otherwise observable on the error path.
-            Err(e) => return Err(e.to_string().into()),
+            Err(e) => return Err(e),
         }
     }
 
@@ -200,7 +211,7 @@ pub async fn dispatch(app: App) -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
-async fn serve(app: App, addr_override: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
+async fn serve(app: App, addr_override: Option<String>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let addr_str = match addr_override {
         Some(s) => s,
         None => umbra_core::settings::get().bind_addr.clone(),
@@ -212,7 +223,7 @@ async fn serve(app: App, addr_override: Option<String>) -> Result<(), Box<dyn st
     Ok(())
 }
 
-async fn makemigrations() -> Result<(), Box<dyn std::error::Error>> {
+async fn makemigrations() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     match umbra::migrate::make().await {
         Ok(paths) => {
             for path in paths {
@@ -232,7 +243,7 @@ async fn migrate(
     fake: Option<String>,
     fake_initial: bool,
     allow_drift: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // --fake <plugin/name>: mark one migration applied without running SQL.
     if let Some(ref spec) = fake {
         let (plugin, name) = parse_migration_spec(spec)?;
@@ -287,7 +298,7 @@ async fn migrate(
 
 /// Parse `"plugin/name"` into `(&str, &str)`. Returns an error if the
 /// format is wrong.
-fn parse_migration_spec(spec: &str) -> Result<(&str, &str), Box<dyn std::error::Error>> {
+fn parse_migration_spec(spec: &str) -> Result<(&str, &str), Box<dyn std::error::Error + Send + Sync>> {
     let mut parts = spec.splitn(2, '/');
     let plugin = parts.next().ok_or("migration spec must be `plugin/name`")?;
     let name = parts
@@ -296,7 +307,7 @@ fn parse_migration_spec(spec: &str) -> Result<(&str, &str), Box<dyn std::error::
     Ok((plugin, name))
 }
 
-async fn showmigrations() -> Result<(), Box<dyn std::error::Error>> {
+async fn showmigrations() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let pending = umbra::migrate::show().await?;
     if pending > 0 {
         println!("\n{pending} migration(s) not yet applied.");
@@ -304,7 +315,7 @@ async fn showmigrations() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-async fn inspectdb(output: PathBuf, mark_applied: bool) -> Result<(), Box<dyn std::error::Error>> {
+async fn inspectdb(output: PathBuf, mark_applied: bool) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let opts = InspectOptions {
         output,
         mark_applied,
@@ -327,13 +338,13 @@ async fn inspectdb(output: PathBuf, mark_applied: bool) -> Result<(), Box<dyn st
     }
 }
 
-async fn dumpdata(output: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+async fn dumpdata(output: PathBuf) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     umbra::backup::dump_to_path(&output).await?;
     println!("Wrote {}", output.display());
     Ok(())
 }
 
-async fn loaddata(input: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+async fn loaddata(input: PathBuf) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let report = umbra::backup::load_from_path(&input).await?;
     println!(
         "Loaded {} row(s) into {} table(s)",
