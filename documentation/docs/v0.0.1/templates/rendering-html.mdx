@@ -137,6 +137,22 @@ This matches Django's `APP_DIRS` loader behaviour. To override a plugin's templa
   <Card icon="clock" title="Deferred" description="Custom filter and test registration through Plugin::on_ready. Hot reload in dev via minijinja-autoreload." />
 </CardGrid>
 
+## Accessing FK fields in templates
+
+When a model has a `ForeignKey<T>` field, the template context carries only the raw integer by default. To access nested fields like `{{ post.author.username }}`, fetch the post with `select_related` so the FK is serialised as the full `T` object:
+
+```rust
+let post = Post::objects()
+    .filter(post::ID.eq(id))
+    .select_related("author")   // serialises author as {id, username, ...} not 42
+    .get()
+    .await?;
+let ctx = context!(post);
+// template: {{ post.author.username }} now resolves correctly
+```
+
+Without `select_related`, `{{ post.author }}` renders the bare integer. See [Relationships](/docs/v0.0.1/orm/relationships#template-rendering-gap-37) for the full serialisation table.
+
 ## Worked example
 
 `examples/derive-demo` exercises this end-to-end: five templates under `templates/` (base + home + articles list + article detail + 404), four routes serving HTML, one keeping the JSON shape, plus the XSS guard verified by injecting `<script>` into a row body and watching it render as `&lt;script&gt;`.

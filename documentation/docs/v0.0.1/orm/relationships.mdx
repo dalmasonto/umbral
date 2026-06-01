@@ -139,7 +139,7 @@ println!("{}", post.reviewer.resolved().unwrap().username);
 
 Each named FK generates one batch query. Two FKs = two batch queries + the main query.
 
-### Template rendering (gap 37)
+### Template rendering
 
 `ForeignKey<T>` serialises as a bare integer when `resolved` is `None` (the default without `select_related`). After `select_related`, it serialises as the full `T` object:
 
@@ -154,9 +154,46 @@ This means `{{ post.author.username }}` in a minijinja template renders correctl
 
 - **`prefetch_related`** — for reverse FKs (all posts by a user) and M2M. Requires a separate query per related set and a reverse-accessor mechanism that doesn't exist yet. Tracked in `docs/specs/relationships.md`.
 - **Nested traversal** (`select_related("author__manager")`) — single-hop only at v1. Chains require calling `select_related` on the resolved row after the first fetch.
-- **Many-to-many relationships** — need a join-table helper type.
 - **Reverse accessors** (`User::posts`) — tracked in `docs/specs/relationships.md`.
 - **`ON DELETE` behaviour beyond the default RESTRICT.**
 - **FK columns referencing a non-`i64` primary key.**
 
 For the design rationale see [`arch.md`](../../../../arch.md) §M9 and `docs/specs/relationships.md`.
+
+## Many-to-many relationships
+
+<Callout type="warning">
+Many-to-many is **not shipped at v0.0.1**. There is no `ManyToMany<T>` field type and no join-table helper.
+</Callout>
+
+The recommended workaround is a manual through-table: declare an explicit join model with two `ForeignKey` fields and query it directly.
+
+```rust
+// Manual through-table pattern for Post ↔ Tag M2M
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbra::orm::Model)]
+pub struct PostTag {
+    pub id: i64,
+    pub post_id: ForeignKey<Post>,
+    pub tag_id: ForeignKey<Tag>,
+}
+
+// Fetch all tags for a post:
+let links = PostTag::objects()
+    .filter(post_tag::POST_ID.eq(post.id))
+    .fetch()
+    .await?;
+let tag_ids: Vec<i64> = links.iter().map(|l| l.tag_id.id()).collect();
+let tags = Tag::objects()
+    .filter(tag::ID.in_(&tag_ids))
+    .fetch()
+    .await?;
+
+// Add a tag:
+PostTag::objects().create(PostTag {
+    id: 0,
+    post_id: post.id.into(),
+    tag_id: tag.id.into(),
+}).await?;
+```
+
+The `umbra-permissions` plugin uses this exact pattern for its `GroupPermission`, `UserGroup`, and `UserPermission` join tables — they are good reference implementations. M2M first-class support (a `ManyToMany<T>` field type, reverse accessors, `prefetch_related`) is tracked in `docs/specs/relationships.md`.

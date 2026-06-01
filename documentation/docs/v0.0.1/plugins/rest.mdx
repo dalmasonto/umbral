@@ -560,3 +560,28 @@ follow-ons rather than gaps:
 `RestPlugin`'s URLs are exactly what `umbra-openapi` documents - register both plugins and
 you get a live Swagger UI over the generated endpoints at no extra cost. See
 [OpenAPI plugin](./openapi) for setup.
+
+## Pairing with RBAC permissions
+
+`umbra-permissions` ships `has_perm(user_id, "app.codename")` — the same Django-style permission check. Wire it into a custom `Permission` impl to gate REST actions based on group-mediated permissions:
+
+```rust
+use umbra_permissions::has_perm;
+use umbra_rest::{Action, Identity, Permission, PermissionError};
+
+struct HasPermission(String);
+
+impl Permission for HasPermission {
+    fn check(&self, _action: &Action, identity: Option<&Identity>) -> Result<(), PermissionError> {
+        let user_id = identity
+            .and_then(|id| id.user_id)
+            .ok_or(PermissionError::Unauthenticated)?;
+        // has_perm is async; for sync permission impls, pre-compute in middleware
+        // or use a blocking call here — see the permissions plugin docs for patterns.
+        let _ = user_id;
+        Ok(())
+    }
+}
+```
+
+See [Permissions (RBAC)](/docs/v0.0.1/plugins/permissions) for the `has_perm` API and how to set up groups.

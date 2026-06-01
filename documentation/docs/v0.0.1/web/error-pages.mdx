@@ -34,7 +34,7 @@ App::builder()
     .build()?
 ```
 
-The inline classes follow the same Tailwind vocabulary as gap 19 (cross-referenced: gap 19 defers a Tailwind build step; these pages use utility classes without requiring a build pipeline — they work with the Tailwind CDN or any pre-compiled stylesheet that includes the same class names).
+The inline classes work with any stylesheet that includes the Tailwind vocabulary — the Tailwind CDN or any pre-compiled CSS. They do not require a Tailwind build pipeline. A full Tailwind build step is deferred; these pages fall back to functional unstyled HTML when Tailwind isn't loaded.
 
 ## Catching internal errors
 
@@ -64,7 +64,7 @@ The hook is **synchronous** and runs on the error path before the response is as
 
 umbra wraps the entire router in `tower_http::catch_panic::CatchPanicLayer`. A handler that panics produces a graceful 500 response instead of aborting the connection. The panic message is logged via `tracing::error!` and (in dev mode) surfaced in the page body.
 
-Before gap 35, the panic layer was only installed when `.server_error_template(...)` was explicitly set. Now it is installed whenever:
+The panic layer is installed whenever:
 - A user-supplied `server_error_template` is set, OR
 - Default error pages are enabled (the default), OR
 - An `on_server_error` hook is registered.

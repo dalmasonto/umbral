@@ -60,16 +60,17 @@ fires `on_ready` in dependency order.
   <Card icon="alert-triangle" title="name (required)" description="Unique within the binary. The reserved name 'app' belongs to the implicit plugin that owns .model::<T>() registrations." />
 </CardGrid>
 
-## What ships at M7 v1 vs deferred
+## What ships at v0.0.1 vs deferred
 
-The trait above is the M7 v1 shape. Deferred to later milestones:
+The trait above is the current shape. Shipped:
 
-- `middleware()` - the cross-plugin layer-ordering open question is still
-  open. Lifts when sessions need it.
-- `commands()` - clap's dynamic-subcommand surface ergonomics. Lifts when
-  tasks add a `worker` subcommand.
-- inventory / linkme auto-registration. Explicit `.plugin(...)` is the
-  default recommendation; auto lands when a built-in opts in.
+- `commands()` - `Plugin::commands()` returns `Vec<Box<dyn PluginCommand>>`. `umbra-auth` ships `createsuperuser` and `umbra-tasks` ships `tasks-worker` through this hook. See [Management commands](/docs/v0.0.1/cli/management-commands#plugin-contributed-subcommands) for the full example.
+- `templates_dirs()` - plugins contribute their own template directories. See [Rendering HTML](/docs/v0.0.1/templates/rendering-html#cross-plugin-templates).
+
+Deferred to later milestones:
+
+- `middleware()` - the cross-plugin layer-ordering open question is still open.
+- inventory / linkme auto-registration. Explicit `.plugin(...)` is the default recommendation; auto lands when a built-in opts in.
 
 ## The proof
 

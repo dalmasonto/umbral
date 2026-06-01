@@ -111,6 +111,12 @@ Chained `.filter()` calls still AND together as before — `Q` is purely additiv
 
 ---
 
+## See also
+
+- [Declaring models](/docs/v0.0.1/orm/models) — the QuerySet API (`filter`, `update_values`, `fetch`, `get`, etc.) that F and Q plug into.
+- [Relationships](/docs/v0.0.1/orm/relationships) — `ForeignKey<T>` and `select_related`; `ForeignKeyCol` supports `eq_f` / `ne_f` for column-vs-column WHERE.
+- [Transactions](/docs/v0.0.1/orm/transactions) — combining F-expression updates with other writes atomically.
+
 ## Design rationale
 
 See [`arch.md`](../../../../arch.md) §M1 (QuerySet design) and `docs/specs/03-orm-querysets.md` for the predicate composition model.

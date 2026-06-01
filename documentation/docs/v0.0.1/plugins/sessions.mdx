@@ -72,3 +72,9 @@ let count: Option<u32> = umbra_sessions::get_data(&session, "cart_count")?;
   management command or a `umbra-tasks` periodic job lands in a later milestone.
 
 The spec lives in `docs/specs/02-plugin-contract.md`. Source: `plugins/umbra-sessions/src/lib.rs`.
+
+## See also
+
+- [Auth plugin](/docs/v0.0.1/plugins/auth) — `AuthUser`, password hashing, custom user model.
+- [Auth gating](/docs/v0.0.1/web/auth-gating) — `LoggedIn<U>` extractor and `LoginRequiredLayer` for protecting routes.
+- [Permissions (RBAC)](/docs/v0.0.1/plugins/permissions) — group-based and direct permission grants.

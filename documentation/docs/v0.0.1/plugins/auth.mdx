@@ -389,3 +389,5 @@ The `Identity` concept from `umbra-rest` carries only `user_id: i64` (extracted 
 - `docs/specs/outlines/auth-and-sessions.md` - design rationale, deferred features.
 - [Sessions](./sessions) - session creation, `current_user`, extractors.
 - [Admin](./admin) - the `require_staff` gate and how it relates to `is_staff`.
+- [Permissions (RBAC)](./permissions) - `ContentType`, `Permission`, `Group`, and `has_perm(user_id, "app.codename")`.
+- [Web → Auth gating](/docs/v0.0.1/web/auth-gating) - `LoggedIn<U>` and `LoginRequiredLayer` quick reference.
