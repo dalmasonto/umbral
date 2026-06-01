@@ -24,6 +24,13 @@ syn = { version = "2", features = ["full"] }
 # propagate to release builds, so there's no real cycle even though the
 # dependency graph looks circular on paper.
 umbra = { path = "../umbra" }
+# umbra-tasks is needed for the `#[task]` macro expansion tests: the
+# generated code calls `::umbra_tasks::register_handler`.
+umbra-tasks = { path = "../../plugins/umbra-tasks" }
 chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio"] }
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }
+# UI-style reject tests for the `#[task]` attribute macro.
+trybuild = { version = "1", features = ["diff"] }

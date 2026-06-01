@@ -29,9 +29,9 @@
 //! - Handlers register per-process at startup. A handler that wasn't
 //!   registered before the worker spawns is the same as "handler not
 //!   found", which the worker marks the task failed for.
-//! - No `#[task]` macro yet; callers pass the handler name as a string
-//!   to [`enqueue`] and register a closure under the same name. The
-//!   proc-macro lands when the deep spec promotes from the outline.
+//! - `#[task]` macro shipped: use `#[umbra::task]` on an `async fn` to
+//!   generate typed registration helpers. See `umbra-macros` and the
+//!   tasks docs page.
 //! - No periodic scheduling ("beat"). Deferred to the deep spec.
 
 use std::collections::HashMap;
@@ -39,6 +39,15 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::OnceLock;
 use std::time::Duration;
+
+/// Re-export of `serde_json` for use in `#[task]` macro-generated code.
+///
+/// The `#[task]` proc-macro (in `umbra-macros`) emits
+/// `::umbra_tasks::_serde_json::from_str(...)` in the generated wrapper
+/// closure. Routing through this re-export means user crates don't need
+/// a direct `serde_json` dep for the generated code to compile.
+#[doc(hidden)]
+pub use serde_json as _serde_json;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

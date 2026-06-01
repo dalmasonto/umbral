@@ -283,14 +283,20 @@ async fn dev(
     if !status.success() {
         return Err(format!(
             "cargo-watch exited with status {}",
-            status.code().map(|c| c.to_string()).unwrap_or_else(|| "<signal>".to_string())
+            status
+                .code()
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "<signal>".to_string())
         )
         .into());
     }
     Ok(())
 }
 
-async fn serve(app: App, addr_override: Option<String>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn serve(
+    app: App,
+    addr_override: Option<String>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let addr_str = match addr_override {
         Some(s) => s,
         None => umbra_core::settings::get().bind_addr.clone(),
@@ -377,7 +383,9 @@ async fn migrate(
 
 /// Parse `"plugin/name"` into `(&str, &str)`. Returns an error if the
 /// format is wrong.
-fn parse_migration_spec(spec: &str) -> Result<(&str, &str), Box<dyn std::error::Error + Send + Sync>> {
+fn parse_migration_spec(
+    spec: &str,
+) -> Result<(&str, &str), Box<dyn std::error::Error + Send + Sync>> {
     let mut parts = spec.splitn(2, '/');
     let plugin = parts.next().ok_or("migration spec must be `plugin/name`")?;
     let name = parts
@@ -394,7 +402,10 @@ async fn showmigrations() -> Result<(), Box<dyn std::error::Error + Send + Sync>
     Ok(())
 }
 
-async fn inspectdb(output: PathBuf, mark_applied: bool) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn inspectdb(
+    output: PathBuf,
+    mark_applied: bool,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let opts = InspectOptions {
         output,
         mark_applied,

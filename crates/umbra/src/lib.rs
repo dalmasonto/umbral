@@ -304,3 +304,39 @@ pub mod orm {
     /// own model produce their own column module from the derive.
     pub use umbra_core::orm::post::post;
 }
+
+/// The `#[task]` attribute macro.
+///
+/// Marks an `async fn` as an umbra background task. Emits the original
+/// function unchanged and a companion `register_<fn_name>()` function
+/// that registers the handler with `umbra_tasks::register_handler`.
+///
+/// Generated code references `::umbra_tasks::register_handler` directly,
+/// so user crates that apply `#[umbra::task]` must have `umbra-tasks` in
+/// their `[dependencies]` (they would anyway, since using the tasks plugin
+/// implies depending on `umbra-tasks`).
+///
+/// # Constraints
+///
+/// - Must be `async fn`.
+/// - Must take exactly one parameter (the typed payload implementing
+///   `serde::Deserialize`).
+/// - Must return `Result<(), String>`.
+///
+/// # Example
+///
+/// ```ignore
+/// use serde::Deserialize;
+///
+/// #[derive(Deserialize)]
+/// struct WelcomeEmailPayload { user_id: i64 }
+///
+/// #[umbra::task]
+/// async fn send_welcome(payload: WelcomeEmailPayload) -> Result<(), String> {
+///     Ok(())
+/// }
+///
+/// // At boot (Plugin::on_ready or main):
+/// register_send_welcome();
+/// ```
+pub use umbra_macros::task;

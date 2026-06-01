@@ -83,8 +83,8 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote, quote_spanned};
 use syn::spanned::Spanned;
 use syn::{
-    Data, DeriveInput, Field, Fields, GenericArgument, PathArguments, Type, TypePath,
-    parse_macro_input,
+    Data, DeriveInput, Field, Fields, GenericArgument, ItemFn, PathArguments, ReturnType, Type,
+    TypePath, parse_macro_input,
 };
 
 /// Generate `impl Model` for a struct.
@@ -1279,6 +1279,244 @@ fn option_inner_type(ty: &syn::Type) -> Option<&syn::Type> {
         }
     }
     None
+}
+
+// =========================================================================
+// `#[task]` attribute macro.
+//
+// Turns an `async fn name(payload: PayloadType) -> Result<(), String>`
+// into:
+//   1. The original `async fn name(...)` unchanged.
+//   2. A companion `pub fn register_name()` that calls
+//      `::umbra_tasks::register_handler("name", wrapper)` where `wrapper`
+//      is a generated `async fn(payload_json: &str) -> Result<(), String>`
+//      that JSON-deserialises the payload via `serde_json::from_str` and
+//      forwards to `name`.
+//
+// Optional: `#[task(name = "dotted.name")]` overrides the handler name
+// used for registration (default: the function's Rust identifier).
+//
+// Constraints:
+//   - Must be `async fn`.
+//   - Must take exactly one parameter (the typed payload).
+//   - Must return `Result<(), String>`.
+//   Violations emit `compile_error!` with a targeted message.
+// =========================================================================
+
+/// Mark an `async fn` as an umbra background task.
+///
+/// The macro emits the original function unchanged and a companion
+/// `register_<fn_name>()` function that registers the task handler with
+/// `umbra_tasks::register_handler`. Call the companion at boot time from
+/// `Plugin::on_ready` or your `main` function.
+///
+/// ```ignore
+/// use serde::Deserialize;
+///
+/// #[derive(Deserialize)]
+/// struct WelcomeEmailPayload {
+///     user_id: i64,
+///     locale: String,
+/// }
+///
+/// #[umbra::task]
+/// async fn send_welcome(payload: WelcomeEmailPayload) -> Result<(), String> {
+///     // ... real work
+///     Ok(())
+/// }
+///
+/// // At boot:
+/// register_send_welcome();
+/// ```
+///
+/// Override the task name (the key stored in the handler registry) with:
+///
+/// ```ignore
+/// #[umbra::task(name = "blog.send_welcome")]
+/// async fn send_welcome(p: WelcomeEmailPayload) -> Result<(), String> { ... }
+/// ```
+#[proc_macro_attribute]
+pub fn task(args: TokenStream, input: TokenStream) -> TokenStream {
+    expand_task(args.into(), input.into())
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+/// Parse optional `name = "..."` from the attribute args.
+struct TaskArgs {
+    name_override: Option<String>,
+}
+
+fn parse_task_args(args: TokenStream2) -> syn::Result<TaskArgs> {
+    let mut out = TaskArgs {
+        name_override: None,
+    };
+    // Empty args are fine — default task name is the fn identifier.
+    if args.is_empty() {
+        return Ok(out);
+    }
+    // Parse as a single `name = "literal"` meta item.
+    let meta: syn::MetaNameValue = syn::parse2(args.clone()).map_err(|_| {
+        syn::Error::new_spanned(
+            &args,
+            "#[task] attribute accepts `name = \"...\"` or nothing",
+        )
+    })?;
+    if !meta.path.is_ident("name") {
+        return Err(syn::Error::new_spanned(
+            &meta.path,
+            "#[task] only supports `name = \"...\"` as an argument",
+        ));
+    }
+    let syn::Expr::Lit(syn::ExprLit {
+        lit: syn::Lit::Str(lit_str),
+        ..
+    }) = &meta.value
+    else {
+        return Err(syn::Error::new_spanned(
+            &meta.value,
+            "#[task(name = ...)] requires a string literal",
+        ));
+    };
+    out.name_override = Some(lit_str.value());
+    Ok(out)
+}
+
+fn expand_task(args: TokenStream2, input: TokenStream2) -> syn::Result<TokenStream2> {
+    let task_args = parse_task_args(args)?;
+
+    // Parse the input as a function item.
+    let func: ItemFn = syn::parse2(input.clone())
+        .map_err(|e| syn::Error::new(e.span(), "#[task] can only be applied to functions"))?;
+
+    // --- Constraint 1: must be async ---
+    if func.sig.asyncness.is_none() {
+        return Err(syn::Error::new_spanned(
+            func.sig.fn_token,
+            "#[task] requires an `async fn`; the handler runs asynchronously in the worker",
+        ));
+    }
+
+    // --- Constraint 2: exactly one parameter ---
+    let params: Vec<&syn::FnArg> = func.sig.inputs.iter().collect();
+    if params.len() != 1 {
+        return Err(syn::Error::new_spanned(
+            &func.sig.inputs,
+            format!(
+                "#[task] requires exactly one parameter (the typed payload); \
+                 found {} parameter(s)",
+                params.len()
+            ),
+        ));
+    }
+
+    // Extract the parameter type so we can generate the wrapper.
+    let payload_ty = match params[0] {
+        syn::FnArg::Typed(pat_ty) => &*pat_ty.ty,
+        syn::FnArg::Receiver(_) => {
+            return Err(syn::Error::new_spanned(
+                params[0],
+                "#[task] cannot be applied to a method (self parameter is not allowed)",
+            ));
+        }
+    };
+
+    // --- Constraint 3: must return Result<(), String> ---
+    let is_correct_return = match &func.sig.output {
+        ReturnType::Default => false,
+        ReturnType::Type(_, ty) => is_result_unit_string(ty),
+    };
+    if !is_correct_return {
+        return Err(syn::Error::new_spanned(
+            &func.sig.output,
+            "#[task] requires `-> Result<(), String>` as the return type (matches \
+             the umbra-tasks handler contract)",
+        ));
+    }
+
+    let fn_name = &func.sig.ident;
+    let fn_name_str = fn_name.to_string();
+    let task_name = task_args.name_override.as_deref().unwrap_or(&fn_name_str);
+
+    // Generated companion: `pub fn register_<fn_name>()`
+    let register_fn_name = format_ident!("register_{}", fn_name);
+
+    // The wrapper closes over nothing — it just deserialises and calls
+    // the original function. The handler registry stores `&'static str`
+    // keys so we need a `&'static str` literal. Since `task_name` may
+    // come from the attribute it could be a runtime String; we use a
+    // string literal OR `Box::leak` for the override case.
+    //
+    // For the default (fn ident) case we emit a literal. For the
+    // override case we need to produce a `'static str` at registration
+    // time; `Box::leak(task_name.into_boxed_str())` does it cleanly and
+    // the task name is a one-time-registration so the leak is
+    // acceptable (same cost as a static).
+    let task_name_tokens: TokenStream2 = {
+        // Both branches emit a `&'static str` expression.
+        let s = task_name;
+        quote! { #s }
+    };
+
+    let output = quote! {
+        // 1. Original function unchanged.
+        #func
+
+        // 2. Companion registration function.
+        pub fn #register_fn_name() {
+            ::umbra_tasks::register_handler(
+                #task_name_tokens,
+                |payload_json: &str| {
+                    // Copy the payload string so the future can own it
+                    // (register_handler requires 'static futures).
+                    let owned = payload_json.to_owned();
+                    async move {
+                        let payload: #payload_ty =
+                            ::umbra_tasks::_serde_json::from_str(&owned)
+                                .map_err(|e| format!("payload deserialise error: {e}"))?;
+                        #fn_name(payload).await
+                    }
+                },
+            );
+        }
+    };
+
+    Ok(output)
+}
+
+/// True when `ty` is `Result<(), String>` (any qualifier depth).
+///
+/// Checks: outer path last segment == `Result`, two generic args, first
+/// is the unit type `()`, second is a path whose last segment is `String`.
+fn is_result_unit_string(ty: &Type) -> bool {
+    let Type::Path(TypePath { qself: None, path }) = ty else {
+        return false;
+    };
+    let Some(last) = path.segments.last() else {
+        return false;
+    };
+    if last.ident != "Result" {
+        return false;
+    }
+    let PathArguments::AngleBracketed(ref args) = last.arguments else {
+        return false;
+    };
+    let type_args: Vec<&GenericArgument> = args.args.iter().collect();
+    if type_args.len() != 2 {
+        return false;
+    }
+    // First arg must be the unit type `()`.
+    let GenericArgument::Type(ok_ty) = type_args[0] else {
+        return false;
+    };
+    if !matches!(ok_ty, Type::Tuple(t) if t.elems.is_empty()) {
+        return false;
+    }
+    // Second arg must be a path ending in `String`.
+    let GenericArgument::Type(err_ty) = type_args[1] else {
+        return false;
+    };
+    type_is_ident(err_ty, "String")
 }
 
 fn expand_form(input: DeriveInput) -> syn::Result<TokenStream2> {

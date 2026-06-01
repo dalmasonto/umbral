@@ -24,11 +24,90 @@ App::builder()
     .build()?;
 ```
 
-## Declaring and enqueueing a task
+## Declaring a task with `#[task]`
 
-There is no `#[task]` proc-macro yet (that lands when the deep spec promotes from
-the outline). The v1 API is explicit: register a handler closure under a string
-name at startup, then enqueue payloads under the same name at runtime.
+The recommended way to declare a task is with the `#[task]` attribute macro.
+Define a typed payload struct that implements `serde::Deserialize`, annotate the
+handler, and call the generated registration function at boot time.
+
+```rust
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize)]
+pub struct WelcomeEmailPayload {
+    pub user_id: i64,
+    pub locale: String,
+}
+
+#[umbra::task]
+async fn send_welcome(payload: WelcomeEmailPayload) -> Result<(), String> {
+    // ... send the email
+    Ok(())
+}
+```
+
+The macro emits two things:
+
+1. The original `async fn send_welcome` unchanged, so you can call it directly
+   in tests or other code.
+2. A companion `pub fn register_send_welcome()` that calls
+   `umbra_tasks::register_handler("send_welcome", ...)` with a generated wrapper
+   that JSON-deserialises the payload and forwards to your function.
+
+Call the companion from `Plugin::on_ready` or your `main` function before the
+worker starts:
+
+```rust
+// in Plugin::on_ready or main.rs, before App::build()
+register_send_welcome();
+```
+
+Then enqueue work anywhere in your request handlers:
+
+```rust
+use umbra_tasks::{EnqueueOptions, enqueue};
+
+let _task_id = enqueue(
+    "send_welcome",
+    WelcomeEmailPayload { user_id: 42, locale: "en".to_string() },
+    EnqueueOptions::default(),
+).await?;
+```
+
+### Overriding the task name
+
+By default the task name equals the Rust function identifier. Override it with
+`name = "..."` when you need a dotted or namespaced key:
+
+```rust
+#[umbra::task(name = "email.send_welcome")]
+async fn send_welcome(payload: WelcomeEmailPayload) -> Result<(), String> {
+    Ok(())
+}
+
+// The generated companion is still named after the Rust identifier:
+register_send_welcome();
+
+// But enqueue uses the custom name:
+enqueue("email.send_welcome", payload, EnqueueOptions::default()).await?;
+```
+
+### Constraints the macro enforces
+
+The macro emits a `compile_error!` with a targeted message if any of these rules
+are violated:
+
+| Rule | Error |
+|------|-------|
+| Must be `async fn` | `#[task] requires an 'async fn'` |
+| Exactly one parameter | `found N parameter(s)` |
+| Return type must be `Result<(), String>` | `requires -> Result<(), String>` |
+
+## Dynamic registration (advanced)
+
+`register_handler` is available directly when you need to register a closure
+dynamically - for example, when the handler name is determined at runtime or when
+you need to skip the macro for a generic handler.
 
 ```rust
 use umbra_tasks::{EnqueueOptions, enqueue, register_handler};
@@ -44,11 +123,15 @@ register_handler("send_welcome_email", |payload: &str| async move {
 });
 
 // In a handler, after a user signs up.
-let _task_id = enqueue("send_welcome_email", WelcomePayload { user_id: 42 }, EnqueueOptions::default()).await?;
+let _task_id = enqueue(
+    "send_welcome_email",
+    WelcomePayload { user_id: 42 },
+    EnqueueOptions::default(),
+).await?;
 ```
 
-`EnqueueOptions` lets you set `max_attempts` (default 3) and `scheduled_for`
-(default `Utc::now()`) to delay execution.
+The `#[task]` macro expands to exactly this pattern. Use it directly only when
+the macro's single-payload constraint does not fit your case.
 
 ## Running the worker
 
@@ -64,10 +147,27 @@ The worker claims one pending row at a time inside a transaction, dispatches the
 handler, and writes back `succeeded` or `failed`. Panicking handlers are caught
 via `tokio::task::spawn` so one bad job cannot take the worker down.
 
+`EnqueueOptions` lets you set `max_attempts` (default 3) and `scheduled_for`
+(default `Utc::now()`) to delay execution.
+
+## Combining with signals
+
+<Callout type="info">
+For fire-and-forget work that must survive the request process - like sending a
+welcome email after user signup - enqueue a task from your signal handler rather
+than running the work inline. That way the task persists to the database and the
+worker picks it up even if the web process restarts before the handler returns.
+
+```rust
+// in your signup signal handler
+enqueue("email.send_welcome", WelcomeEmailPayload { user_id }, EnqueueOptions::default()).await?;
+```
+
+The signals docs page is at [`/docs/v0.0.1/plugins/signals`](/docs/v0.0.1/plugins/signals) and covers how to connect signals to tasks end-to-end.
+</Callout>
+
 ## What is NOT in v1
 
-- **`#[task]` proc-macro.** Handler names are strings; the macro lands when the
-  deep spec is promoted from the outline.
 - **Priority queues and distributed locks.** SQLite is single-writer; a brief
   transaction is sufficient. Postgres-aware locking is a later follow-on.
 - **Periodic scheduling ("beat").** There is no cron-like repeat mechanism yet.

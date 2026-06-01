@@ -1,0 +1,136 @@
+---
+title: Signals
+description: In-process pub/sub - emit named events from anywhere, subscribe from any plugin. Django's signals shape.
+sidebar_position: 12
+icon: radio
+tags: [plugins, signals, events]
+---
+
+`umbra-signals` is Django's signals in the Rust shape: plugins emit named events (`post_user_signup`, `before_email_send`, ...) and any other plugin or the application subscribes by name. It's strictly **in-process** at v1 — no cross-process broker, no persistence, no replay. For work that needs to survive the process, pair signals with [`umbra-tasks`](/docs/v0.0.1/plugins/tasks): the signal handler enqueues a task; the worker runs it.
+
+## Register the plugin
+
+`SignalsPlugin` is empty — it exists so the app builder can order other plugins relative to it ("auth → signals" so auth fires its `post_login` signals after the signals registry is up).
+
+```rust
+use umbra::prelude::*;
+use umbra_signals::SignalsPlugin;
+
+App::builder()
+    .plugin(SignalsPlugin)
+    .plugin(AuthPlugin::default())
+    .build()?;
+```
+
+Subscriptions register via `umbra_signals::subscribe` / `subscribe_async` from anywhere — typically `Plugin::on_ready` for plugins, or right before `App::build` for app-level handlers.
+
+## Emit a signal
+
+```rust
+use umbra_signals::emit;
+use serde_json::json;
+
+// Anywhere in your code (a handler, a Plugin::on_ready, a task body):
+let listeners = emit(
+    "post_user_signup",
+    json!({ "user_id": user.id, "email": user.email }),
+).await;
+// `listeners` is the count of subscribers that received the signal.
+```
+
+`emit` is async because it awaits async subscribers. It returns the number of handlers that fired, mostly for logging.
+
+## Subscribe — sync
+
+```rust
+use umbra_signals::subscribe;
+
+subscribe("post_user_signup", |payload| {
+    let user_id = payload["user_id"].as_i64().unwrap_or(0);
+    tracing::info!(user_id, "new user signed up");
+});
+```
+
+Sync handlers run inline on the emitter's task, in registration order. Cheap operations only — anything I/O-bound should be `subscribe_async` so the emitter doesn't block.
+
+## Subscribe — async
+
+```rust
+use umbra_signals::subscribe_async;
+
+subscribe_async("post_user_signup", |payload| async move {
+    let user_id = payload["user_id"].as_i64().unwrap();
+    // Look up the user, send a welcome email, etc.
+    let user = AuthUser::objects()
+        .filter(auth_user::ID.eq(user_id))
+        .get().await.unwrap();
+    let _ = umbra_email::send(
+        &user.email,
+        "Welcome!",
+        "Glad to have you.",
+    ).await;
+});
+```
+
+Async handlers are awaited by `emit` in series. If you need fire-and-forget (don't block the emitter), spawn a `tokio::task::spawn(...)` inside the handler.
+
+## Combining with tasks — the durable pattern
+
+Signals are in-process and lost if the process crashes mid-handler. For anything that must survive — sending a confirmation email, charging a card, kicking off a long-running job — enqueue a task from the signal handler:
+
+```rust
+use umbra::task;
+use umbra_signals::subscribe_async;
+use umbra_tasks::enqueue;
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct WelcomeEmail {
+    user_id: i64,
+    locale: String,
+}
+
+#[task]
+async fn send_welcome_email(payload: WelcomeEmail) -> Result<(), String> {
+    // ... do the work; runs in the task worker, not on the emitter's task
+    Ok(())
+}
+
+// In on_ready (or main):
+register_send_welcome_email();
+
+subscribe_async("post_user_signup", |payload| async move {
+    let user_id = payload["user_id"].as_i64().unwrap();
+    let _ = enqueue(
+        "send_welcome_email",
+        &WelcomeEmail { user_id, locale: "en".into() },
+    ).await;
+});
+```
+
+Failure modes are now bounded: the signal-handler's only job is to enqueue a row. The worker handles retry, backoff, and dead-letter accounting. See [`umbra-tasks`](/docs/v0.0.1/plugins/tasks) for the worker side and the `#[task]` macro shape.
+
+## Payload shape
+
+Payloads are `serde_json::Value`. The flexibility cost — no compile-time check that emitter and subscriber agree on the shape — is a deliberate trade against the per-event-type generic gymnastics a typed event bus would force on every consumer. Document each signal's payload shape in the emitting plugin's docs.
+
+Built-in signals shipped at v0.0.1:
+
+| Signal | Emitted by | Payload |
+|---|---|---|
+| `post_login` | `umbra-auth` | `{ "user_id": i64, "username": "..." }` after successful authentication |
+| `post_logout` | `umbra-sessions` | `{ "user_id": i64 }` after session destruction |
+| `post_signup` | `umbra-auth` | `{ "user_id": i64, "email": "..." }` after `create_user` returns |
+
+(The auth/sessions emit points are wired in their respective `on_ready` setup paths.)
+
+## What's not shipped at v0.0.1
+
+- **Typed events.** Future: `enum AppEvent { PostSignup { user_id: i64 } }` with a trait associated type so emit/subscribe see the same concrete type. Lands when a real plugin chain needs the compile-time guarantee.
+- **Cross-process broadcast.** Future: a Redis or NATS adapter so signals propagate across replicas. Lands when a horizontally-scaled deployment surfaces the need.
+- **Persistence / replay.** Use `umbra-tasks` if you need durable delivery — that's its job.
+
+## See also
+
+- [`umbra-tasks` plugin docs](/docs/v0.0.1/plugins/tasks) — the durable side of fire-and-forget work.
+- [Plugin trait](/docs/v0.0.1/plugins/the-plugin-trait) — `on_ready` is the canonical place to register subscriptions.
+- [Settings and environment](/docs/v0.0.1/getting-started/settings-and-env) — reading config inside a signal handler.
