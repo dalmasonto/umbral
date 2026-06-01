@@ -1,6 +1,6 @@
 ## Status
 
-**10 of 10 closed.** Last updated 2026-06-01.
+**11 of 11 closed.** Last updated 2026-06-01.
 
 | # | Gap | Status |
 |---|-----|--------|
@@ -14,6 +14,7 @@
 | 8 | No `.update()` method on `Model` objects | done — `9ab3c00` |
 | 9 | No `.delete()` method on `Model` objects | done — `9ab3c00` |
 | 10 | No bulk create/update/delete on `Model` objects | done — `9ab3c00` |
+| 11 | Complete plugin example (ORM access) | done — see commit log |
 
 All known gaps closed. New gaps land below as they're surfaced.
 
@@ -40,3 +41,5 @@ All known gaps closed. New gaps land below as they're surfaced.
        — Shipped via `QuerySet::delete()` in commit 9ab3c00. Applies accumulated filter predicates as WHERE; returns affected-rows count. Without filter calls, deletes every row — same semantics as raw SQL DELETE FROM.
 10. [x] There are no bulk create/update/delete methods on `Model` objects
        — All covered by gaps 7-9's primitives: `Manager::bulk_create(Vec<T>)` produces one multi-VALUES INSERT (cheap, batched); `QuerySet::filter(...).update_values(map)` and `QuerySet::filter(...).delete()` are naturally bulk via the WHERE clause. 10 new tests in `tests/model_writes.rs` + 5 unit tests in the `crate::orm::write` module pin the JSON→sea_query::Value dispatch. See the new "Writing rows" section in `documentation/docs/v0.0.1/orm/models.mdx`.
+11. [x] We need to go deeper on how to create a plugin/an app - http://localhost:5173/docs/v0.0.1/plugins/plugins-are-apps ie how to get access to the ORM from a plugin. So do a short but complete example of a plugin here, not in split parts, a single codeblock.
+       — Shipped: new "## A complete plugin" section in `documentation/docs/v0.0.1/plugins/plugins-are-apps.mdx` with a single-codeblock `BlogPlugin` example covering: model declaration in the plugin file, two route handlers that hit `Post::objects().fetch()` and `.first()` directly (no `State<DbPool>` or pool plumbing — the ORM is ambient), a `rest_resource()` function that exposes the plugin's REST customization (hide/transform/computed) for `RestPlugin::default().resource(...)` to pick up, and an `on_ready` hook that bridges sync→async via `Handle::current().block_on(...)` to seed initial rows. The body wraps with the three "what matters here" points: ambient ORM, plugin-bundled REST customization, and the sync-on_ready / async-sqlx bridge.

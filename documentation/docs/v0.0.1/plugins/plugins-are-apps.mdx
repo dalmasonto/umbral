@@ -54,6 +54,168 @@ identical, which "plugin" expresses more honestly than "app".
 
 The mental model is the same. The keyword is different.
 
+## A complete plugin
+
+Here's the whole shape in one file — a `blog` plugin (think Django's
+`blog` app) that owns its own `Post` model, exposes a couple of
+routes that hit the ORM from the plugin code, customises REST via a
+`ResourceConfig`, and runs a one-shot seed on startup via
+`on_ready`. Drop this in `plugins/blog/src/lib.rs` and add a single
+`.plugin(blog::BlogPlugin)` line to your `App::builder()` chain.
+
+```rust
+//! The blog app. Owns the `Post` model + a couple of HTML pages.
+
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use umbra::plugin::{AppContext, Plugin, PluginError};
+use umbra::prelude::*;
+use umbra::web::{Html, Json, Path, Router, StatusCode, get};
+
+// --- Model -----------------------------------------------------------------
+
+/// The plugin owns its model. `App::builder()` discovers it through the
+/// `Plugin::models()` hook (not shown here — for now register with
+/// `App::builder().model::<blog::Post>()` from main.rs; the auto-discovery
+/// path lands when M7 ships full plugin model registration).
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, umbra::orm::Model)]
+pub struct Post {
+    pub id: i64,
+    pub title: String,
+    pub body: String,
+    pub author_email: String,
+}
+
+// --- Route handlers -- accessing the ORM from inside the plugin ------------
+
+/// HTML list view. `Post::objects()` reaches the ambient pool that
+/// `App::build()` published — no `&Pool` arg through the handler chain,
+/// no `State<DbPool>` extractor, no global look-up at the call site.
+async fn list_posts() -> Result<Html<String>, (StatusCode, String)> {
+    let posts = Post::objects()
+        .order_by(post::ID.desc())
+        .limit(50)
+        .fetch()
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let mut html = String::from("<h1>Posts</h1><ul>");
+    for p in &posts {
+        html.push_str(&format!("<li>{} — {}</li>", p.id, p.title));
+    }
+    html.push_str("</ul>");
+    Ok(Html(html))
+}
+
+/// JSON detail view. Same ORM, different terminal — `.first()` rather than
+/// `.fetch()` because we want one row or 404.
+async fn post_detail(Path(id): Path<i64>) -> Result<Json<Post>, (StatusCode, String)> {
+    let found = Post::objects()
+        .filter(post::ID.eq(id))
+        .first()
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    found
+        .map(Json)
+        .ok_or((StatusCode::NOT_FOUND, format!("no post with id {id}")))
+}
+
+// --- REST customisation, bundled in the plugin ----------------------------
+
+/// What the plugin's REST endpoints should look like. Lives WITH the
+/// plugin so main.rs doesn't have to thread customisation per-table.
+/// Register from main.rs via `.plugin(RestPlugin::default()
+/// .resource(blog::rest_resource()))`.
+pub fn rest_resource() -> umbra_rest::ResourceConfig {
+    umbra_rest::ResourceConfig::new("post")
+        // Hide the raw author email; show the domain only.
+        .transform("author_email", |v| {
+            let s = v.as_str().unwrap_or("");
+            match s.split_once('@') {
+                Some((_, d)) => json!(format!("***@{d}")),
+                None => v.clone(),
+            }
+        })
+        // Add a `summary` field derived from the body's first line.
+        .computed("summary", |row| {
+            let body = row.get("body").and_then(|v| v.as_str()).unwrap_or("");
+            let first_line = body.lines().next().unwrap_or("");
+            json!(first_line.chars().take(120).collect::<String>())
+        })
+}
+
+// --- The Plugin trait ------------------------------------------------------
+
+pub struct BlogPlugin;
+
+impl Plugin for BlogPlugin {
+    fn name(&self) -> &'static str {
+        "blog"
+    }
+
+    fn routes(&self) -> Router {
+        Router::new()
+            .route("/blog", get(list_posts))
+            .route("/blog/{id}", get(post_detail))
+    }
+
+    /// Runs after every other plugin has booted and the ambient pool
+    /// + model registry are live. The classic "seed on first run"
+    /// idiom — bulk_create is idempotent here because we check count
+    /// first; in production you'd guard this behind a feature flag
+    /// or move it to a separate `seed` management command.
+    fn on_ready(&self, _ctx: &AppContext) -> Result<(), PluginError> {
+        tokio::runtime::Handle::current().block_on(async {
+            let count = Post::objects().count().await?;
+            if count == 0 {
+                Post::objects()
+                    .bulk_create(vec![Post {
+                        id: 0,
+                        title: "Hello".into(),
+                        body: "First post.".into(),
+                        author_email: "alice@example.com".into(),
+                    }])
+                    .await?;
+            }
+            Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
+        })
+        .map_err(|e| -> PluginError { Box::new(std::io::Error::other(e.to_string())) })?;
+        Ok(())
+    }
+}
+```
+
+Wire it in `main.rs`:
+
+```rust
+let app = App::builder()
+    .settings(settings)
+    .database("default", pool)
+    .model::<blog::Post>()                       // register the model
+    .plugin(blog::BlogPlugin)                     // routes + on_ready
+    .plugin(
+        umbra_rest::RestPlugin::default()
+            .resource(blog::rest_resource()),    // REST customisation
+    )
+    .build()?;
+```
+
+Three things that matter in this shape:
+
+1. **The ORM is ambient.** `Post::objects().fetch()` works inside a route
+   handler with no plumbing. Same call works inside `on_ready`, inside
+   another plugin's handler, inside a CLI subcommand. The pool was
+   published by `App::build()`; everything reads through the same
+   `OnceLock`.
+2. **REST customisation lives with the plugin.** `rest_resource()` is a
+   free function the plugin exposes. Adding the second plugin's REST
+   customisation is one more line in `main.rs`, not a 30-line builder
+   chain.
+3. **`on_ready` bridges sync to async.** The trait method is sync; sqlx
+   is async; `Handle::current().block_on(...)` is the canonical bridge.
+   It works because `App::build()` runs inside `#[tokio::main]`. The
+   `umbra-rls` plugin uses the same pattern.
+
 ## Next
 
 - The trait surface in detail: [The Plugin trait](/v0.0.1/plugins/the-plugin-trait).

@@ -98,6 +98,51 @@ Three builder methods let you reshape what the REST endpoints emit on a per-tabl
 per-field basis. They apply to every outbound response (`list`, `retrieve`, `create`,
 `update`/`patch`) in order: **hide → transform → computed**.
 
+### Bundling per-model in a `ResourceConfig`
+
+When the customisation grows past a couple of lines, move it next to the model in a
+`ResourceConfig`. The `RestPlugin::default().resource(config)` builder folds it in;
+the per-call `.hide` / `.transform` / `.computed` builders below still work for
+one-off cases.
+
+```rust
+// In your plugin / app: plugins/users/src/lib.rs (or src/users.rs)
+use serde_json::json;
+use umbra_rest::ResourceConfig;
+
+pub fn rest_resource() -> ResourceConfig {
+    ResourceConfig::new("user")
+        .hide("password_hash")
+        .transform("email", |v| {
+            let s = v.as_str().unwrap_or("");
+            match s.split_once('@') {
+                Some((_, d)) => json!(format!("***@{d}")),
+                None => v.clone(),
+            }
+        })
+        .computed("display_name", |row| {
+            let f = row.get("first_name").and_then(|v| v.as_str()).unwrap_or("");
+            let l = row.get("last_name").and_then(|v| v.as_str()).unwrap_or("");
+            json!(format!("{f} {l}").trim().to_string())
+        })
+}
+
+// In main.rs: one line per app.
+let rest = RestPlugin::default()
+    .resource(users::rest_resource())
+    .resource(posts::rest_resource());
+```
+
+The DRF analogy: each Django app has a `serializers.py` next to its `models.py`.
+`ResourceConfig` plays the same role — per-model REST customisation lives next to
+the model, not in the project's wiring layer.
+
+Multiple `.resource(...)` calls for the same table stack additively. Mixing
+`.resource(config)` with one-off `.hide(table, field)` calls in `main.rs` is fine —
+everything lands in the same per-table vecs.
+
+### Per-call builders (one-off cases)
+
 ```rust
 use serde_json::json;
 

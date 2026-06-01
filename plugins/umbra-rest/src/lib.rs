@@ -53,6 +53,9 @@ pub use pagination::{
     LimitOffsetPagination, NoPagination, PageNumberPagination, PageRequest, Pagination,
 };
 
+pub mod resource;
+pub use resource::ResourceConfig;
+
 /// The block-list every plugin starts with. Exposing these via REST
 /// would leak password hashes (auth_user), session IDs (session), or
 /// the migration tracking table itself.
@@ -61,13 +64,16 @@ const DEFAULT_BLOCKED_TABLES: &[&str] = &["auth_user", "session", "umbra_migrati
 /// Closure that transforms one field's JSON value to another. Used
 /// by [`RestPlugin::transform`]. The signature is `&Value -> Value`
 /// — the field's current value goes in, the replacement comes out.
-type TransformFn = std::sync::Arc<dyn Fn(&Value) -> Value + Send + Sync + 'static>;
+/// `pub(crate)` so [`crate::resource::ResourceConfig`] can store them
+/// in its own per-table vec before they're folded into the plugin.
+pub(crate) type TransformFn = std::sync::Arc<dyn Fn(&Value) -> Value + Send + Sync + 'static>;
 
 /// Closure that computes a derived field from the whole row. Used by
 /// [`RestPlugin::computed`]. The signature is `&Map -> Value` — the
 /// closure sees every present field (including computed ones added
 /// earlier in the chain) and returns the value for the new key.
-type ComputedFn = std::sync::Arc<dyn Fn(&Map<String, Value>) -> Value + Send + Sync + 'static>;
+pub(crate) type ComputedFn =
+    std::sync::Arc<dyn Fn(&Map<String, Value>) -> Value + Send + Sync + 'static>;
 
 /// The plugin. Mounts the REST routes at `/api`.
 ///
@@ -171,6 +177,50 @@ impl RestPlugin {
     {
         for t in tables {
             self.extra_exclude.push(t.into());
+        }
+        self
+    }
+
+    /// Register a [`ResourceConfig`] — every `hide` / `transform` /
+    /// `computed` it carries is folded into the plugin under the
+    /// resource's table name.
+    ///
+    /// Lets per-model REST customization live next to the model
+    /// (in a plugin crate, a module, a free function) rather than
+    /// at the `RestPlugin::default()` site in `main.rs`. The
+    /// per-call builders (`.hide` / `.transform` / `.computed`) still
+    /// work for one-off cases.
+    ///
+    /// ```ignore
+    /// // plugins/users/src/lib.rs
+    /// pub fn rest_resource() -> umbra_rest::ResourceConfig {
+    ///     umbra_rest::ResourceConfig::new("user")
+    ///         .hide("password_hash")
+    ///         .transform("email", mask_email)
+    /// }
+    ///
+    /// // main.rs
+    /// RestPlugin::default()
+    ///     .resource(users::rest_resource())
+    /// ```
+    ///
+    /// Calling `.resource(...)` multiple times for the SAME table is
+    /// supported and additive — each call appends, doesn't replace.
+    pub fn resource(mut self, config: ResourceConfig) -> Self {
+        let ResourceConfig {
+            table,
+            hidden,
+            transforms,
+            computed,
+        } = config;
+        for field in hidden {
+            self.hidden.push((table.clone(), field));
+        }
+        for (field, func) in transforms {
+            self.transforms.push((table.clone(), field, func));
+        }
+        for (name, func) in computed {
+            self.computed.push((table.clone(), name, func));
         }
         self
     }
