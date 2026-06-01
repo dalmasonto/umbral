@@ -328,6 +328,80 @@ pub fn fire_server_error_hook(hook: &Option<ServerErrorHook>, error_msg: &str, p
     }
 }
 
+// ─── Response-rendering middleware (handler-Err path) ───────────────────────
+
+/// State for the response-rendering middleware. Cloned per-request; both
+/// fields are cheap to clone (`Option<String>` + `Option<Arc<...>>`).
+#[derive(Clone)]
+pub struct Render500State {
+    pub template: Option<String>,
+    pub hook: Option<ServerErrorHook>,
+}
+
+/// Middleware that intercepts plain-text 500 responses and re-renders them
+/// through the configured `server_error_template` (or the embedded default
+/// when enabled). Already-HTML 500 responses pass through untouched — those
+/// were rendered by `CatchPanicLayer` (panics) or by the handler itself.
+///
+/// This closes the gap where a handler returning
+/// `Err((StatusCode::INTERNAL_SERVER_ERROR, msg))` previously produced a
+/// raw plain-text response instead of the configured 500 page. The
+/// `on_server_error` hook also fires for these paths, with the response
+/// body bytes as the error message and the request URI as the path.
+pub async fn render_500_middleware(
+    axum::extract::State(state): axum::extract::State<Render500State>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response<Body> {
+    let path = req.uri().path().to_string();
+    let resp = next.run(req).await;
+
+    if resp.status() != StatusCode::INTERNAL_SERVER_ERROR {
+        return resp;
+    }
+
+    // Already-rendered HTML 500s (from CatchPanicLayer or a custom handler)
+    // pass through. Only the raw text/plain or no-content-type 500s get
+    // re-rendered.
+    let ct = resp
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if ct.starts_with("text/html") {
+        return resp;
+    }
+
+    // Capture the body to extract the error message for the hook + dev
+    // context. 64KB cap: error messages don't need more, and we don't
+    // want a malicious upstream to OOM us.
+    let (_parts, body) = resp.into_parts();
+    let bytes = axum::body::to_bytes(body, 64 * 1024)
+        .await
+        .unwrap_or_default();
+    let error_msg = String::from_utf8_lossy(&bytes).to_string();
+
+    tracing::error!(
+        error = %error_msg,
+        path = %path,
+        "handler returned 500; rendering server-error template",
+    );
+
+    fire_server_error_hook(&state.hook, &error_msg, &path);
+
+    let dev = is_dev_mode();
+    let chain = vec![error_msg.clone()];
+    let ctx = build_500_context(&error_msg, &chain, &path, dev);
+    let (body_str, content_type) = render_500(state.template.as_deref(), &ctx);
+
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        [(header::CONTENT_TYPE, content_type)],
+        body_str,
+    )
+        .into_response()
+}
+
 // ─── Tests ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

@@ -561,6 +561,22 @@ impl AppBuilder {
                 self.server_error_hook.clone(),
             );
             router = router.layer(tower_http::catch_panic::CatchPanicLayer::custom(handler));
+
+            // Phase 5.8 — wrap with the response-rendering middleware so
+            // any 500 produced by a handler (not just a panic) gets
+            // re-rendered through the configured 500 template. The
+            // middleware checks Content-Type: HTML responses (from the
+            // panic handler above, or from a handler that rendered its
+            // own template) pass through; plain-text 500s get re-rendered.
+            // Also fires `on_server_error` for handler-Err paths.
+            let render_state = crate::errors::Render500State {
+                template: self.server_error_template.clone(),
+                hook: self.server_error_hook.clone(),
+            };
+            router = router.layer(axum::middleware::from_fn_with_state(
+                render_state,
+                crate::errors::render_500_middleware,
+            ));
         }
 
         // Phase 6 — fire each plugin's `on_ready` in topological order.

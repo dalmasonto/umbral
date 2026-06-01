@@ -9,7 +9,7 @@
     <p class="mt-4 text-lg text-gray-600 dark:text-gray-300 max-w-2xl">
       This page walks the framework end-to-end against one
       <code class="font-mono text-sm bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded text-indigo-700 dark:text-indigo-300">Article</code>
-      model. {{ article_count }} seeded article{{ article_count|length == 1 and "" or "s" }} below.
+      model. {{ article_count }} seeded article{% if article_count != 1 %}s{% endif %} below.
     </p>
   </section>
 
