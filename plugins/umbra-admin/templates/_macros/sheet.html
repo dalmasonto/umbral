@@ -161,14 +161,22 @@ Drag-resize: ~50 LOC vanilla JS at the bottom; width in localStorage.
     </form>
 
     {% else %}
-    {# Preview field pairs — clear label/value separation (Bug 6) #}
+    {# Preview field pairs.
+
+       Hierarchy: label is the muted, eyebrow-style chip the eye skips
+       over to land on the value. We push the label down to `text-outline`
+       (the dimmest readable token) and keep the value at `text-on-surface`
+       with `font-medium` so the contrast gap is wide enough to read at a
+       glance. Separator is `outline-variant/15` — barely-there in both
+       light and dark, just enough to delineate rows without competing
+       with the value text. #}
     <dl class="space-y-md">
       {% for field in fields %}
-      <div class="flex flex-col gap-xs pb-sm border-b border-outline-variant/30 last:border-b-0 last:pb-0">
-        <dt class="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider leading-tight">
+      <div class="flex flex-col gap-0.5 pb-sm border-b border-outline-variant/15 last:border-b-0 last:pb-0">
+        <dt class="font-label-sm text-label-sm text-outline/80 uppercase tracking-wider leading-tight">
           {{ field.name | replace("_", " ") }}
         </dt>
-        <dd class="text-body-md text-on-surface break-words min-w-0 {% if field.kind == 'number' or field.kind == 'datetime-local' or field.kind == 'date' or field.kind == 'time' %}tabular-nums font-data-mono{% endif %}">
+        <dd class="text-body-md font-medium text-on-surface break-words min-w-0 {% if field.kind == 'number' or field.kind == 'datetime-local' or field.kind == 'date' or field.kind == 'time' %}tabular-nums font-data-mono{% endif %}">
           {% if field.kind == "bool" %}
             {% if field.value == "true" %}
             <span class="inline-flex items-center gap-xs px-sm py-xs bg-primary-container/10 text-primary border border-primary/20 rounded-full font-label-sm text-label-sm">
@@ -180,7 +188,7 @@ Drag-resize: ~50 LOC vanilla JS at the bottom; width in localStorage.
             </span>
             {% endif %}
           {% elif field.value == "" or field.value is none %}
-            <span class="text-outline italic text-body-sm">—</span>
+            <span class="text-outline/60 italic font-normal text-body-sm">—</span>
           {% else %}
             {{ field.value }}
           {% endif %}
