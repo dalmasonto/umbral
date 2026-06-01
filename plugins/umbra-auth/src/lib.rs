@@ -11,28 +11,132 @@
 //! - [`AuthUser`] model: the canonical Django-shape User (username,
 //!   email, password hash, `is_active` / `is_staff` / `is_superuser`,
 //!   `date_joined`, `last_login`).
+//! - [`UserModel`] trait: the minimum surface a custom user model must
+//!   satisfy so `AuthPlugin<U>` can swap in any user type. Default impls
+//!   cover the optional flag methods so a minimal custom user struct
+//!   only has to implement the load-bearing four.
 //! - argon2 password hashing via [`hash_password`] / [`verify_password`].
 //! - [`create_user`], [`authenticate`], [`set_password`] helpers.
-//! - [`AuthPlugin`] registers the [`AuthUser`] model and contributes
-//!   one system check.
+//!   `authenticate` and `set_password` are generic over any `U: UserModel`.
+//! - [`AuthPlugin`] registers the user model and contributes one system
+//!   check. The type parameter defaults to [`AuthUser`] so existing apps
+//!   need no changes.
+//!
+//! ## Custom user models
+//!
+//! ```ignore
+//! // 1. Declare a custom user struct.
+//! #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
+//! pub struct TenantUser {
+//!     pub id: i64,
+//!     pub username: String,
+//!     pub password_hash: String,
+//!     pub tenant_id: i64,
+//!     pub is_active: bool,
+//! }
+//!
+//! // 2. Implement UserModel (only the four required methods).
+//! impl umbra_auth::UserModel for TenantUser {
+//!     fn id(&self) -> i64               { self.id }
+//!     fn username(&self) -> &str        { &self.username }
+//!     fn password_hash(&self) -> &str   { &self.password_hash }
+//!     fn set_password_hash(&mut self, h: String) { self.password_hash = h; }
+//! }
+//!
+//! // 3. Wire the plugin with your type.
+//! App::builder()
+//!     .plugin(AuthPlugin::<TenantUser>::default())
+//!     .build()?
+//! ```
 //!
 //! ## Deferred (per `docs/specs/outlines/auth-and-sessions.md`)
 //!
-//! - Custom user model swap (the `UserProvider` associated-type
-//!   mechanism). M9 v1 ships exactly one user model.
-//! - Permissions, groups, the auth-backend chain. The deep spec
-//!   promotes from the outline when these land.
+//! - Permissions, groups, the auth-backend chain.
 //! - The `Auth<U>` request extractor + `#[login_required]`
 //!   middleware. Needs `Plugin::middleware()` lifted (M7 deferral).
-//! - Login / logout / password-reset HTTP flows. Needs
-//!   `umbra-sessions` and `umbra-email`, both not yet built.
-//! - `umbra-sessions` itself — sessions plugin lands separately.
+//! - Login / logout / password-reset HTTP flows. Needs the full
+//!   `umbra-sessions` session middleware wired end-to-end.
+//! - Periodic session cleanup via `umbra-tasks`.
+
+use std::marker::PhantomData;
 
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use argon2::{Argon2, password_hash::rand_core::OsRng};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use umbra::prelude::*;
+
+// =========================================================================
+// UserModel trait
+// =========================================================================
+
+/// The minimum surface a user model must expose so `AuthPlugin<U>` can
+/// operate on it generically.
+///
+/// All four required methods map directly to columns that auth ACTUALLY
+/// reads or writes. Optional flag methods (`is_active`, `is_staff`,
+/// `is_superuser`) have default impls that return the safe defaults so a
+/// minimal custom user struct doesn't have to repeat them.
+///
+/// `AuthUser` implements this trait unchanged, so existing code that
+/// calls the auth helpers directly keeps working.
+///
+/// ## Required methods
+///
+/// | Method | Column | Used by |
+/// |---|---|---|
+/// | `id()` | `id` | `create_session`, `set_password` WHERE |
+/// | `username()` | `username` | `authenticate` SELECT, `createsuperuser` output |
+/// | `password_hash()` | `password_hash` | `authenticate` verify step |
+/// | `set_password_hash()` | `password_hash` | `set_password` in-place update |
+///
+/// ## Default methods
+///
+/// | Method | Default | Used by |
+/// |---|---|---|
+/// | `is_active()` | `true` | `authenticate` active-user gate |
+/// | `is_staff()` | `false` | admin require_staff check |
+/// | `is_superuser()` | `false` | permission gates |
+pub trait UserModel: Model + Send + Sync + 'static {
+    /// The row's integer primary key. `set_password` uses this in the
+    /// UPDATE WHERE clause.
+    fn id(&self) -> i64;
+
+    /// The unique login handle. Matched against the username column in
+    /// `authenticate`'s SELECT query.
+    fn username(&self) -> &str;
+
+    /// The argon2 PHC-encoded password hash stored in the DB column.
+    /// `authenticate` reads this, verifies it, and moves on.
+    fn password_hash(&self) -> &str;
+
+    /// Replace the in-memory password hash. Called by `set_password`
+    /// after writing the new hash to the database, so the caller's
+    /// `&mut U` reflects the update without a re-fetch.
+    fn set_password_hash(&mut self, hash: String);
+
+    /// Whether this account is active. `authenticate` rejects inactive
+    /// users with `InvalidCredentials` (same error as wrong password -
+    /// no account enumeration). Default: `true`.
+    fn is_active(&self) -> bool {
+        true
+    }
+
+    /// Whether this account has staff-level access to the admin
+    /// interface. Default: `false`.
+    fn is_staff(&self) -> bool {
+        false
+    }
+
+    /// Whether this account has superuser rights. Default: `false`.
+    fn is_superuser(&self) -> bool {
+        false
+    }
+}
+
+// =========================================================================
+// Built-in AuthUser model
+// =========================================================================
 
 /// The canonical authentication user. `#[derive(Model)]` snake_cases
 /// the struct name into the table name `auth_user`; the M3 derive
@@ -52,25 +156,104 @@ pub struct AuthUser {
     pub last_login: Option<DateTime<Utc>>,
 }
 
-/// The built-in authentication plugin. Registers the [`AuthUser`]
-/// model and contributes one system check (the password-hash
-/// algorithm is reachable at boot).
-#[derive(Debug, Default)]
-pub struct AuthPlugin;
+impl UserModel for AuthUser {
+    fn id(&self) -> i64 {
+        self.id
+    }
 
-impl Plugin for AuthPlugin {
+    fn username(&self) -> &str {
+        &self.username
+    }
+
+    fn password_hash(&self) -> &str {
+        &self.password_hash
+    }
+
+    fn set_password_hash(&mut self, hash: String) {
+        self.password_hash = hash;
+    }
+
+    fn is_active(&self) -> bool {
+        self.is_active
+    }
+
+    fn is_staff(&self) -> bool {
+        self.is_staff
+    }
+
+    fn is_superuser(&self) -> bool {
+        self.is_superuser
+    }
+}
+
+// =========================================================================
+// AuthPlugin<U>
+// =========================================================================
+
+/// The built-in authentication plugin, generic over the user model.
+///
+/// `U` defaults to [`AuthUser`] so `AuthPlugin::default()` continues to
+/// work in all existing code unchanged. Apps that need a custom user type
+/// opt in with one line:
+///
+/// ```ignore
+/// .plugin(AuthPlugin::<CustomUser>::default())
+/// ```
+///
+/// ## `user_model_name`
+///
+/// An optional informational string surfaced in OpenAPI schemas and the
+/// admin nav. Default `None` (resolved from `U::NAME` by the plugin
+/// itself when left empty). Set it explicitly when the type name is
+/// insufficient:
+///
+/// ```ignore
+/// AuthPlugin::<TenantUser>::default().user_model_name("tenant_user")
+/// ```
+#[derive(Debug)]
+pub struct AuthPlugin<U: UserModel = AuthUser> {
+    /// Documentation-only: the human-readable name of the active user
+    /// model. Consumed by admin / OpenAPI when surfacing the user table.
+    /// The actual dispatch is entirely through the type parameter `U`.
+    pub user_model_name: Option<String>,
+    _u: PhantomData<U>,
+}
+
+impl<U: UserModel> Default for AuthPlugin<U> {
+    fn default() -> Self {
+        Self {
+            user_model_name: None,
+            _u: PhantomData,
+        }
+    }
+}
+
+impl<U: UserModel> AuthPlugin<U> {
+    /// Override the informational user-model name shown in admin / OpenAPI.
+    /// Fluent builder method; the return type is `Self` so it chains.
+    pub fn user_model_name(mut self, name: impl Into<String>) -> Self {
+        self.user_model_name = Some(name.into());
+        self
+    }
+}
+
+impl<U: UserModel> Plugin for AuthPlugin<U> {
     fn name(&self) -> &'static str {
         "auth"
     }
 
     fn models(&self) -> Vec<umbra::migrate::ModelMeta> {
-        vec![umbra::migrate::ModelMeta::for_::<AuthUser>()]
+        vec![umbra::migrate::ModelMeta::for_::<U>()]
     }
 
     fn commands(&self) -> Vec<Box<dyn umbra::cli::PluginCommand>> {
         vec![Box::new(CreateSuperuserCommand)]
     }
 }
+
+// =========================================================================
+// AuthError
+// =========================================================================
 
 /// Errors the auth helpers can produce. Kept narrow at M9 v1 so the
 /// surface is easy to handle in one match arm.
@@ -111,9 +294,13 @@ impl From<sqlx::Error> for AuthError {
     }
 }
 
+// =========================================================================
+// Password helpers - pure, no DB.
+// =========================================================================
+
 /// Hash a plaintext password with argon2's framework-chosen
 /// parameters. Returns the PHC-encoded string ready to store in
-/// `auth_user.password_hash`. The hash is self-describing so future
+/// the password_hash column. The hash is self-describing so future
 /// parameter upgrades stay transparent: a verified hash with old
 /// parameters can be re-hashed on next login.
 pub fn hash_password(plaintext: &str) -> Result<String, AuthError> {
@@ -137,6 +324,16 @@ pub fn verify_password(plaintext: &str, hash: &str) -> Result<bool, AuthError> {
     }
 }
 
+// =========================================================================
+// AuthUser-specific creation helpers.
+//
+// These functions are intentionally tied to `AuthUser` because they
+// construct the struct from a fixed set of columns. A custom user model
+// that wants equivalent creation helpers should provide its own, using
+// `hash_password` for the password column. See the docs for the
+// recommended pattern.
+// =========================================================================
+
 /// Create a new active user with the given username, email, and
 /// plaintext password. The password is hashed before insert; the
 /// plaintext never touches the database. `date_joined` is set to
@@ -150,7 +347,7 @@ pub async fn create_user(
     create_user_with_flags(username, email, plaintext, false, false).await
 }
 
-/// Create a superuser — `is_staff = true`, `is_superuser = true`,
+/// Create a superuser - `is_staff = true`, `is_superuser = true`,
 /// `is_active = true`. Used by the `createsuperuser` management
 /// command and available directly for tests / seed scripts.
 pub async fn create_superuser(
@@ -193,27 +390,47 @@ pub async fn create_user_with_flags(
     Ok(row)
 }
 
-/// Verify a username + plaintext password against the user table.
-/// Returns the user on success; returns `AuthError::InvalidCredentials`
-/// for both "no such user" and "wrong password" (the same shape, so a
-/// caller can't enumerate accounts).
+// =========================================================================
+// Generic auth helpers - work against any UserModel.
+// =========================================================================
+
+/// Verify a username + plaintext password against the user table for
+/// user model `U`. Returns the user on success; returns
+/// `AuthError::InvalidCredentials` for both "no such user" and "wrong
+/// password" (the same shape, so a caller can't enumerate accounts).
 ///
-/// Does not update `last_login`; that's the login-flow's job once the
-/// HTTP layer lands.
-pub async fn authenticate(username: &str, plaintext: &str) -> Result<AuthUser, AuthError> {
+/// The query uses `U::TABLE` for the table name. The WHERE clause
+/// filters on `username = ?` and `is_active = 1` (the standard column
+/// name for the active flag). Custom models that store the active flag
+/// under a different column name should filter directly and call
+/// `verify_password` themselves.
+///
+/// Does not update `last_login`; that is the login-flow's job once the
+/// HTTP layer is wired end-to-end.
+pub async fn authenticate<U>(username: &str, plaintext: &str) -> Result<U, AuthError>
+where
+    U: UserModel + for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> + Unpin,
+{
     let pool = umbra::db::pool();
-    let user: Option<AuthUser> = sqlx::query_as::<_, AuthUser>(
-        "SELECT * FROM auth_user WHERE username = ? AND is_active = 1",
-    )
-    .bind(username)
-    .fetch_optional(&pool)
-    .await?;
+    let table = U::TABLE;
+    let sql = format!("SELECT * FROM {table} WHERE username = ? AND is_active = 1");
+    let user: Option<U> = sqlx::query_as::<_, U>(&sql)
+        .bind(username)
+        .fetch_optional(&pool)
+        .await?;
 
     let Some(user) = user else {
         return Err(AuthError::InvalidCredentials);
     };
 
-    if verify_password(plaintext, &user.password_hash)? {
+    // Defence-in-depth: also check the trait method so custom types
+    // that compute is_active dynamically (e.g. checking a TTL field)
+    // are still respected even if the SQL filter passed.
+    if !user.is_active() {
+        return Err(AuthError::InvalidCredentials);
+    }
+
+    if verify_password(plaintext, user.password_hash())? {
         Ok(user)
     } else {
         Err(AuthError::InvalidCredentials)
@@ -221,17 +438,23 @@ pub async fn authenticate(username: &str, plaintext: &str) -> Result<AuthUser, A
 }
 
 /// Replace a user's password with a fresh hash of the given plaintext.
-/// Writes through to the database. `user.password_hash` is updated in
-/// place on success so the caller can keep using the same value.
-pub async fn set_password(user: &mut AuthUser, plaintext: &str) -> Result<(), AuthError> {
+/// Writes through to the database using `U::TABLE`. `user.password_hash`
+/// is updated in place on success so the caller can keep using the same
+/// value.
+pub async fn set_password<U>(user: &mut U, plaintext: &str) -> Result<(), AuthError>
+where
+    U: UserModel,
+{
     let hash = hash_password(plaintext)?;
     let pool = umbra::db::pool();
-    sqlx::query("UPDATE auth_user SET password_hash = ? WHERE id = ?")
+    let table = U::TABLE;
+    let sql = format!("UPDATE {table} SET password_hash = ? WHERE id = ?");
+    sqlx::query(&sql)
         .bind(&hash)
-        .bind(user.id)
+        .bind(user.id())
         .execute(&pool)
         .await?;
-    user.password_hash = hash;
+    user.set_password_hash(hash);
     Ok(())
 }
 
@@ -239,21 +462,20 @@ pub async fn set_password(user: &mut AuthUser, plaintext: &str) -> Result<(), Au
 // Management command: createsuperuser
 // =========================================================================
 
-/// `createsuperuser` — Django's interactive superuser creation,
+/// `createsuperuser` - Django's interactive superuser creation,
 /// dispatched via `cargo run -- createsuperuser` from any umbra
 /// project that registers [`AuthPlugin`].
 ///
 /// Prompts for username, email, and password (the password input
 /// is read without terminal echo via `rpassword`). The new user
 /// lands with `is_active = true`, `is_staff = true`, `is_superuser =
-/// true` — the standard Django shape for the bootstrap admin
-/// account.
+/// true` - the standard Django shape for the bootstrap admin account.
 ///
 /// Flags:
 ///
-/// - `--username <name>` — skip the username prompt.
-/// - `--email <addr>` — skip the email prompt.
-/// - `--noinput` — fail if any required value is missing instead of
+/// - `--username <name>` - skip the username prompt.
+/// - `--email <addr>` - skip the email prompt.
+/// - `--noinput` - fail if any required value is missing instead of
 ///   prompting. Useful in CI / containers / declarative seed paths.
 ///   Reads password from `UMBRA_SUPERUSER_PASSWORD` when set.
 #[derive(Debug, Default)]
@@ -307,7 +529,7 @@ impl umbra::cli::PluginCommand for CreateSuperuserCommand {
             .await
             .map_err(|e| -> umbra::cli::CliError { Box::new(e) })?;
         println!(
-            "Created superuser `{}` (id = {}) — is_staff = true, is_superuser = true",
+            "Created superuser `{}` (id = {}) - is_staff = true, is_superuser = true",
             user.username, user.id,
         );
         Ok(())
@@ -351,7 +573,7 @@ fn resolve_or_prompt(
     Ok(v)
 }
 
-/// Get the password — env var → confirm-prompt with no-echo. Refuses
+/// Get the password - env var -> confirm-prompt with no-echo. Refuses
 /// to proceed when the two confirmation entries don't match.
 fn resolve_password(noinput: bool) -> Result<String, umbra::cli::CliError> {
     if let Ok(v) = std::env::var("UMBRA_SUPERUSER_PASSWORD")

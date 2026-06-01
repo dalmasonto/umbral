@@ -64,7 +64,7 @@ async fn boot() {
         umbra::App::builder()
             .settings(settings)
             .database("default", pool)
-            .plugin(AuthPlugin)
+            .plugin(AuthPlugin::<AuthUser>::default())
             .build()
             .expect("App::build should succeed with AuthPlugin");
 
@@ -201,7 +201,7 @@ async fn authenticate_returns_the_user_for_valid_credentials() {
         .await
         .expect("create_user should succeed for bob");
 
-    let found = authenticate("bob", "secret123")
+    let found = authenticate::<AuthUser>("bob", "secret123")
         .await
         .expect("authenticate should succeed for matching credentials");
 
@@ -225,7 +225,7 @@ async fn authenticate_rejects_wrong_password() {
         .await
         .expect("create_user should succeed for carol");
 
-    let result = authenticate("carol", "wrongpass").await;
+    let result = authenticate::<AuthUser>("carol", "wrongpass").await;
     assert!(
         matches!(result, Err(AuthError::InvalidCredentials)),
         "wrong password must surface as InvalidCredentials; got {result:?}",
@@ -239,7 +239,7 @@ async fn authenticate_rejects_wrong_password() {
 async fn authenticate_rejects_unknown_username() {
     boot().await;
 
-    let result = authenticate("ghost", "anything").await;
+    let result = authenticate::<AuthUser>("ghost", "anything").await;
     assert!(
         matches!(result, Err(AuthError::InvalidCredentials)),
         "unknown username must surface as InvalidCredentials; got {result:?}",
@@ -265,7 +265,7 @@ async fn authenticate_rejects_inactive_user() {
         .await
         .expect("deactivation update should succeed");
 
-    let result = authenticate("dave", "hunter2").await;
+    let result = authenticate::<AuthUser>("dave", "hunter2").await;
     assert!(
         matches!(result, Err(AuthError::InvalidCredentials)),
         "an inactive user must not authenticate; got {result:?}",
@@ -294,11 +294,11 @@ async fn set_password_updates_the_hash() {
         "set_password must update the in-place hash, but it stayed {original_hash}",
     );
 
-    authenticate("erin", "newpass")
+    authenticate::<AuthUser>("erin", "newpass")
         .await
         .expect("the new password must authenticate after set_password");
 
-    let stale = authenticate("erin", "oldpass").await;
+    let stale = authenticate::<AuthUser>("erin", "oldpass").await;
     assert!(
         matches!(stale, Err(AuthError::InvalidCredentials)),
         "the old password must stop working after set_password; got {stale:?}",
@@ -358,7 +358,9 @@ async fn dispatch_routes_createsuperuser_command_with_noinput() {
         std::env::set_var("UMBRA_SUPERUSER_PASSWORD", "swordfish-9-9");
     }
 
-    let plugins: Vec<Box<dyn umbra::prelude::Plugin>> = vec![Box::new(umbra_auth::AuthPlugin)];
+    let plugins: Vec<Box<dyn umbra::prelude::Plugin>> = vec![Box::new(umbra_auth::AuthPlugin::<
+        umbra_auth::AuthUser,
+    >::default())];
     let outcome = umbra::cli::dispatch(
         &plugins,
         vec![
@@ -387,7 +389,7 @@ async fn dispatch_routes_createsuperuser_command_with_noinput() {
     // The user landed in the DB with the right flags. Read it back
     // through the authenticate helper so we also verify the password
     // hash round-trips.
-    let user = umbra_auth::authenticate("admin", "swordfish-9-9")
+    let user = umbra_auth::authenticate::<umbra_auth::AuthUser>("admin", "swordfish-9-9")
         .await
         .expect("authenticate");
     assert_eq!(user.username, "admin");
@@ -411,7 +413,9 @@ async fn createsuperuser_noinput_errors_without_password_env() {
         std::env::remove_var("UMBRA_SUPERUSER_PASSWORD");
     }
 
-    let plugins: Vec<Box<dyn umbra::prelude::Plugin>> = vec![Box::new(umbra_auth::AuthPlugin)];
+    let plugins: Vec<Box<dyn umbra::prelude::Plugin>> = vec![Box::new(umbra_auth::AuthPlugin::<
+        umbra_auth::AuthUser,
+    >::default())];
     let result = umbra::cli::dispatch(
         &plugins,
         vec![

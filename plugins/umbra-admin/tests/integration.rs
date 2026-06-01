@@ -70,7 +70,7 @@ async fn boot() -> &'static axum::Router {
         let app = umbra::App::builder()
             .settings(settings)
             .database("default", pool)
-            .plugin(AuthPlugin)
+            .plugin(AuthPlugin::<AuthUser>::default())
             .plugin(AdminPlugin)
             .model::<Note>()
             .build()

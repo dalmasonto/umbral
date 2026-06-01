@@ -1,0 +1,270 @@
+---
+title: Authentication
+description: umbra-auth plugin — AuthUser model, argon2 password hashing, session login helpers, and the custom user model swap.
+sidebar_position: 2
+tags: [auth, users, passwords, custom-user-model]
+---
+
+# Authentication
+
+The `umbra-auth` plugin is the built-in authentication layer. It ships a ready-to-use `AuthUser` model, argon2 password hashing, and the helpers that power the login flow. Structurally it is a plugin like any other: registering it with `App::builder().plugin(AuthPlugin::default())` is all you need.
+
+## Quick start
+
+```toml
+# Cargo.toml
+umbra-auth = { path = "../../plugins/umbra-auth" }
+```
+
+```rust
+use umbra::prelude::*;
+use umbra_auth::AuthPlugin;
+
+let app = App::builder()
+    .settings(settings)
+    .database("default", pool)
+    .plugin(AuthPlugin::default())
+    .build()?;
+```
+
+Running `migrate` after registration creates the `auth_user` table.
+
+## The AuthUser model
+
+```rust
+pub struct AuthUser {
+    pub id: i64,
+    pub username: String,
+    pub email: String,
+    pub password_hash: String,  // argon2 PHC string, never the plaintext
+    pub is_active: bool,
+    pub is_staff: bool,
+    pub is_superuser: bool,
+    pub date_joined: DateTime<Utc>,
+    pub last_login: Option<DateTime<Utc>>,
+}
+```
+
+`AuthUser` implements the `Model` trait so it participates in the normal QuerySet API.
+
+## Password helpers
+
+```rust
+use umbra_auth::{hash_password, verify_password};
+
+// Hash before storing.
+let hash = hash_password("hunter2")?;
+// -> "$argon2id$v=19$m=19456,t=2,p=1$..."
+
+// Verify on login.
+let ok: bool = verify_password("hunter2", &hash)?;
+```
+
+`hash_password` uses argon2id with a random per-password salt. The PHC string is self-describing, so future parameter upgrades are backward-compatible: a hash made with old parameters still verifies, and you can re-hash on next login.
+
+## Create and authenticate users
+
+```rust
+use umbra_auth::{create_user, authenticate, set_password};
+
+// Create a regular user.
+let user = create_user("alice", "alice@example.com", "s3cret").await?;
+
+// Authenticate.
+let user = authenticate::<AuthUser>("alice", "s3cret").await?;
+// Returns Err(AuthError::InvalidCredentials) on wrong password OR unknown user.
+// The same error for both so a caller cannot enumerate accounts.
+
+// Rotate password.
+set_password(&mut user, "new-s3cret").await?;
+```
+
+`create_superuser` and `create_user_with_flags` are also available for seed scripts and the `createsuperuser` CLI command.
+
+## Sessions integration
+
+`umbra-sessions` provides the login / logout bundle:
+
+```rust
+use umbra_auth::authenticate;
+use umbra_auth::AuthUser;
+use umbra_sessions::login;
+
+async fn login_handler(Form(form): Form<LoginForm>) -> Result<Response, StatusCode> {
+    let user = authenticate::<AuthUser>(&form.username, &form.password)
+        .await
+        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+    let mut response = Redirect::to("/").into_response();
+    login(response.headers_mut(), &user)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(response)
+}
+```
+
+`current_user(&headers)` and the `User` / `OptionalUser` extractors from `umbra-sessions` resolve the session cookie back to an `AuthUser`. See the [Sessions page](./sessions) for details.
+
+## The `createsuperuser` management command
+
+`AuthPlugin` contributes a `createsuperuser` subcommand via `Plugin::commands()`. From a project directory:
+
+```bash
+cargo run -- createsuperuser --username admin --email admin@example.com --noinput
+# reads password from UMBRA_SUPERUSER_PASSWORD
+```
+
+## Swapping the user model
+
+This is umbra's equivalent of Django's `AUTH_USER_MODEL`. In Django you set a string (`AUTH_USER_MODEL = "myapp.CustomUser"`); in umbra you use the type parameter directly, so the swap is validated at compile time with no runtime reflection involved.
+
+### Why it exists
+
+The built-in `AuthUser` covers 90% of projects but forces you into its fixed column set. A multi-tenant SaaS needs a `tenant_id` column. A B2B app might want a `display_name`. Any extra column means either: store it in a separate profile table (join overhead), or swap the user model.
+
+### Step 1 - declare a custom user struct
+
+```rust
+use serde::{Deserialize, Serialize};
+use umbra::orm::Model;
+use umbra_auth::UserModel;
+
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
+pub struct TenantUser {
+    pub id: i64,
+    pub username: String,
+    pub password_hash: String,   // required by UserModel
+    pub display_name: String,    // extra field
+    pub tenant_id: i64,          // extra field
+    pub is_active: bool,
+}
+```
+
+### Step 2 - implement UserModel
+
+`UserModel` requires exactly four methods. The flag methods (`is_active`, `is_staff`, `is_superuser`) have default implementations that return safe values, so you only override them when your struct actually stores them.
+
+```rust
+impl UserModel for TenantUser {
+    fn id(&self) -> i64 { self.id }
+    fn username(&self) -> &str { &self.username }
+    fn password_hash(&self) -> &str { &self.password_hash }
+    fn set_password_hash(&mut self, hash: String) { self.password_hash = hash; }
+
+    // Override because this struct has the column.
+    fn is_active(&self) -> bool { self.is_active }
+    // is_staff and is_superuser default to false.
+}
+```
+
+The full `UserModel` surface:
+
+| Method | Required | Default | Used by |
+|---|---|---|---|
+| `id() -> i64` | yes | - | `set_password` WHERE clause |
+| `username() -> &str` | yes | - | `authenticate` SELECT |
+| `password_hash() -> &str` | yes | - | `authenticate` verify |
+| `set_password_hash(String)` | yes | - | `set_password` in-place update |
+| `is_active() -> bool` | no | `true` | `authenticate` active-user gate |
+| `is_staff() -> bool` | no | `false` | admin require_staff check |
+| `is_superuser() -> bool` | no | `false` | permission gates |
+
+### Step 3 - wire the plugin
+
+```rust
+use umbra_auth::AuthPlugin;
+
+let app = App::builder()
+    .settings(settings)
+    .database("default", pool)
+    .plugin(AuthPlugin::<TenantUser>::default())
+    .build()?;
+```
+
+`AuthPlugin::<TenantUser>` registers `TenantUser` as the model under the `"auth"` plugin slot. `migrate` creates the `tenant_user` table (the snake_case of the struct name) instead of `auth_user`.
+
+### Step 4 - create users and authenticate
+
+There is no generic `create_user` for custom models because constructing a `TenantUser` from a fixed set of columns is not possible without knowing which extra columns exist. Provide your own:
+
+```rust
+pub async fn create_tenant_user(
+    username: &str,
+    display_name: &str,
+    tenant_id: i64,
+    plaintext: &str,
+) -> Result<TenantUser, umbra_auth::AuthError> {
+    let hash = umbra_auth::hash_password(plaintext)?;
+    let pool = umbra::db::pool();
+    let row = sqlx::query_as::<_, TenantUser>(
+        "INSERT INTO tenant_user
+           (username, password_hash, display_name, tenant_id, is_active)
+         VALUES (?, ?, ?, ?, 1) RETURNING *",
+    )
+    .bind(username)
+    .bind(&hash)
+    .bind(display_name)
+    .bind(tenant_id)
+    .fetch_one(&pool)
+    .await?;
+    Ok(row)
+}
+```
+
+Authenticate with the generic helper:
+
+```rust
+use umbra_auth::authenticate;
+
+let user = authenticate::<TenantUser>("alice", "s3cret").await?;
+// Returns TenantUser on success; AuthError::InvalidCredentials on failure.
+```
+
+`set_password` is also generic:
+
+```rust
+use umbra_auth::set_password;
+
+set_password(&mut user, "new-s3cret").await?;
+```
+
+### Optional: informational model name
+
+The `user_model_name` builder method stores a human-readable label that admin / OpenAPI can surface. It has no effect on dispatch - the type parameter is the only thing that matters:
+
+```rust
+AuthPlugin::<TenantUser>::default().user_model_name("tenant_user")
+```
+
+### What carries over automatically
+
+After swapping the user model:
+
+- `authenticate::<TenantUser>` - works against `tenant_user` table.
+- `set_password(&mut user, ...)` - works against `tenant_user` table.
+- `AuthPlugin::<TenantUser>` models() - registers `TenantUser` for migrations.
+- The migration engine - produces the right CREATE TABLE DDL for `TenantUser`'s fields.
+- `hash_password` / `verify_password` - model-agnostic, work unchanged.
+
+### What requires manual adjustment
+
+`umbra-sessions` and `umbra-admin` reference `umbra_auth::AuthUser` concretely:
+
+- `umbra_sessions::current_user(&headers) -> Option<AuthUser>` - queries `auth_user` by id. With a custom user model you replace this call with your own lookup against `tenant_user`.
+- `umbra_sessions::login(headers, &user)` - takes `&AuthUser`. Call `create_session(Some(user.id()), None)` and `set_cookie_header(...)` directly instead.
+- `umbra_sessions::extractors::User(pub AuthUser)` and `OptionalUser` - resolve `AuthUser` from the session. Replace with your own extractor that queries `tenant_user`.
+- `umbra_admin` - its `require_staff` check calls `umbra_auth::authenticate` which returns `AuthUser`. The admin plugin is not yet generic over the user model; this is a known limitation and a follow-up item.
+
+The `Identity` concept from `umbra-rest` carries only `user_id: i64` (extracted from the session), so REST permission checks continue to work without changes. Only code that explicitly hydrates an `AuthUser` struct needs updating.
+
+## Security notes
+
+- `authenticate` returns the same error (`InvalidCredentials`) for both "no such user" and "wrong password". A caller cannot enumerate accounts from the error alone.
+- Inactive users (`is_active = false` or `is_active() -> false`) cannot authenticate. The SQL filter and the trait method both apply.
+- Passwords are never stored or logged. Only the argon2 PHC hash reaches the database.
+- See the [security audit summary](https://github.com) for the full audit findings.
+
+## See also
+
+- `docs/specs/outlines/auth-and-sessions.md` - design rationale, deferred features.
+- [Sessions](./sessions) - session creation, `current_user`, extractors.
+- [Admin](./admin) - the `require_staff` gate and how it relates to `is_staff`.

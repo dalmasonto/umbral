@@ -133,7 +133,7 @@ fn render(name: &str, ctx: minijinja::Value) -> Result<Html<String>, AdminError>
 
 async fn require_staff(headers: &HeaderMap) -> Result<String, Response> {
     let creds = extract_basic_auth(headers).ok_or_else(challenge)?;
-    let user = umbra_auth::authenticate(&creds.username, &creds.password)
+    let user = umbra_auth::authenticate::<umbra_auth::AuthUser>(&creds.username, &creds.password)
         .await
         .map_err(|_| challenge())?;
     if !user.is_staff {

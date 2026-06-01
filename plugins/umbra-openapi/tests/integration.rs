@@ -14,7 +14,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio::sync::OnceCell;
 use tower::ServiceExt;
 
-use umbra_auth::AuthPlugin;
+use umbra_auth::{AuthPlugin, AuthUser};
 use umbra_openapi::OpenApiPlugin;
 use umbra_rest::RestPlugin;
 
@@ -48,7 +48,7 @@ async fn boot() -> &'static axum::Router {
             .settings(settings)
             .database("default", pool)
             .model::<Note>()
-            .plugin(AuthPlugin)
+            .plugin(AuthPlugin::<AuthUser>::default())
             .plugin(RestPlugin::default())
             .plugin(OpenApiPlugin::default())
             .build()

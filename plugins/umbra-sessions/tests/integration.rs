@@ -42,7 +42,7 @@ async fn boot() -> i64 {
             umbra::App::builder()
                 .settings(settings)
                 .database("default", pool)
-                .plugin(AuthPlugin)
+                .plugin(AuthPlugin::<AuthUser>::default())
                 .plugin(SessionsPlugin::default())
                 .build()
                 .expect("App::build with AuthPlugin + SessionsPlugin");
