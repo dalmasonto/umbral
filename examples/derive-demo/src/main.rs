@@ -166,11 +166,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         ))
     .build()?;
 
-    // Auto-migrate on startup. Demo-only convenience. Production
-    // deployments split this from request-serving: `cargo run -p
-    // umbra-cli -- makemigrations` and `migrate` are separate steps.
-    auto_migrate().await?;
-    seed_article_rows().await?;
+    // Auto-migrate on startup — demo-only convenience. Skipped when
+    // the user explicitly runs a non-serve CLI subcommand, so that
+    // `cargo run -- makemigrations` / `migrate` / `inspectdb` /
+    // `createsuperuser` etc. drive the migration flow themselves
+    // without auto-apply stepping on the inputs. Production
+    // deployments split migrate from request-serving regardless:
+    // `cargo run -- makemigrations`, then `cargo run -- migrate`,
+    // then `cargo run -- serve`.
+    if is_serve_invocation() {
+        auto_migrate().await?;
+        seed_article_rows().await?;
+    }
 
     // Hand argv to the CLI dispatcher. With no subcommand it serves on
     // `settings.bind_addr`; with a subcommand like `createsuperuser`
@@ -180,6 +187,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // and ignore argv entirely.
     umbra_cli::dispatch(app).await?;
     Ok(())
+}
+
+/// True when argv has no subcommand (`cargo run` / `cargo run --`) or
+/// the subcommand is `serve`. False for `makemigrations`, `migrate`,
+/// `inspectdb`, `createsuperuser`, etc. — those drive the migration
+/// flow themselves and would conflict with eager auto-migrate.
+fn is_serve_invocation() -> bool {
+    matches!(
+        std::env::args().nth(1).as_deref(),
+        None | Some("serve")
+    )
 }
 
 /// Home page. Counts the rows so the template has something to show
