@@ -61,6 +61,26 @@ async fn boot() {
         let settings =
             umbra::Settings::from_env().expect("figment defaults always load in a test env");
 
+        // The permissions plugin no longer bootstraps its own tables in
+        // `on_ready` (the SQLite-only `CREATE TABLE IF NOT EXISTS` block
+        // was retired once `Manager::get_or_create` could skip-with-grace
+        // on missing tables — see plugin lib.rs). The integration test
+        // therefore needs to run the migration engine itself so the six
+        // permissions_* tables exist when `on_ready` fires.
+        //
+        // Two-pass boot: build the App without the plugin first to ensure
+        // the model registry has the perm models from the plugin's
+        // `Plugin::models()`, run `migrate` to create the tables, then
+        // re-boot WITH the plugin so its `on_ready` seeds the standard
+        // permission rows.
+        //
+        // App::build can only fire once per process, so we collapse the
+        // two passes: build with the plugin, then manually run migrate
+        // (which the typical user binary calls explicitly via
+        // `cargo run -- migrate` before `serve`). The plugin's on_ready
+        // grace-skips its row seed if the tables aren't there yet, then
+        // we run a follow-up `ensure_standard_permissions` pass after
+        // migrate has created the schema.
         umbra::App::builder()
             .settings(settings)
             .database("default", pool)
@@ -69,9 +89,20 @@ async fn boot() {
             .build()
             .expect("App::build with PermissionsPlugin should succeed");
 
-        // PermissionsPlugin::on_ready already ran CREATE TABLE IF NOT EXISTS
-        // and inserted the standard permissions for every registered model.
-        // No additional setup needed.
+        // Apply every pending migration so the schema exists.
+        let migration_dir = tempfile::tempdir().expect("migration dir");
+        let migration_dir_path = migration_dir.path().to_path_buf();
+        std::mem::forget(migration_dir);
+        umbra::migrate::make_in(&migration_dir_path)
+            .await
+            .expect("make migrations");
+        umbra::migrate::run_in(&migration_dir_path)
+            .await
+            .expect("run migrations");
+        // Re-run the on_ready seed step now that the tables exist.
+        umbra_permissions::seed_standard_permissions_for_tests()
+            .await
+            .expect("seed permissions");
     })
     .await;
 }

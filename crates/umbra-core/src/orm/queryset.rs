@@ -1012,6 +1012,105 @@ impl<T: Model> Manager<T> {
         }
     }
 
+    /// Django's `get_or_create`: fetch the first row matching `predicate`;
+    /// if none exists, insert `defaults` and return it. Returns
+    /// `(row, created)` so the caller can branch on whether the write
+    /// happened. Two queries on the miss path (filter+first then create),
+    /// one query on the hit path.
+    ///
+    /// Race condition: a concurrent inserter can win between the two
+    /// calls. The DB's UNIQUE constraint on the `predicate` columns is
+    /// the backstop; without one, two callers can both create rows and
+    /// the second's `create` won't see the first. Pair with a UNIQUE
+    /// constraint for true at-most-one semantics.
+    pub async fn get_or_create(
+        &self,
+        predicate: Predicate<T>,
+        defaults: T,
+    ) -> Result<(T, bool), crate::orm::write::WriteError>
+    where
+        T: serde::Serialize
+            + for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
+            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>
+            + HydrateRelated,
+    {
+        if let Some(existing) = self
+            .filter(predicate)
+            .first()
+            .await
+            .map_err(crate::orm::write::WriteError::Sqlx)?
+        {
+            return Ok((existing, false));
+        }
+        let created = self.create(defaults).await?;
+        Ok((created, true))
+    }
+
+    /// INSERT-or-UPDATE keyed on the primary key. The row's PK column
+    /// is the conflict target; on a hit, every non-PK column is
+    /// overwritten with the supplied value. Returns the row as the DB
+    /// stored it (post-upsert).
+    ///
+    /// Both backends use `INSERT ... ON CONFLICT(<pk>) DO UPDATE SET
+    /// col = excluded.col, ...`. The SQLite and Postgres syntax happens
+    /// to match exactly here so a single sea-query `OnConflict` builder
+    /// covers both.
+    pub async fn upsert(&self, instance: T) -> Result<T, crate::orm::write::WriteError>
+    where
+        T: serde::Serialize
+            + for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
+            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
+    {
+        let map = serialize_to_map(&instance)?;
+        let pool = resolve_pool::<T>(None);
+        let backend = pool.backend_name();
+        let mut stmt = build_insert_one_for::<T>(backend, &map)?;
+
+        // Conflict target = PK column. update_columns = every non-PK
+        // column the body included. sea-query renders `DO UPDATE SET
+        // col = excluded.col` (SQLite) / `DO UPDATE SET col =
+        // EXCLUDED.col` (PG) — both forms work cross-dialect.
+        let pk_name = T::FIELDS
+            .iter()
+            .find(|f| f.primary_key)
+            .map(|f| f.name)
+            .ok_or_else(|| crate::orm::write::WriteError::Sqlx(sqlx::Error::Protocol(
+                "upsert: model has no primary key — use get_or_create or create instead"
+                    .to_string(),
+            )))?;
+        let update_cols: Vec<Alias> = T::FIELDS
+            .iter()
+            .filter(|f| !f.primary_key && map.contains_key(f.name))
+            .map(|f| Alias::new(f.name))
+            .collect();
+        let mut on_conflict = sea_query::OnConflict::column(Alias::new(pk_name));
+        if !update_cols.is_empty() {
+            on_conflict.update_columns(update_cols);
+        } else {
+            // No non-PK columns to overwrite — this is a "INSERT OR
+            // IGNORE" shape. sea-query encodes that as `DO NOTHING`.
+            on_conflict.do_nothing();
+        }
+        stmt.on_conflict(on_conflict);
+
+        match pool {
+            DbPool::Sqlite(pool) => {
+                let (sql, values) = stmt.build_sqlx(SqliteQueryBuilder);
+                let row = sqlx::query_as_with::<sqlx::Sqlite, T, _>(&sql, values)
+                    .fetch_one(&pool)
+                    .await?;
+                Ok(row)
+            }
+            DbPool::Postgres(pool) => {
+                let (sql, values) = stmt.build_sqlx(PostgresQueryBuilder);
+                let row = sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
+                    .fetch_one(&pool)
+                    .await?;
+                Ok(row)
+            }
+        }
+    }
+
     /// `create` against an explicit Postgres pool. The Postgres
     /// counterpart of [`Self::create`] for models with Postgres-only
     /// field types (Array, Inet, MacAddr, FullText), whose `FromRow`

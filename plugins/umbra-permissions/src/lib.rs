@@ -144,215 +144,103 @@ impl Plugin for PermissionsPlugin {
 ///
 /// Standard permissions created: `add_<model>`, `change_<model>`,
 /// `delete_<model>`, `view_<model>`.
-async fn ensure_standard_permissions(pool: &umbra::db::DbPool) -> Result<(), sqlx::Error> {
-    // DDL bootstrap (the documented schema-DDL exception in CLAUDE.md):
-    // create all six tables if they do not yet exist on the SQLite
-    // path. In production these are created by `migrate`; this guard
-    // lets `on_ready` work even when the user runs the app before
-    // migrate (e.g. in tests that skip the full migrate loop).
-    //
-    // The DDL strings are SQLite-flavoured (`INTEGER PRIMARY KEY
-    // AUTOINCREMENT` is rejected by Postgres). On Postgres we skip
-    // this block — the user must have run `migrate` first, which
-    // emits the proper `BIGSERIAL PRIMARY KEY` shape via the migration
-    // engine.
-    let sqlite_pool = match pool {
-        umbra::db::DbPool::Sqlite(p) => p,
-        umbra::db::DbPool::Postgres(_) => {
-            tracing::debug!(
-                "permissions: skipping SQLite-only DDL bootstrap on Postgres backend; \
-                 run `migrate` to ensure the permissions_* tables exist"
-            );
-            return ensure_standard_permission_rows(pool).await;
-        }
-    };
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS permissions_contenttype (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            app_label TEXT NOT NULL,
-            model TEXT NOT NULL,
-            UNIQUE(app_label, model)
-        )",
-    )
-    .execute(sqlite_pool)
-    .await?;
-
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS permissions_permission (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            content_type_id INTEGER NOT NULL REFERENCES permissions_contenttype(id),
-            codename TEXT NOT NULL,
-            name TEXT NOT NULL,
-            UNIQUE(content_type_id, codename)
-        )",
-    )
-    .execute(sqlite_pool)
-    .await?;
-
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS permissions_group (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL UNIQUE
-        )",
-    )
-    .execute(sqlite_pool)
-    .await?;
-
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS permissions_grouppermission (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            group_id INTEGER NOT NULL REFERENCES permissions_group(id),
-            permission_id INTEGER NOT NULL REFERENCES permissions_permission(id),
-            UNIQUE(group_id, permission_id)
-        )",
-    )
-    .execute(sqlite_pool)
-    .await?;
-
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS permissions_usergroup (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            group_id INTEGER NOT NULL REFERENCES permissions_group(id),
-            UNIQUE(user_id, group_id)
-        )",
-    )
-    .execute(sqlite_pool)
-    .await?;
-
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS permissions_userpermission (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            permission_id INTEGER NOT NULL REFERENCES permissions_permission(id),
-            UNIQUE(user_id, permission_id)
-        )",
-    )
-    .execute(sqlite_pool)
-    .await?;
-
-    ensure_standard_permission_rows(pool).await
+/// Re-run the standard-permission seed loop. Public for integration
+/// tests that need to call it AFTER they've run the migration engine
+/// to create the schema (the plugin's `on_ready` skip-with-grace
+/// would otherwise leave the rows un-seeded on a fresh DB).
+///
+/// Not part of the v1 public plugin contract — the typical user flow
+/// is `cargo run -- migrate && cargo run -- serve` which seeds on the
+/// second boot. Marked `#[doc(hidden)]` to keep it off the stable
+/// surface.
+#[doc(hidden)]
+pub async fn seed_standard_permissions_for_tests() -> Result<(), sqlx::Error> {
+    let pool = umbra::db::pool_dispatched().clone();
+    ensure_standard_permissions(&pool).await
 }
 
-/// Probe whether the permissions tables exist by issuing a cheap
-/// `COUNT(*)` against `ContentType`. Any error (missing table, missing
-/// column, anything else) returns false — `on_ready` then defers seeding
-/// until the next boot, after `migrate` has run.
-async fn permissions_tables_exist() -> bool {
-    ContentType::objects().count().await.is_ok()
-}
-
-/// Walk the model registry and create the four standard permissions
-/// (`add_<model>`, `change_<model>`, `delete_<model>`, `view_<model>`)
-/// for every registered model. Routed entirely through the ORM so it
-/// runs on both backends.
-async fn ensure_standard_permission_rows(_pool: &umbra::db::DbPool) -> Result<(), sqlx::Error> {
-    // Auto-create standard permissions for every registered model. Row
-    // INSERTs go through the ORM (so a future Postgres-backed
-    // AppContext::pool migration doesn't have to touch this code) —
-    // the equivalent of Django's `get_or_create`: filter first, create
-    // only when absent. The UNIQUE constraint on the underlying tables
-    // is the race-condition backstop.
+async fn ensure_standard_permissions(_pool: &umbra::db::DbPool) -> Result<(), sqlx::Error> {
+    // Walk the model registry and create the four standard permissions
+    // (`add_<model>`, `change_<model>`, `delete_<model>`, `view_<model>`)
+    // for every registered model. Every row write goes through the ORM
+    // — `Manager::get_or_create` is the right primitive for "fetch the
+    // row if it exists, insert with these defaults otherwise". The
+    // UNIQUE constraints on `(app_label, model)` and
+    // `(content_type_id, codename)` are the race-condition backstop.
     //
     // `on_ready` fires inside `App::build()` — which happens BEFORE
-    // `migrate` in the typical user-binary flow (App::builder().build()
-    // is one call; migrate is a separate step). On a fresh database
+    // `migrate` in the typical user-binary flow. On a fresh database
     // the permissions tables therefore don't exist yet. We probe with
-    // a cheap COUNT-style query; if the table is missing we skip
-    // gracefully so boot completes. The next boot (post-migrate) will
-    // create the rows.
-    if !permissions_tables_exist().await {
+    // a cheap `count` on ContentType; if the table is missing we skip
+    // gracefully so boot completes. The next boot (post-migrate) seeds
+    // the rows. Previously this file carried a SQLite-only
+    // `CREATE TABLE IF NOT EXISTS` bootstrap block as a documented
+    // schema-DDL exception — that block is gone now that the ORM's
+    // `get_or_create` lets us skip-with-grace on missing tables.
+    if ContentType::objects().count().await.is_err() {
         tracing::debug!(
             "permissions: skipping row seed — permissions_contenttype not present yet \
              (run `migrate`, then re-boot to seed standard permissions)"
         );
         return Ok(());
     }
-    let models = umbra::migrate::registered_models();
+    let registered_models = umbra::migrate::registered_models();
     tracing::info!(
         plugin = "permissions",
-        model_count = models.len(),
+        model_count = registered_models.len(),
         "auto-creating standard permissions"
     );
-    for meta in &models {
+    for meta in &registered_models {
         // Derive app_label and model_name from the ModelMeta.
         //
         // Django uses:
         //   - app_label = app name (e.g. "blog")
-        //   - model     = lowercase class name (e.g. "post" for class Post, "blogpost" for BlogPost)
+        //   - model     = lowercase class name (e.g. "post" for class
+        //                 Post, "blogpost" for BlogPost)
         //
-        // We mirror this: `model` is `meta.name.to_lowercase()` (the Rust struct
-        // name lowercased, e.g. "BlogPost" → "blogpost"). `app_label` is derived
-        // from the table's first segment before `_`: "blog_blog_post" → "blog";
-        // bare tables (no `_`) use "app".
+        // We mirror this: `model` is `meta.name.to_lowercase()`. The
+        // `app_label` comes from the table's first segment before `_`
+        // (`"blog_post"` → `"blog"`); bare tables use `"app"`.
         let model_name = meta.name.to_lowercase();
         let app_label = table_app_label(&meta.table);
 
-        // get_or_create on ContentType.
-        let ct_id = match ContentType::objects()
-            .filter(
+        let (ct, _created) = ContentType::objects()
+            .get_or_create(
                 models::content_type::APP_LABEL.eq(&app_label)
                     & models::content_type::MODEL.eq(&model_name),
+                ContentType {
+                    id: 0,
+                    app_label: app_label.clone(),
+                    model: model_name.clone(),
+                },
             )
-            .first()
             .await
-            .map_err(|e| sqlx::Error::Protocol(format!("permissions get_or_create: {e}")))?
-        {
-            Some(c) => c.id,
-            None => {
-                let created = ContentType::objects()
-                    .create(ContentType {
-                        id: 0,
-                        app_label: app_label.clone(),
-                        model: model_name.clone(),
-                    })
-                    .await
-                    .map_err(|e| {
-                        sqlx::Error::Protocol(format!("permissions create content_type: {e:?}"))
-                    })?;
-                created.id
-            }
-        };
+            .map_err(|e| sqlx::Error::Protocol(format!("permissions seed content_type: {e:?}")))?;
 
-        // get_or_create on each of the four standard permissions.
         let standard_perms = [
-            (format!("add_{model_name}"), format!("Can add {model_name}")),
-            (
-                format!("change_{model_name}"),
-                format!("Can change {model_name}"),
-            ),
-            (
-                format!("delete_{model_name}"),
-                format!("Can delete {model_name}"),
-            ),
-            (
-                format!("view_{model_name}"),
-                format!("Can view {model_name}"),
-            ),
+            ("add", format!("Can add {model_name}")),
+            ("change", format!("Can change {model_name}")),
+            ("delete", format!("Can delete {model_name}")),
+            ("view", format!("Can view {model_name}")),
         ];
 
-        for (codename, name) in &standard_perms {
-            let existing = Permission::objects()
-                .filter(
-                    models::permission::CONTENT_TYPE_ID.eq(ct_id)
+        for (verb, label) in &standard_perms {
+            let codename = format!("{verb}_{model_name}");
+            Permission::objects()
+                .get_or_create(
+                    models::permission::CONTENT_TYPE_ID.eq(ct.id)
                         & models::permission::CODENAME.eq(codename.as_str()),
-                )
-                .first()
-                .await
-                .map_err(|e| sqlx::Error::Protocol(format!("permissions get_or_create: {e}")))?;
-            if existing.is_none() {
-                Permission::objects()
-                    .create(Permission {
+                    Permission {
                         id: 0,
-                        content_type_id: umbra::orm::ForeignKey::new(ct_id),
-                        codename: codename.clone(),
-                        name: name.clone(),
-                    })
-                    .await
-                    .map_err(|e| {
-                        sqlx::Error::Protocol(format!("permissions create permission: {e:?}"))
-                    })?;
-            }
+                        content_type_id: umbra::orm::ForeignKey::new(ct.id),
+                        codename,
+                        name: label.clone(),
+                    },
+                )
+                .await
+                .map_err(|e| {
+                    sqlx::Error::Protocol(format!("permissions seed permission: {e:?}"))
+                })?;
         }
     }
 

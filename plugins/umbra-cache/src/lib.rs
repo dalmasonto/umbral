@@ -279,26 +279,24 @@ impl CacheBackend for MemoryBackend {
 //
 // CLAUDE.md exception — backend-specific raw SQL is allowed here.
 //
-// Two reasons this backend keeps `sqlx::query(...)` calls instead of
-// going through the ORM:
+// The original blockers (no `Vec<u8>` field type, no `upsert`
+// terminal) both shipped in subsequent commits — see
+// `SqlType::Bytes` and `Manager::upsert`. The remaining reason this
+// backend keeps `sqlx::query(...)` calls:
 //
-//   1. The `umbra_cache.value` column is `BLOB` / `bytea` — bytes,
-//      not text. The ORM's field-type catalogue doesn't yet model
-//      `Vec<u8>` (it lives in the deferred-features list); declaring
-//      a `CacheEntry` model with a `Vec<u8>` field would fail at
-//      `#[derive(Model)]` expansion.
+//   `SqliteBackend` takes an EXPLICIT `SqlitePool` by design (not
+//   the framework's ambient pool). The ORM's `Manager` terminals
+//   read `umbra::db::pool()` for ambient routing; binding them to
+//   a different pool requires an `Manager::upsert_with(&pool, ...)`
+//   escape hatch that doesn't yet exist. Adding it lands when the
+//   first non-ambient-pool consumer asks for it.
 //
-//   2. The set path uses `INSERT ... ON CONFLICT(key) DO UPDATE SET
-//      excluded.column` — the SQLite upsert syntax. The ORM doesn't
-//      expose an upsert terminal at v1 (`get_or_create` exists for
-//      the "INSERT or no-op" shape; "INSERT or update" is its own
-//      operation and lands when a real consumer needs it).
-//
-// `SqliteBackend` is explicitly typed `pool: SqlitePool`, so the
-// raw SQL has zero portability risk — a user who calls
-// `Cache::sqlite(pool)` opted into SQLite by name. The Redis backend
+// `Cache::sqlite(pool)` is the explicit-pool entry point — a user
+// who calls it opted into SQLite by name AND into a pool that may
+// be separate from the framework's main pool (cache I/O frequently
+// runs against its own smaller, dedicated pool). The Redis backend
 // below handles the non-SQLite case; an eventual `PgBackend` would
-// be its own sibling once `Vec<u8>` lands in the catalogue.
+// be its own sibling.
 
 /// SQLite-backed cache. Table: `umbra_cache(key TEXT PRIMARY KEY,
 /// value BLOB NOT NULL, expires_at TIMESTAMP NULL)`. Expired rows
