@@ -165,6 +165,141 @@ Other Django-style attributes (`db_index`, `default`, `choices`, `on_delete`, `u
 
 Foreign derive attributes (`#[serde(...)]`, `#[sqlx(...)]`, `#[validate(...)]`, etc.) are passed through untouched - the derive doesn't reject them.
 
+## All derive macros at a glance
+
+umbra ships three proc-macros. The model derive is the most-used; the form derive validates request bodies; the task attribute marks background jobs. Each gets a worked example below.
+
+### `#[derive(Model)]` — the schema + admin surface
+
+Defined in `crates/umbra-macros/src/lib.rs::derive_model`. Reads each struct field, emits an `impl Model`, the `objects()` Manager entry point, and a sibling column module (`article::ID`, `article::TITLE`, …).
+
+**Every attribute it accepts:**
+
+```rust
+use umbra::prelude::*;
+
+#[derive(Debug, Clone, sqlx::FromRow, Model)]
+#[umbra(
+    table   = "blog_post",    // override the snake_case-of-struct-name default
+    plugin  = "blog",         // prefix the table (no-op when plugin = "app")
+    display = "Blog post",    // human label shown in the admin sidebar
+    icon    = "newspaper",    // Lucide icon slug (defaults to `database`)
+)]
+pub struct Post {
+    pub id: i64,
+
+    #[umbra(string, max_length = 80)]     // __str__ label + VARCHAR(80) on PG
+    pub title: String,
+
+    pub body: String,                      // unbounded TEXT, renders as <textarea>
+
+    #[umbra(noedit)]                       // read-only on edit, hidden on create
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+```
+
+**Reference:**
+
+| Where | Attribute | What it does |
+|---|---|---|
+| Struct | `table = "..."` | SQL table name. Default: snake_case of struct ident. |
+| Struct | `plugin = "..."` | Table prefix (`blog_post`). `plugin = "app"` is a no-op since `"app"` is the implicit user-binary namespace. |
+| Struct | `display = "..."` | Sidebar label in the admin. Default: struct name. |
+| Struct | `icon = "..."` | Lucide icon slug. Default: `"database"`. |
+| Field | `noform` | Never rendered on any admin form (create or edit). For `password_hash`, internal tokens. |
+| Field | `noedit` | Rendered read-only on edit forms; omitted on create. |
+| Field | `string` / `string = true` | Mark this field as Django's `__str__`. Default `list_display` becomes `[<this>, <other short columns>]`. |
+| Field | `max_length = N` | Cap on a `String`. PG → `VARCHAR(N)`, SQLite stays `TEXT`. Admin form → `<input maxlength="N">` instead of `<textarea>`. List display truncates at N chars. |
+
+### `#[derive(Form)]` — request-boundary validation
+
+Defined in `crates/umbra-macros/src/lib.rs::derive_form`. Implements `umbra::forms::Form` so the struct can be `.parse(body)`-ed against a urlencoded or JSON body and reports field-level errors. Use it on a *separate struct* from your model — one for create, one for update, one per request shape that varies.
+
+```rust
+use umbra::prelude::*;
+
+#[derive(serde::Deserialize, Form)]
+pub struct CreateUser {
+    #[form(min_length = 3, max_length = 32)]
+    username: String,
+
+    #[form(email)]
+    email: String,
+
+    #[form(password, min_length = 12)]
+    password: String,
+
+    #[form(optional, max_length = 200)]
+    bio: Option<String>,
+}
+```
+
+**Reference:**
+
+| Attribute | What it does |
+|---|---|
+| `min_length = N` | Reject values shorter than N characters. |
+| `max_length = N` | Reject values longer than N characters. |
+| `email` | Use the email validator (`@`, basic shape). Renders as `<input type="email">` in the form helper. |
+| `password` | Use the password validator. Renders as `<input type="password">`. Combine with `min_length` for strength. |
+| `optional` | Skip Required. Implicitly on for `Option<T>` fields. |
+
+Rust-type dispatch is automatic:
+
+| Field type | Validator |
+|---|---|
+| `String` | `Field::text` (or `email`/`password` per attribute) |
+| `i8` / `i16` / `i32` / `i64` / `u8` / `u16` / `u32` / `u64` | `Field::integer` |
+| `f32` / `f64` | `Field::integer` (numeric, accepts decimals) |
+| `bool` | `Field::boolean` |
+| `Option<T>` | inner type, marked `.optional()` |
+
+Off-catalogue field types (custom structs, `Vec<T>`, `HashMap<K,V>`) fail at derive time pointing at the field span.
+
+### `#[task]` — background jobs
+
+The third macro is `#[umbra::task]`, an attribute macro on `async fn`. It emits a companion `register_<fn_name>()` you call at boot. Full reference lives with the tasks plugin — see [umbra-tasks › Declaring a task](/docs/v0.0.1/plugins/tasks#declaring-a-task-with-task).
+
+### `choices` — using a Rust enum
+
+`#[umbra(choices = [...])]` isn't on the accept-list. The idiomatic substitute is a Rust enum at the request boundary plus a `String` column on the model:
+
+```rust
+use serde::{Deserialize, Serialize};
+use umbra::prelude::*;
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum PostStatus {
+    Draft,
+    Review,
+    Published,
+    Archived,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow, Model)]
+pub struct Post {
+    pub id: i64,
+    #[umbra(string, max_length = 80)]
+    pub title: String,
+    pub body: String,
+    pub status: String,                    // stores the lowercase variant
+}
+
+// At the request boundary, validate it's one of the four variants:
+#[derive(serde::Deserialize, Form)]
+pub struct CreatePost {
+    #[form(max_length = 80)]
+    title: String,
+    body: String,
+    status: PostStatus,                    // serde rejects unknown variants
+}
+```
+
+`PostStatus` serialises to / from the four lowercase strings; serde's deserialiser rejects anything else with a precise error. The model's `status` field is `TEXT` (or `VARCHAR(N)` if you give it a `max_length`), so existing rows survive an enum-variant addition without a migration — the cost is that the rejection happens in the request handler, not the database.
+
+A full PG `CHECK (status IN ('draft', 'review', 'published', 'archived'))` lands by editing the generated migration JSON; the model snapshot doesn't carry it.
+
 ## Nullability
 
 `Option<T>` is the only path to a nullable column. The migration engine emits the right `NULL` / `NOT NULL` clause for each backend:
