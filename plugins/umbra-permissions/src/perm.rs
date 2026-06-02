@@ -34,12 +34,17 @@
 //! `has_perm_for_superuser` is provided as a convenience that accepts an
 //! `is_superuser: bool` flag and short-circuits immediately.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use crate::models::{
-    ContentType, GroupPermission, Permission, UserGroup, UserPermission, content_type,
-    group_permission, permission, user_group, user_permission,
+    GroupPermission, UserGroup, UserPermission, group_permission, user_group, user_permission,
 };
+// Post-gap-#60 simplification: `has_perm` and `user_perms` no longer
+// look up `ContentType` or `Permission` rows directly — the codename
+// IS the FK value carried in `UserPermission` / `GroupPermission`, so
+// the membership check is a single equality predicate. These types
+// are still referenced from `models.rs` so the crate's public
+// surface is unchanged; the unused-here import is intentional.
 
 /// Errors the perm helpers can produce.
 #[derive(Debug)]
@@ -89,43 +94,20 @@ pub async fn has_perm_scoped(
     app_label: &str,
     codename: &str,
 ) -> Result<bool, PermError> {
-    // The original SQL was one UNION-JOIN; we trade that for 3-4 ORM
-    // calls. Each step filters by an indexed column and the result sets
-    // stay small for typical RBAC tables, so the wall-clock cost is
-    // negligible. The win is portability across backends and no raw
-    // SQL hidden inside the plugin.
+    // Post-gap-#60: `Permission` is keyed by the composite codename
+    // (`"<app_label>.<codename>"`), so the membership check collapses
+    // to a direct PK comparison — no content_type → permission ID
+    // join needed. Two queries: direct grant, then group-mediated.
+    let pk = format!("{app_label}.{codename}");
 
-    // 1. content_type rows for this app_label (usually 1 per model).
-    let ct_ids: Vec<i64> = ContentType::objects()
-        .filter(content_type::APP_LABEL.eq(app_label))
-        .fetch()
-        .await?
-        .into_iter()
-        .map(|c| c.id)
-        .collect();
-    if ct_ids.is_empty() {
-        return Ok(false);
-    }
-
-    // 2. permissions matching codename within those content_types.
-    let perm_ids: Vec<i64> = Permission::objects()
-        .filter(
-            permission::CODENAME.eq(codename) & permission::CONTENT_TYPE_ID.in_(&ct_ids),
-        )
-        .fetch()
-        .await?
-        .into_iter()
-        .map(|p| p.id)
-        .collect();
-    if perm_ids.is_empty() {
-        return Ok(false);
-    }
-
-    // 3. Direct user-permission grant.
+    // 1. Direct user → permission grant. Predicate::col_eq is the
+    //    typed-erased escape hatch for FK columns whose target uses
+    //    a non-i64 PK type (string in this case) — `ForeignKeyCol`'s
+    //    typed predicate API is still i64-shaped at v1.
     let direct = UserPermission::objects()
         .filter(
             user_permission::USER_ID.eq(user_id)
-                & user_permission::PERMISSION_ID.in_(&perm_ids),
+                & umbra::orm::Predicate::<UserPermission>::col_eq("permission_id", pk.clone()),
         )
         .exists()
         .await?;
@@ -133,8 +115,8 @@ pub async fn has_perm_scoped(
         return Ok(true);
     }
 
-    // 4. Group-mediated grant: the user's group ids cross-joined with
-    //    permission ids via the group_permission M2M.
+    // 2. Group-mediated grant: find every group the user is in,
+    //    then check whether any of those groups grants this codename.
     let group_ids: Vec<i64> = UserGroup::objects()
         .filter(user_group::USER_ID.eq(user_id))
         .fetch()
@@ -149,7 +131,7 @@ pub async fn has_perm_scoped(
     Ok(GroupPermission::objects()
         .filter(
             group_permission::GROUP_ID.in_(&group_ids)
-                & group_permission::PERMISSION_ID.in_(&perm_ids),
+                & umbra::orm::Predicate::<GroupPermission>::col_eq("permission_id", pk),
         )
         .exists()
         .await?)
@@ -183,8 +165,10 @@ pub async fn has_perm_for_superuser(
 /// database. Callers that want to short-circuit for superusers should check
 /// `user.is_superuser()` before calling this.
 pub async fn user_perms(user_id: i64) -> Result<HashSet<String>, PermError> {
-    // Direct permission ids granted to this user.
-    let mut perm_ids: Vec<i64> = UserPermission::objects()
+    // Post-gap-#60: the codename IS the permission_id FK value, so
+    // there's nothing left to join. Collect FK values directly and
+    // return them.
+    let mut codenames: Vec<String> = UserPermission::objects()
         .filter(user_permission::USER_ID.eq(user_id))
         .fetch()
         .await?
@@ -192,7 +176,7 @@ pub async fn user_perms(user_id: i64) -> Result<HashSet<String>, PermError> {
         .map(|up| up.permission_id.id())
         .collect();
 
-    // Group-mediated: find the user's groups, then the permissions on those.
+    // Group-mediated grants.
     let group_ids: Vec<i64> = UserGroup::objects()
         .filter(user_group::USER_ID.eq(user_id))
         .fetch()
@@ -201,42 +185,15 @@ pub async fn user_perms(user_id: i64) -> Result<HashSet<String>, PermError> {
         .map(|ug| ug.group_id.id())
         .collect();
     if !group_ids.is_empty() {
-        let mediated: Vec<i64> = GroupPermission::objects()
+        let mediated: Vec<String> = GroupPermission::objects()
             .filter(group_permission::GROUP_ID.in_(&group_ids))
             .fetch()
             .await?
             .into_iter()
             .map(|gp| gp.permission_id.id())
             .collect();
-        perm_ids.extend(mediated);
-    }
-    perm_ids.sort();
-    perm_ids.dedup();
-    if perm_ids.is_empty() {
-        return Ok(HashSet::new());
+        codenames.extend(mediated);
     }
 
-    // Hydrate permission rows for the codenames, then their content_types
-    // for the app_labels. Two more queries; small result sets at v1.
-    let perms: Vec<Permission> = Permission::objects()
-        .filter(permission::ID.in_(&perm_ids))
-        .fetch()
-        .await?;
-    let ct_ids: Vec<i64> = perms.iter().map(|p| p.content_type_id.id()).collect();
-    let ct_map: HashMap<i64, String> = ContentType::objects()
-        .filter(content_type::ID.in_(&ct_ids))
-        .fetch()
-        .await?
-        .into_iter()
-        .map(|c| (c.id, c.app_label))
-        .collect();
-
-    Ok(perms
-        .into_iter()
-        .filter_map(|p| {
-            ct_map
-                .get(&p.content_type_id.id())
-                .map(|app| format!("{app}.{}", p.codename))
-        })
-        .collect())
+    Ok(codenames.into_iter().collect())
 }

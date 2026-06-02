@@ -76,9 +76,19 @@ pub struct ContentType {
     pub model: String,
 }
 
-/// One permission. Standard permissions (add_X, change_X, delete_X, view_X)
-/// are auto-created at boot; custom ones are inserted by user code or
-/// management commands.
+/// One permission, identified by its composite codename like
+/// `"blog.publish_post"` or `"auth.add_user"`. Standard permissions
+/// (`add_X`, `change_X`, `delete_X`, `view_X`) are auto-created at
+/// boot; custom ones are inserted by user code or management
+/// commands.
+///
+/// The primary key is `codename: String` — gap #60 swapped the
+/// historical `id: i64` for the natural string identifier so admins
+/// see meaningful labels (`"blog.publish_post"`) instead of opaque
+/// integers (`10`), and `has_permission(user_id, "blog.publish_post")`
+/// can look up the row by its PK directly. The composite form
+/// (`"<app_label>.<codename>"`) guarantees global uniqueness without
+/// a separate UNIQUE constraint.
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
 #[umbra(
     table = "permissions_permission",
@@ -86,18 +96,17 @@ pub struct ContentType {
     icon = "key"
 )]
 pub struct Permission {
-    pub id: i64,
+    /// Composite codename — `"<app_label>.<codename>"`. Globally
+    /// unique. Read-only because renaming a codename invalidates every
+    /// `has_permission(...)` call site in code.
+    #[umbra(primary_key, string, noedit, max_length = 150)]
+    pub codename: String,
     /// Which model this permission is scoped to. Re-targeting is a
     /// delete-and-create, not an edit.
     #[umbra(noedit)]
     pub content_type_id: ForeignKey<ContentType>,
-    /// Short machine-readable key referenced from `has_permission(...)`
-    /// call sites across the project. Renaming this breaks every check.
-    #[umbra(noedit)]
-    pub codename: String,
     /// Human-readable label shown in the admin. Examples: `"Can publish post"`,
     /// `"Can add post"`. Editable — it's display text, no code reads it.
-    #[umbra(string, max_length = 150)]
     pub name: String,
 }
 

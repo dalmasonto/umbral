@@ -23,7 +23,7 @@
           "primary_key": false,
           "nullable": false,
           "noform": false,
-          "noedit": false,
+          "noedit": true,
           "is_string_repr": false,
           "max_length": 0
         },
@@ -33,7 +33,7 @@
           "primary_key": false,
           "nullable": false,
           "noform": false,
-          "noedit": false,
+          "noedit": true,
           "is_string_repr": false,
           "max_length": 0
         }
@@ -60,6 +60,16 @@
           "nullable": false,
           "noform": false,
           "noedit": false,
+          "is_string_repr": true,
+          "max_length": 150
+        },
+        {
+          "name": "description",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": true,
+          "noform": false,
+          "noedit": false,
           "is_string_repr": false,
           "max_length": 0
         }
@@ -70,14 +80,14 @@
       "table": "permissions_permission",
       "columns": [
         {
-          "name": "id",
-          "ty": "BigInt",
+          "name": "codename",
+          "ty": "Text",
           "primary_key": true,
           "nullable": false,
           "noform": false,
-          "noedit": false,
-          "is_string_repr": false,
-          "max_length": 0
+          "noedit": true,
+          "is_string_repr": true,
+          "max_length": 150
         },
         {
           "name": "content_type_id",
@@ -86,17 +96,7 @@
           "nullable": false,
           "fk_target": "permissions_contenttype",
           "noform": false,
-          "noedit": false,
-          "is_string_repr": false,
-          "max_length": 0
-        },
-        {
-          "name": "codename",
-          "ty": "Text",
-          "primary_key": false,
-          "nullable": false,
-          "noform": false,
-          "noedit": false,
+          "noedit": true,
           "is_string_repr": false,
           "max_length": 0
         },
@@ -247,7 +247,7 @@
             "primary_key": false,
             "nullable": false,
             "noform": false,
-            "noedit": false,
+            "noedit": true,
             "is_string_repr": false,
             "max_length": 0
           },
@@ -257,7 +257,7 @@
             "primary_key": false,
             "nullable": false,
             "noform": false,
-            "noedit": false,
+            "noedit": true,
             "is_string_repr": false,
             "max_length": 0
           }
@@ -284,6 +284,16 @@
             "ty": "Text",
             "primary_key": false,
             "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": true,
+            "max_length": 150
+          },
+          {
+            "name": "description",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": true,
             "noform": false,
             "noedit": false,
             "is_string_repr": false,
@@ -338,14 +348,14 @@
         "table": "permissions_permission",
         "fields": [
           {
-            "name": "id",
-            "ty": "BigInt",
+            "name": "codename",
+            "ty": "Text",
             "primary_key": true,
             "nullable": false,
             "noform": false,
-            "noedit": false,
-            "is_string_repr": false,
-            "max_length": 0
+            "noedit": true,
+            "is_string_repr": true,
+            "max_length": 150
           },
           {
             "name": "content_type_id",
@@ -354,17 +364,7 @@
             "nullable": false,
             "fk_target": "permissions_contenttype",
             "noform": false,
-            "noedit": false,
-            "is_string_repr": false,
-            "max_length": 0
-          },
-          {
-            "name": "codename",
-            "ty": "Text",
-            "primary_key": false,
-            "nullable": false,
-            "noform": false,
-            "noedit": false,
+            "noedit": true,
             "is_string_repr": false,
             "max_length": 0
           },

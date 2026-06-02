@@ -2203,21 +2203,71 @@ fn quote_pg_ident(ident: &str) -> String {
 /// For `SqlType::ForeignKey` columns: rendered as `BIGINT` with a
 /// `REFERENCES "<target>"("id")` suffix appended via `.extra()`. The
 /// target table name comes from `col.fk_target`.
+/// Look up the FK target model's primary-key column name and SQL
+/// type. Walks the registered ModelMeta set to find the model whose
+/// table matches `fk_target_table`, then picks the first column
+/// marked `primary_key = true`. Falls back to `("id", BigInteger)`
+/// when the target isn't registered (cross-plugin lookup miss, or
+/// the FK points outside the framework's model registry).
+///
+/// Used by both the SQLite and Postgres FK column-def builders so the
+/// generated `<col> <type> REFERENCES <tbl>(<pk_col>)` matches the
+/// target's actual PK shape — gap #60 made non-`id`, non-i64 PKs
+/// (e.g. `Permission.codename: String`) a real case.
+fn fk_target_pk(fk_target_table: &str) -> (String, sea_query::ColumnType) {
+    use sea_query::ColumnType;
+    let unesc = fk_target_table.replace("\"\"", "\"");
+    // Non-panicking registry read — `registered_models()` itself
+    // panics when called outside an `App::build()` context, but the
+    // migration engine's unit tests construct snapshots by hand and
+    // call into DDL emit without booting the framework. Fall through
+    // to the historical "id"/BigInteger default in that case.
+    let Some(metas) = REGISTRY.get() else {
+        return ("id".to_string(), ColumnType::BigInteger);
+    };
+    for meta in metas.iter().map(|(_, m)| m) {
+        if meta.table != unesc {
+            continue;
+        }
+        if let Some(pk) = meta.fields.iter().find(|c| c.primary_key) {
+            // Map the PK's SqlType to a sea-query ColumnType. We can't
+            // route through `SqliteBackend::map_column` because that
+            // wants a `Column` and applies max_length / choices
+            // metadata which is irrelevant to a FK column. Hand-roll
+            // the few cases the framework supports for PKs.
+            let ct = match pk.ty {
+                SqlType::BigInt | SqlType::Integer => ColumnType::BigInteger,
+                SqlType::SmallInt => ColumnType::SmallInteger,
+                SqlType::Text => ColumnType::Text,
+                SqlType::Uuid => ColumnType::Uuid,
+                // Other PK types fall back to BigInteger as the
+                // historical default. The compile-time PrimaryKey
+                // trait keeps this list closed in practice.
+                _ => ColumnType::BigInteger,
+            };
+            return (pk.name.clone(), ct);
+        }
+    }
+    ("id".to_string(), ColumnType::BigInteger)
+}
+
 fn build_column_def_sqlite(col: &Column) -> sea_query::ColumnDef {
     use sea_query::{Alias, ColumnDef, ColumnType};
 
-    // ForeignKey gets a special path: BIGINT + inline REFERENCES clause.
+    // ForeignKey gets a special path: column type + inline REFERENCES
+    // clause both derived from the target model's PK column.
     if matches!(col.ty, SqlType::ForeignKey) {
         let fk_target = col
             .fk_target
             .as_deref()
             .unwrap_or("_unknown_")
             .replace('"', "\"\"");
-        let mut def = ColumnDef::new_with_type(Alias::new(&col.name), ColumnType::BigInteger);
+        let (pk_col_name, pk_col_type) = fk_target_pk(&fk_target);
+        let mut def = ColumnDef::new_with_type(Alias::new(&col.name), pk_col_type);
         if !col.nullable {
             def.not_null();
         }
-        def.extra(format!("REFERENCES \"{fk_target}\"(\"id\")"));
+        def.extra(format!("REFERENCES \"{fk_target}\"(\"{pk_col_name}\")"));
         return def;
     }
 
@@ -2262,21 +2312,22 @@ fn build_column_def_sqlite(col: &Column) -> sea_query::ColumnDef {
 fn build_column_def_postgres(col: &Column) -> sea_query::ColumnDef {
     use sea_query::{Alias, ColumnDef};
 
-    // ForeignKey gets a special path: BIGINT + inline REFERENCES clause.
+    // ForeignKey gets a special path: column type + inline REFERENCES
+    // clause both derived from the target model's PK.
     if matches!(col.ty, SqlType::ForeignKey) {
         let fk_target = col
             .fk_target
             .as_deref()
             .unwrap_or("_unknown_")
             .replace('"', "\"\"");
-        let mut def = ColumnDef::new_with_type(
-            Alias::new(&col.name),
-            crate::backend::PostgresBackend.map_type(SqlType::BigInt),
-        );
+        let (pk_col_name, pk_col_type) = fk_target_pk(&fk_target);
+        // sea-query's ColumnType variants are dialect-agnostic; the
+        // same value works for both SQLite and Postgres builders here.
+        let mut def = ColumnDef::new_with_type(Alias::new(&col.name), pk_col_type);
         if !col.nullable {
             def.not_null();
         }
-        def.extra(format!("REFERENCES \"{fk_target}\"(\"id\")"));
+        def.extra(format!("REFERENCES \"{fk_target}\"(\"{pk_col_name}\")"));
         return def;
     }
 

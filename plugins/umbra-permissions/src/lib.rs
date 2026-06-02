@@ -232,15 +232,19 @@ async fn ensure_standard_permissions(_pool: &umbra::db::DbPool) -> Result<(), sq
         ];
 
         for (verb, label) in &standard_perms {
-            let codename = format!("{verb}_{model_name}");
+            // Composite codename — the new PK shape (gap #60). One
+            // string identifies the permission across the whole
+            // system; admin / has_perm / FK references all use it.
+            let codename = format!("{app_label}.{verb}_{model_name}");
             Permission::objects()
                 .get_or_create(
-                    models::permission::CONTENT_TYPE_ID.eq(ct.id)
-                        & models::permission::CODENAME.eq(codename.as_str()),
+                    umbra::orm::Predicate::<Permission>::col_eq(
+                        "codename",
+                        codename.clone(),
+                    ),
                     Permission {
-                        id: 0,
-                        content_type_id: umbra::orm::ForeignKey::new(ct.id),
                         codename,
+                        content_type_id: umbra::orm::ForeignKey::new(ct.id),
                         name: label.clone(),
                     },
                 )

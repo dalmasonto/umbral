@@ -142,6 +142,13 @@ struct UmbraFieldAttr {
     noform: bool,
     /// `#[umbra(noedit)]` — show on edit form read-only, never on create.
     noedit: bool,
+    /// `#[umbra(primary_key)]` — explicitly nominate this field as the
+    /// model's primary key. Used when the PK field isn't named `id`
+    /// (the macro's historical convention). Example: a `Permission`
+    /// model keyed by a string codename uses
+    /// `#[umbra(primary_key)] pub codename: String` instead of
+    /// `pub id: String`.
+    primary_key: bool,
     /// `#[umbra(string)]` — Django-style "__str__" marker. The admin's
     /// default `list_display` falls back to this field when the model
     /// has no explicit `list_display` config, so the table shows a
@@ -170,6 +177,7 @@ fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAtt
     let mut parsed = UmbraFieldAttr {
         noform: false,
         noedit: false,
+        primary_key: false,
         is_string_repr: false,
         max_length: 0,
         choices_ty: None,
@@ -185,6 +193,9 @@ fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAtt
                 Ok(())
             } else if meta.path.is_ident("noedit") {
                 parsed.noedit = true;
+                Ok(())
+            } else if meta.path.is_ident("primary_key") {
+                parsed.primary_key = true;
                 Ok(())
             } else if meta.path.is_ident("string") {
                 // Both `#[umbra(string)]` and `#[umbra(string = true)]` work.
@@ -334,23 +345,51 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         }
     };
 
-    // M3 fixes the primary key to a field named `id` and accepts the
-    // three PK types `i32`, `i64`, and `uuid::Uuid`. The error message
-    // hints at the future flexibility so a user porting from Django
-    // doesn't think they have to rename every PK to `id` forever.
-    let id_field = fields
+    // Primary-key field detection:
+    //   1. First-match: any field carrying `#[umbra(primary_key)]`.
+    //      The explicit marker lets a model name its PK something
+    //      domain-specific — e.g. `Permission` with
+    //      `#[umbra(primary_key)] pub codename: String`.
+    //   2. Fallback: a field literally named `id`. The historical
+    //      default, kept so existing models compile unchanged.
+    //
+    // Either way the PK type (the field's Rust type) isn't validated
+    // here: any type implementing `umbra::orm::PrimaryKey` works. The
+    // trait ships impls for every Rust integer width, `uuid::Uuid`,
+    // and `String`; user crates can add their own with
+    // `impl PrimaryKey for MyId {}`.
+    //
+    // The `PrimaryKey` associated type echoes the user-written field
+    // type verbatim so user crate paths (`uuid::Uuid`, `::uuid::Uuid`,
+    // bare `Uuid`) round-trip unchanged through the emitted tokens.
+    let explicit_pk = fields
         .iter()
-        .find(|f| f.ident.as_ref().is_some_and(|i| i == "id"));
+        .find(|f| match parse_umbra_field_attr(&f.attrs) {
+            Ok(attrs) => attrs.primary_key,
+            Err(_) => false,
+        });
+    let id_field = explicit_pk.or_else(|| {
+        fields
+            .iter()
+            .find(|f| f.ident.as_ref().is_some_and(|i| i == "id"))
+    });
     let id_field = match id_field {
         Some(f) => f,
         None => {
             return Err(syn::Error::new_spanned(
                 struct_name,
-                "umbra M3 requires an `id` primary-key field of type \
-                 i32, i64, or uuid::Uuid (M3+ supports custom PK names)",
+                "umbra::Model requires a primary-key field — either name a field \
+                 `id` (historical default) or mark one with `#[umbra(primary_key)]`",
             ));
         }
     };
+    // Name of the PK field — needed by the `primary_key()` impl
+    // below so it picks `self.codename` instead of `self.id` when the
+    // model nominated a non-standard PK column.
+    let pk_field_name = id_field
+        .ident
+        .as_ref()
+        .expect("PK field must have a name");
     // The id field's type isn't validated here: any type implementing
     // `umbra::orm::PrimaryKey` works. The trait ships impls for every
     // Rust integer width, `uuid::Uuid`, and `String`; user crates can
@@ -427,7 +466,10 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
     for field in fields.iter() {
         let field_name = field.ident.as_ref().unwrap();
         let field_name_str = field_name.to_string();
-        let is_primary_key = field_name == "id";
+        // PK detection: the field this iteration is on is the PK iff it
+        // matches the one `id_field` resolved above — either explicitly
+        // tagged `#[umbra(primary_key)]` or named `id` as the default.
+        let is_primary_key = field_name == pk_field_name;
 
         let kind = classify_field_type(&field.ty);
 
@@ -612,8 +654,17 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                         }
                     }
                 });
+                // PK serialised through serde_json then coerced back
+                // to i64. i64-keyed FK targets round-trip cleanly;
+                // String/UUID-keyed targets serialise to a JSON
+                // string whose `as_i64()` returns None, silently
+                // disabling `select_related` on this FK field — a
+                // v1 limitation while the related-loading machinery
+                // is still i64-shaped.
                 fk_id_arms.push(quote! {
-                    #field_name_str => ::core::option::Option::Some(self.#field_name.id()),
+                    #field_name_str => ::umbra::_serde_json::to_value(&self.#field_name.id())
+                        .ok()
+                        .and_then(|v| v.as_i64()),
                 });
             }
             FieldKind::NullableForeignKey(inner_ty) => {
@@ -627,7 +678,10 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                     }
                 });
                 fk_id_arms.push(quote! {
-                    #field_name_str => self.#field_name.as_ref().map(|fk| fk.id()),
+                    #field_name_str => self.#field_name
+                        .as_ref()
+                        .and_then(|fk| ::umbra::_serde_json::to_value(&fk.id()).ok())
+                        .and_then(|v| v.as_i64()),
                 });
             }
             _ => {}
@@ -658,7 +712,7 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                 // `Uuid`, etc. the optimiser folds the clone back into
                 // a copy; for `String` the clone is the work the call
                 // site would have done anyway.
-                self.id.clone()
+                self.#pk_field_name.clone()
             }
         }
 

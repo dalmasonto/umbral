@@ -124,12 +124,13 @@ async fn standard_perms_auto_created_for_registered_models() {
     let pool = pool();
 
     // The four standard permissions for blogpost should exist.
-    // model = lowercase struct name = "blogpost"
+    // model = lowercase struct name = "blogpost".
+    // Post-gap-#60: codename is the composite `<app_label>.<verb>_<model>`
+    // form (e.g. `blog.add_blogpost`) and serves as the table's PK.
     let count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM permissions_permission p
-         JOIN permissions_contenttype ct ON ct.id = p.content_type_id
-         WHERE ct.app_label = 'blog' AND ct.model = 'blogpost'
-           AND p.codename IN ('add_blogpost','change_blogpost','delete_blogpost','view_blogpost')",
+        "SELECT COUNT(*) FROM permissions_permission \
+         WHERE codename IN ('blog.add_blogpost','blog.change_blogpost', \
+                            'blog.delete_blogpost','blog.view_blogpost')",
     )
     .fetch_one(&pool)
     .await
@@ -212,31 +213,25 @@ async fn has_perm_returns_true_for_direct_user_permission() {
     .await
     .expect("ContentType for blog/blogpost must exist");
 
-    // Insert a custom permission "publish_blogpost" for blog/blogpost.
+    // Insert a custom permission with composite codename PK. Post-
+    // gap-#60: no integer id; the codename string IS the PK.
     sqlx::query(
-        "INSERT OR IGNORE INTO permissions_permission (content_type_id, codename, name)
-         VALUES (?, 'publish_blogpost', 'Can publish blog post')",
+        "INSERT OR IGNORE INTO permissions_permission (codename, content_type_id, name)
+         VALUES ('blog.publish_blogpost', ?, 'Can publish blog post')",
     )
     .bind(ct_id)
     .execute(&pool)
     .await
     .expect("insert permission");
 
-    let perm_id: i64 = sqlx::query_scalar(
-        "SELECT id FROM permissions_permission WHERE content_type_id = ? AND codename = 'publish_blogpost'",
-    )
-    .bind(ct_id)
-    .fetch_one(&pool)
-    .await
-    .expect("fetch perm id");
-
-    // Grant the permission directly to user 101.
+    // Grant the permission directly to user 101. permission_id now
+    // holds the codename string instead of an integer FK.
     sqlx::query(
         "INSERT OR IGNORE INTO permissions_userpermission (user_id, permission_id)
          VALUES (?, ?)",
     )
     .bind(user_id)
-    .bind(perm_id)
+    .bind("blog.publish_blogpost")
     .execute(&pool)
     .await
     .expect("insert user permission");
@@ -274,29 +269,18 @@ async fn has_perm_returns_true_for_group_permission() {
             .await
             .expect("fetch group id");
 
-    // Look up "add_blogpost" standard perm (created at boot for BlogPost).
-    let ct_id: i64 = sqlx::query_scalar(
-        "SELECT id FROM permissions_contenttype WHERE app_label = 'blog' AND model = 'blogpost'",
-    )
-    .fetch_one(&pool)
-    .await
-    .expect("ContentType blog/blogpost");
+    // The codename `blog.add_blogpost` is the standard permission's
+    // PK; no intermediate id lookup needed post-gap-#60.
+    let perm_pk = "blog.add_blogpost";
 
-    let perm_id: i64 = sqlx::query_scalar(
-        "SELECT id FROM permissions_permission WHERE content_type_id = ? AND codename = 'add_blogpost'",
-    )
-    .bind(ct_id)
-    .fetch_one(&pool)
-    .await
-    .expect("add_blogpost permission");
-
-    // Grant the permission to the group.
+    // Grant the permission to the group. permission_id now holds the
+    // codename string.
     sqlx::query(
         "INSERT OR IGNORE INTO permissions_grouppermission (group_id, permission_id)
          VALUES (?, ?)",
     )
     .bind(group_id)
-    .bind(perm_id)
+    .bind(perm_pk)
     .execute(&pool)
     .await
     .expect("insert group permission");
@@ -365,26 +349,13 @@ async fn user_perms_returns_union_of_direct_and_group_perms() {
     let user_id: i64 = 303;
 
     // --- direct permission: blog.view_blogpost ---
-    let ct_id: i64 = sqlx::query_scalar(
-        "SELECT id FROM permissions_contenttype WHERE app_label = 'blog' AND model = 'blogpost'",
-    )
-    .fetch_one(&pool)
-    .await
-    .expect("ContentType blog/blogpost");
-
-    let view_perm_id: i64 = sqlx::query_scalar(
-        "SELECT id FROM permissions_permission WHERE content_type_id = ? AND codename = 'view_blogpost'",
-    )
-    .bind(ct_id)
-    .fetch_one(&pool)
-    .await
-    .expect("view_blogpost permission");
-
+    // Post-gap-#60: the composite codename IS the PK; no integer id
+    // lookup. Bind the codename string directly into permission_id.
     sqlx::query(
         "INSERT OR IGNORE INTO permissions_userpermission (user_id, permission_id) VALUES (?, ?)",
     )
     .bind(user_id)
-    .bind(view_perm_id)
+    .bind("blog.view_blogpost")
     .execute(&pool)
     .await
     .expect("insert direct perm");
@@ -401,19 +372,11 @@ async fn user_perms_returns_union_of_direct_and_group_perms() {
             .await
             .expect("fetch group id");
 
-    let change_perm_id: i64 = sqlx::query_scalar(
-        "SELECT id FROM permissions_permission WHERE content_type_id = ? AND codename = 'change_blogpost'",
-    )
-    .bind(ct_id)
-    .fetch_one(&pool)
-    .await
-    .expect("change_blogpost permission");
-
     sqlx::query(
         "INSERT OR IGNORE INTO permissions_grouppermission (group_id, permission_id) VALUES (?, ?)",
     )
     .bind(group_id)
-    .bind(change_perm_id)
+    .bind("blog.change_blogpost")
     .execute(&pool)
     .await
     .expect("insert group permission");
