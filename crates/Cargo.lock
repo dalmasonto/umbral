@@ -2914,6 +2914,7 @@ dependencies = [
  "chrono",
  "http",
  "http-body-util",
+ "sea-query",
  "serde",
  "serde_json",
  "sqlx",

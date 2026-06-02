@@ -116,6 +116,16 @@ impl<'a> DynQuerySet<'a> {
         self
     }
 
+    /// Splice an externally-built `sea_query::Condition` into the
+    /// accumulated WHERE clauses. Used by callers that need lookups
+    /// the typed builder methods don't cover (e.g. umbra-rest's
+    /// django-filter-style parser produces a `Condition` per
+    /// `field__lookup=value` triple and feeds it in here).
+    pub fn filter_condition(mut self, cond: sea_query::Condition) -> Self {
+        self.where_clauses.push(cond);
+        self
+    }
+
     /// Add `WHERE <col> IN (?, ?, ...)` for an i64 column (PK / FK).
     /// Empty `vals` is a no-op; unknown columns are silently dropped.
     pub fn filter_in_i64(mut self, col: &str, vals: &[i64]) -> Self {
@@ -486,6 +496,266 @@ impl<'a> DynQuerySet<'a> {
             }
         }
     }
+
+    /// Terminal: fetch every row, decoding each cell to a
+    /// `serde_json::Value` that preserves JSON shape (numbers stay
+    /// numbers, booleans stay booleans, JSON columns nest verbatim).
+    /// The right shape for HTTP API responses. Returns one
+    /// `serde_json::Map` per row, keyed by column name.
+    pub async fn fetch_as_json(
+        self,
+    ) -> Result<Vec<serde_json::Map<String, serde_json::Value>>, DynError> {
+        let mut q = Query::select();
+        q.from(Alias::new(&self.meta.table));
+        for c in &self.select_cols {
+            q.column(Alias::new(c));
+        }
+        for cond in &self.where_clauses {
+            q.cond_where(cond.clone());
+        }
+        for (col, descending) in &self.order {
+            q.order_by(
+                Alias::new(col),
+                if *descending { Order::Desc } else { Order::Asc },
+            );
+        }
+        if let Some(n) = self.limit {
+            q.limit(n);
+        }
+        if let Some(n) = self.offset {
+            q.offset(n);
+        }
+
+        match pool_dispatched() {
+            DbPool::Sqlite(pool) => {
+                let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
+                let rows = sqlx::query_with(&sql, values).fetch_all(pool).await?;
+                let mut out: Vec<serde_json::Map<String, serde_json::Value>> =
+                    Vec::with_capacity(rows.len());
+                for row in rows {
+                    let mut entry = serde_json::Map::new();
+                    for col_name in &self.select_cols {
+                        if let Some(col_meta) =
+                            self.meta.fields.iter().find(|c| &c.name == col_name)
+                        {
+                            entry.insert(col_name.clone(), decode_to_json(&row, col_meta)?);
+                        }
+                    }
+                    out.push(entry);
+                }
+                Ok(out)
+            }
+            DbPool::Postgres(pool) => {
+                let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
+                let rows = sqlx::query_with(&sql, values).fetch_all(pool).await?;
+                let mut out: Vec<serde_json::Map<String, serde_json::Value>> =
+                    Vec::with_capacity(rows.len());
+                for row in rows {
+                    let mut entry = serde_json::Map::new();
+                    for col_name in &self.select_cols {
+                        if let Some(col_meta) =
+                            self.meta.fields.iter().find(|c| &c.name == col_name)
+                        {
+                            entry.insert(col_name.clone(), decode_pg_to_json(&row, col_meta)?);
+                        }
+                    }
+                    out.push(entry);
+                }
+                Ok(out)
+            }
+        }
+    }
+
+    /// Terminal: fetch the first row (LIMIT 1) as a JSON object.
+    /// Returns `None` when the filter matches zero rows.
+    pub async fn first_as_json(
+        mut self,
+    ) -> Result<Option<serde_json::Map<String, serde_json::Value>>, DynError> {
+        self.limit = Some(1);
+        let mut rows = self.fetch_as_json().await?;
+        Ok(rows.pop())
+    }
+
+    /// Terminal: INSERT one row from a JSON map. Auto-increment integer
+    /// PKs are omitted when missing or null (the backend assigns).
+    /// Returns the newly-inserted row as JSON (via RETURNING * on
+    /// Postgres; via last_insert_rowid → SELECT * on SQLite). The
+    /// per-column JSON-to-SeaValue coercion goes through the existing
+    /// `json_to_sea_value` so timestamp / uuid / json paths are the
+    /// same as the typed Manager::create path.
+    pub async fn insert_json(
+        self,
+        body: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<serde_json::Map<String, serde_json::Value>, DynError> {
+        use crate::orm::write::is_default_pk;
+
+        let mut cols: Vec<&str> = Vec::new();
+        let mut values: Vec<SeaValue> = Vec::new();
+        for col in &self.meta.fields {
+            // Auto-increment PK: omit when the body supplies no value,
+            // null, or the integer sentinel 0. The backend hands out
+            // the next id.
+            if col.primary_key {
+                let supplied = body.get(&col.name);
+                let is_sentinel = match supplied {
+                    None | Some(serde_json::Value::Null) => true,
+                    Some(v) => is_default_pk(col.ty, v),
+                };
+                if matches!(
+                    col.ty,
+                    SqlType::Integer | SqlType::BigInt | SqlType::SmallInt
+                ) && is_sentinel
+                {
+                    continue;
+                }
+            }
+            let Some(json) = body.get(&col.name) else {
+                // Pre-validate: a non-nullable column with no DB-side
+                // default that the body didn't include is a client
+                // mistake. Surface it as a structured error instead of
+                // letting the DB's NOT NULL constraint produce a 500
+                // at the boundary. Columns with a DEFAULT clause are
+                // allowed to be omitted — the backend fills them.
+                if !col.nullable && col.default.is_empty() && !col.primary_key {
+                    return Err(sqlx::Error::Protocol(format!(
+                        "field `{}` is required",
+                        col.name
+                    )));
+                }
+                continue;
+            };
+            // Null body values for non-nullable columns also surface as
+            // a structured error rather than the DB's NOT NULL rejection.
+            if json.is_null() && !col.nullable && col.default.is_empty() {
+                return Err(sqlx::Error::Protocol(format!(
+                    "field `{}` is required and was null",
+                    col.name
+                )));
+            }
+            let sea_value = crate::orm::write::json_to_sea_value(col.ty, json, col.nullable, &col.name)
+                .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
+            cols.push(&col.name);
+            values.push(sea_value);
+        }
+
+        // The PK name we'll read back. Used for RETURNING on Postgres
+        // and for the SQLite follow-up SELECT.
+        let pk_col = self
+            .meta
+            .fields
+            .iter()
+            .find(|c| c.primary_key)
+            .ok_or_else(|| sqlx::Error::Protocol("insert_json: model has no PK".to_string()))?;
+        let pk_name = pk_col.name.clone();
+        let pk_ty = pk_col.ty;
+
+        let mut q = Query::insert();
+        q.into_table(Alias::new(&self.meta.table));
+        q.columns(cols.iter().map(|c| Alias::new(*c)).collect::<Vec<_>>());
+        let exprs: Vec<sea_query::SimpleExpr> = values.into_iter().map(Into::into).collect();
+        q.values_panic(exprs);
+
+        match pool_dispatched() {
+            DbPool::Sqlite(pool) => {
+                let (sql, vals) = q.build_sqlx(SqliteQueryBuilder);
+                let res = sqlx::query_with(&sql, vals).execute(pool).await?;
+                // Re-fetch by PK so the caller sees the row as the DB
+                // stored it (defaults, autoincrement, server-side
+                // coercion).
+                let pk_pred = match pk_ty {
+                    SqlType::Integer | SqlType::BigInt | SqlType::SmallInt => {
+                        Expr::col(Alias::new(&pk_name)).eq(res.last_insert_rowid())
+                    }
+                    _ => {
+                        // Client-supplied non-integer PK: pull it back
+                        // from the body.
+                        let supplied = body
+                            .get(&pk_name)
+                            .cloned()
+                            .unwrap_or(serde_json::Value::Null);
+                        let sea_value = crate::orm::write::json_to_sea_value(
+                            pk_ty,
+                            &supplied,
+                            false,
+                            &pk_name,
+                        )
+                        .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
+                        Expr::col(Alias::new(&pk_name)).eq(sea_value)
+                    }
+                };
+                let mut sel = Query::select();
+                sel.from(Alias::new(&self.meta.table));
+                for c in &self.meta.fields {
+                    sel.column(Alias::new(&c.name));
+                }
+                sel.cond_where(Condition::all().add(pk_pred));
+                let (sel_sql, sel_vals) = sel.build_sqlx(SqliteQueryBuilder);
+                let row = sqlx::query_with(&sel_sql, sel_vals).fetch_one(pool).await?;
+                let mut out = serde_json::Map::new();
+                for col in &self.meta.fields {
+                    out.insert(col.name.clone(), decode_to_json(&row, col)?);
+                }
+                Ok(out)
+            }
+            DbPool::Postgres(pool) => {
+                // `RETURNING *` fetches every column of the newly-inserted
+                // row in one round trip. sea-query's chained
+                // `returning_col` calls don't accumulate, so we use the
+                // explicit "all columns" variant.
+                q.returning_all();
+                let (sql, vals) = q.build_sqlx(PostgresQueryBuilder);
+                let row = sqlx::query_with(&sql, vals).fetch_one(pool).await?;
+                let mut out = serde_json::Map::new();
+                for col in &self.meta.fields {
+                    out.insert(col.name.clone(), decode_pg_to_json(&row, col)?);
+                }
+                Ok(out)
+            }
+        }
+    }
+
+    /// Terminal: PATCH semantics — update only the columns present
+    /// in `body`. The accumulated WHERE clauses narrow the target
+    /// row(s). Returns the number of rows affected.
+    pub async fn update_json(
+        self,
+        body: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<u64, DynError> {
+        let mut q = Query::update();
+        q.table(Alias::new(&self.meta.table));
+        let mut any = false;
+        for col in &self.meta.fields {
+            if col.primary_key {
+                continue;
+            }
+            let Some(json) = body.get(&col.name) else {
+                continue;
+            };
+            let sea_value = crate::orm::write::json_to_sea_value(col.ty, json, col.nullable, &col.name)
+                .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
+            q.value(Alias::new(&col.name), sea_value);
+            any = true;
+        }
+        if !any {
+            return Ok(0);
+        }
+        for cond in &self.where_clauses {
+            q.cond_where(cond.clone());
+        }
+
+        match pool_dispatched() {
+            DbPool::Sqlite(pool) => {
+                let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
+                let res = sqlx::query_with(&sql, values).execute(pool).await?;
+                Ok(res.rows_affected())
+            }
+            DbPool::Postgres(pool) => {
+                let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
+                let res = sqlx::query_with(&sql, values).execute(pool).await?;
+                Ok(res.rows_affected())
+            }
+        }
+    }
 }
 
 /// Decode one SQLite cell to its template-friendly string form.
@@ -670,6 +940,167 @@ pub fn decode_pg_to_string(
             row.try_get::<String, _>(name).unwrap_or_default()
         }
         SqlType::ForeignKey => row.try_get::<i64, _>(name)?.to_string(),
+    })
+}
+
+/// Decode one SQLite cell to a `serde_json::Value` that preserves the
+/// column's JSON shape (numbers stay numbers, booleans stay booleans,
+/// dates render as ISO strings, JSON columns nest verbatim, NULLs
+/// become `Value::Null`). This is the row → JSON converter the REST
+/// plugin's auto-CRUD list / detail handlers feed straight into their
+/// HTTP body.
+pub fn decode_to_json(
+    row: &sqlx::sqlite::SqliteRow,
+    col: &Column,
+) -> Result<serde_json::Value, sqlx::Error> {
+    use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
+    use serde_json::Value;
+    use uuid::Uuid;
+
+    let name = col.name.as_str();
+    if col.nullable {
+        return Ok(match col.ty {
+            SqlType::SmallInt | SqlType::Integer => row
+                .try_get::<Option<i32>, _>(name)?
+                .map_or(Value::Null, Value::from),
+            SqlType::BigInt => row
+                .try_get::<Option<i64>, _>(name)?
+                .map_or(Value::Null, Value::from),
+            SqlType::Real => row
+                .try_get::<Option<f32>, _>(name)?
+                .map_or(Value::Null, |v| Value::from(v as f64)),
+            SqlType::Double => row
+                .try_get::<Option<f64>, _>(name)?
+                .map_or(Value::Null, Value::from),
+            SqlType::Boolean => row
+                .try_get::<Option<bool>, _>(name)?
+                .map_or(Value::Null, Value::from),
+            SqlType::Text => row
+                .try_get::<Option<String>, _>(name)?
+                .map_or(Value::Null, Value::from),
+            SqlType::Date => row
+                .try_get::<Option<NaiveDate>, _>(name)?
+                .map_or(Value::Null, |v| Value::from(v.to_string())),
+            SqlType::Time => row
+                .try_get::<Option<NaiveTime>, _>(name)?
+                .map_or(Value::Null, |v| Value::from(v.to_string())),
+            SqlType::Timestamptz => row
+                .try_get::<Option<DateTime<Utc>>, _>(name)?
+                .map_or(Value::Null, |v| Value::from(v.to_rfc3339())),
+            SqlType::Uuid => row
+                .try_get::<Option<Uuid>, _>(name)?
+                .map_or(Value::Null, |v| Value::from(v.to_string())),
+            SqlType::Json => row.try_get::<Option<Value>, _>(name)?.unwrap_or(Value::Null),
+            SqlType::Array(_) => panic_array_unsupported(&col.name),
+            SqlType::Inet | SqlType::Cidr | SqlType::MacAddr | SqlType::FullText => {
+                panic_pg_only_unsupported(&col.name)
+            }
+            SqlType::ForeignKey => row
+                .try_get::<Option<i64>, _>(name)?
+                .map_or(Value::Null, Value::from),
+        });
+    }
+    Ok(match col.ty {
+        SqlType::SmallInt | SqlType::Integer => Value::from(row.try_get::<i32, _>(name)?),
+        SqlType::BigInt => Value::from(row.try_get::<i64, _>(name)?),
+        SqlType::Real => Value::from(row.try_get::<f32, _>(name)? as f64),
+        SqlType::Double => Value::from(row.try_get::<f64, _>(name)?),
+        SqlType::Boolean => Value::from(row.try_get::<bool, _>(name)?),
+        SqlType::Text => Value::from(row.try_get::<String, _>(name)?),
+        SqlType::Date => Value::from(row.try_get::<NaiveDate, _>(name)?.to_string()),
+        SqlType::Time => Value::from(row.try_get::<NaiveTime, _>(name)?.to_string()),
+        SqlType::Timestamptz => Value::from(row.try_get::<DateTime<Utc>, _>(name)?.to_rfc3339()),
+        SqlType::Uuid => Value::from(row.try_get::<Uuid, _>(name)?.to_string()),
+        SqlType::Json => row.try_get::<Value, _>(name)?,
+        SqlType::Array(_) => panic_array_unsupported(&col.name),
+        SqlType::Inet | SqlType::Cidr | SqlType::MacAddr | SqlType::FullText => {
+            panic_pg_only_unsupported(&col.name)
+        }
+        SqlType::ForeignKey => Value::from(row.try_get::<i64, _>(name)?),
+    })
+}
+
+/// Postgres sibling of [`decode_to_json`]. Same dispatch table; the
+/// only difference is the executor type (`PgRow`) and the i16 path
+/// for SmallInt (PG binds i16, SQLite affinity-coerces to i32).
+pub fn decode_pg_to_json(
+    row: &sqlx::postgres::PgRow,
+    col: &Column,
+) -> Result<serde_json::Value, sqlx::Error> {
+    use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
+    use serde_json::Value;
+    use uuid::Uuid;
+
+    let name = col.name.as_str();
+    if col.nullable {
+        return Ok(match col.ty {
+            SqlType::SmallInt => row
+                .try_get::<Option<i16>, _>(name)?
+                .map_or(Value::Null, Value::from),
+            SqlType::Integer => row
+                .try_get::<Option<i32>, _>(name)?
+                .map_or(Value::Null, Value::from),
+            SqlType::BigInt => row
+                .try_get::<Option<i64>, _>(name)?
+                .map_or(Value::Null, Value::from),
+            SqlType::Real => row
+                .try_get::<Option<f32>, _>(name)?
+                .map_or(Value::Null, |v| Value::from(v as f64)),
+            SqlType::Double => row
+                .try_get::<Option<f64>, _>(name)?
+                .map_or(Value::Null, Value::from),
+            SqlType::Boolean => row
+                .try_get::<Option<bool>, _>(name)?
+                .map_or(Value::Null, Value::from),
+            SqlType::Text => row
+                .try_get::<Option<String>, _>(name)?
+                .map_or(Value::Null, Value::from),
+            SqlType::Date => row
+                .try_get::<Option<NaiveDate>, _>(name)?
+                .map_or(Value::Null, |v| Value::from(v.to_string())),
+            SqlType::Time => row
+                .try_get::<Option<NaiveTime>, _>(name)?
+                .map_or(Value::Null, |v| Value::from(v.to_string())),
+            SqlType::Timestamptz => row
+                .try_get::<Option<DateTime<Utc>>, _>(name)?
+                .map_or(Value::Null, |v| Value::from(v.to_rfc3339())),
+            SqlType::Uuid => row
+                .try_get::<Option<Uuid>, _>(name)?
+                .map_or(Value::Null, |v| Value::from(v.to_string())),
+            SqlType::Json => row.try_get::<Option<Value>, _>(name)?.unwrap_or(Value::Null),
+            SqlType::Array(_)
+            | SqlType::Inet
+            | SqlType::Cidr
+            | SqlType::MacAddr
+            | SqlType::FullText => row
+                .try_get::<Option<String>, _>(name)
+                .ok()
+                .flatten()
+                .map_or(Value::Null, Value::from),
+            SqlType::ForeignKey => row
+                .try_get::<Option<i64>, _>(name)?
+                .map_or(Value::Null, Value::from),
+        });
+    }
+    Ok(match col.ty {
+        SqlType::SmallInt => Value::from(row.try_get::<i16, _>(name)?),
+        SqlType::Integer => Value::from(row.try_get::<i32, _>(name)?),
+        SqlType::BigInt => Value::from(row.try_get::<i64, _>(name)?),
+        SqlType::Real => Value::from(row.try_get::<f32, _>(name)? as f64),
+        SqlType::Double => Value::from(row.try_get::<f64, _>(name)?),
+        SqlType::Boolean => Value::from(row.try_get::<bool, _>(name)?),
+        SqlType::Text => Value::from(row.try_get::<String, _>(name)?),
+        SqlType::Date => Value::from(row.try_get::<NaiveDate, _>(name)?.to_string()),
+        SqlType::Time => Value::from(row.try_get::<NaiveTime, _>(name)?.to_string()),
+        SqlType::Timestamptz => Value::from(row.try_get::<DateTime<Utc>, _>(name)?.to_rfc3339()),
+        SqlType::Uuid => Value::from(row.try_get::<Uuid, _>(name)?.to_string()),
+        SqlType::Json => row.try_get::<Value, _>(name)?,
+        SqlType::Array(_) | SqlType::Inet | SqlType::Cidr | SqlType::MacAddr | SqlType::FullText => {
+            row.try_get::<String, _>(name)
+                .map(Value::from)
+                .unwrap_or(Value::Null)
+        }
+        SqlType::ForeignKey => Value::from(row.try_get::<i64, _>(name)?),
     })
 }
 

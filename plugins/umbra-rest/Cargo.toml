@@ -15,6 +15,11 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
 sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "chrono", "uuid"] }
+# sea-query for the filter parser's predicate building. The ORM
+# already builds on sea-query under the hood; we use the same
+# primitives (Condition / SimpleExpr) to construct django-filter-
+# style WHERE clauses that DynQuerySet::filter_condition splices in.
+sea-query = "0.32"
 uuid = { version = "1", features = ["serde", "v7"] }
 # async-trait makes the Authentication trait object-safe (`dyn
 # Authentication`). Rust's native async fn in traits doesn't yet

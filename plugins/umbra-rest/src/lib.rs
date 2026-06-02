@@ -38,18 +38,14 @@
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
-use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
 use serde::Serialize;
 use serde_json::{Map, Value};
-use sqlx::{Row, SqlitePool};
-use umbra::migrate::{Column, ModelMeta};
-use umbra::orm::SqlType;
+use umbra::migrate::ModelMeta;
 use umbra::prelude::*;
 use umbra::web::{Json, Path, Query, Response, StatusCode};
-use uuid::Uuid;
 
 pub mod filtering;
-pub(crate) use filtering::{FilterClause, FilterValue, parse_filters};
+pub(crate) use filtering::{FilterClause, parse_filters};
 
 pub mod pagination;
 pub use pagination::{
@@ -597,6 +593,16 @@ enum ApiError {
 
 impl From<sqlx::Error> for ApiError {
     fn from(e: sqlx::Error) -> Self {
+        // The ORM layer (`DynQuerySet::insert_json`/`update_json`)
+        // surfaces structured pre-validation failures —
+        // "field X is required", "field X must be an integer" — as
+        // `sqlx::Error::Protocol` because that's the only structured
+        // string variant the trait surface provides. Mapping them
+        // back to `BadInput` here is what makes those land as 400s
+        // at the boundary instead of as opaque 500s.
+        if matches!(e, sqlx::Error::Protocol(_)) {
+            return Self::BadInput(e.to_string());
+        }
         Self::Sqlx(e)
     }
 }
@@ -648,7 +654,7 @@ fn allowed_model(table: &str) -> Result<ModelMeta, ApiError> {
     Err(ApiError::NotFound(format!("no resource at /api/{table}")))
 }
 
-fn pk_column(model: &ModelMeta) -> Result<&Column, ApiError> {
+fn pk_column(model: &ModelMeta) -> Result<&umbra::migrate::Column, ApiError> {
     model
         .fields
         .iter()
@@ -669,14 +675,13 @@ async fn list(
     let identity = cfg.authentication.authenticate(&headers).await;
     let model = allowed_model(&table)?;
     cfg.gate(&table, &Action::List, identity.as_ref())?;
-    let pool = umbra::db::pool();
 
     // Parse query-string filters when this resource has opted in.
     let filters_on = cfg.filters_enabled.contains(&table);
     let filter = parse_filters(&params, &model.fields, filters_on)?;
 
     let page_req = cfg.pagination.extract_request(&params);
-    let mut rows = fetch_rows(&pool, &model, None, Some(page_req), &filter).await?;
+    let mut rows = fetch_rows(&model, None, Some(page_req), &filter).await?;
     for row in &mut rows {
         cfg.apply_overrides(&table, row);
     }
@@ -684,7 +689,7 @@ async fn list(
     // throw away the result anyway. Other paginators read the total
     // for their envelope.
     let total = if cfg.pagination.needs_total() {
-        count_rows_filtered(&pool, &model, &filter).await?
+        count_rows_filtered(&model, &filter).await?
     } else {
         rows.len() as i64
     };
@@ -701,9 +706,8 @@ async fn retrieve(
     let model = allowed_model(&table)?;
     cfg.gate(&table, &Action::Retrieve, identity.as_ref())?;
     let pk = pk_column(&model)?;
-    let pool = umbra::db::pool();
     let no_filter = FilterClause::default();
-    let mut rows = fetch_rows(&pool, &model, Some((&pk.name, &id)), None, &no_filter).await?;
+    let mut rows = fetch_rows(&model, Some((&pk.name, &id)), None, &no_filter).await?;
     let Some(mut row) = rows.pop() else {
         return Err(ApiError::NotFound(format!(
             "no row with {} = {} in {}",
@@ -724,16 +728,9 @@ async fn create(
     let identity = cfg.authentication.authenticate(&headers).await;
     let model = allowed_model(&table)?;
     cfg.gate(&table, &Action::Create, identity.as_ref())?;
-    let pool = umbra::db::pool();
-    let new_id = insert_row(&pool, &model, &body).await?;
-    let pk = pk_column(&model)?;
-    let no_filter = FilterClause::default();
-    let mut rows = fetch_rows(&pool, &model, Some((&pk.name, &new_id)), None, &no_filter).await?;
-    let Some(mut row) = rows.pop() else {
-        return Err(ApiError::BadInput(
-            "row inserted but disappeared on read-back".into(),
-        ));
-    };
+    let mut row = umbra::orm::DynQuerySet::for_meta(&model)
+        .insert_json(&body)
+        .await?;
     cfg.apply_overrides(&table, &mut row);
     Ok((StatusCode::CREATED, Json(row)))
 }
@@ -748,11 +745,10 @@ async fn update(
     let model = allowed_model(&table)?;
     cfg.gate(&table, &Action::Update, identity.as_ref())?;
     let pk = pk_column(&model)?;
-    let pool = umbra::db::pool();
 
     // 404 if the target row doesn't exist before we attempt the UPDATE.
     let no_filter = FilterClause::default();
-    let existing = fetch_rows(&pool, &model, Some((&pk.name, &id)), None, &no_filter).await?;
+    let existing = fetch_rows(&model, Some((&pk.name, &id)), None, &no_filter).await?;
     if existing.is_empty() {
         return Err(ApiError::NotFound(format!(
             "no row with {} = {} in {}",
@@ -760,8 +756,15 @@ async fn update(
         )));
     }
 
-    update_row(&pool, &model, pk, &id, &body).await?;
-    let mut rows = fetch_rows(&pool, &model, Some((&pk.name, &id)), None, &no_filter).await?;
+    // PATCH-style update: only the columns supplied in the body are
+    // written, primary key never. Returns the row count which we
+    // discard — we re-read the row below to send back the canonical
+    // post-update shape (incl. any DB-side defaults or triggers).
+    umbra::orm::DynQuerySet::for_meta(&model)
+        .filter_eq_string(&pk.name, &id)
+        .update_json(&body)
+        .await?;
+    let mut rows = fetch_rows(&model, Some((&pk.name, &id)), None, &no_filter).await?;
     let Some(mut row) = rows.pop() else {
         return Err(ApiError::BadInput(
             "row updated but disappeared on read-back".into(),
@@ -780,16 +783,11 @@ async fn destroy(
     let model = allowed_model(&table)?;
     cfg.gate(&table, &Action::Delete, identity.as_ref())?;
     let pk = pk_column(&model)?;
-    let pool = umbra::db::pool();
-    let result = sqlx::query(&format!(
-        "DELETE FROM \"{}\" WHERE \"{}\" = ?",
-        q(&model.table),
-        q(&pk.name)
-    ))
-    .bind(&id)
-    .execute(&pool)
-    .await?;
-    if result.rows_affected() == 0 {
+    let affected = umbra::orm::DynQuerySet::for_meta(&model)
+        .filter_eq_string(&pk.name, &id)
+        .delete()
+        .await?;
+    if affected == 0 {
         return Err(ApiError::NotFound(format!(
             "no row with {} = {} in {}",
             pk.name, id, table
@@ -892,459 +890,53 @@ fn parse_action_route(path: &str) -> Result<(String, String, Option<String>), Ap
     }
 }
 
-/// Double-quote-escape a SQL identifier (table or column name). All
-/// `"` chars inside the name become `""`. Apply this AT the
-/// interpolation site (`"{}", q(&model.table)`), never after — the
-/// returned string is meant to land inside the quotes, not include
-/// them. Latent safety today (table names are compile-time constants
-/// from the derive macro) but future-proofs against dynamic
-/// registrations.
-fn q(name: &str) -> String {
-    name.replace('"', "\"\"")
-}
-
 // =========================================================================
-// Row marshalling. Per-SqlType dispatch on both directions; same pattern
-// the backup and admin modules use.
+// Row helpers. Every row read / write routes through DynQuerySet, which
+// emits the dialect-correct SQL via sea-query and binds values via
+// sea-query-binder. Identifier escaping is the queryset's job, not ours.
 // =========================================================================
 
 async fn fetch_rows(
-    pool: &SqlitePool,
     model: &ModelMeta,
     where_clause: Option<(&str, &str)>,
     page: Option<PageRequest>,
     filter: &FilterClause,
 ) -> Result<Vec<Map<String, Value>>, ApiError> {
-    let columns = model
-        .fields
-        .iter()
-        .map(|c| format!("\"{}\"", c.name))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let sql = match where_clause {
-        Some((col, _)) => format!(
-            "SELECT {columns} FROM \"{}\" WHERE \"{}\" = ? LIMIT 1",
-            q(&model.table),
-            q(col)
-        ),
-        None => {
-            // Pagination applies only to the no-WHERE-clause list
-            // path. Single-row lookups (retrieve/update/delete) keep
-            // their existing `LIMIT 1` and bypass paging.
-            let (limit_clause, offset_clause) = match page {
-                Some(req) if req.limit != u64::MAX => (
-                    format!(" LIMIT {}", req.limit),
-                    format!(" OFFSET {}", req.offset),
-                ),
-                _ => (String::new(), String::new()),
-            };
-            let where_part = if filter.is_empty() {
-                String::new()
-            } else {
-                format!(" WHERE {}", filter.where_sql)
-            };
-            format!(
-                "SELECT {columns} FROM \"{}\"{where_part} ORDER BY 1{limit_clause}{offset_clause}",
-                q(&model.table)
-            )
-        }
-    };
-    let mut q = sqlx::query(&sql);
-    if let Some((_, val)) = where_clause {
-        q = q.bind(val.to_string());
+    let mut qs = umbra::orm::DynQuerySet::for_meta(model);
+
+    if let Some((col, val)) = where_clause {
+        // Single-row lookup (retrieve / update / delete read-back).
+        // The WHERE col = val + LIMIT 1 shape is the same as before.
+        qs = qs.filter_eq_string(col, val).limit(1);
     } else {
-        // Bind filter values in order for the list path.
-        q = bind_filter_values(q, &filter.bindings);
-    }
-    let rows = q.fetch_all(pool).await?;
-    let mut out: Vec<Map<String, Value>> = Vec::with_capacity(rows.len());
-    for row in rows {
-        let mut obj = Map::new();
-        for col in &model.fields {
-            obj.insert(col.name.clone(), column_to_json(&row, col)?);
+        // List path: pagination applies, plus any filter the resource
+        // opted in to. `FilterClause` ANDs every parsed predicate.
+        if !filter.is_empty()
+            && let Some(cond) = filter.condition_clone()
+        {
+            qs = qs.filter_condition(cond);
         }
-        out.push(obj);
+        if let Some(req) = page
+            && req.limit != u64::MAX
+        {
+            qs = qs.limit(req.limit).offset(req.offset);
+        }
     }
-    Ok(out)
+
+    let rows = qs.fetch_as_json().await?;
+    Ok(rows)
 }
 
 /// `SELECT COUNT(*)` for the given model, respecting any active
 /// filter predicates so the paginator's total reflects the filtered
 /// result set rather than the whole table.
-async fn count_rows_filtered(
-    pool: &SqlitePool,
-    model: &ModelMeta,
-    filter: &FilterClause,
-) -> Result<i64, ApiError> {
-    let where_part = if filter.is_empty() {
-        String::new()
-    } else {
-        format!(" WHERE {}", filter.where_sql)
-    };
-    let sql = format!("SELECT COUNT(*) FROM \"{}\"{}", q(&model.table), where_part);
-    let mut q = sqlx::query(&sql);
-    q = bind_filter_values(q, &filter.bindings);
-    let row = q.fetch_one(pool).await?;
-    let n: i64 = row.try_get(0)?;
-    Ok(n)
-}
-
-/// Bind all `FilterValue` entries to a `sqlx::query::Query` in order.
-/// The `InTexts` / `InInts` variants expand to multiple `.bind()` calls
-/// (one per element) to match the `IN (?, ?, ...)` placeholders emitted
-/// by `build_in_predicate`.
-fn bind_filter_values<'q>(mut q: SqlxQuery<'q>, bindings: &'q [FilterValue]) -> SqlxQuery<'q> {
-    for val in bindings {
-        match val {
-            FilterValue::Text(s) => q = q.bind(s.as_str()),
-            FilterValue::Int(n) => q = q.bind(*n),
-            FilterValue::Float(f) => q = q.bind(*f),
-            FilterValue::Bool(b) => q = q.bind(*b),
-            FilterValue::InTexts(texts) => {
-                for s in texts {
-                    q = q.bind(s.as_str());
-                }
-            }
-            FilterValue::InInts(ints) => {
-                for n in ints {
-                    q = q.bind(*n);
-                }
-            }
-        }
+async fn count_rows_filtered(model: &ModelMeta, filter: &FilterClause) -> Result<i64, ApiError> {
+    let mut qs = umbra::orm::DynQuerySet::for_meta(model);
+    if !filter.is_empty()
+        && let Some(cond) = filter.condition_clone()
+    {
+        qs = qs.filter_condition(cond);
     }
-    q
+    Ok(qs.count().await?)
 }
 
-/// Unused but kept to preserve the original simpler call-site; callers
-/// that don't have a filter use the new `count_rows_filtered` with an
-/// empty clause instead.
-#[allow(dead_code)]
-async fn count_rows(pool: &SqlitePool, model: &ModelMeta) -> Result<i64, ApiError> {
-    count_rows_filtered(pool, model, &FilterClause::default()).await
-}
-
-fn column_to_json(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<Value, ApiError> {
-    let name = col.name.as_str();
-    if col.nullable {
-        return Ok(match col.ty {
-            SqlType::SmallInt | SqlType::Integer => row
-                .try_get::<Option<i32>, _>(name)?
-                .map_or(Value::Null, Value::from),
-            SqlType::BigInt => row
-                .try_get::<Option<i64>, _>(name)?
-                .map_or(Value::Null, Value::from),
-            SqlType::Real => row
-                .try_get::<Option<f32>, _>(name)?
-                .map_or(Value::Null, |v| Value::from(v as f64)),
-            SqlType::Double => row
-                .try_get::<Option<f64>, _>(name)?
-                .map_or(Value::Null, Value::from),
-            SqlType::Boolean => row
-                .try_get::<Option<bool>, _>(name)?
-                .map_or(Value::Null, Value::from),
-            SqlType::Text => row
-                .try_get::<Option<String>, _>(name)?
-                .map_or(Value::Null, Value::from),
-            SqlType::Date => row
-                .try_get::<Option<NaiveDate>, _>(name)?
-                .map_or(Value::Null, |v| Value::from(v.to_string())),
-            SqlType::Time => row
-                .try_get::<Option<NaiveTime>, _>(name)?
-                .map_or(Value::Null, |v| Value::from(v.to_string())),
-            SqlType::Timestamptz => row
-                .try_get::<Option<DateTime<Utc>>, _>(name)?
-                .map_or(Value::Null, |v| Value::from(v.to_rfc3339())),
-            SqlType::Uuid => row
-                .try_get::<Option<Uuid>, _>(name)?
-                .map_or(Value::Null, |v| Value::from(v.to_string())),
-            // Json columns serialize as themselves — the on-the-wire
-            // JSON the REST endpoint emits already nests the document
-            // structure verbatim. No string-wrapping.
-            SqlType::Json => row
-                .try_get::<Option<Value>, _>(name)?
-                .unwrap_or(Value::Null),
-            // Array fields are Postgres-only and the REST plugin reads
-            // through a SqlitePool today. The field.backend system
-            // check fires at boot when an Array field is registered
-            // against SQLite, so the column-to-JSON path never reaches
-            // this arm in practice.
-            SqlType::Array(_) => panic_array_unsupported(&col.name),
-            SqlType::Inet | SqlType::Cidr | SqlType::MacAddr | SqlType::FullText => {
-                panic_pg_only_unsupported(&col.name)
-            }
-            // ForeignKey stores as i64.
-            SqlType::ForeignKey => row
-                .try_get::<Option<i64>, _>(name)?
-                .map_or(Value::Null, Value::from),
-        });
-    }
-    Ok(match col.ty {
-        SqlType::SmallInt | SqlType::Integer => Value::from(row.try_get::<i32, _>(name)?),
-        SqlType::BigInt => Value::from(row.try_get::<i64, _>(name)?),
-        SqlType::Real => Value::from(row.try_get::<f32, _>(name)? as f64),
-        SqlType::Double => Value::from(row.try_get::<f64, _>(name)?),
-        SqlType::Boolean => Value::from(row.try_get::<bool, _>(name)?),
-        SqlType::Text => Value::from(row.try_get::<String, _>(name)?),
-        SqlType::Date => Value::from(row.try_get::<NaiveDate, _>(name)?.to_string()),
-        SqlType::Time => Value::from(row.try_get::<NaiveTime, _>(name)?.to_string()),
-        SqlType::Timestamptz => Value::from(row.try_get::<DateTime<Utc>, _>(name)?.to_rfc3339()),
-        SqlType::Uuid => Value::from(row.try_get::<Uuid, _>(name)?.to_string()),
-        SqlType::Json => row.try_get::<Value, _>(name)?,
-        SqlType::Array(_) => panic_array_unsupported(&col.name),
-        SqlType::Inet | SqlType::Cidr | SqlType::MacAddr | SqlType::FullText => {
-            panic_pg_only_unsupported(&col.name)
-        }
-        // ForeignKey stores as i64.
-        SqlType::ForeignKey => Value::from(row.try_get::<i64, _>(name)?),
-    })
-}
-
-/// Boot-path-bypassed sentinel for Array fields. The REST plugin's
-/// SqlitePool-based code path can't bind or decode Postgres arrays;
-/// the field.backend system check should have failed boot when an
-/// Array field was registered against SQLite. A future Postgres-aware
-/// REST upgrade lifts this.
-fn panic_array_unsupported(column: &str) -> ! {
-    panic!(
-        "umbra-rest: column `{column}` is a Postgres-only Array; the \
-         field.backend system check should have failed boot. The REST \
-         plugin's auto-CRUD path runs against SqlitePool today; a \
-         Postgres-aware upgrade is a Phase 4 follow-on."
-    )
-}
-
-/// Phase 4.4 sentinel for Inet/Cidr/MacAddr — same gating story as
-/// arrays.
-fn panic_pg_only_unsupported(column: &str) -> ! {
-    panic!(
-        "umbra-rest: column `{column}` is a Postgres-only network type \
-         (Inet/Cidr/MacAddr); the field.backend system check should \
-         have failed boot."
-    )
-}
-
-async fn insert_row(
-    pool: &SqlitePool,
-    model: &ModelMeta,
-    body: &Map<String, Value>,
-) -> Result<String, ApiError> {
-    // PK with an integer SqlType is auto-generated by SQLite, so it
-    // skips the writable set unless the client supplied it. Other
-    // PK shapes (uuid::Uuid, String) the client must supply.
-    let pk = pk_column(model)?;
-    let pk_is_autoincrement = pk.primary_key
-        && matches!(
-            pk.ty,
-            SqlType::Integer | SqlType::BigInt | SqlType::SmallInt
-        );
-    let writable: Vec<&Column> = model
-        .fields
-        .iter()
-        .filter(|c| {
-            !(c.primary_key
-                && matches!(c.ty, SqlType::Integer | SqlType::BigInt | SqlType::SmallInt)
-                && !body.contains_key(&c.name))
-        })
-        .collect();
-    let names = writable
-        .iter()
-        .map(|c| format!("\"{}\"", c.name))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let placeholders = writable.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
-    let sql = format!(
-        "INSERT INTO \"{}\" ({names}) VALUES ({placeholders})",
-        q(&model.table)
-    );
-    let mut q = sqlx::query(&sql);
-    for col in &writable {
-        q = bind_json_value(q, col, body)?;
-    }
-    let result = q.execute(pool).await?;
-
-    if pk_is_autoincrement {
-        // SQLite hands out monotonic ids via ROWID; read back via
-        // last_insert_rowid().
-        Ok(result.last_insert_rowid().to_string())
-    } else {
-        // String / uuid PK: the client supplied it; echo it back.
-        let id = body
-            .get(&pk.name)
-            .and_then(|v| match v {
-                Value::String(s) => Some(s.clone()),
-                _ => None,
-            })
-            .ok_or_else(|| {
-                ApiError::BadInput(format!(
-                    "non-integer primary key `{}` must be supplied in the request body",
-                    pk.name
-                ))
-            })?;
-        Ok(id)
-    }
-}
-
-async fn update_row(
-    pool: &SqlitePool,
-    model: &ModelMeta,
-    pk: &Column,
-    pk_value: &str,
-    body: &Map<String, Value>,
-) -> Result<(), ApiError> {
-    // For PATCH semantics: update only the columns the body provided.
-    // For PUT semantics: same, since missing columns we treat as
-    // "leave alone" rather than clobbering with NULL/default. The
-    // difference between PUT and PATCH at v1 is purely method
-    // routing; both call this.
-    let updates: Vec<&Column> = model
-        .fields
-        .iter()
-        .filter(|c| !c.primary_key && body.contains_key(&c.name))
-        .collect();
-    if updates.is_empty() {
-        return Ok(());
-    }
-    let setters = updates
-        .iter()
-        .map(|c| format!("\"{}\" = ?", c.name))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let sql = format!(
-        "UPDATE \"{}\" SET {setters} WHERE \"{}\" = ?",
-        q(&model.table),
-        q(&pk.name)
-    );
-    let mut q = sqlx::query(&sql);
-    for col in &updates {
-        q = bind_json_value(q, col, body)?;
-    }
-    q = q.bind(pk_value.to_string());
-    q.execute(pool).await?;
-    Ok(())
-}
-
-type SqlxQuery<'q> = sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>>;
-
-/// Bind one column's value to a `sqlx::query::Query`. The JSON value
-/// is parsed against the column's `SqlType` and coerced where the
-/// HTML / JSON shapes differ from sqlx's native types (RFC-3339
-/// strings for timestamps, "true"/"1" for booleans coming through a
-/// stringly-typed body).
-fn bind_json_value<'q>(
-    q: SqlxQuery<'q>,
-    col: &Column,
-    body: &Map<String, Value>,
-) -> Result<SqlxQuery<'q>, ApiError> {
-    let raw = body.get(&col.name).cloned().unwrap_or(Value::Null);
-    Ok(match raw {
-        Value::Null if col.nullable => bind_null(q, col),
-        Value::Null => {
-            return Err(ApiError::BadInput(format!(
-                "field `{}` is required and was null",
-                col.name
-            )));
-        }
-        Value::Bool(b) if matches!(col.ty, SqlType::Boolean) => q.bind(b),
-        Value::Number(n) if matches!(col.ty, SqlType::SmallInt | SqlType::Integer) => {
-            q.bind(n.as_i64().ok_or_else(|| {
-                ApiError::BadInput(format!("field `{}` must be an integer", col.name))
-            })? as i32)
-        }
-        Value::Number(n) if matches!(col.ty, SqlType::BigInt | SqlType::ForeignKey) => {
-            q.bind(n.as_i64().ok_or_else(|| {
-                ApiError::BadInput(format!("field `{}` must be an integer", col.name))
-            })?)
-        }
-        Value::Number(n) if matches!(col.ty, SqlType::Real | SqlType::Double) => {
-            q.bind(n.as_f64().ok_or_else(|| {
-                ApiError::BadInput(format!("field `{}` must be a number", col.name))
-            })?)
-        }
-        Value::String(s) => bind_string(q, col, &s)?,
-        other => {
-            return Err(ApiError::BadInput(format!(
-                "field `{}`: unsupported JSON value `{:?}` for {:?}",
-                col.name, other, col.ty
-            )));
-        }
-    })
-}
-
-fn bind_string<'q>(q: SqlxQuery<'q>, col: &Column, s: &str) -> Result<SqlxQuery<'q>, ApiError> {
-    Ok(match col.ty {
-        SqlType::Text => q.bind(s.to_string()),
-        SqlType::SmallInt | SqlType::Integer => q.bind(
-            s.parse::<i32>()
-                .map_err(|e| ApiError::BadInput(format!("{}: {e}", col.name)))?,
-        ),
-        SqlType::BigInt => q.bind(
-            s.parse::<i64>()
-                .map_err(|e| ApiError::BadInput(format!("{}: {e}", col.name)))?,
-        ),
-        SqlType::Real => q.bind(
-            s.parse::<f32>()
-                .map_err(|e| ApiError::BadInput(format!("{}: {e}", col.name)))?,
-        ),
-        SqlType::Double => q.bind(
-            s.parse::<f64>()
-                .map_err(|e| ApiError::BadInput(format!("{}: {e}", col.name)))?,
-        ),
-        SqlType::Boolean => q.bind(matches!(s, "true" | "1")),
-        SqlType::Date => q.bind(
-            s.parse::<NaiveDate>()
-                .map_err(|e| ApiError::BadInput(format!("{}: {e}", col.name)))?,
-        ),
-        SqlType::Time => q.bind(
-            s.parse::<NaiveTime>()
-                .map_err(|e| ApiError::BadInput(format!("{}: {e}", col.name)))?,
-        ),
-        SqlType::Timestamptz => {
-            let parsed = DateTime::parse_from_rfc3339(s)
-                .map_err(|e| ApiError::BadInput(format!("{}: {e}", col.name)))?;
-            q.bind(parsed.with_timezone(&Utc))
-        }
-        SqlType::Uuid => q.bind(
-            Uuid::parse_str(s).map_err(|e| ApiError::BadInput(format!("{}: {e}", col.name)))?,
-        ),
-        // The string came from a JSON request body's text-typed value
-        // (admin form or query string). Parse it back to a structured
-        // serde_json::Value so the binder stores it as JSONB / JSON
-        // rather than as an opaque string. A client that wants to send
-        // a JSON object directly should put it in the body as JSON, not
-        // wrapped in a string — the JSON-body path (column_to_json's
-        // inverse) handles that case.
-        SqlType::Json => q.bind(
-            serde_json::from_str::<Value>(s)
-                .map_err(|e| ApiError::BadInput(format!("{}: {e}", col.name)))?,
-        ),
-        SqlType::Array(_) => panic_array_unsupported(&col.name),
-        SqlType::Inet | SqlType::Cidr | SqlType::MacAddr | SqlType::FullText => {
-            panic_pg_only_unsupported(&col.name)
-        }
-        // ForeignKey binds as i64.
-        SqlType::ForeignKey => q.bind(
-            s.parse::<i64>()
-                .map_err(|e| ApiError::BadInput(format!("{}: {e}", col.name)))?,
-        ),
-    })
-}
-
-fn bind_null<'q>(q: SqlxQuery<'q>, col: &Column) -> SqlxQuery<'q> {
-    match col.ty {
-        SqlType::SmallInt | SqlType::Integer => q.bind(None::<i32>),
-        SqlType::BigInt | SqlType::ForeignKey => q.bind(None::<i64>),
-        SqlType::Real => q.bind(None::<f32>),
-        SqlType::Double => q.bind(None::<f64>),
-        SqlType::Boolean => q.bind(None::<bool>),
-        SqlType::Text => q.bind(None::<String>),
-        SqlType::Date => q.bind(None::<NaiveDate>),
-        SqlType::Time => q.bind(None::<NaiveTime>),
-        SqlType::Timestamptz => q.bind(None::<DateTime<Utc>>),
-        SqlType::Uuid => q.bind(None::<Uuid>),
-        SqlType::Json => q.bind(None::<Value>),
-        SqlType::Array(_) => panic_array_unsupported(&col.name),
-        SqlType::Inet | SqlType::Cidr | SqlType::MacAddr | SqlType::FullText => {
-            panic_pg_only_unsupported(&col.name)
-        }
-    }
-}

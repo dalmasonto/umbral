@@ -1,8 +1,9 @@
 //! Django-filter-style query-string parser for `umbra-rest`.
 //!
 //! Parses query-string keys of the form `<field>` or `<field>__<lookup>`
-//! into SQL WHERE-clause fragments that the list endpoint ANDs together
-//! before applying pagination.
+//! into a `sea_query::Condition` that the list endpoint splices into
+//! the DynQuerySet via `filter_condition(...)` before applying
+//! pagination.
 //!
 //! ## Lookup grammar
 //!
@@ -20,6 +21,15 @@
 //! | `__startswith` | `LIKE v%`       | strings                       |
 //! | `__isnull`     | `IS NULL` / `IS NOT NULL` | nullable columns |
 //!
+//! ## Why a `sea_query::Condition` and not raw SQL?
+//!
+//! Plugin code never writes raw SQL — every row-level read or write
+//! goes through the ORM (see `CLAUDE.md → Plugins use the ORM`). The
+//! filter parser builds `sea_query` predicates, the list handler hands
+//! them to `DynQuerySet::filter_condition(...)`, and the ORM emits the
+//! dialect-correct SQL at terminal time. Same code path renders on
+//! SQLite and Postgres.
+//!
 //! ## Usage
 //!
 //! ```ignore
@@ -27,10 +37,15 @@
 //! ResourceConfig::new("post").enable_filters()
 //!
 //! // In the list handler:
-//! let filter = parse_filters(&params, &model, &cfg)?;
-//! // pass filter.where_sql and filter.bindings to fetch_rows_filtered
+//! let filter = parse_filters(&params, &model.fields, cfg.filters_enabled)?;
+//! let qs = DynQuerySet::for_meta(&model);
+//! let qs = if let Some(cond) = filter.into_condition() {
+//!     qs.filter_condition(cond)
+//! } else { qs };
+//! let rows = qs.fetch_as_json().await?;
 //! ```
 
+use sea_query::{Alias, Condition, Expr, SimpleExpr};
 use umbra::migrate::Column;
 use umbra::orm::SqlType;
 
@@ -41,43 +56,35 @@ use crate::ApiError;
 /// names.
 const PAGINATION_KEYS: &[&str] = &["page", "page_size", "limit", "offset"];
 
-/// A parsed filter ready to splice into a SQL query.
+/// A parsed filter ready to splice into a DynQuerySet.
 ///
-/// `where_sql` is a possibly-empty fragment like
-/// `"published" = ? AND "title" LIKE ?`. When empty, no WHERE clause
-/// is added. `bindings` holds the positional values in the same order
-/// as the `?` placeholders in `where_sql`.
+/// Holds a single `sea_query::Condition` with all per-key predicates
+/// ANDed together. `None` means "no filter" (no WHERE clause is
+/// produced by the queryset).
 #[derive(Debug, Default)]
 pub(crate) struct FilterClause {
-    /// The WHERE-clause body (without the `WHERE` keyword). Empty
-    /// string means "no filter". Caller appends ` WHERE <where_sql>`
-    /// when non-empty.
-    pub(crate) where_sql: String,
-    /// Positional bindings in `?` order.
-    pub(crate) bindings: Vec<FilterValue>,
+    condition: Option<Condition>,
 }
 
 impl FilterClause {
+    /// True when no filters were parsed (or filters are disabled on
+    /// this resource).
     pub(crate) fn is_empty(&self) -> bool {
-        self.where_sql.is_empty()
+        self.condition.is_none()
     }
-}
 
-/// A single binding value for a filter predicate.
-///
-/// `sqlx` requires static dispatch for each primitive; the list handler
-/// matches on these variants to call the right `.bind()` overload.
-#[derive(Debug, Clone)]
-pub(crate) enum FilterValue {
-    Text(String),
-    Int(i64),
-    Float(f64),
-    Bool(bool),
-    /// Multiple text fragments for `IN (...)` — stored as a flat vec
-    /// of strings; the handler re-binds each one in order after
-    /// expanding `IN (?, ?, ?)` in the SQL.
-    InTexts(Vec<String>),
-    InInts(Vec<i64>),
+    /// Consume the clause, returning the inner condition (if any).
+    #[allow(dead_code)]
+    pub(crate) fn into_condition(self) -> Option<Condition> {
+        self.condition
+    }
+
+    /// Clone the inner condition (sea_query's Condition is Clone).
+    /// Used by call sites that take `&FilterClause` and need the
+    /// condition by value to hand into `DynQuerySet::filter_condition`.
+    pub(crate) fn condition_clone(&self) -> Option<Condition> {
+        self.condition.clone()
+    }
 }
 
 // =========================================================================
@@ -87,8 +94,9 @@ pub(crate) enum FilterValue {
 /// Parse every `key=value` pair in `params` that looks like a field
 /// filter (`<field>` or `<field>__<lookup>`), validate the field
 /// against the model's columns and the lookup against the column's
-/// type, coerce the string value to the typed binding, and return a
-/// single `FilterClause` with all predicates ANDed together.
+/// type, coerce the string value to a typed `sea_query` predicate,
+/// and return a single `FilterClause` with all predicates ANDed
+/// together.
 ///
 /// Unknown field names, lookups that don't apply to the column type,
 /// and malformed values all return `ApiError::BadInput(...)` with a
@@ -105,12 +113,12 @@ pub(crate) fn parse_filters(
         return Ok(FilterClause::default());
     }
 
-    let mut parts: Vec<String> = Vec::new();
-    let mut bindings: Vec<FilterValue> = Vec::new();
-
     // Collect and sort keys for deterministic ordering (helps tests).
     let mut keys: Vec<&str> = params.keys().map(|s| s.as_str()).collect();
     keys.sort_unstable();
+
+    let mut cond = Condition::all();
+    let mut any = false;
 
     for key in keys {
         if PAGINATION_KEYS.contains(&key) {
@@ -118,8 +126,7 @@ pub(crate) fn parse_filters(
         }
         let value = params[key].as_str();
 
-        // Split on the first `__` (only). `title__icontains` → (title, icontains).
-        // `created_at__gte` → (created_at, gte). Plain `published` → (published, eq).
+        // Split on `__<known_lookup>`. `title__icontains` → (title, icontains).
         let (field_name, lookup) = split_key(key);
 
         // Validate field exists on this model.
@@ -144,19 +151,14 @@ pub(crate) fn parse_filters(
             )));
         }
 
-        // Validate that the lookup makes sense for this column type.
         validate_lookup(lookup, col)?;
-
-        // Build the SQL fragment and binding(s).
-        let (sql, vals) = build_predicate(col, lookup, value)?;
-        parts.push(sql);
-        bindings.extend(vals);
+        let predicate = build_predicate(col, lookup, value)?;
+        cond = cond.add(predicate);
+        any = true;
     }
 
-    let where_sql = parts.join(" AND ");
     Ok(FilterClause {
-        where_sql,
-        bindings,
+        condition: if any { Some(cond) } else { None },
     })
 }
 
@@ -167,10 +169,6 @@ pub(crate) fn parse_filters(
 /// Split `field__lookup` at the LAST `__` that separates a known
 /// lookup suffix. If no known suffix is found, the whole key is the
 /// field name and the lookup is "eq".
-///
-/// We split on the last `__` occurrence that matches a known lookup
-/// name, not the first, so column names that contain `__` (unusual
-/// but possible) don't confuse the parser.
 fn split_key(key: &str) -> (&str, &str) {
     const LOOKUPS: &[&str] = &[
         "eq",
@@ -186,7 +184,6 @@ fn split_key(key: &str) -> (&str, &str) {
         "isnull",
     ];
 
-    // Walk from right to left looking for `__<known_lookup>`.
     let mut last = key.len();
     while let Some(pos) = key[..last].rfind("__") {
         let candidate = &key[pos + 2..last];
@@ -198,13 +195,10 @@ fn split_key(key: &str) -> (&str, &str) {
     (key, "eq")
 }
 
-/// True when the lookup is a range/ordering op (`gte`, `lte`, `gt`,
-/// `lt`). These only make sense on numeric, date, and datetime types.
 fn is_range_lookup(lookup: &str) -> bool {
     matches!(lookup, "gte" | "lte" | "gt" | "lt")
 }
 
-/// True when the lookup is a string pattern op.
 fn is_string_lookup(lookup: &str) -> bool {
     matches!(lookup, "contains" | "icontains" | "startswith")
 }
@@ -251,76 +245,52 @@ fn validate_lookup(lookup: &str, col: &Column) -> Result<(), ApiError> {
     Ok(())
 }
 
-/// Build the SQL predicate fragment and its binding values for one
-/// (column, lookup, raw_value) triple.
-///
-/// Returns `(sql_fragment, bindings)` where `sql_fragment` uses `?`
-/// placeholders. For `IN` lookups with N values, the fragment contains
-/// N placeholders.
-fn build_predicate(
-    col: &Column,
-    lookup: &str,
-    value: &str,
-) -> Result<(String, Vec<FilterValue>), ApiError> {
-    let col_sql = format!("\"{}\"", col.name.replace('"', "\"\""));
+/// Build a typed `sea_query::SimpleExpr` predicate for one
+/// (column, lookup, raw_value) triple. The expression carries its
+/// bindings inline — the queryset binds them through `sea_query_binder`
+/// at terminal time so the dialect choice (SqliteQueryBuilder vs
+/// PostgresQueryBuilder) drives the placeholder rendering.
+fn build_predicate(col: &Column, lookup: &str, value: &str) -> Result<SimpleExpr, ApiError> {
+    let expr = Expr::col(Alias::new(&col.name));
 
     match lookup {
         "isnull" => {
             let is_null = parse_bool(value, &col.name)?;
-            let fragment = if is_null {
-                format!("{col_sql} IS NULL")
+            if is_null {
+                Ok(expr.is_null())
             } else {
-                format!("{col_sql} IS NOT NULL")
-            };
-            Ok((fragment, vec![]))
+                Ok(expr.is_not_null())
+            }
         }
-        "in" => build_in_predicate(col, &col_sql, value),
-        "contains" => {
-            let pattern = format!("%{value}%");
-            Ok((
-                format!("{col_sql} LIKE ?"),
-                vec![FilterValue::Text(pattern)],
-            ))
-        }
+        "in" => build_in_predicate(col, value),
+        "contains" => Ok(expr.like(format!("%{value}%"))),
         "icontains" => {
-            let pattern = format!("%{}%", value.to_uppercase());
-            Ok((
-                format!("UPPER({col_sql}) LIKE ?"),
-                vec![FilterValue::Text(pattern)],
-            ))
+            // `UPPER(col) LIKE UPPER(?)` — case-insensitive contains.
+            // sea_query's `Expr::expr(...)` lets us nest UPPER around
+            // the column.
+            Ok(Expr::expr(
+                sea_query::Func::upper(Expr::col(Alias::new(&col.name))),
+            )
+            .like(format!("%{}%", value.to_uppercase())))
         }
-        "startswith" => {
-            let pattern = format!("{value}%");
-            Ok((
-                format!("{col_sql} LIKE ?"),
-                vec![FilterValue::Text(pattern)],
-            ))
-        }
+        "startswith" => Ok(expr.like(format!("{value}%"))),
         op => {
-            let sql_op = match op {
-                "eq" => "=",
-                "ne" => "<>",
-                "gte" => ">=",
-                "lte" => "<=",
-                "gt" => ">",
-                "lt" => "<",
-                other => {
-                    return Err(ApiError::BadInput(format!("unknown lookup `{other}`")));
-                }
-            };
-            let (val, binding) = coerce_value(col, value)?;
-            Ok((format!("{col_sql} {sql_op} {val}"), vec![binding]))
+            let sea_value = coerce_value(col, value)?;
+            match op {
+                "eq" => Ok(expr.eq(sea_value)),
+                "ne" => Ok(expr.ne(sea_value)),
+                "gte" => Ok(expr.gte(sea_value)),
+                "lte" => Ok(expr.lte(sea_value)),
+                "gt" => Ok(expr.gt(sea_value)),
+                "lt" => Ok(expr.lt(sea_value)),
+                other => Err(ApiError::BadInput(format!("unknown lookup `{other}`"))),
+            }
         }
     }
 }
 
-/// Build an `IN (?, ?, ...)` predicate from a comma-separated value
-/// string.
-fn build_in_predicate(
-    col: &Column,
-    col_sql: &str,
-    value: &str,
-) -> Result<(String, Vec<FilterValue>), ApiError> {
+/// Build an `IN (?, ?, ...)` predicate from a comma-separated value.
+fn build_in_predicate(col: &Column, value: &str) -> Result<SimpleExpr, ApiError> {
     let parts: Vec<&str> = value.split(',').map(|s| s.trim()).collect();
     if parts.is_empty() || (parts.len() == 1 && parts[0].is_empty()) {
         return Err(ApiError::BadInput(format!(
@@ -329,9 +299,10 @@ fn build_in_predicate(
         )));
     }
 
+    let expr = Expr::col(Alias::new(&col.name));
     match col.ty {
         SqlType::SmallInt | SqlType::Integer | SqlType::BigInt | SqlType::ForeignKey => {
-            let mut ints = Vec::with_capacity(parts.len());
+            let mut ints: Vec<i64> = Vec::with_capacity(parts.len());
             for p in &parts {
                 let n = p.parse::<i64>().map_err(|_| {
                     ApiError::BadInput(format!(
@@ -341,32 +312,22 @@ fn build_in_predicate(
                 })?;
                 ints.push(n);
             }
-            let placeholders = vec!["?"; ints.len()].join(", ");
-            Ok((
-                format!("{col_sql} IN ({placeholders})"),
-                vec![FilterValue::InInts(ints)],
-            ))
+            Ok(expr.is_in(ints))
         }
         _ => {
             let texts: Vec<String> = parts.iter().map(|s| s.to_string()).collect();
-            let placeholders = vec!["?"; texts.len()].join(", ");
-            Ok((
-                format!("{col_sql} IN ({placeholders})"),
-                vec![FilterValue::InTexts(texts)],
-            ))
+            Ok(expr.is_in(texts))
         }
     }
 }
 
-/// Coerce a query-string value to a typed binding.
-///
-/// Returns `("?", FilterValue)` for the vast majority of types.
-/// Returns a `("true"/"false"/"1"/"0", FilterValue::Bool(_))` for
-/// booleans — SQLite stores booleans as integers 0/1 and the direct
-/// `= true` comparison can trip up; binding a `bool` through sqlx
-/// handles the translation.
-fn coerce_value(col: &Column, value: &str) -> Result<(&'static str, FilterValue), ApiError> {
-    let binding = match col.ty {
+/// Coerce a query-string value to the typed `sea_query::Value` the
+/// predicate expects. The conversion validates the input shape (a
+/// non-numeric string for an integer column returns a 400) and runs
+/// the same dispatch as the ORM's `json_to_sea_value` would for the
+/// equivalent JSON input.
+fn coerce_value(col: &Column, value: &str) -> Result<sea_query::Value, ApiError> {
+    let v = match col.ty {
         SqlType::SmallInt | SqlType::Integer | SqlType::BigInt | SqlType::ForeignKey => {
             let n = value.parse::<i64>().map_err(|_| {
                 ApiError::BadInput(format!(
@@ -374,7 +335,7 @@ fn coerce_value(col: &Column, value: &str) -> Result<(&'static str, FilterValue)
                     col.name
                 ))
             })?;
-            FilterValue::Int(n)
+            sea_query::Value::BigInt(Some(n))
         }
         SqlType::Real | SqlType::Double => {
             let f = value.parse::<f64>().map_err(|_| {
@@ -383,33 +344,31 @@ fn coerce_value(col: &Column, value: &str) -> Result<(&'static str, FilterValue)
                     col.name
                 ))
             })?;
-            FilterValue::Float(f)
+            sea_query::Value::Double(Some(f))
         }
-        SqlType::Boolean => {
-            let b = parse_bool(value, &col.name)?;
-            FilterValue::Bool(b)
-        }
+        SqlType::Boolean => sea_query::Value::Bool(Some(parse_bool(value, &col.name)?)),
         SqlType::Date => {
-            // Store date as TEXT in SQLite; equality / range comparisons on
-            // ISO-8601 strings work because the sort order matches.
-            // Validate it really is a date so bad inputs get a 400.
+            // Validate the shape, then store as ISO-8601 text. Both
+            // backends accept the text form for ordering / equality on
+            // date columns (sea_query also accepts NaiveDate directly,
+            // but routing through text keeps the parse error close to
+            // the user input).
             value.parse::<chrono::NaiveDate>().map_err(|_| {
                 ApiError::BadInput(format!(
                     "field `{}`: cannot parse `{value}` as ISO-8601 date (YYYY-MM-DD)",
                     col.name
                 ))
             })?;
-            FilterValue::Text(value.to_string())
+            sea_query::Value::String(Some(Box::new(value.to_string())))
         }
         SqlType::Timestamptz => {
-            // Same pattern: validate + store as ISO-8601 string for SQLite.
             chrono::DateTime::parse_from_rfc3339(value).map_err(|_| {
                 ApiError::BadInput(format!(
                     "field `{}`: cannot parse `{value}` as RFC-3339 datetime",
                     col.name
                 ))
             })?;
-            FilterValue::Text(value.to_string())
+            sea_query::Value::String(Some(Box::new(value.to_string())))
         }
         SqlType::Time => {
             value.parse::<chrono::NaiveTime>().map_err(|_| {
@@ -418,7 +377,7 @@ fn coerce_value(col: &Column, value: &str) -> Result<(&'static str, FilterValue)
                     col.name
                 ))
             })?;
-            FilterValue::Text(value.to_string())
+            sea_query::Value::String(Some(Box::new(value.to_string())))
         }
         SqlType::Uuid => {
             uuid::Uuid::parse_str(value).map_err(|_| {
@@ -427,10 +386,10 @@ fn coerce_value(col: &Column, value: &str) -> Result<(&'static str, FilterValue)
                     col.name
                 ))
             })?;
-            FilterValue::Text(value.to_string())
+            sea_query::Value::String(Some(Box::new(value.to_string())))
         }
-        SqlType::Text => FilterValue::Text(value.to_string()),
-        SqlType::Json => FilterValue::Text(value.to_string()),
+        SqlType::Text => sea_query::Value::String(Some(Box::new(value.to_string()))),
+        SqlType::Json => sea_query::Value::String(Some(Box::new(value.to_string()))),
         SqlType::Array(_)
         | SqlType::Inet
         | SqlType::Cidr
@@ -442,7 +401,7 @@ fn coerce_value(col: &Column, value: &str) -> Result<(&'static str, FilterValue)
             )));
         }
     };
-    Ok(("?", binding))
+    Ok(v)
 }
 
 /// Parse "true" / "1" → true, "false" / "0" → false. Everything else
