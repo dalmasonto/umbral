@@ -38,12 +38,37 @@ Off-catalogue types and the explicitly-rejected wide / unsigned ints (`i128`, `u
 
 ## "How do I write `VARCHAR(64)`?"
 
-You don't, at the model level. `String` always maps to `TEXT`. Two reasons this is the umbra default:
+Two layers, two knobs — pick the one whose error site matches where you want the failure to surface.
 
-1. **Postgres `VARCHAR(N)` and `TEXT` are the same type underneath** - `VARCHAR(N)` just adds a CHECK constraint on length, and the Postgres docs explicitly recommend `TEXT` unless there's a hard reason otherwise. The performance and storage are identical.
-2. **Length is a validation concern, not a schema concern.** Different layers want different lengths (a `username` might be ≤32 in the form, but you'd never want a 33-char value silently truncated at the DB). umbra puts the validation knob where it can fire the right error.
+### At the model — `#[umbra(max_length = N)]`
 
-For length validation at the request boundary, use `#[derive(Form)]` with `max_length`:
+Declared on a `String` field in `#[derive(Model)]`. Three effects, all opt-in:
+
+```rust
+use umbra::prelude::*;
+
+#[derive(Debug, Clone, sqlx::FromRow, Model)]
+pub struct Article {
+    pub id: i64,
+    #[umbra(string, max_length = 64)]
+    pub title: String,
+    pub body: String,                           // unbounded TEXT
+    pub published_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+```
+
+| Layer | What happens |
+|---|---|
+| Postgres DDL | column emits as `VARCHAR(64)`, so PG enforces the cap with the same error path it uses for any constraint |
+| SQLite DDL | column stays `TEXT`. SQLite's type system is affinity-based; `VARCHAR(64)` and `TEXT` carry the same affinity and SQLite never enforces declared length. Nothing changes for you on SQLite. |
+| Admin form widget | `Text + max_length > 0` renders as `<input type="text" maxlength="64">` (single-line). Without `max_length`, the field renders as a `<textarea>` (prose). |
+| Admin changelist | The value is truncated at `N` characters when rendered in `list_display`, with `…` appended so the cut is visible. |
+
+`#[umbra(string)]` is the sibling attribute — it marks one field as the Django-style `__str__`, so the admin's default `list_display` becomes `[<that field>, <other short columns>]` when no explicit config is registered. See [Models — Display hints](./models#display-hints-string-max_length) for the full opt-in story.
+
+### At the boundary — `#[derive(Form)]`
+
+Use this when you want the validation to fire on the *request* boundary (a 400 with field-level errors), not at the database. The validator is a separate struct that deserialises the request body:
 
 ```rust
 use umbra::prelude::*;
@@ -57,9 +82,19 @@ pub struct CreatePost {
 }
 ```
 
-`Form` produces a typed validator that maps to a 400 with field-level errors when the request body doesn't satisfy the constraints. The model itself stays portable - it works on SQLite (which doesn't have a `VARCHAR(N)` check anyway) without divergence.
+The `Form` derive produces a typed validator that returns `400 Bad Request` with `{ field: "title", error: "max_length" }` when the body doesn't satisfy the constraints. Use it for caps that vary between contexts (a `username` field that allows 64 chars at signup but 32 in the admin's profile edit) or for validation primitives the model layer doesn't carry (`min_length`, `email`, `password` strength).
 
-If you really need a database-level length constraint (regulatory requirement, third-party process that reads the schema), add a `CHECK` to the generated migration JSON directly. The migration engine doesn't round-trip CHECK constraints back to the model snapshot today, so the constraint will live in migrations only - and that's fine, because at that point the DB schema is the source of truth, not the Rust struct.
+### Picking between them
+
+| You want | Reach for |
+|---|---|
+| One length cap, enforced everywhere | `#[umbra(max_length = N)]` on the model |
+| Different caps in different request flows | `#[derive(Form)]` per request |
+| Database-level enforcement on Postgres | `#[umbra(max_length = N)]` (lifts to `VARCHAR(N)`) |
+| Min length, email shape, password strength | `#[derive(Form)]` — model attributes don't cover these |
+| Both | Set both. They compose — `#[umbra(...)]` shapes the DDL + admin; `#[derive(Form)]` validates inputs ahead of the model. |
+
+If you need a database-level constraint the model attributes don't cover (regex, unique-conditional-on-something, computed values), edit the generated migration JSON directly. The model snapshot doesn't round-trip those, so the constraint lives in migrations only — which is fine, because at that point the DB schema is the source of truth for that rule, not the Rust struct.
 
 ## Picking the primary key
 
@@ -77,24 +112,52 @@ Custom PK names (`pub user_id: i64` instead of `pub id: i64`) aren't supported a
 
 ## Attributes the derive accepts today
 
-Exactly one struct-level attribute is stable at v0.0.1:
+### Struct-level
+
+| Attribute | Effect |
+|---|---|
+| `#[umbra(table = "...")]` | Override the snake_case-of-struct-name table default. |
+| `#[umbra(plugin = "...")]` | Prefix the table with the plugin namespace (`blog_post`). Skipped silently when `plugin = "app"` since that's the implicit user-binary namespace. |
+| `#[umbra(display = "...")]` | Human label shown in the admin sidebar. Defaults to the struct name. |
+| `#[umbra(icon = "...")]` | Lucide icon slug. Defaults to `database`. |
 
 ```rust
 #[derive(Model)]
-#[umbra(table = "auth_user")]   // override the snake_case default
+#[umbra(table = "auth_user", display = "Users", icon = "users")]
 pub struct User {
     pub id: i64,
     pub email: String,
 }
 ```
 
-`#[umbra(table = "...")]` is useful when the snake_case-of-struct-name default doesn't match an existing schema. The default for `struct User` would be `user`; `auth_user` is what `umbra-auth` actually ships, hence the override.
+### Field-level
 
-Other Django-style per-field attributes (`max_length`, `db_index`, `default`, `choices`, `on_delete`, `unique`, `nullable`) are **explicitly deferred** in the derive's accept-list. They land as a real plugin or workload surfaces the need. Until then:
+| Attribute | Effect |
+|---|---|
+| `#[umbra(string)]` / `#[umbra(string = true)]` | Mark this field as the Django-style `__str__`. The admin uses it as the label column in the default `list_display`. See [Models — Display hints](./models#display-hints-string-max_length). |
+| `#[umbra(max_length = N)]` | Cap on a `String` field. Postgres DDL emits `VARCHAR(N)`; SQLite stays `TEXT` (affinity-equivalent). Admin form renders as `<input maxlength="N">` instead of `<textarea>`; changelist truncates display at N chars. |
+| `#[umbra(noform)]` | Field never appears on any admin form (create or edit). Use for columns the user should never touch directly (e.g. `password_hash`, `internal_token`). |
+| `#[umbra(noedit)]` | Field appears on edit forms read-only; omitted on create. |
+
+```rust
+#[derive(Model)]
+pub struct Post {
+    pub id: i64,
+    #[umbra(string, max_length = 64)]   // label + VARCHAR(64) on PG
+    pub title: String,
+    pub body: String,                    // unbounded TEXT
+    #[umbra(noedit)]
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+```
+
+### Deferred — write them at the layer that handles them today
+
+Other Django-style attributes (`db_index`, `default`, `choices`, `on_delete`, `unique`, `nullable`) aren't part of the derive's accept-list. They land as a real plugin or workload surfaces the need. Until then:
 
 | You want | Today's workaround |
 |----------|-------------------|
-| `max_length = 64` | `#[derive(Form)]` with `max_length` at the boundary (see above). |
+| `min_length`, `email`, `password` strength | `#[derive(Form)]` at the request boundary — these are validation concerns, not schema. |
 | `db_index = true` / `unique = true` | Edit the generated migration JSON to add the index / unique constraint. The model snapshot ignores it, but the DB enforces it. |
 | `default = ...` | Set the value in `Manager::create` / `bulk_create` from a small wrapper function. If you need the database to fill it, add `DEFAULT ...` to the migration. |
 | `choices = [...]` | Use a Rust enum at the boundary and a `String` field on the model. Validate enum-shape via `#[derive(Form)]` or a hand-written deserialiser. |
