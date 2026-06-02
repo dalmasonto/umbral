@@ -100,6 +100,18 @@ pub trait Model: Sized + Send + Sync + Unpin + 'static {
     /// Override via `#[umbra(icon = "users")]` on the struct.
     const ICON: &'static str = "database";
 
+    /// Database alias this model lives on, when the app registers more
+    /// than one pool via `AppBuilder::database(...)`. `None` (the
+    /// default) means "use whatever the owning plugin chose via
+    /// `Plugin::database()`, or `\"default\"` if neither side
+    /// overrode."
+    ///
+    /// Override via `#[umbra(database = "analytics")]` on the struct.
+    /// Per-model wins over per-plugin — useful for a single plugin
+    /// that owns one model on the primary DB and another on an
+    /// archive/analytics DB.
+    const DATABASE: Option<&'static str> = None;
+
     /// Return the primary key of this instance.
     fn primary_key(&self) -> Self::PrimaryKey;
 }

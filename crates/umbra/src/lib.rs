@@ -98,8 +98,8 @@ pub mod db {
 
     pub use umbra_core::db::{
         DbPool, Transaction, TxFuture, begin, begin_pg, begin_sqlite, connect, connect_sqlite,
-        pool, pool_dispatched, pool_for, pool_for_dispatched, transaction, transaction_pg,
-        transaction_sqlite,
+        pool, pool_dispatched, pool_for, pool_for_dispatched, registered_aliases, transaction,
+        transaction_pg, transaction_sqlite,
     };
 }
 
@@ -158,7 +158,7 @@ pub mod migrate {
         detect_all_drift, detect_drift, diff, fake_apply, fake_apply_in, fake_initial,
         fake_initial_in, make, make_in, model_alias, models_for_plugin, plugin_order,
         record_applied, registered_models, registered_plugins, render_operation_for, run,
-        run_checked, run_checked_in, run_in, show, show_in,
+        run_checked, run_checked_in, run_in, show, show_in, table_alias,
     };
 }
 

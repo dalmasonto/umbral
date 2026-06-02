@@ -133,6 +133,7 @@ struct UmbraStructAttr {
     plugin: Option<String>,
     display: Option<String>,
     icon: Option<String>,
+    database: Option<String>,
 }
 
 /// Field-level `#[umbra(...)]` attribute parsed from a struct field.
@@ -253,6 +254,7 @@ fn parse_umbra_struct_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraStructA
         plugin: None,
         display: None,
         icon: None,
+        database: None,
     };
     for attr in attrs {
         if !attr.path().is_ident("umbra") {
@@ -279,10 +281,19 @@ fn parse_umbra_struct_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraStructA
                 let lit: syn::LitStr = value.parse()?;
                 parsed.icon = Some(lit.value());
                 Ok(())
+            } else if meta.path.is_ident("database") {
+                // `#[umbra(database = "analytics")]` — pin this model
+                // to a specific pool alias when the app registers
+                // more than one via `AppBuilder::database(...)`. Wins
+                // over the owning plugin's `Plugin::database()`.
+                let value = meta.value()?;
+                let lit: syn::LitStr = value.parse()?;
+                parsed.database = Some(lit.value());
+                Ok(())
             } else {
                 Err(meta.error(
                     "umbra::Model derive accepts struct-level `table = \"...\"`, `plugin = \"...\"`, \
-                     `display = \"...\"`, and `icon = \"...\"`; and field-level `noform` and `noedit`. \
+                     `display = \"...\"`, `icon = \"...\"`, `database = \"...\"`; and field-level `noform` and `noedit`. \
                      Other attributes (max_length, db_index, default, choices, on_delete) land as \
                      plugin authors need them",
                 ))
@@ -397,6 +408,10 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         .display
         .unwrap_or_else(|| struct_name.to_string());
     let icon_lit = struct_attr.icon.unwrap_or_else(|| "database".to_string());
+    let database_tokens = match struct_attr.database {
+        Some(alias) => quote! { ::core::option::Option::Some(#alias) },
+        None => quote! { ::core::option::Option::None },
+    };
     // The sibling column module's identifier is always snake_case of
     // the struct name (the user-facing path is `<snake_struct>::FIELD`).
     // Leaving it untouched keeps existing user code working when a
@@ -636,6 +651,7 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             ];
             const DISPLAY: &'static str = #display_lit;
             const ICON: &'static str = #icon_lit;
+            const DATABASE: ::core::option::Option<&'static str> = #database_tokens;
             fn primary_key(&self) -> #pk_ty_tokens {
                 // `.clone()` works for every PK type the trait accepts
                 // (the bound is `Clone`, not `Copy`). For `i32`, `i64`,

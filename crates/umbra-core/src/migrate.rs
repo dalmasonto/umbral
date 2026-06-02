@@ -160,6 +160,25 @@ pub(crate) fn init_model_aliases(map: std::collections::HashMap<String, String>)
         .expect("umbra::migrate::init_model_aliases called more than once");
 }
 
+/// Look up the database alias for a SQL table name — the reverse of
+/// the `Model::NAME → alias` lookup that [`model_alias`] does. Walks
+/// the registered model metas to find the one whose `table` matches
+/// (snake_case of the struct name + any `#[umbra(table = "...")]`
+/// override) and returns its alias if set. Falls back to `"default"`
+/// when no model owns the table (e.g. orphan schema, the
+/// `umbra_migrations` table itself) — those land on the main pool.
+///
+/// Used by the migration engine's per-DB dispatch in [`run_in`] to
+/// route each operation to the right pool.
+pub fn table_alias(table_name: &str) -> String {
+    for meta in registered_models() {
+        if meta.table == table_name {
+            return model_alias(&meta.name).unwrap_or_else(|| "default".to_string());
+        }
+    }
+    "default".to_string()
+}
+
 /// Look up the database alias for one model. Returns `None` if the
 /// model isn't routed explicitly (the caller falls back to the
 /// `"default"` pool); returns `None` even when the alias map hasn't
@@ -206,6 +225,13 @@ pub struct ModelMeta {
     /// Lucide icon slug from `Model::ICON`. Defaults to `"database"`.
     #[serde(default = "default_icon")]
     pub icon: String,
+    /// Database alias from `Model::DATABASE`, when set. `None` means
+    /// "fall back to the owning plugin's `Plugin::database()`, then
+    /// the `default` pool." Captured here so `App::build`'s alias
+    /// routing can read it without re-reaching into the trait at a
+    /// later phase.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub database: Option<String>,
 }
 
 fn default_icon() -> String {
@@ -222,6 +248,7 @@ impl ModelMeta {
             fields: T::FIELDS.iter().map(Column::from).collect(),
             display: T::DISPLAY.to_string(),
             icon: T::ICON.to_string(),
+            database: T::DATABASE.map(|s| s.to_string()),
         }
     }
 }
@@ -332,6 +359,26 @@ pub enum Operation {
     /// applied migration — it is not affected by a table rename inside
     /// the migration.
     RenameTable { from: String, to: String },
+}
+
+impl Operation {
+    /// The primary table this operation targets. For `RenameTable`,
+    /// returns the source name (the post-rename `to` lives in the new
+    /// snapshot, but routing decisions look up the model meta by its
+    /// pre-rename `from`).
+    ///
+    /// Used by `run_in`'s per-DB dispatch loop to route each op to the
+    /// pool where its table actually lives.
+    pub fn table_name(&self) -> &str {
+        match self {
+            Operation::CreateTable { table, .. }
+            | Operation::DropTable { table }
+            | Operation::AddColumn { table, .. }
+            | Operation::DropColumn { table, .. }
+            | Operation::AlterColumn { table, .. } => table,
+            Operation::RenameTable { from, .. } => from,
+        }
+    }
 }
 
 /// One column inside a [`Operation::CreateTable`].
@@ -720,10 +767,25 @@ pub async fn run_checked(allow_drift: bool) -> Result<u64, MigrateError> {
 
 /// Same as [`run_checked`] but takes an explicit base directory.
 pub async fn run_checked_in(dir: &Path, allow_drift: bool) -> Result<u64, MigrateError> {
-    match crate::db::pool_dispatched() {
-        crate::db::DbPool::Sqlite(p) => run_in_sqlite_checked(dir, p, allow_drift).await,
-        crate::db::DbPool::Postgres(p) => run_in_postgres_checked(dir, p, allow_drift).await,
+    let mut total: u64 = 0;
+    // Walk every registered DB. Drift-detection on the default pool
+    // is the dominant flow; secondary pools currently use the same
+    // tracking-table-vs-disk comparison but only against the
+    // migration files whose ops actually targeted that DB. A future
+    // pass can teach `detect_all_drift` to be alias-aware so drift
+    // warnings name the offending pool — today it warns once per
+    // checked DB if the issue is present in any.
+    for alias in crate::db::registered_aliases() {
+        match crate::db::pool_for_dispatched(&alias) {
+            crate::db::DbPool::Sqlite(p) => {
+                total += run_in_sqlite_checked(dir, p, allow_drift, &alias).await?
+            }
+            crate::db::DbPool::Postgres(p) => {
+                total += run_in_postgres_checked(dir, p, allow_drift, &alias).await?
+            }
+        }
     }
+    Ok(total)
 }
 
 /// Same as [`run`] but takes an explicit base directory. Used by
@@ -741,15 +803,43 @@ pub async fn run_checked_in(dir: &Path, allow_drift: bool) -> Result<u64, Migrat
 /// existing tests (which bypass drift by design) keep passing. New
 /// callers should prefer [`run_checked_in`].
 pub async fn run_in(dir: &Path) -> Result<u64, MigrateError> {
-    match crate::db::pool_dispatched() {
-        crate::db::DbPool::Sqlite(p) => run_in_sqlite(dir, p).await,
-        crate::db::DbPool::Postgres(p) => run_in_postgres(dir, p).await,
+    let mut total: u64 = 0;
+    // Walk every registered DB so each pool gets its own
+    // `umbra_migrations` table and runs only the operations targeting
+    // tables routed to it. Order is alphabetical for determinism;
+    // the "default" pool is always present.
+    for alias in crate::db::registered_aliases() {
+        match crate::db::pool_for_dispatched(&alias) {
+            crate::db::DbPool::Sqlite(p) => {
+                total += run_in_sqlite_for_alias(dir, &alias, p).await?
+            }
+            crate::db::DbPool::Postgres(p) => {
+                total += run_in_postgres_for_alias(dir, &alias, p).await?
+            }
+        }
     }
+    Ok(total)
 }
 
-/// SQLite path for [`run_in`]. Reads / writes the tracking table with
-/// `?` placeholders and `INSERT OR IGNORE`.
-async fn run_in_sqlite(dir: &Path, pool: &sqlx::SqlitePool) -> Result<u64, MigrateError> {
+/// Predicate: does `op` target a table that lives on `alias`?
+///
+/// Routing rule: look up the table → alias mapping via
+/// [`table_alias`]. Tables not owned by any registered model fall
+/// through to `"default"` so the migration engine's own
+/// `umbra_migrations` book-keeping stays in the main DB.
+fn op_targets_alias(op: &Operation, alias: &str) -> bool {
+    table_alias(op.table_name()) == alias
+}
+
+/// SQLite per-alias variant. Same shape as the legacy `run_in_sqlite`
+/// but: filters ops to those routed to `alias`; skips files whose op
+/// list contains nothing for this DB (so we don't stuff orphan
+/// tracking rows into pools that didn't run any SQL).
+async fn run_in_sqlite_for_alias(
+    dir: &Path,
+    alias: &str,
+    pool: &sqlx::SqlitePool,
+) -> Result<u64, MigrateError> {
     ensure_tracking_table_sqlite(pool).await?;
     let applied = applied_names_sqlite(pool).await?;
 
@@ -764,8 +854,21 @@ async fn run_in_sqlite(dir: &Path, pool: &sqlx::SqlitePool) -> Result<u64, Migra
                 continue;
             }
 
+            let ops_for_this_db: Vec<&Operation> = file
+                .operations
+                .iter()
+                .filter(|op| op_targets_alias(op, alias))
+                .collect();
+            if ops_for_this_db.is_empty() {
+                // File's content all targets some other DB. Don't
+                // record it here — re-runs will re-evaluate cleanly
+                // once the right DB picks it up. The tracking rows
+                // per-DB stay accurate to "what actually ran here."
+                continue;
+            }
+
             let mut tx = pool.begin().await?;
-            for op in &file.operations {
+            for op in &ops_for_this_db {
                 for sql in render_operation(op) {
                     sqlx::query(&sql).execute(&mut *tx).await?;
                 }
@@ -789,10 +892,12 @@ async fn run_in_sqlite(dir: &Path, pool: &sqlx::SqlitePool) -> Result<u64, Migra
     Ok(applied_count)
 }
 
-/// Postgres path for [`run_in`]. The tracking-table DDL is dialect-
-/// neutral; placeholders are `$1..$N` and the conflict clause is
-/// `ON CONFLICT DO NOTHING` rather than SQLite's `INSERT OR IGNORE`.
-async fn run_in_postgres(dir: &Path, pool: &sqlx::PgPool) -> Result<u64, MigrateError> {
+/// Postgres per-alias variant. Mirror of `run_in_sqlite_for_alias`.
+async fn run_in_postgres_for_alias(
+    dir: &Path,
+    alias: &str,
+    pool: &sqlx::PgPool,
+) -> Result<u64, MigrateError> {
     ensure_tracking_table_postgres(pool).await?;
     let applied = applied_names_postgres(pool).await?;
 
@@ -807,8 +912,17 @@ async fn run_in_postgres(dir: &Path, pool: &sqlx::PgPool) -> Result<u64, Migrate
                 continue;
             }
 
+            let ops_for_this_db: Vec<&Operation> = file
+                .operations
+                .iter()
+                .filter(|op| op_targets_alias(op, alias))
+                .collect();
+            if ops_for_this_db.is_empty() {
+                continue;
+            }
+
             let mut tx = pool.begin().await?;
-            for op in &file.operations {
+            for op in &ops_for_this_db {
                 for sql in render_operation(op) {
                     sqlx::query(&sql).execute(&mut *tx).await?;
                 }
@@ -842,6 +956,7 @@ async fn run_in_sqlite_checked(
     dir: &Path,
     pool: &sqlx::SqlitePool,
     allow_drift: bool,
+    alias: &str,
 ) -> Result<u64, MigrateError> {
     ensure_tracking_table_sqlite(pool).await?;
     let applied = applied_names_sqlite(pool).await?;
@@ -881,7 +996,7 @@ async fn run_in_sqlite_checked(
         );
     }
 
-    run_in_sqlite(dir, pool).await
+    run_in_sqlite_for_alias(dir, alias, pool).await
 }
 
 /// Postgres drift-checking path for `run_checked_in`. Same logic as
@@ -890,6 +1005,7 @@ async fn run_in_postgres_checked(
     dir: &Path,
     pool: &sqlx::PgPool,
     allow_drift: bool,
+    alias: &str,
 ) -> Result<u64, MigrateError> {
     ensure_tracking_table_postgres(pool).await?;
     let applied = applied_names_postgres(pool).await?;
@@ -928,7 +1044,7 @@ async fn run_in_postgres_checked(
         );
     }
 
-    run_in_postgres(dir, pool).await
+    run_in_postgres_for_alias(dir, alias, pool).await
 }
 
 /// Record a migration as applied in the `umbra_migrations` tracking
@@ -2235,6 +2351,7 @@ mod tests {
                 fields: Vec::new(),
                 display: "ZetaModel".to_string(),
                 icon: "database".to_string(),
+            database: None,
             }],
         );
         per_plugin.insert(
@@ -2245,6 +2362,7 @@ mod tests {
                 fields: Vec::new(),
                 display: "AlphaModel".to_string(),
                 icon: "database".to_string(),
+            database: None,
             }],
         );
         init_plugins(per_plugin);

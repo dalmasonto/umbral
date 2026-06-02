@@ -28,6 +28,7 @@ fn make_meta(name: &str, table: &str, cols: Vec<Column>) -> ModelMeta {
         fields: cols,
         display: name.to_string(),
         icon: "database".to_string(),
+            database: None,
     }
 }
 

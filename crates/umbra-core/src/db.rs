@@ -189,6 +189,28 @@ pub fn pool_for_dispatched(alias: &str) -> &'static DbPool {
         .unwrap_or_else(|| panic!("umbra: no database registered under alias '{alias}'"))
 }
 
+/// List every registered pool alias, sorted alphabetically.
+///
+/// Used by the migration engine to walk each DB in deterministic
+/// order so per-DB tracking tables get created and per-DB diffs run
+/// against the right model subset. The `"default"` alias is always
+/// present after `App::build()` succeeds and lands wherever
+/// alphabetical sort puts it (typically first).
+///
+/// # Panics
+///
+/// Panics if `App::build()` hasn't run.
+pub fn registered_aliases() -> Vec<String> {
+    let mut aliases: Vec<String> = POOLS
+        .get()
+        .expect("umbra: db pool not initialised — did you call App::build()?")
+        .keys()
+        .cloned()
+        .collect();
+    aliases.sort();
+    aliases
+}
+
 /// Open a new connection pool for the given database URL.
 ///
 /// Dispatches on the URL scheme:

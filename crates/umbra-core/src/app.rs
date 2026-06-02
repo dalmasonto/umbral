@@ -405,20 +405,52 @@ impl AppBuilder {
         // surface at boot with a clear diagnostic instead of as a
         // runtime "no pool registered" panic from `db::pool_for`.
         // Also collect the per-model alias map for `init_model_aliases`
-        // below.
+        // below. Two layers: plugin-level (`Plugin::database()`) and
+        // per-model (`#[umbra(database = "alias")]` → `Model::DATABASE`,
+        // surfaced via `ModelMeta::database`). Per-model wins when both
+        // are set — useful for a plugin that owns one model on the
+        // primary DB and another on an analytics/archive DB. Same alias
+        // validation: a typo surfaces at boot, not at runtime.
         let mut model_aliases: HashMap<String, String> = HashMap::new();
         for plugin in &sorted_plugins {
-            let Some(alias) = plugin.database() else {
-                continue;
-            };
-            if !self.databases.contains_key(alias) {
-                return Err(BuildError::PluginDatabaseAlias {
-                    plugin: plugin.name(),
-                    alias,
-                });
+            // Plugin-level default for every model this plugin contributes.
+            if let Some(alias) = plugin.database() {
+                if !self.databases.contains_key(alias) {
+                    return Err(BuildError::PluginDatabaseAlias {
+                        plugin: plugin.name(),
+                        alias,
+                    });
+                }
+                for model in plugin.models() {
+                    model_aliases.insert(model.name, alias.to_string());
+                }
             }
+            // Per-model overrides — walked AFTER the plugin pass so they
+            // can supersede the plugin's choice.
             for model in plugin.models() {
-                model_aliases.insert(model.name, alias.to_string());
+                if let Some(alias) = &model.database {
+                    if !self.databases.contains_key(alias) {
+                        return Err(BuildError::PluginDatabaseAlias {
+                            plugin: plugin.name(),
+                            alias: Box::leak(alias.clone().into_boxed_str()),
+                        });
+                    }
+                    model_aliases.insert(model.name.clone(), alias.clone());
+                }
+            }
+        }
+        // Same per-model walk for the implicit `"app"` plugin's
+        // user-registered models, which don't have a `Plugin::database()`
+        // wrapper to inherit from.
+        for model in &self.models {
+            if let Some(alias) = &model.database {
+                if !self.databases.contains_key(alias) {
+                    return Err(BuildError::PluginDatabaseAlias {
+                        plugin: crate::migrate::APP_PLUGIN_NAME,
+                        alias: Box::leak(alias.clone().into_boxed_str()),
+                    });
+                }
+                model_aliases.insert(model.name.clone(), alias.clone());
             }
         }
 

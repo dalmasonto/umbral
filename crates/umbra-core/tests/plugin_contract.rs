@@ -104,6 +104,7 @@ impl Plugin for TestPlugin {
         vec![ModelMeta {
             display: model_name.clone(),
             icon: "database".to_string(),
+            database: None,
             name: model_name,
             table: self.model_table.to_string(),
             fields: vec![Column {

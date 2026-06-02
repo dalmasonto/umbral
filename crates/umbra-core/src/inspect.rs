@@ -751,6 +751,7 @@ pub fn render_initial_migration(schema: &IntrospectedSchema) -> MigrationFile {
             fields: t.columns.iter().map(Column::from).collect(),
             display: t.name.clone(),
             icon: "database".to_string(),
+            database: None,
         })
         .collect();
     models.sort_by(|a, b| a.name.cmp(&b.name));
