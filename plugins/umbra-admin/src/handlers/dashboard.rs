@@ -1,0 +1,213 @@
+//! Dashboard API + the two built-in widgets.
+
+use axum::extract::State;
+use chrono::{DateTime, Utc};
+use minijinja::context;
+use sqlx::Row;
+use umbra::web::{HeaderMap, IntoResponse, Json, Path, Response, StatusCode};
+
+use crate::auth::require_staff;
+use crate::discovery::discover_models;
+use crate::engine::render;
+use crate::error::AdminError;
+use crate::models;
+use crate::util::is_htmx;
+use crate::widgets::{
+    CatalogEntry, FeedItem, FeedPayload, KpiPayload, Span, Widget, WidgetDataFn, WidgetKind,
+    WidgetPayload,
+};
+use crate::AdminState;
+
+// =========================================================================
+// Built-in widgets
+// =========================================================================
+
+/// `Total models` KPI — counts every model the migration registry knows
+/// about. Cheap to compute and always present.
+pub(crate) fn builtin_total_models_widget() -> Widget {
+    Widget {
+        key: "umbra_total_models",
+        title: "Total Models".to_string(),
+        kind: WidgetKind::Kpi,
+        default_span: Span { cols: 3, rows: 1 },
+        permission: None,
+        data: WidgetDataFn::new(|_user| async move {
+            let count = discover_models().len();
+            WidgetPayload::Kpi(KpiPayload {
+                value: count.to_string(),
+                unit: Some("models".to_string()),
+                delta: None,
+                sparkline: None,
+            })
+        }),
+    }
+}
+
+/// `Recent signups` feed — last 5 `auth_user` rows ordered by
+/// `date_joined`. Gracefully degrades to an empty list if the table
+/// is absent (e.g. an admin-only install where `AuthPlugin` isn't
+/// registered), so this widget never breaks the dashboard.
+pub(crate) fn builtin_recent_users_widget() -> Widget {
+    Widget {
+        key: "umbra_recent_users",
+        title: "Recent Signups".to_string(),
+        kind: WidgetKind::Feed,
+        default_span: Span { cols: 4, rows: 2 },
+        permission: None,
+        data: WidgetDataFn::new(|_user| async move {
+            let pool = umbra::db::pool();
+            let rows_result = sqlx::query(
+                "SELECT username, date_joined FROM auth_user ORDER BY date_joined DESC LIMIT 5",
+            )
+            .fetch_all(&pool)
+            .await;
+            let items = match rows_result {
+                Ok(rows) => rows
+                    .into_iter()
+                    .map(|r| {
+                        let actor: String = r.try_get("username").unwrap_or_default();
+                        let at: String = r
+                            .try_get::<DateTime<Utc>, _>("date_joined")
+                            .map(|dt| dt.format("%Y-%m-%d %H:%M UTC").to_string())
+                            .or_else(|_| r.try_get::<String, _>("date_joined"))
+                            .unwrap_or_default();
+                        FeedItem {
+                            actor,
+                            verb: "joined".to_string(),
+                            object: "account".to_string(),
+                            object_link: None,
+                            at,
+                        }
+                    })
+                    .collect(),
+                Err(e) => {
+                    tracing::debug!(error = %e, "umbra_recent_users: auth_user query failed; returning empty feed");
+                    vec![]
+                }
+            };
+            WidgetPayload::Feed(FeedPayload { items })
+        }),
+    }
+}
+
+// =========================================================================
+// API handlers
+// =========================================================================
+
+/// `GET /admin/api/dashboard/catalog` — list widgets the user may add to
+/// the dashboard. Filtered by per-widget permission once those land.
+pub(crate) async fn dashboard_catalog(
+    State(state): State<AdminState>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(r) = require_staff(&headers, "/admin/api/dashboard/catalog").await {
+        return r;
+    }
+    let entries: Vec<CatalogEntry> = state
+        .widget_catalog
+        .iter()
+        .map(|w| CatalogEntry {
+            key: w.key,
+            title: w.title.clone(),
+            kind: w.kind.as_str().to_string(),
+            default_span: w.default_span.clone(),
+        })
+        .collect();
+    Json(entries).into_response()
+}
+
+/// `GET /admin/api/dashboard/layout` — user's saved layout or default.
+/// The body is returned as raw JSON because we round-trip it through
+/// the prefs row as a string.
+pub(crate) async fn dashboard_layout_get(headers: HeaderMap) -> Response {
+    let user = match require_staff(&headers, "/admin/api/dashboard/layout").await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let prefs = match models::fetch_or_default(user.id).await {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!(error = %e, "admin: dashboard_layout_get failed");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "layout error").into_response();
+        }
+    };
+    axum::response::Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "application/json")
+        .body(axum::body::Body::from(prefs.dashboard_layout))
+        .unwrap_or_else(|_| (StatusCode::OK, "[]").into_response())
+}
+
+/// `PUT /admin/api/dashboard/layout` — save the user's layout. Body
+/// must be a JSON array of widget instances; non-JSON 400s. Validity
+/// of the array shape is the client's problem until we lock down a
+/// schema for it.
+pub(crate) async fn dashboard_layout_put(headers: HeaderMap, body: String) -> Response {
+    let user = match require_staff(&headers, "/admin/api/dashboard/layout").await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    if serde_json::from_str::<serde_json::Value>(&body).is_err() {
+        return (StatusCode::BAD_REQUEST, "invalid JSON layout").into_response();
+    }
+    let mut prefs = match models::fetch_or_default(user.id).await {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!(error = %e, "admin: dashboard_layout_put fetch failed");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "layout error").into_response();
+        }
+    };
+    prefs.dashboard_layout = body;
+    match models::upsert(prefs).await {
+        Ok(_) => Json(serde_json::json!({ "ok": true })).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "admin: dashboard_layout_put save failed");
+            (StatusCode::INTERNAL_SERVER_ERROR, "layout save error").into_response()
+        }
+    }
+}
+
+/// `GET /admin/api/dashboard/widgets/{key}/data` — compute and return
+/// one widget's payload. Returns either JSON (API consumers) or an
+/// HTML fragment (HTMX swap).
+pub(crate) async fn dashboard_widget_data(
+    State(state): State<AdminState>,
+    headers: HeaderMap,
+    Path(key): Path<String>,
+) -> Response {
+    let user = match require_staff(&headers, "/admin/api/dashboard/widgets/.../data").await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let Some(widget) = state.widget_catalog.iter().find(|w| w.key == key.as_str()) else {
+        return AdminError::NotFound(format!("no widget `{key}`")).into_response();
+    };
+
+    let data_fn = widget.data.0.clone();
+    let payload = data_fn(user).await;
+
+    if is_htmx(&headers) {
+        let kind = widget.kind.as_str().to_string();
+        let title = widget.title.clone();
+        let payload_json = serde_json::to_value(&payload).unwrap_or(serde_json::Value::Null);
+        match render(
+            "admin/widget_data.html",
+            context!(
+                kind    => kind,
+                title   => title,
+                payload => payload_json,
+            ),
+        ) {
+            Ok(html) => html.into_response(),
+            Err(e) => e.into_response(),
+        }
+    } else {
+        Json(serde_json::json!({
+            "key": key,
+            "kind": widget.kind.as_str(),
+            "title": widget.title,
+            "payload": serde_json::to_value(&payload).unwrap_or(serde_json::Value::Null),
+        }))
+        .into_response()
+    }
+}

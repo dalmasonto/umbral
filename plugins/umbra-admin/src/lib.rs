@@ -58,6 +58,7 @@ mod auth;
 mod discovery;
 mod engine;
 mod error;
+mod handlers;
 mod pagination;
 mod rows;
 mod static_assets;
@@ -67,7 +68,7 @@ mod view;
 pub mod files;
 
 pub(crate) use auth::{login_get, login_post, logout_handler, require_staff};
-pub(crate) use discovery::{discover_models, find_model, pk_column, user_theme};
+pub(crate) use discovery::{find_model, pk_column, user_theme};
 pub(crate) use engine::render;
 pub(crate) use error::AdminError;
 pub use files::{file_descriptor, resolve_preview_kind};
@@ -99,7 +100,6 @@ use std::sync::Arc;
 // Action types are re-exported via `pub use config::...` above; use them directly.
 
 use axum::extract::{Query, State};
-use chrono::{DateTime, Utc};
 use minijinja::context;
 use serde::Serialize;
 use sqlx::{Row, SqlitePool};
@@ -230,7 +230,10 @@ impl Plugin for AdminPlugin {
     fn routes(&self) -> Router {
         // Seed the catalog with the two built-in widgets, then append
         // developer-registered ones.
-        let mut catalog = vec![builtin_total_models_widget(), builtin_recent_users_widget()];
+        let mut catalog = vec![
+            handlers::dashboard::builtin_total_models_widget(),
+            handlers::dashboard::builtin_recent_users_widget(),
+        ];
         catalog.extend(self.widget_catalog.iter().cloned());
 
         let state = AdminState {
@@ -317,31 +320,36 @@ impl Plugin for AdminPlugin {
             // Phase 4: user prefs
             .route(
                 "/admin/api/prefs",
-                axum::routing::get(get_prefs_handler).put(put_prefs_handler),
+                axum::routing::get(handlers::prefs::get_prefs_handler)
+                    .put(handlers::prefs::put_prefs_handler),
             )
             // Phase 4: audit history
             .route(
                 "/admin/{table}/{id}/history",
-                axum::routing::get(history_handler),
+                axum::routing::get(handlers::history::history_handler),
             )
             // Phase 4: dashboard
             .route(
                 "/admin/api/dashboard/catalog",
-                axum::routing::get(dashboard_catalog),
+                axum::routing::get(handlers::dashboard::dashboard_catalog),
             )
             .route(
                 "/admin/api/dashboard/layout",
-                axum::routing::get(dashboard_layout_get).put(dashboard_layout_put),
+                axum::routing::get(handlers::dashboard::dashboard_layout_get)
+                    .put(handlers::dashboard::dashboard_layout_put),
             )
             .route(
                 "/admin/api/dashboard/widgets/{key}/data",
-                axum::routing::get(dashboard_widget_data),
+                axum::routing::get(handlers::dashboard::dashboard_widget_data),
             )
             // Phase 4: command palette fragment + global record search
-            .route("/admin/api/palette", axum::routing::get(palette_fragment))
+            .route(
+                "/admin/api/palette",
+                axum::routing::get(handlers::palette::palette_fragment),
+            )
             .route(
                 "/admin/api/palette/search",
-                axum::routing::get(palette_search),
+                axum::routing::get(handlers::palette::palette_search),
             )
             // Static CSS (embedded at compile time; served in prod, CDN used in dev)
             .route(
@@ -2209,487 +2217,6 @@ fn sanitise_form_error(e: &AdminError) -> String {
 // Pagination helpers.
 // =========================================================================
 
-// =========================================================================
-// Template helpers.
-// =========================================================================
-
-
-// =========================================================================
-// Phase 4: built-in dashboard widget definitions.
-// =========================================================================
-
-fn builtin_total_models_widget() -> Widget {
-    Widget {
-        key: "umbra_total_models",
-        title: "Total Models".to_string(),
-        kind: WidgetKind::Kpi,
-        default_span: Span { cols: 3, rows: 1 },
-        permission: None,
-        data: WidgetDataFn::new(|_user| async move {
-            let count = discover_models().len();
-            WidgetPayload::Kpi(KpiPayload {
-                value: count.to_string(),
-                unit: Some("models".to_string()),
-                delta: None,
-                sparkline: None,
-            })
-        }),
-    }
-}
-
-fn builtin_recent_users_widget() -> Widget {
-    Widget {
-        key: "umbra_recent_users",
-        title: "Recent Signups".to_string(),
-        kind: WidgetKind::Feed,
-        default_span: Span { cols: 4, rows: 2 },
-        permission: None,
-        data: WidgetDataFn::new(|_user| async move {
-            // Attempt to read from auth_user table; gracefully degrade if absent.
-            // Column is `date_joined` (as defined in umbra-auth); fall back to
-            // empty list on any error so the dashboard still renders.
-            let pool = umbra::db::pool();
-            let rows_result = sqlx::query(
-                "SELECT username, date_joined FROM auth_user ORDER BY date_joined DESC LIMIT 5",
-            )
-            .fetch_all(&pool)
-            .await;
-            let items = match rows_result {
-                Ok(rows) => rows
-                    .into_iter()
-                    .map(|r| {
-                        use sqlx::Row;
-                        let actor: String = r.try_get("username").unwrap_or_default();
-                        // date_joined is a Timestamptz; format as a short string.
-                        let at: String = r
-                            .try_get::<DateTime<Utc>, _>("date_joined")
-                            .map(|dt| dt.format("%Y-%m-%d %H:%M UTC").to_string())
-                            .or_else(|_| r.try_get::<String, _>("date_joined"))
-                            .unwrap_or_default();
-                        crate::widgets::FeedItem {
-                            actor,
-                            verb: "joined".to_string(),
-                            object: "account".to_string(),
-                            object_link: None,
-                            at,
-                        }
-                    })
-                    .collect(),
-                Err(e) => {
-                    tracing::debug!(error = %e, "umbra_recent_users: auth_user query failed; returning empty feed");
-                    vec![]
-                }
-            };
-            WidgetPayload::Feed(FeedPayload { items })
-        }),
-    }
-}
-
-// =========================================================================
-// Phase 4: user preferences handlers.
-// =========================================================================
-
-/// `GET /admin/api/prefs` — return the current user's prefs row, creating
-/// defaults on first access.
-async fn get_prefs_handler(headers: HeaderMap) -> Response {
-    let user = match require_staff(&headers, "/admin/api/prefs").await {
-        Ok(u) => u,
-        Err(r) => return r,
-    };
-    match crate::models::fetch_or_default(user.id).await {
-        Ok(prefs) => Json(serde_json::json!({
-            "theme": prefs.theme,
-            "density": prefs.density,
-            "sidebar_collapsed": prefs.sidebar_collapsed,
-            "dashboard_layout": prefs.dashboard_layout,
-            "updated_at": prefs.updated_at,
-        }))
-        .into_response(),
-        Err(e) => {
-            tracing::error!(error = %e, "admin: get_prefs failed");
-            (StatusCode::INTERNAL_SERVER_ERROR, "prefs error").into_response()
-        }
-    }
-}
-
-/// `PUT /admin/api/prefs` — update the current user's prefs.
-///
-/// Body: `application/json` with `{theme?, density?, sidebar_collapsed?}`.
-async fn put_prefs_handler(headers: HeaderMap, body: String) -> Response {
-    let user = match require_staff(&headers, "/admin/api/prefs").await {
-        Ok(u) => u,
-        Err(r) => return r,
-    };
-
-    // Fetch existing (or default) prefs, then overlay the submitted fields.
-    let mut prefs = match crate::models::fetch_or_default(user.id).await {
-        Ok(p) => p,
-        Err(e) => {
-            tracing::error!(error = %e, "admin: put_prefs fetch failed");
-            return (StatusCode::INTERNAL_SERVER_ERROR, "prefs error").into_response();
-        }
-    };
-
-    if let Ok(patch) = serde_json::from_str::<serde_json::Value>(&body) {
-        if let Some(t) = patch.get("theme").and_then(|v| v.as_str()) {
-            if matches!(t, "light" | "dark" | "system") {
-                prefs.theme = t.to_string();
-            }
-        }
-        if let Some(d) = patch.get("density").and_then(|v| v.as_str()) {
-            if matches!(d, "comfortable" | "compact") {
-                prefs.density = d.to_string();
-            }
-        }
-        if let Some(sc) = patch.get("sidebar_collapsed").and_then(|v| v.as_bool()) {
-            prefs.sidebar_collapsed = sc;
-        }
-        if let Some(layout) = patch.get("dashboard_layout").and_then(|v| v.as_str()) {
-            prefs.dashboard_layout = layout.to_string();
-        }
-    }
-
-    match crate::models::upsert(prefs).await {
-        Ok(_) => Json(serde_json::json!({ "ok": true })).into_response(),
-        Err(e) => {
-            tracing::error!(error = %e, "admin: put_prefs upsert failed");
-            (StatusCode::INTERNAL_SERVER_ERROR, "prefs save error").into_response()
-        }
-    }
-}
-
-// =========================================================================
-// Phase 4: audit history handler.
-// =========================================================================
-
-/// `GET /admin/{table}/{id}/history` — audit timeline for one object.
-async fn history_handler(
-    State(state): State<AdminState>,
-    headers: HeaderMap,
-    Path((table, id)): Path<(String, String)>,
-) -> Response {
-    let path = format!("/admin/{table}/{id}/history");
-    let user = match require_staff(&headers, &path).await {
-        Ok(u) => u,
-        Err(r) => return r,
-    };
-    let _ = &user; // actor known but not needed here
-    let Some((_, model)) = find_model(&table) else {
-        return AdminError::NotFound(format!("no model `{table}`")).into_response();
-    };
-    let object_id: i64 = match id.parse() {
-        Ok(v) => v,
-        Err(_) => return AdminError::BadInput(format!("invalid id: {id}")).into_response(),
-    };
-    let entries = match crate::models::audit_for_object(&table, object_id, 50).await {
-        Ok(e) => e,
-        Err(e) => {
-            tracing::error!(error = %e, "admin: audit_for_object failed");
-            return (StatusCode::INTERNAL_SERVER_ERROR, "audit error").into_response();
-        }
-    };
-
-    let apps = sidebar_apps(&state, &user);
-    let initial_theme = user_theme(&user).await;
-    match render(
-        "admin/history.html",
-        context!(
-            model_name    => model.name.clone(),
-            object_id     => object_id,
-            entries       => entries,
-            apps          => apps,
-            active_table  => table,
-            breadcrumbs   => Vec::<serde_json::Value>::new(),
-            initial_theme => initial_theme,
-        ),
-    ) {
-        Ok(html) => html.into_response(),
-        Err(e) => e.into_response(),
-    }
-}
-
-// =========================================================================
-// Phase 4: dashboard API handlers.
-// =========================================================================
-
-/// `GET /admin/api/dashboard/catalog` — list widgets the user may add.
-async fn dashboard_catalog(State(state): State<AdminState>, headers: HeaderMap) -> Response {
-    if let Err(r) = require_staff(&headers, "/admin/api/dashboard/catalog").await {
-        return r;
-    }
-    let entries: Vec<CatalogEntry> = state
-        .widget_catalog
-        .iter()
-        .map(|w| CatalogEntry {
-            key: w.key,
-            title: w.title.clone(),
-            kind: w.kind.as_str().to_string(),
-            default_span: w.default_span.clone(),
-        })
-        .collect();
-    Json(entries).into_response()
-}
-
-/// `GET /admin/api/dashboard/layout` — user's saved layout or default.
-async fn dashboard_layout_get(headers: HeaderMap) -> Response {
-    let user = match require_staff(&headers, "/admin/api/dashboard/layout").await {
-        Ok(u) => u,
-        Err(r) => return r,
-    };
-    let prefs = match crate::models::fetch_or_default(user.id).await {
-        Ok(p) => p,
-        Err(e) => {
-            tracing::error!(error = %e, "admin: dashboard_layout_get failed");
-            return (StatusCode::INTERNAL_SERVER_ERROR, "layout error").into_response();
-        }
-    };
-    // Return as raw JSON string (the layout is stored serialized).
-    axum::response::Response::builder()
-        .status(StatusCode::OK)
-        .header("Content-Type", "application/json")
-        .body(axum::body::Body::from(prefs.dashboard_layout))
-        .unwrap_or_else(|_| (StatusCode::OK, "[]").into_response())
-}
-
-/// `PUT /admin/api/dashboard/layout` — save user's layout.
-async fn dashboard_layout_put(headers: HeaderMap, body: String) -> Response {
-    let user = match require_staff(&headers, "/admin/api/dashboard/layout").await {
-        Ok(u) => u,
-        Err(r) => return r,
-    };
-    // Validate that the body is valid JSON (an array of widget instances).
-    if serde_json::from_str::<serde_json::Value>(&body).is_err() {
-        return (StatusCode::BAD_REQUEST, "invalid JSON layout").into_response();
-    }
-    let mut prefs = match crate::models::fetch_or_default(user.id).await {
-        Ok(p) => p,
-        Err(e) => {
-            tracing::error!(error = %e, "admin: dashboard_layout_put fetch failed");
-            return (StatusCode::INTERNAL_SERVER_ERROR, "layout error").into_response();
-        }
-    };
-    prefs.dashboard_layout = body;
-    match crate::models::upsert(prefs).await {
-        Ok(_) => Json(serde_json::json!({ "ok": true })).into_response(),
-        Err(e) => {
-            tracing::error!(error = %e, "admin: dashboard_layout_put save failed");
-            (StatusCode::INTERNAL_SERVER_ERROR, "layout save error").into_response()
-        }
-    }
-}
-
-/// `GET /admin/api/dashboard/widgets/{key}/data` — compute + return one widget's payload.
-///
-/// Returns either JSON (API consumers) or an HTML fragment (HTMX swap).
-async fn dashboard_widget_data(
-    State(state): State<AdminState>,
-    headers: HeaderMap,
-    Path(key): Path<String>,
-) -> Response {
-    let user = match require_staff(&headers, "/admin/api/dashboard/widgets/.../data").await {
-        Ok(u) => u,
-        Err(r) => return r,
-    };
-    let widget = state.widget_catalog.iter().find(|w| w.key == key.as_str());
-    let Some(widget) = widget else {
-        return AdminError::NotFound(format!("no widget `{key}`")).into_response();
-    };
-
-    let data_fn = widget.data.0.clone();
-    let payload = data_fn(user).await;
-
-    // For HTMX requests render the HTML fragment; otherwise return JSON.
-    if is_htmx(&headers) {
-        let kind = widget.kind.as_str().to_string();
-        let title = widget.title.clone();
-        let payload_json = serde_json::to_value(&payload).unwrap_or(serde_json::Value::Null);
-        match render(
-            "admin/widget_data.html",
-            context!(
-                kind    => kind,
-                title   => title,
-                payload => payload_json,
-            ),
-        ) {
-            Ok(html) => html.into_response(),
-            Err(e) => e.into_response(),
-        }
-    } else {
-        Json(serde_json::json!({
-            "key": key,
-            "kind": widget.kind.as_str(),
-            "title": widget.title,
-            "payload": serde_json::to_value(&payload).unwrap_or(serde_json::Value::Null),
-        }))
-        .into_response()
-    }
-}
-
-// =========================================================================
-// Phase 4: command palette fragment.
-// =========================================================================
-
-/// `GET /admin/api/palette` — returns the command palette HTML fragment.
-///
-/// Jump targets = registered models from the sidebar. Fixed commands = toggle
-/// theme + logout.
-async fn palette_fragment(State(state): State<AdminState>, headers: HeaderMap) -> Response {
-    let user = match require_staff(&headers, "/admin/api/palette").await {
-        Ok(u) => u,
-        Err(r) => return r,
-    };
-    let sidebar = sidebar_apps(&state, &user);
-
-    // Flatten all model entries into a simple list for jump targets.
-    let models: Vec<serde_json::Value> = sidebar
-        .into_iter()
-        .flat_map(|app| app.models)
-        .map(|r| {
-            serde_json::json!({
-                "table": r.table,
-                "label": r.label,
-                "icon": r.icon,
-            })
-        })
-        .collect();
-
-    let commands = vec![
-        serde_json::json!({ "key": "toggle_theme", "label": "Toggle theme", "icon": "sun-moon" }),
-        serde_json::json!({ "key": "logout",       "label": "Logout",       "icon": "log-out" }),
-    ];
-
-    match render(
-        "admin/palette.html",
-        context!(
-            models   => models,
-            commands => commands,
-        ),
-    ) {
-        Ok(html) => html.into_response(),
-        Err(e) => e.into_response(),
-    }
-}
-
-// =========================================================================
-// Phase 4: palette global record search.
-// =========================================================================
-
-/// `GET /admin/api/palette/search?q=<term>` — search across all registered
-/// models that have `search_fields` configured and return up to 10 matching
-/// rows as palette items (HTML fragment for HTMX swap into #umbra-palette-records).
-async fn palette_search(
-    State(state): State<AdminState>,
-    headers: HeaderMap,
-    Query(params): Query<HashMap<String, String>>,
-) -> Response {
-    if let Err(r) = require_staff(&headers, "/admin/api/palette/search").await {
-        return r;
-    }
-    let q = params.get("q").map(|s| s.as_str()).unwrap_or("").trim();
-    if q.len() < 2 {
-        // Return empty fragment for short queries.
-        return axum::response::Response::builder()
-            .status(StatusCode::OK)
-            .header("Content-Type", "text/html")
-            .body(axum::body::Body::empty())
-            .unwrap_or_else(|_| StatusCode::OK.into_response());
-    }
-
-    let pool = umbra::db::pool();
-    let mut html = String::new();
-    let mut total_found = 0usize;
-    const MAX_RESULTS: usize = 10;
-
-    for (_, model) in discover_models() {
-        if total_found >= MAX_RESULTS {
-            break;
-        }
-        let cfg = state.config_for(&model.table);
-        let search_fields: Vec<String> = cfg
-            .filter(|c| !c.search_fields.is_empty())
-            .map(|c| c.search_fields.clone())
-            .unwrap_or_default();
-        if search_fields.is_empty() {
-            continue;
-        }
-
-        let valid_names: std::collections::HashSet<&str> =
-            model.fields.iter().map(|c| c.name.as_str()).collect();
-        let pk = match pk_column(&model) {
-            Some(p) => p,
-            None => continue,
-        };
-
-        // Pick a human-readable label column: first non-pk text column.
-        let label_col = model
-            .fields
-            .iter()
-            .find(|c| !c.primary_key && matches!(c.ty, umbra::orm::SqlType::Text))
-            .map(|c| c.name.as_str())
-            .unwrap_or(pk.name.as_str());
-
-        let like_clauses: Vec<String> = search_fields
-            .iter()
-            .filter(|f| valid_names.contains(f.as_str()))
-            .map(|f| format!("\"{}\" LIKE ?", crate::q(f)))
-            .collect();
-        if like_clauses.is_empty() {
-            continue;
-        }
-
-        let where_sql = format!("WHERE ({})", like_clauses.join(" OR "));
-        let sql = format!(
-            "SELECT \"{pk_col}\", \"{label_col}\" FROM \"{table}\" {where_sql} LIMIT ?",
-            pk_col = crate::q(&pk.name),
-            label_col = crate::q(label_col),
-            table = crate::q(&model.table),
-        );
-        let like_val = format!("%{q}%");
-        let remaining = MAX_RESULTS - total_found;
-
-        let mut qb = sqlx::query(&sql);
-        for _ in &like_clauses {
-            qb = qb.bind(like_val.clone());
-        }
-        qb = qb.bind(remaining as i64);
-
-        if let Ok(rows) = qb.fetch_all(&pool).await {
-            for row in rows {
-                if total_found >= MAX_RESULTS {
-                    break;
-                }
-                let id: String = row
-                    .try_get::<i64, _>(0)
-                    .map(|v| v.to_string())
-                    .or_else(|_| row.try_get::<String, _>(0))
-                    .unwrap_or_default();
-                let label: String = row
-                    .try_get::<String, _>(1)
-                    .unwrap_or_else(|_| format!("#{id}"));
-                let item_label = format!("{}: {}", model.name, label);
-                let href = format!("/admin/{}/{}/sheet", model.table, id);
-                html.push_str(&format!(
-                    r#"<li role="option" data-palette-href="{href}" class="palette-item flex items-center gap-sm px-lg py-sm cursor-pointer hover:bg-surface-container-high transition-colors group" onclick="umbra._paletteGo(this)" tabindex="-1">
-  <div class="w-8 h-8 rounded-xl bg-primary-container/10 border border-primary/20 flex items-center justify-center flex-shrink-0">
-    <i data-lucide="file-search" class="w-4 h-4 text-primary"></i>
-  </div>
-  <span class="text-body-md text-on-surface">{label}</span>
-  <span class="ml-auto text-label-sm text-outline opacity-0 group-hover:opacity-100 transition-opacity">Open</span>
-</li>"#,
-                    href = html_escape(&href),
-                    label = html_escape(&item_label),
-                ));
-                total_found += 1;
-            }
-        }
-    }
-
-    axum::response::Response::builder()
-        .status(StatusCode::OK)
-        .header("Content-Type", "text/html")
-        .body(axum::body::Body::from(html))
-        .unwrap_or_else(|_| StatusCode::OK.into_response())
-}
 
 // =========================================================================
 // Unit tests (pure logic — no DB needed).
