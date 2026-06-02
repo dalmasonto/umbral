@@ -21,23 +21,33 @@
 //!
 //! ## Edit / no-edit policy
 //!
-//! Most columns are marked `#[umbra(noedit)]` because changing them breaks
-//! the system: renaming a `codename` invalidates every `has_permission(...)`
-//! check in code; flipping a join row's FK is semantically a delete+create,
-//! not an edit. The columns that *are* editable carry display-only labels —
-//! they're safe to rename and the system keeps working.
+//! The rule is "lock framework-managed rows, leave user-created rows
+//! editable." That splits along table boundaries:
+//!
+//! - **Framework-managed**: `ContentType` rows (auto-seeded one-per-model
+//!   at boot) and the *codename* + *content_type_id* of every `Permission`
+//!   row (the standard `add_X` / `change_X` / `delete_X` / `view_X` set is
+//!   auto-seeded, and renaming a codename invalidates every
+//!   `has_permission(...)` check in user code). Both stay `#[umbra(noedit)]`
+//!   — the admin renders them read-only.
+//!
+//! - **User-created**: every row in `Group`, `GroupPermission`, `UserGroup`,
+//!   `UserPermission` is something a staff user added through the admin
+//!   to wire authorisation. Those rows MUST stay editable so the admin
+//!   can reassign permissions and group memberships. They had `noedit`
+//!   markers in an earlier pass; #61.1 reverts them.
 //!
 //! | Table | Editable columns | No-edit columns |
 //! |---|---|---|
 //! | `ContentType` | (none — system-managed at boot) | `app_label`, `model` |
 //! | `Permission` | `name` (human label) | `content_type_id`, `codename` |
-//! | `Group` | `name`, `description` | (none — both are user-facing) |
-//! | `GroupPermission` | (none — delete + create instead) | `group_id`, `permission_id` |
-//! | `UserGroup` | (none — delete + create instead) | `user_id`, `group_id` |
-//! | `UserPermission` | (none — delete + create instead) | `user_id`, `permission_id` |
+//! | `Group` | `name`, `description` | (none) |
+//! | `GroupPermission` | `group_id`, `permission_id` | (none — user-defined data) |
+//! | `UserGroup` | `user_id`, `group_id` | (none — user-defined data) |
+//! | `UserPermission` | `user_id`, `permission_id` | (none — user-defined data) |
 //!
 //! The `noedit` attribute is metadata only (it lands in `ModelMeta`, not in
-//! the DDL), so adding it doesn't dirty any existing schema.
+//! the DDL), so adding or removing it doesn't dirty any existing schema.
 
 use serde::{Deserialize, Serialize};
 use umbra::orm::ForeignKey;
@@ -120,10 +130,9 @@ pub struct Group {
 )]
 pub struct GroupPermission {
     pub id: i64,
-    /// Re-targeting a join row is a delete+create, not an edit.
-    #[umbra(noedit)]
+    /// User-defined wiring: the admin reassigns groups → permissions
+    /// at runtime, so both FKs must stay editable.
     pub group_id: ForeignKey<Group>,
-    #[umbra(noedit)]
     pub permission_id: ForeignKey<Permission>,
 }
 
@@ -140,10 +149,9 @@ pub struct GroupPermission {
 )]
 pub struct UserGroup {
     pub id: i64,
-    /// The `UserModel::id()` of the user. Re-targeting is a delete+create.
-    #[umbra(noedit)]
+    /// The `UserModel::id()` of the user. User-defined membership;
+    /// staff users reassign through the admin.
     pub user_id: i64,
-    #[umbra(noedit)]
     pub group_id: ForeignKey<Group>,
 }
 
@@ -159,9 +167,8 @@ pub struct UserGroup {
 )]
 pub struct UserPermission {
     pub id: i64,
-    /// The `UserModel::id()` of the user. Re-targeting is a delete+create.
-    #[umbra(noedit)]
+    /// The `UserModel::id()` of the user. User-defined direct grant;
+    /// staff users reassign through the admin.
     pub user_id: i64,
-    #[umbra(noedit)]
     pub permission_id: ForeignKey<Permission>,
 }
