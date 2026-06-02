@@ -40,10 +40,10 @@ pub(crate) fn pk_column(model: &ModelMeta) -> Option<&Column> {
 /// Two-state behaviour:
 ///
 /// 1. If at least one field is tagged `#[umbra(string)]`, render
-///    `[pk, <first string_repr field>]` — Django-style `__str__`. The
-///    user opted in to a compact list view by tagging the label
-///    column.
-/// 2. Otherwise show every column. The "string attribute" is the
+///    just that field — Django-style `__str__()`. The PK is implicit
+///    in the row link (every row in the admin opens the sheet on
+///    click), so a separate `id` column is redundant.
+/// 2. Otherwise show every column. The `string` attribute is the
 ///    sole opt-in for the compact form; without it the changelist
 ///    stays at the legacy "show all fields" default, so adding the
 ///    derive doesn't silently rewrite existing changelists.
@@ -54,14 +54,6 @@ pub(crate) fn default_list_display(model: &ModelMeta) -> Vec<String> {
         .find(|c| c.is_string_repr && !c.primary_key)
         .map(|c| c.name.clone());
     if let Some(s) = str_field {
-        let pk_name = model
-            .fields
-            .iter()
-            .find(|c| c.primary_key)
-            .map(|c| c.name.clone());
-        if let Some(pk) = pk_name {
-            return vec![pk, s];
-        }
         return vec![s];
     }
     // No opt-in — show every column. Matches pre-#46 behaviour so
