@@ -20,6 +20,7 @@
 //! crossing each other.
 
 pub mod column;
+pub mod dynamic;
 pub mod expr;
 pub mod foreign_key;
 pub mod model;
@@ -31,6 +32,7 @@ pub mod write;
 use std::marker::PhantomData;
 use std::ops::{BitAnd, BitOr};
 
+pub use dynamic::{DynError, DynQuerySet, decode_to_string};
 pub use expr::{F, FColExt, FExpr, Q};
 pub use foreign_key::ForeignKey;
 pub use model::{ArrayElement, FieldSpec, HydrateRelated, Model, PrimaryKey, SqlType};

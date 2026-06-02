@@ -2,13 +2,13 @@
 //! parameterized SQL, bind form values, and decode result rows into
 //! `HashMap<String, String>` for the templates.
 //!
-//! Every public function here takes a model description at runtime
-//! (column names + SQL types from the migration registry), so this is
-//! the seam where the static `Model` trait meets the admin's
-//! type-erased "any model, any column" handlers. The ORM's typed
-//! `QuerySet` can't help here because the column set is only known at
-//! request time. (The TODO below tracks an ORM extension that would
-//! let us swap most of this out.)
+//! The read-side queries (`count_rows_filtered`, `fetch_rows_paged`)
+//! now go through [`umbra::orm::DynQuerySet`] — the runtime-typed
+//! Manager that lives in `umbra-core`. The write-side functions
+//! (`insert_row`, `update_row`, the SQLite-row decoder `column_to_string`,
+//! the form-value binder `bind_form_value`, the typed-NULL binder
+//! `bind_null`) still hand-build SQL because the ORM extension's
+//! write path is the next pass.
 
 use std::collections::HashMap;
 
@@ -16,7 +16,7 @@ use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
 use serde_json::Value;
 use sqlx::{Row, SqlitePool};
 use umbra::migrate::{Column, ModelMeta};
-use umbra::orm::SqlType;
+use umbra::orm::{DynQuerySet, SqlType};
 use uuid::Uuid;
 
 use crate::AdminError;
@@ -25,66 +25,42 @@ use crate::q;
 
 /// COUNT(*) for one filtered changelist query. Returns the total so
 /// the Pagination footer can compute total_pages.
+///
+/// Backed by [`DynQuerySet`] — the search / filter clause comes from
+/// the same builder the row fetch uses, so the count and the page
+/// agree on what "filtered" means.
 pub(crate) async fn count_rows_filtered(
-    pool: &SqlitePool,
+    _pool: &SqlitePool,
     model: &ModelMeta,
     search_term: Option<&str>,
     cfg: Option<&AdminConfig>,
     active_filter: Option<(&str, &str)>,
 ) -> Result<usize, AdminError> {
-    let valid_names: std::collections::HashSet<&str> =
-        model.fields.iter().map(|c| c.name.as_str()).collect();
-
-    let mut conditions: Vec<String> = Vec::new();
-    let mut bind_strings: Vec<String> = Vec::new();
-
+    let mut qs = DynQuerySet::for_meta(model);
     if let Some(term) = search_term
         && let Some(c) = cfg
         && !c.search_fields.is_empty()
     {
-        let like_clauses: Vec<String> = c
-            .search_fields
-            .iter()
-            .filter(|f| valid_names.contains(f.as_str()))
-            .map(|f| format!("\"{}\" LIKE ?", q(f)))
-            .collect();
-        if !like_clauses.is_empty() {
-            conditions.push(format!("({})", like_clauses.join(" OR ")));
-            let like_val = format!("%{term}%");
-            for _ in 0..like_clauses.len() {
-                bind_strings.push(like_val.clone());
-            }
-        }
+        qs = qs.search(&c.search_fields, term);
     }
-
     if let Some((field, value)) = active_filter {
-        if valid_names.contains(field) {
-            conditions.push(format!("\"{}\" = ?", q(field)));
-            bind_strings.push(value.to_string());
-        }
+        qs = qs.filter_eq_string(field, value);
     }
-
-    let where_sql = if conditions.is_empty() {
-        String::new()
-    } else {
-        format!(" WHERE {}", conditions.join(" AND "))
-    };
-
-    let sql = format!("SELECT COUNT(*) FROM \"{}\"{where_sql}", q(&model.table));
-    let mut qb = sqlx::query(&sql);
-    for val in &bind_strings {
-        qb = qb.bind(val.clone());
-    }
-    let row = qb.fetch_one(pool).await?;
-    let count: i64 = row.try_get(0)?;
+    let count = qs.count().await?;
     Ok(count as usize)
 }
 
 /// Fetch one page of rows for the changelist. Phase 2's paginated
 /// counterpart to `fetch_rows_filtered`.
+///
+/// Backed by [`DynQuerySet`]. `order_clause` carries the same
+/// pre-built ORDER BY string the legacy path used (single
+/// `"col" ASC|DESC` or comma-joined multi-column); we parse it back
+/// out into `(col, descending)` pairs and feed each to
+/// `order_by_col` so the ORM owns the rendering.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn fetch_rows_paged(
-    pool: &SqlitePool,
+    _pool: &SqlitePool,
     model: &ModelMeta,
     display_cols: &[String],
     order_clause: &str,
@@ -94,88 +70,47 @@ pub(crate) async fn fetch_rows_paged(
     limit: usize,
     offset: usize,
 ) -> Result<Vec<HashMap<String, String>>, AdminError> {
-    let valid_names: std::collections::HashSet<&str> =
-        model.fields.iter().map(|c| c.name.as_str()).collect();
-    let columns = display_cols
-        .iter()
-        .filter(|n| valid_names.contains(n.as_str()))
-        .map(|n| format!("\"{}\"", n))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let columns = if columns.is_empty() {
-        model
-            .fields
-            .iter()
-            .map(|c| format!("\"{}\"", c.name))
-            .collect::<Vec<_>>()
-            .join(", ")
-    } else {
-        columns
-    };
-
-    let mut conditions: Vec<String> = Vec::new();
-    let mut bind_strings: Vec<String> = Vec::new();
-
+    let mut qs = DynQuerySet::for_meta(model).select_cols(display_cols);
     if let Some(term) = search_term
         && let Some(c) = cfg
         && !c.search_fields.is_empty()
     {
-        let like_clauses: Vec<String> = c
-            .search_fields
-            .iter()
-            .filter(|f| valid_names.contains(f.as_str()))
-            .map(|f| format!("\"{}\" LIKE ?", q(f)))
-            .collect();
-        if !like_clauses.is_empty() {
-            conditions.push(format!("({})", like_clauses.join(" OR ")));
-            let like_val = format!("%{term}%");
-            for _ in 0..like_clauses.len() {
-                bind_strings.push(like_val.clone());
-            }
-        }
+        qs = qs.search(&c.search_fields, term);
     }
-
     if let Some((field, value)) = active_filter {
-        if valid_names.contains(field) {
-            conditions.push(format!("\"{}\" = ?", q(field)));
-            bind_strings.push(value.to_string());
-        }
+        qs = qs.filter_eq_string(field, value);
     }
-
-    let where_sql = if conditions.is_empty() {
-        String::new()
-    } else {
-        format!(" WHERE {}", conditions.join(" AND "))
-    };
-    let order_sql = if order_clause.is_empty() {
-        String::new()
-    } else {
-        format!(" ORDER BY {order_clause}")
-    };
-
-    let sql = format!(
-        "SELECT {columns} FROM \"{}\"{where_sql}{order_sql} LIMIT ? OFFSET ?",
-        q(&model.table)
-    );
-
-    let mut qb = sqlx::query(&sql);
-    for val in &bind_strings {
-        qb = qb.bind(val.clone());
+    for (col, desc) in parse_order_clause(order_clause) {
+        qs = qs.order_by_col(&col, desc);
     }
-    qb = qb.bind(limit as i64).bind(offset as i64);
+    qs = qs.limit(limit as u64).offset(offset as u64);
+    Ok(qs.fetch_as_strings().await?)
+}
 
-    let rows = qb.fetch_all(pool).await?;
-    let mut out: Vec<HashMap<String, String>> = Vec::with_capacity(rows.len());
-    for row in rows {
-        let mut entry: HashMap<String, String> = HashMap::new();
-        for col_name in display_cols {
-            if let Some(col) = model.fields.iter().find(|c| &c.name == col_name) {
-                entry.insert(col.name.clone(), column_to_string(&row, col)?);
+/// Parse the legacy `"col" ASC, "col2" DESC` ORDER BY string back into
+/// `(column_name, descending)` pairs. Whitespace tolerant; segments
+/// that don't parse are silently dropped.
+fn parse_order_clause(clause: &str) -> Vec<(String, bool)> {
+    if clause.trim().is_empty() {
+        return Vec::new();
+    }
+    clause
+        .split(',')
+        .filter_map(|part| {
+            let trimmed = part.trim();
+            if trimmed.is_empty() {
+                return None;
             }
-        }
-        out.push(entry);
-    }
-    Ok(out)
+            // Format: `"col" ASC` or `"col" DESC`.
+            let (col_part, dir_part) = trimmed.rsplit_once(' ')?;
+            let col = col_part.trim().trim_matches('"');
+            if col.is_empty() {
+                return None;
+            }
+            let descending = dir_part.trim().eq_ignore_ascii_case("DESC");
+            Some((col.to_string(), descending))
+        })
+        .collect()
 }
 
 /// Pre-Phase-2 fetch path: hard-capped at 200 rows. Still used by the
