@@ -35,34 +35,37 @@ pub(crate) fn pk_column(model: &ModelMeta) -> Option<&Column> {
 }
 
 /// Default list-display when the admin model carries no explicit
-/// `list_display`. Django renders `[pk, <__str__>]`; this is the same
-/// idea — pick the PK plus the first field tagged
-/// `#[umbra(string)]`. If no field is tagged, fall back to the first
-/// non-PK `Text` column so the table still has a human label. If
-/// nothing fits, show every column (the legacy behaviour).
+/// `list_display`.
+///
+/// Two-state behaviour:
+///
+/// 1. If at least one field is tagged `#[umbra(string)]`, render
+///    `[pk, <first string_repr field>]` — Django-style `__str__`. The
+///    user opted in to a compact list view by tagging the label
+///    column.
+/// 2. Otherwise show every column. The "string attribute" is the
+///    sole opt-in for the compact form; without it the changelist
+///    stays at the legacy "show all fields" default, so adding the
+///    derive doesn't silently rewrite existing changelists.
 pub(crate) fn default_list_display(model: &ModelMeta) -> Vec<String> {
-    let pk_name = model.fields.iter().find(|c| c.primary_key).map(|c| c.name.clone());
     let str_field = model
         .fields
         .iter()
         .find(|c| c.is_string_repr && !c.primary_key)
         .map(|c| c.name.clone());
-    if let (Some(pk), Some(s)) = (&pk_name, &str_field) {
-        return vec![pk.clone(), s.clone()];
+    if let Some(s) = str_field {
+        let pk_name = model
+            .fields
+            .iter()
+            .find(|c| c.primary_key)
+            .map(|c| c.name.clone());
+        if let Some(pk) = pk_name {
+            return vec![pk, s];
+        }
+        return vec![s];
     }
-    // No explicit string-repr — fall back to first non-PK Text column.
-    let first_text = model
-        .fields
-        .iter()
-        .find(|c| {
-            !c.primary_key
-                && matches!(c.ty, umbra::orm::SqlType::Text)
-        })
-        .map(|c| c.name.clone());
-    if let (Some(pk), Some(t)) = (&pk_name, &first_text) {
-        return vec![pk.clone(), t.clone()];
-    }
-    // Nothing usable — show every column.
+    // No opt-in — show every column. Matches pre-#46 behaviour so
+    // existing changelists are unchanged.
     model.fields.iter().map(|c| c.name.clone()).collect()
 }
 

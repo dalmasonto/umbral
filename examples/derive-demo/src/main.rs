@@ -44,8 +44,10 @@ use umbra_auth::AuthUser;
 #[derive(Debug, Clone, serde::Serialize, sqlx::FromRow, Model)]
 pub struct Article {
     pub id: i64,
+    #[umbra(string = true, max_length = 50)]
     pub title: String,
     pub body: String,
+    #[umbra(noedit)]
     pub published_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
@@ -109,6 +111,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .plugin(
             umbra_admin::AdminPlugin::default().register(
                 umbra_admin::AdminModel::new("article")
+                    .label("Articles")
+                    .icon("newspaper")
                     .list_display(&["id", "title", "published_at"])
                     .search_fields(&["title", "body"])
                     .ordering(&["-published_at", "id"]),
