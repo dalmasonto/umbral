@@ -1,6 +1,12 @@
 import * as React from "react"
 
-const MOBILE_BREAKPOINT = 768
+// 480px matches Tailwind's `sm` breakpoint. The default shadcn value of 768
+// turns the sidebar into a Sheet on common laptop widths with a docked window,
+// which made the click-to-collapse trigger appear to "disappear" the sidebar
+// entirely. Using a tighter breakpoint keeps the inline icon-rail behavior on
+// anything that looks like a desktop browser, while still pushing phones to
+// the sheet overlay.
+const MOBILE_BREAKPOINT = 480
 
 export function useIsMobile() {
   const [isMobile, setIsMobile] = React.useState<boolean | undefined>(undefined)
