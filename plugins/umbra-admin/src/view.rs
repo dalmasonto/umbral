@@ -232,15 +232,15 @@ pub(crate) fn input_kind(col: &umbra::migrate::Column) -> &'static str {
             if col.max_length > 0 {
                 "text"
             } else {
-                "string"
+                "textarea"
             }
         }
         SqlType::Uuid => "text",
         SqlType::Date => "date",
         SqlType::Time => "time",
         SqlType::Timestamptz => "datetime-local",
-        SqlType::Json => "textarea",
-        SqlType::Array(_) => "textarea",
+        SqlType::Json => "json",
+        SqlType::Array(_) => "json",
         SqlType::Inet | SqlType::Cidr | SqlType::MacAddr => "text",
         SqlType::FullText => "textarea",
         SqlType::ForeignKey => "fk",

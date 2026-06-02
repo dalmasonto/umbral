@@ -117,6 +117,17 @@ Drag-resize: ~50 LOC vanilla JS at the bottom; width in localStorage.
           <span class="text-body-sm text-on-surface-variant">{{ field.name | replace("_", " ") | title }}</span>
         </label>
         {% elif field.kind == "textarea" %}
+        {# Prose / unbounded TEXT. Body font, no Format button — that's
+           reserved for JSON below. Starts at 4 rows; resize handle
+           lets the user grow it as the value warrants. #}
+        <textarea id="f_{{ field.name }}" {% if not is_readonly %}name="{{ field.name }}"{% endif %} rows="4"
+          {% if not field.nullable and not is_readonly %}required{% endif %}
+          {% if is_readonly %}disabled{% endif %}
+          class="w-full bg-surface-container-low border border-outline-variant rounded-xl px-md py-sm text-on-surface text-body-md focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all resize-y {% if is_readonly %}opacity-50 cursor-not-allowed{% endif %}"
+        >{{ field.value }}</textarea>
+        {% elif field.kind == "json" %}
+        {# JSON / Array. Monospace + a Format button that pretty-prints
+           the current contents through JSON.parse / JSON.stringify. #}
         <div class="relative">
           <textarea id="f_{{ field.name }}" {% if not is_readonly %}name="{{ field.name }}"{% endif %} rows="5"
             {% if not field.nullable and not is_readonly %}required{% endif %}
