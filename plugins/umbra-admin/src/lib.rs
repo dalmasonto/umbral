@@ -55,6 +55,7 @@ pub mod registry;
 pub mod widgets;
 
 mod auth;
+mod branding;
 mod discovery;
 mod engine;
 mod error;
@@ -120,6 +121,7 @@ use umbra::web::post;
 pub struct AdminPlugin {
     registry: AdminRegistry,
     widget_catalog: Vec<Widget>,
+    branding: branding::AdminBranding,
 }
 
 impl AdminPlugin {
@@ -172,6 +174,34 @@ impl AdminPlugin {
         self.widget_catalog.push(widget);
         self
     }
+
+    /// Override the admin site title — shown in the browser tab,
+    /// the sidebar header, and the login page.
+    ///
+    /// ```ignore
+    /// AdminPlugin::default().site_title("Acme Backoffice")
+    /// ```
+    pub fn site_title(mut self, title: impl Into<String>) -> Self {
+        self.branding.site_title = title.into();
+        self
+    }
+
+    /// One-line description shown on the dashboard / login page
+    /// underneath the site title.
+    pub fn site_description(mut self, description: impl Into<String>) -> Self {
+        self.branding.site_description = description.into();
+        self
+    }
+
+    /// Override the brand primary color. Accepts any valid CSS color
+    /// (`#5b5bd6`, `rgb(91 91 214)`, `hsl(240 60% 60%)`). The wrapper
+    /// template emits a `<style>` that re-assigns `--primary` and
+    /// `--primary-container` so every "primary"-tinted element across
+    /// the admin picks it up automatically.
+    pub fn brand_color(mut self, color: impl Into<String>) -> Self {
+        self.branding.brand_color = color.into();
+        self
+    }
 }
 
 /// Shared state injected into every route via [`axum::extract::State`].
@@ -213,6 +243,12 @@ impl Plugin for AdminPlugin {
     }
 
     fn routes(&self) -> Router {
+        // Seal the developer-configured branding into the global so
+        // the template engine picks it up on first init. Subsequent
+        // attempts to set it are silent no-ops; the typical flow is
+        // exactly one Plugin::routes() call per process.
+        let _ = branding::BRANDING.set(self.branding.clone());
+
         // Seed the catalog with the two built-in widgets, then append
         // developer-registered ones.
         let mut catalog = vec![

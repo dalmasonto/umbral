@@ -3,7 +3,8 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>{% block title %}umbra admin{% endblock %}</title>
+  <title>{% block title %}{{ site_title }}{% endblock %}</title>
+  {% if site_description %}<meta name="description" content="{{ site_description }}"/>{% endif %}
   <!-- HTMX: same-origin only -->
   <meta name="htmx-config" content='{"selfRequestsOnly":true}'/>
   <!--
@@ -168,6 +169,13 @@
       --error-container:          #93000a;
       --on-error-container:       #ffdad6;
     }
+    {%- if brand_color %}
+    /* Developer-supplied brand color overrides --primary across the
+       admin so every "primary"-tinted element picks the new tone. */
+    :root, .dark {
+      --primary: {{ brand_color }};
+    }
+    {%- endif %}
     body { background-color: var(--background); color: var(--on-background); font-family: 'Inter', sans-serif; -webkit-font-smoothing: antialiased; }
     html, body, button, input, select, textarea { font-family: 'Inter', sans-serif; }
     /* Tabular numerals for data-heavy contexts */

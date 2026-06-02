@@ -193,6 +193,23 @@ pub(crate) fn engine() -> &'static Environment<'static> {
             .unwrap_or("dev");
         env.add_global("environment", minijinja::Value::from(env_name));
 
+        // Developer-supplied branding. Plugin::routes() seals
+        // AdminPlugin::site_title / site_description / brand_color
+        // into a static cell before the first render; we read it
+        // here and inject the values as template globals so every
+        // template can reference `site_title` / `brand_color` etc.
+        // without the handler having to thread them through context.
+        let branding = crate::branding::current();
+        env.add_global("site_title", minijinja::Value::from(branding.site_title));
+        env.add_global(
+            "site_description",
+            minijinja::Value::from(branding.site_description),
+        );
+        env.add_global(
+            "brand_color",
+            minijinja::Value::from(branding.brand_color),
+        );
+
         env
     })
 }

@@ -1,5 +1,5 @@
 {% extends "admin/base.html" %}
-{% block title %}{{ verb }} {{ model.name }} — umbra admin{% endblock %}
+{% block title %}{{ verb }} {{ model.name }} — {{ site_title }}{% endblock %}
 {% block content %}
   <div class="breadcrumb">
     <a href="/admin">admin</a> / <a href="/admin/{{ model.table }}/">{{ model.name }}</a> / {{ verb }}

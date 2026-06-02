@@ -62,12 +62,12 @@ antialiased flex" id="umbra-admin-body"{% endblock %} {% block body %}
         </div>
         <div>
             <h2 class="font-h3 text-h3 text-on-surface leading-none">
-                Umbra Admin
+                {{ site_title }}
             </h2>
             <p
                 class="text-[10px] text-outline tracking-widest uppercase mt-0.5"
             >
-                v0.0.1
+                {% if site_description %}{{ site_description }}{% else %}v0.0.1{% endif %}
             </p>
         </div>
     </div>

@@ -1,6 +1,6 @@
 {% extends "admin/wrapper.html" %}
 
-{% block title %}Sign in | Umbra Admin{% endblock %}
+{% block title %}Sign in | {{ site_title }}{% endblock %}
 
 {% block extra_head %}
 <style>
@@ -45,7 +45,7 @@
                 ></i>
             </div>
             <h1 class="font-h1 text-h1 text-on-surface tracking-tight">
-                Umbra Admin
+                {{ site_title }}
             </h1>
             <p
                 class="font-body-md text-body-md text-on-surface-variant mt-xs"
