@@ -1,21 +1,23 @@
 import { useEffect } from "react";
 import { usePlayground } from "../state/store";
+import { loadHistory } from "../state/history";
 import { Header } from "./Header";
 import { EndpointTree } from "./EndpointTree";
 import { RequestBuilder } from "./RequestBuilder";
 import { ResponseViewer } from "./ResponseViewer";
 import { ErrorBanner } from "./ErrorBanner";
-import { EmptyState } from "./EmptyState";
 
 export function App() {
   const loadSpec = usePlayground((s) => s.loadSpec);
   const specError = usePlayground((s) => s.specError);
-  const spec = usePlayground((s) => s.spec);
-  const loadingSpec = usePlayground((s) => s.loadingSpec);
 
   useEffect(() => {
     void loadSpec();
   }, [loadSpec]);
+
+  useEffect(() => {
+    usePlayground.setState({ history: loadHistory() });
+  }, []);
 
   return (
     <div className="h-screen flex flex-col bg-slate-950 text-slate-300">
