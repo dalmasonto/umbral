@@ -4,7 +4,12 @@
 //! surface area; the routes table in `lib.rs` calls them. Submodules
 //! are private — handlers are reached only by the router.
 
+pub(crate) mod actions;
 pub(crate) mod dashboard;
+pub(crate) mod fk_picker;
 pub(crate) mod history;
+pub(crate) mod inline_edit;
 pub(crate) mod palette;
 pub(crate) mod prefs;
+
+pub(crate) use actions::action_descriptors_json;

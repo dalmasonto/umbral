@@ -4,6 +4,8 @@
 
 use umbra::web::HeaderMap;
 
+use crate::AdminError;
+
 /// Quote a SQL identifier by doubling embedded `"` characters. The caller
 /// wraps the result in literal double quotes. We never interpolate
 /// user-supplied values into SQL — only column / table names from the
@@ -49,4 +51,20 @@ pub(crate) fn is_htmx(headers: &HeaderMap) -> bool {
         .and_then(|v| v.to_str().ok())
         .map(|v| v == "true")
         .unwrap_or(false)
+}
+
+/// Turn an `AdminError` into a string safe to show the user inside an
+/// inline form-error span. SQL errors are logged but never surfaced
+/// verbatim (they leak schema details); everything else passes its
+/// message through.
+pub(crate) fn sanitise_form_error(e: &AdminError) -> String {
+    match e {
+        AdminError::Sqlx(sqlx_err) => {
+            tracing::error!(error = %sqlx_err, "admin: form submission database error");
+            "database error".to_string()
+        }
+        AdminError::NotFound(msg) | AdminError::Render(msg) | AdminError::BadInput(msg) => {
+            msg.clone()
+        }
+    }
 }
