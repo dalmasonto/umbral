@@ -219,7 +219,7 @@ async fn login(router: axum::Router) -> String {
                 .method("POST")
                 .uri("/admin/login")
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-                .header(header::COOKIE, format!("umbra_session={anon_cookie}"))
+                .header(header::COOKIE, format!("umbra_csrf_token={anon_cookie}"))
                 .body(Body::from(form))
                 .unwrap(),
         )

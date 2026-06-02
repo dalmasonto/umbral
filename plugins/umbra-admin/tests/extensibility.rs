@@ -223,15 +223,22 @@ async fn login_session(router: &axum::Router, username: &str, password: &str) ->
             .unwrap(),
     )
     .await;
-    let anon_cookie = headers
-        .get(header::SET_COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| {
-            s.split(';')
-                .next()
-                .and_then(|p| p.split_once('=').map(|(_, v)| v.to_string()))
+    // GET /admin/login mints (or echoes) the umbra_csrf_token cookie.
+    // Find it in the Set-Cookie header(s).
+    let csrf_cookie = headers
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .find_map(|s| {
+            let first = s.split(';').next()?;
+            let (k, v) = first.split_once('=')?;
+            if k.trim() == "umbra_csrf_token" {
+                Some(v.to_string())
+            } else {
+                None
+            }
         })
-        .expect("GET /admin/login must set session cookie");
+        .expect("GET /admin/login must set umbra_csrf_token cookie");
     let csrf_token = extract_csrf_token(&body).expect("login page must have csrf_token");
 
     let form_body = serde_urlencoded::to_string([
@@ -246,7 +253,7 @@ async fn login_session(router: &axum::Router, username: &str, password: &str) ->
         Request::builder()
             .method("POST")
             .uri("/admin/login")
-            .header(header::COOKIE, format!("umbra_session={anon_cookie}"))
+            .header(header::COOKIE, format!("umbra_csrf_token={csrf_cookie}"))
             .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
             .body(Body::from(form_body))
             .unwrap(),

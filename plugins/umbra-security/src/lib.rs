@@ -65,6 +65,16 @@ use umbra::prelude::*;
 
 const CSRF_COOKIE: &str = "umbra_csrf_token";
 const CSRF_HEADER: &str = "x-csrf-token";
+/// Form field name that carries the CSRF token for HTML `<form>`
+/// submissions. Two shapes are accepted — `csrf_token` and `__csrf`
+/// — so existing form code on either convention works without
+/// migration. The header path stays the canonical one for JS clients.
+const CSRF_FORM_FIELDS: &[&str] = &["csrf_token", "__csrf"];
+/// Hard cap on the buffered body size when we peek at form data to
+/// extract the CSRF field. 1 MiB is well above any realistic
+/// urlencoded form (the login page is < 1 KiB) and well below
+/// anything that would justify a memory pressure concern.
+const MAX_FORM_BODY: usize = 1024 * 1024;
 
 /// CSRF + security-headers plugin. Configure via [`Self::with_hsts`]
 /// (off by default).
@@ -167,23 +177,94 @@ async fn csrf_middleware(req: Request, next: Next) -> Result<Response, Infallibl
         return Ok(response);
     }
 
-    // Write methods: cookie and header must both be present and equal.
+    // Write methods: cookie and (header OR form field) must match.
+    //
+    // Header is the canonical path for JS clients that can set custom
+    // headers. HTML forms can't set those, so we also peek into a
+    // urlencoded body for `csrf_token` (or `__csrf`). The peek
+    // buffers the entire body up to MAX_FORM_BODY then rebuilds the
+    // request so the downstream handler still sees a complete body.
     let header_token = req
         .headers()
         .get(CSRF_HEADER)
         .and_then(|h| h.to_str().ok())
         .map(str::to_string);
 
-    match (cookie_token, header_token) {
-        (Some(c), Some(h)) if tokens_match(&c, &h) => Ok(next.run(req).await),
-        _ => {
-            let body = Body::from("CSRF verification failed");
-            Ok(Response::builder()
-                .status(StatusCode::FORBIDDEN)
-                .body(body)
-                .expect("static response"))
+    if let Some(c) = cookie_token.as_ref() {
+        if let Some(h) = header_token.as_ref() {
+            if tokens_match(c, h) {
+                return Ok(next.run(req).await);
+            }
+        }
+        // Try the form-field path.
+        let content_type = req
+            .headers()
+            .get(http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+        if content_type.starts_with("application/x-www-form-urlencoded") {
+            let cookie_owned = c.clone();
+            let (parts, body) = req.into_parts();
+            let bytes = match axum::body::to_bytes(body, MAX_FORM_BODY).await {
+                Ok(b) => b,
+                Err(_) => return Ok(forbidden()),
+            };
+            let submitted = form_field_token(&bytes);
+            if let Some(s) = submitted {
+                if tokens_match(&cookie_owned, &s) {
+                    let req = Request::from_parts(parts, Body::from(bytes));
+                    return Ok(next.run(req).await);
+                }
+            }
         }
     }
+
+    Ok(forbidden())
+}
+
+fn forbidden() -> Response {
+    let body = Body::from("CSRF verification failed");
+    Response::builder()
+        .status(StatusCode::FORBIDDEN)
+        .body(body)
+        .expect("static response")
+}
+
+/// Scan a urlencoded form body for any of the accepted CSRF field
+/// names. Plain string scan — we avoid pulling in a full
+/// query-string parser for one field.
+fn form_field_token(body: &[u8]) -> Option<String> {
+    let s = std::str::from_utf8(body).ok()?;
+    for part in s.split('&') {
+        let mut iter = part.splitn(2, '=');
+        let key = iter.next()?;
+        let val = iter.next().unwrap_or("");
+        if CSRF_FORM_FIELDS.contains(&key) {
+            // urlencoded forms percent-encode + use `+` for spaces.
+            // The token is hex though, so neither character appears
+            // and a no-op decode is fine for the common case. Fall
+            // back to identity if `urlencoding` isn't available.
+            let decoded = val.replace('+', " ");
+            // No real percent-decoding library used here on purpose;
+            // tokens are hex (no special chars) so the raw value
+            // matches the cookie. Future-proof when token format
+            // changes by routing through a proper decoder.
+            return Some(decoded);
+        }
+    }
+    None
+}
+
+/// Read the current CSRF token from the request's cookie header.
+/// Public so handlers that render HTML forms can embed it as a
+/// hidden `csrf_token` input — the form POST is then validated by
+/// the same middleware path JS clients hit with the header.
+pub fn current_csrf_token(headers: &http::HeaderMap) -> Option<String> {
+    headers
+        .get(COOKIE)
+        .and_then(|h| h.to_str().ok())
+        .and_then(|h| cookie_value(h, CSRF_COOKIE).map(str::to_string))
 }
 
 /// Constant-time string equality. Short-circuit `==` on `String` is

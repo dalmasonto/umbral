@@ -1,10 +1,10 @@
-//! Login / logout / CSRF / staff-gate for the admin.
+//! Login / logout / staff-gate for the admin.
 //!
 //! The admin gates every non-login route through [`require_staff`].
-//! Login is plain HTML-form POST; the form carries a per-session CSRF
-//! token stored in the session `data` map, so the CSRF middleware's
-//! double-submit-cookie scheme (which needs JS to set a custom header)
-//! doesn't apply.
+//! Login is plain HTML-form POST; the form carries the shared CSRF
+//! token from `umbra-security` — same cookie everything else in the
+//! app uses, so a Django-style single token works across admin and
+//! end-user routes.
 //!
 //! `sanitise_next` rejects open-redirect attempts in the `?next=` URL
 //! param so a phished link can't bounce off the login form into an
@@ -18,46 +18,6 @@ use umbra::web::{HeaderMap, IntoResponse, Redirect, Response, StatusCode};
 
 use crate::engine::render;
 use crate::util::urlencoding_simple;
-
-// =========================================================================
-// CSRF helpers for the login form.
-//
-// umbra-security's CSRF middleware uses double-submit-cookie with the
-// `x-csrf-token` header. HTML forms can't set custom headers, so the
-// login page needs its own per-session token stored in the session
-// `data` map and submitted as a hidden form field.
-// =========================================================================
-
-const ADMIN_CSRF_SESSION_KEY: &str = "_umbra_admin_csrf";
-
-/// Issue a CSRF token for the admin login form. Generates a fresh
-/// token, stores it in the session `data` map, and returns the value
-/// for embedding in the form. The session token must be the raw token
-/// from the request cookie (used by `umbra_sessions::set_data`).
-async fn issue_login_csrf(session_token: &str) -> String {
-    let token = umbra_security::generate_token();
-    let _ = umbra_sessions::set_data(session_token, ADMIN_CSRF_SESSION_KEY, &token).await;
-    token
-}
-
-/// Verify the login form CSRF token. Returns `true` only when the
-/// submitted form value equals what we stored in the session. We do
-/// not need a constant-time compare: an attacker who can read the
-/// session DB already has the token, so the protection is purely
-/// against cross-site forms that can't see the session cookie.
-async fn verify_login_csrf(session_token: &str, submitted: &str) -> bool {
-    if submitted.is_empty() {
-        return false;
-    }
-    let session = match umbra_sessions::read_session(session_token).await {
-        Ok(Some(s)) => s,
-        _ => return false,
-    };
-    match umbra_sessions::get_data::<String>(&session, ADMIN_CSRF_SESSION_KEY) {
-        Ok(Some(stored)) => stored == submitted,
-        _ => false,
-    }
-}
 
 // =========================================================================
 // Auth gate — session-based.
@@ -97,12 +57,15 @@ pub(crate) async fn require_staff(
 
 /// `GET /admin/login` — render the login form.
 ///
-/// If the request has no session cookie, a fresh anonymous session is
-/// created and a `Set-Cookie` header is added to the response. This
-/// ensures there is always a session available to anchor the CSRF token,
-/// even when the `SessionsPlugin` auto-layer is disabled (the common
-/// case for admin-only deployments that don't want every request to
-/// create a session row).
+/// Reads the shared `umbra_csrf_token` cookie via
+/// [`umbra_security::current_csrf_token`] and embeds it in the form
+/// as the `csrf_token` hidden input. If no cookie is set yet (first
+/// request to the admin), the response carries no token and the
+/// middleware mints one on the *next* GET — the user will see the
+/// rendered page either way; the POST simply uses whatever cookie
+/// the browser then carries back. If `SecurityPlugin` is not
+/// installed, the form still posts and the admin's own validation
+/// fall-back rejects empty tokens.
 pub(crate) async fn login_get(
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
@@ -124,46 +87,10 @@ pub(crate) async fn login_get(
         .map(|n| sanitise_next(n))
         .unwrap_or_default();
 
-    // Obtain a session token for the CSRF anchor. If the request already
-    // has a valid session cookie, reuse it. Otherwise create a fresh
-    // anonymous session so we have somewhere to store the CSRF token.
-    let existing_token = umbra_sessions::cookie_from_headers(&headers);
-
-    let valid_existing = if let Some(ref tok) = existing_token {
-        umbra_sessions::read_session(tok)
-            .await
-            .ok()
-            .flatten()
-            .is_some()
-    } else {
-        false
-    };
-
-    let (session_token, new_cookie) = if valid_existing {
-        (existing_token.unwrap(), None)
-    } else {
-        match umbra_sessions::create_session(None, None).await {
-            Ok(raw) => {
-                let cookie_str = umbra_sessions::set_cookie_header(&raw, None);
-                (raw, Some(cookie_str))
-            }
-            Err(e) => {
-                tracing::error!(error = %e, "admin: login_get: failed to create anonymous session");
-                // Fallback: render without CSRF protection. The POST
-                // will reject the empty token and redirect back here.
-                let html = render(
-                    "admin/login.html",
-                    context!(csrf_token => "", next => next, error => "", prefill_username => ""),
-                );
-                return match html {
-                    Ok(h) => h.into_response(),
-                    Err(e2) => e2.into_response(),
-                };
-            }
-        }
-    };
-
-    let csrf_token = issue_login_csrf(&session_token).await;
+    // Same CSRF token as everything else in the app. If the cookie
+    // doesn't exist yet, mint one and attach it to the response so
+    // the POST can succeed on the very next click.
+    let (csrf_token, new_cookie) = ensure_csrf_token(&headers);
 
     let html = match render(
         "admin/login.html",
@@ -178,7 +105,6 @@ pub(crate) async fn login_get(
         Err(e) => return e.into_response(),
     };
 
-    // If we minted a new session, attach it to the response.
     if let Some(cookie_str) = new_cookie {
         let mut resp = html.into_response();
         if let Ok(value) = cookie_str.parse::<axum::http::HeaderValue>() {
@@ -192,6 +118,13 @@ pub(crate) async fn login_get(
 }
 
 /// `POST /admin/login` — verify credentials, create session, redirect.
+///
+/// CSRF is checked by comparing the submitted form field against the
+/// shared `umbra_csrf_token` cookie. If `SecurityPlugin` is installed,
+/// it has already done this same check before the handler runs (the
+/// middleware accepts a `csrf_token` form field on POSTs); the
+/// redundant check here protects the case where someone runs the
+/// admin without the security middleware.
 pub(crate) async fn login_post(headers: HeaderMap, body: String) -> Response {
     let form: HashMap<String, String> = match serde_urlencoded::from_str(&body) {
         Ok(m) => m,
@@ -204,23 +137,15 @@ pub(crate) async fn login_post(headers: HeaderMap, body: String) -> Response {
     let next = sanitise_next(next_raw);
     let submitted_csrf = form.get("csrf_token").map(|s| s.as_str()).unwrap_or("");
 
-    let session_token = umbra_sessions::cookie_from_headers(&headers);
-    let csrf_ok = if let Some(ref tok) = session_token {
-        verify_login_csrf(tok, submitted_csrf).await
-    } else {
-        false
-    };
+    let cookie_csrf = umbra_security::current_csrf_token(&headers).unwrap_or_default();
+    let csrf_ok =
+        !submitted_csrf.is_empty() && !cookie_csrf.is_empty() && submitted_csrf == cookie_csrf;
     if !csrf_ok {
-        let new_csrf = if let Some(ref tok) = session_token {
-            issue_login_csrf(tok).await
-        } else {
-            String::new()
-        };
         return bad_login_response_with_csrf(
             "Your session expired. Please try again.",
             username,
             &next,
-            &new_csrf,
+            &cookie_csrf,
         );
     }
 
@@ -230,31 +155,21 @@ pub(crate) async fn login_post(headers: HeaderMap, body: String) -> Response {
     let user = match umbra_auth::authenticate::<umbra_auth::AuthUser>(username, password).await {
         Ok(u) => u,
         Err(_) => {
-            let new_csrf = if let Some(ref tok) = session_token {
-                issue_login_csrf(tok).await
-            } else {
-                String::new()
-            };
             return bad_login_response_with_csrf(
                 "The username or password you entered is incorrect.",
                 username,
                 &next,
-                &new_csrf,
+                &cookie_csrf,
             );
         }
     };
 
     if !user.is_staff {
-        let new_csrf = if let Some(ref tok) = session_token {
-            issue_login_csrf(tok).await
-        } else {
-            String::new()
-        };
         return bad_login_response_with_csrf(
             "This account does not have admin access.",
             username,
             &next,
-            &new_csrf,
+            &cookie_csrf,
         );
     }
 
@@ -271,6 +186,21 @@ pub(crate) async fn login_post(headers: HeaderMap, body: String) -> Response {
         return (StatusCode::INTERNAL_SERVER_ERROR, "session error").into_response();
     }
     response
+}
+
+/// Read the CSRF token off the incoming cookie, or mint a fresh one
+/// and return a Set-Cookie string the caller should attach to the
+/// response so the next request carries it. Mirrors what the
+/// `SecurityPlugin` middleware does on safe-method requests — handlers
+/// rendering forms before the middleware has minted a token need the
+/// same behaviour.
+fn ensure_csrf_token(headers: &HeaderMap) -> (String, Option<String>) {
+    if let Some(tok) = umbra_security::current_csrf_token(headers) {
+        return (tok, None);
+    }
+    let tok = umbra_security::generate_token();
+    let cookie = format!("umbra_csrf_token={tok}; Path=/; SameSite=Lax");
+    (tok, Some(cookie))
 }
 
 /// Render the login template with a generic error banner.

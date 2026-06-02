@@ -220,7 +220,7 @@ async fn login_session(router: &axum::Router, username: &str, password: &str) ->
     ])
     .unwrap();
 
-    let cookie_header = format!("umbra_session={anon_cookie}");
+    let cookie_header = format!("umbra_csrf_token={anon_cookie}");
     let (status2, headers2, _) = send_full(
         router.clone(),
         Request::builder()
@@ -349,7 +349,7 @@ async fn admin_with_wrong_password_returns_error() {
         Request::builder()
             .method("POST")
             .uri("/admin/login")
-            .header(header::COOKIE, format!("umbra_session={anon_cookie}"))
+            .header(header::COOKIE, format!("umbra_csrf_token={anon_cookie}"))
             .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
             .body(Body::from(form_body))
             .unwrap(),

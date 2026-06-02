@@ -186,14 +186,19 @@ async fn login_session(router: &axum::Router, username: &str, password: &str) ->
     )
     .await;
     let anon_cookie = hdrs
-        .get(header::SET_COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| {
-            s.split(';')
-                .next()
-                .and_then(|p| p.split_once('=').map(|(_, v)| v.to_string()))
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .find_map(|s| {
+            let first = s.split(';').next()?;
+            let (k, v) = first.split_once('=')?;
+            if k.trim() == "umbra_csrf_token" {
+                Some(v.to_string())
+            } else {
+                None
+            }
         })
-        .expect("GET /admin/login must set session cookie");
+        .expect("GET /admin/login must set umbra_csrf_token cookie");
     let csrf = extract_csrf_token(&body).expect("login page must have csrf_token");
 
     let form = serde_urlencoded::to_string([
@@ -208,7 +213,7 @@ async fn login_session(router: &axum::Router, username: &str, password: &str) ->
         Request::builder()
             .method("POST")
             .uri("/admin/login")
-            .header(header::COOKIE, format!("umbra_session={anon_cookie}"))
+            .header(header::COOKIE, format!("umbra_csrf_token={anon_cookie}"))
             .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
             .body(Body::from(form))
             .unwrap(),
@@ -330,7 +335,7 @@ async fn login_with_valid_creds_sets_session_and_redirects() {
         Request::builder()
             .method("POST")
             .uri("/admin/login")
-            .header(header::COOKIE, format!("umbra_session={anon_cookie}"))
+            .header(header::COOKIE, format!("umbra_csrf_token={anon_cookie}"))
             .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
             .body(Body::from(form))
             .unwrap(),
@@ -392,7 +397,7 @@ async fn login_with_bad_creds_returns_generic_error() {
         Request::builder()
             .method("POST")
             .uri("/admin/login")
-            .header(header::COOKIE, format!("umbra_session={anon_cookie}"))
+            .header(header::COOKIE, format!("umbra_csrf_token={anon_cookie}"))
             .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
             .body(Body::from(form))
             .unwrap(),
@@ -460,7 +465,7 @@ async fn login_malicious_next_is_rejected() {
         Request::builder()
             .method("POST")
             .uri("/admin/login")
-            .header(header::COOKIE, format!("umbra_session={anon_cookie}"))
+            .header(header::COOKIE, format!("umbra_csrf_token={anon_cookie}"))
             .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
             .body(Body::from(form))
             .unwrap(),

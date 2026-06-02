@@ -194,13 +194,22 @@ async fn login(router: axum::Router) -> String {
         )
         .await
         .expect("get");
-    let anon_raw = resp
+    // GET /admin/login mints (or echoes) the umbra_csrf_token cookie.
+    let csrf_cookie = resp
         .headers()
-        .get(header::SET_COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string())
-        .unwrap_or_default();
-    let anon = extract_cookie(&anon_raw);
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .find_map(|s| {
+            let first = s.split(';').next()?;
+            let (k, v) = first.split_once('=')?;
+            if k.trim() == "umbra_csrf_token" {
+                Some(v.to_string())
+            } else {
+                None
+            }
+        })
+        .expect("GET /admin/login must set umbra_csrf_token cookie");
     let bytes = resp
         .into_body()
         .collect()
@@ -222,18 +231,29 @@ async fn login(router: axum::Router) -> String {
                 .method("POST")
                 .uri("/admin/login")
                 .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-                .header(header::COOKIE, format!("umbra_session={anon}"))
+                .header(header::COOKIE, format!("umbra_csrf_token={csrf_cookie}"))
                 .body(Body::from(form))
                 .unwrap(),
         )
         .await
         .expect("post");
+    // The session is created on successful login; extract it from
+    // the Set-Cookie list on the POST response.
     resp2
         .headers()
-        .get(header::SET_COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .map(extract_cookie)
-        .unwrap_or(anon)
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .find_map(|s| {
+            let first = s.split(';').next()?;
+            let (k, v) = first.split_once('=')?;
+            if k.trim() == "umbra_session" {
+                Some(v.to_string())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_default()
 }
 
 #[tokio::test]
