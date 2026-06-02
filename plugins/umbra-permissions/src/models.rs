@@ -18,6 +18,26 @@
 //! `user_id` in `UserGroup` and `UserPermission` is `i64` (not
 //! `ForeignKey<U>`) to keep the data model generic — we don't tie to a
 //! concrete user type, so any `UserModel` implementation works.
+//!
+//! ## Edit / no-edit policy
+//!
+//! Most columns are marked `#[umbra(noedit)]` because changing them breaks
+//! the system: renaming a `codename` invalidates every `has_permission(...)`
+//! check in code; flipping a join row's FK is semantically a delete+create,
+//! not an edit. The columns that *are* editable carry display-only labels —
+//! they're safe to rename and the system keeps working.
+//!
+//! | Table | Editable columns | No-edit columns |
+//! |---|---|---|
+//! | `ContentType` | (none — system-managed at boot) | `app_label`, `model` |
+//! | `Permission` | `name` (human label) | `content_type_id`, `codename` |
+//! | `Group` | `name`, `description` | (none — both are user-facing) |
+//! | `GroupPermission` | (none — delete + create instead) | `group_id`, `permission_id` |
+//! | `UserGroup` | (none — delete + create instead) | `user_id`, `group_id` |
+//! | `UserPermission` | (none — delete + create instead) | `user_id`, `permission_id` |
+//!
+//! The `noedit` attribute is metadata only (it lands in `ModelMeta`, not in
+//! the DDL), so adding it doesn't dirty any existing schema.
 
 use serde::{Deserialize, Serialize};
 use umbra::orm::ForeignKey;
@@ -36,9 +56,13 @@ use umbra::orm::ForeignKey;
 pub struct ContentType {
     pub id: i64,
     /// The plugin name that owns the model. For bare (un-namespaced) tables
-    /// this is `"app"`.
+    /// this is `"app"`. System-managed at boot — editing would orphan every
+    /// permission attached to this row.
+    #[umbra(noedit)]
     pub app_label: String,
     /// The lowercased model / table suffix. For `blog_post` this is `"post"`.
+    /// System-managed — see `app_label`.
+    #[umbra(noedit)]
     pub model: String,
 }
 
@@ -53,13 +77,17 @@ pub struct ContentType {
 )]
 pub struct Permission {
     pub id: i64,
-    /// Which model this permission is scoped to.
+    /// Which model this permission is scoped to. Re-targeting is a
+    /// delete-and-create, not an edit.
+    #[umbra(noedit)]
     pub content_type_id: ForeignKey<ContentType>,
-    /// Short machine-readable key. Examples: `"publish_post"`,
-    /// `"add_post"`.
+    /// Short machine-readable key referenced from `has_permission(...)`
+    /// call sites across the project. Renaming this breaks every check.
+    #[umbra(noedit)]
     pub codename: String,
     /// Human-readable label shown in the admin. Examples: `"Can publish post"`,
-    /// `"Can add post"`.
+    /// `"Can add post"`. Editable — it's display text, no code reads it.
+    #[umbra(string, max_length = 150)]
     pub name: String,
 }
 
@@ -71,7 +99,16 @@ pub struct Permission {
 pub struct Group {
     pub id: i64,
     /// A unique, human-readable name (e.g. `"editors"`, `"moderators"`).
+    /// Capped at 150 chars — admin renders a single-line input with
+    /// `maxlength=150`, mirroring a SQL `VARCHAR(150)` length cap. The
+    /// `string` flag marks this as the row's `__str__` representation
+    /// for FK pickers.
+    #[umbra(string, max_length = 150)]
     pub name: String,
+    /// Free-form description of what the group is for. Nullable so a
+    /// just-created group can skip it; the admin renders a textarea
+    /// (no `max_length`) because group purpose commentary can be long.
+    pub description: Option<String>,
 }
 
 /// Join table between groups and permissions (M2M).
@@ -83,7 +120,10 @@ pub struct Group {
 )]
 pub struct GroupPermission {
     pub id: i64,
+    /// Re-targeting a join row is a delete+create, not an edit.
+    #[umbra(noedit)]
     pub group_id: ForeignKey<Group>,
+    #[umbra(noedit)]
     pub permission_id: ForeignKey<Permission>,
 }
 
@@ -100,8 +140,10 @@ pub struct GroupPermission {
 )]
 pub struct UserGroup {
     pub id: i64,
-    /// The `UserModel::id()` of the user.
+    /// The `UserModel::id()` of the user. Re-targeting is a delete+create.
+    #[umbra(noedit)]
     pub user_id: i64,
+    #[umbra(noedit)]
     pub group_id: ForeignKey<Group>,
 }
 
@@ -117,7 +159,9 @@ pub struct UserGroup {
 )]
 pub struct UserPermission {
     pub id: i64,
-    /// The `UserModel::id()` of the user.
+    /// The `UserModel::id()` of the user. Re-targeting is a delete+create.
+    #[umbra(noedit)]
     pub user_id: i64,
+    #[umbra(noedit)]
     pub permission_id: ForeignKey<Permission>,
 }
