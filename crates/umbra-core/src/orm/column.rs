@@ -2181,3 +2181,87 @@ impl<T> NullableForeignKeyCol<T> {
         OrderExpr::new(self.name, true)
     }
 }
+
+// =============================================================================
+// BytesCol — Vec<u8> / BLOB / BYTEA columns.
+// =============================================================================
+
+/// A `BLOB` (SQLite) / `BYTEA` (Postgres) column carrying arbitrary bytes.
+/// The Rust field type is `Vec<u8>`. v1 ships equality + null-checks + ordering;
+/// the operator surface is intentionally small because byte columns rarely
+/// appear in WHERE clauses (think file payloads, cache values, encrypted
+/// envelopes).
+pub struct BytesCol<T> {
+    pub(crate) name: &'static str,
+    _phantom: PhantomData<T>,
+}
+
+impl<T> BytesCol<T> {
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            _phantom: PhantomData,
+        }
+    }
+
+    /// SQL `=`. Borrows the byte slice into a sea_query Value.
+    pub fn eq(&self, val: &[u8]) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).eq(val.to_vec()))
+    }
+
+    /// SQL `<>`.
+    pub fn ne(&self, val: &[u8]) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).ne(val.to_vec()))
+    }
+
+    /// SQL `ORDER BY ... ASC`.
+    pub fn asc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, false)
+    }
+
+    /// SQL `ORDER BY ... DESC`.
+    pub fn desc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, true)
+    }
+}
+
+/// `Option<Vec<u8>>` column. Same surface plus `is_null` / `is_not_null`.
+pub struct NullableBytesCol<T> {
+    pub(crate) name: &'static str,
+    _phantom: PhantomData<T>,
+}
+
+impl<T> NullableBytesCol<T> {
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            _phantom: PhantomData,
+        }
+    }
+
+    pub fn eq(&self, val: &[u8]) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).eq(val.to_vec()))
+    }
+
+    pub fn ne(&self, val: &[u8]) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).ne(val.to_vec()))
+    }
+
+    /// SQL `IS NULL`.
+    pub fn is_null(&self) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).is_null())
+    }
+
+    /// SQL `IS NOT NULL`.
+    pub fn is_not_null(&self) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).is_not_null())
+    }
+
+    pub fn asc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, false)
+    }
+
+    pub fn desc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, true)
+    }
+}

@@ -197,6 +197,10 @@ impl DatabaseBackend for PostgresBackend {
             // `build_column_def_*` helpers (sea-query doesn't have a
             // first-class FK DDL API at our version).
             SqlType::ForeignKey => ColumnType::BigInteger,
+            // Postgres BYTEA. sea_query renders ColumnType::Blob as
+            // `bytea` for Postgres and `blob` for SQLite, which is
+            // exactly the dual we want.
+            SqlType::Bytes => ColumnType::Blob,
         }
     }
 }
@@ -279,6 +283,9 @@ impl DatabaseBackend for SqliteBackend {
                 "umbra::backend::SqliteBackend::map_type: SqlType::FullText is Postgres-only. \
                  The field.backend system check should have failed boot."
             ),
+            // SQLite BLOB. sea_query renders ColumnType::Blob as the
+            // dialect's right keyword (`blob` here, `bytea` for PG).
+            SqlType::Bytes => ColumnType::Blob,
         }
     }
 }

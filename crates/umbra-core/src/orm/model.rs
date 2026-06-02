@@ -338,6 +338,17 @@ pub enum SqlType {
     /// `FullTextCol` use the `@@` match operator with `to_tsquery` /
     /// `websearch_to_tsquery`.
     FullText,
+    /// `BLOB` (SQLite) / `BYTEA` (Postgres) — arbitrary binary payload.
+    /// Maps to `Vec<u8>` in Rust. Used by anything that stores opaque
+    /// bytes: file uploads, the cache backend's value column, encrypted
+    /// envelopes, etc.
+    ///
+    /// `Vec<u8>` was previously routed to `SqlType::Array(SmallInt)`
+    /// because the array detection treated `u8` as a small int. The
+    /// detection now checks for `Vec<u8>` specifically first and
+    /// routes to `Bytes`; `Vec<i8>` / `Vec<i16>` still map to
+    /// `Array(SmallInt)`.
+    Bytes,
 }
 
 /// Element types valid inside [`SqlType::Array`].

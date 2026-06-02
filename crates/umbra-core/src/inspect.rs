@@ -478,6 +478,7 @@ fn map_postgres_type(raw: &str) -> Option<SqlType> {
         "cidr" => Some(SqlType::Cidr),
         "macaddr" => Some(SqlType::MacAddr),
         "tsvector" => Some(SqlType::FullText),
+        "bytea" => Some(SqlType::Bytes),
         _ => None,
     }
 }
@@ -561,6 +562,7 @@ fn map_sqlite_type(raw: &str) -> Option<SqlType> {
         // it through `SqlType::Json` (which lowers to TEXT on SQLite
         // anyway).
         "json" | "jsonb" => Some(SqlType::Json),
+        "blob" | "bytea" => Some(SqlType::Bytes),
         _ => None,
     }
 }
@@ -722,6 +724,8 @@ fn render_field_type(ty: SqlType, nullable: bool) -> String {
         // ForeignKey inspectdb renders as i64 for now; the FK relationship
         // introspection that would emit ForeignKey<T> is deferred.
         SqlType::ForeignKey => "i64".to_string(),
+        // BLOB / BYTEA columns surface as Vec<u8> in user code.
+        SqlType::Bytes => "Vec<u8>".to_string(),
     };
     let base = base.as_str();
     if nullable {
@@ -1055,6 +1059,8 @@ mod tests {
         assert_eq!(map_postgres_type("inet"), Some(SqlType::Inet));
         assert_eq!(map_postgres_type("cidr"), Some(SqlType::Cidr));
         assert_eq!(map_postgres_type("macaddr"), Some(SqlType::MacAddr));
+        // BLOB / BYTEA — Vec<u8> in Rust.
+        assert_eq!(map_postgres_type("bytea"), Some(SqlType::Bytes));
     }
 
     /// Postgres-specific types umbra doesn't model yet surface as
@@ -1072,7 +1078,10 @@ mod tests {
     #[test]
     fn map_postgres_type_returns_none_for_postgres_only_types() {
         assert_eq!(map_postgres_type("numeric"), None);
-        assert_eq!(map_postgres_type("bytea"), None);
+        // `bytea` USED to be off-catalogue and returned None; once
+        // SqlType::Bytes shipped, `bytea` started routing to it.
+        // Asserted in the positive `map_postgres_type_covers_the_full_catalogue`
+        // test instead.
         assert_eq!(map_postgres_type("ARRAY"), None);
     }
 

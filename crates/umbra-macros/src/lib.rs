@@ -776,6 +776,11 @@ enum FieldKind {
     /// column (Phase 4.3).
     FullText,
     NullableFullText,
+    /// `Vec<u8>` — BLOB on SQLite, BYTEA on Postgres. Detected before
+    /// the array-element catalogue so `Vec<u8>` doesn't fall through
+    /// into `Array(SmallInt)`.
+    Bytes,
+    NullableBytes,
     /// Catch-all: not a recognised M3 catalogue type, or one of the
     /// explicitly-rejected wide / unsigned ints. Carries the exact
     /// diagnostic to emit at the field's span.
@@ -856,6 +861,7 @@ impl FieldKind {
                 quote!(::umbra::orm::SqlType::ForeignKey)
             }
             FieldKind::MultiChoice(_) => quote!(::umbra::orm::SqlType::Text),
+            FieldKind::Bytes | FieldKind::NullableBytes => quote!(::umbra::orm::SqlType::Bytes),
             FieldKind::Unsupported(_) => return None,
         };
         let nullable = if self.is_nullable() {
@@ -887,6 +893,7 @@ impl FieldKind {
                 | FieldKind::NullableMacAddr
                 | FieldKind::NullableFullText
                 | FieldKind::NullableForeignKey(_)
+                | FieldKind::NullableBytes
         )
     }
 
@@ -962,6 +969,12 @@ fn classify_field_type(ty: &Type) -> FieldKind {
     // qualified `serde_json::Value` lower to `FieldKind::Json`.
     if is_serde_json_value(ty) {
         return FieldKind::Json;
+    }
+    // `Vec<u8>` is BLOB / BYTEA, not an array of small ints. Check
+    // before the array catalogue so the `u8` element doesn't fall into
+    // `Array(SmallInt)`.
+    if is_vec_u8(ty) {
+        return FieldKind::Bytes;
     }
     // `Vec<T>` for the Phase 4.1 Array catalogue. Postgres-only at
     // runtime; the field.backend system check fires at boot when
@@ -1044,6 +1057,9 @@ fn classify_field_type(ty: &Type) -> FieldKind {
         if is_serde_json_value(inner) {
             return FieldKind::NullableJson;
         }
+        if is_vec_u8(inner) {
+            return FieldKind::NullableBytes;
+        }
         if let Some(kind) = vec_element_kind(inner) {
             return FieldKind::NullableArray(kind);
         }
@@ -1123,6 +1139,35 @@ fn multichoice_inner(ty: &Type) -> Option<&Type> {
 }
 
 /// If `ty` is `Vec<T>` and `T` is one of the [`ArrayElementKind`]
+/// Return `true` when `ty` is `Vec<u8>` specifically. Used to route
+/// byte payloads to `SqlType::Bytes` before the array catalogue
+/// classifies `u8` as a small int.
+fn is_vec_u8(ty: &Type) -> bool {
+    let Type::Path(TypePath { qself: None, path }) = ty else {
+        return false;
+    };
+    let Some(last) = path.segments.last() else {
+        return false;
+    };
+    if last.ident != "Vec" {
+        return false;
+    }
+    let PathArguments::AngleBracketed(ref args) = last.arguments else {
+        return false;
+    };
+    let mut type_args = args.args.iter().filter_map(|a| match a {
+        GenericArgument::Type(t) => Some(t),
+        _ => None,
+    });
+    let Some(inner) = type_args.next() else {
+        return false;
+    };
+    if type_args.next().is_some() {
+        return false;
+    }
+    type_is_ident(inner, "u8")
+}
+
 /// catalogue types, return that kind. Returns `None` otherwise
 /// (including for `Vec<i128>`, `Vec<Vec<T>>`, `Vec<Option<T>>`,
 /// `Vec<NaiveDate>` — all currently off the catalogue).
@@ -1150,7 +1195,10 @@ fn vec_element_kind(ty: &Type) -> Option<ArrayElementKind> {
     // variants. Date/Time/Timestamptz/Json deliberately not yet
     // recognised — their cross-backend binding semantics need a
     // deliberate pass.
-    if type_is_ident(inner, "i8") || type_is_ident(inner, "i16") || type_is_ident(inner, "u8") {
+    //
+    // `u8` is excluded here: `Vec<u8>` is BLOB / BYTEA (handled by
+    // `is_vec_u8` and `FieldKind::Bytes`), not an array of small ints.
+    if type_is_ident(inner, "i8") || type_is_ident(inner, "i16") {
         return Some(ArrayElementKind::SmallInt);
     }
     if type_is_ident(inner, "i32") || type_is_ident(inner, "u16") {
@@ -1410,6 +1458,8 @@ fn column_const_for(
         FieldKind::NullableFullText => format_ident!("NullableFullTextCol"),
         FieldKind::ForeignKey(_) => format_ident!("ForeignKeyCol"),
         FieldKind::NullableForeignKey(_) => format_ident!("NullableForeignKeyCol"),
+        FieldKind::Bytes => format_ident!("BytesCol"),
+        FieldKind::NullableBytes => format_ident!("NullableBytesCol"),
         // MultiChoice is handled inline by the caller (emits a StrCol),
         // so this arm is unreachable in practice. We return an empty
         // token stream as a defensive default.

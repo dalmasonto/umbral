@@ -212,6 +212,76 @@ pub fn json_to_sea_value(
         | SqlType::FullText => Ok(SeaValue::String(Some(Box::new(coerce_string(
             value, field_name,
         )?)))),
+        // BLOB / BYTEA. JSON wire shape: an array of u8 numbers, the
+        // natural way to encode a byte string in JSON without picking
+        // a base16/base64 convention at the framework level.
+        // Hex-encoded JSON strings also accepted as a convenience for
+        // human-readable test fixtures.
+        SqlType::Bytes => coerce_bytes(value, field_name)
+            .map(|b| SeaValue::Bytes(Some(Box::new(b)))),
+    }
+}
+
+/// Coerce a `serde_json::Value` to `Vec<u8>`. Accepts:
+///   - `[1, 2, 3, ...]` — JSON array of u8-shaped numbers.
+///   - `"deadbeef"` — lowercase hex string of even length.
+fn coerce_bytes(value: &JsonValue, field_name: &str) -> Result<Vec<u8>, WriteError> {
+    if let Some(arr) = value.as_array() {
+        let mut out = Vec::with_capacity(arr.len());
+        for v in arr {
+            let n = v.as_u64().ok_or_else(|| WriteError::TypeMismatch {
+                field: field_name.to_string(),
+                expected: SqlType::Bytes,
+                got: format!("{v:?}"),
+            })?;
+            if n > 255 {
+                return Err(WriteError::TypeMismatch {
+                    field: field_name.to_string(),
+                    expected: SqlType::Bytes,
+                    got: format!("element {v} out of u8 range"),
+                });
+            }
+            out.push(n as u8);
+        }
+        return Ok(out);
+    }
+    if let Some(s) = value.as_str() {
+        if s.len() % 2 != 0 {
+            return Err(WriteError::TypeMismatch {
+                field: field_name.to_string(),
+                expected: SqlType::Bytes,
+                got: "hex string has odd length".to_string(),
+            });
+        }
+        let mut out = Vec::with_capacity(s.len() / 2);
+        for chunk in s.as_bytes().chunks(2) {
+            let high = hex_nibble(chunk[0]).ok_or_else(|| WriteError::TypeMismatch {
+                field: field_name.to_string(),
+                expected: SqlType::Bytes,
+                got: format!("non-hex char `{}`", chunk[0] as char),
+            })?;
+            let low = hex_nibble(chunk[1]).ok_or_else(|| WriteError::TypeMismatch {
+                field: field_name.to_string(),
+                expected: SqlType::Bytes,
+                got: format!("non-hex char `{}`", chunk[1] as char),
+            })?;
+            out.push((high << 4) | low);
+        }
+        return Ok(out);
+    }
+    Err(WriteError::TypeMismatch {
+        field: field_name.to_string(),
+        expected: SqlType::Bytes,
+        got: format!("{value:?}"),
+    })
+}
+
+fn hex_nibble(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(10 + b - b'a'),
+        b'A'..=b'F' => Some(10 + b - b'A'),
+        _ => None,
     }
 }
 
@@ -235,6 +305,7 @@ pub(crate) fn null_for(sql_type: SqlType) -> SeaValue {
         | SqlType::Cidr
         | SqlType::MacAddr
         | SqlType::FullText => SeaValue::String(None),
+        SqlType::Bytes => SeaValue::Bytes(None),
     }
 }
 

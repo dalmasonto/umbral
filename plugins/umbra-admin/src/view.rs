@@ -282,6 +282,11 @@ pub(crate) fn input_kind(col: &umbra::migrate::Column) -> &'static str {
         SqlType::Inet | SqlType::Cidr | SqlType::MacAddr => "text",
         SqlType::FullText => "textarea",
         SqlType::ForeignKey => "fk",
+        // Bytes columns render as a plain text input today: the admin
+        // doesn't yet ship a file-upload widget for raw byte payloads.
+        // Users submit values as hex strings (the form parser accepts
+        // the hex shape via `coerce_bytes`).
+        SqlType::Bytes => "text",
     }
 }
 
@@ -324,6 +329,7 @@ pub(crate) fn sql_type_name(ty: SqlType) -> &'static str {
         SqlType::Array(_) => "array",
         SqlType::Inet | SqlType::Cidr | SqlType::MacAddr => "text",
         SqlType::FullText => "text",
+        SqlType::Bytes => "bytes",
     }
 }
 

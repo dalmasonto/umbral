@@ -362,6 +362,13 @@ fn column_to_json(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<Value, 
             SqlType::ForeignKey => row
                 .try_get::<Option<i64>, _>(name)?
                 .map_or(Value::Null, Value::from),
+            // BLOB / BYTEA. Backup format is a JSON array of u8
+            // numbers — exactly the same shape `json_to_sea_value`
+            // accepts on load.
+            SqlType::Bytes => row.try_get::<Option<Vec<u8>>, _>(name)?.map_or(
+                Value::Null,
+                |b| Value::Array(b.into_iter().map(Value::from).collect()),
+            ),
         });
     }
     // Non-nullable: same dispatch without the Option layer.
@@ -382,6 +389,10 @@ fn column_to_json(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<Value, 
         SqlType::FullText => unreachable_pg_only(&col.name, "FullText (tsvector)"),
         // ForeignKey stores as i64 — same as BigInt.
         SqlType::ForeignKey => Value::from(row.try_get::<i64, _>(name)?),
+        SqlType::Bytes => {
+            let bytes: Vec<u8> = row.try_get(name)?;
+            Value::Array(bytes.into_iter().map(Value::from).collect())
+        }
     })
 }
 
@@ -440,6 +451,7 @@ fn bind_value<'q>(
             SqlType::FullText => unreachable_pg_only(&col.name, "FullText (tsvector)"),
             // ForeignKey stores as i64 — same as BigInt.
             SqlType::ForeignKey => q.bind(None::<i64>),
+            SqlType::Bytes => q.bind(None::<Vec<u8>>),
         });
     }
     let mismatch = |got: &str| BackupError::TypeMismatch {
@@ -500,6 +512,20 @@ fn bind_value<'q>(
         SqlType::FullText => unreachable_pg_only(&col.name, "FullText (tsvector)"),
         // ForeignKey stores as i64 — same as BigInt.
         SqlType::ForeignKey => q.bind(val.as_i64().ok_or_else(|| mismatch(json_type_name(&val)))?),
+        // BLOB: accept a JSON array of u8 numbers — the same shape the
+        // dump path emits.
+        SqlType::Bytes => {
+            let arr = val.as_array().ok_or_else(|| mismatch(json_type_name(&val)))?;
+            let mut bytes: Vec<u8> = Vec::with_capacity(arr.len());
+            for v in arr {
+                let n = v.as_u64().ok_or_else(|| mismatch("non-number in bytes array"))?;
+                if n > 255 {
+                    return Err(mismatch("element out of u8 range"));
+                }
+                bytes.push(n as u8);
+            }
+            q.bind(bytes)
+        }
     })
 }
 

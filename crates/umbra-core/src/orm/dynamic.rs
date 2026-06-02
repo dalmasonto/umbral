@@ -814,6 +814,9 @@ pub fn decode_to_string(
             SqlType::ForeignKey => row
                 .try_get::<Option<i64>, _>(name)?
                 .map_or(String::new(), |v| v.to_string()),
+            SqlType::Bytes => row
+                .try_get::<Option<Vec<u8>>, _>(name)?
+                .map_or(String::new(), |b| hex_encode(&b)),
         });
     }
     Ok(match col.ty {
@@ -838,6 +841,7 @@ pub fn decode_to_string(
             panic_pg_only_unsupported(&col.name)
         }
         SqlType::ForeignKey => row.try_get::<i64, _>(name)?.to_string(),
+        SqlType::Bytes => hex_encode(&row.try_get::<Vec<u8>, _>(name)?),
     })
 }
 
@@ -915,6 +919,9 @@ pub fn decode_pg_to_string(
             SqlType::ForeignKey => row
                 .try_get::<Option<i64>, _>(name)?
                 .map_or(String::new(), |v| v.to_string()),
+            SqlType::Bytes => row
+                .try_get::<Option<Vec<u8>>, _>(name)?
+                .map_or(String::new(), |b| hex_encode(&b)),
         });
     }
     Ok(match col.ty {
@@ -940,6 +947,7 @@ pub fn decode_pg_to_string(
             row.try_get::<String, _>(name).unwrap_or_default()
         }
         SqlType::ForeignKey => row.try_get::<i64, _>(name)?.to_string(),
+        SqlType::Bytes => hex_encode(&row.try_get::<Vec<u8>, _>(name)?),
     })
 }
 
@@ -998,6 +1006,9 @@ pub fn decode_to_json(
             SqlType::ForeignKey => row
                 .try_get::<Option<i64>, _>(name)?
                 .map_or(Value::Null, Value::from),
+            SqlType::Bytes => row
+                .try_get::<Option<Vec<u8>>, _>(name)?
+                .map_or(Value::Null, |b| bytes_to_json(&b)),
         });
     }
     Ok(match col.ty {
@@ -1017,6 +1028,7 @@ pub fn decode_to_json(
             panic_pg_only_unsupported(&col.name)
         }
         SqlType::ForeignKey => Value::from(row.try_get::<i64, _>(name)?),
+        SqlType::Bytes => bytes_to_json(&row.try_get::<Vec<u8>, _>(name)?),
     })
 }
 
@@ -1080,6 +1092,9 @@ pub fn decode_pg_to_json(
             SqlType::ForeignKey => row
                 .try_get::<Option<i64>, _>(name)?
                 .map_or(Value::Null, Value::from),
+            SqlType::Bytes => row
+                .try_get::<Option<Vec<u8>>, _>(name)?
+                .map_or(Value::Null, |b| bytes_to_json(&b)),
         });
     }
     Ok(match col.ty {
@@ -1101,6 +1116,7 @@ pub fn decode_pg_to_json(
                 .unwrap_or(Value::Null)
         }
         SqlType::ForeignKey => Value::from(row.try_get::<i64, _>(name)?),
+        SqlType::Bytes => bytes_to_json(&row.try_get::<Vec<u8>, _>(name)?),
     })
 }
 
@@ -1126,6 +1142,23 @@ fn form_str_to_sea_value(col: &Column, raw: &str) -> Result<SeaValue, WriteError
     }
     let json = serde_json::Value::String(raw.to_string());
     json_to_sea_value(col.ty, &json, col.nullable, &col.name)
+}
+
+/// Hex-encode a byte slice, lowercase, no `0x` prefix. The
+/// human-readable rendering for `SqlType::Bytes` columns when the
+/// admin / debug tooling asks for a string form.
+fn hex_encode(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        out.push_str(&format!("{b:02x}"));
+    }
+    out
+}
+
+/// Render bytes as a JSON array of u8 numbers. Symmetric with the
+/// `json_to_sea_value` path that accepts the same shape on input.
+fn bytes_to_json(bytes: &[u8]) -> serde_json::Value {
+    serde_json::Value::Array(bytes.iter().map(|b| serde_json::Value::from(*b)).collect())
 }
 
 fn panic_array_unsupported(column: &str) -> ! {

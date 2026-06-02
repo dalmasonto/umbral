@@ -303,6 +303,13 @@ fn openapi_type(ty: SqlType) -> (&'static str, Option<&'static str>) {
         // ForeignKey columns expose as integer (i64) in the REST/OpenAPI
         // schema — the raw PK value, not a nested object.
         SqlType::ForeignKey => ("integer", Some("int64")),
+        // BLOB / BYTEA. OpenAPI's `string` + `format: byte` means
+        // base64-encoded on the wire by convention, but umbra-rest's
+        // current wire format is a JSON array of u8. Render as
+        // `array` + `format: byte` to keep the schema honest about
+        // the shape; clients that need base64 can handle the encoding
+        // boundary themselves.
+        SqlType::Bytes => ("array", Some("byte")),
     }
 }
 
