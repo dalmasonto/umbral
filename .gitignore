@@ -21,3 +21,6 @@ target/
 
 node_modules
 create_db.sh
+
+# Git worktrees created by the using-git-worktrees skill
+.worktrees/
