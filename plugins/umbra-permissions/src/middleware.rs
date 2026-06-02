@@ -250,18 +250,20 @@ where
     }
 }
 
-/// Best-effort superuser check. Reads the `is_superuser` column from
-/// the `auth_user` table; returns false on any error or when the
-/// column / table is absent. Custom user models that don't carry
-/// `is_superuser` are simply never short-circuited.
+/// Best-effort superuser check via the ORM. Hits `auth_user` directly
+/// through the `umbra_auth::AuthUser` model so the dispatch goes through
+/// the backend-aware QuerySet. Returns false on any error (custom user
+/// models that don't carry the `is_superuser` column simply never
+/// match — `AuthUser` is the only model probed here).
 async fn is_superuser_safe(user_id: i64) -> bool {
-    let pool = umbra::db::pool();
-    let row: Result<Option<bool>, sqlx::Error> =
-        sqlx::query_scalar("SELECT is_superuser FROM auth_user WHERE id = ?")
-            .bind(user_id)
-            .fetch_optional(&pool)
-            .await;
-    matches!(row, Ok(Some(true)))
+    use umbra_auth::AuthUser;
+    matches!(
+        AuthUser::objects()
+            .filter(umbra::orm::Predicate::<AuthUser>::col_eq("id", user_id))
+            .first()
+            .await,
+        Ok(Some(u)) if u.is_superuser
+    )
 }
 
 // =========================================================================

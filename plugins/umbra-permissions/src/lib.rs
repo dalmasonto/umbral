@@ -145,10 +145,14 @@ impl Plugin for PermissionsPlugin {
 /// Standard permissions created: `add_<model>`, `change_<model>`,
 /// `delete_<model>`, `view_<model>`.
 async fn ensure_standard_permissions(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> {
-    // DDL: create all six tables if they do not yet exist.
-    // In a real app these are created by `migrate`; this guard lets
-    // `on_ready` work even when the user runs the app before migrate (e.g.
-    // in tests that skip the full migrate loop).
+    // DDL bootstrap (the documented schema-DDL exception in CLAUDE.md):
+    // create all six tables if they do not yet exist. In production
+    // these are created by `migrate`; this guard lets `on_ready` work
+    // even when the user runs the app before migrate (e.g. in tests
+    // that skip the full migrate loop). The strings are SQLite-flavoured;
+    // AppContext::pool is currently hardcoded `SqlitePool` so this path
+    // never runs against Postgres. Once AppContext is backend-agnostic,
+    // delete this block and require `migrate` to have run.
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS permissions_contenttype (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -214,7 +218,12 @@ async fn ensure_standard_permissions(pool: &sqlx::SqlitePool) -> Result<(), sqlx
     .execute(pool)
     .await?;
 
-    // Auto-create standard permissions for every registered model.
+    // Auto-create standard permissions for every registered model. Row
+    // INSERTs go through the ORM (so a future Postgres-backed
+    // AppContext::pool migration doesn't have to touch this code) —
+    // the equivalent of Django's `get_or_create`: filter first, create
+    // only when absent. The UNIQUE constraint on the underlying tables
+    // is the race-condition backstop.
     let models = umbra::migrate::registered_models();
     tracing::info!(
         plugin = "permissions",
@@ -235,26 +244,33 @@ async fn ensure_standard_permissions(pool: &sqlx::SqlitePool) -> Result<(), sqlx
         let model_name = meta.name.to_lowercase();
         let app_label = table_app_label(&meta.table);
 
-        // Upsert the ContentType row (INSERT OR IGNORE gives idempotency).
-        sqlx::query(
-            "INSERT OR IGNORE INTO permissions_contenttype (app_label, model)
-             VALUES (?, ?)",
-        )
-        .bind(&app_label)
-        .bind(&model_name)
-        .execute(pool)
-        .await?;
+        // get_or_create on ContentType.
+        let ct_id = match ContentType::objects()
+            .filter(
+                models::content_type::APP_LABEL.eq(&app_label)
+                    & models::content_type::MODEL.eq(&model_name),
+            )
+            .first()
+            .await
+            .map_err(|e| sqlx::Error::Protocol(format!("permissions get_or_create: {e}")))?
+        {
+            Some(c) => c.id,
+            None => {
+                let created = ContentType::objects()
+                    .create(ContentType {
+                        id: 0,
+                        app_label: app_label.clone(),
+                        model: model_name.clone(),
+                    })
+                    .await
+                    .map_err(|e| {
+                        sqlx::Error::Protocol(format!("permissions create content_type: {e:?}"))
+                    })?;
+                created.id
+            }
+        };
 
-        // Fetch the ContentType id.
-        let ct_id: i64 = sqlx::query_scalar(
-            "SELECT id FROM permissions_contenttype WHERE app_label = ? AND model = ?",
-        )
-        .bind(&app_label)
-        .bind(&model_name)
-        .fetch_one(pool)
-        .await?;
-
-        // Upsert the four standard permissions.
+        // get_or_create on each of the four standard permissions.
         let standard_perms = [
             (format!("add_{model_name}"), format!("Can add {model_name}")),
             (
@@ -272,16 +288,27 @@ async fn ensure_standard_permissions(pool: &sqlx::SqlitePool) -> Result<(), sqlx
         ];
 
         for (codename, name) in &standard_perms {
-            sqlx::query(
-                "INSERT OR IGNORE INTO permissions_permission
-                 (content_type_id, codename, name)
-                 VALUES (?, ?, ?)",
-            )
-            .bind(ct_id)
-            .bind(codename)
-            .bind(name)
-            .execute(pool)
-            .await?;
+            let existing = Permission::objects()
+                .filter(
+                    models::permission::CONTENT_TYPE_ID.eq(ct_id)
+                        & models::permission::CODENAME.eq(codename.as_str()),
+                )
+                .first()
+                .await
+                .map_err(|e| sqlx::Error::Protocol(format!("permissions get_or_create: {e}")))?;
+            if existing.is_none() {
+                Permission::objects()
+                    .create(Permission {
+                        id: 0,
+                        content_type_id: umbra::orm::ForeignKey::new(ct_id),
+                        codename: codename.clone(),
+                        name: name.clone(),
+                    })
+                    .await
+                    .map_err(|e| {
+                        sqlx::Error::Protocol(format!("permissions create permission: {e:?}"))
+                    })?;
+            }
         }
     }
 

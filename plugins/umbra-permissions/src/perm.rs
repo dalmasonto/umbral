@@ -34,7 +34,12 @@
 //! `has_perm_for_superuser` is provided as a convenience that accepts an
 //! `is_superuser: bool` flag and short-circuits immediately.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+
+use crate::models::{
+    ContentType, GroupPermission, Permission, UserGroup, UserPermission, content_type,
+    group_permission, permission, user_group, user_permission,
+};
 
 /// Errors the perm helpers can produce.
 #[derive(Debug)]
@@ -84,53 +89,70 @@ pub async fn has_perm_scoped(
     app_label: &str,
     codename: &str,
 ) -> Result<bool, PermError> {
-    let pool = umbra::db::pool();
+    // The original SQL was one UNION-JOIN; we trade that for 3-4 ORM
+    // calls. Each step filters by an indexed column and the result sets
+    // stay small for typical RBAC tables, so the wall-clock cost is
+    // negligible. The win is portability across backends and no raw
+    // SQL hidden inside the plugin.
 
-    // One query covering both direct user permissions and group-mediated
-    // permissions via a UNION. Using UNION (not UNION ALL) means we get
-    // at most one row back even when both paths match, which is all we need
-    // for the boolean answer.
-    //
-    // Direct path:
-    //   user_permission -> permission -> content_type
-    //
-    // Group path:
-    //   user_group -> group_permission -> permission -> content_type
-    //
-    // EXISTS is cheaper than COUNT(*) because the DB can stop after finding
-    // the first matching row.
-    let exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS (
-            SELECT 1
-            FROM permissions_userpermission up
-            JOIN permissions_permission p ON p.id = up.permission_id
-            JOIN permissions_contenttype ct ON ct.id = p.content_type_id
-            WHERE up.user_id = ?
-              AND p.codename = ?
-              AND ct.app_label = ?
+    // 1. content_type rows for this app_label (usually 1 per model).
+    let ct_ids: Vec<i64> = ContentType::objects()
+        .filter(content_type::APP_LABEL.eq(app_label))
+        .fetch()
+        .await?
+        .into_iter()
+        .map(|c| c.id)
+        .collect();
+    if ct_ids.is_empty() {
+        return Ok(false);
+    }
 
-            UNION
+    // 2. permissions matching codename within those content_types.
+    let perm_ids: Vec<i64> = Permission::objects()
+        .filter(
+            permission::CODENAME.eq(codename) & permission::CONTENT_TYPE_ID.in_(&ct_ids),
+        )
+        .fetch()
+        .await?
+        .into_iter()
+        .map(|p| p.id)
+        .collect();
+    if perm_ids.is_empty() {
+        return Ok(false);
+    }
 
-            SELECT 1
-            FROM permissions_usergroup ug
-            JOIN permissions_grouppermission gp ON gp.group_id = ug.group_id
-            JOIN permissions_permission p ON p.id = gp.permission_id
-            JOIN permissions_contenttype ct ON ct.id = p.content_type_id
-            WHERE ug.user_id = ?
-              AND p.codename = ?
-              AND ct.app_label = ?
-        )",
-    )
-    .bind(user_id)
-    .bind(codename)
-    .bind(app_label)
-    .bind(user_id)
-    .bind(codename)
-    .bind(app_label)
-    .fetch_one(&pool)
-    .await?;
+    // 3. Direct user-permission grant.
+    let direct = UserPermission::objects()
+        .filter(
+            user_permission::USER_ID.eq(user_id)
+                & user_permission::PERMISSION_ID.in_(&perm_ids),
+        )
+        .exists()
+        .await?;
+    if direct {
+        return Ok(true);
+    }
 
-    Ok(exists)
+    // 4. Group-mediated grant: the user's group ids cross-joined with
+    //    permission ids via the group_permission M2M.
+    let group_ids: Vec<i64> = UserGroup::objects()
+        .filter(user_group::USER_ID.eq(user_id))
+        .fetch()
+        .await?
+        .into_iter()
+        .map(|ug| ug.group_id.id())
+        .collect();
+    if group_ids.is_empty() {
+        return Ok(false);
+    }
+
+    Ok(GroupPermission::objects()
+        .filter(
+            group_permission::GROUP_ID.in_(&group_ids)
+                & group_permission::PERMISSION_ID.in_(&perm_ids),
+        )
+        .exists()
+        .await?)
 }
 
 /// Convenience wrapper that short-circuits immediately when `is_superuser`
@@ -161,41 +183,60 @@ pub async fn has_perm_for_superuser(
 /// database. Callers that want to short-circuit for superusers should check
 /// `user.is_superuser()` before calling this.
 pub async fn user_perms(user_id: i64) -> Result<HashSet<String>, PermError> {
-    let pool = umbra::db::pool();
-
-    // Collect direct permissions.
-    let rows: Vec<(String, String)> = sqlx::query_as(
-        "SELECT ct.app_label, p.codename
-         FROM permissions_userpermission up
-         JOIN permissions_permission p ON p.id = up.permission_id
-         JOIN permissions_contenttype ct ON ct.id = p.content_type_id
-         WHERE up.user_id = ?",
-    )
-    .bind(user_id)
-    .fetch_all(&pool)
-    .await?;
-
-    let mut set: HashSet<String> = rows
+    // Direct permission ids granted to this user.
+    let mut perm_ids: Vec<i64> = UserPermission::objects()
+        .filter(user_permission::USER_ID.eq(user_id))
+        .fetch()
+        .await?
         .into_iter()
-        .map(|(app, code)| format!("{app}.{code}"))
+        .map(|up| up.permission_id.id())
         .collect();
 
-    // Collect group-mediated permissions and union them in.
-    let group_rows: Vec<(String, String)> = sqlx::query_as(
-        "SELECT ct.app_label, p.codename
-         FROM permissions_usergroup ug
-         JOIN permissions_grouppermission gp ON gp.group_id = ug.group_id
-         JOIN permissions_permission p ON p.id = gp.permission_id
-         JOIN permissions_contenttype ct ON ct.id = p.content_type_id
-         WHERE ug.user_id = ?",
-    )
-    .bind(user_id)
-    .fetch_all(&pool)
-    .await?;
-
-    for (app, code) in group_rows {
-        set.insert(format!("{app}.{code}"));
+    // Group-mediated: find the user's groups, then the permissions on those.
+    let group_ids: Vec<i64> = UserGroup::objects()
+        .filter(user_group::USER_ID.eq(user_id))
+        .fetch()
+        .await?
+        .into_iter()
+        .map(|ug| ug.group_id.id())
+        .collect();
+    if !group_ids.is_empty() {
+        let mediated: Vec<i64> = GroupPermission::objects()
+            .filter(group_permission::GROUP_ID.in_(&group_ids))
+            .fetch()
+            .await?
+            .into_iter()
+            .map(|gp| gp.permission_id.id())
+            .collect();
+        perm_ids.extend(mediated);
+    }
+    perm_ids.sort();
+    perm_ids.dedup();
+    if perm_ids.is_empty() {
+        return Ok(HashSet::new());
     }
 
-    Ok(set)
+    // Hydrate permission rows for the codenames, then their content_types
+    // for the app_labels. Two more queries; small result sets at v1.
+    let perms: Vec<Permission> = Permission::objects()
+        .filter(permission::ID.in_(&perm_ids))
+        .fetch()
+        .await?;
+    let ct_ids: Vec<i64> = perms.iter().map(|p| p.content_type_id.id()).collect();
+    let ct_map: HashMap<i64, String> = ContentType::objects()
+        .filter(content_type::ID.in_(&ct_ids))
+        .fetch()
+        .await?
+        .into_iter()
+        .map(|c| (c.id, c.app_label))
+        .collect();
+
+    Ok(perms
+        .into_iter()
+        .filter_map(|p| {
+            ct_map
+                .get(&p.content_type_id.id())
+                .map(|app| format!("{app}.{}", p.codename))
+        })
+        .collect())
 }

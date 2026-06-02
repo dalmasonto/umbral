@@ -85,6 +85,34 @@ Build the primitives by hand first, then extract abstractions. Managed migration
 - **Secure by default.** CSRF, clickjacking/HSTS headers, template autoescaping, always-parameterized SQL.
 - **Backend mismatches caught at boot, not in prod.** A field declares which backends it supports (e.g. `ArrayField` is Postgres only); the startup system check fails with a clear message on an incompatible field. **Postgres-first**, SQLite for tests.
 
+## Plugins use the ORM. Not raw SQL.
+
+**The ORM is the single database interface.** Plugin code never writes `sqlx::query("INSERT INTO ...")` or `sqlx::query_as("SELECT ...")` directly. Every row-level read or write goes through the ORM, which knows the backend and emits the right SQL.
+
+Why: plugin code that hand-rolls `sqlx::query(...)` ends up SQLite-only (the `?` placeholders the SQLite driver expects don't work on Postgres) and pool-routing-aware (the plugin has to know whether the active pool is `SqlitePool` or `PgPool`). Pushing that routing into the ORM means a plugin author writes one path that works on every backend the framework supports.
+
+What this looks like:
+
+| Operation | Use this | Not this |
+|---|---|---|
+| Read one row by id | `Session::objects().filter(session::ID.eq(&id)).first().await?` | `sqlx::query_as("SELECT * FROM session WHERE id = ?").bind(&id).fetch_optional(&pool).await?` |
+| Insert a row | `Session::objects().create(session).await?` | `sqlx::query("INSERT INTO session ...").bind(...).execute(&pool).await?` |
+| Update by predicate | `Session::objects().filter(...).update_values(map).await?` | `sqlx::query("UPDATE session SET ... WHERE ...")...` |
+| Delete by predicate | `Session::objects().filter(...).delete().await?` | `sqlx::query("DELETE FROM session WHERE ...")...` |
+| Count / exists | `Session::objects().filter(...).count().await?` | `sqlx::query_scalar("SELECT COUNT(*) ...")...` |
+| Late-bound model (admin) | `DynQuerySet::for_meta(&meta).filter(...).fetch(...).await?` | — |
+
+The ambient pool resolution is already wired: every QuerySet terminal calls `pool_dispatched()` internally and dispatches per `DbPool::Sqlite | DbPool::Postgres`. Plugin code never types `umbra::db::pool()` or `sqlx::SqlitePool`.
+
+**The narrow exceptions.** Two kinds of raw SQL are allowed because the ORM can't model them at the row level:
+
+1. **Schema DDL** (`CREATE TABLE`, `ALTER TABLE`, `CREATE INDEX`). Owned by the migration engine. A plugin that creates its own tables outside the migration system (e.g. `ensure_tables_for_tests` in umbra-admin) is the lone allowed pattern, and only because tests bypass `make`/`run`.
+2. **Backend-specific features the ORM doesn't model** (Postgres RLS policies, full-text indexes, custom triggers). Gate these with `match pool_dispatched() { DbPool::Postgres(_) => ..., DbPool::Sqlite(_) => skip-with-warn }`. Never use the SQLite branch as a fallback path that quietly diverges from the Postgres behaviour.
+
+If the ORM can't express a row-level operation you need, **the right fix is to add the operation to the ORM**, not to write raw SQL in the plugin. The 80% that's already there: filter, order_by, limit, offset, first, fetch, get, count, exists, delete, update_values, update_expr, create, bulk_create, select_related, transactions. If your use case isn't on that list, it's a gap to fix — file a deferred-spec entry and discuss before shipping the raw-SQL workaround.
+
+**Reviewing this rule:** every PR touching a plugin gets a grep for `sqlx::query` / `sqlx::query_as` in `plugins/<name>/src/`. New hits need a comment justifying which exception applies; otherwise the change is rewritten through the ORM.
+
 ## Commands
 
 The Cargo workspace lives at `crates/Cargo.toml`, **not** at the repo root. Every `cargo` command runs from inside `crates/`:
@@ -276,3 +304,47 @@ Right after you understand or solve something, while the context is fresh. Don't
 ## Prior art worth studying
 
 **Cot** (Django-like; builds its own ORM on sea-query + axum, the closest prior art), **Loco** (Rails-style on SeaORM), and **SeaORM** itself (ORM on sea-query).
+
+<!-- gitnexus:start -->
+# GitNexus — Code Intelligence
+
+This project is indexed by GitNexus as **umbra** (5919 symbols, 13104 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+
+> If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
+
+## Always Do
+
+- **MUST run impact analysis before editing any symbol.** Before modifying a function, class, or method, run `gitnexus_impact({target: "symbolName", direction: "upstream"})` and report the blast radius (direct callers, affected processes, risk level) to the user.
+- **MUST run `gitnexus_detect_changes()` before committing** to verify your changes only affect expected symbols and execution flows.
+- **MUST warn the user** if impact analysis returns HIGH or CRITICAL risk before proceeding with edits.
+- When exploring unfamiliar code, use `gitnexus_query({query: "concept"})` to find execution flows instead of grepping. It returns process-grouped results ranked by relevance.
+- When you need full context on a specific symbol — callers, callees, which execution flows it participates in — use `gitnexus_context({name: "symbolName"})`.
+
+## Never Do
+
+- NEVER edit a function, class, or method without first running `gitnexus_impact` on it.
+- NEVER ignore HIGH or CRITICAL risk warnings from impact analysis.
+- NEVER rename symbols with find-and-replace — use `gitnexus_rename` which understands the call graph.
+- NEVER commit changes without running `gitnexus_detect_changes()` to check affected scope.
+
+## Resources
+
+| Resource | Use for |
+|----------|---------|
+| `gitnexus://repo/umbra/context` | Codebase overview, check index freshness |
+| `gitnexus://repo/umbra/clusters` | All functional areas |
+| `gitnexus://repo/umbra/processes` | All execution flows |
+| `gitnexus://repo/umbra/process/{name}` | Step-by-step execution trace |
+
+## CLI
+
+| Task | Read this skill file |
+|------|---------------------|
+| Understand architecture / "How does X work?" | `.claude/skills/gitnexus/gitnexus-exploring/SKILL.md` |
+| Blast radius / "What breaks if I change X?" | `.claude/skills/gitnexus/gitnexus-impact-analysis/SKILL.md` |
+| Trace bugs / "Why is X failing?" | `.claude/skills/gitnexus/gitnexus-debugging/SKILL.md` |
+| Rename / extract / split / refactor | `.claude/skills/gitnexus/gitnexus-refactoring/SKILL.md` |
+| Tools, resources, schema reference | `.claude/skills/gitnexus/gitnexus-guide/SKILL.md` |
+| Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md` |
+
+<!-- gitnexus:end -->

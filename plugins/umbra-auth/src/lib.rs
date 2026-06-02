@@ -281,6 +281,8 @@ pub enum AuthError {
     PasswordHash(argon2::password_hash::Error),
     /// sqlx error executing one of the helper queries.
     Sqlx(sqlx::Error),
+    /// ORM write error — `create`, `update_values`, etc.
+    Write(umbra::orm::write::WriteError),
     /// `authenticate` was called with credentials that don't match any
     /// active user. Returned for both "no such user" and "wrong
     /// password" so a caller can't tell which from the error alone.
@@ -292,6 +294,7 @@ impl std::fmt::Display for AuthError {
         match self {
             AuthError::PasswordHash(e) => write!(f, "umbra-auth: password hash: {e}"),
             AuthError::Sqlx(e) => write!(f, "umbra-auth: sqlx: {e}"),
+            AuthError::Write(e) => write!(f, "umbra-auth: write: {e:?}"),
             AuthError::InvalidCredentials => write!(f, "umbra-auth: invalid credentials"),
         }
     }
@@ -308,6 +311,12 @@ impl From<argon2::password_hash::Error> for AuthError {
 impl From<sqlx::Error> for AuthError {
     fn from(e: sqlx::Error) -> Self {
         Self::Sqlx(e)
+    }
+}
+
+impl From<umbra::orm::write::WriteError> for AuthError {
+    fn from(e: umbra::orm::write::WriteError) -> Self {
+        Self::Write(e)
     }
 }
 
@@ -389,21 +398,19 @@ pub async fn create_user_with_flags(
 ) -> Result<AuthUser, AuthError> {
     let now = chrono::Utc::now();
     let hash = hash_password(plaintext)?;
-    let pool = umbra::db::pool();
-    let row = sqlx::query_as::<_, AuthUser>(
-        "INSERT INTO auth_user
-           (username, email, password_hash, is_active, is_staff, is_superuser, date_joined, last_login)
-         VALUES (?, ?, ?, 1, ?, ?, ?, NULL)
-         RETURNING *",
-    )
-    .bind(username)
-    .bind(email)
-    .bind(&hash)
-    .bind(is_staff)
-    .bind(is_superuser)
-    .bind(now)
-    .fetch_one(&pool)
-    .await?;
+    let row = AuthUser::objects()
+        .create(AuthUser {
+            id: 0,
+            username: username.to_string(),
+            email: email.to_string(),
+            password_hash: hash,
+            is_active: true,
+            is_staff,
+            is_superuser,
+            date_joined: now,
+            last_login: None,
+        })
+        .await?;
     Ok(row)
 }
 
@@ -426,14 +433,18 @@ pub async fn create_user_with_flags(
 /// HTTP layer is wired end-to-end.
 pub async fn authenticate<U>(username: &str, plaintext: &str) -> Result<U, AuthError>
 where
-    U: UserModel + for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> + Unpin,
+    U: UserModel
+        + for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
+        + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>
+        + umbra::orm::HydrateRelated
+        + Unpin,
 {
-    let pool = umbra::db::pool();
-    let table = U::TABLE;
-    let sql = format!("SELECT * FROM {table} WHERE username = ? AND is_active = 1");
-    let user: Option<U> = sqlx::query_as::<_, U>(&sql)
-        .bind(username)
-        .fetch_optional(&pool)
+    let user: Option<U> = umbra::orm::Manager::<U>::default()
+        .filter(
+            umbra::orm::Predicate::<U>::col_eq("username", username)
+                & umbra::orm::Predicate::<U>::col_eq("is_active", true),
+        )
+        .first()
         .await?;
 
     let Some(user) = user else {
@@ -463,13 +474,14 @@ where
     U: UserModel,
 {
     let hash = hash_password(plaintext)?;
-    let pool = umbra::db::pool();
-    let table = U::TABLE;
-    let sql = format!("UPDATE {table} SET password_hash = ? WHERE id = ?");
-    sqlx::query(&sql)
-        .bind(&hash)
-        .bind(user.id())
-        .execute(&pool)
+    let mut patch = serde_json::Map::new();
+    patch.insert(
+        "password_hash".to_string(),
+        serde_json::Value::String(hash.clone()),
+    );
+    umbra::orm::Manager::<U>::default()
+        .filter(umbra::orm::Predicate::<U>::col_eq("id", user.id()))
+        .update_values(patch)
         .await?;
     user.set_password_hash(hash);
     Ok(())

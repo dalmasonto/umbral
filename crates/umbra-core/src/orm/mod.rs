@@ -66,6 +66,21 @@ pub struct Predicate<T> {
 }
 
 impl<T> Predicate<T> {
+    /// Build a `col = value` predicate by column name. Use when the
+    /// column constant isn't reachable at the call site — typically
+    /// generic-over-`T` helper functions in plugin code (e.g.
+    /// `authenticate<U: UserModel>` filtering on `"username"` without
+    /// knowing `U`'s column module).
+    ///
+    /// The typed sibling-module path (`my_model::USERNAME.eq(...)`) is
+    /// preferred when you have a concrete `T`, because it catches typos
+    /// at compile time. This constructor is the escape hatch for
+    /// genuinely-generic code.
+    pub fn col_eq(col: &'static str, value: impl Into<sea_query::Value>) -> Self {
+        let expr = sea_query::Expr::col(sea_query::Alias::new(col)).eq(value);
+        Self::new(expr)
+    }
+
     pub(crate) fn new(cond: sea_query::SimpleExpr) -> Self {
         Self {
             cond,

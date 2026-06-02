@@ -170,7 +170,12 @@ pub struct LoggedIn<U: UserModel>(pub U);
 
 impl<U, S> FromRequestParts<S> for LoggedIn<U>
 where
-    U: UserModel + for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> + Unpin + Send,
+    U: UserModel
+        + for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
+        + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>
+        + umbra::orm::HydrateRelated
+        + Unpin
+        + Send,
     S: Send + Sync,
 {
     type Rejection = Response;
@@ -219,33 +224,20 @@ fn cookie_from_headers(headers: &http::HeaderMap) -> Option<String> {
 /// Load a user of type `U` from the session cookie in the given headers.
 async fn resolve_user<U>(headers: &http::HeaderMap) -> Option<U>
 where
-    U: UserModel + for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> + Unpin + Send,
+    U: UserModel
+        + for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
+        + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>
+        + umbra::orm::HydrateRelated
+        + Unpin
+        + Send,
 {
-    let raw_token = cookie_from_headers(headers)?;
-    let stored_id = hash_token(&raw_token);
-
-    let pool = umbra::db::pool();
-
-    let row: Option<(Option<i64>, DateTime<Utc>)> =
-        sqlx::query_as("SELECT user_id, expires_at FROM session WHERE id = ?")
-            .bind(&stored_id)
-            .fetch_optional(&pool)
-            .await
-            .ok()
-            .flatten();
-
-    let (user_id_opt, expires_at) = row?;
-    let user_id = user_id_opt?; // None = anonymous session
-
-    if expires_at < Utc::now() {
-        return None;
-    }
-
-    let table = U::TABLE;
-    let sql = format!("SELECT * FROM {table} WHERE id = ? AND is_active = 1");
-    sqlx::query_as::<_, U>(&sql)
-        .bind(user_id)
-        .fetch_optional(&pool)
+    let user_id = current_session_user_id(headers).await?;
+    umbra::orm::Manager::<U>::default()
+        .filter(
+            umbra::orm::Predicate::<U>::col_eq("id", user_id)
+                & umbra::orm::Predicate::<U>::col_eq("is_active", true),
+        )
+        .first()
         .await
         .ok()
         .flatten()
@@ -269,22 +261,34 @@ pub(crate) async fn is_authenticated(headers: &http::HeaderMap) -> bool {
 pub async fn current_session_user_id(headers: &http::HeaderMap) -> Option<i64> {
     let raw_token = cookie_from_headers(headers)?;
     let stored_id = hash_token(&raw_token);
-    let pool = umbra::db::pool();
-
-    let row: Option<(Option<i64>, DateTime<Utc>)> =
-        sqlx::query_as("SELECT user_id, expires_at FROM session WHERE id = ?")
-            .bind(&stored_id)
-            .fetch_optional(&pool)
-            .await
-            .ok()
-            .flatten();
-
-    let (user_id_opt, expires_at) = row?;
-    let user_id = user_id_opt?;
-    if expires_at < Utc::now() {
+    let row: Option<SessionRow> = umbra::orm::Manager::<SessionRow>::default()
+        .filter(umbra::orm::Predicate::<SessionRow>::col_eq("id", stored_id))
+        .first()
+        .await
+        .ok()
+        .flatten();
+    let row = row?;
+    let user_id = row.user_id?;
+    if row.expires_at < Utc::now() {
         return None;
     }
     Some(user_id)
+}
+
+/// Private mirror of `umbra_sessions::Session`. Lives here because
+/// `umbra-auth` does not depend on `umbra-sessions` (the dep arrow runs
+/// the other way), but we still need ORM access to the `session` table.
+/// Multiple `Model` impls can target the same table — sea-query treats
+/// the schema as data, not a type-level singleton.
+#[doc(hidden)]
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbra::orm::Model)]
+#[umbra(table = "session")]
+pub struct SessionRow {
+    pub id: String,
+    pub user_id: Option<i64>,
+    pub data: String,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
 }
 
 // =========================================================================

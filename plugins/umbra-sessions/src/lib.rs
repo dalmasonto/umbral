@@ -45,10 +45,9 @@
 
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
 use umbra::prelude::*;
 use umbra::web::{HeaderMap, header};
-use umbra_auth::AuthUser;
+use umbra_auth::{AuthUser, auth_user};
 use uuid::Uuid;
 
 /// Default cookie name. Users override via `set_cookie_header_named`
@@ -132,6 +131,8 @@ pub enum SessionError {
     Sqlx(sqlx::Error),
     /// `data` round-tripping through serde failed.
     Json(serde_json::Error),
+    /// ORM write error — `create`, `update_values`, etc.
+    Write(umbra::orm::write::WriteError),
 }
 
 impl std::fmt::Display for SessionError {
@@ -139,6 +140,7 @@ impl std::fmt::Display for SessionError {
         match self {
             SessionError::Sqlx(e) => write!(f, "umbra-sessions: sqlx: {e}"),
             SessionError::Json(e) => write!(f, "umbra-sessions: json: {e}"),
+            SessionError::Write(e) => write!(f, "umbra-sessions: write: {e:?}"),
         }
     }
 }
@@ -154,6 +156,12 @@ impl From<sqlx::Error> for SessionError {
 impl From<serde_json::Error> for SessionError {
     fn from(e: serde_json::Error) -> Self {
         Self::Json(e)
+    }
+}
+
+impl From<umbra::orm::write::WriteError> for SessionError {
+    fn from(e: umbra::orm::write::WriteError) -> Self {
+        Self::Write(e)
     }
 }
 
@@ -197,22 +205,19 @@ pub async fn create_session(
     user_id: Option<i64>,
     ttl: Option<Duration>,
 ) -> Result<String, SessionError> {
-    let pool = umbra::db::pool();
     let raw_token = Uuid::new_v4().to_string();
     let stored_id = hash_token(&raw_token);
     let now = Utc::now();
     let expires_at = now + ttl.unwrap_or_else(|| Duration::seconds(DEFAULT_TTL_SECONDS));
-    sqlx::query(
-        "INSERT INTO session (id, user_id, data, created_at, expires_at) \
-         VALUES (?, ?, ?, ?, ?)",
-    )
-    .bind(&stored_id)
-    .bind(user_id)
-    .bind("{}")
-    .bind(now)
-    .bind(expires_at)
-    .execute(&pool)
-    .await?;
+    Session::objects()
+        .create(Session {
+            id: stored_id,
+            user_id,
+            data: "{}".to_string(),
+            created_at: now,
+            expires_at,
+        })
+        .await?;
     Ok(raw_token)
 }
 
@@ -223,16 +228,15 @@ pub async fn create_session(
 /// OR if it's expired (in which case the row is also deleted — lazy
 /// cleanup, no scheduled job needed).
 pub async fn read_session(token: &str) -> Result<Option<Session>, SessionError> {
-    let pool = umbra::db::pool();
     let stored_id = hash_token(token);
-    let row: Option<Session> = sqlx::query_as::<_, Session>("SELECT * FROM session WHERE id = ?")
-        .bind(&stored_id)
-        .fetch_optional(&pool)
+    let row: Option<Session> = Session::objects()
+        .filter(session::ID.eq(&stored_id))
+        .first()
         .await?;
     if let Some(s) = &row
         && s.expires_at < Utc::now()
     {
-        destroy_session_with_pool(&pool, &stored_id).await?;
+        destroy_session_by_hash(&stored_id).await?;
         return Ok(None);
     }
     Ok(row)
@@ -243,17 +247,16 @@ pub async fn read_session(token: &str) -> Result<Option<Session>, SessionError> 
 /// before the DELETE so the same hash-on-write/hash-on-read invariant
 /// holds for destruction too.
 pub async fn destroy_session(token: &str) -> Result<(), SessionError> {
-    let pool = umbra::db::pool();
     let stored_id = hash_token(token);
-    destroy_session_with_pool(&pool, &stored_id).await
+    destroy_session_by_hash(&stored_id).await
 }
 
 /// Internal: takes the already-hashed stored id, not the raw token.
 /// Used by `read_session`'s expiry-cleanup branch and `destroy_session`.
-async fn destroy_session_with_pool(pool: &SqlitePool, stored_id: &str) -> Result<(), SessionError> {
-    sqlx::query("DELETE FROM session WHERE id = ?")
-        .bind(stored_id)
-        .execute(pool)
+async fn destroy_session_by_hash(stored_id: &str) -> Result<(), SessionError> {
+    Session::objects()
+        .filter(session::ID.eq(stored_id))
+        .delete()
         .await?;
     Ok(())
 }
@@ -330,12 +333,10 @@ pub async fn current_user(headers: &HeaderMap) -> Result<Option<AuthUser>, Sessi
     let Some(user_id) = session.user_id else {
         return Ok(None);
     };
-    let pool = umbra::db::pool();
-    let user: Option<AuthUser> =
-        sqlx::query_as::<_, AuthUser>("SELECT * FROM auth_user WHERE id = ? AND is_active = 1")
-            .bind(user_id)
-            .fetch_optional(&pool)
-            .await?;
+    let user: Option<AuthUser> = AuthUser::objects()
+        .filter(auth_user::ID.eq(user_id) & auth_user::IS_ACTIVE.eq(true))
+        .first()
+        .await?;
     Ok(user)
 }
 
@@ -368,27 +369,27 @@ pub async fn set_data<T: Serialize>(
     key: &str,
     value: &T,
 ) -> Result<(), SessionError> {
-    let pool = umbra::db::pool();
     let stored_id = hash_token(session_token);
     // Pull the current row so we don't clobber other keys.
-    let row: Option<(String,)> = sqlx::query_as("SELECT data FROM session WHERE id = ?")
-        .bind(&stored_id)
-        .fetch_optional(&pool)
+    let row: Option<Session> = Session::objects()
+        .filter(session::ID.eq(&stored_id))
+        .first()
         .await?;
-    let Some((current,)) = row else {
+    let Some(current) = row else {
         // Session was destroyed between get_session and set_data.
         // Treat as success silently rather than erroring; the data
         // would have been lost when the session expired anyway.
         return Ok(());
     };
     let mut map: serde_json::Map<String, serde_json::Value> =
-        serde_json::from_str(&current).unwrap_or_default();
+        serde_json::from_str(&current.data).unwrap_or_default();
     map.insert(key.to_string(), serde_json::to_value(value)?);
     let updated = serde_json::to_string(&map)?;
-    sqlx::query("UPDATE session SET data = ? WHERE id = ?")
-        .bind(&updated)
-        .bind(&stored_id)
-        .execute(&pool)
+    let mut patch = serde_json::Map::new();
+    patch.insert("data".to_string(), serde_json::Value::String(updated));
+    Session::objects()
+        .filter(session::ID.eq(&stored_id))
+        .update_values(patch)
         .await?;
     Ok(())
 }
@@ -471,12 +472,12 @@ pub async fn login_with_request(
     if let Some(data) = carry_over_data
         && data != "{}"
     {
-        let pool = umbra::db::pool();
         let stored_id = hash_token(&token);
-        let _ = sqlx::query("UPDATE session SET data = ? WHERE id = ?")
-            .bind(&data)
-            .bind(&stored_id)
-            .execute(&pool)
+        let mut patch = serde_json::Map::new();
+        patch.insert("data".to_string(), serde_json::Value::String(data));
+        let _ = Session::objects()
+            .filter(session::ID.eq(&stored_id))
+            .update_values(patch)
             .await;
     }
 
@@ -488,15 +489,18 @@ pub async fn login_with_request(
     // Update last_login. Best-effort — a failure here doesn't
     // invalidate the login (the session was created and the cookie
     // was set), so we swallow the error after logging.
-    let pool = umbra::db::pool();
-    if let Err(e) = sqlx::query("UPDATE auth_user SET last_login = ? WHERE id = ?")
-        .bind(chrono::Utc::now())
-        .bind(user.id)
-        .execute(&pool)
+    let mut patch = serde_json::Map::new();
+    patch.insert(
+        "last_login".to_string(),
+        serde_json::to_value(chrono::Utc::now()).unwrap_or(serde_json::Value::Null),
+    );
+    if let Err(e) = AuthUser::objects()
+        .filter(auth_user::ID.eq(user.id))
+        .update_values(patch)
         .await
     {
         tracing::warn!(
-            error = %e,
+            error = ?e,
             user_id = user.id,
             "umbra-sessions::login: failed to update last_login (session still active)",
         );
@@ -597,10 +601,11 @@ pub mod extractors {
             .or_else(|| super::cookie_from_headers(&parts.headers))?;
         let session = super::read_session(&token).await.ok().flatten()?;
         let user_id = session.user_id?;
-        let pool = umbra::db::pool();
-        sqlx::query_as::<_, AuthUser>("SELECT * FROM auth_user WHERE id = ? AND is_active = 1")
-            .bind(user_id)
-            .fetch_optional(&pool)
+        super::AuthUser::objects()
+            .filter(
+                super::auth_user::ID.eq(user_id) & super::auth_user::IS_ACTIVE.eq(true),
+            )
+            .first()
             .await
             .ok()
             .flatten()

@@ -308,8 +308,8 @@ pub mod orm {
     pub use umbra_core::orm::write::{SaveError, WriteError};
     pub use umbra_core::orm::{
         ArrayElement, ChoiceField, DynError, DynQuerySet, F, FColExt, FExpr, FieldSpec, ForeignKey,
-        GetError, HydrateRelated, Manager, Model, MultiChoice, Post, PrimaryKey, Q, QuerySet,
-        QuerySetTx, SqlType, TsVector, column, decode_to_string, write,
+        GetError, HydrateRelated, Manager, Model, MultiChoice, Post, Predicate, PrimaryKey, Q,
+        QuerySet, QuerySetTx, SqlType, TsVector, column, decode_to_string, write,
     };
 
     /// The `#[derive(Model)]` proc macro. Shares the `Model` name with the
