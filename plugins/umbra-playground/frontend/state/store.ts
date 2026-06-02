@@ -1,5 +1,7 @@
 import { create } from "zustand";
 import type { OpenAPIV3 } from "openapi-types";
+import { buildFetchArgs } from "./buildFetchArgs";
+import { saveHistoryDebounced } from "./history";
 
 /** A request as the user has constructed it in the builder. */
 export interface RequestDraft {
@@ -110,8 +112,82 @@ export const usePlayground = create<PlaygroundState>((set, get) => ({
   lastResponse: null,
   inFlight: false,
   send: async () => {
-    // Implementation lands in M4.
-    throw new Error("send() not yet implemented — M4");
+    const state = get();
+    const result = buildFetchArgs(state.current);
+    if (!result.ok) {
+      const message =
+        result.error.kind === "missing_path_param"
+          ? `Missing path parameter: ${result.error.name}`
+          : `Invalid JSON body: ${result.error.message}`;
+      set({
+        lastResponse: {
+          operationId: state.selectedOperationId ?? "unknown",
+          request: { ...state.current },
+          status: 0,
+          statusText: "Build error",
+          durationMs: 0,
+          sizeBytes: 0,
+          headers: {},
+          bodyText: message,
+          timestamp: Date.now(),
+          error: message,
+        },
+      });
+      return;
+    }
+
+    set({ inFlight: true });
+    const start = performance.now();
+    try {
+      const res = await fetch(result.args.url, result.args.init);
+      const bodyText = await res.text();
+      const durationMs = performance.now() - start;
+      const headers: Record<string, string> = {};
+      res.headers.forEach((v, k) => {
+        headers[k] = v;
+      });
+      const record: ResponseRecord = {
+        operationId: state.selectedOperationId ?? "unknown",
+        request: { ...state.current },
+        status: res.status,
+        statusText: res.statusText,
+        durationMs: Math.round(durationMs),
+        sizeBytes: new Blob([bodyText]).size,
+        headers,
+        bodyText,
+        timestamp: Date.now(),
+      };
+      set((s) => {
+        const opId = state.selectedOperationId ?? "unknown";
+        const existing = s.history[opId] ?? [];
+        return {
+          lastResponse: record,
+          inFlight: false,
+          history: {
+            ...s.history,
+            [opId]: [...existing, record],
+          },
+        };
+      });
+      saveHistoryDebounced(get().history);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      set({
+        inFlight: false,
+        lastResponse: {
+          operationId: state.selectedOperationId ?? "unknown",
+          request: { ...state.current },
+          status: 0,
+          statusText: "Network error",
+          durationMs: Math.round(performance.now() - start),
+          sizeBytes: 0,
+          headers: {},
+          bodyText: "",
+          timestamp: Date.now(),
+          error: message,
+        },
+      });
+    }
   },
 
   history: {},
