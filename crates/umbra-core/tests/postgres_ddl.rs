@@ -26,8 +26,11 @@ fn id_pk() -> Column {
         fk_target: None,
         noform: false,
         noedit: false,
-            is_string_repr: false,
-            max_length: 0,
+        is_string_repr: false,
+        max_length: 0,
+        choices: Vec::new(),
+        choice_labels: Vec::new(),
+        default: String::new(),
     }
 }
 
@@ -41,8 +44,11 @@ fn text_not_null(name: &str) -> Column {
         fk_target: None,
         noform: false,
         noedit: false,
-            is_string_repr: false,
-            max_length: 0,
+        is_string_repr: false,
+        max_length: 0,
+        choices: Vec::new(),
+        choice_labels: Vec::new(),
+        default: String::new(),
     }
 }
 
@@ -56,8 +62,11 @@ fn text_nullable(name: &str) -> Column {
         fk_target: None,
         noform: false,
         noedit: false,
-            is_string_repr: false,
-            max_length: 0,
+        is_string_repr: false,
+        max_length: 0,
+        choices: Vec::new(),
+        choice_labels: Vec::new(),
+        default: String::new(),
     }
 }
 

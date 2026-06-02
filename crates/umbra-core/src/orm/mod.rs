@@ -19,6 +19,7 @@
 //! `mod.rs` so both `column` and `queryset` can reach them without
 //! crossing each other.
 
+pub mod choices;
 pub mod column;
 pub mod dynamic;
 pub mod expr;
@@ -32,6 +33,7 @@ pub mod write;
 use std::marker::PhantomData;
 use std::ops::{BitAnd, BitOr};
 
+pub use choices::ChoiceField;
 pub use dynamic::{DynError, DynQuerySet, decode_to_string};
 pub use expr::{F, FColExt, FExpr, Q};
 pub use foreign_key::ForeignKey;

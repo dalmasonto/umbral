@@ -63,6 +63,9 @@ impl crate::orm::Model for Post {
             noedit: false,
             is_string_repr: false,
             max_length: 0,
+            choices: &[],
+            choice_labels: &[],
+            default: "",
         },
         crate::orm::FieldSpec {
             name: "title",
@@ -75,6 +78,9 @@ impl crate::orm::Model for Post {
             noedit: false,
             is_string_repr: false,
             max_length: 0,
+            choices: &[],
+            choice_labels: &[],
+            default: "",
         },
         crate::orm::FieldSpec {
             name: "body",
@@ -87,6 +93,9 @@ impl crate::orm::Model for Post {
             noedit: false,
             is_string_repr: false,
             max_length: 0,
+            choices: &[],
+            choice_labels: &[],
+            default: "",
         },
         crate::orm::FieldSpec {
             name: "published_at",
@@ -99,6 +108,9 @@ impl crate::orm::Model for Post {
             noedit: false,
             is_string_repr: false,
             max_length: 0,
+            choices: &[],
+            choice_labels: &[],
+            default: "",
         },
     ];
 

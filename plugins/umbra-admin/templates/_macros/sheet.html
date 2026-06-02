@@ -161,6 +161,19 @@ Drag-resize: ~50 LOC vanilla JS at the bottom; width in localStorage.
           {% if not field.nullable and not is_readonly %}required{% endif %}
           {% if is_readonly %}disabled{% endif %}
           class="w-full bg-surface-container-low border border-outline-variant rounded-xl px-md py-sm text-on-surface text-body-md focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all {% if is_readonly %}opacity-50 cursor-not-allowed{% endif %}"/>
+        {% elif field.kind == "select" %}
+        {# Closed-set enum field. Render the variant list from
+           field.choices; the Rust enum's `as_str()` round-trip matches
+           field.value when the row already holds one of these. #}
+        <select id="f_{{ field.name }}" {% if not is_readonly %}name="{{ field.name }}"{% endif %}
+          {% if not field.nullable and not is_readonly %}required{% endif %}
+          {% if is_readonly %}disabled{% endif %}
+          class="w-full bg-surface-container-low border border-outline-variant rounded-xl px-md py-sm text-on-surface text-body-md focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all {% if is_readonly %}opacity-50 cursor-not-allowed{% endif %}">
+          {% if field.nullable %}<option value=""{% if field.value == "" %} selected{% endif %}>—</option>{% endif %}
+          {% for opt in field.choices %}
+          <option value="{{ opt.value }}"{% if field.value == opt.value %} selected{% endif %}>{{ opt.label }}</option>
+          {% endfor %}
+        </select>
         {% else %}
         <input type="text" id="f_{{ field.name }}" {% if not is_readonly %}name="{{ field.name }}"{% endif %} value="{{ field.value }}"
           {% if not field.nullable and not is_readonly %}required{% endif %}

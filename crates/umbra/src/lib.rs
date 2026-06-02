@@ -22,7 +22,7 @@ pub mod prelude {
     //! raw pool accessors are reached as `umbra::db::pool()` so they do
     //! not pollute the prelude with bare names like `pool`.
 
-    pub use crate::orm::{F, FColExt, ForeignKey, Model, Q};
+    pub use crate::orm::{ChoiceField, Choices, F, FColExt, ForeignKey, Model, Q};
     pub use crate::plugin::{AppContext, Plugin};
     pub use crate::web::{
         Form, IntoResponse, Json, JsonResponse, Path, Query, Router, delete, get, patch, post, put,
@@ -38,6 +38,14 @@ pub mod prelude {
 /// code to compile (umbra already depends on it).
 #[doc(hidden)]
 pub use serde_json as _serde_json;
+
+/// Re-export of `sqlx` for use in macro-generated code.
+///
+/// `#[derive(Choices)]` emits `sqlx::Type` / `Encode` / `Decode` impls
+/// behind `::umbra::_sqlx::*`, so user crates don't need their own
+/// direct `sqlx` dependency for the generated code to compile.
+#[doc(hidden)]
+pub use sqlx as _sqlx;
 
 pub use umbra_core::app::{App, AppBuilder, BuildError};
 pub use umbra_core::settings::{Environment, Settings};
@@ -299,15 +307,20 @@ pub mod orm {
 
     pub use umbra_core::orm::write::{SaveError, WriteError};
     pub use umbra_core::orm::{
-        ArrayElement, DynError, DynQuerySet, F, FColExt, FExpr, FieldSpec, ForeignKey, GetError,
-        HydrateRelated, Manager, Model, Post, PrimaryKey, Q, QuerySet, QuerySetTx, SqlType,
-        TsVector, column, decode_to_string, write,
+        ArrayElement, ChoiceField, DynError, DynQuerySet, F, FColExt, FExpr, FieldSpec, ForeignKey,
+        GetError, HydrateRelated, Manager, Model, Post, PrimaryKey, Q, QuerySet, QuerySetTx,
+        SqlType, TsVector, column, decode_to_string, write,
     };
 
     /// The `#[derive(Model)]` proc macro. Shares the `Model` name with the
     /// trait — Rust's type and macro namespaces are separate, so both can
     /// coexist behind one import.
     pub use umbra_macros::Model;
+
+    /// The `#[derive(Choices)]` proc macro for closed-set enum field
+    /// types. Pair the enum derive with `#[umbra(choices)]` on the
+    /// owning model field. See `umbra::orm::ChoiceField`.
+    pub use umbra_macros::Choices;
 
     /// The typed column constants for the demo `Post` model.
     ///

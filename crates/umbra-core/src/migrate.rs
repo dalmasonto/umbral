@@ -366,6 +366,24 @@ pub struct Column {
     /// `0` means no truncation.
     #[serde(default)]
     pub max_length: u32,
+    /// Closed-set DB values for a choices column. Propagated from
+    /// `FieldSpec::choices`. Non-empty when the model field carries
+    /// `#[umbra(choices)]`; the migration engine emits a Postgres
+    /// `CHECK (col IN (...))` constraint when this slice is non-empty.
+    /// Empty for every non-choices column.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub choices: Vec<String>,
+    /// Human labels matching `choices` position-for-position. Carried
+    /// alongside `choices` so the admin's `<select>` widget has labels
+    /// without the runtime needing to reflect on the model type.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub choice_labels: Vec<String>,
+    /// SQL `DEFAULT` value — propagated from `FieldSpec::default`.
+    /// Empty string means no default. The migration engine reads this
+    /// at DDL-emit time for both `CREATE TABLE` and `ALTER TABLE ADD
+    /// COLUMN`. Set via `#[umbra(default = "...")]` on the model field.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub default: String,
 }
 
 impl From<&FieldSpec> for Column {
@@ -380,6 +398,9 @@ impl From<&FieldSpec> for Column {
             noedit: f.noedit,
             is_string_repr: f.is_string_repr,
             max_length: f.max_length,
+            choices: f.choices.iter().map(|s| s.to_string()).collect(),
+            choice_labels: f.choice_labels.iter().map(|s| s.to_string()).collect(),
+            default: f.default.to_string(),
         }
     }
 }
@@ -2023,6 +2044,14 @@ fn build_column_def_sqlite(col: &Column) -> sea_query::ColumnDef {
             def.auto_increment();
         }
     }
+    // User-declared `#[umbra(default = "...")]` lifts to a DDL DEFAULT
+    // clause. Required when emitting `ALTER TABLE ADD COLUMN` for a
+    // NOT NULL column against a non-empty table (SQLite rejects the
+    // ADD otherwise); on CREATE TABLE it sets the column-level default
+    // the database uses when an INSERT omits the value.
+    if !col.default.is_empty() {
+        def.default(col.default.clone());
+    }
     def
 }
 
@@ -2070,6 +2099,26 @@ fn build_column_def_postgres(col: &Column) -> sea_query::ColumnDef {
         ) {
             def.auto_increment();
         }
+    }
+    // Choices: emit a CHECK constraint so a third-party process writing
+    // directly to the DB can't insert a value the Rust enum can't model.
+    // Single-quoted SQL string literals with embedded `'` doubled.
+    if !col.choices.is_empty() {
+        let col_name_escaped = col.name.replace('"', "\"\"");
+        let values_sql = col
+            .choices
+            .iter()
+            .map(|v| format!("'{}'", v.replace('\'', "''")))
+            .collect::<Vec<_>>()
+            .join(", ");
+        def.extra(format!("CHECK (\"{col_name_escaped}\" IN ({values_sql}))"));
+    }
+    // User-declared `#[umbra(default = "...")]` lifts to a DDL DEFAULT
+    // clause. Required for `ALTER TABLE ADD COLUMN` of a NOT NULL
+    // column against a non-empty table — Postgres needs either a
+    // default or a separate backfill.
+    if !col.default.is_empty() {
+        def.default(col.default.clone());
     }
     def
 }

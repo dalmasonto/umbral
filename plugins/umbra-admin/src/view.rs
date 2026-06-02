@@ -89,6 +89,17 @@ pub(crate) struct FormField {
     /// models that have `password_field` set. The field editor renders
     /// two inputs (password + confirm) instead of a plain text input.
     pub is_password: bool,
+    /// For choices fields: matching `(value, label)` pairs the
+    /// `<select>` widget renders as `<option>`s. Empty for every
+    /// non-choices field.
+    pub choices: Vec<ChoiceOption>,
+}
+
+/// One `<option>` entry on a choices-field `<select>`.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct ChoiceOption {
+    pub value: String,
+    pub label: String,
 }
 
 /// Build the form-field list for one model.
@@ -151,6 +162,19 @@ pub(crate) fn form_fields_for(
                 String::new()
             };
             let is_readonly = readonly_set.contains(&c.name) || c.noedit;
+            let choices: Vec<ChoiceOption> = c
+                .choices
+                .iter()
+                .enumerate()
+                .map(|(i, value)| ChoiceOption {
+                    value: value.clone(),
+                    label: c
+                        .choice_labels
+                        .get(i)
+                        .cloned()
+                        .unwrap_or_else(|| value.clone()),
+                })
+                .collect();
             FormField {
                 name: c.name.clone(),
                 kind: input_kind(c),
@@ -159,6 +183,7 @@ pub(crate) fn form_fields_for(
                 readonly: is_readonly,
                 fk_table,
                 is_password: false,
+                choices,
             }
         })
         .collect();
@@ -174,6 +199,7 @@ pub(crate) fn form_fields_for(
                     readonly: false,
                     fk_table: String::new(),
                     is_password: true,
+                    choices: Vec::new(),
                 });
             }
         }
@@ -221,6 +247,12 @@ pub(crate) fn format_for_input(raw: &str, ty: SqlType) -> String {
 /// VARCHAR. An unbounded `Text` field gets a textarea — the column
 /// is built for prose.
 pub(crate) fn input_kind(col: &umbra::migrate::Column) -> &'static str {
+    // Choices columns take precedence over the SqlType lookup — they're
+    // stored as Text in the DB but should render as a <select>, not an
+    // <input>.
+    if !col.choices.is_empty() {
+        return "select";
+    }
     match col.ty {
         SqlType::SmallInt
         | SqlType::Integer

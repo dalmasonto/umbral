@@ -38,9 +38,9 @@ Off-catalogue types and the explicitly-rejected wide / unsigned ints (`i128`, `u
 
 ## "How do I write `VARCHAR(64)`?"
 
-Two layers, two knobs — pick the one whose error site matches where you want the failure to surface.
+Two layers, two knobs - pick the one whose error site matches where you want the failure to surface.
 
-### At the model — `#[umbra(max_length = N)]`
+### At the model - `#[umbra(max_length = N)]`
 
 Declared on a `String` field in `#[derive(Model)]`. Three effects, all opt-in:
 
@@ -64,9 +64,9 @@ pub struct Article {
 | Admin form widget | `Text + max_length > 0` renders as `<input type="text" maxlength="64">` (single-line). Without `max_length`, the field renders as a `<textarea>` (prose). |
 | Admin changelist | The value is truncated at `N` characters when rendered in `list_display`, with `…` appended so the cut is visible. |
 
-`#[umbra(string)]` is the sibling attribute — it marks one field as the Django-style `__str__`, so the admin's default `list_display` becomes `[<that field>, <other short columns>]` when no explicit config is registered. See [Models — Display hints](./models#display-hints-string-max_length) for the full opt-in story.
+`#[umbra(string)]` is the sibling attribute - it marks one field as the Django-style `__str__`, so the admin's default `list_display` becomes `[<that field>, <other short columns>]` when no explicit config is registered. See [Models - Display hints](./models#display-hints-string-max_length) for the full opt-in story.
 
-### At the boundary — `#[derive(Form)]`
+### At the boundary - `#[derive(Form)]`
 
 Use this when you want the validation to fire on the *request* boundary (a 400 with field-level errors), not at the database. The validator is a separate struct that deserialises the request body:
 
@@ -91,10 +91,10 @@ The `Form` derive produces a typed validator that returns `400 Bad Request` with
 | One length cap, enforced everywhere | `#[umbra(max_length = N)]` on the model |
 | Different caps in different request flows | `#[derive(Form)]` per request |
 | Database-level enforcement on Postgres | `#[umbra(max_length = N)]` (lifts to `VARCHAR(N)`) |
-| Min length, email shape, password strength | `#[derive(Form)]` — model attributes don't cover these |
-| Both | Set both. They compose — `#[umbra(...)]` shapes the DDL + admin; `#[derive(Form)]` validates inputs ahead of the model. |
+| Min length, email shape, password strength | `#[derive(Form)]` - model attributes don't cover these |
+| Both | Set both. They compose - `#[umbra(...)]` shapes the DDL + admin; `#[derive(Form)]` validates inputs ahead of the model. |
 
-If you need a database-level constraint the model attributes don't cover (regex, unique-conditional-on-something, computed values), edit the generated migration JSON directly. The model snapshot doesn't round-trip those, so the constraint lives in migrations only — which is fine, because at that point the DB schema is the source of truth for that rule, not the Rust struct.
+If you need a database-level constraint the model attributes don't cover (regex, unique-conditional-on-something, computed values), edit the generated migration JSON directly. The model snapshot doesn't round-trip those, so the constraint lives in migrations only - which is fine, because at that point the DB schema is the source of truth for that rule, not the Rust struct.
 
 ## Picking the primary key
 
@@ -134,7 +134,7 @@ pub struct User {
 
 | Attribute | Effect |
 |---|---|
-| `#[umbra(string)]` / `#[umbra(string = true)]` | Mark this field as the Django-style `__str__`. The admin uses it as the label column in the default `list_display`. See [Models — Display hints](./models#display-hints-string-max_length). |
+| `#[umbra(string)]` / `#[umbra(string = true)]` | Mark this field as the Django-style `__str__`. The admin uses it as the label column in the default `list_display`. See [Models - Display hints](./models#display-hints-string-max_length). |
 | `#[umbra(max_length = N)]` | Cap on a `String` field. Postgres DDL emits `VARCHAR(N)`; SQLite stays `TEXT` (affinity-equivalent). Admin form renders as `<input maxlength="N">` instead of `<textarea>`; changelist truncates display at N chars. |
 | `#[umbra(noform)]` | Field never appears on any admin form (create or edit). Use for columns the user should never touch directly (e.g. `password_hash`, `internal_token`). |
 | `#[umbra(noedit)]` | Field appears on edit forms read-only; omitted on create. |
@@ -151,25 +151,25 @@ pub struct Post {
 }
 ```
 
-### Deferred — write them at the layer that handles them today
+### Deferred - write them at the layer that handles them today
 
-Other Django-style attributes (`db_index`, `default`, `choices`, `on_delete`, `unique`, `nullable`) aren't part of the derive's accept-list. They land as a real plugin or workload surfaces the need. Until then:
+Other Django-style attributes (`db_index`, `default`, `on_delete`, `unique`, `nullable`) aren't part of the derive's accept-list. They land as a real plugin or workload surfaces the need. Until then:
 
 | You want | Today's workaround |
 |----------|-------------------|
-| `min_length`, `email`, `password` strength | `#[derive(Form)]` at the request boundary — these are validation concerns, not schema. |
+| `min_length`, `email`, `password` strength | `#[derive(Form)]` at the request boundary - these are validation concerns, not schema. |
 | `db_index = true` / `unique = true` | Edit the generated migration JSON to add the index / unique constraint. The model snapshot ignores it, but the DB enforces it. |
 | `default = ...` | Set the value in `Manager::create` / `bulk_create` from a small wrapper function. If you need the database to fill it, add `DEFAULT ...` to the migration. |
-| `choices = [...]` | Use a Rust enum at the boundary and a `String` field on the model. Validate enum-shape via `#[derive(Form)]` or a hand-written deserialiser. |
-| `on_delete = CASCADE` | Foreign keys aren't part of the derive surface yet. Add the FK + the ON DELETE clause to the generated migration directly. Tracked as a major v0.1 item. |
+| `choices = [...]` | `#[derive(Choices)]` on the enum + `#[umbra(choices)]` on the field. The Rust type is the source of truth; Postgres gets a CHECK constraint; the admin renders `<select>`. See ["Using a Rust enum as a field type"](#derivechoices---using-a-rust-enum-as-a-field-type) below. |
+| `on_delete = CASCADE` | `ForeignKey<T>` lands the FK + REFERENCES clause; ON DELETE behaviour beyond the default RESTRICT is deferred. Edit the generated migration JSON if you need a different policy. |
 
 Foreign derive attributes (`#[serde(...)]`, `#[sqlx(...)]`, `#[validate(...)]`, etc.) are passed through untouched - the derive doesn't reject them.
 
 ## All derive macros at a glance
 
-umbra ships three proc-macros. The model derive is the most-used; the form derive validates request bodies; the task attribute marks background jobs. Each gets a worked example below.
+umbra ships four proc-macros. The model derive is the most-used; the choices derive turns a Rust enum into a column field type; the form derive validates request bodies; the task attribute marks background jobs. Each gets a worked example below.
 
-### `#[derive(Model)]` — the schema + admin surface
+### `#[derive(Model)]` - the schema + admin surface
 
 Defined in `crates/umbra-macros/src/lib.rs::derive_model`. Reads each struct field, emits an `impl Model`, the `objects()` Manager entry point, and a sibling column module (`article::ID`, `article::TITLE`, …).
 
@@ -210,10 +210,12 @@ pub struct Post {
 | Field | `noedit` | Rendered read-only on edit forms; omitted on create. |
 | Field | `string` / `string = true` | Mark this field as Django's `__str__`. Default `list_display` becomes `[<this>, <other short columns>]`. |
 | Field | `max_length = N` | Cap on a `String`. PG → `VARCHAR(N)`, SQLite stays `TEXT`. Admin form → `<input maxlength="N">` instead of `<textarea>`. List display truncates at N chars. |
+| Field | `choices` | The field's type implements [`umbra::orm::ChoiceField`] (typically via `#[derive(Choices)]`). Stored as `TEXT`; admin renders a `<select>`; Postgres gets a `CHECK` constraint. See ["Using a Rust enum"](#derivechoices---using-a-rust-enum-as-a-field-type). |
+| Field | `default = "..."` | SQL `DEFAULT` clause for the column. String literal at v1; emitted on both `CREATE TABLE` and `ALTER TABLE ADD COLUMN`. Required when adding a NOT NULL column to a non-empty table — Postgres / SQLite reject the `ADD` otherwise. |
 
-### `#[derive(Form)]` — request-boundary validation
+### `#[derive(Form)]` - request-boundary validation
 
-Defined in `crates/umbra-macros/src/lib.rs::derive_form`. Implements `umbra::forms::Form` so the struct can be `.parse(body)`-ed against a urlencoded or JSON body and reports field-level errors. Use it on a *separate struct* from your model — one for create, one for update, one per request shape that varies.
+Defined in `crates/umbra-macros/src/lib.rs::derive_form`. Implements `umbra::forms::Form` so the struct can be `.parse(body)`-ed against a urlencoded or JSON body and reports field-level errors. Use it on a *separate struct* from your model - one for create, one for update, one per request shape that varies.
 
 ```rust
 use umbra::prelude::*;
@@ -256,20 +258,20 @@ Rust-type dispatch is automatic:
 
 Off-catalogue field types (custom structs, `Vec<T>`, `HashMap<K,V>`) fail at derive time pointing at the field span.
 
-### `#[task]` — background jobs
+### `#[task]` - background jobs
 
-The third macro is `#[umbra::task]`, an attribute macro on `async fn`. It emits a companion `register_<fn_name>()` you call at boot. Full reference lives with the tasks plugin — see [umbra-tasks › Declaring a task](/docs/v0.0.1/plugins/tasks#declaring-a-task-with-task).
+The third macro is `#[umbra::task]`, an attribute macro on `async fn`. It emits a companion `register_<fn_name>()` you call at boot. Full reference lives with the tasks plugin - see [umbra-tasks › Declaring a task](/docs/v0.0.1/plugins/tasks#declaring-a-task-with-task).
 
-### `choices` — using a Rust enum
+### `#[derive(Choices)]` - using a Rust enum as a field type
 
-`#[umbra(choices = [...])]` isn't on the accept-list. The idiomatic substitute is a Rust enum at the request boundary plus a `String` column on the model:
+A Rust enum can be used directly as a model field via `#[umbra(choices)]`. The framework stores the variant as TEXT in the database, lifts the variant list into the admin form (renders a `<select>`), and emits a Postgres `CHECK (col IN (...))` constraint so a third-party process writing directly to the database can't insert a value the enum can't model.
 
 ```rust
 use serde::{Deserialize, Serialize};
 use umbra::prelude::*;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Choices)]
+#[choices(rename_all = "lowercase")]
 pub enum PostStatus {
     Draft,
     Review,
@@ -283,22 +285,46 @@ pub struct Post {
     #[umbra(string, max_length = 80)]
     pub title: String,
     pub body: String,
-    pub status: String,                    // stores the lowercase variant
-}
-
-// At the request boundary, validate it's one of the four variants:
-#[derive(serde::Deserialize, Form)]
-pub struct CreatePost {
-    #[form(max_length = 80)]
-    title: String,
-    body: String,
-    status: PostStatus,                    // serde rejects unknown variants
+    #[umbra(choices, default = "draft")]
+    pub status: PostStatus,
 }
 ```
 
-`PostStatus` serialises to / from the four lowercase strings; serde's deserialiser rejects anything else with a precise error. The model's `status` field is `TEXT` (or `VARCHAR(N)` if you give it a `max_length`), so existing rows survive an enum-variant addition without a migration — the cost is that the rejection happens in the request handler, not the database.
+That's the whole setup. `Post { status: PostStatus::Draft, .. }` round-trips through `INSERT` / `SELECT` as `'draft'`. The admin's create / edit sheet shows a `<select>` with the four variants. The migration engine emits `status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'review', 'published', 'archived'))` on Postgres; SQLite gets plain `TEXT DEFAULT 'draft'` (SQLite's CHECK syntax differs and `CHECK` adds friction more than safety on a column the Rust enum already constrains).
 
-A full PG `CHECK (status IN ('draft', 'review', 'published', 'archived'))` lands by editing the generated migration JSON; the model snapshot doesn't carry it.
+The `default = "..."` is required when you add the `status` column to an existing populated table — both Postgres and SQLite reject `ALTER TABLE ADD COLUMN` for a NOT NULL column without a default. It also doubles as the value the DB uses on any future `INSERT` that omits the column.
+
+#### What `#[derive(Choices)]` emits
+
+| Item | Why |
+|---|---|
+| `impl umbra::orm::ChoiceField` | Trait carrying `VALUES` (DB strings) + `LABELS` (admin display) + `as_str` + `from_str_ok`. The `Model` derive reads `VALUES` / `LABELS` at compile time to populate the column's `FieldSpec`. |
+| `impl Display` + `impl FromStr` | String round-trip. |
+| `impl sqlx::Type` + `Encode` + `Decode` for `Sqlite` and `Postgres` | The bind / decode path. `sqlx::query!` works without per-variant glue. |
+
+#### `#[choices(...)]` modifiers
+
+| Where | Attribute | Effect |
+|---|---|---|
+| Enum | `rename_all = "..."` | Naming convention for the DB-stored variant strings. Accepts `lowercase` (default), `UPPERCASE`, `snake_case`, `SCREAMING_SNAKE_CASE`, `kebab-case`, `none` (preserve variant ident as-is). |
+| Variant | `value = "..."` | Override the DB string for one variant. Bypasses `rename_all`. |
+| Variant | `label = "..."` | Override the admin-form label for one variant. Defaults to the Rust variant ident verbatim. |
+
+#### Validation, layered
+
+| Layer | Where it fires | What it catches |
+|---|---|---|
+| The Rust type system | Compile time | `Post { status: PostStatus::Bogus }` doesn't exist; the variant has to come from the enum's closed set. |
+| sqlx `Decode` | `SELECT` time | A row in the DB that holds a string not on `VALUES` returns a typed error from the query (instead of silently materialising a wrong variant). |
+| Postgres `CHECK` constraint | `INSERT` / `UPDATE` time | A direct DB write from an external process can't insert a string outside the variant list. |
+
+This composes with `#[derive(Form)]` if you have additional request-shape rules beyond the variant list (e.g. `published` only allowed when the row is `noform`-immutable elsewhere): use the Form derive at the boundary, the `Choices`-typed field on the model.
+
+#### Limits at v1
+
+- `Option<T>` of a `Choices` enum isn't accepted by the derive yet. For a nullable choice, add a `None` variant to the enum and use the non-Option field. (Tracked.)
+- Adding a new variant to the enum doesn't auto-rewrite the existing Postgres `CHECK` constraint — re-running `make` after adding a variant generates a migration that drops + re-adds the constraint, which is fine but requires the migration step.
+- Removing a variant is a data migration the user owns: existing rows that hold the dropped variant become invalid; clean up the data first, then drop the variant.
 
 ## Nullability
 
@@ -360,7 +386,7 @@ Two field-level attributes tell the admin how to render (or suppress) a column o
 
 ### `#[umbra(noform)]`
 
-The column never appears on any form — neither create nor edit. Use this for fields the user should never touch directly:
+The column never appears on any form - neither create nor edit. Use this for fields the user should never touch directly:
 
 ```rust
 #[derive(Debug, sqlx::FromRow, umbra::orm::Model)]

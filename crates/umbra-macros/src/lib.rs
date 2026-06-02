@@ -151,6 +151,18 @@ struct UmbraFieldAttr {
     /// the value at this many characters in `list_display` so a long
     /// body doesn't blow out a column. `0` means no truncation.
     max_length: u32,
+    /// `#[umbra(choices)]` — the field's type implements
+    /// [`umbra::orm::ChoiceField`]. The Model derive emits the field
+    /// as `SqlType::Text` and pulls the variant list from the trait
+    /// at derive time. Stored as `Some(TypeTokens)` for the choices
+    /// type when set, so the emitted FieldSpec can reference
+    /// `<T as ChoiceField>::VALUES`.
+    choices_ty: Option<proc_macro2::TokenStream>,
+    /// `#[umbra(default = "...")]` — SQL `DEFAULT` clause for this
+    /// column. Accepts a string literal; the migration engine emits
+    /// it verbatim on `CREATE TABLE` and `ALTER TABLE ADD COLUMN`.
+    /// `None` means no default.
+    default: Option<String>,
 }
 
 fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAttr> {
@@ -159,6 +171,8 @@ fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAtt
         noedit: false,
         is_string_repr: false,
         max_length: 0,
+        choices_ty: None,
+        default: None,
     };
     for attr in attrs {
         if !attr.path().is_ident("umbra") {
@@ -185,6 +199,23 @@ fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAtt
                 let lit: syn::LitInt = value.parse()?;
                 parsed.max_length = lit.base10_parse()?;
                 Ok(())
+            } else if meta.path.is_ident("choices") {
+                // `#[umbra(choices)]` — marker. The Rust field type
+                // is the choices enum; no explicit type token needed.
+                // We stamp Some(()) here and read the *field's* Rust
+                // type at the FieldSpec emission site to fill in the
+                // `<T as ChoiceField>::VALUES` tokens.
+                parsed.choices_ty = Some(quote!(()));
+                Ok(())
+            } else if meta.path.is_ident("default") {
+                // `#[umbra(default = "...")]` — SQL DEFAULT clause.
+                // String literal only at v1; the migration engine
+                // emits the value verbatim as a quoted SQL string on
+                // both CREATE TABLE and ADD COLUMN.
+                let value = meta.value()?;
+                let lit: syn::LitStr = value.parse()?;
+                parsed.default = Some(lit.value());
+                Ok(())
             } else {
                 // Unknown key. Report it with the known set so the
                 // common typo case (`is_string_repr` instead of
@@ -207,8 +238,8 @@ fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAtt
                     .unwrap_or_else(|| "<unknown>".to_string());
                 Err(meta.error(format!(
                     "unknown field-level umbra attribute `{path}` — known keys are \
-                     `noform`, `noedit`, `string` (or `string = true`), and \
-                     `max_length = N`"
+                     `noform`, `noedit`, `string` (or `string = true`), \
+                     `max_length = N`, `choices`, and `default = \"...\"`"
                 )))
             }
         })?;
@@ -410,18 +441,46 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             quote!(false)
         };
         let max_length_lit = field_attr.max_length;
+        let is_choices_field = field_attr.choices_ty.is_some();
 
-        let (sql_ty_tokens, nullable_lit) = match kind.sql_type_tokens() {
-            Some((ty, nullable)) => (ty, nullable),
-            None => {
-                // `Unsupported` lands here. Emit a typed error at the
-                // field's span and keep going so the user sees every
-                // problematic field at once.
-                let err =
-                    syn::Error::new_spanned(&field.ty, kind.error_message()).to_compile_error();
+        // When `#[umbra(choices)]` is set, the field's Rust type is
+        // a `ChoiceField`-implementing enum. Bypass the catalogue and
+        // emit `SqlType::Text`. The bind/decode round-trip is handled
+        // by the user's `#[derive(Choices)]` (which emits sqlx::Type +
+        // Encode + Decode treating the enum as a TEXT value).
+        let (sql_ty_tokens, nullable_lit) = if is_choices_field {
+            // A choices field of type `T` or `Option<T>`. We don't
+            // unwrap the Option here — the existing classifier already
+            // walks `Option<T>` for primitive types; for choices we
+            // tell the user "non-nullable only at v1" via a hard
+            // error if they wrap in `Option`. Detecting that means
+            // peeking at the Rust type.
+            if is_option_type(&field.ty) {
+                let err = syn::Error::new_spanned(
+                    &field.ty,
+                    "umbra: `#[umbra(choices)]` on `Option<T>` is deferred. \
+                     For a nullable choices column, declare a `None` variant on the enum \
+                     and use a non-Option field.",
+                )
+                .to_compile_error();
                 field_specs.push(err.clone());
                 column_consts.push(err);
                 continue;
+            }
+            (quote!(::umbra::orm::SqlType::Text), quote!(false))
+        } else {
+            match kind.sql_type_tokens() {
+                Some((ty, nullable)) => (ty, nullable),
+                None => {
+                    // `Unsupported` lands here. Emit a typed error at
+                    // the field's span and keep going so the user sees
+                    // every problematic field at once.
+                    let err =
+                        syn::Error::new_spanned(&field.ty, kind.error_message()).to_compile_error();
+                    field_specs.push(err.clone());
+                    column_consts.push(err);
+                    continue;
+                }
             }
         };
 
@@ -443,6 +502,27 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             _ => quote! { None },
         };
 
+        // For choices fields, emit `choices: <T as ChoiceField>::VALUES`
+        // (and the matching label slice). The user's enum type `T` is
+        // the field's Rust type — we pass it verbatim into the trait
+        // disambiguation so user crate paths round-trip.
+        let (choices_tokens, choice_labels_tokens) = if is_choices_field {
+            let ty = &field.ty;
+            (
+                quote! { <#ty as ::umbra::orm::ChoiceField>::VALUES },
+                quote! { <#ty as ::umbra::orm::ChoiceField>::LABELS },
+            )
+        } else {
+            (quote! { &[] }, quote! { &[] })
+        };
+
+        // `#[umbra(default = "...")]` lifts to a static-str default.
+        // Empty string means none.
+        let default_tokens = match &field_attr.default {
+            Some(s) => quote! { #s },
+            None => quote! { "" },
+        };
+
         field_specs.push(quote! {
             ::umbra::orm::FieldSpec {
                 name: #field_name_str,
@@ -455,10 +535,26 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                 noedit: #noedit_lit,
                 is_string_repr: #is_string_repr_lit,
                 max_length: #max_length_lit,
+                choices: #choices_tokens,
+                choice_labels: #choice_labels_tokens,
+                default: #default_tokens,
             }
         });
 
-        column_consts.push(column_const_for(struct_name, &field_name_str, field, &kind));
+        if is_choices_field {
+            // Choices fields are off-catalogue Rust types stored as
+            // TEXT — emit a `StrCol` predicate constant so filter chains
+            // can do `post::STATUS.eq("draft")` (or with the user's
+            // `PostStatus::Draft.as_str()`).
+            let const_ident = format_ident!("{}", to_screaming_snake_case(&field_name_str));
+            let span = field.ty.span();
+            column_consts.push(quote_spanned! { span =>
+                pub const #const_ident: ::umbra::orm::column::StrCol<super::#struct_name> =
+                    ::umbra::orm::column::StrCol::new(#field_name_str);
+            });
+        } else {
+            column_consts.push(column_const_for(struct_name, &field_name_str, field, &kind));
+        }
     }
 
     // Collect the FK field names and their target types for the
@@ -1175,6 +1271,12 @@ fn is_datetime_utc(ty: &Type) -> bool {
 /// has to be `Option` with exactly one type argument. Aliased options
 /// (e.g. `MyOpt<i64>`) don't match — that's the right call because the
 /// derive doesn't know which aliases mean "nullable."
+/// True when `ty` is syntactically `Option<...>`. Used to reject
+/// `#[umbra(choices)] field: Option<T>` at derive time (v1 limitation).
+fn is_option_type(ty: &Type) -> bool {
+    option_inner(ty).is_some()
+}
+
 fn option_inner(ty: &Type) -> Option<&Type> {
     let Type::Path(TypePath { qself: None, path }) = ty else {
         return None;
@@ -1840,4 +1942,274 @@ fn expand_form(input: DeriveInput) -> syn::Result<TokenStream2> {
         }
     };
     Ok(output)
+}
+
+// =========================================================================
+// `#[derive(Choices)]` — closed-set enums as model field types.
+// =========================================================================
+
+/// Derive the `ChoiceField` trait, `sqlx::Type` (+ Encode/Decode for
+/// Postgres and SQLite), `Display`, and `FromStr` for a unit-variant
+/// enum, so it can be used directly as a model field via
+/// `#[umbra(choices)]`.
+///
+/// Accepted struct-level modifiers:
+///
+/// - `#[choices(rename_all = "lowercase")]` — case style for the
+///   DB-stored variant names. Variants: `lowercase`, `UPPERCASE`,
+///   `snake_case`, `SCREAMING_SNAKE_CASE`, `kebab-case`. Default:
+///   `lowercase`.
+///
+/// Variant-level: each variant gets one DB value (derived from the
+/// variant name + `rename_all`) and one human label (the variant name
+/// verbatim). `#[choices(value = "...")]` and `#[choices(label = "...")]`
+/// on a single variant override its DB value and label respectively.
+#[proc_macro_derive(Choices, attributes(choices))]
+pub fn derive_choices(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    expand_choices(input)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+#[derive(Clone, Copy)]
+enum RenameAll {
+    Lowercase,
+    Uppercase,
+    SnakeCase,
+    ScreamingSnakeCase,
+    KebabCase,
+    None,
+}
+
+fn apply_rename(s: &str, rule: RenameAll) -> String {
+    match rule {
+        RenameAll::None => s.to_string(),
+        RenameAll::Lowercase => s.to_ascii_lowercase(),
+        RenameAll::Uppercase => s.to_ascii_uppercase(),
+        RenameAll::SnakeCase => to_snake_case(s),
+        RenameAll::ScreamingSnakeCase => to_screaming_snake_case(s),
+        RenameAll::KebabCase => to_snake_case(s).replace('_', "-"),
+    }
+}
+
+fn expand_choices(input: DeriveInput) -> syn::Result<TokenStream2> {
+    let enum_name = &input.ident;
+
+    let variants = match &input.data {
+        Data::Enum(e) => &e.variants,
+        _ => {
+            return Err(syn::Error::new_spanned(
+                enum_name,
+                "umbra::Choices can only be derived on enums",
+            ));
+        }
+    };
+
+    // Parse the struct-level rename rule. Default: lowercase (the
+    // sensible default for human-readable enum-as-string columns).
+    let mut rename = RenameAll::Lowercase;
+    for attr in &input.attrs {
+        if !attr.path().is_ident("choices") {
+            continue;
+        }
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("rename_all") {
+                let value = meta.value()?;
+                let lit: syn::LitStr = value.parse()?;
+                rename = match lit.value().as_str() {
+                    "lowercase" => RenameAll::Lowercase,
+                    "UPPERCASE" => RenameAll::Uppercase,
+                    "snake_case" => RenameAll::SnakeCase,
+                    "SCREAMING_SNAKE_CASE" => RenameAll::ScreamingSnakeCase,
+                    "kebab-case" => RenameAll::KebabCase,
+                    "none" => RenameAll::None,
+                    other => {
+                        return Err(meta.error(format!(
+                            "umbra::Choices: unknown `rename_all = \"{other}\"`. Known: \
+                             lowercase, UPPERCASE, snake_case, SCREAMING_SNAKE_CASE, \
+                             kebab-case, none"
+                        )));
+                    }
+                };
+                Ok(())
+            } else {
+                Err(meta
+                    .error("umbra::Choices accepts only struct-level `rename_all = \"...\"` today"))
+            }
+        })?;
+    }
+
+    // Walk variants. Each must be unit (no fields). Per-variant
+    // `#[choices(value = "...", label = "...")]` overrides apply.
+    let mut variant_idents: Vec<&syn::Ident> = Vec::new();
+    let mut values: Vec<String> = Vec::new();
+    let mut labels: Vec<String> = Vec::new();
+    for v in variants {
+        if !matches!(v.fields, Fields::Unit) {
+            return Err(syn::Error::new_spanned(
+                &v.ident,
+                "umbra::Choices variants must be unit (no fields)",
+            ));
+        }
+        let mut value: Option<String> = None;
+        let mut label: Option<String> = None;
+        for attr in &v.attrs {
+            if !attr.path().is_ident("choices") {
+                continue;
+            }
+            attr.parse_nested_meta(|meta| {
+                if meta.path.is_ident("value") {
+                    let lit: syn::LitStr = meta.value()?.parse()?;
+                    value = Some(lit.value());
+                    Ok(())
+                } else if meta.path.is_ident("label") {
+                    let lit: syn::LitStr = meta.value()?.parse()?;
+                    label = Some(lit.value());
+                    Ok(())
+                } else {
+                    Err(meta.error(
+                        "umbra::Choices variant attr accepts `value = \"...\"` or `label = \"...\"`",
+                    ))
+                }
+            })?;
+        }
+        let raw = v.ident.to_string();
+        let v_value = value.unwrap_or_else(|| apply_rename(&raw, rename));
+        let v_label = label.unwrap_or_else(|| raw.clone());
+        variant_idents.push(&v.ident);
+        values.push(v_value);
+        labels.push(v_label);
+    }
+
+    // Check for duplicates in the DB value list — silent duplicates
+    // would round-trip to whichever variant FromStr matches first.
+    for i in 0..values.len() {
+        for j in (i + 1)..values.len() {
+            if values[i] == values[j] {
+                return Err(syn::Error::new_spanned(
+                    variant_idents[j],
+                    format!(
+                        "umbra::Choices: duplicate DB value `{}` (also used by `{}`). \
+                         Use `#[choices(value = \"...\")]` to disambiguate.",
+                        values[i], variant_idents[i],
+                    ),
+                ));
+            }
+        }
+    }
+
+    let values_lits: Vec<_> = values.iter().map(|s| quote!(#s)).collect();
+    let labels_lits: Vec<_> = labels.iter().map(|s| quote!(#s)).collect();
+    let from_arms: Vec<_> = values
+        .iter()
+        .zip(variant_idents.iter())
+        .map(|(v, ident)| quote! { #v => ::core::option::Option::Some(#enum_name::#ident) })
+        .collect();
+    let as_str_arms: Vec<_> = variant_idents
+        .iter()
+        .zip(values.iter())
+        .map(|(ident, v)| quote! { #enum_name::#ident => #v })
+        .collect();
+
+    let enum_name_str = enum_name.to_string();
+    let invalid_msg = format!("invalid value for {}", enum_name_str);
+
+    Ok(quote! {
+        impl ::umbra::orm::ChoiceField for #enum_name {
+            const VALUES: &'static [&'static str] = &[ #(#values_lits),* ];
+            const LABELS: &'static [&'static str] = &[ #(#labels_lits),* ];
+
+            fn as_str(&self) -> &'static str {
+                match self {
+                    #(#as_str_arms),*
+                }
+            }
+
+            fn from_str_ok(s: &str) -> ::core::option::Option<Self> {
+                match s {
+                    #(#from_arms),* ,
+                    _ => ::core::option::Option::None,
+                }
+            }
+        }
+
+        impl ::core::fmt::Display for #enum_name {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                <Self as ::umbra::orm::ChoiceField>::as_str(self).fmt(f)
+            }
+        }
+
+        impl ::core::str::FromStr for #enum_name {
+            type Err = ::std::string::String;
+            fn from_str(s: &str) -> ::core::result::Result<Self, Self::Err> {
+                <Self as ::umbra::orm::ChoiceField>::from_str_ok(s)
+                    .ok_or_else(|| ::std::format!("{}: `{}`", #invalid_msg, s))
+            }
+        }
+
+        // sqlx Type impls — round-trip as TEXT on both backends.
+        impl ::umbra::_sqlx::Type<::umbra::_sqlx::Sqlite> for #enum_name {
+            fn type_info() -> <::umbra::_sqlx::Sqlite as ::umbra::_sqlx::Database>::TypeInfo {
+                <::std::string::String as ::umbra::_sqlx::Type<::umbra::_sqlx::Sqlite>>::type_info()
+            }
+        }
+        impl ::umbra::_sqlx::Type<::umbra::_sqlx::Postgres> for #enum_name {
+            fn type_info() -> <::umbra::_sqlx::Postgres as ::umbra::_sqlx::Database>::TypeInfo {
+                <::std::string::String as ::umbra::_sqlx::Type<::umbra::_sqlx::Postgres>>::type_info()
+            }
+        }
+        impl<'q> ::umbra::_sqlx::Encode<'q, ::umbra::_sqlx::Sqlite> for #enum_name {
+            fn encode_by_ref(
+                &self,
+                buf: &mut <::umbra::_sqlx::Sqlite as ::umbra::_sqlx::Database>::ArgumentBuffer<'q>,
+            ) -> ::core::result::Result<
+                ::umbra::_sqlx::encode::IsNull,
+                ::std::boxed::Box<dyn ::std::error::Error + ::core::marker::Send + ::core::marker::Sync>,
+            > {
+                <&str as ::umbra::_sqlx::Encode<'q, ::umbra::_sqlx::Sqlite>>::encode_by_ref(
+                    &<Self as ::umbra::orm::ChoiceField>::as_str(self),
+                    buf,
+                )
+            }
+        }
+        impl<'q> ::umbra::_sqlx::Encode<'q, ::umbra::_sqlx::Postgres> for #enum_name {
+            fn encode_by_ref(
+                &self,
+                buf: &mut <::umbra::_sqlx::Postgres as ::umbra::_sqlx::Database>::ArgumentBuffer<'q>,
+            ) -> ::core::result::Result<
+                ::umbra::_sqlx::encode::IsNull,
+                ::std::boxed::Box<dyn ::std::error::Error + ::core::marker::Send + ::core::marker::Sync>,
+            > {
+                <&str as ::umbra::_sqlx::Encode<'q, ::umbra::_sqlx::Postgres>>::encode_by_ref(
+                    &<Self as ::umbra::orm::ChoiceField>::as_str(self),
+                    buf,
+                )
+            }
+        }
+        impl<'r> ::umbra::_sqlx::Decode<'r, ::umbra::_sqlx::Sqlite> for #enum_name {
+            fn decode(
+                value: <::umbra::_sqlx::Sqlite as ::umbra::_sqlx::Database>::ValueRef<'r>,
+            ) -> ::core::result::Result<
+                Self,
+                ::std::boxed::Box<dyn ::std::error::Error + ::core::marker::Send + ::core::marker::Sync>,
+            > {
+                let s = <&str as ::umbra::_sqlx::Decode<'r, ::umbra::_sqlx::Sqlite>>::decode(value)?;
+                <Self as ::umbra::orm::ChoiceField>::from_str_ok(s)
+                    .ok_or_else(|| ::std::format!("{}: `{}`", #invalid_msg, s).into())
+            }
+        }
+        impl<'r> ::umbra::_sqlx::Decode<'r, ::umbra::_sqlx::Postgres> for #enum_name {
+            fn decode(
+                value: <::umbra::_sqlx::Postgres as ::umbra::_sqlx::Database>::ValueRef<'r>,
+            ) -> ::core::result::Result<
+                Self,
+                ::std::boxed::Box<dyn ::std::error::Error + ::core::marker::Send + ::core::marker::Sync>,
+            > {
+                let s = <&str as ::umbra::_sqlx::Decode<'r, ::umbra::_sqlx::Postgres>>::decode(value)?;
+                <Self as ::umbra::orm::ChoiceField>::from_str_ok(s)
+                    .ok_or_else(|| ::std::format!("{}: `{}`", #invalid_msg, s).into())
+            }
+        }
+    })
 }

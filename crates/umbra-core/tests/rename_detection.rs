@@ -40,8 +40,11 @@ fn id_col() -> Column {
         fk_target: None,
         noform: false,
         noedit: false,
-            is_string_repr: false,
-            max_length: 0,
+        is_string_repr: false,
+        max_length: 0,
+        choices: Vec::new(),
+        choice_labels: Vec::new(),
+        default: String::new(),
     }
 }
 
@@ -54,8 +57,11 @@ fn title_col() -> Column {
         fk_target: None,
         noform: false,
         noedit: false,
-            is_string_repr: false,
-            max_length: 0,
+        is_string_repr: false,
+        max_length: 0,
+        choices: Vec::new(),
+        choice_labels: Vec::new(),
+        default: String::new(),
     }
 }
 
@@ -145,8 +151,11 @@ fn name_match_wins_over_shape_match_when_columns_differ() {
         fk_target: None,
         noform: false,
         noedit: false,
-            is_string_repr: false,
-            max_length: 0,
+        is_string_repr: false,
+        max_length: 0,
+        choices: Vec::new(),
+        choice_labels: Vec::new(),
+        default: String::new(),
     };
 
     let prev = make_snapshot(vec![make_meta("Foo", "foo", vec![id_col(), title_col()])]);
@@ -215,8 +224,11 @@ fn no_rename_when_shapes_differ() {
         fk_target: None,
         noform: false,
         noedit: false,
-            is_string_repr: false,
-            max_length: 0,
+        is_string_repr: false,
+        max_length: 0,
+        choices: Vec::new(),
+        choice_labels: Vec::new(),
+        default: String::new(),
     };
 
     let prev = make_snapshot(vec![make_meta("Foo", "foo", vec![id_col(), title_col()])]);

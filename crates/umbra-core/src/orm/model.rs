@@ -204,6 +204,30 @@ pub struct FieldSpec {
     /// long body doesn't blow out a column. `0` means no truncation.
     /// Set via `#[umbra(max_length = N)]`.
     pub max_length: u32,
+
+    /// Closed-set values for a choices column, in declaration order.
+    /// Populated by the `#[derive(Model)]` macro for fields tagged
+    /// `#[umbra(choices)]` by reading `<T as ChoiceField>::VALUES` at
+    /// derive time. Empty slice means "not a choices field" — every
+    /// non-choices column uses the empty default.
+    ///
+    /// The migration engine emits a Postgres `CHECK (col IN (...))`
+    /// constraint when this slice is non-empty; the admin renders a
+    /// `<select>` widget with these as the `<option>` values.
+    pub choices: &'static [&'static str],
+
+    /// Human-readable labels matching `choices` position-for-position.
+    /// Used by the admin to render the `<select>` widget's option text.
+    /// Empty when `choices` is empty.
+    pub choice_labels: &'static [&'static str],
+
+    /// SQL `DEFAULT` clause for this column. Set via
+    /// `#[umbra(default = "...")]` — accepts a string literal that
+    /// the DDL pass passes verbatim into `DEFAULT '<value>'`. Empty
+    /// string means no default. Carried through to the migration
+    /// engine, which emits the `DEFAULT` on both `CREATE TABLE` and
+    /// `ALTER TABLE ADD COLUMN`.
+    pub default: &'static str,
 }
 
 /// The SQL type kind of a column.

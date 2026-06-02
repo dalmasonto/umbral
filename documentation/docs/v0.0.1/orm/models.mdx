@@ -227,7 +227,7 @@ pub struct User {
 }
 ```
 
-The attribute lands at M3.1; per-field attributes for `db_index`, `default`, `choices`, `on_delete` are scheduled as the plugins that need them ship.
+The attribute lands at M3.1; per-field attributes for `db_index`, `default`, `on_delete` are scheduled as the plugins that need them ship. (`choices` is shipped — `#[derive(Choices)]` on the enum + `#[umbra(choices)]` on the field; see [Column types - Using a Rust enum](./column-types#derivechoices---using-a-rust-enum-as-a-field-type).)
 
 ## Display hints (`string`, `max_length`)
 
@@ -244,10 +244,10 @@ pub struct Article {
 }
 ```
 
-- `#[umbra(string)]` — the Django-style `__str__`, **opt-in**. Tagging one field per model switches the admin's default `list_display` to that single column when no explicit config is registered. Without any field tagged, the changelist shows every column — the legacy behaviour. The PK isn't rendered as a separate column because every row in the admin is clickable into the sheet, so the id is already reachable. The attribute is never required; it's how you ask for the compact single-column form. Equivalent shapes: `#[umbra(string)]` and `#[umbra(string = true)]`.
-- `#[umbra(max_length = N)]` — soft truncation cap for display. The admin trims the value at `N` characters when rendering it in `list_display`, appending `…` so the cut is visible. Counted in characters, not bytes — emoji and combining characters survive intact.
+- `#[umbra(string)]` - the Django-style `__str__`, **opt-in**. Tagging one field per model switches the admin's default `list_display` to that single column when no explicit config is registered. Without any field tagged, the changelist shows every column - the legacy behaviour. The PK isn't rendered as a separate column because every row in the admin is clickable into the sheet, so the id is already reachable. The attribute is never required; it's how you ask for the compact single-column form. Equivalent shapes: `#[umbra(string)]` and `#[umbra(string = true)]`.
+- `#[umbra(max_length = N)]` - soft truncation cap for display. The admin trims the value at `N` characters when rendering it in `list_display`, appending `…` so the cut is visible. Counted in characters, not bytes - emoji and combining characters survive intact.
 
-Both attributes are display-only — they do not constrain the column at the SQL level. A `String` field with `max_length = 60` is still `TEXT` (unbounded) at the database; the cap only affects how the admin renders cells. Use `#[umbra(table = "...")]` plus a manual `CHECK` constraint via a custom migration if you want the limit enforced at the DB.
+Both attributes are display-only - they do not constrain the column at the SQL level. A `String` field with `max_length = 60` is still `TEXT` (unbounded) at the database; the cap only affects how the admin renders cells. Use `#[umbra(table = "...")]` plus a manual `CHECK` constraint via a custom migration if you want the limit enforced at the DB.
 
 ## Plugin-namespaced tables
 

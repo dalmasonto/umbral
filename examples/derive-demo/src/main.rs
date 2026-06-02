@@ -33,6 +33,21 @@ use umbra::templates::context;
 use umbra::web::{Html, StatusCode};
 use umbra_auth::AuthUser;
 
+/// A closed-set enum used as a model field via `#[umbra(choices)]`.
+///
+/// `#[derive(Choices)]` emits the trait impls + the sqlx Type / Encode /
+/// Decode pair so `Article::create(.. status: ArticleStatus::Draft ..)`
+/// round-trips through the database as `'draft'`. The admin renders a
+/// `<select>` with the variant labels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Choices)]
+#[choices(rename_all = "lowercase")]
+pub enum ArticleStatus {
+    Draft,
+    Review,
+    Published,
+    Archived,
+}
+
 /// A small article model.
 ///
 /// The derive emits `impl Model for Article`, `Article::objects()`,
@@ -47,6 +62,8 @@ pub struct Article {
     #[umbra(string, max_length = 50)]
     pub title: String,
     pub body: String,
+    #[umbra(choices, default = "draft")]
+    pub status: ArticleStatus,
     #[umbra(noedit)]
     pub published_at: Option<chrono::DateTime<chrono::Utc>>,
 }
@@ -113,7 +130,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 umbra_admin::AdminModel::new("article")
                     .label("Articles")
                     .icon("newspaper")
-                    .list_display(&["id", "title", "published_at"])
+                    // .list_display(&["id", "title", "published_at"])
                     .search_fields(&["title", "body"])
                     .ordering(&["-published_at", "id"]),
             ),
@@ -270,9 +287,10 @@ async fn seed_article_rows() -> Result<(), Box<dyn std::error::Error + Send + Sy
 
     let articles = vec![
         Article {
-            id: 1,
+            id: 0,
             title: "Deriving Model".to_string(),
             body: "Article::objects().fetch() returned this row.".to_string(),
+            status: ArticleStatus::Published,
             published_at: Some(
                 chrono::DateTime::parse_from_rfc3339("2026-05-30T12:00:00Z")
                     .unwrap()
@@ -280,9 +298,10 @@ async fn seed_article_rows() -> Result<(), Box<dyn std::error::Error + Send + Sy
             ),
         },
         Article {
-            id: 2,
+            id: 0,
             title: "User-defined struct".to_string(),
             body: "No hand-written impl Model anywhere in this file.".to_string(),
+            status: ArticleStatus::Draft,
             published_at: None::<chrono::DateTime<chrono::Utc>>,
         },
     ];

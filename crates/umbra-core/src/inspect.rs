@@ -830,6 +830,9 @@ impl From<&IntrospectedColumn> for Column {
             noedit: false,
             is_string_repr: false,
             max_length: 0,
+            choices: Vec::new(),
+            choice_labels: Vec::new(),
+            default: String::new(),
         }
     }
 }

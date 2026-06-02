@@ -100,8 +100,11 @@ fn int_pk_column() -> Column {
         fk_target: None,
         noform: false,
         noedit: false,
-            is_string_repr: false,
-            max_length: 0,
+        is_string_repr: false,
+        max_length: 0,
+        choices: Vec::new(),
+        choice_labels: Vec::new(),
+        default: String::new(),
     }
 }
 
@@ -114,8 +117,11 @@ fn uuid_pk_column() -> Column {
         fk_target: None,
         noform: false,
         noedit: false,
-            is_string_repr: false,
-            max_length: 0,
+        is_string_repr: false,
+        max_length: 0,
+        choices: Vec::new(),
+        choice_labels: Vec::new(),
+        default: String::new(),
     }
 }
 
@@ -128,8 +134,11 @@ fn string_pk_column() -> Column {
         fk_target: None,
         noform: false,
         noedit: false,
-            is_string_repr: false,
-            max_length: 0,
+        is_string_repr: false,
+        max_length: 0,
+        choices: Vec::new(),
+        choice_labels: Vec::new(),
+        default: String::new(),
     }
 }
 
@@ -142,8 +151,11 @@ fn label_column() -> Column {
         fk_target: None,
         noform: false,
         noedit: false,
-            is_string_repr: false,
-            max_length: 0,
+        is_string_repr: false,
+        max_length: 0,
+        choices: Vec::new(),
+        choice_labels: Vec::new(),
+        default: String::new(),
     }
 }
 

@@ -21,3 +21,9 @@ minijinja = "2"
 # `serde_json::Value` and `from_value` without requiring user crates
 # to declare a direct `serde_json` dep.
 serde_json = "1"
+# Re-exported as `umbra::_sqlx` so macro-generated code from
+# `#[derive(Choices)]` (sqlx::Type / Encode / Decode impls) compiles
+# in user crates without forcing them to declare a direct sqlx dep
+# with matching feature flags. Feature set mirrors umbra-core: native
+# Sqlite + Postgres + chrono / uuid / json.
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "postgres", "chrono", "uuid", "json"] }

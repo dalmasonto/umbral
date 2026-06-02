@@ -139,8 +139,11 @@ async fn migrated_dir() -> &'static Path {
                 fk_target: None,
                 noform: false,
                 noedit: false,
-            is_string_repr: false,
-            max_length: 0,
+                is_string_repr: false,
+                max_length: 0,
+                choices: Vec::new(),
+                choice_labels: Vec::new(),
+                default: String::new(),
             };
             let file = MigrationFile {
                 id: M8_ADD_COLUMN_MIGRATION_ID.to_string(),
@@ -193,8 +196,11 @@ async fn migrated_dir() -> &'static Path {
                     fk_target: None,
                     noform: false,
                     noedit: false,
-            is_string_repr: false,
-            max_length: 0,
+                    is_string_repr: false,
+                    max_length: 0,
+                    choices: Vec::new(),
+                    choice_labels: Vec::new(),
+                    default: String::new(),
                 },
                 Column {
                     name: "note".to_string(),
@@ -204,8 +210,11 @@ async fn migrated_dir() -> &'static Path {
                     fk_target: None,
                     noform: false,
                     noedit: false,
-            is_string_repr: false,
-            max_length: 0,
+                    is_string_repr: false,
+                    max_length: 0,
+                    choices: Vec::new(),
+                    choice_labels: Vec::new(),
+                    default: String::new(),
                 },
             ];
             let file = MigrationFile {
@@ -683,8 +692,11 @@ fn id_column() -> Column {
         fk_target: None,
         noform: false,
         noedit: false,
-            is_string_repr: false,
-            max_length: 0,
+        is_string_repr: false,
+        max_length: 0,
+        choices: Vec::new(),
+        choice_labels: Vec::new(),
+        default: String::new(),
     }
 }
 
@@ -699,8 +711,11 @@ fn text_column(name: &str) -> Column {
         fk_target: None,
         noform: false,
         noedit: false,
-            is_string_repr: false,
-            max_length: 0,
+        is_string_repr: false,
+        max_length: 0,
+        choices: Vec::new(),
+        choice_labels: Vec::new(),
+        default: String::new(),
     }
 }
 
@@ -826,6 +841,9 @@ fn diff_returns_unsafe_alter_for_a_type_change() {
             noedit: false,
             is_string_repr: false,
             max_length: 0,
+            choices: Vec::new(),
+            choice_labels: Vec::new(),
+            default: String::new(),
         },
     ]));
 
@@ -866,6 +884,9 @@ fn diff_emits_alter_column_for_a_nullable_flip() {
             noedit: false,
             is_string_repr: false,
             max_length: 0,
+            choices: Vec::new(),
+            choice_labels: Vec::new(),
+            default: String::new(),
         },
     ]));
 
