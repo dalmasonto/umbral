@@ -55,6 +55,29 @@ use std::sync::OnceLock;
 
 use minijinja::{AutoEscape, Environment};
 
+tokio::task_local! {
+    /// Per-request ambient user value, set by a session-aware layer
+    /// (typically `umbra_sessions::UserContextLayer<U>`) and read by
+    /// [`render`] to mirror Django's `request.user` ergonomic in
+    /// templates. `None` means an anonymous request.
+    ///
+    /// Outside the layer's scope, `try_with` returns `Err(AccessError)`
+    /// and `render` skips the merge — explicit ctx behaviour is
+    /// preserved when no layer is installed.
+    pub static CURRENT_USER: Option<minijinja::Value>;
+}
+
+/// Run `fut` with the ambient template user value scoped to `user`
+/// for its duration. Intended for the session-aware layer in
+/// `umbra-sessions`; downstream handler code reads the value
+/// transparently through [`render`].
+pub async fn with_current_user<F: std::future::Future>(
+    user: Option<minijinja::Value>,
+    fut: F,
+) -> F::Output {
+    CURRENT_USER.scope(user, fut).await
+}
+
 /// Watched template directories captured at `init` time. Stored
 /// separately so the dev-mode render path can rebuild the environment
 /// from the same sources without re-publishing the OnceLock.
@@ -241,7 +264,40 @@ fn render_with<C: Serialize>(
         minijinja::ErrorKind::TemplateNotFound => TemplateError::Missing(name.to_string()),
         _ => TemplateError::Render(e),
     })?;
-    tmpl.render(ctx).map_err(TemplateError::Render)
+    let merged = merge_ambient_user(ctx);
+    tmpl.render(&merged).map_err(TemplateError::Render)
+}
+
+/// Merge any ambient `CURRENT_USER` task-local value into the caller's
+/// ctx under key `user`. The handler's own `user` (if it supplied one)
+/// always wins — the layer's injection is the default, not an override.
+///
+/// When no layer is installed (`try_with` returns `Err`), the original
+/// ctx is returned unchanged.
+fn merge_ambient_user<C: Serialize>(ctx: &C) -> minijinja::Value {
+    let ctx_value = minijinja::Value::from_serialize(ctx);
+    let Ok(Some(user_value)) = CURRENT_USER.try_with(|u| u.clone()) else {
+        return ctx_value;
+    };
+    // Only inject when the caller didn't supply `user` themselves.
+    if ctx_value.get_attr("user").map(|v| !v.is_undefined()).unwrap_or(false) {
+        return ctx_value;
+    }
+    // Build a fresh object that contains every original key plus
+    // `user`. minijinja's `Value::from_iter` over (key, value) pairs
+    // produces a Map value; we walk the original keys and add ours
+    // last.
+    let mut pairs: Vec<(String, minijinja::Value)> = Vec::new();
+    if let Ok(keys) = ctx_value.try_iter() {
+        for key in keys {
+            let key_str = key.to_string();
+            if let Ok(v) = ctx_value.get_item(&key) {
+                pairs.push((key_str, v));
+            }
+        }
+    }
+    pairs.push(("user".to_string(), user_value));
+    minijinja::Value::from_iter(pairs)
 }
 
 /// Walk a directory recursively and register every `.html` / `.htm` /

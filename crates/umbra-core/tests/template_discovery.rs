@@ -77,6 +77,19 @@ fn boot() {
         // dir_c: conflict.html — duplicate, should be shadowed by dir_b's copy
         write_template(&dir_c, "conflict.html", "from_dir_c");
 
+        // dir_b: user_greeting.html — exercises the `request.user`-style
+        // ambient injection from the `CURRENT_USER` task-local.
+        write_template(
+            &dir_b,
+            "user_greeting.html",
+            // The `is defined` guard makes this template safe to render
+            // whether or not the session layer (which scopes the
+            // `CURRENT_USER` task-local) is installed. With the layer
+            // active, `user` always has at least `is_authenticated:
+            // false`; without it, the guard short-circuits to "anon".
+            "{% if user is defined and user.is_authenticated %}hi {{ user.username }}{% else %}anon{% endif %}",
+        );
+
         (dir_a, dir_b, dir_c)
     });
 
@@ -142,4 +155,70 @@ fn collision_first_registered_wins_and_is_reported() {
         "from_dir_b",
         "dir_b (first registered) should win over dir_c (duplicate)"
     );
+}
+
+// =========================================================================
+// Test 3 — ambient user merge (Django's `request.user` shape)
+//
+// The session-aware layer in `umbra-sessions` calls `with_current_user`
+// to scope the per-request user value. `render` reads the task-local
+// and merges into ctx under key `user`, but only when:
+//   a) the layer scope was entered (otherwise the task-local read errors
+//      out and the merge is skipped — backwards compat for handlers
+//      that don't opt in), and
+//   b) the caller didn't already supply `user` themselves (explicit ctx
+//      always wins over the ambient default).
+// =========================================================================
+
+#[tokio::test]
+async fn ambient_user_renders_when_layer_scoped_value_is_set() {
+    boot();
+
+    let user = minijinja::Value::from_serialize(&serde_json::json!({
+        "username": "alice",
+        "is_authenticated": true,
+    }));
+
+    let output = templates::with_current_user(Some(user), async {
+        templates::render("user_greeting.html", &minijinja::context! {})
+            .expect("render should succeed")
+    })
+    .await;
+
+    assert_eq!(output, "hi alice");
+}
+
+#[tokio::test]
+async fn ambient_user_falls_back_to_anonymous_branch_outside_layer_scope() {
+    boot();
+
+    // No `with_current_user` wrapper — the task-local is unset, the
+    // merge is skipped, and `user` resolves to undefined which minijinja
+    // treats as falsy in `{% if user.is_authenticated %}`.
+    let output = templates::render("user_greeting.html", &minijinja::context! {})
+        .expect("render should succeed");
+
+    assert_eq!(output, "anon");
+}
+
+#[tokio::test]
+async fn explicit_ctx_user_wins_over_ambient_layer_value() {
+    boot();
+
+    let ambient = minijinja::Value::from_serialize(&serde_json::json!({
+        "username": "alice",
+        "is_authenticated": true,
+    }));
+    // Same template, but the handler hands its own `user` via ctx. The
+    // ambient value must NOT clobber it — explicit ctx is authoritative.
+    let explicit_ctx = minijinja::context! {
+        user => serde_json::json!({ "username": "bob", "is_authenticated": true }),
+    };
+
+    let output = templates::with_current_user(Some(ambient), async {
+        templates::render("user_greeting.html", &explicit_ctx).expect("render should succeed")
+    })
+    .await;
+
+    assert_eq!(output, "hi bob");
 }

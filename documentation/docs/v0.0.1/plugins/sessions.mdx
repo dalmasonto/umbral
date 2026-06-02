@@ -43,6 +43,34 @@ async fn dashboard(headers: HeaderMap) -> Result<Html<String>, StatusCode> {
 }
 ```
 
+## Expose the current user in every template (Django-style)
+
+Opt in with `.with_user_in_templates()` on the plugin builder and every template render in the app gets `{{ user }}` for free — Django's `request.user` shape, no per-handler ctx threading:
+
+```rust
+App::builder()
+    .plugin(AuthPlugin::default())
+    .plugin(SessionsPlugin::default().with_user_in_templates())
+    .build()?;
+```
+
+Under the hood: an axum layer resolves the current user once per request and stashes the serialized value in a tokio task-local. `umbra::templates::render` reads the task-local and merges into the ctx under key `user` — but only when the handler didn't already supply its own `user` (explicit ctx wins).
+
+Templates can branch uniformly:
+
+```jinja
+{% if user.is_authenticated %}
+  <span class="navbar-username">{{ user.username }}</span>
+  <a href="/logout">Sign out</a>
+{% else %}
+  <a href="/login">Sign in</a>
+{% endif %}
+```
+
+The injected value is always at least `{ is_authenticated: false }` for anonymous requests, so the `is_authenticated` check is safe without a separate `{% if user %}` guard.
+
+**Cost.** One `current_user` DB read per request (cookie → session → user lookup). That's why it's opt-in: REST-only services, static-asset endpoints, and health checks all skip the lookup unless the app calls `.with_user_in_templates()`.
+
 ## Setting and reading per-session data
 
 `get_data` and `set_data` round-trip typed values through the `data` JSON column.

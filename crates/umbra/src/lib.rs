@@ -252,8 +252,8 @@ pub mod templates {
     //! it's re-exported here so a user crate doesn't need to depend on
     //! minijinja directly.
 
-    pub use minijinja::context;
-    pub use umbra_core::templates::{TemplateError, render};
+    pub use minijinja::{Value, context};
+    pub use umbra_core::templates::{CURRENT_USER, TemplateError, render, with_current_user};
 }
 
 pub mod signals {

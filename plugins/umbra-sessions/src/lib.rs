@@ -80,11 +80,15 @@ pub struct Session {
 #[derive(Debug, Clone)]
 pub struct SessionsPlugin {
     auto_layer: bool,
+    user_in_templates: bool,
 }
 
 impl Default for SessionsPlugin {
     fn default() -> Self {
-        Self { auto_layer: true }
+        Self {
+            auto_layer: true,
+            user_in_templates: false,
+        }
     }
 }
 
@@ -95,6 +99,27 @@ impl SessionsPlugin {
     /// don't get a session DB row on every health check).
     pub fn without_auto_layer(mut self) -> Self {
         self.auto_layer = false;
+        self
+    }
+
+    /// Make the current session user available as `{{ user }}` in
+    /// every template render — mirrors Django's `request.user`. When
+    /// enabled, [`user_context_layer`] is auto-applied to the router
+    /// so every request resolves the user (one DB read each) and
+    /// stashes the resulting `minijinja::Value` into the task-local
+    /// [`umbra::templates::CURRENT_USER`] for the request's duration.
+    /// `render` then merges that value into the ctx under key `user`
+    /// unless the handler supplied its own. Templates can use
+    /// `{% if user.is_authenticated %}` uniformly: the layer always
+    /// injects *something* — either the serialized user augmented
+    /// with `is_authenticated: true`, or the anonymous sentinel
+    /// `{ is_authenticated: false }`.
+    ///
+    /// Off by default because most non-HTML endpoints (REST APIs,
+    /// static assets, health checks) don't benefit from the per-
+    /// request DB lookup. Turn it on for an HTML-heavy app.
+    pub fn with_user_in_templates(mut self) -> Self {
+        self.user_in_templates = true;
         self
     }
 }
@@ -116,11 +141,14 @@ impl Plugin for SessionsPlugin {
     }
 
     fn wrap_router(&self, router: umbra::web::Router) -> umbra::web::Router {
+        let mut router = router;
         if self.auto_layer {
-            router.layer(axum::middleware::from_fn(session_layer))
-        } else {
-            router
+            router = router.layer(axum::middleware::from_fn(session_layer));
         }
+        if self.user_in_templates {
+            router = router.layer(axum::middleware::from_fn(user_context_layer));
+        }
+        router
     }
 }
 
@@ -942,4 +970,60 @@ pub async fn session_layer(
         }
     }
     response
+}
+
+/// Resolve the current [`AuthUser`] and stash it in the
+/// [`umbra::templates::CURRENT_USER`] task-local so every `render`
+/// inside this request can pick it up as `{{ user }}` — Django's
+/// `request.user` shape.
+///
+/// Always injects a value:
+/// - Authenticated session → serialize the user, augment with
+///   `is_authenticated: true`.
+/// - Anonymous / no session / stale cookie → the sentinel
+///   `{ is_authenticated: false }`.
+///
+/// Cost: one `current_user` call per request. The cheap path is
+/// `cookie_from_headers` + `read_session` + `AuthUser::filter().first()`
+/// — three round trips. Opt in via `SessionsPlugin::with_user_in_templates`
+/// when the app's request mix is HTML-heavy; leave off for REST-only
+/// services so static-asset and health-check requests don't trip the
+/// DB read.
+pub async fn user_context_layer(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let user_value = match current_user(req.headers()).await {
+        Ok(Some(u)) => serialize_authenticated(&u),
+        _ => anonymous_user_value(),
+    };
+    umbra::templates::with_current_user(Some(user_value), next.run(req)).await
+}
+
+/// Serialize an `AuthUser` into a minijinja value with
+/// `is_authenticated: true` merged in. Templates can therefore call
+/// `{% if user.is_authenticated %}` uniformly without checking for
+/// `user == None` separately.
+fn serialize_authenticated(user: &AuthUser) -> umbra::templates::Value {
+    let mut json = match serde_json::to_value(user) {
+        Ok(serde_json::Value::Object(map)) => map,
+        _ => serde_json::Map::new(),
+    };
+    json.insert(
+        "is_authenticated".to_string(),
+        serde_json::Value::Bool(true),
+    );
+    umbra::templates::Value::from_serialize(&serde_json::Value::Object(json))
+}
+
+/// Anonymous user sentinel — `{ is_authenticated: false }`. Lets
+/// templates write `{% if user.is_authenticated %}` without a
+/// separate `{% if user %}` guard.
+fn anonymous_user_value() -> umbra::templates::Value {
+    let mut json = serde_json::Map::new();
+    json.insert(
+        "is_authenticated".to_string(),
+        serde_json::Value::Bool(false),
+    );
+    umbra::templates::Value::from_serialize(&serde_json::Value::Object(json))
 }
