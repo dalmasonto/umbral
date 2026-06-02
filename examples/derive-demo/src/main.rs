@@ -78,17 +78,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         )
         .init();
 
-    let settings = Settings::from_env()?;
+    let mut settings = Settings::from_env()?;
 
-    // Override `sqlite::memory:` with a file-backed URL so the schema
-    // and seed survive across `cargo run` invocations. Anything
-    // serious overrides UMBRA_DATABASE_URL.
-    let database_url = if settings.database_url == "sqlite::memory:" {
-        "sqlite://derive-demo.db?mode=rwc".to_string()
-    } else {
-        settings.database_url.clone()
-    };
-    let pool = umbra::db::connect(&database_url).await?;
+    // Demo defaults to a local Postgres so the example exercises the
+    // backend most umbra apps will deploy on. The local setup script
+    // lives at `scripts/create_db.sh` (one-time `CREATE ROLE` +
+    // `CREATE DATABASE`); after that, `cargo run` Just Works.
+    //
+    // The framework still ships with `sqlite::memory:` as the
+    // ambient Settings default, so on a fresh checkout (no env, no
+    // `umbra.toml`) we swap it for the demo's chosen Postgres URL.
+    // An explicit `UMBRA_DATABASE_URL=...` env var (or
+    // `umbra.toml`) wins over this override — set
+    // `UMBRA_DATABASE_URL=sqlite://demo.db?mode=rwc` to fall back to
+    // the SQLite shape, etc.
+    //
+    // We mutate `settings.database_url` rather than just connecting
+    // to a different URL because `App::build()` cross-checks the URL
+    // backend against the pool's runtime backend (a guard against
+    // accidentally registering a Sqlite pool against a Postgres
+    // settings URL and vice versa).
+    const DEMO_PG_URL: &str = "postgres://umbra_dev:umbra_dev@localhost/umbra_dev";
+    if settings.database_url == "sqlite::memory:" {
+        settings.database_url = DEMO_PG_URL.to_string();
+    }
+    let pool = umbra::db::connect(&settings.database_url).await?;
 
     let app = (App::builder()
         .settings(settings)

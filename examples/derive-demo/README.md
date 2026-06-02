@@ -2,6 +2,21 @@
 
 Demonstrates `#[derive(Model)]` against a user-defined struct, served over HTTP.
 
+## Setup (once)
+
+The demo defaults to a local Postgres at
+`postgres://umbra_dev:umbra_dev@localhost/umbra_dev`. Run the one-time
+setup script (creates the role + database):
+
+```bash
+bash scripts/create_db.sh
+```
+
+You can override the DB URL with `UMBRA_DATABASE_URL` — point it at
+your own Postgres or set
+`UMBRA_DATABASE_URL=sqlite://demo.db?mode=rwc` to run against SQLite
+instead.
+
 ## Run it
 
 ```bash
@@ -37,11 +52,11 @@ Every umbra symbol in `src/main.rs` comes through the facade — no `umbra_core:
 - The auto-generated sibling column module `article`, populated with `article::ID`, `article::TITLE`, `article::BODY`, `article::PUBLISHED_AT` in SCREAMING_SNAKE_CASE. The handler uses `article::ID.asc()` to order results, which is the typed predicate surface from M1's column types.
 - `Option<chrono::DateTime<chrono::Utc>>` mapping to a `NullableDateTimeCol`. The other M3-supported field types (`i64` → `IntCol`, `String` → `StrCol`, `chrono::DateTime<chrono::Utc>` → `DateTimeCol`) are all exercised by the struct's other fields.
 
-The schema is no longer hand-written. The example registers `Article` with `App::builder().model::<Article>()` and runs the M5 migration engine in-process on startup (`umbra::migrate::make()` writes `migrations/app/0001_create_article.json` on first run; `umbra::migrate::run()` applies it). Re-runs are no-ops. The seed `INSERT` doesn't supply an `id` value — SQLite's `INTEGER PRIMARY KEY AUTOINCREMENT` (the shape the migration engine renders for `i64` PKs) hands out monotonically increasing ids.
+The schema is no longer hand-written. The example registers `Article` with `App::builder().model::<Article>()` and runs the migration engine in-process on startup (`umbra::migrate::make()` writes `migrations/app/0001_create_article.json` on first run; `umbra::migrate::run()` applies it). Re-runs are no-ops. The seed `INSERT` doesn't supply an `id` value — Postgres's `BIGSERIAL PRIMARY KEY` (or SQLite's `INTEGER PRIMARY KEY AUTOINCREMENT` when you opt into SQLite via `UMBRA_DATABASE_URL`) hands out monotonically increasing ids.
 
-The auto-migrate-on-startup pattern is demo-only. Production deployments run `cargo run -p umbra-cli -- migrate` as a separate step so schema changes can be reviewed before they touch the request-serving path.
+The auto-migrate-on-startup pattern is demo-only and only fires on a `serve` invocation (or no subcommand). Explicit subcommands — `cargo run -- makemigrations`, `cargo run -- migrate`, `cargo run -- inspectdb`, `cargo run -- createsuperuser` — drive the migration flow themselves and skip the auto-apply. Production deployments split the steps regardless: `makemigrations` → review the JSON → `migrate` → `serve`.
 
-`Manager::create` (which would retire the raw `INSERT`) is still deferred to a later milestone; the seed uses bound `sqlx::query` for now.
+Row writes go through the ORM: the seed loop uses `Manager::get_or_create` keyed on `title`, idempotent across restarts. The REST plugin's auto-CRUD at `/api/article/` exercises the same ORM through `DynQuerySet`'s `fetch_as_json` / `insert_json` / `update_json` terminals.
 
 ## Templates
 

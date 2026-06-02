@@ -44,6 +44,58 @@ The migration file is JSON: an ordered operation list plus a snapshot of
 every registered model after the migration runs. Future `makemigrations`
 calls diff against the latest snapshot, not the live database.
 
+## CLI reference
+
+Every migration command runs through the binary's argv dispatch (umbra-cli). The three you'll use day-to-day, plus their flags:
+
+### `makemigrations`
+
+Diff every registered model against its latest snapshot and write one new file per plugin that has changes.
+
+```bash
+cargo run -- makemigrations
+```
+
+No flags. Returns `no changes detected` and exit 0 when every plugin's diff is empty. Output paths land at `migrations/<plugin>/<sequence>_<suffix>.json` — the sequence is zero-padded so lexical sort matches the apply order.
+
+### `migrate`
+
+Apply every pending migration in topological order. Pre-checks for drift (rows in the tracking table whose files are missing on disk) and errors out before running anything if it finds critical drift.
+
+```bash
+cargo run -- migrate                                 # apply all pending
+cargo run -- migrate --allow-drift                   # proceed past orphan tracking rows
+cargo run -- migrate --fake <plugin>/<name>          # mark one migration applied without running SQL
+cargo run -- migrate --fake-initial                  # for each plugin, fake-apply 0001 when its tables already exist
+```
+
+| Flag | What it does | When to reach for it |
+|---|---|---|
+| `--allow-drift` | Logs each missing-on-disk migration as a warning and proceeds. The orphan rows stay in `umbra_migrations`. | You deleted a migration file and the schema change it represented is already in the DB. |
+| `--fake <plugin>/<name>` | Inserts a tracking row for the named migration without executing its SQL. | A schema change was applied out-of-band (psql, raw script) and you're reconciling state. |
+| `--fake-initial` | For every plugin, if the tables the `0001_*` migration would create already exist, mark it applied without SQL. | Adopting a legacy database — paired with [`inspectdb`](./inspectdb). |
+
+Full drift-recovery walk-throughs (lost-file scenario, legacy-database scenario, the four `[X]` / `[ ]` / `[!]` / `[?]` state markers) live on the [Recovering from migration drift](./migration-drift) page.
+
+### `showmigrations`
+
+List every plugin's migrations with a four-state marker (`[X]` applied, `[ ]` pending, `[!]` applied-but-missing, `[?]` out-of-order):
+
+```bash
+cargo run -- showmigrations
+# -> # plugin: app
+# -> [X] app/0001_create_post
+# -> [X] app/0002_add_post_slug
+# -> [!] app/0003_add_post_tag      # tracking row exists, file gone
+# -> [ ] app/0004_add_post_author   # genuinely pending
+```
+
+No flags. The footer line reports the pending count.
+
+<Callout type="info">
+The `[!]` and `[?]` markers are the framework's way of surfacing the drift conditions documented on the [Recovering from migration drift](./migration-drift) page. The first time you see one, run `showmigrations` to see the full picture before reaching for `--allow-drift` / `--fake`.
+</Callout>
+
 ## Change a model
 
 Add a field, drop a field, flip a nullable. Re-run `makemigrations` and the
@@ -78,7 +130,7 @@ When `makemigrations` sees a model disappear from the snapshot and a new model a
 
 ```
 umbra makemigrations: rename detected (column-shape match): `foo` → `bar`
-— please verify this is a rename and not a coincidental column-shape match
+- please verify this is a rename and not a coincidental column-shape match
 ```
 
 **No match.** If neither pass pairs a drop with a create, the autodetector falls back to plain `DropTable` + `CreateTable`.
