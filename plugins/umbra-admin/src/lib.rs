@@ -392,45 +392,52 @@ impl Plugin for AdminPlugin {
             .with_state(state)
     }
 
-    fn route_paths(&self) -> Vec<String> {
+    fn route_paths(&self) -> Vec<umbra::routes::RouteSpec> {
         // Companion list to `routes()` — surfaced by the dev-mode
-        // default 404 page. Keep in sync with the `.route(...)` calls
-        // above; mismatch is "stale route list," not a routing bug.
-        [
-            "/admin",
-            "/admin/",
-            "/admin/login",
-            "/admin/logout",
-            "/admin/{table}/",
-            "/admin/{table}/new",
-            "/admin/{table}/action",
-            "/admin/{table}/rows",
-            "/admin/{table}/filter-dialog",
-            "/admin/{table}/new-sheet",
-            "/admin/{table}/create",
-            "/admin/{table}/{id}",
-            "/admin/{table}/{id}/edit",
-            "/admin/{table}/{id}/edit-sheet",
-            "/admin/{table}/{id}/sheet",
-            "/admin/{table}/{id}/delete",
-            "/admin/{table}/{id}/_confirm-delete",
-            "/admin/{table}/{id}/history",
-            "/admin/{table}/{id}/change-password",
-            "/admin/{table}/{id}/cell/{field}",
-            "/admin/{table}/{id}/cell/{field}/edit",
-            "/admin/{table}/actions/{key}",
-            "/admin/api/{table}/{field}/options",
-            "/admin/api/{table}/{field}/options/resolve",
-            "/admin/api/prefs",
-            "/admin/api/palette",
-            "/admin/api/palette/search",
-            "/admin/api/dashboard/catalog",
-            "/admin/api/dashboard/layout",
-            "/admin/api/dashboard/widgets/{key}/data",
+        // default 404 page. Each entry pairs a path pattern with the
+        // HTTP methods it accepts; keep in sync with the `.route(...)`
+        // calls above. Mismatch is "stale route list," not a routing
+        // bug.
+        use umbra::routes::RouteSpec;
+        // Method shorthands — each constructed once and `clone()`d per
+        // entry so the source list stays one-line-per-route.
+        let g = || vec!["GET"];
+        let p = || vec!["POST"];
+        let gp = || vec!["GET", "POST"];
+        let gpd = || vec!["GET", "POST", "DELETE"];
+        let gput = || vec!["GET", "PUT"];
+        vec![
+            RouteSpec::new("/admin", g()),
+            RouteSpec::new("/admin/", g()),
+            RouteSpec::new("/admin/login", gp()),
+            RouteSpec::new("/admin/logout", g()),
+            RouteSpec::new("/admin/{table}/", g()),
+            RouteSpec::new("/admin/{table}/new", gp()),
+            RouteSpec::new("/admin/{table}/action", p()),
+            RouteSpec::new("/admin/{table}/rows", g()),
+            RouteSpec::new("/admin/{table}/filter-dialog", g()),
+            RouteSpec::new("/admin/{table}/new-sheet", g()),
+            RouteSpec::new("/admin/{table}/create", p()),
+            RouteSpec::new("/admin/{table}/{id}", gpd()),
+            RouteSpec::new("/admin/{table}/{id}/edit", gp()),
+            RouteSpec::new("/admin/{table}/{id}/edit-sheet", g()),
+            RouteSpec::new("/admin/{table}/{id}/sheet", g()),
+            RouteSpec::new("/admin/{table}/{id}/delete", p()),
+            RouteSpec::new("/admin/{table}/{id}/_confirm-delete", g()),
+            RouteSpec::new("/admin/{table}/{id}/history", g()),
+            RouteSpec::new("/admin/{table}/{id}/change-password", p()),
+            RouteSpec::new("/admin/{table}/{id}/cell/{field}", p()),
+            RouteSpec::new("/admin/{table}/{id}/cell/{field}/edit", g()),
+            RouteSpec::new("/admin/{table}/actions/{key}", p()),
+            RouteSpec::new("/admin/api/{table}/{field}/options", g()),
+            RouteSpec::new("/admin/api/{table}/{field}/options/resolve", g()),
+            RouteSpec::new("/admin/api/prefs", gput()),
+            RouteSpec::new("/admin/api/palette", g()),
+            RouteSpec::new("/admin/api/palette/search", g()),
+            RouteSpec::new("/admin/api/dashboard/catalog", g()),
+            RouteSpec::new("/admin/api/dashboard/layout", gput()),
+            RouteSpec::new("/admin/api/dashboard/widgets/{key}/data", g()),
         ]
-        .into_iter()
-        .map(String::from)
-        .collect()
     }
 
     fn on_ready(&self, _ctx: &umbra::plugin::AppContext) -> Result<(), umbra::plugin::PluginError> {

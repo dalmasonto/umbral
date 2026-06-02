@@ -71,7 +71,7 @@ pub struct AppBuilder {
     /// peek inside an axum `Router`, so the caller declares its paths
     /// here. Empty by default; production deployments don't need to
     /// fill it.
-    route_paths: Vec<String>,
+    route_paths: Vec<crate::routes::RouteSpec>,
     models: Vec<ModelMeta>,
     plugins: Vec<Box<dyn Plugin>>,
     templates_dir: Option<std::path::PathBuf>,
@@ -184,16 +184,19 @@ impl AppBuilder {
     ///     .router(Router::new()
     ///         .route("/", get(home))
     ///         .route("/articles", get(articles_list)))
+    ///     // Bare strings → path-only spec, method shown as "ANY".
     ///     .route_paths(["/", "/articles"])
+    ///     // Tuple form → method badge in the dev 404 page.
+    ///     // .route_paths([("GET", "/"), ("POST", "/articles")])
     ///     .build()?;
     /// ```
-    pub fn route_paths<I, S>(mut self, paths: I) -> Self
+    pub fn route_paths<I, R>(mut self, routes: I) -> Self
     where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
+        I: IntoIterator<Item = R>,
+        R: Into<crate::routes::RouteSpec>,
     {
         self.route_paths
-            .extend(paths.into_iter().map(Into::into));
+            .extend(routes.into_iter().map(Into::into));
         self
     }
 

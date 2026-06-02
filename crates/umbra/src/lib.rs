@@ -162,6 +162,18 @@ pub mod migrate {
     };
 }
 
+pub mod routes {
+    //! Route registry — snapshot of every declared URL path the
+    //! framework knows about, grouped by plugin.
+    //!
+    //! Populated at `App::build()` time from `AppBuilder::route_paths`
+    //! plus each plugin's `Plugin::route_paths()` contribution. Read by
+    //! the dev-mode default 404 page to surface the route list when a
+    //! request misses every match.
+
+    pub use umbra_core::routes::{RouteRegistry, RouteSpec, get, init};
+}
+
 pub mod plugin {
     //! The Plugin trait (M7), umbra's extension mechanism.
     //!

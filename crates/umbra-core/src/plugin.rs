@@ -90,21 +90,26 @@ pub trait Plugin: Send + Sync + 'static {
         Router::new()
     }
 
-    /// Declared URL path patterns this plugin contributes — a
-    /// companion to [`routes`] used for surfacing route lists outside
-    /// the request flow (currently: the dev-mode default 404 page).
-    /// axum doesn't expose its internal route table, so plugins
-    /// report the paths they declare here; the framework treats this
-    /// as informational only — not a source of truth for routing.
+    /// Declared URL routes this plugin contributes — a companion to
+    /// [`routes`] used for surfacing route lists outside the request
+    /// flow (currently: the dev-mode default 404 page). axum doesn't
+    /// expose its internal route table, so plugins report what they
+    /// declare here; the framework treats this as informational only
+    /// — not a source of truth for routing.
     ///
-    /// Default empty. Plugins that ship HTTP routes should override
-    /// to enumerate the path patterns (including axum's `{param}`
-    /// placeholders) — e.g. `vec!["/admin/", "/admin/{table}/"]`.
-    /// Mismatch with the real `routes()` is a stale-list bug, not a
-    /// correctness bug.
+    /// Each entry carries a path pattern and the HTTP methods it
+    /// accepts; the dev-mode 404 page renders method badges so a
+    /// developer can tell at a glance which verb to use. Conversions
+    /// (see [`RouteSpec`]'s `From` impls) cover the ergonomic shapes:
+    /// `"/admin/login".into()`, `("GET", "/articles").into()`,
+    /// `(&["GET", "POST"][..], "/api/post").into()`.
+    ///
+    /// Default empty. Mismatch with the real `routes()` is a stale-
+    /// list bug, not a correctness bug.
     ///
     /// [`routes`]: Plugin::routes
-    fn route_paths(&self) -> Vec<String> {
+    /// [`RouteSpec`]: crate::routes::RouteSpec
+    fn route_paths(&self) -> Vec<crate::routes::RouteSpec> {
         Vec::new()
     }
 

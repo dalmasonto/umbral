@@ -127,7 +127,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // response rendered through `templates/500.html`. In dev mode
         // the template receives `error_display`, `error_chain`, and
         // `request_path` for an expandable detail block.
-        // .server_error_template("500.html")
+        .server_error_template("500.html")
         // Auto-generated JSON CRUD at /api/article/. The RestPlugin
         // walks the same model registry the migration engine uses,
         // so the surface stays in lockstep with the schema for free.
@@ -181,7 +181,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // Surface the user-binary routes in the dev-mode 404 page.
         // The framework can't peek inside an axum `Router`, so we
         // declare the paths alongside the `.route(...)` calls above.
-        .route_paths(["/", "/500", "/articles", "/articles/{id}", "/api/articles"]))
+        // Tuple form pairs each path with its HTTP method so the
+        // dev-mode 404 panel renders a colored method badge per row.
+        .route_paths([
+            ("GET", "/"),
+            ("GET", "/500"),
+            ("GET", "/articles"),
+            ("GET", "/articles/{id}"),
+            ("GET", "/api/articles"),
+        ]))
     .build()?;
 
     // Auto-migrate on startup — demo-only convenience. Skipped when

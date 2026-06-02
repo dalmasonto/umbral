@@ -60,10 +60,13 @@
             }
         </style>
     </head>
-    <body class="min-h-screen bg-slate-950 text-slate-300 antialiased">
-        <!-- Wordmark -->
+    <body
+        class="min-h-screen bg-slate-950 text-slate-300 antialiased flex flex-col"
+    >
+        <!-- Wordmark. Natural document flow so the footer never
+             overlaps the route list when it grows tall. -->
         <header
-            class="absolute top-0 inset-x-0 px-6 py-5 flex items-center justify-between"
+            class="relative z-10 px-6 py-5 flex items-center justify-between"
         >
             <a
                 href="/"
@@ -86,9 +89,12 @@
             class="absolute inset-0 -z-10 bg-[radial-gradient(circle_at_50%_30%,rgba(99,102,241,0.08),transparent_60%)]"
         ></div>
 
-        <!-- Main content -->
+        <!-- Main content. `flex-1` makes it absorb the spare
+             viewport so the footer hugs the bottom when the page is
+             short; when the dev-mode route panel makes it tall, the
+             whole body grows and the footer simply follows. -->
         <main
-            class="relative min-h-screen flex items-center justify-center px-6 py-24"
+            class="relative flex-1 flex items-center justify-center px-6 py-16"
         >
             <div class="w-full max-w-2xl mx-auto text-center">
                 <!-- Status label -->
@@ -206,17 +212,32 @@
                                 >
                                 <span
                                     class="mono text-[10px] text-slate-500"
-                                    >{{ group.paths | length }} route{% if group.paths | length != 1 %}s{% endif %}</span
+                                    >{{ group.routes | length }} route{% if group.routes | length != 1 %}s{% endif %}</span
                                 >
                             </summary>
                             <ul
-                                class="px-4 py-2 space-y-1 bg-slate-950/40 border-t border-slate-800"
+                                class="px-4 py-2 space-y-1.5 bg-slate-950/40 border-t border-slate-800"
                             >
-                                {% for p in group.paths %}
-                                <li>
+                                {% for route in group.routes %}
+                                <li class="flex items-baseline gap-2">
+                                    {# Method badge: tinted by verb so
+                                       the eye can scan a list of mixed
+                                       GET/POST/DELETE entries without
+                                       reading every label. The single
+                                       `method_label` (joined with `·`)
+                                       keeps the badge narrow even for
+                                       composite routes like
+                                       `GET·PUT`. #}
+                                    {% set ml = route.method_label %}
+                                    <span class="mono text-[10px] tracking-wider uppercase px-1.5 py-0.5 rounded shrink-0
+                                        {% if 'POST' in route.methods or 'PUT' in route.methods or 'PATCH' in route.methods %}bg-amber-500/10 text-amber-300 ring-1 ring-amber-500/30
+                                        {% elif 'DELETE' in route.methods %}bg-rose-500/10 text-rose-300 ring-1 ring-rose-500/30
+                                        {% elif 'GET' in route.methods or 'HEAD' in route.methods %}bg-emerald-500/10 text-emerald-300 ring-1 ring-emerald-500/30
+                                        {% else %}bg-slate-700/30 text-slate-400 ring-1 ring-slate-700{% endif %}"
+                                        >{{ ml }}</span>
                                     <code
                                         class="mono text-xs text-slate-400 break-all"
-                                        >{{ p }}</code
+                                        >{{ route.path }}</code
                                     >
                                 </li>
                                 {% endfor %}
@@ -229,9 +250,11 @@
             </div>
         </main>
 
-        <!-- Footer links -->
+        <!-- Footer links. Sits in normal flow at the bottom of the
+             flex column body — no `absolute` positioning so it never
+             overlaps the route panel when it grows tall. -->
         <footer
-            class="absolute bottom-0 inset-x-0 px-6 py-5 flex items-center justify-center gap-6"
+            class="relative z-10 px-6 py-5 flex items-center justify-center gap-6"
         >
             <a
                 href="/docs"

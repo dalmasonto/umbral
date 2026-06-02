@@ -531,32 +531,56 @@ impl Plugin for RestPlugin {
         router
     }
 
-    fn route_paths(&self) -> Vec<String> {
+    fn route_paths(&self) -> Vec<umbra::routes::RouteSpec> {
         // Concrete paths beat the `/api/{table}/` placeholder: the
         // dev-mode 404 lists them so a developer reading the page
         // can copy-paste an actual URL. We walk the model registry
         // (live by phase 3 of `App::build`) and emit the per-table
         // collection + detail routes, then append every registered
         // custom action.
-        let mut paths = Vec::new();
+        //
+        // Each collection endpoint accepts GET (list) + POST (create);
+        // each detail endpoint accepts GET (retrieve), PUT/PATCH
+        // (update), DELETE (destroy). Custom `@action` endpoints use
+        // whatever method the closure registered with.
+        use umbra::routes::RouteSpec;
+        let mut specs: Vec<RouteSpec> = Vec::new();
         for meta in umbra::migrate::registered_models() {
-            paths.push(format!("/api/{}/", meta.table));
-            paths.push(format!("/api/{}/{{id}}", meta.table));
+            specs.push(RouteSpec::new(
+                format!("/api/{}/", meta.table),
+                vec!["GET", "POST"],
+            ));
+            specs.push(RouteSpec::new(
+                format!("/api/{}/{{id}}", meta.table),
+                vec!["GET", "PUT", "PATCH", "DELETE"],
+            ));
         }
         for (table, action_list) in &self.actions {
             for def in action_list {
-                match def.scope {
-                    ActionScope::Collection => {
-                        paths.push(format!("/api/{table}/{}", def.name));
-                    }
-                    ActionScope::Detail => {
-                        paths.push(format!("/api/{table}/{{id}}/{}", def.name));
-                    }
-                }
+                let path = match def.scope {
+                    ActionScope::Collection => format!("/api/{table}/{}", def.name),
+                    ActionScope::Detail => format!("/api/{table}/{{id}}/{}", def.name),
+                };
+                // The action's registered method name is the only one
+                // it accepts. `http::Method` stringifies as the
+                // canonical uppercase verb; we widen its borrow to a
+                // `&'static str` via a small match so the value
+                // fits `RouteSpec`'s `Vec<&'static str>` shape.
+                let method_static: &'static str = match def.method.as_str() {
+                    "GET" => "GET",
+                    "POST" => "POST",
+                    "PUT" => "PUT",
+                    "PATCH" => "PATCH",
+                    "DELETE" => "DELETE",
+                    "HEAD" => "HEAD",
+                    "OPTIONS" => "OPTIONS",
+                    _ => "ANY",
+                };
+                specs.push(RouteSpec::new(path, vec![method_static]));
             }
         }
-        paths.sort();
-        paths
+        specs.sort_by(|a, b| a.path.cmp(&b.path));
+        specs
     }
 }
 

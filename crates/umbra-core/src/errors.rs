@@ -151,11 +151,32 @@ pub fn render_not_found(template: Option<&str>, path: &str) -> Response<Body> {
             .map(|reg| {
                 reg.by_plugin
                     .iter()
-                    .filter(|(_, paths)| !paths.is_empty())
-                    .map(|(plugin, paths)| {
+                    .filter(|(_, specs)| !specs.is_empty())
+                    .map(|(plugin, specs)| {
+                        // Pre-shape each route entry for the
+                        // template's loop: a path string and a
+                        // pre-joined method label. Pre-joining here
+                        // lets the template render the badge with a
+                        // single `{{ route.method_label }}` access
+                        // instead of nesting another for-loop.
+                        let routes: Vec<minijinja::Value> = specs
+                            .iter()
+                            .map(|s| {
+                                let method_label = if s.methods.is_empty() {
+                                    "ANY".to_string()
+                                } else {
+                                    s.methods.join("·")
+                                };
+                                minijinja::context! {
+                                    path => s.path.as_str(),
+                                    methods => s.methods.clone(),
+                                    method_label => method_label,
+                                }
+                            })
+                            .collect();
                         minijinja::context! {
                             plugin => plugin.as_str(),
-                            paths => paths,
+                            routes => routes,
                         }
                     })
                     .collect()
@@ -472,8 +493,20 @@ mod tests {
             path => "/typo",
             dev_mode => true,
             routes_by_plugin => serde_json::json!([
-                {"plugin": "app", "paths": ["/", "/articles"]},
-                {"plugin": "admin", "paths": ["/admin/", "/admin/login"]},
+                {
+                    "plugin": "app",
+                    "routes": [
+                        { "path": "/",         "methods": ["GET"],       "method_label": "GET" },
+                        { "path": "/articles", "methods": ["GET","POST"], "method_label": "GET·POST" },
+                    ],
+                },
+                {
+                    "plugin": "admin",
+                    "routes": [
+                        { "path": "/admin/",      "methods": ["GET"],      "method_label": "GET" },
+                        { "path": "/admin/login", "methods": ["GET","POST"], "method_label": "GET·POST" },
+                    ],
+                },
             ]),
         };
         let out = env
@@ -496,6 +529,16 @@ mod tests {
         assert!(
             out.contains("&#x2f;articles"),
             "app route should be listed: {out}"
+        );
+        // Method badges land in the markup.
+        assert!(
+            out.contains("GET·POST"),
+            "composite-method badge label should render: {out}"
+        );
+        // GET-coloured badge applied to the bare-GET row.
+        assert!(
+            out.contains("emerald"),
+            "GET badge should carry the emerald tint class"
         );
     }
 
