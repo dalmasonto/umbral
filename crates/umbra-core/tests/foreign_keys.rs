@@ -338,25 +338,30 @@ async fn resolve_returns_referenced_user() {
     assert_eq!(resolved.name, "Alice", "resolved.name should match");
 }
 
-/// `ForeignKey::from(i64)` and `ForeignKey::id()` round-trip correctly.
+/// `ForeignKey::new(pk)` and `ForeignKey::id()` round-trip correctly.
+/// The post-generic-FK API replaces the `From<i64>` shorthand with
+/// the explicit `new(...)` constructor so non-i64 PK types (String,
+/// UUID) work the same way.
 #[test]
 fn foreign_key_from_and_id_roundtrip() {
-    let fk: ForeignKey<User> = ForeignKey::from(42i64);
+    let fk: ForeignKey<User> = ForeignKey::new(42i64);
     assert_eq!(fk.id(), 42);
 }
 
 /// `ForeignKey::set()` updates the stored value.
 #[test]
 fn foreign_key_set_updates_value() {
-    let mut fk: ForeignKey<User> = ForeignKey::from(1i64);
+    let mut fk: ForeignKey<User> = ForeignKey::new(1i64);
     fk.set(99);
     assert_eq!(fk.id(), 99);
 }
 
-/// `ForeignKey<T>` serialises as a plain JSON integer.
+/// `ForeignKey<T>` serialises as a plain JSON integer for an
+/// i64-keyed target. (String-keyed targets serialise as a JSON
+/// string; UUID-keyed as a UUID-shaped string.)
 #[test]
 fn foreign_key_serialises_as_integer() {
-    let fk: ForeignKey<User> = ForeignKey::from(7i64);
+    let fk: ForeignKey<User> = ForeignKey::new(7i64);
     let json = serde_json::to_string(&fk).unwrap();
     assert_eq!(json, "7", "ForeignKey should serialise as a bare integer");
 }
