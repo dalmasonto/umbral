@@ -20,3 +20,4 @@ target/
 *.db-shm
 
 node_modules
+create_db.sh
