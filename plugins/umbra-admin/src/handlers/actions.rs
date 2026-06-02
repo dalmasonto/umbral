@@ -52,7 +52,7 @@ pub(crate) async fn run_action(
         ids: selected_ids.clone(),
         username: who.username.clone(),
         table: table.clone(),
-        pool: umbra::db::pool().clone(),
+        pool: umbra::db::pool_dispatched().clone(),
     };
     let handler = Arc::clone(&action.handler);
     let result = handler(inv).await;
@@ -60,9 +60,7 @@ pub(crate) async fn run_action(
     let summary = match &result {
         Ok(_) => format!(
             "ran action `{}` on {} #{:?} (via form)",
-            action_key,
-            table,
-            selected_ids
+            action_key, table, selected_ids
         ),
         Err(e) => format!("action `{action_key}` on {table} failed: {e}"),
     };
@@ -149,7 +147,7 @@ pub(crate) async fn dispatch_action(
         ids: ids.clone(),
         username: who.username.clone(),
         table: table.clone(),
-        pool: umbra::db::pool().clone(),
+        pool: umbra::db::pool_dispatched().clone(),
     };
     let handler = Arc::clone(&action.handler);
     let result = handler(inv).await;
@@ -159,9 +157,7 @@ pub(crate) async fn dispatch_action(
     let summary = match &result {
         Ok(_) => format!(
             "ran action `{}` on {} #{:?} (via dispatch)",
-            key,
-            table,
-            ids
+            key, table, ids
         ),
         Err(e) => format!("action `{key}` on {table} failed: {e}"),
     };

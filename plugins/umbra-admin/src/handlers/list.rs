@@ -136,10 +136,8 @@ pub(crate) async fn list(
     };
 
     let order_clause = build_order_clause_phase2(cfg, pk, &sort_col, &sort_order);
-    let pool = umbra::db::pool();
 
     let total = match count_rows_filtered(
-        &pool,
         &model,
         search_term.as_deref(),
         cfg,
@@ -155,7 +153,6 @@ pub(crate) async fn list(
     let pagination = Pagination::new(total, page, page_size);
 
     let rows = match fetch_rows_paged(
-        &pool,
         &model,
         &fetch_cols,
         &order_clause,
@@ -321,9 +318,7 @@ pub(crate) async fn rows_fragment(
 
     let order_clause = build_order_clause_phase2(cfg, pk, &sort_col, &sort_order);
 
-    let pool = umbra::db::pool();
     let total = match count_rows_filtered(
-        &pool,
         &model,
         search_term.as_deref(),
         cfg,
@@ -339,7 +334,6 @@ pub(crate) async fn rows_fragment(
     let pagination = Pagination::new(total, page, page_size);
 
     let rows = match fetch_rows_paged(
-        &pool,
         &model,
         &fetch_cols,
         &order_clause,

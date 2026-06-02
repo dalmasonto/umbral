@@ -320,7 +320,8 @@ let publish = Action::new(
     "send",         // Lucide icon name
     |inv: ActionInvocation| async move {
         // inv.ids      - selected primary keys
-        // inv.pool     - ambient SqlitePool for mutations
+        // inv.pool     - backend-aware `DbPool` (match `Sqlite` / `Postgres`
+        //                for escape-hatch raw SQL; prefer the ORM)
         // inv.username, inv.table - context
         Ok(ActionResult::Toast {
             message: format!("Published {} post(s).", inv.ids.len()),

@@ -23,7 +23,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use sqlx::SqlitePool;
+use umbra::db::DbPool;
 
 // =========================================================================
 // Action result / invocation types
@@ -102,8 +102,11 @@ pub struct ActionInvocation {
     pub username: String,
     /// SQL table the action was invoked on.
     pub table: String,
-    /// Ambient pool for DB mutations.
-    pub pool: SqlitePool,
+    /// Ambient backend-aware pool — match on the `DbPool` variants
+    /// (`Sqlite` / `Postgres`) for any escape-hatch raw SQL. New code
+    /// should prefer the ORM (`Model::objects()` / `DynQuerySet`)
+    /// instead of pulling the pool out at all.
+    pub pool: DbPool,
 }
 
 /// Backwards-compatible context type used by phase 1/2 code paths.
@@ -220,18 +223,20 @@ impl Action {
                         level: ToastLevel::Info,
                     });
                 }
-                let placeholders = inv.ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
-                let sql = format!(
-                    "DELETE FROM \"{}\" WHERE \"id\" IN ({placeholders})",
-                    inv.table.replace('"', "\"\"")
-                );
-                let mut q = sqlx::query(&sql);
-                for id in &inv.ids {
-                    q = q.bind(*id);
-                }
-                match q.execute(&inv.pool).await {
-                    Ok(r) => Ok(ActionResult::Toast {
-                        message: format!("Deleted {} row(s).", r.rows_affected()),
+                let Some((_, meta)) = crate::discovery::find_model(&inv.table) else {
+                    return Err(format!("unknown table `{}`", inv.table));
+                };
+                let pk_name = crate::discovery::pk_column(&meta)
+                    .map(|c| c.name.clone())
+                    .unwrap_or_else(|| "id".to_string());
+                let count = inv.ids.len();
+                match umbra::orm::DynQuerySet::for_meta(&meta)
+                    .filter_in_i64(&pk_name, &inv.ids)
+                    .delete()
+                    .await
+                {
+                    Ok(_) => Ok(ActionResult::Toast {
+                        message: format!("Deleted {count} row(s)."),
                         level: ToastLevel::Success,
                     }),
                     Err(e) => {

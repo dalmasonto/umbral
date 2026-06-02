@@ -39,20 +39,8 @@ pub(crate) async fn preview_sheet(
     let Some(pk) = pk_column(&model) else {
         return AdminError::Render(format!("model `{table}` has no primary key")).into_response();
     };
-    let pool = umbra::db::pool();
     let all_cols: Vec<String> = model.fields.iter().map(|f| f.name.clone()).collect();
-    let rows = match fetch_rows_filtered(
-        &pool,
-        &model,
-        Some((&pk.name, &id)),
-        &all_cols,
-        "",
-        None,
-        None,
-        None,
-    )
-    .await
-    {
+    let rows = match fetch_rows_filtered(&model, Some((&pk.name, &id)), &all_cols).await {
         Ok(r) => r,
         Err(e) => return e.into_response(),
     };
@@ -101,20 +89,8 @@ pub(crate) async fn edit_sheet_handler(
     let Some(pk) = pk_column(&model) else {
         return AdminError::Render(format!("model `{table}` has no primary key")).into_response();
     };
-    let pool = umbra::db::pool();
     let all_cols: Vec<String> = model.fields.iter().map(|f| f.name.clone()).collect();
-    let rows = match fetch_rows_filtered(
-        &pool,
-        &model,
-        Some((&pk.name, &id)),
-        &all_cols,
-        "",
-        None,
-        None,
-        None,
-    )
-    .await
-    {
+    let rows = match fetch_rows_filtered(&model, Some((&pk.name, &id)), &all_cols).await {
         Ok(r) => r,
         Err(e) => return e.into_response(),
     };
@@ -232,8 +208,7 @@ pub(crate) async fn sheet_create(
         Err(e) => return AdminError::BadInput(e.to_string()).into_response(),
     };
     let cfg = state.config_for(&table);
-    let pool = umbra::db::pool();
-    match insert_row(&pool, &model, &form, cfg).await {
+    match insert_row(&model, &form, cfg).await {
         Ok(_) => {
             crate::models::log(
                 who.id,

@@ -43,20 +43,8 @@ pub(crate) async fn cell_edit_get(
         return (StatusCode::FORBIDDEN, "field is read-only").into_response();
     }
 
-    let pool = umbra::db::pool();
     let all_cols: Vec<String> = model.fields.iter().map(|f| f.name.clone()).collect();
-    let rows = match fetch_rows_filtered(
-        &pool,
-        &model,
-        Some((&pk.name, &id)),
-        &all_cols,
-        "",
-        None,
-        None,
-        None,
-    )
-    .await
-    {
+    let rows = match fetch_rows_filtered(&model, Some((&pk.name, &id)), &all_cols).await {
         Ok(r) => r,
         Err(e) => return e.into_response(),
     };

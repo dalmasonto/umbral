@@ -1,18 +1,15 @@
 //! Row marshalling — turn `ModelMeta` + dynamic column lists into
-//! parameterized SQL, bind form values, and decode result rows into
-//! `HashMap<String, String>` for the templates.
+//! parameterized SQL via [`umbra::orm::DynQuerySet`] and decode result
+//! rows into `HashMap<String, String>` for the templates.
 //!
-//! The read-side queries (`count_rows_filtered`, `fetch_rows_paged`)
-//! now go through [`umbra::orm::DynQuerySet`] — the runtime-typed
-//! Manager that lives in `umbra-core`. The write-side functions
-//! (`insert_row`, `update_row`, the SQLite-row decoder `column_to_string`,
-//! the form-value binder `bind_form_value`, the typed-NULL binder
-//! `bind_null`) still hand-build SQL because the ORM extension's
-//! write path is the next pass.
+//! Read and write helpers both route through `DynQuerySet`, which picks
+//! up the ambient backend-aware pool installed by `App::build()`. No
+//! helper here takes a pool argument — that was a transitional shape
+//! and would panic on Postgres because `umbra::db::pool()` is the
+//! SQLite-only accessor.
 
 use std::collections::HashMap;
 
-use sqlx::SqlitePool;
 use umbra::migrate::{Column, ModelMeta};
 use umbra::orm::DynQuerySet;
 
@@ -26,7 +23,6 @@ use crate::config::AdminConfig;
 /// the same builder the row fetch uses, so the count and the page
 /// agree on what "filtered" means.
 pub(crate) async fn count_rows_filtered(
-    _pool: &SqlitePool,
     model: &ModelMeta,
     search_term: Option<&str>,
     cfg: Option<&AdminConfig>,
@@ -56,7 +52,6 @@ pub(crate) async fn count_rows_filtered(
 /// `order_by_col` so the ORM owns the rendering.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn fetch_rows_paged(
-    _pool: &SqlitePool,
     model: &ModelMeta,
     display_cols: &[String],
     order_clause: &str,
@@ -89,10 +84,7 @@ pub(crate) async fn fetch_rows_paged(
 /// `max_length > 0` hint. Appends an ellipsis (`…`) when truncation
 /// happens so the user can see something was cut. UTF-8 safe: we step
 /// by char count, not byte count.
-fn apply_max_length_truncation(
-    model: &ModelMeta,
-    rows: &mut [HashMap<String, String>],
-) {
+fn apply_max_length_truncation(model: &ModelMeta, rows: &mut [HashMap<String, String>]) {
     for row in rows.iter_mut() {
         for col in &model.fields {
             if col.max_length == 0 {
@@ -138,20 +130,11 @@ fn parse_order_clause(clause: &str) -> Vec<(String, bool)> {
 /// Fetch a single row by primary key, projected over `display_cols`.
 ///
 /// Used by the detail / edit / sheet handlers — "one row, every column
-/// the caller asks for." Goes through [`DynQuerySet`]. The signature
-/// keeps the legacy positional shape (`_pool`, `_order_clause`,
-/// `_search_term`, `_cfg`, `_active_filter`) so callers stay
-/// unchanged; only `where_pk` and `display_cols` are read.
-#[allow(clippy::too_many_arguments)]
+/// the caller asks for." Goes through [`DynQuerySet`].
 pub(crate) async fn fetch_rows_filtered(
-    _pool: &SqlitePool,
     model: &ModelMeta,
     where_pk: Option<(&str, &str)>,
     display_cols: &[String],
-    _order_clause: &str,
-    _search_term: Option<&str>,
-    _cfg: Option<&AdminConfig>,
-    _active_filter: Option<(&str, &str)>,
 ) -> Result<Vec<HashMap<String, String>>, AdminError> {
     let mut qs = DynQuerySet::for_meta(model).select_cols(display_cols);
     if let Some((col, val)) = where_pk {
@@ -168,7 +151,6 @@ pub(crate) async fn fetch_rows_filtered(
 /// defaults) so the server can't be tricked into writing fields the
 /// form was supposed to skip.
 pub(crate) async fn insert_row(
-    _pool: &SqlitePool,
     model: &ModelMeta,
     form: &HashMap<String, String>,
     cfg: Option<&AdminConfig>,
@@ -204,7 +186,6 @@ pub(crate) async fn insert_row(
 /// UPDATE one row identified by its PK. Same readonly enforcement as
 /// `insert_row` — fields can't be smuggled back in via the form.
 pub(crate) async fn update_row(
-    _pool: &SqlitePool,
     model: &ModelMeta,
     pk: &Column,
     pk_value: &str,
