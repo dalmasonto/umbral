@@ -127,7 +127,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // response rendered through `templates/500.html`. In dev mode
         // the template receives `error_display`, `error_chain`, and
         // `request_path` for an expandable detail block.
-        .server_error_template("500.html")
+        // .server_error_template("500.html")
         // Auto-generated JSON CRUD at /api/article/. The RestPlugin
         // walks the same model registry the migration engine uses,
         // so the surface stays in lockstep with the schema for free.
@@ -208,10 +208,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 /// `inspectdb`, `createsuperuser`, etc. — those drive the migration
 /// flow themselves and would conflict with eager auto-migrate.
 fn is_serve_invocation() -> bool {
-    matches!(
-        std::env::args().nth(1).as_deref(),
-        None | Some("serve")
-    )
+    matches!(std::env::args().nth(1).as_deref(), None | Some("serve"))
 }
 
 /// Home page. Counts the rows so the template has something to show
