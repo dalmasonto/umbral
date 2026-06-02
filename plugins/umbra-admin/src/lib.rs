@@ -61,6 +61,7 @@ mod error;
 mod pagination;
 mod static_assets;
 mod util;
+mod view;
 
 pub mod files;
 
@@ -72,6 +73,10 @@ pub use files::{file_descriptor, resolve_preview_kind};
 pub(crate) use pagination::{Pagination, build_order_clause_phase2, parse_list_params};
 pub(crate) use static_assets::serve_admin_css;
 pub(crate) use util::{html_escape, is_htmx, q, urlencoding_simple};
+pub(crate) use view::{
+    form_fields_for, input_kind, model_for_template, model_for_template_cols, sidebar_apps,
+};
+
 
 pub use config::{
     Action, ActionInvocation, ActionResult, ActionScope, ActionVariant, AdminConfig, AdminContext,
@@ -359,42 +364,6 @@ impl Plugin for AdminPlugin {
 // to pass the nav tree into the template.
 // =========================================================================
 
-/// Template-facing representation of one sidebar model link.
-#[derive(Debug, Clone, Serialize)]
-struct SidebarModel {
-    table: String,
-    label: String,
-    icon: String,
-}
-
-/// Template-facing group of models for one plugin.
-#[derive(Debug, Clone, Serialize)]
-struct SidebarApp {
-    plugin: String,
-    label: String,
-    models: Vec<SidebarModel>,
-}
-
-fn sidebar_apps(state: &AdminState, user: &umbra_auth::AuthUser) -> Vec<SidebarApp> {
-    state
-        .registry
-        .apps(user)
-        .into_iter()
-        .map(|app| SidebarApp {
-            plugin: app.plugin.clone(),
-            label: app.label.clone(),
-            models: app
-                .models
-                .into_iter()
-                .map(|r| SidebarModel {
-                    table: r.model.table.clone(),
-                    label: r.label.clone(),
-                    icon: r.icon.clone().unwrap_or_else(|| "database".to_string()),
-                })
-                .collect(),
-        })
-        .collect()
-}
 
 
 // =========================================================================
@@ -2798,236 +2767,6 @@ fn bind_null<'q>(
 // Template helpers.
 // =========================================================================
 
-#[derive(Debug, Clone, Serialize)]
-struct FormField {
-    name: String,
-    kind: &'static str,
-    value: String,
-    nullable: bool,
-    readonly: bool,
-    /// For FK fields: the related table name. Empty string for non-FK fields.
-    fk_table: String,
-    /// When `true`, this is the synthetic "password" field emitted for
-    /// models that have `password_field` set. The field editor renders
-    /// two inputs (password + confirm) instead of a plain text input.
-    is_password: bool,
-}
-
-fn form_fields_for(
-    model: &ModelMeta,
-    prefill: Option<&HashMap<String, String>>,
-    cfg: Option<&AdminConfig>,
-) -> Vec<FormField> {
-    // Build the merged readonly set: explicit config + sensitive-column defaults.
-    let all_col_names: Vec<&str> = model.fields.iter().map(|c| c.name.as_str()).collect();
-    let readonly_set: std::collections::HashSet<String> = if let Some(c) = cfg {
-        c.effective_readonly_fields(&all_col_names)
-            .into_iter()
-            .map(|s| s.to_string())
-            .collect()
-    } else {
-        // No explicit config: still apply sensitive-column defaults.
-        all_col_names
-            .iter()
-            .filter(|n| crate::config::is_sensitive_column(n))
-            .map(|s| s.to_string())
-            .collect()
-    };
-    let mut result: Vec<FormField> = model
-        .fields
-        .iter()
-        .filter(|c| {
-            // Primary key never appears on forms.
-            if c.primary_key {
-                return false;
-            }
-            // noform: never on any form.
-            if c.noform {
-                return false;
-            }
-            // password_field column is also suppressed from normal rendering;
-            // it gets its own synthetic field below (create only).
-            if let Some(c2) = cfg.and_then(|cfg| cfg.password_field.as_deref()) {
-                if c.name == c2 {
-                    return false;
-                }
-            }
-            true
-        })
-        .map(|c| {
-            let raw = prefill
-                .and_then(|m| m.get(&c.name))
-                .cloned()
-                .unwrap_or_default();
-            let fk_table = if matches!(c.ty, umbra::orm::SqlType::ForeignKey) {
-                c.fk_target
-                    .clone()
-                    .unwrap_or_else(|| c.name.trim_end_matches("_id").to_string())
-            } else {
-                String::new()
-            };
-            // noedit: shown read-only on edit forms (also when in readonly_set).
-            let is_readonly = readonly_set.contains(&c.name) || c.noedit;
-            FormField {
-                name: c.name.clone(),
-                kind: input_kind(c.ty),
-                value: format_for_input(&raw, c.ty),
-                nullable: c.nullable,
-                readonly: is_readonly,
-                fk_table,
-                is_password: false,
-            }
-        })
-        .collect();
-
-    // Append the synthetic password field for create forms only.
-    // On edit forms (prefill.is_some()), the "Change password" button
-    // in the sheet handles password changes via a dedicated endpoint.
-    if let Some(c) = cfg {
-        if let Some(ref pw_col) = c.password_field {
-            if prefill.is_none() {
-                result.push(FormField {
-                    name: pw_col.clone(),
-                    kind: "password",
-                    value: String::new(),
-                    nullable: false,
-                    readonly: false,
-                    fk_table: String::new(),
-                    is_password: true,
-                });
-            }
-        }
-    }
-
-    result
-}
-
-fn format_for_input(raw: &str, ty: SqlType) -> String {
-    if raw.is_empty() {
-        return String::new();
-    }
-    match ty {
-        SqlType::Timestamptz => match chrono::DateTime::parse_from_rfc3339(raw) {
-            Ok(dt) => dt.format("%Y-%m-%dT%H:%M").to_string(),
-            Err(_) => raw.to_string(),
-        },
-        SqlType::Time => {
-            if let Some(dot) = raw.find('.') {
-                raw[..dot].to_string()
-            } else {
-                raw.to_string()
-            }
-        }
-        _ => raw.to_string(),
-    }
-}
-
-fn input_kind(ty: SqlType) -> &'static str {
-    match ty {
-        SqlType::SmallInt
-        | SqlType::Integer
-        | SqlType::BigInt
-        | SqlType::Real
-        | SqlType::Double => "number",
-        SqlType::Boolean => "bool",
-        // String columns map to a small multi-line textarea by default —
-        // SQL `TEXT` is unbounded in both backends so a single-line input
-        // truncates long content visually; a 2-row textarea handles names
-        // and bodies equally well. UUID / Inet / Cidr / MacAddr stay as
-        // single-line inputs because their values are fixed-format and
-        // never benefit from extra height.
-        SqlType::Text => "string",
-        SqlType::Uuid => "text",
-        SqlType::Date => "date",
-        SqlType::Time => "time",
-        SqlType::Timestamptz => "datetime-local",
-        SqlType::Json => "textarea",
-        SqlType::Array(_) => "textarea",
-        SqlType::Inet | SqlType::Cidr | SqlType::MacAddr => "text",
-        SqlType::FullText => "textarea",
-        SqlType::ForeignKey => "fk",
-    }
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct ModelView {
-    name: String,
-    table: String,
-    fields: Vec<ColumnView>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct ColumnView {
-    name: String,
-    nullable: bool,
-    primary_key: bool,
-    /// Lowercase SQL type name for template filter logic.
-    sql_type: String,
-}
-
-fn sql_type_name(ty: SqlType) -> &'static str {
-    match ty {
-        SqlType::SmallInt | SqlType::Integer => "integer",
-        SqlType::BigInt => "bigint",
-        SqlType::Real | SqlType::Double => "number",
-        SqlType::Boolean => "boolean",
-        SqlType::Text => "text",
-        SqlType::Date => "date",
-        SqlType::Time => "time",
-        SqlType::Timestamptz => "datetime",
-        SqlType::Uuid => "uuid",
-        SqlType::Json => "json",
-        SqlType::ForeignKey => "fk",
-        SqlType::Array(_) => "array",
-        SqlType::Inet | SqlType::Cidr | SqlType::MacAddr => "text",
-        SqlType::FullText => "text",
-    }
-}
-
-fn model_for_template(model: &ModelMeta) -> ModelView {
-    ModelView {
-        name: model.name.clone(),
-        table: model.table.clone(),
-        fields: model
-            .fields
-            .iter()
-            .map(|c| ColumnView {
-                name: c.name.clone(),
-                nullable: c.nullable,
-                primary_key: c.primary_key,
-                sql_type: sql_type_name(c.ty).to_string(),
-            })
-            .collect(),
-    }
-}
-
-fn model_for_template_cols(model: &ModelMeta, display_cols: &[String]) -> ModelView {
-    let valid: std::collections::HashSet<&str> =
-        model.fields.iter().map(|c| c.name.as_str()).collect();
-    let fields: Vec<ColumnView> = display_cols
-        .iter()
-        .filter(|n| valid.contains(n.as_str()))
-        .map(|n| {
-            let col = model.fields.iter().find(|c| &c.name == n).unwrap();
-            ColumnView {
-                name: col.name.clone(),
-                nullable: col.nullable,
-                primary_key: col.primary_key,
-                sql_type: sql_type_name(col.ty).to_string(),
-            }
-        })
-        .collect();
-    ModelView {
-        name: model.name.clone(),
-        table: model.table.clone(),
-        fields,
-    }
-}
-
-#[allow(dead_code)]
-fn _unused_json_marker() -> Option<Json<()>> {
-    None
-}
 
 // =========================================================================
 // Phase 4: built-in dashboard widget definitions.
@@ -3513,45 +3252,6 @@ async fn palette_search(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn format_for_input_coerces_rfc3339_to_datetime_local() {
-        let coerced = format_for_input("2026-05-30T12:00:00+00:00", SqlType::Timestamptz);
-        assert_eq!(coerced, "2026-05-30T12:00");
-    }
-
-    #[test]
-    fn format_for_input_handles_rfc3339_with_offset() {
-        let coerced = format_for_input("2026-05-30T17:00:00+05:00", SqlType::Timestamptz);
-        assert_eq!(coerced, "2026-05-30T17:00");
-    }
-
-    #[test]
-    fn format_for_input_empty_stays_empty() {
-        assert_eq!(format_for_input("", SqlType::Timestamptz), "");
-        assert_eq!(format_for_input("", SqlType::Time), "");
-        assert_eq!(format_for_input("", SqlType::Text), "");
-    }
-
-    #[test]
-    fn format_for_input_passes_through_simple_types() {
-        assert_eq!(format_for_input("2026-05-30", SqlType::Date), "2026-05-30");
-        assert_eq!(format_for_input("hello", SqlType::Text), "hello");
-        assert_eq!(format_for_input("42", SqlType::BigInt), "42");
-    }
-
-    #[test]
-    fn format_for_input_trims_subsecond_time() {
-        assert_eq!(format_for_input("12:34:56.789", SqlType::Time), "12:34:56");
-        assert_eq!(format_for_input("12:34:56", SqlType::Time), "12:34:56");
-        assert_eq!(format_for_input("12:34", SqlType::Time), "12:34");
-    }
-
-    #[test]
-    fn format_for_input_passes_through_bad_rfc3339_unchanged() {
-        let bad = "not-a-valid-timestamp";
-        assert_eq!(format_for_input(bad, SqlType::Timestamptz), bad);
-    }
 
     #[test]
     fn admin_model_defaults() {
