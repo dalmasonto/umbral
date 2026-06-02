@@ -90,7 +90,7 @@ async fn boot() {
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS session (
                 id         TEXT PRIMARY KEY,
-                user_id    INTEGER,
+                user_id    TEXT,
                 data       TEXT NOT NULL DEFAULT '{}',
                 created_at TEXT NOT NULL,
                 expires_at TEXT NOT NULL
@@ -149,7 +149,9 @@ async fn create_session_for(user_id: i64) -> String {
          VALUES (?, ?, '{}', ?, ?)",
     )
     .bind(&stored)
-    .bind(user_id)
+    // Session.user_id is text post-gap-#59. Bind the i64 as its
+    // Display form to match the framework's storage convention.
+    .bind(user_id.to_string())
     .bind(now.to_rfc3339())
     .bind(expires.to_rfc3339())
     .execute(&pool)

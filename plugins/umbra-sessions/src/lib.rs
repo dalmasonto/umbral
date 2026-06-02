@@ -61,13 +61,24 @@ pub const DEFAULT_TTL_SECONDS: i64 = 14 * 24 * 60 * 60;
 /// The session row.
 ///
 /// `id` is a random UUID written to the client cookie. `user_id` is
-/// the umbra-auth user this session belongs to (nullable so anonymous
-/// sessions are possible, though v1 doesn't surface that path). `data`
-/// is a free-form JSON string the application stores per-session.
+/// the user this session belongs to (nullable so anonymous sessions
+/// are possible). `data` is a free-form JSON string the application
+/// stores per-session.
+///
+/// ## `user_id` is polymorphic
+///
+/// Gap #59: the column stores the user PK as a string regardless of
+/// the active `UserModel`'s PK type. `AuthUser` (i64-keyed) writes
+/// the integer's `Display` form; a custom user model with `Uuid` or
+/// `String` PK writes that type's `Display` form. The built-in
+/// helpers (`current_user`, `login_with_request`) are still
+/// AuthUser-specific and round-trip through `i64 ↔ String`; callers
+/// using a custom user model write their own resolver against the
+/// `user_id` text and parse it however their PK type expects.
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
 pub struct Session {
     pub id: String,
-    pub user_id: Option<i64>,
+    pub user_id: Option<String>,
     pub data: String,
     pub created_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
@@ -220,17 +231,16 @@ fn hash_token(raw: &str) -> String {
 /// [`set_cookie_header`]. The DB row stores `sha256(token)` so a
 /// DB leak doesn't surrender live sessions.
 ///
-/// `user_id`:
-/// - `Some(id)` — authenticated session, `user_id` column set.
-/// - `None` — **anonymous session**, `user_id` column NULL. Used
-///   by [`SessionLayer`] to ensure every browser has a session on
-///   first visit so flash messages, anonymous cart contents, CSRF
-///   tokens, etc. have somewhere to live.
+/// `user_id` is the user's primary key serialised as a string
+/// (gap #59). `AuthUser`'s i64 PK round-trips through `to_string()` /
+/// `parse::<i64>()`; a `Uuid`-keyed custom user model uses
+/// `Display` / `FromStr` on `Uuid`, etc. Passing `None` creates an
+/// anonymous session.
 ///
 /// `ttl` controls the row's `expires_at`. Pass `None` to use
 /// [`DEFAULT_TTL_SECONDS`] (14 days).
 pub async fn create_session(
-    user_id: Option<i64>,
+    user_id: Option<String>,
     ttl: Option<Duration>,
 ) -> Result<String, SessionError> {
     let raw_token = Uuid::new_v4().to_string();
@@ -358,7 +368,15 @@ pub async fn current_user(headers: &HeaderMap) -> Result<Option<AuthUser>, Sessi
     let Some(session) = read_session(&id).await? else {
         return Ok(None);
     };
-    let Some(user_id) = session.user_id else {
+    let Some(user_id_str) = session.user_id else {
+        return Ok(None);
+    };
+    // Session.user_id is polymorphic text (gap #59). `AuthUser` is
+    // i64-keyed, so parse the stored string back to i64. A malformed
+    // value (string that doesn't parse as i64) means this session
+    // was written by code that uses a different `UserModel` shape —
+    // treat as anonymous from `AuthUser`'s perspective.
+    let Ok(user_id) = user_id_str.parse::<i64>() else {
         return Ok(None);
     };
     let user: Option<AuthUser> = AuthUser::objects()
@@ -494,7 +512,11 @@ pub async fn login_with_request(
             None
         };
 
-    let token = create_session(Some(user.id), None).await?;
+    // Stringify the user's PK before stashing it in the session row
+    // (gap #59). AuthUser is i64-keyed so this is just `.to_string()`;
+    // custom user models with `Uuid` or string PKs would call the
+    // same helper since `Display` is what writes the canonical form.
+    let token = create_session(Some(user.id.to_string()), None).await?;
 
     // Restore the carry-over data onto the new session, if any.
     if let Some(data) = carry_over_data
@@ -628,7 +650,10 @@ pub mod extractors {
             .map(|t| t.0.clone())
             .or_else(|| super::cookie_from_headers(&parts.headers))?;
         let session = super::read_session(&token).await.ok().flatten()?;
-        let user_id = session.user_id?;
+        // Session.user_id is text (gap #59); parse back to i64 for
+        // the AuthUser extractor. A non-parseable value means a
+        // different UserModel wrote the session — return None.
+        let user_id: i64 = session.user_id?.parse().ok()?;
         super::AuthUser::objects()
             .filter(
                 super::auth_user::ID.eq(user_id) & super::auth_user::IS_ACTIVE.eq(true),

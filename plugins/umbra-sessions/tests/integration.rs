@@ -68,7 +68,7 @@ async fn boot() -> i64 {
             sqlx::query(
                 "CREATE TABLE session (\
                     id TEXT PRIMARY KEY,\
-                    user_id INTEGER,\
+                    user_id TEXT,\
                     data TEXT NOT NULL,\
                     created_at TEXT NOT NULL,\
                     expires_at TEXT NOT NULL\
@@ -95,7 +95,7 @@ async fn boot() -> i64 {
 #[tokio::test]
 async fn create_and_read_round_trip() {
     let user_id = boot().await;
-    let token = create_session(Some(user_id), None).await.expect("create");
+    let token = create_session(Some(user_id.to_string()), None).await.expect("create");
     let s = read_session(&token).await.expect("read").expect("present");
     // The raw token is a UUID; the stored id is a 64-char hex SHA-256.
     // They must differ — if they matched the column would still hold
@@ -106,7 +106,7 @@ async fn create_and_read_round_trip() {
     );
     assert_eq!(s.id.len(), 64, "stored id should be a 64-char hex digest");
     assert!(s.id.chars().all(|c| c.is_ascii_hexdigit()));
-    assert_eq!(s.user_id, Some(user_id));
+    assert_eq!(s.user_id, Some(user_id.to_string()));
     assert_eq!(s.data, "{}");
     assert!(s.expires_at > chrono::Utc::now());
 }
@@ -118,7 +118,7 @@ async fn create_and_read_round_trip() {
 async fn read_session_returns_none_for_expired_and_deletes_the_row() {
     let user_id = boot().await;
     // Create with a negative TTL so the row is already expired.
-    let id = create_session(Some(user_id), Some(Duration::seconds(-1)))
+    let id = create_session(Some(user_id.to_string()), Some(Duration::seconds(-1)))
         .await
         .expect("create");
     let result = read_session(&id).await.expect("read");
@@ -144,7 +144,7 @@ async fn read_session_returns_none_for_expired_and_deletes_the_row() {
 #[tokio::test]
 async fn destroy_session_removes_the_row() {
     let user_id = boot().await;
-    let id = create_session(Some(user_id), None).await.expect("create");
+    let id = create_session(Some(user_id.to_string()), None).await.expect("create");
     assert!(read_session(&id).await.unwrap().is_some());
     destroy_session(&id).await.expect("destroy");
     assert!(read_session(&id).await.unwrap().is_none());
@@ -192,7 +192,7 @@ fn clear_cookie_header_zeroes_max_age() {
 #[tokio::test]
 async fn current_user_round_trip_hydrates_the_logged_in_user() {
     let user_id = boot().await;
-    let id = create_session(Some(user_id), None).await.expect("create");
+    let id = create_session(Some(user_id.to_string()), None).await.expect("create");
 
     let mut headers = HeaderMap::new();
     headers.insert(
@@ -222,7 +222,7 @@ async fn current_user_returns_none_when_no_cookie() {
 #[tokio::test]
 async fn current_user_returns_none_for_destroyed_session() {
     let user_id = boot().await;
-    let id = create_session(Some(user_id), None).await.expect("create");
+    let id = create_session(Some(user_id.to_string()), None).await.expect("create");
     destroy_session(&id).await.expect("destroy");
 
     let mut headers = HeaderMap::new();
@@ -240,7 +240,7 @@ async fn current_user_returns_none_for_destroyed_session() {
 #[tokio::test]
 async fn data_round_trip_through_json_column() {
     let user_id = boot().await;
-    let id = create_session(Some(user_id), None).await.expect("create");
+    let id = create_session(Some(user_id.to_string()), None).await.expect("create");
 
     set_data(&id, "cart_id", &42i64).await.expect("set cart_id");
     set_data(&id, "flash", &"welcome back")
@@ -299,7 +299,7 @@ async fn login_creates_session_sets_cookie_and_bumps_last_login() {
 
     // The session row is readable via the returned token.
     let session = read_session(&token).await.expect("read").expect("present");
-    assert_eq!(session.user_id, Some(user_id));
+    assert_eq!(session.user_id, Some(user_id.to_string()));
 
     // last_login was updated.
     let user_after: AuthUser = sqlx::query_as("SELECT * FROM auth_user WHERE id = ?")
@@ -635,7 +635,7 @@ async fn login_destroys_anonymous_session_and_issues_new_token() {
     );
     // The new authed token is alive.
     let new_session = read_session(&new_token).await.unwrap().unwrap();
-    assert_eq!(new_session.user_id, Some(user_id));
+    assert_eq!(new_session.user_id, Some(user_id.to_string()));
     // They differ — fresh token = fresh cookie = no fixation surface.
     assert_ne!(anon_token, new_token);
 }

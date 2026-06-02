@@ -268,7 +268,11 @@ pub async fn current_session_user_id(headers: &http::HeaderMap) -> Option<i64> {
         .ok()
         .flatten();
     let row = row?;
-    let user_id = row.user_id?;
+    // Session.user_id is text post-gap-#59. Parse the stored value
+    // back to i64 — that's the AuthUser PK shape this helper
+    // supports. A non-parseable value (e.g. session written by a
+    // different UserModel impl) resolves to "no AuthUser id."
+    let user_id: i64 = row.user_id?.parse().ok()?;
     if row.expires_at < Utc::now() {
         return None;
     }
@@ -285,7 +289,11 @@ pub async fn current_session_user_id(headers: &http::HeaderMap) -> Option<i64> {
 #[umbra(table = "session")]
 pub struct SessionRow {
     pub id: String,
-    pub user_id: Option<i64>,
+    /// Polymorphic user-PK column (gap #59). Stored as the user's PK
+    /// `Display` form — i64 for AuthUser, UUID for custom user models,
+    /// etc. Parse with `<U::PrimaryKey as FromStr>::from_str` on the
+    /// way out.
+    pub user_id: Option<String>,
     pub data: String,
     pub created_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,

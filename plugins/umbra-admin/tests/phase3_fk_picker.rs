@@ -95,7 +95,7 @@ async fn boot() -> &'static axum::Router {
         sqlx::query(
             "CREATE TABLE session (\
                 id TEXT PRIMARY KEY,\
-                user_id INTEGER,\
+                user_id TEXT,\
                 data TEXT NOT NULL DEFAULT '{}',\
                 created_at TEXT NOT NULL,\
                 expires_at TEXT NOT NULL\

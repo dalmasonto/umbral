@@ -85,7 +85,7 @@ async fn boot() -> &'static axum::Router {
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS session (\
                 id TEXT PRIMARY KEY,\
-                user_id INTEGER,\
+                user_id TEXT,\
                 data TEXT NOT NULL DEFAULT '{}',\
                 created_at TEXT NOT NULL,\
                 expires_at TEXT NOT NULL\
@@ -120,7 +120,7 @@ async fn staff_cookie() -> String {
             .expect("lookup dash_user")
         }
     };
-    let tok = umbra_sessions::create_session(Some(user.id), None)
+    let tok = umbra_sessions::create_session(Some(user.id.to_string()), None)
         .await
         .expect("session");
     format!("umbra_session={tok}")
