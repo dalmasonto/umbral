@@ -29,7 +29,8 @@
 use std::collections::HashMap;
 
 use sea_query::{
-    Alias, Asterisk, Condition, Expr, Func, Order, Query, SqliteQueryBuilder, Value as SeaValue,
+    Alias, Asterisk, Condition, Expr, Func, Order, PostgresQueryBuilder, Query, SqliteQueryBuilder,
+    Value as SeaValue,
 };
 use sea_query_binder::SqlxBinder;
 use sqlx::Row;
@@ -188,8 +189,10 @@ impl<'a> DynQuerySet<'a> {
                 let row = sqlx::query_with(&sql, values).fetch_one(pool).await?;
                 Ok(row.try_get::<i64, _>(0)?)
             }
-            DbPool::Postgres(_) => {
-                unimplemented!("DynQuerySet::count: Postgres branch not yet wired")
+            DbPool::Postgres(pool) => {
+                let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
+                let row = sqlx::query_with(&sql, values).fetch_one(pool).await?;
+                Ok(row.try_get::<i64, _>(0)?)
             }
         }
     }
@@ -223,8 +226,14 @@ impl<'a> DynQuerySet<'a> {
                 }
                 Ok(out)
             }
-            DbPool::Postgres(_) => {
-                unimplemented!("DynQuerySet::fetch_distinct_strings: Postgres branch not yet wired")
+            DbPool::Postgres(pool) => {
+                let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
+                let rows = sqlx::query_with(&sql, values).fetch_all(pool).await?;
+                let mut out = Vec::with_capacity(rows.len());
+                for row in rows {
+                    out.push(decode_pg_to_string(&row, col_meta)?);
+                }
+                Ok(out)
             }
         }
     }
@@ -244,8 +253,10 @@ impl<'a> DynQuerySet<'a> {
                 let res = sqlx::query_with(&sql, values).execute(pool).await?;
                 Ok(res.rows_affected())
             }
-            DbPool::Postgres(_) => {
-                unimplemented!("DynQuerySet::delete: Postgres branch not yet wired")
+            DbPool::Postgres(pool) => {
+                let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
+                let res = sqlx::query_with(&sql, values).execute(pool).await?;
+                Ok(res.rows_affected())
             }
         }
     }
@@ -276,8 +287,10 @@ impl<'a> DynQuerySet<'a> {
                 let res = sqlx::query_with(&sql, values).execute(pool).await?;
                 Ok(res.rows_affected())
             }
-            DbPool::Postgres(_) => {
-                unimplemented!("DynQuerySet::update_one: Postgres branch not yet wired")
+            DbPool::Postgres(pool) => {
+                let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
+                let res = sqlx::query_with(&sql, values).execute(pool).await?;
+                Ok(res.rows_affected())
             }
         }
     }
@@ -323,8 +336,10 @@ impl<'a> DynQuerySet<'a> {
                 let res = sqlx::query_with(&sql, values).execute(pool).await?;
                 Ok(res.rows_affected())
             }
-            DbPool::Postgres(_) => {
-                unimplemented!("DynQuerySet::update_form: Postgres branch not yet wired")
+            DbPool::Postgres(pool) => {
+                let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
+                let res = sqlx::query_with(&sql, values).execute(pool).await?;
+                Ok(res.rows_affected())
             }
         }
     }
@@ -380,8 +395,28 @@ impl<'a> DynQuerySet<'a> {
                 let res = sqlx::query_with(&sql, vals).execute(pool).await?;
                 Ok(res.last_insert_rowid())
             }
-            DbPool::Postgres(_) => {
-                unimplemented!("DynQuerySet::insert_form: Postgres branch not yet wired")
+            DbPool::Postgres(pool) => {
+                // Postgres doesn't have last_insert_rowid; we ask for
+                // RETURNING the PK and read it back. Falls back to 0
+                // when the model has no integer PK (e.g. UUID PKs) —
+                // the caller's flow needs to skip relying on the
+                // return value in that case.
+                let pk_name = self
+                    .meta
+                    .fields
+                    .iter()
+                    .find(|c| c.primary_key)
+                    .map(|c| c.name.clone());
+                if let Some(pk) = pk_name {
+                    q.returning_col(Alias::new(&pk));
+                    let (sql, vals) = q.build_sqlx(PostgresQueryBuilder);
+                    let row = sqlx::query_with(&sql, vals).fetch_one(pool).await?;
+                    Ok(row.try_get::<i64, _>(pk.as_str()).unwrap_or(0))
+                } else {
+                    let (sql, vals) = q.build_sqlx(PostgresQueryBuilder);
+                    let _ = sqlx::query_with(&sql, vals).execute(pool).await?;
+                    Ok(0)
+                }
             }
         }
     }
@@ -431,8 +466,23 @@ impl<'a> DynQuerySet<'a> {
                 }
                 Ok(out)
             }
-            DbPool::Postgres(_) => {
-                unimplemented!("DynQuerySet::fetch_as_strings: Postgres branch not yet wired")
+            DbPool::Postgres(pool) => {
+                let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
+                let rows = sqlx::query_with(&sql, values).fetch_all(pool).await?;
+                let mut out: Vec<HashMap<String, String>> = Vec::with_capacity(rows.len());
+                for row in rows {
+                    let mut entry = HashMap::new();
+                    for col_name in &self.select_cols {
+                        if let Some(col_meta) =
+                            self.meta.fields.iter().find(|c| &c.name == col_name)
+                        {
+                            let v = decode_pg_to_string(&row, col_meta)?;
+                            entry.insert(col_name.clone(), v);
+                        }
+                    }
+                    out.push(entry);
+                }
+                Ok(out)
             }
         }
     }
@@ -516,6 +566,108 @@ pub fn decode_to_string(
         SqlType::Array(_) => panic_array_unsupported(&col.name),
         SqlType::Inet | SqlType::Cidr | SqlType::MacAddr | SqlType::FullText => {
             panic_pg_only_unsupported(&col.name)
+        }
+        SqlType::ForeignKey => row.try_get::<i64, _>(name)?.to_string(),
+    })
+}
+
+/// Decode one Postgres cell to its template-friendly string form.
+///
+/// Sibling of [`decode_to_string`] for the Postgres backend. Same
+/// dispatch table on `SqlType`; the only difference is the executor
+/// type (`PgRow` instead of `SqliteRow`) and a handful of types that
+/// Postgres binds differently — `i32` for SmallInt instead of SQLite's
+/// affinity-coerced `i32`, native bool, native chrono / uuid /
+/// serde_json::Value. Array / Inet / Cidr / MacAddr / FullText all
+/// live on Postgres natively but are decoded as their JSON string
+/// shape here (the admin templates only need a printable form).
+pub fn decode_pg_to_string(
+    row: &sqlx::postgres::PgRow,
+    col: &Column,
+) -> Result<String, sqlx::Error> {
+    use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
+    use serde_json::Value;
+    use uuid::Uuid;
+
+    let name = col.name.as_str();
+    if col.nullable {
+        return Ok(match col.ty {
+            SqlType::SmallInt => row
+                .try_get::<Option<i16>, _>(name)?
+                .map_or(String::new(), |v| v.to_string()),
+            SqlType::Integer => row
+                .try_get::<Option<i32>, _>(name)?
+                .map_or(String::new(), |v| v.to_string()),
+            SqlType::BigInt => row
+                .try_get::<Option<i64>, _>(name)?
+                .map_or(String::new(), |v| v.to_string()),
+            SqlType::Real => row
+                .try_get::<Option<f32>, _>(name)?
+                .map_or(String::new(), |v| v.to_string()),
+            SqlType::Double => row
+                .try_get::<Option<f64>, _>(name)?
+                .map_or(String::new(), |v| v.to_string()),
+            SqlType::Boolean => row
+                .try_get::<Option<bool>, _>(name)?
+                .map_or(String::new(), |v| {
+                    if v { "true" } else { "false" }.to_string()
+                }),
+            SqlType::Text => row.try_get::<Option<String>, _>(name)?.unwrap_or_default(),
+            SqlType::Date => row
+                .try_get::<Option<NaiveDate>, _>(name)?
+                .map_or(String::new(), |v| v.to_string()),
+            SqlType::Time => row
+                .try_get::<Option<NaiveTime>, _>(name)?
+                .map_or(String::new(), |v| v.to_string()),
+            SqlType::Timestamptz => row
+                .try_get::<Option<DateTime<Utc>>, _>(name)?
+                .map_or(String::new(), |v| v.to_rfc3339()),
+            SqlType::Uuid => row
+                .try_get::<Option<Uuid>, _>(name)?
+                .map_or(String::new(), |v| v.to_string()),
+            SqlType::Json => row
+                .try_get::<Option<Value>, _>(name)?
+                .map_or(String::new(), |v| v.to_string()),
+            // Array / network / FullText decode as their printable forms.
+            // Pg drivers hand back typed Vec / IpNetwork / etc.; we lift
+            // through a best-effort string decode for now since the admin
+            // only needs a glance. Decode failures fall through to empty
+            // string (the admin still renders something useful).
+            SqlType::Array(_)
+            | SqlType::Inet
+            | SqlType::Cidr
+            | SqlType::MacAddr
+            | SqlType::FullText => row
+                .try_get::<Option<String>, _>(name)
+                .ok()
+                .flatten()
+                .unwrap_or_default(),
+            SqlType::ForeignKey => row
+                .try_get::<Option<i64>, _>(name)?
+                .map_or(String::new(), |v| v.to_string()),
+        });
+    }
+    Ok(match col.ty {
+        SqlType::SmallInt => row.try_get::<i16, _>(name)?.to_string(),
+        SqlType::Integer => row.try_get::<i32, _>(name)?.to_string(),
+        SqlType::BigInt => row.try_get::<i64, _>(name)?.to_string(),
+        SqlType::Real => row.try_get::<f32, _>(name)?.to_string(),
+        SqlType::Double => row.try_get::<f64, _>(name)?.to_string(),
+        SqlType::Boolean => if row.try_get::<bool, _>(name)? {
+            "true"
+        } else {
+            "false"
+        }
+        .to_string(),
+        SqlType::Text => row.try_get::<String, _>(name)?,
+        SqlType::Date => row.try_get::<NaiveDate, _>(name)?.to_string(),
+        SqlType::Time => row.try_get::<NaiveTime, _>(name)?.to_string(),
+        SqlType::Timestamptz => row.try_get::<DateTime<Utc>, _>(name)?.to_rfc3339(),
+        SqlType::Uuid => row.try_get::<Uuid, _>(name)?.to_string(),
+        SqlType::Json => row.try_get::<Value, _>(name)?.to_string(),
+        // Same as the nullable branch: lift through best-effort string.
+        SqlType::Array(_) | SqlType::Inet | SqlType::Cidr | SqlType::MacAddr | SqlType::FullText => {
+            row.try_get::<String, _>(name).unwrap_or_default()
         }
         SqlType::ForeignKey => row.try_get::<i64, _>(name)?.to_string(),
     })
