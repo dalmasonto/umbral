@@ -1,0 +1,29 @@
+{
+  "name": "umbra-playground-frontend",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "esbuild index.tsx --bundle --minify --sourcemap=inline --outfile=../dist/playground.tmp.js --define:process.env.NODE_ENV='\"production\"' --loader:.tsx=tsx",
+    "build:dev": "esbuild index.tsx --bundle --sourcemap --outfile=../dist/playground.tmp.js --loader:.tsx=tsx",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "zustand": "^4.5.0",
+    "openapi-types": "^12.1.0"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^6.4.0",
+    "@testing-library/react": "^16.0.0",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.0",
+    "esbuild": "^0.23.0",
+    "jsdom": "^25.0.0",
+    "tailwindcss": "^3.4.0",
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
+  }
+}
