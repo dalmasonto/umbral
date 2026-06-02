@@ -415,6 +415,51 @@ request body lands directly in `.update_values(...)` with no
 intermediate struct.
 </Callout>
 
+### `get_or_create(predicate, defaults)` - INSERT only when missing
+
+Django's exact shape: fetch the first row matching `predicate`; if none exists, insert `defaults` and return it. The second tuple element says whether a write happened so the caller can branch on first-time-ever vs already-seeded.
+
+```rust
+let (ct, created) = ContentType::objects()
+    .get_or_create(
+        content_type::APP_LABEL.eq("blog") & content_type::MODEL.eq("post"),
+        ContentType {
+            id: 0,
+            app_label: "blog".into(),
+            model: "post".into(),
+        },
+    )
+    .await?;
+if created {
+    tracing::info!("first boot — seeded blog.post content type");
+}
+```
+
+Two round-trips on the miss path (filter+first, then create), one on the hit path. Pair with a UNIQUE constraint on the predicate columns for at-most-one semantics under concurrent inserters - the constraint is the backstop a concurrent caller hits if both pass the filter check before either creates.
+
+Common shapes:
+
+- **Seeding on first boot.** A plugin's `on_ready` walks a list of canonical rows and `get_or_create`s each. Idempotent regardless of how many times the app restarts.
+- **Find-or-make.** A handler that needs a tag, category, or content-type row to attach to a write: `Tag::objects().get_or_create(tag::SLUG.eq(slug), Tag { ... })`.
+
+### `upsert(row)` - INSERT or UPDATE keyed on the primary key
+
+INSERT-or-UPDATE for cases where you have a fully-formed row and want it to "win" against any existing row with the same PK. Sea-query emits `INSERT ... ON CONFLICT(<pk>) DO UPDATE SET col = excluded.col, ...` - the SQLite and Postgres syntax happens to match.
+
+```rust
+let cached = CacheEntry::objects()
+    .upsert(CacheEntry {
+        key: "homepage:html".into(),
+        value: rendered_html.into_bytes(),
+        expires_at: Some(Utc::now() + Duration::seconds(60)),
+    })
+    .await?;
+```
+
+Returns the row as the DB stored it post-upsert. Every non-PK column in the supplied instance overwrites the existing one on a conflict; columns omitted from the serialised instance (rare with `#[derive(Model)]` since every field is serialised) keep their current value via sea-query's `DO NOTHING` shape.
+
+Compared to `get_or_create`, `upsert` is the right call when you want to OVERWRITE on a conflict rather than preserve the existing row. `get_or_create` is read-then-create; `upsert` is "this is the canonical row now".
+
 ## What's next
 
 - Register the model with the migration engine so [makemigrations](/docs/v0.0.1/migrations/managed-migrations) tracks it.

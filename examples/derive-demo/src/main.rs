@@ -280,28 +280,12 @@ async fn auto_migrate() -> Result<(), Box<dyn std::error::Error + Send + Sync>> 
 }
 
 async fn seed_article_rows() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // Use the ORM's count() instead of a raw COUNT(*) so this stays
-    // backend-agnostic — the same call runs against either SQLite or
-    // Postgres without table-name escaping or dialect tweaks.
-    let count = Article::objects().count().await?;
-    if count > 0 {
-        return Ok(());
-    }
-    // sqlx::query(
-    //     "INSERT INTO article (title, body, published_at) VALUES \
-    //      (?, ?, ?), \
-    //      (?, ?, ?)",
-    // )
-    // .bind("Deriving Model")
-    // .bind("Article::objects().fetch() returned this row.")
-    // .bind("2026-05-30T12:00:00Z")
-    // .bind("User-defined struct")
-    // .bind("No hand-written impl Model anywhere in this file.")
-    // .bind(None::<String>)
-    // .execute(&pool)
-    // .await?;
-
-    let articles = vec![
+    // Idempotent seed via `Manager::get_or_create`: filter by a unique
+    // field (the title here), insert if missing, do nothing on a hit.
+    // Replaces the old count-and-bulk_create dance, which would skip
+    // the seed entirely if the first row had been hand-deleted but
+    // others survived. With get_or_create each row stands alone.
+    let seeds = [
         Article {
             id: 0,
             title: "Deriving Model".to_string(),
@@ -318,9 +302,14 @@ async fn seed_article_rows() -> Result<(), Box<dyn std::error::Error + Send + Sy
             title: "User-defined struct".to_string(),
             body: "No hand-written impl Model anywhere in this file.".to_string(),
             status: ArticleStatus::Draft,
-            published_at: None::<chrono::DateTime<chrono::Utc>>,
+            published_at: None,
         },
     ];
-    Article::objects().bulk_create(articles).await?;
+    for article in seeds {
+        let title = article.title.clone();
+        Article::objects()
+            .get_or_create(article::TITLE.eq(&title), article)
+            .await?;
+    }
     Ok(())
 }

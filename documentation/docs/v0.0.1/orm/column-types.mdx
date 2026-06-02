@@ -26,7 +26,8 @@ The cross-backend types compile and run against both Postgres and SQLite. The Po
 | `chrono::DateTime<Utc>` | `Timestamptz` | `TIMESTAMP WITH TIME ZONE` | `TEXT` (ISO 8601) |
 | `uuid::Uuid` | `Uuid` | `UUID` | `TEXT` (36-char canonical) |
 | `serde_json::Value` | `Json` | `JSONB` | `TEXT` (JSON-as-string) |
-| `Vec<T>` (Postgres-only) | `Array(T)` | `T[]` | - (boot fails) |
+| `Vec<u8>` | `Bytes` | `BYTEA` | `BLOB` |
+| `Vec<T>` (Postgres-only, `T` ≠ `u8`) | `Array(T)` | `T[]` | - (boot fails) |
 | `ipnetwork::IpNetwork` (Postgres-only) | `Inet` | `INET` | - (boot fails) |
 | `mac_address::MacAddress` (Postgres-only) | `MacAddr` | `MACADDR` | - (boot fails) |
 | `umbra::orm::TsVector` (Postgres-only) | `FullText` | `TSVECTOR` | - (boot fails) |
@@ -394,8 +395,42 @@ Every type in the [Quick lookup](#quick-lookup) above the divider works on both 
 | `uuid::Uuid` | Native on Postgres, 36-char canonical text on SQLite. The Rust type sees `Uuid` either way. |
 | `bool` | Native on Postgres; `0` / `1` storage on SQLite with sqlx encoding both as `bool`. |
 | `serde_json::Value` | `JSONB` on Postgres, `TEXT` on SQLite. The JSON operator surface picks the dialect-correct rendering at query time. |
+| `Vec<u8>` | `BLOB` on SQLite, `BYTEA` on Postgres. Cross-backend by sqlx encoding; admin renders as a text input with hex / array wire shape. |
 
 This is the cross-backend ORM payoff: most models stay on the cross-backend types and run on either backend, with SQLite for tests / dev and Postgres for prod.
+
+### `Vec<u8>` - binary payloads
+
+Use for anything that stores opaque bytes: file uploads, encrypted envelopes, hash digests, the cache backend's value column. Maps to `BLOB` on SQLite and `BYTEA` on Postgres via `sea_query::ColumnType::Blob`.
+
+```rust
+#[derive(Model)]
+pub struct Attachment {
+    pub id: i64,
+    #[umbra(string, max_length = 200)]
+    pub filename: String,
+    pub mime_type: String,
+    /// Raw bytes. NULL allowed via `Option<Vec<u8>>`.
+    pub data: Vec<u8>,
+    pub thumbnail: Option<Vec<u8>>,
+}
+```
+
+The derive emits `BytesCol<Self>` for `Vec<u8>` and `NullableBytesCol<Self>` for `Option<Vec<u8>>`. Operator surface is small (byte columns rarely appear in WHERE clauses): `.eq(&bytes)`, `.ne(&bytes)`, `.is_null()` / `.is_not_null()` (nullable only), `.asc()` / `.desc()`.
+
+```rust
+let by_hash = Attachment::objects()
+    .filter(attachment::DATA.eq(&content_hash))
+    .first()
+    .await?;
+```
+
+JSON wire shape (REST API request bodies, admin form values, backup `dumpdata` output):
+
+- Array of u8 numbers: `[222, 173, 190, 239]` - the canonical form.
+- Hex string: `"deadbeef"` - lowercase, even length. Accepted on input as a convenience for human-readable test fixtures and admin form values.
+
+`#[derive(Model)]` distinguishes `Vec<u8>` from `Vec<i16>` at the type level: `Vec<u8>` routes to `SqlType::Bytes` (cross-backend), every other `Vec<T>` routes to `SqlType::Array(T)` (Postgres-only).
 
 ## Postgres-only types
 
