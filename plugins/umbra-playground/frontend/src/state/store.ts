@@ -107,7 +107,7 @@ export const usePlayground = create<PlaygroundState>((set, get) => ({
   setBearerToken: (t) =>
     set((s) => ({ current: { ...s.current, bearerToken: t } })),
   resetCurrent: (draft) =>
-    set((s) => ({ current: { ...emptyDraft, ...draft } })),
+    set({ current: { ...emptyDraft, ...draft } }),
 
   lastResponse: null,
   inFlight: false,
