@@ -66,6 +66,12 @@ pub struct AppBuilder {
     settings: Option<Settings>,
     databases: HashMap<String, DbPool>,
     router: Option<Router>,
+    /// Companion path list for `router` — surfaces the user's hand-
+    /// registered routes in the dev-mode 404 page. The builder can't
+    /// peek inside an axum `Router`, so the caller declares its paths
+    /// here. Empty by default; production deployments don't need to
+    /// fill it.
+    route_paths: Vec<String>,
     models: Vec<ModelMeta>,
     plugins: Vec<Box<dyn Plugin>>,
     templates_dir: Option<std::path::PathBuf>,
@@ -85,6 +91,7 @@ impl Default for AppBuilder {
             settings: None,
             databases: HashMap::new(),
             router: None,
+            route_paths: Vec::new(),
             models: Vec::new(),
             plugins: Vec::new(),
             templates_dir: None,
@@ -157,6 +164,36 @@ impl AppBuilder {
     /// plugin.
     pub fn router(mut self, router: Router) -> Self {
         self.router = Some(router);
+        self
+    }
+
+    /// Declare the URL path patterns the hand-written
+    /// [`AppBuilder::router`] contributes, for surfacing in the
+    /// dev-mode default 404 page (and any future route-listing tool).
+    /// axum doesn't expose its internal route table, so the framework
+    /// can't introspect what the caller registered; this companion
+    /// method is how a binary tells the framework which paths it
+    /// declared.
+    ///
+    /// Optional — apps that don't care about the dev-mode route list
+    /// can skip the call. The list is stored verbatim and is not
+    /// cross-checked against the actual `Router`.
+    ///
+    /// ```ignore
+    /// App::builder()
+    ///     .router(Router::new()
+    ///         .route("/", get(home))
+    ///         .route("/articles", get(articles_list)))
+    ///     .route_paths(["/", "/articles"])
+    ///     .build()?;
+    /// ```
+    pub fn route_paths<I, S>(mut self, paths: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.route_paths
+            .extend(paths.into_iter().map(Into::into));
         self
     }
 
@@ -426,6 +463,24 @@ impl AppBuilder {
         // registry is alive when QuerySet's resolve_pool starts
         // looking up by `Model::NAME`.
         crate::migrate::init_model_aliases(model_aliases);
+
+        // Snapshot the declared route paths into the registry so the
+        // dev-mode 404 page can surface them. The implicit `"app"`
+        // plugin holds whatever `.route_paths([...])` declared on the
+        // builder; each registered plugin contributes its own list.
+        // Empty entries are kept so the listing distinguishes "plugin
+        // present, no routes" from "plugin absent".
+        let mut route_registry = crate::routes::RouteRegistry::default();
+        route_registry.by_plugin.insert(
+            crate::migrate::APP_PLUGIN_NAME.to_string(),
+            std::mem::take(&mut self.route_paths),
+        );
+        for plugin in &sorted_plugins {
+            route_registry
+                .by_plugin
+                .insert(plugin.name().to_string(), plugin.route_paths());
+        }
+        crate::routes::init(route_registry);
 
         // Templates engine — published before phase 4 so a future
         // plugin system_check that wants to inspect the loaded

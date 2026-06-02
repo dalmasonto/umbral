@@ -90,6 +90,24 @@ pub trait Plugin: Send + Sync + 'static {
         Router::new()
     }
 
+    /// Declared URL path patterns this plugin contributes — a
+    /// companion to [`routes`] used for surfacing route lists outside
+    /// the request flow (currently: the dev-mode default 404 page).
+    /// axum doesn't expose its internal route table, so plugins
+    /// report the paths they declare here; the framework treats this
+    /// as informational only — not a source of truth for routing.
+    ///
+    /// Default empty. Plugins that ship HTTP routes should override
+    /// to enumerate the path patterns (including axum's `{param}`
+    /// placeholders) — e.g. `vec!["/admin/", "/admin/{table}/"]`.
+    /// Mismatch with the real `routes()` is a stale-list bug, not a
+    /// correctness bug.
+    ///
+    /// [`routes`]: Plugin::routes
+    fn route_paths(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     /// Boot-time checks the plugin needs to pass. Run in phase 4 of
     /// `App::build()` alongside the framework's built-in checks.
     /// `Severity::Error` blocks boot; `Severity::Warning` logs and

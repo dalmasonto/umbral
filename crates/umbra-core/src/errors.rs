@@ -137,8 +137,40 @@ pub fn render_not_found(template: Option<&str>, path: &str) -> Response<Body> {
     // When the engine isn't initialised or the template fails to render,
     // the fallback "Not Found" body is plaintext; it would be wrong to
     // ship it as text/html.
+    //
+    // In dev mode, surface the registered-route registry so a
+    // developer who hits a typoed URL can see what's actually
+    // available. Production responses stay minimal — `dev_mode` is
+    // false there, so the template's `{% if dev_mode %}` block
+    // collapses to nothing.
+    let dev_mode = crate::settings::get_opt()
+        .map(|s| matches!(s.environment, crate::settings::Environment::Dev))
+        .unwrap_or(false);
+    let routes_ctx: Vec<minijinja::Value> = if dev_mode {
+        crate::routes::get()
+            .map(|reg| {
+                reg.by_plugin
+                    .iter()
+                    .filter(|(_, paths)| !paths.is_empty())
+                    .map(|(plugin, paths)| {
+                        minijinja::context! {
+                            plugin => plugin.as_str(),
+                            paths => paths,
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let ctx = context! {
+        path => path,
+        dev_mode => dev_mode,
+        routes_by_plugin => routes_ctx,
+    };
     let (body, content_type) = effective_template
-        .and_then(|name| crate::templates::render(name, &context! { path => path }).ok())
+        .and_then(|name| crate::templates::render(name, &ctx).ok())
         .map(|html| (html, "text/html; charset=utf-8"))
         .unwrap_or_else(|| ("Not Found".to_string(), "text/plain; charset=utf-8"));
 
@@ -423,6 +455,74 @@ mod tests {
         // a template name was provided.
         let resp = render_not_found(Some("nonexistent.html"), "/x");
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn default_404_renders_route_panel_when_dev_mode_and_registry_populated() {
+        // Render the embedded default template through a fresh
+        // minijinja environment so the test doesn't depend on the
+        // (OnceLock-published) global engine state. We feed the same
+        // ctx shape `render_not_found` builds in dev mode and assert
+        // the route list lands in the output.
+        let mut env = minijinja::Environment::new();
+        env.set_auto_escape_callback(|_| minijinja::AutoEscape::Html);
+        env.add_template("default_404.html", DEFAULT_404_HTML).unwrap();
+
+        let ctx = minijinja::context! {
+            path => "/typo",
+            dev_mode => true,
+            routes_by_plugin => serde_json::json!([
+                {"plugin": "app", "paths": ["/", "/articles"]},
+                {"plugin": "admin", "paths": ["/admin/", "/admin/login"]},
+            ]),
+        };
+        let out = env
+            .get_template("default_404.html")
+            .unwrap()
+            .render(&ctx)
+            .unwrap();
+
+        // minijinja's HTML autoescape encodes `/` as `&#x2f;` inside
+        // text nodes — the assertion checks the escaped form (which is
+        // what the browser will then unescape and display verbatim).
+        assert!(
+            out.contains("Dev only"),
+            "dev-mode panel header should be in the output"
+        );
+        assert!(
+            out.contains("&#x2f;admin&#x2f;login"),
+            "admin route should be listed: {out}"
+        );
+        assert!(
+            out.contains("&#x2f;articles"),
+            "app route should be listed: {out}"
+        );
+    }
+
+    #[test]
+    fn default_404_omits_route_panel_when_dev_mode_is_off() {
+        // Same template, but `dev_mode = false` — the panel block must
+        // collapse to nothing. The page should still render the path
+        // and the action buttons (those are outside the gated block).
+        let mut env = minijinja::Environment::new();
+        env.set_auto_escape_callback(|_| minijinja::AutoEscape::Html);
+        env.add_template("default_404.html", DEFAULT_404_HTML).unwrap();
+
+        let ctx = minijinja::context! {
+            path => "/typo",
+            dev_mode => false,
+            routes_by_plugin => Vec::<minijinja::Value>::new(),
+        };
+        let out = env
+            .get_template("default_404.html")
+            .unwrap()
+            .render(&ctx)
+            .unwrap();
+
+        assert!(
+            !out.contains("Dev only"),
+            "production response must not surface the route registry"
+        );
     }
 
     #[test]

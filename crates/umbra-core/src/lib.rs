@@ -16,6 +16,7 @@ pub mod inspect;
 pub mod migrate;
 pub mod orm;
 pub mod plugin;
+pub mod routes;
 pub mod settings;
 pub mod signals;
 pub mod slash;

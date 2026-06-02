@@ -530,6 +530,34 @@ impl Plugin for RestPlugin {
 
         router
     }
+
+    fn route_paths(&self) -> Vec<String> {
+        // Concrete paths beat the `/api/{table}/` placeholder: the
+        // dev-mode 404 lists them so a developer reading the page
+        // can copy-paste an actual URL. We walk the model registry
+        // (live by phase 3 of `App::build`) and emit the per-table
+        // collection + detail routes, then append every registered
+        // custom action.
+        let mut paths = Vec::new();
+        for meta in umbra::migrate::registered_models() {
+            paths.push(format!("/api/{}/", meta.table));
+            paths.push(format!("/api/{}/{{id}}", meta.table));
+        }
+        for (table, action_list) in &self.actions {
+            for def in action_list {
+                match def.scope {
+                    ActionScope::Collection => {
+                        paths.push(format!("/api/{table}/{}", def.name));
+                    }
+                    ActionScope::Detail => {
+                        paths.push(format!("/api/{table}/{{id}}/{}", def.name));
+                    }
+                }
+            }
+        }
+        paths.sort();
+        paths
+    }
 }
 
 /// Validate the URL segment is safe to splice into a route path

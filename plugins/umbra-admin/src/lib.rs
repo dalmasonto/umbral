@@ -392,6 +392,47 @@ impl Plugin for AdminPlugin {
             .with_state(state)
     }
 
+    fn route_paths(&self) -> Vec<String> {
+        // Companion list to `routes()` — surfaced by the dev-mode
+        // default 404 page. Keep in sync with the `.route(...)` calls
+        // above; mismatch is "stale route list," not a routing bug.
+        [
+            "/admin",
+            "/admin/",
+            "/admin/login",
+            "/admin/logout",
+            "/admin/{table}/",
+            "/admin/{table}/new",
+            "/admin/{table}/action",
+            "/admin/{table}/rows",
+            "/admin/{table}/filter-dialog",
+            "/admin/{table}/new-sheet",
+            "/admin/{table}/create",
+            "/admin/{table}/{id}",
+            "/admin/{table}/{id}/edit",
+            "/admin/{table}/{id}/edit-sheet",
+            "/admin/{table}/{id}/sheet",
+            "/admin/{table}/{id}/delete",
+            "/admin/{table}/{id}/_confirm-delete",
+            "/admin/{table}/{id}/history",
+            "/admin/{table}/{id}/change-password",
+            "/admin/{table}/{id}/cell/{field}",
+            "/admin/{table}/{id}/cell/{field}/edit",
+            "/admin/{table}/actions/{key}",
+            "/admin/api/{table}/{field}/options",
+            "/admin/api/{table}/{field}/options/resolve",
+            "/admin/api/prefs",
+            "/admin/api/palette",
+            "/admin/api/palette/search",
+            "/admin/api/dashboard/catalog",
+            "/admin/api/dashboard/layout",
+            "/admin/api/dashboard/widgets/{key}/data",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect()
+    }
+
     fn on_ready(&self, _ctx: &umbra::plugin::AppContext) -> Result<(), umbra::plugin::PluginError> {
         // Tables are produced by the migration engine off
         // `Self::models()` — same path as every other plugin's models.

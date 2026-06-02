@@ -171,6 +171,61 @@
                         Go back
                     </button>
                 </div>
+
+                {# Dev-mode aid: list every registered route, grouped
+                   by plugin. Production responses set `dev_mode =
+                   false` so this whole block collapses to nothing. The
+                   list is a declared snapshot, not a live introspection
+                   of axum's routing table — see
+                   `crates/umbra-core/src/routes.rs`. #}
+                {% if dev_mode and routes_by_plugin %}
+                <div
+                    class="mt-12 mx-auto max-w-2xl text-left rounded-md border border-slate-800 bg-slate-900/40 backdrop-blur-sm"
+                >
+                    <div
+                        class="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-slate-800"
+                    >
+                        <span
+                            class="mono text-[10px] tracking-widest text-slate-400 uppercase"
+                        >
+                            Dev only // registered routes
+                        </span>
+                        <span class="mono text-[10px] text-slate-600">
+                            {{ routes_by_plugin | length }} plugin{% if routes_by_plugin | length != 1 %}s{% endif %}
+                        </span>
+                    </div>
+                    <div class="divide-y divide-slate-800">
+                        {% for group in routes_by_plugin %}
+                        <details class="group">
+                            <summary
+                                class="flex items-center justify-between gap-3 px-4 py-2.5 cursor-pointer hover:bg-slate-900/60 transition-colors"
+                            >
+                                <span
+                                    class="mono text-xs text-slate-300"
+                                    >{{ group.plugin }}</span
+                                >
+                                <span
+                                    class="mono text-[10px] text-slate-500"
+                                    >{{ group.paths | length }} route{% if group.paths | length != 1 %}s{% endif %}</span
+                                >
+                            </summary>
+                            <ul
+                                class="px-4 py-2 space-y-1 bg-slate-950/40 border-t border-slate-800"
+                            >
+                                {% for p in group.paths %}
+                                <li>
+                                    <code
+                                        class="mono text-xs text-slate-400 break-all"
+                                        >{{ p }}</code
+                                    >
+                                </li>
+                                {% endfor %}
+                            </ul>
+                        </details>
+                        {% endfor %}
+                    </div>
+                </div>
+                {% endif %}
             </div>
         </main>
 

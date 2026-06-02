@@ -121,7 +121,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // the template's `path` context variable. Replaces the
         // pre-builtin `not_found` fallback handler this example used
         // to carry inline.
-        .not_found_template("404.html")
+        // .not_found_template("404.html")
         // Django-shaped 500: a `tower_http::catch_panic` layer
         // installed by the builder turns handler panics into a 500
         // response rendered through `templates/500.html`. In dev mode
@@ -177,7 +177,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             // Unhandled routes fall through to the framework's
             // `not_found_template` fallback (installed above), which
             // renders 404.html with the request path in scope.
-        ))
+        )
+        // Surface the user-binary routes in the dev-mode 404 page.
+        // The framework can't peek inside an axum `Router`, so we
+        // declare the paths alongside the `.route(...)` calls above.
+        .route_paths(["/", "/500", "/articles", "/articles/{id}", "/api/articles"]))
     .build()?;
 
     // Auto-migrate on startup — demo-only convenience. Skipped when
