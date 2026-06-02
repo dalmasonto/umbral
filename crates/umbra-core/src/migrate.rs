@@ -384,6 +384,19 @@ pub struct Column {
     /// COLUMN`. Set via `#[umbra(default = "...")]` on the model field.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub default: String,
+    /// Distinguishes a multi-valued [`MultiChoice<E>`] column from a
+    /// single-valued choices column. Both share `ty: Text` plus the same
+    /// `choices` / `choice_labels` metadata; this flag is the only
+    /// signal that the value is a CSV. Empty / false for every other
+    /// column.
+    ///
+    /// [`MultiChoice<E>`]: crate::orm::MultiChoice
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub is_multichoice: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 impl From<&FieldSpec> for Column {
@@ -401,6 +414,7 @@ impl From<&FieldSpec> for Column {
             choices: f.choices.iter().map(|s| s.to_string()).collect(),
             choice_labels: f.choice_labels.iter().map(|s| s.to_string()).collect(),
             default: f.default.to_string(),
+            is_multichoice: f.is_multichoice,
         }
     }
 }
@@ -2100,10 +2114,14 @@ fn build_column_def_postgres(col: &Column) -> sea_query::ColumnDef {
             def.auto_increment();
         }
     }
-    // Choices: emit a CHECK constraint so a third-party process writing
-    // directly to the DB can't insert a value the Rust enum can't model.
-    // Single-quoted SQL string literals with embedded `'` doubled.
-    if !col.choices.is_empty() {
+    // Single-valued Choices: emit a CHECK constraint so a third-party
+    // process writing directly to the DB can't insert a value the Rust
+    // enum can't model. MultiChoice carries the same choices/labels
+    // metadata but the stored value is a CSV — a single-value `IN (...)`
+    // constraint would reject every legal CSV. Validating "every CSV
+    // piece is a known variant" needs a regex with per-variant
+    // escaping, which we leave to the sqlx Decode path at v1.
+    if !col.choices.is_empty() && !col.is_multichoice {
         let col_name_escaped = col.name.replace('"', "\"\"");
         let values_sql = col
             .choices

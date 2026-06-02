@@ -228,6 +228,15 @@ pub struct FieldSpec {
     /// engine, which emits the `DEFAULT` on both `CREATE TABLE` and
     /// `ALTER TABLE ADD COLUMN`.
     pub default: &'static str,
+
+    /// When `true`, this column is a [`MultiChoice<E>`] field: TEXT
+    /// storage holding a CSV of the variants of `E`. The `choices` and
+    /// `choice_labels` slices carry the same metadata as a single-valued
+    /// choices field — the admin uses `is_multichoice` to pick the
+    /// checkbox-chip widget over the `<select>` widget.
+    ///
+    /// [`MultiChoice<E>`]: crate::orm::MultiChoice
+    pub is_multichoice: bool,
 }
 
 /// The SQL type kind of a column.

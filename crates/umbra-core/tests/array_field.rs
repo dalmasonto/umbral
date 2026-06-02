@@ -80,6 +80,7 @@ fn postgres_ddl_renders_array_suffix() {
                 choices: Vec::new(),
                 choice_labels: Vec::new(),
                 default: String::new(),
+                is_multichoice: false,
             },
             Column {
                 name: "tags".to_string(),
@@ -94,6 +95,7 @@ fn postgres_ddl_renders_array_suffix() {
                 choices: Vec::new(),
                 choice_labels: Vec::new(),
                 default: String::new(),
+                is_multichoice: false,
             },
         ],
     };

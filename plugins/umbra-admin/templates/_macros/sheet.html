@@ -174,6 +174,27 @@ Drag-resize: ~50 LOC vanilla JS at the bottom; width in localStorage.
           <option value="{{ opt.value }}"{% if field.value == opt.value %} selected{% endif %}>{{ opt.label }}</option>
           {% endfor %}
         </select>
+        {% elif field.kind == "multiselect" %}
+        {# MultiChoice<E> — closed-set, multi-valued.
+           Each variant gets a chip checkbox; the hidden CSV input is
+           the only thing posted. Sync JS lives in field_editor.html. #}
+        <div class="multichoice-picker" data-field="{{ field.name }}">
+          <input type="hidden" id="f_{{ field.name }}" {% if not is_readonly %}name="{{ field.name }}"{% endif %} value="{{ field.value }}" />
+          {% set selected_csv = "," ~ field.value ~ "," %}
+          <div class="flex flex-wrap gap-xs">
+            {% for opt in field.choices %}
+            {% set marker = "," ~ opt.value ~ "," %}
+            {% set is_selected = marker in selected_csv %}
+            <label class="inline-flex items-center gap-xs px-sm py-xs bg-surface-container-low border {% if is_selected %}border-primary text-primary bg-primary/5{% else %}border-outline-variant text-on-surface-variant{% endif %} rounded-full cursor-pointer hover:bg-surface-container-high transition-colors text-body-sm select-none {% if is_readonly %}opacity-60 pointer-events-none{% endif %}">
+              <input type="checkbox" data-mc-value="{{ opt.value }}"
+                {% if is_selected %}checked{% endif %}
+                {% if is_readonly %}disabled{% endif %}
+                class="w-3.5 h-3.5 accent-primary"/>
+              <span>{{ opt.label }}</span>
+            </label>
+            {% endfor %}
+          </div>
+        </div>
         {% else %}
         <input type="text" id="f_{{ field.name }}" {% if not is_readonly %}name="{{ field.name }}"{% endif %} value="{{ field.value }}"
           {% if not field.nullable and not is_readonly %}required{% endif %}

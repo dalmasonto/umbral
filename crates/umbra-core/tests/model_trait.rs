@@ -168,6 +168,7 @@ fn field_spec_is_copy_and_eq() {
         choices: &[],
         choice_labels: &[],
         default: "",
+        is_multichoice: false,
     };
     let b = FieldSpec {
         name: "x",
@@ -183,6 +184,7 @@ fn field_spec_is_copy_and_eq() {
         choices: &[],
         choice_labels: &[],
         default: "",
+        is_multichoice: false,
     };
 
     assert_eq!(
@@ -216,6 +218,7 @@ fn field_spec_eq_distinguishes_different_names() {
         choices: &[],
         choice_labels: &[],
         default: "",
+        is_multichoice: false,
     };
     let b = FieldSpec {
         name: "y",
@@ -231,6 +234,7 @@ fn field_spec_eq_distinguishes_different_names() {
         choices: &[],
         choice_labels: &[],
         default: "",
+        is_multichoice: false,
     };
 
     assert_ne!(a, b, "FieldSpecs differing in name must not compare equal");

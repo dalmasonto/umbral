@@ -466,6 +466,41 @@
   document.body.addEventListener('showToast', function(e) {
     if (e.detail) umbra.showToast(e.detail.message, e.detail.level);
   });
+
+  // MultiChoice — chip checkboxes synced to a hidden CSV input.
+  // Idempotent via [data-mc-init]; safe to re-run after HTMX swaps.
+  function initMultiChoicePickers(root) {
+    root = root || document;
+    root.querySelectorAll('.multichoice-picker:not([data-mc-init])').forEach(function(picker) {
+      picker.setAttribute('data-mc-init', '1');
+      var hidden = picker.querySelector('input[type=hidden]');
+      if (!hidden) return;
+      function sync() {
+        var values = [];
+        picker.querySelectorAll('input[type=checkbox][data-mc-value]').forEach(function(cb) {
+          if (cb.checked) values.push(cb.getAttribute('data-mc-value'));
+        });
+        hidden.value = values.join(',');
+        picker.querySelectorAll('input[type=checkbox][data-mc-value]').forEach(function(cb) {
+          var label = cb.closest('label');
+          if (!label) return;
+          if (cb.checked) {
+            label.classList.add('border-primary', 'text-primary', 'bg-primary/5');
+            label.classList.remove('border-outline-variant', 'text-on-surface-variant');
+          } else {
+            label.classList.remove('border-primary', 'text-primary', 'bg-primary/5');
+            label.classList.add('border-outline-variant', 'text-on-surface-variant');
+          }
+        });
+      }
+      picker.querySelectorAll('input[type=checkbox][data-mc-value]').forEach(function(cb) {
+        cb.addEventListener('change', sync);
+      });
+    });
+  }
+  umbra.initMultiChoicePickers = initMultiChoicePickers;
+  initMultiChoicePickers();
+  document.body.addEventListener('htmx:afterSwap', function() { initMultiChoicePickers(); });
 })();
 </script>
 

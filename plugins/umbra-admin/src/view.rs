@@ -247,9 +247,15 @@ pub(crate) fn format_for_input(raw: &str, ty: SqlType) -> String {
 /// VARCHAR. An unbounded `Text` field gets a textarea — the column
 /// is built for prose.
 pub(crate) fn input_kind(col: &umbra::migrate::Column) -> &'static str {
-    // Choices columns take precedence over the SqlType lookup — they're
-    // stored as Text in the DB but should render as a <select>, not an
-    // <input>.
+    // MultiChoice columns (CSV-encoded TEXT carrying multiple
+    // ChoiceField variants) take precedence: the value is closed-set
+    // but multi-valued, so the `<select>` widget can't represent it.
+    // Render a checkbox-chip group instead.
+    if col.is_multichoice {
+        return "multiselect";
+    }
+    // Single-valued choices columns: stored as Text in the DB but
+    // should render as a <select>, not an <input>.
     if !col.choices.is_empty() {
         return "select";
     }

@@ -45,6 +45,7 @@ fn id_col() -> Column {
         choices: Vec::new(),
         choice_labels: Vec::new(),
         default: String::new(),
+        is_multichoice: false,
     }
 }
 
@@ -62,6 +63,7 @@ fn title_col() -> Column {
         choices: Vec::new(),
         choice_labels: Vec::new(),
         default: String::new(),
+        is_multichoice: false,
     }
 }
 
@@ -156,6 +158,7 @@ fn name_match_wins_over_shape_match_when_columns_differ() {
         choices: Vec::new(),
         choice_labels: Vec::new(),
         default: String::new(),
+        is_multichoice: false,
     };
 
     let prev = make_snapshot(vec![make_meta("Foo", "foo", vec![id_col(), title_col()])]);
@@ -229,6 +232,7 @@ fn no_rename_when_shapes_differ() {
         choices: Vec::new(),
         choice_labels: Vec::new(),
         default: String::new(),
+        is_multichoice: false,
     };
 
     let prev = make_snapshot(vec![make_meta("Foo", "foo", vec![id_col(), title_col()])]);

@@ -31,6 +31,7 @@ fn id_pk() -> Column {
         choices: Vec::new(),
         choice_labels: Vec::new(),
         default: String::new(),
+        is_multichoice: false,
     }
 }
 
@@ -49,6 +50,7 @@ fn text_not_null(name: &str) -> Column {
         choices: Vec::new(),
         choice_labels: Vec::new(),
         default: String::new(),
+        is_multichoice: false,
     }
 }
 
@@ -67,6 +69,7 @@ fn text_nullable(name: &str) -> Column {
         choices: Vec::new(),
         choice_labels: Vec::new(),
         default: String::new(),
+        is_multichoice: false,
     }
 }
 

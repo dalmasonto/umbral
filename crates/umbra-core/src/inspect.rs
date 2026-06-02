@@ -833,6 +833,7 @@ impl From<&IntrospectedColumn> for Column {
             choices: Vec::new(),
             choice_labels: Vec::new(),
             default: String::new(),
+            is_multichoice: false,
         }
     }
 }

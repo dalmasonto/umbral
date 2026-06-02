@@ -160,6 +160,31 @@
       </div>
     </div>
 
+  {% elif field.kind == "multiselect" %}
+    {# MultiChoice<E> — closed-set, multi-valued.
+       Each variant gets a checkbox chip. A hidden CSV input is the
+       single field actually posted, kept in sync by the small JS
+       block below. Pure DOM; no HTMX, no async fetch — every variant
+       is known statically from field.choices. #}
+    <div class="multichoice-picker" data-field="{{ field.name }}">
+      <input type="hidden" id="f_{{ field.name }}" name="{{ field.name }}" value="{{ value }}" />
+      {% set selected_csv = "," ~ value ~ "," %}
+      <div class="flex flex-wrap gap-xs">
+        {% for opt in field.choices %}
+        {% set marker = "," ~ opt.value ~ "," %}
+        {% set is_selected = marker in selected_csv %}
+        <label class="inline-flex items-center gap-xs px-sm py-xs bg-surface-container-low border {% if is_selected %}border-primary text-primary bg-primary/5{% else %}border-outline-variant text-on-surface-variant{% endif %} rounded-full cursor-pointer hover:bg-surface-container-high transition-colors text-body-sm select-none">
+          <input type="checkbox"
+            data-mc-value="{{ opt.value }}"
+            {% if is_selected %}checked{% endif %}
+            {% if is_readonly %}disabled{% endif %}
+            class="w-3.5 h-3.5 accent-primary"/>
+          <span>{{ opt.label }}</span>
+        </label>
+        {% endfor %}
+      </div>
+    </div>
+
   {% elif field.kind == "m2m" %}
     {# M2M chip multi-select picker.
        NOTE: M2M is wired but no Model field uses it until the ORM ships M2M.

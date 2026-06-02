@@ -127,6 +127,7 @@ fn create_table_emits_references_sqlite() {
                 choices: Vec::new(),
                 choice_labels: Vec::new(),
                 default: String::new(),
+                is_multichoice: false,
             },
             Column {
                 name: "title".to_string(),
@@ -141,6 +142,7 @@ fn create_table_emits_references_sqlite() {
                 choices: Vec::new(),
                 choice_labels: Vec::new(),
                 default: String::new(),
+                is_multichoice: false,
             },
             Column {
                 name: "author".to_string(),
@@ -155,6 +157,7 @@ fn create_table_emits_references_sqlite() {
                 choices: Vec::new(),
                 choice_labels: Vec::new(),
                 default: String::new(),
+                is_multichoice: false,
             },
         ],
     };
@@ -202,6 +205,7 @@ fn create_table_emits_references_postgres() {
                 choices: Vec::new(),
                 choice_labels: Vec::new(),
                 default: String::new(),
+                is_multichoice: false,
             },
             Column {
                 name: "title".to_string(),
@@ -216,6 +220,7 @@ fn create_table_emits_references_postgres() {
                 choices: Vec::new(),
                 choice_labels: Vec::new(),
                 default: String::new(),
+                is_multichoice: false,
             },
             Column {
                 name: "author".to_string(),
@@ -230,6 +235,7 @@ fn create_table_emits_references_postgres() {
                 choices: Vec::new(),
                 choice_labels: Vec::new(),
                 default: String::new(),
+                is_multichoice: false,
             },
         ],
     };

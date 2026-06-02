@@ -56,6 +56,7 @@ fn postgres_ddl_renders_tsvector_type() {
                 choices: Vec::new(),
                 choice_labels: Vec::new(),
                 default: String::new(),
+                is_multichoice: false,
             },
             Column {
                 name: "search".to_string(),
@@ -70,6 +71,7 @@ fn postgres_ddl_renders_tsvector_type() {
                 choices: Vec::new(),
                 choice_labels: Vec::new(),
                 default: String::new(),
+                is_multichoice: false,
             },
         ],
     };

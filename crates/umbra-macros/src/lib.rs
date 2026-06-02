@@ -442,6 +442,12 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         };
         let max_length_lit = field_attr.max_length;
         let is_choices_field = field_attr.choices_ty.is_some();
+        // The other path into "choices-shaped metadata": a field of
+        // type `MultiChoice<E>` carries the same closed-set values, but
+        // stores them as a CSV. Detected purely from the Rust type — no
+        // attribute marker — since `MultiChoice<E>` is already
+        // unambiguous.
+        let is_multichoice_field = matches!(kind, FieldKind::MultiChoice(_));
 
         // When `#[umbra(choices)]` is set, the field's Rust type is
         // a `ChoiceField`-implementing enum. Bypass the catalogue and
@@ -503,14 +509,21 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         };
 
         // For choices fields, emit `choices: <T as ChoiceField>::VALUES`
-        // (and the matching label slice). The user's enum type `T` is
-        // the field's Rust type — we pass it verbatim into the trait
+        // (and the matching label slice). For MultiChoice<E> fields,
+        // the inner enum `E` is what implements `ChoiceField`. The
+        // user's enum type is passed verbatim into the trait
         // disambiguation so user crate paths round-trip.
         let (choices_tokens, choice_labels_tokens) = if is_choices_field {
             let ty = &field.ty;
             (
                 quote! { <#ty as ::umbra::orm::ChoiceField>::VALUES },
                 quote! { <#ty as ::umbra::orm::ChoiceField>::LABELS },
+            )
+        } else if let FieldKind::MultiChoice(ref inner) = kind {
+            let inner_ty = inner.as_ref();
+            (
+                quote! { <#inner_ty as ::umbra::orm::ChoiceField>::VALUES },
+                quote! { <#inner_ty as ::umbra::orm::ChoiceField>::LABELS },
             )
         } else {
             (quote! { &[] }, quote! { &[] })
@@ -521,6 +534,11 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         let default_tokens = match &field_attr.default {
             Some(s) => quote! { #s },
             None => quote! { "" },
+        };
+        let is_multichoice_lit = if is_multichoice_field {
+            quote!(true)
+        } else {
+            quote!(false)
         };
 
         field_specs.push(quote! {
@@ -538,14 +556,18 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                 choices: #choices_tokens,
                 choice_labels: #choice_labels_tokens,
                 default: #default_tokens,
+                is_multichoice: #is_multichoice_lit,
             }
         });
 
-        if is_choices_field {
-            // Choices fields are off-catalogue Rust types stored as
-            // TEXT — emit a `StrCol` predicate constant so filter chains
-            // can do `post::STATUS.eq("draft")` (or with the user's
-            // `PostStatus::Draft.as_str()`).
+        if is_choices_field || is_multichoice_field {
+            // Closed-set TEXT fields (single- or multi-valued) get a
+            // `StrCol` predicate constant so filter chains stay
+            // ergonomic: `article::STATUS.eq("draft")` or
+            // `article::TAGS.contains("design")`. The exact set of
+            // operations expressible on multichoice is narrower than
+            // on a true relational M2M, but the predicate constant
+            // form is the same.
             let const_ident = format_ident!("{}", to_screaming_snake_case(&field_name_str));
             let span = field.ty.span();
             column_consts.push(quote_spanned! { span =>
@@ -732,6 +754,10 @@ enum FieldKind {
     ForeignKey(Box<Type>),
     /// `Option<ForeignKey<T>>` — a nullable FK column.
     NullableForeignKey(Box<Type>),
+    /// `MultiChoice<E>` — a CSV-encoded list of `ChoiceField` variants.
+    /// Stored as TEXT; the inner `Type` is `E`, used to pull the
+    /// `VALUES` / `LABELS` slices off the trait at derive time.
+    MultiChoice(Box<Type>),
     /// `ipnetwork::IpNetwork` — Postgres INET column (Phase 4.4).
     Inet,
     NullableInet,
@@ -829,6 +855,7 @@ impl FieldKind {
             FieldKind::ForeignKey(_) | FieldKind::NullableForeignKey(_) => {
                 quote!(::umbra::orm::SqlType::ForeignKey)
             }
+            FieldKind::MultiChoice(_) => quote!(::umbra::orm::SqlType::Text),
             FieldKind::Unsupported(_) => return None,
         };
         let nullable = if self.is_nullable() {
@@ -967,6 +994,15 @@ fn classify_field_type(ty: &Type) -> FieldKind {
     if let Some(inner) = foreign_key_inner(ty) {
         return FieldKind::ForeignKey(Box::new(inner.clone()));
     }
+    // Gap 52 — `MultiChoice<E>`. Same leaf-ident matching as
+    // `ForeignKey<T>`: bare `MultiChoice<E>` or `orm::MultiChoice<E>`
+    // both work. The inner type must itself be `ChoiceField` at use
+    // site; the macro only checks the path shape — the trait bound is
+    // enforced when the emitted `<E as ChoiceField>::VALUES` reference
+    // is type-checked.
+    if let Some(inner) = multichoice_inner(ty) {
+        return FieldKind::MultiChoice(Box::new(inner.clone()));
+    }
     if is_wide_or_unsigned_int(ty) {
         return FieldKind::Unsupported(UnsupportedReason::WideOrUnsignedInt);
     }
@@ -1056,6 +1092,32 @@ fn foreign_key_inner(ty: &Type) -> Option<&Type> {
     let inner = type_args.next()?;
     if type_args.next().is_some() {
         return None; // more than one type arg — not our ForeignKey
+    }
+    Some(inner)
+}
+
+/// If `ty` is `MultiChoice<E>` (with or without the `orm::` qualifier),
+/// return the inner enum type `E`. Returns `None` otherwise. The shape
+/// check mirrors [`foreign_key_inner`] — leaf ident match plus a single
+/// type argument.
+fn multichoice_inner(ty: &Type) -> Option<&Type> {
+    let Type::Path(TypePath { qself: None, path }) = ty else {
+        return None;
+    };
+    let last = path.segments.last()?;
+    if last.ident != "MultiChoice" {
+        return None;
+    }
+    let PathArguments::AngleBracketed(ref args) = last.arguments else {
+        return None;
+    };
+    let mut type_args = args.args.iter().filter_map(|a| match a {
+        GenericArgument::Type(t) => Some(t),
+        _ => None,
+    });
+    let inner = type_args.next()?;
+    if type_args.next().is_some() {
+        return None;
     }
     Some(inner)
 }
@@ -1348,6 +1410,10 @@ fn column_const_for(
         FieldKind::NullableFullText => format_ident!("NullableFullTextCol"),
         FieldKind::ForeignKey(_) => format_ident!("ForeignKeyCol"),
         FieldKind::NullableForeignKey(_) => format_ident!("NullableForeignKeyCol"),
+        // MultiChoice is handled inline by the caller (emits a StrCol),
+        // so this arm is unreachable in practice. We return an empty
+        // token stream as a defensive default.
+        FieldKind::MultiChoice(_) => return TokenStream2::new(),
         FieldKind::Unsupported(_) => return TokenStream2::new(),
     };
     quote_spanned! { span =>

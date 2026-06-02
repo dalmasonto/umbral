@@ -144,6 +144,7 @@ async fn migrated_dir() -> &'static Path {
                 choices: Vec::new(),
                 choice_labels: Vec::new(),
                 default: String::new(),
+                is_multichoice: false,
             };
             let file = MigrationFile {
                 id: M8_ADD_COLUMN_MIGRATION_ID.to_string(),
@@ -201,6 +202,7 @@ async fn migrated_dir() -> &'static Path {
                     choices: Vec::new(),
                     choice_labels: Vec::new(),
                     default: String::new(),
+                    is_multichoice: false,
                 },
                 Column {
                     name: "note".to_string(),
@@ -215,6 +217,7 @@ async fn migrated_dir() -> &'static Path {
                     choices: Vec::new(),
                     choice_labels: Vec::new(),
                     default: String::new(),
+                    is_multichoice: false,
                 },
             ];
             let file = MigrationFile {
@@ -697,6 +700,7 @@ fn id_column() -> Column {
         choices: Vec::new(),
         choice_labels: Vec::new(),
         default: String::new(),
+        is_multichoice: false,
     }
 }
 
@@ -716,6 +720,7 @@ fn text_column(name: &str) -> Column {
         choices: Vec::new(),
         choice_labels: Vec::new(),
         default: String::new(),
+        is_multichoice: false,
     }
 }
 
@@ -844,6 +849,7 @@ fn diff_returns_unsafe_alter_for_a_type_change() {
             choices: Vec::new(),
             choice_labels: Vec::new(),
             default: String::new(),
+            is_multichoice: false,
         },
     ]));
 
@@ -887,6 +893,7 @@ fn diff_emits_alter_column_for_a_nullable_flip() {
             choices: Vec::new(),
             choice_labels: Vec::new(),
             default: String::new(),
+            is_multichoice: false,
         },
     ]));
 

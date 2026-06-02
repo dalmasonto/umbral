@@ -98,6 +98,7 @@ fn write_migration(dir: &Path, plugin: &str, id: &str, table: &str) {
                     choices: Vec::new(),
                     choice_labels: Vec::new(),
                     default: String::new(),
+                    is_multichoice: false,
                 },
                 Column {
                     name: "title".to_string(),
@@ -112,6 +113,7 @@ fn write_migration(dir: &Path, plugin: &str, id: &str, table: &str) {
                     choices: Vec::new(),
                     choice_labels: Vec::new(),
                     default: String::new(),
+                    is_multichoice: false,
                 },
             ],
         }],

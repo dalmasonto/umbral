@@ -326,6 +326,49 @@ This composes with `#[derive(Form)]` if you have additional request-shape rules 
 - Adding a new variant to the enum doesn't auto-rewrite the existing Postgres `CHECK` constraint — re-running `make` after adding a variant generates a migration that drops + re-adds the constraint, which is fine but requires the migration step.
 - Removing a variant is a data migration the user owns: existing rows that hold the dropped variant become invalid; clean up the data first, then drop the variant.
 
+### `MultiChoice<E>` - multi-valued choices
+
+`MultiChoice<E>` is the multi-valued counterpart to `#[derive(Choices)]`. Where a `Choices` field carries one variant, a `MultiChoice<E>` field carries an ordered list of distinct variants of the same enum. Storage is a single TEXT column holding a comma-separated list of the variants' DB strings — e.g. `"design,frontend"`. The admin renders the field as a checkbox-chip group (one chip per variant) backed by a hidden CSV input.
+
+```rust
+use umbra::prelude::*;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Choices)]
+#[choices(rename_all = "lowercase")]
+pub enum Tag { Design, Frontend, Backend, DevOps }
+
+#[derive(Debug, Clone, sqlx::FromRow, Model)]
+pub struct Article {
+    pub id: i64,
+    #[umbra(string, max_length = 120)]
+    pub title: String,
+    pub body: String,
+    #[umbra(default = "design,frontend")]
+    pub tags: MultiChoice<Tag>,
+}
+```
+
+The Rust type drives detection — no `#[umbra(multichoice)]` marker is required; the macro recognises `MultiChoice<E>` directly. `#[umbra(default = "...")]` is a CSV of the initial variants, used both as the SQL `DEFAULT` and as the value `ALTER TABLE ADD COLUMN` applies to existing rows.
+
+**Reading and writing.** `Article { tags: vec![Tag::Design, Tag::Backend].into(), .. }` round-trips through sqlx as the TEXT value `'design,backend'`. The wrapper exposes the usual collection surface — `.as_slice()`, `.into_vec()`, `.push(...)`, `.contains(...)`, iteration, `Deref<Target=[E]>`. On the serde side it serialises to a JSON array of strings (`["design","backend"]`); deserialisation accepts both the JSON array form and the CSV string form (the latter is what HTML form posts produce).
+
+#### What's different from `Choices`
+
+| Concern | `Choices` (single) | `MultiChoice<E>` (multi) |
+|---|---|---|
+| Rust field type | `EnumName` directly | `MultiChoice<EnumName>` wrapper |
+| Attribute marker | `#[umbra(choices)]` required | Detected from the type — no marker |
+| DB storage | TEXT, one variant string | TEXT, CSV of variant strings |
+| Postgres `CHECK` | `CHECK (col IN ('a', 'b', ...))` | Skipped at v1 — application-layer enforcement via sqlx `Decode` |
+| Admin widget | `<select>` | Checkbox-chip group + hidden CSV |
+| Order preserved? | n/a | Yes — declaration order in the `Vec<E>` round-trips |
+
+#### Limits at v1
+
+- No `Option<MultiChoice<E>>` — at v1 the field is non-nullable. Use an empty selection (`MultiChoice::new()`) instead of NULL.
+- No `CHECK` constraint emitted on Postgres — validating "every CSV piece is a known variant" needs a regex with per-variant escaping. Application-layer enforcement via sqlx's `Decode` path is the v1 stance; a defence-in-depth `CHECK` lands when a real consumer needs it.
+- Filtering on a `MultiChoice` column uses string predicates (`MyModel::TAGS.contains("design")`). No element-level membership filter at v1.
+
 ## Nullability
 
 `Option<T>` is the only path to a nullable column. The migration engine emits the right `NULL` / `NOT NULL` clause for each backend:
