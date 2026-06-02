@@ -46,6 +46,9 @@ After `cargo build -p umbra-playground` with the CLIs installed:
 
 1. Run an example app that registers `RestPlugin`, `OpenApiPlugin`, and `PlaygroundPlugin`.
 2. Open `http://localhost:<port>/api/playground/` in a browser.
-3. You should see the 3-pane shell with a left endpoint tree, a center URL strip, and an empty right pane.
-4. The left pane should show a "Loading spec..." state for a moment, then a list of endpoints grouped by tag.
-5. Click an endpoint; the center URL strip should populate with the method and path.
+3. The 3-pane shell renders: left endpoint tree, center request builder, right response viewer.
+4. The left pane shows a "Loading spec..." state, then a list of endpoints grouped by tag.
+5. Click an endpoint; the center URL strip populates with the method and path.
+6. Click "Send"; the right pane shows the response status, body, headers, and a `cURL` tab.
+7. Click Send again; the History tab in the right pane shows 2 entries; click an entry to restore.
+8. Reload the page; the History tab should still show the entries (loaded from localStorage).
