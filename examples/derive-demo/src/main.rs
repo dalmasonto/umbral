@@ -133,6 +133,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // so the surface stays in lockstep with the schema for free.
         .plugin(umbra_rest::RestPlugin::default())
         .plugin(umbra_openapi::OpenApiPlugin::new())
+        .plugin(umbra_playground::PlaygroundPlugin::new())
         .plugin(umbra_auth::AuthPlugin::<AuthUser>::default())
         .plugin(umbra_sessions::SessionsPlugin::default())
         // Register Article with the admin so the datatable renders a
