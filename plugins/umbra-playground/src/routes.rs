@@ -84,12 +84,16 @@ fn not_found() -> Response<Body> {
         .unwrap()
 }
 
-/// Compose both routes into a sub-router. Caller mounts under
-/// `state.base_path` (e.g. via `Router::new().nest(&base, sub)`).
+/// Compose both routes into a router. Routes are absolute
+/// (e.g. `/api/playground/` and `/api/playground/assets/{*path}`)
+/// because the plugin contract merges plugin routers flat into
+/// the app router without auto-prefixing.
 pub fn router(state: PlaygroundState) -> axum::Router {
     use axum::routing::get;
+    let base = state.base_path.as_ref();
+    let base_trimmed = base.trim_end_matches('/');
     axum::Router::new()
-        .route("/", get(shell))
-        .route("/assets/*path", get(assets))
+        .route(&format!("{base_trimmed}/"), get(shell))
+        .route(&format!("{base_trimmed}/assets/{{*path}}"), get(assets))
         .with_state(state)
 }

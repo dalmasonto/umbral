@@ -44,6 +44,13 @@ impl PlaygroundPlugin {
         self.base_path = if trimmed.is_empty() { "/".to_string() } else { trimmed };
         self
     }
+
+    /// Test-only accessor for the configured base path. Marked
+    /// `#[doc(hidden)]` so it doesn't appear in the public API.
+    #[doc(hidden)]
+    pub fn base_path_for_test(&self) -> &str {
+        &self.base_path
+    }
 }
 
 impl Plugin for PlaygroundPlugin {

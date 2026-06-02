@@ -12,3 +12,8 @@ rust-version.workspace = true
 [dependencies]
 umbra = { path = "../../crates/umbra", version = "0.0.1" }
 axum = "0.8"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
