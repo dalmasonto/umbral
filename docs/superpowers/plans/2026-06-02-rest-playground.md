@@ -3469,3 +3469,13 @@ All 14 spec sections are covered. No gaps.
 **One real issue found:** Task 20 is a no-op. The spec's §9 language about "build.rs-driven npx vitest run" was a design choice that turned out to add more complexity than value, given that vitest is fast and CI can run two test commands. The deviation is documented in Task 20 Step 1 and reflected in the final acceptance criteria (Task 24 Step 2 is a separate `npx vitest run` invocation, not a `cargo test` invocation).
 
 Both issues are fixed inline (Task 20's decision is recorded, and the type check above confirms no drift).
+
+## Follow-ups (post-v1)
+
+The following are explicit decisions made during execution that future maintainers should know about:
+
+### Vitest is not invoked from `cargo test`
+
+The spec (§9) called for vitest to be invoked from `cargo test` via `build.rs`-driven `npx vitest run`. We chose the documented alternative: `npm test` in `plugins/umbra-playground/frontend/`. The cross-toolchain coupling (Cargo shelling out to npm) wasn't worth the small UX win of "one command runs everything." CI runs them as two separate steps.
+
+Affected: Task 20 (which is intentionally a no-op as a result). If you want to wire them together later, the hook would live in `plugins/umbra-playground/build.rs` (or a separate test-only build script) and would need to gracefully degrade when `npx` isn't available, mirroring the build pipeline's approach.
