@@ -79,6 +79,12 @@
       --inverse-on-surface:       #e0e2ec;
       --outline:                  #767680;
       --outline-variant:          #cbcdd2;
+      /* Soft dividers — Tailwind v3 silently drops opacity modifiers
+         on raw CSS-variable colors, so we bake the alpha into named
+         tokens. Use `border-divider` / `divide-divider-soft` instead
+         of `border-outline-variant/20`. */
+      --divider:                  rgba(0, 0, 0, 0.10);
+      --divider-soft:             rgba(0, 0, 0, 0.06);
       --background:               #fafbfc;
       --on-background:            #10131a;
       --primary:                  #5b5bd6;
@@ -128,6 +134,8 @@
       --inverse-on-surface:       #2d3038;
       --outline:                  #918f9e;
       --outline-variant:          #464553;
+      --divider:                  rgba(255, 255, 255, 0.09);
+      --divider-soft:             rgba(255, 255, 255, 0.05);
       --background:               #10131a;
       --on-background:            #e0e2ec;
       --primary:                  #c2c1ff;

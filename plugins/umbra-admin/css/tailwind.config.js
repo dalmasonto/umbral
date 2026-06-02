@@ -34,6 +34,13 @@ module.exports = {
         'on-error':                   'var(--on-error)',
         'error-container':            'var(--error-container)',
         'on-error-container':         'var(--on-error-container)',
+        // Pre-alpha'd divider tokens. Use `border-divider` /
+        // `divide-divider-soft` instead of `border-outline-variant/20`
+        // — Tailwind v3 silently drops opacity modifiers on raw
+        // CSS-variable colors, so soft dividers ship with their alpha
+        // already baked in.
+        'divider':                    'var(--divider)',
+        'divider-soft':               'var(--divider-soft)',
       },
       spacing: {
         'sidebar-width':     '260px',

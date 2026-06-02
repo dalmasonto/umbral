@@ -32,5 +32,27 @@
   umbra.closeDialog = function() {
     document.getElementById('umbra-dialog-slot').innerHTML = '';
   };
+
+  {# Auto-open the preview sheet when `?row=<id>` is on the URL. The
+     palette + saved deep links use this to land the user directly on
+     a row. After opening, strip ONLY the `row` param from the URL so
+     search / sort / page state stay intact. #}
+  {% if open_row %}
+  (function autoOpenRow() {
+    var rowId = {{ open_row | tojson }};
+    if (!rowId) return;
+    var table = {{ active_table | tojson }};
+    // Remove only `row` from the URL; keep everything else.
+    try {
+      var u = new URL(window.location.href);
+      u.searchParams.delete('row');
+      history.replaceState({}, '', u.pathname + (u.search || '') + (u.hash || ''));
+    } catch (e) { /* URL not supported — skip the rewrite */ }
+    htmx.ajax('GET', '/admin/' + table + '/' + rowId + '/sheet', {
+      target: '#umbra-sheet-slot',
+      swap: 'innerHTML'
+    });
+  })();
+  {% endif %}
 </script>
 {% endblock %}

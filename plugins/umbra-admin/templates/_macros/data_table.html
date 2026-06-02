@@ -283,7 +283,7 @@
       </thead>
 
       {# HTMX swap target for rows + pagination #}
-      <tbody id="table-body" class="divide-y divide-outline-variant">
+      <tbody id="table-body" class="divide-y dark:divide-gray-800">
         {% if rows %}
           {% for row in rows %}
           <tr
@@ -784,10 +784,16 @@
     });
   };
 
-  // ---- Sort column header (Bug 1 fix) ---
-  // Read CURRENT sort state from live hidden inputs so that toggling desc
-  // works correctly even after an HTMX tbody swap updates the URL without
-  // re-rendering the static column headers.
+  // ---- Sort column header ---
+  // Read CURRENT sort state from live hidden inputs (kept in sync by
+  // syncHiddenInputsFromUrl after every swap). New column → asc.
+  // Same column → flip whatever the current direction is, so the
+  // three-state cycle is asc → desc → asc → desc...
+  //
+  // URL push: htmx's `pushUrl: true` would push the fragment endpoint
+  // (`/admin/<table>/rows?...`), which 500s on direct hit. Push the
+  // page-level URL manually via `history.pushState` so a refresh
+  // re-runs the full changelist with the same params.
   umbra._sortByCol = function(btn) {
     var col       = btn.getAttribute('data-sort-col');
     var table     = btn.getAttribute('data-table');
@@ -800,14 +806,25 @@
     var curOrder = sortOrderEl ? sortOrderEl.value : 'asc';
     var search   = searchEl   ? searchEl.value     : '';
     var filter   = filterEl   ? filterEl.value     : '';
-    // Toggle: same col + asc => desc; everything else => asc on new col.
-    var newOrder = (curCol === col && curOrder === 'asc') ? 'desc' : 'asc';
-    var url = '/admin/' + table + '/rows?search=' + encodeURIComponent(search) +
-              '&filter=' + encodeURIComponent(filter) +
-              '&sort=' + encodeURIComponent(col) +
-              '&order=' + newOrder +
-              '&page=1&page_size=' + pageSize;
-    htmx.ajax('GET', url, { target: '#table-body', swap: 'innerHTML', pushUrl: true });
+    var newOrder = (curCol === col)
+      ? (curOrder === 'asc' ? 'desc' : 'asc')
+      : 'asc';
+    // Sync the hidden inputs synchronously so the very next click
+    // sees the new state even before HTMX finishes the swap.
+    if (sortColEl)   sortColEl.value   = col;
+    if (sortOrderEl) sortOrderEl.value = newOrder;
+    var qs = '?search=' + encodeURIComponent(search) +
+             '&filter=' + encodeURIComponent(filter) +
+             '&sort=' + encodeURIComponent(col) +
+             '&order=' + newOrder +
+             '&page=1&page_size=' + pageSize;
+    try {
+      history.pushState({}, '', '/admin/' + table + '/' + qs);
+    } catch (e) { /* refusing to push is fine; the swap still happens */ }
+    htmx.ajax('GET', '/admin/' + table + '/rows' + qs, {
+      target: '#table-body',
+      swap: 'innerHTML'
+    });
   };
 
   // Re-init after HTMX swaps the tbody.
