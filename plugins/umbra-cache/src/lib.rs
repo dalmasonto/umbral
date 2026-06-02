@@ -276,6 +276,29 @@ impl CacheBackend for MemoryBackend {
 }
 
 // ── SqliteBackend ────────────────────────────────────────────────────────────
+//
+// CLAUDE.md exception — backend-specific raw SQL is allowed here.
+//
+// Two reasons this backend keeps `sqlx::query(...)` calls instead of
+// going through the ORM:
+//
+//   1. The `umbra_cache.value` column is `BLOB` / `bytea` — bytes,
+//      not text. The ORM's field-type catalogue doesn't yet model
+//      `Vec<u8>` (it lives in the deferred-features list); declaring
+//      a `CacheEntry` model with a `Vec<u8>` field would fail at
+//      `#[derive(Model)]` expansion.
+//
+//   2. The set path uses `INSERT ... ON CONFLICT(key) DO UPDATE SET
+//      excluded.column` — the SQLite upsert syntax. The ORM doesn't
+//      expose an upsert terminal at v1 (`get_or_create` exists for
+//      the "INSERT or no-op" shape; "INSERT or update" is its own
+//      operation and lands when a real consumer needs it).
+//
+// `SqliteBackend` is explicitly typed `pool: SqlitePool`, so the
+// raw SQL has zero portability risk — a user who calls
+// `Cache::sqlite(pool)` opted into SQLite by name. The Redis backend
+// below handles the non-SQLite case; an eventual `PgBackend` would
+// be its own sibling once `Vec<u8>` lands in the catalogue.
 
 /// SQLite-backed cache. Table: `umbra_cache(key TEXT PRIMARY KEY,
 /// value BLOB NOT NULL, expires_at TIMESTAMP NULL)`. Expired rows

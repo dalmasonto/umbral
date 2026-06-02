@@ -51,7 +51,6 @@ pub use serde_json as _serde_json;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
 use tokio::sync::watch;
 use umbra::prelude::*;
 
@@ -187,6 +186,12 @@ impl From<serde_json::Error> for TaskError {
     }
 }
 
+impl From<umbra::orm::write::WriteError> for TaskError {
+    fn from(e: umbra::orm::write::WriteError) -> Self {
+        Self::Other(format!("write: {e:?}"))
+    }
+}
+
 // =========================================================================
 // Public helpers.
 // =========================================================================
@@ -214,27 +219,27 @@ pub async fn enqueue<P: Serialize>(
     payload: P,
     opts: EnqueueOptions,
 ) -> Result<i64, TaskError> {
-    let pool = umbra::db::pool();
     let payload_json = serde_json::to_string(&payload)?;
     let now = Utc::now();
     let scheduled_for = opts.scheduled_for.unwrap_or(now);
     let max_attempts = opts.max_attempts.unwrap_or(DEFAULT_MAX_ATTEMPTS);
 
-    let row: (i64,) = sqlx::query_as(
-        "INSERT INTO task_row (\
-            name, payload, status, attempts, max_attempts, \
-            scheduled_for, started_at, completed_at, error, created_at\
-         ) VALUES (?, ?, ?, 0, ?, ?, NULL, NULL, NULL, ?) RETURNING id",
-    )
-    .bind(name)
-    .bind(&payload_json)
-    .bind(STATUS_PENDING)
-    .bind(max_attempts)
-    .bind(scheduled_for)
-    .bind(now)
-    .fetch_one(&pool)
-    .await?;
-    Ok(row.0)
+    let row = TaskRow::objects()
+        .create(TaskRow {
+            id: 0,
+            name: name.to_string(),
+            payload: payload_json,
+            status: STATUS_PENDING.to_string(),
+            attempts: 0,
+            max_attempts,
+            scheduled_for,
+            started_at: None,
+            completed_at: None,
+            error: None,
+            created_at: now,
+        })
+        .await?;
+    Ok(row.id)
 }
 
 /// The boxed handler type stored in the per-process registry. Returns
@@ -357,11 +362,10 @@ pub async fn run_worker(mut opts: WorkerOptions) -> ! {
 /// Test-driver entry point: integration tests can drive deterministic
 /// scenarios without spawning the polling loop.
 pub async fn run_worker_once() -> Result<bool, TaskError> {
-    let pool = umbra::db::pool();
-    let Some(row) = claim_one(&pool).await? else {
+    let Some(row) = claim_one().await? else {
         return Ok(false);
     };
-    process_one(&pool, row).await?;
+    process_one(row).await?;
     Ok(true)
 }
 
@@ -370,42 +374,50 @@ pub async fn run_worker_once() -> Result<bool, TaskError> {
 /// worker can't double-claim — SQLite's single-writer model already
 /// guarantees this, but the explicit transaction keeps the contract
 /// correct for the Postgres backend.
-async fn claim_one(pool: &SqlitePool) -> Result<Option<TaskRow>, TaskError> {
+async fn claim_one() -> Result<Option<TaskRow>, TaskError> {
     let now = Utc::now();
-    let mut tx = pool.begin().await?;
-    let candidate: Option<TaskRow> = sqlx::query_as::<_, TaskRow>(
-        "SELECT * FROM task_row \
-         WHERE status = ? AND scheduled_for <= ? \
-         ORDER BY scheduled_for ASC, id ASC \
-         LIMIT 1",
-    )
-    .bind(STATUS_PENDING)
-    .bind(now)
-    .fetch_optional(&mut *tx)
-    .await?;
-    let Some(mut row) = candidate else {
-        tx.commit().await?;
-        return Ok(None);
-    };
-    sqlx::query(
-        "UPDATE task_row SET status = ?, started_at = ?, attempts = attempts + 1 WHERE id = ?",
-    )
-    .bind(STATUS_RUNNING)
-    .bind(now)
-    .bind(row.id)
-    .execute(&mut *tx)
-    .await?;
-    tx.commit().await?;
-    // Reflect the in-DB mutations in the row we return so the caller
-    // doesn't need to re-SELECT.
-    row.status = STATUS_RUNNING.to_string();
-    row.started_at = Some(now);
-    row.attempts += 1;
-    Ok(Some(row))
+    umbra::transaction(|tx| {
+        Box::pin(async move {
+            let candidate = TaskRow::objects()
+                .filter(
+                    task_row::STATUS.eq(STATUS_PENDING)
+                        & task_row::SCHEDULED_FOR.le(now),
+                )
+                .order_by(task_row::SCHEDULED_FOR.asc())
+                .order_by(task_row::ID.asc())
+                .limit(1)
+                .on_tx(tx)
+                .first()
+                .await?;
+            let Some(mut row) = candidate else {
+                return Ok::<Option<TaskRow>, TaskError>(None);
+            };
+            let new_attempts = row.attempts + 1;
+            let mut patch = serde_json::Map::new();
+            patch.insert(
+                "status".to_string(),
+                serde_json::Value::String(STATUS_RUNNING.to_string()),
+            );
+            patch.insert("started_at".to_string(), serde_json::to_value(now)?);
+            patch.insert("attempts".to_string(), serde_json::Value::from(new_attempts));
+            TaskRow::objects()
+                .filter(task_row::ID.eq(row.id))
+                .on_tx(tx)
+                .update_values(patch)
+                .await?;
+            // Reflect the in-DB mutations in the row we return so the
+            // caller doesn't need to re-SELECT.
+            row.status = STATUS_RUNNING.to_string();
+            row.started_at = Some(now);
+            row.attempts = new_attempts;
+            Ok(Some(row))
+        })
+    })
+    .await
 }
 
 /// Run the handler for a claimed row and write back the terminal state.
-async fn process_one(pool: &SqlitePool, row: TaskRow) -> Result<(), TaskError> {
+async fn process_one(row: TaskRow) -> Result<(), TaskError> {
     let handler = {
         let guard = handlers()
             .read()
@@ -435,14 +447,17 @@ async fn process_one(pool: &SqlitePool, row: TaskRow) -> Result<(), TaskError> {
     let now = Utc::now();
     match result {
         Ok(()) => {
-            sqlx::query(
-                "UPDATE task_row SET status = ?, completed_at = ?, error = NULL WHERE id = ?",
-            )
-            .bind(STATUS_SUCCEEDED)
-            .bind(now)
-            .bind(row.id)
-            .execute(pool)
-            .await?;
+            let mut patch = serde_json::Map::new();
+            patch.insert(
+                "status".to_string(),
+                serde_json::Value::String(STATUS_SUCCEEDED.to_string()),
+            );
+            patch.insert("completed_at".to_string(), serde_json::to_value(now)?);
+            patch.insert("error".to_string(), serde_json::Value::Null);
+            TaskRow::objects()
+                .filter(task_row::ID.eq(row.id))
+                .update_values(patch)
+                .await?;
         }
         Err(err_msg) => {
             // "handler not found" is non-retriable — a missing handler
@@ -451,30 +466,30 @@ async fn process_one(pool: &SqlitePool, row: TaskRow) -> Result<(), TaskError> {
             // of attempts.
             let exhausted = row.attempts >= row.max_attempts;
             let non_retriable = err_msg.starts_with("handler not found");
+            let mut patch = serde_json::Map::new();
             if exhausted || non_retriable {
-                sqlx::query(
-                    "UPDATE task_row SET status = ?, completed_at = ?, error = ? WHERE id = ?",
-                )
-                .bind(STATUS_FAILED)
-                .bind(now)
-                .bind(&err_msg)
-                .bind(row.id)
-                .execute(pool)
-                .await?;
+                patch.insert(
+                    "status".to_string(),
+                    serde_json::Value::String(STATUS_FAILED.to_string()),
+                );
+                patch.insert("completed_at".to_string(), serde_json::to_value(now)?);
+                patch.insert("error".to_string(), serde_json::Value::String(err_msg));
             } else {
                 // Reset to pending so the next worker iteration retries.
                 // `attempts` already incremented in `claim_one`, so the
                 // count is accurate. Clear `started_at` so the next
                 // claim stamps a fresh timestamp.
-                sqlx::query(
-                    "UPDATE task_row SET status = ?, started_at = NULL, error = ? WHERE id = ?",
-                )
-                .bind(STATUS_PENDING)
-                .bind(&err_msg)
-                .bind(row.id)
-                .execute(pool)
-                .await?;
+                patch.insert(
+                    "status".to_string(),
+                    serde_json::Value::String(STATUS_PENDING.to_string()),
+                );
+                patch.insert("started_at".to_string(), serde_json::Value::Null);
+                patch.insert("error".to_string(), serde_json::Value::String(err_msg));
             }
+            TaskRow::objects()
+                .filter(task_row::ID.eq(row.id))
+                .update_values(patch)
+                .await?;
         }
     }
     Ok(())
