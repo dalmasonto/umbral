@@ -27,6 +27,17 @@ axum = "0.8"
 axum-core = "0.5"
 http = "1"
 tower = "0.5"
+# Optional REST integration — see `src/rest.rs`. The `rest` feature
+# turns on the adapter types (`WithPermissions`, `HasPermission`) that
+# let `umbra-rest`'s viewset permission gates check `umbra-permissions`
+# codenames. Off by default so REST-free apps don't pull in the
+# umbra-rest dep just by depending on permissions.
+umbra-rest = { path = "../umbra-rest", version = "0.0.1", optional = true }
+async-trait = { version = "0.1", optional = true }
+
+[features]
+default = []
+rest = ["dep:umbra-rest", "dep:async-trait"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync"] }

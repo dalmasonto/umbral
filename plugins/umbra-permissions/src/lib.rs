@@ -60,6 +60,13 @@ pub mod middleware;
 pub mod models;
 pub mod perm;
 
+/// REST plugin extension — adapter types that let `umbra-rest`'s
+/// viewset permission gates check `umbra-permissions` codenames.
+/// Off by default; enable with `umbra-permissions = { features =
+/// ["rest"] }`.
+#[cfg(feature = "rest")]
+pub mod rest;
+
 pub use middleware::{
     PermissionRequired, PermissionRequiredLayer, permission_required, permission_required_html,
 };
