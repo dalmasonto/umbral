@@ -28,13 +28,16 @@
 
 use std::collections::HashMap;
 
-use sea_query::{Alias, Asterisk, Condition, Expr, Func, Order, Query, SqliteQueryBuilder};
+use sea_query::{
+    Alias, Asterisk, Condition, Expr, Func, Order, Query, SqliteQueryBuilder, Value as SeaValue,
+};
 use sea_query_binder::SqlxBinder;
 use sqlx::Row;
 
 use crate::db::{DbPool, pool_dispatched};
 use crate::migrate::{Column, ModelMeta};
 use crate::orm::SqlType;
+use crate::orm::write::{WriteError, json_to_sea_value, null_for};
 
 /// Errors a runtime-typed query can produce. Thin alias — sqlx errors
 /// drive every actual failure.
@@ -112,6 +115,19 @@ impl<'a> DynQuerySet<'a> {
         self
     }
 
+    /// Add `WHERE <col> IN (?, ?, ...)` for an i64 column (PK / FK).
+    /// Empty `vals` is a no-op; unknown columns are silently dropped.
+    pub fn filter_in_i64(mut self, col: &str, vals: &[i64]) -> Self {
+        if vals.is_empty() || !self.meta.fields.iter().any(|c| c.name == col) {
+            return self;
+        }
+        let cond = Condition::all().add(
+            Expr::col(Alias::new(col)).is_in(vals.iter().copied()),
+        );
+        self.where_clauses.push(cond);
+        self
+    }
+
     /// Add `WHERE <col> = <value>` where the value is parsed against
     /// the column's `SqlType` so SQLite's affinity rules see the right
     /// operand type.
@@ -178,6 +194,195 @@ impl<'a> DynQuerySet<'a> {
             }
             DbPool::Postgres(_) => {
                 unimplemented!("DynQuerySet::count: Postgres branch not yet wired")
+            }
+        }
+    }
+
+    /// Terminal: `SELECT DISTINCT <col>` with the accumulated WHERE.
+    /// Returns each value as a string (via [`decode_to_string`]). LIMIT
+    /// is honoured; ORDER BY isn't (DISTINCT ordering is whatever the
+    /// underlying scan yields). Unknown column → empty result.
+    pub async fn fetch_distinct_strings(self, col: &str) -> Result<Vec<String>, DynError> {
+        let Some(col_meta) = self.meta.fields.iter().find(|c| c.name == col) else {
+            return Ok(Vec::new());
+        };
+        let mut q = Query::select();
+        q.distinct();
+        q.from(Alias::new(&self.meta.table));
+        q.column(Alias::new(col));
+        for cond in &self.where_clauses {
+            q.cond_where(cond.clone());
+        }
+        if let Some(n) = self.limit {
+            q.limit(n);
+        }
+
+        match pool_dispatched() {
+            DbPool::Sqlite(pool) => {
+                let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
+                let rows = sqlx::query_with(&sql, values).fetch_all(pool).await?;
+                let mut out = Vec::with_capacity(rows.len());
+                for row in rows {
+                    out.push(decode_to_string(&row, col_meta)?);
+                }
+                Ok(out)
+            }
+            DbPool::Postgres(_) => {
+                unimplemented!("DynQuerySet::fetch_distinct_strings: Postgres branch not yet wired")
+            }
+        }
+    }
+
+    /// Terminal: `DELETE FROM <table>` with the accumulated WHERE.
+    /// Returns the number of rows affected.
+    pub async fn delete(self) -> Result<u64, DynError> {
+        let mut q = Query::delete();
+        q.from_table(Alias::new(&self.meta.table));
+        for cond in &self.where_clauses {
+            q.cond_where(cond.clone());
+        }
+
+        match pool_dispatched() {
+            DbPool::Sqlite(pool) => {
+                let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
+                let res = sqlx::query_with(&sql, values).execute(pool).await?;
+                Ok(res.rows_affected())
+            }
+            DbPool::Postgres(_) => {
+                unimplemented!("DynQuerySet::delete: Postgres branch not yet wired")
+            }
+        }
+    }
+
+    /// Terminal: `UPDATE <table> SET <col> = <value>` with the
+    /// accumulated WHERE. The value is parsed against the column's
+    /// `SqlType` so SQLite affinity sees the right operand. Returns
+    /// the number of rows affected. Unknown column → 0 rows.
+    pub async fn update_one(self, col: &str, value: &str) -> Result<u64, DynError> {
+        let Some(col_meta) = self.meta.fields.iter().find(|c| c.name == col) else {
+            return Ok(0);
+        };
+        let sea_value = match form_str_to_sea_value(col_meta, value) {
+            Ok(v) => v,
+            Err(e) => return Err(sqlx::Error::Protocol(e.to_string())),
+        };
+
+        let mut q = Query::update();
+        q.table(Alias::new(&self.meta.table));
+        q.value(Alias::new(col), sea_value);
+        for cond in &self.where_clauses {
+            q.cond_where(cond.clone());
+        }
+
+        match pool_dispatched() {
+            DbPool::Sqlite(pool) => {
+                let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
+                let res = sqlx::query_with(&sql, values).execute(pool).await?;
+                Ok(res.rows_affected())
+            }
+            DbPool::Postgres(_) => {
+                unimplemented!("DynQuerySet::update_one: Postgres branch not yet wired")
+            }
+        }
+    }
+
+    /// Terminal: `UPDATE <table> SET <col1> = ?, <col2> = ?, ...` with
+    /// the accumulated WHERE. Each form value is parsed against its
+    /// column's `SqlType`. The primary key column is silently dropped
+    /// from the form (it's the filter, not a target). `skip` lists
+    /// columns the caller wants excluded (e.g. readonly fields the
+    /// admin already enforced). Returns rows affected.
+    pub async fn update_form(
+        self,
+        form: &HashMap<String, String>,
+        skip: &[String],
+    ) -> Result<u64, DynError> {
+        let mut q = Query::update();
+        q.table(Alias::new(&self.meta.table));
+        let mut any = false;
+        for col in &self.meta.fields {
+            if col.primary_key || skip.iter().any(|s| s == &col.name) {
+                continue;
+            }
+            let Some(raw) = form.get(&col.name) else {
+                continue;
+            };
+            let sea_value = match form_str_to_sea_value(col, raw) {
+                Ok(v) => v,
+                Err(e) => return Err(sqlx::Error::Protocol(e.to_string())),
+            };
+            q.value(Alias::new(&col.name), sea_value);
+            any = true;
+        }
+        if !any {
+            return Ok(0);
+        }
+        for cond in &self.where_clauses {
+            q.cond_where(cond.clone());
+        }
+
+        match pool_dispatched() {
+            DbPool::Sqlite(pool) => {
+                let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
+                let res = sqlx::query_with(&sql, values).execute(pool).await?;
+                Ok(res.rows_affected())
+            }
+            DbPool::Postgres(_) => {
+                unimplemented!("DynQuerySet::update_form: Postgres branch not yet wired")
+            }
+        }
+    }
+
+    /// Terminal: `INSERT INTO <table> (...) VALUES (...)` from a form
+    /// map. Auto-increment integer PKs are omitted when the form value
+    /// is missing or empty (SQLite hands out the next id). Form keys
+    /// that don't match a column are ignored. `skip` lets the caller
+    /// drop fields the admin pre-filtered. Returns `last_insert_rowid`.
+    pub async fn insert_form(
+        self,
+        form: &HashMap<String, String>,
+        skip: &[String],
+    ) -> Result<i64, DynError> {
+        let mut cols: Vec<&str> = Vec::new();
+        let mut values: Vec<SeaValue> = Vec::new();
+        for col in &self.meta.fields {
+            if skip.iter().any(|s| s == &col.name) {
+                continue;
+            }
+            // Auto-increment PK: omit when the form supplies no value
+            // or an empty one; the backend hands out the next id.
+            if col.primary_key
+                && matches!(col.ty, SqlType::Integer | SqlType::BigInt | SqlType::SmallInt)
+                && form.get(&col.name).is_none_or(|v| v.is_empty())
+            {
+                continue;
+            }
+            let raw = form.get(&col.name).map(|s| s.as_str()).unwrap_or("");
+            let sea_value = match form_str_to_sea_value(col, raw) {
+                Ok(v) => v,
+                Err(e) => return Err(sqlx::Error::Protocol(e.to_string())),
+            };
+            cols.push(&col.name);
+            values.push(sea_value);
+        }
+        if cols.is_empty() {
+            return Ok(0);
+        }
+
+        let mut q = Query::insert();
+        q.into_table(Alias::new(&self.meta.table));
+        q.columns(cols.iter().map(|c| Alias::new(*c)).collect::<Vec<_>>());
+        let exprs: Vec<sea_query::SimpleExpr> = values.into_iter().map(Into::into).collect();
+        q.values_panic(exprs);
+
+        match pool_dispatched() {
+            DbPool::Sqlite(pool) => {
+                let (sql, vals) = q.build_sqlx(SqliteQueryBuilder);
+                let res = sqlx::query_with(&sql, vals).execute(pool).await?;
+                Ok(res.last_insert_rowid())
+            }
+            DbPool::Postgres(_) => {
+                unimplemented!("DynQuerySet::insert_form: Postgres branch not yet wired")
             }
         }
     }
@@ -315,6 +520,30 @@ pub fn decode_to_string(
         }
         SqlType::ForeignKey => row.try_get::<i64, _>(name)?.to_string(),
     })
+}
+
+/// Convert one form-submitted string into a `SeaValue` ready for
+/// binding. Handles the "empty + nullable" case explicitly so a blank
+/// form field produces SQL NULL instead of an empty-string mismatch
+/// for numeric columns. The rest of the conversion delegates to
+/// [`json_to_sea_value`] by wrapping the value as `JsonValue::String`,
+/// which already understands "true"/"false" booleans and RFC3339
+/// timestamps the HTML form layer hands in.
+fn form_str_to_sea_value(col: &Column, raw: &str) -> Result<SeaValue, WriteError> {
+    if raw.is_empty() {
+        if col.ty == SqlType::Boolean {
+            // Unchecked checkbox = false, not NULL.
+            return Ok(SeaValue::Bool(Some(false)));
+        }
+        if col.nullable {
+            return Ok(null_for(col.ty));
+        }
+        return Err(WriteError::RequiredFieldMissing {
+            field: col.name.clone(),
+        });
+    }
+    let json = serde_json::Value::String(raw.to_string());
+    json_to_sea_value(col.ty, &json, col.nullable, &col.name)
 }
 
 fn panic_array_unsupported(column: &str) -> ! {

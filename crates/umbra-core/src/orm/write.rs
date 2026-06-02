@@ -218,7 +218,7 @@ pub fn json_to_sea_value(
 /// Sea-query value representing SQL NULL for the given SqlType. The
 /// variant tag matters for sea-query's encoding even when the inner
 /// option is `None`.
-fn null_for(sql_type: SqlType) -> SeaValue {
+pub(crate) fn null_for(sql_type: SqlType) -> SeaValue {
     match sql_type {
         SqlType::Boolean => SeaValue::Bool(None),
         SqlType::SmallInt | SqlType::Integer => SeaValue::Int(None),

@@ -1,13 +1,12 @@
 //! Dashboard API + the two built-in widgets.
 
 use axum::extract::State;
-use chrono::{DateTime, Utc};
 use minijinja::context;
-use sqlx::Row;
+use umbra::orm::DynQuerySet;
 use umbra::web::{HeaderMap, IntoResponse, Json, Path, Response, StatusCode};
 
 use crate::auth::require_staff;
-use crate::discovery::discover_models;
+use crate::discovery::{discover_models, find_model};
 use crate::engine::render;
 use crate::error::AdminError;
 use crate::models;
@@ -47,6 +46,12 @@ pub(crate) fn builtin_total_models_widget() -> Widget {
 /// `date_joined`. Gracefully degrades to an empty list if the table
 /// is absent (e.g. an admin-only install where `AuthPlugin` isn't
 /// registered), so this widget never breaks the dashboard.
+///
+/// Goes through [`DynQuerySet`] keyed off the `auth_user` `ModelMeta`
+/// — that way the widget works against any custom user model
+/// `AuthPlugin::<U>` registers, not just the built-in `AuthUser`. If
+/// the registry doesn't know about an `auth_user` table (the
+/// degraded-install case), the widget returns an empty feed.
 pub(crate) fn builtin_recent_users_widget() -> Widget {
     Widget {
         key: "umbra_recent_users",
@@ -55,35 +60,35 @@ pub(crate) fn builtin_recent_users_widget() -> Widget {
         default_span: Span { cols: 4, rows: 2 },
         permission: None,
         data: WidgetDataFn::new(|_user| async move {
-            let pool = umbra::db::pool();
-            let rows_result = sqlx::query(
-                "SELECT username, date_joined FROM auth_user ORDER BY date_joined DESC LIMIT 5",
-            )
-            .fetch_all(&pool)
-            .await;
-            let items = match rows_result {
-                Ok(rows) => rows
-                    .into_iter()
-                    .map(|r| {
-                        let actor: String = r.try_get("username").unwrap_or_default();
-                        let at: String = r
-                            .try_get::<DateTime<Utc>, _>("date_joined")
-                            .map(|dt| dt.format("%Y-%m-%d %H:%M UTC").to_string())
-                            .or_else(|_| r.try_get::<String, _>("date_joined"))
-                            .unwrap_or_default();
-                        FeedItem {
-                            actor,
-                            verb: "joined".to_string(),
-                            object: "account".to_string(),
-                            object_link: None,
-                            at,
+            let items = match find_model("auth_user") {
+                Some((_, meta)) => {
+                    let rows = DynQuerySet::for_meta(&meta)
+                        .select_cols(&[
+                            "username".to_string(),
+                            "date_joined".to_string(),
+                        ])
+                        .order_by_col("date_joined", true)
+                        .limit(5)
+                        .fetch_as_strings()
+                        .await;
+                    match rows {
+                        Ok(rows) => rows
+                            .into_iter()
+                            .map(|r| FeedItem {
+                                actor: r.get("username").cloned().unwrap_or_default(),
+                                verb: "joined".to_string(),
+                                object: "account".to_string(),
+                                object_link: None,
+                                at: r.get("date_joined").cloned().unwrap_or_default(),
+                            })
+                            .collect(),
+                        Err(e) => {
+                            tracing::debug!(error = %e, "umbra_recent_users: auth_user fetch failed; empty feed");
+                            vec![]
                         }
-                    })
-                    .collect(),
-                Err(e) => {
-                    tracing::debug!(error = %e, "umbra_recent_users: auth_user query failed; returning empty feed");
-                    vec![]
+                    }
                 }
+                None => vec![],
             };
             WidgetPayload::Feed(FeedPayload { items })
         }),

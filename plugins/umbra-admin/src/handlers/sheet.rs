@@ -9,12 +9,14 @@ use axum::extract::{Path, State};
 use minijinja::context;
 use umbra::web::{HeaderMap, IntoResponse, Redirect, Response, StatusCode};
 
+use umbra::orm::DynQuerySet;
+
 use crate::auth::require_staff;
 use crate::discovery::{find_model, pk_column};
 use crate::engine::render;
 use crate::error::AdminError;
 use crate::rows::{fetch_rows_filtered, insert_row};
-use crate::util::{is_htmx, q, sanitise_form_error};
+use crate::util::{is_htmx, sanitise_form_error};
 use crate::view::{form_fields_for, model_for_template};
 use crate::AdminState;
 
@@ -319,14 +321,11 @@ pub(crate) async fn change_password_handler(
     let Some(pk) = pk_column(&model) else {
         return AdminError::Render("no pk".to_string()).into_response();
     };
-    let pool = umbra::db::pool();
-    let sql = format!(
-        "UPDATE \"{}\" SET \"{}\" = ? WHERE \"{}\" = ?",
-        q(&model.table),
-        q(pw_col),
-        q(&pk.name)
-    );
-    if let Err(e) = sqlx::query(&sql).bind(hash).bind(&id).execute(&pool).await {
+    if let Err(e) = DynQuerySet::for_meta(&model)
+        .filter_eq_string(&pk.name, &id)
+        .update_one(pw_col, &hash)
+        .await
+    {
         return AdminError::Sqlx(e).into_response();
     }
     let trigger = serde_json::json!({

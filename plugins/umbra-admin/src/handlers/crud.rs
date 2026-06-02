@@ -13,13 +13,15 @@ use axum::extract::{Path, State};
 use minijinja::context;
 use umbra::web::{HeaderMap, IntoResponse, Redirect, Response, StatusCode};
 
+use umbra::orm::DynQuerySet;
+
 use crate::auth::require_staff;
 use crate::discovery::{find_model, pk_column, user_theme};
 use crate::engine::render;
 use crate::error::AdminError;
 use crate::handlers::sheet::edit_sheet_handler;
 use crate::rows::{fetch_rows_filtered, insert_row, update_row};
-use crate::util::{is_htmx, q, sanitise_form_error};
+use crate::util::{is_htmx, sanitise_form_error};
 use crate::view::{form_fields_for, model_for_template, sidebar_apps};
 use crate::AdminState;
 
@@ -368,13 +370,11 @@ pub(crate) async fn delete(
     let Some(pk) = pk_column(&model) else {
         return AdminError::Render(format!("model `{table}` has no primary key")).into_response();
     };
-    let pool = umbra::db::pool();
-    let sql = format!(
-        "DELETE FROM \"{}\" WHERE \"{}\" = ?",
-        q(&model.table),
-        q(&pk.name)
-    );
-    match sqlx::query(&sql).bind(&id).execute(&pool).await {
+    match DynQuerySet::for_meta(&model)
+        .filter_eq_string(&pk.name, &id)
+        .delete()
+        .await
+    {
         Ok(_) => {
             let object_id = id.parse::<i64>().ok();
             crate::models::log(
@@ -409,13 +409,11 @@ pub(crate) async fn htmx_delete(
     let Some(pk) = pk_column(&model) else {
         return AdminError::Render(format!("model `{table}` has no primary key")).into_response();
     };
-    let pool = umbra::db::pool();
-    let sql = format!(
-        "DELETE FROM \"{}\" WHERE \"{}\" = ?",
-        q(&model.table),
-        q(&pk.name)
-    );
-    match sqlx::query(&sql).bind(&id).execute(&pool).await {
+    match DynQuerySet::for_meta(&model)
+        .filter_eq_string(&pk.name, &id)
+        .delete()
+        .await
+    {
         Ok(_) => {
             let object_id = id.parse::<i64>().ok();
             crate::models::log(

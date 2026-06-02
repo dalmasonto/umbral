@@ -10,14 +10,13 @@
 use std::collections::HashMap;
 
 use axum::extract::{Path, Query, State};
-use sqlx::Row;
-use umbra::orm::SqlType;
+use umbra::orm::{DynQuerySet, SqlType};
 use umbra::web::{HeaderMap, IntoResponse, Json, Response, StatusCode};
 
 use crate::auth::require_staff;
 use crate::discovery::{find_model, pk_column};
 use crate::error::AdminError;
-use crate::util::{html_escape, is_htmx, q};
+use crate::util::{html_escape, is_htmx};
 use crate::AdminState;
 
 /// `GET /admin/api/{table}/{field}/options?search=&page=&page_size=20`
@@ -82,53 +81,33 @@ pub(crate) async fn fk_options(
         .map(|c| c.search_fields.clone())
         .unwrap_or_else(|| vec![label_col.to_string()]);
 
-    let pool = umbra::db::pool();
-
-    let mut conditions: Vec<String> = Vec::new();
-    let mut binds: Vec<String> = Vec::new();
-    if !search.is_empty() {
-        let like_clauses: Vec<String> = search_cols
-            .iter()
-            .map(|f| format!("\"{}\" LIKE ?", q(f)))
-            .collect();
-        if !like_clauses.is_empty() {
-            conditions.push(format!("({})", like_clauses.join(" OR ")));
-            let like_val = format!("%{search}%");
-            for _ in &like_clauses {
-                binds.push(like_val.clone());
-            }
-        }
-    }
-    let where_sql = if conditions.is_empty() {
-        String::new()
+    let pk_col_name = pk_column(&related_model)
+        .map(|c| c.name.clone())
+        .unwrap_or_else(|| "id".to_string());
+    let label_col_owned = label_col.to_string();
+    let select_cols = if pk_col_name == label_col_owned {
+        vec![pk_col_name.clone()]
     } else {
-        format!(" WHERE {}", conditions.join(" AND "))
+        vec![pk_col_name.clone(), label_col_owned.clone()]
     };
 
-    let count_sql = format!("SELECT COUNT(*) FROM \"{}\"{where_sql}", q(&related_table));
-    let mut count_qb = sqlx::query(&count_sql);
-    for b in &binds {
-        count_qb = count_qb.bind(b.clone());
-    }
-    let total: i64 = match count_qb.fetch_one(&pool).await {
-        Ok(r) => r.try_get(0).unwrap_or(0),
+    // COUNT(*) and the paginated SELECT share the same WHERE clause —
+    // build the chain once, count off a clone, page off the original.
+    let base = DynQuerySet::for_meta(&related_model).search(&search_cols, search);
+    let total: i64 = match base.count().await {
+        Ok(t) => t,
         Err(e) => return AdminError::Sqlx(e).into_response(),
     };
 
-    let pk_col = pk_column(&related_model)
-        .map(|c| c.name.as_str())
-        .unwrap_or("id");
-    let select_sql = format!(
-        "SELECT \"{pk_col}\", \"{label_col}\" FROM \"{}\"{where_sql} ORDER BY \"{pk_col}\" DESC LIMIT ? OFFSET ?",
-        q(&related_table)
-    );
-    let mut qb = sqlx::query(&select_sql);
-    for b in &binds {
-        qb = qb.bind(b.clone());
-    }
-    qb = qb.bind(page_size as i64).bind(offset as i64);
-
-    let rows = match qb.fetch_all(&pool).await {
+    let rows = match DynQuerySet::for_meta(&related_model)
+        .search(&search_cols, search)
+        .select_cols(&select_cols)
+        .order_by_col(&pk_col_name, true)
+        .limit(page_size as u64)
+        .offset(offset as u64)
+        .fetch_as_strings()
+        .await
+    {
         Ok(r) => r,
         Err(e) => return AdminError::Sqlx(e).into_response(),
     };
@@ -136,11 +115,12 @@ pub(crate) async fn fk_options(
     let items: Vec<serde_json::Value> = rows
         .iter()
         .map(|r| {
-            let value: i64 = r.try_get(0).unwrap_or(0);
+            let raw_pk = r.get(&pk_col_name).cloned().unwrap_or_default();
+            let value: i64 = raw_pk.parse().unwrap_or(0);
             let label: String = r
-                .try_get::<String, _>(1)
-                .or_else(|_| r.try_get::<i64, _>(1).map(|v| v.to_string()))
-                .unwrap_or_else(|_| format!("#{value}"));
+                .get(&label_col_owned)
+                .cloned()
+                .unwrap_or_else(|| format!("#{value}"));
             serde_json::json!({ "value": value, "label": label })
         })
         .collect();
@@ -216,39 +196,39 @@ pub(crate) async fn fk_options_resolve(
         return Json(serde_json::json!({ "items": [] })).into_response();
     }
 
-    let label_col = related_model
+    let label_col_owned = related_model
         .fields
         .iter()
         .find(|c| !c.primary_key && matches!(c.ty, SqlType::Text))
-        .map(|c| c.name.as_str())
-        .unwrap_or("id");
-    let pk_col = pk_column(&related_model)
-        .map(|c| c.name.as_str())
-        .unwrap_or("id");
+        .map(|c| c.name.clone())
+        .unwrap_or_else(|| "id".to_string());
+    let pk_col_name = pk_column(&related_model)
+        .map(|c| c.name.clone())
+        .unwrap_or_else(|| "id".to_string());
 
-    let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
-    let sql = format!(
-        "SELECT \"{pk_col}\", \"{label_col}\" FROM \"{}\" WHERE \"{pk_col}\" IN ({placeholders})",
-        q(&related_table)
-    );
-    let pool = umbra::db::pool();
-    let mut qb = sqlx::query(&sql);
-    for id in &ids {
-        qb = qb.bind(*id);
-    }
+    let select_cols = if pk_col_name == label_col_owned {
+        vec![pk_col_name.clone()]
+    } else {
+        vec![pk_col_name.clone(), label_col_owned.clone()]
+    };
 
-    let _ = &state; // referenced only above; explicit drop kills the warning
+    let _ = &state; // referenced only above
 
-    match qb.fetch_all(&pool).await {
+    match DynQuerySet::for_meta(&related_model)
+        .select_cols(&select_cols)
+        .filter_in_i64(&pk_col_name, &ids)
+        .fetch_as_strings()
+        .await
+    {
         Ok(rows) => {
             let items: Vec<serde_json::Value> = rows
                 .iter()
                 .map(|r| {
-                    let value: i64 = r.try_get(0).unwrap_or(0);
+                    let value: i64 = r.get(&pk_col_name).and_then(|s| s.parse().ok()).unwrap_or(0);
                     let label: String = r
-                        .try_get::<String, _>(1)
-                        .or_else(|_| r.try_get::<i64, _>(1).map(|v| v.to_string()))
-                        .unwrap_or_else(|_| format!("#{value}"));
+                        .get(&label_col_owned)
+                        .cloned()
+                        .unwrap_or_else(|| format!("#{value}"));
                     serde_json::json!({ "value": value, "label": label })
                 })
                 .collect();

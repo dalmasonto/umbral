@@ -6,11 +6,13 @@ use std::collections::HashMap;
 use axum::extract::{Path, State};
 use umbra::web::{HeaderMap, IntoResponse, Response, StatusCode};
 
+use umbra::orm::DynQuerySet;
+
 use crate::auth::require_staff;
 use crate::discovery::{find_model, pk_column};
 use crate::error::AdminError;
-use crate::rows::{bind_form_value, fetch_rows_filtered};
-use crate::util::{html_escape, q, sanitise_form_error};
+use crate::rows::fetch_rows_filtered;
+use crate::util::{html_escape, sanitise_form_error};
 use crate::view::input_kind;
 use crate::AdminState;
 
@@ -114,40 +116,21 @@ pub(crate) async fn cell_edit_post(
     let Some(pk) = pk_column(&model) else {
         return AdminError::Render("no pk".to_string()).into_response();
     };
-    let col = model.fields.iter().find(|c| c.name == field);
-    let Some(col) = col else {
+    if !model.fields.iter().any(|c| c.name == field) {
         return AdminError::NotFound(format!("no field `{field}`")).into_response();
-    };
+    }
     let cfg = state.config_for(&table);
     if cfg.is_some_and(|c| c.readonly_fields.contains(&field)) {
         return (StatusCode::FORBIDDEN, "field is read-only").into_response();
     }
     let form: HashMap<String, String> = serde_urlencoded::from_str(&body).unwrap_or_default();
-    let pool = umbra::db::pool();
-    let sql = format!(
-        "UPDATE \"{}\" SET \"{}\" = ? WHERE \"{}\" = ?",
-        q(&model.table),
-        q(&field),
-        q(&pk.name)
-    );
-    let qb = sqlx::query(&sql);
-    let qb = match bind_form_value(qb, col, &form) {
-        Ok(q) => q,
-        Err(e) => {
-            let err_html = format!(
-                r#"<span class="text-error text-body-sm">{}</span>"#,
-                html_escape(&sanitise_form_error(&e))
-            );
-            return axum::response::Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .header("Content-Type", "text/html")
-                .body(axum::body::Body::from(err_html))
-                .unwrap_or_else(|_| StatusCode::BAD_REQUEST.into_response());
-        }
-    };
-    match qb.bind(id.clone()).execute(&pool).await {
+    let new_value = form.get(&field).cloned().unwrap_or_default();
+    match DynQuerySet::for_meta(&model)
+        .filter_eq_string(&pk.name, &id)
+        .update_one(&field, &new_value)
+        .await
+    {
         Ok(_) => {
-            let new_value = form.get(&field).cloned().unwrap_or_default();
             let display = html_escape(&new_value);
             let cell_html = format!(
                 r#"<span class="text-on-surface text-body-md tabular-nums">{display}</span>"#
@@ -159,9 +142,12 @@ pub(crate) async fn cell_edit_post(
                 .unwrap_or_else(|_| StatusCode::OK.into_response())
         }
         Err(e) => {
+            // sqlx::Error::Protocol carries WriteError messages; sanitise_form_error
+            // already special-cases AdminError::Sqlx vs the others.
+            let msg = sanitise_form_error(&AdminError::Sqlx(e));
             let err_html = format!(
                 r#"<span class="text-error text-body-sm">{}</span>"#,
-                html_escape(&e.to_string())
+                html_escape(&msg)
             );
             axum::response::Response::builder()
                 .status(StatusCode::BAD_REQUEST)

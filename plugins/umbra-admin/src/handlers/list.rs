@@ -7,8 +7,7 @@ use std::collections::HashMap;
 use axum::extract::{Path, Query, State};
 use minijinja::context;
 use serde::Serialize;
-use sqlx::{Row, SqlitePool};
-use umbra::orm::SqlType;
+use umbra::orm::{DynQuerySet, SqlType};
 use umbra::web::{HeaderMap, IntoResponse, Redirect, Response};
 
 use crate::auth::require_staff;
@@ -18,7 +17,7 @@ use crate::error::AdminError;
 use crate::handlers;
 use crate::pagination::{Pagination, build_order_clause_phase2, parse_list_params};
 use crate::rows::{count_rows_filtered, fetch_rows_paged};
-use crate::util::{is_htmx, q};
+use crate::util::is_htmx;
 use crate::view::{model_for_template, model_for_template_cols, sidebar_apps};
 use crate::AdminState;
 
@@ -57,21 +56,19 @@ pub(crate) async fn index(
         })
         .collect();
 
-    let pool = umbra::db::pool();
+    // Per-model row count for the dashboard cards. Goes through
+    // DynQuerySet::count so the query path is identical to the
+    // changelist — no hand-built `SELECT COUNT(*) FROM "<table>"` here.
     let model_cards: Vec<serde_json::Value> = {
         let mut cards = Vec::new();
         for app in &apps {
             for sidebar_model in &app.models {
-                let count: i64 = {
-                    let sql = format!(
-                        "SELECT COUNT(*) FROM \"{}\"",
-                        sidebar_model.table.replace('"', "\"\"")
-                    );
-                    sqlx::query(&sql)
-                        .fetch_one(&pool)
+                let count = match find_model(&sidebar_model.table) {
+                    Some((_, meta)) => DynQuerySet::for_meta(&meta)
+                        .count()
                         .await
-                        .and_then(|r| r.try_get::<i64, _>(0))
-                        .unwrap_or(0)
+                        .unwrap_or(0),
+                    None => 0,
                 };
                 cards.push(serde_json::json!({
                     "table":  sidebar_model.table,
@@ -185,7 +182,7 @@ pub(crate) async fn list(
     let mut facets: Vec<FilterFacet> = Vec::new();
     if let Some(c) = cfg {
         for field in &c.list_filter {
-            let values = fetch_distinct_values(&pool, &model.table, field)
+            let values = fetch_distinct_values(&model.table, field)
                 .await
                 .unwrap_or_default();
             facets.push(FilterFacet {
@@ -261,30 +258,18 @@ pub(crate) async fn list(
 
 /// SELECT DISTINCT for a column — feeds the filter dialog facet lists.
 /// Capped at 100 distinct values so a high-cardinality column doesn't
-/// inflate the dialog.
-async fn fetch_distinct_values(
-    pool: &SqlitePool,
-    table: &str,
-    field: &str,
-) -> Result<Vec<String>, AdminError> {
-    let sql = format!(
-        "SELECT DISTINCT \"{}\" FROM \"{}\" WHERE \"{}\" IS NOT NULL ORDER BY 1 LIMIT 100",
-        q(field),
-        q(table),
-        q(field)
-    );
-    let rows = sqlx::query(&sql).fetch_all(pool).await?;
-    let mut out = Vec::new();
-    for row in rows {
-        if let Ok(v) = row.try_get::<String, _>(0) {
-            out.push(v);
-        } else if let Ok(v) = row.try_get::<i64, _>(0) {
-            out.push(v.to_string());
-        } else if let Ok(v) = row.try_get::<bool, _>(0) {
-            out.push(if v { "true" } else { "false" }.to_string());
-        }
-    }
-    Ok(out)
+/// inflate the dialog. Now goes through `DynQuerySet::fetch_distinct_strings`.
+async fn fetch_distinct_values(table: &str, field: &str) -> Result<Vec<String>, AdminError> {
+    let Some((_, meta)) = find_model(table) else {
+        return Ok(Vec::new());
+    };
+    Ok(DynQuerySet::for_meta(&meta)
+        .limit(100)
+        .fetch_distinct_strings(field)
+        .await?
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect())
 }
 
 /// `GET /admin/{table}/rows` — paginated tbody fragment plus footer.
@@ -434,7 +419,6 @@ pub(crate) async fn filter_dialog_handler(
     };
     let cfg = state.config_for(&table);
 
-    let pool = umbra::db::pool();
     let mut facets: Vec<FilterFacet> = Vec::new();
     if let Some(c) = cfg {
         for field in &c.list_filter {
@@ -468,7 +452,7 @@ pub(crate) async fn filter_dialog_handler(
                     _ => {}
                 }
             }
-            let values = fetch_distinct_values(&pool, &model.table, field)
+            let values = fetch_distinct_values(&model.table, field)
                 .await
                 .unwrap_or_default();
             facets.push(FilterFacet {
