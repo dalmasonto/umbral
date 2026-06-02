@@ -8,7 +8,6 @@ import {
   SidebarHeader,
   SidebarInset,
   SidebarProvider,
-  SidebarRail,
   SidebarTrigger,
 } from "./components/ui/sidebar";
 import { Button } from "./components/ui/button";
@@ -31,7 +30,7 @@ export function App() {
   return (
     <TooltipProvider delayDuration={0}>
       <SidebarProvider>
-        <Sidebar collapsible="icon">
+        <Sidebar collapsible="offcanvas">
           <SidebarHeader>
             <h2 className="px-2 py-1 text-sm font-semibold tracking-wide">
               umbra playground
@@ -55,7 +54,6 @@ export function App() {
               Reload spec
             </Button>
           </SidebarFooter>
-          <SidebarRail />
         </Sidebar>
         <SidebarInset>
           <header className="flex h-14 items-center gap-2 border-b border-border px-4">
