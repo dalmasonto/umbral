@@ -28,7 +28,11 @@ use umbra::orm::ForeignKey;
 /// Standard rows are auto-created during `PermissionsPlugin::on_ready`
 /// for every model registered with the framework.
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
-#[umbra(table = "permissions_contenttype")]
+#[umbra(
+    table = "permissions_contenttype",
+    display = "Content types",
+    icon = "list"
+)]
 pub struct ContentType {
     pub id: i64,
     /// The plugin name that owns the model. For bare (un-namespaced) tables
@@ -42,7 +46,11 @@ pub struct ContentType {
 /// are auto-created at boot; custom ones are inserted by user code or
 /// management commands.
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
-#[umbra(table = "permissions_permission")]
+#[umbra(
+    table = "permissions_permission",
+    display = "Permissions",
+    icon = "key"
+)]
 pub struct Permission {
     pub id: i64,
     /// Which model this permission is scoped to.
@@ -59,7 +67,7 @@ pub struct Permission {
 /// to one or more groups; they inherit all permissions from every group
 /// they are in.
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
-#[umbra(table = "permissions_group")]
+#[umbra(table = "permissions_group", display = "Groups", icon = "users")]
 pub struct Group {
     pub id: i64,
     /// A unique, human-readable name (e.g. `"editors"`, `"moderators"`).
@@ -68,7 +76,11 @@ pub struct Group {
 
 /// Join table between groups and permissions (M2M).
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
-#[umbra(table = "permissions_grouppermission")]
+#[umbra(
+    table = "permissions_grouppermission",
+    display = "Group permissions",
+    icon = "link-2"
+)]
 pub struct GroupPermission {
     pub id: i64,
     pub group_id: ForeignKey<Group>,
@@ -81,7 +93,11 @@ pub struct GroupPermission {
 /// backend-agnostic. Any `UserModel` implementation works without a
 /// crate dependency loop.
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
-#[umbra(table = "permissions_usergroup")]
+#[umbra(
+    table = "permissions_usergroup",
+    display = "User groups",
+    icon = "user-check"
+)]
 pub struct UserGroup {
     pub id: i64,
     /// The `UserModel::id()` of the user.
@@ -94,7 +110,11 @@ pub struct UserGroup {
 ///
 /// `user_id` is a plain `i64` for the same reason as in `UserGroup`.
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
-#[umbra(table = "permissions_userpermission")]
+#[umbra(
+    table = "permissions_userpermission",
+    display = "User permissions",
+    icon = "user-cog"
+)]
 pub struct UserPermission {
     pub id: i64,
     /// The `UserModel::id()` of the user.

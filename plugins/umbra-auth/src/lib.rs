@@ -65,7 +65,8 @@
 pub mod login_required;
 
 pub use login_required::{
-    LoggedIn, LoginRequired, LoginRequiredLayer, login_required, login_required_html,
+    LoggedIn, LoginRequired, LoginRequiredLayer, current_session_user_id, login_required,
+    login_required_html,
 };
 
 use std::marker::PhantomData;

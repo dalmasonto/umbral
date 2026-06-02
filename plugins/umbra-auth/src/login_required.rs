@@ -254,29 +254,37 @@ where
 /// Check whether headers carry a valid authenticated session.
 /// Returns `true` iff a valid, non-expired, non-anonymous session is present.
 pub(crate) async fn is_authenticated(headers: &http::HeaderMap) -> bool {
-    let Some(raw_token) = cookie_from_headers(headers) else {
-        return false;
-    };
+    current_session_user_id(headers).await.is_some()
+}
+
+/// Resolve the `umbra_session` cookie in `headers` to the authenticated
+/// `user_id`. Returns `None` for missing cookie, expired session, anonymous
+/// session, or any sqlx error.
+///
+/// This is the primitive `permission_required` (in `umbra-permissions`)
+/// builds on — it needs the user id to feed into `has_perm`, but does NOT
+/// need to hydrate the full user struct. Exposed pub so plugins that need
+/// session-aware logic don't have to duplicate the cookie-hash-and-query
+/// path.
+pub async fn current_session_user_id(headers: &http::HeaderMap) -> Option<i64> {
+    let raw_token = cookie_from_headers(headers)?;
     let stored_id = hash_token(&raw_token);
     let pool = umbra::db::pool();
 
     let row: Option<(Option<i64>, DateTime<Utc>)> =
-        match sqlx::query_as("SELECT user_id, expires_at FROM session WHERE id = ?")
+        sqlx::query_as("SELECT user_id, expires_at FROM session WHERE id = ?")
             .bind(&stored_id)
             .fetch_optional(&pool)
             .await
-        {
-            Ok(r) => r,
-            Err(_) => return false,
-        };
+            .ok()
+            .flatten();
 
-    let Some((user_id_opt, expires_at)) = row else {
-        return false;
-    };
-    if user_id_opt.is_none() {
-        return false;
+    let (user_id_opt, expires_at) = row?;
+    let user_id = user_id_opt?;
+    if expires_at < Utc::now() {
+        return None;
     }
-    expires_at >= Utc::now()
+    Some(user_id)
 }
 
 // =========================================================================

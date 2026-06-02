@@ -11,13 +11,23 @@ rust-version.workspace = true
 
 [dependencies]
 umbra = { path = "../../crates/umbra", version = "0.0.1" }
+# permission_required uses umbra-auth's session resolution. The arrow
+# direction (permissions → auth) is correct: permissions sit *above* auth
+# in the layering — you need to know who the user is before you can
+# check what they're allowed to do.
+umbra-auth = { path = "../umbra-auth", version = "0.0.1" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio"] }
 tracing = "0.1"
-tokio = { version = "1", features = ["rt"] }
+# rt-multi-thread for `tokio::task::block_in_place` in `on_ready`.
+tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
+# axum + tower for the PermissionRequiredLayer Service impl.
+axum = "0.8"
+axum-core = "0.5"
+http = "1"
+tower = "0.5"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync"] }
 tempfile = "3"
-umbra-auth = { path = "../umbra-auth", version = "0.0.1" }

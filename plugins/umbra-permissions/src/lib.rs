@@ -56,9 +56,13 @@
 //! - RLS predicate injection wired through `umbra-rls`.
 //! - ContentType auto-population for plugins not yet loaded at boot.
 
+pub mod middleware;
 pub mod models;
 pub mod perm;
 
+pub use middleware::{
+    PermissionRequired, PermissionRequiredLayer, permission_required, permission_required_html,
+};
 pub use models::{ContentType, Group, GroupPermission, Permission, UserGroup, UserPermission};
 pub use perm::{PermError, has_perm, has_perm_for_superuser, has_perm_scoped, user_perms};
 

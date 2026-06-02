@@ -6,9 +6,9 @@ icon: shield-check
 tags: [plugins, auth, permissions, rbac]
 ---
 
-`umbra-permissions` ships the role-based access control primitives — `ContentType`, `Permission`, `Group`, and the three M2M tables linking users to permissions both directly and via groups. The `has_perm` query layer lets any handler check `has_perm(user_id, "blog.publish_post")` against the union of direct and group-mediated grants.
+`umbra-permissions` ships the role-based access control primitives - `ContentType`, `Permission`, `Group`, and the three M2M tables linking users to permissions both directly and via groups. The `has_perm` query layer lets any handler check `has_perm(user_id, "blog.publish_post")` against the union of direct and group-mediated grants. A `permission_required(perm)` axum layer wraps the lookup so a Router subtree can be gated declaratively without the handler touching `has_perm` directly.
 
-The admin UI for managing groups and permissions is deferred (it depends on the Tailwind admin work tracked separately). RLS predicate injection — using permissions to constrain DB rows — is `umbra-rls`'s job; this plugin provides the data the RLS layer reads.
+RLS predicate injection - using permissions to constrain DB rows - is `umbra-rls`'s job; this plugin provides the data the RLS layer reads.
 
 ## Register the plugin
 
@@ -53,11 +53,11 @@ if perms.contains("blog.publish_post") && perms.contains("blog.delete_post") {
 }
 ```
 
-`has_perm` issues a single JOIN across `user_permission`, `user_group`, `group_permission`, `permission`, and `content_type` — direct and group-mediated permissions are checked in one round trip.
+`has_perm` issues a single JOIN across `user_permission`, `user_group`, `group_permission`, `permission`, and `content_type` - direct and group-mediated permissions are checked in one round trip.
 
 ### Superuser shortcut
 
-`has_perm` does NOT read `is_superuser` from the user row — this crate doesn't depend on `umbra-auth` (see "Design notes" below). The caller is responsible for the superuser bypass at the handler level:
+`has_perm` does NOT read `is_superuser` from the user row - this crate doesn't depend on `umbra-auth` (see "Design notes" below). The caller is responsible for the superuser bypass at the handler level:
 
 ```rust
 if user.is_superuser() {
@@ -99,22 +99,55 @@ The clean resolution: `has_perm(user_id: i64, codename: &str)` is a free functio
 
 ### M2M tables, not ForeignKey collections
 
-The M2M tables (`GroupPermission`, `UserGroup`, `UserPermission`) are plain models with two foreign keys each — matching Django's intermediate-table shape. umbra's [`ForeignKey<T>`](/docs/v0.0.1/orm/relationships) does the heavy lifting; reverse-accessor M2M syntax (`user.groups()` returning `Vec<Group>`) is deferred until the ORM has reverse accessors generally.
+The M2M tables (`GroupPermission`, `UserGroup`, `UserPermission`) are plain models with two foreign keys each - matching Django's intermediate-table shape. umbra's [`ForeignKey<T>`](/docs/v0.0.1/orm/relationships) does the heavy lifting; reverse-accessor M2M syntax (`user.groups()` returning `Vec<Group>`) is deferred until the ORM has reverse accessors generally.
 
-## Pairing with `login_required`
+## Gating routes with `permission_required`
 
-A `permission_required(perm)` layer is a natural follow-up — wrap a Router subtree, the layer reads the session, calls `has_perm`, and 403s on denial. Tracked alongside the existing [`LoginRequiredLayer`](/docs/v0.0.1/web/auth-gating). For now, gate at the handler level using the snippet above.
+Mount the layer on any Router subtree to require a specific permission for every route inside it. The layer resolves the session cookie, looks up the user id, and calls `has_perm` — no handler-level boilerplate.
+
+```rust
+use umbra::prelude::*;
+use umbra_permissions::{permission_required, permission_required_html};
+
+// REST subtree — 401 JSON if not logged in, 403 JSON if logged-in but lacks perm.
+let api = Router::new()
+    .route("/api/posts/{id}/publish", post(publish_handler))
+    .layer(permission_required("blog.publish_post"));
+
+// HTML subtree — 302 to /login?next=... if not logged in; 403 JSON on no-perm.
+let admin = Router::new()
+    .route("/admin/posts/{id}/publish", post(publish_handler))
+    .layer(permission_required_html("blog.publish_post", "/login"));
+```
+
+### Superuser bypass
+
+When the layer fires, it first checks whether the row in `auth_user` has `is_superuser = 1` — superusers pass every `permission_required` check without consulting the perm tables. This is best-effort and silent: custom user models that don't carry an `is_superuser` column simply never trigger the bypass. If you want explicit superuser-only gates instead, use a separate `is_superuser_required()` middleware (not shipped at v1; the convention is to add a `LoggedIn<U>` extractor inside the handler that returns 403 when `!user.is_superuser()`).
+
+### Composition with `login_required`
+
+`permission_required` does the auth check itself, so you can stack it on top of `login_required_html("/login")` for a single composed pipeline, or use it standalone. The rejection responses are designed to play together: an unauthenticated request to a permission-gated HTML subtree gets the same `302 → /login?next=<uri>` shape that `LoginRequiredLayer` would produce.
+
+```rust
+// Two-layer pipeline: login first, then perm. Either misstep produces the
+// right user-facing response without the handler being involved.
+let gated = Router::new()
+    .route("/admin/posts/{id}/publish", post(publish_handler))
+    .layer(permission_required("blog.publish_post"))
+    .layer(login_required_html("/login"));
+```
+
+In practice the single-layer form `permission_required_html(perm, login_url)` is usually enough — it captures both concerns in one place.
 
 ## What's not shipped at v0.0.1
 
-- Admin UI for managing groups, permissions, and group assignments — deferred (depends on Tailwind admin).
-- `permission_required(perm)` axum layer / decorator — natural follow-up now that the data layer exists.
-- `Meta.permissions = [...]` syntax for declaring custom perms on a model — for now custom perms ship via direct INSERT in a data migration.
+- Built-in admin UI for editing group → permission and user → group assignments. The six RBAC tables (`auth_group`, `auth_permission`, `auth_contenttype`, `auth_grouppermission`, `auth_usergroup`, `auth_userpermission`) are visible to the admin as standard models; an assignment-matrix UI (Django's "permission widget") lands in a follow-up.
+- `Meta.permissions = [...]` syntax for declaring custom perms on a model — custom perms ship via direct INSERT in a data migration today.
 - RLS predicate injection from permissions — that's `umbra-rls`'s responsibility.
-- Object-level permissions (per-row grants) — Django needs `django-guardian` for this; we'd do the same as a follow-up crate.
+- Object-level permissions (per-row grants) — Django needs `django-guardian` for this; same shape would land as a follow-up crate.
 
 ## See also
 
-- [`umbra-auth` plugin docs](/docs/v0.0.1/plugins/auth) — the `UserModel` trait and the `LoggedIn<U>` extractor this composes with.
-- [`umbra-rls` plugin docs](/docs/v0.0.1/plugins/rls) — row-level security; reads permissions for predicate injection.
-- [Web → Auth gating](/docs/v0.0.1/web/auth-gating) — `login_required` patterns.
+- [`umbra-auth` plugin docs](/docs/v0.0.1/plugins/auth) - the `UserModel` trait and the `LoggedIn<U>` extractor this composes with.
+- [`umbra-rls` plugin docs](/docs/v0.0.1/plugins/rls) - row-level security; reads permissions for predicate injection.
+- [Web → Auth gating](/docs/v0.0.1/web/auth-gating) - `login_required` patterns.
