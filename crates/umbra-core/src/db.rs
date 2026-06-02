@@ -46,7 +46,10 @@ use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::OnceLock;
 
-use sqlx::{PgPool, SqlitePool};
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteSynchronous};
+use sqlx::{ConnectOptions, PgPool, SqlitePool};
+use std::str::FromStr;
+use std::time::Duration;
 
 /// A pool of database connections, typed by backend.
 ///
@@ -205,7 +208,7 @@ pub async fn connect(url: &str) -> Result<DbPool, sqlx::Error> {
         .and_then(|s| s.split(':').next())
         .unwrap_or(url);
     match scheme {
-        "sqlite" => Ok(DbPool::Sqlite(SqlitePool::connect(url).await?)),
+        "sqlite" => Ok(DbPool::Sqlite(connect_sqlite(url).await?)),
         "postgres" | "postgresql" => Ok(DbPool::Postgres(PgPool::connect(url).await?)),
         other => Err(sqlx::Error::Configuration(
             format!(
@@ -217,12 +220,40 @@ pub async fn connect(url: &str) -> Result<DbPool, sqlx::Error> {
     }
 }
 
-/// Open a SQLite-backed pool from a URL. Convenience shortcut for
-/// callers that want a typed [`SqlitePool`] without the
-/// [`DbPool`] enum (mainly tests and any code that needs to call
-/// sqlite-specific APIs immediately after connecting).
+/// Open a SQLite-backed pool from a URL.
+///
+/// Applies the standard production PRAGMAs to every connection in the
+/// pool: WAL journal, NORMAL synchronous, a 5-second busy-timeout, and
+/// foreign-key enforcement on. Without these, a fresh `SqlitePool` ends
+/// up in `journal_mode = DELETE` + `synchronous = FULL` — the safe
+/// SQLite defaults that cost ~1-4 seconds per concurrent INSERT once
+/// any other connection touches the file (the rollback-journal lock
+/// serialises writers).
+///
+/// | PRAGMA | Value | Why |
+/// |---|---|---|
+/// | `journal_mode` | `WAL` | Readers don't block writers; a single writer at a time but no full-file lock. Order-of-magnitude faster for any concurrent workload — typically the session/auth/audit tables fanning out. |
+/// | `synchronous` | `NORMAL` | Skips the per-commit fsync of the rollback journal; safe with WAL since the WAL log is fsynced on checkpoint. The official SQLite docs call this the right pairing with WAL for "most applications". |
+/// | `busy_timeout` | `5000ms` | Wait up to 5 s for a contended writer to release the lock before raising `SQLITE_BUSY`. Without this, two concurrent writers immediately race to error. |
+/// | `foreign_keys` | `ON` | sqlite turns FK enforcement off by default. The ORM emits `REFERENCES` clauses assuming they're respected — turning it on per connection makes the FK contract real. |
+///
+/// `:memory:` databases get the PRAGMAs too (harmless: WAL is a no-op
+/// on memory dbs and busy-timeout never fires). The shared-cache
+/// in-memory form (`sqlite::memory:`) keeps working since the same
+/// `SqliteConnectOptions::from_str` parser accepts it.
 pub async fn connect_sqlite(url: &str) -> Result<SqlitePool, sqlx::Error> {
-    SqlitePool::connect(url).await
+    let opts = SqliteConnectOptions::from_str(url)?
+        .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+        .synchronous(SqliteSynchronous::Normal)
+        .busy_timeout(Duration::from_secs(5))
+        .foreign_keys(true)
+        // Disable per-statement logging — sqlx's default INFO-level
+        // logger reads every statement before execution, which adds a
+        // measurable per-query overhead under load. The `slow statement`
+        // WARN at the 1-second threshold stays on, since it goes via a
+        // separate log target.
+        .log_statements(tracing::log::LevelFilter::Off);
+    SqlitePoolOptions::new().connect_with(opts).await
 }
 
 // =============================================================================
