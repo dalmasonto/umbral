@@ -44,7 +44,7 @@ use umbra_auth::AuthUser;
 #[derive(Debug, Clone, serde::Serialize, sqlx::FromRow, Model)]
 pub struct Article {
     pub id: i64,
-    #[umbra(string = true, max_length = 50)]
+    #[umbra(string, max_length = 50)]
     pub title: String,
     pub body: String,
     #[umbra(noedit)]

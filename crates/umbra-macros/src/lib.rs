@@ -186,10 +186,30 @@ fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAtt
                 parsed.max_length = lit.base10_parse()?;
                 Ok(())
             } else {
-                // Ignore unrecognised keys (including struct-level keys that
-                // might appear on a field by mistake) rather than erroring, so
-                // adding new field attributes is non-breaking.
-                Ok(())
+                // Unknown key. Report it with the known set so the
+                // common typo case (`is_string_repr` instead of
+                // `string`, an old name from an earlier doc draft, a
+                // struct-level key on a field) doesn't manifest as the
+                // opaque "expected `,`" parser error.
+                //
+                // Consume any `= value` part first so the outer parser
+                // doesn't trip on `=` after we hand back control —
+                // otherwise the user sees the wrong span and the wrong
+                // error message.
+                if let Ok(value) = meta.value() {
+                    // Best-effort: parse + discard whatever comes next.
+                    let _: syn::Expr = value.parse()?;
+                }
+                let path = meta
+                    .path
+                    .get_ident()
+                    .map(|i| i.to_string())
+                    .unwrap_or_else(|| "<unknown>".to_string());
+                Err(meta.error(format!(
+                    "unknown field-level umbra attribute `{path}` — known keys are \
+                     `noform`, `noedit`, `string` (or `string = true`), and \
+                     `max_length = N`"
+                )))
             }
         })?;
     }
