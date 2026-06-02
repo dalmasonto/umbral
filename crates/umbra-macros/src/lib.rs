@@ -322,8 +322,20 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         // Explicit table always wins over the plugin prefix.
         explicit
     } else if let Some(plugin_prefix) = struct_attr.plugin {
-        // Plugin prefix: "<plugin>_<snake_case_struct>".
-        format!("{}_{}", plugin_prefix, bare_name)
+        // `"app"` is the implicit namespace for user-binary models
+        // (everything registered via `App::builder().model::<T>()`).
+        // Tagging a model `#[umbra(plugin = "app")]` is a no-op for
+        // the prefix — the bare snake_case table name stays, so the
+        // model continues to land in the "app" admin sidebar bucket
+        // without forcing a destructive rename migration on existing
+        // databases. Any other prefix means "this model belongs to
+        // plugin <X>; prefix the table for collision-free coexistence
+        // with other plugins' same-named models."
+        if plugin_prefix == "app" {
+            bare_name
+        } else {
+            format!("{}_{}", plugin_prefix, bare_name)
+        }
     } else {
         bare_name
     };
