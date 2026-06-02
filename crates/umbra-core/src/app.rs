@@ -604,7 +604,7 @@ impl AppBuilder {
         // built, so a plugin can rely on ambient state being live and on
         // any earlier dependency's `on_ready` having already run.
         let ctx = crate::plugin::AppContext {
-            pool: crate::db::pool(),
+            pool: crate::db::pool_dispatched().clone(),
             settings: crate::settings::get().clone(),
         };
         for plugin in &sorted_plugins {

@@ -1534,13 +1534,78 @@ pub fn diff(previous: &Snapshot, current: &Snapshot) -> Result<Vec<Operation>, M
     }
 
     // ---- Pass 2: Emit plain CreateTable for unpaired creates. ----
-    for create in &create_candidates {
-        if !paired_create_tables.contains(create.table.as_str()) {
-            ops.push(Operation::CreateTable {
-                table: create.table.clone(),
-                columns: create.fields.clone(),
-            });
+    //
+    // Sort the create list topologically by FK dependency so that a
+    // table referenced by another table in this batch is created first.
+    // Without this, Postgres rejects the second CreateTable with
+    // `relation "<target>" does not exist`. (SQLite tolerates the wrong
+    // order when `foreign_keys=OFF`, the historical default; once
+    // we turned foreign_keys ON in connect_sqlite, SQLite agrees with
+    // Postgres on the order requirement.)
+    //
+    // Kahn's algorithm on (table → set of FK-target tables that are
+    // ALSO in the create batch). Self-references and FK targets outside
+    // the batch are skipped (they're either harmless or already exist
+    // by the time this migration runs).
+    let creates: Vec<&&ModelMeta> = create_candidates
+        .iter()
+        .filter(|c| !paired_create_tables.contains(c.table.as_str()))
+        .collect();
+    let batch_tables: HashSet<&str> = creates.iter().map(|c| c.table.as_str()).collect();
+    let mut deps: BTreeMap<&str, HashSet<&str>> = BTreeMap::new();
+    for create in &creates {
+        let mut in_batch: HashSet<&str> = HashSet::new();
+        for col in &create.fields {
+            if let Some(target) = col.fk_target.as_deref()
+                && target != create.table.as_str()
+                && batch_tables.contains(target)
+            {
+                in_batch.insert(target);
+            }
         }
+        deps.insert(create.table.as_str(), in_batch);
+    }
+    // Kahn: repeatedly pop tables with no remaining deps in the batch.
+    // BTreeMap iteration is alphabetical → ties break alphabetically,
+    // keeping the output stable.
+    let mut ordered: Vec<&&ModelMeta> = Vec::with_capacity(creates.len());
+    while !deps.is_empty() {
+        let ready: Vec<&str> = deps
+            .iter()
+            .filter(|(_, d)| d.is_empty())
+            .map(|(t, _)| *t)
+            .collect();
+        if ready.is_empty() {
+            // Cyclic FK or other unresolvable dep — fall through to
+            // the original order rather than dropping models. A cycle
+            // here means the user's schema can't be created with
+            // plain CreateTable anyway (Postgres needs deferrable
+            // constraints), so we surface the user-visible error at
+            // apply time instead of silently looping.
+            for create in &creates {
+                if deps.contains_key(create.table.as_str()) {
+                    ordered.push(create);
+                }
+            }
+            break;
+        }
+        for t in &ready {
+            if let Some(create) = creates.iter().find(|c| c.table.as_str() == *t) {
+                ordered.push(create);
+            }
+            deps.remove(t);
+        }
+        for (_, set) in deps.iter_mut() {
+            for t in &ready {
+                set.remove(t);
+            }
+        }
+    }
+    for create in ordered {
+        ops.push(Operation::CreateTable {
+            table: create.table.clone(),
+            columns: create.fields.clone(),
+        });
     }
 
     // ---- Pass 3: Emit plain DropTable for unpaired drops. ----

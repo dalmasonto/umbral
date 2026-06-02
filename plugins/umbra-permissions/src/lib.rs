@@ -144,15 +144,28 @@ impl Plugin for PermissionsPlugin {
 ///
 /// Standard permissions created: `add_<model>`, `change_<model>`,
 /// `delete_<model>`, `view_<model>`.
-async fn ensure_standard_permissions(pool: &sqlx::SqlitePool) -> Result<(), sqlx::Error> {
+async fn ensure_standard_permissions(pool: &umbra::db::DbPool) -> Result<(), sqlx::Error> {
     // DDL bootstrap (the documented schema-DDL exception in CLAUDE.md):
-    // create all six tables if they do not yet exist. In production
-    // these are created by `migrate`; this guard lets `on_ready` work
-    // even when the user runs the app before migrate (e.g. in tests
-    // that skip the full migrate loop). The strings are SQLite-flavoured;
-    // AppContext::pool is currently hardcoded `SqlitePool` so this path
-    // never runs against Postgres. Once AppContext is backend-agnostic,
-    // delete this block and require `migrate` to have run.
+    // create all six tables if they do not yet exist on the SQLite
+    // path. In production these are created by `migrate`; this guard
+    // lets `on_ready` work even when the user runs the app before
+    // migrate (e.g. in tests that skip the full migrate loop).
+    //
+    // The DDL strings are SQLite-flavoured (`INTEGER PRIMARY KEY
+    // AUTOINCREMENT` is rejected by Postgres). On Postgres we skip
+    // this block — the user must have run `migrate` first, which
+    // emits the proper `BIGSERIAL PRIMARY KEY` shape via the migration
+    // engine.
+    let sqlite_pool = match pool {
+        umbra::db::DbPool::Sqlite(p) => p,
+        umbra::db::DbPool::Postgres(_) => {
+            tracing::debug!(
+                "permissions: skipping SQLite-only DDL bootstrap on Postgres backend; \
+                 run `migrate` to ensure the permissions_* tables exist"
+            );
+            return ensure_standard_permission_rows(pool).await;
+        }
+    };
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS permissions_contenttype (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -161,7 +174,7 @@ async fn ensure_standard_permissions(pool: &sqlx::SqlitePool) -> Result<(), sqlx
             UNIQUE(app_label, model)
         )",
     )
-    .execute(pool)
+    .execute(sqlite_pool)
     .await?;
 
     sqlx::query(
@@ -173,7 +186,7 @@ async fn ensure_standard_permissions(pool: &sqlx::SqlitePool) -> Result<(), sqlx
             UNIQUE(content_type_id, codename)
         )",
     )
-    .execute(pool)
+    .execute(sqlite_pool)
     .await?;
 
     sqlx::query(
@@ -182,7 +195,7 @@ async fn ensure_standard_permissions(pool: &sqlx::SqlitePool) -> Result<(), sqlx
             name TEXT NOT NULL UNIQUE
         )",
     )
-    .execute(pool)
+    .execute(sqlite_pool)
     .await?;
 
     sqlx::query(
@@ -193,7 +206,7 @@ async fn ensure_standard_permissions(pool: &sqlx::SqlitePool) -> Result<(), sqlx
             UNIQUE(group_id, permission_id)
         )",
     )
-    .execute(pool)
+    .execute(sqlite_pool)
     .await?;
 
     sqlx::query(
@@ -204,7 +217,7 @@ async fn ensure_standard_permissions(pool: &sqlx::SqlitePool) -> Result<(), sqlx
             UNIQUE(user_id, group_id)
         )",
     )
-    .execute(pool)
+    .execute(sqlite_pool)
     .await?;
 
     sqlx::query(
@@ -215,15 +228,46 @@ async fn ensure_standard_permissions(pool: &sqlx::SqlitePool) -> Result<(), sqlx
             UNIQUE(user_id, permission_id)
         )",
     )
-    .execute(pool)
+    .execute(sqlite_pool)
     .await?;
 
+    ensure_standard_permission_rows(pool).await
+}
+
+/// Probe whether the permissions tables exist by issuing a cheap
+/// `COUNT(*)` against `ContentType`. Any error (missing table, missing
+/// column, anything else) returns false — `on_ready` then defers seeding
+/// until the next boot, after `migrate` has run.
+async fn permissions_tables_exist() -> bool {
+    ContentType::objects().count().await.is_ok()
+}
+
+/// Walk the model registry and create the four standard permissions
+/// (`add_<model>`, `change_<model>`, `delete_<model>`, `view_<model>`)
+/// for every registered model. Routed entirely through the ORM so it
+/// runs on both backends.
+async fn ensure_standard_permission_rows(_pool: &umbra::db::DbPool) -> Result<(), sqlx::Error> {
     // Auto-create standard permissions for every registered model. Row
     // INSERTs go through the ORM (so a future Postgres-backed
     // AppContext::pool migration doesn't have to touch this code) —
     // the equivalent of Django's `get_or_create`: filter first, create
     // only when absent. The UNIQUE constraint on the underlying tables
     // is the race-condition backstop.
+    //
+    // `on_ready` fires inside `App::build()` — which happens BEFORE
+    // `migrate` in the typical user-binary flow (App::builder().build()
+    // is one call; migrate is a separate step). On a fresh database
+    // the permissions tables therefore don't exist yet. We probe with
+    // a cheap COUNT-style query; if the table is missing we skip
+    // gracefully so boot completes. The next boot (post-migrate) will
+    // create the rows.
+    if !permissions_tables_exist().await {
+        tracing::debug!(
+            "permissions: skipping row seed — permissions_contenttype not present yet \
+             (run `migrate`, then re-boot to seed standard permissions)"
+        );
+        return Ok(());
+    }
     let models = umbra::migrate::registered_models();
     tracing::info!(
         plugin = "permissions",

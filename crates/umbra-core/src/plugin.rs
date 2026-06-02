@@ -39,7 +39,7 @@
 use std::path::PathBuf;
 
 use axum::Router;
-use sqlx::SqlitePool;
+use crate::db::DbPool;
 
 use crate::check::SystemCheck;
 use crate::migrate::ModelMeta;
@@ -230,8 +230,13 @@ pub struct StaticFile {
 /// at M9).
 #[derive(Debug, Clone)]
 pub struct AppContext {
-    /// The default SQLite pool, same as `umbra::db::pool()` returns.
-    pub pool: SqlitePool,
+    /// The default connection pool, typed by backend. Same value as
+    /// `umbra::db::pool_dispatched().clone()` returns. Plugin code
+    /// that needs the pool typically goes through the ORM instead
+    /// (`Model::objects()…`); this field is the escape hatch for
+    /// schema-DDL bootstrap (the documented exception in CLAUDE.md)
+    /// and backend-specific features like Postgres RLS.
+    pub pool: DbPool,
     /// A clone of the active settings.
     pub settings: Settings,
 }

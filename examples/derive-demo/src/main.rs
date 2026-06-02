@@ -41,6 +41,7 @@ use umbra_auth::AuthUser;
 /// `<select>` with the variant labels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Choices)]
 #[choices(rename_all = "lowercase")]
+#[serde(rename_all = "lowercase")]
 pub enum ArticleStatus {
     Draft,
     Review,

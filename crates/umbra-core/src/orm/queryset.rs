@@ -437,7 +437,10 @@ impl<T: Model> QuerySet<T> {
         // rewrite logic across branches.
         let mut rebuilt = self.build_query_for(backend);
         rebuilt.clear_selects();
-        rebuilt.expr(Func::count(Expr::col(Alias::new("*"))));
+        // Postgres rejects `"*"` as a quoted identifier (SQLite tolerates
+        // it); use sea_query's Asterisk token which renders bare `*`
+        // on both backends.
+        rebuilt.expr(Func::count(Expr::col(sea_query::Asterisk)));
         rebuilt.reset_limit();
         rebuilt.reset_offset();
 
@@ -758,7 +761,7 @@ impl<T: Model> QuerySet<T> {
     pub async fn count_pg(self, pool: &sqlx::PgPool) -> Result<i64, sqlx::Error> {
         let mut rebuilt = self.build_query_for("postgres");
         rebuilt.clear_selects();
-        rebuilt.expr(Func::count(Expr::col(Alias::new("*"))));
+        rebuilt.expr(Func::count(Expr::col(sea_query::Asterisk)));
         rebuilt.reset_limit();
         rebuilt.reset_offset();
         let (sql, values) = rebuilt.build_sqlx(PostgresQueryBuilder);
