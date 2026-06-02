@@ -61,6 +61,8 @@ impl crate::orm::Model for Post {
             fk_target: None,
             noform: false,
             noedit: false,
+            is_string_repr: false,
+            max_length: 0,
         },
         crate::orm::FieldSpec {
             name: "title",
@@ -71,6 +73,8 @@ impl crate::orm::Model for Post {
             fk_target: None,
             noform: false,
             noedit: false,
+            is_string_repr: false,
+            max_length: 0,
         },
         crate::orm::FieldSpec {
             name: "body",
@@ -81,6 +85,8 @@ impl crate::orm::Model for Post {
             fk_target: None,
             noform: false,
             noedit: false,
+            is_string_repr: false,
+            max_length: 0,
         },
         crate::orm::FieldSpec {
             name: "published_at",
@@ -91,6 +97,8 @@ impl crate::orm::Model for Post {
             fk_target: None,
             noform: false,
             noedit: false,
+            is_string_repr: false,
+            max_length: 0,
         },
     ];
 

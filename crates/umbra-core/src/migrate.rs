@@ -356,6 +356,16 @@ pub struct Column {
     /// Propagated from `FieldSpec::noedit`.
     #[serde(default)]
     pub noedit: bool,
+    /// Django-style `__str__` marker — propagated from
+    /// `FieldSpec::is_string_repr`. The admin uses the first column
+    /// with this flag as the default `list_display` label when no
+    /// explicit one is configured.
+    #[serde(default)]
+    pub is_string_repr: bool,
+    /// Display truncation cap — propagated from `FieldSpec::max_length`.
+    /// `0` means no truncation.
+    #[serde(default)]
+    pub max_length: u32,
 }
 
 impl From<&FieldSpec> for Column {
@@ -368,6 +378,8 @@ impl From<&FieldSpec> for Column {
             fk_target: f.fk_target.map(|s| s.to_string()),
             noform: f.noform,
             noedit: f.noedit,
+            is_string_repr: f.is_string_repr,
+            max_length: f.max_length,
         }
     }
 }

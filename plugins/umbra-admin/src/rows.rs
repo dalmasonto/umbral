@@ -80,7 +80,33 @@ pub(crate) async fn fetch_rows_paged(
         qs = qs.order_by_col(&col, desc);
     }
     qs = qs.limit(limit as u64).offset(offset as u64);
-    Ok(qs.fetch_as_strings().await?)
+    let mut rows = qs.fetch_as_strings().await?;
+    apply_max_length_truncation(model, &mut rows);
+    Ok(rows)
+}
+
+/// Walk every row and truncate cells whose column has a
+/// `max_length > 0` hint. Appends an ellipsis (`…`) when truncation
+/// happens so the user can see something was cut. UTF-8 safe: we step
+/// by char count, not byte count.
+fn apply_max_length_truncation(
+    model: &ModelMeta,
+    rows: &mut [HashMap<String, String>],
+) {
+    for row in rows.iter_mut() {
+        for col in &model.fields {
+            if col.max_length == 0 {
+                continue;
+            }
+            let limit = col.max_length as usize;
+            if let Some(val) = row.get_mut(&col.name) {
+                if val.chars().count() > limit {
+                    let truncated: String = val.chars().take(limit).collect();
+                    *val = format!("{truncated}…");
+                }
+            }
+        }
+    }
 }
 
 /// Parse the legacy `"col" ASC, "col2" DESC` ORDER BY string back into

@@ -114,6 +114,8 @@ impl Plugin for TestPlugin {
                 fk_target: None,
                 noform: false,
                 noedit: false,
+            is_string_repr: false,
+            max_length: 0,
             }],
         }]
     }

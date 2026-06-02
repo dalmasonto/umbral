@@ -34,6 +34,38 @@ pub(crate) fn pk_column(model: &ModelMeta) -> Option<&Column> {
     model.fields.iter().find(|c| c.primary_key)
 }
 
+/// Default list-display when the admin model carries no explicit
+/// `list_display`. Django renders `[pk, <__str__>]`; this is the same
+/// idea — pick the PK plus the first field tagged
+/// `#[umbra(string)]`. If no field is tagged, fall back to the first
+/// non-PK `Text` column so the table still has a human label. If
+/// nothing fits, show every column (the legacy behaviour).
+pub(crate) fn default_list_display(model: &ModelMeta) -> Vec<String> {
+    let pk_name = model.fields.iter().find(|c| c.primary_key).map(|c| c.name.clone());
+    let str_field = model
+        .fields
+        .iter()
+        .find(|c| c.is_string_repr && !c.primary_key)
+        .map(|c| c.name.clone());
+    if let (Some(pk), Some(s)) = (&pk_name, &str_field) {
+        return vec![pk.clone(), s.clone()];
+    }
+    // No explicit string-repr — fall back to first non-PK Text column.
+    let first_text = model
+        .fields
+        .iter()
+        .find(|c| {
+            !c.primary_key
+                && matches!(c.ty, umbra::orm::SqlType::Text)
+        })
+        .map(|c| c.name.clone());
+    if let (Some(pk), Some(t)) = (&pk_name, &first_text) {
+        return vec![pk.clone(), t.clone()];
+    }
+    // Nothing usable — show every column.
+    model.fields.iter().map(|c| c.name.clone()).collect()
+}
+
 /// Return the user's saved theme preference (`"dark"` | `"light"` |
 /// `"system"`). Falls back to `"dark"` on any error so the page always
 /// renders something — this is the server-side read that prevents the

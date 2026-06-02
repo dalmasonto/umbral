@@ -100,6 +100,8 @@ fn int_pk_column() -> Column {
         fk_target: None,
         noform: false,
         noedit: false,
+            is_string_repr: false,
+            max_length: 0,
     }
 }
 
@@ -112,6 +114,8 @@ fn uuid_pk_column() -> Column {
         fk_target: None,
         noform: false,
         noedit: false,
+            is_string_repr: false,
+            max_length: 0,
     }
 }
 
@@ -124,6 +128,8 @@ fn string_pk_column() -> Column {
         fk_target: None,
         noform: false,
         noedit: false,
+            is_string_repr: false,
+            max_length: 0,
     }
 }
 
@@ -136,6 +142,8 @@ fn label_column() -> Column {
         fk_target: None,
         noform: false,
         noedit: false,
+            is_string_repr: false,
+            max_length: 0,
     }
 }
 

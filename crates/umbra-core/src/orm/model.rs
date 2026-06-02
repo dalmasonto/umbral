@@ -190,6 +190,20 @@ pub struct FieldSpec {
     /// The user can see the value but not change it. Set via
     /// `#[umbra(noedit)]`. Has no effect when `noform` is also set.
     pub noedit: bool,
+
+    /// When `true`, this field is the Django-style `__str__` for the
+    /// model — the admin uses it as the default label in
+    /// `list_display` when the developer hasn't specified one
+    /// explicitly. Set via `#[umbra(string)]` /
+    /// `#[umbra(string = true)]`. Only meaningful on `String`-typed
+    /// columns; on non-string columns the admin falls back to the PK.
+    pub is_string_repr: bool,
+
+    /// Soft length cap for display. The admin truncates the value at
+    /// this many characters when rendering it in `list_display` so a
+    /// long body doesn't blow out a column. `0` means no truncation.
+    /// Set via `#[umbra(max_length = N)]`.
+    pub max_length: u32,
 }
 
 /// The SQL type kind of a column.

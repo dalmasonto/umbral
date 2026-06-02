@@ -12,7 +12,7 @@ use umbra::web::{HeaderMap, IntoResponse, Redirect, Response};
 
 use crate::AdminState;
 use crate::auth::require_staff;
-use crate::discovery::{find_model, pk_column, user_theme};
+use crate::discovery::{default_list_display, find_model, pk_column, user_theme};
 use crate::engine::render;
 use crate::error::AdminError;
 use crate::handlers;
@@ -121,7 +121,7 @@ pub(crate) async fn list(
     {
         c.list_display.clone()
     } else {
-        model.fields.iter().map(|f| f.name.clone()).collect()
+        default_list_display(&model)
     };
 
     let (search_term, active_filter, sort_col, sort_order, page, page_size) =
@@ -308,7 +308,7 @@ pub(crate) async fn rows_fragment(
     {
         c.list_display.clone()
     } else {
-        model.fields.iter().map(|f| f.name.clone()).collect()
+        default_list_display(&model)
     };
 
     let fetch_cols: Vec<String> = {

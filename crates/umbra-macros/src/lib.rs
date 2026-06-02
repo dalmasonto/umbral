@@ -141,12 +141,24 @@ struct UmbraFieldAttr {
     noform: bool,
     /// `#[umbra(noedit)]` — show on edit form read-only, never on create.
     noedit: bool,
+    /// `#[umbra(string)]` — Django-style "__str__" marker. The admin's
+    /// default `list_display` falls back to this field when the model
+    /// has no explicit `list_display` config, so the table shows a
+    /// human label instead of every column. Only meaningful on
+    /// `String`-typed fields.
+    is_string_repr: bool,
+    /// `#[umbra(max_length = N)]` — soft limit. The admin truncates
+    /// the value at this many characters in `list_display` so a long
+    /// body doesn't blow out a column. `0` means no truncation.
+    max_length: u32,
 }
 
 fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAttr> {
     let mut parsed = UmbraFieldAttr {
         noform: false,
         noedit: false,
+        is_string_repr: false,
+        max_length: 0,
     };
     for attr in attrs {
         if !attr.path().is_ident("umbra") {
@@ -158,6 +170,20 @@ fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAtt
                 Ok(())
             } else if meta.path.is_ident("noedit") {
                 parsed.noedit = true;
+                Ok(())
+            } else if meta.path.is_ident("string") {
+                // Both `#[umbra(string)]` and `#[umbra(string = true)]` work.
+                if let Ok(value) = meta.value() {
+                    let lit: syn::LitBool = value.parse()?;
+                    parsed.is_string_repr = lit.value;
+                } else {
+                    parsed.is_string_repr = true;
+                }
+                Ok(())
+            } else if meta.path.is_ident("max_length") {
+                let value = meta.value()?;
+                let lit: syn::LitInt = value.parse()?;
+                parsed.max_length = lit.base10_parse()?;
                 Ok(())
             } else {
                 // Ignore unrecognised keys (including struct-level keys that
@@ -346,6 +372,12 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         } else {
             quote!(false)
         };
+        let is_string_repr_lit = if field_attr.is_string_repr {
+            quote!(true)
+        } else {
+            quote!(false)
+        };
+        let max_length_lit = field_attr.max_length;
 
         let (sql_ty_tokens, nullable_lit) = match kind.sql_type_tokens() {
             Some((ty, nullable)) => (ty, nullable),
@@ -389,6 +421,8 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                 fk_target: #fk_target_tokens,
                 noform: #noform_lit,
                 noedit: #noedit_lit,
+                is_string_repr: #is_string_repr_lit,
+                max_length: #max_length_lit,
             }
         });
 

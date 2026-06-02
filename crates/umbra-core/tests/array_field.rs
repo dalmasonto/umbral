@@ -75,6 +75,8 @@ fn postgres_ddl_renders_array_suffix() {
                 fk_target: None,
                 noform: false,
                 noedit: false,
+            is_string_repr: false,
+            max_length: 0,
             },
             Column {
                 name: "tags".to_string(),
@@ -84,6 +86,8 @@ fn postgres_ddl_renders_array_suffix() {
                 fk_target: None,
                 noform: false,
                 noedit: false,
+            is_string_repr: false,
+            max_length: 0,
             },
         ],
     };

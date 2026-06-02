@@ -828,6 +828,8 @@ impl From<&IntrospectedColumn> for Column {
             fk_target: None,
             noform: false,
             noedit: false,
+            is_string_repr: false,
+            max_length: 0,
         }
     }
 }
