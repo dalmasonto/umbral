@@ -42,6 +42,45 @@ StaticPlugin::new("/static", "./assets")
 
 The dev-mode check reads the ambient settings at route-build time (when `Plugin::routes` is called), not at constructor time.
 
+## Referencing files from templates
+
+The mount path is the URL prefix; reference assets at `<mount>/<relative-path>` and the browser hits the same handler that serves the file. Reaching them from a `minijinja` template is just normal HTML:
+
+```jinja
+{# In wrapper.html or base.html #}
+<link rel="stylesheet" href="/static/css/app.css"/>
+<script src="/static/js/htmx.min.js"></script>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml"/>
+```
+
+```jinja
+{# Inside a page template #}
+<img src="/static/img/logo.svg" alt="Acme" class="h-8"/>
+<a href="/static/docs/eula.pdf">Terms of service</a>
+```
+
+Subdirectories under `./assets` map directly. If `./assets/css/app.css` exists on disk, `/static/css/app.css` serves it. The plugin does no rewriting — what you put on disk is what the browser sees.
+
+### A small template helper
+
+If your asset paths change between dev and prod (different mount point, cache-busted filenames), thread the mount through the template context once and reference it from there:
+
+```rust
+// In your handler
+let ctx = context!(
+    static_url => "/static",
+    user       => user.username,
+);
+templates::render("dashboard.html", &ctx)?;
+```
+
+```jinja
+{# dashboard.html #}
+<link rel="stylesheet" href="{{ static_url }}/css/app.css"/>
+```
+
+This is the same pattern Django's `{% static "..." %}` tag uses, just hand-rolled. A `static_url` template global may land in v0.1 to make the mount path implicit.
+
 ## Production note
 
 Behind a reverse proxy (nginx, Caddy, Cloudflare), serve static files from the proxy and skip this plugin in prod. It exists for development, single-binary deployments, and apps small enough that the ops overhead of a separate file server is not worth it.

@@ -49,13 +49,32 @@ pub(crate) async fn run_action(
     };
 
     let inv = ActionInvocation {
-        ids: selected_ids,
+        ids: selected_ids.clone(),
         username: who.username.clone(),
         table: table.clone(),
         pool: umbra::db::pool().clone(),
     };
     let handler = Arc::clone(&action.handler);
-    let flash = match handler(inv).await {
+    let result = handler(inv).await;
+    // Audit log — one entry per bulk-action submission.
+    let summary = match &result {
+        Ok(_) => format!(
+            "ran action `{}` on {} #{:?} (via form)",
+            action_key,
+            table,
+            selected_ids
+        ),
+        Err(e) => format!("action `{action_key}` on {table} failed: {e}"),
+    };
+    crate::models::log(
+        who.id,
+        &format!("action:{action_key}"),
+        &table,
+        selected_ids.first().copied(),
+        &summary,
+    )
+    .await;
+    let flash = match result {
         Ok(ActionResult::Toast { message, .. }) => message,
         Ok(ActionResult::RefreshTable) => "Done.".to_string(),
         Ok(_) => "Done.".to_string(),
@@ -127,13 +146,34 @@ pub(crate) async fn dispatch_action(
     };
 
     let inv = ActionInvocation {
-        ids,
+        ids: ids.clone(),
         username: who.username.clone(),
         table: table.clone(),
         pool: umbra::db::pool().clone(),
     };
     let handler = Arc::clone(&action.handler);
-    match handler(inv).await {
+    let result = handler(inv).await;
+    // Audit log — one entry per dispatched action regardless of
+    // outcome variant, so the timeline shows what was invoked and
+    // by whom even when the action returns a Download or Redirect.
+    let summary = match &result {
+        Ok(_) => format!(
+            "ran action `{}` on {} #{:?} (via dispatch)",
+            key,
+            table,
+            ids
+        ),
+        Err(e) => format!("action `{key}` on {table} failed: {e}"),
+    };
+    crate::models::log(
+        who.id,
+        &format!("action:{key}"),
+        &table,
+        ids.first().copied(),
+        &summary,
+    )
+    .await;
+    match result {
         Ok(ActionResult::Toast { message, level }) => {
             let trigger = serde_json::json!({
                 "showToast": { "message": message, "level": level.as_str() }

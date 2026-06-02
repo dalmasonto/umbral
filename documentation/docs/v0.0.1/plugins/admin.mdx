@@ -413,7 +413,31 @@ The theme toggle in the topbar still writes `localStorage` as the fast path (no 
 
 ### Audit log recording
 
-Every successful create, update, delete, and sheet-create operation writes one row to `admin_audit_log`. Bulk actions write one row summarizing the operation. The write is fire-and-forget (errors are logged but do not fail the originating request).
+`admin_audit_log` captures **mutations the admin itself drives**. Every successful admin write writes one row:
+
+| Operation                                                       | `action`             | Triggered by                                          |
+|------------------------------------------------------------------|----------------------|-------------------------------------------------------|
+| Full-page form create                                            | `create`             | `POST /admin/{table}/new`                             |
+| Sheet create                                                     | `create`             | `POST /admin/{table}/create`                          |
+| Full-page form update                                            | `update`             | `POST /admin/{table}/{id}/edit`                       |
+| Inline cell edit                                                 | `update`             | `POST /admin/{table}/{id}/cell/{field}`               |
+| Password change                                                  | `update`             | `POST /admin/{table}/{id}/change-password`            |
+| Delete (form)                                                    | `delete`             | `POST /admin/{table}/{id}/delete`                     |
+| Delete (HTMX)                                                    | `delete`             | `DELETE /admin/{table}/{id}`                          |
+| Per-key action dispatch (incl. bulk delete, custom actions)      | `action:<key>`       | `POST /admin/{table}/actions/{key}`                   |
+| Legacy form action                                               | `action:<key>`       | `POST /admin/{table}/action`                          |
+
+The write is fire-and-forget — a failure to insert the row is logged at `tracing::error` level but does not bubble up to the originating request.
+
+#### What is NOT in `admin_audit_log`
+
+The table is intentionally scoped to the admin's CRUD surface. These events are not recorded:
+
+- **Logins, logouts, session creation.** The 11K rows in `session` come from `umbra-sessions` doing its job; that's its own data store. If you want admin-side login auditing, write a [signal handler](/docs/v0.0.1/plugins/signals) on `umbra_sessions::login_succeeded` and forward into `admin_audit_log` from there.
+- **Direct ORM writes from your own code.** Calling `Article::objects().save(...)` from a non-admin handler bypasses the admin entirely. If you want those writes audited, hook a `post_save` signal or write to the table directly via `umbra_admin::models::log(...)`.
+- **API endpoints the admin exposes for itself.** The palette search, FK picker, and dashboard widget data endpoints are reads; they don't mutate user models and don't log.
+
+For "everything that happens" auditing, build a separate event log fed by signal handlers across `umbra-sessions`, `umbra-auth`, and per-model post-save hooks. The admin's audit log is the right datum for "who deleted that row from the admin?" — not for general security telemetry.
 
 Per-object history is available at:
 
@@ -422,6 +446,25 @@ GET /admin/{table}/{id}/history
 ```
 
 This renders an audit timeline as a stacked sheet fragment (HTMX) or a standalone page (direct). Each entry shows actor, action, diff summary, and timestamp. A "History" link in the sheet preview header opens this.
+
+#### Writing your own audit entries
+
+`umbra_admin::models::log(actor_id, action, table, object_id, summary)` is `pub` so handlers outside the admin can append to the same timeline. Useful when an external job mutates a model and you want the change visible to admin users:
+
+```rust
+use umbra_admin::models;
+
+models::log(
+    current_user.id,
+    "import",
+    "article",
+    Some(article.id),
+    &format!("imported {} from CSV row {}", article.title, row_num),
+)
+.await;
+```
+
+`action` is a free-form string; the admin renders it verbatim in the timeline. Use the `create` / `update` / `delete` shapes when the operation is one of those; use a custom verb (`"import"`, `"approve"`, `"merge"`) for anything else.
 
 ### Dashboard widget system
 

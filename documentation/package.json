@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "lucide-svelte": "^0.454.0",
-    "specra": "0.2.57"
+    "specra": "0.2.58"
   },
   "devDependencies": {
     "@sveltejs/adapter-static": "^3.0.0",

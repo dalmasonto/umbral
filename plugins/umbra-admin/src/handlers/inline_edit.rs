@@ -107,9 +107,10 @@ pub(crate) async fn cell_edit_post(
     body: String,
 ) -> Response {
     let path = format!("/admin/{table}/{id}/cell/{field}");
-    if let Err(r) = require_staff(&headers, &path).await {
-        return r;
-    }
+    let user = match require_staff(&headers, &path).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
     let Some((_, model)) = find_model(&table) else {
         return AdminError::NotFound(format!("no model `{table}`")).into_response();
     };
@@ -131,6 +132,16 @@ pub(crate) async fn cell_edit_post(
         .await
     {
         Ok(_) => {
+            // Audit log — inline cell edit counts as an update.
+            let object_id = id.parse::<i64>().ok();
+            crate::models::log(
+                user.id,
+                "update",
+                &table,
+                object_id,
+                &format!("inline-edited {}.{} (via cell)", model.name, field),
+            )
+            .await;
             let display = html_escape(&new_value);
             let cell_html = format!(
                 r#"<span class="text-on-surface text-body-md tabular-nums">{display}</span>"#

@@ -227,7 +227,29 @@ pub struct User {
 }
 ```
 
-The attribute lands at M3.1; per-field attributes (`max_length`, `db_index`, `default`, `choices`, `on_delete`) are scheduled as the plugins that need them ship.
+The attribute lands at M3.1; per-field attributes for `db_index`, `default`, `choices`, `on_delete` are scheduled as the plugins that need them ship.
+
+## Display hints (`string`, `max_length`)
+
+Two field-level attributes shape how the admin renders a model when no `list_display` is configured:
+
+```rust
+#[derive(Debug, Clone, sqlx::FromRow, umbra::orm::Model)]
+pub struct Article {
+    pub id: i64,
+    #[umbra(string, max_length = 60)]
+    pub title: String,
+    pub body: String,
+    pub published_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+```
+
+- `#[umbra(string)]` — the Django-style `__str__`. The admin's default `list_display` is `[pk, <first string field>]` when no explicit config is registered, so the changelist shows a human label instead of every column. Equivalent shapes: `#[umbra(string)]` and `#[umbra(string = true)]`.
+- `#[umbra(max_length = N)]` — soft truncation cap for display. The admin trims the value at `N` characters when rendering it in `list_display`, appending `…` so the cut is visible. Counted in characters, not bytes — emoji and combining characters survive intact.
+
+Both attributes are display-only — they do not constrain the column at the SQL level. A `String` field with `max_length = 60` is still `TEXT` (unbounded) at the database; the cap only affects how the admin renders cells. Use `#[umbra(table = "...")]` plus a manual `CHECK` constraint via a custom migration if you want the limit enforced at the DB.
+
+If no field on the model is tagged `string`, the admin falls back to the first non-PK `Text` column as the label. If no `Text` column exists either, the changelist shows every field — the legacy behaviour.
 
 ## Plugin-namespaced tables
 

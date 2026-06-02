@@ -1,0 +1,5 @@
+allowBuilds:
+  esbuild: set this to true or false
+minimumReleaseAgeExclude:
+  - specra@0.2.57
+  - specra@0.2.58

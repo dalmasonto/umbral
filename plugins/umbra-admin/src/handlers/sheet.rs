@@ -285,9 +285,10 @@ pub(crate) async fn change_password_handler(
     body: String,
 ) -> Response {
     let path = format!("/admin/{table}/{id}/change-password");
-    if let Err(r) = require_staff(&headers, &path).await {
-        return r;
-    }
+    let actor = match require_staff(&headers, &path).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
     let cfg = state.config_for(&table);
     let pw_col = match cfg.and_then(|c| c.password_field.as_deref()) {
         Some(col) => col,
@@ -328,6 +329,17 @@ pub(crate) async fn change_password_handler(
     {
         return AdminError::Sqlx(e).into_response();
     }
+    // Audit log — password change is a special-cased update we want
+    // visible in the timeline. Don't log the new hash itself.
+    let object_id = id.parse::<i64>().ok();
+    crate::models::log(
+        actor.id,
+        "update",
+        &table,
+        object_id,
+        &format!("changed password on {} #{}", model.name, id),
+    )
+    .await;
     let trigger = serde_json::json!({
         "showToast": { "message": "Password changed successfully.", "level": "success" },
         "closeDialog": {}

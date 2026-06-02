@@ -1,0 +1,124 @@
+---
+title: Media (User Uploads)
+description: Filesystem-backed user-upload plugin. Tracks every file in the media_file model so the admin can list / delete; S3 backend and image library are deferred to v0.1+.
+sidebar_position: 11
+tags: [media, uploads, files, admin]
+---
+
+# Media (User Uploads)
+
+`umbra-media` is the user-upload counterpart to [`umbra-static`](/docs/v0.0.1/plugins/static): the same `tower-http::ServeDir` read path, plus a `save(filename, content_type, bytes)` helper that writes user-supplied content to disk and tracks each file in the framework-tracked `media_file` model.
+
+Where `umbra-static` is for *developer*-shipped assets (your CSS, your bundled JS), `umbra-media` is for *user*-supplied content (avatars, attachments, generated reports).
+
+```rust
+use std::time::Duration;
+use umbra_media::MediaPlugin;
+
+App::builder()
+    .plugin(
+        MediaPlugin::new("/media", "./media")
+            .max_size(10 * 1024 * 1024)  // 10 MiB cap
+    )
+    .build()?;
+```
+
+`./media/` is the on-disk directory; `/media/<key>` is the public URL.
+
+## Accepting an upload
+
+The plugin doesn't ship its own upload route — write a handler that parses a multipart form and calls `media.save(...)` once you have the bytes:
+
+```rust
+use axum::extract::Multipart;
+use umbra_media::{MediaPlugin, MediaSaveOutcome};
+
+async fn upload(
+    State(media): State<MediaPlugin>,
+    mut multipart: Multipart,
+) -> Result<Json<UploadReply>, AppError> {
+    while let Some(field) = multipart.next_field().await? {
+        if field.name() == Some("file") {
+            let filename = field
+                .file_name()
+                .unwrap_or("upload.bin")
+                .to_string();
+            let content_type = field
+                .content_type()
+                .unwrap_or("application/octet-stream")
+                .to_string();
+            let bytes = field.bytes().await?;
+            let MediaSaveOutcome { file, url } =
+                media.save(&filename, &content_type, &bytes).await?;
+            return Ok(Json(UploadReply {
+                id: file.id,
+                url,
+            }));
+        }
+    }
+    Err(AppError::NoFileField)
+}
+```
+
+`save` writes the bytes under `<dir>/<uuid>-<safe-filename>`, inserts a row in `media_file`, and returns:
+
+- `file: MediaFile` — the new row, with `id` populated.
+- `url: String` — the public URL (`<mount>/<key>`).
+
+## The `MediaFile` model
+
+Every upload is one row:
+
+| Column          | Type                            | Notes                                          |
+|-----------------|---------------------------------|------------------------------------------------|
+| `id`            | `i64`                           | Primary key                                    |
+| `key`           | `String`                        | Storage key: `<uuid>-<filename>`               |
+| `filename`      | `String`                        | The original filename the client sent          |
+| `content_type`  | `String`                        | MIME type the client declared                  |
+| `size`          | `i64`                           | Byte count                                     |
+| `uploaded_at`   | `DateTime<Utc>`                 | Time of save                                   |
+
+The model is registered through `Plugin::models()`, so the migration engine creates the table on the next `migrate run` and the admin lists it under the **media** sidebar group automatically. Every column is `#[umbra(noedit)]` — the admin shows the row read-only because mutating it from the UI would diverge from what's on disk.
+
+To delete a file, write a small handler that calls `MediaFile::objects().filter(media_file::ID.eq(id)).delete_instance(...)` and then `tokio::fs::remove_file(...)`. v0 does not auto-cleanup on row delete; that's wired in v0.2 when the storage backend trait lands.
+
+## Serving from templates
+
+Files come back at `<mount>/<key>`. Reference them like any other URL:
+
+```jinja
+{# Profile photo, key persisted in user.avatar_key #}
+<img src="/media/{{ user.avatar_key }}" alt="{{ user.username }}"/>
+
+{# Download with original filename forced by Content-Disposition #}
+<a href="/media/{{ doc.key }}"
+   download="{{ doc.filename }}">Download {{ doc.filename }}</a>
+```
+
+The plugin sets `X-Content-Type-Options: nosniff` on every response so the browser respects the MIME type the file was uploaded with — a small defence against a user uploading an HTML file disguised as `.png` and getting it interpreted on the same origin.
+
+## Configuration knobs
+
+| Method                          | Default | What it does                                                                      |
+|---------------------------------|---------|-----------------------------------------------------------------------------------|
+| `.new(mount, dir)`              | —       | Mount path + on-disk directory.                                                   |
+| `.max_size(bytes)`              | unlimited | Hard cap on upload size. `save` returns `MediaError::TooLarge` when exceeded.   |
+
+## What v0 does not ship
+
+Three things `gaps.md #49` calls for that the current release deliberately defers:
+
+1. **S3-compatible backend.** Filesystem-only today. A `MediaBackend` trait extraction lands in v0.1 with `FsBackend` and `S3Backend` (any S3-compatible endpoint: AWS, MinIO, R2, B2).
+2. **Image library.** Thumbnails, EXIF strip, format probing. Behind an `images` cargo feature in v0.2.
+3. **Signed URLs.** Auth-required reads against the S3 backend. v0.3.
+
+Design rationale and the migration plan live in `docs/decisions/2026-06-02-media-and-s3.md` in the repo. Each step keeps the v0 public surface compatible.
+
+## When to use which plugin
+
+| Concern                                   | Pick                          |
+|-------------------------------------------|-------------------------------|
+| CSS / JS / fonts shipped with the binary  | [`umbra-static`](./static)   |
+| User-uploaded avatars, documents, reports | `umbra-media` (this plugin)   |
+| Files that change between deploys but are dev-owned (favicon, marketing PDFs) | `umbra-static` |
+| Anything the admin should list / delete   | `umbra-media`                 |
