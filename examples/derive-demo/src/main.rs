@@ -126,15 +126,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // admin falls back to auto-discovery — every column listed, no
         // search input, no per-column tweaks.
         .plugin(
-            umbra_admin::AdminPlugin::default().register(
-                umbra_admin::AdminModel::new("article")
-                    .label("Articles")
-                    .icon("newspaper")
-                    // .list_display(&["id", "title", "published_at"])
-                    .search_fields(&["title", "body"])
-                    .ordering(&["-published_at", "id"]),
-            ),
+            umbra_admin::AdminPlugin::default()
+                .register(
+                    umbra_admin::AdminModel::new("article")
+                        .label("Articles")
+                        .icon("newspaper")
+                        .list_display(&["id", "title", "status", "published_at"])
+                        .search_fields(&["title", "body"])
+                        .ordering(&["-published_at", "id"])
+                        // Double-click any of these cells in the list view to
+                        // edit it inline — no sheet, no extra round-trip.
+                        .inline_edit_fields(&["title", "status"]),
+                )
+                // Surface the AuthUser model and turn on the "Change password"
+                // affordance on its edit sheet. The route + handler are always
+                // wired (in `umbra-admin`); `password_field` is what makes the
+                // button render in the footer.
+                .register(
+                    umbra_admin::AdminModel::new("auth_user")
+                        .label("Users")
+                        .icon("users")
+                        .password_field("password_hash"),
+                ),
         )
+        .plugin(umbra_permissions::PermissionsPlugin)
         .router(
             Router::new()
                 .route("/", get(home))

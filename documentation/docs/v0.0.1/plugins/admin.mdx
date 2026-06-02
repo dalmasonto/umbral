@@ -33,17 +33,32 @@ App::builder()
     .build()?;
 ```
 
+### Opt-in features (and what makes them visible)
+
+Several admin features ship with full backend wiring but only appear in the UI when you opt in by configuring the model. If you don't see them, it's because the registration is missing — not because the feature isn't there.
+
+| Feature | Visible when … |
+|---|---|
+| Inline cell edit (double-click) | `AdminModel::new("post").inline_edit_fields(&["title", "status"])` lists the columns. |
+| "Change password" button on the edit sheet | `AdminModel::new("auth_user").password_field("password_hash")` names the hash column. The route + audit-log handler are always wired; this flag is what makes the footer button render. |
+| Bulk actions (toolbar appears when ≥1 row is selected) | Default delete-selected ships; custom ones via `.actions(vec![Action::new("publish", handler)])`. |
+| Async FK combobox | Automatic for every `ForeignKey<T>` field — no opt-in. |
+| `<select>` for closed-set enums | Automatic for every `#[umbra(choices)]` / `MultiChoice<E>` field — no opt-in. |
+| Search box on list view | `AdminModel::new("post").search_fields(&["title", "body"])`. Without this, the search box is hidden. |
+| Filter sidebar | `.list_filter(&["status", "published_at"])`. Each column gets its own facet. |
+| Customisable column set on the list view | `.list_display(&["title", "status", "published_at"])`. Without this, every column shows. |
+
 ## The admin shell (phase 1)
 
 The admin ships a dark-mode shell matching a production back-office aesthetic:
 
 - **Fixed 260px sidebar** with a live model search box and model groups, one per plugin. Active models are highlighted with the primary accent. The sidebar is independently scrollable.
 - **Sticky 56px topbar** with breadcrumbs on the left, a `⌘K` command-palette placeholder in the center, and a theme toggle + user menu on the right.
-- **Light/dark theme** driven by CSS variables. `:root` holds the light palette; `.dark` overrides with dark values. Every Tailwind utility maps to a `var(--token)` reference, so toggling `html.dark` actually flips every color in place — no `dark:` prefix sprinkled through every template. The toggle persists in `localStorage`. Default is dark. Phase 4 will move this to per-user server-side prefs.
+- **Light/dark theme** driven by CSS variables. `:root` holds the light palette; `.dark` overrides with dark values. Every Tailwind utility maps to a `var(--token)` reference, so toggling `html.dark` actually flips every color in place - no `dark:` prefix sprinkled through every template. The toggle persists in `localStorage`. Default is dark. Phase 4 will move this to per-user server-side prefs.
 - **HTMX loaded** via CDN so later phases can target and swap fragments without restructuring the shell.
 
 <Callout type="warning" title="Tailwind CDN is dev-only">
-The shell loads Tailwind from `cdn.tailwindcss.com` in development so the framework works zero-config out of the box. In production (`settings.environment == "prod"`), the wrapper template instead loads `/admin/static/admin.css` — a pre-compiled stylesheet shipped with the admin plugin. Until that file is wired (a phase-4 hardening task), production deployments will see a broken admin until they either set `UMBRA_ENVIRONMENT=dev` or supply their own `admin.css` at the expected route. The CDN script also emits a "do not use in production" warning to the browser console — that's by design.
+The shell loads Tailwind from `cdn.tailwindcss.com` in development so the framework works zero-config out of the box. In production (`settings.environment == "prod"`), the wrapper template instead loads `/admin/static/admin.css` - a pre-compiled stylesheet shipped with the admin plugin. Until that file is wired (a phase-4 hardening task), production deployments will see a broken admin until they either set `UMBRA_ENVIRONMENT=dev` or supply their own `admin.css` at the expected route. The CDN script also emits a "do not use in production" warning to the browser console - that's by design.
 </Callout>
 - **Lucide icons** throughout (MIT, consistent 24px grid, matches the design PRD §2).
 
@@ -217,7 +232,7 @@ The `data_table` macro (`templates/_macros/data_table.html`) drives every model 
 - **Sortable columns.** Clicking any header sends a new `?sort=col&order=asc/desc` request that HTMX-swaps only the `<tbody id="table-body">`. Active sort shows a chevron; neutral shows a dimmed double-chevron.
 - **Filter chips.** One chip per active filter, each with an `×` to clear. Active filters are encoded as `?filter=field=value`.
 - **Row actions.** Three Lucide icons on each row (sticky right column): `eye` opens the preview sheet, `pencil` opens the edit sheet, `trash-2` opens the delete confirm dialog. The whole row is clickable (outside buttons/checkboxes) and also opens the preview sheet.
-- **States.** Empty (no rows yet — shows a "Create the first one" button), no-results (filters/search returned nothing — shows a "Clear filters" link), and pagination-aware.
+- **States.** Empty (no rows yet - shows a "Create the first one" button), no-results (filters/search returned nothing - shows a "Clear filters" link), and pagination-aware.
 - **Full pagination.** Range text ("1-25 of 1,204"), page-size select (10/25/50/100, default from `list_per_page`), prev/next, first/last, windowed page number list.
 - **Selection.** Header checkbox selects all on page; per-row checkboxes. Selection state is preserved via `hx-preserve` on a hidden `#bulk-action-form`. The floating bulk-action toolbar appears when any rows are selected (phase 3 adds action descriptors to it).
 - **Responsive.** ≥1024px: full table. 768-1023px: low-priority columns hidden via `hidden lg:table-cell`. < 768px: stacked card behavior (low-priority columns hidden; action column visible).
@@ -252,7 +267,7 @@ All previous phase-1 routes (`/new`, `/<id>/edit`, `/<id>/delete`, `/action`) re
 The `sheet` macro (`templates/_macros/sheet.html`) is a floating right-side panel, anchored at `top-4 right-4 bottom-4`, 640px wide by default.
 
 - **Header.** Title + record identity + Preview/Edit segmented toggle + close ✕.
-- **Preview mode.** Fields as labelled values. Booleans render as Yes/No pills. Empty values show "—". Numbers use tabular numerals.
+- **Preview mode.** Fields as labelled values. Booleans render as Yes/No pills. Empty values show "-". Numbers use tabular numerals.
 - **Edit mode.** Full form with per-type field editors.
 - **Footer.** In preview: "Edit" button. In edit: Cancel / Save & continue / Save. In edit (non-create): Delete button that opens the confirm dialog.
 - **Drag-resize.** A left-edge drag handle lets users resize the sheet. Width is persisted in `localStorage` under `umbra-admin-sheet-width`.
@@ -304,9 +319,9 @@ let publish = Action::new(
     "Publish",      // Label shown in tooltips / overflow menus
     "send",         // Lucide icon name
     |inv: ActionInvocation| async move {
-        // inv.ids      — selected primary keys
-        // inv.pool     — ambient SqlitePool for mutations
-        // inv.username, inv.table — context
+        // inv.ids      - selected primary keys
+        // inv.pool     - ambient SqlitePool for mutations
+        // inv.username, inv.table - context
         Ok(ActionResult::Toast {
             message: format!("Published {} post(s).", inv.ids.len()),
             level: ToastLevel::Success,
@@ -326,7 +341,7 @@ AdminModel::new("post")
 | Variant | Effect |
 |---|---|
 | `Toast { message, level }` | `HX-Trigger: {"showToast": {...}}` header |
-| `RefreshTable` | `HX-Trigger: {"refreshTable": {}}` — JS refreshes `#table-body` |
+| `RefreshTable` | `HX-Trigger: {"refreshTable": {}}` - JS refreshes `#table-body` |
 | `OpenSheet { table, id }` | `HX-Trigger: {"openSheet": {...}}` header |
 | `Download { filename, content_type, bytes }` | `Content-Disposition: attachment` response |
 | `Redirect { url }` | `HX-Redirect` header |
@@ -427,7 +442,7 @@ The theme toggle in the topbar still writes `localStorage` as the fast path (no 
 | Per-key action dispatch (incl. bulk delete, custom actions)      | `action:<key>`       | `POST /admin/{table}/actions/{key}`                   |
 | Legacy form action                                               | `action:<key>`       | `POST /admin/{table}/action`                          |
 
-The write is fire-and-forget — a failure to insert the row is logged at `tracing::error` level but does not bubble up to the originating request.
+The write is fire-and-forget - a failure to insert the row is logged at `tracing::error` level but does not bubble up to the originating request.
 
 #### What is NOT in `admin_audit_log`
 
@@ -437,7 +452,7 @@ The table is intentionally scoped to the admin's CRUD surface. These events are 
 - **Direct ORM writes from your own code.** Calling `Article::objects().save(...)` from a non-admin handler bypasses the admin entirely. If you want those writes audited, hook a `post_save` signal or write to the table directly via `umbra_admin::models::log(...)`.
 - **API endpoints the admin exposes for itself.** The palette search, FK picker, and dashboard widget data endpoints are reads; they don't mutate user models and don't log.
 
-For "everything that happens" auditing, build a separate event log fed by signal handlers across `umbra-sessions`, `umbra-auth`, and per-model post-save hooks. The admin's audit log is the right datum for "who deleted that row from the admin?" — not for general security telemetry.
+For "everything that happens" auditing, build a separate event log fed by signal handlers across `umbra-sessions`, `umbra-auth`, and per-model post-save hooks. The admin's audit log is the right datum for "who deleted that row from the admin?" - not for general security telemetry.
 
 Per-object history is available at:
 

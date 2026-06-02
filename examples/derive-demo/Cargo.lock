@@ -2286,6 +2286,7 @@ version = "0.0.1"
 dependencies = [
  "minijinja",
  "serde_json",
+ "sqlx",
  "umbra-core",
  "umbra-macros",
 ]
@@ -2295,16 +2296,18 @@ name = "umbra-admin"
 version = "0.0.1"
 dependencies = [
  "axum",
- "base64",
  "chrono",
  "minijinja",
  "serde",
  "serde_json",
  "serde_urlencoded",
  "sqlx",
+ "tokio",
  "tracing",
  "umbra",
  "umbra-auth",
+ "umbra-security",
+ "umbra-sessions",
  "uuid",
 ]
 
@@ -2380,7 +2383,9 @@ dependencies = [
  "umbra-auth",
  "umbra-cli",
  "umbra-openapi",
+ "umbra-permissions",
  "umbra-rest",
+ "umbra-sessions",
 ]
 
 [[package]]
@@ -2402,6 +2407,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "umbra-permissions"
+version = "0.0.1"
+dependencies = [
+ "axum",
+ "axum-core",
+ "http",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tokio",
+ "tower",
+ "tracing",
+ "umbra",
+ "umbra-auth",
+]
+
+[[package]]
 name = "umbra-rest"
 version = "0.0.1"
 dependencies = [
@@ -2414,6 +2436,38 @@ dependencies = [
  "serde_json",
  "sqlx",
  "umbra",
+ "uuid",
+]
+
+[[package]]
+name = "umbra-security"
+version = "0.0.1"
+dependencies = [
+ "axum",
+ "getrandom 0.2.17",
+ "hex",
+ "http",
+ "subtle",
+ "tower-http",
+ "umbra",
+]
+
+[[package]]
+name = "umbra-sessions"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "axum",
+ "axum-core",
+ "chrono",
+ "http",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "tracing",
+ "umbra",
+ "umbra-auth",
  "uuid",
 ]
 
