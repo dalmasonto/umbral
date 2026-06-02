@@ -205,10 +205,7 @@ pub(crate) fn engine() -> &'static Environment<'static> {
             "site_description",
             minijinja::Value::from(branding.site_description),
         );
-        env.add_global(
-            "brand_color",
-            minijinja::Value::from(branding.brand_color),
-        );
+        env.add_global("brand_color", minijinja::Value::from(branding.brand_color));
 
         env
     })

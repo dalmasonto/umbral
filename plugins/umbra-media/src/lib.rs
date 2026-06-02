@@ -156,7 +156,9 @@ impl MediaPlugin {
                 .await
                 .map_err(MediaError::Io)?;
         }
-        tokio::fs::write(&path, bytes).await.map_err(MediaError::Io)?;
+        tokio::fs::write(&path, bytes)
+            .await
+            .map_err(MediaError::Io)?;
 
         let row = MediaFile {
             id: 0,
@@ -166,19 +168,13 @@ impl MediaPlugin {
             size: bytes.len() as i64,
             uploaded_at: chrono::Utc::now(),
         };
-        let saved = MediaFile::objects().save(row).await.map_err(|e| {
-            MediaError::Storage(format!("media_file save failed: {e}"))
-        })?;
+        let saved = MediaFile::objects()
+            .save(row)
+            .await
+            .map_err(|e| MediaError::Storage(format!("media_file save failed: {e}")))?;
 
-        let url = format!(
-            "{}/{}",
-            self.mount.trim_end_matches('/'),
-            key
-        );
-        Ok(MediaSaveOutcome {
-            file: saved,
-            url,
-        })
+        let url = format!("{}/{}", self.mount.trim_end_matches('/'), key);
+        Ok(MediaSaveOutcome { file: saved, url })
     }
 }
 
