@@ -1,3 +1,5 @@
+> **Status:** v1.0 shipped. See `docs/superpowers/specs/2026-06-02-rest-playground-design.md` for the design and `docs/superpowers/plans/2026-06-02-rest-playground.md` for the build order.
+
 # umbra-playground
 
 Interactive API playground UI for umbra-rest. A 3-pane Postman-style UI mounted at `/api/playground/`. Fetches the existing `umbra-openapi` JSON spec at runtime and renders a navigable endpoint tree, request builder, and response viewer.
