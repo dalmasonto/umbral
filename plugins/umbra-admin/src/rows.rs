@@ -169,7 +169,9 @@ pub(crate) async fn insert_row(
     };
 
     let skip = readonly_set(model, cfg);
-    DynQuerySet::for_meta(model).insert_form(form, &skip).await?;
+    DynQuerySet::for_meta(model)
+        .insert_form(form, &skip)
+        .await?;
     Ok(())
 }
 

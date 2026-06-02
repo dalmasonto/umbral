@@ -11,6 +11,7 @@ use umbra::web::{HeaderMap, IntoResponse, Redirect, Response, StatusCode};
 
 use umbra::orm::DynQuerySet;
 
+use crate::AdminState;
 use crate::auth::require_staff;
 use crate::discovery::{find_model, pk_column};
 use crate::engine::render;
@@ -18,7 +19,6 @@ use crate::error::AdminError;
 use crate::rows::{fetch_rows_filtered, insert_row};
 use crate::util::{is_htmx, sanitise_form_error};
 use crate::view::{form_fields_for, model_for_template};
-use crate::AdminState;
 
 /// `GET /admin/{table}/{id}/sheet` — preview sheet fragment. Falls
 /// back to redirecting non-HTMX requests to the changelist with

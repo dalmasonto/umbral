@@ -8,13 +8,13 @@ use umbra::web::{HeaderMap, IntoResponse, Response, StatusCode};
 
 use umbra::orm::DynQuerySet;
 
+use crate::AdminState;
 use crate::auth::require_staff;
 use crate::discovery::{find_model, pk_column};
 use crate::error::AdminError;
 use crate::rows::fetch_rows_filtered;
 use crate::util::{html_escape, sanitise_form_error};
 use crate::view::input_kind;
-use crate::AdminState;
 
 /// `GET /admin/{table}/{id}/cell/{field}/edit` — return the field
 /// editor for a single cell (HTMX swap into the `<td>`).

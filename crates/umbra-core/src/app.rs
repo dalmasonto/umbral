@@ -494,6 +494,26 @@ impl AppBuilder {
         });
         for plugin in &sorted_plugins {
             router = router.merge(plugin.routes());
+            // Phase 5.4 — mount the plugin's `include_bytes!`-embedded
+            // assets. Each StaticFile becomes a GET route serving the
+            // body with the supplied content-type + cache-control.
+            for file in plugin.static_files() {
+                router = router.route(
+                    file.url_path,
+                    axum::routing::get(move || async move {
+                        use axum::response::IntoResponse;
+                        let cc = file.cache_control.unwrap_or("public, max-age=86400");
+                        axum::http::Response::builder()
+                            .status(axum::http::StatusCode::OK)
+                            .header(axum::http::header::CONTENT_TYPE, file.content_type)
+                            .header(axum::http::header::CACHE_CONTROL, cc)
+                            .body(axum::body::Body::from(file.body))
+                            .unwrap_or_else(|_| {
+                                axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response()
+                            })
+                    }),
+                );
+            }
         }
 
         // Phase 5.5 — apply each plugin's middleware in topological

@@ -156,6 +156,29 @@ pub trait Plugin: Send + Sync + 'static {
         router
     }
 
+    /// Static files the plugin ships baked into its binary.
+    ///
+    /// Each entry produces one `GET <url_path>` route that returns the
+    /// file body with the supplied `Content-Type` and `Cache-Control`.
+    /// Bodies are `&'static [u8]` — typically `include_bytes!` —
+    /// because the canonical use is "the binary ships its own CSS / JS
+    /// / fonts."
+    ///
+    /// Use cases:
+    ///   - `umbra-admin` ships its precompiled Tailwind CSS this way.
+    ///   - A plugin that adds an HTMX page can ship an icon or font.
+    ///   - User code can register arbitrary embedded assets.
+    ///
+    /// Conflicts across plugins (two plugins claiming the same
+    /// `url_path`) surface as the axum `Router::route` panic at
+    /// `App::build` time, with the second registrant losing.
+    ///
+    /// Default: no files. Plugins that ship no embedded assets leave
+    /// this alone.
+    fn static_files(&self) -> Vec<StaticFile> {
+        Vec::new()
+    }
+
     /// CLI subcommands the plugin contributes.
     ///
     /// Each command implements [`crate::cli::PluginCommand`] and ships
@@ -177,6 +200,25 @@ pub trait Plugin: Send + Sync + 'static {
     fn on_ready(&self, _ctx: &AppContext) -> Result<(), PluginError> {
         Ok(())
     }
+}
+
+/// One static file a plugin ships baked into its binary. Returned
+/// from [`Plugin::static_files`].
+///
+/// The body is a `&'static [u8]` (usually from `include_bytes!`) so
+/// the file ships with the binary; no on-disk asset directory needs
+/// to exist at runtime. `cache_control` defaults to one day if left
+/// `None`.
+#[derive(Debug, Clone)]
+pub struct StaticFile {
+    /// URL path the asset is served at, e.g. `/admin/static/admin.css`.
+    pub url_path: &'static str,
+    /// `Content-Type` header value, e.g. `text/css; charset=utf-8`.
+    pub content_type: &'static str,
+    /// File body. Usually `include_bytes!("relative/path")`.
+    pub body: &'static [u8],
+    /// Optional `Cache-Control` header. `None` → `public, max-age=86400`.
+    pub cache_control: Option<&'static str>,
 }
 
 /// The handle plugins receive in `on_ready`.

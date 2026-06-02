@@ -5,6 +5,7 @@ use minijinja::context;
 use umbra::orm::DynQuerySet;
 use umbra::web::{HeaderMap, IntoResponse, Json, Path, Response, StatusCode};
 
+use crate::AdminState;
 use crate::auth::require_staff;
 use crate::discovery::{discover_models, find_model};
 use crate::engine::render;
@@ -15,7 +16,6 @@ use crate::widgets::{
     CatalogEntry, FeedItem, FeedPayload, KpiPayload, Span, Widget, WidgetDataFn, WidgetKind,
     WidgetPayload,
 };
-use crate::AdminState;
 
 // =========================================================================
 // Built-in widgets
@@ -63,10 +63,7 @@ pub(crate) fn builtin_recent_users_widget() -> Widget {
             let items = match find_model("auth_user") {
                 Some((_, meta)) => {
                     let rows = DynQuerySet::for_meta(&meta)
-                        .select_cols(&[
-                            "username".to_string(),
-                            "date_joined".to_string(),
-                        ])
+                        .select_cols(&["username".to_string(), "date_joined".to_string()])
                         .order_by_col("date_joined", true)
                         .limit(5)
                         .fetch_as_strings()

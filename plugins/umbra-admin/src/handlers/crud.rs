@@ -15,6 +15,7 @@ use umbra::web::{HeaderMap, IntoResponse, Redirect, Response, StatusCode};
 
 use umbra::orm::DynQuerySet;
 
+use crate::AdminState;
 use crate::auth::require_staff;
 use crate::discovery::{find_model, pk_column, user_theme};
 use crate::engine::render;
@@ -23,7 +24,6 @@ use crate::handlers::sheet::edit_sheet_handler;
 use crate::rows::{fetch_rows_filtered, insert_row, update_row};
 use crate::util::{is_htmx, sanitise_form_error};
 use crate::view::{form_fields_for, model_for_template, sidebar_apps};
-use crate::AdminState;
 
 /// `GET /admin/{table}/{id}` — read-only detail page.
 pub(crate) async fn detail(

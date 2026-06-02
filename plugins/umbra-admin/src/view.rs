@@ -46,10 +46,7 @@ pub(crate) struct SidebarApp {
 /// Build the per-plugin nav tree. Reads the registry's `apps()` cut
 /// (which already honours `Plugin::admin_register` + the auto-discovered
 /// fallback) and reshapes each entry for direct template consumption.
-pub(crate) fn sidebar_apps(
-    state: &AdminState,
-    user: &umbra_auth::AuthUser,
-) -> Vec<SidebarApp> {
+pub(crate) fn sidebar_apps(state: &AdminState, user: &umbra_auth::AuthUser) -> Vec<SidebarApp> {
     state
         .registry
         .apps(user)
@@ -302,10 +299,7 @@ pub(crate) fn model_for_template(model: &ModelMeta) -> ModelView {
 /// Same as `model_for_template` but filtered to the configured
 /// `display_cols`. Used by the changelist when the admin model
 /// restricts which columns appear in the table.
-pub(crate) fn model_for_template_cols(
-    model: &ModelMeta,
-    display_cols: &[String],
-) -> ModelView {
+pub(crate) fn model_for_template_cols(model: &ModelMeta, display_cols: &[String]) -> ModelView {
     let valid: std::collections::HashSet<&str> =
         model.fields.iter().map(|c| c.name.as_str()).collect();
     let fields: Vec<ColumnView> = display_cols

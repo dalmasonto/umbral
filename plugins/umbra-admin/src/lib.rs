@@ -70,7 +70,7 @@ pub mod files;
 pub(crate) use auth::{login_get, login_post, logout_handler};
 pub(crate) use error::AdminError;
 pub use files::{file_descriptor, resolve_preview_kind};
-pub(crate) use static_assets::serve_admin_css;
+pub(crate) use static_assets::admin_static_files;
 pub(crate) use util::q;
 
 pub use config::{
@@ -201,6 +201,10 @@ impl Plugin for AdminPlugin {
         &["auth", "sessions"]
     }
 
+    fn static_files(&self) -> Vec<umbra::plugin::StaticFile> {
+        admin_static_files()
+    }
+
     fn models(&self) -> Vec<umbra::migrate::ModelMeta> {
         vec![
             umbra::migrate::ModelMeta::for_::<crate::models::AdminUserPref>(),
@@ -266,7 +270,10 @@ impl Plugin for AdminPlugin {
                 "/admin/{table}/{id}/edit-sheet",
                 axum::routing::get(handlers::sheet::edit_sheet_handler),
             )
-            .route("/admin/{table}/{id}", axum::routing::get(handlers::crud::detail))
+            .route(
+                "/admin/{table}/{id}",
+                axum::routing::get(handlers::crud::detail),
+            )
             .route(
                 "/admin/{table}/{id}/edit",
                 axum::routing::get(handlers::crud::edit_form).post(handlers::crud::update),
@@ -344,11 +351,8 @@ impl Plugin for AdminPlugin {
                 "/admin/api/palette/search",
                 axum::routing::get(handlers::palette::palette_search),
             )
-            // Static CSS (embedded at compile time; served in prod, CDN used in dev)
-            .route(
-                "/admin/static/admin.css",
-                axum::routing::get(serve_admin_css),
-            )
+            // Static admin.css is mounted by the framework via
+            // `static_files()` — no manual route needed here.
             .with_state(state)
     }
 

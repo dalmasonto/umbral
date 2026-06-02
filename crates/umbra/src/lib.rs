@@ -162,7 +162,7 @@ pub mod plugin {
     //! routes, or commands. The trait is also re-exported from the
     //! prelude so `use umbra::prelude::*;` brings it in.
 
-    pub use umbra_core::plugin::{AppContext, Plugin, PluginError};
+    pub use umbra_core::plugin::{AppContext, Plugin, PluginError, StaticFile};
 }
 
 pub mod cli {

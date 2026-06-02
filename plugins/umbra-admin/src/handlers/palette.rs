@@ -13,12 +13,12 @@ use minijinja::context;
 use umbra::orm::{DynQuerySet, SqlType};
 use umbra::web::{HeaderMap, IntoResponse, Response, StatusCode};
 
+use crate::AdminState;
 use crate::auth::require_staff;
 use crate::discovery::{discover_models, pk_column};
 use crate::engine::render;
 use crate::util::html_escape;
 use crate::view::sidebar_apps;
-use crate::AdminState;
 
 /// `GET /admin/api/palette` — returns the command palette HTML
 /// fragment. Jump targets = registered models from the sidebar; fixed
@@ -136,7 +136,10 @@ pub(crate) async fn palette_search(
                 break;
             }
             let id = row.get(&pk).cloned().unwrap_or_default();
-            let label = row.get(&label_col).cloned().unwrap_or_else(|| format!("#{id}"));
+            let label = row
+                .get(&label_col)
+                .cloned()
+                .unwrap_or_else(|| format!("#{id}"));
             let item_label = format!("{}: {}", model.name, label);
             let href = format!("/admin/{}/{}/sheet", model.table, id);
             html.push_str(&format!(

@@ -3,13 +3,13 @@
 use minijinja::context;
 use umbra::web::{HeaderMap, IntoResponse, Path, Response, StatusCode};
 
+use crate::AdminState;
 use crate::auth::require_staff;
 use crate::discovery::{find_model, user_theme};
 use crate::engine::render;
 use crate::error::AdminError;
 use crate::models;
 use crate::view::sidebar_apps;
-use crate::AdminState;
 use axum::extract::State;
 
 /// `GET /admin/{table}/{id}/history` — render the timeline page with

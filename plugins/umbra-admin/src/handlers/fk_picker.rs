@@ -13,11 +13,11 @@ use axum::extract::{Path, Query, State};
 use umbra::orm::{DynQuerySet, SqlType};
 use umbra::web::{HeaderMap, IntoResponse, Json, Response, StatusCode};
 
+use crate::AdminState;
 use crate::auth::require_staff;
 use crate::discovery::{find_model, pk_column};
 use crate::error::AdminError;
 use crate::util::{html_escape, is_htmx};
-use crate::AdminState;
 
 /// `GET /admin/api/{table}/{field}/options?search=&page=&page_size=20`
 ///
@@ -224,7 +224,10 @@ pub(crate) async fn fk_options_resolve(
             let items: Vec<serde_json::Value> = rows
                 .iter()
                 .map(|r| {
-                    let value: i64 = r.get(&pk_col_name).and_then(|s| s.parse().ok()).unwrap_or(0);
+                    let value: i64 = r
+                        .get(&pk_col_name)
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or(0);
                     let label: String = r
                         .get(&label_col_owned)
                         .cloned()

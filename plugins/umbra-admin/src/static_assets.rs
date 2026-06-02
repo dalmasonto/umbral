@@ -1,26 +1,28 @@
 //! Compiled admin.css — embedded at compile time, served in prod, the
 //! Tailwind CDN replaces it in dev (see `wrapper.html`).
 //!
-//! ⚠ This handler is the simplest possible thing that works for one
-//! file. A multi-asset static-handler refactor is tracked separately
-//! (umbra-core gains a `static_dir` Plugin hook; this whole module
-//! collapses into one builder call).
+//! Goes through the framework's [`umbra::plugin::StaticFile`] hook:
+//! `AdminPlugin::static_files()` returns one entry referencing
+//! [`ADMIN_CSS_BYTES`], and `App::build` mounts the route. No
+//! hand-written handler lives here. Build the CSS with:
+//!
+//! ```sh
+//! cd plugins/umbra-admin/css && npm install && npm run build
+//! ```
 
-use umbra::web::{IntoResponse, StatusCode};
+use umbra::plugin::StaticFile;
 
-static ADMIN_CSS: &str = include_str!("assets/admin.css");
+/// The compiled stylesheet bytes. Re-exported as a constant so the
+/// `static_files()` registration can reach it.
+pub(crate) const ADMIN_CSS_BYTES: &[u8] = include_bytes!("assets/admin.css");
 
-/// `GET /admin/static/admin.css` — return the embedded production
-/// stylesheet with a one-day cache header. Build it with:
-///
-/// ```sh
-/// cd plugins/umbra-admin/css && npm install && npm run build
-/// ```
-pub(crate) async fn serve_admin_css() -> impl IntoResponse {
-    axum::response::Response::builder()
-        .status(StatusCode::OK)
-        .header("Content-Type", "text/css; charset=utf-8")
-        .header("Cache-Control", "public, max-age=86400")
-        .body(axum::body::Body::from(ADMIN_CSS))
-        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+/// The list of static files this plugin ships. One file today; if the
+/// admin ever embeds a JS bundle or icon font, append to this list.
+pub(crate) fn admin_static_files() -> Vec<StaticFile> {
+    vec![StaticFile {
+        url_path: "/admin/static/admin.css",
+        content_type: "text/css; charset=utf-8",
+        body: ADMIN_CSS_BYTES,
+        cache_control: Some("public, max-age=86400"),
+    }]
 }

@@ -10,13 +10,11 @@ use std::sync::Arc;
 use axum::extract::{Path, State};
 use umbra::web::{HeaderMap, IntoResponse, Redirect, Response, StatusCode};
 
+use crate::AdminState;
 use crate::auth::require_staff;
-use crate::config::{
-    ActionInvocation, ActionResult, ActionScope, ActionVariant, AdminConfig,
-};
+use crate::config::{ActionInvocation, ActionResult, ActionScope, ActionVariant, AdminConfig};
 use crate::error::AdminError;
 use crate::util::urlencoding_simple;
-use crate::AdminState;
 
 /// `POST /admin/{table}/action` — legacy form-POST entry point. The
 /// changelist's bulk action `<form>` posts here; the response is a

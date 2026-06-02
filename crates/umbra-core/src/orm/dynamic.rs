@@ -121,9 +121,7 @@ impl<'a> DynQuerySet<'a> {
         if vals.is_empty() || !self.meta.fields.iter().any(|c| c.name == col) {
             return self;
         }
-        let cond = Condition::all().add(
-            Expr::col(Alias::new(col)).is_in(vals.iter().copied()),
-        );
+        let cond = Condition::all().add(Expr::col(Alias::new(col)).is_in(vals.iter().copied()));
         self.where_clauses.push(cond);
         self
     }
@@ -138,9 +136,7 @@ impl<'a> DynQuerySet<'a> {
         let expr = Expr::col(Alias::new(col));
         let predicate = match meta_col.ty {
             SqlType::SmallInt | SqlType::Integer => value.parse::<i32>().ok().map(|v| expr.eq(v)),
-            SqlType::BigInt | SqlType::ForeignKey => {
-                value.parse::<i64>().ok().map(|v| expr.eq(v))
-            }
+            SqlType::BigInt | SqlType::ForeignKey => value.parse::<i64>().ok().map(|v| expr.eq(v)),
             SqlType::Real | SqlType::Double => value.parse::<f64>().ok().map(|v| expr.eq(v)),
             SqlType::Boolean => {
                 let v = matches!(value, "true" | "on" | "1");
@@ -352,7 +348,10 @@ impl<'a> DynQuerySet<'a> {
             // Auto-increment PK: omit when the form supplies no value
             // or an empty one; the backend hands out the next id.
             if col.primary_key
-                && matches!(col.ty, SqlType::Integer | SqlType::BigInt | SqlType::SmallInt)
+                && matches!(
+                    col.ty,
+                    SqlType::Integer | SqlType::BigInt | SqlType::SmallInt
+                )
                 && form.get(&col.name).is_none_or(|v| v.is_empty())
             {
                 continue;

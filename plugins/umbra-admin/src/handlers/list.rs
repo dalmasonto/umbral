@@ -10,6 +10,7 @@ use serde::Serialize;
 use umbra::orm::{DynQuerySet, SqlType};
 use umbra::web::{HeaderMap, IntoResponse, Redirect, Response};
 
+use crate::AdminState;
 use crate::auth::require_staff;
 use crate::discovery::{find_model, pk_column, user_theme};
 use crate::engine::render;
@@ -19,7 +20,6 @@ use crate::pagination::{Pagination, build_order_clause_phase2, parse_list_params
 use crate::rows::{count_rows_filtered, fetch_rows_paged};
 use crate::util::is_htmx;
 use crate::view::{model_for_template, model_for_template_cols, sidebar_apps};
-use crate::AdminState;
 
 /// Template-facing facet — one filter-dialog choice list.
 #[derive(Debug, Clone, Serialize)]
@@ -30,10 +30,7 @@ struct FilterFacet {
 
 /// `GET /admin` — the dashboard. One card per registered model with a
 /// row count, plus the user's widget grid.
-pub(crate) async fn index(
-    State(state): State<AdminState>,
-    headers: HeaderMap,
-) -> Response {
+pub(crate) async fn index(State(state): State<AdminState>, headers: HeaderMap) -> Response {
     let user = match require_staff(&headers, "/admin/").await {
         Ok(u) => u,
         Err(r) => return r,
@@ -64,10 +61,7 @@ pub(crate) async fn index(
         for app in &apps {
             for sidebar_model in &app.models {
                 let count = match find_model(&sidebar_model.table) {
-                    Some((_, meta)) => DynQuerySet::for_meta(&meta)
-                        .count()
-                        .await
-                        .unwrap_or(0),
+                    Some((_, meta)) => DynQuerySet::for_meta(&meta).count().await.unwrap_or(0),
                     None => 0,
                 };
                 cards.push(serde_json::json!({
@@ -192,8 +186,9 @@ pub(crate) async fn list(
         }
     }
 
-    let action_names: Vec<serde_json::Value> =
-        cfg.map(handlers::action_descriptors_json).unwrap_or_default();
+    let action_names: Vec<serde_json::Value> = cfg
+        .map(handlers::action_descriptors_json)
+        .unwrap_or_default();
 
     let has_search = cfg.is_some_and(|c| !c.search_fields.is_empty());
     let search_val = search_term.unwrap_or_default();
@@ -369,8 +364,9 @@ pub(crate) async fn rows_fragment(
         .unwrap_or_default();
     let search_val = search_term.unwrap_or_default();
 
-    let action_names: Vec<serde_json::Value> =
-        cfg.map(handlers::action_descriptors_json).unwrap_or_default();
+    let action_names: Vec<serde_json::Value> = cfg
+        .map(handlers::action_descriptors_json)
+        .unwrap_or_default();
 
     let inline_edit_fields: Vec<String> = cfg
         .map(|c| c.inline_edit_fields.clone())
