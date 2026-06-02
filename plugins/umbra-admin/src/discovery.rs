@@ -40,25 +40,60 @@ pub(crate) fn pk_column(model: &ModelMeta) -> Option<&Column> {
 /// Two-state behaviour:
 ///
 /// 1. If at least one field is tagged `#[umbra(string)]`, render
-///    just that field — Django-style `__str__()`. The PK is implicit
-///    in the row link (every row in the admin opens the sheet on
-///    click), so a separate `id` column is redundant.
+///    `[<tagged field>, <other short fields>]` — Django-style
+///    `__str__()` plus any column compact enough to fit in a table
+///    cell. "Short" excludes unbounded `Text` (no `max_length`),
+///    `Json`, `Array`, and `FullText` because those tend to be
+///    long-form content that blows out the row. The PK isn't
+///    rendered as a separate column because every row in the admin
+///    is clickable into the sheet, so the id is already reachable.
 /// 2. Otherwise show every column. The `string` attribute is the
 ///    sole opt-in for the compact form; without it the changelist
 ///    stays at the legacy "show all fields" default, so adding the
 ///    derive doesn't silently rewrite existing changelists.
 pub(crate) fn default_list_display(model: &ModelMeta) -> Vec<String> {
-    let str_field = model
+    let str_field_idx = model
         .fields
         .iter()
-        .find(|c| c.is_string_repr && !c.primary_key)
-        .map(|c| c.name.clone());
-    if let Some(s) = str_field {
-        return vec![s];
+        .position(|c| c.is_string_repr && !c.primary_key);
+    let Some(idx) = str_field_idx else {
+        // No opt-in — show every column. Matches pre-#46 behaviour so
+        // existing changelists are unchanged.
+        return model.fields.iter().map(|c| c.name.clone()).collect();
+    };
+    let str_name = model.fields[idx].name.clone();
+    let mut out = vec![str_name.clone()];
+    // Append every other non-PK, non-long field in declaration order
+    // so the change feels like "tag the label column, the rest still
+    // shows" rather than "tag the label column, everything else
+    // disappears."
+    for col in &model.fields {
+        if col.primary_key {
+            continue;
+        }
+        if col.name == str_name {
+            continue;
+        }
+        if is_long_display_type(col) {
+            continue;
+        }
+        out.push(col.name.clone());
     }
-    // No opt-in — show every column. Matches pre-#46 behaviour so
-    // existing changelists are unchanged.
-    model.fields.iter().map(|c| c.name.clone()).collect()
+    out
+}
+
+/// A column is "long" for changelist purposes when its rendered value
+/// is likely to span more than one screen-width of cell. Unbounded
+/// `Text` (no `max_length` cap) is the canonical case; `Json`,
+/// `Array`, and `FullText` are the same idea. Bounded `Text` is
+/// short — that's the whole point of `max_length`.
+fn is_long_display_type(col: &Column) -> bool {
+    use umbra::orm::SqlType;
+    match col.ty {
+        SqlType::Text => col.max_length == 0,
+        SqlType::Json | SqlType::Array(_) | SqlType::FullText => true,
+        _ => false,
+    }
 }
 
 /// Return the user's saved theme preference (`"dark"` | `"light"` |

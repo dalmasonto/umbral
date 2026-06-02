@@ -39,9 +39,12 @@
      search / sort / page state stay intact. #}
   {% if open_row %}
   (function autoOpenRow() {
-    var rowId = {{ open_row | tojson }};
+    {# Minijinja doesn't ship `tojson`; both values are URL-safe
+       strings (server already sanitised), so a plain quoted literal
+       is fine here. #}
+    var rowId = "{{ open_row }}";
     if (!rowId) return;
-    var table = {{ active_table | tojson }};
+    var table = "{{ active_table }}";
     // Remove only `row` from the URL; keep everything else.
     try {
       var u = new URL(window.location.href);

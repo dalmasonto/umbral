@@ -64,7 +64,7 @@ pub(crate) async fn cell_edit_get(
         return AdminError::NotFound(format!("no row {id}")).into_response();
     };
     let value = row.get(&field).cloned().unwrap_or_default();
-    let input_type = input_kind(col.ty);
+    let input_type = input_kind(col);
 
     let html = format!(
         r#"<form

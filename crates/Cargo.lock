@@ -2849,6 +2849,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "umbra-media"
+version = "0.0.1"
+dependencies = [
+ "axum",
+ "chrono",
+ "http",
+ "serde",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tower",
+ "tower-http",
+ "tracing",
+ "umbra",
+ "uuid",
+]
+
+[[package]]
 name = "umbra-openapi"
 version = "0.0.1"
 dependencies = [

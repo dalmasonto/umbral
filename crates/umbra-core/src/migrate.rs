@@ -2010,7 +2010,7 @@ fn build_column_def_sqlite(col: &Column) -> sea_query::ColumnDef {
     let column_type = if is_int_pk {
         ColumnType::Integer
     } else {
-        crate::backend::SqliteBackend.map_type(col.ty)
+        crate::backend::SqliteBackend.map_column(col)
     };
 
     let mut def = ColumnDef::new_with_type(Alias::new(&col.name), column_type);
@@ -2056,7 +2056,7 @@ fn build_column_def_postgres(col: &Column) -> sea_query::ColumnDef {
         return def;
     }
 
-    let column_type = crate::backend::PostgresBackend.map_type(col.ty);
+    let column_type = crate::backend::PostgresBackend.map_column(col);
 
     let mut def = ColumnDef::new_with_type(Alias::new(&col.name), column_type);
     if !col.nullable {

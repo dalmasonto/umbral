@@ -52,6 +52,16 @@ pub trait DatabaseBackend: std::fmt::Debug + Send + Sync + 'static {
     /// renders the right native SQL column type on this backend. The
     /// migration engine (M5) reads this when generating `CREATE TABLE`.
     fn map_type(&self, ty: crate::orm::SqlType) -> sea_query::ColumnType;
+
+    /// Map a full column (type + per-column hints like `max_length`)
+    /// to its sea-query `ColumnType`. Default impl delegates to
+    /// `map_type` — backends that want to lift hints (Postgres
+    /// rendering `Text + max_length=N` as `VARCHAR(N)`, for example)
+    /// override this. The migration engine prefers this over
+    /// `map_type` so the per-column attributes flow into DDL.
+    fn map_column(&self, col: &crate::migrate::Column) -> sea_query::ColumnType {
+        self.map_type(col.ty)
+    }
 }
 
 /// Backend feature flags surfaced to umbra.
@@ -126,6 +136,20 @@ impl DatabaseBackend for PostgresBackend {
             | BackendFeature::UuidNative
             | BackendFeature::Boolean => true,
         }
+    }
+
+    /// Postgres lifts `Text + max_length = N` to `VARCHAR(N)` so the
+    /// length cap is enforced at the database level. `Text` without
+    /// `max_length` stays `TEXT` (unbounded). SQLite ignores the
+    /// length entirely — `VARCHAR(N)` and `TEXT` carry the same
+    /// affinity there — so its `map_column` keeps the default impl.
+    fn map_column(&self, col: &crate::migrate::Column) -> sea_query::ColumnType {
+        use crate::orm::SqlType;
+        use sea_query::ColumnType;
+        if matches!(col.ty, SqlType::Text) && col.max_length > 0 {
+            return ColumnType::String(sea_query::StringLen::N(col.max_length));
+        }
+        self.map_type(col.ty)
     }
 
     /// Postgres `SqlType` -> `sea_query::ColumnType` mapping. Source of

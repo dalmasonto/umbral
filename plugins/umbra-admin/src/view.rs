@@ -153,7 +153,7 @@ pub(crate) fn form_fields_for(
             let is_readonly = readonly_set.contains(&c.name) || c.noedit;
             FormField {
                 name: c.name.clone(),
-                kind: input_kind(c.ty),
+                kind: input_kind(c),
                 value: format_for_input(&raw, c.ty),
                 nullable: c.nullable,
                 readonly: is_readonly,
@@ -214,15 +214,27 @@ pub(crate) fn format_for_input(raw: &str, ty: SqlType) -> String {
 /// and bodies equally well. UUID / Inet / Cidr / MacAddr stay as
 /// single-line inputs because their values are fixed-format and never
 /// benefit from extra height.
-pub(crate) fn input_kind(ty: SqlType) -> &'static str {
-    match ty {
+///
+/// `Text` columns split on `max_length`: a bounded `String` field
+/// (`#[umbra(max_length = N)]`) is a single-line input with the cap
+/// surfaced via the HTML `maxlength` attribute, mirroring a SQL
+/// VARCHAR. An unbounded `Text` field gets a textarea — the column
+/// is built for prose.
+pub(crate) fn input_kind(col: &umbra::migrate::Column) -> &'static str {
+    match col.ty {
         SqlType::SmallInt
         | SqlType::Integer
         | SqlType::BigInt
         | SqlType::Real
         | SqlType::Double => "number",
         SqlType::Boolean => "bool",
-        SqlType::Text => "string",
+        SqlType::Text => {
+            if col.max_length > 0 {
+                "text"
+            } else {
+                "string"
+            }
+        }
         SqlType::Uuid => "text",
         SqlType::Date => "date",
         SqlType::Time => "time",
