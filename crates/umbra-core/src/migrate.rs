@@ -251,6 +251,20 @@ pub struct ModelMeta {
     /// BUG-8.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ordering: Vec<(String, bool)>,
+    /// Mirrors `Model::M2M_RELATIONS`. Many-to-many relations declared
+    /// on this model. The migration engine uses this to auto-generate
+    /// junction tables. Closes BUG-16.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub m2m_relations: Vec<M2MRelation>,
+}
+
+/// Owned mirror of `orm::M2MRelationSpec` so `ModelMeta` can be
+/// serialised into migration JSON without lifetimes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct M2MRelation {
+    pub field_name: String,
+    pub target_table: String,
+    pub target_name: String,
 }
 
 fn default_icon() -> String {
@@ -280,6 +294,14 @@ impl ModelMeta {
             ordering: T::ORDERING
                 .iter()
                 .map(|(col, desc)| (col.to_string(), *desc))
+                .collect(),
+            m2m_relations: T::M2M_RELATIONS
+                .iter()
+                .map(|r| M2MRelation {
+                    field_name: r.field_name.to_string(),
+                    target_table: r.target_table.to_string(),
+                    target_name: r.target_name.to_string(),
+                })
                 .collect(),
         }
     }
@@ -410,6 +432,22 @@ pub enum Operation {
     /// applied migration — it is not affected by a table rename inside
     /// the migration.
     RenameTable { from: String, to: String },
+    /// Create a many-to-many junction table. Auto-emitted when a model
+    /// gains an `M2M<T>` field. Closes BUG-16.
+    ///
+    /// The junction table name is `parent_table_field_name`. Columns:
+    /// `parent_id` (FK to parent), `child_id` (FK to target), both with
+    /// `ON DELETE CASCADE`. Composite PK `(parent_id, child_id)`.
+    CreateM2MTable {
+        junction_table: String,
+        parent_table: String,
+        parent_col: String,
+        child_table: String,
+        child_col: String,
+    },
+    /// Drop a many-to-many junction table. Auto-emitted when an `M2M<T>`
+    /// field is removed from a model.
+    DropM2MTable { junction_table: String },
 }
 
 impl Operation {
@@ -428,6 +466,8 @@ impl Operation {
             | Operation::DropColumn { table, .. }
             | Operation::AlterColumn { table, .. } => table,
             Operation::RenameTable { from, .. } => from,
+            Operation::CreateM2MTable { junction_table, .. }
+            | Operation::DropM2MTable { junction_table } => junction_table,
         }
     }
 }
@@ -1948,7 +1988,113 @@ pub fn diff(previous: &Snapshot, current: &Snapshot) -> Result<Vec<Operation>, M
         }
     }
 
+    // ---- Pass 4: Diff M2M relations. Closes the remaining BUG-16 gap. ----
+    //
+    // Treat each (parent_table, field_name) pair as a junction-table
+    // identity. Compare the flattened set across snapshots and emit
+    // CreateM2MTable / DropM2MTable per delta. Renames of the parent
+    // model trip a Drop + Create on the junction — same semantics as
+    // Django, and the rename-tracking we'd need to do better is
+    // ambitious enough to defer.
+    let prev_m2m = collect_m2m_pairs(previous);
+    let curr_m2m = collect_m2m_pairs(current);
+    for (key, spec) in &curr_m2m {
+        if prev_m2m.contains_key(key) {
+            continue;
+        }
+        // New M2M field on an existing or new model. Resolve the
+        // target's PK column from the current snapshot.
+        match build_create_m2m_op(spec, current) {
+            Ok(op) => ops.push(op),
+            Err(e) => return Err(e),
+        }
+    }
+    for (key, spec) in &prev_m2m {
+        if curr_m2m.contains_key(key) {
+            continue;
+        }
+        // M2M field removed (or its parent was dropped). The junction
+        // table goes away.
+        ops.push(Operation::DropM2MTable {
+            junction_table: spec.junction_table.clone(),
+        });
+    }
+
     Ok(ops)
+}
+
+/// A flat-resolved M2M descriptor used by [`diff`] to compare snapshots.
+/// Owns its strings so it can be keyed in a map without lifetime
+/// gymnastics.
+#[derive(Debug, Clone)]
+struct M2MPair {
+    parent_table: String,
+    parent_pk: String,
+    field_name: String,
+    target_table: String,
+    junction_table: String,
+}
+
+/// Walk a snapshot and produce one [`M2MPair`] per declared M2M field.
+/// Keyed on `(parent_table, field_name)` since that uniquely identifies
+/// a junction table — two models can't share the same parent_table, and
+/// one model can't declare two M2M fields with the same name.
+fn collect_m2m_pairs(snap: &Snapshot) -> std::collections::BTreeMap<(String, String), M2MPair> {
+    let mut out = std::collections::BTreeMap::new();
+    for model in &snap.models {
+        let parent_pk = model
+            .fields
+            .iter()
+            .find(|c| c.primary_key)
+            .map(|c| c.name.clone())
+            .unwrap_or_else(|| "id".to_string());
+        for rel in &model.m2m_relations {
+            let key = (model.table.clone(), rel.field_name.clone());
+            out.insert(
+                key,
+                M2MPair {
+                    parent_table: model.table.clone(),
+                    parent_pk: parent_pk.clone(),
+                    field_name: rel.field_name.clone(),
+                    target_table: rel.target_table.clone(),
+                    junction_table: format!("{}_{}", model.table, rel.field_name),
+                },
+            );
+        }
+    }
+    out
+}
+
+/// Lift an [`M2MPair`] into a fully-specified [`Operation::CreateM2MTable`].
+/// The target table's PK column name is resolved from `current` (the
+/// snapshot the diff is computing toward) — without it the DDL would
+/// reference a column the child table doesn't have.
+fn build_create_m2m_op(spec: &M2MPair, current: &Snapshot) -> Result<Operation, MigrateError> {
+    let target = current
+        .models
+        .iter()
+        .find(|m| m.table == spec.target_table)
+        .ok_or_else(|| {
+            MigrateError::UnsupportedChange(format!(
+                "M2M `{}.{}` targets table `{}` which is not registered \
+                 in the current snapshot — register the target model with \
+                 `AppBuilder::model::<{}>()` before its parent.",
+                spec.parent_table, spec.field_name, spec.target_table, spec.target_table,
+            ))
+        })?;
+    let child_pk = target
+        .fields
+        .iter()
+        .find(|c| c.primary_key)
+        .map(|c| c.name.clone())
+        .unwrap_or_else(|| "id".to_string());
+    Ok(Operation::CreateM2MTable {
+        junction_table: spec.junction_table.clone(),
+        parent_table: spec.parent_table.clone(),
+        parent_col: spec.parent_pk.clone(),
+        child_table: spec.target_table.clone(),
+        child_col: child_pk,
+    })
 }
 
 /// Compute a canonical, sorted column-shape fingerprint for rename
@@ -2365,9 +2511,35 @@ fn render_operation_sqlite(op: &Operation) -> Vec<String> {
             new_columns,
             prev_columns: _,
         } => render_alter_column_dance_sqlite(table, new_columns),
+        Operation::CreateM2MTable {
+            junction_table,
+            parent_table,
+            parent_col,
+            child_table,
+            child_col,
+        } => {
+            // Junction table for many-to-many: two FK columns + composite PK.
+            // Build via sea-query when possible, but composite PK and FKs in
+            // CREATE TABLE are easier expressed as raw DDL that we control.
+            vec![format!(
+                r#"CREATE TABLE "{jt}" (
+    "parent_id" INTEGER NOT NULL REFERENCES "{pt}"("{pc}") ON DELETE CASCADE,
+    "child_id" INTEGER NOT NULL REFERENCES "{ct}"("{cc}") ON DELETE CASCADE,
+    PRIMARY KEY ("parent_id", "child_id")
+)"#,
+                jt = junction_table,
+                pt = parent_table,
+                pc = parent_col,
+                ct = child_table,
+                cc = child_col,
+            )]
+        }
+        Operation::DropM2MTable { junction_table } => vec![
+            Table::drop()
+                .table(Alias::new(junction_table))
+                .build(SqliteQueryBuilder),
+        ],
         Operation::RenameTable { from, to } => {
-            // SQLite: ALTER TABLE "<from>" RENAME TO "<to>"
-            // sea-query's Table::rename() emits the right form.
             use sea_query::{Alias, SqliteQueryBuilder, Table};
             vec![
                 Table::rename()
@@ -2447,6 +2619,31 @@ fn render_operation_postgres(op: &Operation) -> Vec<String> {
             new_columns,
             prev_columns,
         } => render_alter_column_postgres(table, column, new_columns, prev_columns.as_deref()),
+        Operation::CreateM2MTable {
+            junction_table,
+            parent_table,
+            parent_col,
+            child_table,
+            child_col,
+        } => {
+            vec![format!(
+                r#"CREATE TABLE "{jt}" (
+    "parent_id" BIGINT NOT NULL REFERENCES "{pt}"("{pc}") ON DELETE CASCADE,
+    "child_id" BIGINT NOT NULL REFERENCES "{ct}"("{cc}") ON DELETE CASCADE,
+    PRIMARY KEY ("parent_id", "child_id")
+)"#,
+                jt = junction_table,
+                pt = parent_table,
+                pc = parent_col,
+                ct = child_table,
+                cc = child_col,
+            )]
+        }
+        Operation::DropM2MTable { junction_table } => vec![
+            Table::drop()
+                .table(Alias::new(junction_table))
+                .build(PostgresQueryBuilder),
+        ],
         Operation::RenameTable { from, to } => {
             // Postgres: ALTER TABLE "<from>" RENAME TO "<to>"
             // sea-query's Table::rename() emits the right form.
@@ -3033,6 +3230,7 @@ mod tests {
                 unique_together: Vec::new(),
                 indexes: Vec::new(),
                 ordering: Vec::new(),
+                m2m_relations: Vec::new(),
             }],
         );
         per_plugin.insert(
@@ -3048,6 +3246,7 @@ mod tests {
                 unique_together: Vec::new(),
                 indexes: Vec::new(),
                 ordering: Vec::new(),
+                m2m_relations: Vec::new(),
             }],
         );
         init_plugins(per_plugin);
@@ -3379,6 +3578,7 @@ mod tests {
                 unique_together: Vec::new(),
                 indexes: Vec::new(),
                 ordering: Vec::new(),
+                m2m_relations: Vec::new(),
             }
         }
         let prev = meta_with(baseline());

@@ -24,6 +24,7 @@ pub mod column;
 pub mod dynamic;
 pub mod expr;
 pub mod foreign_key;
+pub mod m2m;
 pub mod model;
 pub mod multichoice;
 pub mod post;
@@ -39,7 +40,10 @@ pub use choices::ChoiceField;
 pub use dynamic::{DynError, DynQuerySet, decode_to_string};
 pub use expr::{F, FColExt, FExpr, Q};
 pub use foreign_key::ForeignKey;
-pub use model::{ArrayElement, FieldSpec, FkAction, HydrateRelated, Model, PrimaryKey, SqlType};
+pub use m2m::M2M;
+pub use model::{
+    ArrayElement, FieldSpec, FkAction, HydrateRelated, M2MRelationSpec, Model, PrimaryKey, SqlType,
+};
 pub use multichoice::MultiChoice;
 pub use post::Post;
 pub use queryset::{GetError, Manager, QuerySet, QuerySetTx};

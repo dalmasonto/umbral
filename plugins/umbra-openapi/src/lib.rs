@@ -1102,6 +1102,7 @@ mod tests {
             unique_together: Vec::new(),
             indexes: Vec::new(),
             ordering: Vec::new(),
+            m2m_relations: Vec::new(),
         }
     }
 

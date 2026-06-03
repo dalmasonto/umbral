@@ -51,6 +51,27 @@ pub trait HydrateRelated {
     /// matches Django's behaviour: a bad `select_related` name is a
     /// programming error caught in tests, not a runtime panic.
     fn hydrate_fk(&mut self, field_name: &str, row: &serde_json::Value);
+
+    /// Set the `parent_id` cache on every `M2M<U>` field this model
+    /// owns. Closes the second BUG-16 gap: without this, `m2m.add(&t)`
+    /// silently writes a junction row with `parent_id = 0` because the
+    /// macro skips M2M fields in the `FromRow` decode path.
+    ///
+    /// Called by QuerySet terminals after each row is decoded. The
+    /// macro emits a body that walks the model's M2M fields and calls
+    /// `set_parent_id(self.<pk>)` on each — so loading a `Group`
+    /// gives every `M2M<U>` slot on it the right `parent_id` to write
+    /// against.
+    ///
+    /// Default: no-op. The macro-emitted body shadows this for any
+    /// model that declares an M2M field. A model with no M2M fields
+    /// inherits the default and pays nothing.
+    ///
+    /// V1 limitation: works only when `Self::PrimaryKey` is `i64` (the
+    /// `M2M<T>` struct stores `Option<i64>` for the parent id). Models
+    /// with non-i64 PKs fail to compile here, which matches the
+    /// constraint documented in `M2M<T>`.
+    fn set_m2m_parent_ids(&mut self) {}
 }
 
 /// The trait every model implements.
@@ -152,8 +173,30 @@ pub trait Model: Sized + Send + Sync + Unpin + 'static {
     /// flips to DESC). Closes BUG-8. Default empty.
     const ORDERING: &'static [(&'static str, bool)] = &[];
 
+    /// Many-to-many relations declared on this model. Each entry names
+    /// a field and its target model. The migration engine uses this to
+    /// auto-generate junction tables; the admin uses it to render M2M
+    /// pickers. Default empty.
+    const M2M_RELATIONS: &'static [M2MRelationSpec] = &[];
+
     /// Return the primary key of this instance.
     fn primary_key(&self) -> Self::PrimaryKey;
+}
+
+/// Static metadata for one many-to-many relation declared on a model.
+///
+/// Carried by `Model::M2M_RELATIONS`. The migration engine uses this
+/// to emit `CREATE TABLE` for the junction table; the admin uses it
+/// to know which fields render as multi-select pickers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct M2MRelationSpec {
+    /// The Rust field name (e.g. `"tags"`).
+    pub field_name: &'static str,
+    /// The target model's table name (e.g. `"tag"`).
+    pub target_table: &'static str,
+    /// The target model's struct name (e.g. `"Tag"`). Used for reverse
+    /// accessor lookups and OpenAPI schema references.
+    pub target_name: &'static str,
 }
 
 /// Types that can serve as a model's primary key.

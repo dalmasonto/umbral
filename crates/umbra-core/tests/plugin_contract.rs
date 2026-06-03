@@ -109,6 +109,7 @@ impl Plugin for TestPlugin {
             unique_together: Vec::new(),
             indexes: Vec::new(),
             ordering: Vec::new(),
+            m2m_relations: Vec::new(),
             name: model_name,
             table: self.model_table.to_string(),
             fields: vec![Column {

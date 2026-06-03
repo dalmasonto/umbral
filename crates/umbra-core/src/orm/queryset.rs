@@ -403,6 +403,12 @@ impl<T: Model> QuerySet<T> {
                     .await?
             }
         };
+        // BUG-16 step 2: wire each row's PK into its `M2M<U>` slots so
+        // `add`/`remove`/`clear` know which parent they belong to.
+        // No-op for models with no M2M fields.
+        for r in &mut rows {
+            r.set_m2m_parent_ids();
+        }
         if !sr_fields.is_empty() {
             let pool = resolve_pool::<T>(self.explicit_pool.clone());
             hydrate_select_related::<T>(&mut rows, &sr_fields, &pool).await?;
@@ -435,11 +441,15 @@ impl<T: Model> QuerySet<T> {
                     .await?
             }
         };
-        if sr_fields.is_empty() || row.is_none() {
+        if row.is_none() {
             return Ok(row);
         }
-        // Hydrate the single row.
+        // BUG-16 step 2: wire the row's PK into its M2M slots.
         let mut rows = vec![row.unwrap()];
+        rows[0].set_m2m_parent_ids();
+        if sr_fields.is_empty() {
+            return Ok(rows.pop());
+        }
         let pool = resolve_pool::<T>(self.explicit_pool.clone());
         hydrate_select_related::<T>(&mut rows, &sr_fields, &pool).await?;
         Ok(Some(rows.pop().unwrap()))
@@ -1214,51 +1224,64 @@ impl<'tx, T: Model> QuerySetTx<'tx, T> {
     pub async fn fetch(self) -> Result<Vec<T>, sqlx::Error>
     where
         T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
-            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
+            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>
+            + HydrateRelated,
     {
         let q = self.qs.build_query_for(self.tx.backend_name());
-        match self.tx.backend_name() {
+        let mut rows = match self.tx.backend_name() {
             "sqlite" => {
                 let tx = self.tx.as_sqlite_mut().unwrap();
                 let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
                 sqlx::query_as_with::<sqlx::Sqlite, T, _>(&sql, values)
                     .fetch_all(&mut **tx)
-                    .await
+                    .await?
             }
             _ => {
                 let tx = self.tx.as_pg_mut().unwrap();
                 let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
                 sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
                     .fetch_all(&mut **tx)
-                    .await
+                    .await?
             }
+        };
+        // BUG-16 step 2: wire each row's PK into its M2M slots so
+        // junction-table accessors used inside the transaction see
+        // the right parent.
+        for r in &mut rows {
+            r.set_m2m_parent_ids();
         }
+        Ok(rows)
     }
 
     /// SELECT LIMIT 1 and return the first row, if any.
     pub async fn first(mut self) -> Result<Option<T>, sqlx::Error>
     where
         T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
-            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
+            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>
+            + HydrateRelated,
     {
         self.qs.query.limit(1);
         let q = self.qs.build_query_for(self.tx.backend_name());
-        match self.tx.backend_name() {
+        let mut row = match self.tx.backend_name() {
             "sqlite" => {
                 let tx = self.tx.as_sqlite_mut().unwrap();
                 let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
                 sqlx::query_as_with::<sqlx::Sqlite, T, _>(&sql, values)
                     .fetch_optional(&mut **tx)
-                    .await
+                    .await?
             }
             _ => {
                 let tx = self.tx.as_pg_mut().unwrap();
                 let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
                 sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
                     .fetch_optional(&mut **tx)
-                    .await
+                    .await?
             }
+        };
+        if let Some(r) = row.as_mut() {
+            r.set_m2m_parent_ids();
         }
+        Ok(row)
     }
 
     /// SELECT COUNT(*) inside the transaction.

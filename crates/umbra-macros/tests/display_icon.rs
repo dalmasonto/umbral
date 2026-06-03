@@ -288,6 +288,72 @@ fn validator_text_format_round_trips_through_meta_snapshot() {
     assert_eq!(by_name["plain"], None);
 }
 
+// =========================================================================
+// BUG-16 step 2: `M2M<T>` parent_id hydration.
+// =========================================================================
+
+use umbra::orm::{HydrateRelated, M2M};
+
+#[derive(Debug, sqlx::FromRow, Serialize, Deserialize, Model)]
+struct Tag {
+    id: i64,
+    name: String,
+}
+
+#[derive(Debug, sqlx::FromRow, Serialize, Deserialize, Model)]
+struct PostWithTags {
+    id: i64,
+    title: String,
+    #[sqlx(skip)]
+    #[serde(skip)]
+    tags: M2M<Tag>,
+}
+
+#[test]
+fn m2m_relations_propagate_to_model_const() {
+    let relations = <PostWithTags as Model>::M2M_RELATIONS;
+    assert_eq!(
+        relations.len(),
+        1,
+        "expected one M2M relation on PostWithTags"
+    );
+    assert_eq!(relations[0].field_name, "tags");
+    assert_eq!(relations[0].target_table, "tag");
+    assert_eq!(relations[0].target_name, "Tag");
+    let meta = umbra::migrate::ModelMeta::for_::<PostWithTags>();
+    assert_eq!(meta.m2m_relations.len(), 1);
+    assert_eq!(meta.m2m_relations[0].field_name, "tags");
+}
+
+#[test]
+fn set_m2m_parent_ids_writes_pk_into_each_m2m_field() {
+    let mut row = PostWithTags {
+        id: 42,
+        title: "hello".to_string(),
+        tags: M2M::empty(),
+    };
+    assert_eq!(row.tags.parent_id(), None);
+    row.set_m2m_parent_ids();
+    assert_eq!(
+        row.tags.parent_id(),
+        Some(42),
+        "set_m2m_parent_ids must seed each M2M<U> from the parent's PK",
+    );
+}
+
+#[test]
+fn set_m2m_parent_ids_is_a_noop_for_models_without_m2m_fields() {
+    // BlogPost has no M2M field — calling set_m2m_parent_ids must not
+    // panic or touch anything. The macro's empty-branch path.
+    let mut row = BlogPost {
+        id: 1,
+        title: "t".to_string(),
+    };
+    row.set_m2m_parent_ids();
+    // No assertion required beyond "this compiles + returns without panicking".
+    let _ = row.title.len();
+}
+
 #[test]
 fn struct_attrs_round_trip_through_model_meta() {
     let meta = umbra::migrate::ModelMeta::for_::<PostWithStructAttrs>();

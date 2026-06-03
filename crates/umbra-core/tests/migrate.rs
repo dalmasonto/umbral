@@ -344,10 +344,12 @@ fn create_table_names(ops: &[Operation]) -> Vec<String> {
         .filter_map(|op| match op {
             Operation::CreateTable { table, .. } => Some(table.clone()),
             Operation::DropTable { .. }
+            | Operation::DropM2MTable { .. }
             | Operation::AddColumn { .. }
             | Operation::DropColumn { .. }
             | Operation::AlterColumn { .. }
-            | Operation::RenameTable { .. } => None,
+            | Operation::RenameTable { .. }
+            | Operation::CreateM2MTable { .. } => None,
         })
         .collect();
     names.sort();
@@ -723,6 +725,7 @@ fn post_model(fields: Vec<Column>) -> ModelMeta {
         unique_together: Vec::new(),
         indexes: Vec::new(),
         ordering: Vec::new(),
+        m2m_relations: Vec::new(),
     }
 }
 
@@ -1302,5 +1305,128 @@ async fn create_table_emits_integer_pk_so_inserts_auto_increment() {
         !lower.contains("bigint"),
         "post DDL must NOT use BIGINT for the PK on SQLite (would defeat auto-increment); \
          got: {post_ddl}",
+    );
+}
+
+// --------------------------------------------------------------------- //
+// BUG-16 step 1: `diff` emits CreateM2MTable / DropM2MTable when a       //
+// model gains or loses an M2M field.                                     //
+// --------------------------------------------------------------------- //
+
+use umbra_core::migrate::M2MRelation;
+
+fn tag_model() -> ModelMeta {
+    ModelMeta {
+        name: "Tag".to_string(),
+        table: "tag".to_string(),
+        fields: vec![id_column(), text_column("name")],
+        display: "Tag".to_string(),
+        icon: "database".to_string(),
+        database: None,
+        singleton: false,
+        unique_together: Vec::new(),
+        indexes: Vec::new(),
+        ordering: Vec::new(),
+        m2m_relations: Vec::new(),
+    }
+}
+
+#[test]
+fn diff_emits_create_m2m_table_when_a_field_is_added() {
+    let prev = Snapshot {
+        models: vec![post_model(vec![id_column()]), tag_model()],
+    };
+    let mut post_with_tags = post_model(vec![id_column()]);
+    post_with_tags.m2m_relations.push(M2MRelation {
+        field_name: "tags".to_string(),
+        target_table: "tag".to_string(),
+        target_name: "Tag".to_string(),
+    });
+    let curr = Snapshot {
+        models: vec![post_with_tags, tag_model()],
+    };
+
+    let ops = umbra::migrate::diff(&prev, &curr).expect("diff");
+
+    let create_m2m: Vec<_> = ops
+        .iter()
+        .filter_map(|op| match op {
+            Operation::CreateM2MTable {
+                junction_table,
+                parent_table,
+                child_table,
+                parent_col,
+                child_col,
+            } => Some((
+                junction_table.clone(),
+                parent_table.clone(),
+                child_table.clone(),
+                parent_col.clone(),
+                child_col.clone(),
+            )),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        create_m2m,
+        vec![(
+            "post_tags".to_string(),
+            "post".to_string(),
+            "tag".to_string(),
+            "id".to_string(),
+            "id".to_string(),
+        )],
+        "expected one CreateM2MTable for post.tags → tag; got {ops:?}",
+    );
+}
+
+#[test]
+fn diff_emits_drop_m2m_table_when_a_field_is_removed() {
+    let mut post_with_tags = post_model(vec![id_column()]);
+    post_with_tags.m2m_relations.push(M2MRelation {
+        field_name: "tags".to_string(),
+        target_table: "tag".to_string(),
+        target_name: "Tag".to_string(),
+    });
+    let prev = Snapshot {
+        models: vec![post_with_tags, tag_model()],
+    };
+    let curr = Snapshot {
+        models: vec![post_model(vec![id_column()]), tag_model()],
+    };
+
+    let ops = umbra::migrate::diff(&prev, &curr).expect("diff");
+
+    let drops: Vec<_> = ops
+        .iter()
+        .filter_map(|op| match op {
+            Operation::DropM2MTable { junction_table } => Some(junction_table.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        drops,
+        vec!["post_tags".to_string()],
+        "expected one DropM2MTable for post_tags; got {ops:?}",
+    );
+}
+
+#[test]
+fn diff_rejects_m2m_pointing_at_unregistered_table() {
+    let mut post_with_orphan = post_model(vec![id_column()]);
+    post_with_orphan.m2m_relations.push(M2MRelation {
+        field_name: "ghosts".to_string(),
+        target_table: "nonexistent_table".to_string(),
+        target_name: "Ghost".to_string(),
+    });
+    let curr = Snapshot {
+        models: vec![post_with_orphan],
+    };
+    let err = umbra::migrate::diff(&Snapshot::default(), &curr)
+        .expect_err("diff should refuse to emit DDL referencing an unregistered table");
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("nonexistent_table"),
+        "error must name the missing target table; got: {msg}",
     );
 }

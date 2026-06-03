@@ -22,7 +22,9 @@ pub mod prelude {
     //! raw pool accessors are reached as `umbra::db::pool()` so they do
     //! not pollute the prelude with bare names like `pool`.
 
-    pub use crate::orm::{ChoiceField, Choices, F, FColExt, ForeignKey, Model, MultiChoice, Q};
+    pub use crate::orm::{
+        ChoiceField, Choices, F, FColExt, ForeignKey, M2M, Model, MultiChoice, Q,
+    };
     pub use crate::plugin::{AppContext, Plugin};
     pub use crate::routes::Routes;
     pub use crate::web::{
@@ -324,9 +326,9 @@ pub mod orm {
     pub use umbra_core::orm::write::{SaveError, WriteError};
     pub use umbra_core::orm::{
         ArrayElement, ChoiceField, DynError, DynQuerySet, Email, F, FColExt, FExpr, FieldSpec,
-        FkAction, ForeignKey, GetError, HydrateRelated, Manager, Model, MultiChoice, Post,
-        Predicate, PrimaryKey, Q, QuerySet, QuerySetTx, Slug, SqlType, TsVector, Url,
-        ValidatorError, column, decode_to_string, validate_text_format, write,
+        FkAction, ForeignKey, GetError, HydrateRelated, M2M, M2MRelationSpec, Manager, Model,
+        MultiChoice, Post, Predicate, PrimaryKey, Q, QuerySet, QuerySetTx, Slug, SqlType, TsVector,
+        Url, ValidatorError, column, decode_to_string, validate_text_format, write,
     };
 
     /// The `#[derive(Model)]` proc macro. Shares the `Model` name with the

@@ -759,6 +759,7 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
     // declaration order matches between the two.
     let mut field_specs: Vec<TokenStream2> = Vec::new();
     let mut column_consts: Vec<TokenStream2> = Vec::new();
+    let mut m2m_specs: Vec<TokenStream2> = Vec::new();
 
     for field in fields.iter() {
         let field_name = field.ident.as_ref().unwrap();
@@ -769,6 +770,21 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         let is_primary_key = field_name == pk_field_name;
 
         let kind = classify_field_type(&field.ty);
+
+        // BUG-16: M2M<T> fields have no column on the parent table.
+        // Skip them for FIELDS/column_consts and collect them into
+        // M2M_RELATIONS instead.
+        if let FieldKind::Many2Many(ref inner_ty) = kind {
+            let inner = inner_ty.as_ref();
+            m2m_specs.push(quote! {
+                ::umbra::orm::M2MRelationSpec {
+                    field_name: #field_name_str,
+                    target_table: <#inner as ::umbra::orm::Model>::TABLE,
+                    target_name: <#inner as ::umbra::orm::Model>::NAME,
+                }
+            });
+            continue;
+        }
 
         // Parse field-level `#[umbra(noform)]` / `#[umbra(noedit)]`.
         let field_attr = match parse_umbra_field_attr(&field.attrs) {
@@ -1041,11 +1057,18 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
     // each ForeignKey<U> or Option<ForeignKey<U>> field.
     let mut hydrate_arms: Vec<TokenStream2> = Vec::new();
     let mut fk_id_arms: Vec<TokenStream2> = Vec::new();
+    // BUG-16 step 2: collect M2M field idents so the macro can emit a
+    // `set_m2m_parent_ids` body that wires the parent's PK into each
+    // junction-table accessor at row-decode time.
+    let mut m2m_field_idents: Vec<syn::Ident> = Vec::new();
     for field in fields.iter() {
         let field_name = field.ident.as_ref().unwrap();
         let field_name_str = field_name.to_string();
         let kind = classify_field_type(&field.ty);
         match &kind {
+            FieldKind::Many2Many(_) => {
+                m2m_field_idents.push(field_name.clone());
+            }
             FieldKind::ForeignKey(inner_ty) => {
                 hydrate_arms.push(quote! {
                     #field_name_str => {
@@ -1095,6 +1118,17 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
     // Silence it the same way `post.rs` does for parity with the M2
     // hand-written shape.
     let struct_name_str = struct_name.to_string();
+    // BUG-16 step 2: only compute the parent PK when at least one M2M
+    // field consumes it. Avoids an unused `let` warning for the
+    // overwhelmingly common no-M2M-field case.
+    let set_m2m_body = if m2m_field_idents.is_empty() {
+        quote!({})
+    } else {
+        quote! {{
+            let __pk = <Self as ::umbra::orm::Model>::primary_key(self);
+            #(self.#m2m_field_idents.set_parent_id(__pk);)*
+        }}
+    };
     let output = quote! {
         impl ::umbra::orm::Model for #struct_name {
             type PrimaryKey = #pk_ty_tokens;
@@ -1110,6 +1144,9 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             const UNIQUE_TOGETHER: &'static [&'static [&'static str]] = #unique_together_tokens;
             const INDEXES: &'static [&'static [&'static str]] = #indexes_tokens;
             const ORDERING: &'static [(&'static str, bool)] = #ordering_tokens;
+            const M2M_RELATIONS: &'static [::umbra::orm::M2MRelationSpec] = &[
+                #(#m2m_specs),*
+            ];
             fn primary_key(&self) -> #pk_ty_tokens {
                 // `.clone()` works for every PK type the trait accepts
                 // (the bound is `Clone`, not `Copy`). For `i32`, `i64`,
@@ -1132,6 +1169,16 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                     #(#hydrate_arms)*
                     _ => {}
                 }
+            }
+            fn set_m2m_parent_ids(&mut self) {
+                // BUG-16: every M2M<U> field carries an Option<i64>
+                // parent_id slot. Setting it from the parent's PK is
+                // what lets `add`/`remove`/`clear` write the right
+                // junction-table rows. The block is empty when the
+                // model has no M2M fields — the trait's default
+                // would do the same, but emitting the override
+                // explicitly keeps the macro output uniform.
+                #set_m2m_body
             }
         }
 
@@ -1232,6 +1279,10 @@ enum FieldKind {
     /// Stored as TEXT; the inner `Type` is `E`, used to pull the
     /// `VALUES` / `LABELS` slices off the trait at derive time.
     MultiChoice(Box<Type>),
+    /// `M2M<T>` — many-to-many relation. No column on the parent table;
+    /// the migration engine auto-generates a junction table. The inner
+    /// `Type` is the target model `T`. Closes BUG-16.
+    Many2Many(Box<Type>),
     /// `ipnetwork::IpNetwork` — Postgres INET column (Phase 4.4).
     Inet,
     NullableInet,
@@ -1357,6 +1408,10 @@ impl FieldKind {
             FieldKind::MultiChoice(_) => quote!(::umbra::orm::SqlType::Text),
             FieldKind::Bytes | FieldKind::NullableBytes => quote!(::umbra::orm::SqlType::Bytes),
             FieldKind::Decimal => quote!(::umbra::orm::SqlType::Decimal),
+            // BUG-16: M2M fields have no column on the parent table. They
+            // are skipped before reaching this point; the arm exists only
+            // to keep the match exhaustive.
+            FieldKind::Many2Many(_) => return None,
             FieldKind::Unsupported(_) => return None,
         };
         let nullable = if self.is_nullable() {
@@ -1527,6 +1582,12 @@ fn classify_field_type(ty: &Type) -> FieldKind {
     if let Some(inner) = multichoice_inner(ty) {
         return FieldKind::MultiChoice(Box::new(inner.clone()));
     }
+    // BUG-16 — `M2M<T>`. Same leaf-ident matching as `ForeignKey<T>`.
+    // Bare `M2M<T>` or `orm::M2M<T>` both work. No column on the
+    // parent table; the migration engine auto-generates a junction table.
+    if let Some(inner) = m2m_inner(ty) {
+        return FieldKind::Many2Many(Box::new(inner.clone()));
+    }
     if is_wide_or_unsigned_int(ty) {
         return FieldKind::Unsupported(UnsupportedReason::WideOrUnsignedInt);
     }
@@ -1633,6 +1694,31 @@ fn multichoice_inner(ty: &Type) -> Option<&Type> {
     };
     let last = path.segments.last()?;
     if last.ident != "MultiChoice" {
+        return None;
+    }
+    let PathArguments::AngleBracketed(ref args) = last.arguments else {
+        return None;
+    };
+    let mut type_args = args.args.iter().filter_map(|a| match a {
+        GenericArgument::Type(t) => Some(t),
+        _ => None,
+    });
+    let inner = type_args.next()?;
+    if type_args.next().is_some() {
+        return None;
+    }
+    Some(inner)
+}
+
+/// If `ty` is `M2M<T>` (with or without the `orm::` qualifier),
+/// return the inner model type `T`. Returns `None` otherwise. Mirrors
+/// [`foreign_key_inner`] — leaf ident `M2M` plus one generic arg.
+fn m2m_inner(ty: &Type) -> Option<&Type> {
+    let Type::Path(TypePath { qself: None, path }) = ty else {
+        return None;
+    };
+    let last = path.segments.last()?;
+    if last.ident != "M2M" {
         return None;
     }
     let PathArguments::AngleBracketed(ref args) = last.arguments else {
@@ -1984,10 +2070,11 @@ fn column_const_for(
         FieldKind::Bytes => format_ident!("BytesCol"),
         FieldKind::NullableBytes => format_ident!("NullableBytesCol"),
         FieldKind::Decimal => format_ident!("DecimalCol"),
-        // MultiChoice is handled inline by the caller (emits a StrCol),
-        // so this arm is unreachable in practice. We return an empty
+        // MultiChoice and Many2Many are handled inline by the caller,
+        // so these arms are unreachable in practice. We return an empty
         // token stream as a defensive default.
         FieldKind::MultiChoice(_) => return TokenStream2::new(),
+        FieldKind::Many2Many(_) => return TokenStream2::new(),
         FieldKind::Unsupported(_) => return TokenStream2::new(),
     };
     quote_spanned! { span =>

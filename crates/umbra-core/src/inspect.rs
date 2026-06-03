@@ -761,6 +761,7 @@ pub fn render_initial_migration(schema: &IntrospectedSchema) -> MigrationFile {
             unique_together: Vec::new(),
             indexes: Vec::new(),
             ordering: Vec::new(),
+            m2m_relations: Vec::new(),
         })
         .collect();
     models.sort_by(|a, b| a.name.cmp(&b.name));
@@ -815,7 +816,9 @@ pub async fn write_outputs(
             .iter()
             .fold((0usize, 0usize), |(t, c), op| match op {
                 Operation::CreateTable { columns, .. } => (t + 1, c + columns.len()),
+                Operation::CreateM2MTable { .. } => (t + 1, c + 2),
                 Operation::DropTable { .. }
+                | Operation::DropM2MTable { .. }
                 | Operation::AddColumn { .. }
                 | Operation::DropColumn { .. }
                 | Operation::AlterColumn { .. }
