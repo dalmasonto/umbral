@@ -11,6 +11,12 @@ rust-version.workspace = true
 
 [dependencies]
 umbra = { path = "../../crates/umbra", version = "0.0.1" }
+# Dogfooded asset serving — we embed a StaticPlugin internally to
+# serve the vite bundle under `<base>/assets/`. Hand-rolling the
+# same code is what we used to do in src/static_serve.rs; using the
+# plugin means any bug fix in umbra-static (path traversal, MIME,
+# ETag, etc.) lands here for free.
+umbra-static = { path = "../umbra-static", version = "0.0.1" }
 axum = "0.8"
 
 [dev-dependencies]

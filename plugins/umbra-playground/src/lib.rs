@@ -7,7 +7,6 @@
 use umbra::prelude::*;
 
 pub mod routes;
-pub mod static_serve;
 
 mod generated_assets {
     include!(concat!(env!("OUT_DIR"), "/generated_assets.rs"));

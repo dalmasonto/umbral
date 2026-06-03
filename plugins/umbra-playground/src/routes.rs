@@ -1,13 +1,27 @@
 //! Two routes: the HTML shell and the bundled assets.
+//!
+//! The asset half is delegated to [`umbra_static::StaticPlugin`] so
+//! we don't re-implement (and re-bug) path traversal handling, MIME
+//! sniffing, range requests, ETag, etc. The shell half is one
+//! template-substituted HTML response and lives here.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::body::Body;
-use axum::extract::{Request, State};
+use axum::extract::State;
 use axum::http::{Response, StatusCode, header};
+use umbra::prelude::Plugin;
+use umbra_static::StaticPlugin;
 
-use crate::static_serve::{content_type, resolve};
 use crate::{CSS, JS, PLACEHOLDER_HTML};
+
+/// Compile-time path to the crate's `dist/` directory. Baked in
+/// because `CARGO_MANIFEST_DIR` is only available during the build
+/// phase; at runtime `std::env::var("CARGO_MANIFEST_DIR")` returns
+/// `Err`, which is why the runtime asset serving used to 404 every
+/// request before fix `e73d6db`.
+const MANIFEST_DIR: &str = env!("CARGO_MANIFEST_DIR");
 
 /// Shared state carried through middleware: the base path (e.g.
 /// `/api/playground`) and a flag for whether we're in placeholder mode.
@@ -51,58 +65,39 @@ pub async fn shell(State(state): State<PlaygroundState>) -> Response<Body> {
         .unwrap()
 }
 
-/// `GET {base_path}/assets/*` — bundled assets. Path-traversal safe.
-///
-/// The captured path keeps its `assets/` segment when we hand it to
-/// `resolve`: Vite emits its entry chunks + fonts under
-/// `dist/assets/*`, so a URL like `/api/playground/assets/index-X.css`
-/// should land at `<crate>/dist/assets/index-X.css`. Stripping the
-/// `assets/` segment here was the pre-vite shape (when esbuild dropped
-/// the bundle directly into `dist/`); the migration to vite broke the
-/// mapping by adding the extra directory level.
-pub async fn assets(State(state): State<PlaygroundState>, req: Request) -> Response<Body> {
-    let path = req.uri().path();
-    let base_prefix = format!("{}/", state.base_path);
-    let rel = match path.strip_prefix(&base_prefix) {
-        // `rel` keeps the leading `assets/` segment so resolve maps to
-        // `dist/assets/<file>` directly.
-        Some(r) => r,
-        None => return not_found(),
-    };
-    let resolved = match resolve(rel) {
-        Some(p) => p,
-        None => return not_found(),
-    };
-    let bytes = match std::fs::read(&resolved) {
-        Ok(b) => b,
-        Err(_) => return not_found(),
-    };
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, content_type(&resolved))
-        .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable")
-        .body(Body::from(bytes))
-        .unwrap()
-}
-
-fn not_found() -> Response<Body> {
-    Response::builder()
-        .status(StatusCode::NOT_FOUND)
-        .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
-        .body(Body::from("not found"))
-        .unwrap()
-}
-
-/// Compose both routes into a router. Routes are absolute
-/// (e.g. `/api/playground/` and `/api/playground/assets/{*path}`)
-/// because the plugin contract merges plugin routers flat into
-/// the app router without auto-prefixing.
+/// Compose both routes into a router. The shell route is registered
+/// directly; the asset route is contributed by an internal
+/// [`StaticPlugin`] instance mounted at `<base>/assets`. Routes are
+/// absolute (e.g. `/api/playground/` and `/api/playground/assets/...`)
+/// because the plugin contract merges plugin routers flat into the
+/// app router without auto-prefixing.
 pub fn router(state: PlaygroundState) -> axum::Router {
     use axum::routing::get;
-    let base = state.base_path.as_ref();
-    let base_trimmed = base.trim_end_matches('/');
-    axum::Router::new()
+
+    // Snapshot the base path before we consume `state` via
+    // `.with_state(...)`. The asset mount has to be built afterwards
+    // so we need an owned copy that survives the move.
+    let base_trimmed = state.base_path.trim_end_matches('/').to_string();
+
+    // The shell route — one HTML response with substituted asset paths.
+    let shell_router = axum::Router::new()
         .route(&format!("{base_trimmed}/"), get(shell))
-        .route(&format!("{base_trimmed}/assets/{{*path}}"), get(assets))
-        .with_state(state)
+        .with_state(state);
+
+    // The asset routes — every file under `<crate>/dist/assets/`
+    // exposed at `<base>/assets/*`. StaticPlugin handles the
+    // path-traversal-safe resolution, the MIME type, and the cache
+    // headers; we just feed it the mount path and the directory.
+    //
+    // `max_age` is a year because vite emits hashed filenames — a
+    // changed bundle gets a new hash, so the URL itself busts the
+    // cache. In Environment::Dev StaticPlugin forces this to 0
+    // automatically (see umbra_static::StaticPlugin docs).
+    let assets_dir = PathBuf::from(MANIFEST_DIR).join("dist").join("assets");
+    let assets_mount = format!("{base_trimmed}/assets");
+    let assets_router = StaticPlugin::new(assets_mount, assets_dir)
+        .max_age(std::time::Duration::from_secs(31_536_000))
+        .routes();
+
+    shell_router.merge(assets_router)
 }
