@@ -47,6 +47,33 @@ export interface ResponseRecord {
 }
 
 const SETTINGS_KEY = "umbra-playground-settings:v1";
+const SELECTED_KEY = "umbra-playground:selected-operation:v1";
+
+/** Persist the currently-selected operationId so reloads land back on
+ *  the same endpoint. Sync localStorage write is fine here — this is
+ *  a single short string that the next page load needs synchronously
+ *  before zustand initialises. */
+function loadSelectedOperationId(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.localStorage.getItem(SELECTED_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function saveSelectedOperationId(id: string | null) {
+  if (typeof window === "undefined") return;
+  try {
+    if (id) {
+      window.localStorage.setItem(SELECTED_KEY, id);
+    } else {
+      window.localStorage.removeItem(SELECTED_KEY);
+    }
+  } catch {
+    // Storage full / disabled — silently drop.
+  }
+}
 
 const factoryDefaultHeaders: KVItem[] = [
   { key: "Content-Type", value: "application/json", enabled: true },
@@ -201,8 +228,11 @@ export const usePlayground = create<PlaygroundState>((set, get) => ({
     }
   },
 
-  selectedOperationId: null,
-  selectEndpoint: (id) => set({ selectedOperationId: id }),
+  selectedOperationId: loadSelectedOperationId(),
+  selectEndpoint: (id) => {
+    saveSelectedOperationId(id);
+    set({ selectedOperationId: id });
+  },
 
   current: { ...emptyDraft },
   setMethod: (m) => set((s) => ({ current: { ...s.current, method: m } })),

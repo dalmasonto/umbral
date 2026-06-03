@@ -1,9 +1,10 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { usePlayground } from "@/state/store";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { HistoryRecordDialog } from "./HistoryRecordDialog";
 import {
   Table,
   TableBody,
@@ -92,6 +93,20 @@ function useIsDark() {
     return () => obs.disconnect();
   }, []);
   return dark;
+}
+
+function EmptyState({ title, hint }: { title: string; hint: string }) {
+  return (
+    <div className="flex items-center justify-center h-full text-muted-foreground">
+      <div className="text-center space-y-2">
+        <HardDrive className="size-8 mx-auto opacity-40" />
+        <p className="text-xs font-medium">{title}</p>
+        <p className="text-[10px] text-muted-foreground/60 max-w-[20rem]">
+          {hint}
+        </p>
+      </div>
+    </div>
+  );
 }
 
 function HeadersTable({ headers }: { headers: Record<string, string> }) {
@@ -233,8 +248,46 @@ export function ResponseViewer() {
   const history = usePlayground((s) => s.history);
   const clearHistory = usePlayground((s) => s.clearHistory);
   const [activeTab, setActiveTab] = useState<TabId>("body");
+  const [dialogRecord, setDialogRecord] = useState<ResponseRecord | null>(null);
 
-  const opHistory = selected ? history[selected] ?? [] : [];
+  const opHistory = useMemo(
+    () => (selected ? history[selected] ?? [] : []),
+    [history, selected],
+  );
+
+  // Smart default tab: when the user navigates to an endpoint:
+  //   - has a live lastResponse → Body (most recent)
+  //   - no lastResponse but past history → History (the user's ask:
+  //     "the right side should always be active, default on history")
+  //   - nothing → Body (will show empty state)
+  // Re-runs only when `selected` changes so the user's manual tab
+  // choice sticks until they navigate away.
+  const prevSelectedRef = useRef<string | null>(selected);
+  useEffect(() => {
+    if (prevSelectedRef.current === selected) return;
+    prevSelectedRef.current = selected;
+    if (lastResponse) {
+      setActiveTab("body");
+    } else if (opHistory.length > 0) {
+      setActiveTab("history");
+    } else {
+      setActiveTab("body");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected]);
+
+  // When a brand-new response arrives (user hit Send), pop over to
+  // Body so they see it. Detects the transition from null→record
+  // rather than firing on every response object identity change.
+  const prevResponseRef = useRef<ResponseRecord | null>(lastResponse);
+  useEffect(() => {
+    const wasNone = prevResponseRef.current === null;
+    const isSome = lastResponse !== null;
+    if (wasNone && isSome) {
+      setActiveTab("body");
+    }
+    prevResponseRef.current = lastResponse;
+  }, [lastResponse]);
 
   const prettyBody = useMemo(() => {
     if (!lastResponse) return null;
@@ -256,52 +309,72 @@ export function ResponseViewer() {
     );
   }
 
-  if (!lastResponse) {
-    return (
-      <div className="flex items-center justify-center h-full text-muted-foreground">
-        <div className="text-center space-y-2">
-          <HardDrive className="size-8 mx-auto opacity-40" />
-          <p className="text-xs font-medium">No response yet</p>
-          <p className="text-[10px] text-muted-foreground/60">
-            Send a request to see the response here.
-          </p>
-        </div>
-      </div>
-    );
-  }
-
-  const { status, statusText, durationMs, sizeBytes, bodyText, headers, error } =
-    lastResponse;
+  // Pull these out only when lastResponse exists; the tab content
+  // guards on `lastResponse` directly so empty cases render their
+  // own messages.
+  const status = lastResponse?.status ?? 0;
+  const statusText = lastResponse?.statusText ?? "";
+  const durationMs = lastResponse?.durationMs ?? 0;
+  const sizeBytes = lastResponse?.sizeBytes ?? 0;
+  const bodyText = lastResponse?.bodyText ?? "";
+  const headers = lastResponse?.headers ?? {};
+  const error = lastResponse?.error;
 
   return (
-    <div className="flex flex-col h-full">
-      {/* Status Bar */}
-      <div className="p-3 border-b border-border flex items-center gap-3 flex-wrap">
-        {error ? (
-          <div className="flex items-center gap-2 text-destructive">
-            <AlertTriangle className="size-4" />
-            <span className="text-xs font-semibold">Network Error</span>
-            <span className="text-[10px] text-muted-foreground">{error}</span>
-          </div>
-        ) : (
-          <>
-            <Badge
-              variant="outline"
-              className={`font-mono text-xs font-bold ${statusColor(status)}`}
-            >
-              {status} {statusText}
-            </Badge>
-            <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
-              <Clock className="size-3" />
-              <span>{durationMs}ms</span>
+    <div className="flex flex-col h-full min-h-0">
+      <HistoryRecordDialog
+        record={dialogRecord}
+        open={dialogRecord !== null}
+        onOpenChange={(open) => {
+          if (!open) setDialogRecord(null);
+        }}
+      />
+      {/* Status Bar — only rendered when we have a live response.
+          When there isn't one, the Body/Headers/cURL tabs each
+          render their own empty state and the History tab works
+          normally. */}
+      {lastResponse ? (
+        <div className="p-3 border-b border-border flex items-center gap-3 flex-wrap">
+          {error ? (
+            <div className="flex items-center gap-2 text-destructive">
+              <AlertTriangle className="size-4" />
+              <span className="text-xs font-semibold">Network Error</span>
+              <span className="text-[10px] text-muted-foreground">{error}</span>
             </div>
-            <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
-              <HardDrive className="size-3" />
-              <span>{(sizeBytes / 1024).toFixed(2)}KB</span>
-            </div>
-          </>
-        )}
-      </div>
+          ) : (
+            <>
+              <Badge
+                variant="outline"
+                className={`font-mono text-xs font-bold ${statusColor(status)}`}
+              >
+                {status} {statusText}
+              </Badge>
+              <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                <Clock className="size-3" />
+                <span>{durationMs}ms</span>
+              </div>
+              <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                <HardDrive className="size-3" />
+                <span>{(sizeBytes / 1024).toFixed(2)}KB</span>
+              </div>
+            </>
+          )}
+        </div>
+      ) : (
+        <div className="p-3 border-b border-border flex items-center gap-2 flex-wrap">
+          <Badge
+            variant="outline"
+            className="font-mono text-[10px] text-muted-foreground"
+          >
+            no live response
+          </Badge>
+          {opHistory.length > 0 && (
+            <span className="text-[10px] text-muted-foreground">
+              Showing past requests for this endpoint in the History tab.
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="flex items-center gap-0 border-b border-border px-2">
@@ -328,26 +401,43 @@ export function ResponseViewer() {
       </div>
 
       {/* Tab Content */}
-      <div className="flex-1 overflow-y-auto p-3">
+      <div className="flex-1 min-h-0 overflow-y-auto p-3">
         {activeTab === "body" && (
           <div className="h-full flex flex-col">
-            {prettyBody ? (
-              <ReadonlyMonaco value={prettyBody} language="json" />
+            {lastResponse ? (
+              prettyBody ? (
+                <ReadonlyMonaco value={prettyBody} language="json" />
+              ) : (
+                <pre className="font-mono text-xs whitespace-pre-wrap break-all text-foreground">
+                  {bodyText || (
+                    <span className="text-muted-foreground italic">
+                      Empty response body
+                    </span>
+                  )}
+                </pre>
+              )
             ) : (
-              <pre className="font-mono text-xs whitespace-pre-wrap break-all text-foreground">
-                {bodyText || (
-                  <span className="text-muted-foreground italic">
-                    Empty response body
-                  </span>
-                )}
-              </pre>
+              <EmptyState
+                title="No response yet"
+                hint={
+                  opHistory.length > 0
+                    ? `Hit Send to record a fresh one, or pick from ${opHistory.length} past request${opHistory.length === 1 ? "" : "s"} in History.`
+                    : "Hit Send to record one."
+                }
+              />
             )}
           </div>
         )}
 
-        {activeTab === "headers" && (
-          <HeadersTable headers={headers} />
-        )}
+        {activeTab === "headers" &&
+          (lastResponse ? (
+            <HeadersTable headers={headers} />
+          ) : (
+            <EmptyState
+              title="No response yet"
+              hint="Headers from your next Send will land here."
+            />
+          ))}
 
         {activeTab === "history" && (
           <div className="space-y-2">
@@ -362,9 +452,11 @@ export function ResponseViewer() {
               .map((record, idx) => {
                 const actualIndex = opHistory.length - 1 - idx;
                 return (
-                  <div
+                  <button
                     key={actualIndex}
-                    className="group flex items-center gap-2 p-2 rounded-md border border-border hover:bg-muted/50 transition-colors"
+                    type="button"
+                    onClick={() => setDialogRecord(record)}
+                    className="group w-full flex items-center gap-2 p-2 rounded-md border border-border bg-background hover:bg-muted/50 hover:border-primary/30 transition-colors text-left cursor-pointer"
                   >
                     <Badge
                       variant="outline"
@@ -380,10 +472,10 @@ export function ResponseViewer() {
                     <span className="text-[10px] text-muted-foreground font-mono">
                       {(record.sizeBytes / 1024).toFixed(2)}KB
                     </span>
-                    <span className="text-[10px] text-muted-foreground ml-auto">
+                    <span className="text-[10px] text-muted-foreground font-mono ml-auto">
                       {new Date(record.timestamp).toLocaleTimeString()}
                     </span>
-                  </div>
+                  </button>
                 );
               })}
             {opHistory.length > 0 && selected && (
@@ -401,7 +493,14 @@ export function ResponseViewer() {
           </div>
         )}
 
-        {activeTab === "curl" && (
+        {activeTab === "curl" && !lastResponse && (
+          <EmptyState
+            title="No response yet"
+            hint="The cURL command will mirror your next request."
+          />
+        )}
+
+        {activeTab === "curl" && lastResponse && (
           <div className="space-y-2 h-full flex flex-col">
             <div className="flex items-center justify-between">
               <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold">
@@ -411,15 +510,19 @@ export function ResponseViewer() {
                 type="button"
                 variant="ghost"
                 size="xs"
-                onClick={() =>
-                  navigator.clipboard.writeText(toCurl(lastResponse))
-                }
+                onClick={() => {
+                  if (lastResponse)
+                    navigator.clipboard.writeText(toCurl(lastResponse));
+                }}
                 className="text-muted-foreground hover:text-foreground text-[10px]"
               >
                 Copy
               </Button>
             </div>
-            <ReadonlyMonaco value={toCurl(lastResponse)} language="shell" />
+            <ReadonlyMonaco
+              value={lastResponse ? toCurl(lastResponse) : ""}
+              language="shell"
+            />
           </div>
         )}
       </div>
