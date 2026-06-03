@@ -73,6 +73,30 @@ function getTagIcon(tag: string): React.ReactNode {
   return TAG_ICONS[tag] ?? TAG_ICONS.default;
 }
 
+/** Humanise an OpenAPI tag for display. Mirrors what umbra-admin
+ *  does for model display labels (see `titlecase` in
+ *  `plugins/umbra-admin/src/registry.rs`): split on `_`, capitalise
+ *  each word's first character, rejoin with space.
+ *
+ *    "permissions_contenttype" → "Permissions Contenttype"
+ *    "admin_user_pref"         → "Admin User Pref"
+ *    "article"                 → "Article"
+ *
+ *  Search and grouping still happen against the raw tag — only the
+ *  rendered label changes — so typing "permissions" in the search
+ *  box still matches `permissions_*` groups. */
+function humanizeTag(tag: string): string {
+  if (!tag) return "";
+  return tag
+    .split("_")
+    .map((word) =>
+      word.length === 0
+        ? ""
+        : word.charAt(0).toUpperCase() + word.slice(1),
+    )
+    .join(" ");
+}
+
 function getTagColor(tag: string): string {
   return TAG_COLORS[tag] ?? "border-muted-foreground/30 text-muted-foreground";
 }
@@ -259,7 +283,9 @@ export function EndpointTree() {
                     {/* `break-all` lets long tag names like
                         `permissions_contenttype` fold onto a second
                         line instead of forcing horizontal scroll. */}
-                    <span className="flex-1 min-w-0 text-left break-all">{tag}</span>
+                    <span className="flex-1 min-w-0 text-left break-words">
+                      {humanizeTag(tag)}
+                    </span>
                     <span className="text-[10px] font-medium text-muted-foreground bg-muted px-1.5 py-0.5 rounded-full shrink-0">
                       {entries.length}
                     </span>
