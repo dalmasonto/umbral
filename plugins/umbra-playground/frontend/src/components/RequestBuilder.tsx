@@ -3,12 +3,12 @@ import { usePlayground } from "@/state/store";
 import type { OpenAPIV3 } from "openapi-types";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { KeyValueEditor } from "./KeyValueEditor";
 import { MethodBadge } from "./MethodBadge";
-import { Send, Lock, AlignLeft, Code2, Braces, FormInput, CheckCircle2, AlertCircle } from "lucide-react";
+import { Send, Lock, AlignLeft, Code2, Braces, FormInput } from "lucide-react";
+import Editor from "@monaco-editor/react";
 
 function extractPathParams(url: string): string[] {
   return [...url.matchAll(/\{([a-zA-Z_][a-zA-Z0-9_]*)\}/g)].map((m) => m[1]);
@@ -21,57 +21,6 @@ function findPathParamValue(
   return params.find((p) => p.key === name && p.enabled)?.value ?? "";
 }
 
-function isValidJson(raw: string): boolean {
-  if (!raw.trim()) return true; // empty is considered valid
-  try {
-    JSON.parse(raw);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function JsonValidityBadge({ body }: { body: string }) {
-  const valid = isValidJson(body);
-  if (!body.trim()) return null;
-  return (
-    <span
-      className={`flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider ${
-        valid ? "text-emerald-500" : "text-rose-500"
-      }`}
-    >
-      {valid ? <CheckCircle2 className="size-3" /> : <AlertCircle className="size-3" />}
-      {valid ? "Valid JSON" : "Invalid JSON"}
-    </span>
-  );
-}
-
-function JsonBodyTextarea({
-  value,
-  onChange,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-}) {
-  const valid = isValidJson(value);
-  const hasContent = value.trim().length > 0;
-  return (
-    <Textarea
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      placeholder={`{\n  "title": "Hello World",\n  "content": "..."\n}`}
-      className={`flex-1 font-mono text-sm resize-none min-h-[8rem] rounded-md transition-colors ${
-        hasContent && !valid
-          ? "border-rose-500 focus-visible:ring-rose-500/30"
-          : hasContent && valid
-            ? "border-emerald-500/50 focus-visible:ring-emerald-500/20"
-            : ""
-      }`}
-      spellCheck={false}
-    />
-  );
-}
-
 type TabId = "params" | "body" | "headers" | "auth";
 
 const TABS: { id: TabId; label: string }[] = [
@@ -80,6 +29,20 @@ const TABS: { id: TabId; label: string }[] = [
   { id: "headers", label: "Headers" },
   { id: "auth", label: "Auth" },
 ];
+
+function useIsDark() {
+  const [dark, setDark] = useState(() =>
+    document.documentElement.classList.contains("dark"),
+  );
+  useEffect(() => {
+    const obs = new MutationObserver(() =>
+      setDark(document.documentElement.classList.contains("dark")),
+    );
+    obs.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+    return () => obs.disconnect();
+  }, []);
+  return dark;
+}
 
 export function RequestBuilder() {
   const spec = usePlayground((s) => s.spec);
@@ -97,6 +60,7 @@ export function RequestBuilder() {
   const send = usePlayground((s) => s.send);
   const inFlight = usePlayground((s) => s.inFlight);
   const [activeTab, setActiveTab] = useState<TabId>("params");
+  const isDark = useIsDark();
 
   const op = useMemo(() => {
     if (!spec || !selected) return null;
@@ -294,35 +258,47 @@ export function RequestBuilder() {
                 </button>
               </div>
               {current.bodyType === "json" && (
-                <div className="flex items-center gap-2">
-                  {current.body && (
-                    <JsonValidityBadge body={current.body} />
-                  )}
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="xs"
-                    onClick={() => {
-                      try {
-                        setBody(JSON.stringify(JSON.parse(current.body), null, 2));
-                      } catch {
-                        /* leave as-is */
-                      }
-                    }}
-                    className="text-muted-foreground hover:text-foreground text-[10px]"
-                  >
-                    <AlignLeft className="size-3 mr-1" />
-                    Format JSON
-                  </Button>
-                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="xs"
+                  onClick={() => {
+                    try {
+                      setBody(JSON.stringify(JSON.parse(current.body), null, 2));
+                    } catch {
+                      /* leave as-is */
+                    }
+                  }}
+                  className="text-muted-foreground hover:text-foreground text-[10px]"
+                >
+                  <AlignLeft className="size-3 mr-1" />
+                  Format JSON
+                </Button>
               )}
             </div>
 
             {current.bodyType === "json" ? (
-              <JsonBodyTextarea
-                value={current.body}
-                onChange={setBody}
-              />
+              <div className="flex-1 min-h-[12rem] rounded-md overflow-hidden border border-border">
+                <Editor
+                  height="100%"
+                  language="json"
+                  theme={isDark ? "vs-dark" : "light"}
+                  value={current.body}
+                  onChange={(v) => setBody(v ?? "")}
+                  options={{
+                    minimap: { enabled: false },
+                    lineNumbers: "on",
+                    wordWrap: "on",
+                    folding: true,
+                    scrollBeyondLastLine: false,
+                    automaticLayout: true,
+                    fontSize: 13,
+                    fontFamily: "Geist Mono, ui-monospace, monospace",
+                    tabSize: 2,
+                    formatOnPaste: true,
+                  }}
+                />
+              </div>
             ) : (
               <div className="space-y-2">
                 <p className="text-[10px] text-muted-foreground">
