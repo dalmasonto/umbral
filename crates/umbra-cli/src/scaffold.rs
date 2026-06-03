@@ -201,19 +201,40 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-umbra        = {{ git = "https://github.com/dalmasonto/umbra" }}
-umbra-cli    = {{ git = "https://github.com/dalmasonto/umbra" }}
-umbra-auth   = {{ git = "https://github.com/dalmasonto/umbra" }}
+
+# ----- Framework core (always required) ------------------------------------
+umbra         = {{ git = "https://github.com/dalmasonto/umbra" }}
+umbra-cli     = {{ git = "https://github.com/dalmasonto/umbra" }}
+
+# ----- Active by default ---------------------------------------------------
+# What the generated `src/main.rs` wires in. Comment any of these out only
+# if you also remove the matching `.plugin(...)` line.
+umbra-auth     = {{ git = "https://github.com/dalmasonto/umbra" }}
 umbra-sessions = {{ git = "https://github.com/dalmasonto/umbra" }}
-umbra-admin  = {{ git = "https://github.com/dalmasonto/umbra" }}
-umbra-rest   = {{ git = "https://github.com/dalmasonto/umbra" }}
-umbra-openapi = {{ git = "https://github.com/dalmasonto/umbra" }}
+umbra-admin    = {{ git = "https://github.com/dalmasonto/umbra" }}
+umbra-rest     = {{ git = "https://github.com/dalmasonto/umbra" }}
+umbra-openapi  = {{ git = "https://github.com/dalmasonto/umbra" }}
+
+# ----- Available built-ins (uncomment + register in main.rs to enable) -----
+# umbra-playground   = {{ git = "https://github.com/dalmasonto/umbra" }}  # Interactive API playground UI (think mini-Postman) at /playground/.
+# umbra-tasks        = {{ git = "https://github.com/dalmasonto/umbra" }}  # DB-backed background task queue (Celery-equivalent).
+# umbra-permissions  = {{ git = "https://github.com/dalmasonto/umbra" }}  # Django-style ContentType + Group + Permission model.
+# umbra-rls          = {{ git = "https://github.com/dalmasonto/umbra" }}  # Postgres row-level security policy registration.
+# umbra-cache        = {{ git = "https://github.com/dalmasonto/umbra" }}  # Per-request caching helper.
+# umbra-email        = {{ git = "https://github.com/dalmasonto/umbra" }}  # SMTP + MIME email composer + sender.
+# umbra-media        = {{ git = "https://github.com/dalmasonto/umbra" }}  # Uploaded-file storage abstraction (local FS + S3).
+# umbra-signals      = {{ git = "https://github.com/dalmasonto/umbra" }}  # Pre/post save/delete signal dispatch.
+# umbra-static       = {{ git = "https://github.com/dalmasonto/umbra" }}  # Static-file serving for prod (whitenoise-equivalent).
+# umbra-security     = {{ git = "https://github.com/dalmasonto/umbra" }}  # CSRF + clickjacking + HSTS + security headers middleware.
+
+# ----- Third-party + framework runtime deps --------------------------------
 tokio = {{ version = "1", features = ["macros", "rt-multi-thread"] }}
 tracing-subscriber = {{ version = "0.3", features = ["env-filter"] }}
 serde = {{ version = "1", features = ["derive"] }}
 chrono = {{ version = "0.4", features = ["serde"] }}
 
-# Once you `umbra startapp <plugin>`, add the plugin crate here:
+# Once you `umbra startapp <plugin>` or `umbra startplugin <plugin>`, add
+# the plugin crate here:
 # {crate_name}-posts = {{ path = "plugins/posts" }}
 "#
     );

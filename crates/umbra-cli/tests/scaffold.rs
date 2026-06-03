@@ -61,6 +61,46 @@ fn scaffold_project_cargo_toml_references_all_plugins() {
     }
 }
 
+// features.md #5: every built-in plugin appears in the generated
+// Cargo.toml. The non-default ones are commented out (`# umbra-…`)
+// but listed so the user can discover them by skimming the manifest.
+#[test]
+fn scaffold_project_cargo_toml_lists_every_builtin_plugin_at_least_commented() {
+    let tmp = TempDir::new().unwrap();
+    let report = scaffold_project("testapp", tmp.path()).unwrap();
+    let cargo = fs::read_to_string(report.root.join("Cargo.toml")).unwrap();
+
+    for plugin in &[
+        "umbra-playground",
+        "umbra-tasks",
+        "umbra-permissions",
+        "umbra-rls",
+        "umbra-cache",
+        "umbra-email",
+        "umbra-media",
+        "umbra-signals",
+        "umbra-static",
+        "umbra-security",
+    ] {
+        assert!(
+            cargo.contains(plugin),
+            "Cargo.toml should list every built-in (active or commented); missing {plugin} in:\n{cargo}",
+        );
+    }
+
+    // All ten should appear as commented-out lines (each on its own
+    // line starting with `# umbra-…`). Pick three at random as
+    // sentinels — full coverage is the loop above.
+    for plugin in &["umbra-tasks", "umbra-playground", "umbra-cache"] {
+        assert!(
+            cargo
+                .lines()
+                .any(|l| l.trim_start().starts_with(&format!("# {plugin}"))),
+            "{plugin} should be present as a commented-out line in Cargo.toml",
+        );
+    }
+}
+
 // gap 20: main.rs references all major plugin and auth surfaces.
 #[test]
 fn scaffold_project_main_rs_references_all_plugins() {
