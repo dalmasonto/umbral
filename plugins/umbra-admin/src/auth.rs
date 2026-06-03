@@ -41,7 +41,7 @@ pub(crate) async fn require_staff(
         Redirect::to(&location).into_response()
     };
 
-    let user = match umbra_sessions::current_user(headers).await {
+    let user = match umbra_auth::current_user(headers).await {
         Ok(Some(u)) => u,
         _ => return Err(login_redirect()),
     };
@@ -71,7 +71,7 @@ pub(crate) async fn login_get(
     Query(params): Query<HashMap<String, String>>,
 ) -> Response {
     // If already logged in as staff, redirect straight to /admin/.
-    if let Ok(Some(user)) = umbra_sessions::current_user(&headers).await {
+    if let Ok(Some(user)) = umbra_auth::current_user(&headers).await {
         if user.is_staff {
             let next = params
                 .get("next")
@@ -180,7 +180,7 @@ pub(crate) async fn login_post(headers: HeaderMap, body: String) -> Response {
     };
     let mut response = Redirect::to(&redirect_to).into_response();
     if let Err(e) =
-        umbra_sessions::login_with_request(&headers, response.headers_mut(), &user).await
+        umbra_auth::login_with_request(&headers, response.headers_mut(), &user).await
     {
         tracing::error!(error = %e, "admin: login: session creation failed");
         return (StatusCode::INTERNAL_SERVER_ERROR, "session error").into_response();

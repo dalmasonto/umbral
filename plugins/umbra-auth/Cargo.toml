@@ -38,9 +38,9 @@ axum-core = "0.5"
 axum = "0.8"
 # http for Parts, HeaderMap, Uri in the extractor and middleware.
 http = "1"
-# SHA-256 to hash session tokens before the DB lookup. umbra-auth
-# must not depend on umbra-sessions (the dep arrow runs the other way),
-# so we re-implement the trivial hash step used by sessions.
+# SHA-256 to hash session tokens before the DB lookup. Historically
+# umbra-auth re-implemented this because of the now-flipped dep
+# arrow; today it's a peer of the umbra-sessions implementation.
 sha2 = "0.10"
 # tower for the Layer + Service impl on LoginRequiredLayer so it works
 # directly with Router::layer(...).
@@ -55,10 +55,14 @@ umbra-rest = { path = "../umbra-rest", version = "0.0.1" }
 # token hashing helper) and is re-used to hash the bearer key.
 rand = "0.8"
 base64 = "0.22"
-# UUIDs for the session-row primary key (opaque cookie token). The
-# auth-routes module mints session rows itself rather than calling
-# into umbra-sessions, because the dep arrow runs the other way.
-uuid = { version = "1", features = ["v4"] }
+# tracing::warn! on best-effort failures (last_login bump, etc.).
+tracing = "0.1"
+# umbra-sessions provides the session-table + cookie primitives.
+# The dep arrow used to run sessions -> auth (sessions had user-
+# aware helpers); after the de-coupling those helpers live here,
+# calling into umbra-sessions for the row + cookie primitives. No
+# cycle: sessions is now user-agnostic.
+umbra-sessions = { path = "../umbra-sessions", version = "0.0.1" }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync"] }

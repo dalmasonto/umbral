@@ -1,11 +1,3 @@
-// The Model derive on the crate-private SessionRow emits `pub` column
-// constants whose types (chrono::DateTime, etc.) are reachable through
-// the pub consts. SessionRow itself is `pub(crate)` because we do not
-// want to leak it from the crate. The combination trips the
-// `private_interfaces` lint, which is the wrong call for an internal
-// type that only exists to drive the predicate-builder pattern.
-#![allow(private_interfaces)]
-
 //! Built-in `/auth` HTTP surface — login, logout, me, register.
 //!
 //! Mounted by [`crate::AuthPlugin::with_default_routes`] (only
@@ -44,7 +36,6 @@
 use crate::token::AuthToken;
 use crate::{AuthUser, OptionalIdentity, auth_user};
 use serde::{Deserialize, Serialize};
-use umbra::orm::Manager;
 use umbra::web::{HeaderMap, IntoResponse, Json, Response, Router, StatusCode, post};
 
 // =========================================================================
@@ -173,7 +164,11 @@ async fn register(Json(body): Json<RegisterIn>) -> Response {
 /// cookie, mint a fresh bearer token.
 ///
 /// Returns `{user, token}` plus a Set-Cookie. The token is named
-/// `"login"` for admin listings.
+/// `"login"` for admin listings. The session + cookie are written
+/// via [`crate::login_with_request`], which delegates to
+/// `umbra_sessions::login_user_id` for the cookie + session table
+/// and then bumps `auth_user.last_login`. No duplicate session
+/// code lives here.
 async fn login(headers: HeaderMap, Json(body): Json<LoginIn>) -> Response {
     let user: AuthUser = match crate::authenticate(&body.username, &body.password).await {
         Ok(u) => u,
@@ -200,12 +195,7 @@ async fn login(headers: HeaderMap, Json(body): Json<LoginIn>) -> Response {
         token: plaintext.0,
     };
     let mut response = Json(body).into_response();
-    // umbra-auth can't depend on umbra-sessions (the dep arrow runs
-    // the other way), so we re-implement the cookie-set step.
-    // Mirrors `umbra_sessions::login_with_request`'s session-
-    // fixation defense: destroy any inbound anonymous session
-    // before minting the authenticated one.
-    if let Err(e) = create_session_cookie(&headers, response.headers_mut(), &user).await {
+    if let Err(e) = crate::login_with_request(&headers, response.headers_mut(), &user).await {
         return err(
             StatusCode::INTERNAL_SERVER_ERROR,
             "session_failed",
@@ -219,7 +209,7 @@ async fn login(headers: HeaderMap, Json(body): Json<LoginIn>) -> Response {
 /// the row. 204. Does NOT revoke bearer tokens.
 async fn logout(headers: HeaderMap) -> Response {
     let mut response = StatusCode::NO_CONTENT.into_response();
-    let _ = clear_session_cookie(&headers, response.headers_mut()).await;
+    let _ = umbra_sessions::logout(&headers, response.headers_mut()).await;
     response
 }
 
@@ -258,131 +248,4 @@ async fn me(OptionalIdentity(id): OptionalIdentity) -> Response {
         }
     };
     Json(UserOut::from(&user)).into_response()
-}
-
-// =========================================================================
-// Cookie / session bridge.
-//
-// We do NOT call umbra_sessions directly — that crate depends on
-// umbra-auth, so the import is forbidden by the dep arrow. The
-// session row lives in the `session` table that umbra-sessions
-// owns; we read/write through the ORM against a private struct that
-// mirrors its schema. The cookie name + hashing scheme match
-// umbra-sessions (sha256 of the raw token) so the browser cookie
-// minted here is interchangeable with one minted by
-// umbra-sessions::login. The session table is migrated by
-// SessionsPlugin; if the user didn't add that plugin, these calls
-// fail-soft (no row to write, error swallowed).
-// =========================================================================
-
-const COOKIE_NAME: &str = "umbra_session";
-/// 14 days — matches Django's `SESSION_COOKIE_AGE` default and
-/// umbra-sessions' default.
-const DEFAULT_TTL_SECONDS: i64 = 14 * 24 * 60 * 60;
-
-// The Model derive emits `pub` column constants that reference
-// this struct's type. Marking the struct itself `pub` would leak
-// it; `pub(crate)` keeps it crate-private but the consts still
-// trip the `private_interfaces` lint. The `#[allow]` is the cleanest
-// resolution — the constants are never used outside this crate,
-// they just exist to satisfy the predicate-builder pattern (which
-// expects `<Field>::<COL>.eq(x)`).
-#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
-#[umbra(table = "session")]
-#[allow(private_interfaces)]
-pub(crate) struct SessionRow {
-    pub id: String,
-    pub user_id: Option<String>,
-    pub data: String,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub expires_at: chrono::DateTime<chrono::Utc>,
-}
-
-fn hash_token(raw: &str) -> String {
-    use sha2::Digest;
-    let mut h = sha2::Sha256::new();
-    h.update(raw.as_bytes());
-    format!("{:x}", h.finalize())
-}
-
-fn cookie_from_headers(headers: &HeaderMap) -> Option<String> {
-    let header = headers.get(http::header::COOKIE)?.to_str().ok()?;
-    for pair in header.split(';') {
-        let pair = pair.trim();
-        if let Some(value) = pair.strip_prefix(&format!("{COOKIE_NAME}=")) {
-            return Some(value.to_string());
-        }
-    }
-    None
-}
-
-async fn destroy_session(token: &str) {
-    let stored_id = hash_token(token);
-    let _ = Manager::<SessionRow>::default()
-        .filter(session_row::ID.eq(stored_id))
-        .delete()
-        .await;
-}
-
-async fn create_session_cookie(
-    request_headers: &HeaderMap,
-    response_headers: &mut HeaderMap,
-    user: &AuthUser,
-) -> Result<(), crate::AuthError> {
-    // Session-fixation defense: if the request carried an anonymous
-    // session, destroy that row before minting a new authenticated
-    // one. The new token won't equal the old one because we generate
-    // fresh randomness.
-    if let Some(old) = cookie_from_headers(request_headers) {
-        destroy_session(&old).await;
-    }
-    let raw_token = uuid::Uuid::new_v4().to_string();
-    let stored_id = hash_token(&raw_token);
-    let now = chrono::Utc::now();
-    let expires_at = now + chrono::Duration::seconds(DEFAULT_TTL_SECONDS);
-    Manager::<SessionRow>::default()
-        .create(SessionRow {
-            id: stored_id,
-            user_id: Some(user.id.to_string()),
-            data: "{}".to_string(),
-            created_at: now,
-            expires_at,
-        })
-        .await?;
-    let cookie = format!(
-        "{COOKIE_NAME}={raw_token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age={DEFAULT_TTL_SECONDS}"
-    );
-    response_headers.insert(
-        http::header::SET_COOKIE,
-        cookie.parse().expect("cookie value parses"),
-    );
-    // Best-effort last_login bump. Failure here doesn't invalidate
-    // the login (cookie is already set, session row already exists).
-    let mut patch = serde_json::Map::new();
-    patch.insert(
-        "last_login".to_string(),
-        serde_json::to_value(now).unwrap_or(serde_json::Value::Null),
-    );
-    let _ = AuthUser::objects()
-        .filter(auth_user::ID.eq(user.id))
-        .update_values(patch)
-        .await;
-    Ok(())
-}
-
-async fn clear_session_cookie(
-    request_headers: &HeaderMap,
-    response_headers: &mut HeaderMap,
-) -> Result<(), crate::AuthError> {
-    if let Some(token) = cookie_from_headers(request_headers) {
-        destroy_session(&token).await;
-    }
-    // Max-Age=0 + a far-past expires; the cookie name has to match
-    // exactly for the browser to forget the old value.
-    let cookie = format!("{COOKIE_NAME}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0");
-    response_headers.insert(
-        http::header::SET_COOKIE,
-        cookie.parse().expect("cookie value parses"),
-    );
-    Ok(())
 }

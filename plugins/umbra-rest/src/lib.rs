@@ -256,7 +256,7 @@ impl RestPlugin {
     /// ```ignore
     /// RestPlugin::default()
     ///     .authenticate(FnAuthentication::new(|headers| async move {
-    ///         let user = umbra_sessions::current_user(&headers).await.ok().flatten()?;
+    ///         let user = umbra_auth::current_user(&headers).await.ok().flatten()?;
     ///         Some(Identity::user(user.id).with_staff(user.is_staff))
     ///     }))
     /// ```

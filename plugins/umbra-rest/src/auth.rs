@@ -21,7 +21,7 @@
 //!   endpoints.
 //! - [`FnAuthentication`] — wraps an async closure of your shape.
 //!   The escape hatch for session-cookie auth (against
-//!   `umbra_sessions::current_user`), HTTP Basic Auth, API key,
+//!   `umbra_auth::current_user`), HTTP Basic Auth, API key,
 //!   JWT, and anything else.
 //!
 //! Session / Basic / Token / JWT specifics aren't baked into the
@@ -140,7 +140,7 @@ impl Authentication for NoAuthentication {
 /// ```ignore
 /// // Session-cookie auth via umbra-sessions:
 /// RestPlugin::default().authenticate(FnAuthentication::new(|headers| async move {
-///     let user = umbra_sessions::current_user(&headers).await.ok().flatten()?;
+///     let user = umbra_auth::current_user(&headers).await.ok().flatten()?;
 ///     Some(Identity::user(user.id).with_staff(user.is_staff))
 /// }));
 ///

@@ -37,7 +37,7 @@ use umbra_rest::{
     Action, ChainAuthentication, Identity, IsAuthenticated, IsStaff, Permission, PermissionError,
     ResourceConfig,
 };
-use umbra_sessions::SessionAuthentication;
+use umbra_auth::SessionAuthentication;
 
 /// A closed-set enum used as a model field via `#[umbra(choices)]`.
 ///

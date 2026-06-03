@@ -15,9 +15,10 @@ use tokio::sync::OnceCell;
 
 use umbra::web::{HeaderMap, header};
 use umbra_auth::{AuthPlugin, AuthUser, create_user};
+use umbra_auth::current_user;
 use umbra_sessions::{
     COOKIE_NAME, SessionsPlugin, clear_cookie_header, cookie_from_headers, create_session,
-    current_user, destroy_session, get_data, read_session, set_cookie_header, set_data,
+    destroy_session, get_data, read_session, set_cookie_header, set_data,
 };
 
 static BOOT: OnceCell<i64> = OnceCell::const_new();
@@ -291,7 +292,7 @@ async fn login_creates_session_sets_cookie_and_bumps_last_login() {
     let before_login = user.last_login;
 
     let mut response_headers = HeaderMap::new();
-    let token = umbra_sessions::login(&mut response_headers, &user)
+    let token = umbra_auth::login(&mut response_headers, &user)
         .await
         .expect("login ok");
 
@@ -336,7 +337,7 @@ async fn logout_destroys_session_and_clears_cookie() {
         .await
         .unwrap();
     let mut login_headers = HeaderMap::new();
-    let token = umbra_sessions::login(&mut login_headers, &user)
+    let token = umbra_auth::login(&mut login_headers, &user)
         .await
         .expect("login");
 
@@ -393,7 +394,7 @@ async fn optional_user_returns_some_when_session_cookie_resolves() {
         .await
         .unwrap();
     let mut login_headers = HeaderMap::new();
-    let token = umbra_sessions::login(&mut login_headers, &user)
+    let token = umbra_auth::login(&mut login_headers, &user)
         .await
         .unwrap();
 
@@ -403,8 +404,8 @@ async fn optional_user_returns_some_when_session_cookie_resolves() {
         .body(())
         .unwrap();
     let (mut parts, _) = req.into_parts();
-    let umbra_sessions::OptionalUser(opt) =
-        umbra_sessions::OptionalUser::from_request_parts(&mut parts, &())
+    let umbra_auth::OptionalUser(opt) =
+        umbra_auth::OptionalUser::from_request_parts(&mut parts, &())
             .await
             .unwrap();
     assert!(opt.is_some(), "session cookie should resolve to a user");
@@ -417,8 +418,8 @@ async fn optional_user_returns_none_for_anonymous_request() {
     let _user_id = boot().await;
     let req = http::Request::builder().uri("/").body(()).unwrap();
     let (mut parts, _) = req.into_parts();
-    let umbra_sessions::OptionalUser(opt) =
-        umbra_sessions::OptionalUser::from_request_parts(&mut parts, &())
+    let umbra_auth::OptionalUser(opt) =
+        umbra_auth::OptionalUser::from_request_parts(&mut parts, &())
             .await
             .unwrap();
     assert!(opt.is_none(), "anonymous → None, not 401");
@@ -430,7 +431,7 @@ async fn user_required_extractor_returns_401_for_anonymous() {
     let _user_id = boot().await;
     let req = http::Request::builder().uri("/").body(()).unwrap();
     let (mut parts, _) = req.into_parts();
-    let err = umbra_sessions::User::from_request_parts(&mut parts, &())
+    let err = umbra_auth::User::from_request_parts(&mut parts, &())
         .await
         .expect_err("anonymous should 401");
     assert_eq!(err.0, http::StatusCode::UNAUTHORIZED);
@@ -450,7 +451,7 @@ async fn messages_add_and_drain_round_trip() {
         .await
         .unwrap();
     let mut login_headers = HeaderMap::new();
-    let token = umbra_sessions::login(&mut login_headers, &user)
+    let token = umbra_auth::login(&mut login_headers, &user)
         .await
         .unwrap();
 
@@ -483,7 +484,7 @@ async fn messages_extractor_returns_handle_when_session_cookie_present() {
         .await
         .unwrap();
     let mut login_headers = HeaderMap::new();
-    let token = umbra_sessions::login(&mut login_headers, &user)
+    let token = umbra_auth::login(&mut login_headers, &user)
         .await
         .unwrap();
 
@@ -689,7 +690,7 @@ async fn login_destroys_anonymous_session_and_issues_new_token() {
     );
 
     let mut resp_headers = HeaderMap::new();
-    let new_token = umbra_sessions::login_with_request(&req_headers, &mut resp_headers, &user)
+    let new_token = umbra_auth::login_with_request(&req_headers, &mut resp_headers, &user)
         .await
         .expect("login_with_request");
 
@@ -728,7 +729,7 @@ async fn flash_messages_survive_login_token_regeneration() {
         format!("{COOKIE_NAME}={anon_token}").parse().unwrap(),
     );
     let mut resp_headers = HeaderMap::new();
-    let new_token = umbra_sessions::login_with_request(&req_headers, &mut resp_headers, &user)
+    let new_token = umbra_auth::login_with_request(&req_headers, &mut resp_headers, &user)
         .await
         .unwrap();
 

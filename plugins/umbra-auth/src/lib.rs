@@ -66,6 +66,7 @@ pub mod auth_routes;
 pub mod bearer_auth;
 pub mod extractors;
 pub mod login_required;
+pub mod session_user;
 pub mod token;
 
 pub use bearer_auth::{BearerAuthentication, parse_bearer_header};
@@ -73,6 +74,10 @@ pub use extractors::{CurrentIdentity, OptionalIdentity, resolve_identity};
 pub use login_required::{
     LoggedIn, LoginRequired, LoginRequiredLayer, current_session_user_id, login_required,
     login_required_html,
+};
+pub use session_user::{
+    OptionalUser, SessionAuthentication, User, current_user, login, login_with_request, logout,
+    user_context_layer,
 };
 pub use token::{AuthToken, PlaintextToken, TOKEN_PREFIX, digest_token};
 

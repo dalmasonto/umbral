@@ -47,11 +47,7 @@ use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use umbra::prelude::*;
 use umbra::web::{HeaderMap, header};
-use umbra_auth::{AuthUser, auth_user};
 use uuid::Uuid;
-
-pub mod session_auth;
-pub use session_auth::SessionAuthentication;
 
 /// Default cookie name. Users override via `set_cookie_header_named`
 /// when they need a project-specific name.
@@ -94,15 +90,11 @@ pub struct Session {
 #[derive(Debug, Clone)]
 pub struct SessionsPlugin {
     auto_layer: bool,
-    user_in_templates: bool,
 }
 
 impl Default for SessionsPlugin {
     fn default() -> Self {
-        Self {
-            auto_layer: true,
-            user_in_templates: false,
-        }
+        Self { auto_layer: true }
     }
 }
 
@@ -116,26 +108,6 @@ impl SessionsPlugin {
         self
     }
 
-    /// Make the current session user available as `{{ user }}` in
-    /// every template render — mirrors Django's `request.user`. When
-    /// enabled, [`user_context_layer`] is auto-applied to the router
-    /// so every request resolves the user (one DB read each) and
-    /// stashes the resulting `minijinja::Value` into the task-local
-    /// [`umbra::templates::CURRENT_USER`] for the request's duration.
-    /// `render` then merges that value into the ctx under key `user`
-    /// unless the handler supplied its own. Templates can use
-    /// `{% if user.is_authenticated %}` uniformly: the layer always
-    /// injects *something* — either the serialized user augmented
-    /// with `is_authenticated: true`, or the anonymous sentinel
-    /// `{ is_authenticated: false }`.
-    ///
-    /// Off by default because most non-HTML endpoints (REST APIs,
-    /// static assets, health checks) don't benefit from the per-
-    /// request DB lookup. Turn it on for an HTML-heavy app.
-    pub fn with_user_in_templates(mut self) -> Self {
-        self.user_in_templates = true;
-        self
-    }
 }
 
 impl Plugin for SessionsPlugin {
@@ -158,9 +130,6 @@ impl Plugin for SessionsPlugin {
         let mut router = router;
         if self.auto_layer {
             router = router.layer(axum::middleware::from_fn(session_layer));
-        }
-        if self.user_in_templates {
-            router = router.layer(axum::middleware::from_fn(user_context_layer));
         }
         router
     }
@@ -350,43 +319,38 @@ pub fn clear_cookie_header_named(name: &str) -> String {
     format!("{name}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0")
 }
 
-/// One-call helper: read the session cookie, look up the session,
-/// hydrate the user via the umbra-auth schema. Returns `None` if any
-/// step fails (no cookie, no session, expired session, no user).
+/// Read the request's session cookie and return the active `Session`
+/// row, if any. Returns `None` for: no cookie, expired session, or a
+/// session that was revoked / destroyed.
 ///
-/// The handler signature reads like a real authenticated route:
-///
-/// ```ignore
-/// async fn dashboard(headers: HeaderMap) -> Result<Html<String>, StatusCode> {
-///     let Some(user) = umbra_sessions::current_user(&headers).await? else {
-///         return Err(StatusCode::UNAUTHORIZED);
-///     };
-///     // ...
-/// }
-/// ```
-pub async fn current_user(headers: &HeaderMap) -> Result<Option<AuthUser>, SessionError> {
+/// User-agnostic — the row's `user_id` field is a `String` (the user
+/// PK serialised via `Display`), with no knowledge of which user
+/// model owns the value. For an `AuthUser`-shaped wrapper that
+/// hydrates the row, see `umbra_auth::current_user` (lives there so
+/// `umbra-sessions` stays free of any user-model dependency).
+pub async fn current_session(
+    headers: &HeaderMap,
+) -> Result<Option<Session>, SessionError> {
     let Some(id) = cookie_from_headers(headers) else {
         return Ok(None);
     };
-    let Some(session) = read_session(&id).await? else {
-        return Ok(None);
-    };
-    let Some(user_id_str) = session.user_id else {
-        return Ok(None);
-    };
-    // Session.user_id is polymorphic text (gap #59). `AuthUser` is
-    // i64-keyed, so parse the stored string back to i64. A malformed
-    // value (string that doesn't parse as i64) means this session
-    // was written by code that uses a different `UserModel` shape —
-    // treat as anonymous from `AuthUser`'s perspective.
-    let Ok(user_id) = user_id_str.parse::<i64>() else {
-        return Ok(None);
-    };
-    let user: Option<AuthUser> = AuthUser::objects()
-        .filter(auth_user::ID.eq(user_id) & auth_user::IS_ACTIVE.eq(true))
-        .first()
-        .await?;
-    Ok(user)
+    read_session(&id).await
+}
+
+/// Read the request's session cookie and return the stringified user
+/// id stashed on the active session, if any. The result is the value
+/// `umbra_auth::login_with_request` (or any other login helper)
+/// stored via [`create_session`]; for an `AuthUser`-shaped i64 PK,
+/// `.parse::<i64>().ok()` round-trips it back.
+///
+/// Returns `None` on any of: no cookie, expired session, anonymous
+/// session (`user_id IS NULL`). The user-id parse failure mode is
+/// reserved for the caller, since each user model knows its own PK
+/// shape.
+pub async fn current_user_id_str(
+    headers: &HeaderMap,
+) -> Result<Option<String>, SessionError> {
+    Ok(current_session(headers).await?.and_then(|s| s.user_id))
 }
 
 // =========================================================================
@@ -444,59 +408,35 @@ pub async fn set_data<T: Serialize>(
 }
 
 // =========================================================================
-// Login / logout bundles. The three-call dance — authenticate ->
-// create_session -> set_cookie_header — collapsed into one function so
-// route handlers don't have to reimplement it.
+// Login / logout — user-agnostic primitives. Apps and plugins that
+// know which user model they're working with (umbra-auth's AuthUser,
+// or a custom UserModel impl) call into these to mint / destroy
+// session rows + set the Set-Cookie header. The PK is stringified
+// at the call site (`user.id.to_string()`), keeping `umbra-sessions`
+// free of any user-model dependency.
+//
+// For the AuthUser-aware version that bumps `last_login` and
+// hydrates the user, see `umbra_auth::login_with_request`.
 // =========================================================================
 
-/// Establish a session for the given authenticated user and set the
-/// `Set-Cookie` header on the outgoing response. Updates
-/// `last_login` on the user row as a side effect.
+/// Establish a session pinned to `user_id_str` and set the
+/// `Set-Cookie` header on the outgoing response. Runs the session-
+/// fixation defense (destroys any anonymous session the request
+/// carries before minting the new authenticated one) and carries
+/// over the old session's `data` (flash messages, cart, etc.) so
+/// they survive the rotation.
 ///
-/// `response_headers` is mutated in place — pass the headers from an
-/// already-constructed response (e.g. `redirect.headers_mut()`).
-/// `user` should come from `umbra_auth::authenticate(...)`; this
-/// helper does not re-verify credentials.
+/// `user_id_str` is the user PK serialised via `Display` — `AuthUser`
+/// (i64) uses `.to_string()`; a `Uuid`-keyed custom user model uses
+/// `Display` on `Uuid`. Pass `None` to mint an anonymous session
+/// (rare — `session_layer` already creates one on first visit).
 ///
-/// Returns the raw session token so the caller can log it or stash
-/// it in a test fixture. In production code you can ignore the
-/// returned value.
-///
-/// ```ignore
-/// async fn login_handler(Form(form): Form<LoginForm>)
-///     -> Result<Response, StatusCode>
-/// {
-///     let user = umbra_auth::authenticate(&form.username, &form.password)
-///         .await
-///         .map_err(|_| StatusCode::UNAUTHORIZED)?;
-///     let mut response = Redirect::to("/").into_response();
-///     umbra_sessions::login(response.headers_mut(), &user)
-///         .await
-///         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-///     Ok(response)
-/// }
-/// ```
-pub async fn login(
-    response_headers: &mut HeaderMap,
-    user: &AuthUser,
-) -> Result<String, SessionError> {
-    login_with_request(&HeaderMap::new(), response_headers, user).await
-}
-
-/// `login` variant that takes the **request** headers too. Used to
-/// defend against session fixation: if the request already carries
-/// an anonymous session (created by `session_layer`), the row is
-/// destroyed before the new authenticated session is created.
-/// Carries over the existing session's `data` (flash messages, cart
-/// contents, etc.) so they survive the login.
-///
-/// Most apps call [`login`] directly; this variant exists for
-/// handlers that have a `HeaderMap` extractor and want the fixation
-/// defense to apply.
-pub async fn login_with_request(
+/// Returns the raw session token so the caller can log it or fixture
+/// it. Production code typically ignores the return.
+pub async fn login_user_id(
     request_headers: &HeaderMap,
     response_headers: &mut HeaderMap,
-    user: &AuthUser,
+    user_id_str: Option<String>,
 ) -> Result<String, SessionError> {
     // Capture data from the anonymous session before destroying it,
     // so flash messages etc. don't vanish across login.
@@ -506,22 +446,18 @@ pub async fn login_with_request(
                 Ok(Some(s)) => Some(s.data),
                 _ => None,
             };
-            // Session fixation defense: destroy the row keyed by the old
-            // (potentially attacker-known) token so a leaked cookie
-            // can't grant authed access.
+            // Session fixation defense: destroy the row keyed by the
+            // old (potentially attacker-known) token so a leaked
+            // cookie can't grant authed access.
             let _ = destroy_session(&old_token).await;
             data
         } else {
             None
         };
 
-    // Stringify the user's PK before stashing it in the session row
-    // (gap #59). AuthUser is i64-keyed so this is just `.to_string()`;
-    // custom user models with `Uuid` or string PKs would call the
-    // same helper since `Display` is what writes the canonical form.
-    let token = create_session(Some(user.id.to_string()), None).await?;
+    let token = create_session(user_id_str, None).await?;
 
-    // Restore the carry-over data onto the new session, if any.
+    // Restore carry-over data onto the new session, if any.
     if let Some(data) = carry_over_data
         && data != "{}"
     {
@@ -539,25 +475,6 @@ pub async fn login_with_request(
         header::SET_COOKIE,
         cookie.parse().expect("cookie value parses"),
     );
-    // Update last_login. Best-effort — a failure here doesn't
-    // invalidate the login (the session was created and the cookie
-    // was set), so we swallow the error after logging.
-    let mut patch = serde_json::Map::new();
-    patch.insert(
-        "last_login".to_string(),
-        serde_json::to_value(chrono::Utc::now()).unwrap_or(serde_json::Value::Null),
-    );
-    if let Err(e) = AuthUser::objects()
-        .filter(auth_user::ID.eq(user.id))
-        .update_values(patch)
-        .await
-    {
-        tracing::warn!(
-            error = ?e,
-            user_id = user.id,
-            "umbra-sessions::login: failed to update last_login (session still active)",
-        );
-    }
     Ok(token)
 }
 
@@ -592,112 +509,10 @@ pub async fn logout(
     Ok(())
 }
 
-// =========================================================================
-// Extractors — `User` and `OptionalUser` for `request.user` ergonomics.
-// =========================================================================
-
-/// axum extractors that resolve the current session cookie into an
-/// `AuthUser`.
-///
-/// - [`User`]: required. Returns 401 if the request is anonymous —
-///   the route literally cannot run without a logged-in user.
-/// - [`OptionalUser`]: optional. Wraps `Option<AuthUser>` — `None`
-///   for anonymous; `Some` for authenticated. The route runs either
-///   way and decides what to do.
-///
-/// Both implementations share one helper. The handler signature
-/// becomes the request.user-like ergonomics you'd see in Django:
-///
-/// ```ignore
-/// async fn dashboard(User(user): User) -> Html<String> {
-///     Html(format!("Welcome, {}!", user.username))
-/// }
-///
-/// async fn home(OptionalUser(maybe): OptionalUser) -> Html<String> {
-///     match maybe {
-///         Some(u) => Html(format!("Hi, {}", u.username)),
-///         None    => Html("<a href=\"/login\">Log in</a>".into()),
-///     }
-/// }
-/// ```
-pub mod extractors {
-    use axum_core::extract::FromRequestParts;
-    use http::StatusCode;
-    use http::request::Parts;
-    use umbra_auth::AuthUser;
-
-    /// Required-user extractor. 401 on anonymous requests.
-    #[derive(Debug, Clone)]
-    pub struct User(pub AuthUser);
-
-    /// Optional-user extractor. Anonymous requests get `None`.
-    #[derive(Debug, Clone)]
-    pub struct OptionalUser(pub Option<AuthUser>);
-
-    /// Helper that does the actual session-lookup. Both extractors
-    /// route through this so the resolution order stays one
-    /// definition.
-    ///
-    /// Order:
-    /// 1. `SessionToken` extension (set by `session_layer`) — single
-    ///    source of truth when the middleware is wired.
-    /// 2. Cookie header — backward-compat for handlers that don't
-    ///    use the middleware.
-    ///
-    /// Anonymous sessions resolve to `None` here (the session row
-    /// has `user_id = NULL`).
-    async fn resolve(parts: &Parts) -> Option<AuthUser> {
-        let token = parts
-            .extensions
-            .get::<super::SessionToken>()
-            .map(|t| t.0.clone())
-            .or_else(|| super::cookie_from_headers(&parts.headers))?;
-        let session = super::read_session(&token).await.ok().flatten()?;
-        // Session.user_id is text (gap #59); parse back to i64 for
-        // the AuthUser extractor. A non-parseable value means a
-        // different UserModel wrote the session — return None.
-        let user_id: i64 = session.user_id?.parse().ok()?;
-        super::AuthUser::objects()
-            .filter(super::auth_user::ID.eq(user_id) & super::auth_user::IS_ACTIVE.eq(true))
-            .first()
-            .await
-            .ok()
-            .flatten()
-    }
-
-    impl<S> FromRequestParts<S> for User
-    where
-        S: Send + Sync,
-    {
-        type Rejection = (StatusCode, &'static str);
-
-        async fn from_request_parts(
-            parts: &mut Parts,
-            _state: &S,
-        ) -> Result<Self, Self::Rejection> {
-            match resolve(parts).await {
-                Some(u) => Ok(User(u)),
-                None => Err((StatusCode::UNAUTHORIZED, "authentication required")),
-            }
-        }
-    }
-
-    impl<S> FromRequestParts<S> for OptionalUser
-    where
-        S: Send + Sync,
-    {
-        type Rejection = std::convert::Infallible;
-
-        async fn from_request_parts(
-            parts: &mut Parts,
-            _state: &S,
-        ) -> Result<Self, Self::Rejection> {
-            Ok(OptionalUser(resolve(parts).await))
-        }
-    }
-}
-
-pub use extractors::{OptionalUser, User};
+// User-aware extractors (User / OptionalUser) live in umbra-auth.
+// umbra-sessions stays free of any user-model dependency; the
+// extractors there call into umbra-sessions's `current_session` to
+// read the row and then hydrate `AuthUser` themselves.
 
 // =========================================================================
 // Messages — Django's `contrib.messages` shape.
@@ -997,58 +812,9 @@ pub async fn session_layer(
     response
 }
 
-/// Resolve the current [`AuthUser`] and stash it in the
-/// [`umbra::templates::CURRENT_USER`] task-local so every `render`
-/// inside this request can pick it up as `{{ user }}` — Django's
-/// `request.user` shape.
-///
-/// Always injects a value:
-/// - Authenticated session → serialize the user, augment with
-///   `is_authenticated: true`.
-/// - Anonymous / no session / stale cookie → the sentinel
-///   `{ is_authenticated: false }`.
-///
-/// Cost: one `current_user` call per request. The cheap path is
-/// `cookie_from_headers` + `read_session` + `AuthUser::filter().first()`
-/// — three round trips. Opt in via `SessionsPlugin::with_user_in_templates`
-/// when the app's request mix is HTML-heavy; leave off for REST-only
-/// services so static-asset and health-check requests don't trip the
-/// DB read.
-pub async fn user_context_layer(
-    req: axum::extract::Request,
-    next: axum::middleware::Next,
-) -> axum::response::Response {
-    let user_value = match current_user(req.headers()).await {
-        Ok(Some(u)) => serialize_authenticated(&u),
-        _ => anonymous_user_value(),
-    };
-    umbra::templates::with_current_user(Some(user_value), next.run(req)).await
-}
-
-/// Serialize an `AuthUser` into a minijinja value with
-/// `is_authenticated: true` merged in. Templates can therefore call
-/// `{% if user.is_authenticated %}` uniformly without checking for
-/// `user == None` separately.
-fn serialize_authenticated(user: &AuthUser) -> umbra::templates::Value {
-    let mut json = match serde_json::to_value(user) {
-        Ok(serde_json::Value::Object(map)) => map,
-        _ => serde_json::Map::new(),
-    };
-    json.insert(
-        "is_authenticated".to_string(),
-        serde_json::Value::Bool(true),
-    );
-    umbra::templates::Value::from_serialize(&serde_json::Value::Object(json))
-}
-
-/// Anonymous user sentinel — `{ is_authenticated: false }`. Lets
-/// templates write `{% if user.is_authenticated %}` without a
-/// separate `{% if user %}` guard.
-fn anonymous_user_value() -> umbra::templates::Value {
-    let mut json = serde_json::Map::new();
-    json.insert(
-        "is_authenticated".to_string(),
-        serde_json::Value::Bool(false),
-    );
-    umbra::templates::Value::from_serialize(&serde_json::Value::Object(json))
-}
+// The `user_context_layer` that injected the current user into the
+// `umbra::templates::CURRENT_USER` task-local moved to umbra-auth
+// alongside the rest of the AuthUser-aware surface. It now hangs off
+// `AuthPlugin::with_user_in_templates()` instead of
+// `SessionsPlugin::with_user_in_templates()` — the layer needs to
+// hydrate the AuthUser row, which umbra-sessions can no longer name.
