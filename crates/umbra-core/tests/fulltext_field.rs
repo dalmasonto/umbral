@@ -66,6 +66,8 @@ fn postgres_ddl_renders_tsvector_type() {
                 help: String::new(),
                 example: String::new(),
                 supported_backends: Vec::new(),
+                min: None,
+                max: None,
             },
             Column {
                 name: "search".to_string(),
@@ -90,6 +92,8 @@ fn postgres_ddl_renders_tsvector_type() {
                 help: String::new(),
                 example: String::new(),
                 supported_backends: Vec::new(),
+                min: None,
+                max: None,
             },
         ],
     };

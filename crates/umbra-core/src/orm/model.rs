@@ -382,6 +382,26 @@ pub struct FieldSpec {
     /// their end. Pairs naturally with `help` to make a column's
     /// purpose clear in Swagger UI.
     pub example: &'static str,
+
+    /// Optional numeric lower bound. Set via `#[umbra(min = N)]`.
+    /// Closes IMP-3 from `bugs/tests/testBugs.md`. Flows to:
+    ///
+    /// - OpenAPI `minimum` on the property schema.
+    /// - REST plugin's dynamic write path pre-validation (400
+    ///   response with a structured message).
+    /// - Future: HTML5 `min` attribute on admin form inputs.
+    ///
+    /// `i64::MIN` sentinel means "no minimum"; the DDL +
+    /// OpenAPI emitters skip the constraint when this is the
+    /// sentinel value. Macro accepts integer literals only at
+    /// v1 (a `Decimal`-aware shape can land when there's a real
+    /// consumer for decimal-typed validators).
+    pub min: Option<i64>,
+
+    /// Optional numeric upper bound. Set via `#[umbra(max = N)]`.
+    /// Mirror of `min`; same plumbing on the OpenAPI / REST /
+    /// admin sides.
+    pub max: Option<i64>,
 }
 
 /// Referential action emitted in the SQL `REFERENCES ... ON

@@ -105,7 +105,10 @@ fn singleton_attribute_flips_const() {
         "Model::SINGLETON should be true for a model with #[umbra(singleton)]",
     );
     let meta = umbra::migrate::ModelMeta::for_::<SiteSettings>();
-    assert!(meta.singleton, "ModelMeta.singleton should mirror the const");
+    assert!(
+        meta.singleton,
+        "ModelMeta.singleton should mirror the const"
+    );
 }
 
 #[test]
@@ -128,4 +131,68 @@ fn singleton_round_trips_through_json_snapshot() {
     );
     let round: umbra::migrate::ModelMeta = serde_json::from_str(&json).unwrap();
     assert!(round.singleton);
+}
+
+// =========================================================================
+// IMP-3: `#[umbra(min = N)]` / `#[umbra(max = N)]` propagate from the
+// macro into FieldSpec + ModelMeta.
+// =========================================================================
+
+#[derive(Debug, sqlx::FromRow, Serialize, Deserialize, Model)]
+struct PersonRow {
+    id: i64,
+    #[umbra(min = 0, max = 150)]
+    age: i32,
+    #[umbra(min = 1)]
+    score: i32,
+    plain: i32,
+}
+
+#[test]
+fn min_max_attributes_reach_field_spec() {
+    let age = <PersonRow as Model>::FIELDS
+        .iter()
+        .find(|f| f.name == "age")
+        .expect("age field missing");
+    assert_eq!(age.min, Some(0));
+    assert_eq!(age.max, Some(150));
+
+    let score = <PersonRow as Model>::FIELDS
+        .iter()
+        .find(|f| f.name == "score")
+        .expect("score field missing");
+    assert_eq!(score.min, Some(1));
+    assert_eq!(score.max, None);
+
+    let plain = <PersonRow as Model>::FIELDS
+        .iter()
+        .find(|f| f.name == "plain")
+        .expect("plain field missing");
+    assert_eq!(plain.min, None);
+    assert_eq!(plain.max, None);
+}
+
+#[test]
+fn min_max_round_trip_through_model_meta_snapshot() {
+    let meta = umbra::migrate::ModelMeta::for_::<PersonRow>();
+    let json = serde_json::to_string(&meta).unwrap();
+    // Only the `age` field carries both bounds; `plain` omits them
+    // entirely thanks to skip_serializing_if=Option::is_none.
+    assert!(
+        json.contains("\"min\":0"),
+        "snapshot must carry min:0; got: {json}"
+    );
+    assert!(
+        json.contains("\"max\":150"),
+        "snapshot must carry max:150; got: {json}"
+    );
+
+    let round: umbra::migrate::ModelMeta = serde_json::from_str(&json).unwrap();
+    let age = round
+        .fields
+        .iter()
+        .find(|c| c.name == "age")
+        .expect("age column missing after round-trip");
+    assert_eq!(age.min, Some(0));
+    assert_eq!(age.max, Some(150));
 }

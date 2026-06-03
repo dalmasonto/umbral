@@ -108,6 +108,8 @@ fn write_migration(dir: &Path, plugin: &str, id: &str, table: &str) {
                     help: String::new(),
                     example: String::new(),
                     supported_backends: Vec::new(),
+                    min: None,
+                    max: None,
                 },
                 Column {
                     name: "title".to_string(),
@@ -132,6 +134,8 @@ fn write_migration(dir: &Path, plugin: &str, id: &str, table: &str) {
                     help: String::new(),
                     example: String::new(),
                     supported_backends: Vec::new(),
+                    min: None,
+                    max: None,
                 },
             ],
         }],

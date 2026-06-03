@@ -857,6 +857,8 @@ impl From<&IntrospectedColumn> for Column {
             help: String::new(),
             example: String::new(),
             supported_backends: Vec::new(),
+            min: None,
+            max: None,
         }
     }
 }

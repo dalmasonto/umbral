@@ -57,6 +57,8 @@ fn id_col() -> Column {
         help: String::new(),
         example: String::new(),
         supported_backends: Vec::new(),
+        min: None,
+        max: None,
     }
 }
 
@@ -84,6 +86,8 @@ fn title_col() -> Column {
         help: String::new(),
         example: String::new(),
         supported_backends: Vec::new(),
+        min: None,
+        max: None,
     }
 }
 
@@ -188,6 +192,8 @@ fn name_match_wins_over_shape_match_when_columns_differ() {
         help: String::new(),
         example: String::new(),
         supported_backends: Vec::new(),
+        min: None,
+        max: None,
     };
 
     let prev = make_snapshot(vec![make_meta("Foo", "foo", vec![id_col(), title_col()])]);
@@ -271,6 +277,8 @@ fn no_rename_when_shapes_differ() {
         help: String::new(),
         example: String::new(),
         supported_backends: Vec::new(),
+        min: None,
+        max: None,
     };
 
     let prev = make_snapshot(vec![make_meta("Foo", "foo", vec![id_col(), title_col()])]);

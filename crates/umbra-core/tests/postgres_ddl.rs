@@ -41,6 +41,8 @@ fn id_pk() -> Column {
         help: String::new(),
         example: String::new(),
         supported_backends: Vec::new(),
+        min: None,
+        max: None,
     }
 }
 
@@ -69,6 +71,8 @@ fn text_not_null(name: &str) -> Column {
         help: String::new(),
         example: String::new(),
         supported_backends: Vec::new(),
+        min: None,
+        max: None,
     }
 }
 
@@ -97,6 +101,8 @@ fn text_nullable(name: &str) -> Column {
         help: String::new(),
         example: String::new(),
         supported_backends: Vec::new(),
+        min: None,
+        max: None,
     }
 }
 
@@ -355,6 +361,8 @@ fn col(name: &str, ty: SqlType) -> Column {
         help: String::new(),
         example: String::new(),
         supported_backends: Vec::new(),
+        min: None,
+        max: None,
     }
 }
 
@@ -472,4 +480,92 @@ fn render_operation_for_unknown_backend_panics() {
         table: "x".to_string(),
     };
     let _ = render_operation_for(&op, "mysql");
+}
+
+// --------------------------------------------------------------------- //
+// IMP-3: `#[umbra(min = N)]` / `#[umbra(max = N)]` CHECK constraints      //
+// --------------------------------------------------------------------- //
+
+/// An integer column with min/max bounds renders a CHECK clause that
+/// quotes the column name and combines both bounds with AND.
+#[test]
+fn create_table_int_with_min_max_emits_check_on_postgres() {
+    let mut age = Column {
+        name: "age".to_string(),
+        ty: SqlType::Integer,
+        primary_key: false,
+        nullable: false,
+        fk_target: None,
+        noform: false,
+        noedit: false,
+        is_string_repr: false,
+        max_length: 0,
+        choices: Vec::new(),
+        choice_labels: Vec::new(),
+        default: String::new(),
+        is_multichoice: false,
+        unique: false,
+        on_delete: umbra_core::orm::FkAction::NoAction,
+        on_update: umbra_core::orm::FkAction::NoAction,
+        index: false,
+        auto_now_add: false,
+        auto_now: false,
+        help: String::new(),
+        example: String::new(),
+        supported_backends: Vec::new(),
+        min: Some(0),
+        max: Some(150),
+    };
+    let op = Operation::CreateTable {
+        table: "person".to_string(),
+        columns: vec![id_pk(), age.clone()],
+    };
+    let stmts = render_operation_for(&op, "postgres");
+    let sql = &stmts[0];
+    assert!(
+        sql.contains("CHECK (\"age\" >= 0 AND \"age\" <= 150)"),
+        "expected combined min+max CHECK; got {sql}",
+    );
+
+    // SQLite emits the same CHECK; both dialects accept the syntax.
+    let op2 = Operation::CreateTable {
+        table: "person".to_string(),
+        columns: vec![id_pk(), age.clone()],
+    };
+    let sqlite_sql = &render_operation_for(&op2, "sqlite")[0];
+    assert!(
+        sqlite_sql.contains("CHECK (\"age\" >= 0 AND \"age\" <= 150)"),
+        "expected the same CHECK on SQLite; got {sqlite_sql}",
+    );
+
+    // Min-only is just `>=`.
+    age.max = None;
+    let op3 = Operation::CreateTable {
+        table: "person".to_string(),
+        columns: vec![id_pk(), age.clone()],
+    };
+    let pg_min_only = &render_operation_for(&op3, "postgres")[0];
+    assert!(
+        pg_min_only.contains("CHECK (\"age\" >= 0)") && !pg_min_only.contains("<="),
+        "min-only should drop the upper bound; got {pg_min_only}",
+    );
+}
+
+/// Non-numeric column types skip the CHECK even when bounds are set.
+/// Min/max on a TEXT column is nonsensical (lexicographic comparison)
+/// so the renderer treats them as a no-op rather than a footgun.
+#[test]
+fn min_max_skipped_for_non_numeric_columns() {
+    let mut title = text_not_null("title");
+    title.min = Some(1);
+    title.max = Some(100);
+    let op = Operation::CreateTable {
+        table: "post".to_string(),
+        columns: vec![id_pk(), title],
+    };
+    let sql = &render_operation_for(&op, "postgres")[0];
+    assert!(
+        !sql.contains("CHECK"),
+        "min/max on TEXT must not emit a CHECK clause; got {sql}",
+    );
 }

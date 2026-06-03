@@ -212,6 +212,10 @@ struct UmbraFieldAttr {
     /// from `bugs/tests/testBugs.md`. Accept multiple via repeat:
     /// `#[umbra(backend = "postgres"), umbra(backend = "mysql")]`.
     backends: Vec<String>,
+    /// `#[umbra(min = N)]` — numeric lower bound. Closes IMP-3.
+    min: Option<i64>,
+    /// `#[umbra(max = N)]` — numeric upper bound. Closes IMP-3.
+    max: Option<i64>,
 }
 
 fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAttr> {
@@ -232,6 +236,8 @@ fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAtt
         help: None,
         example: None,
         backends: Vec::new(),
+        min: None,
+        max: None,
     };
     for attr in attrs {
         if !attr.path().is_ident("umbra") {
@@ -331,6 +337,16 @@ fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAtt
                 let lit: syn::LitStr = value.parse()?;
                 parsed.backends.push(lit.value());
                 Ok(())
+            } else if meta.path.is_ident("min") {
+                let value = meta.value()?;
+                let lit: syn::LitInt = value.parse()?;
+                parsed.min = Some(lit.base10_parse()?);
+                Ok(())
+            } else if meta.path.is_ident("max") {
+                let value = meta.value()?;
+                let lit: syn::LitInt = value.parse()?;
+                parsed.max = Some(lit.base10_parse()?);
+                Ok(())
             } else {
                 // Unknown key. Report it with the known set so the
                 // common typo case (`is_string_repr` instead of
@@ -358,7 +374,8 @@ fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAtt
                      `unique`, `on_delete = \"...\"`, \
                      `on_update = \"...\"`, `index`, `auto_now`, \
                      `auto_now_add`, `help = \"...\"`, \
-                     `example = \"...\"`, and `backend = \"...\"`"
+                     `example = \"...\"`, `backend = \"...\"`, \
+                     `min = N`, and `max = N`"
                 )))
             }
         })?;
@@ -792,6 +809,20 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             let lits = field_attr.backends.iter().map(|s| quote!(#s));
             quote! { &[#(#lits),*] }
         };
+        let min_tokens = match field_attr.min {
+            Some(n) => {
+                let lit = syn::LitInt::new(&format!("{n}_i64"), proc_macro2::Span::call_site());
+                quote! { ::core::option::Option::Some(#lit) }
+            }
+            None => quote! { ::core::option::Option::None },
+        };
+        let max_tokens = match field_attr.max {
+            Some(n) => {
+                let lit = syn::LitInt::new(&format!("{n}_i64"), proc_macro2::Span::call_site());
+                quote! { ::core::option::Option::Some(#lit) }
+            }
+            None => quote! { ::core::option::Option::None },
+        };
 
         // `on_delete` / `on_update` → token paths into FkAction. An
         // unknown value (typo, unsupported variant) becomes a
@@ -845,6 +876,8 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                 auto_now: #auto_now_lit,
                 help: #help_tokens,
                 example: #example_tokens,
+                min: #min_tokens,
+                max: #max_tokens,
             }
         });
 

@@ -131,6 +131,8 @@ impl Plugin for TestPlugin {
                 help: String::new(),
                 example: String::new(),
                 supported_backends: Vec::new(),
+                min: None,
+                max: None,
             }],
         }]
     }

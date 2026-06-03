@@ -1317,6 +1317,8 @@ mod noform_drop {
             help: String::new(),
             example: String::new(),
             supported_backends: Vec::new(),
+            min: None,
+            max: None,
         }
     }
 
@@ -1333,6 +1335,7 @@ mod noform_drop {
             display: "User".into(),
             icon: "user".into(),
             database: None,
+            singleton: false,
         }
     }
 

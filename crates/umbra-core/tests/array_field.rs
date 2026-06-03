@@ -90,6 +90,8 @@ fn postgres_ddl_renders_array_suffix() {
                 help: String::new(),
                 example: String::new(),
                 supported_backends: Vec::new(),
+                min: None,
+                max: None,
             },
             Column {
                 name: "tags".to_string(),
@@ -114,6 +116,8 @@ fn postgres_ddl_renders_array_suffix() {
                 help: String::new(),
                 example: String::new(),
                 supported_backends: Vec::new(),
+                min: None,
+                max: None,
             },
         ],
     };

@@ -517,6 +517,15 @@ pub struct Column {
     /// don't churn.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub supported_backends: Vec<String>,
+
+    /// IMP-3: numeric lower bound. `None` means "no minimum"; the
+    /// DDL emits a `CHECK (col >= N)` constraint when set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min: Option<i64>,
+
+    /// IMP-3: numeric upper bound. Same shape as `min`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max: Option<i64>,
 }
 
 fn is_no_action(a: &crate::orm::FkAction) -> bool {
@@ -590,11 +599,9 @@ impl From<&FieldSpec> for Column {
             auto_now: f.auto_now,
             help: f.help.to_string(),
             example: f.example.to_string(),
-            supported_backends: f
-                .supported_backends
-                .iter()
-                .map(|s| s.to_string())
-                .collect(),
+            supported_backends: f.supported_backends.iter().map(|s| s.to_string()).collect(),
+            min: f.min,
+            max: f.max,
         }
     }
 }
@@ -2716,6 +2723,14 @@ fn build_column_def_sqlite(col: &Column) -> sea_query::ColumnDef {
     if col.unique && !col.primary_key {
         def.unique_key();
     }
+    // IMP-3: `#[umbra(min = N)]` / `#[umbra(max = N)]` lift to a
+    // column-level CHECK clause. Both SQLite and Postgres accept the
+    // same syntax. The pre-validation in `insert_json`/`update_json`
+    // catches violations earlier with a friendlier error; the CHECK
+    // is the DB-side safety net against direct-SQL writers.
+    if let Some(check) = check_min_max_sql(col) {
+        def.extra(check);
+    }
     // User-declared `#[umbra(default = "...")]` lifts to a DDL DEFAULT
     // clause. Required when emitting `ALTER TABLE ADD COLUMN` for a
     // NOT NULL column against a non-empty table (SQLite rejects the
@@ -2752,6 +2767,33 @@ fn sqlite_bool_default(raw: &str) -> i32 {
         "true" | "1" | "t" | "yes" => 1,
         _ => 0,
     }
+}
+
+/// IMP-3: lower `#[umbra(min = N)]` / `#[umbra(max = N)]` to a
+/// DDL CHECK clause. Returns `None` when the column declares
+/// neither bound. The rendered SQL works on both SQLite and
+/// Postgres (`"<col>" >= N`, `"<col>" <= N`, joined by `AND`).
+/// Only applied to numeric columns — applying it to text would
+/// compare strings lexicographically and surprise everyone.
+fn check_min_max_sql(col: &Column) -> Option<String> {
+    if col.min.is_none() && col.max.is_none() {
+        return None;
+    }
+    if !matches!(
+        col.ty,
+        SqlType::SmallInt | SqlType::Integer | SqlType::BigInt | SqlType::Real | SqlType::Double
+    ) {
+        return None;
+    }
+    let name = col.name.replace('"', "\"\"");
+    let mut parts = Vec::with_capacity(2);
+    if let Some(n) = col.min {
+        parts.push(format!("\"{name}\" >= {n}"));
+    }
+    if let Some(n) = col.max {
+        parts.push(format!("\"{name}\" <= {n}"));
+    }
+    Some(format!("CHECK ({})", parts.join(" AND ")))
 }
 
 /// Build a Postgres `ColumnDef`. Integer primary keys use the
@@ -2815,6 +2857,10 @@ fn build_column_def_postgres(col: &Column) -> sea_query::ColumnDef {
     // Postgres too. Skipped for PK columns (already unique).
     if col.unique && !col.primary_key {
         def.unique_key();
+    }
+    // IMP-3: numeric bounds CHECK. Mirrors the SQLite branch.
+    if let Some(check) = check_min_max_sql(col) {
+        def.extra(check);
     }
     // Single-valued Choices: emit a CHECK constraint so a third-party
     // process writing directly to the DB can't insert a value the Rust
@@ -2937,6 +2983,8 @@ mod tests {
             help: String::new(),
             example: String::new(),
             supported_backends: Vec::new(),
+            min: None,
+            max: None,
         };
         let username = Column {
             name: "username".into(),
@@ -2961,6 +3009,8 @@ mod tests {
             help: String::new(),
             example: String::new(),
             supported_backends: Vec::new(),
+            min: None,
+            max: None,
         };
         let email = Column {
             name: "email".into(),
@@ -2985,6 +3035,8 @@ mod tests {
             help: String::new(),
             example: String::new(),
             supported_backends: Vec::new(),
+            min: None,
+            max: None,
         };
 
         for backend in ["sqlite", "postgres"] {
@@ -3079,6 +3131,8 @@ mod tests {
             help: String::new(),
             example: String::new(),
             supported_backends: Vec::new(),
+            min: None,
+            max: None,
         };
         let cascade_fk = Column {
             on_delete: crate::orm::FkAction::Cascade,
@@ -3188,6 +3242,8 @@ mod tests {
                 help: String::new(),
                 example: String::new(),
                 supported_backends: Vec::new(),
+                min: None,
+                max: None,
             }
         }
         fn meta_with(col: Column) -> ModelMeta {
@@ -3258,6 +3314,8 @@ mod tests {
             help: String::new(),
             example: String::new(),
             supported_backends: Vec::new(),
+            min: None,
+            max: None,
         };
 
         // unique false → true: emit ADD CONSTRAINT ... UNIQUE
@@ -3358,6 +3416,8 @@ mod tests {
             help: String::new(),
             example: String::new(),
             supported_backends: Vec::new(),
+            min: None,
+            max: None,
         };
         let mut stmt = Table::create();
         stmt.table(Alias::new("t"));
@@ -3434,6 +3494,8 @@ mod tests {
             help: String::new(),
             example: String::new(),
             supported_backends: Vec::new(),
+            min: None,
+            max: None,
         };
         let slug = Column {
             name: "slug".into(),
@@ -3469,7 +3531,9 @@ mod tests {
         for backend in ["sqlite", "postgres"] {
             let stmts = render_operation_for(&op, backend);
             assert!(
-                stmts.iter().any(|s| s.to_uppercase().contains("CREATE TABLE")),
+                stmts
+                    .iter()
+                    .any(|s| s.to_uppercase().contains("CREATE TABLE")),
                 "{backend}: expected a CREATE TABLE; got: {stmts:?}",
             );
             let index_stmts: Vec<_> = stmts

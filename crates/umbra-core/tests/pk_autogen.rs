@@ -115,6 +115,8 @@ fn int_pk_column() -> Column {
         help: String::new(),
         example: String::new(),
         supported_backends: Vec::new(),
+        min: None,
+        max: None,
     }
 }
 
@@ -142,6 +144,8 @@ fn uuid_pk_column() -> Column {
         help: String::new(),
         example: String::new(),
         supported_backends: Vec::new(),
+        min: None,
+        max: None,
     }
 }
 
@@ -169,6 +173,8 @@ fn string_pk_column() -> Column {
         help: String::new(),
         example: String::new(),
         supported_backends: Vec::new(),
+        min: None,
+        max: None,
     }
 }
 
@@ -196,6 +202,8 @@ fn label_column() -> Column {
         help: String::new(),
         example: String::new(),
         supported_backends: Vec::new(),
+        min: None,
+        max: None,
     }
 }
 

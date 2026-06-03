@@ -644,6 +644,28 @@ impl<'a> DynQuerySet<'a> {
                     col.name
                 )));
             }
+            // IMP-3: pre-validate `#[umbra(min = N)]` / `max = N`. The
+            // DB-side CHECK constraint catches violations too, but
+            // surfacing a structured 400 with the field name is
+            // friendlier than a raw constraint error from sqlx.
+            if let Some(n) = json.as_i64() {
+                if let Some(min) = col.min {
+                    if n < min {
+                        return Err(sqlx::Error::Protocol(format!(
+                            "field `{}` violates min={min}: got {n}",
+                            col.name
+                        )));
+                    }
+                }
+                if let Some(max) = col.max {
+                    if n > max {
+                        return Err(sqlx::Error::Protocol(format!(
+                            "field `{}` violates max={max}: got {n}",
+                            col.name
+                        )));
+                    }
+                }
+            }
             let sea_value =
                 crate::orm::write::json_to_sea_value(col.ty, json, col.nullable, &col.name)
                     .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
@@ -749,6 +771,25 @@ impl<'a> DynQuerySet<'a> {
                 }
                 continue;
             };
+            // IMP-3: same min/max pre-validation as insert_json.
+            if let Some(n) = json.as_i64() {
+                if let Some(min) = col.min {
+                    if n < min {
+                        return Err(sqlx::Error::Protocol(format!(
+                            "field `{}` violates min={min}: got {n}",
+                            col.name
+                        )));
+                    }
+                }
+                if let Some(max) = col.max {
+                    if n > max {
+                        return Err(sqlx::Error::Protocol(format!(
+                            "field `{}` violates max={max}: got {n}",
+                            col.name
+                        )));
+                    }
+                }
+            }
             let sea_value =
                 crate::orm::write::json_to_sea_value(col.ty, json, col.nullable, &col.name)
                     .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;

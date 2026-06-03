@@ -137,6 +137,8 @@ fn create_table_emits_references_sqlite() {
                 help: String::new(),
                 example: String::new(),
                 supported_backends: Vec::new(),
+                min: None,
+                max: None,
             },
             Column {
                 name: "title".to_string(),
@@ -161,6 +163,8 @@ fn create_table_emits_references_sqlite() {
                 help: String::new(),
                 example: String::new(),
                 supported_backends: Vec::new(),
+                min: None,
+                max: None,
             },
             Column {
                 name: "author".to_string(),
@@ -185,6 +189,8 @@ fn create_table_emits_references_sqlite() {
                 help: String::new(),
                 example: String::new(),
                 supported_backends: Vec::new(),
+                min: None,
+                max: None,
             },
         ],
     };
@@ -242,6 +248,8 @@ fn create_table_emits_references_postgres() {
                 help: String::new(),
                 example: String::new(),
                 supported_backends: Vec::new(),
+                min: None,
+                max: None,
             },
             Column {
                 name: "title".to_string(),
@@ -266,6 +274,8 @@ fn create_table_emits_references_postgres() {
                 help: String::new(),
                 example: String::new(),
                 supported_backends: Vec::new(),
+                min: None,
+                max: None,
             },
             Column {
                 name: "author".to_string(),
@@ -290,6 +300,8 @@ fn create_table_emits_references_postgres() {
                 help: String::new(),
                 example: String::new(),
                 supported_backends: Vec::new(),
+                min: None,
+                max: None,
             },
         ],
     };
@@ -612,12 +624,10 @@ async fn one_to_one_rejects_second_reference_to_same_target() {
         .await
         .unwrap();
     // Create the user side by hand for the test (test fixture only).
-    sqlx::query(
-        "CREATE TABLE fk_user (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
+    sqlx::query("CREATE TABLE fk_user (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)")
+        .execute(&pool)
+        .await
+        .unwrap();
     let meta = umbra::migrate::ModelMeta::for_::<Profile>();
     let op = Operation::CreateTable {
         table: Profile::TABLE.to_string(),
