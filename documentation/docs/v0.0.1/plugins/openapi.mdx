@@ -65,6 +65,52 @@ OpenApiPlugin::default()
 Each string is matched against the model's table name. Excluded models produce
 no schema object and no operations in the spec.
 
+## Column metadata in the schema
+
+Beyond `type` + `format`, every column's schema carries the metadata the migration engine already knew about — surfaced so Swagger UI, generated clients, and the umbra-playground can build richer affordances without re-walking the model registry.
+
+| OpenAPI key | Source on the column |
+|---|---|
+| `enum` | `#[umbra(choices)]` — closed-set columns get their valid values inline. (Skipped for `is_multichoice` columns whose wire value is a CSV.) |
+| `maxLength` | `#[umbra(max_length = N)]` |
+| `default` | `#[umbra(default = "...")]` |
+| `readOnly` | `#[umbra(noedit)]` — PUT/PATCH bodies in Swagger render the field grey |
+| `nullable` | `Option<T>` on the model field |
+
+### Vendor extensions
+
+OpenAPI 3.0 reserves `x-*` keys for tool-specific data. The plugin emits these for affordances no standard OpenAPI key captures:
+
+| Extension | Meaning |
+|---|---|
+| `x-umbra-choice-labels` | Human labels paired position-for-position with `enum` (from `ChoiceField`). |
+| `x-umbra-multichoice` + `x-umbra-choices` | Flag for multichoice columns whose wire value is a CSV of the choice set. |
+| `x-umbra-fk-target` | Name of the table a foreign-key column points at. |
+| `x-umbra-string-repr` | The model's `__str__`-equivalent display column. |
+| `x-umbra-filter-field` + `x-umbra-filter-lookup` | On filter query parameters (see below) — names the column and lookup the parameter wraps. |
+
+## Filter parameters
+
+When a resource opts into Django-style filtering via `ResourceConfig::enable_filters()`, the plugin emits one OpenAPI `parameters` entry per `(column, lookup)` pair on the list operation. Generated clients, Swagger UI, and the playground all see what's filterable without re-implementing the lookup grammar.
+
+Parameter naming follows the runtime parser:
+
+| Suffix | Parameter name |
+|---|---|
+| `eq` (default) | bare column name (`?status=`) |
+| any other | `<field>__<lookup>` (`?title__contains=`, `?id__in=`) |
+
+Types follow the column (`eq`, `ne`, `gt`, `lt`, `gte`, `lte`); `__in` is a CSV string; `__isnull` is a boolean. PK columns are skipped — filtering on `id` adds no value over the detail URL `/api/<table>/{id}`.
+
+```rust
+use umbra_rest::{RestPlugin, ResourceConfig};
+
+RestPlugin::default()
+    .resource(ResourceConfig::new("article").enable_filters())
+```
+
+Now the GET `/api/article/` operation in the emitted spec carries `title`, `title__contains`, `status`, `status__in`, `id__gte`, etc. as discoverable query parameters.
+
 ## Pairing with REST
 
 `umbra-openapi` declares `"rest"` in its `dependencies()`, so the plugin

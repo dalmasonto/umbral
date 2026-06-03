@@ -1,10 +1,10 @@
 ---
 title: Playground plugin
-description: Interactive API playground for umbra-rest endpoints.
+description: Interactive API playground for umbra-rest endpoints — Postman-style request builder, schema introspection, per-endpoint stats.
 sidebar_position: 1
 ---
 
-`umbra-playground` mounts a Postman-style API playground at `/api/playground/`. It reads the OpenAPI spec produced by `umbra-openapi` and renders a navigable endpoint tree, a request builder, and a response viewer — all from the browser, no extra service to run.
+`umbra-playground` mounts an interactive API explorer at `/api/playground/`. It reads the OpenAPI spec produced by `umbra-openapi` and gives you a navigable endpoint tree, a request builder with schema introspection, a response viewer, per-endpoint history, and a per-endpoint stats panel — all in the browser, no extra service to run.
 
 ## Quick start
 
@@ -22,29 +22,81 @@ let app = App::builder()
 
 Open `http://localhost:8000/api/playground/` in a browser.
 
-## Requirements
+## Build requirements
 
-The plugin bundles a React + tailwindcss UI at compile time. To enable the full UI, install `esbuild` and `tailwindcss` once:
+The plugin bundles a React + Vite UI at compile time and **embeds** it into the binary via `include_dir`. To produce the bundle, you need Node.js 20+ available so `npm` can install the frontend's dev dependencies once:
 
 ```bash
-npm i -g esbuild tailwindcss
+cd plugins/umbra-playground/frontend
+npm install
 ```
 
-Without these, the plugin still compiles and serves a placeholder page that explains what's needed.
+Then a normal `cargo build` of the plugin runs `npm run build` (Vite) automatically through `build.rs` and bakes the output into the binary. There's no `dist/` directory to ship alongside — the assets *are* the binary.
+
+Without Node available, the plugin still compiles and serves a placeholder page explaining the recovery steps.
 
 ## What you get
 
-- Three-pane layout: endpoint tree, request builder, response viewer.
-- Per-endpoint request history persisted to localStorage.
-- cURL export of any request.
-- JSON syntax tree in the response viewer.
-- Bearer token input in the Auth tab.
+### Three-pane layout
+
+- **Sidebar** — endpoint tree grouped by tag with a searchable filter. Tag names are humanised (`permissions_contenttype` → `Permissions Contenttype`).
+- **Request builder** — URL bar, send button, and tabs: Params · Body · Headers · Auth · Schema.
+- **Response viewer** — status bar and tabs: Body · Headers · History · Stats · cURL.
+
+### Schema-driven request building
+
+The **Schema tab** in the request builder surfaces the request body shape and every response schema. Each field is rendered with type / required / nullable / readOnly / `maxLength` / `default` / enum (choices) / FK target / multichoice — pulled straight from the OpenAPI vendor extensions emitted by `umbra-openapi`.
+
+Two **autofill** flows for request bodies:
+
+- **Automatic on endpoint click** — when you select an endpoint that declares a request body, the Body tab pre-fills with a `required-only` JSON skeleton (zero-tracked per operation so harmless re-renders don't clobber your edits).
+- **Manual via the Schema tab** — `[Required only]` / `[All fields]` buttons regenerate the skeleton if you want to start over or expand to every documented field.
+
+`readOnly` fields are excluded from the skeleton by default — they're server-generated (`created_at`, computed columns) and would 4xx if sent.
+
+### Required-param locking
+
+The Params table reads `pathItem.parameters` *and* `operation.parameters` from the spec, so `{id}` on a detail URL appears in the table. Required params are auto-enabled, the checkbox is locked, and the trash button is locked — sending the request without them would 4xx, so the UI removes the temptation.
+
+### Filter discovery
+
+When the OpenAPI spec advertises filter parameters (umbra-openapi emits them when `ResourceConfig::enable_filters()` is on), the Params table shows them with proper types and lookups. When it doesn't, the playground falls back to chip suggestions inferred from the response item schema — `[+ eq]` / `[+ contains]` / `[+ gte]` / `[+ in]` etc. per field, scoped by type.
+
+### Per-endpoint stats
+
+The **Stats tab** computes performance insights from the request history for the current endpoint:
+
+- Stat cards — total requests, avg duration, p95 / p99 (with fastest/slowest hints), success rate.
+- Duration-over-time chart (Recharts area chart with rolling-window moving average).
+- Status distribution — 2xx/3xx/4xx/5xx/ERR class bars plus exact code counts.
+- Avg response size, latest sample timestamp.
+
+### Per-endpoint history with clickable detail dialog
+
+Every send is recorded per `operationId`. Click any history row to open a detail dialog showing the full request (method, URL, query params, headers + auth, body) and response (status, timing, headers, body). Both bodies render in Monaco editors with copy-to-clipboard.
+
+### Persistent UI state
+
+Stored in IndexedDB via Dexie:
+
+- **History** — every request/response pair per endpoint. Survives reloads, 50-record cap per operation.
+- **Editor state** — sidebar search, expanded tag groups, active tabs (Request + Response). The UI lands back exactly where you left it after a reload.
+- **Selected endpoint** — reload returns you to the same operation.
+
+Settings (base URL, default headers, variables) live in `localStorage` since they're small and need to be readable synchronously at store init.
+
+### Other features
+
+- **Dark/light mode** that follows the playground's theme toggle.
+- **cURL export** of any request via the cURL tab.
+- **Bearer-token Auth tab** for quick token testing.
+- **Workspace settings sheet** — base URL, variables (`{{name}}` substitution), default headers.
 
 ## v1 limitations
 
 - Same-origin requests only (no CORS proxy).
-- Body editor is a JSON textarea; no schema-driven form.
-- Auth is a single bearer-token field; spec-driven `securitySchemes` arrive in v2.
-- History is per-browser (localStorage); server-side history is a future plugin.
+- Auth is a single bearer-token field. Spec-driven `securitySchemes` discovery is a v2 follow-up.
+- History total cap is per-operation only; no global ceiling yet.
+- Schema tab doesn't drill into nested `$ref`s — names like `→ Profile` are clickable in v2.
 
-See [the design spec](https://github.com/umbra/umbra/blob/main/docs/superpowers/specs/2026-06-02-rest-playground-design.md) for the full design and follow-up work.
+See [the design spec](https://github.com/umbra/umbra/blob/main/docs/superpowers/specs/2026-06-02-rest-playground-design.md) for the full design history and the post-v1 backlog at `bugs/playground-openapi-gaps.md`.

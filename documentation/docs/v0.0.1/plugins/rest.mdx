@@ -64,6 +64,21 @@ Errors come back as `{"error": "...", "code": "..."}` with an appropriate HTTP s
 error code vocabulary (`not_found`, `bad_input`, `database_error`, `invalid_json`) is not
 yet stable.
 
+### Dev-mode 404 enrichment
+
+In `Environment::Dev` a 404 response from this plugin (e.g. `GET /api/typoed`) grows two fields so the developer can discover what `/api/*` paths actually exist:
+
+```json
+{
+  "error": "no resource at /api/typoed",
+  "code": "not_found",
+  "hint": "dev-mode hint: this list of available endpoints is omitted in production. set `environment = \"prod\"` in umbra.toml to drop it.",
+  "available": ["/api/article/", "/api/note/", "/api/permissions_group/"]
+}
+```
+
+In `Prod` / `Test` the body stays the bare `{error, code}` envelope so production 404s don't leak the table list to unauthenticated callers. The `available` list is filtered through the same `allow()` check the real handlers consult — blocked tables (`auth_user`, `session`, `umbra_migrations`) never appear.
+
 ## Exposing only some models
 
 By default every registered model is exposed except the three internal tables

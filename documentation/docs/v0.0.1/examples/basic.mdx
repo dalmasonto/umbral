@@ -68,7 +68,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .settings(settings)
         .database("default", pool)
         .model::<Note>()
-        .router(Router::new().route("/notes", get(list_notes)))
+        .routes(Routes::new().get("/notes", list_notes))
         .build()?;
 
     // Auto-migrate on boot. Demo-only — production splits this into

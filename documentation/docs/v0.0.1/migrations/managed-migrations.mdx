@@ -103,11 +103,24 @@ diff produces the right operation:
 
 - New field → `AddColumn`
 - Removed field → `DropColumn`
-- Nullable flip → `AlterColumn` (M5.1; rendered via the SQLite table-
-  recreation dance - CREATE _umbra_new, INSERT SELECT, DROP, RENAME)
-- Type change or PK flip → `UnsafeAlter` error. Hand-write the migration
-  with a data-preserving step.
+- Nullable flip → `AlterColumn` (rendered via the SQLite table-recreation dance:
+  CREATE _umbra_new, INSERT SELECT, DROP, RENAME — Postgres uses native
+  `ALTER COLUMN ... SET NOT NULL` / `DROP NOT NULL`).
+- **Safe type change** → `AlterColumn`. The engine keeps a whitelist of
+  data-preserving casts:
+  - every scalar → `Text` (stringify is lossless)
+  - integer widening (`SmallInt` → `Integer` → `BigInt`)
+  - float widening (`Real` → `Double`)
+  - `BigInt` ↔ `ForeignKey` (storage-identical)
 
+  Postgres rendering emits `ALTER COLUMN <col> TYPE <new_type> USING <col>::<new_type>`;
+  SQLite uses the same table-recreation dance, relying on its dynamic typing to
+  read the existing bytes back under the new column affinity.
+- **Unsafe type change** → `UnsafeAlter` error. `Text` → `BigInt`, narrowing
+  integer casts, format-dependent transitions (`Text` → `Date`, `Text` → `Uuid`)
+  are all rejected because the cast can fail at runtime on existing data. Hand-write
+  the migration with an explicit data-preserving step.
+- PK flip → `UnsafeAlter` (PK rebuild is its own dance, not shipped yet).
 - Table rename → `RenameTable` (see [Rename detection](#rename-detection) below).
 
 <Callout type="info">

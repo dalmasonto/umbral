@@ -279,11 +279,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .plugin(umbra_email::EmailPlugin::new(Arc::new(
             umbra_email::ConsoleBackend::default(),
         )))
-        .router(
-            Router::new()
-                .route("/me", get(me))
-                .route("/login", post(login))
-                .route("/logout", post(logout)),
+        .routes(
+            Routes::new()
+                .get("/me", me)
+                .post("/login", login)
+                .post("/logout", logout),
         )
         .build()?;
 

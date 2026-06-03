@@ -16,7 +16,7 @@ App::builder()
     .settings(settings)
     .database("default", pool)
     .templates_dir("templates")   // default is `./templates`
-    .router(Router::new().route("/", get(home)))
+    .routes(Routes::new().get("/", home))
     .build()?;
 ```
 

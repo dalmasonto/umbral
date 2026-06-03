@@ -30,7 +30,7 @@ spans the user's whole visit:
 let app = App::builder()
     .plugin(AuthPlugin)
     .plugin(SessionsPlugin::default())   // auto session-on-every-visit
-    .router(Router::new().route("/", get(home)))
+    .routes(Routes::new().get("/", home))
     .build()?;
 ```
 

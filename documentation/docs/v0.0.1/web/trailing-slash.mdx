@@ -23,10 +23,10 @@ use umbra::web::SlashRedirect;
 
 let app = App::builder()
     .slash_redirect(SlashRedirect::Append)   // Django's APPEND_SLASH = True
-    .router(
-        Router::new()
-            .route("/articles/", get(list_articles))
-            .route("/articles/{id}", get(article_detail)),
+    .routes(
+        Routes::new()
+            .get("/articles/", list_articles)
+            .get("/articles/{id}", article_detail),
     )
     .build()?;
 ```

@@ -22,7 +22,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = App::builder()
         .settings(settings)
         .database("default", pool)
-        .router(Router::new().route("/", get(|| async { "hello, umbra" })))
+        .routes(Routes::new().get("/", || async { "hello, umbra" }))
         .build()?;
 
     app.serve("127.0.0.1:8000".parse()?).await?;

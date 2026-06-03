@@ -1,6 +1,6 @@
 ---
-title: Scaffolding (startproject, startapp)
-description: The `umbra` global binary creates new projects and new plugins. Like `django-admin startproject` and `python manage.py startapp`.
+title: Scaffolding (startproject, startapp, startplugin)
+description: The `umbra` global binary creates new projects (`startproject`), minimal plugin stubs (`startapp`), and richer distributable-plugin scaffolds (`startplugin`). Like `django-admin startproject` and `python manage.py startapp`.
 sidebar_position: 1
 icon: layers
 ---
@@ -224,12 +224,72 @@ becomes `BlogEnginePlugin`.
 
 ### Names umbra refuses to scaffold
 
-`startapp` rejects two classes of names up front so you don't get a half-broken plugin you have to delete and recreate:
+`startapp` (and `startplugin` below) reject two classes of names up front so you don't get a half-broken plugin you have to delete and recreate:
 
 1. **A plugin with the same name already exists** at `plugins/<name>/`. Move it aside or pick a different name.
-2. **The name collides with a built-in umbra plugin.** `startapp` refuses these so you can never end up trying to register both `.plugin(my_auth::AuthPlugin)` and `.plugin(umbra_auth::AuthPlugin)` in the same builder chain (the route mounts and migration table names would collide at boot). Reserved names: `admin`, `app`, `auth`, `cache`, `email`, `openapi`, `permissions`, `rest`, `rls`, `security`, `sessions`, `signals`, `static`, `tasks`.
+2. **The name collides with a built-in umbra plugin.** Scaffolding refuses these so you can never end up trying to register both `.plugin(my_auth::AuthPlugin)` and `.plugin(umbra_auth::AuthPlugin)` in the same builder chain (the route mounts and migration table names would collide at boot). Reserved names: `admin`, `app`, `auth`, `cache`, `email`, `openapi`, `permissions`, `rest`, `rls`, `security`, `sessions`, `signals`, `static`, `tasks`.
 
 Pick a name that names your domain (`blog`, `billing`, `inventory`) rather than the capability the built-in already provides.
+
+## startplugin
+
+`startapp` is the minimal stub. `startplugin` is the richer version — same destination (`plugins/<name>/`), but the generated scaffold is shaped for a plugin you intend to publish or share across projects:
+
+```bash
+umbra startplugin widgets
+```
+
+Generates:
+
+```
+plugins/widgets/
+├── Cargo.toml              # real deps: umbra, serde, sqlx, chrono, async-trait
+├── README.md               # file-structure tour + wiring instructions
+└── src/
+    ├── lib.rs              # WidgetsPlugin with the full Plugin impl
+    ├── models.rs           # one example #[derive(Model)] with attributes
+    └── handlers.rs         # one example axum handler
+```
+
+The generated `src/lib.rs` is the full Plugin impl, not the stub — `models()` returns the example model's meta so the migration engine picks it up, `routes()` registers the example handler at `/<name>/hello`, `on_ready()` is wired and ready for setup work.
+
+The generated `src/models.rs` shows the field-type attributes most plugin authors hit on day one:
+
+```rust
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
+pub struct WidgetsItem {
+    pub id: i64,
+
+    #[umbra(string, max_length = 200)]
+    pub title: String,
+
+    pub status: WidgetsStatus,           // a #[derive(sqlx::Type)] choice enum
+
+    #[umbra(noedit)]
+    pub published_at: Option<DateTime<Utc>>,
+}
+```
+
+The generated `src/handlers.rs` shows how to read query params and return JSON:
+
+```rust
+pub async fn hello(Query(params): Query<HelloParams>) -> Json<HelloResponse> {
+    let who = params.name.as_deref().unwrap_or("widgets");
+    Json(HelloResponse { greeting: format!("Hello, {who}!") })
+}
+```
+
+After scaffolding, the printed next-steps walk you through wiring it into your project: add the path dep in `Cargo.toml`, register the plugin in `App::builder()`, then `cargo run -- makemigrations && cargo run -- migrate` to apply the example model's schema.
+
+### When to pick which
+
+| Choosing... | Use |
+|---|---|
+| An internal module that just needs a `Plugin` seam | `startapp` (one `lib.rs`, easy to read in one sitting) |
+| A reusable plugin you'll share or publish | `startplugin` (separate `models.rs` / `handlers.rs`, README, real deps) |
+| You're learning the Plugin trait surface | `startplugin` — seeing the full impl is more useful than a stub |
+
+Same reserved-name list and same already-exists guard for both.
 
 ## What's next
 
