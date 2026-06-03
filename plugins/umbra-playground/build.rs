@@ -147,6 +147,22 @@ fn bundle_with_vite(
         )
     })?;
 
+    // Wipe the crate's dist/ before mirroring the fresh vite output —
+    // otherwise each build's hashed filenames accumulate alongside the
+    // last build's, and the directory grows unbounded across iteration.
+    // We only delete *contents* (not the directory itself) so any
+    // outer process holding the path open isn't disturbed.
+    if let Ok(read) = fs::read_dir(crate_dist) {
+        for entry in read.flatten() {
+            let p = entry.path();
+            let _ = if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                fs::remove_dir_all(&p)
+            } else {
+                fs::remove_file(&p)
+            };
+        }
+    }
+
     // Mirror the full vite dist/ into the crate's dist/ so the runtime
     // (which serves from <crate>/dist/) sees both the entry bundles
     // and the font files referenced from the CSS.

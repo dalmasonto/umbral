@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { usePlayground } from "@/state/store";
 import type { OpenAPIV3 } from "openapi-types";
 import { Input } from "@/components/ui/input";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -175,7 +176,11 @@ export function EndpointTree() {
   const totalEndpoints = grouped.reduce((sum, [, entries]) => sum + entries.length, 0);
 
   return (
-    <div className="flex flex-col h-full">
+    // `overflow-hidden` here is the hard fence that keeps the whole
+    // sidebar from ever growing a horizontal scrollbar. Every child
+    // that would otherwise overflow has its own min-w-0 + wrap rule
+    // so the content folds onto multiple lines instead.
+    <div className="flex flex-col h-full min-w-0 overflow-hidden">
       {/* Search */}
       <div className="p-3">
         <div className="relative">
@@ -196,68 +201,85 @@ export function EndpointTree() {
 
       <Separator className="mx-3 w-auto" />
 
-      {/* Endpoint Groups */}
-      <div className="flex-1 overflow-y-auto p-2 space-y-3">
-        {grouped.length === 0 && (
-          <div className="py-8 text-center">
-            <p className="text-xs text-muted-foreground">No endpoints match your search.</p>
-          </div>
-        )}
+      {/* Endpoint Groups — Radix ScrollArea gives a styled vertical
+          scrollbar that overlays the content (no layout shift) and
+          stays visible only while scrolling. The wrapping ScrollArea
+          carries the flex-1 so it claims the remaining height. */}
+      <ScrollArea className="flex-1 min-w-0">
+        <div className="p-2 space-y-3 min-w-0">
+          {grouped.length === 0 && (
+            <div className="py-8 text-center">
+              <p className="text-xs text-muted-foreground">No endpoints match your search.</p>
+            </div>
+          )}
 
-        {grouped.map(([tag, entries]) => {
-          const tagColor = getTagColor(tag);
-          const tagIcon = getTagIcon(tag);
-          return (
-            <Collapsible key={tag} defaultOpen={search.length > 0}>
-              <CollapsibleTrigger asChild>
-                <button
-                  type="button"
-                  className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-xs font-semibold text-foreground hover:bg-muted/80 transition-colors select-none group"
-                >
-                  <ChevronRight className="size-3.5 text-muted-foreground transition-transform duration-150 group-data-[state=open]:rotate-90" />
-                  <span className={`flex items-center justify-center size-5 rounded border ${tagColor}`}>
-                    {tagIcon}
-                  </span>
-                  <span className="flex-1 text-left">{tag}</span>
-                  <span className="text-[10px] font-medium text-muted-foreground bg-muted px-1.5 py-0.5 rounded-full">
-                    {entries.length}
-                  </span>
-                </button>
-              </CollapsibleTrigger>
+          {grouped.map(([tag, entries]) => {
+            const tagColor = getTagColor(tag);
+            const tagIcon = getTagIcon(tag);
+            return (
+              <Collapsible key={tag} defaultOpen={search.length > 0}>
+                <CollapsibleTrigger asChild>
+                  <button
+                    type="button"
+                    className="w-full min-w-0 flex items-start gap-2 px-2 py-1.5 rounded-md text-xs font-semibold text-foreground hover:bg-muted/80 transition-colors select-none group"
+                  >
+                    <ChevronRight className="size-3.5 shrink-0 mt-0.5 text-muted-foreground transition-transform duration-150 group-data-[state=open]:rotate-90" />
+                    <span className={`flex items-center justify-center size-5 shrink-0 rounded border ${tagColor}`}>
+                      {tagIcon}
+                    </span>
+                    {/* `break-all` lets long tag names like
+                        `permissions_contenttype` fold onto a second
+                        line instead of forcing horizontal scroll. */}
+                    <span className="flex-1 min-w-0 text-left break-all">{tag}</span>
+                    <span className="text-[10px] font-medium text-muted-foreground bg-muted px-1.5 py-0.5 rounded-full shrink-0">
+                      {entries.length}
+                    </span>
+                  </button>
+                </CollapsibleTrigger>
 
-              <CollapsibleContent>
-                <ul className="mt-1 space-y-0.5 pl-4 border-l border-border ml-4">
-                  {entries.map((e) => (
-                    <li key={e.operationId}>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <button
-                            type="button"
-                            onClick={() => select(e.operationId)}
-                            className={`w-full text-left px-3 py-2 rounded-lg text-xs flex items-center gap-2.5 transition-all ${
-                              selected === e.operationId
-                                ? "bg-primary/8 text-primary ring-1 ring-primary/15 shadow-sm"
-                                : "hover:bg-muted/60 text-muted-foreground hover:text-foreground"
-                            }`}
-                          >
-                            <MethodBadge method={e.method} />
-                            <span className="font-mono truncate flex-1">{e.path}</span>
-                          </button>
-                        </TooltipTrigger>
-                        {e.summary && (
-                          <TooltipContent side="right" className="max-w-xs">
-                            <p className="font-medium text-sm">{e.summary}</p>
-                          </TooltipContent>
-                        )}
-                      </Tooltip>
-                    </li>
-                  ))}
-                </ul>
-              </CollapsibleContent>
-            </Collapsible>
-          );
-        })}
-      </div>
+                <CollapsibleContent>
+                  <ul className="mt-1 space-y-0.5 pl-3 border-l border-border ml-3 min-w-0">
+                    {entries.map((e) => (
+                      <li key={e.operationId} className="min-w-0">
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <button
+                              type="button"
+                              onClick={() => select(e.operationId)}
+                              className={`w-full min-w-0 text-left px-2.5 py-2 rounded-lg text-xs flex items-start gap-2 transition-all ${
+                                selected === e.operationId
+                                  ? "bg-primary/8 text-primary ring-1 ring-primary/15 shadow-sm"
+                                  : "hover:bg-muted/60 text-muted-foreground hover:text-foreground"
+                              }`}
+                            >
+                              <span className="shrink-0 mt-0.5">
+                                <MethodBadge method={e.method} />
+                              </span>
+                              {/* `break-all` wraps long URL paths
+                                  (no spaces to break on, so we need
+                                  the per-character allowance). With
+                                  `min-w-0` on every ancestor the
+                                  wrap actually takes effect. */}
+                              <span className="font-mono flex-1 min-w-0 break-all leading-snug">
+                                {e.path}
+                              </span>
+                            </button>
+                          </TooltipTrigger>
+                          {e.summary && (
+                            <TooltipContent side="right" className="max-w-xs">
+                              <p className="font-medium text-sm">{e.summary}</p>
+                            </TooltipContent>
+                          )}
+                        </Tooltip>
+                      </li>
+                    ))}
+                  </ul>
+                </CollapsibleContent>
+              </Collapsible>
+            );
+          })}
+        </div>
+      </ScrollArea>
     </div>
   );
 }
