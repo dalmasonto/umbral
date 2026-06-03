@@ -12,14 +12,20 @@ rust-version.workspace = true
 [dependencies]
 umbra = { path = "../../crates/umbra", version = "0.0.1" }
 tower-http = { version = "0.6", features = ["fs", "set-header"] }
-tower = { version = "0.5", default-features = false }
+tower = { version = "0.5", default-features = false, features = ["util"] }
 http = "1"
 tracing = "0.1"
+# Embedded-asset support: callers pass in a `&'static Dir<'static>`
+# produced by `include_dir!()` and we serve files out of memory. We
+# only need the type — the macro that produces a `Dir` lives in the
+# `include_dir_macros` crate which the caller pulls in themselves.
+include_dir = { version = "0.7", default-features = false }
+mime_guess = "2"
+bytes = "1"
+axum = "0.8"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync"] }
 tempfile = "3"
-tower = { version = "0.5", features = ["util"] }
-axum = "0.8"
-http = "1"
+include_dir = "0.7"
 http-body-util = "0.1"

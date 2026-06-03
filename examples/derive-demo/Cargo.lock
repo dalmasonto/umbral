@@ -775,6 +775,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "http-range-header"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9171a2ea8a68358193d15dd5d70c1c10a2afc3e7e4c5bc92bc9f025cebd7359c"
+
+[[package]]
 name = "httparse"
 version = "1.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2155,6 +2161,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokio-util"
+version = "0.7.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9ae9cec805b01e8fc3fd2fe289f89149a9b66dd16786abd8b19cfa7b48cb0098"
+dependencies = [
+ "bytes",
+ "futures-core",
+ "futures-sink",
+ "pin-project-lite",
+ "tokio",
+]
+
+[[package]]
 name = "toml"
 version = "0.8.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2219,11 +2238,19 @@ checksum = "4cfcf7e2740e6fc6d4d688b4ef00650406bb94adf4731e43c096c3a19fe40840"
 dependencies = [
  "bitflags",
  "bytes",
+ "futures-core",
  "futures-util",
  "http",
  "http-body",
  "http-body-util",
+ "http-range-header",
+ "httpdate",
+ "mime",
+ "mime_guess",
+ "percent-encoding",
  "pin-project-lite",
+ "tokio",
+ "tokio-util",
  "tower-layer",
  "tower-service",
  "tracing",
@@ -2460,8 +2487,8 @@ version = "0.0.1"
 dependencies = [
  "axum",
  "include_dir",
- "mime_guess",
  "umbra",
+ "umbra-static",
 ]
 
 [[package]]
@@ -2511,6 +2538,21 @@ dependencies = [
  "umbra",
  "umbra-auth",
  "uuid",
+]
+
+[[package]]
+name = "umbra-static"
+version = "0.0.1"
+dependencies = [
+ "axum",
+ "bytes",
+ "http",
+ "include_dir",
+ "mime_guess",
+ "tower",
+ "tower-http",
+ "tracing",
+ "umbra",
 ]
 
 [[package]]

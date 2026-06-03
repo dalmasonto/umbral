@@ -2932,10 +2932,10 @@ dependencies = [
  "axum",
  "http-body-util",
  "include_dir",
- "mime_guess",
  "tokio",
  "tower",
  "umbra",
+ "umbra-static",
 ]
 
 [[package]]
@@ -3027,8 +3027,11 @@ name = "umbra-static"
 version = "0.0.1"
 dependencies = [
  "axum",
+ "bytes",
  "http",
  "http-body-util",
+ "include_dir",
+ "mime_guess",
  "tempfile",
  "tokio",
  "tower",

@@ -1,23 +1,24 @@
 //! Two routes: the HTML shell and the bundled assets.
 //!
-//! Both are served entirely from memory. The shell is one HTML
-//! template substituted with the hashed asset filenames; the assets
-//! come from the compile-time-embedded `ASSETS` Dir
-//! (see [`crate::ASSETS`]). No filesystem reads happen at request
-//! time — the binary is the asset store. That's both a fix for the
-//! "rebuild wipes dist/, browser 404s on old hash names" footgun
-//! and the architectural shape an embeddable plugin should have:
-//! its UI ships *with it*.
+//! The shell is one HTML template substituted with the hashed asset
+//! filenames and lives here. The assets are served by `umbra-static`'s
+//! `StaticPlugin` in its embedded variant — we hand it the
+//! compile-time-baked [`crate::ASSETS`] tree and it gives us back a
+//! Router that resolves `<base>/assets/{*path}` against the in-memory
+//! `Dir`. No filesystem reads, no path-traversal surface, no risk of
+//! a wiped `dist/` orphaning live browser tabs.
 //!
-//! Path-traversal is structurally impossible — the lookup is a
-//! `Dir::get_file(rel_path)` against an in-memory tree, not a path
-//! join. A `..` segment in the URL becomes a no-match.
-
+//! Dogfooding the framework's static plugin means any improvement
+//! `umbra-static` ships (cache headers, dev-mode max-age=0, future
+//! ETag/range-request support against embedded sources) lands here
+//! for free.
 use std::sync::Arc;
 
 use axum::body::Body;
-use axum::extract::{Request, State};
+use axum::extract::State;
 use axum::http::{Response, StatusCode, header};
+use umbra::prelude::Plugin;
+use umbra_static::StaticPlugin;
 
 use crate::{ASSETS, CSS, JS, PLACEHOLDER_HTML};
 
@@ -63,64 +64,38 @@ pub async fn shell(State(state): State<PlaygroundState>) -> Response<Body> {
         .unwrap()
 }
 
-/// `GET {base_path}/assets/{*path}` — every entry in the embedded
-/// asset tree, looked up by name.
+/// Compose both routes into a router.
 ///
-/// Vite emits its entry chunks (and the woff2 fonts the CSS
-/// references) under `dist/assets/`, which is exactly what
-/// `include_dir!` baked into [`ASSETS`]. The handler strips
-/// `{base}/assets/` from the URL and passes the remainder to
-/// `Dir::get_file`. MIME type comes from `mime_guess` against the
-/// extension; fall back to `application/octet-stream`.
+/// - Shell: handled inline (template substitution, not a static
+///   file) at `<base>/`.
+/// - Assets: delegated to `StaticPlugin::embedded` at
+///   `<base>/assets/*`. Routes are absolute because the plugin
+///   contract merges plugin routers flat into the app router
+///   without auto-prefixing.
 ///
-/// Cache headers: a year + `immutable`. Safe because vite's
-/// content-hashed filenames change whenever the underlying bytes
-/// change — a cached `index-X.css` will never refer to anything
-/// other than these exact bytes. Browsers can hold it forever.
-pub async fn assets(State(state): State<PlaygroundState>, req: Request) -> Response<Body> {
-    let path = req.uri().path();
-    let prefix = format!("{}/assets/", state.base_path);
-    let rel = match path.strip_prefix(&prefix) {
-        Some(r) => r,
-        None => return not_found(),
-    };
-    let file = match ASSETS.get_file(rel) {
-        Some(f) => f,
-        None => return not_found(),
-    };
-
-    let content_type = mime_guess::from_path(rel)
-        .first_or_octet_stream()
-        .to_string();
-
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, content_type)
-        .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable")
-        .body(Body::from(file.contents()))
-        .unwrap()
-}
-
-fn not_found() -> Response<Body> {
-    Response::builder()
-        .status(StatusCode::NOT_FOUND)
-        .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
-        .body(Body::from("not found"))
-        .unwrap()
-}
-
-/// Compose both routes into a router. Routes are absolute
-/// (e.g. `/api/playground/` and `/api/playground/assets/{*path}`)
-/// because the plugin contract merges plugin routers flat into
-/// the app router without auto-prefixing.
+/// Cache headers: one year + immutable. Safe with vite's content-
+/// hashed filenames since a changed bundle gets a new hash, so a
+/// cached `index-X.css` will always be exactly these bytes. In
+/// `Environment::Dev` umbra-static forces max-age=0 automatically.
 pub fn router(state: PlaygroundState) -> axum::Router {
     use axum::routing::get;
+    use std::time::Duration;
 
-    let base = state.base_path.as_ref();
-    let base_trimmed = base.trim_end_matches('/').to_string();
+    // Snapshot the base path before we consume `state` via
+    // `.with_state(...)`. The asset mount has to be built afterwards
+    // so we need an owned copy that survives the move.
+    let base_trimmed = state.base_path.trim_end_matches('/').to_string();
 
-    axum::Router::new()
+    let shell_router = axum::Router::new()
         .route(&format!("{base_trimmed}/"), get(shell))
-        .route(&format!("{base_trimmed}/assets/{{*path}}"), get(assets))
-        .with_state(state)
+        .with_state(state);
+
+    let assets_router = StaticPlugin::embedded(
+        format!("{base_trimmed}/assets"),
+        &ASSETS,
+    )
+    .max_age(Duration::from_secs(31_536_000))
+    .routes();
+
+    shell_router.merge(assets_router)
 }
