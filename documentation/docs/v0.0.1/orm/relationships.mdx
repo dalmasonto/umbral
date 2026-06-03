@@ -56,6 +56,72 @@ CREATE TABLE "post" (
 )
 ```
 
+## Referential actions: `on_delete` / `on_update`
+
+By default the FK emits no `ON DELETE` / `ON UPDATE` clause, which means "NO ACTION" — the database blocks a delete of the parent if any child row references it, and refuses to update the parent's primary key. Override per FK with the `on_delete` and `on_update` attributes:
+
+```rust
+#[derive(Model)]
+pub struct AuthToken {
+    pub id: i64,
+    // When the user is deleted, every token they hold goes with them.
+    #[umbra(on_delete = "cascade")]
+    pub user_id: ForeignKey<AuthUser>,
+    // ...
+}
+```
+
+The attribute accepts four values, mirroring the SQL standard:
+
+| Attribute value | Emits | Meaning |
+|---|---|---|
+| `"no_action"` (default) | no clause | refuse the delete/update if children exist |
+| `"cascade"` | `ON DELETE CASCADE` | delete/update children too |
+| `"restrict"` | `ON DELETE RESTRICT` | block immediately, no commit-time deferral |
+| `"set_null"` | `ON DELETE SET NULL` | null the child column (only valid on `Option<ForeignKey<T>>`) |
+
+`on_update` accepts the same vocabulary; useful when the parent PK might move (rare in practice — most apps use immutable PKs).
+
+The attribute applies at `CREATE TABLE` time only. Changing the action on an already-created table needs a hand-written migration — SQLite can't ALTER FK actions in place, and the diff engine doesn't watch constraint flags yet.
+
+## Self-referential foreign keys
+
+A model can hold a `ForeignKey` to itself — useful for category trees, threaded comments, replies, manager hierarchies, anything that nests. Write the type literally:
+
+```rust
+#[derive(Model)]
+pub struct Category {
+    pub id: i64,
+    pub name: String,
+    // Each category optionally points at its parent. CASCADE prunes
+    // the subtree when a root is deleted.
+    #[umbra(on_delete = "cascade")]
+    pub parent_id: Option<ForeignKey<Category>>,
+}
+```
+
+No `Self` keyword (Rust doesn't allow `Self` in a field type), no string sentinel like Django's `ForeignKey('self', ...)` — just the struct's own name. Why it works: `ForeignKey<T>` stores `T::PrimaryKey` and `Option<Box<T>>` (boxed so the type stays finite-size), and `<T as Model>::TABLE` resolves at the same expansion step that emits `impl Model for Category`, so `T = Category` is satisfied within one derive pass.
+
+The DDL is a normal inline `REFERENCES` clause — the table references itself within the same `CREATE TABLE` statement, which both SQLite and Postgres handle natively:
+
+```sql
+CREATE TABLE "category" (
+  "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+  "name" text NOT NULL,
+  "parent_id" bigint REFERENCES "category"("id") ON DELETE CASCADE
+)
+```
+
+Querying a self-FK is the same as any other FK — the column constants live in the model's sibling module and accept `i64` comparisons. To walk the tree, fetch one level at a time (or write a recursive CTE by hand if depth matters):
+
+```rust
+// Direct children of category 1:
+let children = Category::objects()
+    .filter(category::PARENT_ID.eq(1))
+    .fetch()
+    .await?;
+```
+
 ## Querying with a foreign key
 
 The column constant emitted by `#[derive(Model)]` for a `ForeignKey<T>` field is a `ForeignKeyCol`, which accepts `i64` comparisons:

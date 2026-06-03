@@ -390,3 +390,127 @@ fn foreign_key_deserialises_from_integer() {
     let fk: ForeignKey<User> = serde_json::from_str("42").unwrap();
     assert_eq!(fk.id(), 42);
 }
+
+// =========================================================================
+// Gap #69: self-referential foreign keys.
+//
+// Django uses a string sentinel (`models.ForeignKey('self', ...)`)
+// because the model class isn't bound yet when the field is declared.
+// Rust solves the same problem differently: `ForeignKey<T>` stores
+// `T::PrimaryKey` and `Option<Box<T>>` (boxed so the type stays
+// finite-size), and `<T as Model>::TABLE` resolves at the same
+// expansion step that emits `impl Model for Self`. Net result: writing
+// `ForeignKey<MyType>` *inside* `MyType` Just Works — no `Self`
+// keyword needed, no string sentinel, no macro special-case.
+// =========================================================================
+
+/// A category tree: each row optionally points at its parent, with
+/// `ON DELETE CASCADE` so deleting a root prunes the subtree. The
+/// `parent_id` column's `fk_target` resolves to the *same table* the
+/// model lives in.
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbra::orm::Model)]
+#[umbra(table = "fk_category")]
+pub struct Category {
+    pub id: i64,
+    pub name: String,
+    #[umbra(on_delete = "cascade")]
+    pub parent_id: Option<ForeignKey<Category>>,
+}
+
+/// Static metadata: the self-FK column carries `fk_target =
+/// Some("fk_category")` — the model's own table name. The derive
+/// emits `<Category as Model>::TABLE` for the target lookup, which
+/// resolves to the const that the same derive expansion is producing
+/// alongside the field metadata. The const resolution happens before
+/// the const's value is needed, which is fine because const-eval
+/// runs after the expansion is complete.
+#[test]
+fn self_referential_fk_target_resolves_to_own_table() {
+    let by_name: std::collections::HashMap<&str, &umbra::orm::FieldSpec> =
+        <Category as Model>::FIELDS
+            .iter()
+            .map(|f| (f.name, f))
+            .collect();
+    let parent = by_name.get("parent_id").expect("parent_id field present");
+    assert_eq!(parent.ty, SqlType::ForeignKey);
+    assert_eq!(parent.fk_target, Some("fk_category"));
+    assert!(parent.nullable, "Option<ForeignKey<T>> should be nullable");
+    assert!(
+        matches!(parent.on_delete, umbra::orm::FkAction::Cascade),
+        "ON DELETE CASCADE should round-trip from the attribute"
+    );
+}
+
+/// The DDL renders `REFERENCES "fk_category"("id") ON DELETE CASCADE`
+/// for the parent column — the table is self-referencing within a
+/// single CREATE TABLE statement. Both SQLite and Postgres accept
+/// that shape because the column constraint is evaluated against
+/// the table being created in the same statement.
+#[test]
+fn self_referential_fk_renders_inline_references() {
+    let meta = umbra::migrate::ModelMeta::for_::<Category>();
+    let op = Operation::CreateTable {
+        table: Category::TABLE.to_string(),
+        columns: meta.fields.clone(),
+    };
+    for backend in ["sqlite", "postgres"] {
+        let sql = render_operation_for(&op, backend).join("\n");
+        assert!(
+            sql.contains("REFERENCES \"fk_category\"(\"id\")"),
+            "{backend}: expected self-reference in REFERENCES tail; got: {sql}"
+        );
+        assert!(
+            sql.to_uppercase().contains("ON DELETE CASCADE"),
+            "{backend}: expected ON DELETE CASCADE; got: {sql}"
+        );
+    }
+}
+
+/// End-to-end against a live SQLite engine: create the table, insert
+/// a root + a child, assert the FK link, then delete the root and
+/// confirm the cascade pruned the child. The same `Operation::
+/// CreateTable` the migration engine emits is the only DDL run —
+/// nothing is hand-stitched.
+#[tokio::test]
+async fn self_referential_fk_round_trips_through_sqlite_with_cascade() {
+    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    sqlx::query("PRAGMA foreign_keys = ON;")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let meta = umbra::migrate::ModelMeta::for_::<Category>();
+    let op = Operation::CreateTable {
+        table: Category::TABLE.to_string(),
+        columns: meta.fields.clone(),
+    };
+    for stmt in render_operation_for(&op, "sqlite") {
+        sqlx::query(&stmt).execute(&pool).await.unwrap();
+    }
+    sqlx::query("INSERT INTO fk_category (id, name, parent_id) VALUES (1, 'root', NULL)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO fk_category (id, name, parent_id) VALUES (2, 'child', 1)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (children,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM fk_category WHERE parent_id = 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(children, 1, "child should reference the root");
+
+    sqlx::query("DELETE FROM fk_category WHERE id = 1")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (remaining,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM fk_category")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        remaining, 0,
+        "CASCADE should have pruned the child after the root was deleted"
+    );
+}
