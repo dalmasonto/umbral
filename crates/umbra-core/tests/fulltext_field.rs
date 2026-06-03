@@ -60,6 +60,7 @@ fn postgres_ddl_renders_tsvector_type() {
                 unique: false,
                 on_delete: umbra_core::orm::FkAction::NoAction,
                 on_update: umbra_core::orm::FkAction::NoAction,
+                index: false,
             },
             Column {
                 name: "search".to_string(),
@@ -78,6 +79,7 @@ fn postgres_ddl_renders_tsvector_type() {
                 unique: false,
                 on_delete: umbra_core::orm::FkAction::NoAction,
                 on_update: umbra_core::orm::FkAction::NoAction,
+                index: false,
             },
         ],
     };

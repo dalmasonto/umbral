@@ -131,6 +131,7 @@ fn create_table_emits_references_sqlite() {
                 unique: false,
                 on_delete: umbra_core::orm::FkAction::NoAction,
                 on_update: umbra_core::orm::FkAction::NoAction,
+                index: false,
             },
             Column {
                 name: "title".to_string(),
@@ -149,6 +150,7 @@ fn create_table_emits_references_sqlite() {
                 unique: false,
                 on_delete: umbra_core::orm::FkAction::NoAction,
                 on_update: umbra_core::orm::FkAction::NoAction,
+                index: false,
             },
             Column {
                 name: "author".to_string(),
@@ -167,6 +169,7 @@ fn create_table_emits_references_sqlite() {
                 unique: false,
                 on_delete: umbra_core::orm::FkAction::NoAction,
                 on_update: umbra_core::orm::FkAction::NoAction,
+                index: false,
             },
         ],
     };
@@ -218,6 +221,7 @@ fn create_table_emits_references_postgres() {
                 unique: false,
                 on_delete: umbra_core::orm::FkAction::NoAction,
                 on_update: umbra_core::orm::FkAction::NoAction,
+                index: false,
             },
             Column {
                 name: "title".to_string(),
@@ -236,6 +240,7 @@ fn create_table_emits_references_postgres() {
                 unique: false,
                 on_delete: umbra_core::orm::FkAction::NoAction,
                 on_update: umbra_core::orm::FkAction::NoAction,
+                index: false,
             },
             Column {
                 name: "author".to_string(),
@@ -254,6 +259,7 @@ fn create_table_emits_references_postgres() {
                 unique: false,
                 on_delete: umbra_core::orm::FkAction::NoAction,
                 on_update: umbra_core::orm::FkAction::NoAction,
+                index: false,
             },
         ],
     };

@@ -845,6 +845,7 @@ impl From<&IntrospectedColumn> for Column {
             unique: false,
             on_delete: crate::orm::FkAction::NoAction,
             on_update: crate::orm::FkAction::NoAction,
+            index: false,
         }
     }
 }

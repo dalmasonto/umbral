@@ -187,6 +187,9 @@ struct UmbraFieldAttr {
     /// `#[umbra(on_update = "...")]` — emit `ON UPDATE <action>`.
     /// Same vocabulary as `on_delete`.
     on_update: Option<String>,
+    /// `#[umbra(index)]` — single-column index. Closes BUG-4 from
+    /// bugs/tests/testBugs.md.
+    index: bool,
 }
 
 fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAttr> {
@@ -201,6 +204,7 @@ fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAtt
         unique: false,
         on_delete: None,
         on_update: None,
+        index: false,
     };
     for attr in attrs {
         if !attr.path().is_ident("umbra") {
@@ -267,6 +271,13 @@ fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAtt
                 let lit: syn::LitStr = value.parse()?;
                 parsed.on_update = Some(lit.value());
                 Ok(())
+            } else if meta.path.is_ident("index") {
+                // `#[umbra(index)]` — marker. Emits a single-column
+                // `CREATE INDEX idx_<table>_<column>` alongside the
+                // CREATE TABLE. Skipped for PK / UNIQUE columns
+                // (already indexed by the constraint).
+                parsed.index = true;
+                Ok(())
             } else {
                 // Unknown key. Report it with the known set so the
                 // common typo case (`is_string_repr` instead of
@@ -291,8 +302,8 @@ fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAtt
                     "unknown field-level umbra attribute `{path}` — known keys are \
                      `noform`, `noedit`, `string` (or `string = true`), \
                      `max_length = N`, `choices`, `default = \"...\"`, \
-                     `unique`, `on_delete = \"...\"`, and \
-                     `on_update = \"...\"`"
+                     `unique`, `on_delete = \"...\"`, \
+                     `on_update = \"...\"`, and `index`"
                 )))
             }
         })?;
@@ -683,6 +694,11 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         } else {
             quote!(false)
         };
+        let index_lit = if field_attr.index {
+            quote!(true)
+        } else {
+            quote!(false)
+        };
 
         // `on_delete` / `on_update` → token paths into FkAction. An
         // unknown value (typo, unsupported variant) becomes a
@@ -731,6 +747,7 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                 unique: #unique_lit,
                 on_delete: #on_delete_tokens,
                 on_update: #on_update_tokens,
+                index: #index_lit,
             }
         });
 

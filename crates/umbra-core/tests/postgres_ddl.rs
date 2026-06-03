@@ -35,6 +35,7 @@ fn id_pk() -> Column {
         unique: false,
         on_delete: umbra_core::orm::FkAction::NoAction,
         on_update: umbra_core::orm::FkAction::NoAction,
+        index: false,
     }
 }
 
@@ -57,6 +58,7 @@ fn text_not_null(name: &str) -> Column {
         unique: false,
         on_delete: umbra_core::orm::FkAction::NoAction,
         on_update: umbra_core::orm::FkAction::NoAction,
+        index: false,
     }
 }
 
@@ -79,6 +81,7 @@ fn text_nullable(name: &str) -> Column {
         unique: false,
         on_delete: umbra_core::orm::FkAction::NoAction,
         on_update: umbra_core::orm::FkAction::NoAction,
+        index: false,
     }
 }
 
@@ -331,6 +334,7 @@ fn col(name: &str, ty: SqlType) -> Column {
         unique: false,
         on_delete: umbra_core::orm::FkAction::NoAction,
         on_update: umbra_core::orm::FkAction::NoAction,
+        index: false,
     }
 }
 

@@ -620,6 +620,7 @@ mod search {
             unique: false,
             on_delete: ::umbra::orm::FkAction::NoAction,
             on_update: ::umbra::orm::FkAction::NoAction,
+            index: false,
         }
     }
 
@@ -723,6 +724,7 @@ mod choice_validation {
             unique: false,
             on_delete: ::umbra::orm::FkAction::NoAction,
             on_update: ::umbra::orm::FkAction::NoAction,
+            index: false,
         }
     }
 

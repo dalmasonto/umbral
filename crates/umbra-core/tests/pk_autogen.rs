@@ -109,6 +109,7 @@ fn int_pk_column() -> Column {
         unique: false,
         on_delete: umbra_core::orm::FkAction::NoAction,
         on_update: umbra_core::orm::FkAction::NoAction,
+        index: false,
     }
 }
 
@@ -130,6 +131,7 @@ fn uuid_pk_column() -> Column {
         unique: false,
         on_delete: umbra_core::orm::FkAction::NoAction,
         on_update: umbra_core::orm::FkAction::NoAction,
+        index: false,
     }
 }
 
@@ -151,6 +153,7 @@ fn string_pk_column() -> Column {
         unique: false,
         on_delete: umbra_core::orm::FkAction::NoAction,
         on_update: umbra_core::orm::FkAction::NoAction,
+        index: false,
     }
 }
 
@@ -172,6 +175,7 @@ fn label_column() -> Column {
         unique: false,
         on_delete: umbra_core::orm::FkAction::NoAction,
         on_update: umbra_core::orm::FkAction::NoAction,
+        index: false,
     }
 }
 

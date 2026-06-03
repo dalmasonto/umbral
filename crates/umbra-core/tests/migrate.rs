@@ -148,6 +148,7 @@ async fn migrated_dir() -> &'static Path {
                 unique: false,
                 on_delete: umbra_core::orm::FkAction::NoAction,
                 on_update: umbra_core::orm::FkAction::NoAction,
+                index: false,
             };
             let file = MigrationFile {
                 id: M8_ADD_COLUMN_MIGRATION_ID.to_string(),
@@ -209,6 +210,7 @@ async fn migrated_dir() -> &'static Path {
                     unique: false,
                     on_delete: umbra_core::orm::FkAction::NoAction,
                     on_update: umbra_core::orm::FkAction::NoAction,
+                    index: false,
                 },
                 Column {
                     name: "note".to_string(),
@@ -227,6 +229,7 @@ async fn migrated_dir() -> &'static Path {
                     unique: false,
                     on_delete: umbra_core::orm::FkAction::NoAction,
                     on_update: umbra_core::orm::FkAction::NoAction,
+                    index: false,
                 },
             ];
             let file = MigrationFile {
@@ -715,6 +718,7 @@ fn id_column() -> Column {
         unique: false,
         on_delete: umbra_core::orm::FkAction::NoAction,
         on_update: umbra_core::orm::FkAction::NoAction,
+        index: false,
     }
 }
 
@@ -738,6 +742,7 @@ fn text_column(name: &str) -> Column {
         unique: false,
         on_delete: umbra_core::orm::FkAction::NoAction,
         on_update: umbra_core::orm::FkAction::NoAction,
+        index: false,
     }
 }
 
@@ -870,6 +875,7 @@ fn diff_returns_unsafe_alter_for_a_type_change() {
             unique: false,
             on_delete: umbra_core::orm::FkAction::NoAction,
             on_update: umbra_core::orm::FkAction::NoAction,
+            index: false,
         },
     ]));
 
@@ -917,6 +923,7 @@ fn diff_emits_alter_column_for_a_nullable_flip() {
             unique: false,
             on_delete: umbra_core::orm::FkAction::NoAction,
             on_update: umbra_core::orm::FkAction::NoAction,
+            index: false,
         },
     ]));
 
@@ -973,6 +980,7 @@ fn diff_emits_alter_column_for_safe_type_cast_bigint_to_text() {
         unique: false,
         on_delete: umbra_core::orm::FkAction::NoAction,
         on_update: umbra_core::orm::FkAction::NoAction,
+        index: false,
     };
     let mut curr_user_id = prev_user_id.clone();
     curr_user_id.ty = SqlType::Text;
@@ -1030,6 +1038,7 @@ fn diff_still_refuses_text_to_bigint_as_unsafe() {
         unique: false,
         on_delete: umbra_core::orm::FkAction::NoAction,
         on_update: umbra_core::orm::FkAction::NoAction,
+        index: false,
     };
     let mut curr_value = prev_value.clone();
     curr_value.ty = SqlType::BigInt;

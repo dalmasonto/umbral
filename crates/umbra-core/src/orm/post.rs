@@ -70,6 +70,7 @@ impl crate::orm::Model for Post {
             unique: false,
             on_delete: crate::orm::FkAction::NoAction,
             on_update: crate::orm::FkAction::NoAction,
+            index: false,
         },
         crate::orm::FieldSpec {
             name: "title",
@@ -89,6 +90,7 @@ impl crate::orm::Model for Post {
             unique: false,
             on_delete: crate::orm::FkAction::NoAction,
             on_update: crate::orm::FkAction::NoAction,
+            index: false,
         },
         crate::orm::FieldSpec {
             name: "body",
@@ -108,6 +110,7 @@ impl crate::orm::Model for Post {
             unique: false,
             on_delete: crate::orm::FkAction::NoAction,
             on_update: crate::orm::FkAction::NoAction,
+            index: false,
         },
         crate::orm::FieldSpec {
             name: "published_at",
@@ -127,6 +130,7 @@ impl crate::orm::Model for Post {
             unique: false,
             on_delete: crate::orm::FkAction::NoAction,
             on_update: crate::orm::FkAction::NoAction,
+            index: false,
         },
     ];
 

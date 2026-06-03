@@ -470,10 +470,36 @@ pub struct Column {
     /// Same shape as `on_delete`; emits `ON UPDATE <action>`.
     #[serde(default, skip_serializing_if = "is_no_action")]
     pub on_update: crate::orm::FkAction,
+
+    /// Carries `FieldSpec::index` into the migration snapshot. The
+    /// CreateTable + AddColumn render paths emit a matching
+    /// `CREATE INDEX idx_<table>_<col>` for every column whose
+    /// flag is set. Default `false` keeps existing migration JSON
+    /// round-tripping unchanged.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub index: bool,
 }
 
 fn is_no_action(a: &crate::orm::FkAction) -> bool {
     matches!(a, crate::orm::FkAction::NoAction)
+}
+
+/// Build a portable `CREATE INDEX IF NOT EXISTS idx_<table>_<col>
+/// ON "<table>" ("<col>")` statement. Same DDL on SQLite and
+/// Postgres — both accept `CREATE INDEX IF NOT EXISTS` and the
+/// `idx_<table>_<col>` name convention is unique enough that the
+/// migration engine can re-emit it idempotently on subsequent
+/// applies. Used by [`render_operation_sqlite`] / `_postgres`
+/// after a `CreateTable` or `AddColumn` op whose column carries
+/// the `#[umbra(index)]` flag. Closes BUG-4.
+fn create_index_stmt(table: &str, column: &str) -> String {
+    let t = table.replace('"', "\"\"");
+    let c = column.replace('"', "\"\"");
+    format!(
+        "CREATE INDEX IF NOT EXISTS \"idx_{table}_{column}\" ON \"{t}\" (\"{c}\")",
+        table = table.replace('"', ""),
+        column = column.replace('"', ""),
+    )
 }
 
 /// Build the ` ON DELETE <action> ON UPDATE <action>` suffix for a
@@ -520,6 +546,7 @@ impl From<&FieldSpec> for Column {
             unique: f.unique,
             on_delete: f.on_delete,
             on_update: f.on_update,
+            index: f.index,
         }
     }
 }
@@ -1965,6 +1992,7 @@ fn diff_columns(
                 || prev_col.choice_labels != curr_col.choice_labels
                 || prev_col.on_delete != curr_col.on_delete
                 || prev_col.on_update != curr_col.on_update
+                || prev_col.index != curr_col.index
             {
                 alter_columns.push(*name);
             }
@@ -2143,7 +2171,16 @@ fn render_operation_sqlite(op: &Operation) -> Vec<String> {
                 let mut def = build_column_def_sqlite(col);
                 stmt.col(&mut def);
             }
-            vec![stmt.build(SqliteQueryBuilder)]
+            let mut stmts = vec![stmt.build(SqliteQueryBuilder)];
+            // Single-column `#[umbra(index)]` indexes follow the
+            // CREATE TABLE. Same convention on both backends so a
+            // SQLite-dev / Postgres-prod app sees parallel names.
+            for col in columns {
+                if col.index && !col.primary_key && !col.unique {
+                    stmts.push(create_index_stmt(table, &col.name));
+                }
+            }
+            stmts
         }
         Operation::DropTable { table } => vec![
             Table::drop()
@@ -2155,7 +2192,11 @@ fn render_operation_sqlite(op: &Operation) -> Vec<String> {
             stmt.table(Alias::new(table));
             let mut def = build_column_def_sqlite(column);
             stmt.add_column(&mut def);
-            vec![stmt.build(SqliteQueryBuilder)]
+            let mut stmts = vec![stmt.build(SqliteQueryBuilder)];
+            if column.index && !column.primary_key && !column.unique {
+                stmts.push(create_index_stmt(table, &column.name));
+            }
+            stmts
         }
         Operation::DropColumn { table, column } => vec![
             Table::alter()
@@ -2200,7 +2241,13 @@ fn render_operation_postgres(op: &Operation) -> Vec<String> {
                 let mut def = build_column_def_postgres(col);
                 stmt.col(&mut def);
             }
-            vec![stmt.build(PostgresQueryBuilder)]
+            let mut stmts = vec![stmt.build(PostgresQueryBuilder)];
+            for col in columns {
+                if col.index && !col.primary_key && !col.unique {
+                    stmts.push(create_index_stmt(table, &col.name));
+                }
+            }
+            stmts
         }
         Operation::DropTable { table } => vec![
             Table::drop()
@@ -2212,7 +2259,11 @@ fn render_operation_postgres(op: &Operation) -> Vec<String> {
             stmt.table(Alias::new(table));
             let mut def = build_column_def_postgres(column);
             stmt.add_column(&mut def);
-            vec![stmt.build(PostgresQueryBuilder)]
+            let mut stmts = vec![stmt.build(PostgresQueryBuilder)];
+            if column.index && !column.primary_key && !column.unique {
+                stmts.push(create_index_stmt(table, &column.name));
+            }
+            stmts
         }
         Operation::DropColumn { table, column } => vec![
             Table::alter()
@@ -2809,6 +2860,7 @@ mod tests {
             unique: true,
             on_delete: crate::orm::FkAction::NoAction,
             on_update: crate::orm::FkAction::NoAction,
+            index: false,
         };
         let username = Column {
             name: "username".into(),
@@ -2827,6 +2879,7 @@ mod tests {
             unique: true,
             on_delete: crate::orm::FkAction::NoAction,
             on_update: crate::orm::FkAction::NoAction,
+            index: false,
         };
         let email = Column {
             name: "email".into(),
@@ -2845,6 +2898,7 @@ mod tests {
             unique: false,
             on_delete: crate::orm::FkAction::NoAction,
             on_update: crate::orm::FkAction::NoAction,
+            index: false,
         };
 
         for backend in ["sqlite", "postgres"] {
@@ -2933,10 +2987,12 @@ mod tests {
             unique: false,
             on_delete: crate::orm::FkAction::NoAction,
             on_update: crate::orm::FkAction::NoAction,
+            index: false,
         };
         let cascade_fk = Column {
             on_delete: crate::orm::FkAction::Cascade,
             on_update: crate::orm::FkAction::Cascade,
+            index: false,
             ..plain_fk.clone()
         };
         let restrict_fk = Column {
@@ -3030,6 +3086,7 @@ mod tests {
                 unique: false,
                 on_delete: crate::orm::FkAction::NoAction,
                 on_update: crate::orm::FkAction::NoAction,
+                index: false,
             }
         }
         fn meta_with(col: Column) -> ModelMeta {
@@ -3093,6 +3150,7 @@ mod tests {
             unique: false,
             on_delete: crate::orm::FkAction::NoAction,
             on_update: crate::orm::FkAction::NoAction,
+            index: false,
         };
 
         // unique false → true: emit ADD CONSTRAINT ... UNIQUE
@@ -3187,6 +3245,7 @@ mod tests {
             unique: false,
             on_delete: crate::orm::FkAction::NoAction,
             on_update: crate::orm::FkAction::NoAction,
+            index: false,
         };
         let mut stmt = Table::create();
         stmt.table(Alias::new("t"));
@@ -3228,5 +3287,82 @@ mod tests {
             sql.contains("DEFAULT 'hello'"),
             "text default should stay quoted; got: {sql}",
         );
+    }
+
+    /// BUG-4 from bugs/tests/testBugs.md: `#[umbra(index)]` lifts
+    /// to a `CREATE INDEX IF NOT EXISTS idx_<table>_<col>` statement
+    /// alongside the `CREATE TABLE`. The index is skipped on PK
+    /// and UNIQUE columns (those are already indexed by the
+    /// constraint).
+    #[test]
+    fn index_attribute_emits_create_index_alongside_create_table() {
+        let id = Column {
+            name: "id".into(),
+            ty: SqlType::BigInt,
+            primary_key: true,
+            nullable: false,
+            fk_target: None,
+            noform: false,
+            noedit: false,
+            is_string_repr: false,
+            max_length: 0,
+            choices: vec![],
+            choice_labels: vec![],
+            default: String::new(),
+            is_multichoice: false,
+            unique: false,
+            on_delete: crate::orm::FkAction::NoAction,
+            on_update: crate::orm::FkAction::NoAction,
+            // PK with index=true; the renderer should skip the
+            // extra CREATE INDEX because the PK constraint
+            // already covers it.
+            index: true,
+        };
+        let slug = Column {
+            name: "slug".into(),
+            ty: SqlType::Text,
+            primary_key: false,
+            nullable: false,
+            index: true,
+            ..id.clone()
+        };
+        let title = Column {
+            name: "title".into(),
+            ty: SqlType::Text,
+            primary_key: false,
+            nullable: false,
+            index: false,
+            ..id.clone()
+        };
+        let op = Operation::CreateTable {
+            table: "post".into(),
+            columns: vec![id, slug, title],
+        };
+
+        for backend in ["sqlite", "postgres"] {
+            let stmts = render_operation_for(&op, backend);
+            assert!(
+                stmts.iter().any(|s| s.to_uppercase().contains("CREATE TABLE")),
+                "{backend}: expected a CREATE TABLE; got: {stmts:?}",
+            );
+            let index_stmts: Vec<_> = stmts
+                .iter()
+                .filter(|s| s.to_uppercase().contains("CREATE INDEX"))
+                .collect();
+            assert_eq!(
+                index_stmts.len(),
+                1,
+                "{backend}: expected exactly one CREATE INDEX (on `slug`); got {index_stmts:?}",
+            );
+            let ix = index_stmts[0];
+            assert!(
+                ix.contains("\"idx_post_slug\"") && ix.contains("(\"slug\")"),
+                "{backend}: index should target post(slug); got: {ix}",
+            );
+            assert!(
+                ix.to_uppercase().contains("IF NOT EXISTS"),
+                "{backend}: should be idempotent via IF NOT EXISTS; got: {ix}",
+            );
+        }
     }
 }

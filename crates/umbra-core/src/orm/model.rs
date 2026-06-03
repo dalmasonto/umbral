@@ -301,6 +301,17 @@ pub struct FieldSpec {
     /// `on_delete` / `on_update` pair. Set via
     /// `#[umbra(on_update = "...")]`.
     pub on_update: FkAction,
+
+    /// When `true`, the migration engine emits a single-column
+    /// `CREATE INDEX` statement alongside the `CREATE TABLE`. Set
+    /// via `#[umbra(index)]`. Closes BUG-4 in
+    /// `bugs/tests/testBugs.md`.
+    ///
+    /// Index name convention: `idx_<table>_<column>`. Apps that
+    /// need a custom name, a multi-column index, or a partial
+    /// index write the `CREATE INDEX` by hand in a follow-up
+    /// migration.
+    pub index: bool,
 }
 
 /// Referential action emitted in the SQL `REFERENCES ... ON
