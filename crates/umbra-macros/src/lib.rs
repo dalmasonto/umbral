@@ -971,6 +971,22 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                 }
             };
 
+        // BUG-11/12/13: lower validator wrapper types to a
+        // `text_format` marker so downstream consumers know which
+        // validator to run / which OpenAPI format key to emit.
+        let text_format_tokens = match kind {
+            FieldKind::Slug => {
+                quote!(::core::option::Option::Some("slug"))
+            }
+            FieldKind::Email => {
+                quote!(::core::option::Option::Some("email"))
+            }
+            FieldKind::Url => {
+                quote!(::core::option::Option::Some("url"))
+            }
+            _ => quote!(::core::option::Option::None),
+        };
+
         field_specs.push(quote! {
             ::umbra::orm::FieldSpec {
                 name: #field_name_str,
@@ -997,6 +1013,7 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                 example: #example_tokens,
                 min: #min_tokens,
                 max: #max_tokens,
+                text_format: #text_format_tokens,
             }
         });
 
@@ -1241,6 +1258,16 @@ enum FieldKind {
     /// `rust_decimal::Decimal` — NUMERIC(19, 4) fixed-point. Closes
     /// BUG-10.
     Decimal,
+    /// `umbra::orm::Slug` — TEXT with `[A-Za-z0-9_-]+` validation.
+    /// Closes BUG-11. Storage is the inner String; the `text_format`
+    /// marker on FieldSpec carries the validator selector.
+    Slug,
+    /// `umbra::orm::Email` — TEXT with structural email validation.
+    /// Closes BUG-12.
+    Email,
+    /// `umbra::orm::Url` — TEXT with `http(s)://...` validation.
+    /// Closes BUG-13.
+    Url,
     /// Catch-all: not a recognised M3 catalogue type, or one of the
     /// explicitly-rejected wide / unsigned ints. Carries the exact
     /// diagnostic to emit at the field's span.
@@ -1298,6 +1325,13 @@ impl FieldKind {
             FieldKind::Double | FieldKind::NullableDouble => quote!(::umbra::orm::SqlType::Double),
             FieldKind::Bool | FieldKind::NullableBool => quote!(::umbra::orm::SqlType::Boolean),
             FieldKind::Str | FieldKind::NullableStr => quote!(::umbra::orm::SqlType::Text),
+            // BUG-11/12/13: validator wrappers store as TEXT. The
+            // FieldSpec.text_format marker (emitted in the field
+            // loop below) tells downstream consumers which
+            // validator runs / which OpenAPI format to emit.
+            FieldKind::Slug | FieldKind::Email | FieldKind::Url => {
+                quote!(::umbra::orm::SqlType::Text)
+            }
             FieldKind::Date | FieldKind::NullableDate => quote!(::umbra::orm::SqlType::Date),
             FieldKind::Time | FieldKind::NullableTime => quote!(::umbra::orm::SqlType::Time),
             FieldKind::DateTime | FieldKind::NullableDateTime => {
@@ -1412,6 +1446,19 @@ fn classify_field_type(ty: &Type) -> FieldKind {
     }
     if type_is_ident(ty, "String") {
         return FieldKind::Str;
+    }
+    // BUG-11/12/13: the validator wrappers. All three lower to
+    // `SqlType::Text` (the storage shape is plain TEXT); the
+    // `text_format` marker carries the discrimination through to
+    // OpenAPI / REST / the admin form.
+    if type_is_ident(ty, "Slug") {
+        return FieldKind::Slug;
+    }
+    if type_is_ident(ty, "Email") {
+        return FieldKind::Email;
+    }
+    if type_is_ident(ty, "Url") {
+        return FieldKind::Url;
     }
     if type_is_ident(ty, "NaiveDate") {
         return FieldKind::Date;
@@ -1902,6 +1949,10 @@ fn column_const_for(
         FieldKind::Real | FieldKind::Double => format_ident!("F64Col"),
         FieldKind::Bool => format_ident!("BoolCol"),
         FieldKind::Str => format_ident!("StrCol"),
+        // BUG-11/12/13: the validator wrappers expose the same
+        // text-column query surface (`eq`, `ilike`, `contains`,
+        // etc.) as a plain `String` field; reuse `StrCol`.
+        FieldKind::Slug | FieldKind::Email | FieldKind::Url => format_ident!("StrCol"),
         FieldKind::Date => format_ident!("DateCol"),
         FieldKind::Time => format_ident!("TimeCol"),
         FieldKind::DateTime => format_ident!("DateTimeCol"),

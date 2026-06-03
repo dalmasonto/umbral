@@ -666,6 +666,15 @@ impl<'a> DynQuerySet<'a> {
                     }
                 }
             }
+            // BUG-11/12/13: pre-validate Slug / Email / Url wrappers.
+            // The macro-emitted `text_format` marker selects the
+            // validator; only strings are checked (the column type
+            // catches non-string values upstream).
+            if let (Some(fmt), Some(s)) = (col.text_format.as_deref(), json.as_str()) {
+                if let Err(e) = crate::orm::validators::validate_text_format(fmt, s) {
+                    return Err(sqlx::Error::Protocol(format!("field `{}` {e}", col.name)));
+                }
+            }
             let sea_value =
                 crate::orm::write::json_to_sea_value(col.ty, json, col.nullable, &col.name)
                     .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
@@ -788,6 +797,13 @@ impl<'a> DynQuerySet<'a> {
                             col.name
                         )));
                     }
+                }
+            }
+            // BUG-11/12/13: same wrapper-type pre-validation as
+            // insert_json.
+            if let (Some(fmt), Some(s)) = (col.text_format.as_deref(), json.as_str()) {
+                if let Err(e) = crate::orm::validators::validate_text_format(fmt, s) {
+                    return Err(sqlx::Error::Protocol(format!("field `{}` {e}", col.name)));
                 }
             }
             let sea_value =

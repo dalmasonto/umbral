@@ -117,6 +117,7 @@ fn int_pk_column() -> Column {
         supported_backends: Vec::new(),
         min: None,
         max: None,
+        text_format: ::core::option::Option::None,
     }
 }
 
@@ -146,6 +147,7 @@ fn uuid_pk_column() -> Column {
         supported_backends: Vec::new(),
         min: None,
         max: None,
+        text_format: ::core::option::Option::None,
     }
 }
 
@@ -175,6 +177,7 @@ fn string_pk_column() -> Column {
         supported_backends: Vec::new(),
         min: None,
         max: None,
+        text_format: ::core::option::Option::None,
     }
 }
 
@@ -204,6 +207,7 @@ fn label_column() -> Column {
         supported_backends: Vec::new(),
         min: None,
         max: None,
+        text_format: ::core::option::Option::None,
     }
 }
 

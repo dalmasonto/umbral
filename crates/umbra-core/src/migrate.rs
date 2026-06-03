@@ -562,6 +562,14 @@ pub struct Column {
     /// IMP-3: numeric upper bound. Same shape as `min`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max: Option<i64>,
+
+    /// BUG-11/12/13: constrained-text marker. `None` is plain text;
+    /// `Some("slug" | "email" | "url")` flags the column as a
+    /// `Slug` / `Email` / `Url` wrapper. OpenAPI emits the
+    /// corresponding `format` / `pattern`; the REST plugin
+    /// pre-validates the body via `validate_text_format`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_format: Option<String>,
 }
 
 fn is_no_action(a: &crate::orm::FkAction) -> bool {
@@ -666,6 +674,7 @@ impl From<&FieldSpec> for Column {
             supported_backends: f.supported_backends.iter().map(|s| s.to_string()).collect(),
             min: f.min,
             max: f.max,
+            text_format: f.text_format.map(|s| s.to_string()),
         }
     }
 }
@@ -3092,6 +3101,7 @@ mod tests {
             supported_backends: Vec::new(),
             min: None,
             max: None,
+            text_format: ::core::option::Option::None,
         };
         let username = Column {
             name: "username".into(),
@@ -3118,6 +3128,7 @@ mod tests {
             supported_backends: Vec::new(),
             min: None,
             max: None,
+            text_format: ::core::option::Option::None,
         };
         let email = Column {
             name: "email".into(),
@@ -3144,6 +3155,7 @@ mod tests {
             supported_backends: Vec::new(),
             min: None,
             max: None,
+            text_format: ::core::option::Option::None,
         };
 
         for backend in ["sqlite", "postgres"] {
@@ -3240,6 +3252,7 @@ mod tests {
             supported_backends: Vec::new(),
             min: None,
             max: None,
+            text_format: ::core::option::Option::None,
         };
         let cascade_fk = Column {
             on_delete: crate::orm::FkAction::Cascade,
@@ -3351,6 +3364,7 @@ mod tests {
                 supported_backends: Vec::new(),
                 min: None,
                 max: None,
+                text_format: ::core::option::Option::None,
             }
         }
         fn meta_with(col: Column) -> ModelMeta {
@@ -3426,6 +3440,7 @@ mod tests {
             supported_backends: Vec::new(),
             min: None,
             max: None,
+            text_format: ::core::option::Option::None,
         };
 
         // unique false → true: emit ADD CONSTRAINT ... UNIQUE
@@ -3528,6 +3543,7 @@ mod tests {
             supported_backends: Vec::new(),
             min: None,
             max: None,
+            text_format: ::core::option::Option::None,
         };
         let mut stmt = Table::create();
         stmt.table(Alias::new("t"));
@@ -3606,6 +3622,7 @@ mod tests {
             supported_backends: Vec::new(),
             min: None,
             max: None,
+            text_format: ::core::option::Option::None,
         };
         let slug = Column {
             name: "slug".into(),

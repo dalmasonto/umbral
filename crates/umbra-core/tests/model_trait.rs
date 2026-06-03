@@ -179,6 +179,7 @@ fn field_spec_is_copy_and_eq() {
         example: "",
         min: None,
         max: None,
+        text_format: ::core::option::Option::None,
     };
     let b = FieldSpec {
         name: "x",
@@ -205,6 +206,7 @@ fn field_spec_is_copy_and_eq() {
         example: "",
         min: None,
         max: None,
+        text_format: ::core::option::Option::None,
     };
 
     assert_eq!(
@@ -249,6 +251,7 @@ fn field_spec_eq_distinguishes_different_names() {
         example: "",
         min: None,
         max: None,
+        text_format: ::core::option::Option::None,
     };
     let b = FieldSpec {
         name: "y",
@@ -275,6 +278,7 @@ fn field_spec_eq_distinguishes_different_names() {
         example: "",
         min: None,
         max: None,
+        text_format: ::core::option::Option::None,
     };
 
     assert_ne!(a, b, "FieldSpecs differing in name must not compare equal");

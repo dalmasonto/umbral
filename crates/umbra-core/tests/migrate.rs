@@ -156,6 +156,7 @@ async fn migrated_dir() -> &'static Path {
                 supported_backends: Vec::new(),
                 min: None,
                 max: None,
+                text_format: ::core::option::Option::None,
             };
             let file = MigrationFile {
                 id: M8_ADD_COLUMN_MIGRATION_ID.to_string(),
@@ -225,6 +226,7 @@ async fn migrated_dir() -> &'static Path {
                     supported_backends: Vec::new(),
                     min: None,
                     max: None,
+                    text_format: ::core::option::Option::None,
                 },
                 Column {
                     name: "note".to_string(),
@@ -251,6 +253,7 @@ async fn migrated_dir() -> &'static Path {
                     supported_backends: Vec::new(),
                     min: None,
                     max: None,
+                    text_format: ::core::option::Option::None,
                 },
             ];
             let file = MigrationFile {
@@ -751,6 +754,7 @@ fn id_column() -> Column {
         supported_backends: Vec::new(),
         min: None,
         max: None,
+        text_format: ::core::option::Option::None,
     }
 }
 
@@ -782,6 +786,7 @@ fn text_column(name: &str) -> Column {
         supported_backends: Vec::new(),
         min: None,
         max: None,
+        text_format: ::core::option::Option::None,
     }
 }
 
@@ -922,6 +927,7 @@ fn diff_returns_unsafe_alter_for_a_type_change() {
             supported_backends: Vec::new(),
             min: None,
             max: None,
+            text_format: ::core::option::Option::None,
         },
     ]));
 
@@ -977,6 +983,7 @@ fn diff_emits_alter_column_for_a_nullable_flip() {
             supported_backends: Vec::new(),
             min: None,
             max: None,
+            text_format: ::core::option::Option::None,
         },
     ]));
 
@@ -1041,6 +1048,7 @@ fn diff_emits_alter_column_for_safe_type_cast_bigint_to_text() {
         supported_backends: Vec::new(),
         min: None,
         max: None,
+        text_format: ::core::option::Option::None,
     };
     let mut curr_user_id = prev_user_id.clone();
     curr_user_id.ty = SqlType::Text;
@@ -1106,6 +1114,7 @@ fn diff_still_refuses_text_to_bigint_as_unsafe() {
         supported_backends: Vec::new(),
         min: None,
         max: None,
+        text_format: ::core::option::Option::None,
     };
     let mut curr_value = prev_value.clone();
     curr_value.ty = SqlType::BigInt;

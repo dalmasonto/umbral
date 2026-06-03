@@ -62,6 +62,7 @@ fn id_col() -> Column {
         supported_backends: Vec::new(),
         min: None,
         max: None,
+        text_format: ::core::option::Option::None,
     }
 }
 
@@ -91,6 +92,7 @@ fn title_col() -> Column {
         supported_backends: Vec::new(),
         min: None,
         max: None,
+        text_format: ::core::option::Option::None,
     }
 }
 
@@ -197,6 +199,7 @@ fn name_match_wins_over_shape_match_when_columns_differ() {
         supported_backends: Vec::new(),
         min: None,
         max: None,
+        text_format: ::core::option::Option::None,
     };
 
     let prev = make_snapshot(vec![make_meta("Foo", "foo", vec![id_col(), title_col()])]);
@@ -282,6 +285,7 @@ fn no_rename_when_shapes_differ() {
         supported_backends: Vec::new(),
         min: None,
         max: None,
+        text_format: ::core::option::Option::None,
     };
 
     let prev = make_snapshot(vec![make_meta("Foo", "foo", vec![id_col(), title_col()])]);

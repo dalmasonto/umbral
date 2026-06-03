@@ -92,6 +92,7 @@ fn postgres_ddl_renders_array_suffix() {
                 supported_backends: Vec::new(),
                 min: None,
                 max: None,
+                text_format: ::core::option::Option::None,
             },
             Column {
                 name: "tags".to_string(),
@@ -118,6 +119,7 @@ fn postgres_ddl_renders_array_suffix() {
                 supported_backends: Vec::new(),
                 min: None,
                 max: None,
+                text_format: ::core::option::Option::None,
             },
         ],
         unique_together: Vec::new(),

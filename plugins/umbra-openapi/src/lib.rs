@@ -397,6 +397,26 @@ fn column_schema(col: &Column) -> Value {
             Value::Number(serde_json::Number::from(max)),
         );
     }
+    // BUG-11/12/13: `Slug` / `Email` / `Url` wrappers lower to
+    // standard OpenAPI markers so generated clients and Swagger UI
+    // render the right widget.
+    if let Some(fmt) = col.text_format.as_deref() {
+        match fmt {
+            "email" => {
+                obj.insert("format".into(), Value::String("email".into()));
+            }
+            "url" => {
+                obj.insert("format".into(), Value::String("uri".into()));
+            }
+            "slug" => {
+                // No built-in OpenAPI format for slug; use the
+                // `pattern` keyword (standard 3.0) to constrain
+                // accepted values. Mirrors the macro-side regex.
+                obj.insert("pattern".into(), Value::String("^[A-Za-z0-9_-]+$".into()));
+            }
+            _ => {}
+        }
+    }
     // Standard OpenAPI: closed-set values become `enum`. Skipped for
     // multichoice (a CSV-encoded subset) because each request value is
     // a comma-separated string of the choices, not one choice — clients
@@ -904,6 +924,7 @@ mod tests {
             supported_backends: Vec::new(),
             min: None,
             max: None,
+            text_format: ::core::option::Option::None,
         }
     }
 

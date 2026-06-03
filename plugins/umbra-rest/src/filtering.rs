@@ -629,6 +629,7 @@ mod search {
             supported_backends: Vec::new(),
             min: None,
             max: None,
+            text_format: ::core::option::Option::None,
         }
     }
 
@@ -740,6 +741,7 @@ mod choice_validation {
             supported_backends: Vec::new(),
             min: None,
             max: None,
+            text_format: ::core::option::Option::None,
         }
     }
 

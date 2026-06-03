@@ -211,6 +211,83 @@ fn struct_attrs_reach_model_consts() {
     );
 }
 
+// =========================================================================
+// BUG-11 / BUG-12 / BUG-13: `Slug` / `Email` / `Url` wrapper types
+// propagate through the macro into the `text_format` marker on
+// FieldSpec / Column.
+// =========================================================================
+
+use umbra::orm::{Email, Slug, Url, ValidatorError};
+
+#[derive(Debug, sqlx::FromRow, Serialize, Deserialize, Model)]
+struct ValidatorRow {
+    id: i64,
+    slug: Slug,
+    email: Email,
+    homepage: Url,
+    plain: String,
+}
+
+#[test]
+fn validator_types_emit_text_format_marker() {
+    let by_name: std::collections::HashMap<&str, &umbra::orm::FieldSpec> =
+        <ValidatorRow as Model>::FIELDS
+            .iter()
+            .map(|f| (f.name, f))
+            .collect();
+
+    assert_eq!(by_name["slug"].text_format, Some("slug"));
+    assert_eq!(by_name["slug"].ty, umbra::orm::SqlType::Text);
+    assert_eq!(by_name["email"].text_format, Some("email"));
+    assert_eq!(by_name["email"].ty, umbra::orm::SqlType::Text);
+    assert_eq!(by_name["homepage"].text_format, Some("url"));
+    assert_eq!(by_name["homepage"].ty, umbra::orm::SqlType::Text);
+    assert_eq!(by_name["plain"].text_format, None);
+    assert_eq!(by_name["plain"].ty, umbra::orm::SqlType::Text);
+}
+
+#[test]
+fn validator_types_validate_inputs() {
+    assert!(Slug::new("hello-world").is_ok());
+    assert!(matches!(
+        Slug::new("bad slug"),
+        Err(ValidatorError::InvalidSlug(_))
+    ));
+
+    assert!(Email::new("a@b.c").is_ok());
+    assert!(matches!(
+        Email::new("plain"),
+        Err(ValidatorError::InvalidEmail(_))
+    ));
+
+    assert!(Url::new("https://example.com/").is_ok());
+    assert!(matches!(
+        Url::new("not-a-url"),
+        Err(ValidatorError::InvalidUrl(_))
+    ));
+}
+
+#[test]
+fn validator_text_format_round_trips_through_meta_snapshot() {
+    let meta = umbra::migrate::ModelMeta::for_::<ValidatorRow>();
+    let json = serde_json::to_string(&meta).unwrap();
+    // The three wrapper fields carry their marker; `plain` omits it
+    // entirely (Option::is_none → skip).
+    assert!(json.contains("\"text_format\":\"slug\""), "{json}");
+    assert!(json.contains("\"text_format\":\"email\""), "{json}");
+    assert!(json.contains("\"text_format\":\"url\""), "{json}");
+    let back: umbra::migrate::ModelMeta = serde_json::from_str(&json).unwrap();
+    let by_name: std::collections::HashMap<_, _> = back
+        .fields
+        .iter()
+        .map(|c| (c.name.as_str(), c.text_format.as_deref()))
+        .collect();
+    assert_eq!(by_name["slug"], Some("slug"));
+    assert_eq!(by_name["email"], Some("email"));
+    assert_eq!(by_name["homepage"], Some("url"));
+    assert_eq!(by_name["plain"], None);
+}
+
 #[test]
 fn struct_attrs_round_trip_through_model_meta() {
     let meta = umbra::migrate::ModelMeta::for_::<PostWithStructAttrs>();

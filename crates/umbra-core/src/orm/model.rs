@@ -426,6 +426,26 @@ pub struct FieldSpec {
     /// Mirror of `min`; same plumbing on the OpenAPI / REST /
     /// admin sides.
     pub max: Option<i64>,
+
+    /// Constrained-text marker. `None` is a plain `String` /
+    /// `SqlType::Text` column; `Some("slug" | "email" | "url")` is
+    /// one of the validator wrapper types from
+    /// [`crate::orm::validators`]. Closes BUG-11/12/13. Flows to:
+    ///
+    /// - OpenAPI `format: email` / `format: uri` / `pattern` on the
+    ///   property schema (the standard 3.0 markers).
+    /// - REST plugin's dynamic write path: `validate_text_format`
+    ///   pre-checks the body value and returns a structured 400
+    ///   on a bad input.
+    /// - Admin form: HTML5 `type="email"` / `type="url"` widget
+    ///   (when those land).
+    ///
+    /// The marker is set by the macro classifier from the field type
+    /// — `Slug` → `Some("slug")`, `Email` → `Some("email")`,
+    /// `Url` → `Some("url")`. The wrapper type + marker stay in sync
+    /// because they're produced from the same single match arm in
+    /// `umbra-macros::classify_field_type`.
+    pub text_format: Option<&'static str>,
 }
 
 /// Referential action emitted in the SQL `REFERENCES ... ON

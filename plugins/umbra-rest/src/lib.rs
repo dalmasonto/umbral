@@ -1319,6 +1319,7 @@ mod noform_drop {
             supported_backends: Vec::new(),
             min: None,
             max: None,
+            text_format: ::core::option::Option::None,
         }
     }
 

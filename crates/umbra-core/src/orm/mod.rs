@@ -29,6 +29,7 @@ pub mod multichoice;
 pub mod post;
 pub mod queryset;
 pub mod tsvector;
+pub mod validators;
 pub mod write;
 
 use std::marker::PhantomData;
@@ -43,6 +44,7 @@ pub use multichoice::MultiChoice;
 pub use post::Post;
 pub use queryset::{GetError, Manager, QuerySet, QuerySetTx};
 pub use tsvector::TsVector;
+pub use validators::{Email, Slug, Url, ValidatorError, validate_text_format};
 pub use write::SaveError;
 
 /// A typed boolean condition on rows of `T`.

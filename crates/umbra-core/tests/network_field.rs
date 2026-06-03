@@ -83,6 +83,7 @@ fn postgres_ddl_renders_inet_and_macaddr_types() {
                 supported_backends: Vec::new(),
                 min: None,
                 max: None,
+                text_format: ::core::option::Option::None,
             },
             Column {
                 name: "addr".to_string(),
@@ -109,6 +110,7 @@ fn postgres_ddl_renders_inet_and_macaddr_types() {
                 supported_backends: Vec::new(),
                 min: None,
                 max: None,
+                text_format: ::core::option::Option::None,
             },
             Column {
                 name: "mac".to_string(),
@@ -135,6 +137,7 @@ fn postgres_ddl_renders_inet_and_macaddr_types() {
                 supported_backends: Vec::new(),
                 min: None,
                 max: None,
+                text_format: ::core::option::Option::None,
             },
             Column {
                 name: "net".to_string(),
@@ -161,6 +164,7 @@ fn postgres_ddl_renders_inet_and_macaddr_types() {
                 supported_backends: Vec::new(),
                 min: None,
                 max: None,
+                text_format: ::core::option::Option::None,
             },
         ],
         unique_together: Vec::new(),
