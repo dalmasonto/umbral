@@ -83,7 +83,7 @@ pub trait Plugin: Send + Sync + 'static {
     }
 
     /// The plugin's HTTP routes. Merged into the app router after the
-    /// hand-written one passed to `AppBuilder::router()`. Plugins
+    /// hand-written one passed to `AppBuilder::routes()`. Plugins
     /// choose their own path prefixes (spec 02 §"What a plugin can
     /// contribute": routes are flat, not auto-prefixed).
     fn routes(&self) -> Router {

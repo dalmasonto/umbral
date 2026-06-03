@@ -11,8 +11,8 @@ use crate::settings::Settings;
 /// A built and ready-to-serve umbra application.
 ///
 /// Created via `App::builder().build()`. Owns the merged router that
-/// carries every registered plugin's routes (and, at M0, the hand-written
-/// route passed to `AppBuilder::router()`).
+/// carries every registered plugin's routes plus the user-binary
+/// routes passed to `AppBuilder::routes()`.
 pub struct App {
     router: Router,
     plugins: Vec<Box<dyn Plugin>>,
@@ -156,37 +156,25 @@ impl AppBuilder {
         self
     }
 
-    /// Attach a hand-written axum router.
+    /// Attach a [`Routes`](crate::routes::Routes) bundle of
+    /// hand-registered routes.
     ///
-    /// At M0 this is the primary way to register routes. From M7 onward,
-    /// plugins contribute routes through their `Plugin::routes()` method
-    /// and this escape hatch is reserved for ad-hoc routes outside any
-    /// plugin.
+    /// Each `.get(...) / .post(...) / .put(...) / .patch(...) /
+    /// .delete(...) / .head(...) / .options(...)` call on `Routes`
+    /// records the path *and* registers the handler, so the framework
+    /// surfaces declared routes in the dev-mode 404 page without a
+    /// parallel declaration list.
     ///
-    /// **Note:** prefer [`AppBuilder::routes`] for the common case. It
-    /// auto-tracks paths so the dev-mode 404 page surfaces them without
-    /// you having to declare them twice via `.route_paths(...)`. This
-    /// `.router(...)` method stays the escape hatch for axum features
-    /// not yet covered by the [`Routes`](crate::routes::Routes) builder
-    /// (typed State, middleware layers, `nest`, etc.).
-    pub fn router(mut self, router: Router) -> Self {
-        self.router = Some(router);
-        self
-    }
-
-    /// Attach a hand-written [`Routes`](crate::routes::Routes) bundle.
-    ///
-    /// This is the no-double-entry version of
-    /// [`AppBuilder::router`] + [`AppBuilder::route_paths`]: every
-    /// `.get(...)` / `.post(...)` etc. call on `Routes` records the
-    /// path *and* registers the handler, so the framework surfaces the
-    /// declared routes in the dev-mode 404 page without you maintaining
-    /// a parallel `route_paths([...])` list.
+    /// Multi-method routes go through [`Routes::route`] (explicit
+    /// method list + `axum::routing::MethodRouter`). Routes that need
+    /// axum features the per-method shorthands don't expose (typed
+    /// `State`, middleware layers, `nest`, fallback handlers, etc.)
+    /// go through [`Routes::with_router`] — that escape hatch merges
+    /// an external `axum::Router` and its paths stay opaque to the
+    /// framework (won't appear in the dev 404 page).
     ///
     /// Calling this more than once merges the router and concatenates
-    /// the specs. Composes cleanly with [`AppBuilder::router`] when
-    /// you have a mix of tracked routes and an unmoderated axum
-    /// router (the latter contributes routes silently).
+    /// the specs.
     ///
     /// ```ignore
     /// use umbra::prelude::*;
@@ -202,46 +190,11 @@ impl AppBuilder {
     /// ```
     pub fn routes(mut self, routes: crate::routes::Routes) -> Self {
         let (router, specs) = routes.into_parts();
-        // Merge into any prior user router (set via .router() or a
-        // previous .routes() call). axum::Router::merge is
-        // commutative for non-conflicting paths.
         self.router = Some(match self.router.take() {
             Some(prior) => prior.merge(router),
             None => router,
         });
         self.route_paths.extend(specs);
-        self
-    }
-
-    /// Declare the URL path patterns the hand-written
-    /// [`AppBuilder::router`] contributes, for surfacing in the
-    /// dev-mode default 404 page (and any future route-listing tool).
-    /// axum doesn't expose its internal route table, so the framework
-    /// can't introspect what the caller registered; this companion
-    /// method is how a binary tells the framework which paths it
-    /// declared.
-    ///
-    /// Optional — apps that don't care about the dev-mode route list
-    /// can skip the call. The list is stored verbatim and is not
-    /// cross-checked against the actual `Router`.
-    ///
-    /// ```ignore
-    /// App::builder()
-    ///     .router(Router::new()
-    ///         .route("/", get(home))
-    ///         .route("/articles", get(articles_list)))
-    ///     // Bare strings → path-only spec, method shown as "ANY".
-    ///     .route_paths(["/", "/articles"])
-    ///     // Tuple form → method badge in the dev 404 page.
-    ///     // .route_paths([("GET", "/"), ("POST", "/articles")])
-    ///     .build()?;
-    /// ```
-    pub fn route_paths<I, R>(mut self, routes: I) -> Self
-    where
-        I: IntoIterator<Item = R>,
-        R: Into<crate::routes::RouteSpec>,
-    {
-        self.route_paths.extend(routes.into_iter().map(Into::into));
         self
     }
 

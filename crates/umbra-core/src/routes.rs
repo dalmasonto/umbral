@@ -4,9 +4,11 @@
 //! The registry is populated once at `App::build()` time from two
 //! sources:
 //!
-//! 1. The implicit `"app"` plugin's path list, set via
-//!    `AppBuilder::route_paths(&[...])`. Optional — apps that don't
-//!    call it get an empty `"app"` entry.
+//! 1. The implicit `"app"` plugin's path list, fed from the
+//!    [`Routes`] builder passed to [`crate::AppBuilder::routes`].
+//!    Each `.get(...) / .post(...)` etc. call records both a handler
+//!    *and* a [`RouteSpec`], so the registry is automatically in
+//!    sync with the actual axum router for user-binary routes.
 //! 2. Each registered plugin's `Plugin::route_paths()` contribution,
 //!    walked in topological dependency order.
 //!
@@ -28,10 +30,13 @@
 //! `route_paths()`, the registry won't mention it. The cost of that
 //! drift is "404 page is slightly stale," not "framework is broken."
 //!
-//! For the user's hand-registered routes (`AppBuilder::router(...)`),
-//! the same shape applies: call `AppBuilder::route_paths(&[...])`
-//! alongside `.router(...)` to surface them. Skipping it is fine; the
-//! registry just won't list those paths.
+//! For user-binary routes, the [`Routes`] builder eliminates drift
+//! at the source: a path can only land in the axum router by going
+//! through `Routes::get/post/...`, which also records the spec. The
+//! escape hatch `Routes::with_router` *can* merge an external
+//! `axum::Router` whose paths the registry doesn't see — by design,
+//! since that's where typed-State / middleware / nested routers
+//! live and there's no axum API to introspect them.
 
 use std::collections::BTreeMap;
 use std::sync::OnceLock;

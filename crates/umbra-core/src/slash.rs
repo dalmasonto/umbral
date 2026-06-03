@@ -20,7 +20,7 @@
 //!
 //! let app = App::builder()
 //!     .slash_redirect(SlashRedirect::Append)  // Django's APPEND_SLASH=True shape
-//!     .router(Router::new().route("/articles", get(handler)))
+//!     .routes(Routes::new().get("/articles", handler))
 //!     .build()?;
 //! ```
 //!

@@ -19,14 +19,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // we bind a port. `App::build()` would otherwise auto-connect.
     let pool = umbra::db::connect(&settings.database_url).await?;
 
-    let router = Router::new()
-        .route("/", get(root))
-        .route("/settings", get(settings_view));
-
     let app = App::builder()
         .settings(settings)
         .database("default", pool)
-        .router(router)
+        .routes(
+            Routes::new()
+                .get("/", root)
+                .get("/settings", settings_view),
+        )
         .build()?;
 
     app.serve("127.0.0.1:3000".parse::<std::net::SocketAddr>()?)

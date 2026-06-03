@@ -9,14 +9,13 @@
 //! call would trip the "init called more than once" panic. That's why the
 //! companion auto-connect scenario lives in `builder_defaults.rs`.
 
-use axum::Router;
-use axum::routing::get;
 use umbra_core::app::App;
 use umbra_core::db;
+use umbra_core::routes::Routes;
 use umbra_core::settings::Settings;
 
 /// The happy path: hand a settings struct, an in-memory pool, and a small
-/// router to the builder and confirm everything wires together.
+/// route bundle to the builder and confirm everything wires together.
 #[tokio::test]
 async fn build_succeeds_with_explicit_pool_and_router() {
     let settings = Settings::from_env().expect("figment defaults always load");
@@ -25,12 +24,10 @@ async fn build_succeeds_with_explicit_pool_and_router() {
         .await
         .expect("in-memory sqlite should always connect");
 
-    let router = Router::new().route("/ping", get(|| async { "pong" }));
-
     let result = App::builder()
         .settings(settings)
         .database("default", pool)
-        .router(router)
+        .routes(Routes::new().get("/ping", || async { "pong" }))
         .build();
 
     assert!(

@@ -24,8 +24,8 @@ Every umbra symbol in `src/main.rs` comes through the facade. There is no `umbra
 
 - `Settings::from_env()` to load settings with the documented defaults → toml → env precedence.
 - `umbra::db::connect(url)` to open a sqlite pool.
-- `App::builder().settings(...).database("default", pool).router(...).build()` to wire everything up.
-- The router surface from `umbra::prelude::*`: `Router`, `get`, and the route-method builder.
+- `App::builder().settings(...).database("default", pool).routes(...).build()` to wire everything up.
+- The `Routes::new().get("/", root).get("/settings", settings_view)` builder from `umbra::prelude::*` — each per-method call records the path AND registers the handler in one shot.
 - `app.serve(addr)` to bind a listener and run the server.
 
 The point of the example is structural, not behavioural: it proves the facade is complete enough that a downstream user gets a working app without ever reaching past `umbra::*`.

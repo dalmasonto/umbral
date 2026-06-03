@@ -339,17 +339,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {{
         .slash_redirect(SlashRedirect::Append)
 
         // --- Routes ----------------------------------------------------------
-        .router(
-            Router::new()
+        // The Routes builder records each (method, path) pair as you
+        // declare it, so the dev-mode 404 panel surfaces them without
+        // a parallel declaration list. Per-route middleware (here,
+        // login_required_html on /dashboard) goes through the explicit
+        // .route(&[methods], path, MethodRouter) form so the layer
+        // attaches just to that handler — not all routes.
+        .routes(
+            Routes::new()
                 // Public home page.
-                .route("/", get(home))
+                .get("/", home)
                 // API: list posts as JSON (no auth required — demo).
-                .route("/api/posts", get(api_list_posts))
+                .get("/api/posts", api_list_posts)
                 // Dashboard: only reachable when logged in. The
                 // login_required_html("/login") layer issues a 302 to
                 // /login?next=/dashboard/ for anonymous visitors.
-                .route("/dashboard", get(dashboard))
-                    .layer(login_required_html("/login")),
+                .route(
+                    &["GET"],
+                    "/dashboard",
+                    get(dashboard).layer(login_required_html("/login")),
+                ),
         )
         .build()?;
 

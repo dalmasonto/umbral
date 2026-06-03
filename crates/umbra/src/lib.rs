@@ -167,8 +167,9 @@ pub mod routes {
     //! Route registry — snapshot of every declared URL path the
     //! framework knows about, grouped by plugin.
     //!
-    //! Populated at `App::build()` time from `AppBuilder::route_paths`
-    //! plus each plugin's `Plugin::route_paths()` contribution. Read by
+    //! Populated at `App::build()` time from the user binary's
+    //! `Routes` (via `AppBuilder::routes`) plus each plugin's
+    //! `Plugin::route_paths()` contribution. Read by
     //! the dev-mode default 404 page to surface the route list when a
     //! request misses every match.
 
