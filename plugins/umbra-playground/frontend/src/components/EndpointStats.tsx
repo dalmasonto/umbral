@@ -245,12 +245,12 @@ export function EndpointStats({ opHistory }: EndpointStatsProps) {
                 <linearGradient id="dur-fill" x1="0" y1="0" x2="0" y2="1">
                   <stop
                     offset="0%"
-                    stopColor="currentColor"
+                    stopColor="var(--primary)"
                     stopOpacity={0.18}
                   />
                   <stop
                     offset="100%"
-                    stopColor="currentColor"
+                    stopColor="var(--primary)"
                     stopOpacity={0}
                   />
                 </linearGradient>
@@ -258,7 +258,11 @@ export function EndpointStats({ opHistory }: EndpointStatsProps) {
               <CartesianGrid
                 strokeDasharray="3 3"
                 vertical={false}
-                stroke="hsl(var(--border))"
+                // The Luma palette stores colours in `oklch(...)` form,
+                // so `hsl(var(--border))` parses as `hsl(oklch(...))`
+                // and falls back to black in both modes. Reading the
+                // var raw lets the colour function flow through.
+                stroke="var(--border)"
                 strokeOpacity={0.6}
               />
               <XAxis
@@ -266,21 +270,23 @@ export function EndpointStats({ opHistory }: EndpointStatsProps) {
                 tickLine={false}
                 axisLine={false}
                 fontSize={10}
-                stroke="hsl(var(--muted-foreground))"
+                stroke="var(--muted-foreground)"
+                tick={{ fill: "var(--muted-foreground)" }}
                 interval="preserveStartEnd"
               />
               <YAxis
                 tickLine={false}
                 axisLine={false}
                 fontSize={10}
-                stroke="hsl(var(--muted-foreground))"
+                stroke="var(--muted-foreground)"
+                tick={{ fill: "var(--muted-foreground)" }}
                 width={36}
                 tickFormatter={(v: number) =>
                   v >= 1000 ? `${(v / 1000).toFixed(1)}s` : `${Math.round(v)}`
                 }
               />
               <Tooltip
-                cursor={{ stroke: "currentColor", strokeOpacity: 0.2 }}
+                cursor={{ stroke: "var(--muted-foreground)", strokeOpacity: 0.4 }}
                 content={({ active, payload }) => {
                   if (!active || !payload || payload.length === 0) return null;
                   const d = payload[0].payload as (typeof stats.timeline)[number];
@@ -303,21 +309,19 @@ export function EndpointStats({ opHistory }: EndpointStatsProps) {
               <Area
                 type="monotone"
                 dataKey="ms"
-                stroke="currentColor"
+                stroke="var(--primary)"
                 strokeWidth={1.5}
                 fill="url(#dur-fill)"
                 isAnimationActive={false}
-                className="text-primary"
               />
               <Area
                 type="monotone"
                 dataKey="avg"
-                stroke="currentColor"
+                stroke="var(--muted-foreground)"
                 strokeWidth={1}
                 strokeDasharray="3 3"
                 fill="none"
                 isAnimationActive={false}
-                className="text-muted-foreground"
               />
             </AreaChart>
           </ResponsiveContainer>
