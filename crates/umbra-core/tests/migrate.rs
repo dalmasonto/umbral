@@ -707,6 +707,7 @@ fn post_model(fields: Vec<Column>) -> ModelMeta {
         display: "Post".to_string(),
         icon: "database".to_string(),
         database: None,
+        singleton: false,
     }
 }
 

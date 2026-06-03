@@ -134,6 +134,9 @@ struct UmbraStructAttr {
     display: Option<String>,
     icon: Option<String>,
     database: Option<String>,
+    /// `#[umbra(singleton)]` — single-row model marker.
+    /// Closes BUG-9 from bugs/tests/testBugs.md.
+    singleton: bool,
 }
 
 /// Field-level `#[umbra(...)]` attribute parsed from a struct field.
@@ -399,6 +402,7 @@ fn parse_umbra_struct_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraStructA
         display: None,
         icon: None,
         database: None,
+        singleton: false,
     };
     for attr in attrs {
         if !attr.path().is_ident("umbra") {
@@ -434,10 +438,18 @@ fn parse_umbra_struct_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraStructA
                 let lit: syn::LitStr = value.parse()?;
                 parsed.database = Some(lit.value());
                 Ok(())
+            } else if meta.path.is_ident("singleton") {
+                // `#[umbra(singleton)]` — single-row marker. Closes
+                // BUG-9. The admin reads `Model::SINGLETON` to
+                // redirect list view to the row's edit page and to
+                // hide the "+ New" button.
+                parsed.singleton = true;
+                Ok(())
             } else {
                 Err(meta.error(
                     "umbra::Model derive accepts struct-level `table = \"...\"`, `plugin = \"...\"`, \
-                     `display = \"...\"`, `icon = \"...\"`, `database = \"...\"`; and field-level `noform` and `noedit`. \
+                     `display = \"...\"`, `icon = \"...\"`, `database = \"...\"`, `singleton`; \
+                     and field-level `noform` and `noedit`. \
                      Other attributes (max_length, db_index, default, choices, on_delete) land as \
                      plugin authors need them",
                 ))
@@ -580,6 +592,11 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
     let database_tokens = match struct_attr.database {
         Some(alias) => quote! { ::core::option::Option::Some(#alias) },
         None => quote! { ::core::option::Option::None },
+    };
+    let singleton_lit = if struct_attr.singleton {
+        quote!(true)
+    } else {
+        quote!(false)
     };
     // The sibling column module's identifier is always snake_case of
     // the struct name (the user-facing path is `<snake_struct>::FIELD`).
@@ -900,6 +917,7 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             const DISPLAY: &'static str = #display_lit;
             const ICON: &'static str = #icon_lit;
             const DATABASE: ::core::option::Option<&'static str> = #database_tokens;
+            const SINGLETON: bool = #singleton_lit;
             fn primary_key(&self) -> #pk_ty_tokens {
                 // `.clone()` works for every PK type the trait accepts
                 // (the bound is `Clone`, not `Copy`). For `i32`, `i64`,

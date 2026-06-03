@@ -83,3 +83,49 @@ fn icon_only_uses_default_display_and_custom_icon() {
     assert_eq!(<Document as Model>::DISPLAY, "Document");
     assert_eq!(<Document as Model>::ICON, "file-text");
 }
+
+// =========================================================================
+// BUG-9 from bugs/tests/testBugs.md: `#[umbra(singleton)]` flips
+// the `Model::SINGLETON` const + the `ModelMeta.singleton` flag so
+// admin and any tool can detect single-row models.
+// =========================================================================
+
+#[derive(Debug, sqlx::FromRow, Serialize, Deserialize, Model)]
+#[umbra(singleton)]
+struct SiteSettings {
+    id: i64,
+    title: String,
+    maintenance_mode: bool,
+}
+
+#[test]
+fn singleton_attribute_flips_const() {
+    assert!(
+        <SiteSettings as Model>::SINGLETON,
+        "Model::SINGLETON should be true for a model with #[umbra(singleton)]",
+    );
+    let meta = umbra::migrate::ModelMeta::for_::<SiteSettings>();
+    assert!(meta.singleton, "ModelMeta.singleton should mirror the const");
+}
+
+#[test]
+fn singleton_defaults_to_false_when_unset() {
+    assert!(
+        !<BlogPost as Model>::SINGLETON,
+        "Model::SINGLETON should default to false",
+    );
+    let meta = umbra::migrate::ModelMeta::for_::<BlogPost>();
+    assert!(!meta.singleton);
+}
+
+#[test]
+fn singleton_round_trips_through_json_snapshot() {
+    let meta = umbra::migrate::ModelMeta::for_::<SiteSettings>();
+    let json = serde_json::to_string(&meta).unwrap();
+    assert!(
+        json.contains("\"singleton\":true"),
+        "snapshot must carry singleton:true; got: {json}",
+    );
+    let round: umbra::migrate::ModelMeta = serde_json::from_str(&json).unwrap();
+    assert!(round.singleton);
+}

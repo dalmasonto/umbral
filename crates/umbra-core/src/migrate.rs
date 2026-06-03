@@ -232,6 +232,11 @@ pub struct ModelMeta {
     /// later phase.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub database: Option<String>,
+    /// Mirrors `Model::SINGLETON`. Closes BUG-9 in
+    /// `bugs/tests/testBugs.md`. Default `false`; admin renderers
+    /// read it to auto-redirect list-view to the edit form.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub singleton: bool,
 }
 
 fn default_icon() -> String {
@@ -249,6 +254,7 @@ impl ModelMeta {
             display: T::DISPLAY.to_string(),
             icon: T::ICON.to_string(),
             database: T::DATABASE.map(|s| s.to_string()),
+            singleton: T::SINGLETON,
         }
     }
 }
@@ -2848,6 +2854,7 @@ mod tests {
                 display: "ZetaModel".to_string(),
                 icon: "database".to_string(),
                 database: None,
+                singleton: false,
             }],
         );
         per_plugin.insert(
@@ -2859,6 +2866,7 @@ mod tests {
                 display: "AlphaModel".to_string(),
                 icon: "database".to_string(),
                 database: None,
+                singleton: false,
             }],
         );
         init_plugins(per_plugin);
@@ -3165,6 +3173,7 @@ mod tests {
                 display: "M".into(),
                 icon: "database".into(),
                 database: None,
+                singleton: false,
             }
         }
         let prev = meta_with(baseline());

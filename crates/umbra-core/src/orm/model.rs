@@ -112,6 +112,22 @@ pub trait Model: Sized + Send + Sync + Unpin + 'static {
     /// archive/analytics DB.
     const DATABASE: Option<&'static str> = None;
 
+    /// Single-row-marker. When `true`, the admin auto-redirects the
+    /// list view to the (sole) row's edit form, hides the "+ New"
+    /// button, and surfaces the model as a settings-style screen.
+    /// Mirrors the `django-solo` community plugin's shape. Set via
+    /// `#[umbra(singleton)]` on the struct. Closes BUG-9 in
+    /// `bugs/tests/testBugs.md`.
+    ///
+    /// Default `false`. Default-row seeding (so the first admin
+    /// visit doesn't 404) is the user's responsibility — typically
+    /// a one-liner in `Plugin::on_ready` that calls
+    /// `T::objects().create(T::default()).await` if the count is
+    /// zero. A future framework helper could automate that; for v1
+    /// the trait const is enough to let admin and any third-party
+    /// tool know the model is singleton-shaped.
+    const SINGLETON: bool = false;
+
     /// Return the primary key of this instance.
     fn primary_key(&self) -> Self::PrimaryKey;
 }
