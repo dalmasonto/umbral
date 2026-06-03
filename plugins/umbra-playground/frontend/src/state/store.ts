@@ -231,7 +231,13 @@ export const usePlayground = create<PlaygroundState>((set, get) => ({
   selectedOperationId: loadSelectedOperationId(),
   selectEndpoint: (id) => {
     saveSelectedOperationId(id);
-    set({ selectedOperationId: id });
+    // Clear `lastResponse` so the response panel doesn't keep showing
+    // the previous endpoint's body/headers/status. The History tab
+    // still has all the per-op records (Dexie-backed), so nothing is
+    // lost — just hidden when you navigate away. ResponseViewer's
+    // smart-default-tab effect picks History as the landing tab when
+    // lastResponse is null and history exists for the new endpoint.
+    set({ selectedOperationId: id, lastResponse: null });
   },
 
   current: { ...emptyDraft },
