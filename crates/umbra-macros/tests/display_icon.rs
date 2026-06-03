@@ -336,7 +336,7 @@ fn set_m2m_parent_ids_writes_pk_into_each_m2m_field() {
     row.set_m2m_parent_ids();
     assert_eq!(
         row.tags.parent_id(),
-        Some(42),
+        Some(&42i64),
         "set_m2m_parent_ids must seed each M2M<U> from the parent's PK",
     );
 }

@@ -1357,12 +1357,16 @@ fn diff_emits_create_m2m_table_when_a_field_is_added() {
                 child_table,
                 parent_col,
                 child_col,
+                parent_ty,
+                child_ty,
             } => Some((
                 junction_table.clone(),
                 parent_table.clone(),
                 child_table.clone(),
                 parent_col.clone(),
                 child_col.clone(),
+                *parent_ty,
+                *child_ty,
             )),
             _ => None,
         })
@@ -1375,8 +1379,10 @@ fn diff_emits_create_m2m_table_when_a_field_is_added() {
             "tag".to_string(),
             "id".to_string(),
             "id".to_string(),
+            umbra_core::orm::SqlType::BigInt,
+            umbra_core::orm::SqlType::BigInt,
         )],
-        "expected one CreateM2MTable for post.tags → tag; got {ops:?}",
+        "expected one CreateM2MTable for post.tags → tag with i64 PKs both sides; got {ops:?}",
     );
 }
 
@@ -1408,6 +1414,42 @@ fn diff_emits_drop_m2m_table_when_a_field_is_removed() {
         drops,
         vec!["post_tags".to_string()],
         "expected one DropM2MTable for post_tags; got {ops:?}",
+    );
+}
+
+#[test]
+fn create_m2m_table_renders_typed_pk_columns_per_backend() {
+    use umbra::migrate::render_operation_for;
+    use umbra_core::orm::SqlType;
+
+    // Parent with i64 PK, child with String PK — the BUG-16 phase 2
+    // motivating case (Group / Permission in umbra-permissions).
+    let op = Operation::CreateM2MTable {
+        junction_table: "group_permissions".to_string(),
+        parent_table: "permissions_group".to_string(),
+        parent_col: "id".to_string(),
+        child_table: "permissions_permission".to_string(),
+        child_col: "codename".to_string(),
+        parent_ty: SqlType::BigInt,
+        child_ty: SqlType::Text,
+    };
+    let sqlite_sql = render_operation_for(&op, "sqlite")
+        .into_iter()
+        .next()
+        .unwrap();
+    assert!(
+        sqlite_sql.contains("\"parent_id\" INTEGER NOT NULL")
+            && sqlite_sql.contains("\"child_id\" TEXT NOT NULL"),
+        "SQLite junction must respect per-side PK types; got: {sqlite_sql}",
+    );
+    let pg_sql = render_operation_for(&op, "postgres")
+        .into_iter()
+        .next()
+        .unwrap();
+    assert!(
+        pg_sql.contains("\"parent_id\" BIGINT NOT NULL")
+            && pg_sql.contains("\"child_id\" TEXT NOT NULL"),
+        "Postgres junction must use BIGINT + TEXT for i64+String PKs; got: {pg_sql}",
     );
 }
 

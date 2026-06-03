@@ -507,9 +507,18 @@ fn primary_key_string_works() {
 }
 
 // User-defined newtype PK. Demonstrates the public extension path:
-// `impl PrimaryKey for MyId {}` is the one line a user crate writes.
+// `From<MyId> for sea_query::Value` plus `impl PrimaryKey for MyId {}`
+// are the two lines a user crate writes — `Into<sea_query::Value>` is
+// the bound the M2M junction-table CRUD path needs to bind the PK on
+// both backends without per-type adapters.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct UserScopedId(u64);
+
+impl From<UserScopedId> for sea_query::Value {
+    fn from(id: UserScopedId) -> Self {
+        id.0.into()
+    }
+}
 
 impl umbra::orm::PrimaryKey for UserScopedId {}
 

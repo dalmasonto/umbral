@@ -201,35 +201,45 @@ pub struct M2MRelationSpec {
 
 /// Types that can serve as a model's primary key.
 ///
-/// Built-in impls cover every Rust integer width, `uuid::Uuid`, and
-/// `String` (for slug-style keys). The bound is `Clone + Send + Sync
-/// + 'static` rather than `Copy` so non-Copy types like `String` work
-/// the same way as the integer types; for the integer types the
-/// generated `.clone()` lowers to the same machine code as a copy.
+/// Built-in impls cover the integer widths sea-query has native
+/// `Value` variants for (i8 / i16 / i32 / i64, u8 / u16 / u32 / u64),
+/// `uuid::Uuid`, and `String` (for slug-style keys). The bound is
+/// `Clone + Send + Sync + 'static + Into<sea_query::Value>` — the
+/// `Into<Value>` requirement lets the M2M junction-table CRUD path
+/// bind the PK through sea-query without a per-type adapter, on both
+/// SQLite and Postgres. Closes BUG-16 phase 2.
 ///
-/// User crates extend the catalogue with one line:
+/// 128-bit integers (`i128` / `u128`) are deliberately not in the
+/// catalogue: sea-query's `Value` enum has no native variant for them
+/// and neither shipped backend exposes a 128-bit integer column type.
+/// Use `i64` or `String` instead.
+///
+/// User crates extend the catalogue with one line as long as the
+/// custom type already lowers to a `sea_query::Value`:
 ///
 /// ```ignore
 /// #[derive(Clone)]
 /// pub struct UserId(pub u64);
 ///
+/// impl From<UserId> for sea_query::Value {
+///     fn from(id: UserId) -> Self { id.0.into() }
+/// }
 /// impl umbra::orm::PrimaryKey for UserId {}
 /// ```
-pub trait PrimaryKey: Clone + Send + Sync + 'static {}
+pub trait PrimaryKey: Clone + Send + Sync + 'static + Into<sea_query::Value> {}
 
-// Every Rust integer width that can serve as a SQL primary key.
-// SQLite stores all of these with INTEGER affinity; Postgres exposes
-// SMALLINT / INT / BIGINT / NUMERIC depending on width.
+// Integer widths sea-query has Value variants for. Postgres exposes
+// SMALLINT / INT / BIGINT for the signed half; the unsigned widths
+// upcast (sea-query lowers u8/u16/u32 to the next signed width, u64
+// to BIGINT, matching what both backends actually store).
 impl PrimaryKey for i8 {}
 impl PrimaryKey for i16 {}
 impl PrimaryKey for i32 {}
 impl PrimaryKey for i64 {}
-impl PrimaryKey for i128 {}
 impl PrimaryKey for u8 {}
 impl PrimaryKey for u16 {}
 impl PrimaryKey for u32 {}
 impl PrimaryKey for u64 {}
-impl PrimaryKey for u128 {}
 
 // Non-integer built-ins. UUIDs and slug-style String keys are the
 // two non-integer shapes the porting catalogue calls out.

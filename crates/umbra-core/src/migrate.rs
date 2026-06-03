@@ -271,6 +271,14 @@ fn default_icon() -> String {
     "database".to_string()
 }
 
+/// Serde default for [`Operation::CreateM2MTable`]'s `parent_ty` /
+/// `child_ty` fields. Older snapshot files (pre-phase-2) had no
+/// per-side PK type and assumed `BigInt` on both ends — this keeps
+/// them round-tripping without rewrites.
+fn default_bigint() -> crate::orm::SqlType {
+    crate::orm::SqlType::BigInt
+}
+
 impl ModelMeta {
     /// Read static metadata off `T: Model` into an owned `ModelMeta`.
     /// Called from `AppBuilder::model::<T>()`.
@@ -433,17 +441,30 @@ pub enum Operation {
     /// the migration.
     RenameTable { from: String, to: String },
     /// Create a many-to-many junction table. Auto-emitted when a model
-    /// gains an `M2M<T>` field. Closes BUG-16.
+    /// gains an `M2M<T>` field. Closes BUG-16 phase 2.
     ///
     /// The junction table name is `parent_table_field_name`. Columns:
     /// `parent_id` (FK to parent), `child_id` (FK to target), both with
     /// `ON DELETE CASCADE`. Composite PK `(parent_id, child_id)`.
+    ///
+    /// `parent_ty` and `child_ty` carry the SQL types of the
+    /// referenced PK columns — `BigInt` for an `i64` PK, `Text` for a
+    /// `String` slug, `Uuid` for a `uuid::Uuid`. The renderer maps
+    /// these to the right column type per backend; without them the
+    /// junction's `child_id INTEGER` would reject a string codename
+    /// at insert time. `#[serde(default)]` keeps older snapshot files
+    /// (pre-phase-2) round-tripping — they default to `BigInt`,
+    /// matching the original i64-only behaviour.
     CreateM2MTable {
         junction_table: String,
         parent_table: String,
         parent_col: String,
         child_table: String,
         child_col: String,
+        #[serde(default = "default_bigint")]
+        parent_ty: crate::orm::SqlType,
+        #[serde(default = "default_bigint")]
+        child_ty: crate::orm::SqlType,
     },
     /// Drop a many-to-many junction table. Auto-emitted when an `M2M<T>`
     /// field is removed from a model.
@@ -660,6 +681,44 @@ fn create_multi_index_stmt(table: &str, columns: &[String]) -> String {
         "CREATE INDEX IF NOT EXISTS \"idx_{t}_{name_suffix}\" ON \"{t}\" ({col_list})",
         t = t.replace('"', "\"\""),
     )
+}
+
+/// Lower an M2M junction column's PK type into the SQLite column
+/// declaration string used inside the raw `CREATE TABLE` template.
+/// SQLite has affinity types: every integer width stores as `INTEGER`
+/// (one ROWID-aliased column), and TEXT covers `String` / `Uuid`.
+/// Closes BUG-16 phase 2.
+fn m2m_pk_sql_type_sqlite(ty: crate::orm::SqlType) -> &'static str {
+    use crate::orm::SqlType;
+    match ty {
+        SqlType::SmallInt | SqlType::Integer | SqlType::BigInt | SqlType::ForeignKey => "INTEGER",
+        SqlType::Text | SqlType::Uuid => "TEXT",
+        // The macro-side classifier only sets these for PK columns
+        // when the user wrote a non-standard PK type. If we ever
+        // see one here that doesn't make sense as a junction column
+        // (Boolean, Date, Real, …), TEXT is the safest catch-all
+        // affinity — SQLite will accept it and the rest of the
+        // ORM will surface the deeper "this can't be a PK" error
+        // through the system check.
+        _ => "TEXT",
+    }
+}
+
+/// Lower an M2M junction column's PK type into the Postgres column
+/// declaration string. Postgres is strict about types — `BIGINT` for
+/// 64-bit integers, `INTEGER` for 32-bit, `SMALLINT` for 16-bit,
+/// `TEXT` for `String`, `UUID` for `uuid::Uuid`. Mirrors the choices
+/// `build_column_def_postgres` makes for the same `SqlType` variants.
+fn m2m_pk_sql_type_postgres(ty: crate::orm::SqlType) -> &'static str {
+    use crate::orm::SqlType;
+    match ty {
+        SqlType::SmallInt => "SMALLINT",
+        SqlType::Integer => "INTEGER",
+        SqlType::BigInt | SqlType::ForeignKey => "BIGINT",
+        SqlType::Text => "TEXT",
+        SqlType::Uuid => "UUID",
+        _ => "TEXT",
+    }
 }
 
 /// Build the ` ON DELETE <action> ON UPDATE <action>` suffix for a
@@ -2082,18 +2141,37 @@ fn build_create_m2m_op(spec: &M2MPair, current: &Snapshot) -> Result<Operation, 
                 spec.parent_table, spec.field_name, spec.target_table, spec.target_table,
             ))
         })?;
-    let child_pk = target
+    let child_pk_col = target
         .fields
         .iter()
         .find(|c| c.primary_key)
         .map(|c| c.name.clone())
         .unwrap_or_else(|| "id".to_string());
+    let child_ty = target
+        .fields
+        .iter()
+        .find(|c| c.primary_key)
+        .map(|c| c.ty)
+        .unwrap_or(crate::orm::SqlType::BigInt);
+    let parent_model = current
+        .models
+        .iter()
+        .find(|m| m.table == spec.parent_table)
+        .expect("parent model exists in snapshot — collect_m2m_pairs iterated it");
+    let parent_ty = parent_model
+        .fields
+        .iter()
+        .find(|c| c.primary_key)
+        .map(|c| c.ty)
+        .unwrap_or(crate::orm::SqlType::BigInt);
     Ok(Operation::CreateM2MTable {
         junction_table: spec.junction_table.clone(),
         parent_table: spec.parent_table.clone(),
         parent_col: spec.parent_pk.clone(),
         child_table: spec.target_table.clone(),
-        child_col: child_pk,
+        child_col: child_pk_col,
+        parent_ty,
+        child_ty,
     })
 }
 
@@ -2517,14 +2595,19 @@ fn render_operation_sqlite(op: &Operation) -> Vec<String> {
             parent_col,
             child_table,
             child_col,
+            parent_ty,
+            child_ty,
         } => {
             // Junction table for many-to-many: two FK columns + composite PK.
-            // Build via sea-query when possible, but composite PK and FKs in
-            // CREATE TABLE are easier expressed as raw DDL that we control.
+            // Column types follow the referenced PKs — `BigInt` → `INTEGER`
+            // (SQLite affinity), `Text` → `TEXT`, `Uuid` → `TEXT` on SQLite
+            // / `UUID` on Postgres. Raw DDL is the simplest expression of
+            // the composite-PK + per-side cascade FK shape; sea-query's
+            // builder can't express it cleanly in one call.
             vec![format!(
                 r#"CREATE TABLE "{jt}" (
-    "parent_id" INTEGER NOT NULL REFERENCES "{pt}"("{pc}") ON DELETE CASCADE,
-    "child_id" INTEGER NOT NULL REFERENCES "{ct}"("{cc}") ON DELETE CASCADE,
+    "parent_id" {pty} NOT NULL REFERENCES "{pt}"("{pc}") ON DELETE CASCADE,
+    "child_id" {cty} NOT NULL REFERENCES "{ct}"("{cc}") ON DELETE CASCADE,
     PRIMARY KEY ("parent_id", "child_id")
 )"#,
                 jt = junction_table,
@@ -2532,6 +2615,8 @@ fn render_operation_sqlite(op: &Operation) -> Vec<String> {
                 pc = parent_col,
                 ct = child_table,
                 cc = child_col,
+                pty = m2m_pk_sql_type_sqlite(*parent_ty),
+                cty = m2m_pk_sql_type_sqlite(*child_ty),
             )]
         }
         Operation::DropM2MTable { junction_table } => vec![
@@ -2625,11 +2710,13 @@ fn render_operation_postgres(op: &Operation) -> Vec<String> {
             parent_col,
             child_table,
             child_col,
+            parent_ty,
+            child_ty,
         } => {
             vec![format!(
                 r#"CREATE TABLE "{jt}" (
-    "parent_id" BIGINT NOT NULL REFERENCES "{pt}"("{pc}") ON DELETE CASCADE,
-    "child_id" BIGINT NOT NULL REFERENCES "{ct}"("{cc}") ON DELETE CASCADE,
+    "parent_id" {pty} NOT NULL REFERENCES "{pt}"("{pc}") ON DELETE CASCADE,
+    "child_id" {cty} NOT NULL REFERENCES "{ct}"("{cc}") ON DELETE CASCADE,
     PRIMARY KEY ("parent_id", "child_id")
 )"#,
                 jt = junction_table,
@@ -2637,6 +2724,8 @@ fn render_operation_postgres(op: &Operation) -> Vec<String> {
                 pc = parent_col,
                 ct = child_table,
                 cc = child_col,
+                pty = m2m_pk_sql_type_postgres(*parent_ty),
+                cty = m2m_pk_sql_type_postgres(*child_ty),
             )]
         }
         Operation::DropM2MTable { junction_table } => vec![

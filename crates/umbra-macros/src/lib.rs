@@ -1118,15 +1118,25 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
     // Silence it the same way `post.rs` does for parity with the M2
     // hand-written shape.
     let struct_name_str = struct_name.to_string();
-    // BUG-16 step 2: only compute the parent PK when at least one M2M
-    // field consumes it. Avoids an unused `let` warning for the
-    // overwhelmingly common no-M2M-field case.
+    // BUG-16 phase 2: emit one `set_parent_id` + `set_junction_table`
+    // pair per M2M field. The junction name follows the deterministic
+    // `<parent_table>_<field_name>` convention; the migration engine
+    // emits CREATE TABLE under the same name, so the two sides agree.
+    // `.clone()` on __pk handles models with multiple M2M fields
+    // (set_parent_id takes the PK by value).
     let set_m2m_body = if m2m_field_idents.is_empty() {
         quote!({})
     } else {
+        let per_field = m2m_field_idents.iter().map(|ident| {
+            let junction_name = format!("{}_{}", table_name, ident);
+            quote! {
+                self.#ident.set_parent_id(__pk.clone());
+                self.#ident.set_junction_table(#junction_name);
+            }
+        });
         quote! {{
             let __pk = <Self as ::umbra::orm::Model>::primary_key(self);
-            #(self.#m2m_field_idents.set_parent_id(__pk);)*
+            #(#per_field)*
         }}
     };
     let output = quote! {
