@@ -2640,6 +2640,14 @@ fn build_column_def_sqlite(col: &Column) -> sea_query::ColumnDef {
         if !col.nullable {
             def.not_null();
         }
+        // BUG-15: `#[umbra(unique)]` on a FK column is the
+        // OneToOne idiom — emit UNIQUE inline so the
+        // referencing-row uniqueness is enforced at the DB.
+        // The FK branch used to skip this because it returned
+        // before the non-FK unique branch ran.
+        if col.unique {
+            def.unique_key();
+        }
         def.extra(format!(
             "REFERENCES \"{fk_target}\"(\"{pk_col_name}\"){}",
             fk_action_suffix(col),
@@ -2734,6 +2742,14 @@ fn build_column_def_postgres(col: &Column) -> sea_query::ColumnDef {
         let mut def = ColumnDef::new_with_type(Alias::new(&col.name), pk_col_type);
         if !col.nullable {
             def.not_null();
+        }
+        // BUG-15: `#[umbra(unique)]` on a FK column is the
+        // OneToOne idiom — emit UNIQUE inline so the
+        // referencing-row uniqueness is enforced at the DB.
+        // The FK branch used to skip this because it returned
+        // before the non-FK unique branch ran.
+        if col.unique {
+            def.unique_key();
         }
         def.extra(format!(
             "REFERENCES \"{fk_target}\"(\"{pk_col_name}\"){}",

@@ -122,6 +122,35 @@ let children = Category::objects()
     .await?;
 ```
 
+## One-to-one relationships
+
+Django's `OneToOneField` is `ForeignKey(unique=True)` underneath. Umbra spells it the same way — pair `ForeignKey<T>` with `#[umbra(unique)]` and the column gets both `REFERENCES "<target>"("id")` and `UNIQUE`. Only one row in the referencing table may reference any given target row.
+
+```rust
+#[derive(Model)]
+pub struct Profile {
+    pub id: i64,
+    // Each user has at most one profile.
+    #[umbra(unique, on_delete = "cascade")]
+    pub user_id: ForeignKey<AuthUser>,
+    pub bio: String,
+}
+```
+
+The generated DDL:
+
+```sql
+CREATE TABLE "profile" (
+  "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+  "user_id" bigint NOT NULL UNIQUE REFERENCES "auth_user"("id") ON DELETE CASCADE,
+  "bio" text NOT NULL
+)
+```
+
+Why no dedicated `OneToOne<T>` type? The DB-level shape is identical to a FK + UNIQUE; the type-level guarantee a wrapper would give you (only one slot per target row) is already enforced by the constraint. A future `OneToOne<T>` wrapper that adds eager-loading ergonomics (`profile.user_resolved()`) lands when there's a real consumer asking for it; the attribute-based pattern works fine today.
+
+To fetch the related row, query the FK side with `.filter(profile::USER_ID.eq(user.id)).first()` — the UNIQUE constraint guarantees at most one match.
+
 ## Querying with a foreign key
 
 The column constant emitted by `#[derive(Model)]` for a `ForeignKey<T>` field is a `ForeignKeyCol`, which accepts `i64` comparisons:

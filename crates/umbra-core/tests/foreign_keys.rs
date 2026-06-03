@@ -532,3 +532,100 @@ async fn self_referential_fk_round_trips_through_sqlite_with_cascade() {
         "CASCADE should have pruned the child after the root was deleted"
     );
 }
+
+// =========================================================================
+// BUG-15 from bugs/tests/testBugs.md: a OneToOne relationship is
+// expressible today as `#[umbra(unique)] ForeignKey<T>`. The
+// emitted DDL combines UNIQUE + REFERENCES; the second INSERT
+// pointing at the same target row fails the UNIQUE constraint.
+// No dedicated `OneToOne<T>` type is needed at v1; this test
+// pins the pattern so future macro refactors don't silently
+// drop the combination.
+// =========================================================================
+
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbra::orm::Model)]
+#[umbra(table = "fk_profile")]
+pub struct Profile {
+    pub id: i64,
+    /// One profile per user. The `#[umbra(unique)]` flag is what
+    /// makes this a 1:1 rather than a 1:N relationship.
+    #[umbra(unique, on_delete = "cascade")]
+    pub user_id: ForeignKey<User>,
+    pub bio: String,
+}
+
+#[test]
+fn one_to_one_pattern_emits_unique_and_references() {
+    let meta = umbra::migrate::ModelMeta::for_::<Profile>();
+    let user_id = meta
+        .fields
+        .iter()
+        .find(|c| c.name == "user_id")
+        .expect("user_id present");
+    assert_eq!(user_id.ty, SqlType::ForeignKey);
+    assert_eq!(user_id.fk_target.as_deref(), Some("fk_user"));
+    assert!(
+        user_id.unique,
+        "the #[umbra(unique)] flag is what makes this a 1:1",
+    );
+
+    for backend in ["sqlite", "postgres"] {
+        let op = Operation::CreateTable {
+            table: Profile::TABLE.to_string(),
+            columns: meta.fields.clone(),
+        };
+        let sql = render_operation_for(&op, backend).join("\n");
+        assert!(
+            sql.to_uppercase().contains("UNIQUE"),
+            "{backend}: should emit UNIQUE for the 1:1 column; got: {sql}",
+        );
+        assert!(
+            sql.contains("REFERENCES \"fk_user\"(\"id\")"),
+            "{backend}: should still emit the FK REFERENCES clause; got: {sql}",
+        );
+    }
+}
+
+#[tokio::test]
+async fn one_to_one_rejects_second_reference_to_same_target() {
+    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    sqlx::query("PRAGMA foreign_keys = ON;")
+        .execute(&pool)
+        .await
+        .unwrap();
+    // Create the user side by hand for the test (test fixture only).
+    sqlx::query(
+        "CREATE TABLE fk_user (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let meta = umbra::migrate::ModelMeta::for_::<Profile>();
+    let op = Operation::CreateTable {
+        table: Profile::TABLE.to_string(),
+        columns: meta.fields.clone(),
+    };
+    for stmt in render_operation_for(&op, "sqlite") {
+        sqlx::query(&stmt).execute(&pool).await.unwrap();
+    }
+    sqlx::query("INSERT INTO fk_user (id, name) VALUES (1, 'alice')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO fk_profile (id, user_id, bio) VALUES (1, 1, 'first')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let dupe = sqlx::query("INSERT INTO fk_profile (id, user_id, bio) VALUES (2, 1, 'second')")
+        .execute(&pool)
+        .await;
+    assert!(
+        dupe.is_err(),
+        "a second profile pointing at the same user must fail the UNIQUE constraint; succeeded instead",
+    );
+    let msg = format!("{:?}", dupe.unwrap_err()).to_lowercase();
+    assert!(
+        msg.contains("unique"),
+        "the error should mention the UNIQUE violation; got: {msg}",
+    );
+}
