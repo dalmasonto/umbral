@@ -145,6 +145,72 @@ fn pascal_case(name: &str) -> String {
 }
 
 /// Convert a name to its Rust identifier form (hyphens → underscores).
+/// Rewrite git-deps to path-deps anchored at `umbra_repo`. Closes
+/// BUG-17 in `bugs/tests/testBugs.md` — `umbra startproject --local
+/// /path/to/umbra foo` now produces a `Cargo.toml` that path-deps
+/// every umbra crate against the local checkout instead of the
+/// `git = "..."` URL. Comments + commented-out optional plugin
+/// lines all flow through; the line trailing whatever follows the
+/// dep block (descriptive comment, version pin) is preserved.
+///
+/// Subdirectory mapping mirrors the umbra repo layout: facade
+/// crates (`umbra`, `umbra-cli`, `umbra-core`, `umbra-macros`,
+/// `umbra-testing`) live under `crates/`; everything else
+/// (`umbra-auth`, `umbra-sessions`, `umbra-admin`, …) lives
+/// under `plugins/`.
+pub(crate) fn localize_deps(text: &str, umbra_repo: &Path) -> String {
+    const GIT_URL: &str = "https://github.com/dalmasonto/umbra";
+    let repo_str = umbra_repo.display().to_string();
+    let mut out = String::with_capacity(text.len());
+    for line in text.split_inclusive('\n') {
+        out.push_str(&rewrite_line(line, GIT_URL, &repo_str));
+    }
+    out
+}
+
+fn rewrite_line(line: &str, git_url: &str, repo: &str) -> String {
+    // Look for `<crate> = { git = "<url>" }` (optionally preceded by
+    // `#` for commented-out lines, optionally followed by a
+    // descriptive `# ...` comment). Bail out cheaply if the URL
+    // marker isn't present.
+    if !line.contains(git_url) {
+        return line.to_string();
+    }
+    // Find the LHS crate name. Strip any leading `#` and whitespace,
+    // then take the substring up to the first `=`.
+    let body_start = line
+        .char_indices()
+        .find(|(_, c)| !matches!(*c, '#' | ' ' | '\t'))
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+    let body = &line[body_start..];
+    let Some(eq_idx) = body.find('=') else {
+        return line.to_string();
+    };
+    let crate_name = body[..eq_idx].trim();
+    if !crate_name.starts_with("umbra") {
+        return line.to_string();
+    }
+    let subdir = match crate_name {
+        "umbra" | "umbra-cli" | "umbra-core" | "umbra-macros" | "umbra-testing" => "crates",
+        _ => "plugins",
+    };
+    let path = format!("{repo}/{subdir}/{crate_name}");
+    // Replace the entire `{ git = "<url>" }` substring. We don't
+    // know the exact spacing inside, so find the `{` and the matching
+    // `}` and substitute.
+    let Some(lbrace_idx) = body.find('{') else {
+        return line.to_string();
+    };
+    let Some(rbrace_offset) = body[lbrace_idx..].find('}') else {
+        return line.to_string();
+    };
+    let rbrace_idx = lbrace_idx + rbrace_offset;
+    let prefix = &line[..body_start + lbrace_idx];
+    let suffix = &line[body_start + rbrace_idx + 1..];
+    format!("{prefix}{{ path = \"{path}\" }}{suffix}")
+}
+
 fn rust_ident(name: &str) -> String {
     name.replace('-', "_")
 }
@@ -176,7 +242,11 @@ fn rust_ident(name: &str) -> String {
 ///
 /// `main.rs` wires `umbra_cli::dispatch(app)` so the project's binary
 /// hosts the management commands.
-pub fn scaffold_project(name: &str, parent_dir: &Path) -> Result<ScaffoldReport, ScaffoldError> {
+pub fn scaffold_project(
+    name: &str,
+    parent_dir: &Path,
+    local_umbra_repo: Option<&Path>,
+) -> Result<ScaffoldReport, ScaffoldError> {
     validate_name(name)?;
 
     let root = parent_dir.join(name);
@@ -238,6 +308,16 @@ chrono = {{ version = "0.4", features = ["serde"] }}
 # {crate_name}-posts = {{ path = "plugins/posts" }}
 "#
     );
+    // BUG-17 fix: when `--local <PATH>` is set, rewrite every
+    // `{ git = "..." }` dependency to a `{ path = "<umbra>/<sub>/<crate>" }`
+    // form anchored at the supplied umbra-repo path. Comments,
+    // active and commented-out dep lines all go through. Without
+    // the flag, the git-deps shape is preserved verbatim — that's
+    // what a user installing umbra from crates.io / GitHub gets.
+    let cargo_toml = match local_umbra_repo {
+        Some(repo) => localize_deps(&cargo_toml, repo),
+        None => cargo_toml,
+    };
     write_file(&root, "Cargo.toml", &cargo_toml, &mut files)?;
 
     // ------------------------------------------------------------------ //
@@ -366,10 +446,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {{
         )
         .build()?;
 
-    // Auto-migrate on boot so `cargo run -- serve` Just Works against a
-    // fresh database. Production deployments run `cargo run -- migrate`
-    // as a separate step before starting the server.
-    auto_migrate().await?;
+    // Auto-migrate on boot so `cargo run -- serve` Just Works
+    // against a fresh database — but only when we're actually
+    // starting the server. Running `cargo run -- makemigrations`
+    // or `cargo run -- migrate` from the CLI used to silently
+    // trigger `auto_migrate()` first and then report "no changes
+    // detected", which made the CLI tools feel broken (IMP-1 in
+    // `bugs/tests/testBugs.md`). The guard reads `std::env::args`
+    // before dispatch picks them apart so it matches whatever
+    // subcommand the user actually typed.
+    let argv: Vec<String> = std::env::args().collect();
+    let user_invoked_cli = argv.iter().skip(1).any(|a| !a.starts_with('-'));
+    if !user_invoked_cli {{
+        auto_migrate().await?;
+    }}
 
     umbra_cli::dispatch(app).await
 }}
@@ -714,7 +804,11 @@ cargo run -- makemigrations
 /// stub. The user wires it into their App by adding `.plugin(...)`
 /// to the builder chain — the next_steps in the returned report spell
 /// out the exact lines.
-pub fn scaffold_app(name: &str, project_root: &Path) -> Result<ScaffoldReport, ScaffoldError> {
+pub fn scaffold_app(
+    name: &str,
+    project_root: &Path,
+    local_umbra_repo: Option<&Path>,
+) -> Result<ScaffoldReport, ScaffoldError> {
     validate_name(name)?;
 
     // Reject names that collide with built-in umbra plugins. Both crates
@@ -747,8 +841,15 @@ edition = "2024"
 
 [dependencies]
 umbra = {{ git = "https://github.com/dalmasonto/umbra" }}
+serde = {{ version = "1", features = ["derive"] }}
+sqlx = {{ version = "0.8", features = ["sqlite", "runtime-tokio", "chrono"] }}
+chrono = {{ version = "0.4", features = ["serde"] }}
 "#
     );
+    let cargo_toml = match local_umbra_repo {
+        Some(repo) => localize_deps(&cargo_toml, repo),
+        None => cargo_toml,
+    };
     write_file(&root, "Cargo.toml", &cargo_toml, &mut files)?;
 
     let lib_rs = format!(
@@ -764,6 +865,8 @@ umbra = {{ git = "https://github.com/dalmasonto/umbra" }}
 //! See `documentation/docs/v0.0.1/plugins/the-plugin-trait.mdx` for
 //! what each method does.
 
+pub mod models;
+
 use umbra::plugin::{{AppContext, Plugin, PluginError}};
 use umbra::web::Router;
 
@@ -773,6 +876,14 @@ pub struct {pascal}Plugin;
 impl Plugin for {pascal}Plugin {{
     fn name(&self) -> &'static str {{
         "{name}"
+    }}
+
+    fn models(&self) -> Vec<umbra::migrate::ModelMeta> {{
+        // Register every model the plugin owns so makemigrations
+        // picks them up. Uncomment + extend once you've defined one
+        // in src/models.rs.
+        // vec![umbra::migrate::ModelMeta::for_::<models::Example>()]
+        Vec::new()
     }}
 
     fn routes(&self) -> Router {{
@@ -789,11 +900,42 @@ impl Plugin for {pascal}Plugin {{
     );
     write_file(&root, "src/lib.rs", &lib_rs, &mut files)?;
 
+    // IMP-4 from bugs/tests/testBugs.md: startapp now scaffolds a
+    // `models.rs` stub so the user has an obvious place to declare
+    // their first `#[derive(Model)]` struct. Previously they had to
+    // create the file themselves or upgrade to `startplugin` for
+    // the richer layout.
+    let models_rs = format!(
+        r#"//! Models for the `{name}` plugin.
+//!
+//! Declare one `#[derive(umbra::orm::Model)]` struct per database
+//! table. Once registered via `Plugin::models()` in lib.rs, the
+//! migration engine picks them up on the next `makemigrations`.
+//!
+//! ```ignore
+//! use chrono::{{DateTime, Utc}};
+//! use serde::{{Deserialize, Serialize}};
+//!
+//! #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
+//! pub struct Example {{
+//!     pub id: i64,
+//!     #[umbra(string, max_length = 200)]
+//!     pub title: String,
+//!     #[umbra(noedit)]
+//!     pub created_at: DateTime<Utc>,
+//! }}
+//! ```
+"#
+    );
+    write_file(&root, "src/models.rs", &models_rs, &mut files)?;
+
     let next_steps = vec![
         format!("Add `{name}` to your project's Cargo.toml dependencies:"),
         format!("    {name} = {{ path = \"plugins/{name}\" }}"),
         "Add the plugin to your App::builder chain in src/main.rs:".to_string(),
         format!("    .plugin({crate_name}::{pascal}Plugin::default())"),
+        "Declare your first model in src/models.rs and uncomment the".to_string(),
+        "    `Plugin::models()` line in src/lib.rs.".to_string(),
     ];
 
     Ok(ScaffoldReport {
@@ -822,7 +964,11 @@ impl Plugin for {pascal}Plugin {{
 /// (Cargo.toml + lib.rs with a stub Plugin impl, nothing else). Use
 /// `startplugin` when you're building a plugin you intend to ship; use
 /// `startapp` for an internal module that just needs a `Plugin` seam.
-pub fn scaffold_plugin(name: &str, project_root: &Path) -> Result<ScaffoldReport, ScaffoldError> {
+pub fn scaffold_plugin(
+    name: &str,
+    project_root: &Path,
+    local_umbra_repo: Option<&Path>,
+) -> Result<ScaffoldReport, ScaffoldError> {
     validate_name(name)?;
 
     let normalized = name.replace('-', "_");
@@ -863,6 +1009,10 @@ chrono = {{ version = "0.4", features = ["serde"] }}
 async-trait = "0.1"
 "#
     );
+    let cargo_toml = match local_umbra_repo {
+        Some(repo) => localize_deps(&cargo_toml, repo),
+        None => cargo_toml,
+    };
     write_file(&root, "Cargo.toml", &cargo_toml, &mut files)?;
 
     // README.md — the user-facing tour. Mirrors the file structure so
@@ -1148,7 +1298,7 @@ mod tests {
     fn scaffold_app_rejects_reserved_built_in_plugin_names() {
         let tmp = tempfile::tempdir().expect("tempdir");
         for name in RESERVED_PLUGIN_NAMES {
-            let result = scaffold_app(name, tmp.path());
+            let result = scaffold_app(name, tmp.path(), None);
             assert!(
                 matches!(result, Err(ScaffoldError::ReservedName(_))),
                 "expected ReservedName error for `{name}`, got: {result:?}",
@@ -1170,7 +1320,7 @@ mod tests {
         // Pure name check: built-in names contain no hyphens today, but
         // the normalization defends against future built-ins like
         // `slack-bot` versus `slack_bot`.
-        let result = scaffold_app("auth", tmp.path());
+        let result = scaffold_app("auth", tmp.path(), None);
         assert!(matches!(result, Err(ScaffoldError::ReservedName(_))));
     }
 
@@ -1203,7 +1353,7 @@ mod tests {
     #[test]
     fn scaffold_plugin_writes_richer_layout() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let report = scaffold_plugin("widgets", tmp.path()).expect("scaffold ok");
+        let report = scaffold_plugin("widgets", tmp.path(), None).expect("scaffold ok");
 
         let root = tmp.path().join("plugins").join("widgets");
         assert!(root.is_dir());
@@ -1227,7 +1377,7 @@ mod tests {
     #[test]
     fn scaffold_plugin_lib_rs_references_sibling_modules() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        scaffold_plugin("widgets", tmp.path()).expect("scaffold ok");
+        scaffold_plugin("widgets", tmp.path(), None).expect("scaffold ok");
         let lib = fs::read_to_string(tmp.path().join("plugins/widgets/src/lib.rs")).unwrap();
 
         assert!(
@@ -1252,7 +1402,7 @@ mod tests {
     #[test]
     fn scaffold_plugin_models_rs_uses_real_umbra_attributes() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        scaffold_plugin("widgets", tmp.path()).expect("scaffold ok");
+        scaffold_plugin("widgets", tmp.path(), None).expect("scaffold ok");
         let models = fs::read_to_string(tmp.path().join("plugins/widgets/src/models.rs")).unwrap();
 
         assert!(
@@ -1277,7 +1427,7 @@ mod tests {
     fn scaffold_plugin_rejects_reserved_built_in_plugin_names() {
         let tmp = tempfile::tempdir().expect("tempdir");
         for name in RESERVED_PLUGIN_NAMES {
-            let result = scaffold_plugin(name, tmp.path());
+            let result = scaffold_plugin(name, tmp.path(), None);
             assert!(
                 matches!(result, Err(ScaffoldError::ReservedName(_))),
                 "expected ReservedName error for `{name}`, got: {result:?}",
@@ -1288,8 +1438,8 @@ mod tests {
     #[test]
     fn scaffold_plugin_refuses_to_overwrite_existing_directory() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        scaffold_plugin("widgets", tmp.path()).expect("first scaffold ok");
-        let result = scaffold_plugin("widgets", tmp.path());
+        scaffold_plugin("widgets", tmp.path(), None).expect("first scaffold ok");
+        let result = scaffold_plugin("widgets", tmp.path(), None);
         assert!(matches!(result, Err(ScaffoldError::AlreadyExists(_))));
     }
 
@@ -1297,11 +1447,11 @@ mod tests {
     fn scaffold_plugin_validates_name_like_startapp() {
         let tmp = tempfile::tempdir().expect("tempdir");
         assert!(matches!(
-            scaffold_plugin("2cool", tmp.path()),
+            scaffold_plugin("2cool", tmp.path(), None),
             Err(ScaffoldError::InvalidName(_))
         ));
         assert!(matches!(
-            scaffold_plugin("foo bar", tmp.path()),
+            scaffold_plugin("foo bar", tmp.path(), None),
             Err(ScaffoldError::InvalidName(_))
         ));
     }

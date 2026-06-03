@@ -49,6 +49,13 @@ enum Command {
         /// Parent directory. Defaults to the current directory.
         #[arg(long, default_value = ".")]
         path: PathBuf,
+        /// Path to a local umbra repo checkout. When set, scaffold
+        /// path-deps every umbra crate against the checkout instead
+        /// of the public `git = "..."` URL. Closes BUG-17 from
+        /// `bugs/tests/testBugs.md` — lets contributors / framework
+        /// dev iterate without pushing to a remote.
+        #[arg(long, value_name = "PATH")]
+        local: Option<PathBuf>,
     },
     /// Create a new plugin (app) crate in `<project>/plugins/<name>/`.
     ///
@@ -62,6 +69,9 @@ enum Command {
         /// Project root. Defaults to the current directory.
         #[arg(long, default_value = ".")]
         path: PathBuf,
+        /// Path to a local umbra repo checkout. See `startproject --local`.
+        #[arg(long, value_name = "PATH")]
+        local: Option<PathBuf>,
     },
     /// Create a richer plugin scaffold in `<project>/plugins/<name>/`.
     ///
@@ -77,13 +87,20 @@ enum Command {
         /// Project root. Defaults to the current directory.
         #[arg(long, default_value = ".")]
         path: PathBuf,
+        /// Path to a local umbra repo checkout. See `startproject --local`.
+        #[arg(long, value_name = "PATH")]
+        local: Option<PathBuf>,
     },
 }
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
-        Command::Startproject { name, path } => umbra_cli::scaffold::scaffold_project(&name, &path)
+        Command::Startproject { name, path, local } => umbra_cli::scaffold::scaffold_project(
+            &name,
+            &path,
+            local.as_deref(),
+        )
             .map(|r| {
                 println!("Created `{}`:", r.root.display());
                 for f in &r.files {
@@ -95,8 +112,8 @@ fn main() -> ExitCode {
                     println!("  {step}");
                 }
             }),
-        Command::Startapp { name, path } => {
-            umbra_cli::scaffold::scaffold_app(&name, &path).map(|r| {
+        Command::Startapp { name, path, local } => {
+            umbra_cli::scaffold::scaffold_app(&name, &path, local.as_deref()).map(|r| {
                 println!("Created `{}`:", r.root.display());
                 for f in &r.files {
                     println!("  {}", f.display());
@@ -108,7 +125,11 @@ fn main() -> ExitCode {
                 }
             })
         }
-        Command::Startplugin { name, path } => umbra_cli::scaffold::scaffold_plugin(&name, &path)
+        Command::Startplugin { name, path, local } => umbra_cli::scaffold::scaffold_plugin(
+            &name,
+            &path,
+            local.as_deref(),
+        )
             .map(|r| {
                 println!("Created `{}`:", r.root.display());
                 for f in &r.files {

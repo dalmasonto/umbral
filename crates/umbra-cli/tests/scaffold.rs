@@ -13,7 +13,7 @@ use umbra_cli::scaffold::{ScaffoldError, scaffold_app, scaffold_project};
 #[test]
 fn scaffold_project_writes_expected_files() {
     let tmp = TempDir::new().unwrap();
-    let report = scaffold_project("myblog", tmp.path()).unwrap();
+    let report = scaffold_project("myblog", tmp.path(), None).unwrap();
 
     let root = tmp.path().join("myblog");
     assert_eq!(report.root, root);
@@ -44,7 +44,7 @@ fn scaffold_project_writes_expected_files() {
 #[test]
 fn scaffold_project_cargo_toml_references_all_plugins() {
     let tmp = TempDir::new().unwrap();
-    let report = scaffold_project("testapp", tmp.path()).unwrap();
+    let report = scaffold_project("testapp", tmp.path(), None).unwrap();
     let cargo = fs::read_to_string(report.root.join("Cargo.toml")).unwrap();
 
     for dep in &[
@@ -67,7 +67,7 @@ fn scaffold_project_cargo_toml_references_all_plugins() {
 #[test]
 fn scaffold_project_cargo_toml_lists_every_builtin_plugin_at_least_commented() {
     let tmp = TempDir::new().unwrap();
-    let report = scaffold_project("testapp", tmp.path()).unwrap();
+    let report = scaffold_project("testapp", tmp.path(), None).unwrap();
     let cargo = fs::read_to_string(report.root.join("Cargo.toml")).unwrap();
 
     for plugin in &[
@@ -105,7 +105,7 @@ fn scaffold_project_cargo_toml_lists_every_builtin_plugin_at_least_commented() {
 #[test]
 fn scaffold_project_main_rs_references_all_plugins() {
     let tmp = TempDir::new().unwrap();
-    let report = scaffold_project("testapp", tmp.path()).unwrap();
+    let report = scaffold_project("testapp", tmp.path(), None).unwrap();
     let main_rs = fs::read_to_string(report.root.join("src/main.rs")).unwrap();
 
     let markers = &[
@@ -136,7 +136,7 @@ fn scaffold_project_main_rs_references_all_plugins() {
 #[test]
 fn scaffold_project_base_html_has_tailwind_cdn() {
     let tmp = TempDir::new().unwrap();
-    let report = scaffold_project("testapp", tmp.path()).unwrap();
+    let report = scaffold_project("testapp", tmp.path(), None).unwrap();
     let base = fs::read_to_string(report.root.join("templates/base.html")).unwrap();
     assert!(
         base.contains("cdn.tailwindcss.com"),
@@ -149,7 +149,7 @@ fn scaffold_project_base_html_has_tailwind_cdn() {
 #[test]
 fn scaffold_project_substitutes_project_name() {
     let tmp = TempDir::new().unwrap();
-    let report = scaffold_project("acmecorp", tmp.path()).unwrap();
+    let report = scaffold_project("acmecorp", tmp.path(), None).unwrap();
 
     let base = fs::read_to_string(report.root.join("templates/base.html")).unwrap();
     assert!(
@@ -173,7 +173,7 @@ fn scaffold_project_substitutes_project_name() {
 #[test]
 fn scaffold_project_main_rs_wires_dispatch() {
     let tmp = TempDir::new().unwrap();
-    let report = scaffold_project("blog", tmp.path()).unwrap();
+    let report = scaffold_project("blog", tmp.path(), None).unwrap();
     let main_rs = fs::read_to_string(report.root.join("src/main.rs")).unwrap();
     assert!(
         main_rs.contains("umbra_cli::dispatch(app).await"),
@@ -188,7 +188,7 @@ fn scaffold_project_main_rs_wires_dispatch() {
 #[test]
 fn scaffold_project_uses_project_name_in_database_url_and_gitignore() {
     let tmp = TempDir::new().unwrap();
-    let report = scaffold_project("acme", tmp.path()).unwrap();
+    let report = scaffold_project("acme", tmp.path(), None).unwrap();
     let umbra_toml = fs::read_to_string(report.root.join("umbra.toml")).unwrap();
     assert!(
         umbra_toml.contains("sqlite://acme.db"),
@@ -205,7 +205,7 @@ fn scaffold_project_uses_project_name_in_database_url_and_gitignore() {
 fn scaffold_project_refuses_to_overwrite_existing_directory() {
     let tmp = TempDir::new().unwrap();
     fs::create_dir(tmp.path().join("existing")).unwrap();
-    let err = scaffold_project("existing", tmp.path()).unwrap_err();
+    let err = scaffold_project("existing", tmp.path(), None).unwrap_err();
     matches!(err, ScaffoldError::AlreadyExists(_));
 }
 
@@ -213,15 +213,15 @@ fn scaffold_project_refuses_to_overwrite_existing_directory() {
 fn scaffold_project_rejects_invalid_names() {
     let tmp = TempDir::new().unwrap();
     assert!(matches!(
-        scaffold_project("", tmp.path()),
+        scaffold_project("", tmp.path(), None),
         Err(ScaffoldError::InvalidName(_))
     ));
     assert!(matches!(
-        scaffold_project("2cool", tmp.path()),
+        scaffold_project("2cool", tmp.path(), None),
         Err(ScaffoldError::InvalidName(_))
     ));
     assert!(matches!(
-        scaffold_project("has spaces", tmp.path()),
+        scaffold_project("has spaces", tmp.path(), None),
         Err(ScaffoldError::InvalidName(_))
     ));
 }
@@ -230,10 +230,10 @@ fn scaffold_project_rejects_invalid_names() {
 fn scaffold_app_writes_plugin_under_plugins_dir() {
     let tmp = TempDir::new().unwrap();
     // First scaffold a project so plugins/ has a sensible parent.
-    scaffold_project("blog", tmp.path()).unwrap();
+    scaffold_project("blog", tmp.path(), None).unwrap();
     let project_root = tmp.path().join("blog");
 
-    let report = scaffold_app("posts", &project_root).unwrap();
+    let report = scaffold_app("posts", &project_root, None).unwrap();
     assert_eq!(report.root, project_root.join("plugins").join("posts"));
 
     let cargo = fs::read_to_string(report.root.join("Cargo.toml")).unwrap();
@@ -257,10 +257,10 @@ fn scaffold_app_writes_plugin_under_plugins_dir() {
 #[test]
 fn scaffold_app_pascal_cases_multi_word_names() {
     let tmp = TempDir::new().unwrap();
-    scaffold_project("blog", tmp.path()).unwrap();
+    scaffold_project("blog", tmp.path(), None).unwrap();
     let project_root = tmp.path().join("blog");
 
-    let report = scaffold_app("blog-engine", &project_root).unwrap();
+    let report = scaffold_app("blog-engine", &project_root, None).unwrap();
     let lib = fs::read_to_string(report.root.join("src/lib.rs")).unwrap();
     assert!(
         lib.contains("pub struct BlogEnginePlugin"),
@@ -275,10 +275,71 @@ fn scaffold_app_pascal_cases_multi_word_names() {
 #[test]
 fn scaffold_app_refuses_to_overwrite_existing_plugin() {
     let tmp = TempDir::new().unwrap();
-    scaffold_project("blog", tmp.path()).unwrap();
+    scaffold_project("blog", tmp.path(), None).unwrap();
     let project_root = tmp.path().join("blog");
 
-    scaffold_app("posts", &project_root).unwrap();
-    let err = scaffold_app("posts", &project_root).unwrap_err();
+    scaffold_app("posts", &project_root, None).unwrap();
+    let err = scaffold_app("posts", &project_root, None).unwrap_err();
     matches!(err, ScaffoldError::AlreadyExists(_));
+}
+
+// =========================================================================
+// BUG-17 + IMP-4 from bugs/tests/testBugs.md.
+// =========================================================================
+
+/// BUG-17: passing `--local /path/to/umbra` rewrites every git-dep
+/// in the generated Cargo.toml into a `path = "..."` form anchored
+/// at the supplied repo. Comments + commented-out optional plugins
+/// all flow through; the version pin / trailing comment on a line
+/// stays in place.
+#[test]
+fn scaffold_project_local_flag_emits_path_deps() {
+    let tmp = TempDir::new().unwrap();
+    let fake_umbra = tmp.path().join("checkout");
+    std::fs::create_dir_all(&fake_umbra).unwrap();
+    let report = scaffold_project("acme", tmp.path(), Some(&fake_umbra)).unwrap();
+    let cargo_toml = std::fs::read_to_string(report.root.join("Cargo.toml")).unwrap();
+    assert!(
+        !cargo_toml.contains("git = \"https://github.com/dalmasonto/umbra\""),
+        "no git deps should remain when --local was set; got:\n{cargo_toml}",
+    );
+    // Facade crate lands under crates/.
+    let expected_umbra = format!("path = \"{}/crates/umbra\"", fake_umbra.display());
+    assert!(
+        cargo_toml.contains(&expected_umbra),
+        "umbra should path-dep against crates/umbra; expected {expected_umbra:?}, got:\n{cargo_toml}",
+    );
+    // Plugin crate lands under plugins/.
+    let expected_auth = format!("path = \"{}/plugins/umbra-auth\"", fake_umbra.display());
+    assert!(
+        cargo_toml.contains(&expected_auth),
+        "umbra-auth should path-dep against plugins/umbra-auth; expected {expected_auth:?}, got:\n{cargo_toml}",
+    );
+}
+
+/// IMP-4: `startapp` (the minimal scaffold) now writes a
+/// `src/models.rs` stub alongside `src/lib.rs` so the user has an
+/// obvious place to declare their first model. Previously they had
+/// to create it themselves or step up to `startplugin` for the
+/// richer layout.
+#[test]
+fn scaffold_app_writes_models_rs_stub() {
+    let tmp = TempDir::new().unwrap();
+    scaffold_project("acme", tmp.path(), None).unwrap();
+    let project_root = tmp.path().join("acme");
+    let report = scaffold_app("posts", &project_root, None).unwrap();
+    let models = std::fs::read_to_string(report.root.join("src/models.rs")).unwrap();
+    assert!(
+        models.contains("#[derive(umbra::orm::Model)]"),
+        "models.rs should show the canonical derive line in its example block; got:\n{models}",
+    );
+    let lib = std::fs::read_to_string(report.root.join("src/lib.rs")).unwrap();
+    assert!(
+        lib.contains("pub mod models;"),
+        "lib.rs should declare `pub mod models;`; got:\n{lib}",
+    );
+    assert!(
+        lib.contains("Plugin::models()") || lib.contains("fn models("),
+        "lib.rs should reference Plugin::models() so the user sees where to register; got:\n{lib}",
+    );
 }
