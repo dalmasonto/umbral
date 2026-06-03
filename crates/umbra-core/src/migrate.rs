@@ -347,6 +347,15 @@ pub enum Operation {
         table: String,
         column: String,
         new_columns: Vec<Column>,
+        /// Snapshot of the table's columns *before* this alter. Carried
+        /// so the Postgres renderer can decide per-column whether it
+        /// needs a TYPE/USING clause vs a SET/DROP NOT NULL — without
+        /// re-walking the snapshot file. `Option` + `serde(default)`
+        /// keeps older on-disk migrations deserialising cleanly; ops
+        /// produced before this field existed get `None` and fall back
+        /// to the legacy nullable-only Postgres path.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        prev_columns: Option<Vec<Column>>,
     },
     /// Rename an existing table. Emitted by `diff` when a model's table
     /// name changes but its `Model::NAME` (the Rust struct name) stays
@@ -1752,6 +1761,89 @@ fn column_shape(fields: &[Column]) -> Vec<(String, SqlType, bool, Option<String>
     shape
 }
 
+/// Type changes the migration engine can apply without user
+/// intervention. The contract: every entry in this whitelist must be
+/// data-preserving on both backends.
+///
+/// SQLite handles every entry trivially via the table-recreation
+/// dance: its dynamic typing means whatever lives in a column today
+/// reads back fine under a new column type affinity. Postgres needs
+/// `ALTER COLUMN ... TYPE new_type USING column::new_type`, which the
+/// renderer emits when this returns `true`.
+///
+/// What's *not* here is deliberate:
+/// - `Text -> BigInt` / numeric parses can fail at runtime on non-
+///   numeric rows. Force the user to write the migration so they own
+///   the validation.
+/// - Bigger int -> smaller int truncates silently.
+/// - `Text -> Date` / `Text -> Uuid` are format-dependent.
+/// - Anything -> JSON. Even if existing rows are JSON-shaped, that's
+///   the user's invariant to assert.
+fn is_safe_cast(from: SqlType, to: SqlType) -> bool {
+    use SqlType::*;
+    if from == to {
+        return true;
+    }
+    match (from, to) {
+        // Stringify: every scalar serialises to text losslessly. Read-
+        // path code that wants the typed value parses it back; the
+        // cast itself never fails.
+        (
+            SmallInt | Integer | BigInt | Real | Double | Boolean | Date | Time | Timestamptz
+            | Uuid | Inet | Cidr | MacAddr | ForeignKey,
+            Text,
+        ) => true,
+        // Integer widening — no data loss.
+        (SmallInt, Integer | BigInt) => true,
+        (Integer, BigInt) => true,
+        // Float widening.
+        (Real, Double) => true,
+        // ForeignKey is stored as BigInt under the hood, so the two
+        // directions are storage-identical. The Rust-side type is
+        // different but the bytes on disk are not.
+        (ForeignKey, BigInt) => true,
+        (BigInt, ForeignKey) => true,
+        _ => false,
+    }
+}
+
+/// Postgres type name for an `ALTER COLUMN ... TYPE <name> USING …`
+/// clause. Matches what sea-query's `PostgresQueryBuilder` emits for
+/// the same `SqlType` inside a `CREATE TABLE`, so the resulting
+/// schema after the alter is identical to a freshly created table.
+fn postgres_type_name(ty: SqlType) -> &'static str {
+    use SqlType::*;
+    match ty {
+        SmallInt => "smallint",
+        Integer => "integer",
+        BigInt | ForeignKey => "bigint",
+        Real => "real",
+        Double => "double precision",
+        Boolean => "boolean",
+        Text => "text",
+        Date => "date",
+        Time => "time",
+        // sea-query's Postgres builder emits `timestamp with time zone`
+        // for the equivalent column type; both spellings are accepted
+        // by Postgres, but mirroring the builder keeps the surface
+        // consistent if a test ever round-trips DDL.
+        Timestamptz => "timestamp with time zone",
+        Uuid => "uuid",
+        Json => "jsonb",
+        Inet => "inet",
+        Cidr => "cidr",
+        MacAddr => "macaddr",
+        FullText => "tsvector",
+        Bytes => "bytea",
+        // Arrays render as `<inner>[]` in Postgres. The migration
+        // engine doesn't model nested element types deeply enough to
+        // emit a precise inner type here at v1; fall back to `text[]`
+        // and rely on the column-def renderer for the real shape when
+        // recreating the column.
+        Array(_) => "text[]",
+    }
+}
+
 /// Per-model column diff. Same-name columns whose type or nullable
 /// flag changed return `UnsafeAlter` (no `AlterColumn` until M8 v1.1
 /// covers the table-recreation dance for SQLite plus native ALTER for
@@ -1777,25 +1869,18 @@ fn diff_columns(
         .map(|c| (c.name.as_str(), c))
         .collect();
 
-    // Walk the intersection by name. Type and pk changes still
-    // surface as UnsafeAlter (need cast semantics + a primary-key
-    // rebuild dance that's not in scope at the M5.1 close). Nullable
-    // flips become AlterColumn ops, rendered via the SQLite
-    // table-recreation dance.
+    // Walk the intersection by name. Two questions per shared column:
+    //   - did the type change? If so, is the change in the safe-cast
+    //     whitelist (e.g. BigInt -> Text, SmallInt -> Integer)? Safe
+    //     casts emit AlterColumn; unsafe ones still UnsafeAlter so the
+    //     user is forced to write the data-preserving migration by
+    //     hand.
+    //   - did the nullable flag flip? AlterColumn either way.
+    // Primary-key changes still UnsafeAlter (a PK rebuild is its own
+    // dance and isn't shipped yet).
     let mut alter_columns: Vec<&str> = Vec::new();
     for (name, prev_col) in &prev_cols {
         if let Some(curr_col) = curr_cols.get(name) {
-            if prev_col.ty != curr_col.ty {
-                return Err(MigrateError::UnsafeAlter {
-                    model: model.to_string(),
-                    column: (*name).to_string(),
-                    reason: format!(
-                        "type change {prev_ty:?} -> {curr_ty:?} needs cast semantics not yet modelled",
-                        prev_ty = prev_col.ty,
-                        curr_ty = curr_col.ty,
-                    ),
-                });
-            }
             if prev_col.primary_key != curr_col.primary_key {
                 return Err(MigrateError::UnsafeAlter {
                     model: model.to_string(),
@@ -1803,7 +1888,19 @@ fn diff_columns(
                     reason: "primary-key flips need a manual data-preserving migration".to_string(),
                 });
             }
-            if prev_col.nullable != curr_col.nullable {
+            let type_changed = prev_col.ty != curr_col.ty;
+            if type_changed && !is_safe_cast(prev_col.ty, curr_col.ty) {
+                return Err(MigrateError::UnsafeAlter {
+                    model: model.to_string(),
+                    column: (*name).to_string(),
+                    reason: format!(
+                        "type change {prev_ty:?} -> {curr_ty:?} is not in the safe-cast whitelist — write a data-preserving migration by hand",
+                        prev_ty = prev_col.ty,
+                        curr_ty = curr_col.ty,
+                    ),
+                });
+            }
+            if type_changed || prev_col.nullable != curr_col.nullable {
                 alter_columns.push(*name);
             }
         }
@@ -1819,11 +1916,13 @@ fn diff_columns(
     // alters drop and recreate twice; the cost is acceptable while
     // M5.1 ships the simple case).
     let new_columns: Vec<Column> = current.fields.clone();
+    let prev_columns_snapshot: Vec<Column> = previous.fields.clone();
     for name in alter_columns {
         ops.push(Operation::AlterColumn {
             table: current.table.clone(),
             column: name.to_string(),
             new_columns: new_columns.clone(),
+            prev_columns: Some(prev_columns_snapshot.clone()),
         });
     }
 
@@ -2003,6 +2102,7 @@ fn render_operation_sqlite(op: &Operation) -> Vec<String> {
             table,
             column: _,
             new_columns,
+            prev_columns: _,
         } => render_alter_column_dance_sqlite(table, new_columns),
         Operation::RenameTable { from, to } => {
             // SQLite: ALTER TABLE "<from>" RENAME TO "<to>"
@@ -2059,7 +2159,13 @@ fn render_operation_postgres(op: &Operation) -> Vec<String> {
             table,
             column,
             new_columns,
-        } => render_alter_column_postgres(table, column, new_columns),
+            prev_columns,
+        } => render_alter_column_postgres(
+            table,
+            column,
+            new_columns,
+            prev_columns.as_deref(),
+        ),
         Operation::RenameTable { from, to } => {
             // Postgres: ALTER TABLE "<from>" RENAME TO "<to>"
             // sea-query's Table::rename() emits the right form.
@@ -2146,27 +2252,76 @@ fn render_alter_column_dance_sqlite(table: &str, new_columns: &[Column]) -> Vec<
 /// `column` is the field name that triggered the flip; `new_columns`
 /// is the post-change schema (carried for parity with the SQLite
 /// dance, though Postgres only needs the one column).
-fn render_alter_column_postgres(table: &str, column: &str, new_columns: &[Column]) -> Vec<String> {
+fn render_alter_column_postgres(
+    table: &str,
+    column: &str,
+    new_columns: &[Column],
+    prev_columns: Option<&[Column]>,
+) -> Vec<String> {
     let new = new_columns.iter().find(|c| c.name == column).expect(
         "umbra::migrate: AlterColumn op references a column missing from new_columns; \
              this is a bug in `diff_columns`",
     );
-
-    // Postgres treats `SET NOT NULL` and `DROP NOT NULL` as idempotent
-    // against a column whose flag already matches — flipping to the new
-    // state is always safe to issue.
-    let clause = if new.nullable {
-        "DROP NOT NULL"
-    } else {
-        "SET NOT NULL"
-    };
+    let prev = prev_columns.and_then(|cols| cols.iter().find(|c| c.name == column));
 
     let q_table = quote_pg_ident(table);
     let q_column = quote_pg_ident(column);
 
-    vec![format!(
-        "ALTER TABLE {q_table} ALTER COLUMN {q_column} {clause}"
-    )]
+    let mut stmts: Vec<String> = Vec::new();
+
+    // TYPE change: only when we have a previous snapshot AND it differs
+    // AND the change is in the safe-cast whitelist (diff_columns has
+    // already gated unsafe ones). Emitted before nullable so a NOT
+    // NULL flip against the just-cast column reads the new type.
+    if let Some(prev_col) = prev {
+        if prev_col.ty != new.ty && is_safe_cast(prev_col.ty, new.ty) {
+            let new_ty_sql = postgres_type_name(new.ty);
+            // USING <col>::<new_type> covers the safe-cast set
+            // (numeric → text via implicit cast, integer widening as a
+            // no-op, etc.). Postgres still requires the clause for
+            // text-to-text transitions to be explicit; emitting it
+            // unconditionally keeps the codepath uniform.
+            stmts.push(format!(
+                "ALTER TABLE {q_table} ALTER COLUMN {q_column} TYPE {new_ty_sql} USING {q_column}::{new_ty_sql}"
+            ));
+        }
+    }
+
+    // NULL-flag change: skipped when prev is None (legacy migrations
+    // with no snapshot — preserve the old "emit unconditionally" path
+    // because it's idempotent on Postgres). With a snapshot, only emit
+    // when the flag actually flipped.
+    let nullable_changed = match prev {
+        Some(prev_col) => prev_col.nullable != new.nullable,
+        None => true,
+    };
+    if nullable_changed {
+        let clause = if new.nullable {
+            "DROP NOT NULL"
+        } else {
+            "SET NOT NULL"
+        };
+        stmts.push(format!(
+            "ALTER TABLE {q_table} ALTER COLUMN {q_column} {clause}"
+        ));
+    }
+
+    // Defensive: if we somehow produced no statements (shouldn't
+    // happen — diff_columns gates on type or nullable changing), fall
+    // back to a single redundant SET NULL flip to match the legacy
+    // contract. Tests cover both branches; this is belt-and-braces.
+    if stmts.is_empty() {
+        let clause = if new.nullable {
+            "DROP NOT NULL"
+        } else {
+            "SET NOT NULL"
+        };
+        stmts.push(format!(
+            "ALTER TABLE {q_table} ALTER COLUMN {q_column} {clause}"
+        ));
+    }
+
+    stmts
 }
 
 /// Quote a SQL identifier the Postgres way: wrap in double quotes,

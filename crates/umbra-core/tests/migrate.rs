@@ -228,6 +228,7 @@ async fn migrated_dir() -> &'static Path {
                     table: M5_1_ALTER_TABLE.to_string(),
                     column: "note".to_string(),
                     new_columns,
+                    prev_columns: None,
                 }],
                 snapshot_after: Snapshot::current(),
             };
@@ -909,6 +910,7 @@ fn diff_emits_alter_column_for_a_nullable_flip() {
             table,
             column,
             new_columns,
+            prev_columns: _,
         } => {
             assert_eq!(table, "post");
             assert_eq!(column, "title");
@@ -924,6 +926,101 @@ fn diff_emits_alter_column_for_a_nullable_flip() {
             assert!(title.nullable, "title's new nullable flag must be true");
         }
         other => panic!("expected Operation::AlterColumn, got {other:?}"),
+    }
+}
+
+/// Gap #64 — BigInt → Text is in the safe-cast whitelist; the diff
+/// must emit an AlterColumn carrying both snapshots (so the Postgres
+/// renderer can produce the `USING <col>::text` clause) rather than
+/// the legacy `UnsafeAlter` error.
+#[test]
+fn diff_emits_alter_column_for_safe_type_cast_bigint_to_text() {
+    let prev_user_id = Column {
+        name: "user_id".to_string(),
+        ty: SqlType::BigInt,
+        primary_key: false,
+        nullable: false,
+        fk_target: None,
+        noform: false,
+        noedit: false,
+        is_string_repr: false,
+        max_length: 0,
+        choices: Vec::new(),
+        choice_labels: Vec::new(),
+        default: String::new(),
+        is_multichoice: false,
+    };
+    let mut curr_user_id = prev_user_id.clone();
+    curr_user_id.ty = SqlType::Text;
+
+    let previous = snapshot_of(post_model(vec![id_column(), prev_user_id]));
+    let current = snapshot_of(post_model(vec![id_column(), curr_user_id]));
+
+    let ops = diff(&previous, &current)
+        .expect("BigInt -> Text is in the safe-cast whitelist; must NOT be UnsafeAlter");
+    assert_eq!(ops.len(), 1, "one op per changed column; got {ops:?}");
+    match &ops[0] {
+        Operation::AlterColumn {
+            column,
+            prev_columns,
+            ..
+        } => {
+            assert_eq!(column, "user_id");
+            let prev = prev_columns
+                .as_ref()
+                .expect("safe-cast AlterColumn must carry prev_columns for Postgres render");
+            let prev_col = prev
+                .iter()
+                .find(|c| c.name == "user_id")
+                .expect("prev_columns must include the changed column");
+            assert_eq!(
+                prev_col.ty,
+                SqlType::BigInt,
+                "prev snapshot must record the pre-change type",
+            );
+        }
+        other => panic!("expected AlterColumn, got {other:?}"),
+    }
+}
+
+/// Gap #64 boundary case — Text → BigInt is NOT in the whitelist
+/// (parse can fail at runtime on non-numeric rows). The diff must
+/// still refuse with UnsafeAlter so the user is forced to write the
+/// data-preserving migration.
+#[test]
+fn diff_still_refuses_text_to_bigint_as_unsafe() {
+    let prev_value = Column {
+        name: "value".to_string(),
+        ty: SqlType::Text,
+        primary_key: false,
+        nullable: false,
+        fk_target: None,
+        noform: false,
+        noedit: false,
+        is_string_repr: false,
+        max_length: 0,
+        choices: Vec::new(),
+        choice_labels: Vec::new(),
+        default: String::new(),
+        is_multichoice: false,
+    };
+    let mut curr_value = prev_value.clone();
+    curr_value.ty = SqlType::BigInt;
+
+    let previous = snapshot_of(post_model(vec![id_column(), prev_value]));
+    let current = snapshot_of(post_model(vec![id_column(), curr_value]));
+
+    let err = diff(&previous, &current)
+        .expect_err("Text -> BigInt must remain UnsafeAlter; parse can fail");
+    match err {
+        MigrateError::UnsafeAlter { column, reason, .. } => {
+            assert_eq!(column, "value");
+            assert!(
+                reason.contains("safe-cast whitelist") || reason.contains("not in the safe"),
+                "error message should explain the whitelist policy; got {reason}",
+            );
+        }
+        other => panic!("expected UnsafeAlter, got {other:?}"),
     }
 }
 

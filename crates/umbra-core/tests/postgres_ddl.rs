@@ -162,6 +162,7 @@ fn alter_column_to_nullable_uses_native_alter_on_postgres() {
         table: "post".to_string(),
         column: "title".to_string(),
         new_columns: vec![id_pk(), text_nullable("title")],
+        prev_columns: None,
     };
 
     let stmts = render_operation_for(&op, "postgres");
@@ -197,6 +198,7 @@ fn alter_column_to_not_null_uses_set_not_null_on_postgres() {
         table: "post".to_string(),
         column: "title".to_string(),
         new_columns: vec![id_pk(), text_not_null("title")],
+        prev_columns: None,
     };
 
     let stmts = render_operation_for(&op, "postgres");
@@ -222,6 +224,7 @@ fn alter_column_keeps_recreation_dance_on_sqlite() {
         table: "post".to_string(),
         column: "title".to_string(),
         new_columns: vec![id_pk(), text_nullable("title")],
+        prev_columns: None,
     };
 
     let stmts = render_operation_for(&op, "sqlite");
@@ -294,6 +297,129 @@ fn drop_column_on_postgres_double_quotes_identifier() {
     assert!(upper.contains("ALTER TABLE"));
     assert!(upper.contains("DROP COLUMN"));
     assert!(sql.contains("\"body\""), "got {sql}");
+}
+
+// --------------------------------------------------------------------- //
+// Safe-cast support (gap #64)                                            //
+// --------------------------------------------------------------------- //
+
+/// Helper: build a non-nullable column of a given type.
+fn col(name: &str, ty: SqlType) -> Column {
+    Column {
+        name: name.to_string(),
+        ty,
+        primary_key: false,
+        nullable: false,
+        fk_target: None,
+        noform: false,
+        noedit: false,
+        is_string_repr: false,
+        max_length: 0,
+        choices: Vec::new(),
+        choice_labels: Vec::new(),
+        default: String::new(),
+        is_multichoice: false,
+    }
+}
+
+/// BigInt → Text on Postgres emits an `ALTER COLUMN ... TYPE TEXT
+/// USING <col>::text`. This is the canonical case from gap #64
+/// (Session.user_id flipping to polymorphic Text storage).
+#[test]
+fn safe_cast_bigint_to_text_emits_using_on_postgres() {
+    let op = Operation::AlterColumn {
+        table: "session".to_string(),
+        column: "user_id".to_string(),
+        new_columns: vec![id_pk(), col("user_id", SqlType::Text)],
+        prev_columns: Some(vec![id_pk(), col("user_id", SqlType::BigInt)]),
+    };
+
+    let stmts = render_operation_for(&op, "postgres");
+    assert_eq!(
+        stmts.len(),
+        1,
+        "type-only change should emit one ALTER (no nullable flip); got {stmts:?}",
+    );
+    let sql = &stmts[0];
+    assert!(sql.contains("TYPE text"), "expected TYPE text; got {sql}");
+    assert!(
+        sql.contains("USING \"user_id\"::text"),
+        "expected USING <col>::text cast; got {sql}",
+    );
+    assert!(
+        sql.contains("\"session\""),
+        "table identifier double-quoted; got {sql}",
+    );
+}
+
+/// Integer widening also flows through the safe-cast path.
+#[test]
+fn safe_cast_smallint_to_integer_emits_using_on_postgres() {
+    let op = Operation::AlterColumn {
+        table: "thing".to_string(),
+        column: "count".to_string(),
+        new_columns: vec![id_pk(), col("count", SqlType::Integer)],
+        prev_columns: Some(vec![id_pk(), col("count", SqlType::SmallInt)]),
+    };
+
+    let stmts = render_operation_for(&op, "postgres");
+    assert_eq!(stmts.len(), 1);
+    let sql = &stmts[0];
+    assert!(
+        sql.contains("TYPE integer"),
+        "expected TYPE integer; got {sql}",
+    );
+    assert!(
+        sql.contains("USING \"count\"::integer"),
+        "expected USING cast; got {sql}",
+    );
+}
+
+/// A combined type + nullable flip emits BOTH statements in order
+/// (TYPE first so the NOT NULL flip evaluates against the new type).
+#[test]
+fn safe_cast_with_nullable_flip_emits_two_statements_in_order() {
+    let mut prev = col("user_id", SqlType::BigInt);
+    prev.nullable = false;
+    let mut next = col("user_id", SqlType::Text);
+    next.nullable = true;
+
+    let op = Operation::AlterColumn {
+        table: "session".to_string(),
+        column: "user_id".to_string(),
+        new_columns: vec![id_pk(), next],
+        prev_columns: Some(vec![id_pk(), prev]),
+    };
+
+    let stmts = render_operation_for(&op, "postgres");
+    assert_eq!(stmts.len(), 2, "expected TYPE + nullable; got {stmts:?}");
+    assert!(stmts[0].contains("TYPE text"), "TYPE first; got {stmts:?}");
+    assert!(
+        stmts[1].contains("DROP NOT NULL"),
+        "nullable change second; got {stmts:?}",
+    );
+}
+
+/// Without a previous snapshot the renderer falls back to the legacy
+/// nullable-only path (the migration was produced before the safe-cast
+/// machinery shipped, so we can't tell what changed and emit just the
+/// nullable flip).
+#[test]
+fn missing_prev_columns_keeps_legacy_nullable_only_behaviour() {
+    let op = Operation::AlterColumn {
+        table: "post".to_string(),
+        column: "title".to_string(),
+        new_columns: vec![id_pk(), text_nullable("title")],
+        prev_columns: None,
+    };
+
+    let stmts = render_operation_for(&op, "postgres");
+    assert_eq!(stmts.len(), 1);
+    assert!(stmts[0].contains("DROP NOT NULL"));
+    assert!(
+        !stmts[0].contains("TYPE"),
+        "no prev means no TYPE inference; got {stmts:?}",
+    );
 }
 
 // --------------------------------------------------------------------- //
