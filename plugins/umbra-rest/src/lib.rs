@@ -635,6 +635,19 @@ fn method_filter(m: &http::Method) -> axum::routing::MethodFilter {
 struct ApiErrorBody {
     error: String,
     code: &'static str,
+    /// One-sentence operator hint. Currently only populated for
+    /// dev-mode 404s, where it explains why the response is richer
+    /// than prod's bare envelope (so a Dev-set deploy doesn't leak
+    /// the available-endpoints list as a normal-looking detail).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hint: Option<String>,
+    /// Available collection URLs the caller could have hit instead.
+    /// Populated only on 404 in `Environment::Dev`. Empty otherwise.
+    /// Filtered through the same allow/block list the real handlers
+    /// use, so this list never advertises tables the plugin would
+    /// refuse to serve.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    available: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -695,7 +708,69 @@ impl umbra::web::IntoResponse for ApiError {
             ),
             ApiError::Forbidden => (StatusCode::FORBIDDEN, "forbidden", "forbidden".to_string()),
         };
-        (status, Json(ApiErrorBody { error: msg, code })).into_response()
+
+        let body = if status == StatusCode::NOT_FOUND {
+            enrich_404_body(msg, code)
+        } else {
+            ApiErrorBody {
+                error: msg,
+                code,
+                hint: None,
+                available: Vec::new(),
+            }
+        };
+        (status, Json(body)).into_response()
+    }
+}
+
+/// Build the JSON body for a 404 from this plugin. In `Environment::Dev`
+/// the body grows a `hint` and an `available` list of every
+/// `/api/<table>/` URL the plugin would actually serve — walked
+/// straight from the model registry and filtered through the same
+/// `allow()` check the real handlers use. In `Prod` / `Test` the
+/// body stays the minimal `{error, code}` envelope so production
+/// 404s don't leak the table list to unauthenticated clients.
+///
+/// Mirrors the framework's HTML 404 dev-panel behaviour
+/// (`crate::routes` + the default 404 template), kept in spirit for
+/// the REST plugin: JSON-formatted because that's the right shape
+/// for an API consumer, but informative when it can be.
+fn enrich_404_body(msg: String, code: &'static str) -> ApiErrorBody {
+    let is_dev = umbra::settings::get_opt()
+        .map(|s| matches!(s.environment, umbra::Environment::Dev))
+        .unwrap_or(false);
+
+    if !is_dev {
+        return ApiErrorBody {
+            error: msg,
+            code,
+            hint: None,
+            available: Vec::new(),
+        };
+    }
+
+    let mut available: Vec<String> = Vec::new();
+    if let Some(cfg) = CONFIG.get() {
+        for plugin in umbra::migrate::registered_plugins() {
+            for m in umbra::migrate::models_for_plugin(&plugin) {
+                if cfg.allow(&m.table) {
+                    available.push(format!("/api/{}/", m.table));
+                }
+            }
+        }
+        available.sort();
+        available.dedup();
+    }
+
+    ApiErrorBody {
+        error: msg,
+        code,
+        hint: Some(
+            "dev-mode hint: this list of available endpoints is omitted in production. \
+             set `environment = \"prod\"` in umbra.toml to drop it."
+                .to_string(),
+        ),
+        available,
     }
 }
 

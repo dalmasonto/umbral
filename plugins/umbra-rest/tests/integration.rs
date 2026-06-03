@@ -152,6 +152,45 @@ async fn nonexistent_table_returns_404() {
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
+/// In dev mode, the 404 JSON envelope grows an `available` list of
+/// every collection URL the REST plugin would actually serve. The
+/// caller who typoed `/api/vvc` then gets back the real options
+/// instead of a bare "not found".
+#[tokio::test]
+async fn dev_mode_404_includes_available_endpoints_list() {
+    let router = boot().await.clone();
+    let (status, body) = get_request(router, "/api/typoed/").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let v: serde_json::Value = serde_json::from_str(&body).expect("json body");
+    assert_eq!(v["code"], "not_found");
+    assert!(
+        v["error"].as_str().unwrap_or("").contains("typoed"),
+        "error should mention the bad path; got {body}"
+    );
+    // boot() registers `Note`, so the available list should include
+    // at least `/api/note/`. The test fixture boots with
+    // `Environment::Dev` by default — env vars aren't set.
+    let available = v["available"].as_array().expect(
+        "dev-mode 404 must carry an `available` array; \
+         got {body} (is environment dev?)",
+    );
+    let names: Vec<&str> = available.iter().filter_map(|x| x.as_str()).collect();
+    assert!(
+        names.contains(&"/api/note/"),
+        "available list should include the seeded /api/note/ collection; got {names:?}"
+    );
+    // The hint string explains the dev-only nature of the enrichment.
+    assert!(
+        v["hint"]
+            .as_str()
+            .unwrap_or("")
+            .to_lowercase()
+            .contains("dev"),
+        "hint should call out dev-mode origin; got {body}",
+    );
+}
+
 // =========================================================================
 // CRUD round trip. Each step asserts both the HTTP envelope AND the
 // JSON shape so a regression in either bites.
