@@ -135,6 +135,7 @@ fn create_table_emits_references_sqlite() {
                 auto_now_add: false,
                 auto_now: false,
                 help: String::new(),
+                example: String::new(),
             },
             Column {
                 name: "title".to_string(),
@@ -157,6 +158,7 @@ fn create_table_emits_references_sqlite() {
                 auto_now_add: false,
                 auto_now: false,
                 help: String::new(),
+                example: String::new(),
             },
             Column {
                 name: "author".to_string(),
@@ -179,6 +181,7 @@ fn create_table_emits_references_sqlite() {
                 auto_now_add: false,
                 auto_now: false,
                 help: String::new(),
+                example: String::new(),
             },
         ],
     };
@@ -234,6 +237,7 @@ fn create_table_emits_references_postgres() {
                 auto_now_add: false,
                 auto_now: false,
                 help: String::new(),
+                example: String::new(),
             },
             Column {
                 name: "title".to_string(),
@@ -256,6 +260,7 @@ fn create_table_emits_references_postgres() {
                 auto_now_add: false,
                 auto_now: false,
                 help: String::new(),
+                example: String::new(),
             },
             Column {
                 name: "author".to_string(),
@@ -278,6 +283,7 @@ fn create_table_emits_references_postgres() {
                 auto_now_add: false,
                 auto_now: false,
                 help: String::new(),
+                example: String::new(),
             },
         ],
     };

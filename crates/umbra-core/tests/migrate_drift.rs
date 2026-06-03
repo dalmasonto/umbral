@@ -106,6 +106,7 @@ fn write_migration(dir: &Path, plugin: &str, id: &str, table: &str) {
                     auto_now_add: false,
                     auto_now: false,
                     help: String::new(),
+                    example: String::new(),
                 },
                 Column {
                     name: "title".to_string(),
@@ -128,6 +129,7 @@ fn write_migration(dir: &Path, plugin: &str, id: &str, table: &str) {
                     auto_now_add: false,
                     auto_now: false,
                     help: String::new(),
+                    example: String::new(),
                 },
             ],
         }],

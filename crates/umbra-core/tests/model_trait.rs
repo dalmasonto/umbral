@@ -176,6 +176,7 @@ fn field_spec_is_copy_and_eq() {
         auto_now_add: false,
         auto_now: false,
         help: "",
+        example: "",
     };
     let b = FieldSpec {
         name: "x",
@@ -199,6 +200,7 @@ fn field_spec_is_copy_and_eq() {
         auto_now_add: false,
         auto_now: false,
         help: "",
+        example: "",
     };
 
     assert_eq!(
@@ -240,6 +242,7 @@ fn field_spec_eq_distinguishes_different_names() {
         auto_now_add: false,
         auto_now: false,
         help: "",
+        example: "",
     };
     let b = FieldSpec {
         name: "y",
@@ -263,6 +266,7 @@ fn field_spec_eq_distinguishes_different_names() {
         auto_now_add: false,
         auto_now: false,
         help: "",
+        example: "",
     };
 
     assert_ne!(a, b, "FieldSpecs differing in name must not compare equal");

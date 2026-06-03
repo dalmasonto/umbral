@@ -200,6 +200,9 @@ struct UmbraFieldAttr {
     /// OpenAPI `description` and admin form hints. Closes
     /// playground-openapi-gaps item 5.
     help: Option<String>,
+    /// `#[umbra(example = "...")]` — sample value rendered as
+    /// OpenAPI `example`. Closes playground-openapi-gaps item 6.
+    example: Option<String>,
 }
 
 fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAttr> {
@@ -218,6 +221,7 @@ fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAtt
         auto_now_add: false,
         auto_now: false,
         help: None,
+        example: None,
     };
     for attr in attrs {
         if !attr.path().is_ident("umbra") {
@@ -305,6 +309,11 @@ fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAtt
                 let lit: syn::LitStr = value.parse()?;
                 parsed.help = Some(lit.value());
                 Ok(())
+            } else if meta.path.is_ident("example") {
+                let value = meta.value()?;
+                let lit: syn::LitStr = value.parse()?;
+                parsed.example = Some(lit.value());
+                Ok(())
             } else {
                 // Unknown key. Report it with the known set so the
                 // common typo case (`is_string_repr` instead of
@@ -331,7 +340,8 @@ fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAtt
                      `max_length = N`, `choices`, `default = \"...\"`, \
                      `unique`, `on_delete = \"...\"`, \
                      `on_update = \"...\"`, `index`, `auto_now`, \
-                     `auto_now_add`, and `help = \"...\"`"
+                     `auto_now_add`, `help = \"...\"`, \
+                     and `example = \"...\"`"
                 )))
             }
         })?;
@@ -741,6 +751,10 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             Some(s) => quote! { #s },
             None => quote! { "" },
         };
+        let example_tokens = match &field_attr.example {
+            Some(s) => quote! { #s },
+            None => quote! { "" },
+        };
 
         // `on_delete` / `on_update` → token paths into FkAction. An
         // unknown value (typo, unsupported variant) becomes a
@@ -793,6 +807,7 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                 auto_now_add: #auto_now_add_lit,
                 auto_now: #auto_now_lit,
                 help: #help_tokens,
+                example: #example_tokens,
             }
         });
 

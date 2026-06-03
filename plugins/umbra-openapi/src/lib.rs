@@ -292,6 +292,12 @@ fn column_schema(col: &Column) -> Value {
     if !col.help.is_empty() {
         obj.insert("description".into(), Value::String(col.help.clone()));
     }
+    // `#[umbra(example = "...")]` lands as the OpenAPI standard
+    // `example` so Swagger UI pre-fills request bodies with a
+    // useful sample. Closes playground-openapi-gaps item 6.
+    if !col.example.is_empty() {
+        obj.insert("example".into(), Value::String(col.example.clone()));
+    }
     // Standard OpenAPI: closed-set values become `enum`. Skipped for
     // multichoice (a CSV-encoded subset) because each request value is
     // a comma-separated string of the choices, not one choice — clients
@@ -757,6 +763,7 @@ mod tests {
             auto_now_add: false,
             auto_now: false,
             help: String::new(),
+            example: String::new(),
         }
     }
 
@@ -882,6 +889,30 @@ mod tests {
         assert!(
             schema.get("description").is_none(),
             "empty help should omit description; got: {schema:?}",
+        );
+    }
+
+    /// Playground-openapi-gaps item 6: `#[umbra(example = "...")]`
+    /// emits as OpenAPI `example` on the property schema. Empty
+    /// leaves the key absent.
+    #[test]
+    fn example_attribute_flows_to_openapi_example() {
+        let mut col = base_col("status", SqlType::Text);
+        col.example = "published".to_string();
+        let schema = column_schema(&col);
+        assert_eq!(
+            schema["example"], "published",
+            "example should round-trip; got: {schema:?}",
+        );
+    }
+
+    #[test]
+    fn empty_example_omits_example() {
+        let col = base_col("body", SqlType::Text);
+        let schema = column_schema(&col);
+        assert!(
+            schema.get("example").is_none(),
+            "empty example should omit example key; got: {schema:?}",
         );
     }
 

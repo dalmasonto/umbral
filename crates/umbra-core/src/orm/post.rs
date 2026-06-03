@@ -74,6 +74,7 @@ impl crate::orm::Model for Post {
             auto_now_add: false,
             auto_now: false,
             help: "",
+            example: "",
         },
         crate::orm::FieldSpec {
             name: "title",
@@ -97,6 +98,7 @@ impl crate::orm::Model for Post {
             auto_now_add: false,
             auto_now: false,
             help: "",
+            example: "",
         },
         crate::orm::FieldSpec {
             name: "body",
@@ -120,6 +122,7 @@ impl crate::orm::Model for Post {
             auto_now_add: false,
             auto_now: false,
             help: "",
+            example: "",
         },
         crate::orm::FieldSpec {
             name: "published_at",
@@ -143,6 +146,7 @@ impl crate::orm::Model for Post {
             auto_now_add: false,
             auto_now: false,
             help: "",
+            example: "",
         },
     ];
 

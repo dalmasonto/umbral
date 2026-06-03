@@ -624,6 +624,7 @@ mod search {
             auto_now_add: false,
             auto_now: false,
             help: String::new(),
+            example: String::new(),
         }
     }
 
@@ -731,6 +732,7 @@ mod choice_validation {
             auto_now_add: false,
             auto_now: false,
             help: String::new(),
+            example: String::new(),
         }
     }
 

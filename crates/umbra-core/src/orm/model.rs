@@ -356,6 +356,16 @@ pub struct FieldSpec {
     /// emitter and admin form skip the surrounding markup
     /// when this is unset.
     pub help: &'static str,
+
+    /// Sample value rendered as OpenAPI `example` on the property
+    /// schema. Set via `#[umbra(example = "...")]`. Closes
+    /// playground-openapi-gaps item 6.
+    ///
+    /// Empty string means no example. Emitted as a JSON string in
+    /// the spec — clients that want typed examples can coerce on
+    /// their end. Pairs naturally with `help` to make a column's
+    /// purpose clear in Swagger UI.
+    pub example: &'static str,
 }
 
 /// Referential action emitted in the SQL `REFERENCES ... ON

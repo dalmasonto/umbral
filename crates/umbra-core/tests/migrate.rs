@@ -152,6 +152,7 @@ async fn migrated_dir() -> &'static Path {
                 auto_now_add: false,
                 auto_now: false,
                 help: String::new(),
+                example: String::new(),
             };
             let file = MigrationFile {
                 id: M8_ADD_COLUMN_MIGRATION_ID.to_string(),
@@ -217,6 +218,7 @@ async fn migrated_dir() -> &'static Path {
                     auto_now_add: false,
                     auto_now: false,
                     help: String::new(),
+                    example: String::new(),
                 },
                 Column {
                     name: "note".to_string(),
@@ -239,6 +241,7 @@ async fn migrated_dir() -> &'static Path {
                     auto_now_add: false,
                     auto_now: false,
                     help: String::new(),
+                    example: String::new(),
                 },
             ];
             let file = MigrationFile {
@@ -731,6 +734,7 @@ fn id_column() -> Column {
         auto_now_add: false,
         auto_now: false,
         help: String::new(),
+        example: String::new(),
     }
 }
 
@@ -758,6 +762,7 @@ fn text_column(name: &str) -> Column {
         auto_now_add: false,
         auto_now: false,
         help: String::new(),
+        example: String::new(),
     }
 }
 
@@ -894,6 +899,7 @@ fn diff_returns_unsafe_alter_for_a_type_change() {
             auto_now_add: false,
             auto_now: false,
             help: String::new(),
+            example: String::new(),
         },
     ]));
 
@@ -945,6 +951,7 @@ fn diff_emits_alter_column_for_a_nullable_flip() {
             auto_now_add: false,
             auto_now: false,
             help: String::new(),
+            example: String::new(),
         },
     ]));
 
@@ -1005,6 +1012,7 @@ fn diff_emits_alter_column_for_safe_type_cast_bigint_to_text() {
         auto_now_add: false,
         auto_now: false,
         help: String::new(),
+        example: String::new(),
     };
     let mut curr_user_id = prev_user_id.clone();
     curr_user_id.ty = SqlType::Text;
@@ -1066,6 +1074,7 @@ fn diff_still_refuses_text_to_bigint_as_unsafe() {
         auto_now_add: false,
         auto_now: false,
         help: String::new(),
+        example: String::new(),
     };
     let mut curr_value = prev_value.clone();
     curr_value.ty = SqlType::BigInt;

@@ -113,6 +113,7 @@ fn int_pk_column() -> Column {
         auto_now_add: false,
         auto_now: false,
         help: String::new(),
+        example: String::new(),
     }
 }
 
@@ -138,6 +139,7 @@ fn uuid_pk_column() -> Column {
         auto_now_add: false,
         auto_now: false,
         help: String::new(),
+        example: String::new(),
     }
 }
 
@@ -163,6 +165,7 @@ fn string_pk_column() -> Column {
         auto_now_add: false,
         auto_now: false,
         help: String::new(),
+        example: String::new(),
     }
 }
 
@@ -188,6 +191,7 @@ fn label_column() -> Column {
         auto_now_add: false,
         auto_now: false,
         help: String::new(),
+        example: String::new(),
     }
 }
 

@@ -54,6 +54,7 @@ fn id_col() -> Column {
         auto_now_add: false,
         auto_now: false,
         help: String::new(),
+        example: String::new(),
     }
 }
 
@@ -79,6 +80,7 @@ fn title_col() -> Column {
         auto_now_add: false,
         auto_now: false,
         help: String::new(),
+        example: String::new(),
     }
 }
 
@@ -181,6 +183,7 @@ fn name_match_wins_over_shape_match_when_columns_differ() {
         auto_now_add: false,
         auto_now: false,
         help: String::new(),
+        example: String::new(),
     };
 
     let prev = make_snapshot(vec![make_meta("Foo", "foo", vec![id_col(), title_col()])]);
@@ -262,6 +265,7 @@ fn no_rename_when_shapes_differ() {
         auto_now_add: false,
         auto_now: false,
         help: String::new(),
+        example: String::new(),
     };
 
     let prev = make_snapshot(vec![make_meta("Foo", "foo", vec![id_col(), title_col()])]);
