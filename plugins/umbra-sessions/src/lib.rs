@@ -50,6 +50,9 @@ use umbra::web::{HeaderMap, header};
 use umbra_auth::{AuthUser, auth_user};
 use uuid::Uuid;
 
+pub mod session_auth;
+pub use session_auth::SessionAuthentication;
+
 /// Default cookie name. Users override via `set_cookie_header_named`
 /// when they need a project-specific name.
 pub const COOKIE_NAME: &str = "umbra_session";

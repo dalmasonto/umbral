@@ -40,6 +40,12 @@ axum = "0.8"
 # fails (the login itself still succeeded; we just log the secondary
 # failure).
 tracing = "0.1"
+# umbra-rest provides the Authentication / Identity contract.
+# SessionAuthentication is a built-in impl of that trait; it lives
+# here (not in umbra-auth) so the dep arrow stays
+# umbra-sessions → umbra-auth → umbra-rest rather than introducing
+# a cycle through sessions.
+umbra-rest = { path = "../umbra-rest", version = "0.0.1" }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync"] }

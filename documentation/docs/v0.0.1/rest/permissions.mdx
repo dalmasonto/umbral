@@ -1,0 +1,145 @@
+---
+title: Permissions
+description: Built-in permission classes (AllowAny, IsAuthenticated, IsStaff, ReadOnly), Or / And combinators, and how to write your own.
+sidebar_position: 3
+icon: shield
+tags: [rest, permissions, authorization]
+---
+
+A permission class answers *is this caller allowed to perform this action on this resource?* It runs after [authentication](/docs/v0.0.1/rest/authentication) has resolved an `Identity` (or `None` for anonymous), gets handed the `Action` (`List`, `Retrieve`, `Create`, `Update`, `Delete`, or `Custom(name)`), and returns `Ok(())` to allow or a `PermissionError` that maps to 401 / 403.
+
+```rust
+pub trait Permission: Send + Sync + 'static {
+    fn check(&self, action: &Action, identity: Option<&Identity>) -> Result<(), PermissionError>;
+}
+```
+
+One permission class is attached **per resource** via `ResourceConfig::permission(...)`. A resource without an explicit class uses `AllowAny`.
+
+## Built-in classes
+
+<CardGrid cols={2}>
+  <Card icon="unlock" title="AllowAny" description="The default. Every action allowed, anonymous OK. Use for public catalogues, healthchecks, public read endpoints." />
+  <Card icon="user-check" title="IsAuthenticated" description="Require some identity. Anonymous → 401, any authenticated user → allow." />
+  <Card icon="shield-check" title="IsStaff" description="Require identity AND is_staff. Anonymous → 401, non-staff → 403, staff → allow. Most admin-adjacent endpoints." />
+  <Card icon="eye" title="ReadOnly" description="List / Retrieve open to everyone, Create / Update / Delete → 403. Public-read APIs." />
+</CardGrid>
+
+```rust
+use umbra_rest::{AllowAny, IsAuthenticated, IsStaff, ReadOnly, ResourceConfig};
+
+RestPlugin::default()
+    .resource(ResourceConfig::new("article").permission(IsAuthenticated))
+    .resource(ResourceConfig::new("audit_log").permission(IsStaff))
+    .resource(ResourceConfig::new("product").permission(ReadOnly));
+```
+
+## Combinators
+
+### OrPermission — pass if any child passes
+
+```rust
+use umbra_rest::{OrPermission, IsAuthenticated, IsStaff, ResourceConfig};
+
+// Public-read, staff-write
+let p = OrPermission::new(vec![Box::new(ReadOnly), Box::new(IsStaff)]);
+ResourceConfig::new("post").permission(p);
+```
+
+`OrPermission` preserves the *strongest* error code from the failed children: a chain of `[IsAuthenticated, IsStaff]` on anonymous traffic surfaces as 401 (from `IsAuthenticated`) rather than 403 (from `IsStaff`). That matches the principle "tell the caller the more actionable thing first."
+
+### AndPermission — pass only if all children pass
+
+```rust
+use umbra_rest::{AndPermission, IsAuthenticated, IsStaff};
+
+let p = AndPermission::new(vec![Box::new(IsAuthenticated), Box::new(IsStaff)]);
+// Equivalent in practice to IsStaff alone (IsStaff already 401s on anon).
+// The And shape is here for readability when you chain custom classes.
+```
+
+## Writing a custom Permission
+
+Worked example: `IsOwner` — list and retrieve work for everyone, but write actions on a row only succeed if the row's `user_id` matches the caller's `user_id`. The row-level check happens inside the handler (the permission layer runs *before* the row is loaded); the permission class enforces the framing.
+
+```rust
+use umbra_rest::{Action, Identity, Permission, PermissionError};
+
+/// Class-level: writes require an identity; row-level enforcement
+/// belongs in the handler (the permission layer is action-aware
+/// but not row-aware by design).
+pub struct IsOwnerOrReadOnly;
+
+impl Permission for IsOwnerOrReadOnly {
+    fn check(
+        &self,
+        action: &Action,
+        identity: Option<&Identity>,
+    ) -> Result<(), PermissionError> {
+        if action.is_read() {
+            return Ok(());
+        }
+        match identity {
+            Some(_) => Ok(()),
+            None => Err(PermissionError::AuthenticationRequired),
+        }
+    }
+}
+```
+
+### Per-action gating without combinators
+
+`OrPermission` and `AndPermission` short-circuit on the *result* of child checks but don't read the `Action` to decide *which* children to run. For per-verb gating, write a class that matches on `&Action` directly:
+
+```rust
+use umbra_rest::{Action, Identity, IsAuthenticated, IsStaff, Permission, PermissionError};
+
+/// GET stays open; POST / PUT / PATCH require a staff user. DELETE
+/// stays open in this example (widen the match arm if you want it
+/// gated too).
+pub struct StaffWritesOnly;
+
+impl Permission for StaffWritesOnly {
+    fn check(
+        &self,
+        action: &Action,
+        identity: Option<&Identity>,
+    ) -> Result<(), PermissionError> {
+        match action {
+            Action::Create | Action::Update => {
+                IsAuthenticated.check(action, identity)?;
+                IsStaff.check(action, identity)
+            }
+            _ => Ok(()),
+        }
+    }
+}
+```
+
+`PUT` and `PATCH` both map to `Action::Update` — the plugin doesn't separate the two (DRF's `update` / `partial_update` split was a design choice; ours is simpler).
+
+### Custom actions
+
+A `ResourceConfig::action("publish", ...)` endpoint surfaces as `Action::Custom("publish")`. Match on it in your permission class:
+
+```rust
+match action {
+    Action::Custom(name) if name == "publish" => {
+        // Editors can publish; everyone else can't.
+        IsStaff.check(action, identity)
+    }
+    _ => Ok(()),
+}
+```
+
+## Why `check` is sync
+
+Permission classes inspect an already-resolved `Identity` against an in-memory rule set. They don't hit the database — the database hit happened in authentication. Keeping `check` synchronous makes the type signature smaller and prevents the easy mistake of "let me just sneak a query in here" (which produces N+1 patterns and surprising latency).
+
+If you need row-level data to authorize ("only the author can edit this post"), do it inside the handler after the row is loaded, not in the permission class. The permission class enforces *class-level* policy; the handler enforces *instance-level* policy.
+
+## Where to look next
+
+- The full trait + the built-in source: `plugins/umbra-rest/src/permission.rs`.
+- Wiring permissions onto a resource: [`ResourceConfig::permission`](/docs/v0.0.1/rest/) — see the example app at `examples/derive-demo/src/main.rs` for an end-to-end wire-up.
+- The authentication side of the gate: [Authentication](/docs/v0.0.1/rest/authentication).

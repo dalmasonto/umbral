@@ -2757,10 +2757,12 @@ dependencies = [
  "async-trait",
  "axum",
  "axum-core",
+ "base64",
  "chrono",
  "clap",
  "http",
  "http-body-util",
+ "rand",
  "rpassword",
  "serde",
  "serde_json",
@@ -2770,6 +2772,7 @@ dependencies = [
  "tokio",
  "tower",
  "umbra",
+ "umbra-rest",
  "uuid",
 ]
 
@@ -3006,6 +3009,7 @@ dependencies = [
  "tracing",
  "umbra",
  "umbra-auth",
+ "umbra-rest",
  "uuid",
 ]
 

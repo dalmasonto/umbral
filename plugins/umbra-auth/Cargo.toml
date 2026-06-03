@@ -45,6 +45,16 @@ sha2 = "0.10"
 # tower for the Layer + Service impl on LoginRequiredLayer so it works
 # directly with Router::layer(...).
 tower = "0.5"
+# umbra-rest provides the Authentication / Identity contract.
+# BearerAuthentication is a built-in impl of that trait, so we
+# depend up the stack at REST. (Not the other way — REST stays
+# generic over user models.)
+umbra-rest = { path = "../umbra-rest", version = "0.0.1" }
+# Cryptographic RNG + URL-safe base64 for opaque bearer-token
+# generation. sha2 is already in the dep list (used by the session
+# token hashing helper) and is re-used to hash the bearer key.
+rand = "0.8"
+base64 = "0.22"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync"] }

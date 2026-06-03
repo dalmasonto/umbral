@@ -305,26 +305,36 @@ async fn set_password_updates_the_hash() {
     );
 }
 
-/// The `AuthPlugin` registers exactly one model (`AuthUser`) under the
-/// `"auth"` plugin name. Proves the M7 per-plugin model walk picked up
-/// what `AuthPlugin::models()` returned and routed it to the right slot
-/// in the registry.
+/// The `AuthPlugin` registers `AuthUser` and `AuthToken` under the
+/// `"auth"` plugin name when `U = AuthUser` (the default). Custom
+/// user models (`AuthPlugin::<MyUser>::default()`) only get their
+/// own user table — `AuthToken` is hard-bound to `AuthUser` and
+/// brings its own bearer-auth backend.
 #[tokio::test]
 async fn auth_plugin_registers_the_authuser_model() {
     boot().await;
 
     let models = umbra::migrate::models_for_plugin("auth");
+    let tables: Vec<&str> = models.iter().map(|m| m.table.as_str()).collect();
+    assert!(
+        tables.contains(&"auth_user"),
+        "AuthPlugin must register auth_user; got {tables:?}",
+    );
+    assert!(
+        tables.contains(&"auth_token"),
+        "AuthPlugin must register auth_token alongside auth_user; got {tables:?}",
+    );
     assert_eq!(
         models.len(),
-        1,
-        "AuthPlugin contributes exactly one model; got {models:?}",
+        2,
+        "AuthPlugin contributes exactly two models (auth_user + auth_token); got {models:?}",
     );
-    assert_eq!(models[0].name, "AuthUser");
-    assert_eq!(models[0].table, "auth_user");
 
-    // Sanity guard: AuthUser is exposed as Model so the assertion
+    // Sanity guard: both types are exposed as Model so the assertion
     // above is hitting the same surface plugin authors see.
-    let _from_model: umbra::migrate::ModelMeta = umbra::migrate::ModelMeta::for_::<AuthUser>();
+    let _from_user: umbra::migrate::ModelMeta = umbra::migrate::ModelMeta::for_::<AuthUser>();
+    let _from_token: umbra::migrate::ModelMeta =
+        umbra::migrate::ModelMeta::for_::<umbra_auth::AuthToken>();
 }
 
 /// End-to-end dispatch of `createsuperuser --noinput` through

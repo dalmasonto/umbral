@@ -62,12 +62,16 @@
 //!   `umbra-sessions` session middleware wired end-to-end.
 //! - Periodic session cleanup via `umbra-tasks`.
 
+pub mod bearer_auth;
 pub mod login_required;
+pub mod token;
 
+pub use bearer_auth::{BearerAuthentication, parse_bearer_header};
 pub use login_required::{
     LoggedIn, LoginRequired, LoginRequiredLayer, current_session_user_id, login_required,
     login_required_html,
 };
+pub use token::{AuthToken, PlaintextToken, TOKEN_PREFIX, digest_token};
 
 use std::marker::PhantomData;
 
@@ -260,7 +264,16 @@ impl<U: UserModel> Plugin for AuthPlugin<U> {
     }
 
     fn models(&self) -> Vec<umbra::migrate::ModelMeta> {
-        vec![umbra::migrate::ModelMeta::for_::<U>()]
+        // AuthToken FKs against AuthUser specifically (FK target is
+        // a concrete `Model` type, not a `UserModel`). Apps wiring
+        // `AuthPlugin::<CustomUser>` get the user table migrated but
+        // NOT the token table — they bring their own token model
+        // and their own bearer-auth backend.
+        let mut models = vec![umbra::migrate::ModelMeta::for_::<U>()];
+        if std::any::TypeId::of::<U>() == std::any::TypeId::of::<AuthUser>() {
+            models.push(umbra::migrate::ModelMeta::for_::<AuthToken>());
+        }
+        models
     }
 
     fn commands(&self) -> Vec<Box<dyn umbra::cli::PluginCommand>> {

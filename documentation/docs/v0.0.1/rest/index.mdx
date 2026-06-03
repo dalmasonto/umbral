@@ -1,0 +1,41 @@
+---
+title: REST plugin
+description: Auto-generated JSON CRUD from your models — plus authentication, permissions, filtering, pagination.
+sidebar_position: 1
+icon: globe
+tags: [rest, api, json, plugin]
+---
+
+`umbra-rest` walks the same model registry the migration engine uses and mounts a JSON CRUD surface for every registered model. Add the plugin, get `/api/<table>/` on List + Retrieve + Create + Update + Delete, plus filtering, ordering, search, pagination, and an OpenAPI spec everything else (the `umbra-playground` UI, code generators, third-party clients) reads from.
+
+```rust
+use umbra::prelude::*;
+
+App::builder()
+    .model::<Article>()
+    .plugin(umbra_rest::RestPlugin::default())
+    .build()?;
+// → GET/POST/PATCH/PUT/DELETE under /api/article/
+```
+
+## The two access controls
+
+A request goes through two gates before the handler runs:
+
+1. **Authentication** answers *who are you?* — reads the headers, maybe hits the database, returns an `Identity` (or `None` for anonymous).
+2. **Permission** answers *are you allowed?* — takes the `Identity` and the action (`List`, `Retrieve`, `Create`, `Update`, `Delete`, or `Custom`) and either passes or returns a 401 / 403.
+
+Both default to "open" — `NoAuthentication` (every request anonymous) paired with `AllowAny` (every action allowed). You opt in per-resource (or globally, for auth).
+
+| Page | What it covers |
+|---|---|
+| [Authentication](/docs/v0.0.1/rest/authentication) | `SessionAuthentication`, `BearerAuthentication`, `ChainAuthentication`, writing your own |
+| [Permissions](/docs/v0.0.1/rest/permissions) | `AllowAny`, `IsAuthenticated`, `IsStaff`, `ReadOnly`, `Or` / `And` combinators, writing your own |
+
+## Other surfaces
+
+- **Filtering, ordering, search, pagination.** Spec-driven — every list endpoint exposes `?field__op=value`, `?ordering=field`, `?search=term`, `?page=2&page_size=50`. See `arch.md` and `docs/specs/` for the wire shape.
+- **Custom actions.** `ResourceConfig::action("publish", ...)` adds a non-CRUD endpoint that runs under the same auth + permission gate.
+- **Field scoping.** `ResourceConfig::hide("password_hash")` strips a column from responses; `noform` / `noedit` field attributes control write-side behaviour.
+
+The plugin contract itself is documented in `arch.md`; this folder covers the everyday consumer surface.

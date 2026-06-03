@@ -1,0 +1,180 @@
+---
+title: Authentication
+description: Built-in auth classes (Session, Bearer, Chain, Fn) and how to write your own.
+sidebar_position: 2
+icon: key
+tags: [rest, authentication, bearer, session, identity]
+---
+
+Authentication answers *who is the caller?* It runs once per request, inspects the headers, and returns an `Identity` — or `None` if nothing is recognised. The permission layer then decides what to do with that identity.
+
+```rust
+#[async_trait]
+pub trait Authentication: Send + Sync + 'static {
+    async fn authenticate(&self, headers: &HeaderMap) -> Option<Identity>;
+}
+```
+
+One auth class is wired per `RestPlugin` (one plugin-wide backend, not per-resource). Chain multiple with `ChainAuthentication` if you need browsers and curl to use different shapes.
+
+## Identity
+
+```rust
+pub struct Identity {
+    pub user_id: i64,         // the authenticated user's PK
+    pub is_staff: bool,       // mirrors Django's User.is_staff
+    pub extras: HashMap<String, Value>,  // app-specific (roles, org id, scopes)
+}
+```
+
+Constructors are chainable:
+
+```rust
+Identity::user(user.id).with_staff(user.is_staff)
+Identity::user(user.id).with_extra("org_id", json!(42))
+```
+
+The shape is intentionally narrow — `user_id` + `is_staff` covers most checks, `extras` carries anything app-specific your `Permission` impl wants to consult.
+
+## Built-in classes
+
+<CardGrid cols={2}>
+  <Card icon="x" title="NoAuthentication" description="The default. Every request looks anonymous. Pair with AllowAny for fully open endpoints." />
+  <Card icon="cookie" title="SessionAuthentication" description="Reads the umbra-sessions cookie, hydrates the AuthUser. Lives in umbra-sessions." />
+  <Card icon="key" title="BearerAuthentication" description="Reads Authorization: Bearer <key>, looks up an AuthToken row. Lives in umbra-auth." />
+  <Card icon="link" title="ChainAuthentication" description="Tries multiple backends in order; first hit wins." />
+  <Card icon="code" title="FnAuthentication" description="Wraps an async closure. The DIY hook for one-off needs." />
+</CardGrid>
+
+### SessionAuthentication
+
+The browser cookie path. The `SessionsPlugin` middleware already sets a session row on every request; `SessionAuthentication` reads its cookie and turns the resolved user into an `Identity`.
+
+```rust
+use umbra::prelude::*;
+use umbra_rest::RestPlugin;
+use umbra_sessions::{SessionAuthentication, SessionsPlugin};
+
+App::builder()
+    .plugin(SessionsPlugin::default())
+    .plugin(RestPlugin::default().authenticate(SessionAuthentication::default()))
+    .build()?;
+```
+
+Anonymous sessions (no logged-in user yet) resolve to `None`; the permission class then picks the policy.
+
+### BearerAuthentication
+
+The opaque DB-backed bearer-token path — same shape DRF ships. Each user can hold any number of named tokens; the row stores `sha256(plaintext)` so a DB leak does not surrender live tokens.
+
+```rust
+use umbra_auth::{AuthToken, BearerAuthentication};
+use umbra_rest::RestPlugin;
+
+// Wire the auth class.
+RestPlugin::default().authenticate(BearerAuthentication::default());
+
+// Mint a token elsewhere (an admin action, an `umbra` CLI command,
+// a /auth/token endpoint — the last is on the roadmap).
+let (token, plaintext) = AuthToken::create_for(&user, "laptop").await?;
+println!("Save this: {plaintext}");   // shown ONCE; not recoverable from the row
+```
+
+A request then carries it as a normal Bearer header:
+
+```bash
+curl -H "Authorization: Bearer umbra_K3PqJ4nMr9X2v..." https://api.example.com/api/article/
+```
+
+Token format: `umbra_` prefix + 43 URL-safe base64 chars from 32 random bytes (~50 chars total). The prefix is grep-able — log scrubbers can flag accidentally-committed tokens by pattern.
+
+Revoke with `token.revoke()` — the row is deleted, the next request with that plaintext fails the lookup, the caller is treated as anonymous.
+
+### ChainAuthentication — cookie OR token
+
+Browsers send the cookie; CLI clients and CI send a bearer. First class to return `Some` wins.
+
+```rust
+use std::sync::Arc;
+use umbra_auth::BearerAuthentication;
+use umbra_rest::{ChainAuthentication, RestPlugin};
+use umbra_sessions::SessionAuthentication;
+
+let auth = ChainAuthentication::new(vec![
+    Arc::new(SessionAuthentication::default()),
+    Arc::new(BearerAuthentication::default()),
+]);
+RestPlugin::default().authenticate(auth);
+```
+
+### FnAuthentication — anything else
+
+Wraps an async closure when there is no built-in for what you need. Two common shapes:
+
+```rust
+use umbra::web::HeaderMap;
+use umbra_rest::{FnAuthentication, Identity, RestPlugin};
+
+// HTTP Basic Auth against umbra-auth:
+RestPlugin::default().authenticate(FnAuthentication::new(|headers: HeaderMap| async move {
+    let (user, pass) = parse_basic_credentials(&headers)?;
+    let auth_user = umbra_auth::authenticate(&user, &pass).await.ok()?;
+    Some(Identity::user(auth_user.id).with_staff(auth_user.is_staff))
+}));
+```
+
+## Writing a custom Authentication
+
+Anything that recognises a credential in the headers and resolves it to an `Identity` is fair game. Worked example: an `X-Api-Key` header checked against a config-supplied map. No DB hit, useful for service-to-service auth where you have a small fixed set of consumers.
+
+```rust
+use async_trait::async_trait;
+use std::collections::HashMap;
+use std::sync::Arc;
+use umbra::web::HeaderMap;
+use umbra_rest::{Authentication, Identity, RestPlugin};
+
+#[derive(Debug, Clone)]
+pub struct ApiKeyAuthentication {
+    // key -> (user_id, is_staff). Production code would load this
+    // from settings; the example carries it inline.
+    keys: Arc<HashMap<String, (i64, bool)>>,
+}
+
+impl ApiKeyAuthentication {
+    pub fn new(keys: HashMap<String, (i64, bool)>) -> Self {
+        Self { keys: Arc::new(keys) }
+    }
+}
+
+#[async_trait]
+impl Authentication for ApiKeyAuthentication {
+    async fn authenticate(&self, headers: &HeaderMap) -> Option<Identity> {
+        let key = headers.get("x-api-key")?.to_str().ok()?;
+        let (user_id, is_staff) = self.keys.get(key).copied()?;
+        Some(Identity::user(user_id).with_staff(is_staff))
+    }
+}
+
+// Wire it:
+let mut keys = HashMap::new();
+keys.insert("svc_billing_d8b3...".into(), (1, true));
+keys.insert("svc_metrics_a91c...".into(), (2, false));
+RestPlugin::default().authenticate(ApiKeyAuthentication::new(keys));
+```
+
+The contract is small on purpose — *parse headers, return Identity*. Anything more (verifying a credential, looking up a user) is implementation detail.
+
+## Why `authenticate` never returns an error
+
+The trait signature is `Option<Identity>`, not `Result<Identity, _>`. Returning a typed error would leak *which credential you tried* — an attacker probing the system could distinguish "I sent no token at all" from "I sent a malformed token" from "I sent a valid-format token that doesn't exist." Treating all three as `None` and letting the permission class produce a uniform 401 closes that side channel.
+
+## What's deferred
+
+| Class | Status | Notes |
+|---|---|---|
+| `JwtAuthentication` | Deferred to its own small plugin | Stateless, no DB hit; revocation via denylist. Keeps the umbra-auth dep tree free of a JWT crate for apps that don't want it. |
+| `BasicAuthentication` | DIY via `FnAuthentication` | One-liner against `umbra_auth::authenticate`. A built-in lands when there's a real consumer. |
+| OAuth2 / OIDC | Out of scope | Outsource to a real OIDC client crate; bridge via `FnAuthentication`. |
+
+See `arch.md` for the design rationale and `plugins/umbra-rest/src/auth.rs` for the trait definition.
