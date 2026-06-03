@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { KeyValueEditor } from "./KeyValueEditor";
 import { MethodBadge } from "./MethodBadge";
-import { Send, Lock, AlignLeft, Code2, Braces, FormInput } from "lucide-react";
+import { Send, Lock, AlignLeft, Code2, Braces, FormInput, CheckCircle2, AlertCircle } from "lucide-react";
 
 function extractPathParams(url: string): string[] {
   return [...url.matchAll(/\{([a-zA-Z_][a-zA-Z0-9_]*)\}/g)].map((m) => m[1]);
@@ -19,6 +19,57 @@ function findPathParamValue(
   name: string,
 ): string {
   return params.find((p) => p.key === name && p.enabled)?.value ?? "";
+}
+
+function isValidJson(raw: string): boolean {
+  if (!raw.trim()) return true; // empty is considered valid
+  try {
+    JSON.parse(raw);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function JsonValidityBadge({ body }: { body: string }) {
+  const valid = isValidJson(body);
+  if (!body.trim()) return null;
+  return (
+    <span
+      className={`flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider ${
+        valid ? "text-emerald-500" : "text-rose-500"
+      }`}
+    >
+      {valid ? <CheckCircle2 className="size-3" /> : <AlertCircle className="size-3" />}
+      {valid ? "Valid JSON" : "Invalid JSON"}
+    </span>
+  );
+}
+
+function JsonBodyTextarea({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const valid = isValidJson(value);
+  const hasContent = value.trim().length > 0;
+  return (
+    <Textarea
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder={`{\n  "title": "Hello World",\n  "content": "..."\n}`}
+      className={`flex-1 font-mono text-sm resize-none min-h-[8rem] rounded-md transition-colors ${
+        hasContent && !valid
+          ? "border-rose-500 focus-visible:ring-rose-500/30"
+          : hasContent && valid
+            ? "border-emerald-500/50 focus-visible:ring-emerald-500/20"
+            : ""
+      }`}
+      spellCheck={false}
+    />
+  );
 }
 
 type TabId = "params" | "body" | "headers" | "auth";
@@ -243,32 +294,34 @@ export function RequestBuilder() {
                 </button>
               </div>
               {current.bodyType === "json" && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="xs"
-                  onClick={() => {
-                    try {
-                      setBody(JSON.stringify(JSON.parse(current.body), null, 2));
-                    } catch {
-                      /* leave as-is */
-                    }
-                  }}
-                  className="text-muted-foreground hover:text-foreground text-[10px]"
-                >
-                  <AlignLeft className="size-3 mr-1" />
-                  Format JSON
-                </Button>
+                <div className="flex items-center gap-2">
+                  {current.body && (
+                    <JsonValidityBadge body={current.body} />
+                  )}
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="xs"
+                    onClick={() => {
+                      try {
+                        setBody(JSON.stringify(JSON.parse(current.body), null, 2));
+                      } catch {
+                        /* leave as-is */
+                      }
+                    }}
+                    className="text-muted-foreground hover:text-foreground text-[10px]"
+                  >
+                    <AlignLeft className="size-3 mr-1" />
+                    Format JSON
+                  </Button>
+                </div>
               )}
             </div>
 
             {current.bodyType === "json" ? (
-              <Textarea
+              <JsonBodyTextarea
                 value={current.body}
-                onChange={(e) => setBody(e.target.value)}
-                placeholder={`{\n  "title": "Hello World",\n  "content": "..."\n}`}
-                className="flex-1 font-mono text-sm resize-none min-h-[8rem] rounded-md"
-                spellCheck={false}
+                onChange={setBody}
               />
             ) : (
               <div className="space-y-2">

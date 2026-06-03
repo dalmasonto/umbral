@@ -3,7 +3,7 @@ import { usePlayground } from "@/state/store";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { JsonView, defaultStyles } from "react-json-view-lite";
+import { JsonView } from "react-json-view-lite";
 import "react-json-view-lite/dist/index.css";
 import {
   Clock,
@@ -47,19 +47,42 @@ function toCurl(record: ResponseRecord): string {
   if (req.bodyType === "json" && req.body && req.method !== "GET" && req.method !== "HEAD") {
     parts.push(`-d '${req.body.replace(/'/g, "'\\''")}'`);
   } else if (req.bodyType === "form" && req.formFields.length > 0 && req.method !== "GET" && req.method !== "HEAD") {
-    const qs = req.formFields
-      .filter((f) => f.enabled && f.key)
-      .map(({ key, value }) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
-      .join("&");
-    parts.push(`-d '${qs.replace(/'/g, "'\\''")}'`);
+    const hasFiles = req.formFields.some((f) => f.enabled && f.type === "file");
+    if (hasFiles) {
+      for (const f of req.formFields) {
+        if (!f.enabled || !f.key) continue;
+        if (f.type === "file") {
+          parts.push(`-F '${f.key}=@${f.fileName || "file"}'`);
+        } else {
+          parts.push(`-F '${f.key}=${f.value.replace(/'/g, "'\\''")}'`);
+        }
+      }
+    } else {
+      const qs = req.formFields
+        .filter((f) => f.enabled && f.key)
+        .map(({ key, value }) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+        .join("&");
+      parts.push(`-d '${qs.replace(/'/g, "'\\''")}'`);
+    }
   }
   parts.push(`'${req.url}'`);
   return parts.join(" \\\n  ");
 }
 
+/* Dark-mode-aware JSON viewer styles using CSS variables */
 const jsonStyles = {
-  ...defaultStyles,
   container: "font-mono text-xs leading-relaxed",
+  basicChildStyle: "margin-left: 1rem;",
+  label: "color: hsl(var(--foreground)); font-weight: 600; margin-right: 0.25rem;",
+  nullValue: "color: hsl(var(--muted-foreground)); font-style: italic;",
+  undefinedValue: "color: hsl(var(--muted-foreground)); font-style: italic;",
+  stringValue: "color: #4ade80;", // emerald-400 — pops in both light & dark
+  booleanValue: "color: #a78bfa; font-weight: 600;", // violet-400
+  numberValue: "color: #38bdf8; font-weight: 600;", // sky-400
+  expandIcon: "color: hsl(var(--muted-foreground)); cursor: pointer; user-select: none;",
+  collapseIcon: "color: hsl(var(--muted-foreground)); cursor: pointer; user-select: none;",
+  collapsedContent: "color: hsl(var(--muted-foreground)); font-style: italic;",
+  punctuation: "color: hsl(var(--muted-foreground));",
 };
 
 export function ResponseViewer() {

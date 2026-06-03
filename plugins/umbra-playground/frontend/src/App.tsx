@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { usePlayground } from "@/state/store";
 import { loadHistory } from "@/state/history";
+import { useTheme } from "@/hooks/useTheme";
 import {
   Sidebar,
   SidebarContent,
@@ -16,13 +17,14 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { EndpointTree } from "@/components/EndpointTree";
 import { RequestBuilder } from "@/components/RequestBuilder";
 import { ResponseViewer } from "@/components/ResponseViewer";
-import { RotateCcw, Zap } from "lucide-react";
+import { RotateCcw, Zap, Sun, Moon } from "lucide-react";
 
 export function App() {
   const spec = usePlayground((s) => s.spec);
   const specError = usePlayground((s) => s.specError);
   const loadingSpec = usePlayground((s) => s.loadingSpec);
   const loadSpec = usePlayground((s) => s.loadSpec);
+  const [theme, toggleTheme] = useTheme();
 
   useEffect(() => {
     void loadSpec();
@@ -46,7 +48,7 @@ export function App() {
                 <span className="text-[10px] text-muted-foreground leading-tight">
                   {spec?.info?.title ?? "API Explorer"}
                   {spec?.info?.version && (
-                    <> <span className="text-muted-foreground/60">v{spec.info.version}</span></>
+                    <>{" "}<span className="text-muted-foreground/60">v{spec.info.version}</span></>
                   )}
                 </span>
               </div>
@@ -100,6 +102,20 @@ export function App() {
                 {specError}
               </span>
             )}
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              onClick={toggleTheme}
+              title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+              className="text-muted-foreground hover:text-foreground shrink-0"
+            >
+              {theme === "dark" ? (
+                <Sun className="size-4" />
+              ) : (
+                <Moon className="size-4" />
+              )}
+            </Button>
           </header>
 
           <div className="grid flex-1 grid-cols-2 gap-0 overflow-hidden">
