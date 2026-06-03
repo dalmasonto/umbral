@@ -168,6 +168,37 @@ fn urlencoded(s: &str) -> String {
 /// [`LoginRequiredLayer`]) or falls back to [`LoginRequired::API`].
 pub struct LoggedIn<U: UserModel>(pub U);
 
+// `LoggedIn` is a tuple-newtype around `U`. Drop in `Deref` /
+// `DerefMut` (so `user.username()` works directly without the
+// `.0`) and `Serialize` (so it slots into template contexts via
+// `context!(user)` without `user.0`). Closes BUG-18 from
+// bugs/tests/testBugs.md — the original ergonomic gap that
+// pushed test code to write `let username = user.0.username();`
+// for what should be the obvious shape.
+impl<U: UserModel> std::ops::Deref for LoggedIn<U> {
+    type Target = U;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<U: UserModel> std::ops::DerefMut for LoggedIn<U> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl<U: UserModel + serde::Serialize> serde::Serialize for LoggedIn<U> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        // Forward verbatim so `LoggedIn<AuthUser>` round-trips
+        // exactly the same shape `AuthUser` would on its own.
+        self.0.serialize(serializer)
+    }
+}
+
 impl<U, S> FromRequestParts<S> for LoggedIn<U>
 where
     U: UserModel

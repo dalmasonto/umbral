@@ -440,3 +440,44 @@ async fn anonymous_session_is_rejected() {
         "anonymous session must not authenticate",
     );
 }
+
+// =========================================================================
+// Test — BUG-18 from bugs/tests/testBugs.md: LoggedIn<U> now Derefs to U
+// and serialises transparently. Templates / Json responses can hand back
+// the extracted value without writing `user.0.username()` every time.
+// =========================================================================
+
+#[tokio::test]
+async fn loggedin_derefs_to_inner_user() {
+    boot().await;
+    let user_id = insert_user("deref_alice").await;
+    let row: AuthUser = umbra::orm::Manager::<AuthUser>::default()
+        .filter(umbra::orm::Predicate::<AuthUser>::col_eq("id", user_id))
+        .first()
+        .await
+        .expect("query ok")
+        .expect("user present");
+    let wrapped = LoggedIn(row);
+    // No `.0` — Deref does the projection.
+    assert_eq!(wrapped.username, "deref_alice");
+    assert!(wrapped.is_active);
+}
+
+#[tokio::test]
+async fn loggedin_serialises_as_inner_user() {
+    boot().await;
+    let user_id = insert_user("ser_alice").await;
+    let row: AuthUser = umbra::orm::Manager::<AuthUser>::default()
+        .filter(umbra::orm::Predicate::<AuthUser>::col_eq("id", user_id))
+        .first()
+        .await
+        .expect("query ok")
+        .expect("user present");
+    let wrapped = LoggedIn(row.clone());
+    let direct = serde_json::to_value(&row).expect("direct serialise");
+    let wrapped_json = serde_json::to_value(&wrapped).expect("wrapped serialise");
+    assert_eq!(
+        wrapped_json, direct,
+        "LoggedIn(user) must serialise as the raw user, no wrapping object",
+    );
+}

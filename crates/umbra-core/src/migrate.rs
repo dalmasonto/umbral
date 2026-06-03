@@ -2609,10 +2609,37 @@ fn build_column_def_sqlite(col: &Column) -> sea_query::ColumnDef {
     // NOT NULL column against a non-empty table (SQLite rejects the
     // ADD otherwise); on CREATE TABLE it sets the column-level default
     // the database uses when an INSERT omits the value.
+    //
+    // SQLite stores booleans as INTEGER; the literal `'true'` /
+    // `'false'` would land as a TEXT default that fails type checks
+    // on reads. Translate Boolean defaults to `1` / `0` so the
+    // stored representation matches what sqlx expects on hydration
+    // (closes IMP-2 in bugs/tests/testBugs.md).
     if !col.default.is_empty() {
-        def.default(col.default.clone());
+        if matches!(col.ty, SqlType::Boolean) {
+            // Pass an integer to sea-query so the rendered SQL is
+            // `DEFAULT 1` / `DEFAULT 0` instead of the quoted-string
+            // `DEFAULT '1'` (which sqlx rejects as TEXT on read of
+            // a BOOLEAN column).
+            def.default(sqlite_bool_default(&col.default));
+        } else {
+            def.default(col.default.clone());
+        }
     }
     def
+}
+
+/// Map a user-supplied boolean default string (`"true"` / `"false"`
+/// / `"1"` / `"0"`, case-insensitive) to the SQLite integer literal
+/// the column expects. Anything unrecognised falls through to `0`
+/// — a developer-visible miss (default is wrong, not stored as
+/// text) is friendlier than the runtime decode error the textual
+/// path produces.
+fn sqlite_bool_default(raw: &str) -> i32 {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "true" | "1" | "t" | "yes" => 1,
+        _ => 0,
+    }
 }
 
 /// Build a Postgres `ColumnDef`. Integer primary keys use the
@@ -3131,6 +3158,75 @@ mod tests {
                 && joined.contains("FOREIGN KEY")
                 && joined.contains("ON DELETE CASCADE"),
             "FK cascade add: expected drop+readd with ON DELETE CASCADE; got: {joined}",
+        );
+    }
+
+    /// IMP-2 from bugs/tests/testBugs.md: a `#[umbra(default = "true")]`
+    /// on a boolean column used to land as `DEFAULT 'true'` on
+    /// SQLite, which decode-fails on read (column type is INTEGER,
+    /// the stored TEXT can't deserialize as `bool`). The SQLite
+    /// renderer now maps the string to `1` / `0`.
+    #[test]
+    fn sqlite_bool_default_translates_to_integer_literal() {
+        use sea_query::{Alias, SqliteQueryBuilder, Table};
+
+        let bool_col = Column {
+            name: "is_active".into(),
+            ty: SqlType::Boolean,
+            primary_key: false,
+            nullable: false,
+            fk_target: None,
+            noform: false,
+            noedit: false,
+            is_string_repr: false,
+            max_length: 0,
+            choices: vec![],
+            choice_labels: vec![],
+            default: "true".into(),
+            is_multichoice: false,
+            unique: false,
+            on_delete: crate::orm::FkAction::NoAction,
+            on_update: crate::orm::FkAction::NoAction,
+        };
+        let mut stmt = Table::create();
+        stmt.table(Alias::new("t"));
+        let mut def = build_column_def_sqlite(&bool_col);
+        stmt.col(&mut def);
+        let sql = stmt.to_string(SqliteQueryBuilder);
+        assert!(
+            sql.contains("DEFAULT 1") && !sql.contains("DEFAULT 'true'"),
+            "bool default 'true' on sqlite should render as DEFAULT 1; got: {sql}",
+        );
+
+        // "false" → 0
+        let mut bool_col_false = bool_col.clone();
+        bool_col_false.default = "false".into();
+        let mut stmt = Table::create();
+        stmt.table(Alias::new("t"));
+        let mut def = build_column_def_sqlite(&bool_col_false);
+        stmt.col(&mut def);
+        let sql = stmt.to_string(SqliteQueryBuilder);
+        assert!(
+            sql.contains("DEFAULT 0") && !sql.contains("DEFAULT 'false'"),
+            "bool default 'false' on sqlite should render as DEFAULT 0; got: {sql}",
+        );
+
+        // Non-bool columns are untouched (text default stays
+        // single-quoted literal).
+        let text_col = Column {
+            name: "label".into(),
+            ty: SqlType::Text,
+            default: "hello".into(),
+            ..bool_col.clone()
+        };
+        let mut stmt = Table::create();
+        stmt.table(Alias::new("t"));
+        let mut def = build_column_def_sqlite(&text_col);
+        stmt.col(&mut def);
+        let sql = stmt.to_string(SqliteQueryBuilder);
+        assert!(
+            sql.contains("DEFAULT 'hello'"),
+            "text default should stay quoted; got: {sql}",
         );
     }
 }
