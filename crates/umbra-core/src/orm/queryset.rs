@@ -1074,10 +1074,12 @@ impl<T: Model> Manager<T> {
             .iter()
             .find(|f| f.primary_key)
             .map(|f| f.name)
-            .ok_or_else(|| crate::orm::write::WriteError::Sqlx(sqlx::Error::Protocol(
-                "upsert: model has no primary key — use get_or_create or create instead"
-                    .to_string(),
-            )))?;
+            .ok_or_else(|| {
+                crate::orm::write::WriteError::Sqlx(sqlx::Error::Protocol(
+                    "upsert: model has no primary key — use get_or_create or create instead"
+                        .to_string(),
+                ))
+            })?;
         let update_cols: Vec<Alias> = T::FIELDS
             .iter()
             .filter(|f| !f.primary_key && map.contains_key(f.name))

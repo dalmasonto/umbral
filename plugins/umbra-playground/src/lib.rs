@@ -41,7 +41,11 @@ impl PlaygroundPlugin {
     /// Mount under a different path. Trailing slashes are normalised.
     pub fn at(mut self, path: impl Into<String>) -> Self {
         let trimmed = path.into().trim_end_matches('/').to_string();
-        self.base_path = if trimmed.is_empty() { "/".to_string() } else { trimmed };
+        self.base_path = if trimmed.is_empty() {
+            "/".to_string()
+        } else {
+            trimmed
+        };
         self
     }
 

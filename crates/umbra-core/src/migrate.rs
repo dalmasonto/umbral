@@ -2160,12 +2160,7 @@ fn render_operation_postgres(op: &Operation) -> Vec<String> {
             column,
             new_columns,
             prev_columns,
-        } => render_alter_column_postgres(
-            table,
-            column,
-            new_columns,
-            prev_columns.as_deref(),
-        ),
+        } => render_alter_column_postgres(table, column, new_columns, prev_columns.as_deref()),
         Operation::RenameTable { from, to } => {
             // Postgres: ALTER TABLE "<from>" RENAME TO "<to>"
             // sea-query's Table::rename() emits the right form.
@@ -2557,7 +2552,7 @@ mod tests {
                 fields: Vec::new(),
                 display: "ZetaModel".to_string(),
                 icon: "database".to_string(),
-            database: None,
+                database: None,
             }],
         );
         per_plugin.insert(
@@ -2568,7 +2563,7 @@ mod tests {
                 fields: Vec::new(),
                 display: "AlphaModel".to_string(),
                 icon: "database".to_string(),
-            database: None,
+                database: None,
             }],
         );
         init_plugins(per_plugin);

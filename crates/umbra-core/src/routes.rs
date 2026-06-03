@@ -160,7 +160,11 @@ mod tests {
             .insert("app".to_string(), vec!["/".into(), "/articles".into()]);
         reg.by_plugin.insert(
             "admin".to_string(),
-            vec!["/admin/".into(), "/admin/login".into(), "/admin/logout".into()],
+            vec![
+                "/admin/".into(),
+                "/admin/login".into(),
+                "/admin/logout".into(),
+            ],
         );
         reg.by_plugin.insert("sessions".to_string(), Vec::new());
 

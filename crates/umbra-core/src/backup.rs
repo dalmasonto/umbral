@@ -365,10 +365,11 @@ fn column_to_json(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<Value, 
             // BLOB / BYTEA. Backup format is a JSON array of u8
             // numbers — exactly the same shape `json_to_sea_value`
             // accepts on load.
-            SqlType::Bytes => row.try_get::<Option<Vec<u8>>, _>(name)?.map_or(
-                Value::Null,
-                |b| Value::Array(b.into_iter().map(Value::from).collect()),
-            ),
+            SqlType::Bytes => row
+                .try_get::<Option<Vec<u8>>, _>(name)?
+                .map_or(Value::Null, |b| {
+                    Value::Array(b.into_iter().map(Value::from).collect())
+                }),
         });
     }
     // Non-nullable: same dispatch without the Option layer.
@@ -515,10 +516,14 @@ fn bind_value<'q>(
         // BLOB: accept a JSON array of u8 numbers — the same shape the
         // dump path emits.
         SqlType::Bytes => {
-            let arr = val.as_array().ok_or_else(|| mismatch(json_type_name(&val)))?;
+            let arr = val
+                .as_array()
+                .ok_or_else(|| mismatch(json_type_name(&val)))?;
             let mut bytes: Vec<u8> = Vec::with_capacity(arr.len());
             for v in arr {
-                let n = v.as_u64().ok_or_else(|| mismatch("non-number in bytes array"))?;
+                let n = v
+                    .as_u64()
+                    .ok_or_else(|| mismatch("non-number in bytes array"))?;
                 if n > 255 {
                     return Err(mismatch("element out of u8 range"));
                 }

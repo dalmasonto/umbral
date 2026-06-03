@@ -108,8 +108,8 @@ fn main() -> ExitCode {
                 }
             })
         }
-        Command::Startplugin { name, path } => {
-            umbra_cli::scaffold::scaffold_plugin(&name, &path).map(|r| {
+        Command::Startplugin { name, path } => umbra_cli::scaffold::scaffold_plugin(&name, &path)
+            .map(|r| {
                 println!("Created `{}`:", r.root.display());
                 for f in &r.files {
                     println!("  {}", f.display());
@@ -119,8 +119,7 @@ fn main() -> ExitCode {
                 for step in &r.next_steps {
                     println!("  {step}");
                 }
-            })
-        }
+            }),
     };
 
     match result {

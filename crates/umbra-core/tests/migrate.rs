@@ -682,7 +682,7 @@ fn post_model(fields: Vec<Column>) -> ModelMeta {
         fields,
         display: "Post".to_string(),
         icon: "database".to_string(),
-            database: None,
+        database: None,
     }
 }
 

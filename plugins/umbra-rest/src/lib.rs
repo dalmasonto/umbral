@@ -1003,4 +1003,3 @@ async fn count_rows_filtered(model: &ModelMeta, filter: &FilterClause) -> Result
     }
     Ok(qs.count().await?)
 }
-

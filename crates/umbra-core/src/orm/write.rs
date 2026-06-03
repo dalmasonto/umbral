@@ -217,8 +217,9 @@ pub fn json_to_sea_value(
         // a base16/base64 convention at the framework level.
         // Hex-encoded JSON strings also accepted as a convenience for
         // human-readable test fixtures.
-        SqlType::Bytes => coerce_bytes(value, field_name)
-            .map(|b| SeaValue::Bytes(Some(Box::new(b)))),
+        SqlType::Bytes => {
+            coerce_bytes(value, field_name).map(|b| SeaValue::Bytes(Some(Box::new(b))))
+        }
     }
 }
 

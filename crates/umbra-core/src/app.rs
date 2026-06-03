@@ -195,8 +195,7 @@ impl AppBuilder {
         I: IntoIterator<Item = R>,
         R: Into<crate::routes::RouteSpec>,
     {
-        self.route_paths
-            .extend(routes.into_iter().map(Into::into));
+        self.route_paths.extend(routes.into_iter().map(Into::into));
         self
     }
 

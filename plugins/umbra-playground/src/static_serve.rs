@@ -19,8 +19,9 @@ pub fn resolve(asset_path: &str) -> Option<PathBuf> {
         return None;
     }
 
-    let manifest_dir =
-        std::env::var("CARGO_MANIFEST_DIR").map(PathBuf::from).unwrap_or_default();
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_default();
     let candidate = manifest_dir.join(DIST_DIR).join(trimmed);
 
     // Canonicalize the parent + filename to catch symlink escapes.

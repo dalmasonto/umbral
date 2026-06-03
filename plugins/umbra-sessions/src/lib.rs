@@ -655,9 +655,7 @@ pub mod extractors {
         // different UserModel wrote the session — return None.
         let user_id: i64 = session.user_id?.parse().ok()?;
         super::AuthUser::objects()
-            .filter(
-                super::auth_user::ID.eq(user_id) & super::auth_user::IS_ACTIVE.eq(true),
-            )
+            .filter(super::auth_user::ID.eq(user_id) & super::auth_user::IS_ACTIVE.eq(true))
             .first()
             .await
             .ok()

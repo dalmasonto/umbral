@@ -95,7 +95,9 @@ async fn boot() -> i64 {
 #[tokio::test]
 async fn create_and_read_round_trip() {
     let user_id = boot().await;
-    let token = create_session(Some(user_id.to_string()), None).await.expect("create");
+    let token = create_session(Some(user_id.to_string()), None)
+        .await
+        .expect("create");
     let s = read_session(&token).await.expect("read").expect("present");
     // The raw token is a UUID; the stored id is a 64-char hex SHA-256.
     // They must differ — if they matched the column would still hold
@@ -144,7 +146,9 @@ async fn read_session_returns_none_for_expired_and_deletes_the_row() {
 #[tokio::test]
 async fn destroy_session_removes_the_row() {
     let user_id = boot().await;
-    let id = create_session(Some(user_id.to_string()), None).await.expect("create");
+    let id = create_session(Some(user_id.to_string()), None)
+        .await
+        .expect("create");
     assert!(read_session(&id).await.unwrap().is_some());
     destroy_session(&id).await.expect("destroy");
     assert!(read_session(&id).await.unwrap().is_none());
@@ -192,7 +196,9 @@ fn clear_cookie_header_zeroes_max_age() {
 #[tokio::test]
 async fn current_user_round_trip_hydrates_the_logged_in_user() {
     let user_id = boot().await;
-    let id = create_session(Some(user_id.to_string()), None).await.expect("create");
+    let id = create_session(Some(user_id.to_string()), None)
+        .await
+        .expect("create");
 
     let mut headers = HeaderMap::new();
     headers.insert(
@@ -222,7 +228,9 @@ async fn current_user_returns_none_when_no_cookie() {
 #[tokio::test]
 async fn current_user_returns_none_for_destroyed_session() {
     let user_id = boot().await;
-    let id = create_session(Some(user_id.to_string()), None).await.expect("create");
+    let id = create_session(Some(user_id.to_string()), None)
+        .await
+        .expect("create");
     destroy_session(&id).await.expect("destroy");
 
     let mut headers = HeaderMap::new();
@@ -240,7 +248,9 @@ async fn current_user_returns_none_for_destroyed_session() {
 #[tokio::test]
 async fn data_round_trip_through_json_column() {
     let user_id = boot().await;
-    let id = create_session(Some(user_id.to_string()), None).await.expect("create");
+    let id = create_session(Some(user_id.to_string()), None)
+        .await
+        .expect("create");
 
     set_data(&id, "cart_id", &42i64).await.expect("set cart_id");
     set_data(&id, "flash", &"welcome back")

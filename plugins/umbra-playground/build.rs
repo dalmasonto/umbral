@@ -43,7 +43,9 @@ fn main() {
             }
         },
         _ => {
-            eprintln!("cargo:warning=umbra-playground: esbuild and/or tailwindcss not in $PATH; using placeholder HTML. Install with `npm i -g esbuild tailwindcss` to enable the full UI.");
+            eprintln!(
+                "cargo:warning=umbra-playground: esbuild and/or tailwindcss not in $PATH; using placeholder HTML. Install with `npm i -g esbuild tailwindcss` to enable the full UI."
+            );
             (PLACEHOLDER_JS.to_string(), PLACEHOLDER_CSS.to_string())
         }
     };
@@ -128,8 +130,11 @@ fn bundle(
     let css_final = format!("playground.{css_hash}.css");
     fs::rename(dist_dir.join("playground.tmp.js"), dist_dir.join(&js_final))
         .map_err(|e| format!("rename js: {e}"))?;
-    fs::rename(dist_dir.join("playground.tmp.css"), dist_dir.join(&css_final))
-        .map_err(|e| format!("rename css: {e}"))?;
+    fs::rename(
+        dist_dir.join("playground.tmp.css"),
+        dist_dir.join(&css_final),
+    )
+    .map_err(|e| format!("rename css: {e}"))?;
 
     Ok((js_final, css_final))
 }

@@ -38,8 +38,8 @@
 
 use std::path::PathBuf;
 
-use axum::Router;
 use crate::db::DbPool;
+use axum::Router;
 
 use crate::check::SystemCheck;
 use crate::migrate::ModelMeta;

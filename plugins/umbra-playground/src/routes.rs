@@ -35,7 +35,9 @@ fn render_shell(state: &PlaygroundState) -> String {
     }
     let css = format!("{}/assets/{}", state.base_path, CSS);
     let js = format!("{}/assets/{}", state.base_path, JS);
-    SHELL_HTML.replace("__CSS_PATH__", &css).replace("__JS_PATH__", &js)
+    SHELL_HTML
+        .replace("__CSS_PATH__", &css)
+        .replace("__JS_PATH__", &js)
 }
 
 /// `GET {base_path}/` — HTML shell.
@@ -50,10 +52,7 @@ pub async fn shell(State(state): State<PlaygroundState>) -> Response<Body> {
 }
 
 /// `GET {base_path}/assets/*` — bundled assets. Path-traversal safe.
-pub async fn assets(
-    State(state): State<PlaygroundState>,
-    req: Request,
-) -> Response<Body> {
+pub async fn assets(State(state): State<PlaygroundState>, req: Request) -> Response<Body> {
     let path = req.uri().path();
     let prefix = format!("{}/assets/", state.base_path);
     let rel = match path.strip_prefix(&prefix) {

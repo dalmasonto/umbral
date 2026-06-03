@@ -238,10 +238,7 @@ async fn ensure_standard_permissions(_pool: &umbra::db::DbPool) -> Result<(), sq
             let codename = format!("{app_label}.{verb}_{model_name}");
             Permission::objects()
                 .get_or_create(
-                    umbra::orm::Predicate::<Permission>::col_eq(
-                        "codename",
-                        codename.clone(),
-                    ),
+                    umbra::orm::Predicate::<Permission>::col_eq("codename", codename.clone()),
                     Permission {
                         codename,
                         content_type_id: umbra::orm::ForeignKey::new(ct.id),

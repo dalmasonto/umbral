@@ -439,7 +439,10 @@ fn filter_parameter(col: &Column, lookup: &str, name: &str) -> Value {
             };
             (
                 json!({ "type": "string" }),
-                format!("Matches rows where `{}` contains the given {phrase}.", col.name),
+                format!(
+                    "Matches rows where `{}` contains the given {phrase}.",
+                    col.name
+                ),
             )
         }
         // eq, ne, gte, lte, gt, lt — type-aligned with the column.
@@ -488,10 +491,7 @@ fn collection_paths(table: &str, schema_name: &str, filter_params: &[Value]) -> 
     );
     get_op.insert("tags".into(), json!([table]));
     if !filter_params.is_empty() {
-        get_op.insert(
-            "parameters".into(),
-            Value::Array(filter_params.to_vec()),
-        );
+        get_op.insert("parameters".into(), Value::Array(filter_params.to_vec()));
     }
     get_op.insert(
         "responses".into(),
@@ -844,8 +844,7 @@ mod tests {
     #[test]
     fn filter_parameters_range_lookups_only_on_numeric_or_temporal() {
         let params = filter_parameters(&note_model());
-        let has_gte =
-            |field: &str| params.iter().any(|p| p["name"] == format!("{field}__gte"));
+        let has_gte = |field: &str| params.iter().any(|p| p["name"] == format!("{field}__gte"));
         assert!(has_gte("views"), "integer column gets gte");
         assert!(has_gte("published_at"), "timestamp column gets gte");
         assert!(
@@ -857,8 +856,11 @@ mod tests {
     #[test]
     fn filter_parameters_string_lookups_only_on_text() {
         let params = filter_parameters(&note_model());
-        let has_contains =
-            |field: &str| params.iter().any(|p| p["name"] == format!("{field}__contains"));
+        let has_contains = |field: &str| {
+            params
+                .iter()
+                .any(|p| p["name"] == format!("{field}__contains"))
+        };
         assert!(has_contains("title"), "text column gets contains");
         assert!(
             !has_contains("views"),

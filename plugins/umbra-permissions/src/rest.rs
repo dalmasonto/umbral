@@ -98,19 +98,18 @@ impl<A: Authentication> Authentication for WithPermissions<A> {
             .flatten()
             .map(|u| u.is_superuser)
             .unwrap_or(false);
-        identity
-            .extras
-            .insert("is_superuser".to_string(), serde_json::Value::Bool(is_superuser));
+        identity.extras.insert(
+            "is_superuser".to_string(),
+            serde_json::Value::Bool(is_superuser),
+        );
 
         // Skip the perm-set DB read entirely for superusers — they
         // bypass every codename check, so the codename list isn't
         // load-bearing for them.
         if !is_superuser {
             if let Ok(perms) = crate::user_perms(identity.user_id).await {
-                let arr: Vec<serde_json::Value> = perms
-                    .into_iter()
-                    .map(serde_json::Value::String)
-                    .collect();
+                let arr: Vec<serde_json::Value> =
+                    perms.into_iter().map(serde_json::Value::String).collect();
                 identity
                     .extras
                     .insert("permissions".to_string(), serde_json::Value::Array(arr));

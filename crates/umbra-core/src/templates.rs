@@ -280,7 +280,11 @@ fn merge_ambient_user<C: Serialize>(ctx: &C) -> minijinja::Value {
         return ctx_value;
     };
     // Only inject when the caller didn't supply `user` themselves.
-    if ctx_value.get_attr("user").map(|v| !v.is_undefined()).unwrap_or(false) {
+    if ctx_value
+        .get_attr("user")
+        .map(|v| !v.is_undefined())
+        .unwrap_or(false)
+    {
         return ctx_value;
     }
     // Build a fresh object that contains every original key plus

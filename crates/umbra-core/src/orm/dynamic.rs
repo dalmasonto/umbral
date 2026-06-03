@@ -632,8 +632,9 @@ impl<'a> DynQuerySet<'a> {
                     col.name
                 )));
             }
-            let sea_value = crate::orm::write::json_to_sea_value(col.ty, json, col.nullable, &col.name)
-                .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
+            let sea_value =
+                crate::orm::write::json_to_sea_value(col.ty, json, col.nullable, &col.name)
+                    .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
             cols.push(&col.name);
             values.push(sea_value);
         }
@@ -673,13 +674,9 @@ impl<'a> DynQuerySet<'a> {
                             .get(&pk_name)
                             .cloned()
                             .unwrap_or(serde_json::Value::Null);
-                        let sea_value = crate::orm::write::json_to_sea_value(
-                            pk_ty,
-                            &supplied,
-                            false,
-                            &pk_name,
-                        )
-                        .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
+                        let sea_value =
+                            crate::orm::write::json_to_sea_value(pk_ty, &supplied, false, &pk_name)
+                                .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
                         Expr::col(Alias::new(&pk_name)).eq(sea_value)
                     }
                 };
@@ -731,8 +728,9 @@ impl<'a> DynQuerySet<'a> {
             let Some(json) = body.get(&col.name) else {
                 continue;
             };
-            let sea_value = crate::orm::write::json_to_sea_value(col.ty, json, col.nullable, &col.name)
-                .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
+            let sea_value =
+                crate::orm::write::json_to_sea_value(col.ty, json, col.nullable, &col.name)
+                    .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
             q.value(Alias::new(&col.name), sea_value);
             any = true;
         }
@@ -943,9 +941,11 @@ pub fn decode_pg_to_string(
         SqlType::Uuid => row.try_get::<Uuid, _>(name)?.to_string(),
         SqlType::Json => row.try_get::<Value, _>(name)?.to_string(),
         // Same as the nullable branch: lift through best-effort string.
-        SqlType::Array(_) | SqlType::Inet | SqlType::Cidr | SqlType::MacAddr | SqlType::FullText => {
-            row.try_get::<String, _>(name).unwrap_or_default()
-        }
+        SqlType::Array(_)
+        | SqlType::Inet
+        | SqlType::Cidr
+        | SqlType::MacAddr
+        | SqlType::FullText => row.try_get::<String, _>(name).unwrap_or_default(),
         SqlType::ForeignKey => row.try_get::<i64, _>(name)?.to_string(),
         SqlType::Bytes => hex_encode(&row.try_get::<Vec<u8>, _>(name)?),
     })
@@ -998,7 +998,9 @@ pub fn decode_to_json(
             SqlType::Uuid => row
                 .try_get::<Option<Uuid>, _>(name)?
                 .map_or(Value::Null, |v| Value::from(v.to_string())),
-            SqlType::Json => row.try_get::<Option<Value>, _>(name)?.unwrap_or(Value::Null),
+            SqlType::Json => row
+                .try_get::<Option<Value>, _>(name)?
+                .unwrap_or(Value::Null),
             SqlType::Array(_) => panic_array_unsupported(&col.name),
             SqlType::Inet | SqlType::Cidr | SqlType::MacAddr | SqlType::FullText => {
                 panic_pg_only_unsupported(&col.name)
@@ -1079,7 +1081,9 @@ pub fn decode_pg_to_json(
             SqlType::Uuid => row
                 .try_get::<Option<Uuid>, _>(name)?
                 .map_or(Value::Null, |v| Value::from(v.to_string())),
-            SqlType::Json => row.try_get::<Option<Value>, _>(name)?.unwrap_or(Value::Null),
+            SqlType::Json => row
+                .try_get::<Option<Value>, _>(name)?
+                .unwrap_or(Value::Null),
             SqlType::Array(_)
             | SqlType::Inet
             | SqlType::Cidr
@@ -1110,11 +1114,14 @@ pub fn decode_pg_to_json(
         SqlType::Timestamptz => Value::from(row.try_get::<DateTime<Utc>, _>(name)?.to_rfc3339()),
         SqlType::Uuid => Value::from(row.try_get::<Uuid, _>(name)?.to_string()),
         SqlType::Json => row.try_get::<Value, _>(name)?,
-        SqlType::Array(_) | SqlType::Inet | SqlType::Cidr | SqlType::MacAddr | SqlType::FullText => {
-            row.try_get::<String, _>(name)
-                .map(Value::from)
-                .unwrap_or(Value::Null)
-        }
+        SqlType::Array(_)
+        | SqlType::Inet
+        | SqlType::Cidr
+        | SqlType::MacAddr
+        | SqlType::FullText => row
+            .try_get::<String, _>(name)
+            .map(Value::from)
+            .unwrap_or(Value::Null),
         SqlType::ForeignKey => Value::from(row.try_get::<i64, _>(name)?),
         SqlType::Bytes => bytes_to_json(&row.try_get::<Vec<u8>, _>(name)?),
     })

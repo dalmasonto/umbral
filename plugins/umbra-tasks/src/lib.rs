@@ -379,10 +379,7 @@ async fn claim_one() -> Result<Option<TaskRow>, TaskError> {
     umbra::transaction(|tx| {
         Box::pin(async move {
             let candidate = TaskRow::objects()
-                .filter(
-                    task_row::STATUS.eq(STATUS_PENDING)
-                        & task_row::SCHEDULED_FOR.le(now),
-                )
+                .filter(task_row::STATUS.eq(STATUS_PENDING) & task_row::SCHEDULED_FOR.le(now))
                 .order_by(task_row::SCHEDULED_FOR.asc())
                 .order_by(task_row::ID.asc())
                 .limit(1)
@@ -399,7 +396,10 @@ async fn claim_one() -> Result<Option<TaskRow>, TaskError> {
                 serde_json::Value::String(STATUS_RUNNING.to_string()),
             );
             patch.insert("started_at".to_string(), serde_json::to_value(now)?);
-            patch.insert("attempts".to_string(), serde_json::Value::from(new_attempts));
+            patch.insert(
+                "attempts".to_string(),
+                serde_json::Value::from(new_attempts),
+            );
             TaskRow::objects()
                 .filter(task_row::ID.eq(row.id))
                 .on_tx(tx)

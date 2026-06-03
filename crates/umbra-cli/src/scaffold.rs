@@ -1193,7 +1193,13 @@ mod tests {
         assert!(root.is_dir());
 
         // The richer layout: README + lib + models + handlers.
-        for rel in ["Cargo.toml", "README.md", "src/lib.rs", "src/models.rs", "src/handlers.rs"] {
+        for rel in [
+            "Cargo.toml",
+            "README.md",
+            "src/lib.rs",
+            "src/models.rs",
+            "src/handlers.rs",
+        ] {
             assert!(
                 root.join(rel).exists(),
                 "missing expected file: {rel}; got {:?}",
@@ -1208,8 +1214,14 @@ mod tests {
         scaffold_plugin("widgets", tmp.path()).expect("scaffold ok");
         let lib = fs::read_to_string(tmp.path().join("plugins/widgets/src/lib.rs")).unwrap();
 
-        assert!(lib.contains("pub mod handlers;"), "lib.rs must publish handlers");
-        assert!(lib.contains("pub mod models;"), "lib.rs must publish models");
+        assert!(
+            lib.contains("pub mod handlers;"),
+            "lib.rs must publish handlers"
+        );
+        assert!(
+            lib.contains("pub mod models;"),
+            "lib.rs must publish models"
+        );
         assert!(lib.contains("WidgetsPlugin"), "PascalCase plugin name");
         assert!(
             lib.contains("models::WidgetsItem::meta()"),

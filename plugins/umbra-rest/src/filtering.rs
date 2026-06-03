@@ -299,10 +299,10 @@ fn build_predicate(col: &Column, lookup: &str, value: &str) -> Result<SimpleExpr
             // `UPPER(col) LIKE UPPER(?)` — case-insensitive contains.
             // sea_query's `Expr::expr(...)` lets us nest UPPER around
             // the column.
-            Ok(Expr::expr(
-                sea_query::Func::upper(Expr::col(Alias::new(&col.name))),
+            Ok(
+                Expr::expr(sea_query::Func::upper(Expr::col(Alias::new(&col.name))))
+                    .like(format!("%{}%", value.to_uppercase())),
             )
-            .like(format!("%{}%", value.to_uppercase())))
         }
         "startswith" => Ok(expr.like(format!("{value}%"))),
         op => {

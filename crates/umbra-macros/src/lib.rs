@@ -386,10 +386,7 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
     // Name of the PK field — needed by the `primary_key()` impl
     // below so it picks `self.codename` instead of `self.id` when the
     // model nominated a non-standard PK column.
-    let pk_field_name = id_field
-        .ident
-        .as_ref()
-        .expect("PK field must have a name");
+    let pk_field_name = id_field.ident.as_ref().expect("PK field must have a name");
     // The id field's type isn't validated here: any type implementing
     // `umbra::orm::PrimaryKey` works. The trait ships impls for every
     // Rust integer width, `uuid::Uuid`, and `String`; user crates can

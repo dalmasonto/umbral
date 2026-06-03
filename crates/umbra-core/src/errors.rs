@@ -487,7 +487,8 @@ mod tests {
         // the route list lands in the output.
         let mut env = minijinja::Environment::new();
         env.set_auto_escape_callback(|_| minijinja::AutoEscape::Html);
-        env.add_template("default_404.html", DEFAULT_404_HTML).unwrap();
+        env.add_template("default_404.html", DEFAULT_404_HTML)
+            .unwrap();
 
         let ctx = minijinja::context! {
             path => "/typo",
@@ -549,7 +550,8 @@ mod tests {
         // and the action buttons (those are outside the gated block).
         let mut env = minijinja::Environment::new();
         env.set_auto_escape_callback(|_| minijinja::AutoEscape::Html);
-        env.add_template("default_404.html", DEFAULT_404_HTML).unwrap();
+        env.add_template("default_404.html", DEFAULT_404_HTML)
+            .unwrap();
 
         let ctx = minijinja::context! {
             path => "/typo",
