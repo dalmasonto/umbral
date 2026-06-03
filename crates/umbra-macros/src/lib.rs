@@ -190,6 +190,12 @@ struct UmbraFieldAttr {
     /// `#[umbra(index)]` — single-column index. Closes BUG-4 from
     /// bugs/tests/testBugs.md.
     index: bool,
+    /// `#[umbra(auto_now_add)]` — populate with `Utc::now()` on
+    /// create. Closes BUG-5 from bugs/tests/testBugs.md.
+    auto_now_add: bool,
+    /// `#[umbra(auto_now)]` — populate with `Utc::now()` on every
+    /// write. Closes BUG-5.
+    auto_now: bool,
 }
 
 fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAttr> {
@@ -205,6 +211,8 @@ fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAtt
         on_delete: None,
         on_update: None,
         index: false,
+        auto_now_add: false,
+        auto_now: false,
     };
     for attr in attrs {
         if !attr.path().is_ident("umbra") {
@@ -278,6 +286,12 @@ fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAtt
                 // (already indexed by the constraint).
                 parsed.index = true;
                 Ok(())
+            } else if meta.path.is_ident("auto_now_add") {
+                parsed.auto_now_add = true;
+                Ok(())
+            } else if meta.path.is_ident("auto_now") {
+                parsed.auto_now = true;
+                Ok(())
             } else {
                 // Unknown key. Report it with the known set so the
                 // common typo case (`is_string_repr` instead of
@@ -303,7 +317,8 @@ fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAtt
                      `noform`, `noedit`, `string` (or `string = true`), \
                      `max_length = N`, `choices`, `default = \"...\"`, \
                      `unique`, `on_delete = \"...\"`, \
-                     `on_update = \"...\"`, and `index`"
+                     `on_update = \"...\"`, `index`, `auto_now`, \
+                     and `auto_now_add`"
                 )))
             }
         })?;
@@ -699,6 +714,16 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         } else {
             quote!(false)
         };
+        let auto_now_add_lit = if field_attr.auto_now_add {
+            quote!(true)
+        } else {
+            quote!(false)
+        };
+        let auto_now_lit = if field_attr.auto_now {
+            quote!(true)
+        } else {
+            quote!(false)
+        };
 
         // `on_delete` / `on_update` → token paths into FkAction. An
         // unknown value (typo, unsupported variant) becomes a
@@ -748,6 +773,8 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                 on_delete: #on_delete_tokens,
                 on_update: #on_update_tokens,
                 index: #index_lit,
+                auto_now_add: #auto_now_add_lit,
+                auto_now: #auto_now_lit,
             }
         });
 

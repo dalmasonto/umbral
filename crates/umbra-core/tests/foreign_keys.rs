@@ -132,6 +132,8 @@ fn create_table_emits_references_sqlite() {
                 on_delete: umbra_core::orm::FkAction::NoAction,
                 on_update: umbra_core::orm::FkAction::NoAction,
                 index: false,
+                auto_now_add: false,
+                auto_now: false,
             },
             Column {
                 name: "title".to_string(),
@@ -151,6 +153,8 @@ fn create_table_emits_references_sqlite() {
                 on_delete: umbra_core::orm::FkAction::NoAction,
                 on_update: umbra_core::orm::FkAction::NoAction,
                 index: false,
+                auto_now_add: false,
+                auto_now: false,
             },
             Column {
                 name: "author".to_string(),
@@ -170,6 +174,8 @@ fn create_table_emits_references_sqlite() {
                 on_delete: umbra_core::orm::FkAction::NoAction,
                 on_update: umbra_core::orm::FkAction::NoAction,
                 index: false,
+                auto_now_add: false,
+                auto_now: false,
             },
         ],
     };
@@ -222,6 +228,8 @@ fn create_table_emits_references_postgres() {
                 on_delete: umbra_core::orm::FkAction::NoAction,
                 on_update: umbra_core::orm::FkAction::NoAction,
                 index: false,
+                auto_now_add: false,
+                auto_now: false,
             },
             Column {
                 name: "title".to_string(),
@@ -241,6 +249,8 @@ fn create_table_emits_references_postgres() {
                 on_delete: umbra_core::orm::FkAction::NoAction,
                 on_update: umbra_core::orm::FkAction::NoAction,
                 index: false,
+                auto_now_add: false,
+                auto_now: false,
             },
             Column {
                 name: "author".to_string(),
@@ -260,6 +270,8 @@ fn create_table_emits_references_postgres() {
                 on_delete: umbra_core::orm::FkAction::NoAction,
                 on_update: umbra_core::orm::FkAction::NoAction,
                 index: false,
+                auto_now_add: false,
+                auto_now: false,
             },
         ],
     };

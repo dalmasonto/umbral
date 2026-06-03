@@ -610,6 +610,18 @@ impl<'a> DynQuerySet<'a> {
                 }
             }
             let Some(json) = body.get(&col.name) else {
+                // BUG-5 fix: `auto_now` and `auto_now_add` columns
+                // auto-populate with `Utc::now()` on the dynamic
+                // write path when the body omits them — closes
+                // the gap where the REST plugin's POST handler
+                // would reject a required `created_at` field even
+                // though the framework was supposed to manage it.
+                if col.auto_now_add || col.auto_now {
+                    let now_value = crate::orm::write::now_for_column(col.ty);
+                    cols.push(&col.name);
+                    values.push(now_value);
+                    continue;
+                }
                 // Pre-validate: a non-nullable column with no DB-side
                 // default that the body didn't include is a client
                 // mistake. Surface it as a structured error instead of
@@ -726,6 +738,15 @@ impl<'a> DynQuerySet<'a> {
                 continue;
             }
             let Some(json) = body.get(&col.name) else {
+                // BUG-5 fix: `auto_now` columns refresh to
+                // `Utc::now()` on every update, even if the body
+                // doesn't mention them. `auto_now_add` columns
+                // stay frozen (they fired on create only).
+                if col.auto_now {
+                    let now_value = crate::orm::write::now_for_column(col.ty);
+                    q.value(Alias::new(&col.name), now_value);
+                    any = true;
+                }
                 continue;
             };
             let sea_value =

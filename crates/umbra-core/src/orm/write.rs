@@ -286,6 +286,29 @@ fn hex_nibble(b: u8) -> Option<u8> {
     }
 }
 
+/// Build the sea-query value the framework substitutes when an
+/// `auto_now` / `auto_now_add` column needs to be auto-populated.
+/// Used by [`crate::orm::dynamic::DynQuerySet::insert_json`] and
+/// `update_json`. Closes BUG-5 from `bugs/tests/testBugs.md`.
+///
+/// Supported column types: `Timestamptz` (the common case), `Date`,
+/// `Time`. Anything else falls back to the SQL NULL form for that
+/// column type, since a non-time column tagged `#[umbra(auto_now)]`
+/// is a developer mistake — there's no sensible "now" value to
+/// produce. The macro could in principle reject the attribute on
+/// non-time columns at derive time; we defer that polish to the
+/// macro pass where it lands alongside other "wrong attribute on
+/// wrong type" diagnostics.
+pub fn now_for_column(sql_type: SqlType) -> SeaValue {
+    let now = chrono::Utc::now();
+    match sql_type {
+        SqlType::Timestamptz => SeaValue::ChronoDateTimeUtc(Some(Box::new(now))),
+        SqlType::Date => SeaValue::ChronoDate(Some(Box::new(now.date_naive()))),
+        SqlType::Time => SeaValue::ChronoTime(Some(Box::new(now.time()))),
+        _ => null_for(sql_type),
+    }
+}
+
 /// Sea-query value representing SQL NULL for the given SqlType. The
 /// variant tag matters for sea-query's encoding even when the inner
 /// option is `None`.

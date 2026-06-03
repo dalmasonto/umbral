@@ -103,6 +103,8 @@ fn write_migration(dir: &Path, plugin: &str, id: &str, table: &str) {
                     on_delete: umbra_core::orm::FkAction::NoAction,
                     on_update: umbra_core::orm::FkAction::NoAction,
                     index: false,
+                    auto_now_add: false,
+                    auto_now: false,
                 },
                 Column {
                     name: "title".to_string(),
@@ -122,6 +124,8 @@ fn write_migration(dir: &Path, plugin: &str, id: &str, table: &str) {
                     on_delete: umbra_core::orm::FkAction::NoAction,
                     on_update: umbra_core::orm::FkAction::NoAction,
                     index: false,
+                    auto_now_add: false,
+                    auto_now: false,
                 },
             ],
         }],

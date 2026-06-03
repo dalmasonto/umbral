@@ -478,6 +478,19 @@ pub struct Column {
     /// round-tripping unchanged.
     #[serde(default, skip_serializing_if = "is_false")]
     pub index: bool,
+
+    /// Carries `FieldSpec::auto_now_add` into the migration
+    /// snapshot. The dynamic write path (`DynQuerySet::insert_json`)
+    /// auto-populates the column with `Utc::now()` when the body
+    /// omits it. Default `false` so existing migration JSON
+    /// round-trips unchanged.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub auto_now_add: bool,
+
+    /// Carries `FieldSpec::auto_now` into the migration snapshot.
+    /// Same shape as `auto_now_add` but fires on update too.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub auto_now: bool,
 }
 
 fn is_no_action(a: &crate::orm::FkAction) -> bool {
@@ -547,6 +560,8 @@ impl From<&FieldSpec> for Column {
             on_delete: f.on_delete,
             on_update: f.on_update,
             index: f.index,
+            auto_now_add: f.auto_now_add,
+            auto_now: f.auto_now,
         }
     }
 }
@@ -2861,6 +2876,8 @@ mod tests {
             on_delete: crate::orm::FkAction::NoAction,
             on_update: crate::orm::FkAction::NoAction,
             index: false,
+            auto_now_add: false,
+            auto_now: false,
         };
         let username = Column {
             name: "username".into(),
@@ -2880,6 +2897,8 @@ mod tests {
             on_delete: crate::orm::FkAction::NoAction,
             on_update: crate::orm::FkAction::NoAction,
             index: false,
+            auto_now_add: false,
+            auto_now: false,
         };
         let email = Column {
             name: "email".into(),
@@ -2899,6 +2918,8 @@ mod tests {
             on_delete: crate::orm::FkAction::NoAction,
             on_update: crate::orm::FkAction::NoAction,
             index: false,
+            auto_now_add: false,
+            auto_now: false,
         };
 
         for backend in ["sqlite", "postgres"] {
@@ -2988,11 +3009,15 @@ mod tests {
             on_delete: crate::orm::FkAction::NoAction,
             on_update: crate::orm::FkAction::NoAction,
             index: false,
+            auto_now_add: false,
+            auto_now: false,
         };
         let cascade_fk = Column {
             on_delete: crate::orm::FkAction::Cascade,
             on_update: crate::orm::FkAction::Cascade,
             index: false,
+            auto_now_add: false,
+            auto_now: false,
             ..plain_fk.clone()
         };
         let restrict_fk = Column {
@@ -3087,6 +3112,8 @@ mod tests {
                 on_delete: crate::orm::FkAction::NoAction,
                 on_update: crate::orm::FkAction::NoAction,
                 index: false,
+                auto_now_add: false,
+                auto_now: false,
             }
         }
         fn meta_with(col: Column) -> ModelMeta {
@@ -3151,6 +3178,8 @@ mod tests {
             on_delete: crate::orm::FkAction::NoAction,
             on_update: crate::orm::FkAction::NoAction,
             index: false,
+            auto_now_add: false,
+            auto_now: false,
         };
 
         // unique false → true: emit ADD CONSTRAINT ... UNIQUE
@@ -3246,6 +3275,8 @@ mod tests {
             on_delete: crate::orm::FkAction::NoAction,
             on_update: crate::orm::FkAction::NoAction,
             index: false,
+            auto_now_add: false,
+            auto_now: false,
         };
         let mut stmt = Table::create();
         stmt.table(Alias::new("t"));
@@ -3317,6 +3348,8 @@ mod tests {
             // extra CREATE INDEX because the PK constraint
             // already covers it.
             index: true,
+            auto_now_add: false,
+            auto_now: false,
         };
         let slug = Column {
             name: "slug".into(),
@@ -3324,6 +3357,8 @@ mod tests {
             primary_key: false,
             nullable: false,
             index: true,
+            auto_now_add: false,
+            auto_now: false,
             ..id.clone()
         };
         let title = Column {
@@ -3332,6 +3367,8 @@ mod tests {
             primary_key: false,
             nullable: false,
             index: false,
+            auto_now_add: false,
+            auto_now: false,
             ..id.clone()
         };
         let op = Operation::CreateTable {

@@ -51,6 +51,8 @@ fn id_col() -> Column {
         on_delete: umbra_core::orm::FkAction::NoAction,
         on_update: umbra_core::orm::FkAction::NoAction,
         index: false,
+        auto_now_add: false,
+        auto_now: false,
     }
 }
 
@@ -73,6 +75,8 @@ fn title_col() -> Column {
         on_delete: umbra_core::orm::FkAction::NoAction,
         on_update: umbra_core::orm::FkAction::NoAction,
         index: false,
+        auto_now_add: false,
+        auto_now: false,
     }
 }
 
@@ -172,6 +176,8 @@ fn name_match_wins_over_shape_match_when_columns_differ() {
         on_delete: umbra_core::orm::FkAction::NoAction,
         on_update: umbra_core::orm::FkAction::NoAction,
         index: false,
+        auto_now_add: false,
+        auto_now: false,
     };
 
     let prev = make_snapshot(vec![make_meta("Foo", "foo", vec![id_col(), title_col()])]);
@@ -250,6 +256,8 @@ fn no_rename_when_shapes_differ() {
         on_delete: umbra_core::orm::FkAction::NoAction,
         on_update: umbra_core::orm::FkAction::NoAction,
         index: false,
+        auto_now_add: false,
+        auto_now: false,
     };
 
     let prev = make_snapshot(vec![make_meta("Foo", "foo", vec![id_col(), title_col()])]);

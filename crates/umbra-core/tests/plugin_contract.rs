@@ -125,6 +125,8 @@ impl Plugin for TestPlugin {
                 on_delete: umbra_core::orm::FkAction::NoAction,
                 on_update: umbra_core::orm::FkAction::NoAction,
                 index: false,
+                auto_now_add: false,
+                auto_now: false,
             }],
         }]
     }

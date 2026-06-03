@@ -312,6 +312,34 @@ pub struct FieldSpec {
     /// index write the `CREATE INDEX` by hand in a follow-up
     /// migration.
     pub index: bool,
+
+    /// When `true`, the column gets populated with `Utc::now()` at
+    /// row-creation time *only*. Mirrors Django's
+    /// `auto_now_add=True`. Set via `#[umbra(auto_now_add)]`.
+    /// Closes BUG-5 in `bugs/tests/testBugs.md`.
+    ///
+    /// **Where this fires:** the dynamic write path
+    /// (`DynQuerySet::insert_json`, used by `umbra-rest` /
+    /// `umbra-admin`). The typed `Manager::create(instance)` path
+    /// is user-controlled — the caller passes whatever value they
+    /// chose at the struct-init site. v1 scope: the framework
+    /// auto-populates only when the body / form omits the field.
+    pub auto_now_add: bool,
+
+    /// When `true`, the column gets populated with `Utc::now()` on
+    /// every write (create AND update). Mirrors Django's
+    /// `auto_now=True`. Set via `#[umbra(auto_now)]`. Closes
+    /// BUG-5 in `bugs/tests/testBugs.md`.
+    ///
+    /// **Where this fires:** the dynamic write path
+    /// (`DynQuerySet::insert_json` and `update_json`, used by
+    /// `umbra-rest` / `umbra-admin`). The typed paths stay
+    /// user-controlled at v1. Body-supplied values are kept —
+    /// users can override `auto_now` columns on the dynamic
+    /// path, matching the lenient "fill if missing" shape of
+    /// `auto_now_add`. Django's "always override" shape lands as
+    /// a future v2 toggle if a real consumer asks.
+    pub auto_now: bool,
 }
 
 /// Referential action emitted in the SQL `REFERENCES ... ON

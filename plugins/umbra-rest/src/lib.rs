@@ -1289,6 +1289,8 @@ mod noform_drop {
             on_delete: ::umbra::orm::FkAction::NoAction,
             on_update: ::umbra::orm::FkAction::NoAction,
             index: false,
+            auto_now_add: false,
+            auto_now: false,
         }
     }
 
