@@ -163,6 +163,8 @@ fn postgres_ddl_renders_inet_and_macaddr_types() {
                 max: None,
             },
         ],
+        unique_together: Vec::new(),
+        indexes: Vec::new(),
     };
 
     let stmts = render_operation_for(&op, "postgres");

@@ -30,6 +30,9 @@ fn make_meta(name: &str, table: &str, cols: Vec<Column>) -> ModelMeta {
         icon: "database".to_string(),
         database: None,
         singleton: false,
+        unique_together: Vec::new(),
+        indexes: Vec::new(),
+        ordering: Vec::new(),
     }
 }
 

@@ -193,6 +193,8 @@ fn create_table_emits_references_sqlite() {
                 max: None,
             },
         ],
+        unique_together: Vec::new(),
+        indexes: Vec::new(),
     };
 
     let stmts = render_operation_for(&op, "sqlite");
@@ -304,6 +306,8 @@ fn create_table_emits_references_postgres() {
                 max: None,
             },
         ],
+        unique_together: Vec::new(),
+        indexes: Vec::new(),
     };
 
     let stmts = render_operation_for(&op, "postgres");
@@ -500,6 +504,8 @@ fn self_referential_fk_renders_inline_references() {
     let op = Operation::CreateTable {
         table: Category::TABLE.to_string(),
         columns: meta.fields.clone(),
+        unique_together: Vec::new(),
+        indexes: Vec::new(),
     };
     for backend in ["sqlite", "postgres"] {
         let sql = render_operation_for(&op, backend).join("\n");
@@ -530,6 +536,8 @@ async fn self_referential_fk_round_trips_through_sqlite_with_cascade() {
     let op = Operation::CreateTable {
         table: Category::TABLE.to_string(),
         columns: meta.fields.clone(),
+        unique_together: Vec::new(),
+        indexes: Vec::new(),
     };
     for stmt in render_operation_for(&op, "sqlite") {
         sqlx::query(&stmt).execute(&pool).await.unwrap();
@@ -603,6 +611,8 @@ fn one_to_one_pattern_emits_unique_and_references() {
         let op = Operation::CreateTable {
             table: Profile::TABLE.to_string(),
             columns: meta.fields.clone(),
+            unique_together: Vec::new(),
+            indexes: Vec::new(),
         };
         let sql = render_operation_for(&op, backend).join("\n");
         assert!(
@@ -632,6 +642,8 @@ async fn one_to_one_rejects_second_reference_to_same_target() {
     let op = Operation::CreateTable {
         table: Profile::TABLE.to_string(),
         columns: meta.fields.clone(),
+        unique_together: Vec::new(),
+        indexes: Vec::new(),
     };
     for stmt in render_operation_for(&op, "sqlite") {
         sqlx::query(&stmt).execute(&pool).await.unwrap();

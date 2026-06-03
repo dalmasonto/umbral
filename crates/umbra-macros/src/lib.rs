@@ -137,6 +137,18 @@ struct UmbraStructAttr {
     /// `#[umbra(singleton)]` — single-row model marker.
     /// Closes BUG-9 from bugs/tests/testBugs.md.
     singleton: bool,
+    /// `#[umbra(unique_together = [["a", "b"], ["c"]])]` — composite
+    /// UNIQUE constraints. Each inner array names a constraint over the
+    /// listed column names. Closes BUG-6.
+    unique_together: Vec<Vec<String>>,
+    /// `#[umbra(indexes = [["a", "b"], ["status"]])]` — multi-column
+    /// indexes (single-column already covered by field-level
+    /// `#[umbra(index)]`). Closes BUG-7.
+    indexes: Vec<Vec<String>>,
+    /// `#[umbra(ordering = ["-published_at", "id"])]` — default
+    /// `ORDER BY`. A leading `-` flips the direction to DESC.
+    /// Closes BUG-8. Stored as `(column, direction)` pairs.
+    ordering: Vec<(String, bool)>,
 }
 
 /// Field-level `#[umbra(...)]` attribute parsed from a struct field.
@@ -426,6 +438,55 @@ fn fk_action_tokens(
     Ok(quote!(::umbra::orm::FkAction::#variant))
 }
 
+/// Lower a `Vec<Vec<String>>` (e.g. `unique_together` / `indexes`)
+/// into a `&'static [&'static [&'static str]]` token stream the
+/// `Model` trait consts can hold without allocation. Closes BUG-6/7.
+fn render_str_groups(groups: &[Vec<String>]) -> TokenStream2 {
+    if groups.is_empty() {
+        return quote!(&[]);
+    }
+    let groups_tokens = groups.iter().map(|group| {
+        let lits = group.iter().map(|s| quote!(#s));
+        quote! { &[#(#lits),*] as &'static [&'static str] }
+    });
+    quote!(&[#(#groups_tokens),*])
+}
+
+/// Read a `[ "a", "b", "c" ]` literal expression into a `Vec<String>`,
+/// or accept a single bare string literal `"a"` as a one-element list.
+/// `context` names the attribute for the error message so the user sees
+/// e.g. "umbra: `unique_together` entries must be string literals."
+/// Closes BUG-6/7/8 parser helpers.
+fn parse_str_array(expr: &syn::Expr, context: &str) -> syn::Result<Vec<String>> {
+    match expr {
+        syn::Expr::Array(arr) => {
+            let mut out = Vec::with_capacity(arr.elems.len());
+            for elem in &arr.elems {
+                let syn::Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Str(lit),
+                    ..
+                }) = elem
+                else {
+                    return Err(syn::Error::new_spanned(
+                        elem,
+                        format!("umbra: `{context}` entries must be string literals"),
+                    ));
+                };
+                out.push(lit.value());
+            }
+            Ok(out)
+        }
+        syn::Expr::Lit(syn::ExprLit {
+            lit: syn::Lit::Str(lit),
+            ..
+        }) => Ok(vec![lit.value()]),
+        _ => Err(syn::Error::new_spanned(
+            expr,
+            format!("umbra: `{context}` must be a string-literal array"),
+        )),
+    }
+}
+
 fn parse_umbra_struct_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraStructAttr> {
     let mut parsed = UmbraStructAttr {
         table: None,
@@ -434,6 +495,9 @@ fn parse_umbra_struct_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraStructA
         icon: None,
         database: None,
         singleton: false,
+        unique_together: Vec::new(),
+        indexes: Vec::new(),
+        ordering: Vec::new(),
     };
     for attr in attrs {
         if !attr.path().is_ident("umbra") {
@@ -476,10 +540,47 @@ fn parse_umbra_struct_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraStructA
                 // hide the "+ New" button.
                 parsed.singleton = true;
                 Ok(())
+            } else if meta.path.is_ident("unique_together") {
+                // `#[umbra(unique_together = [["a","b"], ["c"]])]`
+                // — composite UNIQUE constraints. Closes BUG-6.
+                let value = meta.value()?;
+                let outer: syn::ExprArray = value.parse()?;
+                for inner in outer.elems {
+                    parsed
+                        .unique_together
+                        .push(parse_str_array(&inner, "unique_together")?);
+                }
+                Ok(())
+            } else if meta.path.is_ident("indexes") {
+                // `#[umbra(indexes = [["a","b"], ["c"]])]` —
+                // multi-column indexes. Closes BUG-7.
+                let value = meta.value()?;
+                let outer: syn::ExprArray = value.parse()?;
+                for inner in outer.elems {
+                    parsed.indexes.push(parse_str_array(&inner, "indexes")?);
+                }
+                Ok(())
+            } else if meta.path.is_ident("ordering") {
+                // `#[umbra(ordering = ["-published_at", "id"])]` —
+                // default ORDER BY. Closes BUG-8. A leading `-` on a
+                // column name flips the direction to DESC.
+                let value = meta.value()?;
+                let outer: syn::ExprArray = value.parse()?;
+                let names = parse_str_array(&syn::Expr::Array(outer), "ordering")?;
+                for raw in names {
+                    let (name, desc) = if let Some(stripped) = raw.strip_prefix('-') {
+                        (stripped.to_string(), true)
+                    } else {
+                        (raw, false)
+                    };
+                    parsed.ordering.push((name, desc));
+                }
+                Ok(())
             } else {
                 Err(meta.error(
                     "umbra::Model derive accepts struct-level `table = \"...\"`, `plugin = \"...\"`, \
-                     `display = \"...\"`, `icon = \"...\"`, `database = \"...\"`, `singleton`; \
+                     `display = \"...\"`, `icon = \"...\"`, `database = \"...\"`, `singleton`, \
+                     `unique_together = [[...]]`, `indexes = [[...]]`, `ordering = [\"-col\", \"col\"]`; \
                      and field-level `noform` and `noedit`. \
                      Other attributes (max_length, db_index, default, choices, on_delete) land as \
                      plugin authors need them",
@@ -628,6 +729,24 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         quote!(true)
     } else {
         quote!(false)
+    };
+    // BUG-6/7/8: render the struct-level attributes as `&'static [...]`
+    // slices so they can sit as `Model::UNIQUE_TOGETHER` / `INDEXES` /
+    // `ORDERING` associated consts. Slice-of-slices keeps `Model` Copy.
+    let unique_together_tokens = render_str_groups(&struct_attr.unique_together);
+    let indexes_tokens = render_str_groups(&struct_attr.indexes);
+    let ordering_pairs = struct_attr
+        .ordering
+        .iter()
+        .map(|(name, desc)| {
+            let desc_lit = if *desc { quote!(true) } else { quote!(false) };
+            quote! { (#name, #desc_lit) }
+        })
+        .collect::<Vec<_>>();
+    let ordering_tokens = if ordering_pairs.is_empty() {
+        quote!(&[])
+    } else {
+        quote!(&[#(#ordering_pairs),*])
     };
     // The sibling column module's identifier is always snake_case of
     // the struct name (the user-facing path is `<snake_struct>::FIELD`).
@@ -971,6 +1090,9 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             const ICON: &'static str = #icon_lit;
             const DATABASE: ::core::option::Option<&'static str> = #database_tokens;
             const SINGLETON: bool = #singleton_lit;
+            const UNIQUE_TOGETHER: &'static [&'static [&'static str]] = #unique_together_tokens;
+            const INDEXES: &'static [&'static [&'static str]] = #indexes_tokens;
+            const ORDERING: &'static [(&'static str, bool)] = #ordering_tokens;
             fn primary_key(&self) -> #pk_ty_tokens {
                 // `.clone()` works for every PK type the trait accepts
                 // (the bound is `Clone`, not `Copy`). For `i32`, `i64`,

@@ -717,6 +717,9 @@ fn post_model(fields: Vec<Column>) -> ModelMeta {
         icon: "database".to_string(),
         database: None,
         singleton: false,
+        unique_together: Vec::new(),
+        indexes: Vec::new(),
+        ordering: Vec::new(),
     }
 }
 

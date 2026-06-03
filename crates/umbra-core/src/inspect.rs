@@ -758,6 +758,9 @@ pub fn render_initial_migration(schema: &IntrospectedSchema) -> MigrationFile {
             icon: "database".to_string(),
             database: None,
             singleton: false,
+            unique_together: Vec::new(),
+            indexes: Vec::new(),
+            ordering: Vec::new(),
         })
         .collect();
     models.sort_by(|a, b| a.name.cmp(&b.name));
@@ -768,6 +771,8 @@ pub fn render_initial_migration(schema: &IntrospectedSchema) -> MigrationFile {
         .map(|t| Operation::CreateTable {
             table: t.table.clone(),
             columns: t.columns.iter().map(Column::from).collect(),
+            unique_together: Vec::new(),
+            indexes: Vec::new(),
         })
         .collect();
 

@@ -59,6 +59,8 @@ async fn boot() -> &'static axum::Router {
         let op = umbra::migrate::Operation::CreateTable {
             table: "item".to_string(),
             columns: meta.fields.clone(),
+            unique_together: Vec::new(),
+            indexes: Vec::new(),
         };
         for stmt in umbra::migrate::render_operation_for(&op, "sqlite") {
             sqlx::query(&stmt)

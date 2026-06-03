@@ -96,6 +96,8 @@ fn postgres_ddl_renders_tsvector_type() {
                 max: None,
             },
         ],
+        unique_together: Vec::new(),
+        indexes: Vec::new(),
     };
     let stmts = render_operation_for(&op, "postgres");
     let lower = stmts[0].to_ascii_lowercase();

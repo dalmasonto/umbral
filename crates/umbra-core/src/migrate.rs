@@ -237,6 +237,20 @@ pub struct ModelMeta {
     /// read it to auto-redirect list-view to the edit form.
     #[serde(default, skip_serializing_if = "is_false")]
     pub singleton: bool,
+    /// Mirrors `Model::UNIQUE_TOGETHER`. Composite-UNIQUE constraints,
+    /// each inner `Vec<String>` listing the columns of one constraint.
+    /// Closes BUG-6.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unique_together: Vec<Vec<String>>,
+    /// Mirrors `Model::INDEXES`. Each inner `Vec<String>` lists the
+    /// columns of one multi-column index. Closes BUG-7.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub indexes: Vec<Vec<String>>,
+    /// Mirrors `Model::ORDERING`. Each tuple is `(column, descending)`
+    /// — `descending == true` lowers to `ORDER BY col DESC`. Closes
+    /// BUG-8.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ordering: Vec<(String, bool)>,
 }
 
 fn default_icon() -> String {
@@ -255,6 +269,18 @@ impl ModelMeta {
             icon: T::ICON.to_string(),
             database: T::DATABASE.map(|s| s.to_string()),
             singleton: T::SINGLETON,
+            unique_together: T::UNIQUE_TOGETHER
+                .iter()
+                .map(|group| group.iter().map(|s| s.to_string()).collect())
+                .collect(),
+            indexes: T::INDEXES
+                .iter()
+                .map(|group| group.iter().map(|s| s.to_string()).collect())
+                .collect(),
+            ordering: T::ORDERING
+                .iter()
+                .map(|(col, desc)| (col.to_string(), *desc))
+                .collect(),
         }
     }
 }
@@ -326,8 +352,18 @@ fn hex(bytes: &[u8]) -> String {
 pub enum Operation {
     /// Create a new table. `columns` is in declaration order; the
     /// engine builds a sea-query `Table::create()` over them and runs
-    /// the rendered DDL.
-    CreateTable { table: String, columns: Vec<Column> },
+    /// the rendered DDL. `unique_together` lowers to inline
+    /// `UNIQUE (col1, col2)` clauses; `indexes` lowers to follow-up
+    /// `CREATE INDEX` statements after the table is created. Both
+    /// default to empty for backward-compat with older snapshots.
+    CreateTable {
+        table: String,
+        columns: Vec<Column>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        unique_together: Vec<Vec<String>>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        indexes: Vec<Vec<String>>,
+    },
     /// Drop an existing table.
     DropTable { table: String },
     /// Add a new column to an existing table. Rendered as
@@ -547,6 +583,34 @@ fn create_index_stmt(table: &str, column: &str) -> String {
         "CREATE INDEX IF NOT EXISTS \"idx_{table}_{column}\" ON \"{t}\" (\"{c}\")",
         table = table.replace('"', ""),
         column = column.replace('"', ""),
+    )
+}
+
+/// Multi-column variant of [`create_index_stmt`]. Closes BUG-7.
+/// Renders `CREATE INDEX IF NOT EXISTS idx_<table>_<col1>_<col2>
+/// ON "<table>" ("<col1>", "<col2>")`. Both backends accept the
+/// same form. Empty groups render no statement (defensive — the
+/// macro layer rejects them before the engine sees them, but the
+/// helper still returns a no-op SQL string to keep the caller
+/// simple).
+fn create_multi_index_stmt(table: &str, columns: &[String]) -> String {
+    if columns.is_empty() {
+        return String::new();
+    }
+    let t = table.replace('"', "");
+    let name_suffix = columns
+        .iter()
+        .map(|c| c.replace('"', ""))
+        .collect::<Vec<_>>()
+        .join("_");
+    let col_list = columns
+        .iter()
+        .map(|c| format!("\"{}\"", c.replace('"', "\"\"")))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "CREATE INDEX IF NOT EXISTS \"idx_{t}_{name_suffix}\" ON \"{t}\" ({col_list})",
+        t = t.replace('"', "\"\""),
     )
 }
 
@@ -1861,6 +1925,8 @@ pub fn diff(previous: &Snapshot, current: &Snapshot) -> Result<Vec<Operation>, M
         ops.push(Operation::CreateTable {
             table: create.table.clone(),
             columns: create.fields.clone(),
+            unique_together: create.unique_together.clone(),
+            indexes: create.indexes.clone(),
         });
     }
 
@@ -2224,12 +2290,28 @@ fn render_operation_sqlite(op: &Operation) -> Vec<String> {
     use sea_query::{Alias, SqliteQueryBuilder, Table};
 
     match op {
-        Operation::CreateTable { table, columns } => {
+        Operation::CreateTable {
+            table,
+            columns,
+            unique_together,
+            indexes,
+        } => {
+            // sea-query's TableCreateStatement renders columns inline.
+            // For composite UNIQUE constraints, we append them via
+            // `stmt.index(Index::create().unique().col(...))` — works on
+            // both backends and uses sea-query's quoting.
             let mut stmt = Table::create();
             stmt.table(Alias::new(table));
             for col in columns {
                 let mut def = build_column_def_sqlite(col);
                 stmt.col(&mut def);
+            }
+            for group in unique_together {
+                let mut idx = sea_query::Index::create().unique().to_owned();
+                for col in group {
+                    idx.col(Alias::new(col));
+                }
+                stmt.index(&mut idx);
             }
             let mut stmts = vec![stmt.build(SqliteQueryBuilder)];
             // Single-column `#[umbra(index)]` indexes follow the
@@ -2239,6 +2321,10 @@ fn render_operation_sqlite(op: &Operation) -> Vec<String> {
                 if col.index && !col.primary_key && !col.unique {
                     stmts.push(create_index_stmt(table, &col.name));
                 }
+            }
+            // BUG-7: multi-column indexes follow as plain CREATE INDEX.
+            for group in indexes {
+                stmts.push(create_multi_index_stmt(table, group));
             }
             stmts
         }
@@ -2294,18 +2380,33 @@ fn render_operation_postgres(op: &Operation) -> Vec<String> {
     use sea_query::{Alias, PostgresQueryBuilder, Table};
 
     match op {
-        Operation::CreateTable { table, columns } => {
+        Operation::CreateTable {
+            table,
+            columns,
+            unique_together,
+            indexes,
+        } => {
             let mut stmt = Table::create();
             stmt.table(Alias::new(table));
             for col in columns {
                 let mut def = build_column_def_postgres(col);
                 stmt.col(&mut def);
             }
+            for group in unique_together {
+                let mut idx = sea_query::Index::create().unique().to_owned();
+                for col in group {
+                    idx.col(Alias::new(col));
+                }
+                stmt.index(&mut idx);
+            }
             let mut stmts = vec![stmt.build(PostgresQueryBuilder)];
             for col in columns {
                 if col.index && !col.primary_key && !col.unique {
                     stmts.push(create_index_stmt(table, &col.name));
                 }
+            }
+            for group in indexes {
+                stmts.push(create_multi_index_stmt(table, group));
             }
             stmts
         }
@@ -2920,6 +3021,9 @@ mod tests {
                 icon: "database".to_string(),
                 database: None,
                 singleton: false,
+                unique_together: Vec::new(),
+                indexes: Vec::new(),
+                ordering: Vec::new(),
             }],
         );
         per_plugin.insert(
@@ -2932,6 +3036,9 @@ mod tests {
                 icon: "database".to_string(),
                 database: None,
                 singleton: false,
+                unique_together: Vec::new(),
+                indexes: Vec::new(),
+                ordering: Vec::new(),
             }],
         );
         init_plugins(per_plugin);
@@ -3255,6 +3362,9 @@ mod tests {
                 icon: "database".into(),
                 database: None,
                 singleton: false,
+                unique_together: Vec::new(),
+                indexes: Vec::new(),
+                ordering: Vec::new(),
             }
         }
         let prev = meta_with(baseline());
@@ -3526,6 +3636,8 @@ mod tests {
         let op = Operation::CreateTable {
             table: "post".into(),
             columns: vec![id, slug, title],
+            unique_together: Vec::new(),
+            indexes: Vec::new(),
         };
 
         for backend in ["sqlite", "postgres"] {

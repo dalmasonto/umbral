@@ -213,6 +213,8 @@ fn sqlite_int_pk_emits_autoincrement() {
     let op = Operation::CreateTable {
         table: "pk_int_model".to_string(),
         columns: vec![int_pk_column(), label_column()],
+        unique_together: Vec::new(),
+        indexes: Vec::new(),
     };
 
     let stmts = render_operation_for(&op, "sqlite");
@@ -242,6 +244,8 @@ fn sqlite_uuid_pk_emits_text_primary_key_no_default() {
     let op = Operation::CreateTable {
         table: "pk_uuid_model".to_string(),
         columns: vec![uuid_pk_column(), label_column()],
+        unique_together: Vec::new(),
+        indexes: Vec::new(),
     };
 
     let stmts = render_operation_for(&op, "sqlite");
@@ -277,6 +281,8 @@ fn sqlite_string_pk_emits_text_primary_key() {
     let op = Operation::CreateTable {
         table: "pk_string_model".to_string(),
         columns: vec![string_pk_column(), label_column()],
+        unique_together: Vec::new(),
+        indexes: Vec::new(),
     };
 
     let stmts = render_operation_for(&op, "sqlite");
@@ -308,6 +314,8 @@ fn postgres_int_pk_emits_bigserial() {
     let op = Operation::CreateTable {
         table: "pk_int_model".to_string(),
         columns: vec![int_pk_column(), label_column()],
+        unique_together: Vec::new(),
+        indexes: Vec::new(),
     };
 
     let stmts = render_operation_for(&op, "postgres");
@@ -332,6 +340,8 @@ fn postgres_uuid_pk_emits_uuid_type() {
     let op = Operation::CreateTable {
         table: "pk_uuid_model".to_string(),
         columns: vec![uuid_pk_column(), label_column()],
+        unique_together: Vec::new(),
+        indexes: Vec::new(),
     };
 
     let stmts = render_operation_for(&op, "postgres");
@@ -355,6 +365,8 @@ fn postgres_string_pk_emits_text() {
     let op = Operation::CreateTable {
         table: "pk_string_model".to_string(),
         columns: vec![string_pk_column(), label_column()],
+        unique_together: Vec::new(),
+        indexes: Vec::new(),
     };
 
     let stmts = render_operation_for(&op, "postgres");

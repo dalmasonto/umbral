@@ -106,6 +106,9 @@ impl Plugin for TestPlugin {
             icon: "database".to_string(),
             database: None,
             singleton: false,
+            unique_together: Vec::new(),
+            indexes: Vec::new(),
+            ordering: Vec::new(),
             name: model_name,
             table: self.model_table.to_string(),
             fields: vec![Column {

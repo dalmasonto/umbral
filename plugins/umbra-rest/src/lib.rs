@@ -1336,6 +1336,9 @@ mod noform_drop {
             icon: "user".into(),
             database: None,
             singleton: false,
+            unique_together: Vec::new(),
+            indexes: Vec::new(),
+            ordering: Vec::new(),
         }
     }
 

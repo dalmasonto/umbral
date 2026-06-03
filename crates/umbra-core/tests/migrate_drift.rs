@@ -138,6 +138,8 @@ fn write_migration(dir: &Path, plugin: &str, id: &str, table: &str) {
                     max: None,
                 },
             ],
+            unique_together: Vec::new(),
+            indexes: Vec::new(),
         }],
         snapshot_after: Snapshot::default(),
     };

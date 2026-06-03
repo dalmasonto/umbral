@@ -120,6 +120,8 @@ fn create_table_bigint_pk_renders_bigserial_on_postgres() {
     let op = Operation::CreateTable {
         table: "post".to_string(),
         columns: vec![id_pk(), text_not_null("title")],
+        unique_together: Vec::new(),
+        indexes: Vec::new(),
     };
 
     let stmts = render_operation_for(&op, "postgres");
@@ -166,6 +168,8 @@ fn create_table_bigint_pk_renders_integer_autoincrement_on_sqlite() {
     let op = Operation::CreateTable {
         table: "post".to_string(),
         columns: vec![id_pk(), text_not_null("title")],
+        unique_together: Vec::new(),
+        indexes: Vec::new(),
     };
 
     let stmts = render_operation_for(&op, "sqlite");
@@ -519,6 +523,8 @@ fn create_table_int_with_min_max_emits_check_on_postgres() {
     let op = Operation::CreateTable {
         table: "person".to_string(),
         columns: vec![id_pk(), age.clone()],
+        unique_together: Vec::new(),
+        indexes: Vec::new(),
     };
     let stmts = render_operation_for(&op, "postgres");
     let sql = &stmts[0];
@@ -531,6 +537,8 @@ fn create_table_int_with_min_max_emits_check_on_postgres() {
     let op2 = Operation::CreateTable {
         table: "person".to_string(),
         columns: vec![id_pk(), age.clone()],
+        unique_together: Vec::new(),
+        indexes: Vec::new(),
     };
     let sqlite_sql = &render_operation_for(&op2, "sqlite")[0];
     assert!(
@@ -543,11 +551,84 @@ fn create_table_int_with_min_max_emits_check_on_postgres() {
     let op3 = Operation::CreateTable {
         table: "person".to_string(),
         columns: vec![id_pk(), age.clone()],
+        unique_together: Vec::new(),
+        indexes: Vec::new(),
     };
     let pg_min_only = &render_operation_for(&op3, "postgres")[0];
     assert!(
         pg_min_only.contains("CHECK (\"age\" >= 0)") && !pg_min_only.contains("<="),
         "min-only should drop the upper bound; got {pg_min_only}",
+    );
+}
+
+// --------------------------------------------------------------------- //
+// BUG-6/7: `unique_together` + `indexes` struct-level attributes          //
+// --------------------------------------------------------------------- //
+
+/// A `CreateTable` carrying a `unique_together` group emits an inline
+/// `UNIQUE (col, col)` clause on both backends. Two groups → two
+/// clauses.
+#[test]
+fn create_table_emits_unique_together_clauses() {
+    let op = Operation::CreateTable {
+        table: "post".to_string(),
+        columns: vec![id_pk(), text_not_null("tenant_id"), text_not_null("slug")],
+        unique_together: vec![vec!["tenant_id".to_string(), "slug".to_string()]],
+        indexes: Vec::new(),
+    };
+    let sql_pg = &render_operation_for(&op, "postgres")[0];
+    let sql_lite = &render_operation_for(
+        &Operation::CreateTable {
+            table: "post".to_string(),
+            columns: vec![id_pk(), text_not_null("tenant_id"), text_not_null("slug")],
+            unique_together: vec![vec!["tenant_id".to_string(), "slug".to_string()]],
+            indexes: Vec::new(),
+        },
+        "sqlite",
+    )[0]
+    .clone();
+    assert!(
+        sql_pg.to_ascii_uppercase().contains("UNIQUE")
+            && sql_pg.contains("\"tenant_id\"")
+            && sql_pg.contains("\"slug\""),
+        "expected composite UNIQUE on postgres; got {sql_pg}",
+    );
+    assert!(
+        sql_lite.to_ascii_uppercase().contains("UNIQUE")
+            && sql_lite.contains("tenant_id")
+            && sql_lite.contains("slug"),
+        "expected composite UNIQUE on sqlite; got {sql_lite}",
+    );
+}
+
+/// A `CreateTable` with an `indexes` group emits a follow-up
+/// `CREATE INDEX IF NOT EXISTS` statement after the table, with a
+/// deterministic `idx_<table>_<col1>_<col2>` name.
+#[test]
+fn create_table_emits_multi_column_index_after_table() {
+    let op = Operation::CreateTable {
+        table: "post".to_string(),
+        columns: vec![
+            id_pk(),
+            text_not_null("tenant_id"),
+            text_not_null("created_at"),
+        ],
+        unique_together: Vec::new(),
+        indexes: vec![vec!["tenant_id".to_string(), "created_at".to_string()]],
+    };
+    let stmts = render_operation_for(&op, "postgres");
+    assert_eq!(
+        stmts.len(),
+        2,
+        "expected CREATE TABLE + CREATE INDEX = 2 stmts; got {stmts:?}",
+    );
+    let idx = &stmts[1];
+    assert!(
+        idx.contains("CREATE INDEX IF NOT EXISTS")
+            && idx.contains("\"idx_post_tenant_id_created_at\"")
+            && idx.contains("\"tenant_id\"")
+            && idx.contains("\"created_at\""),
+        "expected multi-col index DDL; got {idx}",
     );
 }
 
@@ -562,6 +643,8 @@ fn min_max_skipped_for_non_numeric_columns() {
     let op = Operation::CreateTable {
         table: "post".to_string(),
         columns: vec![id_pk(), title],
+        unique_together: Vec::new(),
+        indexes: Vec::new(),
     };
     let sql = &render_operation_for(&op, "postgres")[0];
     assert!(

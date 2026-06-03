@@ -128,6 +128,30 @@ pub trait Model: Sized + Send + Sync + Unpin + 'static {
     /// tool know the model is singleton-shaped.
     const SINGLETON: bool = false;
 
+    /// Composite-UNIQUE constraints. Each inner slice names a
+    /// constraint over the listed column names. Set via
+    /// `#[umbra(unique_together = [["a", "b"]])]`. Closes BUG-6 in
+    /// `bugs/tests/testBugs.md`. Default empty; the migration engine
+    /// emits one `UNIQUE (col1, col2)` clause per inner group on
+    /// `CREATE TABLE`.
+    const UNIQUE_TOGETHER: &'static [&'static [&'static str]] = &[];
+
+    /// Multi-column indexes. Each inner slice names an index over
+    /// the listed columns. Set via
+    /// `#[umbra(indexes = [["tenant_id", "created_at"]])]`. Closes
+    /// BUG-7. Default empty; the migration engine emits
+    /// `CREATE INDEX IF NOT EXISTS idx_<table>_<col1>_<col2>` after
+    /// the `CREATE TABLE`. Single-column indexes stay on the field
+    /// attribute (`#[umbra(index)]`).
+    const INDEXES: &'static [&'static [&'static str]] = &[];
+
+    /// Default `ORDER BY` clause, applied when a QuerySet terminates
+    /// without an explicit `order_by`. Each tuple is `(column_name,
+    /// is_descending)`. Set via
+    /// `#[umbra(ordering = ["-published_at", "id"])]` (leading `-`
+    /// flips to DESC). Closes BUG-8. Default empty.
+    const ORDERING: &'static [(&'static str, bool)] = &[];
+
     /// Return the primary key of this instance.
     fn primary_key(&self) -> Self::PrimaryKey;
 }

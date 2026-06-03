@@ -120,6 +120,8 @@ fn postgres_ddl_renders_array_suffix() {
                 max: None,
             },
         ],
+        unique_together: Vec::new(),
+        indexes: Vec::new(),
     };
 
     let stmts = render_operation_for(&op, "postgres");

@@ -172,6 +172,78 @@ fn min_max_attributes_reach_field_spec() {
     assert_eq!(plain.max, None);
 }
 
+// =========================================================================
+// BUG-6 / BUG-7 / BUG-8: struct-level `unique_together`, `indexes`,
+// `ordering` propagate from the macro into the Model trait consts and
+// the ModelMeta snapshot.
+// =========================================================================
+
+#[derive(Debug, sqlx::FromRow, Serialize, Deserialize, Model)]
+#[umbra(
+    unique_together = [["tenant_id", "slug"], ["author_id", "year"]],
+    indexes = [["tenant_id", "created_at"], ["status"]],
+    ordering = ["-published_at", "id"]
+)]
+struct PostWithStructAttrs {
+    id: i64,
+    tenant_id: i64,
+    slug: String,
+    author_id: i64,
+    year: i32,
+    status: String,
+    created_at: chrono::DateTime<chrono::Utc>,
+    published_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[test]
+fn struct_attrs_reach_model_consts() {
+    assert_eq!(
+        <PostWithStructAttrs as Model>::UNIQUE_TOGETHER,
+        &[&["tenant_id", "slug"][..], &["author_id", "year"][..],][..],
+    );
+    assert_eq!(
+        <PostWithStructAttrs as Model>::INDEXES,
+        &[&["tenant_id", "created_at"][..], &["status"][..]][..],
+    );
+    assert_eq!(
+        <PostWithStructAttrs as Model>::ORDERING,
+        &[("published_at", true), ("id", false)][..],
+    );
+}
+
+#[test]
+fn struct_attrs_round_trip_through_model_meta() {
+    let meta = umbra::migrate::ModelMeta::for_::<PostWithStructAttrs>();
+    assert_eq!(
+        meta.unique_together,
+        vec![
+            vec!["tenant_id".to_string(), "slug".to_string()],
+            vec!["author_id".to_string(), "year".to_string()],
+        ],
+    );
+    assert_eq!(
+        meta.indexes,
+        vec![
+            vec!["tenant_id".to_string(), "created_at".to_string()],
+            vec!["status".to_string()],
+        ],
+    );
+    assert_eq!(
+        meta.ordering,
+        vec![
+            ("published_at".to_string(), true),
+            ("id".to_string(), false),
+        ],
+    );
+
+    // serde round-trip: explicit values survive, defaults are skipped.
+    let json = serde_json::to_string(&meta).unwrap();
+    let back: umbra::migrate::ModelMeta = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.unique_together, meta.unique_together);
+    assert_eq!(back.indexes, meta.indexes);
+    assert_eq!(back.ordering, meta.ordering);
+}
+
 #[test]
 fn min_max_round_trip_through_model_meta_snapshot() {
     let meta = umbra::migrate::ModelMeta::for_::<PersonRow>();

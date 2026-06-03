@@ -69,6 +69,8 @@ async fn boot() -> &'static axum::Router {
         let op = umbra::migrate::Operation::CreateTable {
             table: "product".to_string(),
             columns: meta.fields.clone(),
+            unique_together: Vec::new(),
+            indexes: Vec::new(),
         };
         for stmt in umbra::migrate::render_operation_for(&op, "sqlite") {
             sqlx::query(&stmt)
@@ -131,10 +133,12 @@ async fn rest_post_with_boolean_json_round_trips_through_sqlite() {
         "GET /api/product/ after a POST with bool should not 500 on decode",
     );
     let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
-    let listed: serde_json::Value =
-        serde_json::from_slice(&body_bytes).expect("body json");
+    let listed: serde_json::Value = serde_json::from_slice(&body_bytes).expect("body json");
     let results = listed["results"].as_array().expect("results array");
-    assert!(!results.is_empty(), "list should contain the row we inserted");
+    assert!(
+        !results.is_empty(),
+        "list should contain the row we inserted"
+    );
     let first = &results[0];
     assert_eq!(first["is_featured"], false);
     assert_eq!(first["in_stock"], true);

@@ -90,6 +90,15 @@ pub struct QuerySet<T> {
     /// fetches the related rows for each named field and calls
     /// `HydrateRelated::hydrate_fk` to populate `ForeignKey.resolved`.
     pub(crate) select_related: Vec<String>,
+    /// BUG-8: `#[umbra(ordering = [...])]` lowers to a default ORDER
+    /// BY applied at terminal time when the caller didn't supply an
+    /// explicit `.order_by(...)`. Mirrors Django's
+    /// `Meta.ordering` semantics: explicit calls REPLACE the default
+    /// rather than appending to it.
+    pub(crate) default_ordering: Vec<(&'static str, bool)>,
+    /// Set to `true` the first time `.order_by(...)` is called; when
+    /// `false`, `build_query_for` applies `default_ordering`.
+    pub(crate) explicit_order: bool,
     _phantom: PhantomData<T>,
 }
 
@@ -97,6 +106,8 @@ impl<T> QuerySet<T> {
     pub(crate) fn new(query: sea_query::SelectStatement) -> Self {
         Self {
             query,
+            default_ordering: Vec::new(),
+            explicit_order: false,
             predicates: Vec::new(),
             explicit_pool: None,
             select_related: Vec::new(),
@@ -112,6 +123,15 @@ impl<T> QuerySet<T> {
         let mut q = self.query.clone();
         for p in &self.predicates {
             q.and_where(p.cond_for(backend_name));
+        }
+        // BUG-8: default ORDER BY applies only when the caller didn't
+        // supply an explicit `.order_by(...)`. Mirrors Django's
+        // `Meta.ordering` semantics.
+        if !self.explicit_order {
+            for (col, desc) in &self.default_ordering {
+                let order = if *desc { Order::Desc } else { Order::Asc };
+                q.order_by(Alias::new(*col), order);
+            }
         }
         q
     }
@@ -133,6 +153,10 @@ impl<T> QuerySet<T> {
     }
 
     /// Add an ORDER BY clause. Multiple `.order_by` calls append.
+    /// The first explicit call also opts out of the model's
+    /// `#[umbra(ordering = [...])]` default (BUG-8) — Django semantics:
+    /// explicit ordering replaces the default rather than stacking on
+    /// top of it.
     pub fn order_by(mut self, o: OrderExpr<T>) -> Self {
         let order = if o.descending {
             Order::Desc
@@ -140,6 +164,7 @@ impl<T> QuerySet<T> {
             Order::Asc
         };
         self.query.order_by(Alias::new(o.column), order);
+        self.explicit_order = true;
         self
     }
 
@@ -808,7 +833,12 @@ impl<T: Model> Manager<T> {
             .columns(columns)
             .from(Alias::new(T::TABLE))
             .take();
-        QuerySet::new(query)
+        let mut qs = QuerySet::new(query);
+        // BUG-8: seed the default ORDER BY from `Model::ORDERING` so
+        // terminals that don't see an explicit `.order_by(...)` still
+        // get a deterministic row order.
+        qs.default_ordering = T::ORDERING.to_vec();
+        qs
     }
 
     /// See `QuerySet::filter`.
