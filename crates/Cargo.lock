@@ -2890,6 +2890,7 @@ dependencies = [
 name = "umbra-permissions"
 version = "0.0.1"
 dependencies = [
+ "async-trait",
  "axum",
  "axum-core",
  "http",
@@ -2902,6 +2903,18 @@ dependencies = [
  "tracing",
  "umbra",
  "umbra-auth",
+ "umbra-rest",
+]
+
+[[package]]
+name = "umbra-playground"
+version = "0.0.1"
+dependencies = [
+ "axum",
+ "http-body-util",
+ "tokio",
+ "tower",
+ "umbra",
 ]
 
 [[package]]

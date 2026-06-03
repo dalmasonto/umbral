@@ -264,6 +264,60 @@ fn column_schema(col: &Column) -> Value {
     if col.nullable {
         obj.insert("nullable".into(), Value::Bool(true));
     }
+    // Standard OpenAPI: closed-set values become `enum`. Skipped for
+    // multichoice (a CSV-encoded subset) because each request value is
+    // a comma-separated string of the choices, not one choice — clients
+    // need richer guidance than a flat enum can provide. We still emit
+    // the underlying choices via `x-umbra-choices` below.
+    if !col.choices.is_empty() && !col.is_multichoice {
+        obj.insert(
+            "enum".into(),
+            Value::Array(col.choices.iter().cloned().map(Value::String).collect()),
+        );
+    }
+    if col.max_length > 0 {
+        obj.insert(
+            "maxLength".into(),
+            Value::Number(serde_json::Number::from(col.max_length)),
+        );
+    }
+    if !col.default.is_empty() {
+        // OpenAPI `default` is typed as the property's type, but the
+        // Column carries it as a string (it's a SQL literal). Emitting
+        // as a string is the conservative choice — Swagger UI shows it
+        // as a hint, and clients that care can re-parse.
+        obj.insert("default".into(), Value::String(col.default.clone()));
+    }
+    if col.is_multichoice {
+        obj.insert("x-umbra-multichoice".into(), Value::Bool(true));
+        obj.insert(
+            "x-umbra-choices".into(),
+            Value::Array(col.choices.iter().cloned().map(Value::String).collect()),
+        );
+    }
+    if !col.choice_labels.is_empty() {
+        obj.insert(
+            "x-umbra-choice-labels".into(),
+            Value::Array(
+                col.choice_labels
+                    .iter()
+                    .cloned()
+                    .map(Value::String)
+                    .collect(),
+            ),
+        );
+    }
+    if let Some(target) = &col.fk_target {
+        obj.insert("x-umbra-fk-target".into(), Value::String(target.clone()));
+    }
+    if col.is_string_repr {
+        obj.insert("x-umbra-string-repr".into(), Value::Bool(true));
+    }
+    if col.noedit {
+        // PATCH/PUT semantically forbid this field; Swagger UI greys
+        // out `readOnly` fields in request bodies.
+        obj.insert("readOnly".into(), Value::Bool(true));
+    }
     Value::Object(obj)
 }
 
@@ -481,4 +535,104 @@ fn pascal_case(s: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use umbra::migrate::Column;
+    use umbra::orm::SqlType;
+
+    fn base_col(name: &str, ty: SqlType) -> Column {
+        Column {
+            name: name.into(),
+            ty,
+            primary_key: false,
+            nullable: false,
+            fk_target: None,
+            noform: false,
+            noedit: false,
+            is_string_repr: false,
+            max_length: 0,
+            choices: Vec::new(),
+            choice_labels: Vec::new(),
+            default: String::new(),
+            is_multichoice: false,
+        }
+    }
+
+    #[test]
+    fn choices_render_as_openapi_enum_with_labels_extension() {
+        let mut col = base_col("status", SqlType::Text);
+        col.choices = vec!["draft".into(), "published".into(), "archived".into()];
+        col.choice_labels = vec!["Draft".into(), "Published".into(), "Archived".into()];
+        let schema = column_schema(&col);
+        assert_eq!(schema["type"], "string");
+        assert_eq!(
+            schema["enum"],
+            serde_json::json!(["draft", "published", "archived"])
+        );
+        assert_eq!(
+            schema["x-umbra-choice-labels"],
+            serde_json::json!(["Draft", "Published", "Archived"])
+        );
+    }
+
+    #[test]
+    fn multichoice_skips_enum_and_uses_vendor_extension() {
+        let mut col = base_col("tags", SqlType::Text);
+        col.choices = vec!["rust".into(), "django".into()];
+        col.is_multichoice = true;
+        let schema = column_schema(&col);
+        assert!(
+            schema.get("enum").is_none(),
+            "multichoice columns should not declare a flat enum (value is a CSV subset)"
+        );
+        assert_eq!(schema["x-umbra-multichoice"], true);
+        assert_eq!(
+            schema["x-umbra-choices"],
+            serde_json::json!(["rust", "django"])
+        );
+    }
+
+    #[test]
+    fn max_length_and_default_surface_as_standard_openapi_keys() {
+        let mut col = base_col("title", SqlType::Text);
+        col.max_length = 50;
+        col.default = "untitled".into();
+        let schema = column_schema(&col);
+        assert_eq!(schema["maxLength"], 50);
+        assert_eq!(schema["default"], "untitled");
+    }
+
+    #[test]
+    fn fk_target_emits_vendor_extension_for_playground_navigation() {
+        let mut col = base_col("author_id", SqlType::ForeignKey);
+        col.fk_target = Some("auth_user".into());
+        let schema = column_schema(&col);
+        assert_eq!(schema["type"], "integer");
+        assert_eq!(schema["format"], "int64");
+        assert_eq!(schema["x-umbra-fk-target"], "auth_user");
+    }
+
+    #[test]
+    fn noedit_renders_as_read_only_so_swagger_grays_it_out() {
+        let mut col = base_col("created_at", SqlType::Timestamptz);
+        col.noedit = true;
+        let schema = column_schema(&col);
+        assert_eq!(schema["readOnly"], true);
+    }
+
+    #[test]
+    fn plain_column_keeps_minimal_schema_no_extensions() {
+        let col = base_col("body", SqlType::Text);
+        let schema = column_schema(&col);
+        let obj = schema.as_object().expect("object");
+        assert_eq!(
+            obj.len(),
+            1,
+            "plain column should only have `type`: {obj:?}"
+        );
+        assert_eq!(schema["type"], "string");
+    }
 }
