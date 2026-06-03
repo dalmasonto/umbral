@@ -1,11 +1,22 @@
 //! build.rs for umbra-playground.
 //!
-//! Invokes `esbuild` and `tailwindcss` to bundle the React frontend
-//! and CSS into `dist/`. Writes `OUT_DIR/generated_assets.rs` with
-//! the hashed asset filenames so the runtime knows what to serve.
+//! Runs `npm run build` inside `frontend/` to produce the Vite bundle,
+//! then copies `frontend/dist/` into the crate's `dist/` and writes
+//! `OUT_DIR/generated_assets.rs` with the hashed JS + CSS filenames.
+//! The runtime's `shell.html` template uses those filenames to load
+//! the right bundle at request time.
 //!
-//! If either CLI is missing, writes a degraded placeholder module
-//! pointing at the static placeholder HTML. The crate still compiles.
+//! Degrades gracefully when:
+//!   - `npm` is not in $PATH (no Node installed),
+//!   - `frontend/node_modules/` is missing (user hasn't run
+//!     `npm install` yet),
+//!   - `npm run build` exits non-zero, or
+//!   - Vite produces no `index-*.js` / `index-*.css` in
+//!     `frontend/dist/assets/`.
+//!
+//! In each case we fall back to `playground.placeholder.{js,css}` so
+//! the crate still compiles and the runtime can serve the placeholder
+//! HTML telling the user how to enable the full UI.
 
 use std::env;
 use std::fs;
@@ -20,35 +31,32 @@ fn main() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let frontend_dir = manifest_dir.join("frontend");
-    let dist_dir = manifest_dir.join("dist");
+    let frontend_dist = frontend_dir.join("dist");
+    let crate_dist = manifest_dir.join("dist");
     let out_path = out_dir.join("generated_assets.rs");
 
-    // Rerun triggers.
+    // Rerun triggers. We rerun on every source change inside frontend/
+    // EXCEPT the dist/ and node_modules/ subdirs (which we ourselves
+    // would write into and that would cause an infinite rerun loop).
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed=frontend/");
+    println!("cargo:rerun-if-changed=frontend/src");
+    println!("cargo:rerun-if-changed=frontend/index.html");
+    println!("cargo:rerun-if-changed=frontend/package.json");
+    println!("cargo:rerun-if-changed=frontend/vite.config.ts");
+    println!("cargo:rerun-if-changed=frontend/tsconfig.json");
     println!("cargo:rerun-if-changed=src/placeholder.html");
+    println!("cargo:rerun-if-changed=src/shell.html");
 
-    fs::create_dir_all(&dist_dir).expect("create dist dir");
+    fs::create_dir_all(&crate_dist).expect("create dist dir");
 
-    let debug = env::var("PROFILE").map(|p| p == "debug").unwrap_or(true);
-    let esbuild = find_in_path("esbuild");
-    let tailwind = find_in_path("tailwindcss");
-
-    let (js_name, css_name) = match (esbuild, tailwind) {
-        (Some(eb), Some(tw)) => match bundle(&frontend_dir, &dist_dir, &eb, &tw, debug) {
-            Ok((js, css)) => (js, css),
+    let (js_name, css_name) =
+        match bundle_with_vite(&frontend_dir, &frontend_dist, &crate_dist) {
+            Ok(pair) => pair,
             Err(e) => {
-                eprintln!("cargo:warning=umbra-playground: bundle failed ({e}); using placeholder");
+                eprintln!("cargo:warning=umbra-playground: {e}; serving placeholder");
                 (PLACEHOLDER_JS.to_string(), PLACEHOLDER_CSS.to_string())
             }
-        },
-        _ => {
-            eprintln!(
-                "cargo:warning=umbra-playground: esbuild and/or tailwindcss not in $PATH; using placeholder HTML. Install with `npm i -g esbuild tailwindcss` to enable the full UI."
-            );
-            (PLACEHOLDER_JS.to_string(), PLACEHOLDER_CSS.to_string())
-        }
-    };
+        };
 
     let mut f = fs::File::create(&out_path).expect("create generated_assets.rs");
     writeln!(
@@ -62,90 +70,111 @@ fn main() {
 
 fn find_in_path(bin: &str) -> Option<PathBuf> {
     let path = env::var_os("PATH")?;
+    let names: &[&str] = if cfg!(windows) {
+        &[".cmd", ".exe", ""]
+    } else {
+        &[""]
+    };
     for dir in env::split_paths(&path) {
-        let full = dir.join(bin);
-        if full.is_file() {
-            return Some(full);
+        for suffix in names {
+            let full = dir.join(format!("{bin}{suffix}"));
+            if full.is_file() {
+                return Some(full);
+            }
         }
     }
     None
 }
 
-fn bundle(
+fn bundle_with_vite(
     frontend_dir: &Path,
-    dist_dir: &Path,
-    esbuild: &Path,
-    tailwind: &Path,
-    debug: bool,
+    frontend_dist: &Path,
+    crate_dist: &Path,
 ) -> Result<(String, String), String> {
-    let entry = frontend_dir.join("index.tsx");
-    let css_entry = frontend_dir.join("styles/app.css");
-    let tailwind_config = frontend_dir.join("styles/tailwind.config.js");
-
-    let mut js_args: Vec<String> = vec![
-        entry.to_string_lossy().into_owned(),
-        "--bundle".into(),
-        "--loader:.tsx=tsx".into(),
-        "--outfile=playground.tmp.js".into(),
-    ];
-    if debug {
-        js_args.push("--sourcemap".into());
-    } else {
-        js_args.push("--minify".into());
-        js_args.push("--sourcemap=inline".into());
-        js_args.push("--define:process.env.NODE_ENV=\"production\"".into());
+    let npm = find_in_path("npm").ok_or_else(|| {
+        "npm not in $PATH — install Node.js + npm (https://nodejs.org), \
+         then re-run `cargo build` to bundle the React playground"
+            .to_string()
+    })?;
+    let node_modules = frontend_dir.join("node_modules");
+    if !node_modules.exists() {
+        return Err(format!(
+            "frontend/node_modules missing — run `cd {} && npm install` once, \
+             then re-run `cargo build`",
+            frontend_dir.display()
+        ));
     }
 
-    let status = Command::new(esbuild)
-        .args(&js_args)
-        .current_dir(dist_dir)
+    let status = Command::new(&npm)
+        .args(["run", "build"])
+        .current_dir(frontend_dir)
         .status()
-        .map_err(|e| format!("esbuild: {e}"))?;
+        .map_err(|e| format!("npm run build failed to spawn: {e}"))?;
     if !status.success() {
-        return Err("esbuild exited non-zero".into());
+        return Err("npm run build exited non-zero — fix the vite errors above".into());
     }
 
-    let mut css_args: Vec<String> = vec![
-        format!("-c={}", tailwind_config.display()),
-        format!("-i={}", css_entry.display()),
-        "-o=playground.tmp.css".into(),
-    ];
-    if !debug {
-        css_args.push("--minify".into());
+    let assets_dir = frontend_dist.join("assets");
+    let mut js_name: Option<String> = None;
+    let mut css_name: Option<String> = None;
+    for entry in fs::read_dir(&assets_dir)
+        .map_err(|e| format!("can't read {}: {e}", assets_dir.display()))?
+    {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        // Vite emits `index-<hash>.js` and `index-<hash>.css` for the
+        // entry chunk by default. Fonts and other assets keep their
+        // own prefixes (inter-*.woff2, etc.) so they don't shadow the
+        // entry chunk match.
+        if name.starts_with("index-") && name.ends_with(".js") {
+            js_name = Some(name);
+        } else if name.starts_with("index-") && name.ends_with(".css") {
+            css_name = Some(name);
+        }
     }
+    let js_name = js_name.ok_or_else(|| {
+        format!(
+            "no index-*.js in vite output at {} — \
+             frontend likely renamed; check vite.config.ts entry name",
+            assets_dir.display()
+        )
+    })?;
+    let css_name = css_name.ok_or_else(|| {
+        format!(
+            "no index-*.css in vite output at {} — \
+             frontend likely emits no CSS chunk; check the entry @import lines",
+            assets_dir.display()
+        )
+    })?;
 
-    let status = Command::new(tailwind)
-        .args(&css_args)
-        .current_dir(dist_dir)
-        .status()
-        .map_err(|e| format!("tailwindcss: {e}"))?;
-    if !status.success() {
-        return Err("tailwindcss exited non-zero".into());
-    }
+    // Mirror the full vite dist/ into the crate's dist/ so the runtime
+    // (which serves from <crate>/dist/) sees both the entry bundles
+    // and the font files referenced from the CSS.
+    copy_dir_recursive(frontend_dist, crate_dist)
+        .map_err(|e| format!("can't copy vite dist into crate dist: {e}"))?;
 
-    let js_hash = short_hash(dist_dir.join("playground.tmp.js"));
-    let css_hash = short_hash(dist_dir.join("playground.tmp.css"));
-
-    let js_final = format!("playground.{js_hash}.js");
-    let css_final = format!("playground.{css_hash}.css");
-    fs::rename(dist_dir.join("playground.tmp.js"), dist_dir.join(&js_final))
-        .map_err(|e| format!("rename js: {e}"))?;
-    fs::rename(
-        dist_dir.join("playground.tmp.css"),
-        dist_dir.join(&css_final),
-    )
-    .map_err(|e| format!("rename css: {e}"))?;
-
-    Ok((js_final, css_final))
+    Ok((js_name, css_name))
 }
 
-fn short_hash(path: PathBuf) -> String {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-
-    let bytes = fs::read(&path).unwrap_or_default();
-    let mut h = DefaultHasher::new();
-    bytes.hash(&mut h);
-    let n = h.finish();
-    format!("{n:016x}")
+fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+    if !src.is_dir() {
+        return Ok(());
+    }
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        let target = dst.join(entry.file_name());
+        if ty.is_dir() {
+            copy_dir_recursive(&entry.path(), &target)?;
+        } else if ty.is_file() {
+            // Replace existing files unconditionally — incremental
+            // builds keep the freshest copy.
+            if target.exists() {
+                let _ = fs::remove_file(&target);
+            }
+            fs::copy(entry.path(), &target)?;
+        }
+    }
+    Ok(())
 }

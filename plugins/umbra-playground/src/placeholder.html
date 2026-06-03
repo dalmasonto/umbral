@@ -7,19 +7,42 @@
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; background: #020617; color: #e2e8f0; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 2rem; }
-    .card { max-width: 36rem; padding: 2rem; border: 1px solid #1e293b; border-radius: 0.5rem; background: #0f172a; }
+    .card { max-width: 40rem; padding: 2rem; border: 1px solid #1e293b; border-radius: 0.5rem; background: #0f172a; }
     h1 { font-size: 1.5rem; margin-bottom: 0.75rem; color: #f1f5f9; }
+    h2 { font-size: 0.95rem; margin-top: 1.25rem; margin-bottom: 0.5rem; color: #cbd5e1; font-weight: 600; }
     p { line-height: 1.6; margin-bottom: 0.75rem; color: #94a3b8; }
+    ol { padding-left: 1.25rem; color: #94a3b8; line-height: 1.7; }
+    li { margin-bottom: 0.25rem; }
+    pre { font-family: ui-monospace, monospace; background: #020617; padding: 0.75rem 1rem; border-radius: 0.375rem; color: #c7d2fe; overflow-x: auto; margin: 0.5rem 0; font-size: 0.85rem; }
     code { font-family: ui-monospace, monospace; background: #020617; padding: 0.125rem 0.375rem; border-radius: 0.25rem; color: #c7d2fe; }
+    a { color: #93c5fd; }
   </style>
 </head>
 <body>
   <div class="card">
     <h1>umbra playground</h1>
-    <p>The playground frontend was not built.</p>
-    <p>To enable the interactive UI, install <code>esbuild</code> and <code>tailwindcss</code> in your <code>$PATH</code>:</p>
-    <p><code>npm i -g esbuild tailwindcss</code></p>
-    <p>Then rebuild this crate. The placeholder is shown when the build pipeline can't produce the React bundle.</p>
+    <p>The Vite-built React frontend isn't in <code>dist/</code> yet. You're seeing this placeholder because <code>build.rs</code> couldn't produce the bundle.</p>
+
+    <h2>To enable the full UI</h2>
+    <ol>
+      <li>Install Node.js 20+ (<a href="https://nodejs.org">nodejs.org</a>) so <code>npm</code> is on your PATH.</li>
+      <li>Install the frontend's dev dependencies (one-time setup):
+        <pre>cd plugins/umbra-playground/frontend
+npm install</pre>
+      </li>
+      <li>Rebuild the crate. <code>build.rs</code> will run <code>npm run build</code> automatically and copy the Vite output into <code>plugins/umbra-playground/dist/</code>:
+        <pre>cargo build -p umbra-playground</pre>
+      </li>
+    </ol>
+
+    <h2>Common failure modes</h2>
+    <ol>
+      <li><code>npm</code> not in <code>PATH</code> — install Node.js.</li>
+      <li><code>frontend/node_modules</code> missing — run <code>npm install</code> once.</li>
+      <li>Vite build itself errored — scroll up in the cargo output for the actual error.</li>
+    </ol>
+
+    <p style="margin-top: 1.5rem; font-size: 0.8rem; color: #64748b;">The crate compiles + serves this placeholder either way — only the React UI is gated.</p>
   </div>
 </body>
 </html>
