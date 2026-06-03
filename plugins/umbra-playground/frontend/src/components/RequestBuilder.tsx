@@ -90,10 +90,21 @@ function parseUrlInput(
   }
 }
 
+interface FoundOperation {
+  method: string;
+  path: string;
+  operation: OpenAPIV3.OperationObject;
+  /** The parent PathItem. Carries `parameters` that apply to every
+   *  operation under this path (per OpenAPI 3.0 §4.7.8.1) — that's
+   *  where path-level params like `{id}` get declared by the OpenAPI
+   *  emitter. We need both layers when rendering the Params table. */
+  pathItem: OpenAPIV3.PathItemObject;
+}
+
 function findOperation(
   spec: OpenAPIV3.Document | null,
   selected: string | null,
-): { method: string; path: string; operation: OpenAPIV3.OperationObject } | null {
+): FoundOperation | null {
   if (!spec || !selected) return null;
   for (const [path, pathItem] of Object.entries(spec.paths ?? {})) {
     if (!pathItem) continue;
@@ -108,7 +119,7 @@ function findOperation(
       if (!operation) continue;
       const id = operation.operationId ?? `${method} ${path}`;
       if (id === selected) {
-        return { method, path, operation };
+        return { method, path, operation, pathItem };
       }
     }
   }
@@ -238,6 +249,67 @@ export function RequestBuilder() {
     setBodyType,
   ]);
 
+  // Merged parameter list: OpenAPI 3.0 puts shared parameters on the
+  // PathItem (e.g. `/api/{table}/{id}` declares `id` once, every
+  // operation under it inherits) and per-op extras on the
+  // OperationObject. We need both layers; operation-level wins on
+  // (name, in) conflicts per spec. This is what every consumer
+  // below (the Params table render, the custom-params filter, the
+  // required-auto-fill effect) walks.
+  const declaredParams = useMemo<OpenAPIV3.ParameterObject[]>(() => {
+    if (!op) return [];
+    const pathLevel =
+      (op.pathItem.parameters as OpenAPIV3.ParameterObject[] | undefined) ?? [];
+    const opLevel =
+      (op.operation.parameters as OpenAPIV3.ParameterObject[] | undefined) ??
+      [];
+    const merged: OpenAPIV3.ParameterObject[] = [...pathLevel];
+    for (const p of opLevel) {
+      const idx = merged.findIndex((m) => m.name === p.name && m.in === p.in);
+      if (idx >= 0) merged[idx] = p;
+      else merged.push(p);
+    }
+    return merged;
+  }, [op]);
+
+  // Auto-enable every `required` declared param the moment we land
+  // on an operation that has any. The user can't proceed without
+  // them (the request would 4xx), so toggling them off makes no
+  // sense — the row appears checked, the value stays whatever the
+  // user types (empty by default), and the checkbox + delete button
+  // are disabled in the render. Tracked per operation via a ref so
+  // re-renders against the same op don't re-toggle anything the
+  // user has since changed.
+  const autoEnabledParamsForRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!opMethod || !opPath) return;
+    const key = `${opMethod} ${opPath}`;
+    if (autoEnabledParamsForRef.current === key) return;
+    autoEnabledParamsForRef.current = key;
+
+    const requiredNames = declaredParams
+      .filter((p) => p.required)
+      .map((p) => p.name);
+    if (requiredNames.length === 0) return;
+
+    const next = [...current.params];
+    let changed = false;
+    for (const name of requiredNames) {
+      const idx = next.findIndex((p) => p.key === name);
+      if (idx < 0) {
+        next.push({ key: name, value: "", enabled: true });
+        changed = true;
+      } else if (!next[idx].enabled) {
+        next[idx] = { ...next[idx], enabled: true };
+        changed = true;
+      }
+    }
+    if (changed) setParams(next);
+    // current.params intentionally NOT in deps — we only want this
+    // to fire on operation change, not on every keystroke.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [opMethod, opPath, declaredParams, setParams]);
+
   const responses = useMemo(
     () => responseSchemaEntries(op?.operation, spec),
     [op?.operation, spec],
@@ -252,14 +324,12 @@ export function RequestBuilder() {
   // declared-parameters table below already renders them — showing
   // inferred chips on top would duplicate the UI.
   const specDeclaresFilters = useMemo(() => {
-    const params =
-      (op?.operation?.parameters as OpenAPIV3.ParameterObject[] | undefined) ?? [];
-    return params.some(
+    return declaredParams.some(
       (p) =>
         (p as unknown as Record<string, unknown>)["x-umbra-filter-field"] !==
         undefined,
     );
-  }, [op?.operation]);
+  }, [declaredParams]);
 
   const filterableFields = useMemo<FieldInfo[]>(() => {
     if (current.method !== "GET" || !listItem) return [];
@@ -502,12 +572,10 @@ export function RequestBuilder() {
                   <span>Value</span>
                 </div>
 
-                {/* Declared params from spec */}
+                {/* Declared params from spec (operation + pathItem
+                    merged via `declaredParams`). */}
                 <div className="divide-y divide-border">
-                  {(op?.operation?.parameters
-                    ? (op.operation.parameters as OpenAPIV3.ParameterObject[])
-                    : []
-                  ).map((p) => {
+                  {declaredParams.map((p) => {
                     const existing = current.params.find(
                       (param) => param.key === p.name,
                     );
@@ -554,9 +622,18 @@ export function RequestBuilder() {
                         }`}
                       >
                         <div className="flex justify-center">
+                          {/* Required params can't be toggled off —
+                              sending the request without them would
+                              4xx, so the checkbox is locked. */}
                           <Checkbox
                             checked={isChecked}
-                            onCheckedChange={toggleParam}
+                            onCheckedChange={
+                              p.required ? undefined : toggleParam
+                            }
+                            disabled={p.required}
+                            title={
+                              p.required ? "Required — can't be omitted" : undefined
+                            }
                           />
                         </div>
 
@@ -600,15 +677,27 @@ export function RequestBuilder() {
                                 type="button"
                                 variant="ghost"
                                 size="icon-xs"
-                                title="Remove from request"
-                                onClick={() =>
-                                  setParams(
-                                    current.params.filter(
-                                      (param) => param.key !== p.name,
-                                    ),
-                                  )
+                                title={
+                                  p.required
+                                    ? "Required — can't be removed"
+                                    : "Remove from request"
                                 }
-                                className="shrink-0 text-muted-foreground hover:text-destructive"
+                                disabled={p.required}
+                                onClick={
+                                  p.required
+                                    ? undefined
+                                    : () =>
+                                        setParams(
+                                          current.params.filter(
+                                            (param) => param.key !== p.name,
+                                          ),
+                                        )
+                                }
+                                className={`shrink-0 text-muted-foreground ${
+                                  p.required
+                                    ? "opacity-30 cursor-not-allowed"
+                                    : "hover:text-destructive"
+                                }`}
                               >
                                 <Trash2 className="size-3.5" />
                               </Button>
@@ -624,20 +713,16 @@ export function RequestBuilder() {
                   })}
                 </div>
 
-                {/* Custom params */}
+                {/* Custom params — anything in current.params that
+                    isn't declared by the spec (operation OR pathItem).
+                    Excluded by name match against declaredParams. */}
                 {current.params.filter(
-                  (p) =>
-                    !(
-                      op?.operation?.parameters as OpenAPIV3.ParameterObject[] | undefined
-                    )?.some((declared) => declared.name === p.key),
+                  (p) => !declaredParams.some((d) => d.name === p.key),
                 ).length > 0 && (
                   <div className="divide-y divide-border border-t border-border">
                     {current.params
                       .filter(
-                        (p) =>
-                          !(
-                            op?.operation?.parameters as OpenAPIV3.ParameterObject[] | undefined
-                          )?.some((declared) => declared.name === p.key),
+                        (p) => !declaredParams.some((d) => d.name === p.key),
                       )
                       .map((param) => {
                         const realIndex = current.params.indexOf(param);
