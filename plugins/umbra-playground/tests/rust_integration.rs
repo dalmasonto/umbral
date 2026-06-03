@@ -192,3 +192,61 @@ async fn asset_resolves_even_when_cwd_and_env_dont_point_at_the_crate() {
          the resolver should bake CARGO_MANIFEST_DIR at compile time",
     );
 }
+
+/// Regression test for "we need them all" — every file in
+/// `dist/assets/`, not just the index JS + CSS entry chunks, must
+/// resolve through the mount. Vite emits the woff2 fonts the Inter
+/// CSS references into `dist/assets/inter-*.woff2`; if any of them
+/// 404 the browser will load the page bare-CSS-no-font, which is
+/// exactly the bug the user surfaced.
+///
+/// Iterates every file in `dist/assets/`, fetches each through the
+/// router, and asserts a 200. Skips silently when dist isn't built.
+#[tokio::test]
+async fn every_file_in_dist_assets_resolves_through_the_mount() {
+    use std::path::PathBuf;
+
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let assets_dir = manifest_dir.join("dist").join("assets");
+    let Ok(read) = std::fs::read_dir(&assets_dir) else {
+        eprintln!("skipping: dist/assets not populated");
+        return;
+    };
+    let names: Vec<String> = read
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    if names.is_empty() {
+        eprintln!("skipping: dist/assets is empty (placeholder build)");
+        return;
+    }
+
+    let plugin = PlaygroundPlugin::new();
+    let base = plugin
+        .base_path_for_test()
+        .trim_start_matches('/')
+        .to_string();
+
+    let mut failures: Vec<String> = Vec::new();
+    for name in &names {
+        // Build a fresh router per request: axum's oneshot consumes
+        // the service, so we can't reuse one across iterations.
+        let app = plugin.routes();
+        let req = Request::builder()
+            .uri(format!("/{base}/assets/{name}"))
+            .body(Body::empty())
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        if res.status() != StatusCode::OK {
+            failures.push(format!("{name}: {}", res.status()));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "every file in dist/assets/ must resolve through {base}/assets/; got {} failure(s): {:#?}\nall files: {:#?}",
+        failures.len(),
+        failures,
+        names,
+    );
+}
