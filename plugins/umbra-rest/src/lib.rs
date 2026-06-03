@@ -96,6 +96,13 @@ pub(crate) type ComputedFn =
 pub struct RestPlugin {
     include_only: Option<Vec<String>>,
     extra_exclude: Vec<String>,
+    /// Tables that override the `DEFAULT_BLOCKED_TABLES` security
+    /// default. Populated via `RestPlugin::expose([...])`. A name
+    /// here is served via the standard CRUD endpoints even though
+    /// it's normally blocked (the framework's auth_user / session /
+    /// migration tables). The user explicitly opts in per-table —
+    /// no implicit "expose everything" mode.
+    expose: std::collections::HashSet<String>,
     /// `(table, field)` pairs that are stripped from response bodies.
     hidden: Vec<(String, String)>,
     /// `(table, field, transform_fn)` — replaces a field's value.
@@ -224,6 +231,7 @@ impl RestPlugin {
         Self {
             include_only: None,
             extra_exclude: Vec::new(),
+            expose: std::collections::HashSet::new(),
             hidden: Vec::new(),
             transforms: Vec::new(),
             computed: Vec::new(),
@@ -300,6 +308,49 @@ impl RestPlugin {
     {
         for t in tables {
             self.extra_exclude.push(t.into());
+        }
+        self
+    }
+
+    /// Opt INTO exposing tables that are normally blocked for
+    /// security reasons (`auth_user`, `session`, `umbra_migrations`).
+    ///
+    /// ```ignore
+    /// // I want the admin's user list and session table reachable
+    /// // through the REST API too, knowing what I'm signing up for.
+    /// RestPlugin::default()
+    ///     .expose(["auth_user", "session"])
+    ///     .resource(
+    ///         // ...and hide password_hash from the wire.
+    ///         ResourceConfig::new("auth_user").hide("password_hash"),
+    ///     )
+    /// ```
+    ///
+    /// ## Security note
+    ///
+    /// `auth_user` and `session` are blocked by default because they
+    /// carry credentials/secrets the framework doesn't want a careless
+    /// `RestPlugin::default()` to leak — `password_hash` over the wire
+    /// to anyone hitting `GET /api/auth_user/`, session tokens over
+    /// `GET /api/session/`. When you expose them:
+    ///
+    /// - Pair with `ResourceConfig::hide("password_hash")` so that
+    ///   column never appears in list/retrieve responses.
+    /// - Pair with `ResourceConfig::permission(...)` so the endpoints
+    ///   are gated behind staff-only authorisation.
+    ///
+    /// Composes with `include_only` (an `include_only` allow-list
+    /// takes precedence — if `auth_user` isn't on it, expose is
+    /// moot) and with `exclude` (an exposed table that's also in
+    /// `extra_exclude` stays blocked — explicit user "no" beats
+    /// explicit user "yes" for the same table).
+    pub fn expose<I, S>(mut self, tables: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        for t in tables {
+            self.expose.insert(t.into());
         }
         self
     }
@@ -513,6 +564,12 @@ impl RestPlugin {
     fn allow(&self, table: &str) -> bool {
         if let Some(allow) = &self.include_only {
             return allow.iter().any(|t| t == table);
+        }
+        // Explicit per-table override of the DEFAULT_BLOCKED_TABLES
+        // security default. Lets a user say "yes, please serve
+        // auth_user / session over REST, I know what I'm doing."
+        if self.expose.contains(table) {
+            return !self.extra_exclude.iter().any(|t| t == table);
         }
         if DEFAULT_BLOCKED_TABLES.contains(&table) {
             return false;
@@ -1178,4 +1235,54 @@ async fn count_rows_filtered(model: &ModelMeta, filter: &FilterClause) -> Result
         qs = qs.filter_condition(cond);
     }
     Ok(qs.count().await?)
+}
+
+#[cfg(test)]
+mod allow_block_unit {
+    use super::*;
+
+    #[test]
+    fn default_plugin_blocks_auth_user_and_session_and_migrations() {
+        let p = RestPlugin::new();
+        assert!(!p.allow("auth_user"));
+        assert!(!p.allow("session"));
+        assert!(!p.allow("umbra_migrations"));
+        assert!(p.allow("article"));
+    }
+
+    #[test]
+    fn expose_overrides_default_block_for_named_tables() {
+        let p = RestPlugin::new().expose(["auth_user"]);
+        assert!(p.allow("auth_user"), "expose should let auth_user through");
+        // Other blocked tables stay blocked unless individually exposed.
+        assert!(!p.allow("session"));
+        assert!(!p.allow("umbra_migrations"));
+        // Regular tables unaffected.
+        assert!(p.allow("article"));
+    }
+
+    #[test]
+    fn extra_exclude_beats_expose_when_both_name_the_same_table() {
+        // Explicit user "no" wins over explicit user "yes" for the
+        // same table — least surprising answer when two configs
+        // contradict.
+        let p = RestPlugin::new()
+            .expose(["auth_user"])
+            .exclude(["auth_user"]);
+        assert!(!p.allow("auth_user"));
+    }
+
+    #[test]
+    fn include_only_short_circuits_expose() {
+        // include_only is the strictest gate; tables not in it are
+        // blocked regardless of expose.
+        let p = RestPlugin::new()
+            .include_only(["article"])
+            .expose(["auth_user"]);
+        assert!(p.allow("article"));
+        assert!(
+            !p.allow("auth_user"),
+            "include_only's allow-list is exhaustive — expose can't punch through"
+        );
+    }
 }

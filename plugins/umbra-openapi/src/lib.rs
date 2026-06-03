@@ -28,10 +28,6 @@ use umbra::orm::SqlType;
 use umbra::prelude::*;
 use umbra::web::{Html, IntoResponse, Json, Response, StatusCode, header};
 
-/// Tables umbra-rest hides by default. Mirrored here so the spec does
-/// not advertise endpoints the REST plugin refuses to serve.
-const DEFAULT_BLOCKED_TABLES: &[&str] = &["auth_user", "session", "umbra_migrations"];
-
 const SWAGGER_UI_HTML: &str = include_str!("../templates/swagger_ui.html");
 
 /// The OpenAPI plugin.
@@ -110,9 +106,11 @@ impl OpenApiPlugin {
     }
 
     fn is_exposed(&self, table: &str) -> bool {
-        if DEFAULT_BLOCKED_TABLES.contains(&table) {
-            return false;
-        }
+        // The default block-list lives in umbra-rest and is consulted
+        // via `umbra_rest::is_exposed(table)` at spec-build time, so
+        // we don't duplicate it here. Our own opt-out is purely the
+        // `extra_exclude` list — for cases like "served by REST but
+        // I don't want it in the public spec."
         !self.extra_exclude.iter().any(|t| t == table)
     }
 
