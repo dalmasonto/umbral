@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/table";
 import { Clock, HardDrive, Copy, Check, AlertTriangle } from "lucide-react";
 import { MethodBadge } from "./MethodBadge";
+import { ReadonlyMonaco } from "./ReadonlyMonaco";
 import type { ResponseRecord } from "@/state/store";
 
 interface HistoryRecordDialogProps {
@@ -116,7 +117,7 @@ function KVTable({
 
 function CodeBlock({
   value,
-  language: _language = "json",
+  language = "json",
   emptyLabel,
 }: {
   value: string;
@@ -131,14 +132,20 @@ function CodeBlock({
       </p>
     );
   }
+  // Monaco's IntersectionObserver-based auto-layout needs a sized
+  // wrapper; 18rem gives enough room for ~15 lines of code while
+  // staying inside the dialog's overall max-h without nested scroll.
   return (
-    <div className="relative rounded-md border border-border bg-muted/30">
-      <div className="absolute right-2 top-2">
+    <div className="relative rounded-md border border-border overflow-hidden">
+      <div className="absolute right-2 top-2 z-10">
         <CopyButton value={pretty} />
       </div>
-      <pre className="overflow-x-auto p-3 pt-9 font-mono text-[11px] leading-relaxed text-foreground whitespace-pre-wrap break-all">
-        {pretty}
-      </pre>
+      <ReadonlyMonaco
+        value={pretty}
+        language={language}
+        height="18rem"
+        className="h-[18rem]"
+      />
     </div>
   );
 }

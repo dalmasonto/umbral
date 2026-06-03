@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { usePlayground } from "@/state/store";
 import { usePersistedState } from "@/hooks/usePersistedState";
+import { ReadonlyMonaco } from "./ReadonlyMonaco";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,7 +15,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import Editor from "@monaco-editor/react";
 import {
   Clock,
   HardDrive,
@@ -80,20 +80,6 @@ function toCurl(record: ResponseRecord): string {
   }
   parts.push(`'${req.url}'`);
   return parts.join(" \\\n  ");
-}
-
-function useIsDark() {
-  const [dark, setDark] = useState(() =>
-    document.documentElement.classList.contains("dark"),
-  );
-  useEffect(() => {
-    const obs = new MutationObserver(() =>
-      setDark(document.documentElement.classList.contains("dark")),
-    );
-    obs.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
-    return () => obs.disconnect();
-  }, []);
-  return dark;
 }
 
 function EmptyState({ title, hint }: { title: string; hint: string }) {
@@ -205,39 +191,6 @@ function HeadersTable({ headers }: { headers: Record<string, string> }) {
           </TableBody>
         </Table>
       </div>
-    </div>
-  );
-}
-
-function ReadonlyMonaco({
-  value,
-  language,
-}: {
-  value: string;
-  language: string;
-}) {
-  const isDark = useIsDark();
-  return (
-    <div className="flex-1 min-h-0 h-full rounded-md overflow-hidden border border-border">
-      <Editor
-        height="100%"
-        language={language}
-        theme={isDark ? "vs-dark" : "light"}
-        value={value}
-        options={{
-          readOnly: true,
-          minimap: { enabled: false },
-          lineNumbers: "on",
-          wordWrap: "on",
-          folding: true,
-          scrollBeyondLastLine: false,
-          automaticLayout: true,
-          fontSize: 13,
-          fontFamily:
-            'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace',
-          tabSize: 2,
-        }}
-      />
     </div>
   );
 }

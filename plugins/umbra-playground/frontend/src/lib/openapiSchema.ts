@@ -195,6 +195,92 @@ export function requestBodySchema(
   return { schema, name, contentType, required };
 }
 
+interface SynthesizeOptions {
+  /** Include every field, not just required ones. Default false. */
+  allFields?: boolean;
+  /** Include `readOnly` fields. Default false — those are server-
+   *  generated (created_at, computed columns, etc.) and including
+   *  them in a request body usually triggers a 4xx. */
+  includeReadOnly?: boolean;
+}
+
+/** Pick a sensible placeholder value for one field. Honors:
+ *  - explicit `default` from the OpenAPI schema (parsed as JSON if it
+ *    looks like a literal, else kept as a string);
+ *  - first enum value when there's an `enum`;
+ *  - nullable → `null`;
+ *  - format-driven hints for common string formats
+ *    (`date`, `date-time`, `uuid`, `email`, …);
+ *  - bare type defaults otherwise. */
+function placeholderForField(f: FieldInfo): unknown {
+  if (f.defaultValue !== undefined && f.defaultValue !== "") {
+    try {
+      return JSON.parse(f.defaultValue);
+    } catch {
+      return f.defaultValue;
+    }
+  }
+  if (f.enumValues && f.enumValues.length > 0) {
+    return f.enumValues[0];
+  }
+  if (f.nullable) {
+    return null;
+  }
+  switch (f.type) {
+    case "string":
+      switch (f.format) {
+        case "date":
+          return "2026-01-01";
+        case "date-time":
+          return "2026-01-01T00:00:00Z";
+        case "time":
+          return "00:00:00";
+        case "uuid":
+          return "00000000-0000-0000-0000-000000000000";
+        case "email":
+          return "user@example.com";
+        case "uri":
+        case "url":
+          return "https://example.com";
+        default:
+          return "";
+      }
+    case "integer":
+      return 0;
+    case "number":
+      return 0;
+    case "boolean":
+      return false;
+    case "array":
+      return [];
+    case "object":
+      return {};
+    default:
+      return null;
+  }
+}
+
+/** Build a pretty-printed JSON request body skeleton from a list of
+ *  `FieldInfo`s. Used by the Schema tab's autofill buttons in
+ *  `RequestBuilder` — "required only" gives the minimum payload the
+ *  server will accept; "all fields" shows every key the schema
+ *  documents. `readOnly` fields are skipped unless the caller
+ *  explicitly opts in (server fills them — sending them is usually a
+ *  4xx). */
+export function synthesizeJsonBody(
+  fields: FieldInfo[],
+  options: SynthesizeOptions = {},
+): string {
+  const { allFields = false, includeReadOnly = false } = options;
+  const obj: Record<string, unknown> = {};
+  for (const f of fields) {
+    if (!allFields && !f.required) continue;
+    if (!includeReadOnly && f.readOnly) continue;
+    obj[f.name] = placeholderForField(f);
+  }
+  return JSON.stringify(obj, null, 2);
+}
+
 /** True when the operation looks like a list-collection endpoint
  *  whose response item is a single schema we can introspect. Used to
  *  decide whether to offer filter affordances in the params tab. */

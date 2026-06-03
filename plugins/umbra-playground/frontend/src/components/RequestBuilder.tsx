@@ -15,6 +15,7 @@ import {
   listItemSchema,
   requestBodySchema,
   responseSchemaEntries,
+  synthesizeJsonBody,
   type FieldInfo,
 } from "@/lib/openapiSchema";
 import {
@@ -881,6 +882,50 @@ export function RequestBuilder() {
                     {requestBody.contentType ?? "application/json"}
                     {requestBody.required ? " · required" : " · optional"}
                   </p>
+                  {requestBodyFields.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-1.5 rounded-md border border-border bg-muted/20 p-2">
+                      <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mr-1">
+                        Autofill body
+                      </span>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="xs"
+                        onClick={() => {
+                          const skeleton = synthesizeJsonBody(
+                            requestBodyFields,
+                            { allFields: false },
+                          );
+                          setBodyType("json");
+                          setBody(skeleton);
+                          setActiveTab("body");
+                        }}
+                        className="h-6 px-2 font-mono text-[10px]"
+                      >
+                        Required only
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="xs"
+                        onClick={() => {
+                          const skeleton = synthesizeJsonBody(
+                            requestBodyFields,
+                            { allFields: true },
+                          );
+                          setBodyType("json");
+                          setBody(skeleton);
+                          setActiveTab("body");
+                        }}
+                        className="h-6 px-2 font-mono text-[10px]"
+                      >
+                        All fields
+                      </Button>
+                      <span className="ml-auto text-[10px] text-muted-foreground/70">
+                        Lands in the Body tab as JSON.
+                      </span>
+                    </div>
+                  )}
                   <SchemaTable
                     fields={requestBodyFields}
                     emptyLabel="Request body has no declared properties."
