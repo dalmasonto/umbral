@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { Checkbox } from "@/components/ui/checkbox";
 import { KeyValueEditor } from "./KeyValueEditor";
 import { MethodBadge } from "./MethodBadge";
 import { Send, Lock, AlignLeft, Code2, Braces, FormInput } from "lucide-react";
@@ -206,22 +207,127 @@ export function RequestBuilder() {
             {op?.operation.parameters && op.operation.parameters.length > 0 && (
               <>
                 <Separator />
-                <div className="space-y-1">
+                <div className="space-y-2">
                   <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold">
                     Declared Parameters
                   </p>
-                  {(op.operation.parameters as OpenAPIV3.ParameterObject[]).map((p) => (
-                    <div key={p.name} className="flex items-center gap-2 text-xs">
-                      <span className="font-mono text-foreground">{p.name}</span>
-                      <Badge variant="outline" className="text-[9px] h-4 px-1">{p.in}</Badge>
-                      {p.required && (
-                        <Badge variant="destructive" className="text-[9px] h-4 px-1">required</Badge>
-                      )}
-                      <span className="text-muted-foreground">
-                        {typeof p.schema === "object" && !("$ref" in p.schema) && p.schema.type}
-                      </span>
+                  <div className="rounded-lg border border-border overflow-hidden">
+                    {/* Table Header */}
+                    <div className="grid grid-cols-[2rem_1fr_4rem_4rem_1fr] gap-2 px-3 py-2 bg-muted/50 border-b border-border text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                      <span />
+                      <span>Name</span>
+                      <span>In</span>
+                      <span>Type</span>
+                      <span className="text-right">Value</span>
                     </div>
-                  ))}
+
+                    {/* Table Rows */}
+                    <div className="divide-y divide-border">
+                      {(op.operation.parameters as OpenAPIV3.ParameterObject[]).map((p) => {
+                        const existing = current.params.find(
+                          (param) => param.key === p.name,
+                        );
+                        const isChecked = !!existing && existing.enabled;
+                        const schemaType =
+                          typeof p.schema === "object" && !("$ref" in p.schema)
+                            ? p.schema.type
+                            : "";
+
+                        const toggleParam = () => {
+                          if (existing) {
+                            setParams(
+                              current.params.map((param) =>
+                                param.key === p.name
+                                  ? { ...param, enabled: !param.enabled }
+                                  : param,
+                              ),
+                            );
+                          } else {
+                            setParams([
+                              ...current.params,
+                              {
+                                key: p.name,
+                                value: "",
+                                enabled: true,
+                              },
+                            ]);
+                          }
+                        };
+
+                        const setParamValue = (value: string) => {
+                          if (existing) {
+                            setParams(
+                              current.params.map((param) =>
+                                param.key === p.name
+                                  ? { ...param, value }
+                                  : param,
+                              ),
+                            );
+                          }
+                        };
+
+                        return (
+                          <div
+                            key={p.name}
+                            className={`grid grid-cols-[2rem_1fr_4rem_4rem_1fr] gap-2 px-3 py-2 items-center text-xs transition-colors ${
+                              isChecked
+                                ? "bg-primary/[0.02]"
+                                : "opacity-60"
+                            }`}
+                          >
+                            <div className="flex justify-center">
+                              <Checkbox
+                                checked={isChecked}
+                                onCheckedChange={toggleParam}
+                              />
+                            </div>
+
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-mono text-foreground truncate">
+                                {p.name}
+                              </span>
+                              {p.required && (
+                                <Badge
+                                  variant="destructive"
+                                  className="text-[9px] h-4 px-1 shrink-0"
+                                >
+                                  req
+                                </Badge>
+                              )}
+                            </div>
+
+                            <Badge
+                              variant="outline"
+                              className="text-[9px] h-5 px-1.5 justify-center w-fit"
+                            >
+                              {p.in}
+                            </Badge>
+
+                            <span className="text-muted-foreground font-mono text-[10px]">
+                              {schemaType || "—"}
+                            </span>
+
+                            <div className="flex justify-end">
+                              {isChecked ? (
+                                <Input
+                                  value={existing?.value ?? ""}
+                                  onChange={(e) =>
+                                    setParamValue(e.target.value)
+                                  }
+                                  placeholder="value"
+                                  className="h-7 text-xs font-mono rounded-md w-full max-w-[8rem]"
+                                />
+                              ) : (
+                                <span className="text-muted-foreground/40 italic text-[10px] pr-2">
+                                  —
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
                 </div>
               </>
             )}
