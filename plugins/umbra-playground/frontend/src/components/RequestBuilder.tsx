@@ -6,24 +6,19 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { KeyValueEditor, type KVRow } from "./KeyValueEditor";
+import { KeyValueEditor } from "./KeyValueEditor";
 import { MethodBadge } from "./MethodBadge";
-import { Send, Lock, AlignLeft, Code2 } from "lucide-react";
-
-function recordToKv(r: Record<string, string>): KVRow[] {
-  return Object.entries(r).map(([key, value]) => ({ key, value }));
-}
-
-function kvToRecord(rows: KVRow[]): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const r of rows) {
-    if (r.key) out[r.key] = r.value;
-  }
-  return out;
-}
+import { Send, Lock, AlignLeft, Code2, Braces, FormInput } from "lucide-react";
 
 function extractPathParams(url: string): string[] {
   return [...url.matchAll(/\{([a-zA-Z_][a-zA-Z0-9_]*)\}/g)].map((m) => m[1]);
+}
+
+function findPathParamValue(
+  params: Array<{ key: string; value: string; enabled: boolean }>,
+  name: string,
+): string {
+  return params.find((p) => p.key === name && p.enabled)?.value ?? "";
 }
 
 type TabId = "params" | "body" | "headers" | "auth";
@@ -40,9 +35,13 @@ export function RequestBuilder() {
   const selected = usePlayground((s) => s.selectedOperationId);
   const current = usePlayground((s) => s.current);
   const setUrl = usePlayground((s) => s.setUrl);
-  const setParam = usePlayground((s) => s.setParam);
-  const setHeader = usePlayground((s) => s.setHeader);
+  const setParams = usePlayground((s) => s.setParams);
+  const setHeaders = usePlayground((s) => s.setHeaders);
   const setBody = usePlayground((s) => s.setBody);
+  const setBodyType = usePlayground((s) => s.setBodyType);
+  const setFormFields = usePlayground((s) => s.setFormFields);
+  const setAuthScheme = usePlayground((s) => s.setAuthScheme);
+  const setAuthToken = usePlayground((s) => s.setAuthToken);
   const resetCurrent = usePlayground((s) => s.resetCurrent);
   const send = usePlayground((s) => s.send);
   const inFlight = usePlayground((s) => s.inFlight);
@@ -95,8 +94,7 @@ export function RequestBuilder() {
     );
   }
 
-  const paramRows = recordToKv(current.params);
-  const headerRows = recordToKv(current.headers);
+  const enabledHeaders = current.headers.filter((h) => h.enabled);
 
   return (
     <div className="flex flex-col h-full">
@@ -108,15 +106,15 @@ export function RequestBuilder() {
             value={current.url}
             onChange={(e) => setUrl(e.target.value)}
             placeholder="/api/endpoint"
-            className="flex-1 font-mono text-xs h-8"
+            className="flex-1 font-mono text-sm h-10 rounded-md"
           />
           <Button
             onClick={handleSend}
             disabled={inFlight}
             size="sm"
-            className="bg-primary hover:bg-primary/90 text-primary-foreground font-semibold text-xs h-8 px-3"
+            className="bg-primary hover:bg-primary/90 text-primary-foreground font-semibold text-xs h-10 px-4"
           >
-            <Send className="size-3.5 mr-1" />
+            <Send className="size-3.5 mr-1.5" />
             {inFlight ? "Sending…" : "Send"}
           </Button>
         </div>
@@ -129,10 +127,24 @@ export function RequestBuilder() {
                   {name}
                 </span>
                 <Input
-                  value={current.params[name] ?? ""}
-                  onChange={(e) => setParam(name, e.target.value)}
+                  value={findPathParamValue(current.params, name)}
+                  onChange={(e) => {
+                    const existing = current.params.find((p) => p.key === name);
+                    if (existing) {
+                      setParams(
+                        current.params.map((p) =>
+                          p.key === name ? { ...p, value: e.target.value } : p,
+                        ),
+                      );
+                    } else {
+                      setParams([
+                        ...current.params,
+                        { key: name, value: e.target.value, enabled: true },
+                      ]);
+                    }
+                  }}
                   placeholder={`{${name}}`}
-                  className="w-32 font-mono text-xs h-7"
+                  className="w-36 font-mono text-sm h-9 rounded-md"
                 />
               </div>
             ))}
@@ -147,16 +159,16 @@ export function RequestBuilder() {
             key={tab.id}
             type="button"
             onClick={() => setActiveTab(tab.id)}
-            className={`px-3 py-2 text-[11px] font-semibold uppercase tracking-wide transition-colors border-b-2 ${
+            className={`px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wide transition-colors border-b-2 ${
               activeTab === tab.id
                 ? "text-primary border-primary"
                 : "text-muted-foreground border-transparent hover:text-foreground"
             }`}
           >
             {tab.label}
-            {tab.id === "headers" && headerRows.length > 0 && (
-              <Badge variant="secondary" className="ml-1 text-[9px] px-1 py-0">
-                {headerRows.length}
+            {tab.id === "headers" && enabledHeaders.length > 0 && (
+              <Badge variant="secondary" className="ml-1.5 text-[9px] px-1 py-0">
+                {enabledHeaders.length}
               </Badge>
             )}
           </button>
@@ -171,16 +183,8 @@ export function RequestBuilder() {
               Query &amp; Path Parameters
             </p>
             <KeyValueEditor
-              rows={paramRows}
-              onChange={(rows) => {
-                const next = kvToRecord(rows);
-                for (const k of Object.keys(current.params)) {
-                  if (!(k in next)) setParam(k, "");
-                }
-                for (const [k, v] of Object.entries(next)) {
-                  if (current.params[k] !== v) setParam(k, v);
-                }
-              }}
+              rows={current.params}
+              onChange={setParams}
               keyPlaceholder="param"
               valuePlaceholder="value"
             />
@@ -210,35 +214,75 @@ export function RequestBuilder() {
         )}
 
         {activeTab === "body" && (
-          <div className="h-full flex flex-col gap-2">
+          <div className="h-full flex flex-col gap-3">
             <div className="flex items-center justify-between">
-              <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold">
-                Request Body
-              </p>
-              <Button
-                type="button"
-                variant="ghost"
-                size="xs"
-                onClick={() => {
-                  try {
-                    setBody(JSON.stringify(JSON.parse(current.body), null, 2));
-                  } catch {
-                    /* leave as-is */
-                  }
-                }}
-                className="text-muted-foreground hover:text-foreground text-[10px]"
-              >
-                <AlignLeft className="size-3 mr-1" />
-                Format JSON
-              </Button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setBodyType("json")}
+                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[10px] font-semibold uppercase tracking-wide transition-colors border ${
+                    current.bodyType === "json"
+                      ? "bg-primary/10 text-primary border-primary/20"
+                      : "text-muted-foreground border-transparent hover:text-foreground hover:bg-muted"
+                  }`}
+                >
+                  <Braces className="size-3" />
+                  JSON
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setBodyType("form")}
+                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[10px] font-semibold uppercase tracking-wide transition-colors border ${
+                    current.bodyType === "form"
+                      ? "bg-primary/10 text-primary border-primary/20"
+                      : "text-muted-foreground border-transparent hover:text-foreground hover:bg-muted"
+                  }`}
+                >
+                  <FormInput className="size-3" />
+                  Form
+                </button>
+              </div>
+              {current.bodyType === "json" && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="xs"
+                  onClick={() => {
+                    try {
+                      setBody(JSON.stringify(JSON.parse(current.body), null, 2));
+                    } catch {
+                      /* leave as-is */
+                    }
+                  }}
+                  className="text-muted-foreground hover:text-foreground text-[10px]"
+                >
+                  <AlignLeft className="size-3 mr-1" />
+                  Format JSON
+                </Button>
+              )}
             </div>
-            <Textarea
-              value={current.body}
-              onChange={(e) => setBody(e.target.value)}
-              placeholder={`{\n  "title": "Hello World",\n  "content": "..."\n}`}
-              className="flex-1 font-mono text-xs resize-none min-h-[8rem]"
-              spellCheck={false}
-            />
+
+            {current.bodyType === "json" ? (
+              <Textarea
+                value={current.body}
+                onChange={(e) => setBody(e.target.value)}
+                placeholder={`{\n  "title": "Hello World",\n  "content": "..."\n}`}
+                className="flex-1 font-mono text-sm resize-none min-h-[8rem] rounded-md"
+                spellCheck={false}
+              />
+            ) : (
+              <div className="space-y-2">
+                <p className="text-[10px] text-muted-foreground">
+                  application/x-www-form-urlencoded
+                </p>
+                <KeyValueEditor
+                  rows={current.formFields}
+                  onChange={setFormFields}
+                  keyPlaceholder="field"
+                  valuePlaceholder="value"
+                />
+              </div>
+            )}
           </div>
         )}
 
@@ -248,16 +292,8 @@ export function RequestBuilder() {
               Request Headers
             </p>
             <KeyValueEditor
-              rows={headerRows}
-              onChange={(rows) => {
-                const next = kvToRecord(rows);
-                for (const k of Object.keys(current.headers)) {
-                  if (!(k in next)) setHeader(k, "");
-                }
-                for (const [k, v] of Object.entries(next)) {
-                  if (current.headers[k] !== v) setHeader(k, v);
-                }
-              }}
+              rows={current.headers}
+              onChange={setHeaders}
               keyPlaceholder="Header"
               valuePlaceholder="Value"
             />
@@ -270,18 +306,28 @@ export function RequestBuilder() {
               <div className="flex items-center gap-2">
                 <Lock className="size-3.5 text-muted-foreground" />
                 <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold">
-                  Bearer Token
+                  Authorization
                 </p>
               </div>
-              <Input
-                type="password"
-                value={current.bearerToken}
-                onChange={(e) => setHeader("Authorization", e.target.value ? `Bearer ${e.target.value}` : "")}
-                placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-                className="font-mono text-xs h-8"
-              />
+              <div className="flex items-center gap-2">
+                <Input
+                  value={current.authScheme}
+                  onChange={(e) => setAuthScheme(e.target.value)}
+                  placeholder="Bearer"
+                  className="w-28 font-mono text-sm h-9 rounded-md"
+                />
+                <Input
+                  type="password"
+                  value={current.authToken}
+                  onChange={(e) => setAuthToken(e.target.value)}
+                  placeholder="token"
+                  className="flex-1 font-mono text-sm h-9 rounded-md"
+                />
+              </div>
               <p className="text-[10px] text-muted-foreground/60">
-                Sent as <code className="font-mono text-foreground">Authorization: Bearer &lt;token&gt;</code>
+                Sent as <code className="font-mono text-foreground">
+                  Authorization: {current.authScheme || "<scheme>"} {current.authToken ? "<token>" : "<empty>"}
+                </code>
               </p>
             </div>
             <Separator />

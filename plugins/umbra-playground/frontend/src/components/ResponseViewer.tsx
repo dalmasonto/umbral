@@ -3,7 +3,8 @@ import { usePlayground } from "@/state/store";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { JsonView } from "./JsonView";
+import { JsonView, defaultStyles } from "react-json-view-lite";
+import "react-json-view-lite/dist/index.css";
 import {
   Clock,
   HardDrive,
@@ -36,19 +37,30 @@ function statusColor(status: number): string {
 function toCurl(record: ResponseRecord): string {
   const req = record.request;
   const parts: string[] = [`curl -X ${req.method}`];
-  for (const [k, v] of Object.entries(req.headers)) {
-    if (!v) continue;
-    parts.push(`-H '${k}: ${v.replace(/'/g, "'\\''")}'`);
+  for (const h of req.headers) {
+    if (!h.enabled || !h.key) continue;
+    parts.push(`-H '${h.key}: ${h.value.replace(/'/g, "'\\''")}'`);
   }
-  if (req.bearerToken) {
-    parts.push(`-H 'Authorization: Bearer ${req.bearerToken}'`);
+  if (req.authToken) {
+    parts.push(`-H 'Authorization: ${req.authScheme} ${req.authToken}'`);
   }
-  if (req.body && req.method !== "GET" && req.method !== "HEAD") {
+  if (req.bodyType === "json" && req.body && req.method !== "GET" && req.method !== "HEAD") {
     parts.push(`-d '${req.body.replace(/'/g, "'\\''")}'`);
+  } else if (req.bodyType === "form" && req.formFields.length > 0 && req.method !== "GET" && req.method !== "HEAD") {
+    const qs = req.formFields
+      .filter((f) => f.enabled && f.key)
+      .map(({ key, value }) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+      .join("&");
+    parts.push(`-d '${qs.replace(/'/g, "'\\''")}'`);
   }
   parts.push(`'${req.url}'`);
   return parts.join(" \\\n  ");
 }
+
+const jsonStyles = {
+  ...defaultStyles,
+  container: "font-mono text-xs leading-relaxed",
+};
 
 export function ResponseViewer() {
   const lastResponse = usePlayground((s) => s.lastResponse);
@@ -133,7 +145,7 @@ export function ResponseViewer() {
             key={tab.id}
             type="button"
             onClick={() => setActiveTab(tab.id)}
-            className={`px-3 py-2 text-[11px] font-semibold uppercase tracking-wide transition-colors border-b-2 flex items-center gap-1.5 ${
+            className={`px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wide transition-colors border-b-2 flex items-center gap-1.5 ${
               activeTab === tab.id
                 ? "text-primary border-primary"
                 : "text-muted-foreground border-transparent hover:text-foreground"
@@ -155,9 +167,11 @@ export function ResponseViewer() {
         {activeTab === "body" && (
           <div className="h-full">
             {prettyBody ? (
-              <div className="font-mono text-xs leading-relaxed">
-                <JsonView data={prettyBody} collapsed={false} />
-              </div>
+              <JsonView
+                data={prettyBody}
+                style={jsonStyles}
+                shouldExpandNode={() => true}
+              />
             ) : (
               <pre className="font-mono text-xs whitespace-pre-wrap break-all text-foreground">
                 {bodyText || (
@@ -232,11 +246,11 @@ export function ResponseViewer() {
                     <Button
                       type="button"
                       variant="ghost"
-                      size="icon-xs"
+                      size="icon-sm"
                       className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive"
                       onClick={() => selected && clearHistory(selected)}
                     >
-                      <Trash2 className="size-3" />
+                      <Trash2 className="size-3.5" />
                     </Button>
                   </div>
                 );
@@ -245,7 +259,7 @@ export function ResponseViewer() {
               <Button
                 type="button"
                 variant="ghost"
-                size="xs"
+                size="sm"
                 onClick={() => clearHistory(selected)}
                 className="text-muted-foreground hover:text-destructive text-[10px]"
               >

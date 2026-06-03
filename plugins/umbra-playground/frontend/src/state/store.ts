@@ -4,14 +4,23 @@ import { buildFetchArgs } from "./buildFetchArgs";
 import { saveHistoryDebounced } from "./history";
 import { mockSpec, getMockResponse } from "../data/mockSpec";
 
+export interface KVItem {
+  key: string;
+  value: string;
+  enabled: boolean;
+}
+
 /** A request as the user has constructed it in the builder. */
 export interface RequestDraft {
   method: string;
   url: string;
-  params: Record<string, string>;
-  headers: Record<string, string>;
+  params: KVItem[];
+  headers: KVItem[];
+  bodyType: "json" | "form";
   body: string;
-  bearerToken: string;
+  formFields: KVItem[];
+  authScheme: string;
+  authToken: string;
 }
 
 /** A completed request/response pair, persisted in history. */
@@ -28,6 +37,23 @@ export interface ResponseRecord {
   error?: string;
 }
 
+const defaultHeaders: KVItem[] = [
+  { key: "Content-Type", value: "application/json", enabled: true },
+  { key: "Accept", value: "application/json", enabled: true },
+];
+
+const emptyDraft: RequestDraft = {
+  method: "GET",
+  url: "",
+  params: [],
+  headers: [],
+  bodyType: "json",
+  body: "",
+  formFields: [],
+  authScheme: "Bearer",
+  authToken: "",
+};
+
 interface PlaygroundState {
   // spec
   spec: OpenAPIV3.Document | null;
@@ -43,10 +69,13 @@ interface PlaygroundState {
   current: RequestDraft;
   setMethod: (m: string) => void;
   setUrl: (u: string) => void;
-  setParam: (name: string, value: string) => void;
-  setHeader: (name: string, value: string) => void;
+  setParams: (params: KVItem[]) => void;
+  setHeaders: (headers: KVItem[]) => void;
+  setBodyType: (t: "json" | "form") => void;
   setBody: (raw: string) => void;
-  setBearerToken: (t: string) => void;
+  setFormFields: (fields: KVItem[]) => void;
+  setAuthScheme: (s: string) => void;
+  setAuthToken: (t: string) => void;
   resetCurrent: (draft: Partial<RequestDraft>) => void;
 
   // response
@@ -58,15 +87,6 @@ interface PlaygroundState {
   history: Record<string, ResponseRecord[]>;
   clearHistory: (operationId: string) => void;
 }
-
-const emptyDraft: RequestDraft = {
-  method: "GET",
-  url: "",
-  params: {},
-  headers: {},
-  body: "",
-  bearerToken: "",
-};
 
 export const usePlayground = create<PlaygroundState>((set, get) => ({
   spec: null,
@@ -83,7 +103,6 @@ export const usePlayground = create<PlaygroundState>((set, get) => ({
       const spec = (await res.json()) as OpenAPIV3.Document;
       set({ spec, loadingSpec: false });
     } catch {
-      // Fallback to mock spec so the UI is always populated.
       set({ spec: mockSpec, loadingSpec: false, specError: null });
     }
   },
@@ -94,19 +113,31 @@ export const usePlayground = create<PlaygroundState>((set, get) => ({
   current: { ...emptyDraft },
   setMethod: (m) => set((s) => ({ current: { ...s.current, method: m } })),
   setUrl: (u) => set((s) => ({ current: { ...s.current, url: u } })),
-  setParam: (name, value) =>
-    set((s) => ({
-      current: { ...s.current, params: { ...s.current.params, [name]: value } },
-    })),
-  setHeader: (name, value) =>
-    set((s) => ({
-      current: { ...s.current, headers: { ...s.current.headers, [name]: value } },
-    })),
+  setParams: (params) => set((s) => ({ current: { ...s.current, params } })),
+  setHeaders: (headers) => set((s) => ({ current: { ...s.current, headers } })),
+  setBodyType: (t) => set((s) => ({ current: { ...s.current, bodyType: t } })),
   setBody: (raw) => set((s) => ({ current: { ...s.current, body: raw } })),
-  setBearerToken: (t) =>
-    set((s) => ({ current: { ...s.current, bearerToken: t } })),
-  resetCurrent: (draft) =>
-    set({ current: { ...emptyDraft, ...draft } }),
+  setFormFields: (fields) =>
+    set((s) => ({ current: { ...s.current, formFields: fields } })),
+  setAuthScheme: (scheme) =>
+    set((s) => ({ current: { ...s.current, authScheme: scheme } })),
+  setAuthToken: (token) =>
+    set((s) => ({ current: { ...s.current, authToken: token } })),
+  resetCurrent: (draft) => {
+    const base = { ...emptyDraft, ...draft };
+    // Merge default headers with any user-provided ones, deduping by key.
+    const mergedHeaders = [...defaultHeaders];
+    for (const h of base.headers) {
+      const idx = mergedHeaders.findIndex((d) => d.key === h.key);
+      if (idx >= 0) {
+        mergedHeaders[idx] = { ...h };
+      } else {
+        mergedHeaders.push({ ...h });
+      }
+    }
+    base.headers = mergedHeaders;
+    set({ current: base });
+  },
 
   lastResponse: null,
   inFlight: false,
@@ -138,21 +169,28 @@ export const usePlayground = create<PlaygroundState>((set, get) => ({
     set({ inFlight: true });
     const start = performance.now();
 
-    // Attempt real fetch first; fall back to mock responses for demo endpoints.
     try {
       const mock = getMockResponse(
         state.selectedOperationId ?? "",
-        state.current.method === "DELETE" ? 204 : state.current.method === "POST" ? 201 : 200,
+        state.current.method === "DELETE"
+          ? 204
+          : state.current.method === "POST"
+            ? 201
+            : 200,
       );
 
       if (mock) {
-        // Simulate network delay for realism.
         await new Promise((r) => setTimeout(r, 300 + Math.random() * 400));
         const durationMs = Math.round(performance.now() - start);
         const record: ResponseRecord = {
           operationId: state.selectedOperationId ?? "unknown",
           request: { ...state.current },
-          status: state.current.method === "DELETE" ? 204 : state.current.method === "POST" ? 201 : 200,
+          status:
+            state.current.method === "DELETE"
+              ? 204
+              : state.current.method === "POST"
+                ? 201
+                : 200,
           statusText: state.current.method === "DELETE" ? "No Content" : "OK",
           durationMs,
           sizeBytes: new Blob([mock.body]).size,

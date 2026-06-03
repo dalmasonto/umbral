@@ -36,17 +36,17 @@ export function App() {
     <TooltipProvider delayDuration={0}>
       <SidebarProvider>
         <Sidebar collapsible="offcanvas" className="border-r border-border">
-          <SidebarHeader className="px-3 py-2">
-            <div className="flex items-center gap-2">
-              <Zap className="size-4 text-primary" />
+          <SidebarHeader className="px-4 py-0 h-[60px] flex flex-row items-center justify-between shrink-0">
+            <div className="flex items-center gap-2.5">
+              <Zap className="size-5 text-primary" />
               <div className="flex flex-col">
-                <span className="text-sm font-semibold tracking-tight">
+                <span className="text-sm font-semibold tracking-tight leading-tight">
                   umbra playground
                 </span>
-                <span className="text-[10px] text-muted-foreground">
+                <span className="text-[10px] text-muted-foreground leading-tight">
                   {spec?.info?.title ?? "API Explorer"}
                   {spec?.info?.version && (
-                    <>{" "}<span className="text-muted-foreground/60">v{spec.info.version}</span></>
+                    <> <span className="text-muted-foreground/60">v{spec.info.version}</span></>
                   )}
                 </span>
               </div>
@@ -82,9 +82,9 @@ export function App() {
         </Sidebar>
 
         <SidebarInset>
-          <header className="flex h-12 items-center gap-3 border-b border-border px-4 bg-card/50">
+          <header className="flex h-[60px] items-center gap-3 border-b border-border px-4 bg-card/50 shrink-0">
             <SidebarTrigger />
-            <Separator orientation="vertical" className="h-4" />
+            <Separator orientation="vertical" className="h-5" />
             <div className="flex items-baseline gap-2 flex-1">
               <h1 className="text-sm font-medium">
                 {spec?.info?.title ?? "playground"}

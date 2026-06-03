@@ -6,10 +6,13 @@ function draft(overrides: Partial<RequestDraft> = {}): RequestDraft {
   return {
     method: "GET",
     url: "/api/articles/",
-    params: {},
-    headers: {},
+    params: [],
+    headers: [],
+    bodyType: "json",
     body: "",
-    bearerToken: "",
+    formFields: [],
+    authScheme: "Bearer",
+    authToken: "",
     ...overrides,
   };
 }
@@ -23,9 +26,12 @@ describe("buildFetchArgs", () => {
     }
   });
 
-  it("resolves path template params from the params map", () => {
+  it("resolves path template params from the params list", () => {
     const result = buildFetchArgs(
-      draft({ url: "/api/articles/{id}/", params: { id: "42" } }),
+      draft({
+        url: "/api/articles/{id}/",
+        params: [{ key: "id", value: "42", enabled: true }],
+      }),
     );
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -46,7 +52,13 @@ describe("buildFetchArgs", () => {
 
   it("appends query params to the URL", () => {
     const result = buildFetchArgs(
-      draft({ url: "/api/articles/", params: { page: "2", limit: "10" } }),
+      draft({
+        url: "/api/articles/",
+        params: [
+          { key: "page", value: "2", enabled: true },
+          { key: "limit", value: "10", enabled: true },
+        ],
+      }),
     );
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -57,7 +69,10 @@ describe("buildFetchArgs", () => {
 
   it("encodes special characters in query values", () => {
     const result = buildFetchArgs(
-      draft({ url: "/api/articles/", params: { q: "hello world" } }),
+      draft({
+        url: "/api/articles/",
+        params: [{ key: "q", value: "hello world", enabled: true }],
+      }),
     );
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -65,12 +80,25 @@ describe("buildFetchArgs", () => {
     }
   });
 
-  it("adds bearer token as Authorization header", () => {
-    const result = buildFetchArgs(draft({ bearerToken: "abc123" }));
+  it("adds auth token as Authorization header", () => {
+    const result = buildFetchArgs(
+      draft({ authScheme: "Bearer", authToken: "abc123" }),
+    );
     expect(result.ok).toBe(true);
     if (result.ok) {
       const headers = result.args.init.headers as Record<string, string>;
       expect(headers["Authorization"]).toBe("Bearer abc123");
+    }
+  });
+
+  it("supports custom auth schemes", () => {
+    const result = buildFetchArgs(
+      draft({ authScheme: "Token", authToken: "xyz" }),
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const headers = result.args.init.headers as Record<string, string>;
+      expect(headers["Authorization"]).toBe("Token xyz");
     }
   });
 
@@ -107,12 +135,31 @@ describe("buildFetchArgs", () => {
 
   it("merges user headers", () => {
     const result = buildFetchArgs(
-      draft({ headers: { "X-Custom": "yes" } }),
+      draft({
+        headers: [{ key: "X-Custom", value: "yes", enabled: true }],
+      }),
     );
     expect(result.ok).toBe(true);
     if (result.ok) {
       const headers = result.args.init.headers as Record<string, string>;
       expect(headers["X-Custom"]).toBe("yes");
+    }
+  });
+
+  it("ignores disabled headers", () => {
+    const result = buildFetchArgs(
+      draft({
+        headers: [
+          { key: "X-On", value: "yes", enabled: true },
+          { key: "X-Off", value: "no", enabled: false },
+        ],
+      }),
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const headers = result.args.init.headers as Record<string, string>;
+      expect(headers["X-On"]).toBe("yes");
+      expect(headers["X-Off"]).toBeUndefined();
     }
   });
 });

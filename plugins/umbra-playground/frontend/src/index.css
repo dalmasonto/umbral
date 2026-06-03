@@ -166,3 +166,9 @@
     @apply font-sans;
   }
 }
+
+/* Playground overrides: tighter radius on inputs for a denser UI. */
+input[data-slot="input"],
+textarea[data-slot="textarea"] {
+  border-radius: calc(var(--radius) - 4px);
+}
