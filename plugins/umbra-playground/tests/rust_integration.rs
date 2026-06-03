@@ -59,6 +59,12 @@ async fn missing_asset_returns_404() {
 ///
 /// Skips silently when the bundle hasn't been built (CI without npm).
 /// The shell + 404 tests above already cover that mode.
+///
+/// Note: this test runs under `cargo test`, which sets
+/// `CARGO_MANIFEST_DIR` in the test binary's env. The runtime
+/// equivalent (a deployed server binary) does NOT have that env var
+/// set — `static_serve::resolve` now bakes the path in at compile
+/// time via `env!()` for exactly that reason. See `runtime_cwd_does_not_affect_asset_resolution` below.
 #[tokio::test]
 async fn vite_emitted_css_resolves_to_200() {
     use std::path::PathBuf;
@@ -107,5 +113,82 @@ async fn vite_emitted_css_resolves_to_200() {
     assert!(
         ctype.starts_with("text/css"),
         "expected text/css content-type; got {ctype}",
+    );
+}
+
+/// Regression test for the runtime CWD bug: the resolver used to read
+/// `CARGO_MANIFEST_DIR` via `std::env::var` at request time. Cargo
+/// only exports that env var during the build (and during `cargo test`),
+/// so a deployed binary serving from any working directory other than
+/// the crate root would 404 every asset. The bug only surfaced in
+/// production because tests had the env var set for free.
+///
+/// We simulate the runtime by changing the test process's CWD to /tmp
+/// AND unsetting `CARGO_MANIFEST_DIR` before the request. If the
+/// resolver still works, it's because the manifest dir was baked at
+/// compile time via `env!()`. If it 404s, it's reading runtime state
+/// and we've regressed.
+#[tokio::test]
+async fn asset_resolves_even_when_cwd_and_env_dont_point_at_the_crate() {
+    use std::path::PathBuf;
+
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let assets_dir = manifest_dir.join("dist").join("assets");
+    let Ok(read) = std::fs::read_dir(&assets_dir) else {
+        eprintln!("skipping: dist/assets not populated (no vite build)");
+        return;
+    };
+    let css_name = read
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .find(|n| n.starts_with("index-") && n.ends_with(".css"));
+    let Some(css_name) = css_name else {
+        eprintln!("skipping: no index-*.css in dist/assets");
+        return;
+    };
+
+    // Move CWD to /tmp and clear the env var. A correct resolver
+    // should still find the asset because it baked the manifest dir
+    // at compile time.
+    //
+    // SAFETY: tests run in the same process; this change leaks into
+    // sibling tests if they assume a specific CWD. The other tests
+    // in this file don't, but tokio::test spawns each test on the
+    // same runtime — so we restore CWD before returning.
+    let saved_cwd = std::env::current_dir().ok();
+    std::env::set_current_dir("/tmp").expect("chdir /tmp");
+    // SAFETY: setting env vars from a test thread can race with
+    // anything reading env in another thread. There's no such reader
+    // here (the resolver is the only consumer and it's compile-time
+    // baked now), so this is the minimal surface that still exercises
+    // the regression.
+    unsafe {
+        std::env::remove_var("CARGO_MANIFEST_DIR");
+    }
+
+    let plugin = PlaygroundPlugin::new();
+    let base = plugin
+        .base_path_for_test()
+        .trim_start_matches('/')
+        .to_string();
+    let app = plugin.routes();
+
+    let req = Request::builder()
+        .uri(format!("/{base}/assets/{css_name}"))
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    let status = res.status();
+
+    // Restore CWD regardless of test outcome.
+    if let Some(cwd) = saved_cwd {
+        let _ = std::env::set_current_dir(cwd);
+    }
+
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "asset resolution must not depend on runtime CWD or env vars; \
+         the resolver should bake CARGO_MANIFEST_DIR at compile time",
     );
 }
