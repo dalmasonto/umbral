@@ -268,10 +268,26 @@ export function KeyValueEditor({
             type="button"
             variant="ghost"
             size="icon-sm"
-            onClick={commitDraft}
+            onClick={() => {
+              if (!draft.key.trim() && !draft.value.trim() && draft.type !== "file") {
+                setEditing(false);
+                setDraft({ key: "", value: "", enabled: true, type: "text" });
+              } else {
+                commitDraft();
+              }
+            }}
             className="text-primary hover:text-primary/80 shrink-0"
+            title={
+              !draft.key.trim() && !draft.value.trim() && draft.type !== "file"
+                ? "Cancel"
+                : "Add row"
+            }
           >
-            <Plus className="size-3.5" />
+            {!draft.key.trim() && !draft.value.trim() && draft.type !== "file" ? (
+              <Trash2 className="size-3.5 text-muted-foreground hover:text-destructive" />
+            ) : (
+              <Plus className="size-3.5" />
+            )}
           </Button>
         </div>
       ) : (

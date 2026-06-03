@@ -1,7 +1,7 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
-@import "@fontsource-variable/geist";
+@import "@fontsource-variable/inter";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -101,7 +101,7 @@
 
 .theme {
   --font-heading: var(--font-sans);
-  --font-sans: "Geist Variable", sans-serif;
+  --font-sans: "Inter Variable", "Inter", system-ui, -apple-system, sans-serif;
 }
 
 @theme inline {
@@ -171,4 +171,17 @@
 input[data-slot="input"],
 textarea[data-slot="textarea"] {
   border-radius: calc(var(--radius) - 4px);
+}
+
+/* Global cursor-pointer for all interactive elements */
+button,
+[role="button"],
+[role="tab"],
+[role="checkbox"],
+[type="checkbox"],
+[type="file"],
+label:has([type="file"]),
+[data-slot="collapsible-trigger"],
+[data-state] {
+  cursor: pointer;
 }

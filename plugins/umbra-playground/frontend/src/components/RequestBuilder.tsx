@@ -293,7 +293,7 @@ export function RequestBuilder() {
                     scrollBeyondLastLine: false,
                     automaticLayout: true,
                     fontSize: 13,
-                    fontFamily: "Geist Mono, ui-monospace, monospace",
+                    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace',
                     tabSize: 2,
                     formatOnPaste: true,
                   }}
