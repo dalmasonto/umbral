@@ -515,6 +515,17 @@ impl AppBuilder {
         }
         crate::routes::init(route_registry);
 
+        // BUG-20: publish every plugin's OpenAPI path contribution
+        // so umbra-openapi can merge them into the emitted spec.
+        // Flat (path, value) list — multiple plugins contributing
+        // the same path produce duplicate entries; umbra-openapi's
+        // merge step picks the first.
+        let mut openapi_entries: Vec<(String, serde_json::Value)> = Vec::new();
+        for plugin in &sorted_plugins {
+            openapi_entries.extend(plugin.openapi_paths());
+        }
+        crate::routes::init_openapi(openapi_entries);
+
         // Templates engine — published before phase 4 so a future
         // plugin system_check that wants to inspect the loaded
         // templates can.

@@ -343,6 +343,13 @@ impl<U: UserModel> Plugin for AuthPlugin<U> {
             None => Vec::new(),
         }
     }
+
+    fn openapi_paths(&self) -> Vec<(String, serde_json::Value)> {
+        match &self.default_routes_prefix {
+            Some(prefix) => auth_routes::openapi_paths(prefix),
+            None => Vec::new(),
+        }
+    }
 }
 
 // =========================================================================

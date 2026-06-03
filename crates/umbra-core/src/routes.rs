@@ -383,6 +383,33 @@ pub fn get() -> Option<&'static RouteRegistry> {
     REGISTRY.get()
 }
 
+// =========================================================================
+// OpenAPI path registry (BUG-20).
+//
+// `Plugin::openapi_paths()` lets a plugin contribute fully-formed
+// OpenAPI Path Item Objects keyed by URL. App::build collects every
+// plugin's contribution into a flat Vec and publishes it here; the
+// umbra-openapi crate reads from this at spec-build time.
+//
+// The shape mirrors `RouteRegistry`: a OnceLock with the same `init`
+// / `get` pattern, lifecycle bound to `App::build()`. Returning
+// `None` is the "build wasn't called" case; consumers treat that
+// the same as "no plugin contributed routes."
+// =========================================================================
+
+static OPENAPI_REGISTRY: OnceLock<Vec<(String, serde_json::Value)>> = OnceLock::new();
+
+/// Publish the OpenAPI registry. Called from `App::build()` after
+/// every plugin's `openapi_paths()` has been collected.
+pub fn init_openapi(entries: Vec<(String, serde_json::Value)>) {
+    let _ = OPENAPI_REGISTRY.set(entries);
+}
+
+/// Read the OpenAPI registry. `None` for pre-build callers.
+pub fn registered_openapi_paths() -> Option<&'static [(String, serde_json::Value)]> {
+    OPENAPI_REGISTRY.get().map(|v| v.as_slice())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

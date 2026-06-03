@@ -127,6 +127,131 @@ pub(crate) fn declared_routes(prefix: &str) -> Vec<umbra::routes::RouteSpec> {
     ]
 }
 
+/// OpenAPI Path Item Objects for the four routes. The shapes are
+/// the bare minimum the spec needs to render in Swagger UI: an
+/// `operationId`, a `summary`, a `tags` entry to group them under
+/// "auth", and response codes. Request bodies are documented as
+/// JSON objects with the right `application/json` content type;
+/// the inline schemas describe the field shapes so Swagger UI's
+/// "Try it out" pane prefills sensible defaults. Closes BUG-20
+/// from `bugs/tests/testBugs.md`.
+pub(crate) fn openapi_paths(prefix: &str) -> Vec<(String, serde_json::Value)> {
+    use serde_json::json;
+    let tag = "auth";
+    let register_body = json!({
+        "type": "object",
+        "required": ["username", "email", "password"],
+        "properties": {
+            "username": {"type": "string", "example": "alice"},
+            "email":    {"type": "string", "format": "email", "example": "alice@example.com"},
+            "password": {"type": "string", "format": "password"},
+        }
+    });
+    let login_body = json!({
+        "type": "object",
+        "required": ["username", "password"],
+        "properties": {
+            "username": {"type": "string", "example": "alice"},
+            "password": {"type": "string", "format": "password"},
+        }
+    });
+    let user_response = json!({
+        "type": "object",
+        "properties": {
+            "id":           {"type": "integer", "format": "int64"},
+            "username":     {"type": "string"},
+            "email":        {"type": "string", "format": "email"},
+            "is_staff":     {"type": "boolean"},
+            "is_superuser": {"type": "boolean"},
+        }
+    });
+    let login_response = json!({
+        "type": "object",
+        "properties": {
+            "user":  user_response.clone(),
+            "token": {"type": "string", "description": "Opaque bearer token. Shown ONCE."},
+        }
+    });
+    let error_response = json!({
+        "type": "object",
+        "properties": {
+            "error":  {"type": "string"},
+            "detail": {"type": "string"},
+        }
+    });
+
+    vec![
+        (
+            format!("{prefix}/register"),
+            json!({
+                "post": {
+                    "tags": [tag],
+                    "operationId": "auth_register",
+                    "summary": "Create a new user.",
+                    "description": "Returns the user shape (no password_hash). 409 on duplicate username/email; 400 on missing fields.",
+                    "requestBody": {
+                        "required": true,
+                        "content": {"application/json": {"schema": register_body}}
+                    },
+                    "responses": {
+                        "201": {"description": "User created.", "content": {"application/json": {"schema": user_response.clone()}}},
+                        "400": {"description": "Invalid input.", "content": {"application/json": {"schema": error_response.clone()}}},
+                        "409": {"description": "Username or email already exists.", "content": {"application/json": {"schema": error_response.clone()}}}
+                    }
+                }
+            })
+        ),
+        (
+            format!("{prefix}/login"),
+            json!({
+                "post": {
+                    "tags": [tag],
+                    "operationId": "auth_login",
+                    "summary": "Verify credentials, mint a bearer token, set a session cookie.",
+                    "description": "Returns `{user, token}` and a `Set-Cookie` header. Browsers can ignore `token`; CLI / mobile can ignore the cookie.",
+                    "requestBody": {
+                        "required": true,
+                        "content": {"application/json": {"schema": login_body}}
+                    },
+                    "responses": {
+                        "200": {"description": "Logged in.", "content": {"application/json": {"schema": login_response}}},
+                        "401": {"description": "Invalid credentials.", "content": {"application/json": {"schema": error_response.clone()}}}
+                    }
+                }
+            })
+        ),
+        (
+            format!("{prefix}/logout"),
+            json!({
+                "post": {
+                    "tags": [tag],
+                    "operationId": "auth_logout",
+                    "summary": "Clear the session cookie + destroy the session row.",
+                    "description": "Does NOT revoke bearer tokens — those stay valid until explicitly revoked.",
+                    "responses": {
+                        "204": {"description": "Session cleared."}
+                    }
+                }
+            })
+        ),
+        (
+            format!("{prefix}/me"),
+            json!({
+                "get": {
+                    "tags": [tag],
+                    "operationId": "auth_me",
+                    "summary": "Return the current user.",
+                    "description": "Resolves via session cookie first, then bearer token. 401 if neither yields an active user.",
+                    "responses": {
+                        "200": {"description": "Authenticated user.", "content": {"application/json": {"schema": user_response}}},
+                        "401": {"description": "Not authenticated.", "content": {"application/json": {"schema": error_response}}}
+                    }
+                }
+            })
+        ),
+    ]
+}
+
 // =========================================================================
 // Handlers
 // =========================================================================

@@ -239,6 +239,17 @@ fn build_spec(cfg: &OpenApiPlugin) -> Value {
         }
     }
 
+    // BUG-20: every plugin's `Plugin::openapi_paths()` contribution
+    // gets merged into the spec. Auto-CRUD paths above land first
+    // (so a plugin can shadow a model's path with a custom Path Item
+    // if it wants); plugin contributions land on top, last-write-
+    // wins for duplicate URLs.
+    if let Some(entries) = umbra::routes::registered_openapi_paths() {
+        for (path, item) in entries {
+            paths.insert(path.clone(), item.clone());
+        }
+    }
+
     let mut info = Map::new();
     info.insert("title".into(), Value::String(cfg.title.clone()));
     info.insert("version".into(), Value::String(cfg.version.clone()));

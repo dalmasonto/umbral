@@ -113,6 +113,31 @@ pub trait Plugin: Send + Sync + 'static {
         Vec::new()
     }
 
+    /// OpenAPI path items the plugin contributes. Returned as a
+    /// `Vec<(path, value)>` where `path` is the URL template
+    /// (`/api/auth/login`, `/api/foo/{id}`) and `value` is the
+    /// matching OpenAPI 3.0 [Path Item Object][1] serialised as
+    /// a `serde_json::Value`.
+    ///
+    /// [`umbra-openapi`] walks every registered plugin's
+    /// contribution at spec-build time and merges them into the
+    /// emitted document's `paths` object. Closes BUG-20 from
+    /// `bugs/tests/testBugs.md` — auto-generated CRUD routes were
+    /// the only thing the spec described before; plugin-
+    /// contributed routes (auth, custom actions) were invisible
+    /// to Swagger UI.
+    ///
+    /// Plugins that don't ship OpenAPI documentation leave this
+    /// alone. The umbra-openapi plugin's own routes (the
+    /// `/openapi.json` and Swagger UI mount) are not in the
+    /// generated spec — they're delivery, not API.
+    ///
+    /// [1]: https://spec.openapis.org/oas/v3.0.3#path-item-object
+    /// [`umbra-openapi`]: https://docs.rs/umbra-openapi
+    fn openapi_paths(&self) -> Vec<(String, serde_json::Value)> {
+        Vec::new()
+    }
+
     /// Boot-time checks the plugin needs to pass. Run in phase 4 of
     /// `App::build()` alongside the framework's built-in checks.
     /// `Severity::Error` blocks boot; `Severity::Warning` logs and

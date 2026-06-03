@@ -173,7 +173,9 @@ pub mod routes {
     //! the dev-mode default 404 page to surface the route list when a
     //! request misses every match.
 
-    pub use umbra_core::routes::{RouteRegistry, RouteSpec, Routes, get, init};
+    pub use umbra_core::routes::{
+        RouteRegistry, RouteSpec, Routes, get, init, init_openapi, registered_openapi_paths,
+    };
 }
 
 pub mod plugin {
