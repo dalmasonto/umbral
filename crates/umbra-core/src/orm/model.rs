@@ -553,6 +553,33 @@ pub enum SqlType {
     /// routes to `Bytes`; `Vec<i8>` / `Vec<i16>` still map to
     /// `Array(SmallInt)`.
     Bytes,
+    /// `NUMERIC(19, 4)` — fixed-point decimal. Maps to
+    /// `rust_decimal::Decimal` in Rust. Closes BUG-10 from
+    /// `bugs/tests/testBugs.md`. Money / price columns must use
+    /// this, not `f64` (binary float drops cents) or `String`
+    /// (no DB-level arithmetic).
+    ///
+    /// **Postgres-only at v1.** sqlx's `rust_decimal` feature
+    /// adds Encode/Decode for Postgres `NUMERIC` only; SQLite has
+    /// no native decimal type (every numeric value is INTEGER /
+    /// REAL / TEXT affinity). The boot system check rejects
+    /// Decimal models against SQLite the same way it rejects
+    /// `Array(_)` — apps deploying to SQLite either pick a
+    /// portable type (`Real` or `Text` with manual formatting) or
+    /// use Postgres for the parts of their schema that need
+    /// decimal arithmetic. Closest Django analogue is
+    /// `DecimalField`.
+    ///
+    /// **v1 scope.** Precision and scale are fixed at `(19, 4)` —
+    /// 19 significant digits, 4 after the decimal point. That's
+    /// enough headroom for currency values up to one quadrillion
+    /// dollars (with sub-cent precision) and matches sqlx's
+    /// `Decimal` default. Apps that need a different precision
+    /// alter the column via a hand-written migration after the
+    /// initial create. A `#[umbra(precision = N, scale = M)]`
+    /// attribute lands when there's a real consumer that needs
+    /// dimensions outside the default.
+    Decimal,
 }
 
 /// Element types valid inside [`SqlType::Array`].

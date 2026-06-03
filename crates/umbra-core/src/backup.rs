@@ -370,6 +370,8 @@ fn column_to_json(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<Value, 
                 .map_or(Value::Null, |b| {
                     Value::Array(b.into_iter().map(Value::from).collect())
                 }),
+            // BUG-10: Decimal is Postgres-only.
+            SqlType::Decimal => unreachable_pg_only(&col.name, "Decimal"),
         });
     }
     // Non-nullable: same dispatch without the Option layer.
@@ -394,6 +396,7 @@ fn column_to_json(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<Value, 
             let bytes: Vec<u8> = row.try_get(name)?;
             Value::Array(bytes.into_iter().map(Value::from).collect())
         }
+        SqlType::Decimal => unreachable_pg_only(&col.name, "Decimal"),
     })
 }
 
@@ -453,6 +456,7 @@ fn bind_value<'q>(
             // ForeignKey stores as i64 — same as BigInt.
             SqlType::ForeignKey => q.bind(None::<i64>),
             SqlType::Bytes => q.bind(None::<Vec<u8>>),
+            SqlType::Decimal => unreachable_pg_only(&col.name, "Decimal"),
         });
     }
     let mismatch = |got: &str| BackupError::TypeMismatch {
@@ -531,6 +535,7 @@ fn bind_value<'q>(
             }
             q.bind(bytes)
         }
+        SqlType::Decimal => unreachable_pg_only(&col.name, "Decimal"),
     })
 }
 

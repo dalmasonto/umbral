@@ -287,6 +287,11 @@ pub(crate) fn input_kind(col: &umbra::migrate::Column) -> &'static str {
         // Users submit values as hex strings (the form parser accepts
         // the hex shape via `coerce_bytes`).
         SqlType::Bytes => "text",
+        // BUG-10: Decimal columns render as plain text — the admin's
+        // numeric input would lose precision via JavaScript's f64.
+        // Users type the canonical string form ("19.95"); the REST
+        // dynamic path parses it via `rust_decimal::Decimal::from_str`.
+        SqlType::Decimal => "text",
     }
 }
 
@@ -330,6 +335,7 @@ pub(crate) fn sql_type_name(ty: SqlType) -> &'static str {
         SqlType::Inet | SqlType::Cidr | SqlType::MacAddr => "text",
         SqlType::FullText => "text",
         SqlType::Bytes => "bytes",
+        SqlType::Decimal => "decimal",
     }
 }
 

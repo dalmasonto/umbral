@@ -421,6 +421,12 @@ fn openapi_type(ty: SqlType) -> (&'static str, Option<&'static str>) {
         // the shape; clients that need base64 can handle the encoding
         // boundary themselves.
         SqlType::Bytes => ("array", Some("byte")),
+        // BUG-10: NUMERIC. OpenAPI represents arbitrary-precision
+        // decimals as `string` with `format: decimal` per the
+        // 3.1 spec convention; clients that round-trip through
+        // f64 lose precision, so the canonical wire shape is the
+        // string representation.
+        SqlType::Decimal => ("string", Some("decimal")),
     }
 }
 

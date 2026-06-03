@@ -1959,6 +1959,11 @@ fn postgres_type_name(ty: SqlType) -> &'static str {
         MacAddr => "macaddr",
         FullText => "tsvector",
         Bytes => "bytea",
+        // BUG-10: NUMERIC(19, 4) — same dimensions as the CREATE TABLE
+        // build path. Used by the `ALTER COLUMN ... TYPE ...` render
+        // when the safe-cast diff allows transitioning to/from
+        // Decimal.
+        Decimal => "numeric(19, 4)",
         // Arrays render as `<inner>[]` in Postgres. The migration
         // engine doesn't model nested element types deeply enough to
         // emit a precise inner type here at v1; fall back to `text[]`

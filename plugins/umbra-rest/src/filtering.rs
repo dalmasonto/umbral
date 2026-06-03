@@ -576,7 +576,8 @@ fn coerce_value(col: &Column, value: &str) -> Result<sea_query::Value, ApiError>
         | SqlType::Cidr
         | SqlType::MacAddr
         | SqlType::FullText
-        | SqlType::Bytes => {
+        | SqlType::Bytes
+        | SqlType::Decimal => {
             return Err(ApiError::BadInput(format!(
                 "field `{}`: filtering on {:?} columns is not supported",
                 col.name, col.ty

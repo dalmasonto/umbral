@@ -201,6 +201,11 @@ impl DatabaseBackend for PostgresBackend {
             // `bytea` for Postgres and `blob` for SQLite, which is
             // exactly the dual we want.
             SqlType::Bytes => ColumnType::Blob,
+            // BUG-10: NUMERIC(19, 4) — same shape on Postgres
+            // (`NUMERIC(p, s)`) and SQLite (`NUMERIC` w/ affinity
+            // inheriting precision via stored TEXT). v1 fixes the
+            // dimensions; a future attribute lifts that.
+            SqlType::Decimal => ColumnType::Decimal(Some((19, 4))),
         }
     }
 }
@@ -286,6 +291,14 @@ impl DatabaseBackend for SqliteBackend {
             // SQLite BLOB. sea_query renders ColumnType::Blob as the
             // dialect's right keyword (`blob` here, `bytea` for PG).
             SqlType::Bytes => ColumnType::Blob,
+            // BUG-10: Decimal is Postgres-only at v1 (sqlx's
+            // `rust_decimal` Encode/Decode doesn't ship a SQLite
+            // implementation). The field.backend system check
+            // should have failed boot before this map runs.
+            SqlType::Decimal => panic!(
+                "umbra::backend::SqliteBackend::map_type: SqlType::Decimal is Postgres-only. \
+                 The field.backend system check should have failed boot."
+            ),
         }
     }
 }

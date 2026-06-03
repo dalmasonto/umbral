@@ -726,6 +726,11 @@ fn render_field_type(ty: SqlType, nullable: bool) -> String {
         SqlType::ForeignKey => "i64".to_string(),
         // BLOB / BYTEA columns surface as Vec<u8> in user code.
         SqlType::Bytes => "Vec<u8>".to_string(),
+        // BUG-10: NUMERIC introspection renders as
+        // `rust_decimal::Decimal`. inspectdb reads the column type
+        // from Postgres' `information_schema`; the resulting
+        // model imports use this exact path.
+        SqlType::Decimal => "rust_decimal::Decimal".to_string(),
     };
     let base = base.as_str();
     if nullable {

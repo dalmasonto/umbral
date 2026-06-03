@@ -384,7 +384,16 @@ fn is_postgres_only(ty: crate::orm::SqlType) -> bool {
     use crate::orm::SqlType;
     matches!(
         ty,
-        SqlType::Array(_) | SqlType::Inet | SqlType::Cidr | SqlType::MacAddr | SqlType::FullText
+        SqlType::Array(_)
+            | SqlType::Inet
+            | SqlType::Cidr
+            | SqlType::MacAddr
+            | SqlType::FullText
+            // BUG-10: sqlx's `rust_decimal` Encode/Decode is
+            // Postgres-only. SQLite has no native NUMERIC type;
+            // any model with a Decimal column fails the boot
+            // check the same way Array does.
+            | SqlType::Decimal
     )
 }
 

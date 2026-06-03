@@ -836,6 +836,7 @@ pub fn decode_to_string(
             SqlType::Bytes => row
                 .try_get::<Option<Vec<u8>>, _>(name)?
                 .map_or(String::new(), |b| hex_encode(&b)),
+            SqlType::Decimal => panic_pg_only_unsupported(&col.name),
         });
     }
     Ok(match col.ty {
@@ -861,6 +862,7 @@ pub fn decode_to_string(
         }
         SqlType::ForeignKey => row.try_get::<i64, _>(name)?.to_string(),
         SqlType::Bytes => hex_encode(&row.try_get::<Vec<u8>, _>(name)?),
+        SqlType::Decimal => panic_pg_only_unsupported(&col.name),
     })
 }
 
@@ -941,6 +943,7 @@ pub fn decode_pg_to_string(
             SqlType::Bytes => row
                 .try_get::<Option<Vec<u8>>, _>(name)?
                 .map_or(String::new(), |b| hex_encode(&b)),
+            SqlType::Decimal => panic_pg_only_unsupported(&col.name),
         });
     }
     Ok(match col.ty {
@@ -969,6 +972,7 @@ pub fn decode_pg_to_string(
         | SqlType::FullText => row.try_get::<String, _>(name).unwrap_or_default(),
         SqlType::ForeignKey => row.try_get::<i64, _>(name)?.to_string(),
         SqlType::Bytes => hex_encode(&row.try_get::<Vec<u8>, _>(name)?),
+        SqlType::Decimal => panic_pg_only_unsupported(&col.name),
     })
 }
 
@@ -1032,6 +1036,7 @@ pub fn decode_to_json(
             SqlType::Bytes => row
                 .try_get::<Option<Vec<u8>>, _>(name)?
                 .map_or(Value::Null, |b| bytes_to_json(&b)),
+            SqlType::Decimal => panic_pg_only_unsupported(&col.name),
         });
     }
     Ok(match col.ty {
@@ -1052,6 +1057,7 @@ pub fn decode_to_json(
         }
         SqlType::ForeignKey => Value::from(row.try_get::<i64, _>(name)?),
         SqlType::Bytes => bytes_to_json(&row.try_get::<Vec<u8>, _>(name)?),
+        SqlType::Decimal => panic_pg_only_unsupported(&col.name),
     })
 }
 
@@ -1120,6 +1126,7 @@ pub fn decode_pg_to_json(
             SqlType::Bytes => row
                 .try_get::<Option<Vec<u8>>, _>(name)?
                 .map_or(Value::Null, |b| bytes_to_json(&b)),
+            SqlType::Decimal => panic_pg_only_unsupported(&col.name),
         });
     }
     Ok(match col.ty {
@@ -1145,6 +1152,7 @@ pub fn decode_pg_to_json(
             .unwrap_or(Value::Null),
         SqlType::ForeignKey => Value::from(row.try_get::<i64, _>(name)?),
         SqlType::Bytes => bytes_to_json(&row.try_get::<Vec<u8>, _>(name)?),
+        SqlType::Decimal => panic_pg_only_unsupported(&col.name),
     })
 }
 

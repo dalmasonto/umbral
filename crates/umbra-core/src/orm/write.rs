@@ -220,7 +220,34 @@ pub fn json_to_sea_value(
         SqlType::Bytes => {
             coerce_bytes(value, field_name).map(|b| SeaValue::Bytes(Some(Box::new(b))))
         }
+        // BUG-10: NUMERIC. Accept JSON numbers (round-trip through
+        // f64 — adequate for most reasonable values; truly large
+        // exact decimals come in as strings) AND JSON strings
+        // (canonical for money values). Anything else fails the
+        // typed coerce.
+        SqlType::Decimal => coerce_decimal(value, field_name),
     }
+}
+
+fn coerce_decimal(value: &JsonValue, field_name: &str) -> Result<SeaValue, WriteError> {
+    use std::str::FromStr;
+    // Round-trip through the serde_json textual representation —
+    // serde_json::Number prints integers / floats verbatim, so
+    // `n.to_string()` reads back as the same precision the wire
+    // value carried. Avoids the f64 trap of "3.10" arriving as
+    // 3.1000000000000001.
+    let parsed: Option<rust_decimal::Decimal> = match value {
+        JsonValue::String(s) => rust_decimal::Decimal::from_str(s).ok(),
+        JsonValue::Number(n) => rust_decimal::Decimal::from_str(&n.to_string()).ok(),
+        _ => None,
+    };
+    parsed
+        .map(|d| SeaValue::Decimal(Some(Box::new(d))))
+        .ok_or_else(|| WriteError::TypeMismatch {
+            field: field_name.to_string(),
+            expected: SqlType::Decimal,
+            got: format!("{value:?}"),
+        })
 }
 
 /// Coerce a `serde_json::Value` to `Vec<u8>`. Accepts:
@@ -330,6 +357,7 @@ pub(crate) fn null_for(sql_type: SqlType) -> SeaValue {
         | SqlType::MacAddr
         | SqlType::FullText => SeaValue::String(None),
         SqlType::Bytes => SeaValue::Bytes(None),
+        SqlType::Decimal => SeaValue::Decimal(None),
     }
 }
 

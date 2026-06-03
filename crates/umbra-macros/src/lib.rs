@@ -1083,6 +1083,9 @@ enum FieldKind {
     /// into `Array(SmallInt)`.
     Bytes,
     NullableBytes,
+    /// `rust_decimal::Decimal` — NUMERIC(19, 4) fixed-point. Closes
+    /// BUG-10.
+    Decimal,
     /// Catch-all: not a recognised M3 catalogue type, or one of the
     /// explicitly-rejected wide / unsigned ints. Carries the exact
     /// diagnostic to emit at the field's span.
@@ -1164,6 +1167,7 @@ impl FieldKind {
             }
             FieldKind::MultiChoice(_) => quote!(::umbra::orm::SqlType::Text),
             FieldKind::Bytes | FieldKind::NullableBytes => quote!(::umbra::orm::SqlType::Bytes),
+            FieldKind::Decimal => quote!(::umbra::orm::SqlType::Decimal),
             FieldKind::Unsupported(_) => return None,
         };
         let nullable = if self.is_nullable() {
@@ -1301,6 +1305,9 @@ fn classify_field_type(ty: &Type) -> FieldKind {
     // pick up, same as the other qualified-leaf checks.
     if is_tsvector(ty) {
         return FieldKind::FullText;
+    }
+    if is_decimal(ty) {
+        return FieldKind::Decimal;
     }
     // Gap 14 — `ForeignKey<T>`. Detected by the leaf ident `ForeignKey`
     // with exactly one generic type argument `T`. The qualifier check
@@ -1565,6 +1572,14 @@ fn is_tsvector(ty: &Type) -> bool {
     is_qualified_leaf(ty, "orm", "TsVector")
 }
 
+/// True when `ty` is `rust_decimal::Decimal`. Closes BUG-10 from
+/// `bugs/tests/testBugs.md`. The qualifier `rust_decimal` is part
+/// of the match so a bare `Decimal` (which could be another
+/// crate's type) doesn't get auto-classified.
+fn is_decimal(ty: &Type) -> bool {
+    is_qualified_leaf(ty, "rust_decimal", "Decimal")
+}
+
 /// True when `ty` is a path ending in `qualifier::leaf` with no
 /// generic arguments on the leaf. The qualifier check is positional
 /// — the segment immediately before the leaf has to match. Used by
@@ -1762,6 +1777,7 @@ fn column_const_for(
         FieldKind::NullableForeignKey(_) => format_ident!("NullableForeignKeyCol"),
         FieldKind::Bytes => format_ident!("BytesCol"),
         FieldKind::NullableBytes => format_ident!("NullableBytesCol"),
+        FieldKind::Decimal => format_ident!("DecimalCol"),
         // MultiChoice is handled inline by the caller (emits a StrCol),
         // so this arm is unreachable in practice. We return an empty
         // token stream as a defensive default.
