@@ -110,6 +110,35 @@ pub trait Authentication: Send + Sync + 'static {
     /// (returning a typed error) leaks "which credential you tried"
     /// information to the client.
     async fn authenticate(&self, headers: &HeaderMap) -> Option<Identity>;
+
+    /// OpenAPI `securitySchemes` entry this backend contributes —
+    /// `Some((name, scheme_value))` for documented schemes, `None`
+    /// to skip. Closes playground-openapi-gaps item 4.
+    ///
+    /// `name` is the key under
+    /// `components.securitySchemes.<name>`; consumers also reference
+    /// it from operation-level `security: [{<name>: []}]` entries.
+    /// `scheme_value` is the [OpenAPI 3.0 Security Scheme Object][1]
+    /// serialised as a `serde_json::Value`.
+    ///
+    /// Default `None` — anonymous / no-auth backends contribute
+    /// nothing. Concrete classes
+    /// ([`crate::FnAuthentication`] / user-supplied closures) can
+    /// override when they want to document their shape.
+    ///
+    /// [1]: https://spec.openapis.org/oas/v3.0.3#security-scheme-object
+    fn security_scheme(&self) -> Option<(String, serde_json::Value)> {
+        None
+    }
+
+    /// All `securitySchemes` entries the backend (and any children
+    /// it might wrap) contributes. The default impl returns
+    /// `self.security_scheme().into_iter().collect()` — fine for
+    /// every leaf backend. `ChainAuthentication` overrides to walk
+    /// every child so the OpenAPI plugin can publish the full list.
+    fn security_schemes_all(&self) -> Vec<(String, serde_json::Value)> {
+        self.security_scheme().into_iter().collect()
+    }
 }
 
 // =========================================================================
@@ -237,6 +266,24 @@ impl Authentication for ChainAuthentication {
             }
         }
         None
+    }
+
+    fn security_scheme(&self) -> Option<(String, serde_json::Value)> {
+        // Returns the first child's contribution for callers that
+        // only want one. The full walk lives on
+        // `security_schemes_all` below — the OpenAPI plugin uses
+        // that path so the spec publishes every scheme the chain
+        // accepts.
+        self.backends
+            .iter()
+            .find_map(|b| b.security_scheme())
+    }
+
+    fn security_schemes_all(&self) -> Vec<(String, serde_json::Value)> {
+        self.backends
+            .iter()
+            .flat_map(|b| b.security_schemes_all())
+            .collect()
     }
 }
 

@@ -168,6 +168,21 @@ impl Authentication for SessionAuthentication {
                 .with_extra("auth", serde_json::json!("session")),
         )
     }
+
+    fn security_scheme(&self) -> Option<(String, serde_json::Value)> {
+        // Standard "session cookie" scheme. The actual cookie name
+        // (`umbra_session`) is documented in the description so
+        // Swagger UI users know what they're authorising with.
+        Some((
+            "SessionAuth".to_string(),
+            serde_json::json!({
+                "type": "apiKey",
+                "in": "cookie",
+                "name": "umbra_session",
+                "description": "umbra session cookie. Set by `POST /api/auth/login`; cleared by `/logout`."
+            }),
+        ))
+    }
 }
 
 // =========================================================================

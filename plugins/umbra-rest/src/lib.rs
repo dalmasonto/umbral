@@ -265,6 +265,17 @@ impl RestPlugin {
         self
     }
 
+    /// Walk the configured `Authentication` and return every
+    /// `securitySchemes` entry it contributes — used by the
+    /// OpenAPI plugin to publish a complete schemes block. For a
+    /// `ChainAuthentication([Session, Bearer])` this returns both
+    /// entries. For a single backend it returns at most one.
+    /// `NoAuthentication` returns an empty Vec. Closes
+    /// playground-openapi-gaps item 4.
+    pub fn security_schemes(&self) -> Vec<(String, serde_json::Value)> {
+        self.authentication.security_schemes_all()
+    }
+
     /// Set the pagination shape applied to every list endpoint.
     ///
     /// Three built-ins ship:
@@ -629,6 +640,18 @@ pub fn search_enabled_for(table: &str) -> bool {
         .get()
         .map(|cfg| !cfg.search_disabled.contains(table))
         .unwrap_or(true)
+}
+
+/// Public read: every `securitySchemes` entry contributed by the
+/// configured Authentication chain. Used by `umbra-openapi` at
+/// spec-build time. Returns an empty Vec when CONFIG isn't
+/// populated (no REST plugin booted) — same defaulting story as
+/// `filters_enabled_for`. Closes playground-openapi-gaps item 4.
+pub fn registered_security_schemes() -> Vec<(String, serde_json::Value)> {
+    CONFIG
+        .get()
+        .map(|cfg| cfg.authentication.security_schemes_all())
+        .unwrap_or_default()
 }
 
 impl Plugin for RestPlugin {

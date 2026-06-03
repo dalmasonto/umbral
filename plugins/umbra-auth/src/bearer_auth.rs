@@ -105,6 +105,22 @@ impl Authentication for BearerAuthentication {
                 .with_extra("auth", serde_json::json!("bearer")),
         )
     }
+
+    fn security_scheme(&self) -> Option<(String, serde_json::Value)> {
+        // Standard "bearer token in the Authorization header" shape.
+        // `bearerFormat = "umbra"` signals our opaque-token format
+        // (the `umbra_` prefix + 43 url-safe base64 chars) so
+        // generated clients know not to try parsing as JWT.
+        Some((
+            "BearerAuth".to_string(),
+            serde_json::json!({
+                "type": "http",
+                "scheme": "bearer",
+                "bearerFormat": "umbra",
+                "description": "umbra bearer token. Header: `Authorization: Bearer umbra_<token>`."
+            }),
+        ))
+    }
 }
 
 #[cfg(test)]

@@ -257,14 +257,33 @@ fn build_spec(cfg: &OpenApiPlugin) -> Value {
         info.insert("description".into(), Value::String(desc.clone()));
     }
 
-    json!({
-        "openapi": "3.0.3",
-        "info": Value::Object(info),
-        "paths": Value::Object(paths),
-        "components": {
-            "schemas": Value::Object(schemas),
-        },
-    })
+    // Playground-openapi-gaps #4: read the configured auth chain's
+    // securitySchemes and emit a `components.securitySchemes` block
+    // + a global `security` array referencing each. The global
+    // security is an OR (any one scheme satisfies the request),
+    // matching `ChainAuthentication([Session, Bearer])`'s actual
+    // runtime behaviour.
+    let mut security_schemes = Map::new();
+    let mut security: Vec<Value> = Vec::new();
+    for (name, scheme) in umbra_rest::registered_security_schemes() {
+        security.push(json!({ name.clone(): [] }));
+        security_schemes.insert(name, scheme);
+    }
+    let mut components = Map::new();
+    components.insert("schemas".into(), Value::Object(schemas));
+    if !security_schemes.is_empty() {
+        components.insert("securitySchemes".into(), Value::Object(security_schemes));
+    }
+
+    let mut document = Map::new();
+    document.insert("openapi".into(), Value::String("3.0.3".into()));
+    document.insert("info".into(), Value::Object(info));
+    document.insert("paths".into(), Value::Object(paths));
+    document.insert("components".into(), Value::Object(components));
+    if !security.is_empty() {
+        document.insert("security".into(), Value::Array(security));
+    }
+    Value::Object(document)
 }
 
 fn model_schema(model: &ModelMeta) -> Value {
