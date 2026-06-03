@@ -261,6 +261,40 @@ impl Routes {
         self.with_method("OPTIONS", path, axum::routing::options(handler))
     }
 
+    /// Register a path with a single method using a pre-built
+    /// `MethodRouter` — the right shape for per-route middleware.
+    ///
+    /// The per-method shorthands above accept a bare handler, which
+    /// the framework wraps in `axum::routing::<method>(...)` for you.
+    /// When you need to layer middleware (`login_required_html`,
+    /// rate-limiting, per-route timeouts, etc.) you need the
+    /// `MethodRouter` form so you can chain `.layer(...)`:
+    ///
+    /// ```ignore
+    /// use axum::routing::get;
+    ///
+    /// Routes::new()
+    ///     .get("/", home)                                 // bare handler
+    ///     .layered("GET", "/dashboard", get(dashboard)    // layered
+    ///         .layer(login_required_html("/login")))
+    /// ```
+    ///
+    /// The layer attaches to *this route only* — exactly what
+    /// `axum::routing::MethodRouter::layer` already does. The plain
+    /// `axum::Router::layer` would have applied to every route on
+    /// the Router instance, which is the gotcha the old scaffold
+    /// fell into.
+    ///
+    /// Sugar for [`Self::route`] with a single-element method slice.
+    pub fn layered(
+        self,
+        method: &'static str,
+        path: &str,
+        handler: axum::routing::MethodRouter<()>,
+    ) -> Self {
+        self.route(&[method], path, handler)
+    }
+
     /// Register one or more methods on a path. Use this when several
     /// HTTP verbs share a handler-router (`axum::routing::get(h1).post(h2)`)
     /// — the per-method shorthands above each declare exactly one

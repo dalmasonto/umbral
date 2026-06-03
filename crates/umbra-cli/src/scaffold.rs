@@ -353,9 +353,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {{
                 .get("/api/posts", api_list_posts)
                 // Dashboard: only reachable when logged in. The
                 // login_required_html("/login") layer issues a 302 to
-                // /login?next=/dashboard/ for anonymous visitors.
-                .route(
-                    &["GET"],
+                // /login?next=/dashboard/ for anonymous visitors. The
+                // .layered(method, path, mr) form takes a MethodRouter
+                // so `.layer(...)` scopes to *just* this route — not
+                // every route on the builder.
+                .layered(
+                    "GET",
                     "/dashboard",
                     get(dashboard).layer(login_required_html("/login")),
                 ),
