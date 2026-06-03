@@ -35,7 +35,7 @@
 
 use serde::{Deserialize, Serialize};
 use umbra::web::{HeaderMap, IntoResponse, Json, Response, StatusCode};
-use umbra_auth::{AuthToken, AuthUser, auth_user, parse_bearer_header};
+use umbra_auth::{AuthToken, AuthUser, OptionalIdentity, auth_user};
 
 // =========================================================================
 // Wire-shape DTOs. AuthUser carries password_hash; we never want that
@@ -96,31 +96,14 @@ fn err(status: StatusCode, error: &'static str, detail: impl Into<String>) -> Re
 }
 
 // =========================================================================
-// Resolve current user from EITHER the session cookie OR a bearer
-// token. The route handlers below could lean on the RestPlugin's
-// `ChainAuthentication` wiring, but /me is a custom (non-CRUD)
-// handler so it walks the two paths explicitly — and it doubles as
-// a worked example of "how do I check who the caller is from a
-// hand-written handler."
+// /me reads the current user via `OptionalIdentity` from umbra-auth.
+// That extractor runs the same session-then-bearer chain the
+// RestPlugin uses internally; here we wire it from a custom route so
+// the surface stays uniform. Identity carries `user_id` + `is_staff`
+// + an `extras` map — enough for /me, and a second SELECT on
+// `AuthUser::objects().filter(...)` only happens when the response
+// needs the email / username (which it does, see below).
 // =========================================================================
-
-pub async fn resolve_current_user(headers: &HeaderMap) -> Option<AuthUser> {
-    // Session cookie first — cheaper for browsers (one fewer row
-    // touched than the token path, since current_user already
-    // performs the user JOIN).
-    if let Some(user) = umbra_sessions::current_user(headers).await.ok().flatten() {
-        return Some(user);
-    }
-    // Then bearer token. Two indexed lookups + an is_active guard.
-    let plaintext = parse_bearer_header(headers)?;
-    let token = AuthToken::lookup(plaintext).await.ok().flatten()?;
-    AuthUser::objects()
-        .filter(auth_user::ID.eq(token.user_id.id()) & auth_user::IS_ACTIVE.eq(true))
-        .first()
-        .await
-        .ok()
-        .flatten()
-}
 
 // =========================================================================
 // Handlers
@@ -231,13 +214,36 @@ pub async fn logout(headers: HeaderMap) -> Response {
 /// Accepts either a session cookie or `Authorization: Bearer …`
 /// (or both — session takes precedence). 401 if neither resolves
 /// to an active user. 200 otherwise.
-pub async fn me(headers: HeaderMap) -> Response {
-    match resolve_current_user(&headers).await {
-        Some(user) => Json(UserOut::from(&user)).into_response(),
-        None => err(
+///
+/// `OptionalIdentity` runs the same chain the RestPlugin uses
+/// internally and gives us the `user_id` + `is_staff` flag for
+/// free; we then SELECT the full row to populate `email` and
+/// `username` for the response. A `CurrentIdentity` extractor
+/// would replace the inner Option match with a 401 rejection at
+/// extractor time, but we want the JSON-shaped error body, so
+/// the manual match stays.
+pub async fn me(OptionalIdentity(id): OptionalIdentity) -> Response {
+    let Some(id) = id else {
+        return err(
             StatusCode::UNAUTHORIZED,
             "not_authenticated",
             "send a session cookie or a Bearer token",
-        ),
-    }
+        );
+    };
+    let user: AuthUser = match AuthUser::objects()
+        .filter(auth_user::ID.eq(id.user_id) & auth_user::IS_ACTIVE.eq(true))
+        .first()
+        .await
+    {
+        Ok(Some(u)) => u,
+        Ok(None) => {
+            return err(
+                StatusCode::UNAUTHORIZED,
+                "not_authenticated",
+                "user record went away between auth and lookup",
+            );
+        }
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, "lookup_failed", format!("{e}")),
+    };
+    Json(UserOut::from(&user)).into_response()
 }

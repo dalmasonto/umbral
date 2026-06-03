@@ -63,10 +63,12 @@
 //! - Periodic session cleanup via `umbra-tasks`.
 
 pub mod bearer_auth;
+pub mod extractors;
 pub mod login_required;
 pub mod token;
 
 pub use bearer_auth::{BearerAuthentication, parse_bearer_header};
+pub use extractors::{CurrentIdentity, OptionalIdentity, resolve_identity};
 pub use login_required::{
     LoggedIn, LoginRequired, LoginRequiredLayer, current_session_user_id, login_required,
     login_required_html,

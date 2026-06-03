@@ -165,6 +165,31 @@ RestPlugin::default().authenticate(ApiKeyAuthentication::new(keys));
 
 The contract is small on purpose — *parse headers, return Identity*. Anything more (verifying a credential, looking up a user) is implementation detail.
 
+## Reading the identity from a custom handler
+
+`RestPlugin` runs the configured auth chain inside its CRUD handlers — but a handler you write yourself (`/api/auth/me`, a custom action, anything outside the auto-CRUD surface) doesn't go through that pipeline. Two axum extractors in `umbra-auth` give you the same `Identity` shape from a hand-written handler:
+
+```rust
+use umbra::web::Json;
+use umbra_auth::{CurrentIdentity, OptionalIdentity};
+
+// Rejects with 401 if no auth resolves:
+async fn dashboard(CurrentIdentity(id): CurrentIdentity) -> Json<DashboardData> {
+    // id.user_id, id.is_staff are immediately usable
+    ...
+}
+
+// Never rejects — `id` is None for anonymous callers:
+async fn home(OptionalIdentity(id): OptionalIdentity) -> Json<Page> {
+    let authenticated = id.is_some();
+    ...
+}
+```
+
+Both run the same session-then-bearer chain `RestPlugin` uses by default. If you need a different chain (bearer only, custom backend), write a one-off extractor that calls your own chain — the type is `Option<Identity>` either way.
+
+The bare resolution helper is also exposed: `umbra_auth::resolve_identity(&headers).await -> Option<Identity>`. Use it when you need the result inside a closure or somewhere the extractor framing doesn't fit.
+
 ## Why `authenticate` never returns an error
 
 The trait signature is `Option<Identity>`, not `Result<Identity, _>`. Returning a typed error would leak *which credential you tried* — an attacker probing the system could distinguish "I sent no token at all" from "I sent a malformed token" from "I sent a valid-format token that doesn't exist." Treating all three as `None` and letting the permission class produce a uniform 401 closes that side channel.
