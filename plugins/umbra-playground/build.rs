@@ -48,12 +48,24 @@ fn main() {
     println!("cargo:rerun-if-changed=src/shell.html");
 
     fs::create_dir_all(&crate_dist).expect("create dist dir");
+    // Guarantee dist/assets/ exists so the `include_dir!` macro in
+    // lib.rs always has *something* to embed. Without this, the
+    // first build on a fresh checkout (no vite output yet) would
+    // fail at compile time on a missing-directory error from
+    // include_dir, before build.rs had a chance to populate it.
+    let assets_subdir = crate_dist.join("assets");
+    fs::create_dir_all(&assets_subdir).expect("create dist/assets dir");
 
     let (js_name, css_name) =
         match bundle_with_vite(&frontend_dir, &frontend_dist, &crate_dist) {
             Ok(pair) => pair,
             Err(e) => {
                 eprintln!("cargo:warning=umbra-playground: {e}; serving placeholder");
+                // In placeholder mode `dist/assets/` will be empty —
+                // include_dir embeds an empty tree, the runtime serves
+                // the placeholder HTML for the shell route, and any
+                // request for an asset 404s. That's the expected
+                // degraded behaviour.
                 (PLACEHOLDER_JS.to_string(), PLACEHOLDER_CSS.to_string())
             }
         };

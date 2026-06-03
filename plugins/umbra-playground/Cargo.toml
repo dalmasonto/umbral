@@ -11,12 +11,23 @@ rust-version.workspace = true
 
 [dependencies]
 umbra = { path = "../../crates/umbra", version = "0.0.1" }
-# Dogfooded asset serving — we embed a StaticPlugin internally to
-# serve the vite bundle under `<base>/assets/`. Hand-rolling the
-# same code is what we used to do in src/static_serve.rs; using the
-# plugin means any bug fix in umbra-static (path traversal, MIME,
-# ETag, etc.) lands here for free.
-umbra-static = { path = "../umbra-static", version = "0.0.1" }
+# Compile-time embed of the vite-built React bundle (JS + CSS +
+# Inter woff2 fonts) into the binary. The runtime serves files
+# straight out of memory via include_dir's `Dir` lookup — no
+# filesystem dependency. That means: (a) the plugin ships as a
+# single self-contained library and the user's binary works on any
+# machine without a side-loaded `dist/` directory, (b) the
+# rebuild-and-hash-changed footgun (browser tabs 404'ing on stale
+# asset URLs after a fresh build wipes dist/) goes away because
+# the running binary serves the *embedded* hash set, which only
+# changes when the binary is reloaded. umbra-static doesn't yet
+# support embedded asset trees (it wraps tower-http ServeDir which
+# requires a real path); growing that capability is on the
+# improvement backlog. Until then, the playground inlines the
+# pattern and serves its assets directly. See
+# bugs/playground-openapi-gaps.md item #13.
+include_dir = "0.7"
+mime_guess = "2"
 axum = "0.8"
 
 [dev-dependencies]
