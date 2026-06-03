@@ -990,7 +990,8 @@ impl<T: Model> Manager<T> {
     where
         T: serde::Serialize
             + for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
-            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
+            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>
+            + HydrateRelated,
     {
         let map = serialize_to_map(&instance)?;
         let pool = resolve_pool::<T>(None);
@@ -999,16 +1000,22 @@ impl<T: Model> Manager<T> {
         match pool {
             DbPool::Sqlite(pool) => {
                 let (sql, values) = stmt.build_sqlx(SqliteQueryBuilder);
-                let row = sqlx::query_as_with::<sqlx::Sqlite, T, _>(&sql, values)
+                let mut row = sqlx::query_as_with::<sqlx::Sqlite, T, _>(&sql, values)
                     .fetch_one(&pool)
                     .await?;
+                // BUG-16 step 2: every materialised row, including the
+                // post-INSERT readback, needs `parent_id` +
+                // `junction_table` seeded on its M2M slots — otherwise
+                // `row.tags.add(...)` is a silent no-op.
+                row.set_m2m_parent_ids();
                 Ok(row)
             }
             DbPool::Postgres(pool) => {
                 let (sql, values) = stmt.build_sqlx(PostgresQueryBuilder);
-                let row = sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
+                let mut row = sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
                     .fetch_one(&pool)
                     .await?;
+                row.set_m2m_parent_ids();
                 Ok(row)
             }
         }
@@ -1435,7 +1442,8 @@ impl<'tx, T: Model> QuerySetTx<'tx, T> {
     where
         T: serde::Serialize
             + for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
-            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
+            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>
+            + HydrateRelated,
     {
         let map = serialize_to_map(&instance)?;
         let stmt = build_insert_one_for::<T>(self.tx.backend_name(), &map)?;
@@ -1443,17 +1451,19 @@ impl<'tx, T: Model> QuerySetTx<'tx, T> {
             "sqlite" => {
                 let tx = self.tx.as_sqlite_mut().unwrap();
                 let (sql, values) = stmt.build_sqlx(SqliteQueryBuilder);
-                let row = sqlx::query_as_with::<sqlx::Sqlite, T, _>(&sql, values)
+                let mut row = sqlx::query_as_with::<sqlx::Sqlite, T, _>(&sql, values)
                     .fetch_one(&mut **tx)
                     .await?;
+                row.set_m2m_parent_ids();
                 Ok(row)
             }
             _ => {
                 let tx = self.tx.as_pg_mut().unwrap();
                 let (sql, values) = stmt.build_sqlx(PostgresQueryBuilder);
-                let row = sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
+                let mut row = sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
                     .fetch_one(&mut **tx)
                     .await?;
+                row.set_m2m_parent_ids();
                 Ok(row)
             }
         }
@@ -1496,7 +1506,8 @@ impl<T: Model> Manager<T> {
     where
         T: serde::Serialize
             + for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
-            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
+            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>
+            + HydrateRelated,
     {
         let map = serialize_to_map(&instance)?;
         let stmt = build_insert_one_for::<T>(tx.backend_name(), &map)?;
@@ -1504,17 +1515,19 @@ impl<T: Model> Manager<T> {
             "sqlite" => {
                 let inner = tx.as_sqlite_mut().unwrap();
                 let (sql, values) = stmt.build_sqlx(SqliteQueryBuilder);
-                let row = sqlx::query_as_with::<sqlx::Sqlite, T, _>(&sql, values)
+                let mut row = sqlx::query_as_with::<sqlx::Sqlite, T, _>(&sql, values)
                     .fetch_one(&mut **inner)
                     .await?;
+                row.set_m2m_parent_ids();
                 Ok(row)
             }
             _ => {
                 let inner = tx.as_pg_mut().unwrap();
                 let (sql, values) = stmt.build_sqlx(PostgresQueryBuilder);
-                let row = sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
+                let mut row = sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
                     .fetch_one(&mut **inner)
                     .await?;
+                row.set_m2m_parent_ids();
                 Ok(row)
             }
         }
