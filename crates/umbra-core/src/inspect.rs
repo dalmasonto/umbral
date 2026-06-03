@@ -843,6 +843,8 @@ impl From<&IntrospectedColumn> for Column {
             // (gap #65 ships the declare-side first; inspect-side
             // lands when there's a real porting case that needs it).
             unique: false,
+            on_delete: crate::orm::FkAction::NoAction,
+            on_update: crate::orm::FkAction::NoAction,
         }
     }
 }

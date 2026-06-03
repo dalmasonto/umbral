@@ -177,6 +177,16 @@ struct UmbraFieldAttr {
     /// migrate (the diff engine watches type and nullable, not
     /// constraint flags).
     unique: bool,
+    /// `#[umbra(on_delete = "cascade" | "restrict" | "set_null" |
+    /// "no_action")]` — emit `ON DELETE <action>` in the
+    /// `REFERENCES ...` tail. FK columns only. Closes gap #68.
+    /// Stored as the lowercase string supplied; the FieldSpec
+    /// emitter parses it into `umbra::orm::FkAction` at codegen
+    /// time and rejects unknown values with a compile error.
+    on_delete: Option<String>,
+    /// `#[umbra(on_update = "...")]` — emit `ON UPDATE <action>`.
+    /// Same vocabulary as `on_delete`.
+    on_update: Option<String>,
 }
 
 fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAttr> {
@@ -189,6 +199,8 @@ fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAtt
         choices_ty: None,
         default: None,
         unique: false,
+        on_delete: None,
+        on_update: None,
     };
     for attr in attrs {
         if !attr.path().is_ident("umbra") {
@@ -241,6 +253,20 @@ fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAtt
                 // gap #65.
                 parsed.unique = true;
                 Ok(())
+            } else if meta.path.is_ident("on_delete") {
+                // `#[umbra(on_delete = "cascade" | "restrict" |
+                // "set_null" | "no_action")]` — emit
+                // `ON DELETE <action>` in the REFERENCES tail.
+                // Closes gap #68.
+                let value = meta.value()?;
+                let lit: syn::LitStr = value.parse()?;
+                parsed.on_delete = Some(lit.value());
+                Ok(())
+            } else if meta.path.is_ident("on_update") {
+                let value = meta.value()?;
+                let lit: syn::LitStr = value.parse()?;
+                parsed.on_update = Some(lit.value());
+                Ok(())
             } else {
                 // Unknown key. Report it with the known set so the
                 // common typo case (`is_string_repr` instead of
@@ -265,12 +291,56 @@ fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAtt
                     "unknown field-level umbra attribute `{path}` — known keys are \
                      `noform`, `noedit`, `string` (or `string = true`), \
                      `max_length = N`, `choices`, `default = \"...\"`, \
-                     and `unique`"
+                     `unique`, `on_delete = \"...\"`, and \
+                     `on_update = \"...\"`"
                 )))
             }
         })?;
     }
     Ok(parsed)
+}
+
+/// Translate the user-supplied `on_delete` / `on_update` string into
+/// a path token referring to `umbra::orm::FkAction::<Variant>`.
+/// `None` resolves to `NoAction` so a missing attribute is the
+/// default. An unknown value or a non-FK field with the attribute
+/// set produces a typed compile error at the field's span.
+fn fk_action_tokens(
+    value: &Option<String>,
+    field_ty: &syn::Type,
+    is_fk_field: bool,
+    attr_name: &str,
+) -> syn::Result<proc_macro2::TokenStream> {
+    let Some(raw) = value else {
+        return Ok(quote!(::umbra::orm::FkAction::NoAction));
+    };
+    if !is_fk_field {
+        return Err(syn::Error::new_spanned(
+            field_ty,
+            format!(
+                "umbra: `{attr_name}` is only meaningful on `ForeignKey<T>` / \
+                 `Option<ForeignKey<T>>` fields"
+            ),
+        ));
+    }
+    let normalised = raw.to_lowercase();
+    let variant_ident = match normalised.as_str() {
+        "no_action" | "no action" => "NoAction",
+        "cascade" => "Cascade",
+        "restrict" => "Restrict",
+        "set_null" | "set null" => "SetNull",
+        other => {
+            return Err(syn::Error::new_spanned(
+                field_ty,
+                format!(
+                    "umbra: unknown `{attr_name}` value `{other}` — accepted: \
+                     `cascade`, `restrict`, `set_null`, `no_action`"
+                ),
+            ));
+        }
+    };
+    let variant = syn::Ident::new(variant_ident, proc_macro2::Span::call_site());
+    Ok(quote!(::umbra::orm::FkAction::#variant))
 }
 
 fn parse_umbra_struct_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraStructAttr> {
@@ -614,6 +684,34 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             quote!(false)
         };
 
+        // `on_delete` / `on_update` → token paths into FkAction. An
+        // unknown value (typo, unsupported variant) becomes a
+        // compile error pointing at the field so the user sees the
+        // wrong attribute in IDE squiggle, not a downstream
+        // runtime panic.
+        let is_fk_field = matches!(
+            kind,
+            FieldKind::ForeignKey(_) | FieldKind::NullableForeignKey(_)
+        );
+        let on_delete_tokens =
+            match fk_action_tokens(&field_attr.on_delete, &field.ty, is_fk_field, "on_delete") {
+                Ok(t) => t,
+                Err(e) => {
+                    field_specs.push(e.to_compile_error());
+                    column_consts.push(e.to_compile_error());
+                    continue;
+                }
+            };
+        let on_update_tokens =
+            match fk_action_tokens(&field_attr.on_update, &field.ty, is_fk_field, "on_update") {
+                Ok(t) => t,
+                Err(e) => {
+                    field_specs.push(e.to_compile_error());
+                    column_consts.push(e.to_compile_error());
+                    continue;
+                }
+            };
+
         field_specs.push(quote! {
             ::umbra::orm::FieldSpec {
                 name: #field_name_str,
@@ -631,6 +729,8 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                 default: #default_tokens,
                 is_multichoice: #is_multichoice_lit,
                 unique: #unique_lit,
+                on_delete: #on_delete_tokens,
+                on_update: #on_update_tokens,
             }
         });
 

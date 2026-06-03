@@ -73,6 +73,8 @@ fn postgres_ddl_renders_inet_and_macaddr_types() {
                 default: String::new(),
                 is_multichoice: false,
                 unique: false,
+                on_delete: umbra_core::orm::FkAction::NoAction,
+                on_update: umbra_core::orm::FkAction::NoAction,
             },
             Column {
                 name: "addr".to_string(),
@@ -89,6 +91,8 @@ fn postgres_ddl_renders_inet_and_macaddr_types() {
                 default: String::new(),
                 is_multichoice: false,
                 unique: false,
+                on_delete: umbra_core::orm::FkAction::NoAction,
+                on_update: umbra_core::orm::FkAction::NoAction,
             },
             Column {
                 name: "mac".to_string(),
@@ -105,6 +109,8 @@ fn postgres_ddl_renders_inet_and_macaddr_types() {
                 default: String::new(),
                 is_multichoice: false,
                 unique: false,
+                on_delete: umbra_core::orm::FkAction::NoAction,
+                on_update: umbra_core::orm::FkAction::NoAction,
             },
             Column {
                 name: "net".to_string(),
@@ -121,6 +127,8 @@ fn postgres_ddl_renders_inet_and_macaddr_types() {
                 default: String::new(),
                 is_multichoice: false,
                 unique: false,
+                on_delete: umbra_core::orm::FkAction::NoAction,
+                on_update: umbra_core::orm::FkAction::NoAction,
             },
         ],
     };

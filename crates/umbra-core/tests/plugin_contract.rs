@@ -122,6 +122,8 @@ impl Plugin for TestPlugin {
                 default: String::new(),
                 is_multichoice: false,
                 unique: false,
+                on_delete: umbra_core::orm::FkAction::NoAction,
+                on_update: umbra_core::orm::FkAction::NoAction,
             }],
         }]
     }

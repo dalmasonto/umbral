@@ -38,7 +38,7 @@ pub use choices::ChoiceField;
 pub use dynamic::{DynError, DynQuerySet, decode_to_string};
 pub use expr::{F, FColExt, FExpr, Q};
 pub use foreign_key::ForeignKey;
-pub use model::{ArrayElement, FieldSpec, HydrateRelated, Model, PrimaryKey, SqlType};
+pub use model::{ArrayElement, FieldSpec, FkAction, HydrateRelated, Model, PrimaryKey, SqlType};
 pub use multichoice::MultiChoice;
 pub use post::Post;
 pub use queryset::{GetError, Manager, QuerySet, QuerySetTx};

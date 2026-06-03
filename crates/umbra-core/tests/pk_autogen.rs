@@ -107,6 +107,8 @@ fn int_pk_column() -> Column {
         default: String::new(),
         is_multichoice: false,
         unique: false,
+        on_delete: umbra_core::orm::FkAction::NoAction,
+        on_update: umbra_core::orm::FkAction::NoAction,
     }
 }
 
@@ -126,6 +128,8 @@ fn uuid_pk_column() -> Column {
         default: String::new(),
         is_multichoice: false,
         unique: false,
+        on_delete: umbra_core::orm::FkAction::NoAction,
+        on_update: umbra_core::orm::FkAction::NoAction,
     }
 }
 
@@ -145,6 +149,8 @@ fn string_pk_column() -> Column {
         default: String::new(),
         is_multichoice: false,
         unique: false,
+        on_delete: umbra_core::orm::FkAction::NoAction,
+        on_update: umbra_core::orm::FkAction::NoAction,
     }
 }
 
@@ -164,6 +170,8 @@ fn label_column() -> Column {
         default: String::new(),
         is_multichoice: false,
         unique: false,
+        on_delete: umbra_core::orm::FkAction::NoAction,
+        on_update: umbra_core::orm::FkAction::NoAction,
     }
 }
 

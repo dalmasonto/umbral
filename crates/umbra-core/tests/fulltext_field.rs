@@ -58,6 +58,8 @@ fn postgres_ddl_renders_tsvector_type() {
                 default: String::new(),
                 is_multichoice: false,
                 unique: false,
+                on_delete: umbra_core::orm::FkAction::NoAction,
+                on_update: umbra_core::orm::FkAction::NoAction,
             },
             Column {
                 name: "search".to_string(),
@@ -74,6 +76,8 @@ fn postgres_ddl_renders_tsvector_type() {
                 default: String::new(),
                 is_multichoice: false,
                 unique: false,
+                on_delete: umbra_core::orm::FkAction::NoAction,
+                on_update: umbra_core::orm::FkAction::NoAction,
             },
         ],
     };

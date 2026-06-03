@@ -1286,6 +1286,8 @@ mod noform_drop {
             default: String::new(),
             is_multichoice: false,
             unique: false,
+            on_delete: ::umbra::orm::FkAction::NoAction,
+            on_update: ::umbra::orm::FkAction::NoAction,
         }
     }
 

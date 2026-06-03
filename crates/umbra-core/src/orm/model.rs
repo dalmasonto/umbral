@@ -286,6 +286,80 @@ pub struct FieldSpec {
     /// `email`, opaque tokens, slugs, etc.) so handler-level
     /// pre-checks become unnecessary.
     pub unique: bool,
+
+    /// Referential action emitted on `DELETE` of the FK target row.
+    /// Only meaningful when `ty == ForeignKey`; ignored for every
+    /// other column. Set via `#[umbra(on_delete = "...")]`. Closes
+    /// gap #68. Defaults to `NoAction` so existing migrations
+    /// don't change shape.
+    pub on_delete: FkAction,
+
+    /// Referential action emitted on `UPDATE` of the FK target row's
+    /// primary key. Same FK-only semantics as `on_delete`; almost
+    /// nobody touches this in practice (PKs rarely move) but the
+    /// symmetry matches `REFERENCES ... ON UPDATE ...` and Django's
+    /// `on_delete` / `on_update` pair. Set via
+    /// `#[umbra(on_update = "...")]`.
+    pub on_update: FkAction,
+}
+
+/// Referential action emitted in the SQL `REFERENCES ... ON
+/// {DELETE,UPDATE} <action>` clause. Mirrors the standard SQL set;
+/// Django uses the same vocabulary minus the SQL-level names.
+///
+/// Copy + 'static so it can live on `FieldSpec` (which is itself
+/// `Copy` for storage in `&'static [FieldSpec]`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum FkAction {
+    /// SQL `NO ACTION` — the default. The migration engine emits no
+    /// clause at all (which means "default" on both backends; sqlite
+    /// and Postgres both default to NO ACTION when omitted).
+    #[default]
+    NoAction,
+    /// SQL `CASCADE` — when the FK target row is deleted/updated,
+    /// the referencing row is deleted/updated too. The right answer
+    /// for "owned" relationships (an `AuthToken` follows its
+    /// owning `AuthUser` to the grave).
+    Cascade,
+    /// SQL `RESTRICT` — block the delete/update of the FK target
+    /// row if any referencing row exists. Checked immediately;
+    /// doesn't defer to commit. Right for "you can't drop a
+    /// category that still has products in it."
+    Restrict,
+    /// SQL `SET NULL` — null the referencing column. Only valid on
+    /// nullable FK columns; the migration engine doesn't currently
+    /// check this at boot, so a mismatched pair (NOT NULL + SET NULL)
+    /// will fail at FK action time, not at CREATE TABLE.
+    SetNull,
+}
+
+impl FkAction {
+    /// SQL keyword for the `ON {DELETE,UPDATE} <kw>` clause.
+    /// Returns `None` for `NoAction` so the DDL builder can skip
+    /// the clause entirely (rather than emitting the redundant
+    /// `NO ACTION` literal).
+    pub fn sql_keyword(self) -> Option<&'static str> {
+        match self {
+            Self::NoAction => None,
+            Self::Cascade => Some("CASCADE"),
+            Self::Restrict => Some("RESTRICT"),
+            Self::SetNull => Some("SET NULL"),
+        }
+    }
+
+    /// Parse the attribute string supplied to `#[umbra(on_delete = "...")]`.
+    /// Case-insensitive; accepts both `set_null` and `set null` for
+    /// the multi-word case so users can write whichever feels
+    /// natural.
+    pub fn from_attr_str(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "no_action" | "no action" => Some(Self::NoAction),
+            "cascade" => Some(Self::Cascade),
+            "restrict" => Some(Self::Restrict),
+            "set_null" | "set null" => Some(Self::SetNull),
+            _ => None,
+        }
+    }
 }
 
 /// The SQL type kind of a column.

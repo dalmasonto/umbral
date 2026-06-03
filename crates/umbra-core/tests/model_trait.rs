@@ -170,6 +170,8 @@ fn field_spec_is_copy_and_eq() {
         default: "",
         is_multichoice: false,
         unique: false,
+        on_delete: umbra_core::orm::FkAction::NoAction,
+        on_update: umbra_core::orm::FkAction::NoAction,
     };
     let b = FieldSpec {
         name: "x",
@@ -187,6 +189,8 @@ fn field_spec_is_copy_and_eq() {
         default: "",
         is_multichoice: false,
         unique: false,
+        on_delete: umbra_core::orm::FkAction::NoAction,
+        on_update: umbra_core::orm::FkAction::NoAction,
     };
 
     assert_eq!(
@@ -222,6 +226,8 @@ fn field_spec_eq_distinguishes_different_names() {
         default: "",
         is_multichoice: false,
         unique: false,
+        on_delete: umbra_core::orm::FkAction::NoAction,
+        on_update: umbra_core::orm::FkAction::NoAction,
     };
     let b = FieldSpec {
         name: "y",
@@ -239,6 +245,8 @@ fn field_spec_eq_distinguishes_different_names() {
         default: "",
         is_multichoice: false,
         unique: false,
+        on_delete: umbra_core::orm::FkAction::NoAction,
+        on_update: umbra_core::orm::FkAction::NoAction,
     };
 
     assert_ne!(a, b, "FieldSpecs differing in name must not compare equal");

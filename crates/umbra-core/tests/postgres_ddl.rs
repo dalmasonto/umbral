@@ -33,6 +33,8 @@ fn id_pk() -> Column {
         default: String::new(),
         is_multichoice: false,
         unique: false,
+        on_delete: umbra_core::orm::FkAction::NoAction,
+        on_update: umbra_core::orm::FkAction::NoAction,
     }
 }
 
@@ -53,6 +55,8 @@ fn text_not_null(name: &str) -> Column {
         default: String::new(),
         is_multichoice: false,
         unique: false,
+        on_delete: umbra_core::orm::FkAction::NoAction,
+        on_update: umbra_core::orm::FkAction::NoAction,
     }
 }
 
@@ -73,6 +77,8 @@ fn text_nullable(name: &str) -> Column {
         default: String::new(),
         is_multichoice: false,
         unique: false,
+        on_delete: umbra_core::orm::FkAction::NoAction,
+        on_update: umbra_core::orm::FkAction::NoAction,
     }
 }
 
@@ -323,6 +329,8 @@ fn col(name: &str, ty: SqlType) -> Column {
         default: String::new(),
         is_multichoice: false,
         unique: false,
+        on_delete: umbra_core::orm::FkAction::NoAction,
+        on_update: umbra_core::orm::FkAction::NoAction,
     }
 }
 

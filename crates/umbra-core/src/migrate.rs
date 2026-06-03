@@ -457,6 +457,44 @@ pub struct Column {
     /// omitted on serialise when default).
     #[serde(default, skip_serializing_if = "is_false")]
     pub unique: bool,
+
+    /// Carries `FieldSpec::on_delete` into the migration snapshot.
+    /// FK columns only — the DDL builders emit
+    /// `ON DELETE <action>` when this is anything other than
+    /// `NoAction`. Default `NoAction` is omitted from JSON so
+    /// existing migration files round-trip without churn.
+    #[serde(default, skip_serializing_if = "is_no_action")]
+    pub on_delete: crate::orm::FkAction,
+
+    /// Carries `FieldSpec::on_update` into the migration snapshot.
+    /// Same shape as `on_delete`; emits `ON UPDATE <action>`.
+    #[serde(default, skip_serializing_if = "is_no_action")]
+    pub on_update: crate::orm::FkAction,
+}
+
+fn is_no_action(a: &crate::orm::FkAction) -> bool {
+    matches!(a, crate::orm::FkAction::NoAction)
+}
+
+/// Build the ` ON DELETE <action> ON UPDATE <action>` suffix for a
+/// FK column. Each half is emitted only when its action is anything
+/// other than `NoAction` — keeps the generated DDL minimal and
+/// matches the SQL standard's default (NO ACTION when the clause is
+/// omitted).
+///
+/// Closes gap #68. Shared between the SQLite and Postgres builders
+/// because the REFERENCES tail syntax is identical on both.
+fn fk_action_suffix(col: &Column) -> String {
+    let mut s = String::new();
+    if let Some(kw) = col.on_delete.sql_keyword() {
+        s.push_str(" ON DELETE ");
+        s.push_str(kw);
+    }
+    if let Some(kw) = col.on_update.sql_keyword() {
+        s.push_str(" ON UPDATE ");
+        s.push_str(kw);
+    }
+    s
 }
 
 fn is_false(b: &bool) -> bool {
@@ -480,6 +518,8 @@ impl From<&FieldSpec> for Column {
             default: f.default.to_string(),
             is_multichoice: f.is_multichoice,
             unique: f.unique,
+            on_delete: f.on_delete,
+            on_update: f.on_update,
         }
     }
 }
@@ -2426,7 +2466,10 @@ fn build_column_def_sqlite(col: &Column) -> sea_query::ColumnDef {
         if !col.nullable {
             def.not_null();
         }
-        def.extra(format!("REFERENCES \"{fk_target}\"(\"{pk_col_name}\")"));
+        def.extra(format!(
+            "REFERENCES \"{fk_target}\"(\"{pk_col_name}\"){}",
+            fk_action_suffix(col),
+        ));
         return def;
     }
 
@@ -2491,7 +2534,10 @@ fn build_column_def_postgres(col: &Column) -> sea_query::ColumnDef {
         if !col.nullable {
             def.not_null();
         }
-        def.extra(format!("REFERENCES \"{fk_target}\"(\"{pk_col_name}\")"));
+        def.extra(format!(
+            "REFERENCES \"{fk_target}\"(\"{pk_col_name}\"){}",
+            fk_action_suffix(col),
+        ));
         return def;
     }
 
@@ -2626,6 +2672,8 @@ mod tests {
             // Set even though it's a PK so we can assert below that
             // the emit path drops the redundant clause.
             unique: true,
+            on_delete: crate::orm::FkAction::NoAction,
+            on_update: crate::orm::FkAction::NoAction,
         };
         let username = Column {
             name: "username".into(),
@@ -2642,6 +2690,8 @@ mod tests {
             default: String::new(),
             is_multichoice: false,
             unique: true,
+            on_delete: crate::orm::FkAction::NoAction,
+            on_update: crate::orm::FkAction::NoAction,
         };
         let email = Column {
             name: "email".into(),
@@ -2658,6 +2708,8 @@ mod tests {
             default: String::new(),
             is_multichoice: false,
             unique: false,
+            on_delete: crate::orm::FkAction::NoAction,
+            on_update: crate::orm::FkAction::NoAction,
         };
 
         for backend in ["sqlite", "postgres"] {
@@ -2710,6 +2762,109 @@ mod tests {
             assert!(
                 !id_clause.to_uppercase().contains("UNIQUE"),
                 "{backend}: PK column should not also carry UNIQUE; clause: {id_clause}",
+            );
+        }
+    }
+
+    /// Gap #68: `on_delete` / `on_update` lift to the `REFERENCES`
+    /// tail in DDL. `NoAction` emits no clause (the SQL default);
+    /// any other variant emits `ON DELETE <kw>` / `ON UPDATE <kw>`
+    /// on both backends. The clause goes inside the same `extra(...)`
+    /// string that already carries `REFERENCES "<target>"("id")` —
+    /// the test asserts the full tail shape so a future refactor
+    /// that splits the FK rendering won't silently regress.
+    #[test]
+    fn fk_action_lifts_to_references_clause_on_both_backends() {
+        use sea_query::{Alias, PostgresQueryBuilder, SqliteQueryBuilder, Table};
+
+        // Need an FK target table; the DDL renderer looks up the
+        // PK column type for `auth_user` via `fk_target_pk`.
+        // Using "post" since it's already registered as a real
+        // Model in the lib (resolves to BigInt id).
+        let plain_fk = Column {
+            name: "owner_id".into(),
+            ty: SqlType::ForeignKey,
+            primary_key: false,
+            nullable: false,
+            fk_target: Some("post".into()),
+            noform: false,
+            noedit: false,
+            is_string_repr: false,
+            max_length: 0,
+            choices: vec![],
+            choice_labels: vec![],
+            default: String::new(),
+            is_multichoice: false,
+            unique: false,
+            on_delete: crate::orm::FkAction::NoAction,
+            on_update: crate::orm::FkAction::NoAction,
+        };
+        let cascade_fk = Column {
+            on_delete: crate::orm::FkAction::Cascade,
+            on_update: crate::orm::FkAction::Cascade,
+            ..plain_fk.clone()
+        };
+        let restrict_fk = Column {
+            on_delete: crate::orm::FkAction::Restrict,
+            ..plain_fk.clone()
+        };
+        let set_null_fk = Column {
+            nullable: true,
+            on_delete: crate::orm::FkAction::SetNull,
+            ..plain_fk.clone()
+        };
+
+        for backend in ["sqlite", "postgres"] {
+            let render_one = |col: &Column| -> String {
+                let mut stmt = Table::create();
+                stmt.table(Alias::new("t"));
+                let mut def = if backend == "sqlite" {
+                    build_column_def_sqlite(col)
+                } else {
+                    build_column_def_postgres(col)
+                };
+                stmt.col(&mut def);
+                if backend == "sqlite" {
+                    stmt.to_string(SqliteQueryBuilder)
+                } else {
+                    stmt.to_string(PostgresQueryBuilder)
+                }
+            };
+
+            // NoAction → REFERENCES with no tail clauses.
+            let sql = render_one(&plain_fk);
+            assert!(
+                sql.contains("REFERENCES")
+                    && !sql.to_uppercase().contains("ON DELETE")
+                    && !sql.to_uppercase().contains("ON UPDATE"),
+                "{backend}: NoAction should emit REFERENCES alone; got: {sql}",
+            );
+
+            // Cascade on both ON DELETE and ON UPDATE.
+            let sql = render_one(&cascade_fk);
+            assert!(
+                sql.to_uppercase().contains("ON DELETE CASCADE")
+                    && sql.to_uppercase().contains("ON UPDATE CASCADE"),
+                "{backend}: Cascade should emit both clauses; got: {sql}",
+            );
+
+            // Restrict on ON DELETE only; ON UPDATE is NoAction so
+            // no clause appears.
+            let sql = render_one(&restrict_fk);
+            assert!(
+                sql.to_uppercase().contains("ON DELETE RESTRICT"),
+                "{backend}: Restrict missing; got: {sql}",
+            );
+            assert!(
+                !sql.to_uppercase().contains("ON UPDATE"),
+                "{backend}: ON UPDATE shouldn't appear for NoAction; got: {sql}",
+            );
+
+            // SET NULL renders verbatim (two-word keyword).
+            let sql = render_one(&set_null_fk);
+            assert!(
+                sql.to_uppercase().contains("ON DELETE SET NULL"),
+                "{backend}: SET NULL missing; got: {sql}",
             );
         }
     }

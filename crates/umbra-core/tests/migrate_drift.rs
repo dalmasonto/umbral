@@ -100,6 +100,8 @@ fn write_migration(dir: &Path, plugin: &str, id: &str, table: &str) {
                     default: String::new(),
                     is_multichoice: false,
                     unique: false,
+                    on_delete: umbra_core::orm::FkAction::NoAction,
+                    on_update: umbra_core::orm::FkAction::NoAction,
                 },
                 Column {
                     name: "title".to_string(),
@@ -116,6 +118,8 @@ fn write_migration(dir: &Path, plugin: &str, id: &str, table: &str) {
                     default: String::new(),
                     is_multichoice: false,
                     unique: false,
+                    on_delete: umbra_core::orm::FkAction::NoAction,
+                    on_update: umbra_core::orm::FkAction::NoAction,
                 },
             ],
         }],

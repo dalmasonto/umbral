@@ -129,6 +129,8 @@ fn create_table_emits_references_sqlite() {
                 default: String::new(),
                 is_multichoice: false,
                 unique: false,
+                on_delete: umbra_core::orm::FkAction::NoAction,
+                on_update: umbra_core::orm::FkAction::NoAction,
             },
             Column {
                 name: "title".to_string(),
@@ -145,6 +147,8 @@ fn create_table_emits_references_sqlite() {
                 default: String::new(),
                 is_multichoice: false,
                 unique: false,
+                on_delete: umbra_core::orm::FkAction::NoAction,
+                on_update: umbra_core::orm::FkAction::NoAction,
             },
             Column {
                 name: "author".to_string(),
@@ -161,6 +165,8 @@ fn create_table_emits_references_sqlite() {
                 default: String::new(),
                 is_multichoice: false,
                 unique: false,
+                on_delete: umbra_core::orm::FkAction::NoAction,
+                on_update: umbra_core::orm::FkAction::NoAction,
             },
         ],
     };
@@ -210,6 +216,8 @@ fn create_table_emits_references_postgres() {
                 default: String::new(),
                 is_multichoice: false,
                 unique: false,
+                on_delete: umbra_core::orm::FkAction::NoAction,
+                on_update: umbra_core::orm::FkAction::NoAction,
             },
             Column {
                 name: "title".to_string(),
@@ -226,6 +234,8 @@ fn create_table_emits_references_postgres() {
                 default: String::new(),
                 is_multichoice: false,
                 unique: false,
+                on_delete: umbra_core::orm::FkAction::NoAction,
+                on_update: umbra_core::orm::FkAction::NoAction,
             },
             Column {
                 name: "author".to_string(),
@@ -242,6 +252,8 @@ fn create_table_emits_references_postgres() {
                 default: String::new(),
                 is_multichoice: false,
                 unique: false,
+                on_delete: umbra_core::orm::FkAction::NoAction,
+                on_update: umbra_core::orm::FkAction::NoAction,
             },
         ],
     };

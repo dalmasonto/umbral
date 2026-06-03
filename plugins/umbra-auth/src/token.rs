@@ -67,7 +67,12 @@ pub const TOKEN_PREFIX: &str = "umbra_";
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
 pub struct AuthToken {
     pub id: i64,
-    /// Owning user. FK against `auth_user.id`.
+    /// Owning user. FK against `auth_user.id`. `ON DELETE CASCADE`
+    /// — when a user row is deleted, every token they hold goes
+    /// with them. Otherwise revoking a user would leave orphan
+    /// tokens that no longer match any user via the auth lookup,
+    /// silently failing 401 instead of cleanly disappearing.
+    #[umbra(on_delete = "cascade")]
     pub user_id: ForeignKey<AuthUser>,
     /// `base64(sha256(plaintext))` — 43 chars, URL-safe, no pad. The
     /// UNIQUE constraint protects against the (cryptographically

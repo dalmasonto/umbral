@@ -24,10 +24,10 @@ pub mod prelude {
 
     pub use crate::orm::{ChoiceField, Choices, F, FColExt, ForeignKey, Model, MultiChoice, Q};
     pub use crate::plugin::{AppContext, Plugin};
+    pub use crate::routes::Routes;
     pub use crate::web::{
         Form, IntoResponse, Json, JsonResponse, Path, Query, Router, delete, get, patch, post, put,
     };
-    pub use crate::routes::Routes;
     pub use crate::{App, AppBuilder, Environment, Settings};
 }
 
@@ -321,9 +321,9 @@ pub mod orm {
 
     pub use umbra_core::orm::write::{SaveError, WriteError};
     pub use umbra_core::orm::{
-        ArrayElement, ChoiceField, DynError, DynQuerySet, F, FColExt, FExpr, FieldSpec, ForeignKey,
-        GetError, HydrateRelated, Manager, Model, MultiChoice, Post, Predicate, PrimaryKey, Q,
-        QuerySet, QuerySetTx, SqlType, TsVector, column, decode_to_string, write,
+        ArrayElement, ChoiceField, DynError, DynQuerySet, F, FColExt, FExpr, FieldSpec, FkAction,
+        ForeignKey, GetError, HydrateRelated, Manager, Model, MultiChoice, Post, Predicate,
+        PrimaryKey, Q, QuerySet, QuerySetTx, SqlType, TsVector, column, decode_to_string, write,
     };
 
     /// The `#[derive(Model)]` proc macro. Shares the `Model` name with the
