@@ -8,7 +8,7 @@ open items each carry enough scope detail that the next person
 (human or agent) can pick one and execute in a single coherent
 commit.
 
-Last updated: 2026-06-03 after IMP-3 (`6154cb0`).
+Last updated: 2026-06-03 after BUG-6/7/8 (`d2cdc54`).
 
 ## Closed in this sweep
 
@@ -19,6 +19,9 @@ Last updated: 2026-06-03 after IMP-3 (`6154cb0`).
 | BUG-3 | scaffold `async fn on_ready` → sync (matches `Plugin` trait). | `997e817` |
 | BUG-4 | `#[umbra(index)]` emits `CREATE INDEX IF NOT EXISTS idx_<table>_<col>` on both backends. | `92f0964` |
 | BUG-5 | `#[umbra(auto_now)]` / `#[umbra(auto_now_add)]` populate via `Utc::now()` on the dynamic write path. Typed path stays user-controlled. | `a6c1325` |
+| BUG-6 | `#[umbra(unique_together = [[..]])]` → inline `UNIQUE (col1, col2)` on `CREATE TABLE`. | `d2cdc54` |
+| BUG-7 | `#[umbra(indexes = [[..]])]` → follow-up `CREATE INDEX IF NOT EXISTS` after the table. | `d2cdc54` |
+| BUG-8 | `#[umbra(ordering = ["-col", "col"])]` → default `ORDER BY` applied when no explicit `.order_by`. Django semantics: explicit ordering REPLACES the default. | `d2cdc54` |
 | BUG-9 | `#[umbra(singleton)]` flips `Model::SINGLETON` + `ModelMeta.singleton`. | `5a5b18c` |
 | BUG-10 | `rust_decimal::Decimal` field type (Postgres-only, gated by the field-backend system check). | `dac7c99` |
 | BUG-15 | `OneToOne` shape = `#[umbra(unique)] ForeignKey<T>`. FK render branch fixed to also emit `UNIQUE`. | `0531f5c` |
@@ -37,67 +40,6 @@ Last updated: 2026-06-03 after IMP-3 (`6154cb0`).
 | Playground-openapi #6 | `#[umbra(example = "...")]` → OpenAPI `example`. | `a45379a` |
 
 Plus gap #71 (playground app-scoping, `851728a`) and gap #65 follow-up (full diff widening, `f85ed06`).
-
-## Open — model / field attributes
-
-### BUG-6: `#[model(unique_together = [...])]` — composite UNIQUE
-
-Single-column unique already works (`#[umbra(unique)]`). The
-struct-level shape is what's missing.
-
-**Shape:**
-
-```rust
-#[derive(Model)]
-#[umbra(unique_together = [["tenant_id", "slug"], ["author_id", "year"]])]
-pub struct Post { ... }
-```
-
-**Implementation sketch:**
-- Add `ModelMeta.unique_together: Vec<Vec<String>>` (new field on the snapshot).
-- Parse the struct-level attribute in `parse_umbra_struct_attr`.
-- DDL: `CONSTRAINT "<table>_<col1>_<col2>_key" UNIQUE ("<col1>", "<col2>")` on Postgres; SQLite supports the same `UNIQUE (col1, col2)` inline. Emit alongside the column defs in `render_operation_*::CreateTable`.
-- Diff: any change to the list emits an `AlterTable` op. Could land later — v1 just supports CreateTable.
-- Tests: round-trip the unique_together list through the snapshot, assert the DDL contains the constraint, drive a duplicate insert through SQLite and assert it fails.
-
-Effort: ~250 LOC across model.rs, migrate.rs, the macro, plus 60-something hand-written ModelMeta sites that gain `unique_together: vec![]`. Half a day.
-
-### BUG-7: `#[model(indexes = [["a", "b"]])]` — multi-column indexes
-
-Single-column already covered by `#[umbra(index)]` from BUG-4 above.
-
-**Shape:**
-
-```rust
-#[derive(Model)]
-#[umbra(indexes = [["tenant_id", "created_at"], ["status"]])]
-pub struct Post { ... }
-```
-
-**Implementation sketch:** same pattern as `unique_together` — add `ModelMeta.indexes: Vec<Vec<String>>`, parse, emit `CREATE INDEX IF NOT EXISTS idx_<table>_<col1>_<col2>` after `CREATE TABLE`. Diff widening can come later.
-
-Effort: same as #6, ~300 LOC. Could share a struct-level-attribute helper with #6 — bundle the two into one commit if feasible.
-
-### BUG-8: `#[model(ordering = ["-published_at", "id"])]` — default ordering
-
-**Shape:**
-
-```rust
-#[derive(Model)]
-#[umbra(ordering = ["-published_at", "id"])]
-pub struct Post { ... }
-
-// Now this works:
-Post::objects().fetch().await?;  // ORDER BY published_at DESC, id ASC implied
-```
-
-**Implementation sketch:**
-- `ModelMeta.ordering: Vec<(String, OrderDir)>`.
-- Macro parses the strings; `-prefix` → DESC.
-- `QuerySet::fetch()` checks if any `.order_by(...)` was explicitly added; if not, walks `T::ORDERING` and applies the defaults.
-- Same metadata feeds the admin list view's default sort.
-
-Effort: ~200 LOC. The runtime hook is small once the metadata is there.
 
 ## Open — new field types
 
@@ -143,9 +85,8 @@ Each is real frontend work. None block the framework's correctness or usability 
 
 ## How to pick a next item
 
-Default order (post-IMP-3):
+Default order (post-BUG-6/7/8):
 
-1. **BUG-6 / BUG-7 / BUG-8** — struct-level attributes (`unique_together`, `indexes`, `ordering`). Share one fan-out commit since they cost the same ~60-site ModelMeta widening.
-2. **BUG-11 / BUG-12 / BUG-13** — `Slug` / `Email` / `Url` wrapper types. Bundle.
+1. **BUG-11 / BUG-12 / BUG-13** — `Slug` / `Email` / `Url` wrapper types. Bundle.
 
 The big skips (BUG-14, BUG-16, BUG-21) all want their own dedicated spec before code lands.
