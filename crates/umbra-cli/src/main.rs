@@ -7,7 +7,10 @@
 //!   directory with `Cargo.toml`, `src/main.rs`, `umbra.toml`,
 //!   templates, and a default `404` / `500` page.
 //! - `umbra startapp <name>` — create a new plugin crate at
-//!   `plugins/<name>/` with a `{Name}Plugin` skeleton.
+//!   `plugins/<name>/` with a minimal `{Name}Plugin` skeleton.
+//! - `umbra startplugin <name>` — like `startapp` but writes a
+//!   richer template (example Model with field-type attributes,
+//!   example handler, README) aimed at distributable plugins.
 //!
 //! For every **management** command (`serve`, `migrate`,
 //! `makemigrations`, `inspectdb`, etc.), users run them inside their
@@ -52,8 +55,23 @@ enum Command {
     /// Run this from inside a project. The generated plugin lives at
     /// `plugins/<name>/` and exports a `{Name}Plugin` struct. Wire
     /// it into your App by editing `src/main.rs` per the printed
-    /// instructions.
+    /// instructions. Minimal: one lib.rs with a stub Plugin impl.
     Startapp {
+        /// Plugin name. ASCII alphanumeric, underscore, hyphen.
+        name: String,
+        /// Project root. Defaults to the current directory.
+        #[arg(long, default_value = ".")]
+        path: PathBuf,
+    },
+    /// Create a richer plugin scaffold in `<project>/plugins/<name>/`.
+    ///
+    /// Like `startapp` but writes a more complete starter: an example
+    /// `Model` showing common field attributes (`max_length`,
+    /// `choices`, nullable timestamp, `noedit`), an example axum
+    /// handler that reads query params and returns JSON, and a
+    /// README walking through the layout. Use this when you're
+    /// building a plugin you intend to distribute.
+    Startplugin {
         /// Plugin name. ASCII alphanumeric, underscore, hyphen.
         name: String,
         /// Project root. Defaults to the current directory.
@@ -79,6 +97,19 @@ fn main() -> ExitCode {
             }),
         Command::Startapp { name, path } => {
             umbra_cli::scaffold::scaffold_app(&name, &path).map(|r| {
+                println!("Created `{}`:", r.root.display());
+                for f in &r.files {
+                    println!("  {}", f.display());
+                }
+                println!();
+                println!("Next steps:");
+                for step in &r.next_steps {
+                    println!("  {step}");
+                }
+            })
+        }
+        Command::Startplugin { name, path } => {
+            umbra_cli::scaffold::scaffold_plugin(&name, &path).map(|r| {
                 println!("Created `{}`:", r.root.display());
                 for f in &r.files {
                     println!("  {}", f.display());
