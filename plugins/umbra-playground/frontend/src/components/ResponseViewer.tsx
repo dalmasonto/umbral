@@ -1,10 +1,9 @@
-import { useState } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { usePlayground } from "@/state/store";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { JsonView } from "react-json-view-lite";
-import "react-json-view-lite/dist/index.css";
+import Editor from "@monaco-editor/react";
 import {
   Clock,
   HardDrive,
@@ -69,21 +68,52 @@ function toCurl(record: ResponseRecord): string {
   return parts.join(" \\\n  ");
 }
 
-/* Dark-mode-aware JSON viewer styles using CSS variables */
-const jsonStyles = {
-  container: "font-mono text-xs leading-relaxed",
-  basicChildStyle: "margin-left: 1rem;",
-  label: "color: hsl(var(--foreground)); font-weight: 600; margin-right: 0.25rem;",
-  nullValue: "color: hsl(var(--muted-foreground)); font-style: italic;",
-  undefinedValue: "color: hsl(var(--muted-foreground)); font-style: italic;",
-  stringValue: "color: #4ade80;", // emerald-400 — pops in both light & dark
-  booleanValue: "color: #a78bfa; font-weight: 600;", // violet-400
-  numberValue: "color: #38bdf8; font-weight: 600;", // sky-400
-  expandIcon: "color: hsl(var(--muted-foreground)); cursor: pointer; user-select: none;",
-  collapseIcon: "color: hsl(var(--muted-foreground)); cursor: pointer; user-select: none;",
-  collapsedContent: "color: hsl(var(--muted-foreground)); font-style: italic;",
-  punctuation: "color: hsl(var(--muted-foreground));",
-};
+function useIsDark() {
+  const [dark, setDark] = useState(() =>
+    document.documentElement.classList.contains("dark"),
+  );
+  useEffect(() => {
+    const obs = new MutationObserver(() =>
+      setDark(document.documentElement.classList.contains("dark")),
+    );
+    obs.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+    return () => obs.disconnect();
+  }, []);
+  return dark;
+}
+
+function ReadonlyMonaco({
+  value,
+  language,
+}: {
+  value: string;
+  language: string;
+}) {
+  const isDark = useIsDark();
+  return (
+    <div className="flex-1 min-h-[12rem] rounded-md overflow-hidden border border-border">
+      <Editor
+        height="100%"
+        language={language}
+        theme={isDark ? "vs-dark" : "light"}
+        value={value}
+        options={{
+          readOnly: true,
+          minimap: { enabled: false },
+          lineNumbers: "on",
+          wordWrap: "on",
+          folding: true,
+          scrollBeyondLastLine: false,
+          automaticLayout: true,
+          fontSize: 13,
+          fontFamily:
+            'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace',
+          tabSize: 2,
+        }}
+      />
+    </div>
+  );
+}
 
 export function ResponseViewer() {
   const lastResponse = usePlayground((s) => s.lastResponse);
@@ -94,6 +124,15 @@ export function ResponseViewer() {
   const [activeTab, setActiveTab] = useState<TabId>("body");
 
   const opHistory = selected ? history[selected] ?? [] : [];
+
+  const prettyBody = useMemo(() => {
+    if (!lastResponse) return null;
+    try {
+      return JSON.stringify(JSON.parse(lastResponse.bodyText), null, 2);
+    } catch {
+      return null;
+    }
+  }, [lastResponse?.bodyText]);
 
   if (inFlight) {
     return (
@@ -122,14 +161,6 @@ export function ResponseViewer() {
 
   const { status, statusText, durationMs, sizeBytes, bodyText, headers, error } =
     lastResponse;
-
-  const prettyBody = (() => {
-    try {
-      return JSON.parse(bodyText);
-    } catch {
-      return null;
-    }
-  })();
 
   return (
     <div className="flex flex-col h-full">
@@ -190,11 +221,7 @@ export function ResponseViewer() {
         {activeTab === "body" && (
           <div className="h-full">
             {prettyBody ? (
-              <JsonView
-                data={prettyBody}
-                style={jsonStyles}
-                shouldExpandNode={() => true}
-              />
+              <ReadonlyMonaco value={prettyBody} language="json" />
             ) : (
               <pre className="font-mono text-xs whitespace-pre-wrap break-all text-foreground">
                 {bodyText || (
@@ -294,7 +321,7 @@ export function ResponseViewer() {
         )}
 
         {activeTab === "curl" && (
-          <div className="space-y-2">
+          <div className="space-y-2 h-full flex flex-col">
             <div className="flex items-center justify-between">
               <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold">
                 Equivalent cURL
@@ -311,9 +338,7 @@ export function ResponseViewer() {
                 Copy
               </Button>
             </div>
-            <pre className="font-mono text-[11px] whitespace-pre-wrap break-all p-3 rounded-lg bg-muted border border-border text-foreground">
-              {toCurl(lastResponse)}
-            </pre>
+            <ReadonlyMonaco value={toCurl(lastResponse)} language="shell" />
           </div>
         )}
       </div>

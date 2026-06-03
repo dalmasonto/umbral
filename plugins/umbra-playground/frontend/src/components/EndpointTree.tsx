@@ -164,8 +164,7 @@ export function EndpointTree() {
                       </TooltipTrigger>
                       {e.summary && (
                         <TooltipContent side="right" className="max-w-xs">
-                          <p className="font-medium">{e.summary}</p>
-                          <p className="text-[10px] text-muted-foreground mt-0.5 font-mono">{e.method} {e.path}</p>
+                          <p className="font-medium text-sm">{e.summary}</p>
                         </TooltipContent>
                       )}
                     </Tooltip>
