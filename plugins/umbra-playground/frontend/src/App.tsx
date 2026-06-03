@@ -356,7 +356,12 @@ export function App() {
             </div>
           </div>
 
-          <SidebarContent className="p-0">
+          {/* `overflow-hidden` overrides the shadcn SidebarContent
+              default (`overflow-auto`) so the EndpointTree's
+              ScrollArea is the only scroller. Without this override,
+              the SidebarContent's invisible native scroll wins and
+              the ScrollArea grows to fit content (no scrollbar). */}
+          <SidebarContent className="p-0 overflow-hidden">
             <EndpointTree />
           </SidebarContent>
 
