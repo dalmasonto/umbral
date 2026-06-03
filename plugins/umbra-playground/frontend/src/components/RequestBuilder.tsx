@@ -33,19 +33,6 @@ import {
 } from "lucide-react";
 import Editor from "@monaco-editor/react";
 
-function extractPathParams(url: string): string[] {
-  return [...url.matchAll(/(?<!\{)\{([a-zA-Z_][a-zA-Z0-9_]*)\}(?!\})/g)].map(
-    (m) => m[1],
-  );
-}
-
-function findPathParamValue(
-  params: Array<{ key: string; value: string; enabled: boolean }>,
-  name: string,
-): string {
-  return params.find((p) => p.key === name && p.enabled)?.value ?? "";
-}
-
 /** Build the display URL from stored URL + params. Preserves trailing ?. */
 function buildDisplayUrl(
   url: string,
@@ -200,8 +187,6 @@ export function RequestBuilder() {
       resetCurrent({ method: opMethod, url: opPath });
     }
   }, [opMethod, opPath, resetCurrent]);
-
-  const pathParams = useMemo(() => extractPathParams(current.url), [current.url]);
 
   const displayUrl = useMemo(
     () => buildDisplayUrl(current.url, current.params),
@@ -417,37 +402,12 @@ export function RequestBuilder() {
           </Button>
         </div>
 
-        {pathParams.length > 0 && (
-          <div className="flex flex-wrap gap-2">
-            {pathParams.map((name) => (
-              <div key={name} className="flex items-center gap-1.5">
-                <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
-                  {name}
-                </span>
-                <Input
-                  value={findPathParamValue(current.params, name)}
-                  onChange={(e) => {
-                    const existing = current.params.find((p) => p.key === name);
-                    if (existing) {
-                      setParams(
-                        current.params.map((p) =>
-                          p.key === name ? { ...p, value: e.target.value } : p,
-                        ),
-                      );
-                    } else {
-                      setParams([
-                        ...current.params,
-                        { key: name, value: e.target.value, enabled: true },
-                      ]);
-                    }
-                  }}
-                  placeholder={`{${name}}`}
-                  className="w-36 font-mono text-sm h-9 rounded-md"
-                />
-              </div>
-            ))}
-          </div>
-        )}
+        {/* Path params used to render as a floating row of inputs here.
+            Now that declaredParams reads pathItem-level params, the
+            Params table handles them — locked checkbox + locked trash
+            because they're required. Editing the value in the table
+            still updates the URL through the same `current.params`
+            store path. */}
       </div>
 
       {/* Tabs */}
