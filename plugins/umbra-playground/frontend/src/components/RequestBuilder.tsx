@@ -30,6 +30,8 @@ import {
   FileJson,
   FileOutput,
   Trash2,
+  Copy,
+  Check,
 } from "lucide-react";
 import Editor from "@monaco-editor/react";
 
@@ -54,6 +56,31 @@ function buildDisplayUrl(
     )
     .join("&");
   return `${base}?${qs}`;
+}
+
+/** Compose the absolute URL to copy: substitute filled path params,
+ *  keep the query string from `displayUrl`, then prepend the base URL
+ *  (workspace settings) or fall back to the playground's own origin.
+ *  Unfilled path params stay as `{name}` placeholders so the copied
+ *  URL is still readable (rather than failing silently). */
+function composeCopyUrl(
+  displayUrl: string,
+  params: Array<{ key: string; value: string; enabled: boolean }>,
+  baseUrl: string,
+): string {
+  // Substitute path-template params with their (non-empty) values.
+  // Leave placeholders intact if the user hasn't filled them.
+  const PATH_TEMPLATE = /\{([a-zA-Z_][a-zA-Z0-9_]*)\}/g;
+  const substituted = displayUrl.replace(PATH_TEMPLATE, (match, name) => {
+    const item = params.find(
+      (p) => p.key === name && p.enabled && p.value !== "",
+    );
+    return item ? encodeURIComponent(item.value) : match;
+  });
+  // Already absolute (someone typed a full URL into the bar): return as-is.
+  if (/^[a-z][a-z\d+.-]*:/i.test(substituted)) return substituted;
+  const prefix = baseUrl.trim() || window.location.origin;
+  return `${prefix.replace(/\/+$/, "")}/${substituted.replace(/^\/+/, "")}`;
 }
 
 /** Parse a full URL input into base path + query params. */
@@ -172,6 +199,8 @@ export function RequestBuilder() {
   const resetCurrent = usePlayground((s) => s.resetCurrent);
   const send = usePlayground((s) => s.send);
   const inFlight = usePlayground((s) => s.inFlight);
+  const settings = usePlayground((s) => s.settings);
+  const [copiedUrl, setCopiedUrl] = useState(false);
   const [activeTab, setActiveTab] = usePersistedState<TabId>(
     "request-builder.active-tab",
     "params",
@@ -391,6 +420,39 @@ export function RequestBuilder() {
             placeholder="/api/endpoint"
             className="flex-1 font-mono text-sm h-10 rounded-md"
           />
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            title={
+              copiedUrl
+                ? "Copied!"
+                : `Copy ${(settings.baseUrl.trim() || window.location.origin)}${displayUrl.startsWith("/") ? "" : "/"}${displayUrl}`
+            }
+            onClick={() => {
+              const url = composeCopyUrl(
+                displayUrl,
+                current.params,
+                settings.baseUrl,
+              );
+              void navigator.clipboard.writeText(url);
+              setCopiedUrl(true);
+              setTimeout(() => setCopiedUrl(false), 1200);
+            }}
+            className="h-10 px-3 text-muted-foreground hover:text-foreground"
+          >
+            {copiedUrl ? (
+              <>
+                <Check className="size-3.5 mr-1.5 text-emerald-600" />
+                Copied
+              </>
+            ) : (
+              <>
+                <Copy className="size-3.5 mr-1.5" />
+                Copy URL
+              </>
+            )}
+          </Button>
           <Button
             onClick={handleSend}
             disabled={inFlight}
