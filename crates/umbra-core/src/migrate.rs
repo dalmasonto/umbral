@@ -1949,7 +1949,23 @@ fn diff_columns(
                     ),
                 });
             }
-            if type_changed || prev_col.nullable != curr_col.nullable {
+            // Any schema-meaningful field change triggers AlterColumn.
+            // UI-only flags (`noform`, `noedit`, `max_length`,
+            // `is_string_repr`, `is_multichoice`) are intentionally
+            // excluded — they affect admin / OpenAPI rendering but
+            // not the database schema, so emitting an ALTER would do
+            // no DB work. The snapshot still updates because the next
+            // CreateTable in the migration stream carries the flag.
+            if type_changed
+                || prev_col.nullable != curr_col.nullable
+                || prev_col.fk_target != curr_col.fk_target
+                || prev_col.unique != curr_col.unique
+                || prev_col.default != curr_col.default
+                || prev_col.choices != curr_col.choices
+                || prev_col.choice_labels != curr_col.choice_labels
+                || prev_col.on_delete != curr_col.on_delete
+                || prev_col.on_update != curr_col.on_update
+            {
                 alter_columns.push(*name);
             }
         }
@@ -2320,11 +2336,6 @@ fn render_alter_column_postgres(
     if let Some(prev_col) = prev {
         if prev_col.ty != new.ty && is_safe_cast(prev_col.ty, new.ty) {
             let new_ty_sql = postgres_type_name(new.ty);
-            // USING <col>::<new_type> covers the safe-cast set
-            // (numeric → text via implicit cast, integer widening as a
-            // no-op, etc.). Postgres still requires the clause for
-            // text-to-text transitions to be explicit; emitting it
-            // unconditionally keeps the codepath uniform.
             stmts.push(format!(
                 "ALTER TABLE {q_table} ALTER COLUMN {q_column} TYPE {new_ty_sql} USING {q_column}::{new_ty_sql}"
             ));
@@ -2350,10 +2361,107 @@ fn render_alter_column_postgres(
         ));
     }
 
+    // From here down — all the gap #65 follow-up changes. Each branch
+    // checks if `prev` exists (legacy migrations with no snapshot
+    // skip these, matching the historical behaviour) and emits the
+    // matching ALTER on real flips.
+    if let Some(prev_col) = prev {
+        // UNIQUE flag flip. Postgres autogen for column-level UNIQUE
+        // at CREATE TABLE is `<table>_<col>_key`; we use the same
+        // name when ADDing so a subsequent DROP finds it.
+        if prev_col.unique != new.unique {
+            let cname = format!("{table}_{column}_key");
+            if new.unique {
+                stmts.push(format!(
+                    "ALTER TABLE {q_table} ADD CONSTRAINT \"{cname}\" UNIQUE ({q_column})"
+                ));
+            } else {
+                stmts.push(format!(
+                    "ALTER TABLE {q_table} DROP CONSTRAINT IF EXISTS \"{cname}\""
+                ));
+            }
+        }
+
+        // DEFAULT change. Empty string in either snapshot means "no
+        // default"; the canonical SET / DROP pair fully expresses
+        // the transition.
+        if prev_col.default != new.default {
+            if new.default.is_empty() {
+                stmts.push(format!(
+                    "ALTER TABLE {q_table} ALTER COLUMN {q_column} DROP DEFAULT"
+                ));
+            } else {
+                let escaped = new.default.replace('\'', "''");
+                stmts.push(format!(
+                    "ALTER TABLE {q_table} ALTER COLUMN {q_column} SET DEFAULT '{escaped}'"
+                ));
+            }
+        }
+
+        // FK target / on_delete / on_update — these are all carried
+        // on the same constraint, so any one of them flipping
+        // requires a DROP + readd of the whole FK. Autogen name
+        // convention `<table>_<col>_fkey` matches Postgres at CREATE
+        // TABLE time. Only emitted when the new column is still a
+        // FK; if the column stopped being a FK (ty changed away
+        // from ForeignKey), the type-change branch above handles
+        // it indirectly via the column type rewrite.
+        let fk_changed = prev_col.fk_target != new.fk_target
+            || prev_col.on_delete != new.on_delete
+            || prev_col.on_update != new.on_update;
+        if fk_changed && matches!(new.ty, SqlType::ForeignKey) {
+            let cname = format!("{table}_{column}_fkey");
+            stmts.push(format!(
+                "ALTER TABLE {q_table} DROP CONSTRAINT IF EXISTS \"{cname}\""
+            ));
+            if let Some(target) = &new.fk_target {
+                let q_target = quote_pg_ident(target);
+                let on_delete_clause = new
+                    .on_delete
+                    .sql_keyword()
+                    .map(|k| format!(" ON DELETE {k}"))
+                    .unwrap_or_default();
+                let on_update_clause = new
+                    .on_update
+                    .sql_keyword()
+                    .map(|k| format!(" ON UPDATE {k}"))
+                    .unwrap_or_default();
+                stmts.push(format!(
+                    "ALTER TABLE {q_table} ADD CONSTRAINT \"{cname}\" \
+                     FOREIGN KEY ({q_column}) REFERENCES {q_target}(\"id\")\
+                     {on_delete_clause}{on_update_clause}"
+                ));
+            }
+        }
+
+        // CHECK constraint (single-valued choices) change. MultiChoice
+        // uses CSV storage which can't be expressed as a column-level
+        // IN constraint; the runtime sqlx Decode path is the guard.
+        if prev_col.choices != new.choices && !new.is_multichoice {
+            let cname = format!("{table}_{column}_check");
+            stmts.push(format!(
+                "ALTER TABLE {q_table} DROP CONSTRAINT IF EXISTS \"{cname}\""
+            ));
+            if !new.choices.is_empty() {
+                let values_sql = new
+                    .choices
+                    .iter()
+                    .map(|v| format!("'{}'", v.replace('\'', "''")))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                stmts.push(format!(
+                    "ALTER TABLE {q_table} ADD CONSTRAINT \"{cname}\" \
+                     CHECK ({q_column} IN ({values_sql}))"
+                ));
+            }
+        }
+    }
+
     // Defensive: if we somehow produced no statements (shouldn't
-    // happen — diff_columns gates on type or nullable changing), fall
-    // back to a single redundant SET NULL flip to match the legacy
-    // contract. Tests cover both branches; this is belt-and-braces.
+    // happen — diff_columns gates on at least one schema-meaningful
+    // flag changing), fall back to a single redundant SET NULL flip
+    // to match the legacy contract. Tests cover both branches; this
+    // is belt-and-braces.
     if stmts.is_empty() {
         let clause = if new.nullable {
             "DROP NOT NULL"
@@ -2867,5 +2975,162 @@ mod tests {
                 "{backend}: SET NULL missing; got: {sql}",
             );
         }
+    }
+
+    /// Gap #65 follow-up: the diff engine detects changes to *every*
+    /// schema-meaningful field, not just `ty` and `nullable`. Each
+    /// branch builds a baseline column, mutates one field, runs
+    /// `diff_columns`, and asserts an `AlterColumn` op is produced.
+    /// Catches the regression where toggling `unique` or `on_delete`
+    /// would silently leave the table unchanged.
+    #[test]
+    fn diff_detects_all_schema_meaningful_field_changes() {
+        fn baseline() -> Column {
+            Column {
+                name: "x".into(),
+                ty: SqlType::Text,
+                primary_key: false,
+                nullable: false,
+                fk_target: None,
+                noform: false,
+                noedit: false,
+                is_string_repr: false,
+                max_length: 0,
+                choices: vec![],
+                choice_labels: vec![],
+                default: String::new(),
+                is_multichoice: false,
+                unique: false,
+                on_delete: crate::orm::FkAction::NoAction,
+                on_update: crate::orm::FkAction::NoAction,
+            }
+        }
+        fn meta_with(col: Column) -> ModelMeta {
+            ModelMeta {
+                name: "M".into(),
+                table: "m".into(),
+                fields: vec![col],
+                display: "M".into(),
+                icon: "database".into(),
+                database: None,
+            }
+        }
+        let prev = meta_with(baseline());
+        let mutations: Vec<(&str, fn(&mut Column))> = vec![
+            ("unique", |c| c.unique = true),
+            ("default", |c| c.default = "hello".into()),
+            ("choices", |c| {
+                c.choices = vec!["a".into(), "b".into()];
+                c.choice_labels = vec!["A".into(), "B".into()];
+            }),
+            ("nullable", |c| c.nullable = true),
+        ];
+        for (label, mutate) in mutations {
+            let mut col = baseline();
+            mutate(&mut col);
+            let current = meta_with(col);
+            let ops = diff_columns("M", &prev, &current).expect("diff should succeed");
+            assert!(
+                !ops.is_empty(),
+                "{label}: diff should produce at least one op; got none",
+            );
+            assert!(
+                ops.iter()
+                    .any(|op| matches!(op, Operation::AlterColumn { column, .. } if column == "x")),
+                "{label}: expected AlterColumn on `x`; got: {ops:?}",
+            );
+        }
+    }
+
+    /// Gap #65 follow-up: the Postgres `AlterColumn` render handles
+    /// the new diff types (unique, default, choices, FK actions)
+    /// with native `ALTER TABLE ... ADD/DROP CONSTRAINT` /
+    /// `SET/DROP DEFAULT` statements. SQLite is unchanged — the
+    /// rebuild dance already swallows any column metadata change.
+    #[test]
+    fn postgres_alter_column_renders_constraint_changes() {
+        let baseline = Column {
+            name: "x".into(),
+            ty: SqlType::Text,
+            primary_key: false,
+            nullable: false,
+            fk_target: None,
+            noform: false,
+            noedit: false,
+            is_string_repr: false,
+            max_length: 0,
+            choices: vec![],
+            choice_labels: vec![],
+            default: String::new(),
+            is_multichoice: false,
+            unique: false,
+            on_delete: crate::orm::FkAction::NoAction,
+            on_update: crate::orm::FkAction::NoAction,
+        };
+
+        // unique false → true: emit ADD CONSTRAINT ... UNIQUE
+        let mut new = baseline.clone();
+        new.unique = true;
+        let stmts = render_alter_column_postgres("m", "x", &[new], Some(&[baseline.clone()]));
+        let joined = stmts.join("\n");
+        assert!(
+            joined.contains("ADD CONSTRAINT") && joined.contains("UNIQUE"),
+            "unique add: expected ADD CONSTRAINT UNIQUE; got: {joined}",
+        );
+
+        // unique true → false: emit DROP CONSTRAINT ... IF EXISTS
+        let prev_unique = Column {
+            unique: true,
+            ..baseline.clone()
+        };
+        let stmts =
+            render_alter_column_postgres("m", "x", &[baseline.clone()], Some(&[prev_unique]));
+        let joined = stmts.join("\n");
+        assert!(
+            joined.contains("DROP CONSTRAINT IF EXISTS"),
+            "unique drop: expected DROP CONSTRAINT IF EXISTS; got: {joined}",
+        );
+
+        // default empty → "hello": SET DEFAULT 'hello'
+        let mut new = baseline.clone();
+        new.default = "hello".into();
+        let stmts = render_alter_column_postgres("m", "x", &[new], Some(&[baseline.clone()]));
+        let joined = stmts.join("\n");
+        assert!(
+            joined.contains("SET DEFAULT 'hello'"),
+            "default set: expected SET DEFAULT; got: {joined}",
+        );
+
+        // default "hello" → empty: DROP DEFAULT
+        let prev_default = Column {
+            default: "hello".into(),
+            ..baseline.clone()
+        };
+        let stmts =
+            render_alter_column_postgres("m", "x", &[baseline.clone()], Some(&[prev_default]));
+        let joined = stmts.join("\n");
+        assert!(
+            joined.contains("DROP DEFAULT"),
+            "default drop: expected DROP DEFAULT; got: {joined}",
+        );
+
+        // FK on_delete change → DROP + readd FK with new clause
+        let fk_baseline = Column {
+            ty: SqlType::ForeignKey,
+            fk_target: Some("other".into()),
+            ..baseline.clone()
+        };
+        let fk_cascade = Column {
+            on_delete: crate::orm::FkAction::Cascade,
+            ..fk_baseline.clone()
+        };
+        let stmts = render_alter_column_postgres("m", "x", &[fk_cascade], Some(&[fk_baseline]));
+        let joined = stmts.join("\n");
+        assert!(
+            joined.contains("DROP CONSTRAINT IF EXISTS")
+                && joined.contains("FOREIGN KEY")
+                && joined.contains("ON DELETE CASCADE"),
+            "FK cascade add: expected drop+readd with ON DELETE CASCADE; got: {joined}",
+        );
     }
 }
