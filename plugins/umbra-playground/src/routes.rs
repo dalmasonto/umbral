@@ -52,10 +52,20 @@ pub async fn shell(State(state): State<PlaygroundState>) -> Response<Body> {
 }
 
 /// `GET {base_path}/assets/*` — bundled assets. Path-traversal safe.
+///
+/// The captured path keeps its `assets/` segment when we hand it to
+/// `resolve`: Vite emits its entry chunks + fonts under
+/// `dist/assets/*`, so a URL like `/api/playground/assets/index-X.css`
+/// should land at `<crate>/dist/assets/index-X.css`. Stripping the
+/// `assets/` segment here was the pre-vite shape (when esbuild dropped
+/// the bundle directly into `dist/`); the migration to vite broke the
+/// mapping by adding the extra directory level.
 pub async fn assets(State(state): State<PlaygroundState>, req: Request) -> Response<Body> {
     let path = req.uri().path();
-    let prefix = format!("{}/assets/", state.base_path);
-    let rel = match path.strip_prefix(&prefix) {
+    let base_prefix = format!("{}/", state.base_path);
+    let rel = match path.strip_prefix(&base_prefix) {
+        // `rel` keeps the leading `assets/` segment so resolve maps to
+        // `dist/assets/<file>` directly.
         Some(r) => r,
         None => return not_found(),
     };
