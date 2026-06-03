@@ -38,6 +38,7 @@ fn id_pk() -> Column {
         index: false,
         auto_now_add: false,
         auto_now: false,
+        help: String::new(),
     }
 }
 
@@ -63,6 +64,7 @@ fn text_not_null(name: &str) -> Column {
         index: false,
         auto_now_add: false,
         auto_now: false,
+        help: String::new(),
     }
 }
 
@@ -88,6 +90,7 @@ fn text_nullable(name: &str) -> Column {
         index: false,
         auto_now_add: false,
         auto_now: false,
+        help: String::new(),
     }
 }
 
@@ -343,6 +346,7 @@ fn col(name: &str, ty: SqlType) -> Column {
         index: false,
         auto_now_add: false,
         auto_now: false,
+        help: String::new(),
     }
 }
 

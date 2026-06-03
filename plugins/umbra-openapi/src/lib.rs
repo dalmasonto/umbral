@@ -286,6 +286,12 @@ fn column_schema(col: &Column) -> Value {
     if col.nullable {
         obj.insert("nullable".into(), Value::Bool(true));
     }
+    // `#[umbra(help = "...")]` lands as the OpenAPI standard
+    // `description` so Swagger UI / generated clients pick it up.
+    // Closes playground-openapi-gaps item 5.
+    if !col.help.is_empty() {
+        obj.insert("description".into(), Value::String(col.help.clone()));
+    }
     // Standard OpenAPI: closed-set values become `enum`. Skipped for
     // multichoice (a CSV-encoded subset) because each request value is
     // a comma-separated string of the choices, not one choice — clients
@@ -750,6 +756,7 @@ mod tests {
             index: false,
             auto_now_add: false,
             auto_now: false,
+            help: String::new(),
         }
     }
 
@@ -851,6 +858,31 @@ mod tests {
             "plain column should only have `type`: {obj:?}"
         );
         assert_eq!(schema["type"], "string");
+    }
+
+    /// Playground-openapi-gaps item 5: `#[umbra(help = "...")]`
+    /// emits as the standard OpenAPI `description` so Swagger UI
+    /// and any generated client picks it up. Empty help leaves the
+    /// key absent.
+    #[test]
+    fn help_attribute_flows_to_openapi_description() {
+        let mut col = base_col("status", SqlType::Text);
+        col.help = "Workflow step. Set by editors on Save.".to_string();
+        let schema = column_schema(&col);
+        assert_eq!(
+            schema["description"], "Workflow step. Set by editors on Save.",
+            "help should round-trip to OpenAPI description; got: {schema:?}",
+        );
+    }
+
+    #[test]
+    fn empty_help_omits_description() {
+        let col = base_col("body", SqlType::Text);
+        let schema = column_schema(&col);
+        assert!(
+            schema.get("description").is_none(),
+            "empty help should omit description; got: {schema:?}",
+        );
     }
 
     // ----------------------------------------------------------------- //

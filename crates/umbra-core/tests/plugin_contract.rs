@@ -127,6 +127,7 @@ impl Plugin for TestPlugin {
                 index: false,
                 auto_now_add: false,
                 auto_now: false,
+                help: String::new(),
             }],
         }]
     }

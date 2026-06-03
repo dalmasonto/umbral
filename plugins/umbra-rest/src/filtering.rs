@@ -623,6 +623,7 @@ mod search {
             index: false,
             auto_now_add: false,
             auto_now: false,
+            help: String::new(),
         }
     }
 
@@ -729,6 +730,7 @@ mod choice_validation {
             index: false,
             auto_now_add: false,
             auto_now: false,
+            help: String::new(),
         }
     }
 

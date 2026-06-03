@@ -491,6 +491,12 @@ pub struct Column {
     /// Same shape as `auto_now_add` but fires on update too.
     #[serde(default, skip_serializing_if = "is_false")]
     pub auto_now: bool,
+
+    /// Carries `FieldSpec::help` into the migration snapshot.
+    /// Default empty string is omitted from JSON so existing
+    /// migration files round-trip unchanged.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub help: String,
 }
 
 fn is_no_action(a: &crate::orm::FkAction) -> bool {
@@ -562,6 +568,7 @@ impl From<&FieldSpec> for Column {
             index: f.index,
             auto_now_add: f.auto_now_add,
             auto_now: f.auto_now,
+            help: f.help.to_string(),
         }
     }
 }
@@ -2894,6 +2901,7 @@ mod tests {
             index: false,
             auto_now_add: false,
             auto_now: false,
+            help: String::new(),
         };
         let username = Column {
             name: "username".into(),
@@ -2915,6 +2923,7 @@ mod tests {
             index: false,
             auto_now_add: false,
             auto_now: false,
+            help: String::new(),
         };
         let email = Column {
             name: "email".into(),
@@ -2936,6 +2945,7 @@ mod tests {
             index: false,
             auto_now_add: false,
             auto_now: false,
+            help: String::new(),
         };
 
         for backend in ["sqlite", "postgres"] {
@@ -3027,6 +3037,7 @@ mod tests {
             index: false,
             auto_now_add: false,
             auto_now: false,
+            help: String::new(),
         };
         let cascade_fk = Column {
             on_delete: crate::orm::FkAction::Cascade,
@@ -3034,6 +3045,7 @@ mod tests {
             index: false,
             auto_now_add: false,
             auto_now: false,
+            help: String::new(),
             ..plain_fk.clone()
         };
         let restrict_fk = Column {
@@ -3130,6 +3142,7 @@ mod tests {
                 index: false,
                 auto_now_add: false,
                 auto_now: false,
+                help: String::new(),
             }
         }
         fn meta_with(col: Column) -> ModelMeta {
@@ -3196,6 +3209,7 @@ mod tests {
             index: false,
             auto_now_add: false,
             auto_now: false,
+            help: String::new(),
         };
 
         // unique false → true: emit ADD CONSTRAINT ... UNIQUE
@@ -3293,6 +3307,7 @@ mod tests {
             index: false,
             auto_now_add: false,
             auto_now: false,
+            help: String::new(),
         };
         let mut stmt = Table::create();
         stmt.table(Alias::new("t"));
@@ -3366,6 +3381,7 @@ mod tests {
             index: true,
             auto_now_add: false,
             auto_now: false,
+            help: String::new(),
         };
         let slug = Column {
             name: "slug".into(),
@@ -3375,6 +3391,7 @@ mod tests {
             index: true,
             auto_now_add: false,
             auto_now: false,
+            help: String::new(),
             ..id.clone()
         };
         let title = Column {
@@ -3385,6 +3402,7 @@ mod tests {
             index: false,
             auto_now_add: false,
             auto_now: false,
+            help: String::new(),
             ..id.clone()
         };
         let op = Operation::CreateTable {

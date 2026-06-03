@@ -151,6 +151,7 @@ async fn migrated_dir() -> &'static Path {
                 index: false,
                 auto_now_add: false,
                 auto_now: false,
+                help: String::new(),
             };
             let file = MigrationFile {
                 id: M8_ADD_COLUMN_MIGRATION_ID.to_string(),
@@ -215,6 +216,7 @@ async fn migrated_dir() -> &'static Path {
                     index: false,
                     auto_now_add: false,
                     auto_now: false,
+                    help: String::new(),
                 },
                 Column {
                     name: "note".to_string(),
@@ -236,6 +238,7 @@ async fn migrated_dir() -> &'static Path {
                     index: false,
                     auto_now_add: false,
                     auto_now: false,
+                    help: String::new(),
                 },
             ];
             let file = MigrationFile {
@@ -727,6 +730,7 @@ fn id_column() -> Column {
         index: false,
         auto_now_add: false,
         auto_now: false,
+        help: String::new(),
     }
 }
 
@@ -753,6 +757,7 @@ fn text_column(name: &str) -> Column {
         index: false,
         auto_now_add: false,
         auto_now: false,
+        help: String::new(),
     }
 }
 
@@ -888,6 +893,7 @@ fn diff_returns_unsafe_alter_for_a_type_change() {
             index: false,
             auto_now_add: false,
             auto_now: false,
+            help: String::new(),
         },
     ]));
 
@@ -938,6 +944,7 @@ fn diff_emits_alter_column_for_a_nullable_flip() {
             index: false,
             auto_now_add: false,
             auto_now: false,
+            help: String::new(),
         },
     ]));
 
@@ -997,6 +1004,7 @@ fn diff_emits_alter_column_for_safe_type_cast_bigint_to_text() {
         index: false,
         auto_now_add: false,
         auto_now: false,
+        help: String::new(),
     };
     let mut curr_user_id = prev_user_id.clone();
     curr_user_id.ty = SqlType::Text;
@@ -1057,6 +1065,7 @@ fn diff_still_refuses_text_to_bigint_as_unsafe() {
         index: false,
         auto_now_add: false,
         auto_now: false,
+        help: String::new(),
     };
     let mut curr_value = prev_value.clone();
     curr_value.ty = SqlType::BigInt;

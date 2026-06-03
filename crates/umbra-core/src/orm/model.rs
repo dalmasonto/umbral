@@ -340,6 +340,22 @@ pub struct FieldSpec {
     /// `auto_now_add`. Django's "always override" shape lands as
     /// a future v2 toggle if a real consumer asks.
     pub auto_now: bool,
+
+    /// Human-readable column description, mirroring Django's
+    /// `help_text=`. Set via `#[umbra(help = "...")]`. Flows
+    /// through to:
+    ///
+    /// - OpenAPI `description` on the property schema (closes
+    ///   playground-openapi-gaps item 5).
+    /// - Admin form field hint (the small line below the
+    ///   input).
+    /// - Doc-comment-style introspection for any future code
+    ///   generator.
+    ///
+    /// Empty string means "no description" — the OpenAPI
+    /// emitter and admin form skip the surrounding markup
+    /// when this is unset.
+    pub help: &'static str,
 }
 
 /// Referential action emitted in the SQL `REFERENCES ... ON

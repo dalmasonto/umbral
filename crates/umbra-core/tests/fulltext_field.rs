@@ -63,6 +63,7 @@ fn postgres_ddl_renders_tsvector_type() {
                 index: false,
                 auto_now_add: false,
                 auto_now: false,
+                help: String::new(),
             },
             Column {
                 name: "search".to_string(),
@@ -84,6 +85,7 @@ fn postgres_ddl_renders_tsvector_type() {
                 index: false,
                 auto_now_add: false,
                 auto_now: false,
+                help: String::new(),
             },
         ],
     };

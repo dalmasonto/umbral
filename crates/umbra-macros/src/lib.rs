@@ -196,6 +196,10 @@ struct UmbraFieldAttr {
     /// `#[umbra(auto_now)]` — populate with `Utc::now()` on every
     /// write. Closes BUG-5.
     auto_now: bool,
+    /// `#[umbra(help = "...")]` — column help text. Flows to
+    /// OpenAPI `description` and admin form hints. Closes
+    /// playground-openapi-gaps item 5.
+    help: Option<String>,
 }
 
 fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAttr> {
@@ -213,6 +217,7 @@ fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAtt
         index: false,
         auto_now_add: false,
         auto_now: false,
+        help: None,
     };
     for attr in attrs {
         if !attr.path().is_ident("umbra") {
@@ -292,6 +297,14 @@ fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAtt
             } else if meta.path.is_ident("auto_now") {
                 parsed.auto_now = true;
                 Ok(())
+            } else if meta.path.is_ident("help") {
+                // `#[umbra(help = "human text")]` — column
+                // description string. Flows to OpenAPI
+                // `description` and admin form hints.
+                let value = meta.value()?;
+                let lit: syn::LitStr = value.parse()?;
+                parsed.help = Some(lit.value());
+                Ok(())
             } else {
                 // Unknown key. Report it with the known set so the
                 // common typo case (`is_string_repr` instead of
@@ -318,7 +331,7 @@ fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAtt
                      `max_length = N`, `choices`, `default = \"...\"`, \
                      `unique`, `on_delete = \"...\"`, \
                      `on_update = \"...\"`, `index`, `auto_now`, \
-                     and `auto_now_add`"
+                     `auto_now_add`, and `help = \"...\"`"
                 )))
             }
         })?;
@@ -724,6 +737,10 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         } else {
             quote!(false)
         };
+        let help_tokens = match &field_attr.help {
+            Some(s) => quote! { #s },
+            None => quote! { "" },
+        };
 
         // `on_delete` / `on_update` → token paths into FkAction. An
         // unknown value (typo, unsupported variant) becomes a
@@ -775,6 +792,7 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                 index: #index_lit,
                 auto_now_add: #auto_now_add_lit,
                 auto_now: #auto_now_lit,
+                help: #help_tokens,
             }
         });
 

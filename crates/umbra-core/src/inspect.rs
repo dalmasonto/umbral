@@ -848,6 +848,7 @@ impl From<&IntrospectedColumn> for Column {
             index: false,
             auto_now_add: false,
             auto_now: false,
+            help: String::new(),
         }
     }
 }

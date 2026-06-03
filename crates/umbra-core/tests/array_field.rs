@@ -87,6 +87,7 @@ fn postgres_ddl_renders_array_suffix() {
                 index: false,
                 auto_now_add: false,
                 auto_now: false,
+                help: String::new(),
             },
             Column {
                 name: "tags".to_string(),
@@ -108,6 +109,7 @@ fn postgres_ddl_renders_array_suffix() {
                 index: false,
                 auto_now_add: false,
                 auto_now: false,
+                help: String::new(),
             },
         ],
     };
