@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { usePlayground } from "@/state/store";
 import { usePersistedState } from "@/hooks/usePersistedState";
 import type { OpenAPIV3 } from "openapi-types";
@@ -207,6 +207,37 @@ export function RequestBuilder() {
     () => fieldInfosFromSchema(requestBody?.schema ?? null, spec),
     [requestBody?.schema, spec],
   );
+
+  // Auto-fill the JSON body with required fields the first time we
+  // see each operation that declares a request body. Behaviour:
+  //
+  // - On endpoint click (opMethod+opPath change), we synthesise the
+  //   "required only" skeleton and put it on `current.body`. The
+  //   user lands on the Body tab with a runnable starting point.
+  // - We track the last operation we autofilled (via ref) so that
+  //   harmless re-renders — spec re-fetched, schema fields ident-
+  //   ity-stable, etc. — don't clobber subsequent user edits.
+  // - The Schema-tab buttons (`Required only` / `All fields`) still
+  //   work as manual overrides if you want to refill from scratch
+  //   or expand to every field.
+  const autofilledForRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!opMethod || !opPath) return;
+    const key = `${opMethod} ${opPath}`;
+    if (autofilledForRef.current === key) return;
+    if (!requestBody || requestBodyFields.length === 0) return;
+    autofilledForRef.current = key;
+    setBody(synthesizeJsonBody(requestBodyFields, { allFields: false }));
+    setBodyType("json");
+  }, [
+    opMethod,
+    opPath,
+    requestBody,
+    requestBodyFields,
+    setBody,
+    setBodyType,
+  ]);
+
   const responses = useMemo(
     () => responseSchemaEntries(op?.operation, spec),
     [op?.operation, spec],
