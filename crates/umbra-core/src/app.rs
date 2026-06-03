@@ -162,8 +162,54 @@ impl AppBuilder {
     /// plugins contribute routes through their `Plugin::routes()` method
     /// and this escape hatch is reserved for ad-hoc routes outside any
     /// plugin.
+    ///
+    /// **Note:** prefer [`AppBuilder::routes`] for the common case. It
+    /// auto-tracks paths so the dev-mode 404 page surfaces them without
+    /// you having to declare them twice via `.route_paths(...)`. This
+    /// `.router(...)` method stays the escape hatch for axum features
+    /// not yet covered by the [`Routes`](crate::routes::Routes) builder
+    /// (typed State, middleware layers, `nest`, etc.).
     pub fn router(mut self, router: Router) -> Self {
         self.router = Some(router);
+        self
+    }
+
+    /// Attach a hand-written [`Routes`](crate::routes::Routes) bundle.
+    ///
+    /// This is the no-double-entry version of
+    /// [`AppBuilder::router`] + [`AppBuilder::route_paths`]: every
+    /// `.get(...)` / `.post(...)` etc. call on `Routes` records the
+    /// path *and* registers the handler, so the framework surfaces the
+    /// declared routes in the dev-mode 404 page without you maintaining
+    /// a parallel `route_paths([...])` list.
+    ///
+    /// Calling this more than once merges the router and concatenates
+    /// the specs. Composes cleanly with [`AppBuilder::router`] when
+    /// you have a mix of tracked routes and an unmoderated axum
+    /// router (the latter contributes routes silently).
+    ///
+    /// ```ignore
+    /// use umbra::prelude::*;
+    ///
+    /// App::builder()
+    ///     .routes(
+    ///         Routes::new()
+    ///             .get("/", home)
+    ///             .get("/articles", list_articles_html)
+    ///             .post("/api/articles", create_article),
+    ///     )
+    ///     .build()?;
+    /// ```
+    pub fn routes(mut self, routes: crate::routes::Routes) -> Self {
+        let (router, specs) = routes.into_parts();
+        // Merge into any prior user router (set via .router() or a
+        // previous .routes() call). axum::Router::merge is
+        // commutative for non-conflicting paths.
+        self.router = Some(match self.router.take() {
+            Some(prior) => prior.merge(router),
+            None => router,
+        });
+        self.route_paths.extend(specs);
         self
     }
 

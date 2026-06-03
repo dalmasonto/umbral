@@ -166,31 +166,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 ),
         )
         .plugin(umbra_permissions::PermissionsPlugin)
-        .router(
-            Router::new()
-                .route("/", get(home))
-                .route("/500", get(test_500_html))
-                .route("/articles", get(list_articles_html))
-                .route("/articles/{id}", get(article_detail))
+        // Routes builder records each (method, path) pair as it
+        // registers the handler, so the framework surfaces them in
+        // the dev-mode 404 panel without a parallel `.route_paths(...)`
+        // declaration. One source of truth per route.
+        //
+        // Unhandled routes fall through to the framework's
+        // `not_found_template` fallback (installed above), which
+        // renders 404.html with the request path in scope.
+        .routes(
+            Routes::new()
+                .get("/", home)
+                .get("/500", test_500_html)
+                .get("/articles", list_articles_html)
+                .get("/articles/{id}", article_detail)
                 // Backwards-compat alias from the pre-RestPlugin era.
                 // New clients should hit /api/article/ instead.
-                .route("/api/articles", get(list_articles_json)),
-            // Unhandled routes fall through to the framework's
-            // `not_found_template` fallback (installed above), which
-            // renders 404.html with the request path in scope.
-        )
-        // Surface the user-binary routes in the dev-mode 404 page.
-        // The framework can't peek inside an axum `Router`, so we
-        // declare the paths alongside the `.route(...)` calls above.
-        // Tuple form pairs each path with its HTTP method so the
-        // dev-mode 404 panel renders a colored method badge per row.
-        .route_paths([
-            ("GET", "/"),
-            ("GET", "/500"),
-            ("GET", "/articles"),
-            ("GET", "/articles/{id}"),
-            ("GET", "/api/articles"),
-        ]))
+                .get("/api/articles", list_articles_json),
+        ))
     .build()?;
 
     // Auto-migrate on startup — demo-only convenience. Skipped when

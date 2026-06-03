@@ -36,6 +36,9 @@
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
+use axum::Router;
+use axum::handler::Handler;
+
 /// One declared route entry: the URL path pattern plus the HTTP
 /// methods it accepts. The dev-mode 404 template renders the methods
 /// as colored badges next to each path so a developer can tell at a
@@ -132,6 +135,198 @@ impl RouteRegistry {
     }
 }
 
+/// Builder for the user binary's hand-registered routes.
+///
+/// Replaces the `(.router(...) + .route_paths([...]))` double-entry
+/// pattern with a single builder that records both as you go:
+///
+/// ```ignore
+/// use umbra::prelude::*;
+///
+/// App::builder()
+///     .routes(
+///         Routes::new()
+///             .get("/", home)
+///             .get("/articles", list_articles_html)
+///             .get("/articles/{id}", article_detail)
+///             .post("/api/articles", create_article),
+///     )
+///     .build()?;
+/// ```
+///
+/// Behind the scenes each `.get(...)` / `.post(...)` / etc. call
+/// records a [`RouteSpec`] *and* registers the handler with an
+/// internal `axum::Router`. `AppBuilder::routes` extracts both —
+/// the router becomes the user-binary router, the specs flow into
+/// the [`RouteRegistry`] for the dev-mode 404 page.
+///
+/// ## Why this exists
+///
+/// axum's `Router` doesn't expose its internal route table, so the
+/// framework can't introspect what was registered. The old API
+/// asked users to declare paths twice — once via `.route(...)` for
+/// the actual handler, once via `.route_paths([...])` for the dev
+/// 404 surface. `Routes` tracks both in one call.
+///
+/// ## Escape hatches
+///
+/// - **Need axum middleware / nest / fallback / State?** Build a
+///   plain `axum::Router` and pass it to [`Routes::with_router`].
+///   That router merges into the tracked one; you'll need to
+///   declare its paths via `route_paths(...)` if you want them in
+///   the dev 404 page.
+/// - **Multi-method route on one path?** Use [`Routes::route`]
+///   with an explicit method list.
+#[must_use = "Routes must be passed to AppBuilder::routes to take effect"]
+pub struct Routes {
+    inner: Router,
+    specs: Vec<RouteSpec>,
+}
+
+impl Routes {
+    /// Empty builder.
+    pub fn new() -> Self {
+        Self {
+            inner: Router::new(),
+            specs: Vec::new(),
+        }
+    }
+
+    /// Register a `GET` handler. Same handler shape as
+    /// `axum::routing::get(...)`.
+    pub fn get<H, T>(self, path: &str, handler: H) -> Self
+    where
+        H: Handler<T, ()>,
+        T: 'static,
+    {
+        self.with_method("GET", path, axum::routing::get(handler))
+    }
+
+    /// Register a `POST` handler.
+    pub fn post<H, T>(self, path: &str, handler: H) -> Self
+    where
+        H: Handler<T, ()>,
+        T: 'static,
+    {
+        self.with_method("POST", path, axum::routing::post(handler))
+    }
+
+    /// Register a `PUT` handler.
+    pub fn put<H, T>(self, path: &str, handler: H) -> Self
+    where
+        H: Handler<T, ()>,
+        T: 'static,
+    {
+        self.with_method("PUT", path, axum::routing::put(handler))
+    }
+
+    /// Register a `PATCH` handler.
+    pub fn patch<H, T>(self, path: &str, handler: H) -> Self
+    where
+        H: Handler<T, ()>,
+        T: 'static,
+    {
+        self.with_method("PATCH", path, axum::routing::patch(handler))
+    }
+
+    /// Register a `DELETE` handler.
+    pub fn delete<H, T>(self, path: &str, handler: H) -> Self
+    where
+        H: Handler<T, ()>,
+        T: 'static,
+    {
+        self.with_method("DELETE", path, axum::routing::delete(handler))
+    }
+
+    /// Register a `HEAD` handler.
+    pub fn head<H, T>(self, path: &str, handler: H) -> Self
+    where
+        H: Handler<T, ()>,
+        T: 'static,
+    {
+        self.with_method("HEAD", path, axum::routing::head(handler))
+    }
+
+    /// Register a `OPTIONS` handler.
+    pub fn options<H, T>(self, path: &str, handler: H) -> Self
+    where
+        H: Handler<T, ()>,
+        T: 'static,
+    {
+        self.with_method("OPTIONS", path, axum::routing::options(handler))
+    }
+
+    /// Register one or more methods on a path. Use this when several
+    /// HTTP verbs share a handler-router (`axum::routing::get(h1).post(h2)`)
+    /// — the per-method shorthands above each declare exactly one
+    /// method, so a chained `MethodRouter` needs this explicit form
+    /// to land its full method list in the registry.
+    ///
+    /// ```ignore
+    /// use axum::routing::{get, post};
+    ///
+    /// Routes::new().route(
+    ///     &["GET", "POST"],
+    ///     "/api/comments",
+    ///     get(list_comments).post(create_comment),
+    /// )
+    /// ```
+    pub fn route(
+        mut self,
+        methods: &[&'static str],
+        path: &str,
+        handler: axum::routing::MethodRouter<()>,
+    ) -> Self {
+        self.specs.push(RouteSpec {
+            path: path.to_string(),
+            methods: methods.to_vec(),
+        });
+        self.inner = self.inner.route(path, handler);
+        self
+    }
+
+    /// Merge a pre-built `axum::Router` into the tracked routes.
+    ///
+    /// Use when you need axum features the per-method shorthands
+    /// don't expose: `nest`, `fallback`, middleware layers, typed
+    /// State, etc. The merged router contributes its handlers but
+    /// *not* its paths — paths inside the external router aren't
+    /// visible to the framework, so they won't appear in the dev
+    /// 404 page unless you declare them via
+    /// [`AppBuilder::route_paths`](crate::AppBuilder::route_paths).
+    pub fn with_router(mut self, router: Router) -> Self {
+        self.inner = self.inner.merge(router);
+        self
+    }
+
+    /// Consume into the inner axum Router plus the tracked specs.
+    /// `AppBuilder::routes` is the canonical consumer.
+    pub fn into_parts(self) -> (Router, Vec<RouteSpec>) {
+        (self.inner, self.specs)
+    }
+
+    /// Shared body for the per-method shorthands.
+    fn with_method(
+        mut self,
+        method: &'static str,
+        path: &str,
+        handler: axum::routing::MethodRouter<()>,
+    ) -> Self {
+        self.specs.push(RouteSpec {
+            path: path.to_string(),
+            methods: vec![method],
+        });
+        self.inner = self.inner.route(path, handler);
+        self
+    }
+}
+
+impl Default for Routes {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 static REGISTRY: OnceLock<RouteRegistry> = OnceLock::new();
 
 /// Publish the registry. Called from `App::build()` after every
@@ -152,6 +347,63 @@ pub fn get() -> Option<&'static RouteRegistry> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn dummy_get() -> &'static str {
+        "ok"
+    }
+    async fn dummy_post() -> &'static str {
+        "ok"
+    }
+
+    #[test]
+    fn routes_builder_records_one_spec_per_get_with_method_and_path() {
+        let (_router, specs) = Routes::new()
+            .get("/", dummy_get)
+            .get("/articles", dummy_get)
+            .post("/api/articles", dummy_post)
+            .into_parts();
+
+        assert_eq!(specs.len(), 3, "one spec per builder call: {specs:?}");
+        assert_eq!(specs[0].path, "/");
+        assert_eq!(specs[0].methods, vec!["GET"]);
+        assert_eq!(specs[1].path, "/articles");
+        assert_eq!(specs[1].methods, vec!["GET"]);
+        assert_eq!(specs[2].path, "/api/articles");
+        assert_eq!(specs[2].methods, vec!["POST"]);
+    }
+
+    #[test]
+    fn routes_builder_supports_multi_method_via_route() {
+        use axum::routing::get;
+        let (_router, specs) = Routes::new()
+            .route(
+                &["GET", "POST"],
+                "/api/comments",
+                get(dummy_get).post(dummy_post),
+            )
+            .into_parts();
+
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[0].path, "/api/comments");
+        assert_eq!(specs[0].methods, vec!["GET", "POST"]);
+    }
+
+    #[test]
+    fn routes_with_router_merges_axum_router_silently() {
+        use axum::Router;
+        use axum::routing::get;
+        let external = Router::new().route("/external", get(dummy_get));
+        let (_router, specs) = Routes::new()
+            .get("/tracked", dummy_get)
+            .with_router(external)
+            .into_parts();
+
+        // Only the tracked route is in specs; the merged axum router
+        // contributes its handler without surfacing its path in the
+        // registry. That's the documented contract.
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[0].path, "/tracked");
+    }
 
     #[test]
     fn total_sums_per_plugin_paths_and_handles_empty_groups() {

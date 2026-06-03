@@ -27,6 +27,7 @@ pub mod prelude {
     pub use crate::web::{
         Form, IntoResponse, Json, JsonResponse, Path, Query, Router, delete, get, patch, post, put,
     };
+    pub use crate::routes::Routes;
     pub use crate::{App, AppBuilder, Environment, Settings};
 }
 
@@ -171,7 +172,7 @@ pub mod routes {
     //! the dev-mode default 404 page to surface the route list when a
     //! request misses every match.
 
-    pub use umbra_core::routes::{RouteRegistry, RouteSpec, get, init};
+    pub use umbra_core::routes::{RouteRegistry, RouteSpec, Routes, get, init};
 }
 
 pub mod plugin {
