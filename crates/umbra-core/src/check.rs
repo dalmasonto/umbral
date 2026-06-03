@@ -323,6 +323,35 @@ fn field_backend(ctx: &CheckContext<'_>) -> Vec<SystemCheckFinding> {
     for plugin in crate::migrate::registered_plugins() {
         for model in crate::migrate::models_for_plugin(&plugin) {
             for field in &model.fields {
+                // IMP-5: per-field backend gate via
+                // `#[umbra(backend = "postgres")]`. When the slice
+                // is non-empty and the active backend isn't listed,
+                // reject at boot with a clear message. The
+                // hardcoded `is_postgres_only` branch below remains
+                // for types the framework knows about; the
+                // declared-list path covers user-facing attribute
+                // shape.
+                if !field.supported_backends.is_empty()
+                    && !field.supported_backends.iter().any(|b| b == active)
+                {
+                    findings.push(SystemCheckFinding {
+                        check_id: "field.backend",
+                        severity: Severity::Error,
+                        location: CheckLocation::Settings,
+                        message: format!(
+                            "Field `{plugin}::{}::{}` declares `#[umbra(backend = ...)]` \
+                             as {:?}, but the active backend is `{active}`.",
+                            model.name, field.name, field.supported_backends,
+                        ),
+                        hint: Some(format!(
+                            "switch UMBRA_DATABASE_URL to a backend matching one of \
+                             {:?}, or drop the `backend` attribute and pick a portable \
+                             field type.",
+                            field.supported_backends,
+                        )),
+                    });
+                    continue;
+                }
                 if is_postgres_only(field.ty) {
                     findings.push(SystemCheckFinding {
                         check_id: "field.backend",

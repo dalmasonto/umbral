@@ -206,6 +206,12 @@ struct UmbraFieldAttr {
     /// `#[umbra(example = "...")]` — sample value rendered as
     /// OpenAPI `example`. Closes playground-openapi-gaps item 6.
     example: Option<String>,
+    /// `#[umbra(backend = "postgres")]` — restrict this field to a
+    /// specific backend (or several). The boot system check fails
+    /// when the active backend isn't in the list. Closes IMP-5
+    /// from `bugs/tests/testBugs.md`. Accept multiple via repeat:
+    /// `#[umbra(backend = "postgres"), umbra(backend = "mysql")]`.
+    backends: Vec<String>,
 }
 
 fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAttr> {
@@ -225,6 +231,7 @@ fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAtt
         auto_now: false,
         help: None,
         example: None,
+        backends: Vec::new(),
     };
     for attr in attrs {
         if !attr.path().is_ident("umbra") {
@@ -317,6 +324,13 @@ fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAtt
                 let lit: syn::LitStr = value.parse()?;
                 parsed.example = Some(lit.value());
                 Ok(())
+            } else if meta.path.is_ident("backend") {
+                // `#[umbra(backend = "postgres")]` — restrict to
+                // one backend. Repeat the attribute to add more.
+                let value = meta.value()?;
+                let lit: syn::LitStr = value.parse()?;
+                parsed.backends.push(lit.value());
+                Ok(())
             } else {
                 // Unknown key. Report it with the known set so the
                 // common typo case (`is_string_repr` instead of
@@ -344,7 +358,7 @@ fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAtt
                      `unique`, `on_delete = \"...\"`, \
                      `on_update = \"...\"`, `index`, `auto_now`, \
                      `auto_now_add`, `help = \"...\"`, \
-                     and `example = \"...\"`"
+                     `example = \"...\"`, and `backend = \"...\"`"
                 )))
             }
         })?;
@@ -772,6 +786,12 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             Some(s) => quote! { #s },
             None => quote! { "" },
         };
+        let backends_tokens = if field_attr.backends.is_empty() {
+            quote! { &[] }
+        } else {
+            let lits = field_attr.backends.iter().map(|s| quote!(#s));
+            quote! { &[#(#lits),*] }
+        };
 
         // `on_delete` / `on_update` → token paths into FkAction. An
         // unknown value (typo, unsupported variant) becomes a
@@ -807,7 +827,7 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                 ty: #sql_ty_tokens,
                 primary_key: #pk_lit,
                 nullable: #nullable_lit,
-                supported_backends: &[],
+                supported_backends: #backends_tokens,
                 fk_target: #fk_target_tokens,
                 noform: #noform_lit,
                 noedit: #noedit_lit,

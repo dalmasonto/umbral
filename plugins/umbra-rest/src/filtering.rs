@@ -625,6 +625,7 @@ mod search {
             auto_now: false,
             help: String::new(),
             example: String::new(),
+            supported_backends: Vec::new(),
         }
     }
 
@@ -733,6 +734,7 @@ mod choice_validation {
             auto_now: false,
             help: String::new(),
             example: String::new(),
+            supported_backends: Vec::new(),
         }
     }
 

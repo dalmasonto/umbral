@@ -40,6 +40,7 @@ fn id_pk() -> Column {
         auto_now: false,
         help: String::new(),
         example: String::new(),
+        supported_backends: Vec::new(),
     }
 }
 
@@ -67,6 +68,7 @@ fn text_not_null(name: &str) -> Column {
         auto_now: false,
         help: String::new(),
         example: String::new(),
+        supported_backends: Vec::new(),
     }
 }
 
@@ -94,6 +96,7 @@ fn text_nullable(name: &str) -> Column {
         auto_now: false,
         help: String::new(),
         example: String::new(),
+        supported_backends: Vec::new(),
     }
 }
 
@@ -351,6 +354,7 @@ fn col(name: &str, ty: SqlType) -> Column {
         auto_now: false,
         help: String::new(),
         example: String::new(),
+        supported_backends: Vec::new(),
     }
 }
 

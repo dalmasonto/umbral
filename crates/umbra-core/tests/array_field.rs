@@ -89,6 +89,7 @@ fn postgres_ddl_renders_array_suffix() {
                 auto_now: false,
                 help: String::new(),
                 example: String::new(),
+                supported_backends: Vec::new(),
             },
             Column {
                 name: "tags".to_string(),
@@ -112,6 +113,7 @@ fn postgres_ddl_renders_array_suffix() {
                 auto_now: false,
                 help: String::new(),
                 example: String::new(),
+                supported_backends: Vec::new(),
             },
         ],
     };
@@ -236,4 +238,64 @@ async fn array_field_round_trips_through_postgres() {
     assert_eq!(rows[1].kind, "draft");
     assert_eq!(rows[1].tags, vec!["wip".to_string()]);
     assert!(rows[1].scores.is_none());
+}
+
+// =========================================================================
+// IMP-5: declared backend gate. A model with a field marked
+// `#[umbra(backend = "postgres")]` should fail the boot system
+// check on SQLite. Mirrors the Array-on-SQLite test above.
+// =========================================================================
+
+/// A model whose `metadata` field is explicitly gated to Postgres
+/// via `#[umbra(backend = "postgres")]`. Even though `String` is
+/// portable, the declared restriction should fail the boot when
+/// the active backend is SQLite.
+#[derive(Debug, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbra::orm::Model)]
+#[umbra(table = "backend_gate_doc")]
+struct GatedDoc {
+    id: i64,
+    title: String,
+    #[umbra(backend = "postgres")]
+    metadata: String,
+}
+
+#[tokio::test]
+#[ignore = "pollutes the process-wide model registry; run isolated"]
+async fn field_backend_rejects_declared_postgres_only_on_sqlite() {
+    use umbra::{App, Settings};
+    use umbra_core::app::BuildError;
+
+    let mut settings = Settings::from_env().expect("figment defaults load");
+    settings.database_url = "sqlite::memory:".to_string();
+    let sqlite_pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+
+    let result = App::builder()
+        .settings(settings)
+        .database("default", sqlite_pool)
+        .model::<GatedDoc>()
+        .build();
+
+    match result {
+        Err(BuildError::SystemCheckFailed { findings }) => {
+            let has = findings.iter().any(|f| f.check_id == "field.backend");
+            assert!(
+                has,
+                "expected a field.backend finding for the declared gate; got {:?}",
+                findings.iter().map(|f| f.check_id).collect::<Vec<_>>(),
+            );
+            let f = findings
+                .iter()
+                .find(|f| f.check_id == "field.backend")
+                .unwrap();
+            assert!(
+                f.message.contains("metadata"),
+                "the finding message should mention the gated field; got: {}",
+                f.message,
+            );
+        }
+        Err(other) => panic!("expected SystemCheckFailed, got {other:?}"),
+        Ok(_) => panic!(
+            "expected build to fail; declared backend = postgres should be rejected on SQLite"
+        ),
+    }
 }

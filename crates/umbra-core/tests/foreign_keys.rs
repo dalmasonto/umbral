@@ -136,6 +136,7 @@ fn create_table_emits_references_sqlite() {
                 auto_now: false,
                 help: String::new(),
                 example: String::new(),
+                supported_backends: Vec::new(),
             },
             Column {
                 name: "title".to_string(),
@@ -159,6 +160,7 @@ fn create_table_emits_references_sqlite() {
                 auto_now: false,
                 help: String::new(),
                 example: String::new(),
+                supported_backends: Vec::new(),
             },
             Column {
                 name: "author".to_string(),
@@ -182,6 +184,7 @@ fn create_table_emits_references_sqlite() {
                 auto_now: false,
                 help: String::new(),
                 example: String::new(),
+                supported_backends: Vec::new(),
             },
         ],
     };
@@ -238,6 +241,7 @@ fn create_table_emits_references_postgres() {
                 auto_now: false,
                 help: String::new(),
                 example: String::new(),
+                supported_backends: Vec::new(),
             },
             Column {
                 name: "title".to_string(),
@@ -261,6 +265,7 @@ fn create_table_emits_references_postgres() {
                 auto_now: false,
                 help: String::new(),
                 example: String::new(),
+                supported_backends: Vec::new(),
             },
             Column {
                 name: "author".to_string(),
@@ -284,6 +289,7 @@ fn create_table_emits_references_postgres() {
                 auto_now: false,
                 help: String::new(),
                 example: String::new(),
+                supported_backends: Vec::new(),
             },
         ],
     };

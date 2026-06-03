@@ -508,6 +508,15 @@ pub struct Column {
     /// Same shape as `help`.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub example: String,
+
+    /// Carries `FieldSpec::supported_backends` into the migration
+    /// snapshot. When non-empty, the boot system check rejects the
+    /// model on any backend not listed. Closes IMP-5 from
+    /// `bugs/tests/testBugs.md`. Default empty (works on every
+    /// backend); JSON skip-when-empty so existing migration files
+    /// don't churn.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub supported_backends: Vec<String>,
 }
 
 fn is_no_action(a: &crate::orm::FkAction) -> bool {
@@ -581,6 +590,11 @@ impl From<&FieldSpec> for Column {
             auto_now: f.auto_now,
             help: f.help.to_string(),
             example: f.example.to_string(),
+            supported_backends: f
+                .supported_backends
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
         }
     }
 }
@@ -2917,6 +2931,7 @@ mod tests {
             auto_now: false,
             help: String::new(),
             example: String::new(),
+            supported_backends: Vec::new(),
         };
         let username = Column {
             name: "username".into(),
@@ -2940,6 +2955,7 @@ mod tests {
             auto_now: false,
             help: String::new(),
             example: String::new(),
+            supported_backends: Vec::new(),
         };
         let email = Column {
             name: "email".into(),
@@ -2963,6 +2979,7 @@ mod tests {
             auto_now: false,
             help: String::new(),
             example: String::new(),
+            supported_backends: Vec::new(),
         };
 
         for backend in ["sqlite", "postgres"] {
@@ -3056,6 +3073,7 @@ mod tests {
             auto_now: false,
             help: String::new(),
             example: String::new(),
+            supported_backends: Vec::new(),
         };
         let cascade_fk = Column {
             on_delete: crate::orm::FkAction::Cascade,
@@ -3065,6 +3083,7 @@ mod tests {
             auto_now: false,
             help: String::new(),
             example: String::new(),
+            supported_backends: Vec::new(),
             ..plain_fk.clone()
         };
         let restrict_fk = Column {
@@ -3163,6 +3182,7 @@ mod tests {
                 auto_now: false,
                 help: String::new(),
                 example: String::new(),
+                supported_backends: Vec::new(),
             }
         }
         fn meta_with(col: Column) -> ModelMeta {
@@ -3232,6 +3252,7 @@ mod tests {
             auto_now: false,
             help: String::new(),
             example: String::new(),
+            supported_backends: Vec::new(),
         };
 
         // unique false → true: emit ADD CONSTRAINT ... UNIQUE
@@ -3331,6 +3352,7 @@ mod tests {
             auto_now: false,
             help: String::new(),
             example: String::new(),
+            supported_backends: Vec::new(),
         };
         let mut stmt = Table::create();
         stmt.table(Alias::new("t"));
@@ -3406,6 +3428,7 @@ mod tests {
             auto_now: false,
             help: String::new(),
             example: String::new(),
+            supported_backends: Vec::new(),
         };
         let slug = Column {
             name: "slug".into(),
@@ -3417,6 +3440,7 @@ mod tests {
             auto_now: false,
             help: String::new(),
             example: String::new(),
+            supported_backends: Vec::new(),
             ..id.clone()
         };
         let title = Column {
@@ -3429,6 +3453,7 @@ mod tests {
             auto_now: false,
             help: String::new(),
             example: String::new(),
+            supported_backends: Vec::new(),
             ..id.clone()
         };
         let op = Operation::CreateTable {

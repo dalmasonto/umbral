@@ -80,6 +80,7 @@ fn postgres_ddl_renders_inet_and_macaddr_types() {
                 auto_now: false,
                 help: String::new(),
                 example: String::new(),
+                supported_backends: Vec::new(),
             },
             Column {
                 name: "addr".to_string(),
@@ -103,6 +104,7 @@ fn postgres_ddl_renders_inet_and_macaddr_types() {
                 auto_now: false,
                 help: String::new(),
                 example: String::new(),
+                supported_backends: Vec::new(),
             },
             Column {
                 name: "mac".to_string(),
@@ -126,6 +128,7 @@ fn postgres_ddl_renders_inet_and_macaddr_types() {
                 auto_now: false,
                 help: String::new(),
                 example: String::new(),
+                supported_backends: Vec::new(),
             },
             Column {
                 name: "net".to_string(),
@@ -149,6 +152,7 @@ fn postgres_ddl_renders_inet_and_macaddr_types() {
                 auto_now: false,
                 help: String::new(),
                 example: String::new(),
+                supported_backends: Vec::new(),
             },
         ],
     };

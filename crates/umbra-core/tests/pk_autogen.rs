@@ -114,6 +114,7 @@ fn int_pk_column() -> Column {
         auto_now: false,
         help: String::new(),
         example: String::new(),
+        supported_backends: Vec::new(),
     }
 }
 
@@ -140,6 +141,7 @@ fn uuid_pk_column() -> Column {
         auto_now: false,
         help: String::new(),
         example: String::new(),
+        supported_backends: Vec::new(),
     }
 }
 
@@ -166,6 +168,7 @@ fn string_pk_column() -> Column {
         auto_now: false,
         help: String::new(),
         example: String::new(),
+        supported_backends: Vec::new(),
     }
 }
 
@@ -192,6 +195,7 @@ fn label_column() -> Column {
         auto_now: false,
         help: String::new(),
         example: String::new(),
+        supported_backends: Vec::new(),
     }
 }
 

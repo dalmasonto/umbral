@@ -1293,6 +1293,7 @@ mod noform_drop {
             auto_now: false,
             help: String::new(),
             example: String::new(),
+            supported_backends: Vec::new(),
         }
     }
 
