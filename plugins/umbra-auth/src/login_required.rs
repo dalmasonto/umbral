@@ -221,8 +221,19 @@ fn cookie_from_headers(headers: &http::HeaderMap) -> Option<String> {
     None
 }
 
-/// Load a user of type `U` from the session cookie in the given headers.
-async fn resolve_user<U>(headers: &http::HeaderMap) -> Option<U>
+/// Load a user of type `U` from the session cookie in the given
+/// headers. The generic shape powers both [`LoggedIn`] and the
+/// public [`crate::current_user_as`] helper — apps using a custom
+/// `UserModel` reach for the latter from their own handlers when
+/// the AuthUser-flavoured [`crate::current_user`] doesn't fit.
+///
+/// Conventions assumed: `U` has an `id` column matching the value
+/// stored on the session row (v1 fixes that to i64 via
+/// [`current_session_user_id`]), and an `is_active` boolean column
+/// the filter excludes deactivated rows on. Custom user models that
+/// rename either column write their own resolver against
+/// [`umbra_sessions::current_user_id_str`] instead.
+pub async fn resolve_user<U>(headers: &http::HeaderMap) -> Option<U>
 where
     U: UserModel
         + for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>

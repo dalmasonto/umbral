@@ -73,7 +73,7 @@ pub use bearer_auth::{BearerAuthentication, parse_bearer_header};
 pub use extractors::{CurrentIdentity, OptionalIdentity, resolve_identity};
 pub use login_required::{
     LoggedIn, LoginRequired, LoginRequiredLayer, current_session_user_id, login_required,
-    login_required_html,
+    login_required_html, resolve_user as current_user_as,
 };
 pub use session_user::{
     OptionalUser, SessionAuthentication, User, current_user, login, login_with_request, logout,
