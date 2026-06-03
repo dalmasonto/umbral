@@ -3,8 +3,17 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <!-- Per-app scope for browser-side storage (gap #71). The
+       frontend reads either the `<meta>` tag or the window global
+       below to namespace localStorage keys + the Dexie database
+       name so two apps served from the same browser don't share
+       history / settings. -->
+  <meta name="umbra-playground-app" content="__APP_NAME_ATTR__" />
   <title>umbra playground</title>
   <link rel="stylesheet" href="__CSS_PATH__" />
+  <script>
+    window.__UMBRA_PLAYGROUND_APP__ = __APP_NAME_JSON__;
+  </script>
 </head>
 <body>
   <div id="root"></div>

@@ -1,8 +1,11 @@
 import { useState, useEffect } from "react";
+import { scopedKey } from "../state/scope";
 
 type Theme = "light" | "dark";
 
-const STORAGE_KEY = "umbra-playground:theme";
+// Per-app theme key (gap #71). Two apps in the same browser get
+// independent theme preferences.
+const STORAGE_KEY = scopedKey("umbra-playground:theme");
 
 function getSystemTheme(): Theme {
   return window.matchMedia("(prefers-color-scheme: dark)").matches

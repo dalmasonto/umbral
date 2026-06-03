@@ -9,7 +9,7 @@ use umbra_playground::PlaygroundPlugin;
 
 #[tokio::test]
 async fn shell_returns_200_html() {
-    let plugin = PlaygroundPlugin::new();
+    let plugin = PlaygroundPlugin::new("test-app");
     let base = plugin
         .base_path_for_test()
         .trim_start_matches('/')
@@ -34,7 +34,7 @@ async fn shell_returns_200_html() {
 
 #[tokio::test]
 async fn missing_asset_returns_404() {
-    let plugin = PlaygroundPlugin::new();
+    let plugin = PlaygroundPlugin::new("test-app");
     let base = plugin
         .base_path_for_test()
         .trim_start_matches('/')
@@ -87,7 +87,7 @@ async fn vite_emitted_css_resolves_to_200() {
         return;
     };
 
-    let plugin = PlaygroundPlugin::new();
+    let plugin = PlaygroundPlugin::new("test-app");
     let base = plugin
         .base_path_for_test()
         .trim_start_matches('/')
@@ -166,7 +166,7 @@ async fn asset_resolves_even_when_cwd_and_env_dont_point_at_the_crate() {
         std::env::remove_var("CARGO_MANIFEST_DIR");
     }
 
-    let plugin = PlaygroundPlugin::new();
+    let plugin = PlaygroundPlugin::new("test-app");
     let base = plugin
         .base_path_for_test()
         .trim_start_matches('/')
@@ -222,7 +222,7 @@ async fn every_file_in_dist_assets_resolves_through_the_mount() {
         return;
     }
 
-    let plugin = PlaygroundPlugin::new();
+    let plugin = PlaygroundPlugin::new("test-app");
     let base = plugin
         .base_path_for_test()
         .trim_start_matches('/')
@@ -248,5 +248,69 @@ async fn every_file_in_dist_assets_resolves_through_the_mount() {
         failures.len(),
         failures,
         names,
+    );
+}
+
+/// Gap #71: the rendered shell HTML carries the configured app
+/// name in two places — a `<meta name="umbra-playground-app">`
+/// tag (for non-JS introspection / scrapers) and the
+/// `window.__UMBRA_PLAYGROUND_APP__` global the frontend reads at
+/// boot to namespace storage keys. Both must round-trip the exact
+/// string the caller passed, and both must escape correctly when
+/// the name contains characters that are dangerous in HTML
+/// attributes or JS strings.
+#[tokio::test]
+async fn shell_injects_per_app_scope() {
+    let plugin = PlaygroundPlugin::new("my-shop");
+    let base = plugin
+        .base_path_for_test()
+        .trim_start_matches('/')
+        .to_string();
+    let app = plugin.routes();
+    let req = Request::builder()
+        .uri(format!("/{base}/"))
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(res.into_body(), 64 * 1024).await.unwrap();
+    let s = String::from_utf8_lossy(&body);
+    assert!(
+        s.contains(r#"<meta name="umbra-playground-app" content="my-shop" />"#),
+        "shell must carry the app meta tag; got: {s}"
+    );
+    assert!(
+        s.contains(r#"window.__UMBRA_PLAYGROUND_APP__ = "my-shop";"#),
+        "shell must carry the app window global; got: {s}"
+    );
+}
+
+/// Defensive: an app name containing a double quote, an
+/// ampersand, or a `<` must escape into the attribute + the
+/// inline-script JSON string without breaking out. Production code
+/// will rarely hit this — a normal project slug doesn't have
+/// these chars — but a careless `PlaygroundPlugin::new(&user_supplied_string)`
+/// could.
+#[tokio::test]
+async fn shell_scope_escapes_dangerous_chars() {
+    let plugin = PlaygroundPlugin::new(r#"my"shop & <test>"#);
+    let app = plugin.routes();
+    let req = Request::builder()
+        .uri("/api/playground/")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    let body = axum::body::to_bytes(res.into_body(), 64 * 1024).await.unwrap();
+    let s = String::from_utf8_lossy(&body);
+    // Attribute: " -> &quot;, & -> &amp;, < -> &lt;, > -> &gt;
+    assert!(
+        s.contains("content=\"my&quot;shop &amp; &lt;test&gt;\""),
+        "attribute must HTML-escape the unsafe chars; got: {s}"
+    );
+    // JS: " -> \", every other char preserved verbatim. serde_json
+    // wraps the result in surrounding double-quotes.
+    assert!(
+        s.contains(r#"window.__UMBRA_PLAYGROUND_APP__ = "my\"shop & <test>";"#),
+        "window assignment must JSON-escape the unsafe chars; got: {s}"
     );
 }

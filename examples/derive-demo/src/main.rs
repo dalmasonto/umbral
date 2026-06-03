@@ -183,7 +183,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 // GET and DELETE stay open. See StaffWritesOnly above.
                 .resource(ResourceConfig::new("article").permission(StaffWritesOnly)),
         )
-        .plugin(umbra_playground::PlaygroundPlugin::new())
+        // App name scopes browser-side storage (history, theme,
+        // settings) so two umbra apps in the same browser don't
+        // collide. Closes gap #71 — the no-arg `Default` fallback
+        // logs a tracing::warn.
+        .plugin(umbra_playground::PlaygroundPlugin::new("derive-demo"))
         // `with_default_routes()` mounts /api/auth/{register,login,
         // logout,me} — the four-handler reference surface lifted
         // from this app's own `auth_api.rs` (now retired) into the

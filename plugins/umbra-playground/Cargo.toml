@@ -25,6 +25,11 @@ include_dir = "0.7"
 # headers + dev-mode max-age=0 + the usual Plugin trait flow.
 umbra-static = { path = "../umbra-static", version = "0.0.1" }
 axum = "0.8"
+# `tracing::warn!` on the no-app-name fallback (gap #71).
+tracing = "0.1"
+# `serde_json::to_string` for safely escaping the app name into the
+# inline-script `window.__UMBRA_PLAYGROUND_APP__` assignment.
+serde_json = "1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }

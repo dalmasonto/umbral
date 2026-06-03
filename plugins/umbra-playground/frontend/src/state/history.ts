@@ -1,7 +1,15 @@
 import { db, type HistoryRow } from "./db";
+import { scopedKey } from "./scope";
 import type { ResponseRecord } from "./store";
 
-const LEGACY_STORAGE_KEY = "umbra-playground:history:v1";
+// Per-app legacy key (gap #71). The localStorage-era history was
+// also unscoped; if an app upgrades through this code path we
+// migrate the per-app slot only — the unscoped legacy key for the
+// "default" app is checked separately by the bare-key fallback in
+// `migrateFromLocalStorage` below so existing single-app users
+// don't lose their history at upgrade time.
+const LEGACY_STORAGE_KEY = scopedKey("umbra-playground:history:v1");
+const LEGACY_STORAGE_KEY_UNSCOPED = "umbra-playground:history:v1";
 const PER_OPERATION_CAP = 50;
 
 /** Replace strategy + per-op cap.
@@ -70,12 +78,23 @@ async function persistHistory(
 
 /** Best-effort one-shot import of an older localStorage-backed history.
  *  Runs at most once: after the first successful import we clear the
- *  legacy key, so subsequent loads skip straight to IndexedDB. */
+ *  legacy key, so subsequent loads skip straight to IndexedDB.
+ *
+ *  Looks for the per-app legacy key first; falls back to the bare
+ *  unscoped key so existing single-app users (who upgrade through
+ *  gap #71) don't lose their pre-scope history. The unscoped key
+ *  is only honoured when the per-app key is empty AND the current
+ *  scope is `"default"` — i.e. the app didn't pass an explicit
+ *  name. Other scopes leave the unscoped legacy blob alone for
+ *  whichever default-named app eventually picks it up. */
 async function migrateFromLocalStorage(): Promise<void> {
   if (typeof localStorage === "undefined") return;
   let raw: string | null;
   try {
     raw = localStorage.getItem(LEGACY_STORAGE_KEY);
+    if (!raw && LEGACY_STORAGE_KEY.startsWith("default:")) {
+      raw = localStorage.getItem(LEGACY_STORAGE_KEY_UNSCOPED);
+    }
   } catch {
     return;
   }
@@ -98,6 +117,9 @@ async function migrateFromLocalStorage(): Promise<void> {
       }
     }
     localStorage.removeItem(LEGACY_STORAGE_KEY);
+    if (LEGACY_STORAGE_KEY.startsWith("default:")) {
+      localStorage.removeItem(LEGACY_STORAGE_KEY_UNSCOPED);
+    }
   } catch {
     // Legacy blob unparseable — drop it so we don't keep retrying.
     try {

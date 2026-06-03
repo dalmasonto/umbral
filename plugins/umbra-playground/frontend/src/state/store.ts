@@ -3,6 +3,7 @@ import type { OpenAPIV3 } from "openapi-types";
 import { buildFetchArgs } from "./buildFetchArgs";
 import { saveHistoryDebounced } from "./history";
 import { mockSpec, getMockResponse } from "../data/mockSpec";
+import { scopedKey } from "./scope";
 
 export interface KVItem {
   key: string;
@@ -46,8 +47,11 @@ export interface ResponseRecord {
   error?: string;
 }
 
-const SETTINGS_KEY = "umbra-playground-settings:v1";
-const SELECTED_KEY = "umbra-playground:selected-operation:v1";
+// Per-app storage keys (gap #71). The bare strings used to be
+// shared across every umbra app served to the same browser; now
+// each app's localStorage slot is `<app>:<key>`.
+const SETTINGS_KEY = scopedKey("umbra-playground-settings:v1");
+const SELECTED_KEY = scopedKey("umbra-playground:selected-operation:v1");
 
 /** Persist the currently-selected operationId so reloads land back on
  *  the same endpoint. Sync localStorage write is fine here — this is

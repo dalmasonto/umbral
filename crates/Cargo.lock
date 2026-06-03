@@ -2771,8 +2771,10 @@ dependencies = [
  "tempfile",
  "tokio",
  "tower",
+ "tracing",
  "umbra",
  "umbra-rest",
+ "umbra-sessions",
  "uuid",
 ]
 
@@ -2935,8 +2937,10 @@ dependencies = [
  "axum",
  "http-body-util",
  "include_dir",
+ "serde_json",
  "tokio",
  "tower",
+ "tracing",
  "umbra",
  "umbra-static",
 ]
@@ -3009,7 +3013,6 @@ dependencies = [
  "tracing",
  "umbra",
  "umbra-auth",
- "umbra-rest",
  "uuid",
 ]
 

@@ -1,4 +1,5 @@
 import Dexie, { type EntityTable } from "dexie";
+import { getAppScope } from "./scope";
 import type { ResponseRecord } from "./store";
 
 export interface HistoryRow extends ResponseRecord {
@@ -19,7 +20,10 @@ export interface EditorStateRow {
   value: unknown;
 }
 
-const DB_NAME = "umbra-playground";
+// Per-app Dexie database name (gap #71). Two apps in the same
+// browser get two separate IndexedDB databases — history /
+// editorState slots can't bleed across app boundaries.
+const DB_NAME = `umbra-playground:${getAppScope()}`;
 
 export const db = new Dexie(DB_NAME) as Dexie & {
   history: EntityTable<HistoryRow, "id">;
