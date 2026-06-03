@@ -10,27 +10,33 @@ export function toCurl(draft: RequestDraft): string {
   if (draft.authToken) {
     parts.push(`-H 'Authorization: ${draft.authScheme} ${draft.authToken}'`);
   }
-  if (
-    draft.bodyType === "json" &&
-    draft.body &&
-    draft.method !== "GET" &&
-    draft.method !== "HEAD"
-  ) {
-    parts.push(`-d '${draft.body.replace(/'/g, "'\\''")}'`);
-  } else if (
-    draft.bodyType === "form" &&
-    draft.formFields.length > 0 &&
-    draft.method !== "GET" &&
-    draft.method !== "HEAD"
-  ) {
-    const qs = draft.formFields
-      .filter((f) => f.enabled && f.key)
-      .map(
-        ({ key, value }) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`,
-      )
-      .join("&");
-    parts.push(`-d '${qs.replace(/'/g, "'\\''")}'`);
+
+  if (draft.bodyType === "json" && draft.body) {
+    if (draft.method !== "GET" && draft.method !== "HEAD") {
+      parts.push(`-d '${draft.body.replace(/'/g, "'\\''")}'`);
+    }
+  } else if (draft.bodyType === "form") {
+    const entries = draft.formFields.filter((f) => f.enabled && f.key);
+    const hasFiles = entries.some((f) => f.type === "file");
+    if (hasFiles) {
+      for (const f of entries) {
+        if (f.type === "file") {
+          parts.push(`-F '${f.key}=@${f.fileName || "file"}'`);
+        } else {
+          parts.push(`-F '${f.key}=${f.value.replace(/'/g, "'\\''")}'`);
+        }
+      }
+    } else {
+      const qs = entries
+        .map(
+          ({ key, value }) =>
+            `${encodeURIComponent(key)}=${encodeURIComponent(value)}`,
+        )
+        .join("&");
+      if (qs) parts.push(`-d '${qs.replace(/'/g, "'\\''")}'`);
+    }
   }
+
   parts.push(`'${draft.url}'`);
   return parts.join(" \\\n  ");
 }

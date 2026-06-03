@@ -8,6 +8,8 @@ export interface KVItem {
   key: string;
   value: string;
   enabled: boolean;
+  type?: "text" | "file";
+  fileName?: string;
 }
 
 /** A request as the user has constructed it in the builder. */

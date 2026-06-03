@@ -280,6 +280,7 @@ export function RequestBuilder() {
                   onChange={setFormFields}
                   keyPlaceholder="field"
                   valuePlaceholder="value"
+                  allowFileType
                 />
               </div>
             )}

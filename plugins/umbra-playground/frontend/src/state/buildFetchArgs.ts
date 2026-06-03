@@ -1,4 +1,5 @@
 import type { RequestDraft } from "./store";
+import { getFile } from "./fileRegistry";
 
 export interface FetchArgs {
   url: string;
@@ -57,7 +58,7 @@ export function buildFetchArgs(draft: RequestDraft): {
 
   // 5. Body.
   const method = draft.method.toUpperCase();
-  let body: string | undefined;
+  let body: BodyInit | undefined;
   if (method !== "GET" && method !== "HEAD") {
     if (draft.bodyType === "json") {
       if (draft.body) {
@@ -84,7 +85,24 @@ export function buildFetchArgs(draft: RequestDraft): {
       }
     } else if (draft.bodyType === "form") {
       const entries = draft.formFields.filter((f) => f.enabled && f.key);
-      if (entries.length > 0) {
+      const hasFiles = entries.some((f) => f.type === "file");
+
+      if (hasFiles) {
+        const formData = new FormData();
+        for (const f of entries) {
+          if (f.type === "file") {
+            const file = getFile(`${f.key}`);
+            if (file) {
+              formData.append(f.key, file);
+            }
+          } else {
+            formData.append(f.key, f.value);
+          }
+        }
+        body = formData;
+        // Browser sets Content-Type with boundary automatically
+        delete headers["Content-Type"];
+      } else if (entries.length > 0) {
         const qs = entries
           .map(
             ({ key, value }) =>
