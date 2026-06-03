@@ -206,9 +206,19 @@ fn build_spec(cfg: &OpenApiPlugin) -> Value {
             }
             let schema_name = pascal_case(&model.name);
             schemas.insert(schema_name.clone(), model_schema(&model));
+            // When the resource has `.enable_filters()`, advertise
+            // every filterable column × lookup as a separate query
+            // parameter on the GET list operation. The playground (and
+            // any spec consumer) can then drive a real filter UI off
+            // the spec instead of guessing.
+            let filter_params = if umbra_rest::filters_enabled_for(&model.table) {
+                filter_parameters(&model)
+            } else {
+                Vec::new()
+            };
             paths.insert(
                 format!("/api/{}/", model.table),
-                collection_paths(&model.table, &schema_name),
+                collection_paths(&model.table, &schema_name, &filter_params),
             );
             paths.insert(
                 format!("/api/{}/{{id}}", model.table),
@@ -367,22 +377,138 @@ fn openapi_type(ty: SqlType) -> (&'static str, Option<&'static str>) {
     }
 }
 
-fn collection_paths(table: &str, schema_name: &str) -> Value {
+/// Build the OpenAPI `parameters` entries that document the
+/// django-filter-style query-string filters on a list endpoint.
+/// One entry per (column, lookup) pair.
+///
+/// Skips the primary key (filtering on `id` adds no value over the
+/// detail URL `/api/<table>/{id}`) and the columns whose type the
+/// filter parser can't model (none today, but the helper takes the
+/// stance so future opt-outs are a one-line change).
+fn filter_parameters(model: &ModelMeta) -> Vec<Value> {
+    let mut out: Vec<Value> = Vec::new();
+    for col in &model.fields {
+        if col.primary_key {
+            continue;
+        }
+        let lookups = umbra_rest::filtering::applicable_lookups(col);
+        for lookup in lookups {
+            let name = if lookup == "eq" {
+                col.name.clone()
+            } else {
+                format!("{}__{}", col.name, lookup)
+            };
+            out.push(filter_parameter(col, lookup, &name));
+        }
+    }
+    out
+}
+
+/// One OpenAPI parameter object for a single (column, lookup) pair.
+///
+/// - `__in` takes a CSV string: schema `type: string` with a
+///   description spelling out the format. (A proper `style: form` +
+///   `explode: false` array would be more correct OpenAPI but
+///   complicates client code.)
+/// - `__isnull` takes a boolean.
+/// - `__contains` / `__icontains` / `__startswith` take a string
+///   regardless of column type.
+/// - Range / equality lookups inherit the column's own type.
+fn filter_parameter(col: &Column, lookup: &str, name: &str) -> Value {
+    let (schema, description) = match lookup {
+        "in" => (
+            json!({ "type": "string" }),
+            format!(
+                "Comma-separated `{}` values; matches rows where the column is in the set.",
+                col.name,
+            ),
+        ),
+        "isnull" => (
+            json!({ "type": "boolean" }),
+            format!(
+                "`true` matches rows where `{}` IS NULL; `false` matches IS NOT NULL.",
+                col.name,
+            ),
+        ),
+        "contains" | "icontains" | "startswith" => {
+            let phrase = match lookup {
+                "contains" => "case-sensitive substring",
+                "icontains" => "case-insensitive substring",
+                "startswith" => "case-sensitive prefix",
+                _ => unreachable!(),
+            };
+            (
+                json!({ "type": "string" }),
+                format!("Matches rows where `{}` contains the given {phrase}.", col.name),
+            )
+        }
+        // eq, ne, gte, lte, gt, lt — type-aligned with the column.
+        _ => {
+            let (ty, format) = openapi_type(col.ty);
+            let mut schema_obj = Map::new();
+            schema_obj.insert("type".into(), Value::String(ty.into()));
+            if let Some(f) = format {
+                schema_obj.insert("format".into(), Value::String(f.into()));
+            }
+            let phrase = match lookup {
+                "eq" => "equals the value",
+                "ne" => "does not equal the value",
+                "gte" => "is greater than or equal to the value",
+                "lte" => "is less than or equal to the value",
+                "gt" => "is greater than the value",
+                "lt" => "is less than the value",
+                _ => "matches the value",
+            };
+            (
+                Value::Object(schema_obj),
+                format!("Matches rows where `{}` {phrase}.", col.name),
+            )
+        }
+    };
+
     json!({
-        "get": {
-            "operationId": format!("list_{}", table),
-            "tags": [table],
-            "responses": {
-                "200": {
-                    "description": "List of rows",
-                    "content": {
-                        "application/json": {
-                            "schema": list_envelope(schema_name)
-                        }
+        "name": name,
+        "in": "query",
+        "required": false,
+        "description": description,
+        "schema": schema,
+        "x-umbra-filter-field": col.name,
+        "x-umbra-filter-lookup": lookup,
+    })
+}
+
+fn collection_paths(table: &str, schema_name: &str, filter_params: &[Value]) -> Value {
+    // The list operation's `parameters` array is omitted entirely
+    // when there are no filters (matches the pre-fix spec shape and
+    // keeps Swagger UI from rendering an empty Parameters section).
+    let mut get_op = Map::new();
+    get_op.insert(
+        "operationId".into(),
+        Value::String(format!("list_{}", table)),
+    );
+    get_op.insert("tags".into(), json!([table]));
+    if !filter_params.is_empty() {
+        get_op.insert(
+            "parameters".into(),
+            Value::Array(filter_params.to_vec()),
+        );
+    }
+    get_op.insert(
+        "responses".into(),
+        json!({
+            "200": {
+                "description": "List of rows",
+                "content": {
+                    "application/json": {
+                        "schema": list_envelope(schema_name)
                     }
                 }
             }
-        },
+        }),
+    );
+
+    json!({
+        "get": Value::Object(get_op),
         "post": {
             "operationId": format!("create_{}", table),
             "tags": [table],
@@ -634,5 +760,133 @@ mod tests {
             "plain column should only have `type`: {obj:?}"
         );
         assert_eq!(schema["type"], "string");
+    }
+
+    // ----------------------------------------------------------------- //
+    // Filter parameter emission                                          //
+    // ----------------------------------------------------------------- //
+
+    fn note_model() -> ModelMeta {
+        let mut id = base_col("id", SqlType::BigInt);
+        id.primary_key = true;
+        let mut published_at = base_col("published_at", SqlType::Timestamptz);
+        published_at.nullable = true;
+        ModelMeta {
+            name: "Note".to_string(),
+            table: "note".to_string(),
+            fields: vec![
+                id,
+                base_col("title", SqlType::Text),
+                base_col("views", SqlType::Integer),
+                published_at,
+            ],
+            display: "Note".to_string(),
+            icon: "database".to_string(),
+            database: None,
+        }
+    }
+
+    #[test]
+    fn filter_parameters_skips_primary_key() {
+        let params = filter_parameters(&note_model());
+        let names: Vec<&str> = params.iter().map(|p| p["name"].as_str().unwrap()).collect();
+        assert!(
+            !names.iter().any(|n| *n == "id" || n.starts_with("id__")),
+            "PK column should be skipped; got {names:?}",
+        );
+    }
+
+    #[test]
+    fn filter_parameters_eq_uses_bare_column_name_no_suffix() {
+        let params = filter_parameters(&note_model());
+        let bare_title = params
+            .iter()
+            .find(|p| p["name"] == "title")
+            .expect("title eq parameter should be present");
+        assert_eq!(bare_title["x-umbra-filter-lookup"], "eq");
+        assert_eq!(bare_title["x-umbra-filter-field"], "title");
+        assert_eq!(bare_title["schema"]["type"], "string");
+    }
+
+    #[test]
+    fn filter_parameters_in_is_string_typed_with_csv_description() {
+        let params = filter_parameters(&note_model());
+        let title_in = params
+            .iter()
+            .find(|p| p["name"] == "title__in")
+            .expect("title__in parameter should be present");
+        assert_eq!(title_in["schema"]["type"], "string");
+        assert!(
+            title_in["description"]
+                .as_str()
+                .unwrap()
+                .to_lowercase()
+                .contains("comma"),
+            "__in description should mention the comma-separated format",
+        );
+    }
+
+    #[test]
+    fn filter_parameters_isnull_only_on_nullable_columns() {
+        let params = filter_parameters(&note_model());
+        let isnull_params: Vec<&str> = params
+            .iter()
+            .filter_map(|p| p["name"].as_str())
+            .filter(|n| n.ends_with("__isnull"))
+            .collect();
+        assert_eq!(
+            isnull_params,
+            vec!["published_at__isnull"],
+            "isnull lookup should only appear for nullable columns; got {isnull_params:?}",
+        );
+    }
+
+    #[test]
+    fn filter_parameters_range_lookups_only_on_numeric_or_temporal() {
+        let params = filter_parameters(&note_model());
+        let has_gte =
+            |field: &str| params.iter().any(|p| p["name"] == format!("{field}__gte"));
+        assert!(has_gte("views"), "integer column gets gte");
+        assert!(has_gte("published_at"), "timestamp column gets gte");
+        assert!(
+            !has_gte("title"),
+            "text column must NOT get gte; got {params:?}",
+        );
+    }
+
+    #[test]
+    fn filter_parameters_string_lookups_only_on_text() {
+        let params = filter_parameters(&note_model());
+        let has_contains =
+            |field: &str| params.iter().any(|p| p["name"] == format!("{field}__contains"));
+        assert!(has_contains("title"), "text column gets contains");
+        assert!(
+            !has_contains("views"),
+            "integer column must NOT get contains; got {params:?}",
+        );
+    }
+
+    #[test]
+    fn collection_paths_omits_parameters_array_when_no_filters() {
+        let value = collection_paths("note", "Note", &[]);
+        let get_op = &value["get"];
+        assert!(
+            get_op.get("parameters").is_none(),
+            "no filters → no parameters key; got {get_op:?}",
+        );
+    }
+
+    #[test]
+    fn collection_paths_includes_parameters_when_filters_present() {
+        let filter_params = filter_parameters(&note_model());
+        let value = collection_paths("note", "Note", &filter_params);
+        let params = value["get"]["parameters"]
+            .as_array()
+            .expect("parameters array should be present when filters land");
+        assert!(!params.is_empty());
+        assert!(
+            params.iter().all(|p| p["in"] == "query"),
+            "every filter parameter is in: query",
+        );
     }
 }

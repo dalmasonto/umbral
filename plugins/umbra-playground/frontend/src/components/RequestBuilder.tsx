@@ -209,10 +209,26 @@ export function RequestBuilder() {
     () => listItemSchema(op?.operation, spec),
     [op?.operation, spec],
   );
+  // True when the spec already declares filter parameters (via the
+  // `x-umbra-filter-field` vendor key umbra-openapi emits on list ops
+  // when ResourceConfig.enable_filters() is on). In that case the
+  // declared-parameters table below already renders them — showing
+  // inferred chips on top would duplicate the UI.
+  const specDeclaresFilters = useMemo(() => {
+    const params =
+      (op?.operation?.parameters as OpenAPIV3.ParameterObject[] | undefined) ?? [];
+    return params.some(
+      (p) =>
+        (p as unknown as Record<string, unknown>)["x-umbra-filter-field"] !==
+        undefined,
+    );
+  }, [op?.operation]);
+
   const filterableFields = useMemo<FieldInfo[]>(() => {
     if (current.method !== "GET" || !listItem) return [];
+    if (specDeclaresFilters) return [];
     return fieldInfosFromSchema(listItem.schema, spec);
-  }, [current.method, listItem, spec]);
+  }, [current.method, listItem, spec, specDeclaresFilters]);
 
   const addFilterParam = (key: string) => {
     const existing = current.params.find((p) => p.key === key);

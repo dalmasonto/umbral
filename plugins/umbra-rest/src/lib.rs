@@ -475,6 +475,18 @@ impl RestPlugin {
 /// rules per request.
 static CONFIG: OnceLock<RestPlugin> = OnceLock::new();
 
+/// Public read of "is filtering enabled for this table?" — used by
+/// `umbra-openapi` to decide whether to advertise filter query
+/// parameters on a list endpoint's OpenAPI operation. Returns
+/// `false` when `RestPlugin::routes()` hasn't run yet (the OnceLock
+/// is empty) so calls from spec-only smoke tests don't panic.
+pub fn filters_enabled_for(table: &str) -> bool {
+    CONFIG
+        .get()
+        .map(|cfg| cfg.filters_enabled.contains(table))
+        .unwrap_or(false)
+}
+
 impl Plugin for RestPlugin {
     fn name(&self) -> &'static str {
         "rest"

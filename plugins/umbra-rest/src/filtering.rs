@@ -221,6 +221,37 @@ fn is_string_type(ty: SqlType) -> bool {
     matches!(ty, SqlType::Text)
 }
 
+/// Public view of the lookups applicable to a column. Used by
+/// `umbra-openapi` to emit per-column query parameters on list
+/// endpoints — clients (Swagger UI, codegen, the umbra-playground)
+/// can then discover what `?<field>__<lookup>=` keys are valid
+/// without re-implementing the validation rules here.
+///
+/// Ordering: most-common first (eq, then range, then string-shape,
+/// then set-membership, then nullability). Stable across calls so
+/// the emitted OpenAPI parameter ordering is deterministic.
+///
+/// Skips columns the list handler can't filter on (no rule today, but
+/// the function shape leaves room to add `noform`-style opt-outs).
+pub fn applicable_lookups(col: &Column) -> Vec<&'static str> {
+    let mut out: Vec<&'static str> = Vec::with_capacity(8);
+    // eq + ne work for everything.
+    out.push("eq");
+    out.push("ne");
+    if is_numeric_or_temporal(col.ty) {
+        out.extend(["gte", "lte", "gt", "lt"]);
+    }
+    if is_string_type(col.ty) {
+        out.extend(["contains", "icontains", "startswith"]);
+    }
+    // `__in` is universally accepted (CSV-split of any scalar type).
+    out.push("in");
+    if col.nullable {
+        out.push("isnull");
+    }
+    out
+}
+
 /// Validate that `lookup` is applicable for `col`'s type. Returns
 /// `BadInput` with a human-readable message on mismatch.
 fn validate_lookup(lookup: &str, col: &Column) -> Result<(), ApiError> {
