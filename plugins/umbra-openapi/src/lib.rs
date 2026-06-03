@@ -201,6 +201,17 @@ fn build_spec(cfg: &OpenApiPlugin) -> Value {
 
     for plugin in umbra::migrate::registered_plugins() {
         for model in umbra::migrate::models_for_plugin(&plugin) {
+            // The spec describes what REST actually serves, so defer
+            // to RestPlugin's allow/block decision first. This means
+            // `RestPlugin::default().include_only(["article"])`
+            // automatically restricts the spec to `article` without
+            // the user having to repeat the configuration on
+            // OpenApiPlugin. The OpenAPI plugin's own `.exclude(...)`
+            // list still applies AFTER as an additional filter for
+            // tables the user wants served-but-not-documented.
+            if !umbra_rest::is_exposed(&model.table) {
+                continue;
+            }
             if !cfg.is_exposed(&model.table) {
                 continue;
             }

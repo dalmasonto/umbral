@@ -535,6 +535,21 @@ static CONFIG: OnceLock<RestPlugin> = OnceLock::new();
 /// parameters on a list endpoint's OpenAPI operation. Returns
 /// `false` when `RestPlugin::routes()` hasn't run yet (the OnceLock
 /// is empty) so calls from spec-only smoke tests don't panic.
+/// Public read: would this REST plugin instance serve the given
+/// table? Returns the same answer the internal allow/block check
+/// uses for the actual list/retrieve/create handlers, so spec
+/// consumers (umbra-openapi, the playground sidebar, etc.) stay
+/// in lockstep with what the API will actually accept.
+///
+/// `true` when the table is on the `include_only` list (when one
+/// is set) AND not in the default block-list AND not in the
+/// plugin's `extra_exclude`. Default behaviour when CONFIG isn't
+/// populated yet is `true` — the spec-build path takes that
+/// branch before the REST plugin's `routes()` runs in tests.
+pub fn is_exposed(table: &str) -> bool {
+    CONFIG.get().map(|cfg| cfg.allow(table)).unwrap_or(true)
+}
+
 pub fn filters_enabled_for(table: &str) -> bool {
     // Filters are ON by default for every exposed table. The opt-out
     // set carries the tables that explicitly turned filtering off.
