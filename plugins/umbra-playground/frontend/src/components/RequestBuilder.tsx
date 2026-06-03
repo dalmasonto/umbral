@@ -27,6 +27,7 @@ import {
   Plus,
   FileJson,
   FileOutput,
+  Trash2,
 } from "lucide-react";
 import Editor from "@monaco-editor/react";
 
@@ -548,14 +549,34 @@ export function RequestBuilder() {
                           {schemaType || "—"}
                         </span>
 
-                        <div className="min-w-0">
+                        <div className="min-w-0 flex items-center gap-1">
                           {isChecked ? (
-                            <Input
-                              value={existing?.value ?? ""}
-                              onChange={(e) => setParamValue(e.target.value)}
-                              placeholder="value"
-                              className="h-7 text-xs font-mono rounded-md w-full"
-                            />
+                            <>
+                              <Input
+                                value={existing?.value ?? ""}
+                                onChange={(e) =>
+                                  setParamValue(e.target.value)
+                                }
+                                placeholder="value"
+                                className="h-7 text-xs font-mono rounded-md flex-1 min-w-0"
+                              />
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon-xs"
+                                title="Remove from request"
+                                onClick={() =>
+                                  setParams(
+                                    current.params.filter(
+                                      (param) => param.key !== p.name,
+                                    ),
+                                  )
+                                }
+                                className="shrink-0 text-muted-foreground hover:text-destructive"
+                              >
+                                <Trash2 className="size-3.5" />
+                              </Button>
+                            </>
                           ) : (
                             <span className="text-muted-foreground/40 italic text-[10px]">
                               —
@@ -632,20 +653,38 @@ export function RequestBuilder() {
                               string
                             </span>
 
-                            <Input
-                              value={param.value}
-                              onChange={(e) =>
-                                setParams(
-                                  current.params.map((p, i) =>
-                                    i === realIndex
-                                      ? { ...p, value: e.target.value }
-                                      : p,
-                                  ),
-                                )
-                              }
-                              placeholder="value"
-                              className="h-7 text-xs font-mono rounded-md w-full"
-                            />
+                            <div className="min-w-0 flex items-center gap-1">
+                              <Input
+                                value={param.value}
+                                onChange={(e) =>
+                                  setParams(
+                                    current.params.map((p, i) =>
+                                      i === realIndex
+                                        ? { ...p, value: e.target.value }
+                                        : p,
+                                    ),
+                                  )
+                                }
+                                placeholder="value"
+                                className="h-7 text-xs font-mono rounded-md flex-1 min-w-0"
+                              />
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon-xs"
+                                title="Remove this custom parameter"
+                                onClick={() =>
+                                  setParams(
+                                    current.params.filter(
+                                      (_, i) => i !== realIndex,
+                                    ),
+                                  )
+                                }
+                                className="shrink-0 text-muted-foreground hover:text-destructive"
+                              >
+                                <Trash2 className="size-3.5" />
+                              </Button>
+                            </div>
                           </div>
                         );
                       })}
