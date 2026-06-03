@@ -27,11 +27,19 @@
 //! - Coexisting HTML and JSON surfaces: `/articles` renders the list
 //!   page, `/api/articles` returns the same data as JSON.
 
+mod auth_api;
+
+use std::sync::Arc;
 use umbra::migrate::MigrateError;
 use umbra::prelude::*;
 use umbra::templates::context;
 use umbra::web::{Html, StatusCode};
-use umbra_auth::AuthUser;
+use umbra_auth::{AuthUser, BearerAuthentication};
+use umbra_rest::{
+    Action, ChainAuthentication, Identity, IsAuthenticated, IsStaff, Permission, PermissionError,
+    ResourceConfig,
+};
+use umbra_sessions::SessionAuthentication;
 
 /// A closed-set enum used as a model field via `#[umbra(choices)]`.
 ///
@@ -67,6 +75,34 @@ pub struct Article {
     pub status: ArticleStatus,
     #[umbra(noedit)]
     pub published_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// Per-action permission for `article`: GET (List / Retrieve) and
+/// DELETE stay open; POST / PUT / PATCH (Create / Update) require an
+/// authenticated staff user. `ResourceConfig::permission(...)` takes
+/// one class invoked on every action, so per-verb gating lives inside
+/// the `check()` body rather than in a combinator.
+///
+/// `IsStaff` already short-circuits anonymous traffic with 401 before
+/// the staff check, so chaining it after `IsAuthenticated` is
+/// redundant in practice — both calls appear here to make the gate
+/// readable at the call site.
+struct StaffWritesOnly;
+
+impl Permission for StaffWritesOnly {
+    fn check(
+        &self,
+        action: &Action,
+        identity: Option<&Identity>,
+    ) -> Result<(), PermissionError> {
+        match action {
+            Action::Create | Action::Update => {
+                IsAuthenticated.check(action, identity)?;
+                IsStaff.check(action, identity)
+            }
+            _ => Ok(()),
+        }
+    }
 }
 
 #[tokio::main]
@@ -131,8 +167,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // Auto-generated JSON CRUD at /api/article/. The RestPlugin
         // walks the same model registry the migration engine uses,
         // so the surface stays in lockstep with the schema for free.
-        .plugin(umbra_rest::RestPlugin::default())
         .plugin(umbra_openapi::OpenApiPlugin::new())
+        .plugin(
+            umbra_rest::RestPlugin::default()
+                .expose(["auth_user", "session"])
+                // Two-way authentication: browsers send the session
+                // cookie, CLI / mobile / CI send a bearer token. First
+                // class to recognise the request wins; both produce
+                // the same `Identity` shape so the permission classes
+                // (StaffWritesOnly below, IsStaff anywhere else)
+                // compose with either path for free.
+                .authenticate(ChainAuthentication::new(vec![
+                    Arc::new(SessionAuthentication),
+                    Arc::new(BearerAuthentication),
+                ]))
+                // POST/PUT/PATCH on `article` require a staff user;
+                // GET and DELETE stay open. See StaffWritesOnly above.
+                .resource(ResourceConfig::new("article").permission(StaffWritesOnly)),
+        )
         .plugin(umbra_playground::PlaygroundPlugin::new())
         .plugin(umbra_auth::AuthPlugin::<AuthUser>::default())
         .plugin(umbra_sessions::SessionsPlugin::default())
@@ -182,7 +234,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .get("/articles/{id}", article_detail)
                 // Backwards-compat alias from the pre-RestPlugin era.
                 // New clients should hit /api/article/ instead.
-                .get("/api/articles", list_articles_json),
+                .get("/api/articles", list_articles_json)
+                // Reference auth endpoints. Live in `auth_api.rs`
+                // alongside this file. See the module docs there
+                // for the shape rationale and what's deliberately
+                // missing (password reset, throttling, email
+                // verification on register).
+                .post("/api/auth/register", auth_api::register)
+                .post("/api/auth/login", auth_api::login)
+                .post("/api/auth/logout", auth_api::logout)
+                .get("/api/auth/me", auth_api::me),
         ))
     .build()?;
 
