@@ -55,6 +55,10 @@ umbra-rest = { path = "../umbra-rest", version = "0.0.1" }
 # token hashing helper) and is re-used to hash the bearer key.
 rand = "0.8"
 base64 = "0.22"
+# UUIDs for the session-row primary key (opaque cookie token). The
+# auth-routes module mints session rows itself rather than calling
+# into umbra-sessions, because the dep arrow runs the other way.
+uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync"] }

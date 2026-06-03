@@ -62,6 +62,7 @@
 //!   `umbra-sessions` session middleware wired end-to-end.
 //! - Periodic session cleanup via `umbra-tasks`.
 
+pub mod auth_routes;
 pub mod bearer_auth;
 pub mod extractors;
 pub mod login_required;
@@ -240,6 +241,12 @@ pub struct AuthPlugin<U: UserModel = AuthUser> {
     /// model. Consumed by admin / OpenAPI when surfacing the user table.
     /// The actual dispatch is entirely through the type parameter `U`.
     pub user_model_name: Option<String>,
+    /// When `Some`, mount the four built-in routes (register / login /
+    /// logout / me) under this prefix. `None` skips them — the user
+    /// either doesn't want them or is rolling their own surface. Only
+    /// settable on `AuthPlugin<AuthUser>` (the handlers FK into
+    /// `AuthToken` → `AuthUser`); custom user models bring their own.
+    pub default_routes_prefix: Option<String>,
     _u: PhantomData<U>,
 }
 
@@ -247,6 +254,7 @@ impl<U: UserModel> Default for AuthPlugin<U> {
     fn default() -> Self {
         Self {
             user_model_name: None,
+            default_routes_prefix: None,
             _u: PhantomData,
         }
     }
@@ -257,6 +265,35 @@ impl<U: UserModel> AuthPlugin<U> {
     /// Fluent builder method; the return type is `Self` so it chains.
     pub fn user_model_name(mut self, name: impl Into<String>) -> Self {
         self.user_model_name = Some(name.into());
+        self
+    }
+}
+
+// =========================================================================
+// Default route opt-in. Only exposed on AuthPlugin<AuthUser> because the
+// handlers FK into AuthUser via AuthToken. Custom user models would need a
+// different token model + different handlers; they bring their own surface.
+// The concrete impl block (no <U>) is the compile-time witness: calling
+// `.with_default_routes()` on `AuthPlugin::<CustomUser>` is an error at
+// the call site, not a silent no-op at runtime.
+// =========================================================================
+impl AuthPlugin<AuthUser> {
+    /// Mount the built-in `/api/auth/{register,login,logout,me}`
+    /// surface. Same handlers that lived in the derive-demo example
+    /// app, promoted to the framework so every app gets them with one
+    /// line. JSON-only; UNIQUE-violation → 409; login returns both a
+    /// Set-Cookie and a bearer token in one response so browsers and
+    /// CLI clients share an endpoint.
+    pub fn with_default_routes(mut self) -> Self {
+        self.default_routes_prefix = Some("/api/auth".to_string());
+        self
+    }
+
+    /// Same as [`Self::with_default_routes`] but the prefix is yours
+    /// to pick. Useful when `/api/auth` collides with an existing
+    /// surface or you want versioning (`/v1/auth`).
+    pub fn with_default_routes_at(mut self, prefix: impl Into<String>) -> Self {
+        self.default_routes_prefix = Some(prefix.into());
         self
     }
 }
@@ -281,6 +318,25 @@ impl<U: UserModel> Plugin for AuthPlugin<U> {
 
     fn commands(&self) -> Vec<Box<dyn umbra::cli::PluginCommand>> {
         vec![Box::new(CreateSuperuserCommand)]
+    }
+
+    fn routes(&self) -> umbra::web::Router {
+        // `default_routes_prefix` is only ever Some when U = AuthUser
+        // (the only impl block that sets it is `impl AuthPlugin<AuthUser>`).
+        // So the prefix-guarded branch is dead code for any custom user
+        // model — both at compile time (the builder method isn't
+        // visible) and at runtime (the field stays None).
+        match &self.default_routes_prefix {
+            Some(prefix) => auth_routes::build_router(prefix),
+            None => umbra::web::Router::new(),
+        }
+    }
+
+    fn route_paths(&self) -> Vec<umbra::routes::RouteSpec> {
+        match &self.default_routes_prefix {
+            Some(prefix) => auth_routes::declared_routes(prefix),
+            None => Vec::new(),
+        }
     }
 }
 

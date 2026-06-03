@@ -27,8 +27,6 @@
 //! - Coexisting HTML and JSON surfaces: `/articles` renders the list
 //!   page, `/api/articles` returns the same data as JSON.
 
-mod auth_api;
-
 use std::sync::Arc;
 use umbra::migrate::MigrateError;
 use umbra::prelude::*;
@@ -186,7 +184,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .resource(ResourceConfig::new("article").permission(StaffWritesOnly)),
         )
         .plugin(umbra_playground::PlaygroundPlugin::new())
-        .plugin(umbra_auth::AuthPlugin::<AuthUser>::default())
+        // `with_default_routes()` mounts /api/auth/{register,login,
+        // logout,me} — the four-handler reference surface lifted
+        // from this app's own `auth_api.rs` (now retired) into the
+        // plugin so every app gets it with one line. Only available
+        // on `AuthPlugin<AuthUser>` because the handlers FK into
+        // `AuthToken` → `AuthUser`; custom user models bring their
+        // own auth surface.
+        .plugin(umbra_auth::AuthPlugin::<AuthUser>::default().with_default_routes())
         .plugin(umbra_sessions::SessionsPlugin::default())
         // Register Article with the admin so the datatable renders a
         // search box (search_fields driven) and the list view shows the
@@ -234,16 +239,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .get("/articles/{id}", article_detail)
                 // Backwards-compat alias from the pre-RestPlugin era.
                 // New clients should hit /api/article/ instead.
-                .get("/api/articles", list_articles_json)
-                // Reference auth endpoints. Live in `auth_api.rs`
-                // alongside this file. See the module docs there
-                // for the shape rationale and what's deliberately
-                // missing (password reset, throttling, email
-                // verification on register).
-                .post("/api/auth/register", auth_api::register)
-                .post("/api/auth/login", auth_api::login)
-                .post("/api/auth/logout", auth_api::logout)
-                .get("/api/auth/me", auth_api::me),
+                .get("/api/articles", list_articles_json),
         ))
     .build()?;
 
