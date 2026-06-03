@@ -107,3 +107,41 @@ follows milestone by milestone. As features land, each gets a doc page here.
 For the long version, read the design specs in the repository root: `arch.md`
 (architecture), `umbra-PRD.md` (product requirements), and `docs/specs/`
 (per-subsystem deep specs).
+
+## Roadmap
+
+Notable items on the backlog. Pages land here as each one ships. See
+`bugs/features.md` in the repository for the full punch-list.
+
+<CardGrid cols={2}>
+  <Card
+    icon="activity"
+    title="Logs plugin"
+    description="django-logs-style auto-logging of every DB action. Registers a logs table, surfaces 'Recent activity' in the admin."
+  />
+  <Card
+    icon="bell"
+    title="Notifications plugin (SSE)"
+    description="Server-sent events the user can subscribe to per model / per action. Composes with TasksPlugin so a logged error type can fan out to email."
+  />
+  <Card
+    icon="edit-3"
+    title="Rich admin field widgets"
+    description="RTE and Markdown editors (with preview) declared per-column: AdminModel::field('body', Markdown::new())."
+  />
+  <Card
+    icon="layout-grid"
+    title="Admin widget tooling"
+    description="Helper for building dashboard widgets with built-in filters (date, search, range, choice) — plus per-user widget reordering."
+  />
+  <Card
+    icon="git-merge"
+    title="GraphQL plugin"
+    description="Schema + query/mutation endpoints auto-generated from the OpenAPI spec. The playground stays the same shape as the REST playground, opt-in per resource."
+  />
+  <Card
+    icon="radio"
+    title="WebSocket playground"
+    description="Opt-in playground tab that connects to declared WS endpoints with the same UI shape as the REST playground."
+  />
+</CardGrid>
