@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { usePlayground } from "@/state/store";
+import { usePersistedState } from "@/hooks/usePersistedState";
 import type { OpenAPIV3 } from "openapi-types";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -172,7 +173,10 @@ export function RequestBuilder() {
   const resetCurrent = usePlayground((s) => s.resetCurrent);
   const send = usePlayground((s) => s.send);
   const inFlight = usePlayground((s) => s.inFlight);
-  const [activeTab, setActiveTab] = useState<TabId>("params");
+  const [activeTab, setActiveTab] = usePersistedState<TabId>(
+    "request-builder.active-tab",
+    "params",
+  );
   const isDark = useIsDark();
 
   const op = findOperation(spec, selected);

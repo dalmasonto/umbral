@@ -1,5 +1,6 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { usePlayground } from "@/state/store";
+import { usePersistedState } from "@/hooks/usePersistedState";
 import type { OpenAPIV3 } from "openapi-types";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -113,7 +114,17 @@ export function EndpointTree() {
   const specError = usePlayground((s) => s.specError);
   const selected = usePlayground((s) => s.selectedOperationId);
   const select = usePlayground((s) => s.selectEndpoint);
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = usePersistedState<string>(
+    "endpoint-tree.search",
+    "",
+  );
+  // Map<tag, isOpen>. A missing key means "use the default". When
+  // the user is actively searching, every group force-opens
+  // regardless of the persisted state — typing should always reveal
+  // matches even if the user previously collapsed that group.
+  const [expandedTags, setExpandedTags] = usePersistedState<
+    Record<string, boolean>
+  >("endpoint-tree.expanded-tags", {});
 
   const grouped = useMemo(() => {
     if (!spec) return null;
@@ -222,7 +233,20 @@ export function EndpointTree() {
             const tagColor = getTagColor(tag);
             const tagIcon = getTagIcon(tag);
             return (
-              <Collapsible key={tag} defaultOpen={search.length > 0}>
+              <Collapsible
+                key={tag}
+                // While typing, force-open so matches are always
+                // visible regardless of the persisted preference.
+                // Otherwise read from / write to the persisted map.
+                open={search.length > 0 ? true : expandedTags[tag] ?? false}
+                onOpenChange={(open) => {
+                  // Don't write to the persisted map while searching —
+                  // the toggle is a visual side effect of the search
+                  // override, not a user-intended preference change.
+                  if (search.length > 0) return;
+                  setExpandedTags({ ...expandedTags, [tag]: open });
+                }}
+              >
                 <CollapsibleTrigger asChild>
                   <button
                     type="button"

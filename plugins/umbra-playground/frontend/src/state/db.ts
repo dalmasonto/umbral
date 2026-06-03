@@ -7,16 +7,34 @@ export interface HistoryRow extends ResponseRecord {
   id?: number;
 }
 
+/** Per-key UI state slot. Keyed by a stable string the consumer
+ *  picks (e.g. `"endpoint-tree.search"`). Value is whatever JSON the
+ *  consumer needs to round-trip — Dexie serialises with
+ *  structuredClone so non-primitive values (Records, arrays) work
+ *  without us writing a JSON shape per slot. */
+export interface EditorStateRow {
+  /** The slot key. Primary. Convention: `<component>.<field>`. */
+  key: string;
+  /** Whatever value the consumer wants persisted. */
+  value: unknown;
+}
+
 const DB_NAME = "umbra-playground";
 
 export const db = new Dexie(DB_NAME) as Dexie & {
   history: EntityTable<HistoryRow, "id">;
+  editorState: EntityTable<EditorStateRow, "key">;
 };
 
-// One indexed table, three indexed columns.
-//   ++id        — auto-increment primary key
-//   operationId — fast filter for "history for this endpoint"
-//   timestamp   — chronological ordering / range pruning
+// v1: history table. v2 adds the editorState table for persistent
+// UI slots (expanded sidebar groups, search input, active tabs).
+// Upgrading from v1 is automatic — Dexie keeps the existing
+// history table untouched and just adds the new one.
 db.version(1).stores({
   history: "++id, operationId, timestamp",
+});
+
+db.version(2).stores({
+  history: "++id, operationId, timestamp",
+  editorState: "&key",
 });

@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { usePlayground } from "@/state/store";
+import { usePersistedState } from "@/hooks/usePersistedState";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -247,7 +248,10 @@ export function ResponseViewer() {
   const selected = usePlayground((s) => s.selectedOperationId);
   const history = usePlayground((s) => s.history);
   const clearHistory = usePlayground((s) => s.clearHistory);
-  const [activeTab, setActiveTab] = useState<TabId>("body");
+  const [activeTab, setActiveTab] = usePersistedState<TabId>(
+    "response-viewer.active-tab",
+    "body",
+  );
   const [dialogRecord, setDialogRecord] = useState<ResponseRecord | null>(null);
 
   const opHistory = useMemo(
