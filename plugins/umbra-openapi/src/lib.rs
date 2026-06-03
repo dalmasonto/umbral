@@ -335,10 +335,33 @@ fn column_schema(col: &Column) -> Value {
     if col.is_string_repr {
         obj.insert("x-umbra-string-repr".into(), Value::Bool(true));
     }
-    if col.noedit {
-        // PATCH/PUT semantically forbid this field; Swagger UI greys
-        // out `readOnly` fields in request bodies.
+    // `noedit` is intentionally NOT mapped to `readOnly`. The two
+    // concepts are different: `noedit` is an admin EDIT-form hint
+    // ("show this field disabled when the user clicks the row"),
+    // while OpenAPI's `readOnly` means "never accept this field in
+    // ANY request body" — including POST. The conflation hid
+    // required `noedit` fields from the playground autofill on
+    // CREATE, which is exactly the wrong direction.
+    //
+    // The real "API never accepts" semantic is `noform` (the field
+    // is never shown on any admin form AND the REST plugin drops
+    // it from request bodies before write). That maps cleanly to
+    // OpenAPI `readOnly`.
+    if col.noform {
         obj.insert("readOnly".into(), Value::Bool(true));
+        // Vendor extension so clients aware of the umbra surface
+        // (the playground in particular) can distinguish "API
+        // doesn't accept this" from "admin won't let you edit it"
+        // without having to re-derive the rule from the column
+        // metadata.
+        obj.insert("x-umbra-noform".into(), Value::Bool(true));
+    }
+    // `noedit` becomes a pure vendor extension. Aware clients can
+    // surface it in their edit UI (the playground could, e.g.,
+    // grey the field on PUT/PATCH but not POST) without it
+    // contaminating the request-body contract.
+    if col.noedit {
+        obj.insert("x-umbra-noedit".into(), Value::Bool(true));
     }
     Value::Object(obj)
 }
@@ -779,11 +802,36 @@ mod tests {
     }
 
     #[test]
-    fn noedit_renders_as_read_only_so_swagger_grays_it_out() {
-        let mut col = base_col("created_at", SqlType::Timestamptz);
-        col.noedit = true;
+    fn noform_renders_as_read_only_and_carries_vendor_extension() {
+        // `noform` is the API-readOnly semantic — never accepted in
+        // any request body, server fills it in. Maps to OpenAPI
+        // `readOnly: true` so Swagger / generated clients honour it
+        // on POST and PUT/PATCH alike.
+        let mut col = base_col("internal_token", SqlType::Text);
+        col.noform = true;
         let schema = column_schema(&col);
         assert_eq!(schema["readOnly"], true);
+        assert_eq!(schema["x-umbra-noform"], true);
+    }
+
+    #[test]
+    fn noedit_does_NOT_render_as_read_only() {
+        // Decoupled from API contract: `noedit` is purely an admin
+        // EDIT-form hint. The field stays writable in the spec so a
+        // required `noedit` field (e.g. `email` you can set at
+        // signup but not change later) still gets autofilled on POST
+        // by the playground and accepted by the REST plugin on CREATE.
+        let mut col = base_col("email", SqlType::Text);
+        col.noedit = true;
+        let schema = column_schema(&col);
+        assert!(
+            schema.get("readOnly").is_none(),
+            "noedit must NOT contaminate the API request-body contract; \
+             got readOnly in schema: {schema:?}"
+        );
+        // Surface it as a vendor extension so aware clients can
+        // still grey the field on PUT/PATCH if they want.
+        assert_eq!(schema["x-umbra-noedit"], true);
     }
 
     #[test]

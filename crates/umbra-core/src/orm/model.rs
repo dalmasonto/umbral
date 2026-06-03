@@ -192,15 +192,33 @@ pub struct FieldSpec {
     pub fk_target: Option<&'static str>,
 
     /// When `true`, this field is never rendered on any form (create or
-    /// edit). Use for columns the user should never touch directly — e.g.
-    /// `password_hash`, `internal_token`. Set via `#[umbra(noform)]`.
+    /// edit) AND the REST plugin drops it from POST/PUT/PATCH request
+    /// bodies before write. This is the framework's "server-managed,
+    /// never accepts client input" flag — `password_hash`,
+    /// `internal_token`, audit timestamps the database owns.
+    /// Set via `#[umbra(noform)]`.
+    ///
+    /// OpenAPI emits `readOnly: true` for `noform` columns so Swagger
+    /// UI / generated clients honour the contract too. If you only
+    /// want the admin to render the field disabled — without affecting
+    /// the REST API or the spec — use `noedit` below.
     ///
     /// If `noform` is true, `noedit` is moot (noform takes precedence).
     pub noform: bool,
 
-    /// When `true`, this field appears on the edit form as read-only.
-    /// The user can see the value but not change it. Set via
-    /// `#[umbra(noedit)]`. Has no effect when `noform` is also set.
+    /// When `true`, the admin shows this field disabled on the edit
+    /// form. Pure UX hint — no effect on the REST API or the OpenAPI
+    /// spec; clients can still POST/PUT/PATCH the column normally.
+    /// Set via `#[umbra(noedit)]`.
+    ///
+    /// Use case: a value the user supplies once at signup (`email`,
+    /// `username`) but isn't supposed to change later through the
+    /// admin. The REST API may still accept updates — gate that
+    /// separately via `ResourceConfig::hide(...)` or a permission
+    /// class if you want hard enforcement. To block writes entirely,
+    /// use `noform` instead.
+    ///
+    /// Has no effect when `noform` is also set.
     pub noedit: bool,
 
     /// When `true`, this field is the Django-style `__str__` for the

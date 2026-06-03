@@ -945,6 +945,30 @@ fn pk_column(model: &ModelMeta) -> Result<&umbra::migrate::Column, ApiError> {
         .ok_or_else(|| ApiError::BadInput(format!("`{}` has no primary key", model.table)))
 }
 
+/// Strip `noform` columns from a request body before write.
+///
+/// `noform` is the model-side declaration that "the user never
+/// touches this directly" — `password_hash`, `internal_token`,
+/// server-managed audit fields. The OpenAPI schema advertises
+/// those columns as `readOnly: true`, and the REST handlers honour
+/// that by silently dropping them from the incoming JSON before
+/// dispatching to `insert_json` / `update_json`.
+///
+/// Silent drop (not 400) so well-behaved clients re-posting a
+/// previous response back as a request (a common round-trip
+/// pattern) don't have to filter the payload themselves. If you
+/// want strict-mode rejection, that's a future opt-in.
+///
+/// `noedit` is intentionally NOT in scope: that flag is an admin
+/// EDIT-form UX hint and has no API contract semantic.
+fn drop_noform_fields(model: &ModelMeta, body: &mut Map<String, Value>) {
+    for col in &model.fields {
+        if col.noform {
+            body.remove(&col.name);
+        }
+    }
+}
+
 // =========================================================================
 // Handlers.
 // =========================================================================
@@ -1019,12 +1043,13 @@ async fn retrieve(
 async fn create(
     Path(table): Path<String>,
     headers: umbra::web::HeaderMap,
-    Json(body): Json<Map<String, Value>>,
+    Json(mut body): Json<Map<String, Value>>,
 ) -> Result<(StatusCode, Json<Map<String, Value>>), ApiError> {
     let cfg = CONFIG.get().expect("RestPlugin::routes was called");
     let identity = cfg.authentication.authenticate(&headers).await;
     let model = allowed_model(&table)?;
     cfg.gate(&table, &Action::Create, identity.as_ref())?;
+    drop_noform_fields(&model, &mut body);
     let mut row = umbra::orm::DynQuerySet::for_meta(&model)
         .insert_json(&body)
         .await?;
@@ -1035,12 +1060,13 @@ async fn create(
 async fn update(
     Path((table, id)): Path<(String, String)>,
     headers: umbra::web::HeaderMap,
-    Json(body): Json<Map<String, Value>>,
+    Json(mut body): Json<Map<String, Value>>,
 ) -> Result<Json<Map<String, Value>>, ApiError> {
     let cfg = CONFIG.get().expect("RestPlugin::routes was called");
     let identity = cfg.authentication.authenticate(&headers).await;
     let model = allowed_model(&table)?;
     cfg.gate(&table, &Action::Update, identity.as_ref())?;
+    drop_noform_fields(&model, &mut body);
     let pk = pk_column(&model)?;
 
     // 404 if the target row doesn't exist before we attempt the UPDATE.
@@ -1235,6 +1261,97 @@ async fn count_rows_filtered(model: &ModelMeta, filter: &FilterClause) -> Result
         qs = qs.filter_condition(cond);
     }
     Ok(qs.count().await?)
+}
+
+#[cfg(test)]
+mod noform_drop {
+    use super::*;
+    use serde_json::json;
+    use umbra::migrate::Column;
+    use umbra::orm::SqlType;
+
+    fn col(name: &str, noform: bool, noedit: bool) -> Column {
+        Column {
+            name: name.into(),
+            ty: SqlType::Text,
+            primary_key: false,
+            nullable: false,
+            fk_target: None,
+            noform,
+            noedit,
+            is_string_repr: false,
+            max_length: 0,
+            choices: Vec::new(),
+            choice_labels: Vec::new(),
+            default: String::new(),
+            is_multichoice: false,
+        }
+    }
+
+    fn model() -> ModelMeta {
+        ModelMeta {
+            name: "User".into(),
+            table: "auth_user".into(),
+            fields: vec![
+                col("username", false, false),       // ordinary
+                col("email", false, true),           // noedit only
+                col("password_hash", true, false),   // noform
+                col("internal_token", true, true),   // both
+            ],
+            display: "User".into(),
+            icon: "user".into(),
+            database: None,
+        }
+    }
+
+    #[test]
+    fn drops_noform_keys_from_body() {
+        let mut body: Map<String, Value> = json!({
+            "username": "alice",
+            "email": "alice@example.com",
+            "password_hash": "$2b$12$...should_be_dropped",
+            "internal_token": "secret_should_be_dropped",
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+
+        drop_noform_fields(&model(), &mut body);
+
+        assert!(body.contains_key("username"), "ordinary field stays");
+        assert!(
+            body.contains_key("email"),
+            "noedit-only field stays — noedit is an admin UX hint, not an API contract"
+        );
+        assert!(
+            !body.contains_key("password_hash"),
+            "noform field must be dropped from writes"
+        );
+        assert!(
+            !body.contains_key("internal_token"),
+            "noform takes precedence when both flags are set"
+        );
+    }
+
+    #[test]
+    fn empty_body_handled_gracefully() {
+        let mut body: Map<String, Value> = Map::new();
+        drop_noform_fields(&model(), &mut body);
+        assert!(body.is_empty());
+    }
+
+    #[test]
+    fn body_with_only_noform_fields_becomes_empty() {
+        let mut body: Map<String, Value> = json!({
+            "password_hash": "x",
+            "internal_token": "y",
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        drop_noform_fields(&model(), &mut body);
+        assert!(body.is_empty());
+    }
 }
 
 #[cfg(test)]
