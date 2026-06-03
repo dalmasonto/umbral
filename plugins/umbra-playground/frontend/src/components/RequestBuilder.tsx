@@ -22,6 +22,44 @@ function findPathParamValue(
   return params.find((p) => p.key === name && p.enabled)?.value ?? "";
 }
 
+/** Build the display URL from base path + query params. */
+function buildDisplayUrl(
+  baseUrl: string,
+  params: Array<{ key: string; value: string; enabled: boolean }>,
+): string {
+  const base = baseUrl.split("?")[0];
+  const queryEntries = params.filter(
+    (p) => p.enabled && p.key && !base.includes(`{${p.key}}`),
+  );
+  if (queryEntries.length === 0) return base;
+  const qs = queryEntries
+    .map(
+      ({ key, value }) =>
+        `${encodeURIComponent(key)}=${encodeURIComponent(value)}`,
+    )
+    .join("&");
+  return `${base}?${qs}`;
+}
+
+/** Parse a full URL input into base path + query params. */
+function parseUrlInput(
+  input: string,
+): { baseUrl: string; queryEntries: Array<{ key: string; value: string }> } {
+  const [basePart, queryString] = input.split("?");
+  const baseUrl = basePart || "";
+  if (!queryString) return { baseUrl, queryEntries: [] };
+  try {
+    const sp = new URLSearchParams(queryString);
+    const queryEntries: Array<{ key: string; value: string }> = [];
+    sp.forEach((value, key) => {
+      queryEntries.push({ key, value });
+    });
+    return { baseUrl, queryEntries };
+  } catch {
+    return { baseUrl, queryEntries: [] };
+  }
+}
+
 type TabId = "params" | "body" | "headers" | "auth";
 
 const TABS: { id: TabId; label: string }[] = [
@@ -94,6 +132,30 @@ export function RequestBuilder() {
 
   const pathParams = useMemo(() => extractPathParams(current.url), [current.url]);
 
+  const displayUrl = useMemo(
+    () => buildDisplayUrl(current.url, current.params),
+    [current.url, current.params],
+  );
+
+  const handleUrlChange = (input: string) => {
+    const { baseUrl, queryEntries } = parseUrlInput(input);
+    setUrl(baseUrl);
+
+    if (queryEntries.length > 0) {
+      // Merge query entries into current params.
+      const next = [...current.params];
+      for (const { key, value } of queryEntries) {
+        const idx = next.findIndex((p) => p.key === key);
+        if (idx >= 0) {
+          next[idx] = { ...next[idx], value, enabled: true };
+        } else {
+          next.push({ key, value, enabled: true });
+        }
+      }
+      setParams(next);
+    }
+  };
+
   const handleSend = () => {
     void send();
   };
@@ -119,8 +181,8 @@ export function RequestBuilder() {
         <div className="flex items-center gap-2">
           <MethodBadge method={current.method} />
           <Input
-            value={current.url}
-            onChange={(e) => setUrl(e.target.value)}
+            value={displayUrl}
+            onChange={(e) => handleUrlChange(e.target.value)}
             placeholder="/api/endpoint"
             className="flex-1 font-mono text-sm h-10 rounded-md"
           />

@@ -91,7 +91,7 @@ function ReadonlyMonaco({
 }) {
   const isDark = useIsDark();
   return (
-    <div className="h-[24rem] rounded-md overflow-hidden border border-border">
+    <div className="flex-1 min-h-0 h-full rounded-md overflow-hidden border border-border">
       <Editor
         height="100%"
         language={language}
@@ -219,7 +219,7 @@ export function ResponseViewer() {
       {/* Tab Content */}
       <div className="flex-1 overflow-y-auto p-3">
         {activeTab === "body" && (
-          <div>
+          <div className="h-full flex flex-col">
             {prettyBody ? (
               <ReadonlyMonaco value={prettyBody} language="json" />
             ) : (
