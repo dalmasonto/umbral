@@ -1,0 +1,19 @@
+[package]
+name = "umbra-playground"
+description = "Interactive API playground UI for umbra-rest. The DRF browsable API, in umbra."
+workspace = "../../crates"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+umbra = { path = "../../crates/umbra", version = "0.0.1" }
+axum = "0.8"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

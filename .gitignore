@@ -24,3 +24,8 @@ create_db.sh
 
 # Git worktrees created by the using-git-worktrees skill
 .worktrees/
+
+# umbra-playground build artifacts
+plugins/umbra-playground/dist/
+plugins/umbra-playground/src/generated_assets.rs
+plugins/umbra-playground/frontend/node_modules/

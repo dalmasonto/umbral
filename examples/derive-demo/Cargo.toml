@@ -12,6 +12,7 @@ umbra = { path = "../../crates/umbra" }
 # serializer code.
 umbra-rest = { path = "../../plugins/umbra-rest" }
 umbra-openapi = { path = "../../plugins/umbra-openapi" }
+umbra-playground = { path = "../../plugins/umbra-playground" }
 umbra-admin = {path = "../../plugins/umbra-admin"}
 umbra-auth = {path = "../../plugins/umbra-auth"}
 umbra-sessions = {path = "../../plugins/umbra-sessions"}

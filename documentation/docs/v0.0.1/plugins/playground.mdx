@@ -1,0 +1,50 @@
+---
+title: Playground plugin
+description: Interactive API playground for umbra-rest endpoints.
+sidebar_position: 1
+---
+
+`umbra-playground` mounts a Postman-style API playground at `/api/playground/`. It reads the OpenAPI spec produced by `umbra-openapi` and renders a navigable endpoint tree, a request builder, and a response viewer — all from the browser, no extra service to run.
+
+## Quick start
+
+```rust
+use umbra_playground::PlaygroundPlugin;
+use umbra_rest::RestPlugin;
+use umbra_openapi::OpenApiPlugin;
+
+let app = App::builder()
+    .plugin(RestPlugin::default())
+    .plugin(OpenApiPlugin::new())
+    .plugin(PlaygroundPlugin::new())
+    .build();
+```
+
+Open `http://localhost:8000/api/playground/` in a browser.
+
+## Requirements
+
+The plugin bundles a React + tailwindcss UI at compile time. To enable the full UI, install `esbuild` and `tailwindcss` once:
+
+```bash
+npm i -g esbuild tailwindcss
+```
+
+Without these, the plugin still compiles and serves a placeholder page that explains what's needed.
+
+## What you get
+
+- Three-pane layout: endpoint tree, request builder, response viewer.
+- Per-endpoint request history persisted to localStorage.
+- cURL export of any request.
+- JSON syntax tree in the response viewer.
+- Bearer token input in the Auth tab.
+
+## v1 limitations
+
+- Same-origin requests only (no CORS proxy).
+- Body editor is a JSON textarea; no schema-driven form.
+- Auth is a single bearer-token field; spec-driven `securitySchemes` arrive in v2.
+- History is per-browser (localStorage); server-side history is a future plugin.
+
+See [the design spec](https://github.com/umbra/umbra/blob/main/docs/superpowers/specs/2026-06-02-rest-playground-design.md) for the full design and follow-up work.

@@ -2384,6 +2384,7 @@ dependencies = [
  "umbra-cli",
  "umbra-openapi",
  "umbra-permissions",
+ "umbra-playground",
  "umbra-rest",
  "umbra-sessions",
 ]
@@ -2421,6 +2422,14 @@ dependencies = [
  "tracing",
  "umbra",
  "umbra-auth",
+]
+
+[[package]]
+name = "umbra-playground"
+version = "0.0.1"
+dependencies = [
+ "axum",
+ "umbra",
 ]
 
 [[package]]
