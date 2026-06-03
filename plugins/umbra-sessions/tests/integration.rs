@@ -591,6 +591,61 @@ async fn router_through_sessions_plugin_creates_anon_session_on_first_visit() {
     );
 }
 
+/// Regression: when a handler sets its own `Set-Cookie` (the
+/// shape `login_with_request` uses to rotate the token after
+/// credential check — session-fixation defense), the session_layer
+/// must NOT overwrite it with the anonymous cookie it minted at
+/// request entry. The previous behaviour silently clobbered every
+/// cookie-based login: the row got `user_id = Some(u.id)`, but the
+/// response carried the anonymous cookie, so the very next request
+/// looked unauthenticated to the server.
+#[tokio::test]
+async fn session_layer_does_not_clobber_handler_set_cookie() {
+    use axum::body::Body;
+    use axum::http::Request;
+    use axum::response::IntoResponse;
+    use axum::routing::get;
+    use tower::ServiceExt;
+
+    let _ = boot().await;
+
+    let handler_cookie = format!("{COOKIE_NAME}=handler-mint; Path=/; HttpOnly");
+    let cookie_for_handler = handler_cookie.clone();
+    let inner = axum::Router::new().route(
+        "/",
+        get(move || {
+            let value = cookie_for_handler.clone();
+            async move {
+                let mut response = "ok".into_response();
+                response
+                    .headers_mut()
+                    .insert(header::SET_COOKIE, value.parse().unwrap());
+                response
+            }
+        }),
+    );
+    let plugin = SessionsPlugin::default();
+    use umbra::plugin::Plugin;
+    let router = plugin.wrap_router(inner);
+
+    // Request without an inbound cookie: the layer would normally
+    // mint an anonymous session and stamp Set-Cookie on the way
+    // back. The handler beat it to the punch — the layer must back
+    // off.
+    let req = Request::builder().uri("/").body(Body::empty()).unwrap();
+    let resp = router.oneshot(req).await.unwrap();
+    let set_cookie = resp
+        .headers()
+        .get(header::SET_COOKIE)
+        .expect("handler-set Set-Cookie should survive")
+        .to_str()
+        .unwrap();
+    assert_eq!(
+        set_cookie, handler_cookie,
+        "the layer overwrote the handler's Set-Cookie; got {set_cookie:?}",
+    );
+}
+
 /// Messages that an anonymous user adds (e.g. a "you signed up
 /// successfully" toast before redirect to /login) survive across
 /// requests — the whole point of having anonymous sessions.

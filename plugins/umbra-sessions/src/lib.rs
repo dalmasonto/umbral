@@ -982,14 +982,13 @@ pub async fn session_layer(
 
     let mut response = next.run(req).await;
 
-    // Set-Cookie on the way out for newly-created sessions. We check
-    // both: the original cookie was absent/stale AND no later layer
-    // already replaced it (login() sets its own Set-Cookie via the
-    // response headers, which would have landed on `response` already
-    // — but it ALSO inserts a SessionFresh marker via login_with_layer
-    // when called inside the SessionLayer scope. For now the rule is
-    // simple: if we minted the token, we set the cookie.
-    if fresh {
+    // Set-Cookie on the way out for newly-created sessions. Skip if
+    // the handler already set its own Set-Cookie — `login_with_request`
+    // does exactly that to rotate the token after credential check
+    // (session-fixation defense). Without this guard the middleware
+    // overwrites the authenticated cookie with the anonymous one it
+    // minted at request entry, breaking every cookie-based login.
+    if fresh && !response.headers().contains_key(header::SET_COOKIE) {
         let cookie = set_cookie_header(&token, None);
         if let Ok(value) = cookie.parse() {
             response.headers_mut().insert(header::SET_COOKIE, value);
