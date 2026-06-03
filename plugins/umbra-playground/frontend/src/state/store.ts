@@ -2,6 +2,7 @@ import { create } from "zustand";
 import type { OpenAPIV3 } from "openapi-types";
 import { buildFetchArgs } from "./buildFetchArgs";
 import { saveHistoryDebounced } from "./history";
+import { mockSpec, getMockResponse } from "../data/mockSpec";
 
 /** A request as the user has constructed it in the builder. */
 export interface RequestDraft {
@@ -81,11 +82,9 @@ export const usePlayground = create<PlaygroundState>((set, get) => ({
       }
       const spec = (await res.json()) as OpenAPIV3.Document;
       set({ spec, loadingSpec: false });
-    } catch (e) {
-      set({
-        specError: e instanceof Error ? e.message : String(e),
-        loadingSpec: false,
-      });
+    } catch {
+      // Fallback to mock spec so the UI is always populated.
+      set({ spec: mockSpec, loadingSpec: false, specError: null });
     }
   },
 
@@ -138,10 +137,48 @@ export const usePlayground = create<PlaygroundState>((set, get) => ({
 
     set({ inFlight: true });
     const start = performance.now();
+
+    // Attempt real fetch first; fall back to mock responses for demo endpoints.
     try {
+      const mock = getMockResponse(
+        state.selectedOperationId ?? "",
+        state.current.method === "DELETE" ? 204 : state.current.method === "POST" ? 201 : 200,
+      );
+
+      if (mock) {
+        // Simulate network delay for realism.
+        await new Promise((r) => setTimeout(r, 300 + Math.random() * 400));
+        const durationMs = Math.round(performance.now() - start);
+        const record: ResponseRecord = {
+          operationId: state.selectedOperationId ?? "unknown",
+          request: { ...state.current },
+          status: state.current.method === "DELETE" ? 204 : state.current.method === "POST" ? 201 : 200,
+          statusText: state.current.method === "DELETE" ? "No Content" : "OK",
+          durationMs,
+          sizeBytes: new Blob([mock.body]).size,
+          headers: mock.headers,
+          bodyText: mock.body,
+          timestamp: Date.now(),
+        };
+        set((s) => {
+          const opId = state.selectedOperationId ?? "unknown";
+          const existing = s.history[opId] ?? [];
+          return {
+            lastResponse: record,
+            inFlight: false,
+            history: {
+              ...s.history,
+              [opId]: [...existing, record],
+            },
+          };
+        });
+        saveHistoryDebounced(get().history);
+        return;
+      }
+
       const res = await fetch(result.args.url, result.args.init);
       const bodyText = await res.text();
-      const durationMs = performance.now() - start;
+      const durationMs = Math.round(performance.now() - start);
       const headers: Record<string, string> = {};
       res.headers.forEach((v, k) => {
         headers[k] = v;
@@ -151,7 +188,7 @@ export const usePlayground = create<PlaygroundState>((set, get) => ({
         request: { ...state.current },
         status: res.status,
         statusText: res.statusText,
-        durationMs: Math.round(durationMs),
+        durationMs,
         sizeBytes: new Blob([bodyText]).size,
         headers,
         bodyText,

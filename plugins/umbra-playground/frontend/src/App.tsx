@@ -1,6 +1,6 @@
 import { useEffect } from "react";
-import { usePlayground } from "./state/store";
-import { loadHistory } from "./state/history";
+import { usePlayground } from "@/state/store";
+import { loadHistory } from "@/state/history";
 import {
   Sidebar,
   SidebarContent,
@@ -9,14 +9,19 @@ import {
   SidebarInset,
   SidebarProvider,
   SidebarTrigger,
-} from "./components/ui/sidebar";
-import { Button } from "./components/ui/button";
-import { Separator } from "./components/ui/separator";
-import { TooltipProvider } from "./components/ui/tooltip";
+} from "@/components/ui/sidebar";
+import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { EndpointTree } from "@/components/EndpointTree";
+import { RequestBuilder } from "@/components/RequestBuilder";
+import { ResponseViewer } from "@/components/ResponseViewer";
+import { RotateCcw, Zap } from "lucide-react";
 
 export function App() {
   const spec = usePlayground((s) => s.spec);
   const specError = usePlayground((s) => s.specError);
+  const loadingSpec = usePlayground((s) => s.loadingSpec);
   const loadSpec = usePlayground((s) => s.loadSpec);
 
   useEffect(() => {
@@ -30,56 +35,79 @@ export function App() {
   return (
     <TooltipProvider delayDuration={0}>
       <SidebarProvider>
-        <Sidebar collapsible="offcanvas">
-          <SidebarHeader>
-            <h2 className="px-2 py-1 text-sm font-semibold tracking-wide">
-              umbra playground
-            </h2>
+        <Sidebar collapsible="offcanvas" className="border-r border-border">
+          <SidebarHeader className="px-3 py-2">
+            <div className="flex items-center gap-2">
+              <Zap className="size-4 text-primary" />
+              <div className="flex flex-col">
+                <span className="text-sm font-semibold tracking-tight">
+                  umbra playground
+                </span>
+                <span className="text-[10px] text-muted-foreground">
+                  {spec?.info?.title ?? "API Explorer"}
+                  {spec?.info?.version && (
+                    <>{" "}<span className="text-muted-foreground/60">v{spec.info.version}</span></>
+                  )}
+                </span>
+              </div>
+            </div>
           </SidebarHeader>
           <Separator />
-          <SidebarContent>
-            {/* EndpointTree lands here next iteration */}
-            <div className="p-4 text-xs text-muted-foreground">
-              Endpoint tree placeholder
-            </div>
+          <SidebarContent className="p-0">
+            <EndpointTree />
           </SidebarContent>
           <Separator />
-          <SidebarFooter>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => void loadSpec()}
-              className="w-full justify-start"
-            >
-              Reload spec
-            </Button>
+          <SidebarFooter className="p-2">
+            <div className="flex items-center justify-between px-2 py-1">
+              <span className="text-[10px] text-muted-foreground">
+                {loadingSpec
+                  ? "Loading…"
+                  : specError
+                    ? "Spec error"
+                    : spec
+                      ? `${Object.keys(spec.paths ?? {}).length} paths`
+                      : "No spec"}
+              </span>
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                onClick={() => void loadSpec()}
+                title="Reload spec"
+                className="text-muted-foreground hover:text-foreground"
+              >
+                <RotateCcw className="size-3" />
+              </Button>
+            </div>
           </SidebarFooter>
         </Sidebar>
+
         <SidebarInset>
-          <header className="flex h-14 items-center gap-2 border-b border-border px-4">
+          <header className="flex h-12 items-center gap-3 border-b border-border px-4 bg-card/50">
             <SidebarTrigger />
-            <h1 className="text-sm font-medium">
-              {spec?.info?.title ?? "playground"}
+            <Separator orientation="vertical" className="h-4" />
+            <div className="flex items-baseline gap-2 flex-1">
+              <h1 className="text-sm font-medium">
+                {spec?.info?.title ?? "playground"}
+              </h1>
               {spec?.info?.version && (
-                <span className="ml-2 text-xs text-muted-foreground">
+                <span className="text-xs text-muted-foreground">
                   v{spec.info.version}
                 </span>
               )}
-            </h1>
+            </div>
             {specError && (
-              <span className="ml-4 text-xs text-destructive">
-                spec error: {specError}
+              <span className="text-xs text-destructive font-mono">
+                {specError}
               </span>
             )}
           </header>
-          <div className="grid flex-1 grid-cols-2 gap-0">
-            {/* RequestBuilder placeholder */}
-            <section className="border-r border-border p-4 text-xs text-muted-foreground">
-              Request builder placeholder
+
+          <div className="grid flex-1 grid-cols-2 gap-0 overflow-hidden">
+            <section className="border-r border-border overflow-hidden flex flex-col">
+              <RequestBuilder />
             </section>
-            {/* ResponseViewer placeholder */}
-            <section className="p-4 text-xs text-muted-foreground">
-              Response viewer placeholder
+            <section className="overflow-hidden flex flex-col">
+              <ResponseViewer />
             </section>
           </div>
         </SidebarInset>
