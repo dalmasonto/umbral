@@ -25,6 +25,13 @@ export interface RequestDraft {
   authToken: string;
 }
 
+export interface PlaygroundSettings {
+  baseUrl: string;
+  variables: KVItem[];
+  defaultHeaders: KVItem[];
+  includeCredentials: boolean;
+}
+
 /** A completed request/response pair, persisted in history. */
 export interface ResponseRecord {
   operationId: string;
@@ -39,10 +46,19 @@ export interface ResponseRecord {
   error?: string;
 }
 
-const defaultHeaders: KVItem[] = [
+const SETTINGS_KEY = "umbra-playground-settings:v1";
+
+const factoryDefaultHeaders: KVItem[] = [
   { key: "Content-Type", value: "application/json", enabled: true },
   { key: "Accept", value: "application/json", enabled: true },
 ];
+
+const baseSettings: PlaygroundSettings = {
+  baseUrl: "",
+  variables: [],
+  defaultHeaders: factoryDefaultHeaders.map((h) => ({ ...h })),
+  includeCredentials: true,
+};
 
 const emptyDraft: RequestDraft = {
   method: "GET",
@@ -55,6 +71,70 @@ const emptyDraft: RequestDraft = {
   authScheme: "Bearer",
   authToken: "",
 };
+
+function cloneRows(rows: KVItem[]): KVItem[] {
+  return rows.map((row) => ({ ...row }));
+}
+
+function normalizeRows(rows: unknown): KVItem[] {
+  if (!Array.isArray(rows)) return [];
+  return rows
+    .filter((row): row is Partial<KVItem> => row !== null && typeof row === "object")
+    .map((row) => ({
+      key: typeof row.key === "string" ? row.key : "",
+      value: typeof row.value === "string" ? row.value : "",
+      enabled: row.enabled !== false,
+      type: row.type === "file" ? "file" : "text",
+      fileName: typeof row.fileName === "string" ? row.fileName : undefined,
+    }));
+}
+
+function normalizeSettings(settings: Partial<PlaygroundSettings>): PlaygroundSettings {
+  const defaultHeaders = normalizeRows(settings.defaultHeaders);
+  return {
+    baseUrl: typeof settings.baseUrl === "string" ? settings.baseUrl : "",
+    variables: normalizeRows(settings.variables),
+    defaultHeaders:
+      defaultHeaders.length > 0
+        ? defaultHeaders
+        : cloneRows(factoryDefaultHeaders),
+    includeCredentials: settings.includeCredentials !== false,
+  };
+}
+
+function loadSettings(): PlaygroundSettings {
+  if (typeof window === "undefined") return normalizeSettings(baseSettings);
+  try {
+    const raw = window.localStorage.getItem(SETTINGS_KEY);
+    if (!raw) return normalizeSettings(baseSettings);
+    return normalizeSettings(JSON.parse(raw) as Partial<PlaygroundSettings>);
+  } catch {
+    return normalizeSettings(baseSettings);
+  }
+}
+
+function saveSettings(settings: PlaygroundSettings) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+}
+
+function mergeHeaders(
+  requestHeaders: KVItem[],
+  defaultHeaders: KVItem[],
+): KVItem[] {
+  const merged = cloneRows(defaultHeaders);
+  for (const header of requestHeaders) {
+    const idx = merged.findIndex(
+      (existing) => existing.key.toLowerCase() === header.key.toLowerCase(),
+    );
+    if (idx >= 0) {
+      merged[idx] = { ...header };
+    } else {
+      merged.push({ ...header });
+    }
+  }
+  return merged;
+}
 
 interface PlaygroundState {
   // spec
@@ -88,7 +168,19 @@ interface PlaygroundState {
   // history
   history: Record<string, ResponseRecord[]>;
   clearHistory: (operationId: string) => void;
+
+  // workspace settings
+  settings: PlaygroundSettings;
+  setSettings: (settings: Partial<PlaygroundSettings>) => void;
+  setBaseUrl: (baseUrl: string) => void;
+  setVariables: (variables: KVItem[]) => void;
+  setDefaultHeaders: (headers: KVItem[]) => void;
+  setIncludeCredentials: (enabled: boolean) => void;
+  applyDefaultHeaders: () => void;
+  resetSettings: () => void;
 }
+
+const initialSettings = loadSettings();
 
 export const usePlayground = create<PlaygroundState>((set, get) => ({
   spec: null,
@@ -127,17 +219,7 @@ export const usePlayground = create<PlaygroundState>((set, get) => ({
     set((s) => ({ current: { ...s.current, authToken: token } })),
   resetCurrent: (draft) => {
     const base = { ...emptyDraft, ...draft };
-    // Merge default headers with any user-provided ones, deduping by key.
-    const mergedHeaders = [...defaultHeaders];
-    for (const h of base.headers) {
-      const idx = mergedHeaders.findIndex((d) => d.key === h.key);
-      if (idx >= 0) {
-        mergedHeaders[idx] = { ...h };
-      } else {
-        mergedHeaders.push({ ...h });
-      }
-    }
-    base.headers = mergedHeaders;
+    base.headers = mergeHeaders(base.headers, get().settings.defaultHeaders);
     set({ current: base });
   },
 
@@ -145,7 +227,11 @@ export const usePlayground = create<PlaygroundState>((set, get) => ({
   inFlight: false,
   send: async () => {
     const state = get();
-    const result = buildFetchArgs(state.current);
+    const result = buildFetchArgs(state.current, {
+      baseUrl: state.settings.baseUrl,
+      variables: state.settings.variables,
+      includeCredentials: state.settings.includeCredentials,
+    });
     if (!result.ok) {
       const message =
         result.error.kind === "missing_path_param"
@@ -273,4 +359,30 @@ export const usePlayground = create<PlaygroundState>((set, get) => ({
       const { [operationId]: _op, ...rest } = s.history;
       return { history: rest };
     }),
+
+  settings: initialSettings,
+  setSettings: (patch) =>
+    set((s) => {
+      const settings = normalizeSettings({ ...s.settings, ...patch });
+      saveSettings(settings);
+      return { settings };
+    }),
+  setBaseUrl: (baseUrl) => get().setSettings({ baseUrl }),
+  setVariables: (variables) => get().setSettings({ variables: cloneRows(variables) }),
+  setDefaultHeaders: (headers) =>
+    get().setSettings({ defaultHeaders: cloneRows(headers) }),
+  setIncludeCredentials: (enabled) =>
+    get().setSettings({ includeCredentials: enabled }),
+  applyDefaultHeaders: () =>
+    set((s) => ({
+      current: {
+        ...s.current,
+        headers: mergeHeaders(s.current.headers, s.settings.defaultHeaders),
+      },
+    })),
+  resetSettings: () => {
+    const settings = normalizeSettings(baseSettings);
+    saveSettings(settings);
+    set({ settings });
+  },
 }));

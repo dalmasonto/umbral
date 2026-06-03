@@ -162,4 +162,81 @@ describe("buildFetchArgs", () => {
       expect(headers["X-Off"]).toBeUndefined();
     }
   });
+
+  it("interpolates enabled variables in URL params, headers, auth, and JSON body", () => {
+    const result = buildFetchArgs(
+      draft({
+        method: "POST",
+        url: "/api/{{version}}/articles/{id}/",
+        params: [
+          { key: "id", value: "{{articleId}}", enabled: true },
+          { key: "tenant", value: "{{tenant}}", enabled: true },
+        ],
+        headers: [{ key: "X-Tenant", value: "{{tenant}}", enabled: true }],
+        authToken: "{{token}}",
+        body: '{"title":"{{title}}"}',
+      }),
+      {
+        variables: [
+          { key: "version", value: "v1", enabled: true },
+          { key: "articleId", value: "42", enabled: true },
+          { key: "tenant", value: "acme", enabled: true },
+          { key: "token", value: "abc123", enabled: true },
+          { key: "title", value: "Launch", enabled: true },
+        ],
+      },
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const headers = result.args.init.headers as Record<string, string>;
+      expect(result.args.url).toBe("/api/v1/articles/42/?tenant=acme");
+      expect(headers["X-Tenant"]).toBe("acme");
+      expect(headers["Authorization"]).toBe("Bearer abc123");
+      expect(result.args.init.body).toBe('{"title":"Launch"}');
+    }
+  });
+
+  it("leaves disabled or missing variables unchanged", () => {
+    const result = buildFetchArgs(
+      draft({
+        url: "/api/{{disabled}}/{{missing}}/",
+      }),
+      {
+        variables: [{ key: "disabled", value: "v1", enabled: false }],
+      },
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.args.url).toBe("/api/{{disabled}}/{{missing}}/");
+    }
+  });
+
+  it("prefixes relative URLs with a configured base URL", () => {
+    const result = buildFetchArgs(draft(), {
+      baseUrl: "https://api.example.test/",
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.args.url).toBe("https://api.example.test/api/articles/");
+    }
+  });
+
+  it("does not prefix absolute URLs with the base URL", () => {
+    const result = buildFetchArgs(
+      draft({ url: "https://other.example.test/articles/" }),
+      { baseUrl: "https://api.example.test" },
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.args.url).toBe("https://other.example.test/articles/");
+    }
+  });
+
+  it("can include credentials for cookie-backed APIs", () => {
+    const result = buildFetchArgs(draft(), { includeCredentials: true });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.args.init.credentials).toBe("include");
+    }
+  });
 });

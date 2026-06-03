@@ -1,4 +1,4 @@
-import type { RequestDraft } from "./store";
+import type { KVItem, RequestDraft } from "./store";
 import { getFile } from "./fileRegistry";
 
 export interface FetchArgs {
@@ -6,25 +6,56 @@ export interface FetchArgs {
   init: RequestInit;
 }
 
+export interface BuildFetchOptions {
+  baseUrl?: string;
+  variables?: KVItem[];
+  includeCredentials?: boolean;
+}
+
 export type BuildError =
   | { kind: "missing_path_param"; name: string }
   | { kind: "invalid_json_body"; message: string };
 
-export function buildFetchArgs(draft: RequestDraft): {
+const PATH_TEMPLATE_RE = /(?<!\{)\{([a-zA-Z_][a-zA-Z0-9_]*)\}(?!\})/g;
+
+function variableMap(variables: KVItem[] = []): Record<string, string> {
+  const map: Record<string, string> = {};
+  for (const variable of variables) {
+    if (!variable.enabled || !variable.key) continue;
+    map[variable.key] = variable.value;
+  }
+  return map;
+}
+
+function interpolate(value: string, variables: Record<string, string>): string {
+  return value.replace(/\{\{\s*([^{}\s]+)\s*\}\}/g, (match, key: string) =>
+    Object.prototype.hasOwnProperty.call(variables, key)
+      ? variables[key]
+      : match,
+  );
+}
+
+function joinBaseUrl(url: string, baseUrl?: string): string {
+  const base = baseUrl?.trim();
+  if (!base || /^[a-z][a-z\d+.-]*:/i.test(url)) return url;
+  return `${base.replace(/\/+$/, "")}/${url.replace(/^\/+/, "")}`;
+}
+
+export function buildFetchArgs(draft: RequestDraft, options: BuildFetchOptions = {}): {
   ok: true;
   args: FetchArgs;
 } | {
   ok: false;
   error: BuildError;
 } {
+  const variables = variableMap(options.variables);
+
   // 1. Resolve path template params.
-  let url = draft.url;
-  const templateNames = [...url.matchAll(/\{([a-zA-Z_][a-zA-Z0-9_]*)\}/g)].map(
-    (m) => m[1],
-  );
+  let url = interpolate(draft.url, variables).split("?")[0]; // strip any existing query string
+  const templateNames = [...url.matchAll(PATH_TEMPLATE_RE)].map((m) => m[1]);
   for (const name of templateNames) {
     const item = draft.params.find((p) => p.key === name && p.enabled);
-    const value = item?.value ?? "";
+    const value = interpolate(item?.value ?? "", variables);
     if (!value) {
       return { ok: false, error: { kind: "missing_path_param", name } };
     }
@@ -39,21 +70,27 @@ export function buildFetchArgs(draft: RequestDraft): {
     const qs = queryEntries
       .map(
         ({ key, value }) =>
-          `${encodeURIComponent(key)}=${encodeURIComponent(value)}`,
+          `${encodeURIComponent(key)}=${encodeURIComponent(
+            interpolate(value, variables),
+          )}`,
       )
       .join("&");
-    url += url.includes("?") ? `&${qs}` : `?${qs}`;
+    url += `?${qs}`;
   }
+  url = joinBaseUrl(url, interpolate(options.baseUrl ?? "", variables));
 
   // 3. Headers.
   const headers: Record<string, string> = {};
   for (const h of draft.headers) {
-    if (h.enabled && h.key) headers[h.key] = h.value;
+    if (h.enabled && h.key) headers[h.key] = interpolate(h.value, variables);
   }
 
   // 4. Auth.
   if (draft.authToken) {
-    headers["Authorization"] = `${draft.authScheme} ${draft.authToken}`;
+    headers["Authorization"] = `${interpolate(
+      draft.authScheme,
+      variables,
+    )} ${interpolate(draft.authToken, variables)}`;
   }
 
   // 5. Body.
@@ -62,12 +99,13 @@ export function buildFetchArgs(draft: RequestDraft): {
   if (method !== "GET" && method !== "HEAD") {
     if (draft.bodyType === "json") {
       if (draft.body) {
+        const resolvedBody = interpolate(draft.body, variables);
         if (
           !headers["Content-Type"] ||
           headers["Content-Type"].includes("application/json")
         ) {
           try {
-            JSON.parse(draft.body);
+            JSON.parse(resolvedBody);
           } catch (e) {
             return {
               ok: false,
@@ -81,7 +119,7 @@ export function buildFetchArgs(draft: RequestDraft): {
             headers["Content-Type"] = "application/json";
           }
         }
-        body = draft.body;
+        body = resolvedBody;
       }
     } else if (draft.bodyType === "form") {
       const entries = draft.formFields.filter((f) => f.enabled && f.key);
@@ -96,7 +134,7 @@ export function buildFetchArgs(draft: RequestDraft): {
               formData.append(f.key, file);
             }
           } else {
-            formData.append(f.key, f.value);
+            formData.append(f.key, interpolate(f.value, variables));
           }
         }
         body = formData;
@@ -106,7 +144,9 @@ export function buildFetchArgs(draft: RequestDraft): {
         const qs = entries
           .map(
             ({ key, value }) =>
-              `${encodeURIComponent(key)}=${encodeURIComponent(value)}`,
+              `${encodeURIComponent(key)}=${encodeURIComponent(
+                interpolate(value, variables),
+              )}`,
           )
           .join("&");
         body = qs;
@@ -115,11 +155,16 @@ export function buildFetchArgs(draft: RequestDraft): {
     }
   }
 
+  const init: RequestInit = { method, headers, body };
+  if (options.includeCredentials) {
+    init.credentials = "include";
+  }
+
   return {
     ok: true,
     args: {
       url,
-      init: { method, headers, body },
+      init,
     },
   };
 }

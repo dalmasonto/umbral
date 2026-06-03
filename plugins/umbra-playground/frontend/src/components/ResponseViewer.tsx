@@ -2,7 +2,16 @@ import { useState, useMemo, useEffect } from "react";
 import { usePlayground } from "@/state/store";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import Editor from "@monaco-editor/react";
 import {
   Clock,
@@ -12,6 +21,9 @@ import {
   Terminal,
   Eye,
   Package,
+  Copy,
+  Check,
+  Search,
 } from "lucide-react";
 
 import type { ResponseRecord } from "@/state/store";
@@ -82,6 +94,105 @@ function useIsDark() {
   return dark;
 }
 
+function HeadersTable({ headers }: { headers: Record<string, string> }) {
+  const [filter, setFilter] = useState("");
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
+  const entries = useMemo(() => {
+    const sorted = Object.entries(headers).sort(([a], [b]) =>
+      a.toLowerCase().localeCompare(b.toLowerCase()),
+    );
+    const q = filter.trim().toLowerCase();
+    if (!q) return sorted;
+    return sorted.filter(
+      ([k, v]) =>
+        k.toLowerCase().includes(q) || v.toLowerCase().includes(q),
+    );
+  }, [headers, filter]);
+
+  const total = Object.keys(headers).length;
+
+  if (total === 0) {
+    return (
+      <p className="text-xs text-muted-foreground italic">
+        No headers received.
+      </p>
+    );
+  }
+
+  const copyValue = (key: string, value: string) => {
+    void navigator.clipboard.writeText(value);
+    setCopiedKey(key);
+    setTimeout(() => setCopiedKey((k) => (k === key ? null : k)), 1200);
+  };
+
+  return (
+    <div className="space-y-2.5">
+      {total > 5 && (
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder={`Filter ${total} headers`}
+            className="h-8 pl-7 font-mono text-xs"
+          />
+        </div>
+      )}
+      <div className="overflow-hidden rounded-md border border-border">
+        <Table>
+          <TableHeader className="bg-muted/40">
+            <TableRow className="hover:bg-muted/40">
+              <TableHead className="w-[14rem]">Header</TableHead>
+              <TableHead>Value</TableHead>
+              <TableHead className="w-10" />
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {entries.length === 0 ? (
+              <TableRow className="hover:bg-transparent">
+                <TableCell
+                  colSpan={3}
+                  className="text-center text-xs italic text-muted-foreground"
+                >
+                  No headers match "{filter}".
+                </TableCell>
+              </TableRow>
+            ) : (
+              entries.map(([key, value]) => (
+                <TableRow key={key} className="group">
+                  <TableCell className="font-mono text-xs font-medium text-foreground">
+                    {key}
+                  </TableCell>
+                  <TableCell className="break-all font-mono text-xs text-muted-foreground">
+                    {value}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-xs"
+                      onClick={() => copyValue(key, value)}
+                      title="Copy value"
+                      className="opacity-0 transition-opacity group-hover:opacity-100 text-muted-foreground hover:text-foreground"
+                    >
+                      {copiedKey === key ? (
+                        <Check className="size-3.5 text-emerald-600" />
+                      ) : (
+                        <Copy className="size-3.5" />
+                      )}
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </Table>
+      </div>
+    </div>
+  );
+}
+
 function ReadonlyMonaco({
   value,
   language,
@@ -132,7 +243,7 @@ export function ResponseViewer() {
     } catch {
       return null;
     }
-  }, [lastResponse?.bodyText]);
+  }, [lastResponse]);
 
   if (inFlight) {
     return (
@@ -235,28 +346,7 @@ export function ResponseViewer() {
         )}
 
         {activeTab === "headers" && (
-          <div className="space-y-1">
-            {Object.entries(headers)
-              .sort(([a], [b]) => a.localeCompare(b))
-              .map(([key, value]) => (
-                <div
-                  key={key}
-                  className="flex items-start gap-2 text-xs py-0.5"
-                >
-                  <span className="font-mono text-foreground font-medium min-w-[10rem]">
-                    {key}
-                  </span>
-                  <span className="font-mono text-muted-foreground break-all">
-                    {value}
-                  </span>
-                </div>
-              ))}
-            {Object.keys(headers).length === 0 && (
-              <p className="text-xs text-muted-foreground italic">
-                No headers received.
-              </p>
-            )}
-          </div>
+          <HeadersTable headers={headers} />
         )}
 
         {activeTab === "history" && (
@@ -293,15 +383,6 @@ export function ResponseViewer() {
                     <span className="text-[10px] text-muted-foreground ml-auto">
                       {new Date(record.timestamp).toLocaleTimeString()}
                     </span>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon-sm"
-                      className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive"
-                      onClick={() => selected && clearHistory(selected)}
-                    >
-                      <Trash2 className="size-3.5" />
-                    </Button>
                   </div>
                 );
               })}

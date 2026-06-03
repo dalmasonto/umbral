@@ -8,11 +8,32 @@ import { Separator } from "@/components/ui/separator";
 import { Checkbox } from "@/components/ui/checkbox";
 import { KeyValueEditor } from "./KeyValueEditor";
 import { MethodBadge } from "./MethodBadge";
-import { Send, Lock, AlignLeft, Code2, Braces, FormInput } from "lucide-react";
+import { SchemaTable } from "./SchemaTable";
+import {
+  fieldInfosFromSchema,
+  listItemSchema,
+  requestBodySchema,
+  responseSchemaEntries,
+  type FieldInfo,
+} from "@/lib/openapiSchema";
+import {
+  Send,
+  Lock,
+  AlignLeft,
+  Code2,
+  Braces,
+  FormInput,
+  Filter as FilterIcon,
+  Plus,
+  FileJson,
+  FileOutput,
+} from "lucide-react";
 import Editor from "@monaco-editor/react";
 
 function extractPathParams(url: string): string[] {
-  return [...url.matchAll(/\{([a-zA-Z_][a-zA-Z0-9_]*)\}/g)].map((m) => m[1]);
+  return [...url.matchAll(/(?<!\{)\{([a-zA-Z_][a-zA-Z0-9_]*)\}(?!\})/g)].map(
+    (m) => m[1],
+  );
 }
 
 function findPathParamValue(
@@ -22,16 +43,20 @@ function findPathParamValue(
   return params.find((p) => p.key === name && p.enabled)?.value ?? "";
 }
 
-/** Build the display URL from base path + query params. */
+/** Build the display URL from stored URL + params. Preserves trailing ?. */
 function buildDisplayUrl(
-  baseUrl: string,
+  url: string,
   params: Array<{ key: string; value: string; enabled: boolean }>,
 ): string {
-  const base = baseUrl.split("?")[0];
+  const base = url.split("?")[0];
   const queryEntries = params.filter(
     (p) => p.enabled && p.key && !base.includes(`{${p.key}}`),
   );
-  if (queryEntries.length === 0) return base;
+  if (queryEntries.length === 0) {
+    // Preserve trailing ? if user explicitly typed it with no params.
+    if (url.endsWith("?")) return `${base}?`;
+    return base;
+  }
   const qs = queryEntries
     .map(
       ({ key, value }) =>
@@ -45,8 +70,10 @@ function buildDisplayUrl(
 function parseUrlInput(
   input: string,
 ): { baseUrl: string; queryEntries: Array<{ key: string; value: string }> } {
-  const [basePart, queryString] = input.split("?");
-  const baseUrl = basePart || "";
+  const qIdx = input.indexOf("?");
+  if (qIdx === -1) return { baseUrl: input, queryEntries: [] };
+  const baseUrl = input.slice(0, qIdx);
+  const queryString = input.slice(qIdx + 1);
   if (!queryString) return { baseUrl, queryEntries: [] };
   try {
     const sp = new URLSearchParams(queryString);
@@ -60,14 +87,60 @@ function parseUrlInput(
   }
 }
 
-type TabId = "params" | "body" | "headers" | "auth";
+function findOperation(
+  spec: OpenAPIV3.Document | null,
+  selected: string | null,
+): { method: string; path: string; operation: OpenAPIV3.OperationObject } | null {
+  if (!spec || !selected) return null;
+  for (const [path, pathItem] of Object.entries(spec.paths ?? {})) {
+    if (!pathItem) continue;
+    const methods: Array<[string, OpenAPIV3.OperationObject | undefined]> = [
+      ["GET", pathItem.get],
+      ["POST", pathItem.post],
+      ["PUT", pathItem.put],
+      ["PATCH", pathItem.patch],
+      ["DELETE", pathItem.delete],
+    ];
+    for (const [method, operation] of methods) {
+      if (!operation) continue;
+      const id = operation.operationId ?? `${method} ${path}`;
+      if (id === selected) {
+        return { method, path, operation };
+      }
+    }
+  }
+  return null;
+}
+
+type TabId = "params" | "body" | "headers" | "auth" | "schema";
 
 const TABS: { id: TabId; label: string }[] = [
   { id: "params", label: "Params" },
   { id: "body", label: "Body" },
   { id: "headers", label: "Headers" },
   { id: "auth", label: "Auth" },
+  { id: "schema", label: "Schema" },
 ];
+
+/** Lookup suffixes the umbra-rest list view recognises. Mirrors the
+ *  __eq/__contains/etc grammar Django-filter exposes, scoped per
+ *  scalar type to keep the chip palette short. */
+const LOOKUPS_BY_TYPE: Record<string, string[]> = {
+  string: ["", "__contains", "__icontains", "__startswith", "__in"],
+  integer: ["", "__gte", "__lte", "__gt", "__lt", "__in"],
+  number: ["", "__gte", "__lte", "__gt", "__lt", "__in"],
+  boolean: [""],
+  // Choice/enum fields get __in for set-membership, no substring lookups.
+  enum: ["", "__in"],
+};
+
+function lookupsFor(f: FieldInfo): string[] {
+  if (f.enumValues && f.enumValues.length > 0) return LOOKUPS_BY_TYPE.enum;
+  if (f.type === "string" && (f.format === "date" || f.format === "date-time")) {
+    return ["", "__gte", "__lte", "__gt", "__lt"];
+  }
+  return LOOKUPS_BY_TYPE[f.type] ?? [""];
+}
 
 function useIsDark() {
   const [dark, setDark] = useState(() =>
@@ -101,34 +174,15 @@ export function RequestBuilder() {
   const [activeTab, setActiveTab] = useState<TabId>("params");
   const isDark = useIsDark();
 
-  const op = useMemo(() => {
-    if (!spec || !selected) return null;
-    for (const [path, pathItem] of Object.entries(spec.paths ?? {})) {
-      if (!pathItem) continue;
-      const methods: Array<[string, OpenAPIV3.OperationObject | undefined]> = [
-        ["GET", pathItem.get],
-        ["POST", pathItem.post],
-        ["PUT", pathItem.put],
-        ["PATCH", pathItem.patch],
-        ["DELETE", pathItem.delete],
-      ];
-      for (const [method, operation] of methods) {
-        if (!operation) continue;
-        const id = operation.operationId ?? `${method} ${path}`;
-        if (id === selected) {
-          return { method, path, operation };
-        }
-      }
-    }
-    return null;
-  }, [spec, selected]);
+  const op = findOperation(spec, selected);
+  const opMethod = op?.method;
+  const opPath = op?.path;
 
   useEffect(() => {
-    if (op) {
-      resetCurrent({ method: op.method, url: op.path });
-      setActiveTab("params");
+    if (opMethod && opPath) {
+      resetCurrent({ method: opMethod, url: opPath });
     }
-  }, [op?.method, op?.path, resetCurrent]);
+  }, [opMethod, opPath, resetCurrent]);
 
   const pathParams = useMemo(() => extractPathParams(current.url), [current.url]);
 
@@ -137,9 +191,52 @@ export function RequestBuilder() {
     [current.url, current.params],
   );
 
+  // Introspected schema info — drives the Schema tab and the filter
+  // chip affordance in the Params tab.
+  const requestBody = useMemo(
+    () => requestBodySchema(op?.operation, spec),
+    [op?.operation, spec],
+  );
+  const requestBodyFields = useMemo(
+    () => fieldInfosFromSchema(requestBody?.schema ?? null, spec),
+    [requestBody?.schema, spec],
+  );
+  const responses = useMemo(
+    () => responseSchemaEntries(op?.operation, spec),
+    [op?.operation, spec],
+  );
+  const listItem = useMemo(
+    () => listItemSchema(op?.operation, spec),
+    [op?.operation, spec],
+  );
+  const filterableFields = useMemo<FieldInfo[]>(() => {
+    if (current.method !== "GET" || !listItem) return [];
+    return fieldInfosFromSchema(listItem.schema, spec);
+  }, [current.method, listItem, spec]);
+
+  const addFilterParam = (key: string) => {
+    const existing = current.params.find((p) => p.key === key);
+    if (existing) {
+      // Already present — just enable it and focus by re-emitting.
+      if (!existing.enabled) {
+        setParams(
+          current.params.map((p) =>
+            p.key === key ? { ...p, enabled: true } : p,
+          ),
+        );
+      }
+      return;
+    }
+    setParams([
+      ...current.params,
+      { key, value: "", enabled: true },
+    ]);
+  };
+
   const handleUrlChange = (input: string) => {
-    const { baseUrl, queryEntries } = parseUrlInput(input);
-    setUrl(baseUrl);
+    const { queryEntries } = parseUrlInput(input);
+    // Store the full input so trailing ? is preserved while typing.
+    setUrl(input);
 
     if (queryEntries.length > 0) {
       // Merge query entries into current params.
@@ -256,7 +353,88 @@ export function RequestBuilder() {
       {/* Tab Content */}
       <div className="flex-1 overflow-y-auto p-3">
         {activeTab === "params" && (
-          <div className="space-y-3">
+          <div className="space-y-4">
+            {filterableFields.length > 0 && (
+              <div className="space-y-2 rounded-lg border border-border bg-muted/20 p-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <FilterIcon className="size-3.5 text-primary" />
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                      Suggested filters
+                    </p>
+                  </div>
+                  {listItem?.name && (
+                    <Badge
+                      variant="outline"
+                      className="h-4 rounded px-1 font-mono text-[9px]"
+                    >
+                      {listItem.name}
+                    </Badge>
+                  )}
+                </div>
+                <p className="text-[10px] leading-relaxed text-muted-foreground">
+                  Click a chip to add the filter as a query parameter. Lookup
+                  suffixes follow the <code className="font-mono">__lookup</code>
+                  {" "}grammar (eq, contains, gte, in, …).
+                </p>
+                <div className="space-y-2">
+                  {filterableFields
+                    .filter((f) => !f.fkTarget || f.type === "integer")
+                    .map((f) => {
+                      const lookups = lookupsFor(f);
+                      return (
+                        <div
+                          key={f.name}
+                          className="flex flex-wrap items-center gap-1.5 border-t border-border/60 pt-2 first:border-t-0 first:pt-0"
+                        >
+                          <span className="mr-1 font-mono text-[11px] font-medium text-foreground">
+                            {f.name}
+                          </span>
+                          {f.enumValues && (
+                            <Badge
+                              variant="secondary"
+                              className="h-4 rounded px-1 font-mono text-[9px]"
+                              title={f.enumValues.join(" | ")}
+                            >
+                              choice
+                            </Badge>
+                          )}
+                          {f.fkTarget && (
+                            <Badge
+                              variant="secondary"
+                              className="h-4 rounded px-1 font-mono text-[9px]"
+                            >
+                              FK → {f.fkTarget}
+                            </Badge>
+                          )}
+                          {lookups.map((suffix) => {
+                            const key = `${f.name}${suffix}`;
+                            const active = current.params.some(
+                              (p) => p.key === key && p.enabled,
+                            );
+                            return (
+                              <button
+                                key={key}
+                                type="button"
+                                onClick={() => addFilterParam(key)}
+                                className={`flex items-center gap-1 rounded-md border px-1.5 py-0.5 font-mono text-[10px] transition-colors ${
+                                  active
+                                    ? "border-primary/40 bg-primary/10 text-primary"
+                                    : "border-border bg-background text-muted-foreground hover:text-foreground hover:border-primary/30"
+                                }`}
+                              >
+                                <Plus className="size-2.5" />
+                                {suffix === "" ? "= eq" : suffix.slice(2)}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      );
+                    })}
+                </div>
+              </div>
+            )}
+
             <div className="space-y-2">
               <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold">
                 Parameters
@@ -616,6 +794,125 @@ export function RequestBuilder() {
                 The playground shares cookies with the rest of the application.
               </p>
             </div>
+          </div>
+        )}
+
+        {activeTab === "schema" && (
+          <div className="space-y-5">
+            <section className="space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5">
+                  <FileJson className="size-3.5 text-primary" />
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    Request body
+                  </p>
+                </div>
+                {requestBody?.name && (
+                  <Badge
+                    variant="outline"
+                    className="h-5 rounded px-1.5 font-mono text-[10px]"
+                  >
+                    {requestBody.name}
+                  </Badge>
+                )}
+              </div>
+              {requestBody ? (
+                <>
+                  <p className="text-[10px] text-muted-foreground">
+                    {requestBody.contentType ?? "application/json"}
+                    {requestBody.required ? " · required" : " · optional"}
+                  </p>
+                  <SchemaTable
+                    fields={requestBodyFields}
+                    emptyLabel="Request body has no declared properties."
+                  />
+                </>
+              ) : (
+                <p className="px-2 py-3 text-xs italic text-muted-foreground">
+                  This operation does not declare a request body.
+                </p>
+              )}
+            </section>
+
+            <section className="space-y-2">
+              <div className="flex items-center gap-1.5">
+                <FileOutput className="size-3.5 text-primary" />
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Responses
+                </p>
+              </div>
+              {responses.length === 0 ? (
+                <p className="px-2 py-3 text-xs italic text-muted-foreground">
+                  No responses declared.
+                </p>
+              ) : (
+                <div className="space-y-3">
+                  {responses.map((entry, idx) => {
+                    const fields = fieldInfosFromSchema(
+                      entry.resolved,
+                      spec,
+                    );
+                    const isError =
+                      entry.status.startsWith("4") || entry.status.startsWith("5");
+                    return (
+                      <div
+                        key={`${entry.status}-${entry.contentType ?? idx}`}
+                        className="space-y-1.5 rounded-md border border-border bg-background p-2.5"
+                      >
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Badge
+                            variant="outline"
+                            className={`h-5 rounded px-1.5 font-mono text-[10px] font-bold ${
+                              isError
+                                ? "border-rose-500/30 text-rose-600"
+                                : entry.status === "204"
+                                  ? "border-muted-foreground/30 text-muted-foreground"
+                                  : "border-emerald-500/30 text-emerald-600"
+                            }`}
+                          >
+                            {entry.status}
+                          </Badge>
+                          {entry.description && (
+                            <span className="text-[11px] text-foreground">
+                              {entry.description}
+                            </span>
+                          )}
+                          {entry.contentType && (
+                            <Badge
+                              variant="outline"
+                              className="h-4 rounded px-1 font-mono text-[9px]"
+                            >
+                              {entry.contentType}
+                            </Badge>
+                          )}
+                          {entry.resolvedName && (
+                            <Badge
+                              variant="outline"
+                              className="h-4 rounded px-1 font-mono text-[9px]"
+                            >
+                              {entry.resolvedName}
+                            </Badge>
+                          )}
+                        </div>
+                        {entry.resolved && fields.length > 0 && (
+                          <SchemaTable
+                            fields={fields}
+                            emptyLabel="Body has no declared properties."
+                          />
+                        )}
+                        {entry.resolved &&
+                          fields.length === 0 &&
+                          entry.resolved.type === "object" && (
+                            <p className="text-[10px] italic text-muted-foreground">
+                              Object with no declared properties.
+                            </p>
+                          )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
           </div>
         )}
       </div>
