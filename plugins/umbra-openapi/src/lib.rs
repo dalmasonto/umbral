@@ -206,19 +206,22 @@ fn build_spec(cfg: &OpenApiPlugin) -> Value {
             }
             let schema_name = pascal_case(&model.name);
             schemas.insert(schema_name.clone(), model_schema(&model));
-            // When the resource has `.enable_filters()`, advertise
-            // every filterable column × lookup as a separate query
-            // parameter on the GET list operation. The playground (and
-            // any spec consumer) can then drive a real filter UI off
-            // the spec instead of guessing.
-            let filter_params = if umbra_rest::filters_enabled_for(&model.table) {
-                filter_parameters(&model)
-            } else {
-                Vec::new()
-            };
+            // Advertise every filterable column × lookup AND the
+            // `?search=` free-text parameter (when enabled) as
+            // discoverable query parameters on the GET list
+            // operation. The playground (and any spec consumer) can
+            // then drive a real filter UI off the spec instead of
+            // guessing.
+            let mut list_params = Vec::new();
+            if umbra_rest::search_enabled_for(&model.table) {
+                list_params.push(search_parameter());
+            }
+            if umbra_rest::filters_enabled_for(&model.table) {
+                list_params.extend(filter_parameters(&model));
+            }
             paths.insert(
                 format!("/api/{}/", model.table),
-                collection_paths(&model.table, &schema_name, &filter_params),
+                collection_paths(&model.table, &schema_name, &list_params),
             );
             paths.insert(
                 format!("/api/{}/{{id}}", model.table),
@@ -375,6 +378,31 @@ fn openapi_type(ty: SqlType) -> (&'static str, Option<&'static str>) {
         // boundary themselves.
         SqlType::Bytes => ("array", Some("byte")),
     }
+}
+
+/// Build the OpenAPI `?search=` parameter object. One slot shared
+/// across every searchable column on the resource — the REST list
+/// handler ORs `icontains` predicates on Text columns and `eq`
+/// predicates on numeric / FK / Boolean columns whose type matches
+/// the parsed term shape.
+///
+/// Vendor extension `x-umbra-search: true` flags this parameter for
+/// aware clients (the playground in particular surfaces it as a
+/// dedicated search box rather than treating it as a generic filter
+/// chip).
+fn search_parameter() -> Value {
+    json!({
+        "name": "search",
+        "in": "query",
+        "required": false,
+        "description": "Free-text search across every searchable column. \
+                        Text columns match via case-insensitive substring; \
+                        numeric / FK / Boolean columns match exactly when \
+                        the term parses as that type. Multiple matches are \
+                        ORed.",
+        "schema": { "type": "string" },
+        "x-umbra-search": true,
+    })
 }
 
 /// Build the OpenAPI `parameters` entries that document the

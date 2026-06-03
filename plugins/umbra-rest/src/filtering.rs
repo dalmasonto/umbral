@@ -45,16 +45,16 @@
 //! let rows = qs.fetch_as_json().await?;
 //! ```
 
-use sea_query::{Alias, Condition, Expr, SimpleExpr};
+use sea_query::{Alias, Condition, Expr, Func, SimpleExpr};
 use umbra::migrate::Column;
 use umbra::orm::SqlType;
 
 use crate::ApiError;
 
-/// Pagination params we skip when scanning for filter keys. These are
-/// consumed by the pagination layer and must not be treated as field
-/// names.
-const PAGINATION_KEYS: &[&str] = &["page", "page_size", "limit", "offset"];
+/// Query-string keys consumed elsewhere (pagination layer + the
+/// free-text search handler), skipped when scanning for filter keys
+/// so the parser doesn't reject them as "unknown field".
+const RESERVED_KEYS: &[&str] = &["page", "page_size", "limit", "offset", "search"];
 
 /// A parsed filter ready to splice into a DynQuerySet.
 ///
@@ -84,6 +84,18 @@ impl FilterClause {
     /// condition by value to hand into `DynQuerySet::filter_condition`.
     pub(crate) fn condition_clone(&self) -> Option<Condition> {
         self.condition.clone()
+    }
+
+    /// AND-merge an additional condition into this clause. Used by the
+    /// list handler to splice the `?search=` predicate alongside the
+    /// parsed `?field=` / `?field__lookup=` filter set without losing
+    /// either layer.
+    pub(crate) fn and(mut self, extra: Condition) -> Self {
+        self.condition = Some(match self.condition.take() {
+            Some(c) => c.add(extra),
+            None => Condition::all().add(extra),
+        });
+        self
     }
 }
 
@@ -121,7 +133,7 @@ pub(crate) fn parse_filters(
     let mut any = false;
 
     for key in keys {
-        if PAGINATION_KEYS.contains(&key) {
+        if RESERVED_KEYS.contains(&key) {
             continue;
         }
         let value = params[key].as_str();
@@ -161,6 +173,87 @@ pub(crate) fn parse_filters(
     Ok(FilterClause {
         condition: if any { Some(cond) } else { None },
     })
+}
+
+/// Build the OR-condition for a `?search=<term>` query string against
+/// every searchable column. Returns `None` when:
+/// - `term` is empty;
+/// - no columns are searchable (e.g. all integer with a non-numeric
+///   term, or all blocked types);
+/// - `restrict_to` is `Some` but no column in the model matches.
+///
+/// The shape per column type:
+///
+/// | type | predicate when term applies |
+/// |---|---|
+/// | `Text` | `UPPER(col) LIKE UPPER('%term%')` (icontains) |
+/// | `SmallInt` / `Integer` / `BigInt` / `ForeignKey` | `col = term` when `term.parse::<i64>().is_ok()` |
+/// | `Real` / `Double` | `col = term` when `term.parse::<f64>().is_ok()` |
+/// | `Boolean` | `col = term` when `term` is `true` / `false` |
+///
+/// All other types (Date, Time, Uuid, Json, Bytes, Array, …) skip —
+/// parsing them from a free-text term is ambiguous and rarely what
+/// the user wants. Add explicit filter parameters for those.
+///
+/// When `restrict_to` is supplied, only columns whose name appears in
+/// the slice participate. Use this to honour
+/// `ResourceConfig::search_fields(...)` opt-in lists.
+pub(crate) fn parse_search(
+    term: &str,
+    columns: &[Column],
+    restrict_to: Option<&[String]>,
+) -> Option<Condition> {
+    let term = term.trim();
+    if term.is_empty() {
+        return None;
+    }
+
+    let as_int = term.parse::<i64>().ok();
+    let as_float = term.parse::<f64>().ok();
+    let as_bool = match term.to_ascii_lowercase().as_str() {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
+    };
+
+    let mut or = Condition::any();
+    let mut any = false;
+
+    for col in columns {
+        if let Some(allow) = restrict_to {
+            if !allow.iter().any(|n| n == &col.name) {
+                continue;
+            }
+        }
+
+        let predicate: Option<SimpleExpr> = match col.ty {
+            SqlType::Text => {
+                let pattern = format!("%{term}%").to_uppercase();
+                Some(
+                    Expr::expr(Func::upper(Expr::col(Alias::new(&col.name))))
+                        .like(pattern),
+                )
+            }
+            SqlType::SmallInt | SqlType::Integer | SqlType::BigInt | SqlType::ForeignKey => {
+                as_int.map(|n| Expr::col(Alias::new(&col.name)).eq(n))
+            }
+            SqlType::Real | SqlType::Double => {
+                as_float.map(|n| Expr::col(Alias::new(&col.name)).eq(n))
+            }
+            SqlType::Boolean => as_bool.map(|b| Expr::col(Alias::new(&col.name)).eq(b)),
+            // Date / Time / Timestamptz / Uuid / Json / Bytes / Array /
+            // network types / FullText: free-text matching is ambiguous;
+            // callers can hit those with the typed `?col__eq=` filter.
+            _ => None,
+        };
+
+        if let Some(p) = predicate {
+            or = or.add(p);
+            any = true;
+        }
+    }
+
+    if any { Some(or) } else { None }
 }
 
 // =========================================================================
@@ -501,6 +594,103 @@ fn parse_bool(value: &str, field_name: &str) -> Result<bool, ApiError> {
         _ => Err(ApiError::BadInput(format!(
             "field `{field_name}`: cannot parse `{value}` as boolean; use `true`/`false`"
         ))),
+    }
+}
+
+#[cfg(test)]
+mod search {
+    use super::*;
+
+    fn col(name: &str, ty: SqlType) -> Column {
+        Column {
+            name: name.into(),
+            ty,
+            primary_key: false,
+            nullable: false,
+            fk_target: None,
+            noform: false,
+            noedit: false,
+            is_string_repr: false,
+            max_length: 0,
+            choices: Vec::new(),
+            choice_labels: Vec::new(),
+            default: String::new(),
+            is_multichoice: false,
+        }
+    }
+
+    fn columns() -> Vec<Column> {
+        vec![
+            col("id", SqlType::BigInt),
+            col("title", SqlType::Text),
+            col("body", SqlType::Text),
+            col("author_id", SqlType::ForeignKey),
+            col("published", SqlType::Boolean),
+            col("score", SqlType::Double),
+            col("created_at", SqlType::Timestamptz),
+        ]
+    }
+
+    #[test]
+    fn empty_term_returns_none() {
+        assert!(parse_search("", &columns(), None).is_none());
+        assert!(parse_search("   ", &columns(), None).is_none());
+    }
+
+    #[test]
+    fn text_term_matches_text_columns_only() {
+        let cond = parse_search("rust", &columns(), None);
+        assert!(cond.is_some(), "Text columns should produce an OR clause");
+        // No int/bool/float predicate should land — `rust` doesn't
+        // parse as i64 / f64 / bool. The OR is non-empty thanks to
+        // title + body Text columns.
+    }
+
+    #[test]
+    fn numeric_term_matches_int_and_float_and_fk() {
+        let cond = parse_search("42", &columns(), None);
+        assert!(
+            cond.is_some(),
+            "term that parses as both int + float should produce a non-empty OR"
+        );
+    }
+
+    #[test]
+    fn boolean_term_matches_boolean_column() {
+        let cond = parse_search("true", &columns(), None);
+        assert!(cond.is_some(), "boolean column should join the OR for `true`");
+    }
+
+    #[test]
+    fn term_with_no_matching_column_returns_none() {
+        // A model with only a Date column and a non-text non-numeric term.
+        let cols = vec![col("when", SqlType::Date)];
+        assert!(
+            parse_search("hello", &cols, None).is_none(),
+            "Date column doesn't match free-text terms"
+        );
+    }
+
+    #[test]
+    fn restrict_to_honoured_when_subset_present() {
+        let allow = vec!["title".to_string()];
+        let cond = parse_search("rust", &columns(), Some(&allow));
+        assert!(cond.is_some(), "title is in the allow-list and is Text");
+    }
+
+    #[test]
+    fn restrict_to_empty_subset_returns_none() {
+        let allow: Vec<String> = Vec::new();
+        assert!(
+            parse_search("rust", &columns(), Some(&allow)).is_none(),
+            "empty allow-list excludes every column"
+        );
+    }
+
+    #[test]
+    fn restrict_to_unknown_column_returns_none() {
+        let allow = vec!["does_not_exist".to_string()];
+        assert!(parse_search("rust", &columns(), Some(&allow)).is_none());
     }
 }
 

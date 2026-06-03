@@ -45,7 +45,7 @@ use umbra::prelude::*;
 use umbra::web::{Json, Path, Query, Response, StatusCode};
 
 pub mod filtering;
-pub(crate) use filtering::{FilterClause, parse_filters};
+pub(crate) use filtering::{FilterClause, parse_filters, parse_search};
 
 pub mod pagination;
 pub use pagination::{
@@ -135,6 +135,13 @@ pub struct RestPlugin {
     /// default for every exposed table; this set is the
     /// per-resource opt-out list.
     filters_disabled: std::collections::HashSet<String>,
+    /// Tables that have opted OUT of `?search=` free-text search.
+    /// Search is ON by default; this set is the per-table opt-out.
+    search_disabled: std::collections::HashSet<String>,
+    /// Per-table allow-list of column names that participate in
+    /// `?search=`. Tables not in the map default to "every
+    /// searchable column" (see `filtering::parse_search`).
+    search_fields: HashMap<String, Vec<String>>,
 }
 
 impl std::fmt::Debug for RestPlugin {
@@ -226,6 +233,8 @@ impl RestPlugin {
             view_scope: HashMap::new(),
             actions: HashMap::new(),
             filters_disabled: std::collections::HashSet::new(),
+            search_disabled: std::collections::HashSet::new(),
+            search_fields: HashMap::new(),
         }
     }
 
@@ -330,6 +339,8 @@ impl RestPlugin {
             view_scope,
             actions,
             filters_disabled,
+            search_disabled,
+            search_fields,
         } = config;
         for field in hidden {
             self.hidden.push((table.clone(), field));
@@ -360,6 +371,12 @@ impl RestPlugin {
         if filters_disabled {
             self.filters_disabled.insert(table.clone());
         }
+        if search_disabled {
+            self.search_disabled.insert(table.clone());
+        }
+        if let Some(fields) = search_fields {
+            self.search_fields.insert(table.clone(), fields);
+        }
         self
     }
 
@@ -382,6 +399,19 @@ impl RestPlugin {
     {
         for table in tables {
             self.filters_disabled.insert(table.into());
+        }
+        self
+    }
+
+    /// Disable `?search=` free-text search for one or more tables.
+    /// See [`crate::ResourceConfig::disable_search`] for the rationale.
+    pub fn disable_search_for<I, S>(mut self, tables: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        for table in tables {
+            self.search_disabled.insert(table.into());
         }
         self
     }
@@ -515,6 +545,17 @@ pub fn filters_enabled_for(table: &str) -> bool {
     CONFIG
         .get()
         .map(|cfg| !cfg.filters_disabled.contains(table))
+        .unwrap_or(true)
+}
+
+/// Public read: is `?search=` enabled for `table`?
+/// Same defaulting story as `filters_enabled_for`: ON by default,
+/// opt-out via `ResourceConfig::disable_search()` or the plugin's
+/// `disable_search_for([...])`.
+pub fn search_enabled_for(table: &str) -> bool {
+    CONFIG
+        .get()
+        .map(|cfg| !cfg.search_disabled.contains(table))
         .unwrap_or(true)
 }
 
@@ -849,7 +890,20 @@ async fn list(
     // Parse query-string filters when this resource has opted in.
     // Filters are ON by default; `filters_disabled` is the opt-out set.
     let filters_on = !cfg.filters_disabled.contains(&table);
-    let filter = parse_filters(&params, &model.fields, filters_on)?;
+    let mut filter = parse_filters(&params, &model.fields, filters_on)?;
+
+    // Free-text search: `?search=<term>` ORs predicates across every
+    // searchable column. Default-on, opt-out via
+    // `ResourceConfig::disable_search()`. When restricted via
+    // `search_fields`, only the named subset participates.
+    if !cfg.search_disabled.contains(&table) {
+        if let Some(term) = params.get("search") {
+            let restrict = cfg.search_fields.get(&table).map(|v| v.as_slice());
+            if let Some(search_cond) = parse_search(term, &model.fields, restrict) {
+                filter = filter.and(search_cond);
+            }
+        }
+    }
 
     let page_req = cfg.pagination.extract_request(&params);
     let mut rows = fetch_rows(&model, None, Some(page_req), &filter).await?;

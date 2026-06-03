@@ -209,6 +209,14 @@ pub struct ResourceConfig {
     /// for tables where filtering is undesirable (audit logs,
     /// append-only event streams, etc.).
     pub(crate) filters_disabled: bool,
+    /// Opt OUT of `?search=<term>` free-text search on this resource.
+    /// Search is ON by default and walks every searchable column.
+    pub(crate) search_disabled: bool,
+    /// Restrict `?search=` to a specific subset of columns. When
+    /// `None`, every searchable column participates (Text +
+    /// numeric + FK + Boolean — see `filtering::parse_search`).
+    /// When `Some(list)`, only those column names contribute.
+    pub(crate) search_fields: Option<Vec<String>>,
 }
 
 impl std::fmt::Debug for ResourceConfig {
@@ -235,6 +243,8 @@ impl ResourceConfig {
             view_scope: None,
             actions: Vec::new(),
             filters_disabled: false,
+            search_disabled: false,
+            search_fields: None,
         }
     }
 
@@ -261,6 +271,45 @@ impl ResourceConfig {
     /// ```
     pub fn disable_filters(mut self) -> Self {
         self.filters_disabled = true;
+        self
+    }
+
+    /// Opt OUT of `?search=<term>` free-text search on this resource.
+    ///
+    /// Search is ON by default. A `?search=foo` query string ORs an
+    /// `icontains` predicate across every Text column with `eq`
+    /// predicates against numeric / FK / Boolean columns when the
+    /// term parses as those types — DRF's `SearchFilter` shape.
+    /// Call this on resources where free-text matching makes no
+    /// sense (event streams, metric samples, opaque payloads).
+    pub fn disable_search(mut self) -> Self {
+        self.search_disabled = true;
+        self
+    }
+
+    /// Restrict `?search=<term>` to a specific subset of columns.
+    ///
+    /// By default `parse_search` walks every searchable column on
+    /// the model. When you only want a subset to participate — say,
+    /// title + body on a post but never the internal `slug` — pass
+    /// the allow-list here:
+    ///
+    /// ```ignore
+    /// RestPlugin::default().resource(
+    ///     ResourceConfig::new("post").search_fields(["title", "body"])
+    /// )
+    /// ```
+    ///
+    /// Calling `search_fields` does NOT enable search by itself —
+    /// search is already on. Composes with `disable_search()`
+    /// (last-call wins: if you disable then restrict, the restrict
+    /// is ignored because search is off).
+    pub fn search_fields<I, S>(mut self, fields: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.search_fields = Some(fields.into_iter().map(Into::into).collect());
         self
     }
 
