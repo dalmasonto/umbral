@@ -152,6 +152,7 @@ pub(crate) fn parse_filters(
         }
 
         validate_lookup(lookup, col)?;
+        validate_choices(col, lookup, value)?;
         let predicate = build_predicate(col, lookup, value)?;
         cond = cond.add(predicate);
         any = true;
@@ -274,6 +275,61 @@ fn validate_lookup(lookup: &str, col: &Column) -> Result<(), ApiError> {
         )));
     }
     Ok(())
+}
+
+/// Validate that the supplied value matches one of the column's
+/// declared `choices` when the column is a closed-set (enum) column.
+/// The API is the source of truth — without this check, a typo like
+/// `?status=pub` against an enum whose values are `draft|published|...`
+/// silently returns zero rows instead of telling the caller the value
+/// is wrong, leaving them debugging an empty list.
+///
+/// Skips when:
+/// - the column has no `choices` (regular text/int columns);
+/// - the column is `is_multichoice` — its stored values are CSV
+///   subsets, so `__eq` / `__in` semantics differ and the per-value
+///   check would over-reject;
+/// - the lookup is a substring shape (`contains`, `icontains`,
+///   `startswith`) where partial matches against a choice are
+///   legitimate (`?status__startswith=pub` is a fuzzy search, not
+///   an assertion of equality);
+/// - the lookup is `isnull` — its value is a boolean, not a choice.
+///
+/// For `__in` the value is comma-separated; every CSV element gets
+/// validated separately so the error message names exactly which
+/// pieces failed.
+fn validate_choices(col: &Column, lookup: &str, value: &str) -> Result<(), ApiError> {
+    if col.choices.is_empty() || col.is_multichoice {
+        return Ok(());
+    }
+    if matches!(lookup, "isnull" | "contains" | "icontains" | "startswith") {
+        return Ok(());
+    }
+
+    // `__in` splits on `,`; everything else is a single value.
+    let candidates: Vec<&str> = if lookup == "in" {
+        value.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect()
+    } else {
+        vec![value]
+    };
+
+    let invalid: Vec<&str> = candidates
+        .iter()
+        .filter(|v| !col.choices.iter().any(|c| c == *v))
+        .copied()
+        .collect();
+
+    if invalid.is_empty() {
+        return Ok(());
+    }
+
+    let allowed = col.choices.join(", ");
+    let supplied = invalid.join(", ");
+    let plural = if invalid.len() == 1 { "" } else { "s" };
+    Err(ApiError::BadInput(format!(
+        "value{plural} `{supplied}` not in the allowed choices for `{}`; valid values: {allowed}",
+        col.name,
+    )))
 }
 
 /// Build a typed `sea_query::SimpleExpr` predicate for one
@@ -445,5 +501,114 @@ fn parse_bool(value: &str, field_name: &str) -> Result<bool, ApiError> {
         _ => Err(ApiError::BadInput(format!(
             "field `{field_name}`: cannot parse `{value}` as boolean; use `true`/`false`"
         ))),
+    }
+}
+
+#[cfg(test)]
+mod choice_validation {
+    use super::*;
+
+    fn status_col() -> Column {
+        Column {
+            name: "status".into(),
+            ty: SqlType::Text,
+            primary_key: false,
+            nullable: false,
+            fk_target: None,
+            noform: false,
+            noedit: false,
+            is_string_repr: false,
+            max_length: 0,
+            choices: vec!["draft".into(), "published".into(), "archived".into()],
+            choice_labels: Vec::new(),
+            default: String::new(),
+            is_multichoice: false,
+        }
+    }
+
+    fn assert_bad_input(res: Result<(), ApiError>, msg_contains: &[&str]) {
+        match res {
+            Err(ApiError::BadInput(m)) => {
+                for needle in msg_contains {
+                    assert!(
+                        m.contains(needle),
+                        "expected error message to contain `{needle}`, got: {m}"
+                    );
+                }
+            }
+            other => panic!("expected BadInput, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn eq_with_valid_choice_passes() {
+        assert!(validate_choices(&status_col(), "eq", "published").is_ok());
+    }
+
+    #[test]
+    fn eq_with_unknown_choice_rejects_with_allowed_list() {
+        let res = validate_choices(&status_col(), "eq", "pub");
+        assert_bad_input(
+            res,
+            &["pub", "status", "draft", "published", "archived"],
+        );
+    }
+
+    #[test]
+    fn in_with_one_invalid_csv_element_rejects_naming_only_that_one() {
+        let res = validate_choices(&status_col(), "in", "draft,pub,archived");
+        match res {
+            Err(ApiError::BadInput(m)) => {
+                // Mentions the invalid token and the column.
+                assert!(m.contains("pub"), "missing invalid token in: {m}");
+                assert!(m.contains("status"), "missing column name in: {m}");
+                // Doesn't quote the valid CSV items as "supplied".
+                let supplied_section = m.split("not in the allowed").next().unwrap_or("");
+                assert!(
+                    !supplied_section.contains("draft"),
+                    "draft (valid) should not be listed as supplied: {m}"
+                );
+                assert!(
+                    !supplied_section.contains("archived"),
+                    "archived (valid) should not be listed as supplied: {m}"
+                );
+            }
+            other => panic!("expected BadInput, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn substring_lookups_skip_choices_check() {
+        // contains/icontains/startswith are fuzzy searches; the value
+        // is a substring, not an assertion of equality.
+        for lookup in ["contains", "icontains", "startswith"] {
+            assert!(
+                validate_choices(&status_col(), lookup, "pub").is_ok(),
+                "{lookup} should bypass choices validation"
+            );
+        }
+    }
+
+    #[test]
+    fn isnull_skips_choices_check() {
+        // isnull's value is a boolean — never a choice.
+        assert!(validate_choices(&status_col(), "isnull", "true").is_ok());
+    }
+
+    #[test]
+    fn column_with_no_choices_is_always_ok() {
+        let mut col = status_col();
+        col.choices.clear();
+        assert!(validate_choices(&col, "eq", "anything").is_ok());
+    }
+
+    #[test]
+    fn multichoice_column_skips_check() {
+        let mut col = status_col();
+        col.is_multichoice = true;
+        // Multichoice values are CSV subsets — `__eq` against the
+        // raw CSV doesn't map cleanly to a per-value check, so we
+        // skip the validator and trust the user knows the CSV shape.
+        assert!(validate_choices(&col, "eq", "draft,published").is_ok());
     }
 }
