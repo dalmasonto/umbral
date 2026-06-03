@@ -203,9 +203,14 @@ export function EndpointTree() {
 
       {/* Endpoint Groups — Radix ScrollArea gives a styled vertical
           scrollbar that overlays the content (no layout shift) and
-          stays visible only while scrolling. The wrapping ScrollArea
-          carries the flex-1 so it claims the remaining height. */}
-      <ScrollArea className="flex-1 min-w-0">
+          stays visible only while scrolling.
+          - `flex-1` claims remaining height.
+          - `min-h-0` is the critical bit: without it the flex item's
+            implicit min-height:auto pins the item to the content's
+            height, so the Viewport never has constrained height and
+            never scrolls. The same trick fixes the equivalent
+            horizontal case via `min-w-0`. */}
+      <ScrollArea className="flex-1 min-h-0 min-w-0">
         <div className="p-2 space-y-3 min-w-0">
           {grouped.length === 0 && (
             <div className="py-8 text-center">
