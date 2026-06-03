@@ -8,7 +8,7 @@ open items each carry enough scope detail that the next person
 (human or agent) can pick one and execute in a single coherent
 commit.
 
-Last updated: 2026-06-03 after BUG-6/7/8 (`d2cdc54`).
+Last updated: 2026-06-04 after BUG-11/12/13 (`e2661f8`).
 
 ## Closed in this sweep
 
@@ -24,6 +24,9 @@ Last updated: 2026-06-03 after BUG-6/7/8 (`d2cdc54`).
 | BUG-8 | `#[umbra(ordering = ["-col", "col"])]` → default `ORDER BY` applied when no explicit `.order_by`. Django semantics: explicit ordering REPLACES the default. | `d2cdc54` |
 | BUG-9 | `#[umbra(singleton)]` flips `Model::SINGLETON` + `ModelMeta.singleton`. | `5a5b18c` |
 | BUG-10 | `rust_decimal::Decimal` field type (Postgres-only, gated by the field-backend system check). | `dac7c99` |
+| BUG-11 | `Slug` wrapper type → `text_format = "slug"` marker + OpenAPI `pattern`. | `e2661f8` |
+| BUG-12 | `Email` wrapper type → `text_format = "email"` marker + OpenAPI `format: email`. | `e2661f8` |
+| BUG-13 | `Url` wrapper type → `text_format = "url"` marker + OpenAPI `format: uri`. | `e2661f8` |
 | BUG-15 | `OneToOne` shape = `#[umbra(unique)] ForeignKey<T>`. FK render branch fixed to also emit `UNIQUE`. | `0531f5c` |
 | BUG-17 | `--local <PATH>` on `startproject` / `startapp` / `startplugin` writes path-deps. | `2ad0102` |
 | BUG-18 | `LoggedIn<U>` gained `Deref` / `DerefMut` / `Serialize`. | `997e817` |
@@ -42,18 +45,6 @@ Last updated: 2026-06-03 after BUG-6/7/8 (`d2cdc54`).
 Plus gap #71 (playground app-scoping, `851728a`) and gap #65 follow-up (full diff widening, `f85ed06`).
 
 ## Open — new field types
-
-### BUG-11 / BUG-12 / BUG-13: `Slug` / `Email` / `Url` — text + validation
-
-All three are `String` with type-level guarantees and validation. Each could be a separate wrapper type with `Deref` to `str` + a `validate()` method.
-
-**Implementation sketch:**
-- New crate `umbra-validators` (or fold into umbra-core's orm module) exporting `Slug(String)`, `Email(String)`, `Url(String)`.
-- Each provides `pub fn new(s: impl Into<String>) -> Result<Self, ValidationError>` and `pub fn unchecked(s: String) -> Self`.
-- Macro classifies the type as `SqlType::Text` with a marker for the admin form to render the right widget (HTML5 `type="email"` / `type="url"` for the latter two; slug regex hint for the first).
-- REST plugin's dynamic path runs `Validator::validate` on insert/update.
-
-Effort: low per type (~150 LOC each), but the three together carry a lot of boilerplate. Bundle as one commit.
 
 ### BUG-14: `ImageField` / `FileField`
 
@@ -85,8 +76,11 @@ Each is real frontend work. None block the framework's correctness or usability 
 
 ## How to pick a next item
 
-Default order (post-BUG-6/7/8):
+Default order (post-BUG-11/12/13):
 
-1. **BUG-11 / BUG-12 / BUG-13** — `Slug` / `Email` / `Url` wrapper types. Bundle.
-
-The big skips (BUG-14, BUG-16, BUG-21) all want their own dedicated spec before code lands.
+The remaining open items (BUG-14 file/image field, BUG-16 ManyToMany,
+BUG-21 admin pickers, plus the playground frontend punch-list) are
+all "needs its own spec before code lands" — none has a clean
+half-day shape like the items just shipped. The next session should
+either pick one and design it, or wait for a real consumer to drive
+the requirements.
