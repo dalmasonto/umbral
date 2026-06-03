@@ -267,6 +267,25 @@ pub struct FieldSpec {
     ///
     /// [`MultiChoice<E>`]: crate::orm::MultiChoice
     pub is_multichoice: bool,
+
+    /// When `true`, the migration engine emits a `UNIQUE` constraint
+    /// on this column at `CREATE TABLE` time. Set via
+    /// `#[umbra(unique)]`. Closes gap #65.
+    ///
+    /// Scope at v1: applies to *new* tables only. Toggling `unique`
+    /// on an existing column does not generate an automatic
+    /// `ALTER TABLE ADD CONSTRAINT` — SQLite cannot add a unique
+    /// constraint without rebuilding the table, and the M8 diff
+    /// engine only watches `ty` and `nullable`. Add or remove
+    /// uniqueness on a live table via a hand-written migration
+    /// until the diff engine grows constraint-level ops.
+    ///
+    /// Primary-key columns are already implicitly unique, so this
+    /// flag is a no-op on a PK field. Set it on every other column
+    /// that needs database-enforced uniqueness (`username`,
+    /// `email`, opaque tokens, slugs, etc.) so handler-level
+    /// pre-checks become unnecessary.
+    pub unique: bool,
 }
 
 /// The SQL type kind of a column.

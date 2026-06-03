@@ -32,6 +32,7 @@ fn id_pk() -> Column {
         choice_labels: Vec::new(),
         default: String::new(),
         is_multichoice: false,
+        unique: false,
     }
 }
 
@@ -51,6 +52,7 @@ fn text_not_null(name: &str) -> Column {
         choice_labels: Vec::new(),
         default: String::new(),
         is_multichoice: false,
+        unique: false,
     }
 }
 
@@ -70,6 +72,7 @@ fn text_nullable(name: &str) -> Column {
         choice_labels: Vec::new(),
         default: String::new(),
         is_multichoice: false,
+        unique: false,
     }
 }
 
@@ -319,6 +322,7 @@ fn col(name: &str, ty: SqlType) -> Column {
         choice_labels: Vec::new(),
         default: String::new(),
         is_multichoice: false,
+        unique: false,
     }
 }
 

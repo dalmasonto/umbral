@@ -121,6 +121,7 @@ impl Plugin for TestPlugin {
                 choice_labels: Vec::new(),
                 default: String::new(),
                 is_multichoice: false,
+                unique: false,
             }],
         }]
     }

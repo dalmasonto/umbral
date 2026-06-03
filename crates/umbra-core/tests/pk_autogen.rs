@@ -106,6 +106,7 @@ fn int_pk_column() -> Column {
         choice_labels: Vec::new(),
         default: String::new(),
         is_multichoice: false,
+        unique: false,
     }
 }
 
@@ -124,6 +125,7 @@ fn uuid_pk_column() -> Column {
         choice_labels: Vec::new(),
         default: String::new(),
         is_multichoice: false,
+        unique: false,
     }
 }
 
@@ -142,6 +144,7 @@ fn string_pk_column() -> Column {
         choice_labels: Vec::new(),
         default: String::new(),
         is_multichoice: false,
+        unique: false,
     }
 }
 
@@ -160,6 +163,7 @@ fn label_column() -> Column {
         choice_labels: Vec::new(),
         default: String::new(),
         is_multichoice: false,
+        unique: false,
     }
 }
 

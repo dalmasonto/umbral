@@ -839,6 +839,10 @@ impl From<&IntrospectedColumn> for Column {
             choice_labels: Vec::new(),
             default: String::new(),
             is_multichoice: false,
+            // inspectdb does not introspect UNIQUE constraints yet
+            // (gap #65 ships the declare-side first; inspect-side
+            // lands when there's a real porting case that needs it).
+            unique: false,
         }
     }
 }

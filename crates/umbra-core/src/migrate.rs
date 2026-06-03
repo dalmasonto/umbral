@@ -449,6 +449,14 @@ pub struct Column {
     /// [`MultiChoice<E>`]: crate::orm::MultiChoice
     #[serde(default, skip_serializing_if = "is_false")]
     pub is_multichoice: bool,
+
+    /// Carries `FieldSpec::unique` into the migration snapshot. The
+    /// DDL builders emit a `UNIQUE` clause on this column at
+    /// `CREATE TABLE` time when set. Default `false` keeps existing
+    /// migration JSON files round-tripping unchanged (the field is
+    /// omitted on serialise when default).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub unique: bool,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -471,6 +479,7 @@ impl From<&FieldSpec> for Column {
             choice_labels: f.choice_labels.iter().map(|s| s.to_string()).collect(),
             default: f.default.to_string(),
             is_multichoice: f.is_multichoice,
+            unique: f.unique,
         }
     }
 }
@@ -2439,6 +2448,11 @@ fn build_column_def_sqlite(col: &Column) -> sea_query::ColumnDef {
             def.auto_increment();
         }
     }
+    // `#[umbra(unique)]` lifts to a column-level UNIQUE clause.
+    // Skipped on PK columns (already unique) so the DDL stays tidy.
+    if col.unique && !col.primary_key {
+        def.unique_key();
+    }
     // User-declared `#[umbra(default = "...")]` lifts to a DDL DEFAULT
     // clause. Required when emitting `ALTER TABLE ADD COLUMN` for a
     // NOT NULL column against a non-empty table (SQLite rejects the
@@ -2495,6 +2509,11 @@ fn build_column_def_postgres(col: &Column) -> sea_query::ColumnDef {
         ) {
             def.auto_increment();
         }
+    }
+    // `#[umbra(unique)]` lifts to a column-level UNIQUE clause on
+    // Postgres too. Skipped for PK columns (already unique).
+    if col.unique && !col.primary_key {
+        def.unique_key();
     }
     // Single-valued Choices: emit a CHECK constraint so a third-party
     // process writing directly to the DB can't insert a value the Rust
@@ -2581,5 +2600,117 @@ mod tests {
             registered_plugins(),
             "fallback should exactly equal registered_plugins()",
         );
+    }
+
+    /// Gap #65: `#[umbra(unique)]` lifts to a column-level UNIQUE in
+    /// CREATE TABLE DDL on both backends. PK columns skip the clause
+    /// because they're already unique by virtue of being the PK.
+    #[test]
+    fn unique_column_emits_unique_keyword_on_both_backends() {
+        use sea_query::{Alias, PostgresQueryBuilder, SqliteQueryBuilder, Table};
+
+        let id = Column {
+            name: "id".into(),
+            ty: SqlType::BigInt,
+            primary_key: true,
+            nullable: false,
+            fk_target: None,
+            noform: false,
+            noedit: false,
+            is_string_repr: false,
+            max_length: 0,
+            choices: vec![],
+            choice_labels: vec![],
+            default: String::new(),
+            is_multichoice: false,
+            // Set even though it's a PK so we can assert below that
+            // the emit path drops the redundant clause.
+            unique: true,
+        };
+        let username = Column {
+            name: "username".into(),
+            ty: SqlType::Text,
+            primary_key: false,
+            nullable: false,
+            fk_target: None,
+            noform: false,
+            noedit: false,
+            is_string_repr: false,
+            max_length: 0,
+            choices: vec![],
+            choice_labels: vec![],
+            default: String::new(),
+            is_multichoice: false,
+            unique: true,
+        };
+        let email = Column {
+            name: "email".into(),
+            ty: SqlType::Text,
+            primary_key: false,
+            nullable: false,
+            fk_target: None,
+            noform: false,
+            noedit: false,
+            is_string_repr: false,
+            max_length: 0,
+            choices: vec![],
+            choice_labels: vec![],
+            default: String::new(),
+            is_multichoice: false,
+            unique: false,
+        };
+
+        for backend in ["sqlite", "postgres"] {
+            let mut stmt = Table::create();
+            stmt.table(Alias::new("u"));
+            for col in [&id, &username, &email] {
+                let mut def = if backend == "sqlite" {
+                    build_column_def_sqlite(col)
+                } else {
+                    build_column_def_postgres(col)
+                };
+                stmt.col(&mut def);
+            }
+            let sql = if backend == "sqlite" {
+                stmt.to_string(SqliteQueryBuilder)
+            } else {
+                stmt.to_string(PostgresQueryBuilder)
+            };
+
+            // UNIQUE on the explicitly-marked non-PK column.
+            assert!(
+                sql.contains("\"username\"") && sql.to_uppercase().contains("UNIQUE"),
+                "{backend}: expected UNIQUE on username; got: {sql}",
+            );
+            // No UNIQUE on `email` (flag false).
+            let email_clause = sql
+                .split("\"email\"")
+                .nth(1)
+                .unwrap_or_default()
+                .split(',')
+                .next()
+                .unwrap_or_default();
+            assert!(
+                !email_clause.to_uppercase().contains("UNIQUE"),
+                "{backend}: email should not be UNIQUE; clause: {email_clause}",
+            );
+            // PK still PK; the redundant UNIQUE flag is dropped so we
+            // don't double up the constraint.
+            let id_clause = sql
+                .split("\"id\"")
+                .nth(1)
+                .unwrap_or_default()
+                .split(',')
+                .next()
+                .unwrap_or_default();
+            assert!(
+                id_clause.to_uppercase().contains("PRIMARY KEY"),
+                "{backend}: id should still be PRIMARY KEY; clause: {id_clause}",
+            );
+            assert!(
+                !id_clause.to_uppercase().contains("UNIQUE"),
+                "{backend}: PK column should not also carry UNIQUE; clause: {id_clause}",
+            );
+        }
     }
 }

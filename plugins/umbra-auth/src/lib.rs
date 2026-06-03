@@ -161,10 +161,11 @@ pub trait UserModel: Model + Send + Sync + 'static {
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
 pub struct AuthUser {
     pub id: i64,
+    #[umbra(unique)]
     pub username: String,
     /// Shown read-only on edit forms; never on create forms (use the
     /// admin's password field mechanism for changes).
-    #[umbra(noedit)]
+    #[umbra(noedit, unique)]
     pub email: String,
     /// Never shown on any form — password management goes through the
     /// dedicated Change Password flow in the admin.

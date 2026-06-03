@@ -229,10 +229,7 @@ pub(crate) fn parse_search(
         let predicate: Option<SimpleExpr> = match col.ty {
             SqlType::Text => {
                 let pattern = format!("%{term}%").to_uppercase();
-                Some(
-                    Expr::expr(Func::upper(Expr::col(Alias::new(&col.name))))
-                        .like(pattern),
-                )
+                Some(Expr::expr(Func::upper(Expr::col(Alias::new(&col.name)))).like(pattern))
             }
             SqlType::SmallInt | SqlType::Integer | SqlType::BigInt | SqlType::ForeignKey => {
                 as_int.map(|n| Expr::col(Alias::new(&col.name)).eq(n))
@@ -401,7 +398,11 @@ fn validate_choices(col: &Column, lookup: &str, value: &str) -> Result<(), ApiEr
 
     // `__in` splits on `,`; everything else is a single value.
     let candidates: Vec<&str> = if lookup == "in" {
-        value.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect()
+        value
+            .split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect()
     } else {
         vec![value]
     };
@@ -616,6 +617,7 @@ mod search {
             choice_labels: Vec::new(),
             default: String::new(),
             is_multichoice: false,
+            unique: false,
         }
     }
 
@@ -658,7 +660,10 @@ mod search {
     #[test]
     fn boolean_term_matches_boolean_column() {
         let cond = parse_search("true", &columns(), None);
-        assert!(cond.is_some(), "boolean column should join the OR for `true`");
+        assert!(
+            cond.is_some(),
+            "boolean column should join the OR for `true`"
+        );
     }
 
     #[test]
@@ -713,6 +718,7 @@ mod choice_validation {
             choice_labels: Vec::new(),
             default: String::new(),
             is_multichoice: false,
+            unique: false,
         }
     }
 
@@ -738,10 +744,7 @@ mod choice_validation {
     #[test]
     fn eq_with_unknown_choice_rejects_with_allowed_list() {
         let res = validate_choices(&status_col(), "eq", "pub");
-        assert_bad_input(
-            res,
-            &["pub", "status", "draft", "published", "archived"],
-        );
+        assert_bad_input(res, &["pub", "status", "draft", "published", "archived"]);
     }
 
     #[test]

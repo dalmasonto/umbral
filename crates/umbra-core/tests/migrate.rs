@@ -145,6 +145,7 @@ async fn migrated_dir() -> &'static Path {
                 choice_labels: Vec::new(),
                 default: String::new(),
                 is_multichoice: false,
+                unique: false,
             };
             let file = MigrationFile {
                 id: M8_ADD_COLUMN_MIGRATION_ID.to_string(),
@@ -203,6 +204,7 @@ async fn migrated_dir() -> &'static Path {
                     choice_labels: Vec::new(),
                     default: String::new(),
                     is_multichoice: false,
+                    unique: false,
                 },
                 Column {
                     name: "note".to_string(),
@@ -218,6 +220,7 @@ async fn migrated_dir() -> &'static Path {
                     choice_labels: Vec::new(),
                     default: String::new(),
                     is_multichoice: false,
+                    unique: false,
                 },
             ];
             let file = MigrationFile {
@@ -703,6 +706,7 @@ fn id_column() -> Column {
         choice_labels: Vec::new(),
         default: String::new(),
         is_multichoice: false,
+        unique: false,
     }
 }
 
@@ -723,6 +727,7 @@ fn text_column(name: &str) -> Column {
         choice_labels: Vec::new(),
         default: String::new(),
         is_multichoice: false,
+        unique: false,
     }
 }
 
@@ -852,6 +857,7 @@ fn diff_returns_unsafe_alter_for_a_type_change() {
             choice_labels: Vec::new(),
             default: String::new(),
             is_multichoice: false,
+            unique: false,
         },
     ]));
 
@@ -896,6 +902,7 @@ fn diff_emits_alter_column_for_a_nullable_flip() {
             choice_labels: Vec::new(),
             default: String::new(),
             is_multichoice: false,
+            unique: false,
         },
     ]));
 
@@ -949,6 +956,7 @@ fn diff_emits_alter_column_for_safe_type_cast_bigint_to_text() {
         choice_labels: Vec::new(),
         default: String::new(),
         is_multichoice: false,
+        unique: false,
     };
     let mut curr_user_id = prev_user_id.clone();
     curr_user_id.ty = SqlType::Text;
@@ -1003,6 +1011,7 @@ fn diff_still_refuses_text_to_bigint_as_unsafe() {
         choice_labels: Vec::new(),
         default: String::new(),
         is_multichoice: false,
+        unique: false,
     };
     let mut curr_value = prev_value.clone();
     curr_value.ty = SqlType::BigInt;

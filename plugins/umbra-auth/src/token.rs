@@ -72,8 +72,8 @@ pub struct AuthToken {
     /// `base64(sha256(plaintext))` — 43 chars, URL-safe, no pad. The
     /// UNIQUE constraint protects against the (cryptographically
     /// negligible) chance of two random keys hashing to the same
-    /// digest.
-    #[umbra(max_length = 64)]
+    /// digest, and lets the lookup path stop at the first match.
+    #[umbra(max_length = 64, unique)]
     pub key_hash: String,
     /// Human label. Shown in admin listings and the management
     /// CLI; never used for lookup. Defaults to "default" when the

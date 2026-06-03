@@ -72,6 +72,7 @@ fn postgres_ddl_renders_inet_and_macaddr_types() {
                 choice_labels: Vec::new(),
                 default: String::new(),
                 is_multichoice: false,
+                unique: false,
             },
             Column {
                 name: "addr".to_string(),
@@ -87,6 +88,7 @@ fn postgres_ddl_renders_inet_and_macaddr_types() {
                 choice_labels: Vec::new(),
                 default: String::new(),
                 is_multichoice: false,
+                unique: false,
             },
             Column {
                 name: "mac".to_string(),
@@ -102,6 +104,7 @@ fn postgres_ddl_renders_inet_and_macaddr_types() {
                 choice_labels: Vec::new(),
                 default: String::new(),
                 is_multichoice: false,
+                unique: false,
             },
             Column {
                 name: "net".to_string(),
@@ -117,6 +120,7 @@ fn postgres_ddl_renders_inet_and_macaddr_types() {
                 choice_labels: Vec::new(),
                 default: String::new(),
                 is_multichoice: false,
+                unique: false,
             },
         ],
     };

@@ -171,6 +171,12 @@ struct UmbraFieldAttr {
     /// it verbatim on `CREATE TABLE` and `ALTER TABLE ADD COLUMN`.
     /// `None` means no default.
     default: Option<String>,
+    /// `#[umbra(unique)]` — emit a column-level `UNIQUE` constraint
+    /// at `CREATE TABLE` time. Closes gap #65. v1 scope: new
+    /// tables only; toggling on an existing column doesn't auto-
+    /// migrate (the diff engine watches type and nullable, not
+    /// constraint flags).
+    unique: bool,
 }
 
 fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAttr> {
@@ -182,6 +188,7 @@ fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAtt
         max_length: 0,
         choices_ty: None,
         default: None,
+        unique: false,
     };
     for attr in attrs {
         if !attr.path().is_ident("umbra") {
@@ -228,6 +235,12 @@ fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAtt
                 let lit: syn::LitStr = value.parse()?;
                 parsed.default = Some(lit.value());
                 Ok(())
+            } else if meta.path.is_ident("unique") {
+                // `#[umbra(unique)]` — marker. Emits a column-level
+                // UNIQUE constraint at CREATE TABLE time. Closes
+                // gap #65.
+                parsed.unique = true;
+                Ok(())
             } else {
                 // Unknown key. Report it with the known set so the
                 // common typo case (`is_string_repr` instead of
@@ -251,7 +264,8 @@ fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAtt
                 Err(meta.error(format!(
                     "unknown field-level umbra attribute `{path}` — known keys are \
                      `noform`, `noedit`, `string` (or `string = true`), \
-                     `max_length = N`, `choices`, and `default = \"...\"`"
+                     `max_length = N`, `choices`, `default = \"...\"`, \
+                     and `unique`"
                 )))
             }
         })?;
@@ -594,6 +608,11 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         } else {
             quote!(false)
         };
+        let unique_lit = if field_attr.unique {
+            quote!(true)
+        } else {
+            quote!(false)
+        };
 
         field_specs.push(quote! {
             ::umbra::orm::FieldSpec {
@@ -611,6 +630,7 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                 choice_labels: #choice_labels_tokens,
                 default: #default_tokens,
                 is_multichoice: #is_multichoice_lit,
+                unique: #unique_lit,
             }
         });
 

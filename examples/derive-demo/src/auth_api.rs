@@ -147,33 +147,11 @@ pub async fn register(Json(body): Json<RegisterIn>) -> Response {
             "username, email and password are required",
         );
     }
-    // Defensive UNIQUE pre-check. The `auth_user` schema doesn't
-    // emit a UNIQUE constraint on `username` at the column level yet
-    // (framework gap — `#[umbra(unique)]` is on the roadmap), so a
-    // raw `create_user` call would silently produce a duplicate.
-    // This is the "do it in the handler until the schema catches up"
-    // shape — drop the pre-check once UNIQUE lands.
-    match AuthUser::objects()
-        .filter(auth_user::USERNAME.eq(&body.username))
-        .exists()
-        .await
-    {
-        Ok(true) => {
-            return err(
-                StatusCode::CONFLICT,
-                "username_taken",
-                format!("a user named {:?} already exists", body.username),
-            );
-        }
-        Ok(false) => {}
-        Err(e) => {
-            return err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "lookup_failed",
-                format!("{e}"),
-            );
-        }
-    }
+    // Database UNIQUE on `username` and `email` (gap #65 — set
+    // via `#[umbra(unique)]` on the AuthUser model) is the
+    // source of truth for "already taken". The conflict surfaces
+    // here as a sqlx error whose message contains the word
+    // "unique" — the error branch below translates that to 409.
     match umbra_auth::create_user(&body.username, &body.email, &body.password).await {
         Ok(user) => (StatusCode::CREATED, Json(UserOut::from(&user))).into_response(),
         Err(e) => {

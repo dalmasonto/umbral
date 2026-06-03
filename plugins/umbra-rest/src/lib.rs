@@ -1285,6 +1285,7 @@ mod noform_drop {
             choice_labels: Vec::new(),
             default: String::new(),
             is_multichoice: false,
+            unique: false,
         }
     }
 
@@ -1293,10 +1294,10 @@ mod noform_drop {
             name: "User".into(),
             table: "auth_user".into(),
             fields: vec![
-                col("username", false, false),       // ordinary
-                col("email", false, true),           // noedit only
-                col("password_hash", true, false),   // noform
-                col("internal_token", true, true),   // both
+                col("username", false, false),     // ordinary
+                col("email", false, true),         // noedit only
+                col("password_hash", true, false), // noform
+                col("internal_token", true, true), // both
             ],
             display: "User".into(),
             icon: "user".into(),

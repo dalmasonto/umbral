@@ -67,6 +67,7 @@ impl crate::orm::Model for Post {
             choice_labels: &[],
             default: "",
             is_multichoice: false,
+            unique: false,
         },
         crate::orm::FieldSpec {
             name: "title",
@@ -83,6 +84,7 @@ impl crate::orm::Model for Post {
             choice_labels: &[],
             default: "",
             is_multichoice: false,
+            unique: false,
         },
         crate::orm::FieldSpec {
             name: "body",
@@ -99,6 +101,7 @@ impl crate::orm::Model for Post {
             choice_labels: &[],
             default: "",
             is_multichoice: false,
+            unique: false,
         },
         crate::orm::FieldSpec {
             name: "published_at",
@@ -115,6 +118,7 @@ impl crate::orm::Model for Post {
             choice_labels: &[],
             default: "",
             is_multichoice: false,
+            unique: false,
         },
     ];
 
