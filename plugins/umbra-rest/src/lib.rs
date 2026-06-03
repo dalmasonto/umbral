@@ -129,10 +129,12 @@ pub struct RestPlugin {
     /// and the dispatch handler looks the (table, action_name)
     /// lookup back out at request time.
     actions: HashMap<String, Vec<crate::resource::ActionDef>>,
-    /// Tables that have opted in to query-string filtering via
-    /// `ResourceConfig::enable_filters()`. Keyed by table name.
-    /// Tables not in this set ignore filter keys on the list endpoint.
-    filters_enabled: std::collections::HashSet<String>,
+    /// Tables that have opted OUT of query-string filtering via
+    /// `ResourceConfig::disable_filters()` or
+    /// `RestPlugin::disable_filters_for(&[...])`. Filtering is the
+    /// default for every exposed table; this set is the
+    /// per-resource opt-out list.
+    filters_disabled: std::collections::HashSet<String>,
 }
 
 impl std::fmt::Debug for RestPlugin {
@@ -147,7 +149,7 @@ impl std::fmt::Debug for RestPlugin {
             .field("transforms_count", &self.transforms.len())
             .field("computed_count", &self.computed.len())
             .field("pagination", &"<dyn Pagination>")
-            .field("filters_enabled", &self.filters_enabled)
+            .field("filters_disabled", &self.filters_disabled)
             .finish()
     }
 }
@@ -223,7 +225,7 @@ impl RestPlugin {
             permissions: HashMap::new(),
             view_scope: HashMap::new(),
             actions: HashMap::new(),
-            filters_enabled: std::collections::HashSet::new(),
+            filters_disabled: std::collections::HashSet::new(),
         }
     }
 
@@ -327,7 +329,7 @@ impl RestPlugin {
             permission,
             view_scope,
             actions,
-            filters_enabled,
+            filters_disabled,
         } = config;
         for field in hidden {
             self.hidden.push((table.clone(), field));
@@ -355,8 +357,31 @@ impl RestPlugin {
                 .or_default()
                 .extend(actions);
         }
-        if filters_enabled {
-            self.filters_enabled.insert(table.clone());
+        if filters_disabled {
+            self.filters_disabled.insert(table.clone());
+        }
+        self
+    }
+
+    /// Disable query-string filtering for one or more tables.
+    ///
+    /// Filters are ON by default — every exposed list endpoint accepts
+    /// the `<field>` / `<field>__<lookup>` grammar described on
+    /// [`crate::ResourceConfig::disable_filters`]. This is the
+    /// plugin-level shorthand for opting a batch of tables out
+    /// without building a `ResourceConfig` for each one.
+    ///
+    /// ```ignore
+    /// RestPlugin::default()
+    ///     .disable_filters_for(["audit_log", "metric_sample"])
+    /// ```
+    pub fn disable_filters_for<I, S>(mut self, tables: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        for table in tables {
+            self.filters_disabled.insert(table.into());
         }
         self
     }
@@ -481,10 +506,16 @@ static CONFIG: OnceLock<RestPlugin> = OnceLock::new();
 /// `false` when `RestPlugin::routes()` hasn't run yet (the OnceLock
 /// is empty) so calls from spec-only smoke tests don't panic.
 pub fn filters_enabled_for(table: &str) -> bool {
+    // Filters are ON by default for every exposed table. The opt-out
+    // set carries the tables that explicitly turned filtering off.
+    // When CONFIG isn't populated (the REST plugin hasn't booted yet —
+    // spec-only smoke tests, for example), we still return `true`
+    // because the OpenAPI spec emitted in that context should
+    // describe the default-on behaviour.
     CONFIG
         .get()
-        .map(|cfg| cfg.filters_enabled.contains(table))
-        .unwrap_or(false)
+        .map(|cfg| !cfg.filters_disabled.contains(table))
+        .unwrap_or(true)
 }
 
 impl Plugin for RestPlugin {
@@ -816,7 +847,8 @@ async fn list(
     cfg.gate(&table, &Action::List, identity.as_ref())?;
 
     // Parse query-string filters when this resource has opted in.
-    let filters_on = cfg.filters_enabled.contains(&table);
+    // Filters are ON by default; `filters_disabled` is the opt-out set.
+    let filters_on = !cfg.filters_disabled.contains(&table);
     let filter = parse_filters(&params, &model.fields, filters_on)?;
 
     let page_req = cfg.pagination.extract_request(&params);

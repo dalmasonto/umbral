@@ -47,8 +47,15 @@ async fn boot() -> &'static axum::Router {
             .await
             .expect("pool");
 
-        // Enable filters on the post resource.
-        let rest = RestPlugin::default().resource(ResourceConfig::new("post").enable_filters());
+        // Filters are ON by default — RestPlugin::default() already
+        // serves the `?field=` / `?field__lookup=` grammar against
+        // every column. No explicit opt-in required.
+        let rest = RestPlugin::default();
+        // `ResourceConfig` only matters here if we wanted other
+        // resource-level customisation; for a plain filter test the
+        // default plugin is enough.
+        let _ = ResourceConfig::new("post"); // kept as a smoke-build
+        let rest = rest;
 
         let app = umbra::App::builder()
             .settings(settings)

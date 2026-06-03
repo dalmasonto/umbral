@@ -202,10 +202,13 @@ pub struct ResourceConfig {
     /// Merged into the plugin's per-table action map at `.resource()`
     /// time; mounted as new axum routes at `RestPlugin::routes()`.
     pub(crate) actions: Vec<ActionDef>,
-    /// Whether django-filter-style query-string filtering is enabled
-    /// for the list endpoint. Off by default; opt in with
-    /// `.enable_filters()`.
-    pub(crate) filters_enabled: bool,
+    /// Opt OUT of django-filter-style query-string filtering on the
+    /// list endpoint for this resource. Filters are ON by default —
+    /// every column gets the standard lookup grammar (`__eq`, `__in`,
+    /// `__contains`, etc.) — and `.disable_filters()` removes them
+    /// for tables where filtering is undesirable (audit logs,
+    /// append-only event streams, etc.).
+    pub(crate) filters_disabled: bool,
 }
 
 impl std::fmt::Debug for ResourceConfig {
@@ -231,32 +234,33 @@ impl ResourceConfig {
             permission: None,
             view_scope: None,
             actions: Vec::new(),
-            filters_enabled: false,
+            filters_disabled: false,
         }
     }
 
-    /// Opt in to django-filter-style query-string filtering on the list
-    /// endpoint for this resource.
+    /// Opt OUT of django-filter-style query-string filtering on the
+    /// list endpoint for this resource.
     ///
-    /// When enabled, query-string keys of the form `<field>` or
-    /// `<field>__<lookup>` are parsed into SQL WHERE predicates and
-    /// ANDed together before pagination is applied. Unrecognised field
-    /// names, inapplicable lookups, and malformed values all return
-    /// HTTP 400 with a descriptive JSON error.
-    ///
-    /// ```ignore
-    /// RestPlugin::default()
-    ///     .resource(
-    ///         ResourceConfig::new("post")
-    ///             .enable_filters()
-    ///     )
-    /// ```
+    /// Filtering is ON by default. Query-string keys of the form
+    /// `<field>` or `<field>__<lookup>` are parsed into SQL WHERE
+    /// predicates and ANDed together before pagination is applied.
+    /// Unrecognised field names, inapplicable lookups, and malformed
+    /// values all return HTTP 400 with a descriptive JSON error.
     ///
     /// Supported lookups: `eq` (default), `ne`, `gte`, `lte`, `gt`,
     /// `lt`, `in` (comma-separated), `contains`, `icontains`,
     /// `startswith`, `isnull`.
-    pub fn enable_filters(mut self) -> Self {
-        self.filters_enabled = true;
+    ///
+    /// Call this on tables where filtering doesn't make sense (audit
+    /// logs, append-only streams, dashboards meant to surface every
+    /// row):
+    ///
+    /// ```ignore
+    /// RestPlugin::default()
+    ///     .resource(ResourceConfig::new("audit_log").disable_filters())
+    /// ```
+    pub fn disable_filters(mut self) -> Self {
+        self.filters_disabled = true;
         self
     }
 
