@@ -26,16 +26,19 @@ import {
   Copy,
   Check,
   Search,
+  BarChart3,
 } from "lucide-react";
+import { EndpointStats } from "./EndpointStats";
 
 import type { ResponseRecord } from "@/state/store";
 
-type TabId = "body" | "headers" | "history" | "curl";
+type TabId = "body" | "headers" | "history" | "stats" | "curl";
 
 const TABS: { id: TabId; label: string; icon: React.ReactNode }[] = [
   { id: "body", label: "Body", icon: <Eye className="size-3" /> },
   { id: "headers", label: "Headers", icon: <Package className="size-3" /> },
   { id: "history", label: "History", icon: <Clock className="size-3" /> },
+  { id: "stats", label: "Stats", icon: <BarChart3 className="size-3" /> },
   { id: "curl", label: "cURL", icon: <Terminal className="size-3" /> },
 ];
 
@@ -449,6 +452,8 @@ export function ResponseViewer() {
             )}
           </div>
         )}
+
+        {activeTab === "stats" && <EndpointStats opHistory={opHistory} />}
 
         {activeTab === "curl" && !lastResponse && (
           <EmptyState
