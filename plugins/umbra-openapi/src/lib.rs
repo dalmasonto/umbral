@@ -244,6 +244,9 @@ fn build_spec(cfg: &OpenApiPlugin) -> Value {
             if umbra_rest::search_enabled_for(&model.table) {
                 list_params.push(search_parameter());
             }
+            // `?fields=` sparse fieldset (BUG-81) is always
+            // available — independent of search / filter opt-out.
+            list_params.push(fields_parameter(&model));
             if umbra_rest::filters_enabled_for(&model.table) {
                 list_params.extend(filter_parameters(&model));
             }
@@ -251,9 +254,12 @@ fn build_spec(cfg: &OpenApiPlugin) -> Value {
                 format!("/api/{}/", model.table),
                 collection_paths(&model.table, &schema_name, &list_params),
             );
+            // Retrieve also respects `?fields=`, so document it
+            // there too — the playground reads the GET op's params
+            // off the spec and renders one input per entry.
             paths.insert(
                 format!("/api/{}/{{id}}", model.table),
-                item_paths(&model.table, &schema_name),
+                item_paths(&model.table, &schema_name, &[fields_parameter(&model)]),
             );
         }
     }
@@ -577,6 +583,37 @@ fn search_parameter() -> Value {
     })
 }
 
+/// BUG-81: the `?fields=col1,col2` sparse-fieldset parameter. Lives
+/// on every list AND retrieve endpoint — when set, the response row
+/// drops every key not in the requested list. Unknown column names
+/// are silently ignored; an empty value falls back to the full row.
+///
+/// The `x-umbra-fields` vendor extension lists every column the
+/// model exposes so the playground can render a multi-select
+/// instead of a plain text box. Generated clients that ignore the
+/// extension still see a `string` parameter with a clear
+/// description.
+fn fields_parameter(model: &ModelMeta) -> Value {
+    let columns: Vec<Value> = model
+        .fields
+        .iter()
+        .map(|c| Value::String(c.name.clone()))
+        .collect();
+    json!({
+        "name": "fields",
+        "in": "query",
+        "required": false,
+        "description": "Comma-separated list of column names to include in the \
+                        response. Unknown names are silently dropped; an empty \
+                        value falls back to the full row (BUG-81). Composes \
+                        with hide / transform / computed — hide always wins, \
+                        the rest are returned iff in the list.",
+        "schema": { "type": "string" },
+        "x-umbra-fields": true,
+        "x-umbra-fields-columns": Value::Array(columns),
+    })
+}
+
 /// Playground-openapi-gaps #3: the two standard pagination
 /// parameters umbra-rest accepts on every list endpoint. Documented
 /// here so generated clients and Swagger UI surface them as
@@ -764,30 +801,47 @@ fn collection_paths(table: &str, schema_name: &str, filter_params: &[Value]) -> 
     })
 }
 
-fn item_paths(table: &str, schema_name: &str) -> Value {
+fn item_paths(table: &str, schema_name: &str, retrieve_query_params: &[Value]) -> Value {
     let id_param = json!({
         "name": "id",
         "in": "path",
         "required": true,
         "schema": { "type": "string" }
     });
+    // Build the GET op separately so its query params can be
+    // listed alongside the path-level `id_param`. Path-level
+    // `parameters` apply to every method on the item URL, so
+    // GET-only knobs (like `?fields=`) land on the operation
+    // itself instead.
+    let mut get_op = Map::new();
+    get_op.insert(
+        "operationId".into(),
+        Value::String(format!("retrieve_{}", table)),
+    );
+    get_op.insert("tags".into(), json!([table]));
+    if !retrieve_query_params.is_empty() {
+        get_op.insert(
+            "parameters".into(),
+            Value::Array(retrieve_query_params.to_vec()),
+        );
+    }
+    get_op.insert(
+        "responses".into(),
+        json!({
+            "200": {
+                "description": "Row found",
+                "content": {
+                    "application/json": {
+                        "schema": schema_ref(schema_name)
+                    }
+                }
+            },
+            "404": { "description": "Not found" }
+        }),
+    );
     json!({
         "parameters": [id_param],
-        "get": {
-            "operationId": format!("retrieve_{}", table),
-            "tags": [table],
-            "responses": {
-                "200": {
-                    "description": "Row found",
-                    "content": {
-                        "application/json": {
-                            "schema": schema_ref(schema_name)
-                        }
-                    }
-                },
-                "404": { "description": "Not found" }
-            }
-        },
+        "get": Value::Object(get_op),
         "put": {
             "operationId": format!("update_{}", table),
             "tags": [table],
@@ -1209,6 +1263,42 @@ mod tests {
         assert!(
             params.iter().all(|p| p["in"] == "query"),
             "every filter parameter is in: query",
+        );
+    }
+
+    /// BUG-81: the `?fields=` sparse-fieldset parameter is built
+    /// with the model's columns listed under the
+    /// `x-umbra-fields-columns` vendor extension so the playground
+    /// can render a multi-select.
+    #[test]
+    fn fields_parameter_lists_model_columns() {
+        let param = fields_parameter(&note_model());
+        assert_eq!(param["name"], "fields");
+        assert_eq!(param["in"], "query");
+        assert_eq!(param["x-umbra-fields"], true);
+        let cols = param["x-umbra-fields-columns"]
+            .as_array()
+            .expect("x-umbra-fields-columns should be a list");
+        let names: Vec<&str> = cols.iter().filter_map(|v| v.as_str()).collect();
+        assert!(names.contains(&"title"));
+        assert!(names.contains(&"views"));
+        assert!(
+            !names.is_empty(),
+            "every column should land in the enum so the playground can offer it",
+        );
+    }
+
+    /// The retrieve op also documents `?fields=` so the playground
+    /// renders the same param on GET /resource/{id}.
+    #[test]
+    fn item_paths_advertises_fields_query_param_on_retrieve() {
+        let value = item_paths("note", "Note", &[fields_parameter(&note_model())]);
+        let get_params = value["get"]["parameters"]
+            .as_array()
+            .expect("retrieve op should carry its query parameters");
+        assert!(
+            get_params.iter().any(|p| p["name"] == "fields"),
+            "fields parameter should be on the retrieve op; got {get_params:?}",
         );
     }
 
