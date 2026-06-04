@@ -1254,6 +1254,238 @@ fn drop_noform_fields(model: &ModelMeta, body: &mut Map<String, Value>) {
     }
 }
 
+/// Pre-DB validation for `POST /api/<table>/`: every required
+/// column must carry a usable value. "Required" means: not a
+/// primary key, not `noform`-hidden, not nullable, no DDL default.
+/// "Usable" means: present in the body AND non-blank — empty
+/// strings, JSON null, and missing keys all fail.
+///
+/// This catches the common shop-demo footgun where a client
+/// POSTs `{ "sku": "", "name": "" }` and gets a row of empty
+/// strings stored on the wire because the DB happily accepted
+/// `NOT NULL VARCHAR` columns full of `""`. The DRF-style 400
+/// returned here surfaces every offending field at once so the
+/// client can show every form input as red in one round-trip.
+fn validate_required_on_create(
+    model: &ModelMeta,
+    body: &Map<String, Value>,
+) -> BTreeMap<String, Vec<String>> {
+    let mut errors: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for col in &model.fields {
+        if col.primary_key || col.noform || col.nullable {
+            continue;
+        }
+        if !col.default.is_empty() {
+            // DDL default fills in for the missing field; the
+            // ORM converts a missing key into the column's
+            // default at INSERT time. Empty-string defaults are
+            // intentional (e.g. CharField blank=True patterns).
+            continue;
+        }
+        // `auto_now` / `auto_now_add` are server-populated: the
+        // ORM stamps `Utc::now()` on insert when the body
+        // omits the field. Don't require the client to send
+        // them — that would defeat the whole point of the
+        // attribute.
+        if col.auto_now || col.auto_now_add {
+            continue;
+        }
+        if is_blank_value(body.get(&col.name), col.ty) {
+            errors
+                .entry(col.name.clone())
+                .or_default()
+                .push("This field is required.".to_string());
+        }
+    }
+    errors
+}
+
+/// Pre-DB validation for `PUT` / `PATCH`: required fields that
+/// the client explicitly set to a blank value get rejected.
+/// Fields the client omitted are left alone — the existing row's
+/// value stays in place.
+fn validate_required_on_update(
+    model: &ModelMeta,
+    body: &Map<String, Value>,
+) -> BTreeMap<String, Vec<String>> {
+    let mut errors: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for col in &model.fields {
+        if col.primary_key || col.noform || col.nullable {
+            continue;
+        }
+        if col.auto_now || col.auto_now_add {
+            // Same skip as create: auto_now / auto_now_add are
+            // server-populated.
+            continue;
+        }
+        // Update: only complain about fields the client EXPLICITLY
+        // sent blank. Missing keys preserve the existing row's
+        // value, which is the partial-update contract.
+        let Some(value) = body.get(&col.name) else {
+            continue;
+        };
+        if is_blank_value(Some(value), col.ty) {
+            errors
+                .entry(col.name.clone())
+                .or_default()
+                .push("This field cannot be blank.".to_string());
+        }
+    }
+    errors
+}
+
+/// "Blank" means: missing, `null`, an empty string, or — for
+/// numeric / boolean / date columns — an empty string serialised
+/// where a typed value belongs. JSON `{}` is intentionally not
+/// blank: an empty JSON object is a legitimate value for a JSONB
+/// column. Empty arrays are also valid for array-ish columns.
+fn is_blank_value(value: Option<&Value>, ty: umbra::orm::SqlType) -> bool {
+    use umbra::orm::SqlType;
+    match value {
+        None => true,
+        Some(Value::Null) => true,
+        Some(Value::String(s)) => {
+            // Text columns: empty string is blank by convention
+            // (Django's CharField with blank=False). Other typed
+            // columns: an empty string sent in JSON is also
+            // blank — it's a placeholder, not a value.
+            s.is_empty()
+                || matches!(
+                    ty,
+                    SqlType::SmallInt
+                        | SqlType::Integer
+                        | SqlType::BigInt
+                        | SqlType::Real
+                        | SqlType::Double
+                        | SqlType::Boolean
+                        | SqlType::Date
+                        | SqlType::Time
+                        | SqlType::Timestamptz
+                        | SqlType::Uuid
+                        | SqlType::ForeignKey,
+                ) && s.trim().is_empty()
+        }
+        _ => false,
+    }
+}
+
+/// Take a `ClassifiedConstraint` produced by sqlx-error
+/// classification and lift the offending value out of the
+/// request body into the message. Turns
+/// `"A row with this value already exists."` into
+/// `"A row with slug='widget' already exists."` — much faster to
+/// debug when several columns on the same row are unique.
+///
+/// Also enriches FK non-field errors by listing every FK column
+/// the request carried, with its value. SQLite's
+/// `FOREIGN KEY constraint failed` error doesn't say which FK,
+/// so the next-best signal for the client is "here are all the
+/// FKs you sent — look for the row that doesn't exist."
+fn enrich_validation_with_body(
+    classified: ClassifiedConstraint,
+    body: &Map<String, Value>,
+    model: &ModelMeta,
+) -> ClassifiedConstraint {
+    let ClassifiedConstraint {
+        code,
+        mut field_errors,
+        mut non_field_errors,
+    } = classified;
+
+    match code {
+        "unique_constraint" => {
+            for (col, msgs) in field_errors.iter_mut() {
+                let value_repr = body
+                    .get(col)
+                    .map(repr_json_value)
+                    .unwrap_or_else(|| "(unknown)".to_string());
+                *msgs =
+                    vec![format!("A row with {col}={value_repr} already exists.")];
+            }
+        }
+        "fk_constraint" => {
+            // Per-field path (Postgres): already keyed by column.
+            // Lift the user-sent value into the message so the
+            // client sees `"category_id=99"` and knows which row
+            // didn't exist.
+            for (col, msgs) in field_errors.iter_mut() {
+                let value_repr = body
+                    .get(col)
+                    .map(repr_json_value)
+                    .unwrap_or_else(|| "(unknown)".to_string());
+                *msgs = vec![format!(
+                    "Referenced row with {col}={value_repr} does not exist."
+                )];
+            }
+            // Non-field path (SQLite): list every FK column the
+            // request carried so the user can spot the bad one.
+            if field_errors.is_empty() && !non_field_errors.is_empty() {
+                let fk_values: Vec<String> = model
+                    .fields
+                    .iter()
+                    .filter(|c| c.fk_target.is_some())
+                    .filter_map(|c| {
+                        body.get(&c.name)
+                            .map(|v| format!("{}={}", c.name, repr_json_value(v)))
+                    })
+                    .collect();
+                if !fk_values.is_empty() {
+                    non_field_errors = vec![format!(
+                        "One or more foreign-key fields reference rows that don't exist. \
+                         Sent: {}.",
+                        fk_values.join(", "),
+                    )];
+                }
+            }
+        }
+        _ => {}
+    }
+
+    ClassifiedConstraint {
+        code,
+        field_errors,
+        non_field_errors,
+    }
+}
+
+/// JSON-value display for error messages. Strings are quoted,
+/// numbers / booleans / null appear bare, arrays / objects fall
+/// back to compact JSON so they're at least readable.
+fn repr_json_value(v: &Value) -> String {
+    match v {
+        Value::String(s) => format!("'{s}'"),
+        Value::Number(n) => n.to_string(),
+        Value::Bool(b) => b.to_string(),
+        Value::Null => "null".to_string(),
+        _ => serde_json::to_string(v).unwrap_or_else(|_| "(?)".to_string()),
+    }
+}
+
+/// Run an INSERT / UPDATE and lift any constraint failure into a
+/// body-aware `ApiError::Validation`. The DB-level constraint
+/// errors lose all knowledge of what the client sent the moment
+/// they're handed to `From<sqlx::Error>` — running through this
+/// helper preserves the body so the resulting 400 can name the
+/// offending value.
+fn validation_from_sql_error(
+    e: sqlx::Error,
+    body: &Map<String, Value>,
+    model: &ModelMeta,
+) -> ApiError {
+    if let Some(classified) = classify_constraint_failure(&e) {
+        let enriched = enrich_validation_with_body(classified, body, model);
+        return ApiError::Validation {
+            code: enriched.code,
+            field_errors: enriched.field_errors,
+            non_field_errors: enriched.non_field_errors,
+        };
+    }
+    // Not a recognised constraint code — fall through to the
+    // standard `From<sqlx::Error>` mapping (which turns Protocol
+    // errors into BadInput and everything else into a 500).
+    ApiError::from(e)
+}
+
 // =========================================================================
 // Handlers.
 // =========================================================================
@@ -1339,9 +1571,28 @@ async fn create(
     let model = allowed_model(&table)?;
     cfg.gate(&table, &Action::Create, identity.as_ref())?;
     drop_noform_fields(&model, &mut body);
-    let mut row = umbra::orm::DynQuerySet::for_meta(&model)
+
+    // Pre-DB required-field validation. Rejects empty strings
+    // and missing values on NOT NULL columns with no default —
+    // the DRF-style 400 here lets the client highlight every
+    // bad input in one round-trip instead of letting blank
+    // strings sneak past the constraint layer.
+    let required_errors = validate_required_on_create(&model, &body);
+    if !required_errors.is_empty() {
+        return Err(ApiError::Validation {
+            code: "required_field",
+            field_errors: required_errors,
+            non_field_errors: Vec::new(),
+        });
+    }
+
+    let mut row = match umbra::orm::DynQuerySet::for_meta(&model)
         .insert_json(&body)
-        .await?;
+        .await
+    {
+        Ok(row) => row,
+        Err(e) => return Err(validation_from_sql_error(e, &body, &model)),
+    };
     cfg.apply_overrides(&table, &mut row);
     Ok((StatusCode::CREATED, Json(row)))
 }
@@ -1358,6 +1609,19 @@ async fn update(
     drop_noform_fields(&model, &mut body);
     let pk = pk_column(&model)?;
 
+    // Reject blanking-out of required fields. Missing keys are
+    // fine (partial-update contract), but explicitly sending an
+    // empty string for a NOT NULL column without a default
+    // shouldn't be silently written.
+    let required_errors = validate_required_on_update(&model, &body);
+    if !required_errors.is_empty() {
+        return Err(ApiError::Validation {
+            code: "required_field",
+            field_errors: required_errors,
+            non_field_errors: Vec::new(),
+        });
+    }
+
     // 404 if the target row doesn't exist before we attempt the UPDATE.
     let no_filter = FilterClause::default();
     let existing = fetch_rows(&model, Some((&pk.name, &id)), None, &no_filter).await?;
@@ -1372,10 +1636,13 @@ async fn update(
     // written, primary key never. Returns the row count which we
     // discard — we re-read the row below to send back the canonical
     // post-update shape (incl. any DB-side defaults or triggers).
-    umbra::orm::DynQuerySet::for_meta(&model)
+    if let Err(e) = umbra::orm::DynQuerySet::for_meta(&model)
         .filter_eq_string(&pk.name, &id)
         .update_json(&body)
-        .await?;
+        .await
+    {
+        return Err(validation_from_sql_error(e, &body, &model));
+    }
     let mut rows = fetch_rows(&model, Some((&pk.name, &id)), None, &no_filter).await?;
     let Some(mut row) = rows.pop() else {
         return Err(ApiError::BadInput(

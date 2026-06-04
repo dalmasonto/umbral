@@ -211,22 +211,29 @@ async fn not_null_violation_keys_the_error_under_the_required_column() {
 
     assert_eq!(status, StatusCode::BAD_REQUEST, "got body: {body}");
     let code = body["code"].as_str().unwrap_or("");
+    // Three valid outcomes, in order of preference:
+    //  - `required_field`: the new pre-validation caught the missing
+    //    `username` before it reached the DB (preferred — no SQL
+    //    round-trip).
+    //  - `null_constraint`: the row reached SQLite and it rejected
+    //    the NOT NULL violation.
+    //  - `bad_input`: the ORM's protocol-error path turned the
+    //    missing column into a structured 400.
     assert!(
-        code == "null_constraint" || code == "bad_input",
-        "expected null_constraint or bad_input, got code={code:?} body={body}",
+        code == "required_field" || code == "null_constraint" || code == "bad_input",
+        "expected required_field / null_constraint / bad_input, got code={code:?} body={body}",
     );
 
-    // When the ORM passes the row through and SQLite rejects it,
-    // the structured shape surfaces `username` as a field error.
-    if code == "null_constraint" {
+    // All three shapes name the offending column. `required_field`
+    // and `null_constraint` carry `username` as a field error;
+    // `bad_input` puts the explanation in the top-level `error`.
+    if code == "required_field" || code == "null_constraint" {
         let username_errors = body["username"]
             .as_array()
-            .expect("`username` should carry the not-null message; got {body}");
+            .expect("`username` should carry the field error; got {body}");
+        let msg = username_errors[0].as_str().unwrap_or("");
         assert!(
-            username_errors[0]
-                .as_str()
-                .map(|s| s.contains("required"))
-                .unwrap_or(false),
+            msg.contains("required") || msg.contains("blank"),
             "got {username_errors:?}",
         );
     }
@@ -248,4 +255,115 @@ async fn valid_payload_still_returns_201_created() {
     .await;
     assert_eq!(status, StatusCode::CREATED, "got body: {body}");
     assert_eq!(body["username"], "carol");
+}
+
+// =========================================================================
+// Required-field pre-validation: empty strings and missing values
+// on NOT NULL columns with no default are rejected BEFORE the
+// DB sees them. (User report: shop demo accepted a row of
+// `"name": ""`, `"slug": ""` etc. because the constraint layer
+// happily writes empty strings into NOT NULL VARCHAR.)
+// =========================================================================
+
+#[tokio::test]
+async fn empty_string_on_required_field_is_rejected() {
+    let router = boot().await.clone();
+    let (status, body) = post_json(
+        router,
+        "/api/author/",
+        // `username` is NOT NULL — sending `""` shouldn't slip
+        // through as an empty row.
+        json!({ "username": "", "email": "blank@example.com" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "got body: {body}");
+    assert_eq!(body["code"], "required_field");
+    let username_errors = body["username"]
+        .as_array()
+        .expect("`username` should carry the required-field message; got {body}");
+    assert!(
+        username_errors[0]
+            .as_str()
+            .map(|s| s.contains("required"))
+            .unwrap_or(false),
+        "got {username_errors:?}",
+    );
+}
+
+#[tokio::test]
+async fn multiple_blank_fields_surface_in_one_response() {
+    let router = boot().await.clone();
+    let (status, body) = post_json(
+        router,
+        "/api/author/",
+        json!({ "username": "", "email": "" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "got body: {body}");
+    // Both fields surface in the same response — the client can
+    // highlight every form input in one round-trip.
+    assert!(body["username"].is_array(), "got {body}");
+    assert!(body["email"].is_array(), "got {body}");
+}
+
+#[tokio::test]
+async fn missing_required_field_is_rejected_too() {
+    let router = boot().await.clone();
+    let (status, body) = post_json(
+        router,
+        "/api/author/",
+        json!({ "email": "noname@example.com" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "got body: {body}");
+    assert_eq!(body["code"], "required_field");
+    assert!(body["username"].is_array(), "got {body}");
+}
+
+// =========================================================================
+// Body-aware error enrichment: UNIQUE / FK errors now include
+// the offending VALUE so the client knows exactly which input is
+// duplicated / referencing a missing row.
+// =========================================================================
+
+#[tokio::test]
+async fn unique_violation_message_names_the_offending_value() {
+    let router = boot().await.clone();
+    let (status, body) = post_json(
+        router,
+        "/api/author/",
+        json!({ "username": "dave", "email": "alice@example.com" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "got body: {body}");
+    assert_eq!(body["code"], "unique_constraint");
+    let email_errors = body["email"]
+        .as_array()
+        .expect("`email` field error; got {body}");
+    let msg = email_errors[0].as_str().unwrap_or("");
+    assert!(
+        msg.contains("'alice@example.com'"),
+        "message should name the offending value; got {msg:?}",
+    );
+}
+
+#[tokio::test]
+async fn fk_violation_lists_every_fk_value_the_client_sent() {
+    let router = boot().await.clone();
+    let (status, body) = post_json(
+        router,
+        "/api/comment/",
+        json!({ "author_id": 9999, "body": "orphan" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "got body: {body}");
+    assert_eq!(body["code"], "fk_constraint");
+    let nfe = body["non_field_errors"]
+        .as_array()
+        .expect("non_field_errors array; got {body}");
+    let msg = nfe[0].as_str().unwrap_or("");
+    assert!(
+        msg.contains("author_id=9999"),
+        "message should list the FK columns + values; got {msg:?}",
+    );
 }

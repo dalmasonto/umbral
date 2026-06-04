@@ -313,8 +313,18 @@ async fn missing_required_field_returns_400_with_error_envelope() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "got {body}");
     let err: serde_json::Value = serde_json::from_str(&body).expect("error envelope is json");
-    assert!(err["error"].is_string());
-    assert!(err["code"].is_string());
+    // The 400 envelope has a stable `code` field; the body
+    // payload is either the legacy `{error, code}` shape (when
+    // the failure surfaced from the ORM as a Protocol error) or
+    // the new DRF-flat shape with per-field arrays plus
+    // `code = "required_field"` (when pre-validation caught it).
+    assert!(err["code"].is_string(), "got body: {err}");
+    let has_field_error = err["body"].is_array();
+    let has_error_msg = err["error"].is_string();
+    assert!(
+        has_field_error || has_error_msg,
+        "expected either a field-keyed array OR a top-level `error` string; got {err}",
+    );
 }
 
 #[tokio::test]
