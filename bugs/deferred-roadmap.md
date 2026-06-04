@@ -43,7 +43,7 @@ Last updated: 2026-06-04 after BUG-11/12/13 (`e2661f8`).
 | Playground-openapi #6 | `#[umbra(example = "...")]` → OpenAPI `example`. | `a45379a` |
 
 Plus gap #71 (playground app-scoping, `851728a`) and gap #65 follow-up (full diff widening, `f85ed06`).
-
+ 
 ## Open — new field types
 
 ### BUG-14: `ImageField` / `FileField`

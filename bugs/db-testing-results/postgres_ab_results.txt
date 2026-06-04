@@ -1,0 +1,222 @@
+=== Postgres API Tests (umbra_shop/umbra_shop) ===
+
+--- GET /api/post/ | c=1 n=1000 (Postgres) ---
+Time per request:       8.740 [ms] (mean, across all concurrent requests)
+Transfer rate:          14959.33 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.0      0       0
+Processing:     5    9   3.4      8      42
+Waiting:        5    9   3.3      8      42
+Total:          5    9   3.4      8      42
+
+Percentage of the requests served within a certain time (ms)
+  50%      8
+  66%     10
+  75%     11
+  80%     12
+  90%     13
+  95%     14
+  98%     16
+  99%     17
+ 100%     42 (longest request)
+
+--- GET /api/post/ | c=10 n=1000 (Postgres) ---
+Time per request:       0.909 [ms] (mean, across all concurrent requests)
+Transfer rate:          143831.57 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.0      0       0
+Processing:     5    9   6.4      8      95
+Waiting:        5    9   6.4      8      95
+Total:          5    9   6.4      8      95
+
+Percentage of the requests served within a certain time (ms)
+  50%      8
+  66%      9
+  75%     10
+  80%     11
+  90%     11
+  95%     12
+  98%     13
+  99%     19
+ 100%     95 (longest request)
+
+--- GET /api/post/ | c=50 n=1000 (Postgres) ---
+Time per request:       0.840 [ms] (mean, across all concurrent requests)
+Transfer rate:          155581.08 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.2      0       2
+Processing:    12   41   5.2     40      78
+Waiting:       10   40   5.2     40      78
+Total:         12   41   5.2     40      78
+
+Percentage of the requests served within a certain time (ms)
+  50%     40
+  66%     41
+  75%     42
+  80%     42
+  90%     44
+  95%     45
+  98%     58
+  99%     67
+ 100%     78 (longest request)
+
+--- GET /api/post/ | c=100 n=1000 (Postgres) ---
+Time per request:       0.841 [ms] (mean, across all concurrent requests)
+Transfer rate:          155544.24 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.2      0       1
+Processing:    11   80  10.2     79     129
+Waiting:       10   80  10.2     79     129
+Total:         11   80  10.2     79     129
+
+Percentage of the requests served within a certain time (ms)
+  50%     79
+  66%     80
+  75%     82
+  80%     82
+  90%     84
+  95%     98
+  98%    116
+  99%    122
+ 100%    129 (longest request)
+
+--- GET /api/post/1/ | c=1 n=1000 (Postgres) ---
+Time per request:       1.645 [ms] (mean, across all concurrent requests)
+Transfer rate:          858.18 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.0      0       0
+Processing:     1    2   0.3      2       4
+Waiting:        1    2   0.3      2       4
+Total:          1    2   0.3      2       4
+
+Percentage of the requests served within a certain time (ms)
+  50%      2
+  66%      2
+  75%      2
+  80%      2
+  90%      2
+  95%      2
+  98%      3
+  99%      3
+ 100%      4 (longest request)
+
+--- GET /api/post/1/ | c=50 n=1000 (Postgres) ---
+Time per request:       0.242 [ms] (mean, across all concurrent requests)
+Transfer rate:          5829.43 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.2      0       2
+Processing:     2   11   1.9     12      17
+Waiting:        2   11   1.9     12      17
+Total:          4   12   1.7     12      17
+
+Percentage of the requests served within a certain time (ms)
+  50%     12
+  66%     12
+  75%     13
+  80%     13
+  90%     13
+  95%     14
+  98%     14
+  99%     14
+ 100%     17 (longest request)
+
+--- GET /api/product/ | c=1 n=1000 (Postgres) ---
+Time per request:       4.370 [ms] (mean, across all concurrent requests)
+Transfer rate:          508.16 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.0      0       0
+Processing:     2    4   1.2      4      11
+Waiting:        2    4   1.2      4      11
+Total:          2    4   1.2      4      11
+
+Percentage of the requests served within a certain time (ms)
+  50%      4
+  66%      5
+  75%      5
+  80%      5
+  90%      6
+  95%      6
+  98%      7
+  99%      7
+ 100%     11 (longest request)
+
+--- GET /api/product/ | c=50 n=1000 (Postgres) ---
+Time per request:       0.337 [ms] (mean, across all concurrent requests)
+Transfer rate:          6589.94 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.4      0       3
+Processing:     7   16   8.3     13      47
+Waiting:        6   16   8.3     13      47
+Total:          9   16   8.3     13      48
+
+Percentage of the requests served within a certain time (ms)
+  50%     13
+  66%     14
+  75%     15
+  80%     17
+  90%     28
+  95%     41
+  98%     45
+  99%     45
+ 100%     48 (longest request)
+
+--- GET / | c=1 n=1000 (Postgres) ---
+Time per request:       6.147 [ms] (mean, across all concurrent requests)
+Transfer rate:          519.98 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.0      0       0
+Processing:     3    6   1.7      6      13
+Waiting:        3    6   1.6      6      13
+Total:          3    6   1.7      6      13
+
+Percentage of the requests served within a certain time (ms)
+  50%      6
+  66%      7
+  75%      7
+  80%      7
+  90%      8
+  95%      9
+  98%     10
+  99%     10
+ 100%     13 (longest request)
+
+--- GET / | c=50 n=1000 (Postgres) ---
+Time per request:       0.433 [ms] (mean, across all concurrent requests)
+Transfer rate:          7373.85 [Kbytes/sec] received
+
+Connection Times (ms)
+              min  mean[+/-sd] median   max
+Connect:        0    0   0.2      0       1
+Processing:     6   21   8.1     19      59
+Waiting:        4   21   8.1     19      59
+Total:          6   21   8.1     19      59
+
+Percentage of the requests served within a certain time (ms)
+  50%     19
+  66%     19
+  75%     19
+  80%     20
+  90%     30
+  95%     42
+  98%     52
+  99%     55
+ 100%     59 (longest request)
+
