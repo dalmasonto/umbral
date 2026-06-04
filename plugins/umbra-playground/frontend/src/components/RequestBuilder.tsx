@@ -212,11 +212,18 @@ export function RequestBuilder() {
   const opMethod = op?.method;
   const opPath = op?.path;
 
+  // Only seed the draft from the spec's defaults when there's no
+  // persisted draft for the picked operation yet. `selectEndpoint`
+  // resets `current.url` to "" synchronously and may async-load a
+  // saved draft moments later; the empty URL is the signal that
+  // either the load resolved with nothing OR is still in flight
+  // (in which case the saved draft will arrive and overwrite the
+  // defaults we set here — same as the previous behaviour).
   useEffect(() => {
-    if (opMethod && opPath) {
+    if (opMethod && opPath && current.url === "") {
       resetCurrent({ method: opMethod, url: opPath });
     }
-  }, [opMethod, opPath, resetCurrent]);
+  }, [opMethod, opPath, current.url, resetCurrent]);
 
   const displayUrl = useMemo(
     () => buildDisplayUrl(current.url, current.params),

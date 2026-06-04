@@ -4,6 +4,7 @@ import { buildFetchArgs } from "./buildFetchArgs";
 import { saveHistoryDebounced } from "./history";
 import { mockSpec, getMockResponse } from "../data/mockSpec";
 import { scopedKey } from "./scope";
+import { deleteDraft, loadDraft, saveDraft } from "./draftStorage";
 import {
   hydrateInitialSettings,
   persistSettings,
@@ -235,6 +236,10 @@ interface PlaygroundState {
   setAuthScheme: (s: string) => void;
   setAuthToken: (t: string) => void;
   resetCurrent: (draft: Partial<RequestDraft>) => void;
+  /** Discard the in-memory draft AND the persisted Dexie row for
+   *  the current operation. Reload won't bring the cleared draft
+   *  back. */
+  clearCurrent: () => void;
 
   // response
   lastResponse: ResponseRecord | null;
@@ -277,6 +282,33 @@ interface PlaygroundState {
 }
 
 const initialSettings = loadSettings();
+
+// Per-operation request-draft persistence. setMethod / setUrl /
+// setParams / setHeaders / setBody / setFormFields / setAuth* all
+// fire-and-forget through `scheduleDraftSave` so the UI stays
+// responsive. The 250ms debounce coalesces a typing burst into a
+// single Dexie write. Module-scoped state because zustand isn't
+// the right place for transient timer handles.
+let draftSaveTimer: ReturnType<typeof setTimeout> | null = null;
+let draftSavePending: { operationId: string; draft: RequestDraft } | null = null;
+
+function scheduleDraftSave(operationId: string | null, draft: RequestDraft) {
+  if (!operationId) return;
+  draftSavePending = { operationId, draft };
+  if (draftSaveTimer) return; // already scheduled
+  draftSaveTimer = setTimeout(() => {
+    draftSaveTimer = null;
+    const snapshot = draftSavePending;
+    draftSavePending = null;
+    if (snapshot) {
+      // Fire-and-forget on purpose — the setter that scheduled
+      // this returned synchronously, so awaiting here would not
+      // block the UI but would also not be observable. The
+      // caller doesn't need a confirmation.
+      void saveDraft(snapshot.operationId, snapshot.draft);
+    }
+  }, 250);
+}
 
 // Debounced "Settings saved" toast (gap #76). setSettings fires on
 // every keystroke; the debounce coalesces a typing burst into a
@@ -322,32 +354,116 @@ export const usePlayground = create<PlaygroundState>((set, get) => ({
   selectedOperationId: loadSelectedOperationId(),
   selectEndpoint: (id) => {
     saveSelectedOperationId(id);
-    // Clear `lastResponse` so the response panel doesn't keep showing
-    // the previous endpoint's body/headers/status. The History tab
-    // still has all the per-op records (Dexie-backed), so nothing is
-    // lost — just hidden when you navigate away. ResponseViewer's
-    // smart-default-tab effect picks History as the landing tab when
-    // lastResponse is null and history exists for the new endpoint.
-    set({ selectedOperationId: id, lastResponse: null });
+    // Flush the pending draft save for the OUTGOING op so the
+    // user's last keystroke before switching doesn't get lost in
+    // the debounce window.
+    if (draftSaveTimer && draftSavePending) {
+      clearTimeout(draftSaveTimer);
+      const snapshot = draftSavePending;
+      draftSavePending = null;
+      draftSaveTimer = null;
+      void saveDraft(snapshot.operationId, snapshot.draft);
+    }
+    // Reset to an empty draft synchronously so the request
+    // builder doesn't briefly show the previous operation's
+    // values. The async draftStorage.loadDraft below either
+    // hydrates the saved draft for the new op or leaves the
+    // empty state in place (in which case RequestBuilder's
+    // effect fills in the operation defaults).
+    set({
+      selectedOperationId: id,
+      lastResponse: null,
+      current: { ...emptyDraft },
+    });
+    if (!id) return;
+    // Fire-and-forget — the load can complete on the next tick
+    // and `set` it then. Subscribers re-render naturally.
+    void loadDraft(id).then((saved) => {
+      if (!saved) return;
+      // Only apply if the user hasn't already navigated away,
+      // and only if they haven't started typing into the empty
+      // draft we set synchronously above (i.e. their typed
+      // values would otherwise be clobbered).
+      const cur = get();
+      if (cur.selectedOperationId !== id) return;
+      if (cur.current.url !== "" || cur.current.body !== "") return;
+      set({ current: saved });
+    });
   },
 
   current: { ...emptyDraft },
-  setMethod: (m) => set((s) => ({ current: { ...s.current, method: m } })),
-  setUrl: (u) => set((s) => ({ current: { ...s.current, url: u } })),
-  setParams: (params) => set((s) => ({ current: { ...s.current, params } })),
-  setHeaders: (headers) => set((s) => ({ current: { ...s.current, headers } })),
-  setBodyType: (t) => set((s) => ({ current: { ...s.current, bodyType: t } })),
-  setBody: (raw) => set((s) => ({ current: { ...s.current, body: raw } })),
+  setMethod: (m) =>
+    set((s) => {
+      const next = { ...s.current, method: m };
+      scheduleDraftSave(s.selectedOperationId, next);
+      return { current: next };
+    }),
+  setUrl: (u) =>
+    set((s) => {
+      const next = { ...s.current, url: u };
+      scheduleDraftSave(s.selectedOperationId, next);
+      return { current: next };
+    }),
+  setParams: (params) =>
+    set((s) => {
+      const next = { ...s.current, params };
+      scheduleDraftSave(s.selectedOperationId, next);
+      return { current: next };
+    }),
+  setHeaders: (headers) =>
+    set((s) => {
+      const next = { ...s.current, headers };
+      scheduleDraftSave(s.selectedOperationId, next);
+      return { current: next };
+    }),
+  setBodyType: (t) =>
+    set((s) => {
+      const next = { ...s.current, bodyType: t };
+      scheduleDraftSave(s.selectedOperationId, next);
+      return { current: next };
+    }),
+  setBody: (raw) =>
+    set((s) => {
+      const next = { ...s.current, body: raw };
+      scheduleDraftSave(s.selectedOperationId, next);
+      return { current: next };
+    }),
   setFormFields: (fields) =>
-    set((s) => ({ current: { ...s.current, formFields: fields } })),
+    set((s) => {
+      const next = { ...s.current, formFields: fields };
+      scheduleDraftSave(s.selectedOperationId, next);
+      return { current: next };
+    }),
   setAuthScheme: (scheme) =>
-    set((s) => ({ current: { ...s.current, authScheme: scheme } })),
+    set((s) => {
+      const next = { ...s.current, authScheme: scheme };
+      scheduleDraftSave(s.selectedOperationId, next);
+      return { current: next };
+    }),
   setAuthToken: (token) =>
-    set((s) => ({ current: { ...s.current, authToken: token } })),
+    set((s) => {
+      const next = { ...s.current, authToken: token };
+      scheduleDraftSave(s.selectedOperationId, next);
+      return { current: next };
+    }),
   resetCurrent: (draft) => {
     const base = { ...emptyDraft, ...draft };
     base.headers = mergeHeaders(base.headers, get().settings.defaultHeaders);
     set({ current: base });
+    // resetCurrent fires when the RequestBuilder picks up a fresh
+    // operation that has no saved draft yet — capture the seeded
+    // defaults so the next reload still sees them under this op.
+    scheduleDraftSave(get().selectedOperationId, base);
+  },
+  /** Explicit "wipe my work for this endpoint" path. Clears the
+   *  in-memory draft AND the Dexie row so a reload doesn't
+   *  resurrect what the user just discarded. */
+  clearCurrent: () => {
+    const opId = get().selectedOperationId;
+    set({ current: { ...emptyDraft } });
+    if (opId) {
+      void deleteDraft(opId);
+    }
   },
 
   lastResponse: null,

@@ -1,6 +1,6 @@
 import Dexie, { type EntityTable } from "dexie";
 import { getAppScope } from "./scope";
-import type { PlaygroundSettings, ResponseRecord } from "./store";
+import type { PlaygroundSettings, RequestDraft, ResponseRecord } from "./store";
 
 export interface HistoryRow extends ResponseRecord {
   /** Dexie auto-increment PK. Optional on the type because we never
@@ -31,6 +31,19 @@ export interface SettingsRow {
   updatedAt: number;
 }
 
+/** Per-operation request-draft row. Keyed by `operationId` so each
+ *  endpoint remembers its last in-progress state across reloads.
+ *  Stores the entire `RequestDraft` shape — method, URL, params,
+ *  headers, body, form fields, auth — so the user's work is never
+ *  lost to a tab close. Schema-versioned alongside the settings
+ *  row for the same forward-compat reason. */
+export interface DraftRow {
+  operationId: string;
+  schema: number;
+  draft: RequestDraft;
+  updatedAt: number;
+}
+
 // Per-app Dexie database name (gap #71). Two apps in the same
 // browser get two separate IndexedDB databases — history /
 // editorState / settings slots can't bleed across app boundaries.
@@ -40,6 +53,7 @@ export const db = new Dexie(DB_NAME) as Dexie & {
   history: EntityTable<HistoryRow, "id">;
   editorState: EntityTable<EditorStateRow, "key">;
   settings: EntityTable<SettingsRow, "key">;
+  drafts: EntityTable<DraftRow, "operationId">;
 };
 
 // v1: history table. v2 adds the editorState table for persistent
@@ -47,7 +61,9 @@ export const db = new Dexie(DB_NAME) as Dexie & {
 // v3 adds the settings table (workspace settings, previously stored
 // in localStorage — moved to IndexedDB so the 5MB quota goes away
 // and the unreliable-private-mode-throws localStorage edge cases
-// stop biting us). Upgrades are automatic — Dexie keeps the
+// stop biting us). v4 adds the drafts table — per-operation
+// request state survives reloads so the user never loses an
+// in-progress payload. Upgrades are automatic; Dexie keeps the
 // existing tables untouched and just adds the new one.
 db.version(1).stores({
   history: "++id, operationId, timestamp",
@@ -64,9 +80,20 @@ db.version(3).stores({
   settings: "&key",
 });
 
+db.version(4).stores({
+  history: "++id, operationId, timestamp",
+  editorState: "&key",
+  settings: "&key",
+  drafts: "&operationId, updatedAt",
+});
+
 /** Schema version stamped on every `SettingsRow`. Bump alongside any
  *  breaking change to `PlaygroundSettings`. Reads with a lower
  *  version go through the normaliser to fill in missing fields;
  *  reads with a higher version (downgrade) are discarded back to
  *  defaults so we don't pretend to understand them. */
 export const SETTINGS_SCHEMA_VERSION = 1;
+
+/** Schema version stamped on every `DraftRow`. See
+ *  [`SETTINGS_SCHEMA_VERSION`] for the upgrade convention. */
+export const DRAFT_SCHEMA_VERSION = 1;
