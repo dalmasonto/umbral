@@ -53,6 +53,12 @@ pub use sqlx as _sqlx;
 pub use umbra_core::app::{App, AppBuilder, BuildError};
 pub use umbra_core::settings::{Environment, Settings};
 
+/// CORS configuration for [`AppBuilder::cors`]. See
+/// [`umbra_core::cors`] for the full surface.
+pub mod cors {
+    pub use umbra_core::cors::CorsConfig;
+}
+
 /// Settings accessors — `get()` returns the live `Settings` published
 /// at `App::build` time. Used by plugin code that needs to branch on
 /// `environment` / `bind_addr` etc. (e.g. umbra-email checking whether

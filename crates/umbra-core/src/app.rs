@@ -83,6 +83,10 @@ pub struct AppBuilder {
     /// When `true` (the default), the embedded default 404/500 templates
     /// are used as fallbacks when the user hasn't supplied their own.
     default_error_pages: bool,
+    /// Optional cross-origin policy. `None` means no `CorsLayer`
+    /// is installed at all and browsers apply the same-origin
+    /// default. Configure via [`AppBuilder::cors`].
+    cors: Option<crate::cors::CorsConfig>,
 }
 
 impl Default for AppBuilder {
@@ -100,6 +104,7 @@ impl Default for AppBuilder {
             server_error_template: None,
             server_error_hook: None,
             default_error_pages: true,
+            cors: None,
         }
     }
 }
@@ -315,6 +320,38 @@ impl AppBuilder {
     /// ```
     pub fn disable_default_error_pages(mut self) -> Self {
         self.default_error_pages = false;
+        self
+    }
+
+    /// Install a CORS policy as the outermost middleware.
+    ///
+    /// The framework doesn't install a `CorsLayer` by default —
+    /// same-origin requests need no policy, and CORS is too
+    /// security-sensitive to enable implicitly. Pass a
+    /// [`crate::cors::CorsConfig`] (start from
+    /// [`CorsConfig::strict`](crate::cors::CorsConfig::strict) for
+    /// production or [`CorsConfig::permissive`](crate::cors::CorsConfig::permissive)
+    /// for dev).
+    ///
+    /// ```ignore
+    /// use umbra::prelude::*;
+    /// use umbra::cors::CorsConfig;
+    ///
+    /// App::builder()
+    ///     .cors(CorsConfig::strict()
+    ///         .allow_origin("https://app.example.com")
+    ///         .allow_credentials(true))
+    ///     .build()
+    ///     .await?
+    /// ```
+    ///
+    /// The layer is applied LAST in the middleware chain so it
+    /// becomes the outermost wrapper — preflight `OPTIONS` is
+    /// answered before any plugin / handler sees the request, and
+    /// the response headers are added on the way back out
+    /// regardless of which downstream layer produced the body.
+    pub fn cors(mut self, config: crate::cors::CorsConfig) -> Self {
+        self.cors = Some(config);
         self
     }
 
@@ -696,6 +733,15 @@ impl AppBuilder {
                 render_state,
                 crate::errors::render_500_middleware,
             ));
+        }
+
+        // Phase 5.9 — CORS, applied last so it's the outermost
+        // wrapper. Preflight `OPTIONS` is answered before any
+        // plugin/handler sees the request; response headers are
+        // added on the way back out regardless of which downstream
+        // layer produced the body.
+        if let Some(cors) = self.cors.take() {
+            router = router.layer(cors.into_layer());
         }
 
         // Phase 6 — fire each plugin's `on_ready` in topological order.

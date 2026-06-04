@@ -7,6 +7,7 @@
 pub mod app;
 pub mod backend;
 pub mod backup;
+pub mod cors;
 pub mod check;
 pub mod cli;
 pub mod db;

@@ -19,7 +19,7 @@ tower = { version = "0.5", default-features = false }
 # handler into a rendered template response instead of a process-level
 # panic. Cheap to add; we'd want it eventually for static-files and
 # trace support anyway.
-tower-http = { version = "0.6", default-features = false, features = ["catch-panic"] }
+tower-http = { version = "0.6", default-features = false, features = ["catch-panic", "cors"] }
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "string"] }
 async-trait = "0.1"
