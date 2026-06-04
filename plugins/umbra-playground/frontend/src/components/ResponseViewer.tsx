@@ -42,6 +42,21 @@ const TABS: { id: TabId; label: string; icon: React.ReactNode }[] = [
   { id: "curl", label: "cURL", icon: <Terminal className="size-3" /> },
 ];
 
+/** Case-insensitive scan of the response headers for a
+ *  `content-type` whose media type matches `text/html`. Charset /
+ *  boundary parameters are ignored — `text/html; charset=utf-8`
+ *  qualifies. */
+export function isHtmlContentType(headers: Record<string, string>): boolean {
+  for (const [k, v] of Object.entries(headers)) {
+    if (k.toLowerCase() !== "content-type") continue;
+    const mediaType = (v ?? "").split(";")[0].trim().toLowerCase();
+    if (mediaType === "text/html" || mediaType === "application/xhtml+xml") {
+      return true;
+    }
+  }
+  return false;
+}
+
 function statusColor(status: number): string {
   if (status >= 200 && status < 300) return "bg-emerald-500/15 text-emerald-600 border-emerald-500/25";
   if (status >= 300 && status < 400) return "bg-amber-500/15 text-amber-600 border-amber-500/25";
@@ -83,6 +98,23 @@ function toCurl(record: ResponseRecord): string {
   }
   parts.push(`'${req.url}'`);
   return parts.join(" \\\n  ");
+}
+
+/** Render an HTML response body in a sandboxed iframe so the
+ *  Body tab actually shows the page the server returned instead of
+ *  a raw text dump. The sandbox keeps script execution and
+ *  same-origin access off by default; rendered CSS / images / form
+ *  layout still works, which is what users need to spot a 500-page
+ *  template or a Tailwind admin shell. */
+function HtmlPreview({ body }: { body: string }) {
+  return (
+    <iframe
+      title="HTML response preview"
+      srcDoc={body}
+      sandbox=""
+      className="w-full h-full border border-border rounded-md bg-white"
+    />
+  );
 }
 
 function EmptyState({ title, hint }: { title: string; hint: string }) {
@@ -258,6 +290,15 @@ export function ResponseViewer() {
     }
   }, [lastResponse]);
 
+  // Detect HTML responses so the Body tab renders them as a
+  // sandboxed iframe instead of a raw text dump. The decision
+  // is response-header driven (`content-type`), case-insensitive
+  // so `Text/HTML` and `text/html;charset=utf-8` both qualify.
+  const isHtmlResponse = useMemo(() => {
+    if (!lastResponse) return false;
+    return isHtmlContentType(lastResponse.headers);
+  }, [lastResponse]);
+
   if (inFlight) {
     return (
       <div className="flex flex-col h-full p-4 space-y-3">
@@ -365,7 +406,9 @@ export function ResponseViewer() {
         {activeTab === "body" && (
           <div className="h-full flex flex-col">
             {lastResponse ? (
-              prettyBody ? (
+              isHtmlResponse ? (
+                <HtmlPreview body={bodyText} />
+              ) : prettyBody ? (
                 <ReadonlyMonaco value={prettyBody} language="json" />
               ) : (
                 <pre className="font-mono text-xs whitespace-pre-wrap break-all text-foreground">

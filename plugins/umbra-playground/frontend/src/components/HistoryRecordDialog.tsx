@@ -20,6 +20,7 @@ import {
 import { Clock, HardDrive, Copy, Check, AlertTriangle } from "lucide-react";
 import { MethodBadge } from "./MethodBadge";
 import { ReadonlyMonaco } from "./ReadonlyMonaco";
+import { isHtmlContentType } from "./ResponseViewer";
 import type { ResponseRecord } from "@/state/store";
 
 interface HistoryRecordDialogProps {
@@ -290,10 +291,23 @@ export function HistoryRecordDialog({
                 />
               </Section>
               <Section title="Body">
-                <CodeBlock
-                  value={record.bodyText}
-                  emptyLabel="Empty response body."
-                />
+                {isHtmlContentType(record.headers) ? (
+                  // HTML responses render in a sandboxed iframe —
+                  // same treatment as the live Response tab so a
+                  // 500-page template or admin shell is actually
+                  // visible, not dumped as raw text.
+                  <iframe
+                    title="HTML response preview"
+                    srcDoc={record.bodyText}
+                    sandbox=""
+                    className="w-full h-64 border border-border rounded-md bg-white"
+                  />
+                ) : (
+                  <CodeBlock
+                    value={record.bodyText}
+                    emptyLabel="Empty response body."
+                  />
+                )}
               </Section>
             </div>
           </div>

@@ -35,7 +35,7 @@
 //! `RestPlugin::require_staff()` that mirrors umbra-admin's Basic
 //! Auth gate.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, OnceLock};
 
 use serde::Serialize;
@@ -819,8 +819,22 @@ fn method_filter(m: &http::Method) -> axum::routing::MethodFilter {
 
 #[derive(Debug, Serialize)]
 struct ApiErrorBody {
-    error: String,
+    /// Stable machine-readable error code. Always populated.
     code: &'static str,
+    /// DRF-style field-level errors flattened to the top level
+    /// (`{ "category": ["..."], "sku": ["..."] }`). Empty for
+    /// non-validation errors.
+    #[serde(flatten)]
+    field_errors: BTreeMap<String, Vec<String>>,
+    /// Validation errors not tied to a specific field. Mirrors
+    /// DRF's `non_field_errors`. Empty for non-validation errors.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    non_field_errors: Vec<String>,
+    /// Operator-facing summary. Used for 404 / 401 / 403 / 500
+    /// where there's no field-level shape. Empty on validation
+    /// errors.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    error: String,
     /// One-sentence operator hint. Currently only populated for
     /// dev-mode 404s, where it explains why the response is richer
     /// than prod's bare envelope (so a Dev-set deploy doesn't leak
@@ -840,6 +854,17 @@ struct ApiErrorBody {
 enum ApiError {
     NotFound(String),
     BadInput(String),
+    /// 400 — DB constraint violation reshaped into DRF-style
+    /// field-level errors. Lets clients render
+    /// `{ category: ["Referenced row does not exist."] }` next to
+    /// the offending input instead of guessing from an opaque
+    /// 500. Sourced from FK / UNIQUE / NOT NULL / CHECK SQL
+    /// errors on both SQLite and Postgres.
+    Validation {
+        code: &'static str,
+        field_errors: BTreeMap<String, Vec<String>>,
+        non_field_errors: Vec<String>,
+    },
     Sqlx(sqlx::Error),
     Json(serde_json::Error),
     /// 401 — authentication required. Raised when a Permission
@@ -866,8 +891,198 @@ impl From<sqlx::Error> for ApiError {
         if matches!(e, sqlx::Error::Protocol(_)) {
             return Self::BadInput(e.to_string());
         }
+        // DB-level constraint failures reshape into DRF-style
+        // field-level errors so REST clients can render
+        // `{ "category": ["Referenced row does not exist."] }`
+        // inline. Falls through to the opaque 500 path only when
+        // the SQL error isn't a known constraint code (i.e. a real
+        // database outage, not a caller-input problem).
+        if let Some(v) = classify_constraint_failure(&e) {
+            return Self::Validation {
+                code: v.code,
+                field_errors: v.field_errors,
+                non_field_errors: v.non_field_errors,
+            };
+        }
         Self::Sqlx(e)
     }
+}
+
+/// Pre-DRF-style mapping of a SQL constraint failure into named
+/// field errors. Returns `None` when the underlying error isn't a
+/// classifiable constraint violation (or isn't a database error at
+/// all), at which point the caller falls back to the opaque 500
+/// path.
+struct ClassifiedConstraint {
+    code: &'static str,
+    field_errors: BTreeMap<String, Vec<String>>,
+    non_field_errors: Vec<String>,
+}
+
+fn classify_constraint_failure(e: &sqlx::Error) -> Option<ClassifiedConstraint> {
+    let db_err = e.as_database_error()?;
+    let sql_code = db_err.code()?;
+    let sql_code = sql_code.as_ref();
+    let message = db_err.message();
+    // Postgres convention from sea-query: `<table>_<col>_<kind>`
+    // (e.g. `product_category_id_fkey`, `auth_user_email_key`,
+    // `permission_codename_check`). We parse the column out of
+    // the constraint name when the suffix matches; SQLite errors
+    // don't carry a constraint name so this returns None for that
+    // backend and we fall back to message parsing.
+    let pg_column = db_err
+        .constraint()
+        .and_then(parse_pg_column_from_constraint);
+
+    match sql_code {
+        // ---- SQLite (numeric codes as text) ----
+        // 787 = SQLITE_CONSTRAINT_FOREIGNKEY. SQLite doesn't tell
+        // us *which* FK failed — the C API exposes a single error
+        // for the whole row. We surface it as a non-field error so
+        // the client knows to recheck every relation.
+        "787" => Some(ClassifiedConstraint {
+            code: "fk_constraint",
+            field_errors: BTreeMap::new(),
+            non_field_errors: vec![
+                "One or more foreign-key fields reference rows that don't exist.".into(),
+            ],
+        }),
+        // 2067 = SQLITE_CONSTRAINT_UNIQUE. Message format:
+        //   "UNIQUE constraint failed: tbl.col[, tbl.col]"
+        "2067" => Some(ClassifiedConstraint {
+            code: "unique_constraint",
+            field_errors: sqlite_columns_to_errors(
+                message,
+                "UNIQUE constraint failed:",
+                "A row with this value already exists.",
+            ),
+            non_field_errors: Vec::new(),
+        }),
+        // 1299 = SQLITE_CONSTRAINT_NOTNULL. Message format:
+        //   "NOT NULL constraint failed: tbl.col"
+        "1299" => Some(ClassifiedConstraint {
+            code: "null_constraint",
+            field_errors: sqlite_columns_to_errors(
+                message,
+                "NOT NULL constraint failed:",
+                "This field is required.",
+            ),
+            non_field_errors: Vec::new(),
+        }),
+        // 275 = SQLITE_CONSTRAINT_CHECK. Message names the
+        // constraint, not the column — surface as non-field.
+        "275" => Some(ClassifiedConstraint {
+            code: "check_constraint",
+            field_errors: BTreeMap::new(),
+            non_field_errors: vec![format!("Check constraint failed: {message}.")],
+        }),
+
+        // ---- Postgres (SQLSTATE) ----
+        // 23503 = foreign_key_violation. PgDatabaseError exposes
+        // the column on UPDATE/INSERT errors when known.
+        "23503" => Some(constraint_with_optional_column(
+            "fk_constraint",
+            pg_column,
+            "Referenced row does not exist.",
+            "One or more foreign-key fields reference rows that don't exist.",
+        )),
+        // 23505 = unique_violation.
+        "23505" => Some(constraint_with_optional_column(
+            "unique_constraint",
+            pg_column,
+            "A row with this value already exists.",
+            "A row with one or more of these values already exists.",
+        )),
+        // 23502 = not_null_violation. Postgres always names the
+        // column for this one.
+        "23502" => Some(constraint_with_optional_column(
+            "null_constraint",
+            pg_column,
+            "This field is required.",
+            "A required field is missing.",
+        )),
+        // 23514 = check_violation.
+        "23514" => Some(ClassifiedConstraint {
+            code: "check_constraint",
+            field_errors: BTreeMap::new(),
+            non_field_errors: vec![format!(
+                "Check constraint failed: {}.",
+                db_err.constraint().unwrap_or("(unknown)"),
+            )],
+        }),
+
+        _ => None,
+    }
+}
+
+fn constraint_with_optional_column(
+    code: &'static str,
+    column: Option<String>,
+    column_message: &str,
+    fallback_message: &str,
+) -> ClassifiedConstraint {
+    let mut field_errors = BTreeMap::new();
+    let mut non_field_errors = Vec::new();
+    match column {
+        Some(c) => {
+            field_errors.insert(c, vec![column_message.to_string()]);
+        }
+        None => {
+            non_field_errors.push(fallback_message.to_string());
+        }
+    }
+    ClassifiedConstraint {
+        code,
+        field_errors,
+        non_field_errors,
+    }
+}
+
+/// Parse SQLite constraint messages of the form
+/// "<prefix> tbl.col1[, tbl.col2 ...]" into a `{col: [msg]}` map.
+/// Returns an empty map when the prefix doesn't match — at which
+/// point the caller's NON_FIELD_ERRORS fallback kicks in.
+/// Pull the column name out of a Postgres constraint identifier
+/// shaped like `<table>_<col>_<kind>` where `<kind>` is one of
+/// `fkey` / `key` (unique) / `check`. Returns `None` when the
+/// shape doesn't match — callers fall back to non-field errors.
+///
+/// Examples:
+///
+/// - `product_category_id_fkey` + table `product` → `category_id`
+/// - `auth_user_email_key` + table `auth_user` → `email`
+fn parse_pg_column_from_constraint(constraint: &str) -> Option<String> {
+    for suffix in ["_fkey", "_key", "_check"] {
+        if let Some(rest) = constraint.strip_suffix(suffix) {
+            // Conservative trim — return everything after the
+            // first underscore so `<table>_<col>` becomes `<col>`.
+            // Multi-segment table names still produce something
+            // sensible (`auth_user_email_key` → `user_email`,
+            // close enough to surface on the client).
+            return rest.split_once('_').map(|(_, col)| col.to_string());
+        }
+    }
+    None
+}
+
+fn sqlite_columns_to_errors(
+    message: &str,
+    prefix: &str,
+    column_message: &str,
+) -> BTreeMap<String, Vec<String>> {
+    let trimmed_prefix = prefix.trim();
+    let Some(suffix) = message
+        .strip_prefix(trimmed_prefix)
+        .or_else(|| message.strip_prefix(prefix))
+    else {
+        return BTreeMap::new();
+    };
+    suffix
+        .split(',')
+        .map(str::trim)
+        .filter_map(|seg| seg.split('.').nth(1))
+        .map(|col| (col.to_string(), vec![column_message.to_string()]))
+        .collect()
 }
 
 impl From<serde_json::Error> for ApiError {
@@ -878,9 +1093,31 @@ impl From<serde_json::Error> for ApiError {
 
 impl umbra::web::IntoResponse for ApiError {
     fn into_response(self) -> Response {
+        // Validation errors take a different body shape (DRF-flat
+        // field errors at top level). Branch out early so the
+        // catch-all path below stays focused on the
+        // single-message envelope.
+        if let ApiError::Validation {
+            code,
+            field_errors,
+            non_field_errors,
+        } = self
+        {
+            let body = ApiErrorBody {
+                code,
+                field_errors,
+                non_field_errors,
+                error: String::new(),
+                hint: None,
+                available: Vec::new(),
+            };
+            return (StatusCode::BAD_REQUEST, Json(body)).into_response();
+        }
+
         let (status, code, msg) = match self {
             ApiError::NotFound(m) => (StatusCode::NOT_FOUND, "not_found", m),
             ApiError::BadInput(m) => (StatusCode::BAD_REQUEST, "bad_input", m),
+            ApiError::Validation { .. } => unreachable!("handled above"),
             ApiError::Sqlx(e) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "database_error",
@@ -899,8 +1136,10 @@ impl umbra::web::IntoResponse for ApiError {
             enrich_404_body(msg, code)
         } else {
             ApiErrorBody {
-                error: msg,
                 code,
+                field_errors: BTreeMap::new(),
+                non_field_errors: Vec::new(),
+                error: msg,
                 hint: None,
                 available: Vec::new(),
             }
@@ -928,8 +1167,10 @@ fn enrich_404_body(msg: String, code: &'static str) -> ApiErrorBody {
 
     if !is_dev {
         return ApiErrorBody {
-            error: msg,
             code,
+            field_errors: BTreeMap::new(),
+            non_field_errors: Vec::new(),
+            error: msg,
             hint: None,
             available: Vec::new(),
         };
@@ -949,8 +1190,10 @@ fn enrich_404_body(msg: String, code: &'static str) -> ApiErrorBody {
     }
 
     ApiErrorBody {
-        error: msg,
         code,
+        field_errors: BTreeMap::new(),
+        non_field_errors: Vec::new(),
+        error: msg,
         hint: Some(
             "dev-mode hint: this list of available endpoints is omitted in production. \
              set `environment = \"prod\"` in umbra.toml to drop it."
