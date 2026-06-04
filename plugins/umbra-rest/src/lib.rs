@@ -1339,11 +1339,25 @@ fn validate_required_on_update(
 /// where a typed value belongs. JSON `{}` is intentionally not
 /// blank: an empty JSON object is a legitimate value for a JSONB
 /// column. Empty arrays are also valid for array-ish columns.
+///
+/// **Foreign keys get one extra rule**: a numeric `0` (or
+/// negative) is treated as blank because that's the conventional
+/// "nothing selected" placeholder for an auto-increment FK — real
+/// rows start at 1. Without this rule the form-default value of
+/// `category: 0` would slip past pre-validation and either fail
+/// the DB constraint with a less useful per-row message OR write
+/// a dangling reference when FK enforcement is off.
 fn is_blank_value(value: Option<&Value>, ty: umbra::orm::SqlType) -> bool {
     use umbra::orm::SqlType;
     match value {
         None => true,
         Some(Value::Null) => true,
+        Some(Value::Number(n)) if matches!(ty, SqlType::ForeignKey) => {
+            // 0 or negative on an auto-increment FK = "form
+            // didn't pick anything." Real rows start at 1.
+            n.as_i64().map(|i| i <= 0).unwrap_or(false)
+                || n.as_f64().map(|f| f <= 0.0).unwrap_or(false)
+        }
         Some(Value::String(s)) => {
             // Text columns: empty string is blank by convention
             // (Django's CharField with blank=False). Other typed

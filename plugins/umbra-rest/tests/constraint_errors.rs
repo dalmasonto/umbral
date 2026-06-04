@@ -367,3 +367,50 @@ async fn fk_violation_lists_every_fk_value_the_client_sent() {
         "message should list the FK columns + values; got {msg:?}",
     );
 }
+
+// =========================================================================
+// FK = 0 (or negative) is the form-default "nothing selected"
+// placeholder — pre-validation should catch it before the row
+// touches the DB, so the response keys the error under the FK
+// column instead of buried in a non-field message.
+// =========================================================================
+
+#[tokio::test]
+async fn fk_zero_is_treated_as_blank_and_keyed_under_the_fk_column() {
+    let router = boot().await.clone();
+    let (status, body) = post_json(
+        router,
+        "/api/comment/",
+        // `author_id: 0` is the typical "form didn't pick a
+        // value" sentinel. Auto-increment rows start at 1, so
+        // 0 can't possibly reference a real author.
+        json!({ "author_id": 0, "body": "ghost" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "got body: {body}");
+    assert_eq!(body["code"], "required_field");
+    let fk_errors = body["author_id"]
+        .as_array()
+        .expect("`author_id` should carry the required-field message; got {body}");
+    assert!(
+        fk_errors[0]
+            .as_str()
+            .map(|s| s.contains("required"))
+            .unwrap_or(false),
+        "got {fk_errors:?}",
+    );
+}
+
+#[tokio::test]
+async fn fk_negative_is_treated_as_blank_too() {
+    let router = boot().await.clone();
+    let (status, body) = post_json(
+        router,
+        "/api/comment/",
+        json!({ "author_id": -1, "body": "wrong" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "got body: {body}");
+    assert_eq!(body["code"], "required_field");
+    assert!(body["author_id"].is_array(), "got {body}");
+}
