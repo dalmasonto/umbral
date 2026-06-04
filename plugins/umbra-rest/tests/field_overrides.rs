@@ -294,7 +294,11 @@ async fn list_response_respects_fields_query_param() {
         let obj = row.as_object().expect("row is object");
         let keys: Vec<&str> = obj.keys().map(String::as_str).collect();
         // Only id + username should appear; computed/transform fields drop out too.
-        assert_eq!(keys.len(), 2, "row should have exactly 2 keys, got {keys:?}");
+        assert_eq!(
+            keys.len(),
+            2,
+            "row should have exactly 2 keys, got {keys:?}"
+        );
         assert!(obj.contains_key("id"));
         assert!(obj.contains_key("username"));
         assert!(!obj.contains_key("email"));
@@ -309,7 +313,11 @@ async fn retrieve_response_respects_fields_query_param() {
     assert_eq!(status, StatusCode::OK);
     let obj = body.as_object().expect("body is object");
     let keys: Vec<&str> = obj.keys().map(String::as_str).collect();
-    assert_eq!(keys.len(), 2, "row should have exactly 2 keys, got {keys:?}");
+    assert_eq!(
+        keys.len(),
+        2,
+        "row should have exactly 2 keys, got {keys:?}"
+    );
     assert!(obj.contains_key("username"));
     assert!(obj.contains_key("first_name"));
     assert!(!obj.contains_key("id"));
