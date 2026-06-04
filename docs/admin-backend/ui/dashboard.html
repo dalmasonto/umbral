@@ -1,0 +1,1325 @@
+<!doctype html>
+
+<html class="dark" lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta content="width=device-width, initial-scale=1.0" name="viewport" />
+        <title>Umbra Admin Dashboard</title>
+        <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+        <link
+            href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap"
+            rel="stylesheet"
+        />
+        <link
+            href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap"
+            rel="stylesheet"
+        />
+        <link
+            href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap"
+            rel="stylesheet"
+        />
+        <script id="tailwind-config">
+            tailwind.config = {
+                darkMode: "class",
+                theme: {
+                    extend: {
+                        colors: {
+                            "on-tertiary-fixed-variant": "#930013",
+                            secondary: "#bec7d7",
+                            "inverse-surface": "#e0e2ec",
+                            "on-tertiary-fixed": "#410004",
+                            "primary-container": "#8484f8",
+                            "primary-fixed-dim": "#c2c1ff",
+                            "outline-variant": "#464553",
+                            "surface-container": "#1d2027",
+                            error: "#ffb4ab",
+                            "on-secondary-container": "#adb6c5",
+                            "surface-container-high": "#272a31",
+                            "on-error-container": "#ffdad6",
+                            "on-secondary-fixed-variant": "#3e4755",
+                            "on-tertiary": "#68000a",
+                            "surface-container-low": "#191c23",
+                            "surface-dim": "#10131a",
+                            "on-surface": "#e0e2ec",
+                            "on-error": "#690005",
+                            "secondary-container": "#3e4755",
+                            "error-container": "#93000a",
+                            "on-primary": "#1f1792",
+                            "inverse-on-surface": "#2d3038",
+                            "on-secondary-fixed": "#131c28",
+                            primary: "#c2c1ff",
+                            "tertiary-container": "#ff5451",
+                            "surface-container-lowest": "#0b0e15",
+                            "secondary-fixed": "#dae3f4",
+                            "on-primary-container": "#16098d",
+                            "on-surface-variant": "#c7c5d5",
+                            "surface-tint": "#c2c1ff",
+                            "on-tertiary-container": "#5c0008",
+                            "inverse-primary": "#504fc1",
+                            "surface-container-highest": "#32353c",
+                            "on-primary-fixed-variant": "#3835a8",
+                            "tertiary-fixed": "#ffdad7",
+                            surface: "#10131a",
+                            "primary-fixed": "#e2dfff",
+                            "on-secondary": "#28313d",
+                            outline: "#918f9e",
+                            "surface-bright": "#363941",
+                            "secondary-fixed-dim": "#bec7d7",
+                            "surface-variant": "#32353c",
+                            tertiary: "#ffb3ad",
+                            "tertiary-fixed-dim": "#ffb3ad",
+                            "on-primary-fixed": "#0b006b",
+                            background: "#10131a",
+                            "on-background": "#e0e2ec",
+                        },
+                        borderRadius: {
+                            DEFAULT: "0.125rem",
+                            lg: "0.25rem",
+                            xl: "0.5rem",
+                            full: "0.75rem",
+                        },
+                        spacing: {
+                            "sidebar-width": "260px",
+                            md: "16px",
+                            xs: "4px",
+                            sm: "8px",
+                            "sidebar-collapsed": "68px",
+                            base: "4px",
+                            lg: "24px",
+                            "topbar-height": "56px",
+                            gutter: "20px",
+                            xl: "32px",
+                        },
+                        fontFamily: {
+                            "body-md": ["Inter"],
+                            "data-mono": ["Inter"],
+                            h3: ["Inter"],
+                            "body-sm": ["Inter"],
+                            display: ["Inter"],
+                            h1: ["Inter"],
+                            "label-sm": ["Inter"],
+                            h2: ["Inter"],
+                            "label-md": ["Inter"],
+                            "body-lg": ["Inter"],
+                        },
+                        fontSize: {
+                            "body-md": [
+                                "14px",
+                                { lineHeight: "20px", fontWeight: "400" },
+                            ],
+                            "data-mono": [
+                                "14px",
+                                { lineHeight: "20px", fontWeight: "400" },
+                            ],
+                            h3: [
+                                "16px",
+                                { lineHeight: "24px", fontWeight: "600" },
+                            ],
+                            "body-sm": [
+                                "13px",
+                                { lineHeight: "18px", fontWeight: "400" },
+                            ],
+                            display: [
+                                "30px",
+                                {
+                                    lineHeight: "38px",
+                                    letterSpacing: "-0.02em",
+                                    fontWeight: "700",
+                                },
+                            ],
+                            h1: [
+                                "24px",
+                                {
+                                    lineHeight: "32px",
+                                    letterSpacing: "-0.015em",
+                                    fontWeight: "600",
+                                },
+                            ],
+                            "label-sm": [
+                                "11px",
+                                {
+                                    lineHeight: "14px",
+                                    letterSpacing: "0.03em",
+                                    fontWeight: "600",
+                                },
+                            ],
+                            h2: [
+                                "20px",
+                                {
+                                    lineHeight: "28px",
+                                    letterSpacing: "-0.01em",
+                                    fontWeight: "600",
+                                },
+                            ],
+                            "label-md": [
+                                "12px",
+                                {
+                                    lineHeight: "16px",
+                                    letterSpacing: "0.01em",
+                                    fontWeight: "500",
+                                },
+                            ],
+                            "body-lg": [
+                                "16px",
+                                { lineHeight: "24px", fontWeight: "400" },
+                            ],
+                        },
+                    },
+                },
+            };
+        </script>
+        <style>
+            body {
+                font-family: "Inter", sans-serif;
+            }
+            .material-symbols-outlined {
+                font-variation-settings:
+                    "FILL" 0,
+                    "wght" 400,
+                    "GRAD" 0,
+                    "opsz" 24;
+                vertical-align: middle;
+            }
+            .custom-scrollbar::-webkit-scrollbar {
+                width: 4px;
+            }
+            .custom-scrollbar::-webkit-scrollbar-track {
+                background: transparent;
+            }
+            .custom-scrollbar::-webkit-scrollbar-thumb {
+                background: #32353c;
+                border-radius: 10px;
+            }
+            .glass {
+                background: rgba(29, 32, 39, 0.7);
+                backdrop-filter: blur(12px);
+            }
+        </style>
+    </head>
+    <body class="bg-background text-on-background antialiased flex">
+        <!-- Sidebar -->
+        <aside
+            class="fixed left-0 top-0 h-full w-sidebar-width bg-surface-container border-r border-outline-variant flex flex-col z-50 transition-all duration-300"
+        >
+            <!-- Logo Area -->
+            <div class="p-lg flex items-center gap-sm">
+                <div
+                    class="w-8 h-8 rounded-xl bg-primary flex items-center justify-center"
+                >
+                    <span
+                        class="material-symbols-outlined text-on-primary text-[20px]"
+                        >cloud_sync</span
+                    >
+                </div>
+                <div>
+                    <h2 class="font-h2 text-h2 font-bold text-on-surface">
+                        Umbra Admin
+                    </h2>
+                    <p
+                        class="text-[10px] text-outline tracking-widest uppercase"
+                    >
+                        Version 2.4.0
+                    </p>
+                </div>
+            </div>
+            <!-- Search Box -->
+            <div class="px-md mb-md">
+                <div class="relative group">
+                    <span
+                        class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-outline text-[18px]"
+                        >search</span
+                    >
+                    <input
+                        class="w-full bg-surface-container-low border border-outline-variant rounded-xl pl-10 pr-4 py-2 text-body-sm focus:ring-1 focus:ring-primary focus:border-primary transition-all"
+                        placeholder="Search models..."
+                        type="text"
+                    />
+                </div>
+            </div>
+            <!-- Navigation Scroll Area -->
+            <nav
+                class="flex-1 overflow-y-auto px-sm space-y-md custom-scrollbar"
+            >
+                <!-- App Group: Dashboard -->
+                <div>
+                    <p
+                        class="px-md mb-xs font-label-sm text-label-sm text-outline uppercase tracking-wider"
+                    >
+                        Core
+                    </p>
+                    <div class="space-y-1">
+                        <a
+                            class="flex items-center gap-3 px-md py-2.5 rounded-xl bg-primary-container/10 text-primary border-l-2 border-primary font-body-sm transition-all"
+                            href="#"
+                        >
+                            <span
+                                class="material-symbols-outlined"
+                                style="
+                                    font-variation-settings: &quot;FILL&quot; 1;
+                                "
+                                >dashboard</span
+                            >
+                            <span>Dashboard</span>
+                        </a>
+                        <a
+                            class="flex items-center gap-3 px-md py-2.5 rounded-xl text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface font-body-sm transition-all"
+                            href="#"
+                        >
+                            <span class="material-symbols-outlined"
+                                >rocket_launch</span
+                            >
+                            <span>Deployments</span>
+                        </a>
+                    </div>
+                </div>
+                <!-- App Group: Blog -->
+                <div>
+                    <p
+                        class="px-md mb-xs font-label-sm text-label-sm text-outline uppercase tracking-wider"
+                    >
+                        Blog
+                    </p>
+                    <div class="space-y-1">
+                        <a
+                            class="flex items-center gap-3 px-md py-2.5 rounded-xl text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface font-body-sm transition-all"
+                            href="#"
+                        >
+                            <span class="material-symbols-outlined"
+                                >article</span
+                            >
+                            <span>Articles</span>
+                        </a>
+                        <a
+                            class="flex items-center gap-3 px-md py-2.5 rounded-xl text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface font-body-sm transition-all"
+                            href="#"
+                        >
+                            <span class="material-symbols-outlined"
+                                >category</span
+                            >
+                            <span>Categories</span>
+                        </a>
+                    </div>
+                </div>
+                <!-- App Group: Auth -->
+                <div>
+                    <p
+                        class="px-md mb-xs font-label-sm text-label-sm text-outline uppercase tracking-wider"
+                    >
+                        Auth
+                    </p>
+                    <div class="space-y-1">
+                        <a
+                            class="flex items-center gap-3 px-md py-2.5 rounded-xl text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface font-body-sm transition-all"
+                            href="#"
+                        >
+                            <span class="material-symbols-outlined"
+                                >groups</span
+                            >
+                            <span>Team</span>
+                        </a>
+                        <a
+                            class="flex items-center gap-3 px-md py-2.5 rounded-xl text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface font-body-sm transition-all"
+                            href="#"
+                        >
+                            <span class="material-symbols-outlined"
+                                >security</span
+                            >
+                            <span>Permissions</span>
+                        </a>
+                    </div>
+                </div>
+                <!-- App Group: Newsletter -->
+                <div>
+                    <p
+                        class="px-md mb-xs font-label-sm text-label-sm text-outline uppercase tracking-wider"
+                    >
+                        Newsletter
+                    </p>
+                    <div class="space-y-1">
+                        <a
+                            class="flex items-center gap-3 px-md py-2.5 rounded-xl text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface font-body-sm transition-all"
+                            href="#"
+                        >
+                            <span class="material-symbols-outlined">mail</span>
+                            <span>Campaigns</span>
+                        </a>
+                        <a
+                            class="flex items-center gap-3 px-md py-2.5 rounded-xl text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface font-body-sm transition-all"
+                            href="#"
+                        >
+                            <span class="material-symbols-outlined"
+                                >database</span
+                            >
+                            <span>Resources</span>
+                        </a>
+                    </div>
+                </div>
+            </nav>
+            <!-- Footer -->
+            <div
+                class="p-md border-t border-outline-variant bg-surface-container-low"
+            >
+                <div class="space-y-1">
+                    <a
+                        class="flex items-center gap-3 px-md py-2 rounded-xl text-on-surface-variant hover:text-on-surface font-body-sm transition-all group"
+                        href="#"
+                    >
+                        <span
+                            class="material-symbols-outlined group-hover:rotate-12 transition-transform"
+                            >help</span
+                        >
+                        <span>Support</span>
+                    </a>
+                    <a
+                        class="flex items-center gap-3 px-md py-2 rounded-xl text-on-surface-variant hover:text-on-surface font-body-sm transition-all"
+                        href="#"
+                    >
+                        <span class="material-symbols-outlined">settings</span>
+                        <span>Settings</span>
+                    </a>
+                </div>
+            </div>
+        </aside>
+        <!-- Main Wrapper -->
+        <main class="ml-sidebar-width flex-1 flex flex-col min-h-screen">
+            <!-- Topbar -->
+            <header
+                class="sticky top-0 z-40 h-topbar-height glass border-b border-outline-variant flex items-center justify-between px-lg"
+            >
+                <!-- Breadcrumbs -->
+                <div
+                    class="flex items-center gap-xs font-label-md text-label-md"
+                >
+                    <span class="text-outline">Home</span>
+                    <span
+                        class="material-symbols-outlined text-[14px] text-outline"
+                        >chevron_right</span
+                    >
+                    <span class="text-primary font-bold">Dashboard</span>
+                </div>
+                <!-- Global Search Trigger -->
+                <button
+                    class="bg-surface-container-low border border-outline-variant px-md py-1.5 rounded-xl flex items-center gap-xl hover:bg-surface-container transition-colors"
+                >
+                    <div class="flex items-center gap-sm">
+                        <span
+                            class="material-symbols-outlined text-outline text-[18px]"
+                            >search</span
+                        >
+                        <span class="text-body-sm text-outline"
+                            >Search everything...</span
+                        >
+                    </div>
+                    <kbd
+                        class="text-[10px] bg-outline-variant/30 text-on-surface border border-outline-variant/50 px-1.5 py-0.5 rounded"
+                        >⌘K</kbd
+                    >
+                </button>
+                <!-- Actions -->
+                <div class="flex items-center gap-md">
+                    <button
+                        class="w-10 h-10 flex items-center justify-center rounded-xl text-on-surface-variant hover:bg-surface-container-lowest transition-all relative"
+                    >
+                        <span class="material-symbols-outlined"
+                            >notifications</span
+                        >
+                        <span
+                            class="absolute top-2.5 right-2.5 w-2 h-2 bg-error rounded-full border-2 border-surface"
+                        ></span>
+                    </button>
+                    <button
+                        class="w-10 h-10 flex items-center justify-center rounded-xl text-on-surface-variant hover:bg-surface-container-lowest transition-all"
+                    >
+                        <span class="material-symbols-outlined">dark_mode</span>
+                    </button>
+                    <div class="w-px h-6 bg-outline-variant mx-1"></div>
+                    <div
+                        class="flex items-center gap-3 pl-1 group cursor-pointer"
+                    >
+                        <div class="text-right">
+                            <p
+                                class="text-body-sm font-semibold text-on-surface leading-none"
+                            >
+                                Alex Rivera
+                            </p>
+                            <p
+                                class="text-[10px] text-outline uppercase tracking-wider mt-1"
+                            >
+                                Admin
+                            </p>
+                        </div>
+                        <img
+                            alt="User Profile"
+                            class="w-9 h-9 rounded-xl border border-outline-variant group-hover:border-primary transition-colors"
+                            src="https://lh3.googleusercontent.com/aida-public/AB6AXuCU6Nm9zlHHBxD7UA7bOYYupkxAPptHqmfB2aeE-lEVbsgm8WeJJAtgpUbW9cKziUDCFe-1-kyi5GoYREyhNoLV-jfGZB7UD6J9whzrGxX89JuLgfRMxXZC3B_sdI6h0Z6wMhD8kVagpMic0WjPsCsAfSbIq9nR5wJ582yBT3Ga6CoCjUGiSqmALcz_rS--ZAkLMuQZ5Zez5xj69gAw006p-speGUp4Ab7EvIi16MBAp_TezDgvkZlA6HJweeAVD-FWqvjXRfZSyFI"
+                        />
+                    </div>
+                </div>
+            </header>
+            <!-- Content Area -->
+            <div class="p-lg space-y-lg flex-1">
+                <!-- KPI Cards Grid -->
+                <div
+                    class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-md"
+                >
+                    <!-- KPI 1 -->
+                    <div
+                        class="bg-surface border border-outline-variant rounded-xl p-md flex flex-col justify-between hover:border-primary/50 transition-colors group"
+                    >
+                        <div class="flex justify-between items-start mb-md">
+                            <div>
+                                <p
+                                    class="font-label-md text-label-md text-outline"
+                                >
+                                    Total Users
+                                </p>
+                                <h3
+                                    class="font-h1 text-h1 font-bold mt-1 tabular-nums"
+                                >
+                                    12,842
+                                </h3>
+                            </div>
+                            <span
+                                class="bg-primary/10 text-primary p-2 rounded-lg material-symbols-outlined"
+                                >groups</span
+                            >
+                        </div>
+                        <div class="flex items-center justify-between">
+                            <div class="flex items-center gap-1 text-primary">
+                                <span
+                                    class="material-symbols-outlined text-[16px]"
+                                    >trending_up</span
+                                >
+                                <span class="text-label-sm font-bold"
+                                    >+12%</span
+                                >
+                            </div>
+                            <!-- Sparkline Placeholder -->
+                            <div class="h-8 flex items-end gap-[2px]">
+                                <div
+                                    class="w-1 bg-primary/20 h-[40%] rounded-full"
+                                ></div>
+                                <div
+                                    class="w-1 bg-primary/20 h-[60%] rounded-full"
+                                ></div>
+                                <div
+                                    class="w-1 bg-primary/20 h-[30%] rounded-full"
+                                ></div>
+                                <div
+                                    class="w-1 bg-primary/40 h-[70%] rounded-full"
+                                ></div>
+                                <div
+                                    class="w-1 bg-primary/60 h-[90%] rounded-full"
+                                ></div>
+                                <div
+                                    class="w-1 bg-primary h-[80%] rounded-full"
+                                ></div>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- KPI 2 -->
+                    <div
+                        class="bg-surface border border-outline-variant rounded-xl p-md flex flex-col justify-between hover:border-primary/50 transition-colors"
+                    >
+                        <div class="flex justify-between items-start mb-md">
+                            <div>
+                                <p
+                                    class="font-label-md text-label-md text-outline"
+                                >
+                                    Monthly Revenue
+                                </p>
+                                <h3
+                                    class="font-h1 text-h1 font-bold mt-1 tabular-nums"
+                                >
+                                    $48.2k
+                                </h3>
+                            </div>
+                            <span
+                                class="bg-secondary/10 text-secondary p-2 rounded-lg material-symbols-outlined"
+                                >payments</span
+                            >
+                        </div>
+                        <div class="flex items-center justify-between">
+                            <div class="flex items-center gap-1 text-secondary">
+                                <span
+                                    class="material-symbols-outlined text-[16px]"
+                                    >trending_up</span
+                                >
+                                <span class="text-label-sm font-bold"
+                                    >+8.4%</span
+                                >
+                            </div>
+                            <div class="h-8 flex items-end gap-[2px]">
+                                <div
+                                    class="w-1 bg-secondary/20 h-[50%] rounded-full"
+                                ></div>
+                                <div
+                                    class="w-1 bg-secondary/20 h-[40%] rounded-full"
+                                ></div>
+                                <div
+                                    class="w-1 bg-secondary/40 h-[60%] rounded-full"
+                                ></div>
+                                <div
+                                    class="w-1 bg-secondary/40 h-[50%] rounded-full"
+                                ></div>
+                                <div
+                                    class="w-1 bg-secondary/60 h-[80%] rounded-full"
+                                ></div>
+                                <div
+                                    class="w-1 bg-secondary h-[75%] rounded-full"
+                                ></div>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- KPI 3 -->
+                    <div
+                        class="bg-surface border border-outline-variant rounded-xl p-md flex flex-col justify-between hover:border-primary/50 transition-colors"
+                    >
+                        <div class="flex justify-between items-start mb-md">
+                            <div>
+                                <p
+                                    class="font-label-md text-label-md text-outline"
+                                >
+                                    Active Sessions
+                                </p>
+                                <h3
+                                    class="font-h1 text-h1 font-bold mt-1 tabular-nums"
+                                >
+                                    1,209
+                                </h3>
+                            </div>
+                            <span
+                                class="bg-tertiary-container/10 text-tertiary-container p-2 rounded-lg material-symbols-outlined"
+                                >bolt</span
+                            >
+                        </div>
+                        <div class="flex items-center justify-between">
+                            <div
+                                class="flex items-center gap-1 text-tertiary-container"
+                            >
+                                <span
+                                    class="material-symbols-outlined text-[16px]"
+                                    >trending_down</span
+                                >
+                                <span class="text-label-sm font-bold"
+                                    >-2.1%</span
+                                >
+                            </div>
+                            <div class="h-8 flex items-end gap-[2px]">
+                                <div
+                                    class="w-1 bg-tertiary-container/20 h-[90%] rounded-full"
+                                ></div>
+                                <div
+                                    class="w-1 bg-tertiary-container/40 h-[70%] rounded-full"
+                                ></div>
+                                <div
+                                    class="w-1 bg-tertiary-container/30 h-[80%] rounded-full"
+                                ></div>
+                                <div
+                                    class="w-1 bg-tertiary-container/60 h-[50%] rounded-full"
+                                ></div>
+                                <div
+                                    class="w-1 bg-tertiary-container/80 h-[40%] rounded-full"
+                                ></div>
+                                <div
+                                    class="w-1 bg-tertiary-container h-[30%] rounded-full"
+                                ></div>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- KPI 4 -->
+                    <div
+                        class="bg-surface border border-outline-variant rounded-xl p-md flex flex-col justify-between hover:border-primary/50 transition-colors"
+                    >
+                        <div class="flex justify-between items-start mb-md">
+                            <div>
+                                <p
+                                    class="font-label-md text-label-md text-outline"
+                                >
+                                    Error Rate
+                                </p>
+                                <h3
+                                    class="font-h1 text-h1 font-bold mt-1 tabular-nums"
+                                >
+                                    0.04%
+                                </h3>
+                            </div>
+                            <span
+                                class="bg-error/10 text-error p-2 rounded-lg material-symbols-outlined"
+                                >warning</span
+                            >
+                        </div>
+                        <div class="flex items-center justify-between">
+                            <div class="flex items-center gap-1 text-error">
+                                <span
+                                    class="material-symbols-outlined text-[16px]"
+                                    >trending_down</span
+                                >
+                                <span class="text-label-sm font-bold"
+                                    >-0.01%</span
+                                >
+                            </div>
+                            <div class="h-8 flex items-end gap-[2px]">
+                                <div
+                                    class="w-1 bg-error/20 h-[60%] rounded-full"
+                                ></div>
+                                <div
+                                    class="w-1 bg-error/20 h-[50%] rounded-full"
+                                ></div>
+                                <div
+                                    class="w-1 bg-error/40 h-[40%] rounded-full"
+                                ></div>
+                                <div
+                                    class="w-1 bg-error/60 h-[30%] rounded-full"
+                                ></div>
+                                <div
+                                    class="w-1 bg-error h-[20%] rounded-full"
+                                ></div>
+                                <div
+                                    class="w-1 bg-error h-[10%] rounded-full"
+                                ></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <!-- Dashboard Visualizations -->
+                <div class="grid grid-cols-12 gap-lg">
+                    <!-- Signups Line Chart -->
+                    <div
+                        class="col-span-12 lg:col-span-8 bg-surface border border-outline-variant rounded-xl p-lg"
+                    >
+                        <div class="flex items-center justify-between mb-lg">
+                            <div>
+                                <h3 class="font-h2 text-h2 font-semibold">
+                                    Signups Over Time
+                                </h3>
+                                <p class="text-body-sm text-outline mt-1">
+                                    Growth analytics across all connected
+                                    platforms.
+                                </p>
+                            </div>
+                            <select
+                                class="bg-surface-container-low border border-outline-variant rounded-lg text-body-sm px-3 py-1.5 focus:ring-1 focus:ring-primary"
+                            >
+                                <option>Last 30 Days</option>
+                                <option>Last 6 Months</option>
+                                <option>Year to Date</option>
+                            </select>
+                        </div>
+                        <!-- Chart Placeholder -->
+                        <div
+                            class="relative h-[300px] w-full mt-4 flex items-end justify-between px-2"
+                        >
+                            <div
+                                class="absolute inset-0 flex flex-col justify-between pointer-events-none"
+                            >
+                                <div
+                                    class="w-full border-t border-outline-variant/30 h-0"
+                                ></div>
+                                <div
+                                    class="w-full border-t border-outline-variant/30 h-0"
+                                ></div>
+                                <div
+                                    class="w-full border-t border-outline-variant/30 h-0"
+                                ></div>
+                                <div
+                                    class="w-full border-t border-outline-variant/30 h-0"
+                                ></div>
+                            </div>
+                            <svg
+                                class="absolute inset-0 w-full h-full drop-shadow-[0_0_8px_rgba(194,193,255,0.3)]"
+                                preserveaspectratio="none"
+                                viewbox="0 0 1000 300"
+                            >
+                                <path
+                                    class="text-primary"
+                                    d="M0,250 Q100,240 200,180 T400,150 T600,80 T800,110 T1000,40"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="3"
+                                ></path>
+                                <path
+                                    d="M0,250 Q100,240 200,180 T400,150 T600,80 T800,110 T1000,40 V300 H0 Z"
+                                    fill="url(#chartGradient)"
+                                ></path>
+                                <defs>
+                                    <lineargradient
+                                        id="chartGradient"
+                                        x1="0"
+                                        x2="0"
+                                        y1="0"
+                                        y2="1"
+                                    >
+                                        <stop
+                                            class="text-primary"
+                                            offset="0%"
+                                            stop-color="currentColor"
+                                            stop-opacity="0.15"
+                                        ></stop>
+                                        <stop
+                                            class="text-primary"
+                                            offset="100%"
+                                            stop-color="currentColor"
+                                            stop-opacity="0"
+                                        ></stop>
+                                    </lineargradient>
+                                </defs>
+                            </svg>
+                        </div>
+                        <div
+                            class="flex justify-between mt-4 px-2 font-label-sm text-label-sm text-outline uppercase tracking-widest"
+                        >
+                            <span>Day 01</span>
+                            <span>Day 10</span>
+                            <span>Day 20</span>
+                            <span>Day 30</span>
+                        </div>
+                    </div>
+                    <!-- Traffic Source Donut -->
+                    <div
+                        class="col-span-12 lg:col-span-4 bg-surface border border-outline-variant rounded-xl p-lg flex flex-col"
+                    >
+                        <h3 class="font-h2 text-h2 font-semibold mb-lg">
+                            Traffic Sources
+                        </h3>
+                        <div
+                            class="flex-1 flex flex-col items-center justify-center relative py-4"
+                        >
+                            <svg class="w-48 h-48 -rotate-90">
+                                <circle
+                                    class="text-primary"
+                                    cx="96"
+                                    cy="96"
+                                    fill="transparent"
+                                    r="80"
+                                    stroke="currentColor"
+                                    stroke-dasharray="502"
+                                    stroke-dashoffset="120"
+                                    stroke-width="14"
+                                ></circle>
+                                <circle
+                                    class="text-secondary"
+                                    cx="96"
+                                    cy="96"
+                                    fill="transparent"
+                                    r="80"
+                                    stroke="currentColor"
+                                    stroke-dasharray="502"
+                                    stroke-dashoffset="380"
+                                    stroke-width="14"
+                                ></circle>
+                                <circle
+                                    class="text-tertiary-container"
+                                    cx="96"
+                                    cy="96"
+                                    fill="transparent"
+                                    r="80"
+                                    stroke="currentColor"
+                                    stroke-dasharray="502"
+                                    stroke-dashoffset="460"
+                                    stroke-width="14"
+                                ></circle>
+                            </svg>
+                            <div
+                                class="absolute inset-0 flex flex-col items-center justify-center"
+                            >
+                                <p
+                                    class="text-display font-display text-on-surface leading-none"
+                                >
+                                    84%
+                                </p>
+                                <p
+                                    class="text-[10px] text-outline uppercase tracking-widest mt-1"
+                                >
+                                    Direct
+                                </p>
+                            </div>
+                        </div>
+                        <div class="space-y-sm mt-md">
+                            <div class="flex items-center justify-between">
+                                <div class="flex items-center gap-2">
+                                    <span
+                                        class="w-3 h-3 rounded-full bg-primary"
+                                    ></span>
+                                    <span class="text-body-sm text-on-surface"
+                                        >Direct</span
+                                    >
+                                </div>
+                                <span
+                                    class="font-data-mono text-data-mono font-bold"
+                                    >42.8%</span
+                                >
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <div class="flex items-center gap-2">
+                                    <span
+                                        class="w-3 h-3 rounded-full bg-secondary"
+                                    ></span>
+                                    <span class="text-body-sm text-on-surface"
+                                        >Organic</span
+                                    >
+                                </div>
+                                <span
+                                    class="font-data-mono text-data-mono font-bold"
+                                    >35.2%</span
+                                >
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <div class="flex items-center gap-2">
+                                    <span
+                                        class="w-3 h-3 rounded-full bg-tertiary-container"
+                                    ></span>
+                                    <span class="text-body-sm text-on-surface"
+                                        >Social</span
+                                    >
+                                </div>
+                                <span
+                                    class="font-data-mono text-data-mono font-bold"
+                                    >22.0%</span
+                                >
+                            </div>
+                        </div>
+                    </div>
+                    <!-- Recent Activity Table -->
+                    <div
+                        class="col-span-12 bg-surface border border-outline-variant rounded-xl overflow-hidden"
+                    >
+                        <div
+                            class="px-lg py-md border-b border-outline-variant flex items-center justify-between bg-surface-container-low"
+                        >
+                            <h3 class="font-h3 text-h3 font-semibold">
+                                Recent Activity
+                            </h3>
+                            <button
+                                class="text-primary hover:underline text-body-sm font-medium"
+                            >
+                                View all
+                            </button>
+                        </div>
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-left">
+                                <thead
+                                    class="bg-surface-container-lowest border-b border-outline-variant"
+                                >
+                                    <tr>
+                                        <th
+                                            class="px-lg py-3 font-label-sm text-label-sm text-outline uppercase tracking-wider"
+                                        >
+                                            User
+                                        </th>
+                                        <th
+                                            class="px-lg py-3 font-label-sm text-label-sm text-outline uppercase tracking-wider"
+                                        >
+                                            Action
+                                        </th>
+                                        <th
+                                            class="px-lg py-3 font-label-sm text-label-sm text-outline uppercase tracking-wider"
+                                        >
+                                            Status
+                                        </th>
+                                        <th
+                                            class="px-lg py-3 font-label-sm text-label-sm text-outline uppercase tracking-wider"
+                                        >
+                                            Date
+                                        </th>
+                                        <th
+                                            class="px-lg py-3 font-label-sm text-label-sm text-outline uppercase tracking-wider"
+                                        ></th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-outline-variant">
+                                    <tr
+                                        class="hover:bg-surface-container-low transition-colors group"
+                                    >
+                                        <td class="px-lg py-3.5">
+                                            <div
+                                                class="flex items-center gap-3"
+                                            >
+                                                <div
+                                                    class="w-8 h-8 rounded-lg bg-surface-container-high overflow-hidden"
+                                                >
+                                                    <img
+                                                        alt="John Doe"
+                                                        class="w-full h-full"
+                                                        src="https://lh3.googleusercontent.com/aida-public/AB6AXuC1uGC15EDbdzyxWKVmMh00gJrwWnGGyKZjMKXlEiZSFCvWUGHBWdiQKD248IOmMXb5js3KbYMAhCid6vy7JB7dbqjFKH8sxjLvou0Lx1g5tdARto-P8_RBLE3FtLzbriHeQ_Ez8mOFu9XEHisApqB894e98YUgugvrbZ52XG4TzNBfPQDtNros7yIWonMlZK-Ht8ESAdrCyJUfWcnLGPKKHFi2M4YRN7JQk6nAGSx1aSg-BxH1qUDNZrj-liJo7mUIpbLEr_SUg3M"
+                                                    />
+                                                </div>
+                                                <span
+                                                    class="text-body-sm font-medium text-on-surface"
+                                                    >John Doe</span
+                                                >
+                                            </div>
+                                        </td>
+                                        <td class="px-lg py-3.5">
+                                            <span
+                                                class="text-body-sm text-on-surface-variant"
+                                                >Deployed production app
+                                                v2.4.1</span
+                                            >
+                                        </td>
+                                        <td class="px-lg py-3.5">
+                                            <span
+                                                class="inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-primary/10 text-primary uppercase tracking-wider border border-primary/20"
+                                                >Success</span
+                                            >
+                                        </td>
+                                        <td
+                                            class="px-lg py-3.5 font-data-mono text-data-mono text-outline"
+                                        >
+                                            2023-11-24 14:20
+                                        </td>
+                                        <td
+                                            class="px-lg py-3.5 text-right opacity-0 group-hover:opacity-100 transition-opacity"
+                                        >
+                                            <button
+                                                class="material-symbols-outlined text-outline hover:text-on-surface"
+                                            >
+                                                more_vert
+                                            </button>
+                                        </td>
+                                    </tr>
+                                    <tr
+                                        class="hover:bg-surface-container-low transition-colors group"
+                                    >
+                                        <td class="px-lg py-3.5">
+                                            <div
+                                                class="flex items-center gap-3"
+                                            >
+                                                <div
+                                                    class="w-8 h-8 rounded-lg bg-surface-container-high overflow-hidden"
+                                                >
+                                                    <img
+                                                        alt="Sarah Chen"
+                                                        class="w-full h-full"
+                                                        src="https://lh3.googleusercontent.com/aida-public/AB6AXuAXRNf01lr60lZic3lyOe6E4yylUM-zA2QR4clyazf1K2AGwmHDX0rtBqjGlV71JkouQgTPO391z2O3rkiPUHZq2RHF1XWjIG1eOq7miFgXImoesbXfXWH8d_4vGrdx-9sL_D1-thAh3U7vc1xnYqiZHD7xJhMqsc6j7NCjFVLH1XEqPawHsWQKyKVFEe5Zz9TygmMMYY46qAy73xn996hOE3SEUZUDTOk1jy81Lqz89Uvm5-QvAXmmt21YOaRo34ybtGNU3sWw1i4"
+                                                    />
+                                                </div>
+                                                <span
+                                                    class="text-body-sm font-medium text-on-surface"
+                                                    >Sarah Chen</span
+                                                >
+                                            </div>
+                                        </td>
+                                        <td class="px-lg py-3.5">
+                                            <span
+                                                class="text-body-sm text-on-surface-variant"
+                                                >Modified security headers</span
+                                            >
+                                        </td>
+                                        <td class="px-lg py-3.5">
+                                            <span
+                                                class="inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-primary/10 text-primary uppercase tracking-wider border border-primary/20"
+                                                >Success</span
+                                            >
+                                        </td>
+                                        <td
+                                            class="px-lg py-3.5 font-data-mono text-data-mono text-outline"
+                                        >
+                                            2023-11-24 13:45
+                                        </td>
+                                        <td
+                                            class="px-lg py-3.5 text-right opacity-0 group-hover:opacity-100 transition-opacity"
+                                        >
+                                            <button
+                                                class="material-symbols-outlined text-outline hover:text-on-surface"
+                                            >
+                                                more_vert
+                                            </button>
+                                        </td>
+                                    </tr>
+                                    <tr
+                                        class="hover:bg-surface-container-low transition-colors group"
+                                    >
+                                        <td class="px-lg py-3.5">
+                                            <div
+                                                class="flex items-center gap-3"
+                                            >
+                                                <div
+                                                    class="w-8 h-8 rounded-lg bg-surface-container-high overflow-hidden"
+                                                >
+                                                    <img
+                                                        alt="Backup Task"
+                                                        class="w-full h-full"
+                                                        src="https://lh3.googleusercontent.com/aida-public/AB6AXuBV8yKB6AbsH60nID_7r5nbx2PGVSddawfNCRbOS6rXm_tAbxX2TtGsbMI16P_05JAH0j5QdIzpKSZR7pVK1N4FWU8Sb6vG8XnxlUB6LWVrgtCb-JfGI8hA3wDFSVnYt3AwtY_2M3IWRhYn4zTajz8cUF4kLpsEBemhFg1RDWVeCFpxp6tX6LzkSrZMZXEwUoRE3QgXhrnYpkeYZBhiGClUfVB5G7RsbqTUJnV5ZvkFX4dvP0CVa8rYrE56H8L8mkfui-gFFbqV1XU"
+                                                    />
+                                                </div>
+                                                <span
+                                                    class="text-body-sm font-medium text-on-surface"
+                                                    >Automated Task</span
+                                                >
+                                            </div>
+                                        </td>
+                                        <td class="px-lg py-3.5">
+                                            <span
+                                                class="text-body-sm text-on-surface-variant"
+                                                >Nightly database cleanup</span
+                                            >
+                                        </td>
+                                        <td class="px-lg py-3.5">
+                                            <span
+                                                class="inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-error/10 text-error uppercase tracking-wider border border-error/20"
+                                                >Failed</span
+                                            >
+                                        </td>
+                                        <td
+                                            class="px-lg py-3.5 font-data-mono text-data-mono text-outline"
+                                        >
+                                            2023-11-24 03:00
+                                        </td>
+                                        <td
+                                            class="px-lg py-3.5 text-right opacity-0 group-hover:opacity-100 transition-opacity"
+                                        >
+                                            <button
+                                                class="material-symbols-outlined text-outline hover:text-on-surface"
+                                            >
+                                                more_vert
+                                            </button>
+                                        </td>
+                                    </tr>
+                                    <tr
+                                        class="hover:bg-surface-container-low transition-colors group"
+                                    >
+                                        <td class="px-lg py-3.5">
+                                            <div
+                                                class="flex items-center gap-3"
+                                            >
+                                                <div
+                                                    class="w-8 h-8 rounded-lg bg-surface-container-high overflow-hidden"
+                                                >
+                                                    <img
+                                                        alt="Marcus Wright"
+                                                        class="w-full h-full"
+                                                        src="https://lh3.googleusercontent.com/aida-public/AB6AXuCrr1l1ZFsTBFQg4fKonY42qYOygL3UmAYt78-0UqvNcCNJrfe8QF9kZVgPSs74O4sm3FkzOr_FzHBhqyCzLR7U8Op4JYbqJIcc5Hejs2LS3f-kXnblDGPCeLG48LU4npf1WdoDy5RRNXPczUrgpa_jngGQ8SG9AfUOsXI30GgkXyZ8dy_H6YUpyWjqBKNxUsbpdZRkKv7hBanDk_OueOa331H2k6Ea4I4Wzp8ulolzOdEzMXiGGrsrfQRuw_kvfXNCLkAzriAqKM0"
+                                                    />
+                                                </div>
+                                                <span
+                                                    class="text-body-sm font-medium text-on-surface"
+                                                    >Marcus Wright</span
+                                                >
+                                            </div>
+                                        </td>
+                                        <td class="px-lg py-3.5">
+                                            <span
+                                                class="text-body-sm text-on-surface-variant"
+                                                >Created new newsletter
+                                                campaign</span
+                                            >
+                                        </td>
+                                        <td class="px-lg py-3.5">
+                                            <span
+                                                class="inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-secondary/10 text-secondary uppercase tracking-wider border border-secondary/20"
+                                                >Pending</span
+                                            >
+                                        </td>
+                                        <td
+                                            class="px-lg py-3.5 font-data-mono text-data-mono text-outline"
+                                        >
+                                            2023-11-23 18:12
+                                        </td>
+                                        <td
+                                            class="px-lg py-3.5 text-right opacity-0 group-hover:opacity-100 transition-opacity"
+                                        >
+                                            <button
+                                                class="material-symbols-outlined text-outline hover:text-on-surface"
+                                            >
+                                                more_vert
+                                            </button>
+                                        </td>
+                                    </tr>
+                                    <tr
+                                        class="hover:bg-surface-container-low transition-colors group"
+                                    >
+                                        <td class="px-lg py-3.5">
+                                            <div
+                                                class="flex items-center gap-3"
+                                            >
+                                                <div
+                                                    class="w-8 h-8 rounded-lg bg-surface-container-high overflow-hidden"
+                                                >
+                                                    <img
+                                                        alt="Emily Lo"
+                                                        class="w-full h-full"
+                                                        src="https://lh3.googleusercontent.com/aida-public/AB6AXuDUfIBOjGPi9XgeAv1jxCGyY7GxwK_GAP-WqeEP5ZbDW-ARJgUPEsF9wUN-NMkPns3MrXvj45cQl6O28PGEju5SwfIpCCE4niUOab87UCrU7A7lAxOnkdVUm9T_BKKCWV0JRGmSh7uWwE8VWDupga1wgNF9a_Zh0IJ7BSNhDH5JR_SN4en6Iwi4ldjvdsMKTbeGngZCfkxG2JIY3EAvn4WXU9IPD4Z_z9kgjJQbJEV5JHsDgDft86s64gu6VG0KB9Dz66lPrAxH7OU"
+                                                    />
+                                                </div>
+                                                <span
+                                                    class="text-body-sm font-medium text-on-surface"
+                                                    >Emily Lo</span
+                                                >
+                                            </div>
+                                        </td>
+                                        <td class="px-lg py-3.5">
+                                            <span
+                                                class="text-body-sm text-on-surface-variant"
+                                                >Invited 4 new team
+                                                members</span
+                                            >
+                                        </td>
+                                        <td class="px-lg py-3.5">
+                                            <span
+                                                class="inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-primary/10 text-primary uppercase tracking-wider border border-primary/20"
+                                                >Success</span
+                                            >
+                                        </td>
+                                        <td
+                                            class="px-lg py-3.5 font-data-mono text-data-mono text-outline"
+                                        >
+                                            2023-11-23 16:55
+                                        </td>
+                                        <td
+                                            class="px-lg py-3.5 text-right opacity-0 group-hover:opacity-100 transition-opacity"
+                                        >
+                                            <button
+                                                class="material-symbols-outlined text-outline hover:text-on-surface"
+                                            >
+                                                more_vert
+                                            </button>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+                <!-- Dashboard Footer/Copyright -->
+                <footer
+                    class="pt-xl pb-md border-t border-outline-variant flex justify-between items-center text-label-md text-outline"
+                >
+                    <p>© 2024 Umbra Systems. All rights reserved.</p>
+                    <div class="flex gap-lg">
+                        <a class="hover:text-primary transition-colors" href="#"
+                            >Privacy Policy</a
+                        >
+                        <a class="hover:text-primary transition-colors" href="#"
+                            >Terms of Service</a
+                        >
+                    </div>
+                </footer>
+            </div>
+        </main>
+        <!-- Command Palette Backdrop (Hidden by default) -->
+        <div
+            class="fixed inset-0 bg-background/80 backdrop-blur-sm z-[100] hidden items-start justify-center pt-24"
+            id="command-palette"
+        >
+            <div
+                class="bg-surface-container border border-outline-variant w-full max-w-2xl rounded-xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200"
+            >
+                <div
+                    class="p-md flex items-center gap-md border-b border-outline-variant"
+                >
+                    <span class="material-symbols-outlined text-primary"
+                        >search</span
+                    >
+                    <input
+                        class="flex-1 bg-transparent border-none focus:ring-0 text-body-lg placeholder:text-outline"
+                        placeholder="Type a command or search..."
+                        type="text"
+                    />
+                    <kbd
+                        class="text-xs bg-outline-variant/30 text-outline px-1.5 py-0.5 rounded"
+                        >ESC</kbd
+                    >
+                </div>
+                <div
+                    class="p-sm max-h-[400px] overflow-y-auto custom-scrollbar"
+                >
+                    <p
+                        class="px-md py-2 font-label-sm text-label-sm text-outline uppercase tracking-widest"
+                    >
+                        Suggestions
+                    </p>
+                    <div class="space-y-1">
+                        <button
+                            class="w-full flex items-center gap-3 px-md py-2.5 rounded-lg hover:bg-surface-container-high transition-colors text-left group"
+                        >
+                            <span
+                                class="material-symbols-outlined text-outline group-hover:text-primary"
+                                >rocket_launch</span
+                            >
+                            <span class="flex-1 text-body-md"
+                                >Deploy to Staging</span
+                            >
+                            <span class="text-xs text-outline font-data-mono"
+                                >G D</span
+                            >
+                        </button>
+                        <button
+                            class="w-full flex items-center gap-3 px-md py-2.5 rounded-lg hover:bg-surface-container-high transition-colors text-left group"
+                        >
+                            <span
+                                class="material-symbols-outlined text-outline group-hover:text-primary"
+                                >person_add</span
+                            >
+                            <span class="flex-1 text-body-md"
+                                >Invite New User</span
+                            >
+                            <span class="text-xs text-outline font-data-mono"
+                                >A U</span
+                            >
+                        </button>
+                        <button
+                            class="w-full flex items-center gap-3 px-md py-2.5 rounded-lg hover:bg-surface-container-high transition-colors text-left group"
+                        >
+                            <span
+                                class="material-symbols-outlined text-outline group-hover:text-primary"
+                                >settings</span
+                            >
+                            <span class="flex-1 text-body-md"
+                                >Account Settings</span
+                            >
+                            <span class="text-xs text-outline font-data-mono"
+                                >S</span
+                            >
+                        </button>
+                    </div>
+                </div>
+                <div
+                    class="bg-surface-container-lowest p-3 border-t border-outline-variant flex items-center gap-4 text-[10px] text-outline uppercase tracking-tighter"
+                >
+                    <div class="flex items-center gap-1">
+                        <kbd class="bg-outline-variant/30 px-1 rounded">↑↓</kbd>
+                        to navigate
+                    </div>
+                    <div class="flex items-center gap-1">
+                        <kbd class="bg-outline-variant/30 px-1 rounded"
+                            >ENTER</kbd
+                        >
+                        to select
+                    </div>
+                </div>
+            </div>
+        </div>
+        <script>
+            // Simple micro-interactions for the command palette
+            const paletteTrigger = document
+                .querySelector("kbd")
+                .closest("button");
+            const palette = document.getElementById("command-palette");
+
+            window.addEventListener("keydown", (e) => {
+                if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+                    e.preventDefault();
+                    palette.classList.toggle("hidden");
+                    palette.classList.toggle("flex");
+                }
+                if (e.key === "Escape") {
+                    palette.classList.add("hidden");
+                    palette.classList.remove("flex");
+                }
+            });
+
+            paletteTrigger.addEventListener("click", () => {
+                palette.classList.remove("hidden");
+                palette.classList.add("flex");
+            });
+
+            palette.addEventListener("click", (e) => {
+                if (e.target === palette) {
+                    palette.classList.add("hidden");
+                    palette.classList.remove("flex");
+                }
+            });
+        </script>
+    </body>
+</html>

@@ -1,0 +1,1027 @@
+<!doctype html>
+
+<html class="dark" lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta content="width=device-width, initial-scale=1.0" name="viewport" />
+        <title>Umbra Admin | Posts</title>
+        <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+        <link
+            href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&amp;display=swap"
+            rel="stylesheet"
+        />
+        <link
+            href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap"
+            rel="stylesheet"
+        />
+        <link
+            href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap"
+            rel="stylesheet"
+        />
+        <script id="tailwind-config">
+            tailwind.config = {
+                darkMode: "class",
+                theme: {
+                    extend: {
+                        colors: {
+                            "on-tertiary-fixed-variant": "#930013",
+                            secondary: "#bec7d7",
+                            "inverse-surface": "#e0e2ec",
+                            "on-tertiary-fixed": "#410004",
+                            "primary-container": "#8484f8",
+                            "primary-fixed-dim": "#c2c1ff",
+                            "outline-variant": "#464553",
+                            "surface-container": "#1d2027",
+                            error: "#ffb4ab",
+                            "on-secondary-container": "#adb6c5",
+                            "surface-container-high": "#272a31",
+                            "on-error-container": "#ffdad6",
+                            "on-secondary-fixed-variant": "#3e4755",
+                            "on-tertiary": "#68000a",
+                            "surface-container-low": "#191c23",
+                            "surface-dim": "#10131a",
+                            "on-surface": "#e0e2ec",
+                            "on-error": "#690005",
+                            "secondary-container": "#3e4755",
+                            "error-container": "#93000a",
+                            "on-primary": "#1f1792",
+                            "inverse-on-surface": "#2d3038",
+                            "on-secondary-fixed": "#131c28",
+                            primary: "#c2c1ff",
+                            "tertiary-container": "#ff5451",
+                            "surface-container-lowest": "#0b0e15",
+                            "secondary-fixed": "#dae3f4",
+                            "on-primary-container": "#16098d",
+                            "on-surface-variant": "#c7c5d5",
+                            "surface-tint": "#c2c1ff",
+                            "on-tertiary-container": "#5c0008",
+                            "inverse-primary": "#504fc1",
+                            "surface-container-highest": "#32353c",
+                            "on-primary-fixed-variant": "#3835a8",
+                            "tertiary-fixed": "#ffdad7",
+                            surface: "#10131a",
+                            "primary-fixed": "#e2dfff",
+                            "on-secondary": "#28313d",
+                            outline: "#918f9e",
+                            "surface-bright": "#363941",
+                            "secondary-fixed-dim": "#bec7d7",
+                            "surface-variant": "#32353c",
+                            tertiary: "#ffb3ad",
+                            "tertiary-fixed-dim": "#ffb3ad",
+                            "on-primary-fixed": "#0b006b",
+                            background: "#10131a",
+                            "on-background": "#e0e2ec",
+                        },
+                        borderRadius: {
+                            DEFAULT: "0.125rem",
+                            lg: "0.25rem",
+                            xl: "0.5rem",
+                            full: "0.75rem",
+                        },
+                        spacing: {
+                            "sidebar-width": "260px",
+                            md: "16px",
+                            xs: "4px",
+                            sm: "8px",
+                            "sidebar-collapsed": "68px",
+                            base: "4px",
+                            lg: "24px",
+                            "topbar-height": "64px",
+                            gutter: "20px",
+                            xl: "32px",
+                        },
+                        fontFamily: {
+                            "body-md": ["Inter"],
+                            "data-mono": ["Inter"],
+                            h3: ["Inter"],
+                            "body-sm": ["Inter"],
+                            display: ["Inter"],
+                            h1: ["Inter"],
+                            "label-sm": ["Inter"],
+                            h2: ["Inter"],
+                            "label-md": ["Inter"],
+                            "body-lg": ["Inter"],
+                        },
+                        fontSize: {
+                            "body-md": [
+                                "14px",
+                                { lineHeight: "20px", fontWeight: "400" },
+                            ],
+                            "data-mono": [
+                                "14px",
+                                { lineHeight: "20px", fontWeight: "400" },
+                            ],
+                            h3: [
+                                "16px",
+                                { lineHeight: "24px", fontWeight: "600" },
+                            ],
+                            "body-sm": [
+                                "13px",
+                                { lineHeight: "18px", fontWeight: "400" },
+                            ],
+                            display: [
+                                "30px",
+                                {
+                                    lineHeight: "38px",
+                                    letterSpacing: "-0.02em",
+                                    fontWeight: "700",
+                                },
+                            ],
+                            h1: [
+                                "24px",
+                                {
+                                    lineHeight: "32px",
+                                    letterSpacing: "-0.015em",
+                                    fontWeight: "600",
+                                },
+                            ],
+                            "label-sm": [
+                                "11px",
+                                {
+                                    lineHeight: "14px",
+                                    letterSpacing: "0.03em",
+                                    fontWeight: "600",
+                                },
+                            ],
+                            h2: [
+                                "20px",
+                                {
+                                    lineHeight: "28px",
+                                    letterSpacing: "-0.01em",
+                                    fontWeight: "600",
+                                },
+                            ],
+                            "label-md": [
+                                "12px",
+                                {
+                                    lineHeight: "16px",
+                                    letterSpacing: "0.01em",
+                                    fontWeight: "500",
+                                },
+                            ],
+                            "body-lg": [
+                                "16px",
+                                { lineHeight: "24px", fontWeight: "400" },
+                            ],
+                        },
+                    },
+                },
+            };
+        </script>
+        <style>
+            body {
+                background-color: #10131a;
+                color: #e0e2ec;
+                font-family: "Inter", sans-serif;
+                overflow-x: hidden;
+            }
+            .material-symbols-outlined {
+                font-size: 20px;
+                vertical-align: middle;
+            }
+            ::-webkit-scrollbar {
+                width: 6px;
+                height: 6px;
+            }
+            ::-webkit-scrollbar-track {
+                background: #191c23;
+            }
+            ::-webkit-scrollbar-thumb {
+                background: #32353c;
+                border-radius: 10px;
+            }
+            ::-webkit-scrollbar-thumb:hover {
+                background: #464553;
+            }
+        </style>
+    </head>
+    <body class="bg-background text-on-background">
+        <!-- Sidebar Navigation -->
+        <aside
+            class="fixed left-0 top-0 h-full w-sidebar-width transition-all duration-300 bg-surface-container border-r border-outline-variant flex flex-col z-50"
+        >
+            <div class="p-lg flex items-center gap-sm">
+                <div
+                    class="w-8 h-8 bg-primary rounded flex items-center justify-center text-on-primary"
+                >
+                    <span class="material-symbols-outlined" data-icon="cloud"
+                        >cloud</span
+                    >
+                </div>
+                <div>
+                    <h2 class="font-h2 text-h2 font-bold text-on-surface">
+                        Umbra Admin
+                    </h2>
+                    <p
+                        class="text-on-surface-variant font-body-sm text-body-sm opacity-60"
+                    >
+                        v2.4.0
+                    </p>
+                </div>
+            </div>
+            <nav class="flex-1 px-md space-y-1 mt-md">
+                <a
+                    class="flex items-center gap-md px-md py-sm text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition-colors font-body-sm text-body-sm rounded-xl"
+                    href="#"
+                >
+                    <span
+                        class="material-symbols-outlined"
+                        data-icon="dashboard"
+                        >dashboard</span
+                    >
+                    <span>Dashboard</span>
+                </a>
+                <a
+                    class="flex items-center gap-md px-md py-sm bg-primary-container/10 text-primary border-l-2 border-primary transition-colors font-body-sm text-body-sm"
+                    href="#"
+                >
+                    <span
+                        class="material-symbols-outlined"
+                        data-icon="rocket_launch"
+                        >rocket_launch</span
+                    >
+                    <span>Deployments</span>
+                </a>
+                <a
+                    class="flex items-center gap-md px-md py-sm text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition-colors font-body-sm text-body-sm rounded-xl"
+                    href="#"
+                >
+                    <span class="material-symbols-outlined" data-icon="database"
+                        >database</span
+                    >
+                    <span>Resources</span>
+                </a>
+                <a
+                    class="flex items-center gap-md px-md py-sm text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition-colors font-body-sm text-body-sm rounded-xl"
+                    href="#"
+                >
+                    <span class="material-symbols-outlined" data-icon="groups"
+                        >groups</span
+                    >
+                    <span>Team</span>
+                </a>
+                <a
+                    class="flex items-center gap-md px-md py-sm text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition-colors font-body-sm text-body-sm rounded-xl"
+                    href="#"
+                >
+                    <span
+                        class="material-symbols-outlined"
+                        data-icon="leaderboard"
+                        >leaderboard</span
+                    >
+                    <span>Analytics</span>
+                </a>
+                <a
+                    class="flex items-center gap-md px-md py-sm text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition-colors font-body-sm text-body-sm rounded-xl"
+                    href="#"
+                >
+                    <span class="material-symbols-outlined" data-icon="settings"
+                        >settings</span
+                    >
+                    <span>Settings</span>
+                </a>
+            </nav>
+            <div class="px-md mt-auto mb-md space-y-1">
+                <button
+                    class="w-full bg-primary text-on-primary py-sm rounded-xl font-label-md text-label-md flex items-center justify-center gap-sm active:scale-95 duration-150 transition-transform"
+                >
+                    <span class="material-symbols-outlined" data-icon="add"
+                        >add</span
+                    >
+                    New Project
+                </button>
+                <div class="pt-md">
+                    <a
+                        class="flex items-center gap-md px-md py-sm text-on-surface-variant hover:text-on-surface transition-colors font-body-sm text-body-sm"
+                        href="#"
+                    >
+                        <span
+                            class="material-symbols-outlined"
+                            data-icon="description"
+                            >description</span
+                        >
+                        <span>Documentation</span>
+                    </a>
+                    <a
+                        class="flex items-center gap-md px-md py-sm text-on-surface-variant hover:text-on-surface transition-colors font-body-sm text-body-sm"
+                        href="#"
+                    >
+                        <span class="material-symbols-outlined" data-icon="help"
+                            >help</span
+                        >
+                        <span>Support</span>
+                    </a>
+                </div>
+            </div>
+        </aside>
+        <!-- Main Content Area -->
+        <main class="ml-sidebar-width min-h-screen flex flex-col">
+            <!-- Top Navigation Bar -->
+            <header
+                class="sticky top-0 z-40 w-full h-topbar-height bg-surface/80 backdrop-blur-md border-b border-outline-variant flex justify-between items-center px-lg"
+            >
+                <div class="flex items-center gap-lg">
+                    <div
+                        class="flex items-center gap-xs text-on-surface-variant font-label-md text-label-md"
+                    >
+                        <span>Admin</span>
+                        <span
+                            class="material-symbols-outlined text-[16px]"
+                            data-icon="chevron_right"
+                            >chevron_right</span
+                        >
+                        <span class="text-on-surface font-semibold">Posts</span>
+                    </div>
+                </div>
+                <div class="flex items-center gap-md">
+                    <div class="flex items-center gap-md mr-md">
+                        <a
+                            class="text-on-surface-variant hover:text-on-surface font-label-md text-label-md"
+                            href="#"
+                            >Docs</a
+                        >
+                        <a
+                            class="text-on-surface-variant hover:text-on-surface font-label-md text-label-md"
+                            href="#"
+                            >Feedback</a
+                        >
+                        <a
+                            class="text-on-surface-variant hover:text-on-surface font-label-md text-label-md"
+                            href="#"
+                            >Changelog</a
+                        >
+                    </div>
+                    <div
+                        class="flex items-center gap-sm border-l border-outline-variant pl-md"
+                    >
+                        <button
+                            class="p-xs text-on-surface-variant hover:bg-surface-container-lowest rounded-xl transition-colors"
+                        >
+                            <span
+                                class="material-symbols-outlined"
+                                data-icon="notifications"
+                                >notifications</span
+                            >
+                        </button>
+                        <button
+                            class="p-xs text-on-surface-variant hover:bg-surface-container-lowest rounded-xl transition-colors"
+                        >
+                            <span
+                                class="material-symbols-outlined"
+                                data-icon="terminal"
+                                >terminal</span
+                            >
+                        </button>
+                        <button
+                            class="p-xs text-on-surface-variant hover:bg-surface-container-lowest rounded-xl transition-colors"
+                        >
+                            <span
+                                class="material-symbols-outlined"
+                                data-icon="command"
+                                >keyboard_command_key</span
+                            >
+                        </button>
+                        <div
+                            class="w-8 h-8 rounded-full overflow-hidden ml-sm cursor-pointer border border-outline-variant"
+                        >
+                            <img
+                                alt="User Profile"
+                                class="w-full h-full object-cover"
+                                src="https://lh3.googleusercontent.com/aida-public/AB6AXuDFGUAjLISQE_akJNYV4f9f3Z-sCcS0Tcl3irG0hHggTIZ94c8Q134gvlaNj-Cuw4QTr5DqN6arBdmoGjXNn90NFjAbVFT2EBS2Y6vJdXn8VFUAuykjPxzuWWazEedanFIZVtZ1qYJtWri2hIbkaDW20qr7p1H-9L6Miep6nNJXtR-tXE6npkD9luQfJ-zgJuIh31WibAav9wToADr42it_aGlQP0s8a49gnaOX6JSbtUcm7XbYNdRDst_ndkSIfHLnS-etRAOshZs"
+                            />
+                        </div>
+                    </div>
+                </div>
+            </header>
+            <!-- Page Header -->
+            <section class="px-lg pt-lg flex justify-between items-end">
+                <div>
+                    <div class="flex items-center gap-sm">
+                        <h1 class="font-h1 text-h1 text-on-surface">Posts</h1>
+                        <span
+                            class="bg-surface-container-high px-sm py-xs rounded-full font-data-mono text-label-sm text-secondary"
+                            >1,204</span
+                        >
+                    </div>
+                    <p
+                        class="text-on-surface-variant font-body-sm text-body-sm mt-xs"
+                    >
+                        Manage and moderate all blog entries across the
+                        platform.
+                    </p>
+                </div>
+                <button
+                    class="bg-primary text-on-primary px-lg py-md rounded-xl font-h3 text-h3 flex items-center gap-sm hover:opacity-90 transition-opacity active:scale-95 duration-150"
+                >
+                    <span class="material-symbols-outlined" data-icon="add"
+                        >add</span
+                    >
+                    Add Post
+                </button>
+            </section>
+            <!-- Data Toolbar -->
+            <section class="px-lg mt-lg">
+                <div
+                    class="bg-surface-container rounded-xl border border-outline-variant p-sm flex flex-wrap items-center justify-between gap-md"
+                >
+                    <div class="flex items-center gap-sm flex-1 min-w-[300px]">
+                        <div class="relative flex-1 max-w-md">
+                            <span
+                                class="material-symbols-outlined absolute left-sm top-1/2 -translate-y-1/2 text-on-surface-variant"
+                                data-icon="search"
+                                >search</span
+                            >
+                            <input
+                                class="w-full bg-surface-container-lowest border border-outline-variant rounded-xl pl-xl pr-md py-sm font-body-md text-body-md text-on-surface focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all"
+                                placeholder="Search posts..."
+                                type="text"
+                            />
+                        </div>
+                        <button
+                            class="flex items-center gap-sm px-md py-sm hover:bg-surface-container-high rounded-xl text-on-surface transition-colors font-label-md text-label-md border border-outline-variant"
+                        >
+                            <span
+                                class="material-symbols-outlined"
+                                data-icon="filter_list"
+                                >filter_list</span
+                            >
+                            Filter
+                        </button>
+                        <!-- Filter Chips -->
+                        <div class="flex items-center gap-xs">
+                            <div
+                                class="flex items-center gap-xs bg-primary-container/10 border border-primary/20 text-primary px-sm py-xs rounded-full font-label-sm text-label-sm"
+                            >
+                                Status: Published
+                                <span
+                                    class="material-symbols-outlined text-[14px] cursor-pointer"
+                                    data-icon="close"
+                                    >close</span
+                                >
+                            </div>
+                            <div
+                                class="flex items-center gap-xs bg-primary-container/10 border border-primary/20 text-primary px-sm py-xs rounded-full font-label-sm text-label-sm"
+                            >
+                                Author: Jane Doe
+                                <span
+                                    class="material-symbols-outlined text-[14px] cursor-pointer"
+                                    data-icon="close"
+                                    >close</span
+                                >
+                            </div>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-sm">
+                        <button
+                            class="p-sm hover:bg-surface-container-high rounded-xl text-on-surface-variant transition-colors group relative"
+                            title="Column Visibility"
+                        >
+                            <span
+                                class="material-symbols-outlined"
+                                data-icon="view_column"
+                                >view_column</span
+                            >
+                        </button>
+                        <div class="h-6 w-[1px] bg-outline-variant"></div>
+                        <div
+                            class="bg-surface-container-lowest border border-outline-variant rounded-xl p-xs flex items-center"
+                        >
+                            <button
+                                class="px-sm py-xs bg-surface-container-highest text-primary rounded-lg font-label-sm text-label-sm"
+                            >
+                                Comfortable
+                            </button>
+                            <button
+                                class="px-sm py-xs text-on-surface-variant hover:text-on-surface transition-colors font-label-sm text-label-sm"
+                            >
+                                Compact
+                            </button>
+                        </div>
+                        <button
+                            class="flex items-center gap-sm px-md py-sm hover:bg-surface-container-high rounded-xl text-on-surface transition-colors font-label-md text-label-md"
+                        >
+                            <span
+                                class="material-symbols-outlined"
+                                data-icon="download"
+                                >download</span
+                            >
+                            Export
+                        </button>
+                    </div>
+                </div>
+            </section>
+            <!-- DataTable -->
+            <section class="px-lg mt-md flex-1 overflow-x-auto pb-32">
+                <div
+                    class="bg-surface border border-outline-variant rounded-xl overflow-hidden"
+                >
+                    <table class="w-full text-left border-collapse">
+                        <thead
+                            class="bg-surface-container-low border-b border-outline-variant sticky top-0 z-10"
+                        >
+                            <tr>
+                                <th class="w-12 px-md py-md">
+                                    <input
+                                        class="w-4 h-4 rounded border-outline-variant bg-surface-container text-primary focus:ring-primary cursor-pointer"
+                                        type="checkbox"
+                                    />
+                                </th>
+                                <th
+                                    class="px-md py-md font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider"
+                                >
+                                    Thumbnail
+                                </th>
+                                <th
+                                    class="px-md py-md font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider"
+                                >
+                                    Title
+                                </th>
+                                <th
+                                    class="px-md py-md font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider"
+                                >
+                                    Author
+                                </th>
+                                <th
+                                    class="px-md py-md font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider text-center"
+                                >
+                                    Status
+                                </th>
+                                <th
+                                    class="px-md py-md font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider"
+                                >
+                                    Published At
+                                </th>
+                                <th
+                                    class="px-md py-md font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider sticky right-0 bg-surface-container-low text-right"
+                                >
+                                    Actions
+                                </th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-outline-variant">
+                            <!-- Row 1 -->
+                            <tr
+                                class="hover:bg-surface-container-lowest transition-colors group"
+                            >
+                                <td class="px-md py-md">
+                                    <input
+                                        checked=""
+                                        class="w-4 h-4 rounded border-outline-variant bg-surface-container text-primary focus:ring-primary cursor-pointer"
+                                        type="checkbox"
+                                    />
+                                </td>
+                                <td class="px-md py-md">
+                                    <div
+                                        class="w-10 h-10 rounded-lg overflow-hidden border border-outline-variant"
+                                    >
+                                        <img
+                                            class="w-full h-full object-cover"
+                                            data-alt="A macro photograph of high-resolution computer code on a glowing monitor, showcasing vibrant syntax highlighting in blues, pinks, and yellows. The lighting is moody and cinematic, emphasizing the digital texture of the screen. The shot captures a sense of complex technological development in a modern, dark developer environment with crisp focus and soft background bokeh."
+                                            src="https://lh3.googleusercontent.com/aida-public/AB6AXuB0Q1Hw3QncksXRbhKaCdFUYJ4ATfVmNspEBjoqLMVy6eq0ppoHxLzBPoNPvW0Eivwre0Z3dyt2V_s1vGBU_m5-_jMQ42e5DdFuC6orSz_0_Wt1Rn1YMu8q8blbUot-sAlbAHD82l1QOXoIplzASXIJ9F1bMWpxbIU_6mzzdPRxHJVStpkLz457Wm6q7J--X2rNK0xGPgaDjgyEgcqnYtlgsN3DyjYovggS5G1IDBjgVu82UHcKugFRSkhwm9r3TWuCklisgWQQ-RI"
+                                        />
+                                    </div>
+                                </td>
+                                <td class="px-md py-md">
+                                    <div class="flex flex-col">
+                                        <span
+                                            class="text-on-surface font-body-md text-body-md font-medium"
+                                            >The Future of Decentralized
+                                            Infrastructure</span
+                                        >
+                                        <span
+                                            class="text-on-surface-variant font-body-sm text-body-sm"
+                                            >/blog/future-decentralized-infra</span
+                                        >
+                                    </div>
+                                </td>
+                                <td class="px-md py-md">
+                                    <a
+                                        class="inline-flex items-center gap-sm px-sm py-xs bg-secondary-container/50 text-secondary rounded-full font-label-sm text-label-sm hover:bg-secondary-container transition-colors"
+                                        href="#"
+                                    >
+                                        <div
+                                            class="w-5 h-5 rounded-full overflow-hidden"
+                                        >
+                                            <img
+                                                alt="Author"
+                                                class="w-full h-full object-cover"
+                                                src="https://lh3.googleusercontent.com/aida-public/AB6AXuA1QWPjgf3SBneXPSNU4KWwt4nvACsWj9q6m93MpjGopVtDBqhAZVou85gCyAQqnOOdv38z3rMoczDH4RIWmaNAAmUzwCXLfIPZzN7JrAuMQf8X9upX-pM_s-jGseqKEfyCfYOzKxQFpdnNVLCgS1wkOCgCxf0AKRFAMN6ArG7PnpAP6M2TY2VKGNRCT1aqnDgRcMRNdMm8qUtRzC4brD88IhxkDuG1yrcU6WvHTH3aMm_sqNxlP4RsOfnrF2V-rlamji5kgmHaeiE"
+                                            />
+                                        </div>
+                                        Jane Doe
+                                    </a>
+                                </td>
+                                <td class="px-md py-md text-center">
+                                    <span
+                                        class="px-sm py-xs bg-primary-container/10 text-primary border border-primary/20 rounded-full font-label-sm text-label-sm"
+                                        >Published</span
+                                    >
+                                </td>
+                                <td
+                                    class="px-md py-md font-data-mono text-body-sm text-on-surface-variant"
+                                >
+                                    Oct 24, 2023
+                                </td>
+                                <td
+                                    class="px-md py-md sticky right-0 bg-surface transition-colors group-hover:bg-surface-container-lowest text-right"
+                                >
+                                    <div
+                                        class="flex items-center justify-end gap-xs"
+                                    >
+                                        <button
+                                            class="p-sm text-on-surface-variant hover:text-primary transition-colors"
+                                        >
+                                            <span
+                                                class="material-symbols-outlined"
+                                                data-icon="visibility"
+                                                >visibility</span
+                                            >
+                                        </button>
+                                        <button
+                                            class="p-sm text-on-surface-variant hover:text-primary transition-colors"
+                                        >
+                                            <span
+                                                class="material-symbols-outlined"
+                                                data-icon="edit"
+                                                >edit</span
+                                            >
+                                        </button>
+                                        <button
+                                            class="p-sm text-on-surface-variant hover:text-error transition-colors"
+                                        >
+                                            <span
+                                                class="material-symbols-outlined"
+                                                data-icon="delete"
+                                                >delete</span
+                                            >
+                                        </button>
+                                        <button
+                                            class="p-sm text-on-surface-variant hover:text-on-surface transition-colors"
+                                        >
+                                            <span
+                                                class="material-symbols-outlined"
+                                                data-icon="more_vert"
+                                                >more_vert</span
+                                            >
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                            <!-- Row 2 -->
+                            <tr
+                                class="hover:bg-surface-container-lowest transition-colors group"
+                            >
+                                <td class="px-md py-md">
+                                    <input
+                                        checked=""
+                                        class="w-4 h-4 rounded border-outline-variant bg-surface-container text-primary focus:ring-primary cursor-pointer"
+                                        type="checkbox"
+                                    />
+                                </td>
+                                <td class="px-md py-md">
+                                    <div
+                                        class="w-10 h-10 rounded-lg overflow-hidden border border-outline-variant"
+                                    >
+                                        <img
+                                            class="w-full h-full object-cover"
+                                            data-alt="A minimalist overhead view of high-tech retro hardware, featuring circuit boards and vintage microchips arranged symmetrically on a dark slate surface. The lighting is precise and technical, creating a sleek, industrial aesthetic. The color palette is composed of metallic silvers and deep charcoal greys, evoking a sense of engineering precision and hardware history."
+                                            src="https://lh3.googleusercontent.com/aida-public/AB6AXuAMS_KGLqcb1VcaeAgYl3sHQmXquUkzSUH8o56bRHT6qZljGGLqD3rj8n5Q2ocGpkyVxbLVTeY2928wvvzOFhYZooRvYdlWtoktCy2qCj0bCVXz1hB3uILOM3aoKUKKwl_Eh7N8EtrKDQkm66xA_zfvTc2warkIRwly4Aw-GfTCBDW3dPpvNpREFQIkW4yzvitQaruwuL5iymS2FcPhA-hackFEhbKODSAUYHphVJuy8T64sn26M9-KkTbhBeFUqGu0vFg30uPX-3o"
+                                        />
+                                    </div>
+                                </td>
+                                <td class="px-md py-md">
+                                    <div class="flex flex-col">
+                                        <span
+                                            class="text-on-surface font-body-md text-body-md font-medium"
+                                            >Why Web3 Security Matters in
+                                            2024</span
+                                        >
+                                        <span
+                                            class="text-on-surface-variant font-body-sm text-body-sm"
+                                            >/blog/web3-security-2024</span
+                                        >
+                                    </div>
+                                </td>
+                                <td class="px-md py-md">
+                                    <a
+                                        class="inline-flex items-center gap-sm px-sm py-xs bg-secondary-container/50 text-secondary rounded-full font-label-sm text-label-sm hover:bg-secondary-container transition-colors"
+                                        href="#"
+                                    >
+                                        <div
+                                            class="w-5 h-5 rounded-full overflow-hidden"
+                                        >
+                                            <img
+                                                alt="Author"
+                                                class="w-full h-full object-cover"
+                                                src="https://lh3.googleusercontent.com/aida-public/AB6AXuAckPMXogfRFphYJyKUYnmclLgZmQp-JY5gUBQk1wV1eNfXT2ruJZRGvFSKgMMhumYnVl5ELcr36kOe2LY-vFx8T9iFn55WCHiwwb9pknrfw9-Nk7ymSor9MfYV8OR7-Qv_KAIXBesc2JmdO-3x2Nk8iqM67zJGnNkkCeyZst6YdZwbnyQjB3ClCSNTk2RLQ7Fa2Xk-gn28WcO5i_c3n6jN8ADK5cP8oohDn_q90C_RfeLuZJezCmvTzrD0Tn7jEvo0LboCGtj2S34"
+                                            />
+                                        </div>
+                                        Marcus Thorne
+                                    </a>
+                                </td>
+                                <td class="px-md py-md text-center">
+                                    <span
+                                        class="px-sm py-xs bg-surface-container-highest text-on-surface-variant border border-outline-variant rounded-full font-label-sm text-label-sm"
+                                        >Draft</span
+                                    >
+                                </td>
+                                <td
+                                    class="px-md py-md font-data-mono text-body-sm text-on-surface-variant"
+                                >
+                                    Nov 12, 2023
+                                </td>
+                                <td
+                                    class="px-md py-md sticky right-0 bg-surface transition-colors group-hover:bg-surface-container-lowest text-right"
+                                >
+                                    <div
+                                        class="flex items-center justify-end gap-xs"
+                                    >
+                                        <button
+                                            class="p-sm text-on-surface-variant hover:text-primary transition-colors"
+                                        >
+                                            <span
+                                                class="material-symbols-outlined"
+                                                data-icon="visibility"
+                                                >visibility</span
+                                            >
+                                        </button>
+                                        <button
+                                            class="p-sm text-on-surface-variant hover:text-primary transition-colors"
+                                        >
+                                            <span
+                                                class="material-symbols-outlined"
+                                                data-icon="edit"
+                                                >edit</span
+                                            >
+                                        </button>
+                                        <button
+                                            class="p-sm text-on-surface-variant hover:text-error transition-colors"
+                                        >
+                                            <span
+                                                class="material-symbols-outlined"
+                                                data-icon="delete"
+                                                >delete</span
+                                            >
+                                        </button>
+                                        <button
+                                            class="p-sm text-on-surface-variant hover:text-on-surface transition-colors"
+                                        >
+                                            <span
+                                                class="material-symbols-outlined"
+                                                data-icon="more_vert"
+                                                >more_vert</span
+                                            >
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                            <!-- Additional Mock Rows for visual volume -->
+                            <script>
+                                const tableBody =
+                                    document.querySelector("tbody");
+                                const mockData = [
+                                    {
+                                        title: "Optimizing CI/CD for Scale",
+                                        slug: "/blog/cicd-scale",
+                                        author: "Sarah Chen",
+                                        img: "1484417856214-722e1d798ef5",
+                                        status: "Published",
+                                        date: "Oct 20, 2023",
+                                    },
+                                    {
+                                        title: "The Rise of Edge Computing",
+                                        slug: "/blog/edge-computing",
+                                        author: "Alex Rivera",
+                                        img: "1518770660439-4636190af475",
+                                        status: "Published",
+                                        date: "Oct 18, 2023",
+                                    },
+                                    {
+                                        title: "Scaling PostgreSQL Clusters",
+                                        slug: "/blog/postgres-scaling",
+                                        author: "Jane Doe",
+                                        img: "1558494949-ef010c719284",
+                                        status: "Draft",
+                                        date: "Oct 15, 2023",
+                                    },
+                                ];
+
+                                mockData.forEach((item) => {
+                                    const row = `
+                                    <tr class="hover:bg-surface-container-lowest transition-colors group">
+                                        <td class="px-md py-md"><input type="checkbox" class="w-4 h-4 rounded border-outline-variant bg-surface-container text-primary focus:ring-primary cursor-pointer"></td>
+                                        <td class="px-md py-md">
+                                            <div class="w-10 h-10 rounded-lg overflow-hidden border border-outline-variant">
+                                                <img src="https://images.unsplash.com/photo-${item.img}?auto=format&fit=crop&q=80&w=100" alt="${item.title}" class="w-full h-full object-cover">
+                                            </div>
+                                        </td>
+                                        <td class="px-md py-md">
+                                            <div class="flex flex-col">
+                                                <span class="text-on-surface font-body-md text-body-md font-medium">${item.title}</span>
+                                                <span class="text-on-surface-variant font-body-sm text-body-sm">${item.slug}</span>
+                                            </div>
+                                        </td>
+                                        <td class="px-md py-md">
+                                            <a href="#" class="inline-flex items-center gap-sm px-sm py-xs bg-secondary-container/50 text-secondary rounded-full font-label-sm text-label-sm hover:bg-secondary-container">
+                                                ${item.author}
+                                            </a>
+                                        </td>
+                                        <td class="px-md py-md text-center">
+                                            <span class="px-sm py-xs ${item.status === "Published" ? "bg-primary-container/10 text-primary border border-primary/20" : "bg-surface-container-highest text-on-surface-variant border border-outline-variant"} rounded-full font-label-sm text-label-sm">${item.status}</span>
+                                        </td>
+                                        <td class="px-md py-md font-data-mono text-body-sm text-on-surface-variant">${item.date}</td>
+                                        <td class="px-md py-md sticky right-0 bg-surface transition-colors group-hover:bg-surface-container-lowest text-right">
+                                            <div class="flex items-center justify-end gap-xs opacity-0 group-hover:opacity-100 transition-opacity">
+                                                <button class="p-sm text-on-surface-variant hover:text-primary"><span class="material-symbols-outlined">visibility</span></button>
+                                                <button class="p-sm text-on-surface-variant hover:text-primary"><span class="material-symbols-outlined">edit</span></button>
+                                                <button class="p-sm text-on-surface-variant hover:text-error"><span class="material-symbols-outlined">delete</span></button>
+                                                <button class="p-sm text-on-surface-variant"><span class="material-symbols-outlined">more_vert</span></button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                `;
+                                    tableBody.innerHTML += row;
+                                });
+                            </script>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+            <!-- Pagination Footer -->
+            <footer
+                class="mt-auto px-lg py-md border-t border-outline-variant bg-surface flex flex-wrap items-center justify-between gap-md"
+            >
+                <div class="flex items-center gap-lg">
+                    <span
+                        class="font-body-sm text-body-sm text-on-surface-variant"
+                        >Showing
+                        <span class="text-on-surface font-medium">1–25</span> of
+                        <span class="text-on-surface font-medium">1,204</span>
+                        posts</span
+                    >
+                    <div class="flex items-center gap-sm">
+                        <span
+                            class="font-label-md text-label-md text-on-surface-variant"
+                            >Rows per page:</span
+                        >
+                        <select
+                            class="bg-surface-container border border-outline-variant rounded-lg px-sm py-xs font-label-md text-label-md text-on-surface focus:outline-none focus:ring-1 focus:ring-primary"
+                        >
+                            <option>10</option>
+                            <option selected="">25</option>
+                            <option>50</option>
+                            <option>100</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="flex items-center gap-xs">
+                    <button
+                        class="p-sm text-on-surface-variant hover:bg-surface-container-high rounded-xl disabled:opacity-30"
+                        disabled=""
+                    >
+                        <span
+                            class="material-symbols-outlined"
+                            data-icon="first_page"
+                            >first_page</span
+                        >
+                    </button>
+                    <button
+                        class="p-sm text-on-surface-variant hover:bg-surface-container-high rounded-xl disabled:opacity-30"
+                        disabled=""
+                    >
+                        <span
+                            class="material-symbols-outlined"
+                            data-icon="chevron_left"
+                            >chevron_left</span
+                        >
+                    </button>
+                    <div class="flex items-center">
+                        <button
+                            class="w-8 h-8 flex items-center justify-center bg-primary text-on-primary rounded-lg font-label-md text-label-md"
+                        >
+                            1
+                        </button>
+                        <button
+                            class="w-8 h-8 flex items-center justify-center text-on-surface-variant hover:bg-surface-container-high rounded-lg font-label-md text-label-md transition-colors"
+                        >
+                            2
+                        </button>
+                        <button
+                            class="w-8 h-8 flex items-center justify-center text-on-surface-variant hover:bg-surface-container-high rounded-lg font-label-md text-label-md transition-colors"
+                        >
+                            3
+                        </button>
+                        <span class="px-sm text-on-surface-variant">...</span>
+                        <button
+                            class="w-8 h-8 flex items-center justify-center text-on-surface-variant hover:bg-surface-container-high rounded-lg font-label-md text-label-md transition-colors"
+                        >
+                            49
+                        </button>
+                    </div>
+                    <button
+                        class="p-sm text-on-surface-variant hover:bg-surface-container-high rounded-xl"
+                    >
+                        <span
+                            class="material-symbols-outlined"
+                            data-icon="chevron_right"
+                            >chevron_right</span
+                        >
+                    </button>
+                    <button
+                        class="p-sm text-on-surface-variant hover:bg-surface-container-high rounded-xl"
+                    >
+                        <span
+                            class="material-symbols-outlined"
+                            data-icon="last_page"
+                            >last_page</span
+                        >
+                    </button>
+                </div>
+            </footer>
+            <!-- Bulk Action Toolbar (Floating) -->
+            <div
+                class="fixed bottom-lg left-1/2 -translate-x-1/2 z-50 animate-bounce-subtle"
+            >
+                <div
+                    class="bg-surface-container-highest/90 backdrop-blur-xl border border-outline-variant rounded-full px-lg py-md shadow-2xl flex items-center gap-lg"
+                >
+                    <div
+                        class="flex items-center gap-md border-r border-outline-variant pr-lg"
+                    >
+                        <div
+                            class="w-6 h-6 bg-primary text-on-primary rounded flex items-center justify-center font-label-md text-label-md"
+                        >
+                            2
+                        </div>
+                        <span
+                            class="font-label-md text-label-md text-on-surface"
+                            >Selected</span
+                        >
+                    </div>
+                    <div class="flex items-center gap-md">
+                        <button
+                            class="flex items-center gap-sm text-on-surface-variant hover:text-on-surface transition-colors font-label-md text-label-md group"
+                        >
+                            <span
+                                class="material-symbols-outlined group-hover:scale-110 transition-transform"
+                                data-icon="edit"
+                                >edit</span
+                            >
+                            Edit
+                        </button>
+                        <button
+                            class="flex items-center gap-sm text-on-surface-variant hover:text-on-surface transition-colors font-label-md text-label-md group"
+                        >
+                            <span
+                                class="material-symbols-outlined group-hover:scale-110 transition-transform"
+                                data-icon="download"
+                                >download</span
+                            >
+                            Export
+                        </button>
+                        <button
+                            class="flex items-center gap-sm text-error hover:text-error-container transition-colors font-label-md text-label-md group"
+                        >
+                            <span
+                                class="material-symbols-outlined group-hover:scale-110 transition-transform"
+                                data-icon="delete"
+                                >delete</span
+                            >
+                            Delete
+                        </button>
+                    </div>
+                    <div class="border-l border-outline-variant pl-lg">
+                        <button
+                            class="text-on-surface-variant hover:text-on-surface transition-colors"
+                        >
+                            <span
+                                class="material-symbols-outlined"
+                                data-icon="close"
+                                >close</span
+                            >
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </main>
+        <script>
+            // Simple logic for row selection visual
+            const checkboxes = document.querySelectorAll(
+                'tbody input[type="checkbox"]',
+            );
+            checkboxes.forEach((cb) => {
+                cb.addEventListener("change", function () {
+                    const row = this.closest("tr");
+                    if (this.checked) {
+                        row.classList.add("bg-primary-container/5");
+                    } else {
+                        row.classList.remove("bg-primary-container/5");
+                    }
+                });
+                // Initial state
+                if (cb.checked)
+                    cb.closest("tr").classList.add("bg-primary-container/5");
+            });
+        </script>
+    </body>
+</html>
