@@ -49,6 +49,7 @@ pub async fn validate_on_create(
     body: &Map<String, Value>,
 ) -> Vec<WriteError> {
     let mut errors = validate_required_create(meta, body);
+    errors.extend(validate_choices(meta, body));
     let mut fk_errors = validate_fk_references(meta, body).await;
     let fk_fields: std::collections::HashSet<String> = fk_errors
         .iter()
@@ -78,6 +79,7 @@ pub async fn validate_on_update(
     body: &Map<String, Value>,
 ) -> Vec<WriteError> {
     let mut errors = validate_required_update(meta, body);
+    errors.extend(validate_choices(meta, body));
     let mut fk_errors = validate_fk_references(meta, body).await;
     let fk_fields: std::collections::HashSet<String> = fk_errors
         .iter()
@@ -226,6 +228,50 @@ fn validate_required_update(meta: &ModelMeta, body: &Map<String, Value>) -> Vec<
     out
 }
 
+/// Reject body values that don't match a column's declared
+/// `choices` set. Catches the typo case (`"usdd"` for a column
+/// constrained to `["usd","eur","gbp",...]`) before the row
+/// reaches the DB's CHECK constraint — the CHECK would still
+/// catch it, but with a generic message; here we emit
+/// `WriteError::Validator { field, message }` with the offending
+/// value and the allowed set spelled out.
+///
+/// Blank / null / missing values are skipped — those are the
+/// required-field check's job. Columns with an empty `choices`
+/// list are unrestricted.
+fn validate_choices(meta: &ModelMeta, body: &Map<String, Value>) -> Vec<WriteError> {
+    let mut out = Vec::new();
+    for col in &meta.fields {
+        if col.choices.is_empty() {
+            continue;
+        }
+        let Some(value) = body.get(&col.name) else {
+            continue;
+        };
+        if value.is_null() {
+            continue;
+        }
+        let value_repr = match value {
+            Value::String(s) if s.is_empty() => continue,
+            Value::String(s) => s.clone(),
+            Value::Number(n) => n.to_string(),
+            Value::Bool(b) => b.to_string(),
+            _ => continue, // odd shape — let the DB sort it out
+        };
+        if col.choices.iter().any(|c| c == &value_repr) {
+            continue;
+        }
+        out.push(WriteError::Validator {
+            field: col.name.clone(),
+            message: format!(
+                "'{value_repr}' is not a valid choice. Allowed: {}.",
+                col.choices.join(", "),
+            ),
+        });
+    }
+    out
+}
+
 async fn validate_fk_references(
     meta: &ModelMeta,
     body: &Map<String, Value>,
@@ -353,4 +399,111 @@ fn parse_pg_column_from_constraint(constraint: &str) -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::migrate::Column;
+
+    fn col(name: &str, choices: &[&str]) -> Column {
+        Column {
+            name: name.to_string(),
+            ty: SqlType::Text,
+            primary_key: false,
+            nullable: false,
+            noform: false,
+            noedit: false,
+            is_string_repr: false,
+            max_length: 0,
+            fk_target: None,
+            on_delete: crate::orm::model::FkAction::NoAction,
+            on_update: crate::orm::model::FkAction::NoAction,
+            unique: false,
+            default: String::new(),
+            choices: choices.iter().map(|s| s.to_string()).collect(),
+            choice_labels: Vec::new(),
+            is_multichoice: false,
+            min: None,
+            max: None,
+            text_format: None,
+            auto_now: false,
+            auto_now_add: false,
+            help: String::new(),
+            example: String::new(),
+            index: false,
+            supported_backends: Vec::new(),
+        }
+    }
+
+    fn meta_with(cols: Vec<Column>) -> ModelMeta {
+        ModelMeta {
+            name: "Test".into(),
+            table: "test".into(),
+            fields: cols,
+            display: "Test".into(),
+            icon: "database".into(),
+            database: None,
+            singleton: false,
+            unique_together: Vec::new(),
+            indexes: Vec::new(),
+            ordering: Vec::new(),
+            m2m_relations: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn choices_validator_catches_typo_against_allowed_set() {
+        let meta = meta_with(vec![col("currency", &["usd", "eur", "gbp"])]);
+        let mut body = serde_json::Map::new();
+        body.insert("currency".into(), serde_json::Value::String("usdd".into()));
+        let errors = validate_choices(&meta, &body);
+        assert_eq!(errors.len(), 1, "expected one error, got {errors:?}");
+        match &errors[0] {
+            WriteError::Validator { field, message } => {
+                assert_eq!(field, "currency");
+                assert!(
+                    message.contains("'usdd'"),
+                    "message should name the offending value; got {message:?}",
+                );
+                assert!(
+                    message.contains("usd, eur, gbp"),
+                    "message should list the allowed set; got {message:?}",
+                );
+            }
+            other => panic!("expected Validator, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn choices_validator_accepts_a_known_value() {
+        let meta = meta_with(vec![col("status", &["draft", "active", "archived"])]);
+        let mut body = serde_json::Map::new();
+        body.insert("status".into(), serde_json::Value::String("active".into()));
+        assert!(validate_choices(&meta, &body).is_empty());
+    }
+
+    #[test]
+    fn choices_validator_skips_blank_and_missing() {
+        let meta = meta_with(vec![col("status", &["draft", "active"])]);
+        // Missing key — required-field check handles it; choices
+        // shouldn't double-report.
+        assert!(validate_choices(&meta, &serde_json::Map::new()).is_empty());
+        // Explicit null — same.
+        let mut body = serde_json::Map::new();
+        body.insert("status".into(), serde_json::Value::Null);
+        assert!(validate_choices(&meta, &body).is_empty());
+        // Empty string — required-field check's territory.
+        let mut body = serde_json::Map::new();
+        body.insert("status".into(), serde_json::Value::String(String::new()));
+        assert!(validate_choices(&meta, &body).is_empty());
+    }
+
+    #[test]
+    fn choices_validator_skips_columns_without_choices() {
+        let meta = meta_with(vec![col("name", &[])]);
+        let mut body = serde_json::Map::new();
+        body.insert("name".into(), serde_json::Value::String("anything".into()));
+        assert!(validate_choices(&meta, &body).is_empty());
+    }
 }
