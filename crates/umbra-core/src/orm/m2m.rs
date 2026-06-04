@@ -451,6 +451,175 @@ impl<T: Model, P: PrimaryKey> M2M<T, P> {
     }
 }
 
+/// "Replace this parent's M2M junction entries with exactly
+/// `child_ids`." The dynamic equivalent of [`M2M::set`] for callers
+/// that only have the junction name + a list of typed
+/// `sea_query::Value` PKs — the admin's form path is the motivating
+/// use case, since it works with `ModelMeta` and form strings rather
+/// than typed `T` instances.
+///
+/// Free-standing (not on `M2M<T, P>`) because the admin's form
+/// handler doesn't know the typed child or parent at compile time;
+/// it has only string values + a `Column` per side to derive the
+/// SqlType from.
+///
+/// Runs `DELETE FROM <junction> WHERE parent_id = ?` followed by one
+/// `INSERT ... ON CONFLICT DO NOTHING` per child id, all inside a
+/// single transaction so a partial replacement can't leak.
+/// Empty `child_ids` is the legitimate "clear the relation" shape.
+///
+/// Closes the BUG-16 phase 3 admin gap: the form for editing a
+/// parent model can now persist M2M selections without knowing the
+/// typed wrappers.
+pub async fn set_junction_dynamic(
+    junction_table: &str,
+    parent_id: sea_query::Value,
+    child_ids: Vec<sea_query::Value>,
+) -> Result<(), sqlx::Error> {
+    let pool = crate::db::pool_dispatched();
+    match pool {
+        crate::db::DbPool::Sqlite(p) => {
+            let mut tx = p.begin().await?;
+            let mut delete = Query::delete();
+            delete
+                .from_table(Alias::new(junction_table))
+                .and_where(Expr::col(Alias::new("parent_id")).eq(parent_id.clone()));
+            let (sql, values) = delete.build_sqlx(SqliteQueryBuilder);
+            sqlx::query_with(&sql, values).execute(&mut *tx).await?;
+            for child_id in child_ids {
+                let mut insert = Query::insert();
+                insert
+                    .into_table(Alias::new(junction_table))
+                    .columns([Alias::new("parent_id"), Alias::new("child_id")])
+                    .values_panic([
+                        Expr::value(parent_id.clone()).into(),
+                        Expr::value(child_id).into(),
+                    ])
+                    .on_conflict(
+                        OnConflict::columns([Alias::new("parent_id"), Alias::new("child_id")])
+                            .do_nothing()
+                            .to_owned(),
+                    );
+                let (sql, values) = insert.build_sqlx(SqliteQueryBuilder);
+                sqlx::query_with(&sql, values).execute(&mut *tx).await?;
+            }
+            tx.commit().await?;
+        }
+        crate::db::DbPool::Postgres(p) => {
+            let mut tx = p.begin().await?;
+            let mut delete = Query::delete();
+            delete
+                .from_table(Alias::new(junction_table))
+                .and_where(Expr::col(Alias::new("parent_id")).eq(parent_id.clone()));
+            let (sql, values) = delete.build_sqlx(PostgresQueryBuilder);
+            sqlx::query_with(&sql, values).execute(&mut *tx).await?;
+            for child_id in child_ids {
+                let mut insert = Query::insert();
+                insert
+                    .into_table(Alias::new(junction_table))
+                    .columns([Alias::new("parent_id"), Alias::new("child_id")])
+                    .values_panic([
+                        Expr::value(parent_id.clone()).into(),
+                        Expr::value(child_id).into(),
+                    ])
+                    .on_conflict(
+                        OnConflict::columns([Alias::new("parent_id"), Alias::new("child_id")])
+                            .do_nothing()
+                            .to_owned(),
+                    );
+                let (sql, values) = insert.build_sqlx(PostgresQueryBuilder);
+                sqlx::query_with(&sql, values).execute(&mut *tx).await?;
+            }
+            tx.commit().await?;
+        }
+    }
+    Ok(())
+}
+
+/// "Which child PKs does `parent_id` hold the M2M junction relation
+/// to, as plain strings?" The dynamic equivalent of
+/// [`M2M::fetch`] for callers that only have the junction name +
+/// per-side PK [`SqlType`]s — the admin form's "pre-check current
+/// selection" path is the motivating use case.
+///
+/// `child_pk_ty` selects the right `try_get<T>` codec from the
+/// returned row; everything is stringified before return so the
+/// template layer can string-compare against candidate PKs without
+/// learning typed shapes.
+///
+/// Free-standing for the same reason as `set_junction_dynamic`:
+/// admin code works with `ModelMeta` / `SqlType`, not typed `T`.
+pub async fn load_junction_selection(
+    junction_table: &str,
+    parent_id: sea_query::Value,
+    child_pk_ty: super::SqlType,
+) -> Result<Vec<String>, sqlx::Error> {
+    let mut q = Query::select();
+    q.distinct()
+        .column(Alias::new("child_id"))
+        .from(Alias::new(junction_table))
+        .and_where(Expr::col(Alias::new("parent_id")).eq(parent_id));
+    let pool = crate::db::pool_dispatched();
+    let mut out: Vec<String> = Vec::new();
+    match pool {
+        crate::db::DbPool::Sqlite(p) => {
+            let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
+            let rows = sqlx::query_with(&sql, values).fetch_all(p).await?;
+            for row in rows {
+                let s = stringify_sqlite_child_id(&row, child_pk_ty)?;
+                out.push(s);
+            }
+        }
+        crate::db::DbPool::Postgres(p) => {
+            let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
+            let rows = sqlx::query_with(&sql, values).fetch_all(p).await?;
+            for row in rows {
+                let s = stringify_postgres_child_id(&row, child_pk_ty)?;
+                out.push(s);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Decode the `child_id` column of one junction row into a string,
+/// using the SqlType to pick the right typed `try_get`. Mirrors the
+/// `decode_to_string` dispatch in `orm::dynamic` but specialised
+/// to the junction's only column.
+fn stringify_sqlite_child_id(
+    row: &sqlx::sqlite::SqliteRow,
+    ty: super::SqlType,
+) -> Result<String, sqlx::Error> {
+    use sqlx::Row;
+    Ok(match ty {
+        super::SqlType::SmallInt | super::SqlType::Integer => {
+            row.try_get::<i32, _>("child_id")?.to_string()
+        }
+        super::SqlType::BigInt | super::SqlType::ForeignKey => {
+            row.try_get::<i64, _>("child_id")?.to_string()
+        }
+        super::SqlType::Uuid => row.try_get::<uuid::Uuid, _>("child_id")?.to_string(),
+        // TEXT and anything else come back as a String.
+        _ => row.try_get::<String, _>("child_id")?,
+    })
+}
+
+fn stringify_postgres_child_id(
+    row: &sqlx::postgres::PgRow,
+    ty: super::SqlType,
+) -> Result<String, sqlx::Error> {
+    use sqlx::Row;
+    Ok(match ty {
+        super::SqlType::SmallInt => row.try_get::<i16, _>("child_id")?.to_string(),
+        super::SqlType::Integer => row.try_get::<i32, _>("child_id")?.to_string(),
+        super::SqlType::BigInt | super::SqlType::ForeignKey => {
+            row.try_get::<i64, _>("child_id")?.to_string()
+        }
+        super::SqlType::Uuid => row.try_get::<uuid::Uuid, _>("child_id")?.to_string(),
+        _ => row.try_get::<String, _>("child_id")?,
+    })
+}
+
 /// Resolve the child model's PK column name from `T::FIELDS`.
 /// Defaults to `"id"` if the model somehow has no PK column (the
 /// macro guarantees one in practice).

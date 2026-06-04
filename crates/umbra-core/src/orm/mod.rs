@@ -40,7 +40,7 @@ pub use choices::ChoiceField;
 pub use dynamic::{DynError, DynQuerySet, decode_to_string};
 pub use expr::{F, FColExt, FExpr, Q};
 pub use foreign_key::ForeignKey;
-pub use m2m::M2M;
+pub use m2m::{M2M, load_junction_selection, set_junction_dynamic};
 pub use model::{
     ArrayElement, FieldSpec, FkAction, HydrateRelated, M2MRelationSpec, Model, PrimaryKey, SqlType,
 };

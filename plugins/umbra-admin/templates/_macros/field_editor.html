@@ -1,15 +1,21 @@
 {#
-  field_editor(field, value, readonly=false, error="")
+  field_editor(field, value, parent_table, readonly=false, error="")
   -------------------------------------------------------
   Dispatcher macro: renders one form field per SqlType kind.
 
   Arguments
   ---------
-  field   : FormField  — { name, kind, value, nullable, readonly }
-  value   : string     — current field value (pre-coerced for date/time)
-  readonly: bool       — override to force read-only (e.g. preview mode)
-  error   : string     — inline validation message; empty = no error shown
-  is_long : bool       — upgrade Text to textarea for long values (>200 chars)
+  field        : FormField  — { name, kind, value, nullable, readonly, fk_table }
+  value        : string     — current field value (pre-coerced for date/time)
+  parent_table : string     — the *owning* model's table name. Used in the FK
+                              picker URL (`/admin/api/<parent_table>/<field.name>/options`)
+                              because the handler looks the column up on the
+                              PARENT model to follow `col.fk_target` to the
+                              real target. Passing the target here would 404
+                              with "no field `<fk_col>` on `<target>`".
+  readonly     : bool       — override to force read-only (e.g. preview mode)
+  error        : string     — inline validation message; empty = no error shown
+  is_long      : bool       — upgrade Text to textarea for long values (>200 chars)
 
   Phase-3 cut
   -----------
@@ -17,7 +23,7 @@
   The async searchable combobox (phase 3) replaces this.
 #}
 
-{% macro field_editor(field, value, readonly=false, error="", is_long=false) %}
+{% macro field_editor(field, value, parent_table="", readonly=false, error="", is_long=false) %}
 {% set is_readonly = readonly or field.readonly %}
 <div class="space-y-1.5 mb-md">
   {# --- Label row --- #}
@@ -128,8 +134,13 @@
 
   {% elif field.kind == "fk" %}
     {# Async FK combobox — never preloads the whole table.
-       Endpoint: /admin/api/<fk_table>/<field.name>/options powers search.
-       On edit-mode load, /options/resolve?ids=<current> resolves the label. #}
+       Endpoint: /admin/api/<parent_table>/<field.name>/options — the
+       handler looks the column up on the parent model to follow
+       `col.fk_target` to the target. On edit-mode load,
+       /options/resolve?ids=<current> resolves the label.
+       `fk_table` (= the target table name) is kept on the dom node
+       as `data-fk-table` because the picker JS reads it for label
+       formatting; it is NOT what the URL `{table}` segment expects. #}
     {% set fk_table = field.fk_table | default("") %}
     <div class="relative fk-picker" data-field="{{ field.name }}" data-fk-table="{{ fk_table }}">
       <input type="hidden" id="f_{{ field.name }}" name="{{ field.name }}" value="{{ value }}" />
@@ -140,7 +151,7 @@
         autocomplete="off"
         class="w-full bg-surface-container-low border {% if error %}border-error{% else %}border-outline-variant{% endif %} rounded-xl px-md py-sm text-on-surface text-body-md focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all placeholder:text-outline/50 {% if is_readonly %}opacity-70 cursor-default{% endif %}"
         {% if is_readonly %}readonly{% endif %}
-        hx-get="/admin/api/{{ fk_table }}/{{ field.name }}/options"
+        hx-get="/admin/api/{{ parent_table }}/{{ field.name }}/options"
         hx-trigger="input changed delay:250ms, focus"
         hx-target="next .fk-options"
         hx-swap="innerHTML"
@@ -149,7 +160,7 @@
       />
       {% if value and not is_readonly %}
       <span id="fk_resolve_{{ field.name }}"
-        hx-get="/admin/api/{{ fk_table }}/{{ field.name }}/options/resolve?ids={{ value }}"
+        hx-get="/admin/api/{{ parent_table }}/{{ field.name }}/options/resolve?ids={{ value }}"
         hx-trigger="load"
         hx-swap="none"
         hx-on:htmx:after-request="if(window.umbra&&umbra.fkResolve)umbra.fkResolve('{{ field.name }}', event)"

@@ -18,7 +18,7 @@ use crate::engine::render;
 use crate::error::AdminError;
 use crate::rows::{fetch_rows_filtered, insert_row};
 use crate::util::{is_htmx, sanitise_form_error};
-use crate::view::{form_fields_for, model_for_template};
+use crate::view::{form_fields_for, form_m2m_fields_for, model_for_template};
 
 /// `GET /admin/{table}/{id}/sheet` — preview sheet fragment. Falls
 /// back to redirecting non-HTMX requests to the changelist with
@@ -101,6 +101,7 @@ pub(crate) async fn edit_sheet_handler(
         row.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
     let cfg = state.config_for(&table);
     let fields = form_fields_for(&model, Some(&row_strings), cfg);
+    let m2m_fields = form_m2m_fields_for(&model, Some(&id)).await;
     let model_view = model_for_template(&model);
 
     let password_field = cfg.and_then(|c| c.password_field.as_deref()).unwrap_or("");
@@ -112,6 +113,7 @@ pub(crate) async fn edit_sheet_handler(
                 model          => model_view,
                 instance_id    => id,
                 fields         => fields,
+                m2m_fields     => m2m_fields,
                 error          => "",
                 password_field => password_field,
             ),
@@ -140,6 +142,7 @@ pub(crate) async fn new_sheet(
     };
     let cfg = state.config_for(&table);
     let fields = form_fields_for(&model, None, cfg);
+    let m2m_fields = form_m2m_fields_for(&model, None).await;
     let model_view = model_for_template(&model);
 
     match render(
@@ -148,6 +151,7 @@ pub(crate) async fn new_sheet(
             model       => model_view,
             instance_id => "",
             fields      => fields,
+            m2m_fields  => m2m_fields,
             error       => "",
         ),
     ) {
@@ -207,9 +211,17 @@ pub(crate) async fn sheet_create(
         Ok(m) => m,
         Err(e) => return AdminError::BadInput(e.to_string()).into_response(),
     };
+    let multi_form: Vec<(String, String)> = serde_urlencoded::from_str(&body).unwrap_or_default();
     let cfg = state.config_for(&table);
     match insert_row(&model, &form, cfg).await {
-        Ok(_) => {
+        Ok(new_pk) => {
+            // BUG-16 admin: apply M2M selections to the auto-junction
+            // tables. Same shape as `crud::create`.
+            if let Err(e) =
+                crate::handlers::crud::apply_m2m_selections_pub(&model, &new_pk, &multi_form).await
+            {
+                return AdminError::Sqlx(e).into_response();
+            }
             crate::models::log(
                 who.id,
                 "create",
@@ -232,6 +244,7 @@ pub(crate) async fn sheet_create(
         }
         Err(e) => {
             let fields = form_fields_for(&model, Some(&form), cfg);
+            let m2m_fields = form_m2m_fields_for(&model, None).await;
             let model_view = model_for_template(&model);
             match render(
                 "admin/sheet_create.html",
@@ -239,6 +252,7 @@ pub(crate) async fn sheet_create(
                     model       => model_view,
                     instance_id => "",
                     fields      => fields,
+                    m2m_fields  => m2m_fields,
                     error       => sanitise_form_error(&e),
                 ),
             ) {

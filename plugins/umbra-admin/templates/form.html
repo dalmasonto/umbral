@@ -10,26 +10,119 @@
     <form method="post" action="{{ action }}">
       {% for field in fields %}
         <div class="field">
+          <label for="f_{{ field.name }}">
+            {{ field.name }}{% if field.nullable %} <span class="meta">(nullable)</span>{% endif %}
+          </label>
+
           {% if field.kind == "bool" %}
             <div class="checkbox-row">
               <input type="checkbox" id="f_{{ field.name }}" name="{{ field.name }}" value="true"{% if field.value == "true" %} checked{% endif %}>
-              <label for="f_{{ field.name }}">{{ field.name }}{% if field.nullable %} <span class="meta">(nullable)</span>{% endif %}</label>
+              <label for="f_{{ field.name }}">{{ field.name }}</label>
             </div>
+
+          {% elif field.kind == "select" %}
+            <select id="f_{{ field.name }}" name="{{ field.name }}">
+              {% if field.nullable %}<option value="">—</option>{% endif %}
+              {% for opt in field.choices %}
+              <option value="{{ opt.value }}"{% if field.value == opt.value %} selected{% endif %}>{{ opt.label }}</option>
+              {% endfor %}
+            </select>
+
+          {% elif field.kind == "fk" %}
+            {% set fk_table = field.fk_table | default("") %}
+            <div class="fk-picker" data-field="{{ field.name }}" data-fk-table="{{ fk_table }}">
+              <input type="hidden" id="f_{{ field.name }}" name="{{ field.name }}" value="{{ field.value }}" />
+              <input type="text" id="fk_text_{{ field.name }}" placeholder="Search..." autocomplete="off" value=""
+                hx-get="/admin/api/{{ model.table }}/{{ field.name }}/options"
+                hx-trigger="input changed delay:250ms, focus"
+                hx-target="next .fk-options"
+                hx-swap="innerHTML"
+                hx-include="this"
+                name="search"
+                style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;"
+              />
+              {% if field.value %}
+              <span id="fk_resolve_{{ field.name }}"
+                hx-get="/admin/api/{{ model.table }}/{{ field.name }}/options/resolve?ids={{ field.value }}"
+                hx-trigger="load"
+                hx-swap="none"
+                hx-on:htmx:after-request="if(window.umbra&&umbra.fkResolve)umbra.fkResolve('{{ field.name }}', event)"
+              ></span>
+              {% endif %}
+              <div class="fk-options" style="display:none; position:absolute; background:#fff; border:1px solid #ccc; max-height:200px; overflow-y:auto; z-index:100;">
+              </div>
+            </div>
+
+          {% elif field.kind == "password" %}
+            <input type="password" id="f_{{ field.name }}" name="{{ field.name }}" placeholder="New password" required autocomplete="new-password" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; margin-bottom: 8px;" />
+            <input type="password" name="{{ field.name }}_confirm" placeholder="Confirm password" required autocomplete="new-password" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;" />
+
+          {% elif field.kind == "textarea" %}
+            <textarea id="f_{{ field.name }}" name="{{ field.name }}" rows="4" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;">{{ field.value }}</textarea>
+
+          {% elif field.kind == "json" %}
+            <textarea id="f_{{ field.name }}" name="{{ field.name }}" rows="5" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; font-family: monospace;">{{ field.value }}</textarea>
+
+          {% elif field.kind == "multiselect" %}
+            <div class="multichoice-picker" data-field="{{ field.name }}">
+              <input type="hidden" id="f_{{ field.name }}" name="{{ field.name }}" value="{{ field.value }}" />
+              {% set selected_csv = "," ~ field.value ~ "," %}
+              <div style="display:flex; flex-wrap:wrap; gap:4px;">
+                {% for opt in field.choices %}
+                {% set marker = "," ~ opt.value ~ "," %}
+                {% set is_selected = marker in selected_csv %}
+                <label style="display:inline-flex; align-items:center; gap:4px; padding:4px 8px; border:1px solid #ccc; border-radius:12px; cursor:pointer;{% if is_selected %} background:#e0f2fe; border-color:#0284c7;{% endif %}">
+                  <input type="checkbox" data-mc-value="{{ opt.value }}" {% if is_selected %}checked{% endif %} />
+                  <span>{{ opt.label }}</span>
+                </label>
+                {% endfor %}
+              </div>
+            </div>
+
           {% else %}
-            <label for="f_{{ field.name }}">
-              {{ field.name }}{% if field.nullable %} <span class="meta">(nullable)</span>{% endif %}
-            </label>
             <input
-              type="{{ field.kind }}"
+              type="{% if field.kind == "number" %}number{% elif field.kind == "date" %}date{% elif field.kind == "time" %}time{% elif field.kind == "datetime-local" %}datetime-local{% else %}text{% endif %}"
               id="f_{{ field.name }}"
               name="{{ field.name }}"
               value="{{ field.value }}"
-              {% if not field.nullable and field.kind != "checkbox" %}required{% endif %}
+              {% if not field.nullable %}required{% endif %}
               {% if field.readonly %}readonly{% endif %}
+              style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;"
             >
           {% endif %}
         </div>
       {% endfor %}
+
+      {# BUG-16 admin: M2M selections. One section per
+         `Model::M2M_RELATIONS` entry; renders a checkbox list of
+         every candidate child with currently-selected ones
+         pre-checked. The POST handler reads back `m2m_<field>`
+         repeated values and writes them through
+         `set_junction_dynamic`. #}
+      {% if m2m_fields %}
+        {% for m in m2m_fields %}
+          <div class="field">
+            <label>{{ m.label }} <span class="meta">({{ m.candidates | length }} available)</span></label>
+            <div class="m2m-checkbox-list" style="max-height: 220px; overflow-y: auto; border: 1px solid #ccc; border-radius: 4px; padding: 8px;">
+              {% if not m.candidates %}
+                <p class="meta">No candidate rows in the target table.</p>
+              {% else %}
+                {% for opt in m.candidates %}
+                  {% set is_selected = opt.value in m.selected_values %}
+                  <label style="display: block; padding: 2px 0; cursor: pointer;">
+                    <input type="checkbox"
+                           name="m2m_{{ m.name }}"
+                           value="{{ opt.value }}"
+                           {% if is_selected %}checked{% endif %} />
+                    <span>{{ opt.label }}</span>
+                  </label>
+                {% endfor %}
+              {% endif %}
+            </div>
+          </div>
+        {% endfor %}
+      {% endif %}
+
       <div class="actions">
         <button type="submit" class="btn btn-primary">Save</button>
         <a class="btn" href="/admin/{{ model.table }}/">Cancel</a>

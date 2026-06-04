@@ -23,7 +23,95 @@ use crate::error::AdminError;
 use crate::handlers::sheet::edit_sheet_handler;
 use crate::rows::{fetch_rows_filtered, insert_row, update_row};
 use crate::util::{is_htmx, sanitise_form_error};
-use crate::view::{form_fields_for, model_for_template, sidebar_apps};
+use crate::view::{form_fields_for, form_m2m_fields_for, model_for_template, sidebar_apps};
+
+/// Cross-module wrapper used by the sheet handler — keeps
+/// `apply_m2m_selections` private to this file while still letting
+/// `handlers::sheet::sheet_create` reuse the same write path.
+pub(crate) async fn apply_m2m_selections_pub(
+    parent: &umbra::migrate::ModelMeta,
+    parent_pk_str: &str,
+    multi_form: &[(String, String)],
+) -> Result<(), sqlx::Error> {
+    apply_m2m_selections(parent, parent_pk_str, multi_form).await
+}
+
+/// Persist M2M field selections for a parent row, one
+/// `set_junction_dynamic` call per `Model::M2M_RELATIONS` entry.
+///
+/// Walks `parent.m2m_relations` (the ModelMeta mirror of
+/// `Model::M2M_RELATIONS`), extracts every checked candidate from the
+/// form's repeated `m2m_<field>` values, parses the parent + child
+/// PKs through `form_str_to_sea_value` so the bind types match the
+/// junction's column types, and replaces the junction's existing
+/// rows for this parent inside a single transaction.
+///
+/// Called by `create` (after INSERT) and `update` (after UPDATE).
+/// No-op when the parent has no M2M relations or the form has no
+/// `m2m_*` entries.
+async fn apply_m2m_selections(
+    parent: &umbra::migrate::ModelMeta,
+    parent_pk_str: &str,
+    multi_form: &[(String, String)],
+) -> Result<(), sqlx::Error> {
+    if parent.m2m_relations.is_empty() {
+        return Ok(());
+    }
+    let Some(parent_pk_col) = parent.fields.iter().find(|c| c.primary_key) else {
+        return Ok(());
+    };
+    // Parse the parent PK once — same value binds against every
+    // junction's `parent_id` column for this row.
+    let parent_value = match umbra::orm::write::json_to_sea_value(
+        parent_pk_col.ty,
+        &serde_json::Value::String(parent_pk_str.to_string()),
+        false,
+        &parent_pk_col.name,
+    ) {
+        Ok(v) => v,
+        Err(_) => return Ok(()),
+    };
+    for rel in &parent.m2m_relations {
+        let field_key = format!("m2m_{}", rel.field_name);
+        let raw_child_values: Vec<&str> = multi_form
+            .iter()
+            .filter_map(|(k, v)| {
+                if k == &field_key {
+                    Some(v.as_str())
+                } else {
+                    None
+                }
+            })
+            .filter(|v| !v.is_empty())
+            .collect();
+        // Look up the child's PK column to dispatch the bind type.
+        let Some(target) = umbra::migrate::registered_models()
+            .into_iter()
+            .find(|m| m.table == rel.target_table)
+        else {
+            continue;
+        };
+        let Some(child_pk_col) = target.fields.iter().find(|c| c.primary_key) else {
+            continue;
+        };
+        let mut child_values = Vec::with_capacity(raw_child_values.len());
+        for raw in raw_child_values {
+            match umbra::orm::write::json_to_sea_value(
+                child_pk_col.ty,
+                &serde_json::Value::String(raw.to_string()),
+                false,
+                &child_pk_col.name,
+            ) {
+                Ok(v) => child_values.push(v),
+                Err(_) => continue,
+            }
+        }
+        let junction_table = format!("{}_{}", parent.table, rel.field_name);
+        umbra::orm::set_junction_dynamic(&junction_table, parent_value.clone(), child_values)
+            .await?;
+    }
+    Ok(())
+}
 
 /// `GET /admin/{table}/{id}` — read-only detail page.
 pub(crate) async fn detail(
@@ -90,6 +178,10 @@ pub(crate) async fn new_form(
     };
     let cfg = state.config_for(&table);
     let fields = form_fields_for(&model, None, cfg);
+    // BUG-16 admin: empty M2M selection on the create form (no
+    // parent PK yet — the junction rows get written post-INSERT by
+    // the POST handler once the parent has an id).
+    let m2m_fields = form_m2m_fields_for(&model, None).await;
     let apps = sidebar_apps(&state, &user);
     let breadcrumbs = vec![
         serde_json::json!({ "label": model.name.clone(), "url": format!("/admin/{table}/") }),
@@ -102,6 +194,7 @@ pub(crate) async fn new_form(
             user          => user.username.clone(),
             model         => model_for_template(&model),
             fields        => fields,
+            m2m_fields    => m2m_fields,
             verb          => "Create",
             action        => format!("/admin/{}/new", model.table),
             error         => "",
@@ -133,13 +226,26 @@ pub(crate) async fn create(
     let Some((_, model)) = find_model(&table) else {
         return AdminError::NotFound(format!("no model with table `{table}`")).into_response();
     };
+    // Parse the body twice with different deserialisers:
+    //   - HashMap collapses duplicates to "last wins" (right for
+    //     scalar fields).
+    //   - Vec<(K, V)> preserves duplicates (right for `m2m_<field>`
+    //     repeated entries — the checkbox list emits one body pair
+    //     per checked candidate).
     let form: HashMap<String, String> = match serde_urlencoded::from_str(&body) {
         Ok(m) => m,
         Err(e) => return AdminError::BadInput(e.to_string()).into_response(),
     };
+    let multi_form: Vec<(String, String)> = serde_urlencoded::from_str(&body).unwrap_or_default();
     let cfg = state.config_for(&table);
     match insert_row(&model, &form, cfg).await {
-        Ok(_) => {
+        Ok(new_pk) => {
+            // BUG-16 admin: with the parent row written, apply any
+            // M2M selections from the form to each junction table.
+            // `new_pk` is the just-inserted parent's PK as a string.
+            if let Err(e) = apply_m2m_selections(&model, &new_pk, &multi_form).await {
+                return AdminError::Sqlx(e).into_response();
+            }
             crate::models::log(
                 user.id,
                 "create",
@@ -152,6 +258,7 @@ pub(crate) async fn create(
         }
         Err(e) => {
             let fields = form_fields_for(&model, Some(&form), cfg);
+            let m2m_fields = form_m2m_fields_for(&model, None).await;
             let apps = sidebar_apps(&state, &user);
             let breadcrumbs = vec![
                 serde_json::json!({ "label": model.name.clone(), "url": format!("/admin/{table}/") }),
@@ -164,6 +271,7 @@ pub(crate) async fn create(
                     user          => user.username.clone(),
                     model         => model_for_template(&model),
                     fields        => fields,
+                    m2m_fields    => m2m_fields,
                     verb          => "Create",
                     action        => format!("/admin/{}/new", model.table),
                     error         => sanitise_form_error(&e),
@@ -209,6 +317,11 @@ pub(crate) async fn edit_form(
         row.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
     let cfg = state.config_for(&table);
     let fields = form_fields_for(&model, Some(&row_strings), cfg);
+    // BUG-16 admin: pre-check the current M2M selection for this
+    // parent row. The PK comes from the URL path; the helper does
+    // one `SELECT DISTINCT child_id FROM <junction> WHERE parent_id
+    // = ?` per M2M field.
+    let m2m_fields = form_m2m_fields_for(&model, Some(&id)).await;
     let apps = sidebar_apps(&state, &user);
     let breadcrumbs = vec![
         serde_json::json!({ "label": model.name.clone(), "url": format!("/admin/{table}/") }),
@@ -222,6 +335,7 @@ pub(crate) async fn edit_form(
             user          => user.username.clone(),
             model         => model_for_template(&model),
             fields        => fields,
+            m2m_fields    => m2m_fields,
             verb          => "Edit",
             action        => format!("/admin/{}/{}/edit", model.table, id),
             row           => row,
@@ -267,9 +381,15 @@ pub(crate) async fn update(
         Ok(m) => m,
         Err(e) => return AdminError::BadInput(e.to_string()).into_response(),
     };
+    let multi_form: Vec<(String, String)> = serde_urlencoded::from_str(&body).unwrap_or_default();
     let cfg = state.config_for(&table);
     match update_row(&model, pk, &id, &form, cfg).await {
         Ok(_) => {
+            // BUG-16 admin: replace this parent's M2M selections in
+            // each auto-generated junction table to match the form.
+            if let Err(e) = apply_m2m_selections(&model, &id, &multi_form).await {
+                return AdminError::Sqlx(e).into_response();
+            }
             let object_id = id.parse::<i64>().ok();
             crate::models::log(
                 user.id,
@@ -298,6 +418,7 @@ pub(crate) async fn update(
         }
         Err(e) => {
             let fields = form_fields_for(&model, Some(&form), cfg);
+            let m2m_fields = form_m2m_fields_for(&model, Some(&id)).await;
             let apps = sidebar_apps(&state, &user);
             let breadcrumbs = vec![
                 serde_json::json!({ "label": model.name.clone(), "url": format!("/admin/{table}/") }),
@@ -311,6 +432,7 @@ pub(crate) async fn update(
                     user          => user.username.clone(),
                     model         => model_for_template(&model),
                     fields        => fields,
+                    m2m_fields    => m2m_fields,
                     verb          => "Edit",
                     action        => format!("/admin/{}/{}/edit", model.table, id),
                     error         => sanitise_form_error(&e),

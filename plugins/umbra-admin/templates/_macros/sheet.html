@@ -7,7 +7,7 @@ Arguments: mode="preview"|"edit"|"create", model_name, table, instance_id, field
 Phase-3 deferred: sheet stacking requires a JS state machine.
 Drag-resize: ~50 LOC vanilla JS at the bottom; width in localStorage.
 #}
-{% macro sheet(mode, model_name, table, instance_id, fields, title="", error="", depth=0, password_field="") %}
+{% macro sheet(mode, model_name, table, instance_id, fields, title="", error="", depth=0, password_field="", m2m_fields=[]) %}
 {% set sheet_title = title if title else ("New " ~ model_name if mode == "create" else ("Edit " ~ model_name ~ " #" ~ instance_id if mode == "edit" else (model_name ~ " #" ~ instance_id))) %}
 {% set is_edit = mode == "edit" or mode == "create" %}
 {% set offset = depth * 40 %}
@@ -116,6 +116,28 @@ Drag-resize: ~50 LOC vanilla JS at the bottom; width in localStorage.
           </div>
           <span class="text-body-sm text-on-surface-variant">{{ field.name | replace("_", " ") | title }}</span>
         </label>
+        {% elif field.kind == "password" %}
+        {# Password + confirm pair (create forms only for password_field models) #}
+        <div class="space-y-sm">
+          <input
+            type="password"
+            id="f_{{ field.name }}"
+            name="{{ field.name }}"
+            placeholder="New password"
+            required
+            autocomplete="new-password"
+            class="w-full bg-surface-container-low border border-outline-variant rounded-xl px-md py-sm text-on-surface text-body-md focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all placeholder:text-outline/50"
+          />
+          <input
+            type="password"
+            name="{{ field.name }}_confirm"
+            placeholder="Confirm password"
+            required
+            autocomplete="new-password"
+            class="w-full bg-surface-container-low border border-outline-variant rounded-xl px-md py-sm text-on-surface text-body-md focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all placeholder:text-outline/50"
+          />
+        </div>
+
         {% elif field.kind == "textarea" %}
         {# Prose / unbounded TEXT. Body font, no Format button — that's
            reserved for JSON below. Starts at 4 rows; resize handle
@@ -174,6 +196,39 @@ Drag-resize: ~50 LOC vanilla JS at the bottom; width in localStorage.
           <option value="{{ opt.value }}"{% if field.value == opt.value %} selected{% endif %}>{{ opt.label }}</option>
           {% endfor %}
         </select>
+        {% elif field.kind == "fk" %}
+        {# Async searchable FK combobox. #}
+        {% set fk_table = field.fk_table | default("") %}
+        <div class="relative fk-picker" data-field="{{ field.name }}" data-fk-table="{{ fk_table }}">
+          <input type="hidden" id="f_{{ field.name }}" {% if not is_readonly %}name="{{ field.name }}"{% endif %} value="{{ field.value }}" />
+          <input
+            type="text"
+            id="fk_text_{{ field.name }}"
+            placeholder="Search {{ field.name | replace('_id', '') | replace('_', ' ') | title }}..."
+            autocomplete="off"
+            value=""
+            class="w-full bg-surface-container-low border border-outline-variant rounded-xl px-md py-sm text-on-surface text-body-md focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all placeholder:text-outline/50 {% if is_readonly %}opacity-70 cursor-default{% endif %}"
+            {% if is_readonly %}readonly{% endif %}
+            hx-get="/admin/api/{{ table }}/{{ field.name }}/options"
+            hx-trigger="input changed delay:250ms, focus"
+            hx-target="next .fk-options"
+            hx-swap="innerHTML"
+            hx-include="this"
+            name="search"
+          />
+          {% if field.value and not is_readonly %}
+          <span id="fk_resolve_{{ field.name }}"
+            hx-get="/admin/api/{{ table }}/{{ field.name }}/options/resolve?ids={{ field.value }}"
+            hx-trigger="load"
+            hx-swap="none"
+            hx-on:htmx:after-request="if(window.umbra&&umbra.fkResolve)umbra.fkResolve('{{ field.name }}', event)"
+          ></span>
+          {% endif %}
+          <div class="fk-options hidden absolute left-0 right-0 top-full mt-xs z-30 bg-surface-container border border-outline-variant rounded-xl shadow-lg max-h-48 overflow-y-auto">
+            {# Populated by HTMX #}
+          </div>
+        </div>
+
         {% elif field.kind == "multiselect" %}
         {# MultiChoice<E> — closed-set, multi-valued.
            Each variant gets a chip checkbox; the hidden CSV input is
@@ -201,6 +256,44 @@ Drag-resize: ~50 LOC vanilla JS at the bottom; width in localStorage.
           {% if is_readonly %}disabled{% endif %}
           class="w-full bg-surface-container-low border border-outline-variant rounded-xl px-md py-sm text-on-surface text-body-md focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all placeholder:text-outline/50 {% if is_readonly %}opacity-50 cursor-not-allowed{% endif %}"/>
         {% endif %}
+      </div>
+      {% endfor %}
+
+      {# BUG-16 admin: M2M selection sections.
+         The form-builder hands us `m2m_fields` (one entry per
+         `Model::M2M_RELATIONS` slot on the parent), each carrying
+         the candidate child rows and the currently-selected PKs.
+         Rendered as a scrolling checkbox list — simple, works for
+         the permissions-app scale (tens of permissions). Submits
+         as repeated `m2m_<field>` values that the POST handler
+         hands to `set_junction_dynamic`. #}
+      {% for m in m2m_fields %}
+      <div class="space-y-1.5 mb-md">
+        <div class="flex items-center gap-xs">
+          <label class="font-label-md text-label-md text-on-surface-variant select-none">
+            {{ m.label | replace("_", " ") | title }}
+          </label>
+          <span class="text-[10px] text-outline bg-surface-container-high px-1.5 py-0.5 rounded font-label-sm">
+            {{ m.candidates | length }} available
+          </span>
+        </div>
+        <div class="max-h-64 overflow-y-auto bg-surface-container-low border border-outline-variant rounded-xl p-md space-y-1">
+          {% if not m.candidates %}
+            <p class="text-body-sm text-outline">No candidate rows in the target table yet.</p>
+          {% else %}
+            {% for opt in m.candidates %}
+              {% set is_selected = opt.value in m.selected_values %}
+              <label class="flex items-center gap-sm cursor-pointer text-body-sm text-on-surface hover:bg-surface-container rounded-lg px-sm py-1">
+                <input type="checkbox"
+                       name="m2m_{{ m.name }}"
+                       value="{{ opt.value }}"
+                       {% if is_selected %}checked{% endif %}
+                       class="w-4 h-4 accent-primary" />
+                <span>{{ opt.label }}</span>
+              </label>
+            {% endfor %}
+          {% endif %}
+        </div>
       </div>
       {% endfor %}
     </form>

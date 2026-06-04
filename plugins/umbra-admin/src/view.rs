@@ -208,6 +208,165 @@ pub(crate) fn form_fields_for(
     result
 }
 
+// =========================================================================
+// M2M form context
+// =========================================================================
+
+/// Template-facing description of one M2M field on the parent form.
+///
+/// The admin's form template loops over `m2m_fields` after the
+/// regular `fields` and renders a checkbox list per entry: every
+/// candidate child row from `candidates`, with the ones in
+/// `selected_values` pre-checked. The form POST handler walks the
+/// same set on submit and calls `set_junction_dynamic` to persist
+/// the new selection.
+///
+/// The chip-picker template branch at `field_editor.html:m2m` is the
+/// future-facing UX for large child sets (HTMX typeahead). The v1
+/// checkbox list rendered against `m2m_fields` works for the
+/// permissions-app shape (tens of permissions per content type).
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct M2MFormField {
+    /// Field ident on the parent struct (`"permissions"` for
+    /// `Group.permissions`). Used as the form input name —
+    /// the POST handler reads `m2m_<field_name>` multi-values.
+    pub name: String,
+    /// Display label — falls back to the field name. Title-cased
+    /// at the template layer for the section heading.
+    pub label: String,
+    /// Junction-table name derived by the migration engine. Carried
+    /// for the form POST so the handler doesn't have to re-look-up.
+    /// The string is internal — application code reaches it via
+    /// the macro-emitted `<Parent>::<field>_junction_table()`.
+    pub junction_table: String,
+    /// Candidate child rows for the picker. One entry per existing
+    /// row in the target table. v1 loads every row — fine for the
+    /// permissions-app scale; large catalogues should switch to the
+    /// HTMX chip-picker variant when it lands.
+    pub candidates: Vec<M2MCandidate>,
+    /// Currently-selected child PKs, in string form. The template
+    /// pre-checks any candidate whose `value` matches an entry here.
+    pub selected_values: Vec<String>,
+}
+
+/// One row in the M2M candidate list — the value the form binds
+/// (the child's PK string) and a human-readable label.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct M2MCandidate {
+    pub value: String,
+    pub label: String,
+}
+
+/// Build the per-M2M-field form context for `parent`.
+///
+/// For each entry in `parent.m2m_relations`:
+///   1. Look up the target model's `ModelMeta` from the registry.
+///   2. Fetch every row in the target table (string-shaped via
+///      `DynQuerySet::fetch_as_strings`).
+///   3. If `parent_pk_value` is `Some(pk)` (edit form), query the
+///      auto-generated junction for the current selection and
+///      pre-check those entries; on create forms (`None`), the
+///      selection starts empty.
+///
+/// Async because both queries hit the DB; called from the create /
+/// edit / update handlers right before the template render.
+pub(crate) async fn form_m2m_fields_for(
+    parent: &ModelMeta,
+    parent_pk_value: Option<&str>,
+) -> Vec<M2MFormField> {
+    if parent.m2m_relations.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::with_capacity(parent.m2m_relations.len());
+    // Parent PK column — required to compute the junction
+    // `parent_id` value and to load the current selection.
+    let parent_pk_col = parent.fields.iter().find(|c| c.primary_key);
+    for rel in &parent.m2m_relations {
+        // 1) Find the target ModelMeta in the live registry.
+        let Some(target) = umbra::migrate::registered_models()
+            .into_iter()
+            .find(|m| m.table == rel.target_table)
+        else {
+            // Target model isn't registered — silently skip rather
+            // than panic; the admin shouldn't crash because of a
+            // misconfigured app.
+            continue;
+        };
+        let Some(child_pk_col) = target.fields.iter().find(|c| c.primary_key) else {
+            continue;
+        };
+        // 2) Fetch every candidate child row, projected to (PK, str).
+        let label_col_name = target
+            .fields
+            .iter()
+            .find(|c| c.is_string_repr)
+            .map(|c| c.name.clone())
+            .unwrap_or_else(|| child_pk_col.name.clone());
+        let select_cols = if label_col_name == child_pk_col.name {
+            vec![child_pk_col.name.clone()]
+        } else {
+            vec![child_pk_col.name.clone(), label_col_name.clone()]
+        };
+        let candidate_rows = match umbra::orm::DynQuerySet::for_meta(&target)
+            .select_cols(&select_cols)
+            .fetch_as_strings()
+            .await
+        {
+            Ok(rows) => rows,
+            Err(_) => Vec::new(),
+        };
+        let candidates: Vec<M2MCandidate> = candidate_rows
+            .into_iter()
+            .filter_map(|row| {
+                let value = row.get(&child_pk_col.name).cloned()?;
+                let label = row
+                    .get(&label_col_name)
+                    .cloned()
+                    .unwrap_or_else(|| value.clone());
+                Some(M2MCandidate { value, label })
+            })
+            .collect();
+        // 3) Current selection — only on edit forms (where we have a
+        //    parent PK). Junction queries `SELECT DISTINCT child_id
+        //    FROM <junction> WHERE parent_id = <pk>` via the core
+        //    helper that handles per-side SqlType binding + per-
+        //    backend decoding.
+        let selected_values: Vec<String> = match (parent_pk_col, parent_pk_value) {
+            (Some(pk_col), Some(pk_str)) => {
+                let junction_table = format!("{}_{}", parent.table, rel.field_name);
+                let parent_value = match umbra::orm::write::json_to_sea_value(
+                    pk_col.ty,
+                    &serde_json::Value::String(pk_str.to_string()),
+                    false,
+                    &pk_col.name,
+                ) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                match umbra::orm::load_junction_selection(
+                    &junction_table,
+                    parent_value,
+                    child_pk_col.ty,
+                )
+                .await
+                {
+                    Ok(v) => v,
+                    Err(_) => Vec::new(),
+                }
+            }
+            _ => Vec::new(),
+        };
+        out.push(M2MFormField {
+            name: rel.field_name.clone(),
+            label: rel.field_name.clone(),
+            junction_table: format!("{}_{}", parent.table, rel.field_name),
+            candidates,
+            selected_values,
+        });
+    }
+    out
+}
+
 /// Coerce a stored DB value into the shape the corresponding HTML input
 /// expects. Timestamptz strips to `yyyy-mm-ddThh:mm` (the format
 /// `datetime-local` accepts); Time drops subseconds; everything else

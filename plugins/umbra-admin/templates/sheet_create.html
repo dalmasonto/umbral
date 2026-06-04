@@ -3,4 +3,4 @@
   GET /admin/{table}/new-sheet
 #}
 {% from "admin/_macros/sheet.html" import sheet %}
-{{ sheet("create", model.name, model.table, "", fields, error=error) }}
+{{ sheet("create", model.name, model.table, "", fields, error=error, m2m_fields=m2m_fields | default([])) }}

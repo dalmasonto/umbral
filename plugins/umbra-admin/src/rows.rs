@@ -11,7 +11,7 @@
 use std::collections::HashMap;
 
 use umbra::migrate::{Column, ModelMeta};
-use umbra::orm::DynQuerySet;
+use umbra::orm::{DynQuerySet, SqlType};
 
 use crate::AdminError;
 use crate::config::AdminConfig;
@@ -154,7 +154,7 @@ pub(crate) async fn insert_row(
     model: &ModelMeta,
     form: &HashMap<String, String>,
     cfg: Option<&AdminConfig>,
-) -> Result<(), AdminError> {
+) -> Result<String, AdminError> {
     let form_owned: HashMap<String, String>;
     let form = if let Some(pw_col) = cfg.and_then(|c| c.password_field.as_deref()) {
         if let Some(plaintext) = form.get(pw_col).filter(|v| !v.is_empty()) {
@@ -177,10 +177,22 @@ pub(crate) async fn insert_row(
     };
 
     let skip = readonly_set(model, cfg);
-    DynQuerySet::for_meta(model)
+    let new_int_pk = DynQuerySet::for_meta(model)
         .insert_form(form, &skip)
         .await?;
-    Ok(())
+    // Return the new PK as a string. For integer-PK models
+    // `insert_form` hands back the just-allocated row id; for
+    // String-PK models (e.g. `Permission`) the integer is 0 and
+    // the real PK is whatever the form supplied — read it back
+    // out of the form. The M2M post-write path in `crud.rs` uses
+    // this to address the junction's parent_id.
+    let pk_col = model.fields.iter().find(|c| c.primary_key);
+    Ok(match pk_col {
+        Some(c) if !matches!(c.ty, SqlType::SmallInt | SqlType::Integer | SqlType::BigInt) => {
+            form.get(&c.name).cloned().unwrap_or_default()
+        }
+        _ => new_int_pk.to_string(),
+    })
 }
 
 /// UPDATE one row identified by its PK. Same readonly enforcement as

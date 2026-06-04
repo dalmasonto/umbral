@@ -24,6 +24,14 @@ use crate::util::{html_escape, is_htmx};
 /// Returns paginated label+value options for an FK field. HTMX
 /// requests get an HTML fragment (the combobox dropdown body); plain
 /// requests get JSON for programmatic consumers.
+///
+/// URL semantics: `{table}` is the PARENT model's table; `{field}`
+/// is the FK column on it. The handler looks the column up,
+/// follows `col.fk_target` to find the target model, and serves
+/// options from there. The templates must construct the URL with
+/// the parent's table — not the FK target — or the lookup 404s
+/// with "no field `<fk_col>` on `<target_table>`" (the latter
+/// table has no such column, by design).
 pub(crate) async fn fk_options(
     State(state): State<AdminState>,
     headers: HeaderMap,
@@ -161,7 +169,9 @@ pub(crate) async fn fk_options(
 ///
 /// Returns labels for pre-selected ids — used on edit-form load so
 /// the combobox can render the existing FK value's label before the
-/// user has typed a search query.
+/// user has typed a search query. Same URL semantics as `fk_options`:
+/// `{table}` is the parent's table, `{field}` is the FK column on
+/// it; the handler derives the target via `col.fk_target`.
 pub(crate) async fn fk_options_resolve(
     State(state): State<AdminState>,
     headers: HeaderMap,

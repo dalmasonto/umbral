@@ -531,6 +531,138 @@ async fn perms_union_for_with_empty_parent_slice_returns_empty() {
     );
 }
 
+// =========================================================================
+// BUG-16 admin: `set_junction_dynamic` — the call path the admin form
+// handler uses, with typed PKs but no typed `T` wrapper.
+// =========================================================================
+
+#[tokio::test]
+async fn set_junction_dynamic_replaces_selection_with_typed_values() {
+    boot().await;
+
+    let perm_a = RoundTripPermission::objects()
+        .create(RoundTripPermission {
+            codename: "m2mtest.dyn_a".to_string(),
+            label: "A".to_string(),
+        })
+        .await
+        .expect("create A");
+    let perm_b = RoundTripPermission::objects()
+        .create(RoundTripPermission {
+            codename: "m2mtest.dyn_b".to_string(),
+            label: "B".to_string(),
+        })
+        .await
+        .expect("create B");
+
+    let group = RoundTripGroup::objects()
+        .create(RoundTripGroup {
+            id: 0,
+            name: "dynamic_apply".to_string(),
+            perms: M2M::empty(),
+        })
+        .await
+        .expect("create group");
+
+    // Mimic the admin's form-handler flow: parse parent + child PKs
+    // through json_to_sea_value, then hand to set_junction_dynamic.
+    let parent_value = umbra::orm::write::json_to_sea_value(
+        umbra::orm::SqlType::BigInt,
+        &serde_json::Value::String(group.id.to_string()),
+        false,
+        "id",
+    )
+    .unwrap();
+    let child_values: Vec<_> = [&perm_a, &perm_b]
+        .iter()
+        .map(|p| {
+            umbra::orm::write::json_to_sea_value(
+                umbra::orm::SqlType::Text,
+                &serde_json::Value::String(p.codename.clone()),
+                false,
+                "codename",
+            )
+            .unwrap()
+        })
+        .collect();
+
+    umbra::orm::set_junction_dynamic(JUNCTION_TABLE, parent_value.clone(), child_values)
+        .await
+        .expect("set_junction_dynamic");
+
+    // Verify via the typed-API fetch — both rows should be linked.
+    let mut fetched = group.perms.fetch().await.expect("fetch");
+    fetched.sort_by(|x, y| x.codename.cmp(&y.codename));
+    assert_eq!(fetched.len(), 2);
+    assert_eq!(fetched[0].codename, perm_a.codename);
+    assert_eq!(fetched[1].codename, perm_b.codename);
+
+    // Re-set with just B — A should drop.
+    let only_b = vec![
+        umbra::orm::write::json_to_sea_value(
+            umbra::orm::SqlType::Text,
+            &serde_json::Value::String(perm_b.codename.clone()),
+            false,
+            "codename",
+        )
+        .unwrap(),
+    ];
+    umbra::orm::set_junction_dynamic(JUNCTION_TABLE, parent_value.clone(), only_b)
+        .await
+        .expect("set_junction_dynamic with new selection");
+    let fetched = group.perms.fetch().await.expect("fetch after replace");
+    assert_eq!(fetched.len(), 1);
+    assert_eq!(fetched[0].codename, perm_b.codename);
+
+    // Empty selection clears the junction.
+    umbra::orm::set_junction_dynamic(JUNCTION_TABLE, parent_value, Vec::new())
+        .await
+        .expect("set_junction_dynamic with empty selection");
+    let fetched = group.perms.fetch().await.expect("fetch after clear");
+    assert!(
+        fetched.is_empty(),
+        "empty child_ids should leave no junction rows for this parent",
+    );
+}
+
+#[tokio::test]
+async fn load_junction_selection_returns_current_child_pks_as_strings() {
+    boot().await;
+
+    let perm = RoundTripPermission::objects()
+        .create(RoundTripPermission {
+            codename: "m2mtest.load_sel".to_string(),
+            label: "load".to_string(),
+        })
+        .await
+        .expect("create permission");
+    let group = RoundTripGroup::objects()
+        .create(RoundTripGroup {
+            id: 0,
+            name: "load_sel_group".to_string(),
+            perms: M2M::empty(),
+        })
+        .await
+        .expect("create group");
+    group.perms.add(&perm).await.expect("add");
+
+    let parent_value = umbra::orm::write::json_to_sea_value(
+        umbra::orm::SqlType::BigInt,
+        &serde_json::Value::String(group.id.to_string()),
+        false,
+        "id",
+    )
+    .unwrap();
+    let selection = umbra::orm::load_junction_selection(
+        JUNCTION_TABLE,
+        parent_value,
+        umbra::orm::SqlType::Text,
+    )
+    .await
+    .expect("load_junction_selection");
+    assert_eq!(selection, vec![perm.codename.clone()]);
+}
+
 #[tokio::test]
 async fn m2m_hydration_works_on_freshly_loaded_rows_via_filter_fetch() {
     boot().await;
