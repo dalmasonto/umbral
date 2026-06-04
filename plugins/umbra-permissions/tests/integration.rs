@@ -273,10 +273,13 @@ async fn has_perm_returns_true_for_group_permission() {
     // PK; no intermediate id lookup needed post-gap-#60.
     let perm_pk = "blog.add_blogpost";
 
-    // Grant the permission to the group. permission_id now holds the
-    // codename string.
+    // Grant the permission to the group. Post BUG-16 phase 3 cleanup
+    // the join lives in the auto-generated M2M junction
+    // `permissions_group_permissions` with `parent_id` (group_id) +
+    // `child_id` (codename string) — no more standalone
+    // `permissions_grouppermission` table.
     sqlx::query(
-        "INSERT OR IGNORE INTO permissions_grouppermission (group_id, permission_id)
+        "INSERT OR IGNORE INTO permissions_group_permissions (parent_id, child_id)
          VALUES (?, ?)",
     )
     .bind(group_id)
@@ -373,7 +376,7 @@ async fn user_perms_returns_union_of_direct_and_group_perms() {
             .expect("fetch group id");
 
     sqlx::query(
-        "INSERT OR IGNORE INTO permissions_grouppermission (group_id, permission_id) VALUES (?, ?)",
+        "INSERT OR IGNORE INTO permissions_group_permissions (parent_id, child_id) VALUES (?, ?)",
     )
     .bind(group_id)
     .bind("blog.change_blogpost")

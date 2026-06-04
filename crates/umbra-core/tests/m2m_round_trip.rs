@@ -33,6 +33,7 @@
 
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio::sync::OnceCell;
 
 use umbra::orm::M2M;
@@ -71,9 +72,26 @@ async fn boot() {
     BOOT.get_or_init(|| async {
         let settings =
             umbra::Settings::from_env().expect("figment defaults always load in a test env");
-        let pool = umbra::db::connect_sqlite("sqlite::memory:")
+        // File-backed SQLite in a tempdir, not `sqlite::memory:` —
+        // every connection sqlx hands out from a `:memory:` pool sees
+        // its own private database, so a schema created on the boot
+        // connection vanishes from the test connections. The
+        // permissions plugin's own integration test uses the same
+        // tempdir pattern for exactly this reason.
+        let tmp = tempfile::tempdir().expect("create db tempdir");
+        let db_path = tmp.path().join("m2m_round_trip.sqlite");
+        // Leak the TempDir so it stays alive for the process lifetime
+        // — when the OnceCell init function returns, the local `tmp`
+        // would Drop and unlink the file mid-test.
+        std::mem::forget(tmp);
+        let opts = SqliteConnectOptions::new()
+            .filename(&db_path)
+            .create_if_missing(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(5)
+            .connect_with(opts)
             .await
-            .expect("in-memory sqlite should always connect");
+            .expect("sqlite file pool should connect");
 
         umbra::App::builder()
             .settings(settings)
@@ -85,9 +103,9 @@ async fn boot() {
 
         // Run migrate against a private tempdir so the schema (parent
         // tables + the auto-generated junction) actually exists.
-        let tmp = tempfile::tempdir().expect("create migration tempdir");
-        let migration_path = tmp.path().to_path_buf();
-        std::mem::forget(tmp);
+        let migration_tmp = tempfile::tempdir().expect("create migration tempdir");
+        let migration_path = migration_tmp.path().to_path_buf();
+        std::mem::forget(migration_tmp);
         umbra::migrate::make_in(&migration_path)
             .await
             .expect("make_in should emit the m2mtest seed migration");
@@ -330,6 +348,178 @@ async fn m2m_clear_removes_every_junction_row_for_the_parent() {
     assert_eq!(removed, 2, "clear() should report rows removed");
     let fetched = group.perms.fetch().await.expect("fetch after clear");
     assert!(fetched.is_empty(), "clear() must remove every junction row");
+}
+
+// =========================================================================
+// BUG-16 phase 3 follow-up: static bulk-across-parents helpers.
+// any_holds / holders_of_any are the OR-membership shape perm gates
+// need; they don't require a constructed M2M instance.
+// =========================================================================
+
+#[tokio::test]
+async fn any_holds_returns_true_when_any_parent_has_the_child() {
+    boot().await;
+
+    let perm = RoundTripPermission::objects()
+        .create(RoundTripPermission {
+            codename: "m2mtest.any_holds_yes".to_string(),
+            label: "yes".to_string(),
+        })
+        .await
+        .expect("create permission");
+
+    let g1 = RoundTripGroup::objects()
+        .create(RoundTripGroup {
+            id: 0,
+            name: "any_holds_g1".to_string(),
+            perms: M2M::empty(),
+        })
+        .await
+        .expect("g1");
+    let g2 = RoundTripGroup::objects()
+        .create(RoundTripGroup {
+            id: 0,
+            name: "any_holds_g2".to_string(),
+            perms: M2M::empty(),
+        })
+        .await
+        .expect("g2");
+
+    // Only g2 holds the perm. any_holds across [g1.id, g2.id] should
+    // return true regardless.
+    g2.perms.add(&perm).await.expect("add to g2");
+
+    let holds = M2M::<RoundTripPermission>::any_holds(
+        JUNCTION_TABLE,
+        &[g1.id, g2.id],
+        perm.codename.clone(),
+    )
+    .await
+    .expect("any_holds");
+    assert!(
+        holds,
+        "any_holds across both groups must find the relation on g2"
+    );
+}
+
+#[tokio::test]
+async fn any_holds_returns_false_when_no_parent_has_the_child() {
+    boot().await;
+
+    let perm = RoundTripPermission::objects()
+        .create(RoundTripPermission {
+            codename: "m2mtest.any_holds_no".to_string(),
+            label: "no".to_string(),
+        })
+        .await
+        .expect("create permission");
+
+    let g = RoundTripGroup::objects()
+        .create(RoundTripGroup {
+            id: 0,
+            name: "any_holds_empty".to_string(),
+            perms: M2M::empty(),
+        })
+        .await
+        .expect("g");
+
+    // No add — the junction is empty for this group.
+    let holds =
+        M2M::<RoundTripPermission>::any_holds(JUNCTION_TABLE, &[g.id], perm.codename.clone())
+            .await
+            .expect("any_holds");
+    assert!(
+        !holds,
+        "any_holds must return false when no junction row matches"
+    );
+}
+
+#[tokio::test]
+async fn any_holds_with_empty_parent_slice_short_circuits_false() {
+    boot().await;
+    let holds = M2M::<RoundTripPermission>::any_holds(JUNCTION_TABLE, &[], "anything".to_string())
+        .await
+        .expect("any_holds with empty parents");
+    assert!(
+        !holds,
+        "empty parent slice should short-circuit to Ok(false)"
+    );
+}
+
+#[tokio::test]
+async fn holders_of_any_returns_distinct_union_across_parents() {
+    boot().await;
+
+    let perm_a = RoundTripPermission::objects()
+        .create(RoundTripPermission {
+            codename: "m2mtest.holders_a".to_string(),
+            label: "a".to_string(),
+        })
+        .await
+        .expect("create A");
+    let perm_b = RoundTripPermission::objects()
+        .create(RoundTripPermission {
+            codename: "m2mtest.holders_b".to_string(),
+            label: "b".to_string(),
+        })
+        .await
+        .expect("create B");
+    let perm_c = RoundTripPermission::objects()
+        .create(RoundTripPermission {
+            codename: "m2mtest.holders_c".to_string(),
+            label: "c".to_string(),
+        })
+        .await
+        .expect("create C");
+
+    let g1 = RoundTripGroup::objects()
+        .create(RoundTripGroup {
+            id: 0,
+            name: "holders_g1".to_string(),
+            perms: M2M::empty(),
+        })
+        .await
+        .expect("g1");
+    let g2 = RoundTripGroup::objects()
+        .create(RoundTripGroup {
+            id: 0,
+            name: "holders_g2".to_string(),
+            perms: M2M::empty(),
+        })
+        .await
+        .expect("g2");
+
+    // g1: {A, B}, g2: {B, C}. Union is {A, B, C}; B should be de-duped.
+    g1.perms.add(&perm_a).await.unwrap();
+    g1.perms.add(&perm_b).await.unwrap();
+    g2.perms.add(&perm_b).await.unwrap();
+    g2.perms.add(&perm_c).await.unwrap();
+
+    let mut all = M2M::<RoundTripPermission>::holders_of_any(JUNCTION_TABLE, &[g1.id, g2.id])
+        .await
+        .expect("holders_of_any");
+    all.sort();
+    assert_eq!(
+        all,
+        vec![
+            perm_a.codename.clone(),
+            perm_b.codename.clone(),
+            perm_c.codename.clone(),
+        ],
+        "holders_of_any must return the DISTINCT union; B appears once not twice",
+    );
+}
+
+#[tokio::test]
+async fn holders_of_any_with_empty_parent_slice_returns_empty() {
+    boot().await;
+    let out = M2M::<RoundTripPermission>::holders_of_any(JUNCTION_TABLE, &[])
+        .await
+        .expect("holders_of_any with empty parents");
+    assert!(
+        out.is_empty(),
+        "empty parent slice should short-circuit to Ok(Vec::new())"
+    );
 }
 
 #[tokio::test]

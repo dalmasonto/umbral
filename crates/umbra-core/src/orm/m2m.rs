@@ -328,6 +328,127 @@ impl<T: Model, P: PrimaryKey> M2M<T, P> {
     fn junction_handle(&self) -> Option<(P, &'static str)> {
         Some((self.parent_id.clone()?, self.junction_table?))
     }
+
+    // -----------------------------------------------------------------
+    // Static bulk-across-parents queries.
+    //
+    // The instance methods (`add` / `remove` / `fetch`) are
+    // single-parent: they read parent_id off `self` and act on one
+    // junction row at a time. Permission gates and the like need to
+    // check OR-membership across many parent ids in one query.
+    // These free-standing helpers ride on the type's generic
+    // parameters (`T` for the child Model, `P` for the parent PK)
+    // and take the junction table name as an argument so they don't
+    // require a constructed `M2M` instance.
+    //
+    // Callers usually know the junction name from the macro-derived
+    // `<parent_table>_<field_name>` convention. For umbra-permissions
+    // that's `"permissions_group_permissions"` for the
+    // `Group.permissions: M2M<Permission>` field. Closes the BUG-16
+    // phase 3 follow-up.
+    // -----------------------------------------------------------------
+
+    /// "Does any of `parent_ids` hold the junction relation to
+    /// `child_pk`?" Returns `Ok(false)` for an empty `parent_ids`
+    /// slice. Built as `SELECT 1 FROM <junction> WHERE parent_id
+    /// IN (?,?,?) AND child_id = ? LIMIT 1` so the DB short-circuits
+    /// on the first match; the bool comes from `fetch_optional`.
+    ///
+    /// Use case: permission gates. "Is the user in any group that
+    /// holds this permission?" is `Group::permissions_junction()`
+    /// any-holds against the user's group ids.
+    pub async fn any_holds(
+        junction_table: &str,
+        parent_ids: &[P],
+        child_pk: T::PrimaryKey,
+    ) -> Result<bool, sqlx::Error> {
+        if parent_ids.is_empty() {
+            return Ok(false);
+        }
+        let mut q = Query::select();
+        q.expr(Expr::value(1))
+            .from(Alias::new(junction_table))
+            .and_where(
+                Expr::col(Alias::new("parent_id"))
+                    .is_in(parent_ids.iter().cloned().map(|v| v.into())),
+            )
+            .and_where(Expr::col(Alias::new("child_id")).eq(Expr::value(child_pk)))
+            .limit(1);
+        let pool = crate::db::pool_dispatched();
+        let exists = match pool {
+            crate::db::DbPool::Sqlite(p) => {
+                let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
+                sqlx::query_with(&sql, values)
+                    .fetch_optional(p)
+                    .await?
+                    .is_some()
+            }
+            crate::db::DbPool::Postgres(p) => {
+                let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
+                sqlx::query_with(&sql, values)
+                    .fetch_optional(p)
+                    .await?
+                    .is_some()
+            }
+        };
+        Ok(exists)
+    }
+
+    /// "Give me every distinct child PK any of `parent_ids` holds the
+    /// junction relation to." Returns `Ok(Vec::new())` for an empty
+    /// `parent_ids` slice. Built as `SELECT DISTINCT child_id FROM
+    /// <junction> WHERE parent_id IN (?,?,?)`.
+    ///
+    /// Use case: collecting the full permission set for a user via
+    /// their group memberships — one round-trip whatever the group
+    /// count.
+    ///
+    /// Decoding `T::PrimaryKey` from `child_id` is what the extra
+    /// trait bounds buy us; every built-in PK type
+    /// (`i64` / `String` / `Uuid`) already satisfies them, and so
+    /// does a user-defined newtype as long as it carries the matching
+    /// `sqlx::Type` + `Decode` impls. See [`super::PrimaryKey`]'s
+    /// extension-recipe docstring.
+    pub async fn holders_of_any(
+        junction_table: &str,
+        parent_ids: &[P],
+    ) -> Result<Vec<T::PrimaryKey>, sqlx::Error>
+    where
+        T::PrimaryKey: for<'r> sqlx::Decode<'r, sqlx::Sqlite>
+            + for<'r> sqlx::Decode<'r, sqlx::Postgres>
+            + sqlx::Type<sqlx::Sqlite>
+            + sqlx::Type<sqlx::Postgres>
+            + Send
+            + Unpin,
+    {
+        if parent_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut q = Query::select();
+        q.distinct()
+            .column(Alias::new("child_id"))
+            .from(Alias::new(junction_table))
+            .and_where(
+                Expr::col(Alias::new("parent_id"))
+                    .is_in(parent_ids.iter().cloned().map(|v| v.into())),
+            );
+        let pool = crate::db::pool_dispatched();
+        let rows: Vec<(T::PrimaryKey,)> = match pool {
+            crate::db::DbPool::Sqlite(p) => {
+                let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
+                sqlx::query_as_with::<sqlx::Sqlite, (T::PrimaryKey,), _>(&sql, values)
+                    .fetch_all(p)
+                    .await?
+            }
+            crate::db::DbPool::Postgres(p) => {
+                let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
+                sqlx::query_as_with::<sqlx::Postgres, (T::PrimaryKey,), _>(&sql, values)
+                    .fetch_all(p)
+                    .await?
+            }
+        };
+        Ok(rows.into_iter().map(|(pk,)| pk).collect())
+    }
 }
 
 /// Resolve the child model's PK column name from `T::FIELDS`.

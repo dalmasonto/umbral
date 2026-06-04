@@ -1,6 +1,6 @@
-//! The six permission data models.
+//! The five permission data models.
 //!
-//! All six tables are namespaced under the "permissions" plugin prefix so they
+//! All tables are namespaced under the "permissions" plugin prefix so they
 //! don't collide with user models or other plugins. Explicit `table = "..."`
 //! attributes are used to get the exact table names we want (the macro's default
 //! snake_case would produce `permissions_content_type` instead of
@@ -11,13 +11,30 @@
 //! | `ContentType` | `permissions_contenttype` |
 //! | `Permission` | `permissions_permission` |
 //! | `Group` | `permissions_group` |
-//! | `GroupPermission` | `permissions_grouppermission` |
 //! | `UserGroup` | `permissions_usergroup` |
 //! | `UserPermission` | `permissions_userpermission` |
 //!
+//! Plus one auto-generated M2M junction table:
+//!
+//! | Owner field | Junction table |
+//! |---|---|
+//! | `Group.permissions: M2M<Permission>` | `permissions_group_permissions` |
+//!
+//! Closes the BUG-16 phase 3 follow-up: the original `GroupPermission`
+//! explicit join model is gone. The framework's `M2M<T, P>` (with
+//! string child PK support landed in BUG-16 phase 2) carries the
+//! group → permission set instead, and the perm-query layer reaches
+//! the junction via `M2M::any_holds` / `M2M::holders_of_any`. The
+//! cutover IS a destructive schema change: any existing
+//! `permissions_grouppermission` table goes away and its rows have to
+//! be copied into `permissions_group_permissions` by hand or
+//! re-seeded.
+//!
 //! `user_id` in `UserGroup` and `UserPermission` is `i64` (not
 //! `ForeignKey<U>`) to keep the data model generic — we don't tie to a
-//! concrete user type, so any `UserModel` implementation works.
+//! concrete user type, so any `UserModel` implementation works. The
+//! user side stays as explicit join models because the plugin doesn't
+//! own a `User` struct to attach `M2M<...>` fields to.
 //!
 //! ## Edit / no-edit policy
 //!
@@ -31,26 +48,17 @@
 //!   `has_permission(...)` check in user code). Both stay `#[umbra(noedit)]`
 //!   — the admin renders them read-only.
 //!
-//! - **User-created**: every row in `Group`, `GroupPermission`, `UserGroup`,
-//!   `UserPermission` is something a staff user added through the admin
-//!   to wire authorisation. Those rows MUST stay editable so the admin
-//!   can reassign permissions and group memberships. They had `noedit`
-//!   markers in an earlier pass; #61.1 reverts them.
-//!
-//! | Table | Editable columns | No-edit columns |
-//! |---|---|---|
-//! | `ContentType` | (none — system-managed at boot) | `app_label`, `model` |
-//! | `Permission` | `name` (human label) | `content_type_id`, `codename` |
-//! | `Group` | `name`, `description` | (none) |
-//! | `GroupPermission` | `group_id`, `permission_id` | (none — user-defined data) |
-//! | `UserGroup` | `user_id`, `group_id` | (none — user-defined data) |
-//! | `UserPermission` | `user_id`, `permission_id` | (none — user-defined data) |
+//! - **User-created**: every row in `Group`, `UserGroup`, `UserPermission`,
+//!   plus the auto-managed `permissions_group_permissions` junction,
+//!   is something a staff user wired through the admin. The data is
+//!   editable; the junction rows aren't admin-formed at all (the
+//!   admin chip-picker lands as a follow-up).
 //!
 //! The `noedit` attribute is metadata only (it lands in `ModelMeta`, not in
 //! the DDL), so adding or removing it doesn't dirty any existing schema.
 
 use serde::{Deserialize, Serialize};
-use umbra::orm::ForeignKey;
+use umbra::orm::{ForeignKey, M2M};
 
 /// One row per Model in the project. Identifies a model by its plugin
 /// (app_label) and lowercased struct name.
@@ -113,6 +121,13 @@ pub struct Permission {
 /// A named group that bundles multiple permissions. Users can be assigned
 /// to one or more groups; they inherit all permissions from every group
 /// they are in.
+///
+/// The `permissions` field is an auto-junction M2M into [`Permission`].
+/// Mutating it (`group.permissions.add(&perm).await?` /
+/// `.remove(&perm)` / `.set(&[...])`) writes through to the
+/// framework-managed `permissions_group_permissions` junction table
+/// the migration engine auto-generates from the `M2M<Permission>`
+/// type. Closes the BUG-16 phase 3 follow-up.
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
 #[umbra(table = "permissions_group", display = "Groups", icon = "users")]
 pub struct Group {
@@ -128,22 +143,25 @@ pub struct Group {
     /// just-created group can skip it; the admin renders a textarea
     /// (no `max_length`) because group purpose commentary can be long.
     pub description: Option<String>,
+    /// Set of permissions this group grants. Backed by the
+    /// auto-generated junction table `permissions_group_permissions`
+    /// — see [`Self`]'s docstring above. The field is `#[sqlx(skip)]`
+    /// + `#[serde(skip)]` because it has no column on `permissions_group`:
+    /// the junction lives in its own table and the framework hydrates
+    /// `parent_id` + `junction_table` on every row materialised through
+    /// `Group::objects().fetch()` / `.create()` etc.
+    #[sqlx(skip)]
+    #[serde(skip)]
+    pub permissions: M2M<Permission>,
 }
 
-/// Join table between groups and permissions (M2M).
-#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
-#[umbra(
-    table = "permissions_grouppermission",
-    display = "Group permissions",
-    icon = "link-2"
-)]
-pub struct GroupPermission {
-    pub id: i64,
-    /// User-defined wiring: the admin reassigns groups → permissions
-    /// at runtime, so both FKs must stay editable.
-    pub group_id: ForeignKey<Group>,
-    pub permission_id: ForeignKey<Permission>,
-}
+/// Name of the auto-generated M2M junction table backing
+/// `Group.permissions`. Exposed as a `const` so the `perm` query layer
+/// can pass it to `M2M::any_holds` / `M2M::holders_of_any` without
+/// duplicating the `<parent_table>_<field_name>` derivation. The macro
+/// emits the same string into the hydrated runtime instance; this
+/// constant is the static-side handle for bulk-across-parents queries.
+pub const GROUP_PERMISSIONS_JUNCTION: &str = "permissions_group_permissions";
 
 /// Join table between users and groups (M2M).
 ///

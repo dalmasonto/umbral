@@ -13,9 +13,18 @@
 //! | `ContentType` | `permissions_contenttype` | One row per Model (app_label + model name) |
 //! | `Permission` | `permissions_permission` | One row per (ContentType, codename) |
 //! | `Group` | `permissions_group` | Named collection of permissions |
-//! | `GroupPermission` | `permissions_grouppermission` | M2M: groups ↔ permissions |
-//! | `UserGroup` | `permissions_usergroup` | M2M: users ↔ groups |
-//! | `UserPermission` | `permissions_userpermission` | M2M: users ↔ permissions (direct) |
+//! | `UserGroup` | `permissions_usergroup` | Explicit join: users ↔ groups |
+//! | `UserPermission` | `permissions_userpermission` | Explicit join: users ↔ permissions (direct) |
+//!
+//! Plus one framework-managed M2M junction:
+//!
+//! | Junction table | Backing field |
+//! |---|---|
+//! | `permissions_group_permissions` | `Group.permissions: M2M<Permission>` |
+//!
+//! The `User`-side joins stay as explicit models because this plugin
+//! is user-agnostic — it doesn't own a `User` struct to attach
+//! `M2M<...>` fields to.
 //!
 //! ## The `has_perm` decision: free function, not a trait method
 //!
@@ -70,7 +79,9 @@ pub mod rest;
 pub use middleware::{
     PermissionRequired, PermissionRequiredLayer, permission_required, permission_required_html,
 };
-pub use models::{ContentType, Group, GroupPermission, Permission, UserGroup, UserPermission};
+pub use models::{
+    ContentType, GROUP_PERMISSIONS_JUNCTION, Group, Permission, UserGroup, UserPermission,
+};
 pub use perm::{PermError, has_perm, has_perm_for_superuser, has_perm_scoped, user_perms};
 
 use umbra::plugin::{AppContext, Plugin, PluginError};
@@ -92,11 +103,14 @@ impl Plugin for PermissionsPlugin {
     }
 
     fn models(&self) -> Vec<umbra::migrate::ModelMeta> {
+        // Five explicit models — the sixth (group ↔ permission join)
+        // is gone; its data lives in the auto-generated
+        // `permissions_group_permissions` junction the migration
+        // engine emits from `Group.permissions: M2M<Permission>`.
         vec![
             umbra::migrate::ModelMeta::for_::<ContentType>(),
             umbra::migrate::ModelMeta::for_::<Permission>(),
             umbra::migrate::ModelMeta::for_::<Group>(),
-            umbra::migrate::ModelMeta::for_::<GroupPermission>(),
             umbra::migrate::ModelMeta::for_::<UserGroup>(),
             umbra::migrate::ModelMeta::for_::<UserPermission>(),
         ]
