@@ -52,9 +52,18 @@ use umbra::orm::SqlType;
 use crate::ApiError;
 
 /// Query-string keys consumed elsewhere (pagination layer + the
-/// free-text search handler), skipped when scanning for filter keys
-/// so the parser doesn't reject them as "unknown field".
-const RESERVED_KEYS: &[&str] = &["page", "page_size", "limit", "offset", "search"];
+/// free-text search handler + sparse fieldset + ordering), skipped
+/// when scanning for filter keys so the parser doesn't reject them
+/// as "unknown field".
+const RESERVED_KEYS: &[&str] = &[
+    "page",
+    "page_size",
+    "limit",
+    "offset",
+    "search",
+    "fields",
+    "ordering",
+];
 
 /// A parsed filter ready to splice into a DynQuerySet.
 ///

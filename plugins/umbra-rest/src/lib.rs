@@ -572,6 +572,25 @@ impl RestPlugin {
         }
     }
 
+    /// Sparse fieldset (gap #81). When the caller passes `?fields=a,b,c`,
+    /// retain only those keys in the response row. Applied *after*
+    /// `apply_overrides` so users can still combine `hide` / `transform`
+    /// / `compute` with sparse selection. Unknown field names are
+    /// silently ignored (no 400 — gives clients latitude to ask for
+    /// new fields without coordinating a server change first).
+    pub(crate) fn apply_sparse_fields(row: &mut Map<String, Value>, fields_param: Option<&str>) {
+        let Some(raw) = fields_param else { return };
+        let allowed: std::collections::HashSet<&str> = raw
+            .split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect();
+        if allowed.is_empty() {
+            return;
+        }
+        row.retain(|k, _| allowed.contains(k.as_str()));
+    }
+
     fn allow(&self, table: &str) -> bool {
         if let Some(allow) = &self.include_only {
             return allow.iter().any(|t| t == table);
@@ -1026,8 +1045,10 @@ async fn list(
 
     let page_req = cfg.pagination.extract_request(&params);
     let mut rows = fetch_rows(&model, None, Some(page_req), &filter).await?;
+    let fields_param = params.get("fields").map(|s| s.as_str());
     for row in &mut rows {
         cfg.apply_overrides(&table, row);
+        RestPlugin::apply_sparse_fields(row, fields_param);
     }
     // Skip the extra COUNT round-trip for NoPagination — it would
     // throw away the result anyway. Other paginators read the total
@@ -1043,6 +1064,7 @@ async fn list(
 
 async fn retrieve(
     Path((table, id)): Path<(String, String)>,
+    Query(params): Query<HashMap<String, String>>,
     headers: umbra::web::HeaderMap,
 ) -> Result<Json<Map<String, Value>>, ApiError> {
     let cfg = CONFIG.get().expect("RestPlugin::routes was called");
@@ -1060,6 +1082,7 @@ async fn retrieve(
     };
     let cfg = CONFIG.get().expect("RestPlugin::routes was called");
     cfg.apply_overrides(&table, &mut row);
+    RestPlugin::apply_sparse_fields(&mut row, params.get("fields").map(|s| s.as_str()));
     Ok(Json(row))
 }
 

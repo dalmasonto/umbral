@@ -280,3 +280,61 @@ async fn one_row_carries_all_three_override_types() {
     assert_eq!(body["username"], json!("alice"));
     assert_eq!(body["first_name"], json!("Alice"));
 }
+
+// =====================================================================
+// Sparse fieldset — `?fields=...` retains only listed keys (gap #81).
+// =====================================================================
+
+#[tokio::test]
+async fn list_response_respects_fields_query_param() {
+    let router = boot().await.clone();
+    let (status, body) = get_json(router, "/api/user/?fields=id,username").await;
+    assert_eq!(status, StatusCode::OK);
+    for row in body["results"].as_array().expect("results array") {
+        let obj = row.as_object().expect("row is object");
+        let keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        // Only id + username should appear; computed/transform fields drop out too.
+        assert_eq!(keys.len(), 2, "row should have exactly 2 keys, got {keys:?}");
+        assert!(obj.contains_key("id"));
+        assert!(obj.contains_key("username"));
+        assert!(!obj.contains_key("email"));
+        assert!(!obj.contains_key("display_name"));
+    }
+}
+
+#[tokio::test]
+async fn retrieve_response_respects_fields_query_param() {
+    let router = boot().await.clone();
+    let (status, body) = get_json(router, "/api/user/1?fields=username,first_name").await;
+    assert_eq!(status, StatusCode::OK);
+    let obj = body.as_object().expect("body is object");
+    let keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+    assert_eq!(keys.len(), 2, "row should have exactly 2 keys, got {keys:?}");
+    assert!(obj.contains_key("username"));
+    assert!(obj.contains_key("first_name"));
+    assert!(!obj.contains_key("id"));
+    assert!(!obj.contains_key("display_name"));
+}
+
+#[tokio::test]
+async fn fields_query_param_silently_drops_unknown_names() {
+    let router = boot().await.clone();
+    let (status, body) = get_json(router, "/api/user/1?fields=username,no_such_column").await;
+    assert_eq!(status, StatusCode::OK);
+    let obj = body.as_object().expect("body is object");
+    // Only the real key lands; unknown name is ignored, no 400.
+    assert_eq!(obj.len(), 1);
+    assert_eq!(obj.get("username"), Some(&json!("alice")));
+}
+
+#[tokio::test]
+async fn empty_fields_param_falls_back_to_full_row() {
+    let router = boot().await.clone();
+    let (status, body) = get_json(router, "/api/user/1?fields=").await;
+    assert_eq!(status, StatusCode::OK);
+    let obj = body.as_object().expect("body is object");
+    // Empty `?fields=` is treated as "no filter" — full row comes back
+    // (minus hide overrides that always apply).
+    assert!(obj.contains_key("username"));
+    assert!(obj.contains_key("display_name"));
+}
