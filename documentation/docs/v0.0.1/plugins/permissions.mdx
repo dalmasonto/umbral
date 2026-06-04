@@ -32,28 +32,40 @@ App::builder()
 | `ContentType` | One row per registered Model. Holds `app_label` (plugin name) and `model` (lowercased struct name). |
 | `Permission` | One row per (ContentType, codename). The four standard ones auto-create; custom ones land via direct INSERT or future `Meta.permissions` declarations. |
 | `Group` | Named permission bundle. Users in a group inherit every permission the group holds. |
-| `GroupPermission` | M2M: which permissions belong to which groups. |
-| `UserGroup` | M2M: which users belong to which groups. |
-| `UserPermission` | M2M: direct grants that bypass groups. Use sparingly. |
+| `UserGroup` | M2M: which users belong to which groups. `user_id: String` (PK-agnostic). |
+| `UserPermission` | M2M: direct grants that bypass groups. `user_id: String`. Use sparingly. |
+
+Plus one framework-managed M2M junction:
+
+| Junction table | Backing field |
+|---|---|
+| `permissions_group_permissions` | `Group.permissions: M2M<Permission>` — the typed M2M replaces the old `GroupPermission` model. |
+
+### Why `user_id` is `String`, not `i64` or `ForeignKey<U>`
+
+The plugin doesn't own a `User` struct. Different apps wire different user models — some with `i64` PKs, some with `uuid::Uuid`, some with slug-style `String`. Storing the column as `TEXT` (max 64 chars — covers UUIDs at 36 and i64-as-string at 20) lets *any* PK type round-trip. The trade-off vs `ForeignKey<U>`: deleting a user does NOT cascade-delete their `UserGroup`/`UserPermission` rows. Apps that need that guarantee add a per-user cleanup hook in their user-delete path.
 
 ## Checking permissions
 
 ```rust
 use umbra_permissions::{has_perm, user_perms};
 
-// One specific permission
-if !has_perm(user.id(), "blog.publish_post").await? {
+// One specific permission. `&user.id().to_string()` for an i64 PK;
+// for a Uuid PK the same `.to_string()` gives the canonical
+// hyphenated form. The perm layer takes `&str` — pass whatever
+// stringified shape your user PK lands in.
+if !has_perm(&user.id().to_string(), "blog.publish_post").await? {
     return Err((StatusCode::FORBIDDEN, "missing publish permission").into());
 }
 
 // All permissions a user has (for caching in a request scope)
-let perms: HashSet<String> = user_perms(user.id()).await?;
+let perms: HashSet<String> = user_perms(&user.id().to_string()).await?;
 if perms.contains("blog.publish_post") && perms.contains("blog.delete_post") {
     // ...
 }
 ```
 
-`has_perm` issues a single JOIN across `user_permission`, `user_group`, `group_permission`, `permission`, and `content_type` - direct and group-mediated permissions are checked in one round trip.
+`has_perm` runs two queries: a direct-grant lookup on `permissions_userpermission`, and (if no direct match) a group-mediated check that asks the auto-generated `permissions_group_permissions` junction whether any of the user's groups holds the codename. The group-mediated half is one round-trip regardless of group count via the macro-emitted `Group::permissions_contains_any` helper.
 
 ### Superuser shortcut
 
@@ -62,9 +74,21 @@ if perms.contains("blog.publish_post") && perms.contains("blog.delete_post") {
 ```rust
 if user.is_superuser() {
     // skip the has_perm check entirely
-} else if !has_perm(user.id(), "blog.publish_post").await? {
+} else if !has_perm(&user.id().to_string(), "blog.publish_post").await? {
     return Err(StatusCode::FORBIDDEN.into());
 }
+```
+
+Or use the convenience wrapper:
+
+```rust
+use umbra_permissions::has_perm_for_superuser;
+
+let allowed = has_perm_for_superuser(
+    &user.id().to_string(),
+    user.is_superuser(),
+    "blog.publish_post",
+).await?;
 ```
 
 In practice you'd wrap this in a helper function on your app side.
@@ -95,11 +119,12 @@ Permission::objects().on(&pool).create(Permission {
 
 Putting `has_perm` on the [`UserModel`](/docs/v0.0.1/plugins/auth#swapping-the-user-model) trait would require `umbra-auth` to call into `umbra-permissions` (to query permissions) *and* `umbra-permissions` to read `UserModel` from `umbra-auth` (for the receiver type). That's a circular crate dependency Cargo refuses to compile.
 
-The clean resolution: `has_perm(user_id: i64, codename: &str)` is a free function that takes the bare ID. The dependency arrow stays one-way (`umbra-permissions` → `umbra-auth` would be needed if at all, but isn't). Apps using a [custom user model](/docs/v0.0.1/plugins/auth#swapping-the-user-model) work without adapters.
+The clean resolution: `has_perm(user_id: &str, codename: &str)` is a free function that takes the stringified user ID. The dependency arrow stays one-way (`umbra-permissions` → `umbra-auth` would be needed if at all, but isn't). Apps using a [custom user model](/docs/v0.0.1/plugins/auth#swapping-the-user-model) work without adapters — including ones with UUID, slug, or any other PK type, because the `&str` parameter accepts whatever stringified form the caller passes.
 
-### M2M tables, not ForeignKey collections
+### Three different M2M shapes, three different reasons
 
-The M2M tables (`GroupPermission`, `UserGroup`, `UserPermission`) are plain models with two foreign keys each - matching Django's intermediate-table shape. umbra's [`ForeignKey<T>`](/docs/v0.0.1/orm/relationships) does the heavy lifting; reverse-accessor M2M syntax (`user.groups()` returning `Vec<Group>`) is deferred until the ORM has reverse accessors generally.
+- **`Group.permissions: M2M<Permission>`** — a framework-managed M2M field on the typed `Group` model. The migration engine auto-generates the `permissions_group_permissions` junction (with the right typed PK columns for Group's `i64` PK and Permission's `String` codename PK); the macro emits typed helpers `Group::permissions_contains_any` / `Group::permissions_union_for` so application code never has to spell the junction name. This is what the perm-query layer's group-mediated check rides on.
+- **`UserGroup` / `UserPermission`** — explicit join models, kept because the plugin is user-agnostic (no User struct to attach `M2M<...>` to) and `user_id` needs to stay a string to round-trip any PK type. `ForeignKey<Group>` / `ForeignKey<Permission>` on the join row sides carry their typed FK guarantees.
 
 ## Gating routes with `permission_required`
 

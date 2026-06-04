@@ -76,9 +76,15 @@ impl From<sqlx::Error> for PermError {
 /// superuser bypass should call `has_perm_for_superuser` or check
 /// `user.is_superuser()` themselves.
 ///
+/// `user_id` is a string so the plugin works with any user-model PK
+/// type. Callers convert at the boundary: `&user.id().to_string()` for
+/// an `i64` PK, `&user.id().to_string()` for a `uuid::Uuid` PK
+/// (Display gives the canonical hyphenated form), or pass through
+/// directly for `String` PKs.
+///
 /// Returns `Ok(false)` when the perm string is malformed (no dot) or the
 /// permission does not exist, rather than returning an error.
-pub async fn has_perm(user_id: i64, perm: &str) -> Result<bool, PermError> {
+pub async fn has_perm(user_id: &str, perm: &str) -> Result<bool, PermError> {
     let Some((app_label, codename)) = perm.split_once('.') else {
         return Ok(false);
     };
@@ -89,7 +95,7 @@ pub async fn has_perm(user_id: i64, perm: &str) -> Result<bool, PermError> {
 /// parameters. Prefer `has_perm` for call sites that already have the
 /// `"app_label.codename"` string form.
 pub async fn has_perm_scoped(
-    user_id: i64,
+    user_id: &str,
     app_label: &str,
     codename: &str,
 ) -> Result<bool, PermError> {
@@ -98,14 +104,16 @@ pub async fn has_perm_scoped(
     // to a direct PK comparison — no content_type → permission ID
     // join needed. Two queries: direct grant, then group-mediated.
     let pk = format!("{app_label}.{codename}");
+    let user_id_owned = user_id.to_string();
 
-    // 1. Direct user → permission grant. Predicate::col_eq is the
-    //    typed-erased escape hatch for FK columns whose target uses
-    //    a non-i64 PK type (string in this case) — `ForeignKeyCol`'s
-    //    typed predicate API is still i64-shaped at v1.
+    // 1. Direct user → permission grant. `user_id` is the stringified
+    //    PK; `permission_id` is the composite codename string. Both
+    //    use Predicate::col_eq because the underlying columns are
+    //    TEXT and the typed `ForeignKeyCol` API is still i64-shaped
+    //    at v1.
     let direct = UserPermission::objects()
         .filter(
-            user_permission::USER_ID.eq(user_id)
+            user_permission::USER_ID.eq(user_id_owned.clone())
                 & umbra::orm::Predicate::<UserPermission>::col_eq("permission_id", pk.clone()),
         )
         .exists()
@@ -121,7 +129,7 @@ pub async fn has_perm_scoped(
     //    round-trip regardless of group count, and we never have to
     //    spell the junction-table name ourselves.
     let group_ids: Vec<i64> = UserGroup::objects()
-        .filter(user_group::USER_ID.eq(user_id))
+        .filter(user_group::USER_ID.eq(user_id_owned))
         .fetch()
         .await?
         .into_iter()
@@ -141,10 +149,14 @@ pub async fn has_perm_scoped(
 /// user struct:
 ///
 /// ```ignore
-/// let allowed = has_perm_for_superuser(user.id(), user.is_superuser(), "blog.publish_post").await?;
+/// let allowed = has_perm_for_superuser(
+///     &user.id().to_string(),
+///     user.is_superuser(),
+///     "blog.publish_post",
+/// ).await?;
 /// ```
 pub async fn has_perm_for_superuser(
-    user_id: i64,
+    user_id: &str,
     is_superuser: bool,
     perm: &str,
 ) -> Result<bool, PermError> {
@@ -161,12 +173,13 @@ pub async fn has_perm_for_superuser(
 /// Superuser bypass is NOT applied — the set reflects only what is in the
 /// database. Callers that want to short-circuit for superusers should check
 /// `user.is_superuser()` before calling this.
-pub async fn user_perms(user_id: i64) -> Result<HashSet<String>, PermError> {
+pub async fn user_perms(user_id: &str) -> Result<HashSet<String>, PermError> {
     // Post-gap-#60: the codename IS the permission_id FK value, so
     // there's nothing left to join. Collect FK values directly and
     // return them.
+    let user_id_owned = user_id.to_string();
     let mut codenames: Vec<String> = UserPermission::objects()
-        .filter(user_permission::USER_ID.eq(user_id))
+        .filter(user_permission::USER_ID.eq(user_id_owned.clone()))
         .fetch()
         .await?
         .into_iter()
@@ -178,7 +191,7 @@ pub async fn user_perms(user_id: i64) -> Result<HashSet<String>, PermError> {
     // `DISTINCT child_id` for the matching `parent_id IN (...)`, so
     // no per-group fan-out and no dedup pass needed here.
     let group_ids: Vec<i64> = UserGroup::objects()
-        .filter(user_group::USER_ID.eq(user_id))
+        .filter(user_group::USER_ID.eq(user_id_owned))
         .fetch()
         .await?
         .into_iter()

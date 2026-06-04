@@ -30,11 +30,29 @@
 //! be copied into `permissions_group_permissions` by hand or
 //! re-seeded.
 //!
-//! `user_id` in `UserGroup` and `UserPermission` is `i64` (not
-//! `ForeignKey<U>`) to keep the data model generic — we don't tie to a
-//! concrete user type, so any `UserModel` implementation works. The
-//! user side stays as explicit join models because the plugin doesn't
-//! own a `User` struct to attach `M2M<...>` fields to.
+//! `user_id` in `UserGroup` and `UserPermission` is `String` (not
+//! `ForeignKey<U>`, not `i64`) to keep the data model PK-agnostic.
+//! The plugin doesn't own a `User` struct to point at — different
+//! apps wire different user models, some with `i64` PKs, some with
+//! `uuid::Uuid`, some with slug-style `String` codenames. Storing
+//! the column as `TEXT` (max 64 chars — covers UUIDs at 36 chars and
+//! i64-as-string at 20) lets any PK type round-trip.
+//!
+//! Callers convert their user's PK to string at the perm-call
+//! boundary:
+//!
+//! ```ignore
+//! let granted = has_perm(&user.id().to_string(), "blog.publish").await?;
+//! // For UUID user PKs:
+//! let granted = has_perm(&user.id().to_string(), "blog.publish").await?;
+//! // For Uuid PKs (uuid crate's Display gives the canonical form):
+//! let granted = has_perm(&user.id().to_string(), "blog.publish").await?;
+//! ```
+//!
+//! The trade-off vs `ForeignKey<U>` referential integrity: deleting a
+//! user does NOT cascade-delete their UserGroup/UserPermission rows.
+//! Apps that need that guarantee should add a per-user cleanup hook
+//! in their user-delete path.
 //!
 //! ## Edit / no-edit policy
 //!
@@ -201,20 +219,25 @@ pub struct Group {
 )]
 pub struct UserGroup {
     pub id: i64,
-    /// The `UserModel::id()` of the user. Indexed because every
+    /// The `UserModel::id()` of the user, stringified. `String` (not
+    /// `i64`) so the plugin works with any user PK type — UUID PKs
+    /// round-trip via `Uuid::to_string()`, integer PKs via
+    /// `i64::to_string()`. Capped at 64 chars (UUIDs are 36; the
+    /// widest integer PKs need ≤20). Indexed because every
     /// `has_perm(user_id, ...)` query starts with "what groups is
     /// this user in?" — that's a `WHERE user_id = ?` on this table
-    /// on the perm-check hot path. User-defined membership;
-    /// staff users reassign through the admin.
-    #[umbra(index)]
-    pub user_id: i64,
+    /// on the perm-check hot path. User-defined membership; staff
+    /// users reassign through the admin.
+    #[umbra(index, max_length = 64)]
+    pub user_id: String,
     pub group_id: ForeignKey<Group>,
 }
 
 /// Direct user-to-permission assignment (M2M). Bypasses groups — a user
 /// can hold a permission independently of group membership.
 ///
-/// `user_id` is a plain `i64` for the same reason as in `UserGroup`.
+/// `user_id` is `String` (not `i64`) for the same reason as in
+/// `UserGroup` — keeps the plugin PK-agnostic.
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
 #[umbra(
     table = "permissions_userpermission",
@@ -226,11 +249,12 @@ pub struct UserGroup {
 )]
 pub struct UserPermission {
     pub id: i64,
-    /// The `UserModel::id()` of the user. Indexed for the
-    /// `has_perm` direct-grant path (`WHERE user_id = ?`), the
-    /// step-1 query of every permission check. User-defined direct
-    /// grant; staff users reassign through the admin.
-    #[umbra(index)]
-    pub user_id: i64,
+    /// The `UserModel::id()` of the user, stringified. Same `String`
+    /// + `max_length = 64` shape as `UserGroup.user_id` — keeps the
+    /// plugin PK-agnostic. Indexed for the `has_perm` direct-grant
+    /// path (`WHERE user_id = ?`), the step-1 query of every
+    /// permission check.
+    #[umbra(index, max_length = 64)]
+    pub user_id: String,
     pub permission_id: ForeignKey<Permission>,
 }

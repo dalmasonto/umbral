@@ -174,7 +174,7 @@ async fn has_perm_returns_false_when_user_has_no_permissions() {
     boot().await;
 
     // user_id 9999 — doesn't exist in any permission table
-    let result = has_perm(9999, "blog.publish_blogpost")
+    let result = has_perm("9999", "blog.publish_blogpost")
         .await
         .expect("has_perm should not error");
     assert!(
@@ -188,7 +188,7 @@ async fn has_perm_returns_false_when_user_has_no_permissions() {
 async fn has_perm_returns_false_for_malformed_perm_string() {
     boot().await;
 
-    let result = has_perm(1, "nodotsomewhere")
+    let result = has_perm("1", "nodotsomewhere")
         .await
         .expect("should not error on malformed perm");
     assert!(!result, "malformed perm string should return false");
@@ -203,7 +203,7 @@ async fn has_perm_returns_true_for_direct_user_permission() {
     boot().await;
     let pool = pool();
 
-    let user_id: i64 = 101;
+    let user_id: &str = "101";
 
     // Get the ContentType for blog/blogpost.
     let ct_id: i64 = sqlx::query_scalar(
@@ -255,7 +255,7 @@ async fn has_perm_returns_true_for_group_permission() {
     boot().await;
     let pool = pool();
 
-    let user_id: i64 = 202;
+    let user_id: &str = "202";
 
     // Create a group "editors".
     sqlx::query("INSERT OR IGNORE INTO permissions_group (name) VALUES ('editors')")
@@ -317,7 +317,7 @@ async fn superuser_always_passes_has_perm() {
     boot().await;
 
     // user_id 8888 has no DB rows at all.
-    let result = has_perm_for_superuser(8888, true, "blog.delete_blogpost")
+    let result = has_perm_for_superuser("8888", true, "blog.delete_blogpost")
         .await
         .expect("should not error");
 
@@ -333,7 +333,7 @@ async fn non_superuser_falls_through_to_db_check() {
     boot().await;
 
     // user_id 7777 has no DB rows.
-    let result = has_perm_for_superuser(7777, false, "blog.delete_blogpost")
+    let result = has_perm_for_superuser("7777", false, "blog.delete_blogpost")
         .await
         .expect("should not error");
 
@@ -349,7 +349,7 @@ async fn user_perms_returns_union_of_direct_and_group_perms() {
     boot().await;
     let pool = pool();
 
-    let user_id: i64 = 303;
+    let user_id: &str = "303";
 
     // --- direct permission: blog.view_blogpost ---
     // Post-gap-#60: the composite codename IS the PK; no integer id
@@ -412,7 +412,7 @@ async fn has_perm_scoped_api_works() {
     boot().await;
 
     // user_id 9999 has no rows — should return false for any perm.
-    let result = has_perm_scoped(9999, "blog", "add_blogpost")
+    let result = has_perm_scoped("9999", "blog", "add_blogpost")
         .await
         .expect("should not error");
 

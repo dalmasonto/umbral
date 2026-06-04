@@ -289,6 +289,49 @@ The full `UserModel` surface:
 | `is_staff() -> bool` | no | `false` | admin require_staff check |
 | `is_superuser() -> bool` | no | `false` | permission gates |
 
+### `username()` is the login handle, not necessarily a `username` column
+
+`username()` returns the value `authenticate(handle, password)` matches against. It is *the user-supplied login handle*, not literally a column called `username`. If your app logs in by email, return the email:
+
+```rust
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
+pub struct EmailUser {
+    pub id: i64,
+    #[umbra(unique, max_length = 320)]
+    pub email: String,            // the login handle
+    pub password_hash: String,
+    pub is_active: bool,
+}
+
+impl UserModel for EmailUser {
+    fn id(&self) -> i64 { self.id }
+    fn username(&self) -> &str { &self.email }   // ← email-as-handle
+    fn password_hash(&self) -> &str { &self.password_hash }
+    fn set_password_hash(&mut self, hash: String) { self.password_hash = hash; }
+    fn is_active(&self) -> bool { self.is_active }
+}
+```
+
+Then `authenticate::<EmailUser>("alice@example.com", "s3cret").await?` looks the row up by `email`. This is the same role Django's `USERNAME_FIELD` setting plays — except in umbra it's a trait method on your struct, not a separate config string.
+
+The framework never assumes your handle column is called `username`. The only requirement: a unique column the user supplies at login time, and you point `username()` at it.
+
+### User-id type and the permissions plugin
+
+`UserModel::id()` returns `i64` today. The framework's stored-id surfaces match: `umbra-sessions` writes `Option<i64>`, `Identity` from `umbra-rest` carries `user_id: i64`. A custom user model with a `uuid::Uuid` PK isn't fully supported through this trait yet; a follow-up generalises `id()` to an associated `Pk` type.
+
+In the meantime, `umbra-permissions` is PK-agnostic — its `user_id` columns are `TEXT`, and `has_perm` / `user_perms` take `&str`. Callers stringify whatever their user PK is at the perm-call boundary:
+
+```rust
+// i64 PK (today's AuthUser):
+has_perm(&user.id().to_string(), "blog.publish_post").await?;
+
+// UUID PK (after the UserModel generalisation lands):
+has_perm(&user.id().to_string(), "blog.publish_post").await?;
+```
+
+So as soon as you can hold a `Uuid`/`String` user PK in your custom struct (today: by hand-rolling around `UserModel::id()`'s i64 return), the permissions plugin already accepts it.
+
 ### Step 3 - wire the plugin
 
 ```rust

@@ -235,10 +235,15 @@ where
             // models can opt out by omitting `is_superuser`).
             let is_super = is_superuser_safe(user_id).await;
 
+            // Stringify the user id once — the perm-query layer
+            // takes `&str` because the perm tables now store
+            // `user_id` as TEXT (PK-agnostic — UUID, slug, int all
+            // round-trip via to_string()).
+            let user_id_str = user_id.to_string();
             let allowed = if is_super {
                 true
             } else {
-                has_perm(user_id, &config.perm).await.unwrap_or(false)
+                has_perm(&user_id_str, &config.perm).await.unwrap_or(false)
             };
 
             if !allowed {
