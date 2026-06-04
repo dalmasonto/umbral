@@ -155,13 +155,20 @@ pub struct Group {
     pub permissions: M2M<Permission>,
 }
 
-/// Name of the auto-generated M2M junction table backing
-/// `Group.permissions`. Exposed as a `const` so the `perm` query layer
-/// can pass it to `M2M::any_holds` / `M2M::holders_of_any` without
-/// duplicating the `<parent_table>_<field_name>` derivation. The macro
-/// emits the same string into the hydrated runtime instance; this
-/// constant is the static-side handle for bulk-across-parents queries.
-pub const GROUP_PERMISSIONS_JUNCTION: &str = "permissions_group_permissions";
+// No public junction-table constant here. The framework manages the
+// junction's identity end-to-end:
+//
+// - The migration engine derives the table name from the parent's
+//   table + field ident (`permissions_group_permissions`) and emits
+//   the CREATE; it never appears in admin or OpenAPI because the
+//   junction isn't a registered ModelMeta.
+// - Application code that needs bulk-across-parents queries calls
+//   `Group::permissions_contains_any(...)` / `Group::permissions_union_for(...)`
+//   — typed helpers the `#[derive(Model)]` macro emits per M2M field.
+//   The string never appears in user code.
+// - The escape hatch (raw queries against the junction) lives at
+//   `Group::permissions_junction_table()` for admin chip-picker
+//   backends and similar low-level integrations.
 
 /// Join table between users and groups (M2M).
 ///

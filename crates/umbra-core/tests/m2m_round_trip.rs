@@ -351,13 +351,27 @@ async fn m2m_clear_removes_every_junction_row_for_the_parent() {
 }
 
 // =========================================================================
-// BUG-16 phase 3 follow-up: static bulk-across-parents helpers.
-// any_holds / holders_of_any are the OR-membership shape perm gates
-// need; they don't require a constructed M2M instance.
+// BUG-16 phase 3 follow-up: typed bulk-across-parents helpers the macro
+// emits on the parent struct. Developers never spell the junction-
+// table name; the `<field>_contains_any` / `<field>_union_for` methods
+// derive it from the parent's table + field ident at expand time.
 // =========================================================================
 
 #[tokio::test]
-async fn any_holds_returns_true_when_any_parent_has_the_child() {
+async fn macro_emits_typed_junction_accessor_const() {
+    // The escape hatch — the auto-derived junction name is exposed
+    // via `<Parent>::<field>_junction_table()`. Application code
+    // shouldn't need it, but raw-SQL admin pickers and the like do.
+    assert_eq!(
+        RoundTripGroup::perms_junction_table(),
+        JUNCTION_TABLE,
+        "the macro-emitted accessor must agree with the migration \
+         engine's `<parent_table>_<field_name>` derivation",
+    );
+}
+
+#[tokio::test]
+async fn perms_contains_any_returns_true_when_any_parent_has_the_child() {
     boot().await;
 
     let perm = RoundTripPermission::objects()
@@ -385,25 +399,21 @@ async fn any_holds_returns_true_when_any_parent_has_the_child() {
         .await
         .expect("g2");
 
-    // Only g2 holds the perm. any_holds across [g1.id, g2.id] should
-    // return true regardless.
+    // Only g2 holds the perm. perms_contains_any across [g1.id, g2.id]
+    // should return true regardless.
     g2.perms.add(&perm).await.expect("add to g2");
 
-    let holds = M2M::<RoundTripPermission>::any_holds(
-        JUNCTION_TABLE,
-        &[g1.id, g2.id],
-        perm.codename.clone(),
-    )
-    .await
-    .expect("any_holds");
+    let holds = RoundTripGroup::perms_contains_any(&[g1.id, g2.id], perm.codename.clone())
+        .await
+        .expect("perms_contains_any");
     assert!(
         holds,
-        "any_holds across both groups must find the relation on g2"
+        "perms_contains_any across both groups must find the relation on g2"
     );
 }
 
 #[tokio::test]
-async fn any_holds_returns_false_when_no_parent_has_the_child() {
+async fn perms_contains_any_returns_false_when_no_parent_has_the_child() {
     boot().await;
 
     let perm = RoundTripPermission::objects()
@@ -424,22 +434,21 @@ async fn any_holds_returns_false_when_no_parent_has_the_child() {
         .expect("g");
 
     // No add — the junction is empty for this group.
-    let holds =
-        M2M::<RoundTripPermission>::any_holds(JUNCTION_TABLE, &[g.id], perm.codename.clone())
-            .await
-            .expect("any_holds");
+    let holds = RoundTripGroup::perms_contains_any(&[g.id], perm.codename.clone())
+        .await
+        .expect("perms_contains_any");
     assert!(
         !holds,
-        "any_holds must return false when no junction row matches"
+        "perms_contains_any must return false when no junction row matches"
     );
 }
 
 #[tokio::test]
-async fn any_holds_with_empty_parent_slice_short_circuits_false() {
+async fn perms_contains_any_with_empty_parent_slice_short_circuits_false() {
     boot().await;
-    let holds = M2M::<RoundTripPermission>::any_holds(JUNCTION_TABLE, &[], "anything".to_string())
+    let holds = RoundTripGroup::perms_contains_any(&[], "anything".to_string())
         .await
-        .expect("any_holds with empty parents");
+        .expect("perms_contains_any with empty parents");
     assert!(
         !holds,
         "empty parent slice should short-circuit to Ok(false)"
@@ -447,7 +456,7 @@ async fn any_holds_with_empty_parent_slice_short_circuits_false() {
 }
 
 #[tokio::test]
-async fn holders_of_any_returns_distinct_union_across_parents() {
+async fn perms_union_for_returns_distinct_union_across_parents() {
     boot().await;
 
     let perm_a = RoundTripPermission::objects()
@@ -495,9 +504,9 @@ async fn holders_of_any_returns_distinct_union_across_parents() {
     g2.perms.add(&perm_b).await.unwrap();
     g2.perms.add(&perm_c).await.unwrap();
 
-    let mut all = M2M::<RoundTripPermission>::holders_of_any(JUNCTION_TABLE, &[g1.id, g2.id])
+    let mut all = RoundTripGroup::perms_union_for(&[g1.id, g2.id])
         .await
-        .expect("holders_of_any");
+        .expect("perms_union_for");
     all.sort();
     assert_eq!(
         all,
@@ -506,16 +515,16 @@ async fn holders_of_any_returns_distinct_union_across_parents() {
             perm_b.codename.clone(),
             perm_c.codename.clone(),
         ],
-        "holders_of_any must return the DISTINCT union; B appears once not twice",
+        "perms_union_for must return the DISTINCT union; B appears once not twice",
     );
 }
 
 #[tokio::test]
-async fn holders_of_any_with_empty_parent_slice_returns_empty() {
+async fn perms_union_for_with_empty_parent_slice_returns_empty() {
     boot().await;
-    let out = M2M::<RoundTripPermission>::holders_of_any(JUNCTION_TABLE, &[])
+    let out = RoundTripGroup::perms_union_for(&[])
         .await
-        .expect("holders_of_any with empty parents");
+        .expect("perms_union_for with empty parents");
     assert!(
         out.is_empty(),
         "empty parent slice should short-circuit to Ok(Vec::new())"

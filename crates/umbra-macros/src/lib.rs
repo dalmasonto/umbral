@@ -1059,15 +1059,21 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
     let mut fk_id_arms: Vec<TokenStream2> = Vec::new();
     // BUG-16 step 2: collect M2M field idents so the macro can emit a
     // `set_m2m_parent_ids` body that wires the parent's PK into each
-    // junction-table accessor at row-decode time.
+    // junction-table accessor at row-decode time. BUG-16 phase 3
+    // follow-up: also carry the inner child type so we can emit
+    // typed `<field>_contains_any` / `<field>_union_for` helpers on
+    // the parent — keeps developers from ever having to spell the
+    // auto-generated junction-table name themselves.
     let mut m2m_field_idents: Vec<syn::Ident> = Vec::new();
+    let mut m2m_field_children: Vec<syn::Type> = Vec::new();
     for field in fields.iter() {
         let field_name = field.ident.as_ref().unwrap();
         let field_name_str = field_name.to_string();
         let kind = classify_field_type(&field.ty);
         match &kind {
-            FieldKind::Many2Many(_) => {
+            FieldKind::Many2Many(inner_ty) => {
                 m2m_field_idents.push(field_name.clone());
+                m2m_field_children.push((**inner_ty).clone());
             }
             FieldKind::ForeignKey(inner_ty) => {
                 hydrate_arms.push(quote! {
@@ -1139,6 +1145,93 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             #(#per_field)*
         }}
     };
+
+    // BUG-16 phase 3 follow-up: typed bulk-across-parents helpers
+    // emitted on the parent's inherent impl. Closes the developer
+    // ergonomics gap: the auto-generated junction-table name never
+    // appears in user code — these macro-emitted methods derive it
+    // from `<parent_table>_<field_name>` internally and pass it to
+    // `M2M::<Child>::any_holds` / `holders_of_any`.
+    //
+    // For a field `pub permissions: M2M<Permission>` on `Group`, the
+    // macro emits:
+    //
+    //   impl Group {
+    //       pub async fn permissions_contains_any(
+    //           parent_ids: &[<Self as Model>::PrimaryKey],
+    //           child_pk: <Permission as Model>::PrimaryKey,
+    //       ) -> Result<bool, sqlx::Error>;
+    //
+    //       pub async fn permissions_union_for(
+    //           parent_ids: &[<Self as Model>::PrimaryKey],
+    //       ) -> Result<Vec<<Permission as Model>::PrimaryKey>, sqlx::Error>;
+    //
+    //       pub const fn permissions_junction_table() -> &'static str;
+    //   }
+    //
+    // The `_junction_table()` method is the escape hatch for raw
+    // queries against the junction — admin chip-picker HTMX backends
+    // and similar low-level integrations. Application code should
+    // prefer the typed helpers and never touch the string.
+    let m2m_helper_methods: Vec<TokenStream2> = m2m_field_idents
+        .iter()
+        .zip(m2m_field_children.iter())
+        .map(|(ident, child_ty)| {
+            let junction_name = format!("{}_{}", table_name, ident);
+            let junction_fn = format_ident!("{}_junction_table", ident);
+            let contains_any_fn = format_ident!("{}_contains_any", ident);
+            let union_for_fn = format_ident!("{}_union_for", ident);
+            quote! {
+                /// The auto-generated M2M junction table name. Exposed
+                /// for low-level integrations (raw queries, custom
+                /// admin pickers). Most application code should prefer
+                /// the typed helpers below.
+                pub const fn #junction_fn() -> &'static str {
+                    #junction_name
+                }
+
+                /// "Do any of `parent_ids` hold the M2M relation to
+                /// `child_pk`?" One round-trip via
+                /// `SELECT 1 FROM <junction> WHERE parent_id IN (?)
+                /// AND child_id = ? LIMIT 1`.
+                pub async fn #contains_any_fn(
+                    parent_ids: &[<Self as ::umbra::orm::Model>::PrimaryKey],
+                    child_pk: <#child_ty as ::umbra::orm::Model>::PrimaryKey,
+                ) -> ::core::result::Result<bool, ::umbra::_sqlx::Error> {
+                    ::umbra::orm::M2M::<#child_ty, <Self as ::umbra::orm::Model>::PrimaryKey>::any_holds(
+                        Self::#junction_fn(),
+                        parent_ids,
+                        child_pk,
+                    ).await
+                }
+
+                /// "Distinct union of every child PK any of
+                /// `parent_ids` holds." One round-trip via
+                /// `SELECT DISTINCT child_id FROM <junction>
+                /// WHERE parent_id IN (?)`.
+                pub async fn #union_for_fn(
+                    parent_ids: &[<Self as ::umbra::orm::Model>::PrimaryKey],
+                ) -> ::core::result::Result<
+                    ::std::vec::Vec<<#child_ty as ::umbra::orm::Model>::PrimaryKey>,
+                    ::umbra::_sqlx::Error,
+                >
+                where
+                    <#child_ty as ::umbra::orm::Model>::PrimaryKey:
+                        for<'r> ::umbra::_sqlx::Decode<'r, ::umbra::_sqlx::Sqlite>
+                        + for<'r> ::umbra::_sqlx::Decode<'r, ::umbra::_sqlx::Postgres>
+                        + ::umbra::_sqlx::Type<::umbra::_sqlx::Sqlite>
+                        + ::umbra::_sqlx::Type<::umbra::_sqlx::Postgres>
+                        + ::core::marker::Send
+                        + ::core::marker::Unpin,
+                {
+                    ::umbra::orm::M2M::<#child_ty, <Self as ::umbra::orm::Model>::PrimaryKey>::holders_of_any(
+                        Self::#junction_fn(),
+                        parent_ids,
+                    ).await
+                }
+            }
+        })
+        .collect();
     let output = quote! {
         impl ::umbra::orm::Model for #struct_name {
             type PrimaryKey = #pk_ty_tokens;
@@ -1196,6 +1289,8 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             pub fn objects() -> ::umbra::orm::Manager<Self> {
                 ::umbra::orm::Manager::default()
             }
+
+            #(#m2m_helper_methods)*
         }
 
         #[allow(clippy::module_inception)]

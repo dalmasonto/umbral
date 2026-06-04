@@ -79,9 +79,7 @@ pub mod rest;
 pub use middleware::{
     PermissionRequired, PermissionRequiredLayer, permission_required, permission_required_html,
 };
-pub use models::{
-    ContentType, GROUP_PERMISSIONS_JUNCTION, Group, Permission, UserGroup, UserPermission,
-};
+pub use models::{ContentType, Group, Permission, UserGroup, UserPermission};
 pub use perm::{PermError, has_perm, has_perm_for_superuser, has_perm_scoped, user_perms};
 
 use umbra::plugin::{AppContext, Plugin, PluginError};

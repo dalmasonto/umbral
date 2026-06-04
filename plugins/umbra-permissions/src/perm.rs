@@ -36,17 +36,14 @@
 
 use std::collections::HashSet;
 
-use umbra::orm::M2M;
-
-use crate::models::{
-    GROUP_PERMISSIONS_JUNCTION, Permission, UserGroup, UserPermission, user_group, user_permission,
-};
+use crate::models::{Group, UserGroup, UserPermission, user_group, user_permission};
 // Post-gap-#60 simplification: `has_perm` and `user_perms` no longer
 // look up `ContentType` or `Permission` rows directly — the codename
 // IS the FK value carried in `UserPermission` (direct grant) and the
 // child PK in the `Group.permissions` M2M junction (group-mediated
 // grant). The membership check is one equality predicate against the
-// FK column, or one `M2M::any_holds` call against the junction.
+// FK column, or one macro-emitted `Group::permissions_contains_any`
+// call against the auto-generated junction.
 
 /// Errors the perm helpers can produce.
 #[derive(Debug)]
@@ -118,11 +115,11 @@ pub async fn has_perm_scoped(
     }
 
     // 2. Group-mediated grant: find every group the user is in, then
-    //    ask M2M whether any of those groups holds this codename in
-    //    the auto-generated `permissions_group_permissions` junction.
-    //    `M2M::any_holds` lowers to `SELECT 1 FROM <junction> WHERE
-    //    parent_id IN (?,?,?) AND child_id = ? LIMIT 1` — one round-trip
-    //    regardless of group count.
+    //    ask the macro-emitted `Group::permissions_contains_any`
+    //    helper. That lowers to `SELECT 1 FROM <junction> WHERE
+    //    parent_id IN (?,?,?) AND child_id = ? LIMIT 1` — one
+    //    round-trip regardless of group count, and we never have to
+    //    spell the junction-table name ourselves.
     let group_ids: Vec<i64> = UserGroup::objects()
         .filter(user_group::USER_ID.eq(user_id))
         .fetch()
@@ -134,7 +131,7 @@ pub async fn has_perm_scoped(
         return Ok(false);
     }
 
-    Ok(M2M::<Permission>::any_holds(GROUP_PERMISSIONS_JUNCTION, &group_ids, pk).await?)
+    Ok(Group::permissions_contains_any(&group_ids, pk).await?)
 }
 
 /// Convenience wrapper that short-circuits immediately when `is_superuser`
@@ -176,11 +173,10 @@ pub async fn user_perms(user_id: i64) -> Result<HashSet<String>, PermError> {
         .map(|up| up.permission_id.id())
         .collect();
 
-    // Group-mediated grants — one round-trip through the M2M junction
-    // for the full distinct set of codenames any of the user's groups
-    // holds. `holders_of_any` SELECTs `DISTINCT child_id` for the
-    // matching `parent_id IN (...)`, so no per-group fan-out and no
-    // dedup pass needed here.
+    // Group-mediated grants — one round-trip through the macro-
+    // emitted `Group::permissions_union_for` helper. It SELECTs
+    // `DISTINCT child_id` for the matching `parent_id IN (...)`, so
+    // no per-group fan-out and no dedup pass needed here.
     let group_ids: Vec<i64> = UserGroup::objects()
         .filter(user_group::USER_ID.eq(user_id))
         .fetch()
@@ -189,8 +185,7 @@ pub async fn user_perms(user_id: i64) -> Result<HashSet<String>, PermError> {
         .map(|ug| ug.group_id.id())
         .collect();
     if !group_ids.is_empty() {
-        let mediated: Vec<String> =
-            M2M::<Permission>::holders_of_any(GROUP_PERMISSIONS_JUNCTION, &group_ids).await?;
+        let mediated: Vec<String> = Group::permissions_union_for(&group_ids).await?;
         codenames.extend(mediated);
     }
 
