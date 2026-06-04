@@ -501,6 +501,46 @@
   umbra.initMultiChoicePickers = initMultiChoicePickers;
   initMultiChoicePickers();
   document.body.addEventListener('htmx:afterSwap', function() { initMultiChoicePickers(); });
+
+  // FK searchable combobox — idempotent via [data-fk-init].
+  function initFkPickers(root) {
+    root = root || document;
+    root.querySelectorAll('.fk-picker:not([data-fk-init])').forEach(function(picker) {
+      picker.setAttribute('data-fk-init', '1');
+      var textInput = picker.querySelector('input[type=text]');
+      var hiddenInput = picker.querySelector('input[type=hidden]');
+      var dropdown = picker.querySelector('.fk-options');
+      if (!textInput || !hiddenInput || !dropdown) return;
+
+      textInput.addEventListener('focus', function() { dropdown.classList.remove('hidden'); });
+      document.addEventListener('click', function(e) {
+        if (!picker.contains(e.target)) dropdown.classList.add('hidden');
+      });
+
+      picker.addEventListener('htmx:afterSwap', function() {
+        dropdown.classList.remove('hidden');
+        dropdown.querySelectorAll('[data-fk-value]').forEach(function(opt) {
+          opt.addEventListener('mousedown', function(e) {
+            e.preventDefault();
+            hiddenInput.value = opt.getAttribute('data-fk-value');
+            textInput.value = opt.textContent.trim();
+            dropdown.classList.add('hidden');
+          });
+        });
+      });
+    });
+  }
+  umbra.fkResolve = function(field, event) {
+    try {
+      var data = JSON.parse(event.detail.xhr.responseText);
+      if (data.items && data.items[0]) {
+        var el = document.getElementById('fk_text_' + field);
+        if (el) el.value = data.items[0].label;
+      }
+    } catch(e) {}
+  };
+  initFkPickers();
+  document.body.addEventListener('htmx:afterSwap', function() { initFkPickers(); });
 })();
 </script>
 
