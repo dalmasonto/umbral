@@ -143,7 +143,7 @@ async fn foreign_key_violation_renders_as_400_with_fk_constraint_code() {
 
     assert_eq!(status, StatusCode::BAD_REQUEST, "expected 400, got {body}");
     assert_eq!(
-        body["code"], "fk_constraint",
+        body["code"], "validation_error",
         "machine-readable code; got body: {body}",
     );
     // The pre-DB existence check keys the error under the FK
@@ -213,7 +213,7 @@ async fn not_null_violation_keys_the_error_under_the_required_column() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "got body: {body}");
     let code = body["code"].as_str().unwrap_or("");
     // Three valid outcomes, in order of preference:
-    //  - `required_field`: the new pre-validation caught the missing
+    //  - `validation_error`: pre-validation caught the missing
     //    `username` before it reached the DB (preferred — no SQL
     //    round-trip).
     //  - `null_constraint`: the row reached SQLite and it rejected
@@ -221,14 +221,14 @@ async fn not_null_violation_keys_the_error_under_the_required_column() {
     //  - `bad_input`: the ORM's protocol-error path turned the
     //    missing column into a structured 400.
     assert!(
-        code == "required_field" || code == "null_constraint" || code == "bad_input",
-        "expected required_field / null_constraint / bad_input, got code={code:?} body={body}",
+        code == "validation_error" || code == "null_constraint" || code == "bad_input",
+        "expected validation_error / null_constraint / bad_input, got code={code:?} body={body}",
     );
 
-    // All three shapes name the offending column. `required_field`
+    // All three shapes name the offending column. `validation_error`
     // and `null_constraint` carry `username` as a field error;
     // `bad_input` puts the explanation in the top-level `error`.
-    if code == "required_field" || code == "null_constraint" {
+    if code == "validation_error" || code == "null_constraint" {
         let username_errors = body["username"]
             .as_array()
             .expect("`username` should carry the field error; got {body}");
@@ -278,7 +278,7 @@ async fn empty_string_on_required_field_is_rejected() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "got body: {body}");
-    assert_eq!(body["code"], "required_field");
+    assert_eq!(body["code"], "validation_error");
     let username_errors = body["username"]
         .as_array()
         .expect("`username` should carry the required-field message; got {body}");
@@ -317,7 +317,7 @@ async fn missing_required_field_is_rejected_too() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "got body: {body}");
-    assert_eq!(body["code"], "required_field");
+    assert_eq!(body["code"], "validation_error");
     assert!(body["username"].is_array(), "got {body}");
 }
 
@@ -377,7 +377,7 @@ async fn fk_zero_is_reported_as_not_found_under_the_fk_column() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "got body: {body}");
-    assert_eq!(body["code"], "fk_constraint");
+    assert_eq!(body["code"], "validation_error");
     let fk_errors = body["author_id"]
         .as_array()
         .expect("`author_id` should carry the FK-not-found message; got {body}");
@@ -402,7 +402,7 @@ async fn fk_pointing_at_nonexistent_row_is_caught_pre_db() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "got body: {body}");
-    assert_eq!(body["code"], "fk_constraint");
+    assert_eq!(body["code"], "validation_error");
     // The pre-DB existence check keys the error under the FK
     // column directly, so the client doesn't have to parse a
     // non_field_errors string to figure out which FK was bad.
@@ -413,5 +413,48 @@ async fn fk_pointing_at_nonexistent_row_is_caught_pre_db() {
     assert!(
         msg.contains("id=99999"),
         "message should name the offending value; got {msg:?}",
+    );
+}
+
+// =========================================================================
+// Required-field AND FK-not-found surface in the SAME response.
+// The user report: blank `name` + bogus `category` → previously
+// only the blank `name` came back because the required check
+// short-circuited. Now both checks run and merge before the 400.
+// =========================================================================
+
+#[tokio::test]
+async fn blank_string_and_bad_fk_surface_together() {
+    let router = boot().await.clone();
+    let (status, body) = post_json(
+        router,
+        "/api/comment/",
+        // `body` is blank (required-field error) AND `author_id`
+        // is 0 (FK-not-found). Both should appear in one
+        // response.
+        json!({ "author_id": 0, "body": "" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "got body: {body}");
+    assert_eq!(body["code"], "validation_error");
+
+    let body_errors = body["body"]
+        .as_array()
+        .expect("`body` should carry the required-field message; got {body}");
+    assert!(
+        body_errors[0]
+            .as_str()
+            .map(|s| s.contains("required"))
+            .unwrap_or(false),
+        "got {body_errors:?}",
+    );
+
+    let fk_errors = body["author_id"]
+        .as_array()
+        .expect("`author_id` should ALSO be present; got {body}");
+    let msg = fk_errors[0].as_str().unwrap_or("");
+    assert!(
+        msg.contains("not found") && msg.contains("id=0"),
+        "got {msg:?}",
     );
 }

@@ -1667,30 +1667,25 @@ async fn create(
     cfg.gate(&table, &Action::Create, identity.as_ref())?;
     drop_noform_fields(&model, &mut body);
 
-    // Pre-DB required-field validation. Rejects empty strings
-    // and missing values on NOT NULL columns with no default —
-    // the DRF-style 400 here lets the client highlight every
-    // bad input in one round-trip instead of letting blank
-    // strings sneak past the constraint layer.
-    let required_errors = validate_required_on_create(&model, &body);
-    if !required_errors.is_empty() {
-        return Err(ApiError::Validation {
-            code: "required_field",
-            field_errors: required_errors,
-            non_field_errors: Vec::new(),
-        });
-    }
-
-    // Pre-DB FK existence check. One indexed `SELECT count`
-    // per FK column in the body — cheap, and the resulting
-    // 400 names every offending reference under its own field
-    // (rather than relying on SQLite's column-less FOREIGN
-    // KEY constraint message at INSERT time).
+    // Pre-DB validation. Two checks run together so the client
+    // sees EVERY bad input in one response — a blank `name` and
+    // a bogus `category` FK surface in the same 400, not in two
+    // sequential round-trips. The required-field check is sync;
+    // the FK existence check fires N indexed `SELECT count`s
+    // through the ORM (one per FK column in the body).
+    let mut field_errors = validate_required_on_create(&model, &body);
     let fk_errors = validate_fk_references(&model, &body).await;
-    if !fk_errors.is_empty() {
+    for (col, msgs) in fk_errors {
+        // Merge: if a field has both a "required" and a
+        // "FK not found" error, keep the FK message — it's the
+        // more specific failure mode (the client knew to send
+        // a value, the value just doesn't reference a real row).
+        field_errors.insert(col, msgs);
+    }
+    if !field_errors.is_empty() {
         return Err(ApiError::Validation {
-            code: "fk_constraint",
-            field_errors: fk_errors,
+            code: "validation_error",
+            field_errors,
             non_field_errors: Vec::new(),
         });
     }
@@ -1718,26 +1713,19 @@ async fn update(
     drop_noform_fields(&model, &mut body);
     let pk = pk_column(&model)?;
 
-    // Reject blanking-out of required fields. Missing keys are
-    // fine (partial-update contract), but explicitly sending an
-    // empty string for a NOT NULL column without a default
-    // shouldn't be silently written.
-    let required_errors = validate_required_on_update(&model, &body);
-    if !required_errors.is_empty() {
-        return Err(ApiError::Validation {
-            code: "required_field",
-            field_errors: required_errors,
-            non_field_errors: Vec::new(),
-        });
-    }
-
-    // FK existence check — same shape as create. Catches
-    // updates that point an FK column at a non-existent row.
+    // Pre-DB validation: required (only complains about
+    // EXPLICIT blanks on update — partial-update contract) plus
+    // FK existence. Merged so the client sees every issue in
+    // one response.
+    let mut field_errors = validate_required_on_update(&model, &body);
     let fk_errors = validate_fk_references(&model, &body).await;
-    if !fk_errors.is_empty() {
+    for (col, msgs) in fk_errors {
+        field_errors.insert(col, msgs);
+    }
+    if !field_errors.is_empty() {
         return Err(ApiError::Validation {
-            code: "fk_constraint",
-            field_errors: fk_errors,
+            code: "validation_error",
+            field_errors,
             non_field_errors: Vec::new(),
         });
     }
