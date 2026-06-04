@@ -1,0 +1,40 @@
+[package]
+name = "shop"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+
+# ----- Framework core (always required) ------------------------------------
+umbra         = { path = "../../crates/umbra" }
+umbra-cli     = { path = "../../crates/umbra-cli" }
+
+# ----- Active by default ---------------------------------------------------
+umbra-auth     = { path = "../../plugins/umbra-auth" }
+umbra-sessions = { path = "../../plugins/umbra-sessions" }
+umbra-admin    = { path = "../../plugins/umbra-admin" }
+umbra-rest     = { path = "../../plugins/umbra-rest" }
+umbra-openapi  = { path = "../../plugins/umbra-openapi" }
+
+# ----- Available built-ins (uncomment + register in main.rs to enable) -----
+umbra-playground   = { path = "../../plugins/umbra-playground" }
+# umbra-tasks        = { path = "../../plugins/umbra-tasks" }
+umbra-permissions  = { path = "../../plugins/umbra-permissions" }
+# umbra-rls          = { path = "../../plugins/umbra-rls" }
+# umbra-cache        = { path = "../../plugins/umbra-cache" }
+# umbra-email        = { path = "../../plugins/umbra-email" }
+# umbra-media        = { path = "../../plugins/umbra-media" }
+# umbra-signals      = { path = "../../plugins/umbra-signals" }
+umbra-static       = { path = "../../plugins/umbra-static" }
+# umbra-security     = { path = "../../plugins/umbra-security" }
+
+# ----- Third-party + framework runtime deps --------------------------------
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+
+# ----- Project plugins -----------------------------------------------------
+content = { path = "plugins/content" }
+ecommerce = { path = "plugins/ecommerce" }

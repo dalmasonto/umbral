@@ -1,0 +1,4 @@
+/target
+/shop.db*
+.env
+Cargo.lock

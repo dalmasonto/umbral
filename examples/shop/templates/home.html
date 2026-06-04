@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Shop — Home{% endblock %}
+{% block content %}
+  <h1 class="text-3xl font-bold mb-2">Umbra Shop</h1>
+  <p class="text-gray-500 mb-8">A full e-commerce demo built with the Umbra framework.</p>
+
+  {% if featured %}
+    <h2 class="text-xl font-semibold mb-4">Featured Products</h2>
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-10">
+      {% for p in featured %}
+        <div class="bg-white rounded-lg shadow p-4">
+          <div class="h-32 bg-gray-100 rounded mb-3 flex items-center justify-center text-gray-400">
+            No image
+          </div>
+          <h3 class="font-medium truncate">{{ p.name }}</h3>
+          <p class="text-sm text-gray-500 truncate">{{ p.slug }}</p>
+          <p class="text-lg font-bold mt-2">${{ p.price }}</p>
+          <a href="/products/{{ p.id }}" class="mt-3 inline-block px-3 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700">
+            View
+          </a>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <p class="text-gray-500 mb-8">No featured products yet.</p>
+  {% endif %}
+
+  <div class="flex gap-4 mb-8">
+    <a href="/products" class="px-4 py-2 bg-gray-800 text-white rounded hover:bg-gray-900">
+      Browse all products
+    </a>
+    <a href="/dashboard" class="px-4 py-2 bg-gray-200 text-gray-800 rounded hover:bg-gray-300">
+      Dashboard
+    </a>
+  </div>
+
+  {% if brands %}
+    <h2 class="text-xl font-semibold mb-4">Brands</h2>
+    <div class="flex flex-wrap gap-3">
+      {% for b in brands %}
+        <span class="px-3 py-1 bg-white border rounded text-sm">{{ b.name }}</span>
+      {% endfor %}
+    </div>
+  {% endif %}
+{% endblock %}

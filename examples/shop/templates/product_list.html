@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Products{% endblock %}
+{% block content %}
+  <h1 class="text-3xl font-bold mb-6">All Products</h1>
+
+  {% if products %}
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+      {% for p in products %}
+        <div class="bg-white rounded-lg shadow p-4 flex flex-col">
+          <div class="h-40 bg-gray-100 rounded mb-3 flex items-center justify-center text-gray-400">
+            No image
+          </div>
+          <h3 class="font-medium text-lg">{{ p.name }}</h3>
+          <p class="text-sm text-gray-500 mb-2">{{ p.slug }}</p>
+          <p class="text-gray-700 text-sm line-clamp-2 mb-3 flex-grow">{{ p.description }}</p>
+          <div class="flex items-center justify-between mt-auto">
+            <span class="text-lg font-bold">${{ p.price }}</span>
+            <a href="/products/{{ p.id }}" class="px-3 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700">
+              View details
+            </a>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <p class="text-gray-500">No products available.</p>
+  {% endif %}
+{% endblock %}

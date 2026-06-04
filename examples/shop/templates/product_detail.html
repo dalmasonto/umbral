@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}{{ product.name }}{% endblock %}
+{% block content %}
+  <div class="mb-4">
+    <a href="/products" class="text-sm text-gray-500 hover:text-gray-800">← Back to products</a>
+  </div>
+
+  <div class="bg-white rounded-lg shadow p-6">
+    <div class="flex flex-col md:flex-row gap-6">
+      <div class="w-full md:w-1/2 h-64 bg-gray-100 rounded flex items-center justify-center text-gray-400">
+        No image
+      </div>
+      <div class="flex-1">
+        <h1 class="text-2xl font-bold mb-2">{{ product.name }}</h1>
+        <p class="text-gray-500 mb-4">{{ product.slug }}</p>
+        <p class="text-3xl font-bold text-green-700 mb-4">${{ product.price }}</p>
+        {% if product.compare_at_price %}
+          <p class="text-sm text-gray-400 line-through mb-4">${{ product.compare_at_price }}</p>
+        {% endif %}
+        <p class="text-gray-700 mb-6">{{ product.description }}</p>
+        <div class="flex gap-3">
+          <span class="px-3 py-1 bg-gray-100 rounded text-sm">SKU: {{ product.sku }}</span>
+          <span class="px-3 py-1 bg-gray-100 rounded text-sm">Stock: {{ product.stock_quantity }}</span>
+        </div>
+      </div>
+    </div>
+  </div>
+{% endblock %}
