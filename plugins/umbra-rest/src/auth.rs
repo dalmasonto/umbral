@@ -51,10 +51,13 @@ use umbra::web::{HeaderMap, header};
 /// custom permission impls.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Identity {
-    /// The authenticated user's primary key. v1 fixes the PK shape to
-    /// `i64` because that's what `umbra-auth::AuthUser` uses; UUID
-    /// support lands when there's a real consumer.
-    pub user_id: i64,
+    /// The authenticated user's primary key, stringified so the same
+    /// `Identity` shape works whether the active user model has an
+    /// `i64`, `String`, or UUID primary key. Permission checks that
+    /// need the typed PK back can parse on demand
+    /// (`identity.user_id.parse::<i64>()`); the framework's own
+    /// permissions plugin and session store already speak strings.
+    pub user_id: String,
     /// Staff flag, mirroring Django's `User.is_staff`. Used by the
     /// built-in [`crate::permission::IsStaff`].
     pub is_staff: bool,
@@ -66,10 +69,13 @@ pub struct Identity {
 }
 
 impl Identity {
-    /// Convenience constructor for a non-staff user.
-    pub fn user(user_id: i64) -> Self {
+    /// Convenience constructor for a non-staff user. Accepts any
+    /// stringifiable PK — `Identity::user(42)`, `Identity::user("42")`,
+    /// or `Identity::user(uuid.to_string())` all work because the
+    /// argument is `impl ToString`.
+    pub fn user(user_id: impl ToString) -> Self {
         Self {
-            user_id,
+            user_id: user_id.to_string(),
             is_staff: false,
             extras: Default::default(),
         }
@@ -331,7 +337,7 @@ mod tests {
     async fn fn_authentication_invokes_closure() {
         let auth = FnAuthentication::new(|_headers| async move { Some(Identity::user(42)) });
         let id = auth.authenticate(&HeaderMap::new()).await.unwrap();
-        assert_eq!(id.user_id, 42);
+        assert_eq!(id.user_id, "42");
         assert!(!id.is_staff);
     }
 
@@ -347,7 +353,7 @@ mod tests {
         ]);
         let id = chain.authenticate(&HeaderMap::new()).await.unwrap();
         // Second wins, third never runs.
-        assert_eq!(id.user_id, 7);
+        assert_eq!(id.user_id, "7");
         assert!(id.is_staff);
     }
 

@@ -351,8 +351,19 @@ async fn me(OptionalIdentity(id): OptionalIdentity) -> Response {
             "send a session cookie or a Bearer token",
         );
     };
+    // Identity::user_id is stringified to keep custom-PK user
+    // models working; the default `AuthUser` keys by i64, so parse
+    // back here. A non-numeric id means the caller wired a custom
+    // user model behind /me — they should mount their own route.
+    let Ok(auth_user_id) = id.user_id.parse::<i64>() else {
+        return err(
+            StatusCode::UNAUTHORIZED,
+            "not_authenticated",
+            "session user id does not match the AuthUser PK shape",
+        );
+    };
     let user: AuthUser = match AuthUser::objects()
-        .filter(auth_user::ID.eq(id.user_id) & auth_user::IS_ACTIVE.eq(true))
+        .filter(auth_user::ID.eq(auth_user_id) & auth_user::IS_ACTIVE.eq(true))
         .first()
         .await
     {

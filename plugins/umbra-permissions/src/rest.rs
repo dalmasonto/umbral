@@ -90,14 +90,21 @@ impl<A: Authentication> Authentication for WithPermissions<A> {
         // Pull `is_superuser` off the user row. A None return here
         // is "user vanished between authenticate and now," which
         // shouldn't be fatal — fall through and treat as non-super.
-        let is_superuser = Manager::<AuthUser>::default()
-            .filter(Predicate::<AuthUser>::col_eq("id", identity.user_id))
-            .first()
-            .await
-            .ok()
-            .flatten()
-            .map(|u| u.is_superuser)
-            .unwrap_or(false);
+        // The default `AuthUser` keys by i64; custom user models can
+        // key by any string, so parse on the way in and skip the
+        // lookup if the PK doesn't fit (the codename grants below
+        // still work, since `user_perms` already speaks strings).
+        let is_superuser = match identity.user_id.parse::<i64>() {
+            Ok(auth_user_id) => Manager::<AuthUser>::default()
+                .filter(Predicate::<AuthUser>::col_eq("id", auth_user_id))
+                .first()
+                .await
+                .ok()
+                .flatten()
+                .map(|u| u.is_superuser)
+                .unwrap_or(false),
+            Err(_) => false,
+        };
         identity.extras.insert(
             "is_superuser".to_string(),
             serde_json::Value::Bool(is_superuser),
@@ -107,7 +114,7 @@ impl<A: Authentication> Authentication for WithPermissions<A> {
         // bypass every codename check, so the codename list isn't
         // load-bearing for them.
         if !is_superuser {
-            if let Ok(perms) = crate::user_perms(identity.user_id).await {
+            if let Ok(perms) = crate::user_perms(&identity.user_id).await {
                 let arr: Vec<serde_json::Value> =
                     perms.into_iter().map(serde_json::Value::String).collect();
                 identity
