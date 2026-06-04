@@ -764,6 +764,17 @@ impl<'a> DynQuerySet<'a> {
                 for col in &self.meta.fields {
                     out.insert(col.name.clone(), decode_to_json(&row, col)?);
                 }
+                // Phase 2 — write junction rows for every M2M
+                // relation the body carried. Validation has
+                // already confirmed the array shape + element
+                // existence; we just have to mirror the ids into
+                // the auto-generated `<table>_<field>` table.
+                let pk_value = out.get(&pk_name).cloned();
+                write_m2m_junctions(&self.meta, pk_value.as_ref(), body).await?;
+                // Phase 3 — hydrate M2M arrays back into the
+                // response so the caller sees `tags: [1, 2]`
+                // instead of an empty echo.
+                hydrate_m2m_into(&self.meta, pk_value.as_ref(), &mut out).await?;
                 Ok(out)
             }
             DbPool::Postgres(pool) => {
@@ -781,6 +792,9 @@ impl<'a> DynQuerySet<'a> {
                 for col in &self.meta.fields {
                     out.insert(col.name.clone(), decode_pg_to_json(&row, col)?);
                 }
+                let pk_value = out.get(&pk_name).cloned();
+                write_m2m_junctions(&self.meta, pk_value.as_ref(), body).await?;
+                hydrate_m2m_into(&self.meta, pk_value.as_ref(), &mut out).await?;
                 Ok(out)
             }
         }
@@ -877,29 +891,62 @@ impl<'a> DynQuerySet<'a> {
             q.value(Alias::new(&col.name), sea_value);
             any = true;
         }
-        if !any {
+        // Detect whether the body wants to touch any M2M
+        // relations. If so, we'll write junctions *after* the
+        // UPDATE — and we'll need to know the matched parent
+        // PKs even when no regular columns are being changed.
+        let touches_m2m = self
+            .meta
+            .m2m_relations
+            .iter()
+            .any(|r| body.contains_key(&r.field_name));
+        if !any && !touches_m2m {
             return Ok(0);
         }
         for cond in &self.where_clauses {
             q.cond_where(cond.clone());
         }
+        // Find every parent_id matched by the filter so we can
+        // mirror the M2M arrays into each one's junction. Done
+        // BEFORE the UPDATE so a no-op (any = false, touches_m2m
+        // = true) still gets the M2M write.
+        let parent_pks: Vec<serde_json::Value> = if touches_m2m {
+            match self.meta.pk_column() {
+                Some(pk_col) => {
+                    collect_parent_pks(&self.meta, pk_col, &self.where_clauses).await?
+                }
+                None => Vec::new(),
+            }
+        } else {
+            Vec::new()
+        };
 
         match pool_dispatched() {
             DbPool::Sqlite(pool) => {
-                let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
-                let res = sqlx::query_with(&sql, values)
-                    .execute(pool)
-                    .await
-                    .map_err(|e| classify_or_sqlx(e, body))?;
-                Ok(res.rows_affected())
+                if any {
+                    let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
+                    sqlx::query_with(&sql, values)
+                        .execute(pool)
+                        .await
+                        .map_err(|e| classify_or_sqlx(e, body))?;
+                }
+                for pk in &parent_pks {
+                    write_m2m_junctions(&self.meta, Some(pk), body).await?;
+                }
+                Ok(parent_pks.len().max(if any { 1 } else { 0 }) as u64)
             }
             DbPool::Postgres(pool) => {
-                let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
-                let res = sqlx::query_with(&sql, values)
-                    .execute(pool)
-                    .await
-                    .map_err(|e| classify_or_sqlx(e, body))?;
-                Ok(res.rows_affected())
+                if any {
+                    let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
+                    sqlx::query_with(&sql, values)
+                        .execute(pool)
+                        .await
+                        .map_err(|e| classify_or_sqlx(e, body))?;
+                }
+                for pk in &parent_pks {
+                    write_m2m_junctions(&self.meta, Some(pk), body).await?;
+                }
+                Ok(parent_pks.len().max(if any { 1 } else { 0 }) as u64)
             }
         }
     }
@@ -1353,4 +1400,166 @@ fn classify_or_sqlx(
         return classified;
     }
     crate::orm::write::WriteError::Sqlx(e)
+}
+
+/// Convert a JSON PK-shaped value (number or string) into a
+/// `sea_query::Value` usable as a junction-table binding. Returns
+/// `None` for shapes we don't know how to bind (arrays, objects,
+/// booleans) — those won't reach here because
+/// `validate_m2m_relations` rejects them upstream.
+fn json_pk_to_sea(v: &serde_json::Value) -> Option<sea_query::Value> {
+    match v {
+        serde_json::Value::Number(n) => n.as_i64().map(|i| sea_query::Value::BigInt(Some(i))),
+        serde_json::Value::String(s) => {
+            Some(sea_query::Value::String(Some(Box::new(s.clone()))))
+        }
+        _ => None,
+    }
+}
+
+/// Read every M2M relation off its junction table and attach
+/// the resulting `child_id` arrays to `out` under each relation's
+/// field name. Called from `insert_json` / `update_json`'s read-
+/// back path so the response JSON includes the relations the
+/// caller just wrote (otherwise the `tags: [1, 2]` they POSTed
+/// would never appear in the response, since `M2M<T>` is
+/// `#[serde(skip)]` on the parent struct).
+async fn hydrate_m2m_into(
+    meta: &crate::migrate::ModelMeta,
+    parent_pk_json: Option<&serde_json::Value>,
+    out: &mut serde_json::Map<String, serde_json::Value>,
+) -> Result<(), crate::orm::write::WriteError> {
+    if meta.m2m_relations.is_empty() {
+        return Ok(());
+    }
+    let Some(parent_pk_value) = parent_pk_json.and_then(json_pk_to_sea) else {
+        return Ok(());
+    };
+    for rel in &meta.m2m_relations {
+        let junction_table = format!("{}_{}", meta.table, rel.field_name);
+        let mut sel = Query::select();
+        sel.from(Alias::new(&junction_table));
+        sel.column(Alias::new("child_id"));
+        sel.and_where(Expr::col(Alias::new("parent_id")).eq(parent_pk_value.clone()));
+        let children: Vec<serde_json::Value> = match pool_dispatched() {
+            DbPool::Sqlite(pool) => {
+                let (sql, values) = sel.build_sqlx(SqliteQueryBuilder);
+                let rows = sqlx::query_with(&sql, values).fetch_all(pool).await?;
+                rows.iter()
+                    .map(|r| {
+                        r.try_get::<i64, _>("child_id")
+                            .map(|i| serde_json::Value::Number(i.into()))
+                            .or_else(|_| {
+                                r.try_get::<String, _>("child_id")
+                                    .map(serde_json::Value::String)
+                            })
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(crate::orm::write::WriteError::Sqlx)?
+            }
+            DbPool::Postgres(pool) => {
+                let (sql, values) = sel.build_sqlx(PostgresQueryBuilder);
+                let rows = sqlx::query_with(&sql, values).fetch_all(pool).await?;
+                rows.iter()
+                    .map(|r| {
+                        r.try_get::<i64, _>("child_id")
+                            .map(|i| serde_json::Value::Number(i.into()))
+                            .or_else(|_| {
+                                r.try_get::<String, _>("child_id")
+                                    .map(serde_json::Value::String)
+                            })
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(crate::orm::write::WriteError::Sqlx)?
+            }
+        };
+        out.insert(rel.field_name.clone(), serde_json::Value::Array(children));
+    }
+    Ok(())
+}
+
+/// Run `SELECT <pk> FROM <table> WHERE <conds>` to find every
+/// row the dynamic UPDATE would touch. Returns each matched PK
+/// as the raw JSON value the parent table holds — number for
+/// integer PKs, string for UUID / String PKs. Used by
+/// `update_json` so we know which junction-table parent_ids
+/// to write to even when the body has no regular column changes.
+async fn collect_parent_pks(
+    meta: &crate::migrate::ModelMeta,
+    pk_col: &crate::migrate::Column,
+    where_clauses: &[Condition],
+) -> Result<Vec<serde_json::Value>, crate::orm::write::WriteError> {
+    let mut sel = Query::select();
+    sel.from(Alias::new(&meta.table));
+    sel.column(Alias::new(&pk_col.name));
+    for cond in where_clauses {
+        sel.cond_where(cond.clone());
+    }
+    match pool_dispatched() {
+        DbPool::Sqlite(pool) => {
+            let (sql, values) = sel.build_sqlx(SqliteQueryBuilder);
+            let rows = sqlx::query_with(&sql, values).fetch_all(pool).await?;
+            rows.iter()
+                .map(|row| decode_to_json(row, pk_col))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(crate::orm::write::WriteError::Sqlx)
+        }
+        DbPool::Postgres(pool) => {
+            let (sql, values) = sel.build_sqlx(PostgresQueryBuilder);
+            let rows = sqlx::query_with(&sql, values).fetch_all(pool).await?;
+            rows.iter()
+                .map(|row| decode_pg_to_json(row, pk_col))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(crate::orm::write::WriteError::Sqlx)
+        }
+    }
+}
+
+/// Mirror each M2M field in `body` into its junction table for
+/// the given parent PK. Validation has already confirmed array
+/// shape + child existence, so this is a straight write —
+/// `set_junction_dynamic` wipes any existing rows for the
+/// parent and re-inserts the supplied ids inside a transaction.
+///
+/// `parent_pk_json` is the JSON value the parent row holds at
+/// its PK column (read straight off the post-INSERT row). When
+/// it's `None` or unparseable we silently skip — there's nothing
+/// to anchor the junction to.
+async fn write_m2m_junctions(
+    meta: &crate::migrate::ModelMeta,
+    parent_pk_json: Option<&serde_json::Value>,
+    body: &serde_json::Map<String, serde_json::Value>,
+) -> Result<(), crate::orm::write::WriteError> {
+    if meta.m2m_relations.is_empty() {
+        return Ok(());
+    }
+    let Some(parent_pk_value) = parent_pk_json.and_then(json_pk_to_sea) else {
+        return Ok(());
+    };
+    for rel in &meta.m2m_relations {
+        let Some(value) = body.get(&rel.field_name) else {
+            continue;
+        };
+        let Some(items) = value.as_array() else {
+            continue; // shape was validated upstream
+        };
+        let mut child_ids: Vec<sea_query::Value> = Vec::with_capacity(items.len());
+        for item in items {
+            if item.is_null() {
+                continue;
+            }
+            if let Some(v) = json_pk_to_sea(item) {
+                child_ids.push(v);
+            }
+        }
+        let junction_table = format!("{}_{}", meta.table, rel.field_name);
+        crate::orm::m2m::set_junction_dynamic(
+            &junction_table,
+            parent_pk_value.clone(),
+            child_ids,
+        )
+        .await
+        .map_err(crate::orm::write::WriteError::Sqlx)?;
+    }
+    Ok(())
 }
