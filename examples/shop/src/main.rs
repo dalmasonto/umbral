@@ -10,6 +10,10 @@
 //!   cargo run -- showmigrations
 //!   cargo run -- createsuperuser
 
+mod auth;
+
+use std::sync::Arc;
+
 use content::ContentPlugin;
 use ecommerce::EcommercePlugin;
 use umbra::migrate::MigrateError;
@@ -17,12 +21,17 @@ use umbra::prelude::*;
 use umbra::templates::context;
 use umbra::web::{Html, Path, SlashRedirect, StatusCode};
 use umbra_admin::AdminPlugin;
-use umbra_auth::{AuthPlugin, AuthUser, UserModel, login_required_html};
+use umbra_auth::{AuthPlugin, AuthUser, BearerAuthentication, UserModel, login_required_html};
 use umbra_openapi::OpenApiPlugin;
 use umbra_permissions::{PermissionsPlugin, permission_required_html};
 use umbra_playground::PlaygroundPlugin;
-use umbra_rest::{PageNumberPagination, ResourceConfig, RestPlugin};
+use umbra_rest::{
+    Authentication, ChainAuthentication, IsAuthenticated, IsStaff, OrPermission,
+    PageNumberPagination, ReadOnly, ResourceConfig, RestPlugin,
+};
 use umbra_sessions::SessionsPlugin;
+
+use crate::auth::{TokenSchemeAuthentication, session_authentication};
 
 use content::models::{Category, Comment, Post, PostStatus, Tag};
 use ecommerce::models::{Brand, Currency, Product, ProductStatus, brand, product};
@@ -53,12 +62,47 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .plugin(ContentPlugin)
         .plugin(EcommercePlugin)
         .plugin(AdminPlugin::default())
+        // REST: three resources, three different auth + permission
+        // postures, plus per-resource field-exposure controls. The
+        // global authenticator is a CHAIN — try session first (browsers
+        // get cookies), then Bearer, then the custom `Token <T>`
+        // scheme. Whichever matches yields the same Identity shape; the
+        // per-resource Permission decides what they can do.
         .plugin(
             RestPlugin::default()
                 .paginate(PageNumberPagination::new(20))
-                .resource(ResourceConfig::new("product"))
-                .resource(ResourceConfig::new("order"))
-                .resource(ResourceConfig::new("post")),
+                .authenticate(ChainAuthentication::new(vec![
+                    Arc::new(session_authentication()) as Arc<dyn Authentication>,
+                    Arc::new(BearerAuthentication::default()) as Arc<dyn Authentication>,
+                    Arc::new(TokenSchemeAuthentication::default()) as Arc<dyn Authentication>,
+                ]))
+                // product: anyone can read, only staff can write.
+                // `cost` is internal margin data — never leaks out.
+                // Combined with #[umbra(noform)] / noedit on the model
+                // this would also lock the field on the write path.
+                .resource(
+                    ResourceConfig::new("product")
+                        .hide("cost")
+                        .permission(OrPermission::new(vec![
+                            Box::new(ReadOnly),
+                            Box::new(IsStaff),
+                        ])),
+                )
+                // order: every action requires an authenticated caller
+                // (the cookie path is the realistic one for a real
+                // shop; bearer / token are convenient for curl smoke
+                // testing).
+                .resource(ResourceConfig::new("order").permission(IsAuthenticated))
+                // post: same public-read + staff-write shape as
+                // product. Demonstrates the *custom* Token scheme:
+                // POST /api/post/ with `Authorization: Token <key>`
+                // lands here through the chain authenticator.
+                .resource(
+                    ResourceConfig::new("post").permission(OrPermission::new(vec![
+                        Box::new(ReadOnly),
+                        Box::new(IsStaff),
+                    ])),
+                ),
         )
         .plugin(OpenApiPlugin::new())
         .plugin(PlaygroundPlugin::new("shop"))
@@ -89,6 +133,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     if is_serve_invocation() {
         auto_migrate().await?;
+        seed_test_credentials().await?;
         seed_products().await?;
         seed_blogs().await?;
     }
@@ -187,6 +232,61 @@ async fn auto_migrate() -> Result<(), Box<dyn std::error::Error + Send + Sync>> 
     if n > 0 {
         eprintln!("auto-migrate: applied {n} migration(s)");
     }
+    Ok(())
+}
+
+/// First-run convenience for gap #82 manual testing: when no users
+/// exist yet, mint a deterministic superuser ("shopadmin" /
+/// "shopadmin") plus a bearer token, and print both to stderr so
+/// the developer can curl the gated endpoints without leaving the
+/// terminal. Idempotent — subsequent boots find the user, skip the
+/// create, and stay quiet.
+///
+/// NEVER ship this in production. It's a test scaffold; production
+/// would call `createsuperuser` interactively.
+async fn seed_test_credentials() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use umbra_auth::AuthUser;
+    use umbra_auth::token::AuthToken;
+
+    if AuthUser::objects().count().await? > 0 {
+        return Ok(());
+    }
+
+    let user = umbra_auth::create_superuser("shopadmin", "shopadmin@example.com", "shopadmin")
+        .await
+        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+    let (_row, token) = AuthToken::create_for(&user, "shop-demo")
+        .await
+        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+
+    eprintln!();
+    eprintln!("======================================================================");
+    eprintln!(" TEST CREDENTIALS — seeded because no users existed yet (gap #82)");
+    eprintln!("----------------------------------------------------------------------");
+    eprintln!(" Username : shopadmin");
+    eprintln!(" Password : shopadmin");
+    eprintln!(" Token    : {token}");
+    eprintln!();
+    eprintln!(" Try a public read (no auth):");
+    eprintln!("   curl -s http://localhost:8000/api/product/?fields=id,name,price | jq");
+    eprintln!();
+    eprintln!(" Try a Bearer-gated write:");
+    eprintln!("   curl -X DELETE -H 'Authorization: Bearer {token}' \\");
+    eprintln!("        http://localhost:8000/api/product/1");
+    eprintln!();
+    eprintln!(" Try the CUSTOM `Token` scheme on a blog post:");
+    eprintln!("   curl -X DELETE -H 'Authorization: Token {token}' \\");
+    eprintln!("        http://localhost:8000/api/post/1");
+    eprintln!();
+    eprintln!(" Try anonymous write (expect 401):");
+    eprintln!("   curl -X DELETE http://localhost:8000/api/product/1");
+    eprintln!();
+    eprintln!(" Try order (any auth required, even read):");
+    eprintln!("   curl -H 'Authorization: Bearer {token}' \\");
+    eprintln!("        http://localhost:8000/api/order/");
+    eprintln!("======================================================================");
+    eprintln!();
+
     Ok(())
 }
 
