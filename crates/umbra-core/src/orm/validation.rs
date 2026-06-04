@@ -50,6 +50,7 @@ pub async fn validate_on_create(
 ) -> Vec<WriteError> {
     let mut errors = validate_required_create(meta, body);
     errors.extend(validate_choices(meta, body));
+    errors.extend(validate_m2m_relations(meta, body).await);
     let mut fk_errors = validate_fk_references(meta, body).await;
     let fk_fields: std::collections::HashSet<String> = fk_errors
         .iter()
@@ -80,6 +81,7 @@ pub async fn validate_on_update(
 ) -> Vec<WriteError> {
     let mut errors = validate_required_update(meta, body);
     errors.extend(validate_choices(meta, body));
+    errors.extend(validate_m2m_relations(meta, body).await);
     let mut fk_errors = validate_fk_references(meta, body).await;
     let fk_fields: std::collections::HashSet<String> = fk_errors
         .iter()
@@ -270,6 +272,110 @@ fn validate_choices(meta: &ModelMeta, body: &Map<String, Value>) -> Vec<WriteErr
         });
     }
     out
+}
+
+/// Validate every M2M relation on the parent.
+///
+/// `Post.tags: M2M<Tag>` doesn't live on `model.fields` (it has
+/// no column on `post`); it lives on `model.m2m_relations`. Two
+/// failure modes:
+///
+/// - **Shape**: the body value must be an array (or null /
+///   missing). `tags: 1` is wrong — caught as a structured type
+///   error keyed under the M2M field name.
+/// - **Existence**: every id in the array must reference a real
+///   row in the target table. Missing rows surface keyed under
+///   the M2M field with the full list of bad ids.
+///
+/// Both messages name the offending value so the client knows
+/// exactly what to fix.
+async fn validate_m2m_relations(meta: &ModelMeta, body: &Map<String, Value>) -> Vec<WriteError> {
+    let mut out = Vec::new();
+    for rel in &meta.m2m_relations {
+        let Some(value) = body.get(&rel.field_name) else {
+            continue;
+        };
+        if value.is_null() {
+            continue;
+        }
+        // Shape: must be an array.
+        let Some(items) = value.as_array() else {
+            out.push(WriteError::Validator {
+                field: rel.field_name.clone(),
+                message: format!(
+                    "Expected an array of `{}` ids, got {}.",
+                    rel.target_name,
+                    json_kind(value),
+                ),
+            });
+            continue;
+        };
+        // Skip the registry lookup when there's nothing to check
+        // — also avoids touching the registry in unit tests that
+        // exercise the shape branch without booting an App.
+        let to_check: Vec<&Value> = items.iter().filter(|v| !v.is_null()).collect();
+        if to_check.is_empty() {
+            continue;
+        }
+        // Existence: each id in the array must reference a real
+        // row in the target table.
+        let Some(target_meta) = model_meta_by_table(&rel.target_table) else {
+            // Target not registered; fall back to silent skip —
+            // the migration engine would have caught a real
+            // typo at boot.
+            continue;
+        };
+        let mut missing: Vec<Value> = Vec::new();
+        for item in to_check {
+            if !check_fk_row_exists(&target_meta, item).await {
+                missing.push(item.clone());
+            }
+        }
+        if !missing.is_empty() {
+            let listed = missing
+                .iter()
+                .map(repr_json_value_local)
+                .collect::<Vec<_>>()
+                .join(", ");
+            out.push(WriteError::Validator {
+                field: rel.field_name.clone(),
+                message: format!(
+                    "Some referenced `{}` rows do not exist: {listed}.",
+                    rel.target_name,
+                ),
+            });
+        }
+    }
+    out
+}
+
+/// Lightweight string label for the JSON value's kind. Used in
+/// shape-mismatch messages so the response reads
+/// "got number" / "got object" instead of leaking the full
+/// rendered value.
+fn json_kind(v: &Value) -> &'static str {
+    match v {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
+/// Same shape as the `repr_json_value` helper in `write.rs` but
+/// usable inside this module without an extra pub. Strings get
+/// quoted; numbers / bools / null bare; arrays / objects fall
+/// back to compact JSON.
+fn repr_json_value_local(v: &Value) -> String {
+    match v {
+        Value::String(s) => format!("'{s}'"),
+        Value::Number(n) => n.to_string(),
+        Value::Bool(b) => b.to_string(),
+        Value::Null => "null".to_string(),
+        _ => serde_json::to_string(v).unwrap_or_else(|_| "(?)".to_string()),
+    }
 }
 
 async fn validate_fk_references(
@@ -505,5 +611,89 @@ mod tests {
         let mut body = serde_json::Map::new();
         body.insert("name".into(), serde_json::Value::String("anything".into()));
         assert!(validate_choices(&meta, &body).is_empty());
+    }
+
+    // -------------------------------------------------------------
+    // M2M shape validation. The existence check needs a registered
+    // ModelMeta on the target table — not feasible here without
+    // booting an App, so we exercise the shape branch only. The
+    // happy-path FK-existence behaviour is covered by the live
+    // integration tests in the REST plugin.
+    // -------------------------------------------------------------
+
+    fn meta_with_m2m(field_name: &str, target_table: &str, target_name: &str) -> ModelMeta {
+        let mut meta = meta_with(vec![]);
+        meta.m2m_relations.push(crate::migrate::M2MRelation {
+            field_name: field_name.to_string(),
+            target_table: target_table.to_string(),
+            target_name: target_name.to_string(),
+        });
+        meta
+    }
+
+    #[tokio::test]
+    async fn m2m_rejects_a_scalar_where_an_array_was_expected() {
+        let meta = meta_with_m2m("tags", "tag", "Tag");
+        let mut body = serde_json::Map::new();
+        // `tags: 1` is the bug — a scalar where an array of ids
+        // belongs. The framework should call this out, not let
+        // the value silently disappear.
+        body.insert("tags".into(), serde_json::Value::Number(1.into()));
+        let errors = validate_m2m_relations(&meta, &body).await;
+        assert_eq!(errors.len(), 1, "expected one shape error, got {errors:?}");
+        match &errors[0] {
+            WriteError::Validator { field, message } => {
+                assert_eq!(field, "tags");
+                assert!(
+                    message.contains("array")
+                        && message.contains("Tag")
+                        && message.contains("number"),
+                    "message should name the expected shape, the target, and \
+                     the kind of the bad value; got {message:?}",
+                );
+            }
+            other => panic!("expected Validator, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn m2m_accepts_an_empty_array() {
+        let meta = meta_with_m2m("tags", "tag", "Tag");
+        let mut body = serde_json::Map::new();
+        body.insert("tags".into(), serde_json::Value::Array(Vec::new()));
+        // Empty array is the "no children selected" shape — must
+        // not produce an error; the framework just won't write any
+        // junction rows.
+        assert!(validate_m2m_relations(&meta, &body).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn m2m_skips_null_and_missing_values() {
+        let meta = meta_with_m2m("tags", "tag", "Tag");
+        // Missing key — required-field path is the right home for
+        // this (and M2M slots aren't required). Skipped here.
+        assert!(validate_m2m_relations(&meta, &serde_json::Map::new())
+            .await
+            .is_empty());
+        // Explicit null — same.
+        let mut body = serde_json::Map::new();
+        body.insert("tags".into(), serde_json::Value::Null);
+        assert!(validate_m2m_relations(&meta, &body).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn m2m_rejects_an_object_too() {
+        let meta = meta_with_m2m("tags", "tag", "Tag");
+        let mut body = serde_json::Map::new();
+        body.insert("tags".into(), serde_json::json!({ "id": 1 }));
+        let errors = validate_m2m_relations(&meta, &body).await;
+        assert_eq!(errors.len(), 1);
+        match &errors[0] {
+            WriteError::Validator { field, message } => {
+                assert_eq!(field, "tags");
+                assert!(message.contains("object"));
+            }
+            other => panic!("expected Validator, got {other:?}"),
+        }
     }
 }
