@@ -69,7 +69,14 @@ use umbra::orm::{ForeignKey, M2M};
 #[umbra(
     table = "permissions_contenttype",
     display = "Content types",
-    icon = "list"
+    icon = "list",
+    // (app_label, model) globally identifies a content type — two
+    // rows with the same pair would let two Permission rows with the
+    // same `<app>.<codename>` point at different `content_type_id`,
+    // silently breaking the perm-name → ContentType lookup. The
+    // unique_together makes the invariant a DB-level guarantee
+    // instead of a polite convention enforced by on_ready.
+    unique_together = [["app_label", "model"]]
 )]
 pub struct ContentType {
     pub id: i64,
@@ -110,8 +117,10 @@ pub struct Permission {
     #[umbra(primary_key, string, noedit, max_length = 150)]
     pub codename: String,
     /// Which model this permission is scoped to. Re-targeting is a
-    /// delete-and-create, not an edit.
-    #[umbra(noedit)]
+    /// delete-and-create, not an edit. Indexed because admin's
+    /// "show all permissions for this content type" view filters here
+    /// — without an index every page-load full-scans the table.
+    #[umbra(noedit, index)]
     pub content_type_id: ForeignKey<ContentType>,
     /// Human-readable label shown in the admin. Examples: `"Can publish post"`,
     /// `"Can add post"`. Editable — it's display text, no code reads it.
@@ -136,8 +145,11 @@ pub struct Group {
     /// Capped at 150 chars — admin renders a single-line input with
     /// `maxlength=150`, mirroring a SQL `VARCHAR(150)` length cap. The
     /// `string` flag marks this as the row's `__str__` representation
-    /// for FK pickers.
-    #[umbra(string, max_length = 150)]
+    /// for FK pickers. UNIQUE because two groups with the same name
+    /// would make the admin sidebar ambiguous and break the typical
+    /// `Group::objects().filter(name.eq("editors")).get()` lookup
+    /// (`MultipleObjectsReturned`).
+    #[umbra(string, unique, max_length = 150)]
     pub name: String,
     /// Free-form description of what the group is for. Nullable so a
     /// just-created group can skip it; the admin renders a textarea
@@ -179,12 +191,22 @@ pub struct Group {
 #[umbra(
     table = "permissions_usergroup",
     display = "User groups",
-    icon = "user-check"
+    icon = "user-check",
+    // Membership is a set, not a multiset: a user is either in a
+    // group or not, never "in twice." Without this constraint the
+    // admin's "+ Add" could create duplicate membership rows that
+    // make `user_perms` return the same codename twice (HashSet
+    // de-dupes it, but the redundant rows still pollute the table).
+    unique_together = [["user_id", "group_id"]]
 )]
 pub struct UserGroup {
     pub id: i64,
-    /// The `UserModel::id()` of the user. User-defined membership;
+    /// The `UserModel::id()` of the user. Indexed because every
+    /// `has_perm(user_id, ...)` query starts with "what groups is
+    /// this user in?" — that's a `WHERE user_id = ?` on this table
+    /// on the perm-check hot path. User-defined membership;
     /// staff users reassign through the admin.
+    #[umbra(index)]
     pub user_id: i64,
     pub group_id: ForeignKey<Group>,
 }
@@ -197,12 +219,18 @@ pub struct UserGroup {
 #[umbra(
     table = "permissions_userpermission",
     display = "User permissions",
-    icon = "user-cog"
+    icon = "user-cog",
+    // Same set-not-multiset reasoning as `UserGroup`: a user holds a
+    // permission directly or not, never "twice."
+    unique_together = [["user_id", "permission_id"]]
 )]
 pub struct UserPermission {
     pub id: i64,
-    /// The `UserModel::id()` of the user. User-defined direct grant;
-    /// staff users reassign through the admin.
+    /// The `UserModel::id()` of the user. Indexed for the
+    /// `has_perm` direct-grant path (`WHERE user_id = ?`), the
+    /// step-1 query of every permission check. User-defined direct
+    /// grant; staff users reassign through the admin.
+    #[umbra(index)]
     pub user_id: i64,
     pub permission_id: ForeignKey<Permission>,
 }

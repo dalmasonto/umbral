@@ -10,11 +10,11 @@
 //!
 //! | Model | Table | Purpose |
 //! |---|---|---|
-//! | `ContentType` | `permissions_contenttype` | One row per Model (app_label + model name) |
-//! | `Permission` | `permissions_permission` | One row per (ContentType, codename) |
-//! | `Group` | `permissions_group` | Named collection of permissions |
-//! | `UserGroup` | `permissions_usergroup` | Explicit join: users ↔ groups |
-//! | `UserPermission` | `permissions_userpermission` | Explicit join: users ↔ permissions (direct) |
+//! | `ContentType` | `permissions_contenttype` | One row per Model. `UNIQUE (app_label, model)` |
+//! | `Permission` | `permissions_permission` | One row per (ContentType, codename). PK is the composite codename string; `content_type_id` indexed |
+//! | `Group` | `permissions_group` | Named collection of permissions. `UNIQUE (name)` |
+//! | `UserGroup` | `permissions_usergroup` | Explicit join: users ↔ groups. `UNIQUE (user_id, group_id)`; `user_id` indexed |
+//! | `UserPermission` | `permissions_userpermission` | Explicit join: users ↔ permissions (direct). `UNIQUE (user_id, permission_id)`; `user_id` indexed |
 //!
 //! Plus one framework-managed M2M junction:
 //!
