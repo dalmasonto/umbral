@@ -226,7 +226,10 @@ pub struct M2MRelationSpec {
 /// }
 /// impl umbra::orm::PrimaryKey for UserId {}
 /// ```
-pub trait PrimaryKey: Clone + Send + Sync + 'static + Into<sea_query::Value> {}
+pub trait PrimaryKey:
+    Clone + Send + Sync + 'static + Into<sea_query::Value> + std::fmt::Display
+{
+}
 
 // Integer widths sea-query has Value variants for. Postgres exposes
 // SMALLINT / INT / BIGINT for the signed half; the unsigned widths

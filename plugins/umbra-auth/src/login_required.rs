@@ -207,6 +207,12 @@ where
         + umbra::orm::HydrateRelated
         + Unpin
         + Send,
+    // The session-row parse step is the bit that needs FromStr —
+    // an `i64`, `Uuid`, `String`, or hand-rolled PK type all
+    // implement it for free; a future PK shape with no string
+    // representation would have to override `id_string` AND
+    // provide a `FromStr` mirror to keep this extractor happy.
+    <U as umbra::orm::Model>::PrimaryKey: std::str::FromStr,
     S: Send + Sync,
 {
     type Rejection = Response;
@@ -258,11 +264,18 @@ fn cookie_from_headers(headers: &http::HeaderMap) -> Option<String> {
 /// `UserModel` reach for the latter from their own handlers when
 /// the AuthUser-flavoured [`crate::current_user`] doesn't fit.
 ///
-/// Conventions assumed: `U` has an `id` column matching the value
-/// stored on the session row (v1 fixes that to i64 via
-/// [`current_session_user_id`]), and an `is_active` boolean column
-/// the filter excludes deactivated rows on. Custom user models that
-/// rename either column write their own resolver against
+/// **Polymorphic over `U::PrimaryKey`** — the session row stores
+/// the user PK as text (gap #59); we parse it back to the typed PK
+/// via `FromStr` before feeding it to the ORM, so a `UuidUser`
+/// stays UUID-shaped on the WHERE clause and an `AuthUser` stays
+/// `i64`-shaped. There is no `parse::<i64>()` hardcoded anywhere
+/// in the framework's session-read path; the typed PK threads
+/// through verbatim.
+///
+/// Conventions assumed: `U` has an `id` column populated by the
+/// model's PK type, and an `is_active` boolean column the filter
+/// excludes deactivated rows on. Custom user models that rename
+/// either column write their own resolver against
 /// [`umbra_sessions::current_user_id_str`] instead.
 pub async fn resolve_user<U>(headers: &http::HeaderMap) -> Option<U>
 where
@@ -272,8 +285,9 @@ where
         + umbra::orm::HydrateRelated
         + Unpin
         + Send,
+    <U as umbra::orm::Model>::PrimaryKey: std::str::FromStr,
 {
-    let user_id = current_session_user_id(headers).await?;
+    let user_id = current_session_user_pk::<U>(headers).await?;
     umbra::orm::Manager::<U>::default()
         .filter(
             umbra::orm::Predicate::<U>::col_eq("id", user_id)
@@ -285,22 +299,23 @@ where
         .flatten()
 }
 
-/// Check whether headers carry a valid authenticated session.
-/// Returns `true` iff a valid, non-expired, non-anonymous session is present.
-pub(crate) async fn is_authenticated(headers: &http::HeaderMap) -> bool {
-    current_session_user_id(headers).await.is_some()
-}
-
-/// Resolve the `umbra_session` cookie in `headers` to the authenticated
-/// `user_id`. Returns `None` for missing cookie, expired session, anonymous
-/// session, or any sqlx error.
+/// Read the request's session cookie and resolve it to the
+/// authenticated user's TYPED primary key. The generic version of
+/// [`current_session_user_id`]; this is what [`resolve_user`] and
+/// the future `permission_required_as<U>` build on.
 ///
-/// This is the primitive `permission_required` (in `umbra-permissions`)
-/// builds on — it needs the user id to feed into `has_perm`, but does NOT
-/// need to hydrate the full user struct. Exposed pub so plugins that need
-/// session-aware logic don't have to duplicate the cookie-hash-and-query
-/// path.
-pub async fn current_session_user_id(headers: &http::HeaderMap) -> Option<i64> {
+/// Parses the text `session.user_id` (gap #59) via
+/// `<U::PrimaryKey as FromStr>::from_str`. A non-parseable value
+/// (the row was written by a different `UserModel` impl) resolves
+/// to `None` — same as missing cookie or expired session, so the
+/// caller's "anonymous" branch fires.
+pub async fn current_session_user_pk<U>(
+    headers: &http::HeaderMap,
+) -> Option<<U as umbra::orm::Model>::PrimaryKey>
+where
+    U: UserModel,
+    <U as umbra::orm::Model>::PrimaryKey: std::str::FromStr,
+{
     let raw_token = cookie_from_headers(headers)?;
     let stored_id = hash_token(&raw_token);
     let row: Option<SessionRow> = umbra::orm::Manager::<SessionRow>::default()
@@ -310,15 +325,32 @@ pub async fn current_session_user_id(headers: &http::HeaderMap) -> Option<i64> {
         .ok()
         .flatten();
     let row = row?;
-    // Session.user_id is text post-gap-#59. Parse the stored value
-    // back to i64 — that's the AuthUser PK shape this helper
-    // supports. A non-parseable value (e.g. session written by a
-    // different UserModel impl) resolves to "no AuthUser id."
-    let user_id: i64 = row.user_id?.parse().ok()?;
     if row.expires_at < Utc::now() {
         return None;
     }
-    Some(user_id)
+    row.user_id?.parse().ok()
+}
+
+/// Check whether headers carry a valid authenticated session.
+/// Returns `true` iff a valid, non-expired, non-anonymous session is present.
+pub(crate) async fn is_authenticated(headers: &http::HeaderMap) -> bool {
+    current_session_user_id(headers).await.is_some()
+}
+
+/// Resolve the `umbra_session` cookie in `headers` to the
+/// authenticated user's `i64` PK — the AuthUser-specific shorthand
+/// for [`current_session_user_pk::<AuthUser>`]. Returns `None` for
+/// missing cookie, expired session, anonymous session, a
+/// non-parseable `user_id` (session written by a non-AuthUser
+/// model), or any sqlx error.
+///
+/// This is the primitive `permission_required` (in `umbra-permissions`)
+/// builds on. Callers using a custom user model reach for
+/// [`current_session_user_pk`] (the typed generic) or
+/// [`umbra_sessions::current_user_id_str`] (the raw string)
+/// instead — both stay polymorphic over the active user model's PK.
+pub async fn current_session_user_id(headers: &http::HeaderMap) -> Option<i64> {
+    current_session_user_pk::<crate::AuthUser>(headers).await
 }
 
 /// Private mirror of `umbra_sessions::Session`. Lives here because

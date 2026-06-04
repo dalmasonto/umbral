@@ -71,8 +71,12 @@ impl Authentication for TokenSchemeAuthentication {
         // private helper inside umbra-auth; an external custom auth
         // backend either skips the update (this demo) or reaches
         // for an ORM-level update on the row.
+        //
+        // `id_string()` is the polymorphic UserModel-level
+        // stringifier — stays correct even if the app swaps
+        // AuthUser for a custom user model with a non-i64 PK.
         Some(
-            Identity::user(user.id)
+            Identity::user(UserModel::id_string(&user))
                 .with_staff(user.is_staff)
                 .with_extra("auth", serde_json::json!("token-scheme")),
         )
@@ -111,7 +115,7 @@ pub fn session_authentication() -> FnAuthentication {
     FnAuthentication::new(|headers| async move {
         let user = umbra_auth::current_user(&headers).await.ok().flatten()?;
         Some(
-            Identity::user(user.id())
+            Identity::user(user.id_string())
                 .with_staff(user.is_staff())
                 .with_extra("auth", serde_json::json!("session")),
         )

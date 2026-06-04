@@ -118,7 +118,7 @@ async fn identity_from_session(headers: &HeaderMap) -> Option<Identity> {
         .ok()
         .flatten()?;
     Some(
-        Identity::user(user.id)
+        Identity::user(crate::UserModel::id_string(&user))
             .with_staff(user.is_staff)
             .with_extra("auth", serde_json::json!("session")),
     )
@@ -135,7 +135,7 @@ async fn identity_from_bearer(headers: &HeaderMap) -> Option<Identity> {
         .flatten()?;
     token.touch_last_used().await;
     Some(
-        Identity::user(user.id)
+        Identity::user(crate::UserModel::id_string(&user))
             .with_staff(user.is_staff)
             .with_extra("auth", serde_json::json!("bearer")),
     )

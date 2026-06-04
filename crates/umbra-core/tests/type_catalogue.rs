@@ -520,6 +520,17 @@ impl From<UserScopedId> for sea_query::Value {
     }
 }
 
+// `Display` is part of the `PrimaryKey` trait surface — the framework
+// uses it to stringify a typed PK for session storage and for the
+// uniform `Identity::user_id` field on the REST plugin's Identity.
+// Custom PK types must provide it; the default for tuple-struct
+// wrappers is to forward to the inner type.
+impl std::fmt::Display for UserScopedId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
+
 impl umbra::orm::PrimaryKey for UserScopedId {}
 
 // NOTE: the model itself can't currently use UserScopedId as its `id`

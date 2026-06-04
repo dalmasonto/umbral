@@ -108,7 +108,7 @@ use umbra::prelude::*;
 ///
 /// | Method | Column | Used by |
 /// |---|---|---|
-/// | `id()` | `id` | `create_session`, `set_password` WHERE |
+/// | `id()` | `id` | `set_password` WHERE clause; session storage |
 /// | `username()` | `username` | `authenticate` SELECT, `createsuperuser` output |
 /// | `password_hash()` | `password_hash` | `authenticate` verify step |
 /// | `set_password_hash()` | `password_hash` | `set_password` in-place update |
@@ -117,13 +117,66 @@ use umbra::prelude::*;
 ///
 /// | Method | Default | Used by |
 /// |---|---|---|
+/// | `id_string()` | `self.id().to_string()` | `Identity::user_id`, session row |
 /// | `is_active()` | `true` | `authenticate` active-user gate |
 /// | `is_staff()` | `false` | admin require_staff check |
 /// | `is_superuser()` | `false` | permission gates |
+///
+/// ## Polymorphic primary key
+///
+/// `id()` returns the model's typed primary key via the existing
+/// `Model::PrimaryKey` associated type — the framework no longer
+/// hardcodes `i64`. A custom user model keyed by `uuid::Uuid`
+/// works as-is:
+///
+/// ```ignore
+/// #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize,
+///          umbra::orm::Model)]
+/// pub struct UuidUser {
+///     pub id: uuid::Uuid,
+///     pub username: String,
+///     pub password_hash: String,
+///     pub is_active: bool,
+///     pub is_staff: bool,
+/// }
+/// impl umbra_auth::UserModel for UuidUser {
+///     fn id(&self) -> uuid::Uuid { self.id }
+///     fn username(&self) -> &str { &self.username }
+///     fn password_hash(&self) -> &str { &self.password_hash }
+///     fn set_password_hash(&mut self, h: String) { self.password_hash = h; }
+///     fn is_active(&self) -> bool { self.is_active }
+///     fn is_staff(&self) -> bool { self.is_staff }
+/// }
+/// ```
+///
+/// The session-row text column, [`Identity::user_id`], and the
+/// permissions plugin all speak strings (via `id_string()`); the
+/// ORM-side WHERE clauses use the typed PK directly (via the
+/// `PrimaryKey: Into<sea_query::Value>` bound). Nothing in the
+/// framework parses `id()` back to `i64`.
 pub trait UserModel: Model + Send + Sync + 'static {
-    /// The row's integer primary key. `set_password` uses this in the
-    /// UPDATE WHERE clause.
-    fn id(&self) -> i64;
+    /// The row's typed primary key. `set_password` uses this in the
+    /// UPDATE WHERE clause; bearer-token / session backends use it
+    /// to filter on `auth_user::ID.eq(user.id())` style predicates.
+    ///
+    /// The return type is `<Self as Model>::PrimaryKey`, which the
+    /// `#[derive(Model)]` macro derives from the `id` field's type
+    /// (`i64`, `uuid::Uuid`, `String`, etc.). All `PrimaryKey`
+    /// types implement `Display`, so [`id_string`](Self::id_string)
+    /// can stringify without an explicit per-impl override.
+    fn id(&self) -> <Self as Model>::PrimaryKey;
+
+    /// The PK as a string. Used by [`umbra_sessions`] (which stores
+    /// `user_id` as text) and by `umbra-rest`'s
+    /// [`Identity::user_id`](umbra_rest::Identity) (which is
+    /// uniform across user models).
+    ///
+    /// Default uses the typed PK's `Display` impl — override only
+    /// when the stringification needs to differ from `Display`
+    /// (e.g. a base64-encoded ULID).
+    fn id_string(&self) -> String {
+        self.id().to_string()
+    }
 
     /// The unique login handle. Matched against the username column in
     /// `authenticate`'s SELECT query.
@@ -187,7 +240,13 @@ pub struct AuthUser {
 }
 
 impl UserModel for AuthUser {
-    fn id(&self) -> i64 {
+    // `<AuthUser as Model>::PrimaryKey` is `i64` — the derive picks
+    // it up from the `id: i64` field. Returning `self.id` directly
+    // satisfies `fn id(&self) -> <Self as Model>::PrimaryKey` for
+    // the default AuthUser shape; a custom user model with a
+    // `uuid::Uuid` PK would return `self.id` of that type, and the
+    // default `id_string()` would stringify via `Display` for free.
+    fn id(&self) -> <Self as umbra::orm::Model>::PrimaryKey {
         self.id
     }
 

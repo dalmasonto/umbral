@@ -159,8 +159,13 @@ impl SessionAuthentication {
 impl Authentication for SessionAuthentication {
     async fn authenticate(&self, headers: &HeaderMap) -> Option<Identity> {
         let user = current_user(headers).await.ok().flatten()?;
+        // `user.id_string()` is the UserModel-level stringifier —
+        // it stays correct when an app swaps AuthUser for a custom
+        // user model with a non-i64 PK. `Identity::user_id` is
+        // String regardless because Identity must be uniform across
+        // user models.
         Some(
-            Identity::user(user.id)
+            Identity::user(crate::UserModel::id_string(&user))
                 .with_staff(user.is_staff)
                 .with_extra("auth", serde_json::json!("session")),
         )

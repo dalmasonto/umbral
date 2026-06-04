@@ -99,8 +99,12 @@ impl Authentication for BearerAuthentication {
         // UPDATE on the hot path, this moves into a background
         // task — for now we keep umbra-auth tokio-free.
         token.touch_last_used().await;
+        // `id_string()` so the polymorphic-PK refactor flows
+        // through cleanly even if AuthUser is later swapped for
+        // a custom user model (the trait method's default does
+        // `Display`).
         Some(
-            Identity::user(user.id)
+            Identity::user(crate::UserModel::id_string(&user))
                 .with_staff(user.is_staff)
                 .with_extra("auth", serde_json::json!("bearer")),
         )
