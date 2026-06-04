@@ -178,27 +178,26 @@ function loadSettings(): PlaygroundSettings {
   }
 }
 
-function saveSettings(settings: PlaygroundSettings) {
-  if (typeof window === "undefined") return;
-  window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
-  notifySettingsSaved();
-}
-
-// "Settings saved" toast (gap #76). setSettings fires on every
-// keystroke, so a per-call toast would spam — debounce so only the
-// last save in a burst surfaces.
-let saveToastTimer: ReturnType<typeof setTimeout> | null = null;
-let suppressNextSaveToast = false;
-function notifySettingsSaved() {
-  if (suppressNextSaveToast) {
-    suppressNextSaveToast = false;
-    return;
+/** `saveSettings` had been a fire-and-forget localStorage write
+ *  with no error handling. If the browser threw (quota exceeded,
+ *  private mode, storage disabled) the in-memory state still
+ *  updated but the next reload silently restored the old settings
+ *  — the symptom users actually report as "settings aren't being
+ *  saved." Returns `true` on a confirmed write, `false` on any
+ *  failure mode (including SSR, where there is no window). The
+ *  caller threads this through `saveStatus` so the UI can tell
+ *  the truth instead of always saying "saved." */
+function saveSettings(settings: PlaygroundSettings): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+    return true;
+  } catch (e) {
+    if (typeof console !== "undefined") {
+      console.warn("umbra-playground: settings save failed", e);
+    }
+    return false;
   }
-  if (saveToastTimer) clearTimeout(saveToastTimer);
-  saveToastTimer = setTimeout(() => {
-    pushToast({ kind: "success", message: "Settings saved" });
-    saveToastTimer = null;
-  }, 600);
 }
 
 function mergeHeaders(
@@ -254,6 +253,15 @@ interface PlaygroundState {
 
   // workspace settings
   settings: PlaygroundSettings;
+  /** Visible save state — populates the badge + Save-button label
+   *  in the settings sheet. "saving" is the in-flight burst window;
+   *  "saved" is the resting state immediately after a successful
+   *  write; "dirty" appears only when the most recent write failed
+   *  and the in-memory state is out of sync with localStorage. */
+  saveStatus: "saved" | "saving" | "dirty";
+  /** Timestamp of the last successful save, for the "saved 3s ago"
+   *  text. `null` if nothing has ever been saved this session. */
+  lastSavedAt: number | null;
   setSettings: (settings: Partial<PlaygroundSettings>) => void;
   setBaseUrl: (baseUrl: string) => void;
   setVariables: (variables: KVItem[]) => void;
@@ -262,9 +270,36 @@ interface PlaygroundState {
   setGlobalAuth: (patch: Partial<GlobalAuthSettings>) => void;
   applyDefaultHeaders: () => void;
   resetSettings: () => void;
+  /** Manual flush — useful both as a "save retry" after an
+   *  in-memory edit hit a transient storage error AND as the click
+   *  handler for the visible Save button. Returns the success bit
+   *  so the caller can fire its own toast. */
+  saveSettingsNow: () => boolean;
 }
 
 const initialSettings = loadSettings();
+
+// Debounced "Settings saved" toast (gap #76). setSettings fires on
+// every keystroke; the debounce coalesces a typing burst into a
+// single confirmation. Lives at module scope so a global reset can
+// clear it without exposing it on the store.
+let saveToastTimer: ReturnType<typeof setTimeout> | null = null;
+function scheduleSaveToast(success: boolean) {
+  if (saveToastTimer) clearTimeout(saveToastTimer);
+  saveToastTimer = setTimeout(() => {
+    pushToast(
+      success
+        ? { kind: "success", message: "Settings saved" }
+        : {
+            kind: "error",
+            message:
+              "Couldn't save settings — your browser may be blocking localStorage (private mode? quota full?).",
+            durationMs: 5000,
+          },
+    );
+    saveToastTimer = null;
+  }, 600);
+}
 
 export const usePlayground = create<PlaygroundState>((set, get) => ({
   spec: null,
@@ -455,12 +490,27 @@ export const usePlayground = create<PlaygroundState>((set, get) => ({
     }),
 
   settings: initialSettings,
-  setSettings: (patch) =>
-    set((s) => {
-      const settings = normalizeSettings({ ...s.settings, ...patch });
-      saveSettings(settings);
-      return { settings };
-    }),
+  saveStatus: "saved",
+  lastSavedAt: null,
+  setSettings: (patch) => {
+    // 1. Apply the patch synchronously and flip to "saving" so the
+    //    settings sheet's badge reflects the burst-window state.
+    set((s) => ({
+      settings: normalizeSettings({ ...s.settings, ...patch }),
+      saveStatus: "saving",
+    }));
+    // 2. Persist. The write is synchronous; the toast is debounced
+    //    so a typing burst surfaces one confirmation, not one per
+    //    keystroke. saveStatus flips to "saved" on success, "dirty"
+    //    on failure — that way the UI tells the truth about
+    //    persistence rather than just trusting the in-memory state.
+    const ok = saveSettings(get().settings);
+    set({
+      saveStatus: ok ? "saved" : "dirty",
+      lastSavedAt: ok ? Date.now() : get().lastSavedAt,
+    });
+    scheduleSaveToast(ok);
+  },
   setBaseUrl: (baseUrl) => get().setSettings({ baseUrl }),
   setVariables: (variables) => get().setSettings({ variables: cloneRows(variables) }),
   setDefaultHeaders: (headers) =>
@@ -471,6 +521,30 @@ export const usePlayground = create<PlaygroundState>((set, get) => ({
     const current = get().settings.globalAuth;
     get().setSettings({ globalAuth: { ...current, ...patch } });
   },
+  saveSettingsNow: () => {
+    const ok = saveSettings(get().settings);
+    set({
+      saveStatus: ok ? "saved" : "dirty",
+      lastSavedAt: ok ? Date.now() : get().lastSavedAt,
+    });
+    // Manual flush bypasses the debounce — fire the toast right
+    // away so the click feels responsive.
+    if (saveToastTimer) {
+      clearTimeout(saveToastTimer);
+      saveToastTimer = null;
+    }
+    pushToast(
+      ok
+        ? { kind: "success", message: "Settings saved" }
+        : {
+            kind: "error",
+            message:
+              "Couldn't save settings — your browser may be blocking localStorage.",
+            durationMs: 5000,
+          },
+    );
+    return ok;
+  },
   applyDefaultHeaders: () =>
     set((s) => ({
       current: {
@@ -480,11 +554,28 @@ export const usePlayground = create<PlaygroundState>((set, get) => ({
     })),
   resetSettings: () => {
     const settings = normalizeSettings(baseSettings);
-    // Suppress the auto "Settings saved" debounced toast — the
-    // reset path posts its own, more informative toast below.
-    suppressNextSaveToast = true;
-    saveSettings(settings);
-    set({ settings });
-    pushToast({ kind: "info", message: "Settings reset to defaults" });
+    const ok = saveSettings(settings);
+    set({
+      settings,
+      saveStatus: ok ? "saved" : "dirty",
+      lastSavedAt: ok ? Date.now() : get().lastSavedAt,
+    });
+    // Reset is an explicit user action — bypass the debounce so
+    // the confirmation lands immediately. Different toast text
+    // distinguishes it from the autosave path.
+    if (saveToastTimer) {
+      clearTimeout(saveToastTimer);
+      saveToastTimer = null;
+    }
+    pushToast(
+      ok
+        ? { kind: "info", message: "Settings reset to defaults" }
+        : {
+            kind: "error",
+            message:
+              "Reset applied in memory but couldn't persist to localStorage.",
+            durationMs: 5000,
+          },
+    );
   },
 }));

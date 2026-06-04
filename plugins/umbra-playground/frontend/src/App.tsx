@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useReducer } from "react";
 import type { OpenAPIV3 } from "openapi-types";
 import { usePlayground } from "@/state/store";
 import { loadHistory } from "@/state/history";
@@ -36,6 +36,7 @@ import { ResponseViewer } from "@/components/ResponseViewer";
 import { Toaster } from "@/components/Toaster";
 import {
   Activity,
+  AlertCircle,
   CheckCircle2,
   Cookie,
   Database,
@@ -101,6 +102,8 @@ function responseTone(status?: number): string {
 
 function SettingsSheetButton() {
   const settings = usePlayground((s) => s.settings);
+  const saveStatus = usePlayground((s) => s.saveStatus);
+  const lastSavedAt = usePlayground((s) => s.lastSavedAt);
   const setBaseUrl = usePlayground((s) => s.setBaseUrl);
   const setVariables = usePlayground((s) => s.setVariables);
   const setDefaultHeaders = usePlayground((s) => s.setDefaultHeaders);
@@ -108,6 +111,7 @@ function SettingsSheetButton() {
   const setGlobalAuth = usePlayground((s) => s.setGlobalAuth);
   const applyDefaultHeaders = usePlayground((s) => s.applyDefaultHeaders);
   const resetSettings = usePlayground((s) => s.resetSettings);
+  const saveSettingsNow = usePlayground((s) => s.saveSettingsNow);
 
   const variableCount = settings.variables.filter(
     (row) => row.enabled && row.key,
@@ -134,12 +138,17 @@ function SettingsSheetButton() {
         className="!inset-y-3 !right-3 !h-auto !w-[min(calc(100vw-1.5rem),640px)] gap-0 overflow-hidden rounded-2xl border border-border bg-popover p-0 shadow-2xl sm:!max-w-[640px]"
       >
         <SheetHeader className="border-b border-border px-7 py-5">
-          <div className="flex items-center gap-2">
-            <Settings2 className="size-4 text-primary" />
-            <SheetTitle>Workspace settings</SheetTitle>
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <Settings2 className="size-4 text-primary" />
+              <SheetTitle>Workspace settings</SheetTitle>
+            </div>
+            <SaveStatusBadge status={saveStatus} lastSavedAt={lastSavedAt} />
           </div>
           <SheetDescription>
             Variables, defaults, and request policy for this playground.
+            Autosaved to your browser; click <strong>Save now</strong> at the
+            bottom if you want to verify a write landed.
           </SheetDescription>
         </SheetHeader>
 
@@ -290,20 +299,85 @@ function SettingsSheetButton() {
           </div>
         </div>
 
-        <SheetFooter className="border-t border-border px-7 py-4">
+        <SheetFooter className="flex flex-row items-center justify-between border-t border-border px-7 py-4">
           <Button
             type="button"
             variant="ghost"
             size="sm"
             onClick={resetSettings}
-            className="w-fit text-muted-foreground hover:text-foreground"
+            className="text-muted-foreground hover:text-foreground"
           >
             Reset settings
+          </Button>
+          <Button
+            type="button"
+            variant={saveStatus === "dirty" ? "destructive" : "default"}
+            size="sm"
+            onClick={() => {
+              void saveSettingsNow();
+            }}
+          >
+            {saveStatus === "dirty" ? "Retry save" : "Save now"}
           </Button>
         </SheetFooter>
       </SheetContent>
     </Sheet>
   );
+}
+
+/** Visible save indicator next to the settings sheet title.
+ *  - "saving" — pulse + grey badge during the autosave burst.
+ *  - "saved"  — green check + "Saved" (or "Saved <n>s ago").
+ *  - "dirty"  — red alert + "Unsaved" so the user knows the last
+ *               write attempt didn't actually land in localStorage. */
+function SaveStatusBadge({
+  status,
+  lastSavedAt,
+}: {
+  status: "saved" | "saving" | "dirty";
+  lastSavedAt: number | null;
+}) {
+  // Re-render every 5s so the "Saved <n>s ago" text creeps without
+  // demanding an upstream tick.
+  const [, force] = useReducer((x: number) => x + 1, 0);
+  useEffect(() => {
+    if (status !== "saved" || lastSavedAt === null) return;
+    const handle = setInterval(force, 5000);
+    return () => clearInterval(handle);
+  }, [status, lastSavedAt]);
+
+  if (status === "saving") {
+    return (
+      <Badge variant="outline" className="gap-1.5">
+        <span className="size-2 animate-pulse rounded-full bg-amber-500" />
+        Saving…
+      </Badge>
+    );
+  }
+  if (status === "dirty") {
+    return (
+      <Badge variant="destructive" className="gap-1.5">
+        <AlertCircle className="size-3" />
+        Unsaved
+      </Badge>
+    );
+  }
+  return (
+    <Badge variant="secondary" className="gap-1.5 text-emerald-600 dark:text-emerald-400">
+      <CheckCircle2 className="size-3" />
+      {lastSavedAt === null ? "Saved" : `Saved ${formatAgo(lastSavedAt)}`}
+    </Badge>
+  );
+}
+
+function formatAgo(timestamp: number): string {
+  const seconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
+  if (seconds < 5) return "just now";
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ago`;
 }
 
 export function App() {
