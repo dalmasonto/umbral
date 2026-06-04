@@ -1,6 +1,12 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { usePlayground } from "@/state/store";
 import { usePersistedState } from "@/hooks/usePersistedState";
+import {
+  generate,
+  LANGUAGES,
+  snapshotFromRecord,
+  type CodegenLanguage,
+} from "@/state/codegen";
 import { ReadonlyMonaco } from "./ReadonlyMonaco";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -65,39 +71,79 @@ function statusColor(status: number): string {
   return "bg-muted text-muted-foreground";
 }
 
-function toCurl(record: ResponseRecord): string {
-  const req = record.request;
-  const parts: string[] = [`curl -X ${req.method}`];
-  for (const h of req.headers) {
-    if (!h.enabled || !h.key) continue;
-    parts.push(`-H '${h.key}: ${h.value.replace(/'/g, "'\\''")}'`);
-  }
-  if (req.authToken) {
-    parts.push(`-H 'Authorization: ${req.authScheme} ${req.authToken}'`);
-  }
-  if (req.bodyType === "json" && req.body && req.method !== "GET" && req.method !== "HEAD") {
-    parts.push(`-d '${req.body.replace(/'/g, "'\\''")}'`);
-  } else if (req.bodyType === "form" && req.formFields.length > 0 && req.method !== "GET" && req.method !== "HEAD") {
-    const hasFiles = req.formFields.some((f) => f.enabled && f.type === "file");
-    if (hasFiles) {
-      for (const f of req.formFields) {
-        if (!f.enabled || !f.key) continue;
-        if (f.type === "file") {
-          parts.push(`-F '${f.key}=@${f.fileName || "file"}'`);
-        } else {
-          parts.push(`-F '${f.key}=${f.value.replace(/'/g, "'\\''")}'`);
-        }
-      }
-    } else {
-      const qs = req.formFields
-        .filter((f) => f.enabled && f.key)
-        .map(({ key, value }) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
-        .join("&");
-      parts.push(`-d '${qs.replace(/'/g, "'\\''")}'`);
+// Note: the old `toCurl` lived here and rendered the typed-in
+// URL raw. It was replaced by `CodegenPanel` below, which pipes
+// the record through `buildFetchArgs` so the snippet matches the
+// wire (resolved URL, default headers, global auth, interpolated
+// variables) and then offers JS/TS / cURL / Python / Rust.
+
+/** The Code tab — multi-language snippet generator. Replaces the
+ *  old cURL-only panel; JS/TS is the default (the playground is
+ *  the JS/TS app, so the snippet's home is usually another JS/TS
+ *  app). The selected language is persisted via the Dexie-backed
+ *  editor-state slot so it survives reloads. */
+function CodegenPanel({ record }: { record: ResponseRecord }) {
+  const settings = usePlayground((s) => s.settings);
+  const [language, setLanguage] = usePersistedState<CodegenLanguage>(
+    "response-viewer.codegen.language",
+    "js",
+  );
+
+  const snapshot = useMemo(
+    () => snapshotFromRecord(record, settings),
+    [record, settings],
+  );
+  const snippet = useMemo(() => {
+    if (!snapshot) return "// Could not reconstruct request — a path parameter changed since this call.";
+    return generate(language, snapshot);
+  }, [snapshot, language]);
+
+  const monacoLang = useMemo(() => {
+    switch (language) {
+      case "js":
+        return "javascript";
+      case "python":
+        return "python";
+      case "rust":
+        return "rust";
+      case "curl":
+      default:
+        return "shell";
     }
-  }
-  parts.push(`'${req.url}'`);
-  return parts.join(" \\\n  ");
+  }, [language]);
+
+  return (
+    <div className="space-y-2 h-full flex flex-col">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="flex items-center gap-1">
+          {LANGUAGES.map((lang) => (
+            <Button
+              key={lang.id}
+              type="button"
+              variant={language === lang.id ? "secondary" : "ghost"}
+              size="xs"
+              onClick={() => setLanguage(lang.id)}
+              className="text-[10px] font-semibold uppercase tracking-wider"
+            >
+              {lang.label}
+            </Button>
+          ))}
+        </div>
+        <Button
+          type="button"
+          variant="ghost"
+          size="xs"
+          onClick={() => {
+            void navigator.clipboard.writeText(snippet);
+          }}
+          className="text-muted-foreground hover:text-foreground text-[10px]"
+        >
+          Copy
+        </Button>
+      </div>
+      <ReadonlyMonaco value={snippet} language={monacoLang} />
+    </div>
+  );
 }
 
 /** Render an HTML response body in a sandboxed iframe so the
@@ -501,34 +547,12 @@ export function ResponseViewer() {
         {activeTab === "curl" && !lastResponse && (
           <EmptyState
             title="No response yet"
-            hint="The cURL command will mirror your next request."
+            hint="The code snippet will mirror your next request."
           />
         )}
 
         {activeTab === "curl" && lastResponse && (
-          <div className="space-y-2 h-full flex flex-col">
-            <div className="flex items-center justify-between">
-              <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold">
-                Equivalent cURL
-              </p>
-              <Button
-                type="button"
-                variant="ghost"
-                size="xs"
-                onClick={() => {
-                  if (lastResponse)
-                    navigator.clipboard.writeText(toCurl(lastResponse));
-                }}
-                className="text-muted-foreground hover:text-foreground text-[10px]"
-              >
-                Copy
-              </Button>
-            </div>
-            <ReadonlyMonaco
-              value={lastResponse ? toCurl(lastResponse) : ""}
-              language="shell"
-            />
-          </div>
+          <CodegenPanel record={lastResponse} />
         )}
       </div>
     </div>

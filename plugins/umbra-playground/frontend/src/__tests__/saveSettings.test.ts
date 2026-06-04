@@ -60,9 +60,27 @@ async function reload() {
 }
 
 /** Async test helper — `setSettings` schedules the save as a
- *  microtask, so the assertions need to wait one cycle. */
-async function tick() {
-  await new Promise((resolve) => setTimeout(resolve, 0));
+ *  microtask AND awaits Dexie (which on fake-indexeddb is a few
+ *  macrotask hops). One tick isn't always enough; this loops
+ *  until either the predicate fires or we run out of patience. */
+async function tick(times = 4) {
+  for (let i = 0; i < times; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+}
+
+/** Wait until `storage.setItem` has been called at least `n`
+ *  times, or 200ms pass. Lets the round-trip tests assert on the
+ *  cache write without flaking on Dexie's async overhead. */
+async function waitForSetItemCalls(n: number) {
+  const deadline = Date.now() + 200;
+  while (
+    (globalThis as unknown as { window: { localStorage: typeof storage } })
+      .window.localStorage.setItem.mock.calls.length < n
+  ) {
+    if (Date.now() > deadline) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
 }
 
 describe("playground settings persistence (Dexie + boot cache)", () => {
@@ -131,12 +149,12 @@ describe("playground settings persistence (Dexie + boot cache)", () => {
       scheme: "Token",
       token: "abc123",
     });
-    await tick();
-    await tick();
-    // Sanity: the boot cache also has the new value.
-    expect(JSON.parse(storage.setItem.mock.calls.at(-1)![1]).globalAuth.token).toBe(
-      "abc123",
-    );
+    await waitForSetItemCalls(1);
+    // Sanity: the boot cache also has the new value. (Dexie holds
+    // the source of truth; the LS cache mirrors it for fast boot.)
+    const lastWrite = storage.setItem.mock.calls.at(-1);
+    expect(lastWrite, "boot cache write should have landed").toBeDefined();
+    expect(JSON.parse(lastWrite![1]).globalAuth.token).toBe("abc123");
 
     // Reload — drops the in-memory store. Dexie persists across
     // the reload because fake-indexeddb is process-wide unless we
