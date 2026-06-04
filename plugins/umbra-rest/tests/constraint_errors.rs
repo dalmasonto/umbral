@@ -146,16 +146,17 @@ async fn foreign_key_violation_renders_as_400_with_fk_constraint_code() {
         body["code"], "fk_constraint",
         "machine-readable code; got body: {body}",
     );
-    let nfe = body["non_field_errors"]
+    // The pre-DB existence check keys the error under the FK
+    // column directly — much more actionable than the
+    // engine-level "FOREIGN KEY constraint failed" non-field
+    // message used to be.
+    let fk_errors = body["author_id"]
         .as_array()
-        .expect("non_field_errors array; SQLite doesn't tell us which FK failed");
-    assert!(!nfe.is_empty());
+        .expect("`author_id` should carry the per-field FK message; got {body}");
+    let msg = fk_errors[0].as_str().unwrap_or("");
     assert!(
-        nfe[0]
-            .as_str()
-            .map(|s| s.contains("foreign-key"))
-            .unwrap_or(false),
-        "message should mention the constraint kind; got {nfe:?}",
+        msg.contains("not found"),
+        "message should say the referenced row doesn't exist; got {msg:?}",
     );
 }
 
@@ -347,26 +348,12 @@ async fn unique_violation_message_names_the_offending_value() {
     );
 }
 
-#[tokio::test]
-async fn fk_violation_lists_every_fk_value_the_client_sent() {
-    let router = boot().await.clone();
-    let (status, body) = post_json(
-        router,
-        "/api/comment/",
-        json!({ "author_id": 9999, "body": "orphan" }),
-    )
-    .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "got body: {body}");
-    assert_eq!(body["code"], "fk_constraint");
-    let nfe = body["non_field_errors"]
-        .as_array()
-        .expect("non_field_errors array; got {body}");
-    let msg = nfe[0].as_str().unwrap_or("");
-    assert!(
-        msg.contains("author_id=9999"),
-        "message should list the FK columns + values; got {msg:?}",
-    );
-}
+// The pre-DB existence check shipped here catches the same case
+// the SQLite-engine-level FOREIGN KEY message used to surface in
+// `non_field_errors`. The replacement test
+// `fk_pointing_at_nonexistent_row_is_caught_pre_db` (below)
+// asserts the new field-keyed shape; the legacy non-field-errors
+// path is now unreachable from a normal API request.
 
 // =========================================================================
 // FK = 0 (or negative) is the form-default "nothing selected"
@@ -376,41 +363,55 @@ async fn fk_violation_lists_every_fk_value_the_client_sent() {
 // =========================================================================
 
 #[tokio::test]
-async fn fk_zero_is_treated_as_blank_and_keyed_under_the_fk_column() {
+async fn fk_zero_is_reported_as_not_found_under_the_fk_column() {
     let router = boot().await.clone();
     let (status, body) = post_json(
         router,
         "/api/comment/",
         // `author_id: 0` is the typical "form didn't pick a
         // value" sentinel. Auto-increment rows start at 1, so
-        // 0 can't possibly reference a real author.
+        // 0 can't possibly reference a real author. The error
+        // should carry that truth ("row with id=0 not found"),
+        // not a synthetic "this field is required."
         json!({ "author_id": 0, "body": "ghost" }),
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "got body: {body}");
-    assert_eq!(body["code"], "required_field");
+    assert_eq!(body["code"], "fk_constraint");
     let fk_errors = body["author_id"]
         .as_array()
-        .expect("`author_id` should carry the required-field message; got {body}");
+        .expect("`author_id` should carry the FK-not-found message; got {body}");
+    let msg = fk_errors[0].as_str().unwrap_or("");
     assert!(
-        fk_errors[0]
-            .as_str()
-            .map(|s| s.contains("required"))
-            .unwrap_or(false),
-        "got {fk_errors:?}",
+        msg.contains("not found"),
+        "message should say the referenced row doesn't exist; got {msg:?}",
+    );
+    assert!(
+        msg.contains("id=0"),
+        "message should name the offending value; got {msg:?}",
     );
 }
 
 #[tokio::test]
-async fn fk_negative_is_treated_as_blank_too() {
+async fn fk_pointing_at_nonexistent_row_is_caught_pre_db() {
     let router = boot().await.clone();
     let (status, body) = post_json(
         router,
         "/api/comment/",
-        json!({ "author_id": -1, "body": "wrong" }),
+        json!({ "author_id": 99999, "body": "wrong" }),
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "got body: {body}");
-    assert_eq!(body["code"], "required_field");
-    assert!(body["author_id"].is_array(), "got {body}");
+    assert_eq!(body["code"], "fk_constraint");
+    // The pre-DB existence check keys the error under the FK
+    // column directly, so the client doesn't have to parse a
+    // non_field_errors string to figure out which FK was bad.
+    let fk_errors = body["author_id"]
+        .as_array()
+        .expect("`author_id` should carry the FK-not-found message; got {body}");
+    let msg = fk_errors[0].as_str().unwrap_or("");
+    assert!(
+        msg.contains("id=99999"),
+        "message should name the offending value; got {msg:?}",
+    );
 }

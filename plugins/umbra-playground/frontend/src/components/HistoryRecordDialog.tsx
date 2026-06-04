@@ -299,7 +299,7 @@ export function HistoryRecordDialog({
                   <iframe
                     title="HTML response preview"
                     srcDoc={record.bodyText}
-                    sandbox=""
+                    sandbox="allow-scripts"
                     className="w-full h-64 border border-border rounded-md bg-white"
                   />
                 ) : (

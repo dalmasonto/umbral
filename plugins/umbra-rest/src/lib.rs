@@ -1334,30 +1334,23 @@ fn validate_required_on_update(
     errors
 }
 
-/// "Blank" means: missing, `null`, an empty string, or — for
-/// numeric / boolean / date columns — an empty string serialised
-/// where a typed value belongs. JSON `{}` is intentionally not
-/// blank: an empty JSON object is a legitimate value for a JSONB
-/// column. Empty arrays are also valid for array-ish columns.
+/// "Blank" means: missing, `null`, or — for text / typed columns
+/// — an empty string. JSON `{}` is intentionally not blank
+/// (legitimate JSONB value), arrays / numbers / booleans likewise
+/// preserve their semantics.
 ///
-/// **Foreign keys get one extra rule**: a numeric `0` (or
-/// negative) is treated as blank because that's the conventional
-/// "nothing selected" placeholder for an auto-increment FK — real
-/// rows start at 1. Without this rule the form-default value of
-/// `category: 0` would slip past pre-validation and either fail
-/// the DB constraint with a less useful per-row message OR write
-/// a dangling reference when FK enforcement is off.
+/// Foreign keys are **not** caught here — the blank-vs-not-blank
+/// rule on FK numerics is ambiguous (is `0` a sentinel or a real
+/// row?), and the right answer is a real "does this row exist?"
+/// check against the target table. That happens in
+/// [`validate_fk_references`] below, which emits accurate
+/// "Referenced row not found" messages instead of a synthetic
+/// "required."
 fn is_blank_value(value: Option<&Value>, ty: umbra::orm::SqlType) -> bool {
     use umbra::orm::SqlType;
     match value {
         None => true,
         Some(Value::Null) => true,
-        Some(Value::Number(n)) if matches!(ty, SqlType::ForeignKey) => {
-            // 0 or negative on an auto-increment FK = "form
-            // didn't pick anything." Real rows start at 1.
-            n.as_i64().map(|i| i <= 0).unwrap_or(false)
-                || n.as_f64().map(|f| f <= 0.0).unwrap_or(false)
-        }
         Some(Value::String(s)) => {
             // Text columns: empty string is blank by convention
             // (Django's CharField with blank=False). Other typed
@@ -1381,6 +1374,94 @@ fn is_blank_value(value: Option<&Value>, ty: umbra::orm::SqlType) -> bool {
         }
         _ => false,
     }
+}
+
+/// Walk every FK column in `body` and verify the referenced row
+/// actually exists. Returns DRF-flat field-keyed errors with the
+/// real message ("Referenced [target] row with id=0 not found.")
+/// instead of a synthetic "required."
+///
+/// Skipped:
+///
+/// - Missing FK fields (the required-field check above handles
+///   them with "This field is required.").
+/// - Explicit `null` values on nullable FK columns (no FK to
+///   verify).
+/// - Target tables that aren't registered with the migration
+///   engine (graceful fallback — the DB itself will catch the
+///   violation if it matters and post-INSERT enrichment surfaces
+///   it).
+async fn validate_fk_references(
+    model: &ModelMeta,
+    body: &Map<String, Value>,
+) -> BTreeMap<String, Vec<String>> {
+    let mut errors: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for col in &model.fields {
+        let Some(target_table) = col.fk_target.as_deref() else {
+            continue;
+        };
+        let Some(value) = body.get(&col.name) else {
+            continue;
+        };
+        if value.is_null() {
+            continue;
+        }
+        let Some(target_meta) = model_meta_by_table(target_table) else {
+            // Target not registered — fall back to letting the
+            // DB enforce the constraint (or not).
+            continue;
+        };
+        let exists = check_fk_row_exists(&target_meta, value).await;
+        if !exists {
+            errors.insert(
+                col.name.clone(),
+                vec![format!(
+                    "Referenced {target_table} row with id={} not found.",
+                    repr_json_value(value),
+                )],
+            );
+        }
+    }
+    errors
+}
+
+/// Look up a `ModelMeta` by its SQL table name. Walks the
+/// migration registry — same source the REST allow/deny check
+/// uses. Returns `None` when no plugin contributes a model for
+/// that table; the caller treats this as "skip the FK check."
+fn model_meta_by_table(table: &str) -> Option<ModelMeta> {
+    for plugin in umbra::migrate::registered_plugins() {
+        for meta in umbra::migrate::models_for_plugin(&plugin) {
+            if meta.table == table {
+                return Some(meta);
+            }
+        }
+    }
+    None
+}
+
+/// Single-row existence check against the FK target table.
+/// Routes through the ORM's `DynQuerySet` so it works on both
+/// SQLite and Postgres without raw SQL.
+async fn check_fk_row_exists(target: &ModelMeta, value: &Value) -> bool {
+    let Some(pk) = target.fields.iter().find(|c| c.primary_key) else {
+        return true; // no PK column → can't validate, accept
+    };
+    // The PK can be i64 / Uuid / String depending on the target
+    // model; bind whatever serde_json gave us as a stringified
+    // form via the dyn queryset's string-filter path.
+    let pk_repr = match value {
+        Value::Number(n) => n.to_string(),
+        Value::String(s) => s.clone(),
+        Value::Bool(b) => b.to_string(),
+        _ => return true, // odd value shape — let DB sort it out
+    };
+    let count = umbra::orm::DynQuerySet::for_meta(target)
+        .filter_eq_string(&pk.name, &pk_repr)
+        .count()
+        .await
+        .unwrap_or(0);
+    count > 0
 }
 
 /// Take a `ClassifiedConstraint` produced by sqlx-error
@@ -1600,6 +1681,20 @@ async fn create(
         });
     }
 
+    // Pre-DB FK existence check. One indexed `SELECT count`
+    // per FK column in the body — cheap, and the resulting
+    // 400 names every offending reference under its own field
+    // (rather than relying on SQLite's column-less FOREIGN
+    // KEY constraint message at INSERT time).
+    let fk_errors = validate_fk_references(&model, &body).await;
+    if !fk_errors.is_empty() {
+        return Err(ApiError::Validation {
+            code: "fk_constraint",
+            field_errors: fk_errors,
+            non_field_errors: Vec::new(),
+        });
+    }
+
     let mut row = match umbra::orm::DynQuerySet::for_meta(&model)
         .insert_json(&body)
         .await
@@ -1632,6 +1727,17 @@ async fn update(
         return Err(ApiError::Validation {
             code: "required_field",
             field_errors: required_errors,
+            non_field_errors: Vec::new(),
+        });
+    }
+
+    // FK existence check — same shape as create. Catches
+    // updates that point an FK column at a non-existent row.
+    let fk_errors = validate_fk_references(&model, &body).await;
+    if !fk_errors.is_empty() {
+        return Err(ApiError::Validation {
+            code: "fk_constraint",
+            field_errors: fk_errors,
             non_field_errors: Vec::new(),
         });
     }

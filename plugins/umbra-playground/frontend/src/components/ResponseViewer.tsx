@@ -148,16 +148,20 @@ function CodegenPanel({ record }: { record: ResponseRecord }) {
 
 /** Render an HTML response body in a sandboxed iframe so the
  *  Body tab actually shows the page the server returned instead of
- *  a raw text dump. The sandbox keeps script execution and
- *  same-origin access off by default; rendered CSS / images / form
- *  layout still works, which is what users need to spot a 500-page
- *  template or a Tailwind admin shell. */
+ *  a raw text dump.
+ *
+ *  Sandbox shape: `allow-scripts` only. Scripts run (the response
+ *  page can use Tailwind via CDN, hydrate React, etc. — what you'd
+ *  see in a real browser) but the iframe stays in an opaque origin
+ *  without `allow-same-origin`, so XSS in the response body can't
+ *  read the playground's cookies / localStorage / window. Forms +
+ *  popups + downloads stay disabled too. */
 function HtmlPreview({ body }: { body: string }) {
   return (
     <iframe
       title="HTML response preview"
       srcDoc={body}
-      sandbox=""
+      sandbox="allow-scripts"
       className="w-full h-full border border-border rounded-md bg-white"
     />
   );
