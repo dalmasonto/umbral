@@ -405,6 +405,14 @@ export function App() {
     };
   }, []);
 
+  // After the localStorage boot cache renders, async-load the
+  // authoritative settings out of Dexie. Replaces in-memory state
+  // when another tab — or a stale cache — caused a divergence.
+  // Single shot; Dexie's tab-sync would go here later if we want it.
+  useEffect(() => {
+    void usePlayground.getState().hydrateFromDexie();
+  }, []);
+
   const operations = useMemo(() => collectOperations(spec), [spec]);
   const selectedOperation = useMemo(
     () => operations.find((operation) => operation.id === selectedOperationId),

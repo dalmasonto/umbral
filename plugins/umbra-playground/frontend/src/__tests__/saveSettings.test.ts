@@ -1,13 +1,23 @@
-/** Verifies the gap #76 save path: an in-memory edit DOES land in
- *  localStorage, the saveStatus flips back to "saved" on success and
- *  "dirty" on failure, and reload-equivalent reads round-trip. */
+/** Verifies the gap #76 save path on Dexie / IndexedDB:
+ *
+ *  - In-memory edits land in IndexedDB via the `settings` table.
+ *  - `saveStatus` flips to "saved" on a confirmed Dexie write,
+ *    "dirty" on failure.
+ *  - The localStorage boot cache is updated as a side-effect so
+ *    the next page load can render synchronously.
+ *  - Round-trip across a "reload" (module reset + re-import) reads
+ *    the persisted settings back. */
 
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 
-// Hoist a fake window/localStorage onto the global before the
-// store module loads — the module computes SETTINGS_KEY and
-// captures `window.localStorage` at import time via
-// `loadSettings()`.
+// Install fake-indexeddb BEFORE importing Dexie. The auto-import
+// shape registers the polyfill on globalThis.indexedDB so Dexie
+// finds it the first time it tries to open a database.
+import "fake-indexeddb/auto";
+
+// 2. Install a synchronous localStorage shim. The boot cache is
+//    sync-read at module load, so it must be present before the
+//    store module imports.
 const memory: Record<string, string> = {};
 const storage = {
   getItem: vi.fn((k: string) => (k in memory ? memory[k] : null)),
@@ -23,22 +33,39 @@ const storage = {
   length: 0,
   key: vi.fn(() => null),
 };
-// JSDOM-free smoke environment — assign a minimal window + the
-// flat localStorage symbol the store reads via `window.localStorage`.
 (globalThis as unknown as { window: { localStorage: typeof storage } }).window = {
   localStorage: storage,
 };
 (globalThis as unknown as { localStorage: typeof storage }).localStorage = storage;
 
-async function reload() {
-  // Drop the store module from the module cache so the next import
-  // re-runs `loadSettings()` and `create()`, simulating a real
-  // page-reload boot path.
+async function freshDexie() {
+  // Delete the existing per-app Dexie DB before resetting modules
+  // so the *next* import of db.ts opens a fresh Dexie instance
+  // against an empty IndexedDB. Calling `.delete()` closes the
+  // existing instance — that's why we must reset modules AFTER,
+  // not before; the closed instance must not survive into the
+  // next test.
+  try {
+    const { db } = await import("../state/db");
+    await db.delete();
+  } catch {
+    // First boot, or db.ts not in module cache yet — nothing to delete.
+  }
   vi.resetModules();
+}
+
+async function reload() {
+  await freshDexie();
   return (await import("../state/store")).usePlayground;
 }
 
-describe("playground settings persistence (gap #76)", () => {
+/** Async test helper — `setSettings` schedules the save as a
+ *  microtask, so the assertions need to wait one cycle. */
+async function tick() {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+describe("playground settings persistence (Dexie + boot cache)", () => {
   beforeEach(() => {
     storage.clear();
     storage.setItem.mockClear();
@@ -48,44 +75,78 @@ describe("playground settings persistence (gap #76)", () => {
     vi.useRealTimers();
   });
 
-  it("persists baseUrl through to localStorage on setSettings", async () => {
+  it("persists baseUrl into the Dexie settings table", async () => {
     const use = await reload();
     use.getState().setBaseUrl("https://api.example.com");
-    expect(storage.setItem).toHaveBeenCalled();
-    // Last write should be the full settings object with baseUrl set.
-    const lastCall = storage.setItem.mock.calls.at(-1)!;
-    const [, raw] = lastCall;
-    const persisted = JSON.parse(raw);
-    expect(persisted.baseUrl).toBe("https://api.example.com");
+    await tick();
+    await tick();
+    const { db } = await import("../state/db");
+    const row = await db.settings.get("workspace");
+    expect(row?.value.baseUrl).toBe("https://api.example.com");
+  });
+
+  it("mirrors writes into the localStorage boot cache too", async () => {
+    const use = await reload();
+    use.getState().setBaseUrl("https://api.example.com");
+    await tick();
+    await tick();
+    // Last write should be the per-app scoped key.
+    const lastCall = storage.setItem.mock.calls.at(-1);
+    expect(lastCall).toBeDefined();
+    const [key, raw] = lastCall!;
+    expect(key).toMatch(/umbra-playground-settings:v1$/);
+    expect(JSON.parse(raw).baseUrl).toBe("https://api.example.com");
   });
 
   it("flips saveStatus to 'saved' after a successful write", async () => {
     const use = await reload();
     use.getState().setBaseUrl("https://api.example.com");
+    expect(use.getState().saveStatus).toBe("saving");
+    await tick();
+    await tick();
     expect(use.getState().saveStatus).toBe("saved");
     expect(use.getState().lastSavedAt).not.toBeNull();
   });
 
-  it("flips saveStatus to 'dirty' when localStorage throws", async () => {
+  it("flips saveStatus to 'dirty' when Dexie write throws", async () => {
     const use = await reload();
-    storage.setItem.mockImplementationOnce(() => {
-      throw new DOMException("QuotaExceededError");
-    });
+    const { db } = await import("../state/db");
+    const original = db.settings.put.bind(db.settings);
+    db.settings.put = vi.fn(() => {
+      throw new Error("simulated quota");
+    }) as unknown as typeof db.settings.put;
     use.getState().setBaseUrl("oops");
+    await tick();
+    await tick();
     expect(use.getState().saveStatus).toBe("dirty");
-    // The in-memory settings still reflect the attempt.
+    // In-memory state still reflects the attempt.
     expect(use.getState().settings.baseUrl).toBe("oops");
+    db.settings.put = original;
   });
 
-  it("globalAuth round-trips across a reload", async () => {
+  it("globalAuth round-trips across a reload via Dexie", async () => {
     let use = await reload();
     use.getState().setGlobalAuth({
       enabled: true,
       scheme: "Token",
       token: "abc123",
     });
-    // Simulate the user reloading the tab.
-    use = await reload();
+    await tick();
+    await tick();
+    // Sanity: the boot cache also has the new value.
+    expect(JSON.parse(storage.setItem.mock.calls.at(-1)![1]).globalAuth.token).toBe(
+      "abc123",
+    );
+
+    // Reload — drops the in-memory store. Dexie persists across
+    // the reload because fake-indexeddb is process-wide unless we
+    // call db.delete().
+    use = (await import("../state/store")).usePlayground;
+    vi.resetModules();
+    use = (await import("../state/store")).usePlayground;
+    // Hydrate from Dexie explicitly (mirrors what App.tsx does on
+    // mount).
+    await use.getState().hydrateFromDexie();
     expect(use.getState().settings.globalAuth).toEqual({
       enabled: true,
       scheme: "Token",
@@ -93,34 +154,81 @@ describe("playground settings persistence (gap #76)", () => {
     });
   });
 
-  it("variables survive across a reload", async () => {
+  it("variables survive across a reload via Dexie", async () => {
     let use = await reload();
     use.getState().setVariables([
       { key: "api_key", value: "secret-value", enabled: true, type: "text" },
     ]);
-    use = await reload();
+    await tick();
+    await tick();
+
+    vi.resetModules();
+    use = (await import("../state/store")).usePlayground;
+    await use.getState().hydrateFromDexie();
     expect(use.getState().settings.variables).toEqual([
       { key: "api_key", value: "secret-value", enabled: true, type: "text" },
     ]);
   });
 
-  it("saveSettingsNow writes immediately and fires a toast", async () => {
+  it("saveSettingsNow flushes immediately and returns true on success", async () => {
     const use = await reload();
     use.getState().setBaseUrl("https://x.test");
-    storage.setItem.mockClear();
-    const ok = use.getState().saveSettingsNow();
+    await tick();
+    await tick();
+    const ok = await use.getState().saveSettingsNow();
     expect(ok).toBe(true);
-    expect(storage.setItem).toHaveBeenCalledTimes(1);
     expect(use.getState().saveStatus).toBe("saved");
   });
 
-  it("saveSettingsNow returns false when storage throws", async () => {
+  it("saveSettingsNow returns false when Dexie throws", async () => {
     const use = await reload();
-    storage.setItem.mockImplementationOnce(() => {
+    const { db } = await import("../state/db");
+    const original = db.settings.put.bind(db.settings);
+    db.settings.put = vi.fn(() => {
       throw new Error("disabled");
-    });
-    const ok = use.getState().saveSettingsNow();
+    }) as unknown as typeof db.settings.put;
+    const ok = await use.getState().saveSettingsNow();
     expect(ok).toBe(false);
     expect(use.getState().saveStatus).toBe("dirty");
+    db.settings.put = original;
+  });
+
+  it("hydrateFromDexie migrates a localStorage-only row into Dexie", async () => {
+    // Fresh empty Dexie so the migration path actually fires —
+    // it only seeds Dexie from localStorage when the settings
+    // table is empty.
+    await freshDexie();
+
+    // Pre-seed the boot cache as if an older build had written
+    // there before the Dexie migration shipped.
+    storage.setItem(
+      "default:umbra-playground-settings:v1",
+      JSON.stringify({
+        baseUrl: "https://migrated.example",
+        variables: [
+          { key: "foo", value: "bar", enabled: true, type: "text" },
+        ],
+        defaultHeaders: [],
+        includeCredentials: true,
+        globalAuth: { enabled: false, scheme: "Bearer", token: "" },
+      }),
+    );
+
+    // Sanity: storage actually holds the seed before we boot the
+    // store. Catches mock-helper regressions.
+    expect(JSON.parse(memory["default:umbra-playground-settings:v1"]).baseUrl).toBe(
+      "https://migrated.example",
+    );
+
+    // freshDexie already ran vi.resetModules() — just import.
+    const use = (await import("../state/store")).usePlayground;
+    await use.getState().hydrateFromDexie();
+    expect(use.getState().settings.baseUrl).toBe("https://migrated.example");
+
+    // Dexie should now hold the migrated row too — the next reload
+    // won't need the localStorage cache.
+    const { db } = await import("../state/db");
+    const row = await db.settings.get("workspace");
+    expect(row?.value.baseUrl).toBe("https://migrated.example");
   });
 });

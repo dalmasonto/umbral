@@ -4,6 +4,12 @@ import { buildFetchArgs } from "./buildFetchArgs";
 import { saveHistoryDebounced } from "./history";
 import { mockSpec, getMockResponse } from "../data/mockSpec";
 import { scopedKey } from "./scope";
+import {
+  hydrateInitialSettings,
+  persistSettings,
+  readLocalStorageCache,
+  writeLocalStorageCache,
+} from "./settingsStorage";
 import { pushToast } from "./toastStore";
 
 export interface KVItem {
@@ -64,8 +70,11 @@ export interface ResponseRecord {
 
 // Per-app storage keys (gap #71). The bare strings used to be
 // shared across every umbra app served to the same browser; now
-// each app's localStorage slot is `<app>:<key>`.
-const SETTINGS_KEY = scopedKey("umbra-playground-settings:v1");
+// each app's localStorage slot is `<app>:<key>`. The full
+// `umbra-playground-settings:v1` slot moved to Dexie's `settings`
+// table — `settingsStorage.ts` owns that path now; the slot below
+// is only the selected-endpoint pointer, which is a single short
+// string that the next page load still needs synchronously.
 const SELECTED_KEY = scopedKey("umbra-playground:selected-operation:v1");
 
 /** Persist the currently-selected operationId so reloads land back on
@@ -167,37 +176,22 @@ function normalizeSettings(settings: Partial<PlaygroundSettings>): PlaygroundSet
   };
 }
 
+/** Sync read for the initial store state. Hits the localStorage
+ *  boot cache that mirrors Dexie — fast, no flash, but possibly
+ *  stale if another tab wrote to Dexie since this tab last rendered.
+ *  The store fires `hydrateFromDexie` after mount to settle that. */
 function loadSettings(): PlaygroundSettings {
-  if (typeof window === "undefined") return normalizeSettings(baseSettings);
-  try {
-    const raw = window.localStorage.getItem(SETTINGS_KEY);
-    if (!raw) return normalizeSettings(baseSettings);
-    return normalizeSettings(JSON.parse(raw) as Partial<PlaygroundSettings>);
-  } catch {
-    return normalizeSettings(baseSettings);
-  }
+  const cached = readLocalStorageCache();
+  return normalizeSettings(cached ?? baseSettings);
 }
 
-/** `saveSettings` had been a fire-and-forget localStorage write
- *  with no error handling. If the browser threw (quota exceeded,
- *  private mode, storage disabled) the in-memory state still
- *  updated but the next reload silently restored the old settings
- *  — the symptom users actually report as "settings aren't being
- *  saved." Returns `true` on a confirmed write, `false` on any
- *  failure mode (including SSR, where there is no window). The
- *  caller threads this through `saveStatus` so the UI can tell
- *  the truth instead of always saying "saved." */
-function saveSettings(settings: PlaygroundSettings): boolean {
-  if (typeof window === "undefined") return false;
-  try {
-    window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
-    return true;
-  } catch (e) {
-    if (typeof console !== "undefined") {
-      console.warn("umbra-playground: settings save failed", e);
-    }
-    return false;
-  }
+/** Authoritative settings save. Writes Dexie first, then mirrors
+ *  to the localStorage boot cache, then returns whether the Dexie
+ *  write actually landed. The store branches `saveStatus` on the
+ *  return value so the UI tells the truth instead of always
+ *  claiming "saved." */
+async function saveSettings(settings: PlaygroundSettings): Promise<boolean> {
+  return persistSettings(settings);
 }
 
 function mergeHeaders(
@@ -272,9 +266,14 @@ interface PlaygroundState {
   resetSettings: () => void;
   /** Manual flush — useful both as a "save retry" after an
    *  in-memory edit hit a transient storage error AND as the click
-   *  handler for the visible Save button. Returns the success bit
-   *  so the caller can fire its own toast. */
-  saveSettingsNow: () => boolean;
+   *  handler for the visible Save button. Resolves with the success
+   *  bit so the caller can fire its own toast. */
+  saveSettingsNow: () => Promise<boolean>;
+  /** Pull the authoritative settings out of Dexie once after mount.
+   *  No-op when Dexie matches the localStorage cache; replaces the
+   *  in-memory state when another tab (or a stale cache) caused a
+   *  divergence. Idempotent — safe to call on every mount. */
+  hydrateFromDexie: () => Promise<void>;
 }
 
 const initialSettings = loadSettings();
@@ -499,17 +498,17 @@ export const usePlayground = create<PlaygroundState>((set, get) => ({
       settings: normalizeSettings({ ...s.settings, ...patch }),
       saveStatus: "saving",
     }));
-    // 2. Persist. The write is synchronous; the toast is debounced
-    //    so a typing burst surfaces one confirmation, not one per
-    //    keystroke. saveStatus flips to "saved" on success, "dirty"
-    //    on failure — that way the UI tells the truth about
-    //    persistence rather than just trusting the in-memory state.
-    const ok = saveSettings(get().settings);
-    set({
-      saveStatus: ok ? "saved" : "dirty",
-      lastSavedAt: ok ? Date.now() : get().lastSavedAt,
+    // 2. Persist asynchronously. Dexie is the source of truth,
+    //    localStorage is a boot cache. saveStatus flips to "saved"
+    //    on a confirmed Dexie write, "dirty" otherwise. The toast
+    //    is debounced so a typing burst surfaces one confirmation.
+    void saveSettings(get().settings).then((ok) => {
+      set({
+        saveStatus: ok ? "saved" : "dirty",
+        lastSavedAt: ok ? Date.now() : get().lastSavedAt,
+      });
+      scheduleSaveToast(ok);
     });
-    scheduleSaveToast(ok);
   },
   setBaseUrl: (baseUrl) => get().setSettings({ baseUrl }),
   setVariables: (variables) => get().setSettings({ variables: cloneRows(variables) }),
@@ -521,8 +520,8 @@ export const usePlayground = create<PlaygroundState>((set, get) => ({
     const current = get().settings.globalAuth;
     get().setSettings({ globalAuth: { ...current, ...patch } });
   },
-  saveSettingsNow: () => {
-    const ok = saveSettings(get().settings);
+  saveSettingsNow: async () => {
+    const ok = await saveSettings(get().settings);
     set({
       saveStatus: ok ? "saved" : "dirty",
       lastSavedAt: ok ? Date.now() : get().lastSavedAt,
@@ -539,11 +538,37 @@ export const usePlayground = create<PlaygroundState>((set, get) => ({
         : {
             kind: "error",
             message:
-              "Couldn't save settings — your browser may be blocking localStorage.",
+              "Couldn't save settings — IndexedDB may be blocked (private mode? full?).",
             durationMs: 5000,
           },
     );
     return ok;
+  },
+  hydrateFromDexie: async () => {
+    try {
+      const fromDexie = await hydrateInitialSettings();
+      if (!fromDexie) return;
+      const normalized = normalizeSettings(fromDexie);
+      // Only replace if the snapshot actually differs from what
+      // we already have — the JSON-string compare is good enough
+      // for our small settings shape and avoids spuriously
+      // re-rendering subscribers when localStorage and Dexie
+      // agree.
+      const currentJson = JSON.stringify(get().settings);
+      if (JSON.stringify(normalized) === currentJson) return;
+      set({
+        settings: normalized,
+        saveStatus: "saved",
+        lastSavedAt: Date.now(),
+      });
+      // Refresh the localStorage cache so future boots match Dexie
+      // without going through hydration first.
+      writeLocalStorageCache(normalized);
+    } catch (e) {
+      if (typeof console !== "undefined") {
+        console.warn("[umbra-playground] Dexie hydration failed", e);
+      }
+    }
   },
   applyDefaultHeaders: () =>
     set((s) => ({
@@ -554,28 +579,29 @@ export const usePlayground = create<PlaygroundState>((set, get) => ({
     })),
   resetSettings: () => {
     const settings = normalizeSettings(baseSettings);
-    const ok = saveSettings(settings);
-    set({
-      settings,
-      saveStatus: ok ? "saved" : "dirty",
-      lastSavedAt: ok ? Date.now() : get().lastSavedAt,
+    set({ settings, saveStatus: "saving" });
+    void saveSettings(settings).then((ok) => {
+      set({
+        saveStatus: ok ? "saved" : "dirty",
+        lastSavedAt: ok ? Date.now() : get().lastSavedAt,
+      });
+      // Reset is an explicit user action — bypass the debounce so
+      // the confirmation lands immediately. Different toast text
+      // distinguishes it from the autosave path.
+      if (saveToastTimer) {
+        clearTimeout(saveToastTimer);
+        saveToastTimer = null;
+      }
+      pushToast(
+        ok
+          ? { kind: "info", message: "Settings reset to defaults" }
+          : {
+              kind: "error",
+              message:
+                "Reset applied in memory but couldn't persist to IndexedDB.",
+              durationMs: 5000,
+            },
+      );
     });
-    // Reset is an explicit user action — bypass the debounce so
-    // the confirmation lands immediately. Different toast text
-    // distinguishes it from the autosave path.
-    if (saveToastTimer) {
-      clearTimeout(saveToastTimer);
-      saveToastTimer = null;
-    }
-    pushToast(
-      ok
-        ? { kind: "info", message: "Settings reset to defaults" }
-        : {
-            kind: "error",
-            message:
-              "Reset applied in memory but couldn't persist to localStorage.",
-            durationMs: 5000,
-          },
-    );
   },
 }));
