@@ -227,6 +227,68 @@ async fn patch_with_empty_array_clears_all_tags() {
     assert!(junction_rows_for(post_id).await.is_empty());
 }
 
+async fn get_json(router: axum::Router, uri: &str) -> (StatusCode, Value) {
+    let req = Request::builder()
+        .method("GET")
+        .uri(uri)
+        .body(Body::empty())
+        .unwrap();
+    let resp = router.oneshot(req).await.expect("oneshot");
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let parsed: Value = serde_json::from_slice(&bytes).expect("valid json");
+    (status, parsed)
+}
+
+#[tokio::test]
+async fn get_response_includes_the_m2m_arrays() {
+    let router = boot().await.clone();
+    let (_, created) = post_json(
+        router.clone(),
+        "/api/post/",
+        json!({ "title": "for-read", "tags": [1, 3] }),
+    )
+    .await;
+    let post_id = created["id"].as_i64().unwrap();
+
+    // Single-row GET.
+    let (status, body) = get_json(router.clone(), &format!("/api/post/{post_id}")).await;
+    assert_eq!(status, StatusCode::OK);
+    let echoed = body["tags"]
+        .as_array()
+        .expect("tags array on GET response; got {body}");
+    let ids: Vec<i64> = echoed.iter().filter_map(|v| v.as_i64()).collect();
+    assert_eq!(ids, vec![1, 3]);
+}
+
+#[tokio::test]
+async fn patch_readback_includes_the_updated_m2m_arrays() {
+    let router = boot().await.clone();
+    let (_, created) = post_json(
+        router.clone(),
+        "/api/post/",
+        json!({ "title": "readback", "tags": [1] }),
+    )
+    .await;
+    let post_id = created["id"].as_i64().unwrap();
+
+    // PATCH replaces the tag set; the response (which goes
+    // through fetch_rows after the UPDATE) must include the
+    // NEW arrays, not the old ones and not nothing at all.
+    let (status, patched) = patch_json(
+        router,
+        &format!("/api/post/{post_id}"),
+        json!({ "tags": [2, 3] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let echoed = patched["tags"]
+        .as_array()
+        .expect("tags array on PATCH response; got {patched}");
+    let ids: Vec<i64> = echoed.iter().filter_map(|v| v.as_i64()).collect();
+    assert_eq!(ids, vec![2, 3]);
+}
+
 #[tokio::test]
 async fn post_with_a_missing_tag_id_is_rejected_before_the_junction_write() {
     let router = boot().await.clone();

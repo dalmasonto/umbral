@@ -526,6 +526,11 @@ impl<'a> DynQuerySet<'a> {
             q.offset(n);
         }
 
+        let pk_name = self
+            .meta
+            .pk_column()
+            .map(|c| c.name.clone())
+            .unwrap_or_default();
         match pool_dispatched() {
             DbPool::Sqlite(pool) => {
                 let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
@@ -540,6 +545,14 @@ impl<'a> DynQuerySet<'a> {
                         {
                             entry.insert(col_name.clone(), decode_to_json(&row, col_meta)?);
                         }
+                    }
+                    // Echo M2M relations alongside the scalar
+                    // columns. Per-row, per-relation `SELECT` is
+                    // the v1 shape; `prefetch_related`-style batch
+                    // loading is deferred.
+                    if !self.meta.m2m_relations.is_empty() {
+                        let pk_val = entry.get(&pk_name).cloned();
+                        hydrate_m2m_into(&self.meta, pk_val.as_ref(), &mut entry).await?;
                     }
                     out.push(entry);
                 }
@@ -558,6 +571,10 @@ impl<'a> DynQuerySet<'a> {
                         {
                             entry.insert(col_name.clone(), decode_pg_to_json(&row, col_meta)?);
                         }
+                    }
+                    if !self.meta.m2m_relations.is_empty() {
+                        let pk_val = entry.get(&pk_name).cloned();
+                        hydrate_m2m_into(&self.meta, pk_val.as_ref(), &mut entry).await?;
                     }
                     out.push(entry);
                 }
@@ -1428,7 +1445,7 @@ async fn hydrate_m2m_into(
     meta: &crate::migrate::ModelMeta,
     parent_pk_json: Option<&serde_json::Value>,
     out: &mut serde_json::Map<String, serde_json::Value>,
-) -> Result<(), crate::orm::write::WriteError> {
+) -> Result<(), sqlx::Error> {
     if meta.m2m_relations.is_empty() {
         return Ok(());
     }
@@ -1454,8 +1471,7 @@ async fn hydrate_m2m_into(
                                     .map(serde_json::Value::String)
                             })
                     })
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(crate::orm::write::WriteError::Sqlx)?
+                    .collect::<Result<Vec<_>, _>>()?
             }
             DbPool::Postgres(pool) => {
                 let (sql, values) = sel.build_sqlx(PostgresQueryBuilder);
@@ -1469,8 +1485,7 @@ async fn hydrate_m2m_into(
                                     .map(serde_json::Value::String)
                             })
                     })
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(crate::orm::write::WriteError::Sqlx)?
+                    .collect::<Result<Vec<_>, _>>()?
             }
         };
         out.insert(rel.field_name.clone(), serde_json::Value::Array(children));
