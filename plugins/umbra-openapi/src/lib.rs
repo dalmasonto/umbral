@@ -328,6 +328,50 @@ fn model_schema(
             required.push(Value::String(col.name.clone()));
         }
     }
+    // M2M relations live on the parent's `m2m_relations` channel
+    // (not on `fields`, because they have no column on the parent
+    // table). Surface them as `array of integer` with a vendor
+    // extension naming the child schema so playground / generated
+    // clients can render a tag-picker. Not marked required —
+    // M2M slots are always optional on write.
+    for rel in &model.m2m_relations {
+        let target_schema = table_to_schema
+            .get(&rel.target_table)
+            .cloned()
+            .unwrap_or_else(|| pascal_case(&rel.target_name));
+        let mut prop = serde_json::Map::new();
+        prop.insert("type".into(), Value::String("array".into()));
+        prop.insert(
+            "items".into(),
+            json!({ "type": "integer", "format": "int64" }),
+        );
+        prop.insert(
+            "description".into(),
+            Value::String(format!(
+                "Many-to-many relation to {}. Send an array of child ids on \
+                 create / update; the framework writes the junction table.",
+                target_schema,
+            )),
+        );
+        // Vendor extensions: aware clients (playground) can render
+        // a multi-select chip picker pointed at the child schema.
+        prop.insert("x-umbra-m2m".into(), Value::Bool(true));
+        prop.insert(
+            "x-umbra-m2m-target".into(),
+            Value::String(target_schema.clone()),
+        );
+        prop.insert(
+            "x-umbra-m2m-target-table".into(),
+            Value::String(rel.target_table.clone()),
+        );
+        if table_to_schema.contains_key(&rel.target_table) {
+            prop.insert(
+                "x-umbra-m2m-target-ref".into(),
+                Value::String(format!("#/components/schemas/{target_schema}")),
+            );
+        }
+        properties.insert(rel.field_name.clone(), Value::Object(prop));
+    }
     let mut obj = Map::new();
     obj.insert("type".into(), Value::String("object".into()));
     obj.insert("properties".into(), Value::Object(properties));
@@ -1333,6 +1377,42 @@ mod tests {
             schema.get("x-umbra-fk-ref").is_none(),
             "unknown FK target → no ref emitted; got: {schema:?}",
         );
+    }
+
+    /// M2M relations get a property entry on the model schema
+    /// (`array of integer` ids) plus vendor extensions naming the
+    /// target schema. Without this the playground / generated
+    /// clients have no way to know the model has a many-to-many
+    /// slot.
+    #[test]
+    fn m2m_relation_lands_in_model_schema_with_target_extension() {
+        let mut model = note_model();
+        model.m2m_relations.push(umbra::migrate::M2MRelation {
+            field_name: "tags".to_string(),
+            target_table: "tag".to_string(),
+            target_name: "Tag".to_string(),
+        });
+        // table_to_schema mirrors what `model_schemas` builds at
+        // spec-emit time; pre-seed with the M2M target so the
+        // vendor `x-umbra-m2m-target-ref` JSON pointer is set.
+        let mut tts = std::collections::HashMap::new();
+        tts.insert("tag".to_string(), "Tag".to_string());
+        let schema = model_schema(&model, &tts);
+        let tags_prop = &schema["properties"]["tags"];
+        assert_eq!(tags_prop["type"], "array");
+        assert_eq!(tags_prop["items"]["type"], "integer");
+        assert_eq!(tags_prop["x-umbra-m2m"], true);
+        assert_eq!(tags_prop["x-umbra-m2m-target"], "Tag");
+        assert_eq!(tags_prop["x-umbra-m2m-target-table"], "tag");
+        assert_eq!(
+            tags_prop["x-umbra-m2m-target-ref"],
+            "#/components/schemas/Tag",
+        );
+        // Not in `required` — M2M slots are always optional.
+        let required = schema["required"].as_array();
+        if let Some(req) = required {
+            assert!(!req.iter().any(|v| v == "tags"));
+        }
     }
 
     /// Playground-openapi-gaps #3: every list endpoint advertises
