@@ -4,6 +4,7 @@ import { buildFetchArgs } from "./buildFetchArgs";
 import { saveHistoryDebounced } from "./history";
 import { mockSpec, getMockResponse } from "../data/mockSpec";
 import { scopedKey } from "./scope";
+import { pushToast } from "./toastStore";
 
 export interface KVItem {
   key: string;
@@ -26,11 +27,25 @@ export interface RequestDraft {
   authToken: string;
 }
 
+export interface GlobalAuthSettings {
+  /** Master toggle so users can stash a token without it leaking
+   *  into every request. */
+  enabled: boolean;
+  /** Scheme prefix — `Bearer`, `Token`, `Basic`, anything custom. */
+  scheme: string;
+  /** Token value. Variable interpolation works inside it. */
+  token: string;
+}
+
 export interface PlaygroundSettings {
   baseUrl: string;
   variables: KVItem[];
   defaultHeaders: KVItem[];
   includeCredentials: boolean;
+  /** Workspace-wide Authorization fallback (gap #75). Per-request
+   *  auth on the builder still wins; this only fires when the
+   *  request didn't set its own. */
+  globalAuth: GlobalAuthSettings;
 }
 
 /** A completed request/response pair, persisted in history. */
@@ -84,11 +99,18 @@ const factoryDefaultHeaders: KVItem[] = [
   { key: "Accept", value: "application/json", enabled: true },
 ];
 
+const baseGlobalAuth: GlobalAuthSettings = {
+  enabled: false,
+  scheme: "Bearer",
+  token: "",
+};
+
 const baseSettings: PlaygroundSettings = {
   baseUrl: "",
   variables: [],
   defaultHeaders: factoryDefaultHeaders.map((h) => ({ ...h })),
   includeCredentials: true,
+  globalAuth: { ...baseGlobalAuth },
 };
 
 const emptyDraft: RequestDraft = {
@@ -120,6 +142,17 @@ function normalizeRows(rows: unknown): KVItem[] {
     }));
 }
 
+function normalizeGlobalAuth(
+  raw: Partial<GlobalAuthSettings> | undefined,
+): GlobalAuthSettings {
+  if (!raw || typeof raw !== "object") return { ...baseGlobalAuth };
+  return {
+    enabled: raw.enabled === true,
+    scheme: typeof raw.scheme === "string" && raw.scheme ? raw.scheme : "Bearer",
+    token: typeof raw.token === "string" ? raw.token : "",
+  };
+}
+
 function normalizeSettings(settings: Partial<PlaygroundSettings>): PlaygroundSettings {
   const defaultHeaders = normalizeRows(settings.defaultHeaders);
   return {
@@ -130,6 +163,7 @@ function normalizeSettings(settings: Partial<PlaygroundSettings>): PlaygroundSet
         ? defaultHeaders
         : cloneRows(factoryDefaultHeaders),
     includeCredentials: settings.includeCredentials !== false,
+    globalAuth: normalizeGlobalAuth(settings.globalAuth),
   };
 }
 
@@ -147,6 +181,24 @@ function loadSettings(): PlaygroundSettings {
 function saveSettings(settings: PlaygroundSettings) {
   if (typeof window === "undefined") return;
   window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  notifySettingsSaved();
+}
+
+// "Settings saved" toast (gap #76). setSettings fires on every
+// keystroke, so a per-call toast would spam — debounce so only the
+// last save in a burst surfaces.
+let saveToastTimer: ReturnType<typeof setTimeout> | null = null;
+let suppressNextSaveToast = false;
+function notifySettingsSaved() {
+  if (suppressNextSaveToast) {
+    suppressNextSaveToast = false;
+    return;
+  }
+  if (saveToastTimer) clearTimeout(saveToastTimer);
+  saveToastTimer = setTimeout(() => {
+    pushToast({ kind: "success", message: "Settings saved" });
+    saveToastTimer = null;
+  }, 600);
 }
 
 function mergeHeaders(
@@ -207,6 +259,7 @@ interface PlaygroundState {
   setVariables: (variables: KVItem[]) => void;
   setDefaultHeaders: (headers: KVItem[]) => void;
   setIncludeCredentials: (enabled: boolean) => void;
+  setGlobalAuth: (patch: Partial<GlobalAuthSettings>) => void;
   applyDefaultHeaders: () => void;
   resetSettings: () => void;
 }
@@ -271,6 +324,7 @@ export const usePlayground = create<PlaygroundState>((set, get) => ({
       baseUrl: state.settings.baseUrl,
       variables: state.settings.variables,
       includeCredentials: state.settings.includeCredentials,
+      globalAuth: state.settings.globalAuth,
     });
     if (!result.ok) {
       const message =
@@ -413,6 +467,10 @@ export const usePlayground = create<PlaygroundState>((set, get) => ({
     get().setSettings({ defaultHeaders: cloneRows(headers) }),
   setIncludeCredentials: (enabled) =>
     get().setSettings({ includeCredentials: enabled }),
+  setGlobalAuth: (patch) => {
+    const current = get().settings.globalAuth;
+    get().setSettings({ globalAuth: { ...current, ...patch } });
+  },
   applyDefaultHeaders: () =>
     set((s) => ({
       current: {
@@ -422,7 +480,11 @@ export const usePlayground = create<PlaygroundState>((set, get) => ({
     })),
   resetSettings: () => {
     const settings = normalizeSettings(baseSettings);
+    // Suppress the auto "Settings saved" debounced toast — the
+    // reset path posts its own, more informative toast below.
+    suppressNextSaveToast = true;
     saveSettings(settings);
     set({ settings });
+    pushToast({ kind: "info", message: "Settings reset to defaults" });
   },
 }));

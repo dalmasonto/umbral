@@ -1,5 +1,6 @@
 import { useState, useRef } from "react";
 import { Input } from "@/components/ui/input";
+import { PasswordInput } from "@/components/ui/password-input";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Plus, Trash2, FileText, FileUp } from "lucide-react";
@@ -12,6 +13,9 @@ interface KeyValueEditorProps {
   keyPlaceholder?: string;
   valuePlaceholder?: string;
   allowFileType?: boolean;
+  /** Render value inputs with a password mask + eye toggle. Use for
+   *  variables and other slots that often hold secrets (gap #73). */
+  maskValues?: boolean;
 }
 
 export function KeyValueEditor({
@@ -20,7 +24,9 @@ export function KeyValueEditor({
   keyPlaceholder = "Key",
   valuePlaceholder = "Value",
   allowFileType = false,
+  maskValues = false,
 }: KeyValueEditorProps) {
+  const ValueInput = maskValues ? PasswordInput : Input;
   const [draft, setDraft] = useState<KVItem>({
     key: "",
     value: "",
@@ -125,13 +131,14 @@ export function KeyValueEditor({
             </div>
           ) : (
             <div className="flex-[2] flex items-center gap-1.5">
-              <Input
+              <ValueInput
                 value={row.value}
                 onChange={(e) => updateRow(i, { value: e.target.value })}
                 placeholder={valuePlaceholder}
-                className={`flex-1 font-mono text-sm h-9 rounded-md ${
+                className={`font-mono text-sm h-9 rounded-md ${maskValues ? "" : "flex-1"} ${
                   !row.enabled ? "opacity-50" : ""
                 }`}
+                {...(maskValues ? { wrapperClassName: "flex-1" } : {})}
               />
               {allowFileType && (
                 <Button
@@ -231,14 +238,15 @@ export function KeyValueEditor({
             </div>
           ) : (
             <div className="flex-[2] flex items-center gap-1.5">
-              <Input
+              <ValueInput
                 value={draft.value}
                 onChange={(e) =>
                   setDraft((d) => ({ ...d, value: e.target.value }))
                 }
                 placeholder={valuePlaceholder}
-                className="flex-1 font-mono text-sm h-9 rounded-md"
-                onKeyDown={(e) => {
+                className={`font-mono text-sm h-9 rounded-md ${maskValues ? "" : "flex-1"}`}
+                {...(maskValues ? { wrapperClassName: "flex-1" } : {})}
+                onKeyDown={(e: React.KeyboardEvent<HTMLInputElement>) => {
                   if (e.key === "Enter") {
                     e.preventDefault();
                     commitDraft();

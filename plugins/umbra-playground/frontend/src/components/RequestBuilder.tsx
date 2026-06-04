@@ -3,6 +3,7 @@ import { usePlayground } from "@/state/store";
 import { usePersistedState } from "@/hooks/usePersistedState";
 import type { OpenAPIV3 } from "openapi-types";
 import { Input } from "@/components/ui/input";
+import { PasswordInput } from "@/components/ui/password-input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
@@ -410,8 +411,9 @@ export function RequestBuilder() {
 
   return (
     <div className="flex flex-col h-full">
-      {/* URL Bar */}
-      <div className="p-3 border-b border-border space-y-2">
+      {/* URL Bar — sticky so it stays visible when long param/header
+          lists scroll below (gap #73). */}
+      <div className="p-3 border-b border-border space-y-2 sticky top-0 z-20 bg-background">
         <div className="flex items-center gap-2">
           <MethodBadge method={current.method} />
           <Input
@@ -971,12 +973,12 @@ export function RequestBuilder() {
                   placeholder="Bearer"
                   className="w-28 font-mono text-sm h-9 rounded-md"
                 />
-                <Input
-                  type="password"
+                <PasswordInput
                   value={current.authToken}
                   onChange={(e) => setAuthToken(e.target.value)}
                   placeholder="token"
-                  className="flex-1 font-mono text-sm h-9 rounded-md"
+                  className="font-mono text-sm h-9 rounded-md"
+                  wrapperClassName="flex-1"
                 />
               </div>
               <p className="text-[10px] text-muted-foreground/60">

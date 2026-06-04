@@ -10,6 +10,10 @@ export interface BuildFetchOptions {
   baseUrl?: string;
   variables?: KVItem[];
   includeCredentials?: boolean;
+  /** Workspace-wide Authorization fallback (gap #75). Applied only
+   *  when `enabled`, `token` is non-empty, AND the per-request draft
+   *  hasn't already set its own Authorization (per-request wins). */
+  globalAuth?: { enabled: boolean; scheme: string; token: string };
 }
 
 export type BuildError =
@@ -91,6 +95,17 @@ export function buildFetchArgs(draft: RequestDraft, options: BuildFetchOptions =
       draft.authScheme,
       variables,
     )} ${interpolate(draft.authToken, variables)}`;
+  } else if (
+    options.globalAuth?.enabled &&
+    options.globalAuth.token &&
+    !headers["Authorization"]
+  ) {
+    // Workspace-wide fallback: only applies when the per-request
+    // draft set neither an Authorization header nor an auth token.
+    headers["Authorization"] = `${interpolate(
+      options.globalAuth.scheme || "Bearer",
+      variables,
+    )} ${interpolate(options.globalAuth.token, variables)}`;
   }
 
   // 5. Body.

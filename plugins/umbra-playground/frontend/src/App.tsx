@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
+import { PasswordInput } from "@/components/ui/password-input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import {
@@ -32,6 +33,7 @@ import { EndpointTree } from "@/components/EndpointTree";
 import { KeyValueEditor } from "@/components/KeyValueEditor";
 import { RequestBuilder } from "@/components/RequestBuilder";
 import { ResponseViewer } from "@/components/ResponseViewer";
+import { Toaster } from "@/components/Toaster";
 import {
   Activity,
   CheckCircle2,
@@ -103,6 +105,7 @@ function SettingsSheetButton() {
   const setVariables = usePlayground((s) => s.setVariables);
   const setDefaultHeaders = usePlayground((s) => s.setDefaultHeaders);
   const setIncludeCredentials = usePlayground((s) => s.setIncludeCredentials);
+  const setGlobalAuth = usePlayground((s) => s.setGlobalAuth);
   const applyDefaultHeaders = usePlayground((s) => s.applyDefaultHeaders);
   const resetSettings = usePlayground((s) => s.resetSettings);
 
@@ -173,11 +176,13 @@ function SettingsSheetButton() {
                   onChange={setVariables}
                   keyPlaceholder="name"
                   valuePlaceholder="value"
+                  maskValues
                 />
               </div>
               <p className="text-[11px] text-muted-foreground">
                 Use <code className="font-mono text-foreground">{"{{name}}"}</code>{" "}
-                in URLs, params, headers, auth, or request bodies.
+                in URLs, params, headers, auth, or request bodies. Values are
+                masked by default — click the eye icon to reveal.
               </p>
             </section>
 
@@ -204,6 +209,60 @@ function SettingsSheetButton() {
               >
                 Apply to current request
               </Button>
+            </section>
+
+            <section className="space-y-2">
+              <div className="flex items-center justify-between gap-3">
+                <Label className="text-xs font-semibold">
+                  Global authorization
+                </Label>
+                <Badge
+                  variant={settings.globalAuth.enabled ? "secondary" : "outline"}
+                  className="font-mono text-[10px]"
+                >
+                  {settings.globalAuth.enabled ? "on" : "off"}
+                </Badge>
+              </div>
+              <div className="flex items-start gap-3 rounded-md border border-border bg-muted/25 p-3">
+                <Checkbox
+                  id="global-auth-enabled"
+                  checked={settings.globalAuth.enabled}
+                  onCheckedChange={(checked) =>
+                    setGlobalAuth({ enabled: checked === true })
+                  }
+                  className="mt-2"
+                />
+                <div className="flex-1 space-y-2">
+                  <div className="flex items-center gap-2">
+                    <Input
+                      value={settings.globalAuth.scheme}
+                      onChange={(event) =>
+                        setGlobalAuth({ scheme: event.target.value })
+                      }
+                      placeholder="Bearer"
+                      className="w-28 font-mono text-sm h-9"
+                    />
+                    <PasswordInput
+                      value={settings.globalAuth.token}
+                      onChange={(event) =>
+                        setGlobalAuth({ token: event.target.value })
+                      }
+                      placeholder="token"
+                      className="font-mono text-sm h-9"
+                      wrapperClassName="flex-1"
+                    />
+                  </div>
+                  <p className="text-[11px] leading-relaxed text-muted-foreground">
+                    Sent as{" "}
+                    <code className="font-mono text-foreground">
+                      Authorization: {settings.globalAuth.scheme || "<scheme>"}{" "}
+                      {settings.globalAuth.token ? "<token>" : "<empty>"}
+                    </code>{" "}
+                    on every request that doesn't set its own. Per-request
+                    auth always wins.
+                  </p>
+                </div>
+              </div>
             </section>
 
             <section className="flex items-start gap-3 rounded-md border border-border bg-muted/25 p-3">
@@ -534,6 +593,7 @@ export function App() {
           </div>
         </SidebarInset>
       </SidebarProvider>
+      <Toaster />
     </TooltipProvider>
   );
 }
