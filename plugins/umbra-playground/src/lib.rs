@@ -117,11 +117,8 @@ impl Plugin for PlaygroundPlugin {
 
     fn routes(&self) -> axum::Router {
         let degraded = JS.starts_with("playground.placeholder");
-        let state = routes::PlaygroundState::new(
-            self.base_path.clone(),
-            self.app_name.clone(),
-            degraded,
-        );
+        let state =
+            routes::PlaygroundState::new(self.base_path.clone(), self.app_name.clone(), degraded);
         routes::router(state)
     }
 }

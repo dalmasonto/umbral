@@ -107,7 +107,6 @@ impl SessionsPlugin {
         self.auto_layer = false;
         self
     }
-
 }
 
 impl Plugin for SessionsPlugin {
@@ -328,9 +327,7 @@ pub fn clear_cookie_header_named(name: &str) -> String {
 /// model owns the value. For an `AuthUser`-shaped wrapper that
 /// hydrates the row, see `umbra_auth::current_user` (lives there so
 /// `umbra-sessions` stays free of any user-model dependency).
-pub async fn current_session(
-    headers: &HeaderMap,
-) -> Result<Option<Session>, SessionError> {
+pub async fn current_session(headers: &HeaderMap) -> Result<Option<Session>, SessionError> {
     let Some(id) = cookie_from_headers(headers) else {
         return Ok(None);
     };
@@ -347,9 +344,7 @@ pub async fn current_session(
 /// session (`user_id IS NULL`). The user-id parse failure mode is
 /// reserved for the caller, since each user model knows its own PK
 /// shape.
-pub async fn current_user_id_str(
-    headers: &HeaderMap,
-) -> Result<Option<String>, SessionError> {
+pub async fn current_user_id_str(headers: &HeaderMap) -> Result<Option<String>, SessionError> {
     Ok(current_session(headers).await?.and_then(|s| s.user_id))
 }
 

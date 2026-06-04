@@ -56,19 +56,18 @@ fn main() {
     let assets_subdir = crate_dist.join("assets");
     fs::create_dir_all(&assets_subdir).expect("create dist/assets dir");
 
-    let (js_name, css_name) =
-        match bundle_with_vite(&frontend_dir, &frontend_dist, &crate_dist) {
-            Ok(pair) => pair,
-            Err(e) => {
-                eprintln!("cargo:warning=umbra-playground: {e}; serving placeholder");
-                // In placeholder mode `dist/assets/` will be empty —
-                // include_dir embeds an empty tree, the runtime serves
-                // the placeholder HTML for the shell route, and any
-                // request for an asset 404s. That's the expected
-                // degraded behaviour.
-                (PLACEHOLDER_JS.to_string(), PLACEHOLDER_CSS.to_string())
-            }
-        };
+    let (js_name, css_name) = match bundle_with_vite(&frontend_dir, &frontend_dist, &crate_dist) {
+        Ok(pair) => pair,
+        Err(e) => {
+            eprintln!("cargo:warning=umbra-playground: {e}; serving placeholder");
+            // In placeholder mode `dist/assets/` will be empty —
+            // include_dir embeds an empty tree, the runtime serves
+            // the placeholder HTML for the shell route, and any
+            // request for an asset 404s. That's the expected
+            // degraded behaviour.
+            (PLACEHOLDER_JS.to_string(), PLACEHOLDER_CSS.to_string())
+        }
+    };
 
     let mut f = fs::File::create(&out_path).expect("create generated_assets.rs");
     writeln!(

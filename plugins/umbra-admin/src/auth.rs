@@ -179,9 +179,7 @@ pub(crate) async fn login_post(headers: HeaderMap, body: String) -> Response {
         next.clone()
     };
     let mut response = Redirect::to(&redirect_to).into_response();
-    if let Err(e) =
-        umbra_auth::login_with_request(&headers, response.headers_mut(), &user).await
-    {
+    if let Err(e) = umbra_auth::login_with_request(&headers, response.headers_mut(), &user).await {
         tracing::error!(error = %e, "admin: login: session creation failed");
         return (StatusCode::INTERNAL_SERVER_ERROR, "session error").into_response();
     }

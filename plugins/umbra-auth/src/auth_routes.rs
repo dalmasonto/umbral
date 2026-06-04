@@ -199,7 +199,7 @@ pub(crate) fn openapi_paths(prefix: &str) -> Vec<(String, serde_json::Value)> {
                         "409": {"description": "Username or email already exists.", "content": {"application/json": {"schema": error_response.clone()}}}
                     }
                 }
-            })
+            }),
         ),
         (
             format!("{prefix}/login"),
@@ -218,7 +218,7 @@ pub(crate) fn openapi_paths(prefix: &str) -> Vec<(String, serde_json::Value)> {
                         "401": {"description": "Invalid credentials.", "content": {"application/json": {"schema": error_response.clone()}}}
                     }
                 }
-            })
+            }),
         ),
         (
             format!("{prefix}/logout"),
@@ -232,7 +232,7 @@ pub(crate) fn openapi_paths(prefix: &str) -> Vec<(String, serde_json::Value)> {
                         "204": {"description": "Session cleared."}
                     }
                 }
-            })
+            }),
         ),
         (
             format!("{prefix}/me"),
@@ -247,7 +247,7 @@ pub(crate) fn openapi_paths(prefix: &str) -> Vec<(String, serde_json::Value)> {
                         "401": {"description": "Not authenticated.", "content": {"application/json": {"schema": error_response}}}
                     }
                 }
-            })
+            }),
         ),
     ]
 }

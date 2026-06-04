@@ -37,11 +37,7 @@ pub struct PlaygroundState {
 }
 
 impl PlaygroundState {
-    pub fn new(
-        base_path: impl Into<String>,
-        app_name: impl Into<String>,
-        degraded: bool,
-    ) -> Self {
+    pub fn new(base_path: impl Into<String>, app_name: impl Into<String>, degraded: bool) -> Self {
         Self {
             base_path: Arc::from(base_path.into()),
             app_name: Arc::from(app_name.into()),

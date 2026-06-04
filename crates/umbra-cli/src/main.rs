@@ -96,12 +96,8 @@ enum Command {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
-        Command::Startproject { name, path, local } => umbra_cli::scaffold::scaffold_project(
-            &name,
-            &path,
-            local.as_deref(),
-        )
-            .map(|r| {
+        Command::Startproject { name, path, local } => {
+            umbra_cli::scaffold::scaffold_project(&name, &path, local.as_deref()).map(|r| {
                 println!("Created `{}`:", r.root.display());
                 for f in &r.files {
                     println!("  {}", f.display());
@@ -111,7 +107,8 @@ fn main() -> ExitCode {
                 for step in &r.next_steps {
                     println!("  {step}");
                 }
-            }),
+            })
+        }
         Command::Startapp { name, path, local } => {
             umbra_cli::scaffold::scaffold_app(&name, &path, local.as_deref()).map(|r| {
                 println!("Created `{}`:", r.root.display());
@@ -125,12 +122,8 @@ fn main() -> ExitCode {
                 }
             })
         }
-        Command::Startplugin { name, path, local } => umbra_cli::scaffold::scaffold_plugin(
-            &name,
-            &path,
-            local.as_deref(),
-        )
-            .map(|r| {
+        Command::Startplugin { name, path, local } => {
+            umbra_cli::scaffold::scaffold_plugin(&name, &path, local.as_deref()).map(|r| {
                 println!("Created `{}`:", r.root.display());
                 for f in &r.files {
                     println!("  {}", f.display());
@@ -140,7 +133,8 @@ fn main() -> ExitCode {
                 for step in &r.next_steps {
                     println!("  {step}");
                 }
-            }),
+            })
+        }
     };
 
     match result {

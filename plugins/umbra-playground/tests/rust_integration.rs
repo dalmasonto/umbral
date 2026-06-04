@@ -273,7 +273,9 @@ async fn shell_injects_per_app_scope() {
         .unwrap();
     let res = app.oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(res.into_body(), 64 * 1024).await.unwrap();
+    let body = axum::body::to_bytes(res.into_body(), 64 * 1024)
+        .await
+        .unwrap();
     let s = String::from_utf8_lossy(&body);
     assert!(
         s.contains(r#"<meta name="umbra-playground-app" content="my-shop" />"#),
@@ -300,7 +302,9 @@ async fn shell_scope_escapes_dangerous_chars() {
         .body(Body::empty())
         .unwrap();
     let res = app.oneshot(req).await.unwrap();
-    let body = axum::body::to_bytes(res.into_body(), 64 * 1024).await.unwrap();
+    let body = axum::body::to_bytes(res.into_body(), 64 * 1024)
+        .await
+        .unwrap();
     let s = String::from_utf8_lossy(&body);
     // Attribute: " -> &quot;, & -> &amp;, < -> &lt;, > -> &gt;
     assert!(

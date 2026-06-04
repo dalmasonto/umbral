@@ -274,9 +274,7 @@ impl Authentication for ChainAuthentication {
         // `security_schemes_all` below — the OpenAPI plugin uses
         // that path so the spec publishes every scheme the chain
         // accepts.
-        self.backends
-            .iter()
-            .find_map(|b| b.security_scheme())
+        self.backends.iter().find_map(|b| b.security_scheme())
     }
 
     fn security_schemes_all(&self) -> Vec<(String, serde_json::Value)> {

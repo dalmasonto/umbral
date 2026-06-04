@@ -14,8 +14,8 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio::sync::OnceCell;
 
 use umbra::web::{HeaderMap, header};
-use umbra_auth::{AuthPlugin, AuthUser, create_user};
 use umbra_auth::current_user;
+use umbra_auth::{AuthPlugin, AuthUser, create_user};
 use umbra_sessions::{
     COOKIE_NAME, SessionsPlugin, clear_cookie_header, cookie_from_headers, create_session,
     destroy_session, get_data, read_session, set_cookie_header, set_data,
@@ -394,9 +394,7 @@ async fn optional_user_returns_some_when_session_cookie_resolves() {
         .await
         .unwrap();
     let mut login_headers = HeaderMap::new();
-    let token = umbra_auth::login(&mut login_headers, &user)
-        .await
-        .unwrap();
+    let token = umbra_auth::login(&mut login_headers, &user).await.unwrap();
 
     let req = http::Request::builder()
         .uri("/")
@@ -451,9 +449,7 @@ async fn messages_add_and_drain_round_trip() {
         .await
         .unwrap();
     let mut login_headers = HeaderMap::new();
-    let token = umbra_auth::login(&mut login_headers, &user)
-        .await
-        .unwrap();
+    let token = umbra_auth::login(&mut login_headers, &user).await.unwrap();
 
     let msgs = Messages::new(Some(token.clone()));
     assert!(msgs.is_active());
@@ -484,9 +480,7 @@ async fn messages_extractor_returns_handle_when_session_cookie_present() {
         .await
         .unwrap();
     let mut login_headers = HeaderMap::new();
-    let token = umbra_auth::login(&mut login_headers, &user)
-        .await
-        .unwrap();
+    let token = umbra_auth::login(&mut login_headers, &user).await.unwrap();
 
     let req = http::Request::builder()
         .uri("/")

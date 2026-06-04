@@ -110,12 +110,9 @@ pub async fn login_with_request(
     response_headers: &mut HeaderMap,
     user: &AuthUser,
 ) -> Result<String, SessionError> {
-    let token = umbra_sessions::login_user_id(
-        request_headers,
-        response_headers,
-        Some(user.id.to_string()),
-    )
-    .await?;
+    let token =
+        umbra_sessions::login_user_id(request_headers, response_headers, Some(user.id.to_string()))
+            .await?;
 
     let mut patch = serde_json::Map::new();
     patch.insert(
