@@ -30,6 +30,7 @@ pub mod multichoice;
 pub mod post;
 pub mod queryset;
 pub mod tsvector;
+pub mod validation;
 pub mod validators;
 pub mod write;
 

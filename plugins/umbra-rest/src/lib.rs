@@ -881,222 +881,52 @@ enum ApiError {
 
 impl From<sqlx::Error> for ApiError {
     fn from(e: sqlx::Error) -> Self {
-        // The ORM layer (`DynQuerySet::insert_json`/`update_json`)
-        // surfaces structured pre-validation failures —
-        // "field X is required", "field X must be an integer" — as
-        // `sqlx::Error::Protocol` because that's the only structured
-        // string variant the trait surface provides. Mapping them
-        // back to `BadInput` here is what makes those land as 400s
-        // at the boundary instead of as opaque 500s.
+        // Plain sqlx errors land here only from the non-write
+        // paths (filter / count / delete). Writes go through
+        // `WriteError`, which has its own translator below.
         if matches!(e, sqlx::Error::Protocol(_)) {
             return Self::BadInput(e.to_string());
-        }
-        // DB-level constraint failures reshape into DRF-style
-        // field-level errors so REST clients can render
-        // `{ "category": ["Referenced row does not exist."] }`
-        // inline. Falls through to the opaque 500 path only when
-        // the SQL error isn't a known constraint code (i.e. a real
-        // database outage, not a caller-input problem).
-        if let Some(v) = classify_constraint_failure(&e) {
-            return Self::Validation {
-                code: v.code,
-                field_errors: v.field_errors,
-                non_field_errors: v.non_field_errors,
-            };
         }
         Self::Sqlx(e)
     }
 }
 
-/// Pre-DRF-style mapping of a SQL constraint failure into named
-/// field errors. Returns `None` when the underlying error isn't a
-/// classifiable constraint violation (or isn't a database error at
-/// all), at which point the caller falls back to the opaque 500
-/// path.
-struct ClassifiedConstraint {
-    code: &'static str,
-    field_errors: BTreeMap<String, Vec<String>>,
-    non_field_errors: Vec<String>,
-}
-
-fn classify_constraint_failure(e: &sqlx::Error) -> Option<ClassifiedConstraint> {
-    let db_err = e.as_database_error()?;
-    let sql_code = db_err.code()?;
-    let sql_code = sql_code.as_ref();
-    let message = db_err.message();
-    // Postgres convention from sea-query: `<table>_<col>_<kind>`
-    // (e.g. `product_category_id_fkey`, `auth_user_email_key`,
-    // `permission_codename_check`). We parse the column out of
-    // the constraint name when the suffix matches; SQLite errors
-    // don't carry a constraint name so this returns None for that
-    // backend and we fall back to message parsing.
-    let pg_column = db_err
-        .constraint()
-        .and_then(parse_pg_column_from_constraint);
-
-    match sql_code {
-        // ---- SQLite (numeric codes as text) ----
-        // 787 = SQLITE_CONSTRAINT_FOREIGNKEY. SQLite doesn't tell
-        // us *which* FK failed — the C API exposes a single error
-        // for the whole row. We surface it as a non-field error so
-        // the client knows to recheck every relation.
-        "787" => Some(ClassifiedConstraint {
-            code: "fk_constraint",
-            field_errors: BTreeMap::new(),
-            non_field_errors: vec![
-                "One or more foreign-key fields reference rows that don't exist.".into(),
-            ],
-        }),
-        // 2067 = SQLITE_CONSTRAINT_UNIQUE. Message format:
-        //   "UNIQUE constraint failed: tbl.col[, tbl.col]"
-        "2067" => Some(ClassifiedConstraint {
-            code: "unique_constraint",
-            field_errors: sqlite_columns_to_errors(
-                message,
-                "UNIQUE constraint failed:",
-                "A row with this value already exists.",
-            ),
-            non_field_errors: Vec::new(),
-        }),
-        // 1299 = SQLITE_CONSTRAINT_NOTNULL. Message format:
-        //   "NOT NULL constraint failed: tbl.col"
-        "1299" => Some(ClassifiedConstraint {
-            code: "null_constraint",
-            field_errors: sqlite_columns_to_errors(
-                message,
-                "NOT NULL constraint failed:",
-                "This field is required.",
-            ),
-            non_field_errors: Vec::new(),
-        }),
-        // 275 = SQLITE_CONSTRAINT_CHECK. Message names the
-        // constraint, not the column — surface as non-field.
-        "275" => Some(ClassifiedConstraint {
-            code: "check_constraint",
-            field_errors: BTreeMap::new(),
-            non_field_errors: vec![format!("Check constraint failed: {message}.")],
-        }),
-
-        // ---- Postgres (SQLSTATE) ----
-        // 23503 = foreign_key_violation. PgDatabaseError exposes
-        // the column on UPDATE/INSERT errors when known.
-        "23503" => Some(constraint_with_optional_column(
-            "fk_constraint",
-            pg_column,
-            "Referenced row does not exist.",
-            "One or more foreign-key fields reference rows that don't exist.",
-        )),
-        // 23505 = unique_violation.
-        "23505" => Some(constraint_with_optional_column(
-            "unique_constraint",
-            pg_column,
-            "A row with this value already exists.",
-            "A row with one or more of these values already exists.",
-        )),
-        // 23502 = not_null_violation. Postgres always names the
-        // column for this one.
-        "23502" => Some(constraint_with_optional_column(
-            "null_constraint",
-            pg_column,
-            "This field is required.",
-            "A required field is missing.",
-        )),
-        // 23514 = check_violation.
-        "23514" => Some(ClassifiedConstraint {
-            code: "check_constraint",
-            field_errors: BTreeMap::new(),
-            non_field_errors: vec![format!(
-                "Check constraint failed: {}.",
-                db_err.constraint().unwrap_or("(unknown)"),
-            )],
-        }),
-
-        _ => None,
-    }
-}
-
-fn constraint_with_optional_column(
-    code: &'static str,
-    column: Option<String>,
-    column_message: &str,
-    fallback_message: &str,
-) -> ClassifiedConstraint {
-    let mut field_errors = BTreeMap::new();
-    let mut non_field_errors = Vec::new();
-    match column {
-        Some(c) => {
-            field_errors.insert(c, vec![column_message.to_string()]);
+impl From<umbra::orm::write::WriteError> for ApiError {
+    fn from(e: umbra::orm::write::WriteError) -> Self {
+        use umbra::orm::write::WriteError;
+        // True infrastructure / serialization failures (raw
+        // sqlx::Error not classified as a constraint, JSON
+        // serialization failure, NotAnObject) bubble out as 500
+        // via the `Sqlx` path. Everything else is a 400 with the
+        // structured WriteError shape rendered into the DRF-flat
+        // body via `field_errors()` + `non_field_errors()`.
+        if let WriteError::Sqlx(sqlx_err) = &e {
+            return Self::Sqlx(sqlx_err_clone(sqlx_err));
         }
-        None => {
-            non_field_errors.push(fallback_message.to_string());
+        if !e.is_validation() {
+            return Self::Sqlx(sqlx::Error::Protocol(e.to_string()));
+        }
+        Self::Validation {
+            code: e.code(),
+            field_errors: e.field_errors(),
+            non_field_errors: e.non_field_errors(),
         }
     }
-    ClassifiedConstraint {
-        code,
-        field_errors,
-        non_field_errors,
-    }
 }
 
-/// Parse SQLite constraint messages of the form
-/// "<prefix> tbl.col1[, tbl.col2 ...]" into a `{col: [msg]}` map.
-/// Returns an empty map when the prefix doesn't match — at which
-/// point the caller's NON_FIELD_ERRORS fallback kicks in.
-/// Pull the column name out of a Postgres constraint identifier
-/// shaped like `<table>_<col>_<kind>` where `<kind>` is one of
-/// `fkey` / `key` (unique) / `check`. Returns `None` when the
-/// shape doesn't match — callers fall back to non-field errors.
-///
-/// Examples:
-///
-/// - `product_category_id_fkey` + table `product` → `category_id`
-/// - `auth_user_email_key` + table `auth_user` → `email`
-fn parse_pg_column_from_constraint(constraint: &str) -> Option<String> {
-    for suffix in ["_fkey", "_key", "_check"] {
-        if let Some(rest) = constraint.strip_suffix(suffix) {
-            // Conservative trim — return everything after the
-            // first underscore so `<table>_<col>` becomes `<col>`.
-            // Multi-segment table names still produce something
-            // sensible (`auth_user_email_key` → `user_email`,
-            // close enough to surface on the client).
-            return rest.split_once('_').map(|(_, col)| col.to_string());
-        }
-    }
-    None
-}
-
-fn sqlite_columns_to_errors(
-    message: &str,
-    prefix: &str,
-    column_message: &str,
-) -> BTreeMap<String, Vec<String>> {
-    let trimmed_prefix = prefix.trim();
-    let Some(suffix) = message
-        .strip_prefix(trimmed_prefix)
-        .or_else(|| message.strip_prefix(prefix))
-    else {
-        return BTreeMap::new();
-    };
-    suffix
-        .split(',')
-        .map(str::trim)
-        .filter_map(|seg| seg.split('.').nth(1))
-        .map(|col| (col.to_string(), vec![column_message.to_string()]))
-        .collect()
-}
-
-impl From<serde_json::Error> for ApiError {
-    fn from(e: serde_json::Error) -> Self {
-        Self::Json(e)
-    }
+/// `sqlx::Error` isn't `Clone`; we own the WriteError by value
+/// from `?` so we need to recreate the inner sqlx::Error for the
+/// `ApiError::Sqlx(...)` arm. Stringify via Display — we're
+/// already on the 500 path; preserving the exact variant
+/// matters less than getting a usable trace.
+fn sqlx_err_clone(e: &sqlx::Error) -> sqlx::Error {
+    sqlx::Error::Protocol(e.to_string())
 }
 
 impl umbra::web::IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        // Validation errors take a different body shape (DRF-flat
-        // field errors at top level). Branch out early so the
-        // catch-all path below stays focused on the
-        // single-message envelope.
+        // Validation errors take the DRF-flat field shape; the
+        // catch-all path below covers the single-message envelope.
         if let ApiError::Validation {
             code,
             field_errors,
@@ -1148,18 +978,9 @@ impl umbra::web::IntoResponse for ApiError {
     }
 }
 
-/// Build the JSON body for a 404 from this plugin. In `Environment::Dev`
-/// the body grows a `hint` and an `available` list of every
-/// `/api/<table>/` URL the plugin would actually serve — walked
-/// straight from the model registry and filtered through the same
-/// `allow()` check the real handlers use. In `Prod` / `Test` the
-/// body stays the minimal `{error, code}` envelope so production
-/// 404s don't leak the table list to unauthenticated clients.
-///
-/// Mirrors the framework's HTML 404 dev-panel behaviour
-/// (`crate::routes` + the default 404 template), kept in spirit for
-/// the REST plugin: JSON-formatted because that's the right shape
-/// for an API consumer, but informative when it can be.
+/// Build the JSON body for a 404 from this plugin. Dev mode
+/// emits a `hint` + `available` list of every `/api/<table>/`
+/// URL the plugin would actually serve; prod stays minimal.
 fn enrich_404_body(msg: String, code: &'static str) -> ApiErrorBody {
     let is_dev = umbra::settings::get_opt()
         .map(|s| matches!(s.environment, umbra::Environment::Dev))
@@ -1231,354 +1052,12 @@ fn pk_column(model: &ModelMeta) -> Result<&umbra::migrate::Column, ApiError> {
 }
 
 /// Strip `noform` columns from a request body before write.
-///
-/// `noform` is the model-side declaration that "the user never
-/// touches this directly" — `password_hash`, `internal_token`,
-/// server-managed audit fields. The OpenAPI schema advertises
-/// those columns as `readOnly: true`, and the REST handlers honour
-/// that by silently dropping them from the incoming JSON before
-/// dispatching to `insert_json` / `update_json`.
-///
-/// Silent drop (not 400) so well-behaved clients re-posting a
-/// previous response back as a request (a common round-trip
-/// pattern) don't have to filter the payload themselves. If you
-/// want strict-mode rejection, that's a future opt-in.
-///
-/// `noedit` is intentionally NOT in scope: that flag is an admin
-/// EDIT-form UX hint and has no API contract semantic.
 fn drop_noform_fields(model: &ModelMeta, body: &mut Map<String, Value>) {
     for col in &model.fields {
         if col.noform {
             body.remove(&col.name);
         }
     }
-}
-
-/// Pre-DB validation for `POST /api/<table>/`: every required
-/// column must carry a usable value. "Required" means: not a
-/// primary key, not `noform`-hidden, not nullable, no DDL default.
-/// "Usable" means: present in the body AND non-blank — empty
-/// strings, JSON null, and missing keys all fail.
-///
-/// This catches the common shop-demo footgun where a client
-/// POSTs `{ "sku": "", "name": "" }` and gets a row of empty
-/// strings stored on the wire because the DB happily accepted
-/// `NOT NULL VARCHAR` columns full of `""`. The DRF-style 400
-/// returned here surfaces every offending field at once so the
-/// client can show every form input as red in one round-trip.
-fn validate_required_on_create(
-    model: &ModelMeta,
-    body: &Map<String, Value>,
-) -> BTreeMap<String, Vec<String>> {
-    let mut errors: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for col in &model.fields {
-        if col.primary_key || col.noform || col.nullable {
-            continue;
-        }
-        if !col.default.is_empty() {
-            // DDL default fills in for the missing field; the
-            // ORM converts a missing key into the column's
-            // default at INSERT time. Empty-string defaults are
-            // intentional (e.g. CharField blank=True patterns).
-            continue;
-        }
-        // `auto_now` / `auto_now_add` are server-populated: the
-        // ORM stamps `Utc::now()` on insert when the body
-        // omits the field. Don't require the client to send
-        // them — that would defeat the whole point of the
-        // attribute.
-        if col.auto_now || col.auto_now_add {
-            continue;
-        }
-        if is_blank_value(body.get(&col.name), col.ty) {
-            errors
-                .entry(col.name.clone())
-                .or_default()
-                .push("This field is required.".to_string());
-        }
-    }
-    errors
-}
-
-/// Pre-DB validation for `PUT` / `PATCH`: required fields that
-/// the client explicitly set to a blank value get rejected.
-/// Fields the client omitted are left alone — the existing row's
-/// value stays in place.
-fn validate_required_on_update(
-    model: &ModelMeta,
-    body: &Map<String, Value>,
-) -> BTreeMap<String, Vec<String>> {
-    let mut errors: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for col in &model.fields {
-        if col.primary_key || col.noform || col.nullable {
-            continue;
-        }
-        if col.auto_now || col.auto_now_add {
-            // Same skip as create: auto_now / auto_now_add are
-            // server-populated.
-            continue;
-        }
-        // Update: only complain about fields the client EXPLICITLY
-        // sent blank. Missing keys preserve the existing row's
-        // value, which is the partial-update contract.
-        let Some(value) = body.get(&col.name) else {
-            continue;
-        };
-        if is_blank_value(Some(value), col.ty) {
-            errors
-                .entry(col.name.clone())
-                .or_default()
-                .push("This field cannot be blank.".to_string());
-        }
-    }
-    errors
-}
-
-/// "Blank" means: missing, `null`, or — for text / typed columns
-/// — an empty string. JSON `{}` is intentionally not blank
-/// (legitimate JSONB value), arrays / numbers / booleans likewise
-/// preserve their semantics.
-///
-/// Foreign keys are **not** caught here — the blank-vs-not-blank
-/// rule on FK numerics is ambiguous (is `0` a sentinel or a real
-/// row?), and the right answer is a real "does this row exist?"
-/// check against the target table. That happens in
-/// [`validate_fk_references`] below, which emits accurate
-/// "Referenced row not found" messages instead of a synthetic
-/// "required."
-fn is_blank_value(value: Option<&Value>, ty: umbra::orm::SqlType) -> bool {
-    use umbra::orm::SqlType;
-    match value {
-        None => true,
-        Some(Value::Null) => true,
-        Some(Value::String(s)) => {
-            // Text columns: empty string is blank by convention
-            // (Django's CharField with blank=False). Other typed
-            // columns: an empty string sent in JSON is also
-            // blank — it's a placeholder, not a value.
-            s.is_empty()
-                || matches!(
-                    ty,
-                    SqlType::SmallInt
-                        | SqlType::Integer
-                        | SqlType::BigInt
-                        | SqlType::Real
-                        | SqlType::Double
-                        | SqlType::Boolean
-                        | SqlType::Date
-                        | SqlType::Time
-                        | SqlType::Timestamptz
-                        | SqlType::Uuid
-                        | SqlType::ForeignKey,
-                ) && s.trim().is_empty()
-        }
-        _ => false,
-    }
-}
-
-/// Walk every FK column in `body` and verify the referenced row
-/// actually exists. Returns DRF-flat field-keyed errors with the
-/// real message ("Referenced [target] row with id=0 not found.")
-/// instead of a synthetic "required."
-///
-/// Skipped:
-///
-/// - Missing FK fields (the required-field check above handles
-///   them with "This field is required.").
-/// - Explicit `null` values on nullable FK columns (no FK to
-///   verify).
-/// - Target tables that aren't registered with the migration
-///   engine (graceful fallback — the DB itself will catch the
-///   violation if it matters and post-INSERT enrichment surfaces
-///   it).
-async fn validate_fk_references(
-    model: &ModelMeta,
-    body: &Map<String, Value>,
-) -> BTreeMap<String, Vec<String>> {
-    let mut errors: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for col in &model.fields {
-        let Some(target_table) = col.fk_target.as_deref() else {
-            continue;
-        };
-        let Some(value) = body.get(&col.name) else {
-            continue;
-        };
-        if value.is_null() {
-            continue;
-        }
-        let Some(target_meta) = model_meta_by_table(target_table) else {
-            // Target not registered — fall back to letting the
-            // DB enforce the constraint (or not).
-            continue;
-        };
-        let exists = check_fk_row_exists(&target_meta, value).await;
-        if !exists {
-            errors.insert(
-                col.name.clone(),
-                vec![format!(
-                    "Referenced {target_table} row with id={} not found.",
-                    repr_json_value(value),
-                )],
-            );
-        }
-    }
-    errors
-}
-
-/// Look up a `ModelMeta` by its SQL table name. Walks the
-/// migration registry — same source the REST allow/deny check
-/// uses. Returns `None` when no plugin contributes a model for
-/// that table; the caller treats this as "skip the FK check."
-fn model_meta_by_table(table: &str) -> Option<ModelMeta> {
-    for plugin in umbra::migrate::registered_plugins() {
-        for meta in umbra::migrate::models_for_plugin(&plugin) {
-            if meta.table == table {
-                return Some(meta);
-            }
-        }
-    }
-    None
-}
-
-/// Single-row existence check against the FK target table.
-/// Routes through the ORM's `DynQuerySet` so it works on both
-/// SQLite and Postgres without raw SQL.
-async fn check_fk_row_exists(target: &ModelMeta, value: &Value) -> bool {
-    let Some(pk) = target.fields.iter().find(|c| c.primary_key) else {
-        return true; // no PK column → can't validate, accept
-    };
-    // The PK can be i64 / Uuid / String depending on the target
-    // model; bind whatever serde_json gave us as a stringified
-    // form via the dyn queryset's string-filter path.
-    let pk_repr = match value {
-        Value::Number(n) => n.to_string(),
-        Value::String(s) => s.clone(),
-        Value::Bool(b) => b.to_string(),
-        _ => return true, // odd value shape — let DB sort it out
-    };
-    let count = umbra::orm::DynQuerySet::for_meta(target)
-        .filter_eq_string(&pk.name, &pk_repr)
-        .count()
-        .await
-        .unwrap_or(0);
-    count > 0
-}
-
-/// Take a `ClassifiedConstraint` produced by sqlx-error
-/// classification and lift the offending value out of the
-/// request body into the message. Turns
-/// `"A row with this value already exists."` into
-/// `"A row with slug='widget' already exists."` — much faster to
-/// debug when several columns on the same row are unique.
-///
-/// Also enriches FK non-field errors by listing every FK column
-/// the request carried, with its value. SQLite's
-/// `FOREIGN KEY constraint failed` error doesn't say which FK,
-/// so the next-best signal for the client is "here are all the
-/// FKs you sent — look for the row that doesn't exist."
-fn enrich_validation_with_body(
-    classified: ClassifiedConstraint,
-    body: &Map<String, Value>,
-    model: &ModelMeta,
-) -> ClassifiedConstraint {
-    let ClassifiedConstraint {
-        code,
-        mut field_errors,
-        mut non_field_errors,
-    } = classified;
-
-    match code {
-        "unique_constraint" => {
-            for (col, msgs) in field_errors.iter_mut() {
-                let value_repr = body
-                    .get(col)
-                    .map(repr_json_value)
-                    .unwrap_or_else(|| "(unknown)".to_string());
-                *msgs =
-                    vec![format!("A row with {col}={value_repr} already exists.")];
-            }
-        }
-        "fk_constraint" => {
-            // Per-field path (Postgres): already keyed by column.
-            // Lift the user-sent value into the message so the
-            // client sees `"category_id=99"` and knows which row
-            // didn't exist.
-            for (col, msgs) in field_errors.iter_mut() {
-                let value_repr = body
-                    .get(col)
-                    .map(repr_json_value)
-                    .unwrap_or_else(|| "(unknown)".to_string());
-                *msgs = vec![format!(
-                    "Referenced row with {col}={value_repr} does not exist."
-                )];
-            }
-            // Non-field path (SQLite): list every FK column the
-            // request carried so the user can spot the bad one.
-            if field_errors.is_empty() && !non_field_errors.is_empty() {
-                let fk_values: Vec<String> = model
-                    .fields
-                    .iter()
-                    .filter(|c| c.fk_target.is_some())
-                    .filter_map(|c| {
-                        body.get(&c.name)
-                            .map(|v| format!("{}={}", c.name, repr_json_value(v)))
-                    })
-                    .collect();
-                if !fk_values.is_empty() {
-                    non_field_errors = vec![format!(
-                        "One or more foreign-key fields reference rows that don't exist. \
-                         Sent: {}.",
-                        fk_values.join(", "),
-                    )];
-                }
-            }
-        }
-        _ => {}
-    }
-
-    ClassifiedConstraint {
-        code,
-        field_errors,
-        non_field_errors,
-    }
-}
-
-/// JSON-value display for error messages. Strings are quoted,
-/// numbers / booleans / null appear bare, arrays / objects fall
-/// back to compact JSON so they're at least readable.
-fn repr_json_value(v: &Value) -> String {
-    match v {
-        Value::String(s) => format!("'{s}'"),
-        Value::Number(n) => n.to_string(),
-        Value::Bool(b) => b.to_string(),
-        Value::Null => "null".to_string(),
-        _ => serde_json::to_string(v).unwrap_or_else(|_| "(?)".to_string()),
-    }
-}
-
-/// Run an INSERT / UPDATE and lift any constraint failure into a
-/// body-aware `ApiError::Validation`. The DB-level constraint
-/// errors lose all knowledge of what the client sent the moment
-/// they're handed to `From<sqlx::Error>` — running through this
-/// helper preserves the body so the resulting 400 can name the
-/// offending value.
-fn validation_from_sql_error(
-    e: sqlx::Error,
-    body: &Map<String, Value>,
-    model: &ModelMeta,
-) -> ApiError {
-    if let Some(classified) = classify_constraint_failure(&e) {
-        let enriched = enrich_validation_with_body(classified, body, model);
-        return ApiError::Validation {
-            code: enriched.code,
-            field_errors: enriched.field_errors,
-            non_field_errors: enriched.non_field_errors,
-        };
-    }
-    // Not a recognised constraint code — fall through to the
-    // standard `From<sqlx::Error>` mapping (which turns Protocol
-    // errors into BadInput and everything else into a 500).
-    ApiError::from(e)
 }
 
 // =========================================================================
@@ -1667,36 +1146,14 @@ async fn create(
     cfg.gate(&table, &Action::Create, identity.as_ref())?;
     drop_noform_fields(&model, &mut body);
 
-    // Pre-DB validation. Two checks run together so the client
-    // sees EVERY bad input in one response — a blank `name` and
-    // a bogus `category` FK surface in the same 400, not in two
-    // sequential round-trips. The required-field check is sync;
-    // the FK existence check fires N indexed `SELECT count`s
-    // through the ORM (one per FK column in the body).
-    let mut field_errors = validate_required_on_create(&model, &body);
-    let fk_errors = validate_fk_references(&model, &body).await;
-    for (col, msgs) in fk_errors {
-        // Merge: if a field has both a "required" and a
-        // "FK not found" error, keep the FK message — it's the
-        // more specific failure mode (the client knew to send
-        // a value, the value just doesn't reference a real row).
-        field_errors.insert(col, msgs);
-    }
-    if !field_errors.is_empty() {
-        return Err(ApiError::Validation {
-            code: "validation_error",
-            field_errors,
-            non_field_errors: Vec::new(),
-        });
-    }
-
-    let mut row = match umbra::orm::DynQuerySet::for_meta(&model)
+    // The ORM owns pre-validation + constraint classification
+    // now — `insert_json` returns a structured `WriteError`
+    // that `From<WriteError> for ApiError` translates into a
+    // 400 with field-level errors. No body parsing at the
+    // boundary, no string-based Protocol-error contracts.
+    let mut row = umbra::orm::DynQuerySet::for_meta(&model)
         .insert_json(&body)
-        .await
-    {
-        Ok(row) => row,
-        Err(e) => return Err(validation_from_sql_error(e, &body, &model)),
-    };
+        .await?;
     cfg.apply_overrides(&table, &mut row);
     Ok((StatusCode::CREATED, Json(row)))
 }
@@ -1713,23 +1170,6 @@ async fn update(
     drop_noform_fields(&model, &mut body);
     let pk = pk_column(&model)?;
 
-    // Pre-DB validation: required (only complains about
-    // EXPLICIT blanks on update — partial-update contract) plus
-    // FK existence. Merged so the client sees every issue in
-    // one response.
-    let mut field_errors = validate_required_on_update(&model, &body);
-    let fk_errors = validate_fk_references(&model, &body).await;
-    for (col, msgs) in fk_errors {
-        field_errors.insert(col, msgs);
-    }
-    if !field_errors.is_empty() {
-        return Err(ApiError::Validation {
-            code: "validation_error",
-            field_errors,
-            non_field_errors: Vec::new(),
-        });
-    }
-
     // 404 if the target row doesn't exist before we attempt the UPDATE.
     let no_filter = FilterClause::default();
     let existing = fetch_rows(&model, Some((&pk.name, &id)), None, &no_filter).await?;
@@ -1741,16 +1181,13 @@ async fn update(
     }
 
     // PATCH-style update: only the columns supplied in the body are
-    // written, primary key never. Returns the row count which we
-    // discard — we re-read the row below to send back the canonical
-    // post-update shape (incl. any DB-side defaults or triggers).
-    if let Err(e) = umbra::orm::DynQuerySet::for_meta(&model)
+    // written, primary key never. The ORM's `update_json` owns
+    // validation + constraint classification; `From<WriteError>
+    // for ApiError` handles the 400 translation.
+    umbra::orm::DynQuerySet::for_meta(&model)
         .filter_eq_string(&pk.name, &id)
         .update_json(&body)
-        .await
-    {
-        return Err(validation_from_sql_error(e, &body, &model));
-    }
+        .await?;
     let mut rows = fetch_rows(&model, Some((&pk.name, &id)), None, &no_filter).await?;
     let Some(mut row) = rows.pop() else {
         return Err(ApiError::BadInput(

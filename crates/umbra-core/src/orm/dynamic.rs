@@ -586,8 +586,22 @@ impl<'a> DynQuerySet<'a> {
     pub async fn insert_json(
         self,
         body: &serde_json::Map<String, serde_json::Value>,
-    ) -> Result<serde_json::Map<String, serde_json::Value>, DynError> {
-        use crate::orm::write::is_default_pk;
+    ) -> Result<serde_json::Map<String, serde_json::Value>, crate::orm::write::WriteError> {
+        use crate::orm::write::{WriteError, is_default_pk};
+
+        // Phase 0 — pre-DB validation. Required-field + FK
+        // existence checks run together so the response carries
+        // every problem in one round-trip. The REST plugin used
+        // to do this; centralising it here means the admin
+        // plugin and any third-party caller of `insert_json`
+        // gets the same structured errors.
+        let validation_errors =
+            crate::orm::validation::validate_on_create(&self.meta, body).await;
+        if !validation_errors.is_empty() {
+            return Err(WriteError::Multiple {
+                errors: validation_errors,
+            });
+        }
 
         let mut cols: Vec<&str> = Vec::new();
         let mut values: Vec<SeaValue> = Vec::new();
@@ -622,62 +636,50 @@ impl<'a> DynQuerySet<'a> {
                     values.push(now_value);
                     continue;
                 }
-                // Pre-validate: a non-nullable column with no DB-side
-                // default that the body didn't include is a client
-                // mistake. Surface it as a structured error instead of
-                // letting the DB's NOT NULL constraint produce a 500
-                // at the boundary. Columns with a DEFAULT clause are
-                // allowed to be omitted — the backend fills them.
-                if !col.nullable && col.default.is_empty() && !col.primary_key {
-                    return Err(sqlx::Error::Protocol(format!(
-                        "field `{}` is required",
-                        col.name
-                    )));
-                }
+                // `validate_on_create` already caught
+                // missing-required-field cases above, but a
+                // column with a default that the body omitted
+                // still needs to be skipped here so the backend
+                // fills it.
                 continue;
             };
-            // Null body values for non-nullable columns also surface as
-            // a structured error rather than the DB's NOT NULL rejection.
-            if json.is_null() && !col.nullable && col.default.is_empty() {
-                return Err(sqlx::Error::Protocol(format!(
-                    "field `{}` is required and was null",
-                    col.name
-                )));
+            if json.is_null() {
+                // Pre-validation lets nullable nulls through; a
+                // null on a non-nullable column was caught above.
+                continue;
             }
-            // IMP-3: pre-validate `#[umbra(min = N)]` / `max = N`. The
-            // DB-side CHECK constraint catches violations too, but
-            // surfacing a structured 400 with the field name is
-            // friendlier than a raw constraint error from sqlx.
+            // IMP-3: pre-validate `#[umbra(min = N)]` / `max = N`.
+            // The DB-side CHECK catches violations too; surfacing
+            // a structured error is friendlier.
             if let Some(n) = json.as_i64() {
                 if let Some(min) = col.min {
                     if n < min {
-                        return Err(sqlx::Error::Protocol(format!(
-                            "field `{}` violates min={min}: got {n}",
-                            col.name
-                        )));
+                        return Err(WriteError::Validator {
+                            field: col.name.clone(),
+                            message: format!("must be >= {min} (got {n})."),
+                        });
                     }
                 }
                 if let Some(max) = col.max {
                     if n > max {
-                        return Err(sqlx::Error::Protocol(format!(
-                            "field `{}` violates max={max}: got {n}",
-                            col.name
-                        )));
+                        return Err(WriteError::Validator {
+                            field: col.name.clone(),
+                            message: format!("must be <= {max} (got {n})."),
+                        });
                     }
                 }
             }
-            // BUG-11/12/13: pre-validate Slug / Email / Url wrappers.
-            // The macro-emitted `text_format` marker selects the
-            // validator; only strings are checked (the column type
-            // catches non-string values upstream).
+            // BUG-11/12/13: Slug / Email / Url wrappers.
             if let (Some(fmt), Some(s)) = (col.text_format.as_deref(), json.as_str()) {
                 if let Err(e) = crate::orm::validators::validate_text_format(fmt, s) {
-                    return Err(sqlx::Error::Protocol(format!("field `{}` {e}", col.name)));
+                    return Err(WriteError::Validator {
+                        field: col.name.clone(),
+                        message: e.to_string(),
+                    });
                 }
             }
             let sea_value =
-                crate::orm::write::json_to_sea_value(col.ty, json, col.nullable, &col.name)
-                    .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
+                crate::orm::write::json_to_sea_value(col.ty, json, col.nullable, &col.name)?;
             cols.push(&col.name);
             values.push(sea_value);
         }
@@ -689,7 +691,9 @@ impl<'a> DynQuerySet<'a> {
             .fields
             .iter()
             .find(|c| c.primary_key)
-            .ok_or_else(|| sqlx::Error::Protocol("insert_json: model has no PK".to_string()))?;
+            .ok_or_else(|| WriteError::Sqlx(sqlx::Error::Protocol(
+                "insert_json: model has no PK".to_string(),
+            )))?;
         let pk_name = pk_col.name.clone();
         let pk_ty = pk_col.ty;
 
@@ -702,7 +706,10 @@ impl<'a> DynQuerySet<'a> {
         match pool_dispatched() {
             DbPool::Sqlite(pool) => {
                 let (sql, vals) = q.build_sqlx(SqliteQueryBuilder);
-                let res = sqlx::query_with(&sql, vals).execute(pool).await?;
+                let res = sqlx::query_with(&sql, vals)
+                    .execute(pool)
+                    .await
+                    .map_err(|e| classify_or_sqlx(e, body))?;
                 // Re-fetch by PK so the caller sees the row as the DB
                 // stored it (defaults, autoincrement, server-side
                 // coercion).
@@ -717,9 +724,9 @@ impl<'a> DynQuerySet<'a> {
                             .get(&pk_name)
                             .cloned()
                             .unwrap_or(serde_json::Value::Null);
-                        let sea_value =
-                            crate::orm::write::json_to_sea_value(pk_ty, &supplied, false, &pk_name)
-                                .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
+                        let sea_value = crate::orm::write::json_to_sea_value(
+                            pk_ty, &supplied, false, &pk_name,
+                        )?;
                         Expr::col(Alias::new(&pk_name)).eq(sea_value)
                     }
                 };
@@ -744,7 +751,10 @@ impl<'a> DynQuerySet<'a> {
                 // explicit "all columns" variant.
                 q.returning_all();
                 let (sql, vals) = q.build_sqlx(PostgresQueryBuilder);
-                let row = sqlx::query_with(&sql, vals).fetch_one(pool).await?;
+                let row = sqlx::query_with(&sql, vals)
+                    .fetch_one(pool)
+                    .await
+                    .map_err(|e| classify_or_sqlx(e, body))?;
                 let mut out = serde_json::Map::new();
                 for col in &self.meta.fields {
                     out.insert(col.name.clone(), decode_pg_to_json(&row, col)?);
@@ -760,7 +770,21 @@ impl<'a> DynQuerySet<'a> {
     pub async fn update_json(
         self,
         body: &serde_json::Map<String, serde_json::Value>,
-    ) -> Result<u64, DynError> {
+    ) -> Result<u64, crate::orm::write::WriteError> {
+        use crate::orm::write::WriteError;
+
+        // Phase 0 — pre-DB validation. Update-shape: required-
+        // field check only complains about EXPLICIT blanks
+        // (preserving the partial-update contract); FK existence
+        // applies to whatever FK columns the body carries.
+        let validation_errors =
+            crate::orm::validation::validate_on_update(&self.meta, body).await;
+        if !validation_errors.is_empty() {
+            return Err(WriteError::Multiple {
+                errors: validation_errors,
+            });
+        }
+
         let mut q = Query::update();
         q.table(Alias::new(&self.meta.table));
         let mut any = false;
@@ -784,18 +808,18 @@ impl<'a> DynQuerySet<'a> {
             if let Some(n) = json.as_i64() {
                 if let Some(min) = col.min {
                     if n < min {
-                        return Err(sqlx::Error::Protocol(format!(
-                            "field `{}` violates min={min}: got {n}",
-                            col.name
-                        )));
+                        return Err(WriteError::Validator {
+                            field: col.name.clone(),
+                            message: format!("must be >= {min} (got {n})."),
+                        });
                     }
                 }
                 if let Some(max) = col.max {
                     if n > max {
-                        return Err(sqlx::Error::Protocol(format!(
-                            "field `{}` violates max={max}: got {n}",
-                            col.name
-                        )));
+                        return Err(WriteError::Validator {
+                            field: col.name.clone(),
+                            message: format!("must be <= {max} (got {n})."),
+                        });
                     }
                 }
             }
@@ -803,12 +827,14 @@ impl<'a> DynQuerySet<'a> {
             // insert_json.
             if let (Some(fmt), Some(s)) = (col.text_format.as_deref(), json.as_str()) {
                 if let Err(e) = crate::orm::validators::validate_text_format(fmt, s) {
-                    return Err(sqlx::Error::Protocol(format!("field `{}` {e}", col.name)));
+                    return Err(WriteError::Validator {
+                        field: col.name.clone(),
+                        message: e.to_string(),
+                    });
                 }
             }
             let sea_value =
-                crate::orm::write::json_to_sea_value(col.ty, json, col.nullable, &col.name)
-                    .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
+                crate::orm::write::json_to_sea_value(col.ty, json, col.nullable, &col.name)?;
             q.value(Alias::new(&col.name), sea_value);
             any = true;
         }
@@ -822,12 +848,18 @@ impl<'a> DynQuerySet<'a> {
         match pool_dispatched() {
             DbPool::Sqlite(pool) => {
                 let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
-                let res = sqlx::query_with(&sql, values).execute(pool).await?;
+                let res = sqlx::query_with(&sql, values)
+                    .execute(pool)
+                    .await
+                    .map_err(|e| classify_or_sqlx(e, body))?;
                 Ok(res.rows_affected())
             }
             DbPool::Postgres(pool) => {
                 let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
-                let res = sqlx::query_with(&sql, values).execute(pool).await?;
+                let res = sqlx::query_with(&sql, values)
+                    .execute(pool)
+                    .await
+                    .map_err(|e| classify_or_sqlx(e, body))?;
                 Ok(res.rows_affected())
             }
         }
@@ -1267,4 +1299,19 @@ fn panic_pg_only_unsupported(column: &str) -> ! {
          (Inet/Cidr/MacAddr); the field/backend system check should \
          have failed boot."
     )
+}
+
+/// Classify a sqlx error from an `insert_json` / `update_json`
+/// SQL execution into a structured `WriteError`. Constraint
+/// failures are body-aware (the original JSON value is threaded
+/// into the message); unknown errors fall through to
+/// `WriteError::Sqlx` and the REST layer renders them as a 500.
+fn classify_or_sqlx(
+    e: sqlx::Error,
+    body: &serde_json::Map<String, serde_json::Value>,
+) -> crate::orm::write::WriteError {
+    if let Some(classified) = crate::orm::validation::classify_sql_error(&e, body) {
+        return classified;
+    }
+    crate::orm::write::WriteError::Sqlx(e)
 }

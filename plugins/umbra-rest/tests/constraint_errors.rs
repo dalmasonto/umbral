@@ -285,7 +285,7 @@ async fn empty_string_on_required_field_is_rejected() {
     assert!(
         username_errors[0]
             .as_str()
-            .map(|s| s.contains("required"))
+            .map(|s| s.contains("required") || s.contains("blank"))
             .unwrap_or(false),
         "got {username_errors:?}",
     );
@@ -444,7 +444,7 @@ async fn blank_string_and_bad_fk_surface_together() {
     assert!(
         body_errors[0]
             .as_str()
-            .map(|s| s.contains("required"))
+            .map(|s| s.contains("required") || s.contains("blank"))
             .unwrap_or(false),
         "got {body_errors:?}",
     );

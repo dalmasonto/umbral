@@ -39,12 +39,53 @@ use serde_json::Value as JsonValue;
 use crate::orm::SqlType;
 
 /// Errors that can surface when converting JSON values to bindable
-/// sea-query values, or when the write itself fails.
+/// sea-query values, when pre-validating against the schema, or
+/// when the write itself fails. Every variant that the REST /
+/// admin plugins surface as a DRF-style field error has its own
+/// structured shape so the boundary translation is a `match`, not
+/// a string parse.
 #[derive(Debug)]
 pub enum WriteError {
     /// A non-nullable field received a JSON `null` (or was absent on
     /// create). Names the offending field.
     RequiredFieldMissing { field: String },
+    /// A non-nullable text field received an empty string where a
+    /// meaningful value was required (Django's CharField with
+    /// `blank=False`). Surfaced by pre-validation in `insert_json`.
+    BlankNotAllowed { field: String },
+    /// A foreign-key column references a row that doesn't exist in
+    /// the target table. Pre-validated against the live DB before
+    /// the INSERT/UPDATE so the response keys the error under the
+    /// FK column with the offending value.
+    ForeignKeyNotFound {
+        field: String,
+        target_table: String,
+        value: serde_json::Value,
+    },
+    /// DB-side UNIQUE constraint failure. `field` is `Some(col)` when
+    /// the message / constraint name names the column (SQLite
+    /// always; Postgres via the `<table>_<col>_key` convention);
+    /// `None` for unparseable cases. `value` carries the offending
+    /// JSON value when the original body is still available.
+    UniqueViolation {
+        field: Option<String>,
+        value: Option<serde_json::Value>,
+    },
+    /// DB-side NOT NULL constraint failure (caller bypassed pre-
+    /// validation, e.g. via a raw transaction).
+    NotNullViolation { field: Option<String> },
+    /// DB-side CHECK constraint failure. Carries the constraint
+    /// name when the engine surfaces it (Postgres does; SQLite
+    /// gives just a generic message).
+    CheckViolation { constraint: Option<String> },
+    /// DB-side foreign-key constraint failure that pre-validation
+    /// missed (rare — typically a race where the target row was
+    /// deleted between the existence check and the INSERT).
+    ForeignKeyViolation { field: Option<String> },
+    /// Multiple validation errors at once. Surfaced by
+    /// `insert_json` when required + FK checks both fire, so the
+    /// caller can render every problem in one response.
+    Multiple { errors: Vec<WriteError> },
     /// The JSON value couldn't be coerced to the column's SqlType.
     /// e.g. a string body where an integer was expected.
     TypeMismatch {
@@ -52,6 +93,9 @@ pub enum WriteError {
         expected: SqlType,
         got: String,
     },
+    /// Format validator (`#[umbra(slug)]` / `email` / `url` /
+    /// `min = N` / `max = N`) rejected the value.
+    Validator { field: String, message: String },
     /// `serde_json` couldn't serialize the instance to a JSON
     /// object (the only shape `Manager::create` accepts).
     NotAnObject,
@@ -66,14 +110,222 @@ pub enum WriteError {
     UnknownColumn { field: String },
 }
 
+impl WriteError {
+    /// Flatten into a DRF-style `{field: [messages, ...]}` map.
+    /// Used by the REST plugin to render the 400 body; the admin
+    /// plugin will use the same shape for inline form errors.
+    /// Variants that aren't tied to a specific field (raw sqlx,
+    /// NotAnObject, etc.) produce empty maps — the caller's
+    /// non-field-error envelope covers those.
+    pub fn field_errors(&self) -> std::collections::BTreeMap<String, Vec<String>> {
+        let mut out: std::collections::BTreeMap<String, Vec<String>> =
+            std::collections::BTreeMap::new();
+        self.collect_field_errors(&mut out);
+        out
+    }
+
+    fn collect_field_errors(&self, out: &mut std::collections::BTreeMap<String, Vec<String>>) {
+        use WriteError::*;
+        match self {
+            RequiredFieldMissing { field } => {
+                out.entry(field.clone())
+                    .or_default()
+                    .push("This field is required.".to_string());
+            }
+            BlankNotAllowed { field } => {
+                out.entry(field.clone())
+                    .or_default()
+                    .push("This field cannot be blank.".to_string());
+            }
+            ForeignKeyNotFound { field, target_table, value } => {
+                let value_repr = repr_json_value(value);
+                out.insert(
+                    field.clone(),
+                    vec![format!(
+                        "Referenced {target_table} row with id={value_repr} not found."
+                    )],
+                );
+            }
+            UniqueViolation { field: Some(col), value } => {
+                let value_repr = value.as_ref().map(repr_json_value);
+                let msg = match value_repr {
+                    Some(v) => format!("A row with {col}={v} already exists."),
+                    None => "A row with this value already exists.".to_string(),
+                };
+                out.insert(col.clone(), vec![msg]);
+            }
+            NotNullViolation { field: Some(col) } => {
+                out.entry(col.clone())
+                    .or_default()
+                    .push("This field is required.".to_string());
+            }
+            ForeignKeyViolation { field: Some(col) } => {
+                out.insert(
+                    col.clone(),
+                    vec!["Referenced row does not exist.".to_string()],
+                );
+            }
+            TypeMismatch { field, expected, got } => {
+                out.entry(field.clone()).or_default().push(format!(
+                    "Expected `{expected:?}`, got `{got}`."
+                ));
+            }
+            Validator { field, message } => {
+                out.entry(field.clone()).or_default().push(message.clone());
+            }
+            UnknownColumn { field } => {
+                out.entry(field.clone()).or_default().push(format!(
+                    "Unknown column `{field}` on this model."
+                ));
+            }
+            Multiple { errors } => {
+                for e in errors {
+                    e.collect_field_errors(out);
+                }
+            }
+            _ => {
+                // Sqlx fallthrough, NotAnObject, SerializeFailed, and
+                // the `None`-field constraint variants produce no
+                // per-field entry — the caller's non-field-error
+                // envelope handles those.
+            }
+        }
+    }
+
+    /// Non-field-level errors, for the DRF `non_field_errors`
+    /// array. Only populated for the parseable-but-non-keyed
+    /// constraint variants and the multi-error wrapper.
+    pub fn non_field_errors(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        self.collect_non_field_errors(&mut out);
+        out
+    }
+
+    fn collect_non_field_errors(&self, out: &mut Vec<String>) {
+        use WriteError::*;
+        match self {
+            UniqueViolation { field: None, .. } => {
+                out.push("A row with one or more of these values already exists.".into());
+            }
+            NotNullViolation { field: None } => {
+                out.push("A required field is missing.".into());
+            }
+            ForeignKeyViolation { field: None } => {
+                out.push(
+                    "One or more foreign-key fields reference rows that don't exist."
+                        .into(),
+                );
+            }
+            CheckViolation { constraint } => {
+                let msg = match constraint {
+                    Some(c) => format!("Check constraint `{c}` failed."),
+                    None => "A check constraint failed.".to_string(),
+                };
+                out.push(msg);
+            }
+            Multiple { errors } => {
+                for e in errors {
+                    e.collect_non_field_errors(out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Stable machine-readable code for the boundary layer. REST
+    /// puts this in the `code` field of the 400 body; admin uses
+    /// it to pick an inline error style.
+    pub fn code(&self) -> &'static str {
+        use WriteError::*;
+        match self {
+            RequiredFieldMissing { .. }
+            | BlankNotAllowed { .. }
+            | NotNullViolation { .. } => "required_field",
+            ForeignKeyNotFound { .. } | ForeignKeyViolation { .. } => "fk_constraint",
+            UniqueViolation { .. } => "unique_constraint",
+            CheckViolation { .. } => "check_constraint",
+            TypeMismatch { .. } => "type_mismatch",
+            Validator { .. } => "validator_failed",
+            Multiple { .. } => "validation_error",
+            UnknownColumn { .. } => "unknown_column",
+            NotAnObject => "not_an_object",
+            SerializeFailed(_) => "serialize_failed",
+            Sqlx(_) => "database_error",
+        }
+    }
+
+    /// `true` for the variants that represent user-fixable input
+    /// problems (renderable as a 400). `false` for genuine
+    /// infrastructure / serialization failures (which should
+    /// surface as 500s).
+    pub fn is_validation(&self) -> bool {
+        use WriteError::*;
+        !matches!(self, Sqlx(_) | SerializeFailed(_) | NotAnObject)
+    }
+}
+
+/// JSON-value display used inside error messages. Strings are
+/// quoted, numbers / bools / null appear bare, arrays / objects
+/// fall back to compact JSON.
+fn repr_json_value(v: &serde_json::Value) -> String {
+    match v {
+        serde_json::Value::String(s) => format!("'{s}'"),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        serde_json::Value::Null => "null".to_string(),
+        _ => serde_json::to_string(v).unwrap_or_else(|_| "(?)".to_string()),
+    }
+}
+
 impl std::fmt::Display for WriteError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            WriteError::RequiredFieldMissing { field } => {
-                write!(
+            WriteError::RequiredFieldMissing { field } => write!(
+                f,
+                "umbra::orm::write: required field `{field}` is missing or null"
+            ),
+            WriteError::BlankNotAllowed { field } => write!(
+                f,
+                "umbra::orm::write: field `{field}` cannot be blank"
+            ),
+            WriteError::ForeignKeyNotFound {
+                field,
+                target_table,
+                value,
+            } => write!(
+                f,
+                "umbra::orm::write: field `{field}` references `{target_table}` row with id={} which does not exist",
+                repr_json_value(value),
+            ),
+            WriteError::UniqueViolation { field, value } => match (field, value) {
+                (Some(f_), Some(v)) => write!(
                     f,
-                    "umbra::orm::write: required field `{field}` is missing or null"
-                )
+                    "umbra::orm::write: unique constraint on `{f_}`={} violated",
+                    repr_json_value(v),
+                ),
+                (Some(f_), None) => write!(
+                    f,
+                    "umbra::orm::write: unique constraint on `{f_}` violated"
+                ),
+                _ => write!(f, "umbra::orm::write: unique constraint violated"),
+            },
+            WriteError::NotNullViolation { field } => match field {
+                Some(f_) => write!(f, "umbra::orm::write: NOT NULL on `{f_}` violated"),
+                None => write!(f, "umbra::orm::write: NOT NULL violation"),
+            },
+            WriteError::CheckViolation { constraint } => match constraint {
+                Some(c) => write!(f, "umbra::orm::write: CHECK `{c}` violated"),
+                None => write!(f, "umbra::orm::write: CHECK constraint violated"),
+            },
+            WriteError::ForeignKeyViolation { field } => match field {
+                Some(f_) => write!(
+                    f,
+                    "umbra::orm::write: foreign-key constraint on `{f_}` violated"
+                ),
+                None => write!(f, "umbra::orm::write: foreign-key constraint violated"),
+            },
+            WriteError::Multiple { errors } => {
+                write!(f, "umbra::orm::write: {} validation error(s)", errors.len())
             }
             WriteError::TypeMismatch {
                 field,
@@ -83,6 +335,9 @@ impl std::fmt::Display for WriteError {
                 f,
                 "umbra::orm::write: field `{field}` expected `{expected:?}`, got `{got}`",
             ),
+            WriteError::Validator { field, message } => {
+                write!(f, "umbra::orm::write: field `{field}` {message}")
+            }
             WriteError::NotAnObject => write!(
                 f,
                 "umbra::orm::write: model didn't serialize to a JSON object — make sure your struct uses a flat field layout",
