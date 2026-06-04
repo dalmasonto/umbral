@@ -993,16 +993,45 @@ impl<T: Model> Manager<T> {
             + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>
             + HydrateRelated,
     {
+        use crate::orm::write::WriteError;
         let map = serialize_to_map(&instance)?;
+
+        // Same pre-DB validation pipeline the dynamic
+        // `insert_json` path runs — choices + FK existence +
+        // M2M shape. Empty-string + required-field checks are
+        // intentionally relaxed on the typed path: a Rust
+        // `pub title: String` field set to `""` is the caller's
+        // deliberate choice, not a form-default leak, and
+        // missing-required can't happen because the struct
+        // forced the caller to supply every column at compile
+        // time. We only validate the things the typed path
+        // can't catch at compile time.
+        let meta = crate::migrate::ModelMeta::for_::<T>();
+        let validation_errors =
+            crate::orm::validation::validate_on_typed_create(&meta, &map).await;
+        if !validation_errors.is_empty() {
+            return Err(WriteError::Multiple {
+                errors: validation_errors,
+            });
+        }
+
         let pool = resolve_pool::<T>(None);
         let backend = pool.backend_name();
         let stmt = build_insert_one_for::<T>(backend, &map)?;
+        // Post-execution SQL classification: turns the DB's
+        // UNIQUE / FK / NOT NULL / CHECK violations into the
+        // structured `WriteError` variants instead of a raw
+        // `Sqlx(_)` 500. Symmetric with `DynQuerySet::insert_json`.
         match pool {
             DbPool::Sqlite(pool) => {
                 let (sql, values) = stmt.build_sqlx(SqliteQueryBuilder);
                 let mut row = sqlx::query_as_with::<sqlx::Sqlite, T, _>(&sql, values)
                     .fetch_one(&pool)
-                    .await?;
+                    .await
+                    .map_err(|e| {
+                        crate::orm::validation::classify_sql_error(&e, &map)
+                            .unwrap_or(WriteError::Sqlx(e))
+                    })?;
                 // BUG-16 step 2: every materialised row, including the
                 // post-INSERT readback, needs `parent_id` +
                 // `junction_table` seeded on its M2M slots — otherwise
@@ -1014,7 +1043,11 @@ impl<T: Model> Manager<T> {
                 let (sql, values) = stmt.build_sqlx(PostgresQueryBuilder);
                 let mut row = sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
                     .fetch_one(&pool)
-                    .await?;
+                    .await
+                    .map_err(|e| {
+                        crate::orm::validation::classify_sql_error(&e, &map)
+                            .unwrap_or(WriteError::Sqlx(e))
+                    })?;
                 row.set_m2m_parent_ids();
                 Ok(row)
             }
@@ -1033,27 +1066,55 @@ impl<T: Model> Manager<T> {
     where
         T: serde::Serialize,
     {
+        use crate::orm::write::WriteError;
         if instances.is_empty() {
             return Ok(0);
         }
         let maps: Result<Vec<_>, _> = instances.iter().map(serialize_to_map).collect();
         let maps = maps?;
+        // Validate every instance through the typed-create
+        // pipeline. Collected into one `Multiple` so a caller
+        // that submitted ten rows and got two bad ones can fix
+        // both in one pass.
+        let meta = crate::migrate::ModelMeta::for_::<T>();
+        let mut all_errors: Vec<WriteError> = Vec::new();
+        for map in &maps {
+            let errs = crate::orm::validation::validate_on_typed_create(&meta, map).await;
+            all_errors.extend(errs);
+        }
+        if !all_errors.is_empty() {
+            return Err(WriteError::Multiple { errors: all_errors });
+        }
         let pool = resolve_pool::<T>(None);
         let backend = pool.backend_name();
         let stmt = build_insert_many_for::<T>(backend, &maps)?;
+        // First row's map is used to enrich UNIQUE / FK
+        // messages with the offending value when the engine
+        // doesn't name it. Imperfect for bulk (the failing row
+        // could be later in the batch) but better than the raw
+        // sqlx error.
+        let first_map = maps.first().cloned().unwrap_or_default();
         match pool {
             DbPool::Sqlite(pool) => {
                 let (sql, values) = stmt.build_sqlx(SqliteQueryBuilder);
                 let result = sqlx::query_with::<sqlx::Sqlite, _>(&sql, values)
                     .execute(&pool)
-                    .await?;
+                    .await
+                    .map_err(|e| {
+                        crate::orm::validation::classify_sql_error(&e, &first_map)
+                            .unwrap_or(WriteError::Sqlx(e))
+                    })?;
                 Ok(result.rows_affected())
             }
             DbPool::Postgres(pool) => {
                 let (sql, values) = stmt.build_sqlx(PostgresQueryBuilder);
                 let result = sqlx::query_with::<sqlx::Postgres, _>(&sql, values)
                     .execute(&pool)
-                    .await?;
+                    .await
+                    .map_err(|e| {
+                        crate::orm::validation::classify_sql_error(&e, &first_map)
+                            .unwrap_or(WriteError::Sqlx(e))
+                    })?;
                 Ok(result.rows_affected())
             }
         }

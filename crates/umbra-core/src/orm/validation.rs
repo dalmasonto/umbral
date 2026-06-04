@@ -75,6 +75,34 @@ pub async fn validate_on_create(
 /// Update-shaped equivalent. Required-field check only fires on
 /// fields the client EXPLICITLY sent as blank — missing keys are
 /// fine per the partial-update contract.
+/// Typed-create equivalent of [`validate_on_create`]. Skips the
+/// blank-string check (a Rust `String` field set to `""` is the
+/// caller's deliberate choice on this path, not a form-default
+/// leak), but still runs choices + FK existence + M2M shape —
+/// the things a compile-time type can't catch.
+pub async fn validate_on_typed_create(
+    meta: &ModelMeta,
+    body: &Map<String, Value>,
+) -> Vec<WriteError> {
+    let mut errors = Vec::new();
+    errors.extend(validate_choices(meta, body));
+    errors.extend(validate_m2m_relations(meta, body).await);
+    let mut fk_errors = validate_fk_references(meta, body).await;
+    let fk_fields: std::collections::HashSet<String> = fk_errors
+        .iter()
+        .filter_map(|e| match e {
+            WriteError::ForeignKeyNotFound { field, .. } => Some(field.clone()),
+            _ => None,
+        })
+        .collect();
+    errors.retain(|e| match e {
+        WriteError::Validator { field, .. } => !fk_fields.contains(field),
+        _ => true,
+    });
+    errors.append(&mut fk_errors);
+    errors
+}
+
 pub async fn validate_on_update(
     meta: &ModelMeta,
     body: &Map<String, Value>,

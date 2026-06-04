@@ -280,6 +280,15 @@ fn default_bigint() -> crate::orm::SqlType {
 }
 
 impl ModelMeta {
+    /// The primary-key column on this model. Every umbra model
+    /// has exactly one PK by construction (the derive enforces
+    /// it), but the lookup is `Option`-shaped because nothing
+    /// stops a hand-written `ModelMeta` (test fixtures, etc.)
+    /// from omitting it.
+    pub fn pk_column(&self) -> Option<&Column> {
+        self.fields.iter().find(|c| c.primary_key)
+    }
+
     /// Read static metadata off `T: Model` into an owned `ModelMeta`.
     /// Called from `AppBuilder::model::<T>()`.
     pub fn for_<T: Model>() -> Self {

@@ -589,12 +589,34 @@ impl<'a> DynQuerySet<'a> {
     ) -> Result<serde_json::Map<String, serde_json::Value>, crate::orm::write::WriteError> {
         use crate::orm::write::{WriteError, is_default_pk};
 
+        // Phase -1 — strip `noform` columns. The user-facing
+        // contract is "this column is server-managed; clients
+        // never write to it" — REST callers used to filter at
+        // the boundary, but the rule belongs at the dynamic-
+        // write seam so every consumer (REST, admin, custom
+        // handlers) gets it for free. The owned clone lets us
+        // continue to take `&body` from the caller.
+        let mut body_owned: serde_json::Map<String, serde_json::Value>;
+        let body: &serde_json::Map<String, serde_json::Value> =
+            if self.meta.fields.iter().any(|c| c.noform) {
+                body_owned = body.clone();
+                for col in &self.meta.fields {
+                    if col.noform {
+                        body_owned.remove(&col.name);
+                    }
+                }
+                &body_owned
+            } else {
+                body
+            };
+
         // Phase 0 — pre-DB validation. Required-field + FK
-        // existence checks run together so the response carries
-        // every problem in one round-trip. The REST plugin used
-        // to do this; centralising it here means the admin
-        // plugin and any third-party caller of `insert_json`
-        // gets the same structured errors.
+        // existence + choices + M2M shape checks run together
+        // so the response carries every problem in one round-
+        // trip. The REST plugin used to do this; centralising
+        // it here means the admin plugin and any third-party
+        // caller of `insert_json` gets the same structured
+        // errors.
         let validation_errors =
             crate::orm::validation::validate_on_create(&self.meta, body).await;
         if !validation_errors.is_empty() {
@@ -773,10 +795,27 @@ impl<'a> DynQuerySet<'a> {
     ) -> Result<u64, crate::orm::write::WriteError> {
         use crate::orm::write::WriteError;
 
+        // Phase -1 — strip `noform` columns (server-managed
+        // fields the client must not overwrite).
+        let mut body_owned: serde_json::Map<String, serde_json::Value>;
+        let body: &serde_json::Map<String, serde_json::Value> =
+            if self.meta.fields.iter().any(|c| c.noform) {
+                body_owned = body.clone();
+                for col in &self.meta.fields {
+                    if col.noform {
+                        body_owned.remove(&col.name);
+                    }
+                }
+                &body_owned
+            } else {
+                body
+            };
+
         // Phase 0 — pre-DB validation. Update-shape: required-
         // field check only complains about EXPLICIT blanks
         // (preserving the partial-update contract); FK existence
-        // applies to whatever FK columns the body carries.
+        // + choices + M2M shape apply to whatever the body
+        // carries.
         let validation_errors =
             crate::orm::validation::validate_on_update(&self.meta, body).await;
         if !validation_errors.is_empty() {

@@ -1045,20 +1045,14 @@ fn allowed_model(table: &str) -> Result<ModelMeta, ApiError> {
 
 fn pk_column(model: &ModelMeta) -> Result<&umbra::migrate::Column, ApiError> {
     model
-        .fields
-        .iter()
-        .find(|c| c.primary_key)
+        .pk_column()
         .ok_or_else(|| ApiError::BadInput(format!("`{}` has no primary key", model.table)))
 }
 
-/// Strip `noform` columns from a request body before write.
-fn drop_noform_fields(model: &ModelMeta, body: &mut Map<String, Value>) {
-    for col in &model.fields {
-        if col.noform {
-            body.remove(&col.name);
-        }
-    }
-}
+// `noform` filtering used to live here. It moved into
+// `DynQuerySet::insert_json` / `update_json` so every consumer of
+// the dynamic-write path (REST, admin, custom handlers) gets it
+// for free — no boundary-layer scrubbing required.
 
 // =========================================================================
 // Handlers.
@@ -1138,17 +1132,17 @@ async fn retrieve(
 async fn create(
     Path(table): Path<String>,
     headers: umbra::web::HeaderMap,
-    Json(mut body): Json<Map<String, Value>>,
+    Json(body): Json<Map<String, Value>>,
 ) -> Result<(StatusCode, Json<Map<String, Value>>), ApiError> {
     let cfg = CONFIG.get().expect("RestPlugin::routes was called");
     let identity = cfg.authentication.authenticate(&headers).await;
     let model = allowed_model(&table)?;
     cfg.gate(&table, &Action::Create, identity.as_ref())?;
-    drop_noform_fields(&model, &mut body);
 
-    // The ORM owns pre-validation + constraint classification
-    // now — `insert_json` returns a structured `WriteError`
-    // that `From<WriteError> for ApiError` translates into a
+    // The ORM owns pre-validation + constraint classification +
+    // noform-stripping now — `insert_json` returns a structured
+    // `WriteError` that `From<WriteError> for ApiError`
+    // translates into a
     // 400 with field-level errors. No body parsing at the
     // boundary, no string-based Protocol-error contracts.
     let mut row = umbra::orm::DynQuerySet::for_meta(&model)
@@ -1161,13 +1155,12 @@ async fn create(
 async fn update(
     Path((table, id)): Path<(String, String)>,
     headers: umbra::web::HeaderMap,
-    Json(mut body): Json<Map<String, Value>>,
+    Json(body): Json<Map<String, Value>>,
 ) -> Result<Json<Map<String, Value>>, ApiError> {
     let cfg = CONFIG.get().expect("RestPlugin::routes was called");
     let identity = cfg.authentication.authenticate(&headers).await;
     let model = allowed_model(&table)?;
     cfg.gate(&table, &Action::Update, identity.as_ref())?;
-    drop_noform_fields(&model, &mut body);
     let pk = pk_column(&model)?;
 
     // 404 if the target row doesn't exist before we attempt the UPDATE.
@@ -1364,113 +1357,11 @@ async fn count_rows_filtered(model: &ModelMeta, filter: &FilterClause) -> Result
     Ok(qs.count().await?)
 }
 
-#[cfg(test)]
-mod noform_drop {
-    use super::*;
-    use serde_json::json;
-    use umbra::migrate::Column;
-    use umbra::orm::SqlType;
-
-    fn col(name: &str, noform: bool, noedit: bool) -> Column {
-        Column {
-            name: name.into(),
-            ty: SqlType::Text,
-            primary_key: false,
-            nullable: false,
-            fk_target: None,
-            noform,
-            noedit,
-            is_string_repr: false,
-            max_length: 0,
-            choices: Vec::new(),
-            choice_labels: Vec::new(),
-            default: String::new(),
-            is_multichoice: false,
-            unique: false,
-            on_delete: ::umbra::orm::FkAction::NoAction,
-            on_update: ::umbra::orm::FkAction::NoAction,
-            index: false,
-            auto_now_add: false,
-            auto_now: false,
-            help: String::new(),
-            example: String::new(),
-            supported_backends: Vec::new(),
-            min: None,
-            max: None,
-            text_format: ::core::option::Option::None,
-        }
-    }
-
-    fn model() -> ModelMeta {
-        ModelMeta {
-            name: "User".into(),
-            table: "auth_user".into(),
-            fields: vec![
-                col("username", false, false),     // ordinary
-                col("email", false, true),         // noedit only
-                col("password_hash", true, false), // noform
-                col("internal_token", true, true), // both
-            ],
-            display: "User".into(),
-            icon: "user".into(),
-            database: None,
-            singleton: false,
-            unique_together: Vec::new(),
-            indexes: Vec::new(),
-            ordering: Vec::new(),
-            m2m_relations: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn drops_noform_keys_from_body() {
-        let mut body: Map<String, Value> = json!({
-            "username": "alice",
-            "email": "alice@example.com",
-            "password_hash": "$2b$12$...should_be_dropped",
-            "internal_token": "secret_should_be_dropped",
-        })
-        .as_object()
-        .unwrap()
-        .clone();
-
-        drop_noform_fields(&model(), &mut body);
-
-        assert!(body.contains_key("username"), "ordinary field stays");
-        assert!(
-            body.contains_key("email"),
-            "noedit-only field stays — noedit is an admin UX hint, not an API contract"
-        );
-        assert!(
-            !body.contains_key("password_hash"),
-            "noform field must be dropped from writes"
-        );
-        assert!(
-            !body.contains_key("internal_token"),
-            "noform takes precedence when both flags are set"
-        );
-    }
-
-    #[test]
-    fn empty_body_handled_gracefully() {
-        let mut body: Map<String, Value> = Map::new();
-        drop_noform_fields(&model(), &mut body);
-        assert!(body.is_empty());
-    }
-
-    #[test]
-    fn body_with_only_noform_fields_becomes_empty() {
-        let mut body: Map<String, Value> = json!({
-            "password_hash": "x",
-            "internal_token": "y",
-        })
-        .as_object()
-        .unwrap()
-        .clone();
-        drop_noform_fields(&model(), &mut body);
-        assert!(body.is_empty());
-    }
-}
+// The `noform` filtering tests that used to live here moved
+// into the ORM alongside the logic — see
+// `crates/umbra-core/src/orm/dynamic.rs`'s test module. The
+// REST plugin no longer scrubs the body before dispatch; the
+// dynamic-write seam does.
 
 #[cfg(test)]
 mod allow_block_unit {
