@@ -16,7 +16,7 @@
 
 use std::marker::PhantomData;
 
-use sea_query::{Alias, Expr, Func};
+use sea_query::{Alias, Expr, ExprTrait, Func};
 
 use super::{OrderExpr, Predicate};
 
@@ -2439,5 +2439,201 @@ impl<T> NullableBytesCol<T> {
 
     pub fn desc(&self) -> OrderExpr<T> {
         OrderExpr::new(self.name, true)
+    }
+}
+
+// =========================================================================
+// Gap #24 + #36 — DB-function helpers (`ColExpr<T>`)
+//
+// Column extension methods (`StrCol::lower`, `DateTimeCol::year`, ...)
+// return a `ColExpr<T>` so the caller can pick the comparison
+// operator: `post::TITLE.lower().eq(...)`,
+// `post::CREATED_AT.year().lt(2026)`. `ColExpr<T>` carries a primary
+// `SimpleExpr` plus an optional SQLite-specific override (same
+// dual-rendering pattern `Predicate<T>` uses); date-extract needs
+// this so it can emit `EXTRACT(YEAR FROM …)` on Postgres and
+// `CAST(strftime('%Y', …) AS INTEGER)` on SQLite from a single
+// `ColExpr`.
+// =========================================================================
+
+/// A backend-aware expression that hasn't been compared yet. Built by
+/// the column extension methods (`.lower()`, `.year()`, etc.) and
+/// finalised by calling a comparison operator (`.eq`, `.lt`, etc.) to
+/// produce a `Predicate<T>`.
+pub struct ColExpr<T> {
+    expr: sea_query::SimpleExpr,
+    expr_sqlite: Option<sea_query::SimpleExpr>,
+    _phantom: PhantomData<T>,
+}
+
+impl<T> ColExpr<T> {
+    /// Construct a single-form expression (same SQL on every backend).
+    pub(crate) fn new(expr: sea_query::SimpleExpr) -> Self {
+        Self {
+            expr,
+            expr_sqlite: None,
+            _phantom: PhantomData,
+        }
+    }
+
+    /// Construct an expression that renders differently on SQLite vs
+    /// Postgres. The default `expr` is the Postgres form; `sqlite` is
+    /// substituted at terminal time when the resolved pool is SQLite.
+    pub(crate) fn new_with_sqlite(
+        expr: sea_query::SimpleExpr,
+        sqlite: sea_query::SimpleExpr,
+    ) -> Self {
+        Self {
+            expr,
+            expr_sqlite: Some(sqlite),
+            _phantom: PhantomData,
+        }
+    }
+
+    /// Internal: build a `Predicate` by applying the supplied
+    /// operator to both expression forms in parallel.
+    fn into_predicate<F>(self, op: F) -> Predicate<T>
+    where
+        F: Fn(sea_query::SimpleExpr) -> sea_query::SimpleExpr,
+    {
+        let cond = op(self.expr);
+        let cond_sqlite = self.expr_sqlite.map(&op);
+        match cond_sqlite {
+            Some(sql) => Predicate::new_with_sqlite(cond, sql),
+            None => Predicate::new(cond),
+        }
+    }
+
+    /// `<expr> = value`.
+    pub fn eq<V: Into<sea_query::Value>>(self, val: V) -> Predicate<T> {
+        let val = val.into();
+        self.into_predicate(move |e| e.eq(val.clone()))
+    }
+
+    /// `<expr> <> value`.
+    pub fn ne<V: Into<sea_query::Value>>(self, val: V) -> Predicate<T> {
+        let val = val.into();
+        self.into_predicate(move |e| e.ne(val.clone()))
+    }
+
+    /// `<expr> < value`.
+    pub fn lt<V: Into<sea_query::Value>>(self, val: V) -> Predicate<T> {
+        let val = val.into();
+        self.into_predicate(move |e| e.lt(val.clone()))
+    }
+
+    /// `<expr> <= value`.
+    pub fn le<V: Into<sea_query::Value>>(self, val: V) -> Predicate<T> {
+        let val = val.into();
+        self.into_predicate(move |e| e.lte(val.clone()))
+    }
+
+    /// `<expr> > value`.
+    pub fn gt<V: Into<sea_query::Value>>(self, val: V) -> Predicate<T> {
+        let val = val.into();
+        self.into_predicate(move |e| e.gt(val.clone()))
+    }
+
+    /// `<expr> >= value`.
+    pub fn ge<V: Into<sea_query::Value>>(self, val: V) -> Predicate<T> {
+        let val = val.into();
+        self.into_predicate(move |e| e.gte(val.clone()))
+    }
+}
+
+/// String-function helpers — `lower()`, `upper()`, `length()`.
+/// Implemented for both `StrCol<T>` and `NullableStrCol<T>` so the
+/// extension methods work whether the column is `String` or
+/// `Option<String>`.
+pub trait StrColExt<T> {
+    /// `LOWER(col)` — case-insensitive comparison primitive.
+    fn lower(&self) -> ColExpr<T>;
+    /// `UPPER(col)`.
+    fn upper(&self) -> ColExpr<T>;
+    /// `LENGTH(col)` — character count of the stored value.
+    fn length(&self) -> ColExpr<T>;
+}
+
+impl<T> StrColExt<T> for StrCol<T> {
+    fn lower(&self) -> ColExpr<T> {
+        ColExpr::new(Func::lower(Expr::col(Alias::new(self.name))).into())
+    }
+    fn upper(&self) -> ColExpr<T> {
+        ColExpr::new(Func::upper(Expr::col(Alias::new(self.name))).into())
+    }
+    fn length(&self) -> ColExpr<T> {
+        ColExpr::new(Func::char_length(Expr::col(Alias::new(self.name))).into())
+    }
+}
+
+impl<T> StrColExt<T> for NullableStrCol<T> {
+    fn lower(&self) -> ColExpr<T> {
+        ColExpr::new(Func::lower(Expr::col(Alias::new(self.name))).into())
+    }
+    fn upper(&self) -> ColExpr<T> {
+        ColExpr::new(Func::upper(Expr::col(Alias::new(self.name))).into())
+    }
+    fn length(&self) -> ColExpr<T> {
+        ColExpr::new(Func::char_length(Expr::col(Alias::new(self.name))).into())
+    }
+}
+
+/// Date-extract helpers — `year()`, `month()`, `day()`.
+///
+/// Backend dispatch is hidden inside the returned [`ColExpr`]: the
+/// Postgres form uses `CAST(EXTRACT(<part> FROM col) AS INTEGER)`;
+/// the SQLite form uses `CAST(strftime('<fmt>', col) AS INTEGER)`.
+/// Both forms land in the same `ColExpr`; `Predicate` picks the
+/// right one at terminal time based on the resolved pool.
+pub trait DateTimeColExt<T> {
+    /// Year as an integer (e.g. 2026).
+    fn year(&self) -> ColExpr<T>;
+    /// Month of year, 1..=12.
+    fn month(&self) -> ColExpr<T>;
+    /// Day of month, 1..=31.
+    fn day(&self) -> ColExpr<T>;
+}
+
+fn date_part_exprs(
+    col_name: &str,
+    part_pg: &'static str,
+    fmt_sqlite: &'static str,
+) -> (sea_query::SimpleExpr, sea_query::SimpleExpr) {
+    let pg = sea_query::SimpleExpr::Custom(format!(
+        "CAST(EXTRACT({part_pg} FROM \"{col_name}\") AS INTEGER)"
+    ));
+    let sqlite = sea_query::SimpleExpr::Custom(format!(
+        "CAST(strftime('{fmt_sqlite}', \"{col_name}\") AS INTEGER)"
+    ));
+    (pg, sqlite)
+}
+
+impl<T> DateTimeColExt<T> for DateTimeCol<T> {
+    fn year(&self) -> ColExpr<T> {
+        let (pg, sqlite) = date_part_exprs(self.name, "YEAR", "%Y");
+        ColExpr::new_with_sqlite(pg, sqlite)
+    }
+    fn month(&self) -> ColExpr<T> {
+        let (pg, sqlite) = date_part_exprs(self.name, "MONTH", "%m");
+        ColExpr::new_with_sqlite(pg, sqlite)
+    }
+    fn day(&self) -> ColExpr<T> {
+        let (pg, sqlite) = date_part_exprs(self.name, "DAY", "%d");
+        ColExpr::new_with_sqlite(pg, sqlite)
+    }
+}
+
+impl<T> DateTimeColExt<T> for NullableDateTimeCol<T> {
+    fn year(&self) -> ColExpr<T> {
+        let (pg, sqlite) = date_part_exprs(self.name, "YEAR", "%Y");
+        ColExpr::new_with_sqlite(pg, sqlite)
+    }
+    fn month(&self) -> ColExpr<T> {
+        let (pg, sqlite) = date_part_exprs(self.name, "MONTH", "%m");
+        ColExpr::new_with_sqlite(pg, sqlite)
+    }
+    fn day(&self) -> ColExpr<T> {
+        let (pg, sqlite) = date_part_exprs(self.name, "DAY", "%d");
+        ColExpr::new_with_sqlite(pg, sqlite)
     }
 }
