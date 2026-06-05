@@ -164,6 +164,80 @@ Each returned `Value` is an object keyed by the requested column names, with val
 
 Mirrors Django's `QuerySet.values('id', 'title')`. The typed-tuple form (`values_list`) is deferred until a concrete consumer surfaces the need.
 
+## DB-function helpers: `.lower()`, `.upper()`, `.length()`, `.year()`, `.month()`, `.day()`
+
+Column extension traits add SQL function wrappers that compose with `.filter`. Import `umbra::orm::column::{StrColExt, DateTimeColExt}` to bring them into scope.
+
+```rust
+use umbra::orm::column::{StrColExt, DateTimeColExt};
+
+// Case-insensitive search.
+Post::objects()
+    .filter(post::TITLE.lower().eq("hello"))
+    .fetch()
+    .await?;
+
+// Filter by string length.
+Post::objects()
+    .filter(post::TITLE.length().lt(20))
+    .fetch()
+    .await?;
+
+// Year/month/day archive pages.
+Post::objects()
+    .filter(post::CREATED_AT.year().eq(2026))
+    .filter(post::CREATED_AT.month().eq(6))
+    .fetch()
+    .await?;
+```
+
+Each helper returns a `ColExpr<T>`; chain `.eq` / `.ne` / `.lt` / `.le` / `.gt` / `.ge` to finalise the predicate. Date extracts hide backend dispatch automatically — `CAST(EXTRACT(YEAR FROM col) AS INTEGER)` on Postgres, `CAST(strftime('%Y', col) AS INTEGER)` on SQLite — so the call site stays portable.
+
+Deferred from v1: `trim`, `coalesce`, `concat`, `now`, `hour`, `minute`, `second`, `week_day`. Same `ColExpr<T>` pattern when needed.
+
+## QuerySet sugar: `.earliest()`, `.latest()`, `.distinct()`, `.explain()`
+
+```rust
+// Earliest / latest by column.
+let first_post = Post::objects().earliest("created_at").await?;
+let newest = Post::objects().latest("created_at").await?;
+
+// SELECT DISTINCT — most useful with values() to dedupe a column projection.
+let unique_tags = Post::objects()
+    .distinct()
+    .values(&["tag"])
+    .await?;
+
+// EXPLAIN — eyeball the execution plan.
+let plan: String = Post::objects()
+    .filter(post::PUBLISHED.eq(true))
+    .explain()
+    .await?;
+println!("{plan}");
+```
+
+## Mutate-side terminals: `update_or_create`, `bulk_update`, `raw`
+
+```rust
+// Upsert with predicate + defaults.
+let (post, created) = Post::objects()
+    .update_or_create(
+        Predicate::col_eq("slug", "first-post"),
+        Post { id: 0, slug: "first-post".into(), title: "Hello".into(), ..Default::default() },
+    )
+    .await?;
+
+// Bulk update: per-row differing values in one statement via CASE WHEN.
+let n = Post::objects().bulk_update(modified_posts).await?;
+
+// Raw SQL escape hatch returning typed Vec<T>.
+let recent: Vec<Post> = Post::objects()
+    .raw("SELECT * FROM post WHERE created_at > datetime('now', '-7 days')")
+    .await?;
+```
+
+`update_or_create` returns `(row, created: bool)`. `bulk_update` returns rows-affected. `raw` skips select_related/prefetch_related chains and binds no parameters — sanitise input before calling.
+
 ## See also
 
 - [Declaring models](/docs/v0.0.1/orm/models) - the QuerySet API (`filter`, `update_values`, `fetch`, `get`, etc.) that F and Q plug into.

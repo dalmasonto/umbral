@@ -75,10 +75,8 @@ These are the QuerySet features and model-level capabilities that Django develop
 16. [x] **`values()` and `values_list()` — column projection** 🟡 Medium
        — `values(&["id", "title"])` shipped on both `QuerySet<T>` and `Manager<T>`. Returns `Vec<serde_json::Value::Object>` instead of typed `T` rows; skips both the unused-column transfer cost and the FromRow hydration overhead. Reuses `decode_to_json` / `decode_pg_to_json` from `orm::dynamic` so every column type round-trips correctly (int / string / bool / date / Json). Composes with `filter` / `exclude` / `order_by` / `limit` / `offset`. Unknown column names fail loudly before any SQL runs. Tests in `crates/umbra-core/tests/values_projection.rs`. **Deferred**: `values_list()` (typed-tuple return) — needs a different generic-arity story; ship when a consumer surfaces the need.
 
-17. [ ] **`distinct()` — duplicate elimination** 🟢 Low
-    > Why: Used for tag clouds and deduplication, but `GROUP BY` (via `annotate`) often covers the same use case. The Postgres-specific `DISTINCT ON` is more valuable than plain `DISTINCT`.
-    >
-    > How: Add `distinct()` (no args → `SELECT DISTINCT`) and `distinct_on(&[&str])` (Postgres only → `SELECT DISTINCT ON (...)`). Gate `distinct_on` behind a runtime backend check that errors on SQLite. Small change; low priority because it has workarounds.
+17. [x] **`distinct()` — duplicate elimination** 🟢 Low
+       — `QuerySet::distinct()` emits `SELECT DISTINCT ...`. Most useful paired with `.values(&["col"])` to dedupe a column-projected list. Tests in `crates/umbra-core/tests/earliest_latest_distinct.rs`. **Deferred**: Postgres-specific `DISTINCT ON (cols)` until a concrete consumer surfaces the need.
 
 18. [x] **`select_related()` — FK prefetch via JOIN** 🔴 High
        — Already shipped. `QuerySet::select_related(field)` and `.select_related_many(&[...])` accumulate FK names; the `fetch` / `first` terminals run one batched `SELECT ... WHERE id IN (...)` per FK after the main query and call `HydrateRelated::hydrate_fk` to populate `ForeignKey<U>.resolved` on every row. Lives in `crates/umbra-core/src/orm/queryset.rs::hydrate_select_related`. Tests in `crates/umbra-core/tests/select_related.rs` cover single FK, multi-FK, serde JSON projection (`post["author"]` renders as the full object after select_related and stays an integer without it), and template-context access. **Deferred**: nested traversal (`"author__manager"`) — current implementation supports one-hop FKs only; chains require successive `.select_related` on the resolved row.
@@ -86,30 +84,22 @@ These are the QuerySet features and model-level capabilities that Django develop
 19. [~] **`prefetch_related()` — M2M and reverse-FK batch loading** 🟡 Medium
        — M2M batching shipped. `QuerySet::prefetch_related("tags")` / `prefetch_related_many(&[...])` issue one batched JOIN through the junction table for every parent, group results by `parent_id`, and populate each parent's `M2M.resolved` slot via the new `HydrateRelated::set_m2m_resolved_json` hook. Macro override emits the per-M2M-field arms; new `HydrateRelated::pk_i64` hook (also macro-emitted, only for i64-PK models) feeds the parent-id collection. v1 constraints: M2M only, i64 parent PK only — same as the rest of the M2M plumbing. Tests in `crates/umbra-core/tests/prefetch_related.rs` (3 tests). **Still open**: reverse-FK collection prefetch (`prefetch_related("comment_set")`) — needs a Vec-on-parent slot that doesn't exist yet.
 
-20. [ ] **`bulk_update()` — mass updates without N round-trips** 🟡 Medium
-    > Why: `update_values` works for a single set of values across all filtered rows, but `bulk_update` takes a `Vec<Instance>` and updates each row individually in one statement. Needed for import workflows and sync jobs.
-    >
-    > How: `Manager::bulk_update(instances)` builds `UPDATE "table" SET ... WHERE "id" IN (...)` with a `CASE "id" WHEN 1 THEN 'new_title_1' WHEN 2 THEN 'new_title_2' END` pattern. Postgres handles this natively; SQLite needs the same pattern or a temp-table approach. Start with the `CASE` syntax since both backends accept it.
+20. [x] **`bulk_update()` — mass updates without N round-trips** 🟡 Medium
+       — `Manager::bulk_update(instances)` shipped. Builds `UPDATE table SET col = CASE id WHEN 1 THEN <val1> WHEN 2 THEN <val2> END WHERE id IN (1, 2)` — one CASE per non-PK column. Default-PK instances skipped. Empty input is a no-op. Same SQL on both backends. Tests in `crates/umbra-core/tests/bulk_update_raw.rs`.
 
-21. [ ] **`update_or_create()` — upsert with defaults** 🟡 Medium
-    > Why: The everyday pattern for idempotent importers and webhook handlers. Django returns `(instance, created)` so the caller can branch. Without this, every upsert is a manual `get()` → `match` → `create()` or `update()` block.
-    >
-    > How: `QuerySet::update_or_create(predicate, defaults)` runs `get(predicate)`. On `GetError::NotFound`, insert with `defaults` merged with the predicate values. On success, update the found row with `defaults`. Return `(T, bool)`. Reuse the existing `get()` and `create()` primitives.
+21. [x] **`update_or_create()` — upsert with defaults** 🟡 Medium
+       — `Manager::update_or_create(predicate, defaults) → (T, bool)` shipped. On hit: update the matched row's non-PK columns with the defaults' values, re-fetch, return `(row, false)`. On miss: insert `defaults`, return `(row, true)`. PK in defaults is ignored on the update path. Tests in `crates/umbra-core/tests/update_or_create.rs`.
 
-22. [ ] **`raw()` / `raw_sql()` — escape hatch** 🟡 Medium
-    > Why: Every ORM eventually needs this for complex CTEs, window functions, or vendor-specific SQL. The framework already allows raw SQL in migrations; models need the same escape hatch.
-    >
-    > How: `QuerySet::raw("SELECT * FROM post WHERE ...")` that returns `Vec<T>` by delegating to `sqlx::query_as` but still respects the model's `HydrateRelated` path. A thin wrapper that gives the user SQL control without losing type safety.
+22. [x] **`raw()` / `raw_sql()` — escape hatch** 🟡 Medium
+       — `Manager::raw(sql)` shipped. Delegates to `sqlx::query_as::<DB, T>` against the ambient pool; dispatches on backend so user code stays portable. Returns typed `Vec<T>` decoded by `FromRow`. Skips `select_related` / `prefetch_related` chains (those only apply to the typed builder path); no parameter binding (sanitise input before calling). Tests in `crates/umbra-core/tests/bulk_update_raw.rs`.
 
 23. [ ] **`defer()` / `only()` — lazy column loading** 🟢 Low
     > Why: `values()` (gap #16) covers 80% of the use case. `defer`/`only` are Django sugar for "skip this column in the initial SELECT, fetch it on first access." The complexity (lazy loading via a second query on property access) is high for marginal gain.
     >
     > How: Defer until `values()` is shipped. If users still ask for it, add a `projection` field to `QuerySet` and implement `defer` as "all columns except these" and `only` as "only these columns." The lazy-fetch-on-access part is the hard bit; start without it and just treat `defer` as a `values()` alias with the full struct return type.
 
-24. [ ] **Database functions — `Lower`, `Upper`, `Length`, `Now`, `Coalesce`, `Concat`, `Trim`** 🟡 Medium
-    > Why: Case-insensitive search (`LOWER(title) = 'hello'`) and computed ordering (`LENGTH(title) ASC`) require raw SQL today. These are SQL function wrappers that compose with `filter()`, `annotate()`, and `order_by()`.
-    >
-    > How: A `DbFunc` enum with variants that know their SQL expression. `Lower("title")` renders to `LOWER("title")`. Allow `DbFunc` inside `Predicate` and `OrderBy` so `filter(title_lower().eq("hello"))` and `order_by(title_length().asc())` both work. Small, well-scoped change with immediate utility.
+24. [~] **Database functions — `Lower`, `Upper`, `Length`, `Now`, `Coalesce`, `Concat`, `Trim`** 🟡 Medium
+       — Partial. `StrColExt` trait shipped with `.lower()`, `.upper()`, `.length()` on `StrCol` and `NullableStrCol`. Each returns `ColExpr<T>`; chain `.eq/.ne/.lt/.le/.gt/.ge(val)` to produce a `Predicate<T>` ready for `filter`. Tests in `crates/umbra-core/tests/db_functions.rs`. **Still open**: `trim`, `coalesce`, `concat`, `now` — add to `StrColExt` (or a new `NumColExt`) following the same pattern when a consumer surfaces the need. Order-by via DB function is also deferred (it would need OrderExpr to accept a SimpleExpr).
 
 25. [ ] **Conditional expressions — `Case`, `When`, `Default`** 🟢 Low
     > Why: `CASE WHEN ... THEN ... ELSE ... END` is powerful for tiered badges and computed status fields, but it has workarounds (compute in Rust after fetching, or use raw SQL). The SQL generation is straightforward; the ergonomics in Rust are the challenge.
@@ -159,20 +149,14 @@ These are the QuerySet features and model-level capabilities that Django develop
     >
     > How: `Post::objects().in_bulk([1, 2, 3])` builds `SELECT * FROM post WHERE id IN (1, 2, 3)` and collects into `HashMap<i64, Post>`. One method, one test. Small scope; defer until someone asks for it.
 
-35. [ ] **`explain()` — query plan inspection** 🟡 Medium
-    > Why: Essential for debugging slow queries and verifying index usage. Django's `queryset.explain()` is the first tool a developer reaches for when a page is slow.
-    >
-    > How: `Post::objects().filter(...).explain()` returns the database's execution plan as a `String` (SQLite `EXPLAIN QUERY PLAN`) or `serde_json::Value` (Postgres `EXPLAIN (FORMAT JSON)`). Add an `explain: bool` flag to `QuerySet` that prepends the explain prefix before executing. Simple change, high debugging value.
+35. [x] **`explain()` — query plan inspection** 🟡 Medium
+       — `QuerySet::explain()` returns the execution plan as a plain-text `String`. SQLite: prepends `EXPLAIN QUERY PLAN` and joins the `detail` column; Postgres: prepends `EXPLAIN` and joins the `QUERY PLAN` column. Tests in `crates/umbra-core/tests/earliest_latest_distinct.rs`. **Deferred**: Postgres `EXPLAIN (FORMAT JSON)` for machine-readable output — use raw sqlx when needed.
 
-36. [ ] **Date/time extract functions — `year`, `month`, `day`, `week_day`** 🟡 Medium
-    > Why: `Post::objects().filter(created_at__year.eq(2026))` is needed for archive pages, monthly reports, and calendar views. Currently requires raw SQL or filtering in Rust after fetching all rows.
-    >
-    > How: Add `year`, `month`, `day`, `hour`, `minute`, `week_day` as `DateTimeCol` extension methods that return `DbFunc` expressions. `created_at.year()` renders to `EXTRACT(YEAR FROM created_at)`. Postgres and SQLite both support `strftime` / `EXTRACT`. Well-scoped.
+36. [~] **Date/time extract functions — `year`, `month`, `day`, `week_day`** 🟡 Medium
+       — Partial. `DateTimeColExt` trait shipped with `.year()`, `.month()`, `.day()` on `DateTimeCol` and `NullableDateTimeCol`. Backend-aware rendering hidden in `ColExpr<T>`: Postgres uses `CAST(EXTRACT(<part> FROM col) AS INTEGER)`, SQLite uses `CAST(strftime('<fmt>', col) AS INTEGER)`. Compose with `.eq/.ne/.lt/.le/.gt/.ge(int)`. Tests in `crates/umbra-core/tests/db_functions.rs`. **Still open**: `hour`, `minute`, `second`, `week_day` — add following the same pattern when needed.
 
-37. [ ] **`earliest()` / `latest()` — convenience wrappers** 🟢 Low
-    > Why: Small sugar but used constantly in activity feeds and audit trails. `first()` + `order_by()` already covers this; these are just shorter names.
-    >
-    > How: `Post::objects().earliest(created_at)` = `order_by(created_at.asc()).first()`. `latest(created_at)` = `order_by(created_at.desc()).first()`. Two one-line methods. Ship as a quick win if someone wants a small task.
+37. [x] **`earliest()` / `latest()` — convenience wrappers** 🟢 Low
+       — Shipped. `QuerySet::earliest("col_name")` = `order_by(col.asc()).first()`; `latest("col_name")` = `order_by(col.desc()).first()`. Takes a `&'static str` column name to match Django's call shape. Tests in `crates/umbra-core/tests/earliest_latest_distinct.rs`.
 
 38. [x] **Signals — `pre_save`, `post_save`, `pre_delete`, `post_delete`, `m2m_changed`** 🔴 High
        — Fully wired. Lives in `crates/umbra-core/src/signals.rs`. Surface: `subscribe`/`subscribe_async`/`emit`/`clear_for_tests` + ORM emitters `emit_pre_save`/`emit_post_save`/`emit_pre_delete`/`emit_post_delete`/`emit_bulk_post_save`/`emit_bulk_post_delete`/`emit_m2m_changed`. The first four fire from `Manager::save` and `Manager::delete_instance` for per-row hooks. Bulk terminals (`bulk_create`, `update_values`, `update_expr`, `QuerySet::delete`) fire one `bulk_post_save:<table>` / `bulk_post_delete:<table>` per call with the affected PKs (captured via `RETURNING <pk>`). M2M mutations (`M2M::add`/`remove`/`set`/`clear`) fire `m2m_changed:<junction>` with `{ action, parent_id, added, removed }`. Actor field: a tokio task-local `ACTOR: serde_json::Value` set via `with_actor(value, fut).await`; every signal payload (ORM and user-level) automatically inherits an `"actor"` key (Null when no scope is active). Tests: `signals_registry.rs`, `signal_actor.rs`, `bulk_signals.rs`, `m2m_signals.rs`.
