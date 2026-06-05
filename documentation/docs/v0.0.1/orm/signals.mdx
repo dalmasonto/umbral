@@ -1,0 +1,145 @@
+---
+title: Signals
+description: Lifecycle hooks fired by the ORM (per-row, bulk, m2m) plus the actor task-local that flows through every payload.
+sidebar_position: 6
+tags: [orm, signals, hooks, audit, m2m]
+---
+
+# Signals
+
+Umbra ships a name-keyed in-process pub/sub. Subscribers register handlers against a signal name; ORM write paths fire those names with a JSON payload. Plugins (audit logs, notifications, cache invalidation) hang functionality off the events without touching the framework's write code.
+
+The full surface lives in `umbra_core::signals`. Re-exported callable bits: `subscribe`, `subscribe_async`, `emit`, `with_actor`, `current_actor`.
+
+## Signal names
+
+ORM signals use a `<event>:<table>` shape so the built-in set is namespaced away from anything an app defines:
+
+| Name | Fired by | Payload |
+|---|---|---|
+| `pre_save:<table>` | `Manager::save` (before INSERT or UPDATE) | `{ instance, created, actor }` |
+| `post_save:<table>` | `Manager::save` (after, with the DB read-back row) | `{ instance, created, actor }` |
+| `pre_delete:<table>` | `Manager::delete_instance` (before) | `{ instance, actor }` |
+| `post_delete:<table>` | `Manager::delete_instance` (after) | `{ instance, actor }` |
+| `bulk_post_save:<table>` | `bulk_create`, `update_values`, `update_expr` | `{ ids, created, actor }` |
+| `bulk_post_delete:<table>` | `QuerySet::delete` | `{ ids, actor }` |
+| `m2m_changed:<junction>` | `M2M::add`/`remove`/`set`/`clear` | `{ action, parent_id, added, removed, actor }` |
+
+User-defined signals keep their own namespace. The `<event>:<table>` prefix on ORM signals just exists so a plugin that subscribes to `post_save:user` doesn't accidentally collide with an app-level `user` event.
+
+## Subscribing
+
+```rust
+use umbra::signals::{subscribe, subscribe_async};
+
+// Sync handler — runs inline during emit().
+subscribe("post_save:post", |payload| {
+    let actor = &payload["actor"];
+    let id = payload["instance"]["id"].as_i64();
+    tracing::info!(?actor, ?id, "post saved");
+});
+
+// Async handler — awaited in series after the sync handlers.
+subscribe_async("post_delete:post", |payload| async move {
+    let id = payload["instance"]["id"].as_i64();
+    redis::invalidate(&format!("post:{:?}", id)).await;
+});
+```
+
+Handlers stack in registration order. Multiple handlers per name all run.
+
+## The actor envelope
+
+Every signal payload carries an `"actor"` key whose value is whatever JSON the nearest enclosing `with_actor(...)` scope set. With no scope active, the value is `Value::Null`. This is how an audit-log plugin learns who triggered a write without each plugin reinventing the same middleware.
+
+```rust
+use umbra::signals::with_actor;
+use serde_json::json;
+
+// Typical auth middleware: resolve the request's identity into JSON,
+// then run the rest of the handler under with_actor(...) so every
+// ORM write the handler triggers picks up the same actor.
+async fn handle_request(req: Request) -> Response {
+    let user = resolve_session(&req).await;
+    let actor = json!({ "id": user.id, "username": user.username });
+
+    with_actor(actor, async move {
+        // Any ORM write inside this future fires signals with the
+        // actor embedded in the payload.
+        let post = Post::objects().create(new_post).await?;
+        Ok::<_, MyError>(post)
+    }).await.into_response()
+}
+```
+
+A subscriber reads `payload["actor"]["id"]` (or whatever shape the auth layer chose) to identify the actor. Nested `with_actor` calls shadow the outer scope and restore it on the way out; concurrent tasks see their own actors.
+
+If a caller wants to identify itself independently of the ambient scope, an explicit `"actor"` key in the payload supplied to `emit()` wins over the task-local. Useful for system-task wrappers that want to be `{ "source": "scheduled-task", "job_id": "..." }` regardless of who started them.
+
+## Per-row vs bulk
+
+The framework deliberately splits row-level and bulk signal contracts:
+
+- **Per-row** signals (`pre_save:<t>`, `post_save:<t>`, `pre_delete:<t>`, `post_delete:<t>`) fire from `Manager::save` and `Manager::delete_instance`. Use these when the handler needs the full instance to do its work (slug auto-generation, cache key derivation, notification subject lines).
+- **Bulk** signals (`bulk_post_save:<t>`, `bulk_post_delete:<t>`) fire once per call from `bulk_create`, `update_values`, `update_expr`, and `QuerySet::delete` with the list of affected primary keys. Use these when the handler can work from just the PKs (audit logs, bulk cache invalidation, downstream re-indexing).
+
+The split avoids fanning out N handler invocations on a 10k-row bulk import. A subscriber that needs more than the PKs from a bulk write can issue a single follow-up SELECT on the captured ids.
+
+```rust
+// Audit subscriber for bulk inserts: log the actor + ids tuple.
+subscribe("bulk_post_save:order", |payload| {
+    let actor = &payload["actor"];
+    let ids = payload["ids"].as_array().map(|v| v.len()).unwrap_or(0);
+    tracing::info!(?actor, "bulk INSERT touched {} orders", ids);
+});
+```
+
+The `created` field on `bulk_post_save` is `true` for INSERT terminals (`bulk_create`) and `false` for UPDATE terminals (`update_values`, `update_expr`). Subscribers that only care about one direction filter on that field.
+
+## M2M signals
+
+`M2M::add`/`remove`/`set`/`clear` each fire `m2m_changed:<junction_table>` with an action label and the lists of added/removed child PKs. The junction table name follows the macro-derived convention `<parent_table>_<field_name>`.
+
+```rust
+subscribe("m2m_changed:post_tags", |payload| {
+    let action = payload["action"].as_str().unwrap_or("");
+    let added = payload["added"].as_array().map(|v| v.len()).unwrap_or(0);
+    let removed = payload["removed"].as_array().map(|v| v.len()).unwrap_or(0);
+    tracing::info!(action, added, removed, "post tags changed");
+});
+```
+
+`set` reports the SQL-level reality: every prior child lands in `removed` (the DB DELETE wiped them all) and every supplied child lands in `added` (the DB INSERTs re-built the set). Subscribers that want a Django-style diff compute it in their handler.
+
+`clear` on an empty relation skips emission — there is nothing to report.
+
+## When `emit()` itself merges actor
+
+The actor merge lives inside `emit()`, not the per-helper emitters. That means user-defined signals fired through `emit("my_event", payload).await` also pick up the actor automatically:
+
+```rust
+use umbra::signals::emit;
+
+with_actor(json!({ "id": 7 }), async {
+    emit("payment_captured", json!({ "amount_cents": 4200 })).await;
+    // Subscribers see: { "amount_cents": 4200, "actor": { "id": 7 } }
+}).await;
+```
+
+Object payloads gain an `"actor"` key. Non-object payloads (rare) are wrapped as `{ "data": <payload>, "actor": ... }` so the envelope shape stays predictable for subscribers.
+
+## Pitfalls
+
+**Signals are in-process only.** They do not cross process boundaries. A signal fired on one app instance is invisible to a sibling instance. For cross-instance pub/sub, layer Redis (or another broker) on top of a subscriber that re-publishes the event.
+
+**Sync handlers run on the caller's task.** A slow sync handler blocks the write that fired it. Use `subscribe_async` for any handler that awaits I/O.
+
+**Bulk signals fire even when zero rows were affected for INSERT, but skip for UPDATE / DELETE / clear.** `bulk_create([])` short-circuits before the SQL; an `update_values` that matches zero rows stays silent because a "zero-row" event is usually noise.
+
+**The actor task-local is in-process only too.** It does not propagate across `tokio::spawn` boundaries automatically — `tokio::task_local` resets when a new task starts. If you spawn from inside a `with_actor(...)` scope and want the actor to survive, capture `current_actor()` into a `let` and re-establish via `with_actor(actor, ...)` inside the spawned task.
+
+## See also
+
+- [Transactions](/docs/v0.0.1/orm/transactions) - `.atomic()` and `.on_tx()` wrap writes that fire signals on commit.
+- [Relationships](/docs/v0.0.1/orm/relationships) - `M2M` operations that fire `m2m_changed`.
+- `arch.md` - thin-core / plugin-heavy design; signals are a foundational extensibility seam.

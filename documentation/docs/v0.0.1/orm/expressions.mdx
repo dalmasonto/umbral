@@ -109,6 +109,35 @@ Post::objects()
 
 Chained `.filter()` calls still AND together as before - `Q` is purely additive.
 
+### `.exclude(p)` - the negated complement of `.filter(p)`
+
+`QuerySet::exclude(p)` and `Manager::exclude(p)` are sugar for `.filter(Q::not(p))`. They drop rows where the predicate holds; the negated predicate still ANDs into the chain alongside any `filter` calls.
+
+```rust
+// Every non-published post.
+Post::objects()
+    .exclude(post::PUBLISHED.eq(true))
+    .fetch()
+    .await?;
+
+// Published, but NOT by the spam user.
+// Renders as: WHERE published = TRUE AND NOT (author_id = <spam>)
+Post::objects()
+    .filter(post::PUBLISHED.eq(true))
+    .exclude(post::AUTHOR_ID.eq(spam_id))
+    .fetch()
+    .await?;
+
+// Multiple excludes AND together: "not unpublished AND not by author 2".
+Post::objects()
+    .exclude(post::PUBLISHED.eq(false))
+    .exclude(post::AUTHOR_ID.eq(2))
+    .fetch()
+    .await?;
+```
+
+Mirrors Django's `QuerySet.exclude()`. Useful for soft-delete patterns (`exclude(deleted_at.is_not_null())`) and for "everything except" queries where reaching for `Q::not` directly would be noisy.
+
 ---
 
 ## See also

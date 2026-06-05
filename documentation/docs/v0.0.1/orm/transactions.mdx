@@ -125,9 +125,75 @@ This is the `TxFuture<'_, T, E>` type alias. If your project already uses the `f
 
 **Isolation level control is deferred.** The transaction starts with the database's default isolation level (SQLite: serializable; Postgres: read committed). Changing the isolation level per-transaction is a deferred feature.
 
+## `.atomic()` - per-call BEGIN/COMMIT wrapper
+
+`Manager::atomic()` and `QuerySet::atomic()` flip a flag on the entry point that makes the next write terminal run inside its own BEGIN / COMMIT pair. On `Err`, the statement is rolled back; on `Ok`, it is committed. No closure, no `Box::pin`, no `&mut Transaction` to thread through the call chain.
+
+```rust
+// Single-statement INSERT inside an implicit transaction.
+let post = Post::objects()
+    .atomic()
+    .create(new_post)
+    .await?;
+
+// Bulk INSERT wrapped in BEGIN/COMMIT.
+let n = Post::objects()
+    .atomic()
+    .bulk_create(many_posts)
+    .await?;
+
+// UPDATE wrapped in BEGIN/COMMIT.
+Post::objects()
+    .filter(post::PUBLISHED.eq(false))
+    .atomic()
+    .update_values(updates)
+    .await?;
+
+// DELETE wrapped in BEGIN/COMMIT.
+Post::objects()
+    .filter(post::CREATED_AT.lt(cutoff))
+    .atomic()
+    .delete()
+    .await?;
+```
+
+Wired terminals: `Manager::create`, `Manager::bulk_create`, `QuerySet::update_values`, `QuerySet::delete`. Other write terminals (`save`, `delete_instance`, `upsert`, `get_or_create`, `update_expr`) are single-statement at the DB level — an explicit BEGIN/COMMIT around them would add overhead without changing observable semantics, so they currently ignore the flag.
+
+## Builder default: `atomic_transactions(true)`
+
+The safe-by-default posture: opt every wired terminal into transactional behaviour at boot, then opt specific calls out with `.non_atomic()` only where the perf or batching shape demands it.
+
+```rust
+umbra::App::builder()
+    .settings(settings)
+    .database("default", pool)
+    .atomic_transactions(true)   // every write wraps in BEGIN/COMMIT
+    .model::<Post>()
+    .build()?
+```
+
+Per-call resolution order at terminal time: explicit `.atomic()` / `.non_atomic()` > builder default > false. So an app that built with `.atomic_transactions(true)` still lets a hot-path import opt out:
+
+```rust
+// Skip the per-row BEGIN/COMMIT overhead; the caller's outer
+// transaction (or a one-shot seed script) is what's protecting the
+// batch.
+Post::objects()
+    .non_atomic()
+    .bulk_create(thousands_of_posts)
+    .await?;
+```
+
+## `.atomic()` and `.on_tx()` are mutually exclusive
+
+`.on_tx(tx)` already runs your statement inside an open transaction. Calling `.atomic()` alongside it would try to start a second, separate transaction on a different connection — which would deadlock on backends without nested transactions. The framework documents `.on_tx()` as the winner: when both are set, `.on_tx()` runs and `.atomic()` is silently a no-op for that call.
+
+Reach for `.on_tx(tx)` when you want several statements to commit or roll back together. Reach for `.atomic()` when you want one statement protected without writing a closure.
+
 ## See also
 
 - `arch.md` - ambient pool design and the `OnceLock`-backed global.
 - `docs/specs/03-orm-querysets.md` - the QuerySet surface.
 - `documentation/docs/v0.0.1/orm/models.mdx` - model declarations.
+- `documentation/docs/v0.0.1/orm/signals.mdx` - lifecycle signals (per-row, bulk, m2m) and the actor task-local.
 - `documentation/docs/v0.0.1/backends/sqlite.mdx` - SQLite backend.

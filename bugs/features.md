@@ -68,15 +68,11 @@ These are the QuerySet features and model-level capabilities that Django develop
     >
     > How: Add an `annotate` method to `QuerySet` that accepts `Vec<(String, AggregateExpr)>` and appends `SELECT ... COUNT(*) AS count, AVG(price) AS avg_price ... GROUP BY <annotated_cols>` to the generated SQL. Return a `Vec<serde_json::Value>` (or a user-supplied struct) rather than full model instances. The `AggregateExpr` enum covers `Count`, `Sum`, `Avg`, `Max`, `Min`, `StdDev`, `Variance`. Each variant knows its SQL fragment and return type. This composes with `filter()` and `order_by()` naturally.
 
-14. [ ] **`Q` objects for complex boolean logic** 🔴 High
-    > Why: `Predicate` already exists but cannot compose with `and` / `or` / `not`. Every non-trivial filter chain (`(A AND B) OR (C AND NOT D)`) currently requires raw SQL or multiple round-trips.
-    >
-    > How: A `Q` struct that wraps a `Predicate` plus a `QOp` enum (`And`, `Or`, `Not`). `QuerySet::filter` already accepts `Predicate`; overload it to accept `Q` and recursively flatten the tree into a sea-query `Condition` tree. The existing `&` and `|` operators on `Predicate` can be deprecated in favor of `Q::and(a, b)` and `Q::or(a, b)` for explicit composition.
+14. [x] **`Q` objects for complex boolean logic** 🔴 High
+       — Already shipped in `crates/umbra-core/src/orm/expr.rs:276-311`. `Q::and(a, b)`, `Q::or(a, b)`, `Q::not(p)` compose predicates explicitly; the existing `&` / `|` operator overloads on `Predicate` keep working alongside them. Both styles dispatch through the same per-backend `cond_for(backend)` path so SQLite-specific overrides survive composition. Re-exported from `umbra::orm::Q`. Test coverage in `crates/umbra-core/tests/q_objects.rs` (8 tests pinning render shape, AND/OR/NOT semantics, nested composition, and live SQLite execution).
 
-15. [ ] **`exclude()` — negated filtering** 🟡 Medium
-    > Why: The complement of `filter()`. Critical for soft-delete patterns (`exclude(is_deleted.eq(true))`) and for "everything except" queries. Small scope, high everyday utility.
-    >
-    > How: `QuerySet::exclude(predicate)` wraps the accumulated predicate in ` sea_query::Condition::not()` before emitting `WHERE NOT (...)`. One method, one test, immediate payoff.
+15. [x] **`exclude()` — negated filtering** 🟡 Medium
+       — Shipped on both `QuerySet<T>` and `Manager<T>` (`crates/umbra-core/src/orm/queryset.rs`). Implemented as sugar over `filter(Q::not(p))` so the predicate chain still ANDs naturally — `.filter(A).exclude(B).filter(C)` renders as `WHERE A AND NOT B AND C`. No new SQL-generation surface; Q::not handles backend-specific override negation. Tests in `crates/umbra-core/tests/exclude.rs`.
 
 16. [ ] **`values()` and `values_list()` — column projection** 🟡 Medium
     > Why: The primary tool for reducing memory pressure on large lists. `Post::objects().values("id", "title")` skips the 50KB `body` blob. Without this, every list view pays the cost of every column.
@@ -188,23 +184,13 @@ These are the QuerySet features and model-level capabilities that Django develop
     >
     > How: `Post::objects().earliest(created_at)` = `order_by(created_at.asc()).first()`. `latest(created_at)` = `order_by(created_at.desc()).first()`. Two one-line methods. Ship as a quick win if someone wants a small task.
 
-38. [ ] **Signals — `pre_save`, `post_save`, `pre_delete`, `post_delete`, `m2m_changed`** 🔴 High
-    > Why: Hooks that fire around ORM operations so plugins and user code can react: auto-generate a slug on `pre_save`, clear a cache on `post_delete`, send an email on `post_save`. The permissions plugin currently auto-creates standard permissions on boot; signals would let it do that reactively when a new model is registered. This is a foundational extensibility mechanism.
-    >
-    > How: A `Signal` type in `umbra-core/src/signals.rs` (already exists but not wired). Define `ModelEvent { kind, table, pk, before, after, actor }`. Fire from `QuerySet::create`, `update_values`, `delete`, and `bulk_create` terminals. The `actor` field comes from a tokio task-local set by an axum middleware (gap #48, structured logging, can share the same task-local infrastructure). This unlocks gaps #1 (logs plugin), #2 (notifications), and #77 (ORM audit trail).
+38. [x] **Signals — `pre_save`, `post_save`, `pre_delete`, `post_delete`, `m2m_changed`** 🔴 High
+       — Fully wired. Lives in `crates/umbra-core/src/signals.rs`. Surface: `subscribe`/`subscribe_async`/`emit`/`clear_for_tests` + ORM emitters `emit_pre_save`/`emit_post_save`/`emit_pre_delete`/`emit_post_delete`/`emit_bulk_post_save`/`emit_bulk_post_delete`/`emit_m2m_changed`. The first four fire from `Manager::save` and `Manager::delete_instance` for per-row hooks. Bulk terminals (`bulk_create`, `update_values`, `update_expr`, `QuerySet::delete`) fire one `bulk_post_save:<table>` / `bulk_post_delete:<table>` per call with the affected PKs (captured via `RETURNING <pk>`). M2M mutations (`M2M::add`/`remove`/`set`/`clear`) fire `m2m_changed:<junction>` with `{ action, parent_id, added, removed }`. Actor field: a tokio task-local `ACTOR: serde_json::Value` set via `with_actor(value, fut).await`; every signal payload (ORM and user-level) automatically inherits an `"actor"` key (Null when no scope is active). Tests: `signals_registry.rs`, `signal_actor.rs`, `bulk_signals.rs`, `m2m_signals.rs`.
 
-38.1 [ ] **Atomic transactions at the ORM level — opt-in via builder** 🔴 High
-    > Why: Manual `begin` / `commit` / `rollback` via `umbra::db::transaction()` works today, but every multi-write endpoint (nested REST creates, admin inlines, bulk imports) has to hand-roll the same transaction wrapping. Django's `with transaction.atomic():` context manager makes this invisible. Umbra needs an equivalent so that `POST /api/order/` with nested `items` (feature #58) can create the parent and all children in one transaction without the REST handler knowing about `sqlx::Transaction`. Without this, a failure mid-way leaves half-written rows in the database.
-    >
-    > How: Two layers — an **ORM-level** convenience and a **framework-level** default.
-    >
-    > **ORM layer**: `QuerySet::atomic()` wraps the terminal call in a transaction. `Post::objects().atomic().create(post).await` starts a transaction, runs the insert, commits on `Ok`, rolls back on `Err`. `Manager::bulk_create_atomic(instances)` does the same for the multi-row path. This uses the ambient `DbPool` to `BEGIN` against the correct backend, so the caller never types `pool` or `Transaction`.
-    >
-    > **Builder layer (opt-in)**: `App::builder().atomic_transactions(true)` sets a global default that makes *every* ORM terminal (`create`, `update_values`, `delete`, `bulk_create`) run inside a transaction unless explicitly opted out with `.non_atomic()`. This is the safe-by-default posture: a framework that claims "secure by default" should also be "transaction-safe by default." The opt-out exists for high-throughput paths where the caller manages batching themselves (e.g. a seed script that already wraps 1000 inserts in one outer transaction).
-    >
-    > **REST layer**: `ResourceConfig::new("order").atomic_writes(true)` opts a single resource into the transaction wrapper. The REST handler's `create` path calls `Manager::create_atomic()` instead of `create()` when the flag is on. Nested writes (feature #58) inherit the outer transaction automatically — the junction/child inserts share the same `sqlx::Transaction` because the ORM's `atomic()` path stashes the active transaction in a tokio task-local or a `QuerySet` field.
-    >
-    > **Why opt-in at the builder?** Because `DbPool` is resolved ambiently, and a global default would silently change the behaviour of existing code that already does its own transaction management. `App::builder().atomic_transactions(true)` is an explicit contract: the developer says "I want every write protected." Without the flag, the framework stays exactly as it is today — manual control, no surprises.
+38.1 [x] **Atomic transactions at the ORM level — opt-in via builder** 🔴 High
+       — Shipped. `.atomic()` / `.non_atomic()` available on both `Manager<T>` and `QuerySet<T>`; the Manager flag propagates into QuerySets it constructs. `App::builder().atomic_transactions(true)` flips a global default stored in `OnceLock<bool>` inside `umbra::db`. Resolution order at terminal time: per-call override > builder default > false. Wired terminals: `Manager::create`, `Manager::bulk_create`, `QuerySet::update_values`, `QuerySet::delete`. Each wraps its single SQL statement in BEGIN/COMMIT (rolled back on Err) when atomic is true; otherwise the existing ambient-pool path stays unchanged. `.atomic()` and `.on_tx()` are documented as mutually exclusive — `.on_tx()` wins because that path doesn't read the atomic flag. Tests in `crates/umbra-core/tests/atomic_terminals.rs`.
+
+    > Follow-ups still open under this number: REST-layer `ResourceConfig::new("order").atomic_writes(true)` per-resource opt-in (tracked alongside feature #58 since nested writes are its main use case).
 
 ---
 
