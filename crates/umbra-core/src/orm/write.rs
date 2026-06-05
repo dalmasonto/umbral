@@ -137,7 +137,11 @@ impl WriteError {
                     .or_default()
                     .push("This field cannot be blank.".to_string());
             }
-            ForeignKeyNotFound { field, target_table, value } => {
+            ForeignKeyNotFound {
+                field,
+                target_table,
+                value,
+            } => {
                 let value_repr = repr_json_value(value);
                 out.insert(
                     field.clone(),
@@ -146,7 +150,10 @@ impl WriteError {
                     )],
                 );
             }
-            UniqueViolation { field: Some(col), value } => {
+            UniqueViolation {
+                field: Some(col),
+                value,
+            } => {
                 let value_repr = value.as_ref().map(repr_json_value);
                 let msg = match value_repr {
                     Some(v) => format!("A row with {col}={v} already exists."),
@@ -165,18 +172,22 @@ impl WriteError {
                     vec!["Referenced row does not exist.".to_string()],
                 );
             }
-            TypeMismatch { field, expected, got } => {
-                out.entry(field.clone()).or_default().push(format!(
-                    "Expected `{expected:?}`, got `{got}`."
-                ));
+            TypeMismatch {
+                field,
+                expected,
+                got,
+            } => {
+                out.entry(field.clone())
+                    .or_default()
+                    .push(format!("Expected `{expected:?}`, got `{got}`."));
             }
             Validator { field, message } => {
                 out.entry(field.clone()).or_default().push(message.clone());
             }
             UnknownColumn { field } => {
-                out.entry(field.clone()).or_default().push(format!(
-                    "Unknown column `{field}` on this model."
-                ));
+                out.entry(field.clone())
+                    .or_default()
+                    .push(format!("Unknown column `{field}` on this model."));
             }
             Multiple { errors } => {
                 for e in errors {
@@ -211,10 +222,7 @@ impl WriteError {
                 out.push("A required field is missing.".into());
             }
             ForeignKeyViolation { field: None } => {
-                out.push(
-                    "One or more foreign-key fields reference rows that don't exist."
-                        .into(),
-                );
+                out.push("One or more foreign-key fields reference rows that don't exist.".into());
             }
             CheckViolation { constraint } => {
                 let msg = match constraint {
@@ -238,9 +246,9 @@ impl WriteError {
     pub fn code(&self) -> &'static str {
         use WriteError::*;
         match self {
-            RequiredFieldMissing { .. }
-            | BlankNotAllowed { .. }
-            | NotNullViolation { .. } => "required_field",
+            RequiredFieldMissing { .. } | BlankNotAllowed { .. } | NotNullViolation { .. } => {
+                "required_field"
+            }
             ForeignKeyNotFound { .. } | ForeignKeyViolation { .. } => "fk_constraint",
             UniqueViolation { .. } => "unique_constraint",
             CheckViolation { .. } => "check_constraint",
@@ -284,10 +292,9 @@ impl std::fmt::Display for WriteError {
                 f,
                 "umbra::orm::write: required field `{field}` is missing or null"
             ),
-            WriteError::BlankNotAllowed { field } => write!(
-                f,
-                "umbra::orm::write: field `{field}` cannot be blank"
-            ),
+            WriteError::BlankNotAllowed { field } => {
+                write!(f, "umbra::orm::write: field `{field}` cannot be blank")
+            }
             WriteError::ForeignKeyNotFound {
                 field,
                 target_table,
@@ -303,10 +310,9 @@ impl std::fmt::Display for WriteError {
                     "umbra::orm::write: unique constraint on `{f_}`={} violated",
                     repr_json_value(v),
                 ),
-                (Some(f_), None) => write!(
-                    f,
-                    "umbra::orm::write: unique constraint on `{f_}` violated"
-                ),
+                (Some(f_), None) => {
+                    write!(f, "umbra::orm::write: unique constraint on `{f_}` violated")
+                }
                 _ => write!(f, "umbra::orm::write: unique constraint violated"),
             },
             WriteError::NotNullViolation { field } => match field {

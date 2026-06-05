@@ -44,10 +44,7 @@ use crate::orm::write::WriteError;
 /// The FK check is async because it queries the target tables;
 /// the required check is sync. Callers that want only one or the
 /// other reach for the individual helpers.
-pub async fn validate_on_create(
-    meta: &ModelMeta,
-    body: &Map<String, Value>,
-) -> Vec<WriteError> {
+pub async fn validate_on_create(meta: &ModelMeta, body: &Map<String, Value>) -> Vec<WriteError> {
     let mut errors = validate_required_create(meta, body);
     errors.extend(validate_choices(meta, body));
     errors.extend(validate_m2m_relations(meta, body).await);
@@ -103,10 +100,7 @@ pub async fn validate_on_typed_create(
     errors
 }
 
-pub async fn validate_on_update(
-    meta: &ModelMeta,
-    body: &Map<String, Value>,
-) -> Vec<WriteError> {
+pub async fn validate_on_update(meta: &ModelMeta, body: &Map<String, Value>) -> Vec<WriteError> {
     let mut errors = validate_required_update(meta, body);
     errors.extend(validate_choices(meta, body));
     errors.extend(validate_m2m_relations(meta, body).await);
@@ -119,8 +113,9 @@ pub async fn validate_on_update(
         })
         .collect();
     errors.retain(|e| match e {
-        WriteError::RequiredFieldMissing { field }
-        | WriteError::BlankNotAllowed { field } => !fk_fields.contains(field),
+        WriteError::RequiredFieldMissing { field } | WriteError::BlankNotAllowed { field } => {
+            !fk_fields.contains(field)
+        }
         _ => true,
     });
     errors.append(&mut fk_errors);
@@ -154,14 +149,20 @@ pub fn classify_sql_error(e: &sqlx::Error, body: &Map<String, Value>) -> Option<
             if cols.len() == 1 {
                 let col = cols.into_iter().next().unwrap();
                 let value = body.get(&col).cloned();
-                Some(WriteError::UniqueViolation { field: Some(col), value })
+                Some(WriteError::UniqueViolation {
+                    field: Some(col),
+                    value,
+                })
             } else if !cols.is_empty() {
                 Some(WriteError::UniqueViolation {
                     field: Some(cols.into_iter().next().unwrap()),
                     value: None,
                 })
             } else {
-                Some(WriteError::UniqueViolation { field: None, value: None })
+                Some(WriteError::UniqueViolation {
+                    field: None,
+                    value: None,
+                })
             }
         }
         "1299" => {
@@ -175,11 +176,11 @@ pub fn classify_sql_error(e: &sqlx::Error, body: &Map<String, Value>) -> Option<
         // ---- Postgres ----
         "23503" => Some(WriteError::ForeignKeyViolation { field: pg_column }),
         "23505" => {
-            let value = pg_column
-                .as_ref()
-                .and_then(|c| body.get(c))
-                .cloned();
-            Some(WriteError::UniqueViolation { field: pg_column, value })
+            let value = pg_column.as_ref().and_then(|c| body.get(c)).cloned();
+            Some(WriteError::UniqueViolation {
+                field: pg_column,
+                value,
+            })
         }
         "23502" => Some(WriteError::NotNullViolation { field: pg_column }),
         "23514" => Some(WriteError::CheckViolation {
@@ -406,10 +407,7 @@ fn repr_json_value_local(v: &Value) -> String {
     }
 }
 
-async fn validate_fk_references(
-    meta: &ModelMeta,
-    body: &Map<String, Value>,
-) -> Vec<WriteError> {
+async fn validate_fk_references(meta: &ModelMeta, body: &Map<String, Value>) -> Vec<WriteError> {
     let mut out = Vec::new();
     for col in &meta.fields {
         let Some(target_table) = col.fk_target.as_deref() else {
@@ -700,9 +698,11 @@ mod tests {
         let meta = meta_with_m2m("tags", "tag", "Tag");
         // Missing key — required-field path is the right home for
         // this (and M2M slots aren't required). Skipped here.
-        assert!(validate_m2m_relations(&meta, &serde_json::Map::new())
-            .await
-            .is_empty());
+        assert!(
+            validate_m2m_relations(&meta, &serde_json::Map::new())
+                .await
+                .is_empty()
+        );
         // Explicit null — same.
         let mut body = serde_json::Map::new();
         body.insert("tags".into(), serde_json::Value::Null);

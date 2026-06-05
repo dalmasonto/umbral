@@ -634,8 +634,7 @@ impl<'a> DynQuerySet<'a> {
         // it here means the admin plugin and any third-party
         // caller of `insert_json` gets the same structured
         // errors.
-        let validation_errors =
-            crate::orm::validation::validate_on_create(&self.meta, body).await;
+        let validation_errors = crate::orm::validation::validate_on_create(&self.meta, body).await;
         if !validation_errors.is_empty() {
             return Err(WriteError::Multiple {
                 errors: validation_errors,
@@ -730,9 +729,11 @@ impl<'a> DynQuerySet<'a> {
             .fields
             .iter()
             .find(|c| c.primary_key)
-            .ok_or_else(|| WriteError::Sqlx(sqlx::Error::Protocol(
-                "insert_json: model has no PK".to_string(),
-            )))?;
+            .ok_or_else(|| {
+                WriteError::Sqlx(sqlx::Error::Protocol(
+                    "insert_json: model has no PK".to_string(),
+                ))
+            })?;
         let pk_name = pk_col.name.clone();
         let pk_ty = pk_col.ty;
 
@@ -847,8 +848,7 @@ impl<'a> DynQuerySet<'a> {
         // (preserving the partial-update contract); FK existence
         // + choices + M2M shape apply to whatever the body
         // carries.
-        let validation_errors =
-            crate::orm::validation::validate_on_update(&self.meta, body).await;
+        let validation_errors = crate::orm::validation::validate_on_update(&self.meta, body).await;
         if !validation_errors.is_empty() {
             return Err(WriteError::Multiple {
                 errors: validation_errors,
@@ -929,9 +929,7 @@ impl<'a> DynQuerySet<'a> {
         // = true) still gets the M2M write.
         let parent_pks: Vec<serde_json::Value> = if touches_m2m {
             match self.meta.pk_column() {
-                Some(pk_col) => {
-                    collect_parent_pks(&self.meta, pk_col, &self.where_clauses).await?
-                }
+                Some(pk_col) => collect_parent_pks(&self.meta, pk_col, &self.where_clauses).await?,
                 None => Vec::new(),
             }
         } else {
@@ -1427,9 +1425,7 @@ fn classify_or_sqlx(
 fn json_pk_to_sea(v: &serde_json::Value) -> Option<sea_query::Value> {
     match v {
         serde_json::Value::Number(n) => n.as_i64().map(|i| sea_query::Value::BigInt(Some(i))),
-        serde_json::Value::String(s) => {
-            Some(sea_query::Value::String(Some(Box::new(s.clone()))))
-        }
+        serde_json::Value::String(s) => Some(sea_query::Value::String(Some(Box::new(s.clone())))),
         _ => None,
     }
 }
@@ -1568,13 +1564,9 @@ async fn write_m2m_junctions(
             }
         }
         let junction_table = format!("{}_{}", meta.table, rel.field_name);
-        crate::orm::m2m::set_junction_dynamic(
-            &junction_table,
-            parent_pk_value.clone(),
-            child_ids,
-        )
-        .await
-        .map_err(crate::orm::write::WriteError::Sqlx)?;
+        crate::orm::m2m::set_junction_dynamic(&junction_table, parent_pk_value.clone(), child_ids)
+            .await
+            .map_err(crate::orm::write::WriteError::Sqlx)?;
     }
     Ok(())
 }
