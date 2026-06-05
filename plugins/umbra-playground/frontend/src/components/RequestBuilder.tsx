@@ -253,15 +253,42 @@ export function RequestBuilder() {
   // - The Schema-tab buttons (`Required only` / `All fields`) still
   //   work as manual overrides if you want to refill from scratch
   //   or expand to every field.
-  const autofilledForRef = useRef<string | null>(null);
+  //
+  // Race fix: the effect MUST NOT clobber a saved draft that
+  // `selectEndpoint` async-loaded from Dexie. The previous
+  // version (tracking only the last op autofilled) had a race:
+  // switching tabs re-fired this effect, the body was `""` for
+  // one frame between `selectEndpoint`'s sync reset and the
+  // async load, and the effect ran `setBody(synthesized…)`
+  // before the load resolved. The load's own guard
+  // (`if (cur.current.body !== "") return;`) then saw the
+  // synthesized body and skipped — the saved draft was
+  // silently discarded. The fix: defer the autofill with
+  // setTimeout(0) so the draft load (also a microtask) lands
+  // first, then check the body is still empty before
+  // synthesizing. Track autofilled ops in a Set so revisiting
+  // a tab never re-runs the skeleton over a draft the user
+  // already cleared.
+  const autofilledOpsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (!opMethod || !opPath) return;
     const key = `${opMethod} ${opPath}`;
-    if (autofilledForRef.current === key) return;
+    if (autofilledOpsRef.current.has(key)) return;
     if (!requestBody || requestBodyFields.length === 0) return;
-    autofilledForRef.current = key;
-    setBody(synthesizeJsonBody(requestBodyFields, { allFields: false }));
-    setBodyType("json");
+    const timer = setTimeout(() => {
+      // After the deferred tick, the async loadDraft (triggered
+      // by selectEndpoint) has had a chance to land. Re-read
+      // the current body from the store — if it's non-empty,
+      // either the user typed, or the saved draft loaded, or
+      // another autofill won the race. In all three cases, do
+      // nothing.
+      const body = usePlayground.getState().current.body;
+      if (body !== "") return;
+      autofilledOpsRef.current.add(key);
+      setBody(synthesizeJsonBody(requestBodyFields, { allFields: false }));
+      setBodyType("json");
+    }, 0);
+    return () => clearTimeout(timer);
   }, [
     opMethod,
     opPath,
