@@ -208,34 +208,37 @@ describe("playground tabs slice", () => {
     expect(row.activeTabId).toBe(secondTab?.id);
   });
 
-  it("restores tabs and active on reload, and falls back to the first tab if active is gone", async () => {
+  it("the loader returns the persisted activeId verbatim so App.tsx can apply its own fallback", async () => {
+    // Two sessions of state — the first sets up a (tabs, active)
+    // pair, the second simulates a reload that opens only a
+    // subset of those tabs. The contract: loadTabs returns
+    // whatever the previous session persisted. The fallback to
+    // the first tab when the active id is missing is the
+    // App.tsx hydration logic's job, not the loader's.
     let use = await reload();
     use.getState().openTab("op_a");
     use.getState().openTab("op_b");
     use.getState().openTab("op_c");
-    // Make op_b the active tab so we have a non-default active.
     const bId = use.getState().openTabs[1]?.id;
     use.getState().setActiveTab(bId!);
     await waitForTabsWrite();
 
-    // Now simulate a reload that drops op_b from openTabs but
-    // leaves the persisted activeTabId pointing at it.
+    // Reload — fresh store, fresh Dexie. We only re-open two
+    // of the three tabs. Whatever the second session saves is
+    // what the loader will surface.
     use = await reload();
     use.getState().openTab("op_a");
     use.getState().openTab("op_c");
-    use.getState().setActiveTab(use.getState().openTabs[1]?.id!);
-    // The persisted row's activeTabId still points at the old
-    // bId; App.tsx's hydration logic should fall back to the
-    // first tab. We test that here by asserting the loader
-    // returns the empty shape for activeId when the active tab
-    // is missing.
+    const op_c_id = use.getState().openTabs[1]?.id;
+    use.getState().setActiveTab(op_c_id!);
+    await waitForTabsWrite();
+
     const { loadTabs } = await import("../state/tabsStorage");
     const loaded = await loadTabs();
-    // The loader returns the persisted snapshot verbatim; the
-    // fallback-to-first logic lives in App.tsx. The contract
-    // this test pins is: the loader surfaces the stale active
-    // id so the caller can apply the fallback.
-    expect(loaded?.activeTabId).toBe(bId);
     expect(loaded?.tabs.map((t) => t.operationId)).toEqual(["op_a", "op_c"]);
+    expect(loaded?.activeTabId).toBe(op_c_id);
+    // The OLD bId from the pre-reload session is gone — Dexie
+    // was deleted on reload.
+    expect(loaded?.activeTabId).not.toBe(bId);
   });
 });

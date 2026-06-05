@@ -398,6 +398,23 @@ function scheduleSaveToast(success: boolean) {
   }, 600);
 }
 
+/** Internal helper for switching which tab is active. Updates
+ *  `activeTabId`, fires `selectEndpoint` for the new active
+ *  tab's `operationId`, and schedules the persist. Lives at
+ *  module scope so `openTab` and `setActiveTab` can both call
+ *  it without duplicating the side effects. */
+function setActiveTabInternal(
+  set: (partial: Partial<PlaygroundState>) => void,
+  get: () => PlaygroundState,
+  id: string,
+): void {
+  const tab = get().openTabs.find((t) => t.id === id);
+  if (!tab) return;
+  set({ activeTabId: id });
+  scheduleTabsSave(get().openTabs, get().activeTabId);
+  get().selectEndpoint(tab.operationId);
+}
+
 export const usePlayground = create<PlaygroundState>((set, get) => ({
   spec: null,
   specError: null,
@@ -672,23 +689,107 @@ export const usePlayground = create<PlaygroundState>((set, get) => ({
 
   openTabs: [],
   activeTabId: null,
-  openTab: (_operationId) => {
-    // Filled in by Task 5. The temporary body just keeps
-    // `scheduleTabsSave` referenced so the noUnusedLocals
-    // check passes while the slice is being scaffolded.
+  openTab: (operationId) => {
+    const state = get();
+    // Idempotent: if a tab for this operationId already exists,
+    // just activate it.
+    const existing = state.openTabs.find(
+      (t) => t.operationId === operationId,
+    );
+    if (existing) {
+      if (state.activeTabId !== existing.id) {
+        // Internal helper that flips activeTabId, fires
+        // selectEndpoint, and schedules the persist — defined
+        // below.
+        setActiveTabInternal(set, get, existing.id);
+      }
+      return;
+    }
+    const newTab: Tab = {
+      id:
+        typeof crypto !== "undefined" && "randomUUID" in crypto
+          ? crypto.randomUUID()
+          : `tab-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      operationId,
+      openedAt: Date.now(),
+      pristineDraft: { ...state.current },
+    };
+    set({
+      openTabs: [...state.openTabs, newTab],
+      activeTabId: newTab.id,
+    });
     scheduleTabsSave(get().openTabs, get().activeTabId);
+    // The draft hydration for the new tab runs through the
+    // existing selectEndpoint path. We snapshot the pristine
+    // draft again after hydration completes so the dirty dot
+    // starts clean.
+    state.selectEndpoint(operationId);
+    setTimeout(() => {
+      const refreshed = get().openTabs.find((t) => t.id === newTab.id);
+      if (!refreshed) return;
+      const hydrated = get().current;
+      const same =
+        JSON.stringify(refreshed.pristineDraft) ===
+        JSON.stringify(hydrated);
+      if (same) return;
+      set({
+        openTabs: get().openTabs.map((t) =>
+          t.id === newTab.id
+            ? { ...t, pristineDraft: { ...hydrated } }
+            : t,
+        ),
+      });
+      scheduleTabsSave(get().openTabs, get().activeTabId);
+    }, 0);
   },
-  setActiveTab: (_id) => {
-    // Filled in by Task 5.
+  setActiveTab: (id) => {
+    setActiveTabInternal(set, get, id);
   },
-  closeTab: (_id) => {
-    // Filled in by Task 5.
+  closeTab: (id) => {
+    const state = get();
+    const idx = state.openTabs.findIndex((t) => t.id === id);
+    if (idx < 0) return;
+    const wasActive = state.activeTabId === id;
+    const next = state.openTabs.filter((t) => t.id !== id);
+    if (!wasActive) {
+      set({ openTabs: next });
+      scheduleTabsSave(next, state.activeTabId);
+      return;
+    }
+    // Pick a fallback: right neighbor first, then left
+    // neighbor, then null.
+    const fallback = next[idx] ?? next[idx - 1] ?? null;
+    const fallbackId = fallback?.id ?? null;
+    set({ openTabs: next, activeTabId: fallbackId });
+    scheduleTabsSave(next, fallbackId);
+    if (fallback) {
+      get().selectEndpoint(fallback.operationId);
+    } else {
+      get().selectEndpoint(null);
+    }
   },
-  reorderTab: (_id, _toIndex) => {
-    // Filled in by Task 5.
+  reorderTab: (id, toIndex) => {
+    const state = get();
+    const idx = state.openTabs.findIndex((t) => t.id === id);
+    if (idx < 0) return;
+    if (toIndex < 0 || toIndex >= state.openTabs.length) return;
+    if (toIndex === idx) return;
+    const next = [...state.openTabs];
+    const [picked] = next.splice(idx, 1);
+    next.splice(toIndex, 0, picked!);
+    set({ openTabs: next });
+    scheduleTabsSave(next, state.activeTabId);
   },
   markCurrentClean: () => {
-    // Filled in by Task 5.
+    const state = get();
+    if (!state.activeTabId) return;
+    const next = state.openTabs.map((t) =>
+      t.id === state.activeTabId
+        ? { ...t, pristineDraft: { ...state.current } }
+        : t,
+    );
+    set({ openTabs: next });
+    scheduleTabsSave(next, state.activeTabId);
   },
 
   settings: initialSettings,
