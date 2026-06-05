@@ -505,7 +505,7 @@ export function RequestBuilder() {
       </div>
 
       {/* Tab Content */}
-      <div className="flex-1 overflow-y-auto p-3">
+      <div className="flex-1 min-h-0 overflow-y-auto p-3">
         {activeTab === "params" && (
           <div className="space-y-4">
             {filterableFields.length > 0 && (
@@ -912,7 +912,7 @@ export function RequestBuilder() {
             </div>
 
             {current.bodyType === "json" ? (
-              <div className="flex-1 min-h-full rounded-md overflow-hidden border border-border">
+              <div className="flex-1 min-h-0 h-full rounded-md overflow-hidden border border-border">
                 <Editor
                   height="100%"
                   language="json"
