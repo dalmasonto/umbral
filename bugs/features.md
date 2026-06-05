@@ -106,33 +106,29 @@ These are the QuerySet features and model-level capabilities that Django develop
     >
     > How: A builder API: `Case::new().when(view_count.gt(1000), 2).when(view_count.gt(100), 1).default(0)`. Each `when` takes a `Predicate` and a `Value`. Render to `CASE WHEN ... THEN ... ELSE ... END`. Defer until `annotate()` (gap #13) is shipped, since conditional expressions are primarily useful as annotated columns.
 
-26. [ ] **Subqueries — `Subquery` and `Exists`** 🟡 Medium
-    > Why: The only clean way to do "posts that have at least one approved comment" without a JOIN. Correlated subqueries are essential for complex filtering that can't be expressed with simple column comparisons.
-    >
-    > How: `Subquery::new(Comment::objects().filter(post.eq(OuterRef("id"))).values("id"))` wraps an inner QuerySet and renders it as `(SELECT ...)` in the outer query. `Exists` is the same but wraps in `EXISTS (...)`. Requires `OuterRef` to reference the outer query's columns. This is a medium-sized change but well-scoped.
+26. [~] **Subqueries — `Subquery` and `Exists`** 🟡 Medium
+       — Partial. `Subquery` type ships in `crates/umbra-core/src/orm/mod.rs`; built via `QuerySet::into_subquery(col_name)` / `Manager::into_subquery(col_name)`. `IntCol::in_subquery(sub)` and `ForeignKeyCol::in_subquery(sub)` produce `Predicate<T>` rendering as `<col> IN (SELECT col FROM ...)`. Most "is there a row that references me" queries collapse to in_subquery without correlated EXISTS. Tests in `crates/umbra-core/tests/subquery.rs`. **Still open**: correlated `EXISTS(...)` with `OuterRef` references back to the outer query's columns.
 
 27. [ ] **Window functions — `RowNumber`, `Rank`, `DenseRank`, `Lead`, `Lag`, `NthValue`** 🟢 Low
     > Why: Needed for leaderboards and "top N per category," but Postgres-only (SQLite needs window-function support compiled in). The user base for this is smaller than the core QuerySet gaps.
     >
     > How: Add a `Window` struct and an `Over` clause. Gate the entire feature behind a runtime backend check that returns a clear error on SQLite. Start with `RowNumber` and `Rank` since they cover the 80% use case. Defer until `annotate()` (gap #13) is shipped, since window functions are a form of annotation.
 
-28. [ ] **`union()`, `intersection()`, `difference()` — set operations** 🟢 Low
-    > Why: Useful for merging search results from multiple models, but `OR` filtering within a single model (gap #14, `Q` objects) covers most of the same ground. Set ops across different models are rare in practice.
-    >
-    > How: `q1.union(q2)` emits `SELECT ... UNION SELECT ...`. Requires both QuerySets to return the same column shape, which is hard to enforce at the type level in Rust. Start with a runtime check that errors if column counts differ. Low priority.
+28. [x] **`union()`, `intersection()`, `difference()` — set operations** 🟢 Low
+       — Shipped. `QuerySet::union(other)`, `intersect(other)`, `except(other)` combine two `QuerySet<T>` values via sea-query's `UnionType::{Distinct, Intersect, Except}`. The shared `T` type-param enforces column-shape compatibility at compile time — no runtime check needed. Default is the de-duplicating UNION (UNION ALL would be a future variant). Both sides apply their accumulated WHERE before the combine; further `.filter()` on the returned QuerySet applies to the OUTER combined query. Tests in `crates/umbra-core/tests/set_ops.rs`.
 
 29. [ ] **`iterator()` — memory-efficient streaming** 🟡 Medium
     > Why: For tables with millions of rows, `fetch()` collects into a `Vec` and would OOM. `iterator()` yields rows one at a time — the only viable path for exports, migrations, and bulk transforms.
     >
     > How: `QuerySet::iterator()` returns a struct implementing `Stream` (or an async `Iterator` if `Stream` is too heavy). Under the hood, use `sqlx::query_as().fetch()` which yields rows as they arrive. The challenge is lifetime management — the `Stream` must hold the `sqlx::Pool` reference and the query state. This is medium-sized but critical for large datasets.
+    >
+    > **Deferred this round** — the true-Stream impl requires `futures-util` as a workspace dep (cross-cutting change); a callback-shape `try_for_each(|row| ...)` variant ships the same memory bound without it. Coming next session if requested.
 
 30. [x] **Reverse relation accessors — `post.comment_set`, `category.post_set`** 🔴 High
        — Shipped via `#[derive(Model)]`. For every `ForeignKey<Parent>` field on a derived Child, the macro emits `impl Parent { pub fn <child_snake>_set(&self) -> QuerySet<Child> }` returning a QuerySet pre-filtered by the FK column = parent's primary key. Multiple FKs from one Child to the same Parent are disambiguated with `<child>_via_<field>_set`. `ForeignKeyCol::eq` / `ne` generalised from `i64` to `impl Into<sea_query::Value>` so the accessor body works for any PK type. Tests in `crates/umbra-core/tests/reverse_fk.rs`. **Limitations**: parent type must be local (Rust orphan rule); parent PK must implement `Into<sea_query::Value>` (every built-in PK type does).
 
-31. [ ] **JSONField / JSONB query operations** 🟡 Medium
-    > Why: `serde_json::Value` stores as JSONB but cannot be queried by path or checked for containment. This blocks any schema-less or semi-structured data model.
-    >
-    > How: For Postgres: `metadata__has_key("name")` → `metadata ? 'name'`, `metadata__path("a", "b")` → `metadata #> '{a,b}'`. For SQLite: fall back to `json_extract` (available in modern SQLite). Add JSON-specific lookup operators to the REST filter parser (gap #29) so `?metadata__has_key=name` works out of the box.
+31. [x] **JSONField / JSONB query operations** 🟡 Medium
+       — Shipped on `JsonCol` / `NullableJsonCol` with full backend dispatch. `meta.has_key("name")` renders as Postgres `meta ? 'name'` or SQLite `json_extract(meta, '$.name') IS NOT NULL`. `meta.path_text(&["a", "b"])` returns a chainable that supports `.eq/.ne/.is_null/.is_not_null`; rendering is `meta -> 'a' ->> 'b'` on Postgres or `json_extract(meta, '$.a.b')` on SQLite. Tests: Postgres render shape in `crates/umbra-core/tests/json_ops.rs`; live SQLite end-to-end in `crates/umbra-core/tests/json_sqlite_live.rs`. **Deferred**: REST filter-parser hooks for `?meta__has_key=name` (lives with REST plugin work).
 
 32. [ ] **ArrayField operations** 🟢 Low
     > Why: Postgres arrays are powerful, but most use cases (tags, permissions) are better served by a junction table (M2M) or a JSONB column. Only reach for this if a real app needs `tags__contains` containment checks on a native array.
@@ -144,10 +140,8 @@ These are the QuerySet features and model-level capabilities that Django develop
     >
     > How: Add `SearchField` (Postgres-only at v1) that creates a `tsvector` column via GIN index. `Post::objects().filter(body__search("rust async"))` emits `to_tsvector('english', body) @@ plainto_tsquery('rust async')`. For SQLite, ship an FTS5 virtual table as a fallback. This is a medium-sized plugin-level feature, not a core ORM change.
 
-34. [ ] **`in_bulk()` — fetch many rows by PK into a HashMap** 🟢 Low
-    > Why: Convenience method for when you have a list of IDs from a cache or external system. `fetch()` + manual HashMap construction is the workaround today.
-    >
-    > How: `Post::objects().in_bulk([1, 2, 3])` builds `SELECT * FROM post WHERE id IN (1, 2, 3)` and collects into `HashMap<i64, Post>`. One method, one test. Small scope; defer until someone asks for it.
+34. [x] **`in_bulk()` — fetch many rows by PK into a HashMap** 🟢 Low
+       — `QuerySet::in_bulk(pks)` shipped. Builds `SELECT * WHERE pk IN (...)`, groups by the existing `HydrateRelated::pk_i64` hook, returns `HashMap<i64, T>`. Missing ids silently absent; empty input short-circuits. v1 limitation: i64-PK models only. Tests in `crates/umbra-core/tests/in_bulk.rs`.
 
 35. [x] **`explain()` — query plan inspection** 🟡 Medium
        — `QuerySet::explain()` returns the execution plan as a plain-text `String`. SQLite: prepends `EXPLAIN QUERY PLAN` and joins the `detail` column; Postgres: prepends `EXPLAIN` and joins the `QUERY PLAN` column. Tests in `crates/umbra-core/tests/earliest_latest_distinct.rs`. **Deferred**: Postgres `EXPLAIN (FORMAT JSON)` for machine-readable output — use raw sqlx when needed.

@@ -238,6 +238,56 @@ let recent: Vec<Post> = Post::objects()
 
 `update_or_create` returns `(row, created: bool)`. `bulk_update` returns rows-affected. `raw` skips select_related/prefetch_related chains and binds no parameters — sanitise input before calling.
 
+## Composition: subqueries + set ops + in_bulk
+
+```rust
+// col IN (SELECT col FROM ...) — sub-builders bind cleanly.
+let staff_posts = Post::objects()
+    .filter(post::AUTHOR.in_subquery(
+        User::objects()
+            .filter(user::IS_STAFF.eq(true))
+            .into_subquery("id"),
+    ))
+    .fetch()
+    .await?;
+
+// union / intersect / except across two QuerySet<T>.
+let combined = Post::objects()
+    .filter(post::ID.le(10))
+    .union(Post::objects().filter(post::AUTHOR.eq(self.id)))
+    .fetch()
+    .await?;
+
+// in_bulk: cached-IDs lookup.
+let users_by_id: HashMap<i64, User> =
+    User::objects().in_bulk(vec![1, 2, 3]).await?;
+```
+
+`into_subquery(col)` clears the SELECT list to just `col` and hands the result to `IntCol::in_subquery` / `ForeignKeyCol::in_subquery`. `union` / `intersect` / `except` work on same-typed QuerySets — column-shape compatibility is enforced by the shared `T` param. `in_bulk` requires an i64-PK model.
+
+## JSON column ops
+
+`JsonCol` and `NullableJsonCol` carry backend-aware helpers for the everyday "is this key present" / "drill into nested value" patterns:
+
+```rust
+// has_key — true when the JSON object has the named top-level key.
+// Postgres: meta ? 'name'   /   SQLite: json_extract(meta, '$.name') IS NOT NULL
+Doc::objects()
+    .filter(doc::META.has_key("name"))
+    .fetch()
+    .await?;
+
+// path_text — drill into a nested path; compare as text.
+// Postgres: meta -> 'nested' ->> 'role' = 'admin'
+// SQLite:   json_extract(meta, '$.nested.role') = 'admin'
+Doc::objects()
+    .filter(doc::META.path_text(&["nested", "role"]).eq("admin"))
+    .fetch()
+    .await?;
+```
+
+`path_text` returns a chainable supporting `.eq` / `.ne` / `.is_null` / `.is_not_null`. Both helpers compose with the rest of `QuerySet::filter`.
+
 ## See also
 
 - [Declaring models](/docs/v0.0.1/orm/models) - the QuerySet API (`filter`, `update_values`, `fetch`, `get`, etc.) that F and Q plug into.
