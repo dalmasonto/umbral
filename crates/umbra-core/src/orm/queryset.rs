@@ -614,6 +614,41 @@ impl<T: Model> QuerySet<T> {
         self.order_by(OrderExpr::new(col_name, true)).first().await
     }
 
+    /// Fetch many rows by their primary keys and return a
+    /// `HashMap<i64, T>` keyed by PK. The everyday companion to a
+    /// cached list of ids — `User::objects().in_bulk(user_ids)`
+    /// gives you direct lookup access without a second
+    /// `.iter().find(...)` pass per id.
+    ///
+    /// Missing ids are silently absent from the map; callers that
+    /// need the existence check can compare `map.len()` to
+    /// `pks.len()`. Empty input is a no-op (returns the empty map).
+    ///
+    /// v1 limitation: i64-PK models only (matches `pk_i64()`'s
+    /// constraint). Non-i64 PK models silently drop every row from
+    /// the result map.
+    pub async fn in_bulk(self, pks: Vec<i64>) -> Result<HashMap<i64, T>, sqlx::Error>
+    where
+        T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
+            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>
+            + HydrateRelated,
+    {
+        if pks.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let pk_name = pk_field::<T>().map(|f| f.name).unwrap_or("id");
+        let pk_pred: Predicate<T> =
+            Predicate::new(Expr::col(Alias::new(pk_name)).is_in(pks.iter().copied()));
+        let rows = self.filter(pk_pred).fetch().await?;
+        let mut out: HashMap<i64, T> = HashMap::with_capacity(rows.len());
+        for row in rows {
+            if let Some(id) = row.pk_i64() {
+                out.insert(id, row);
+            }
+        }
+        Ok(out)
+    }
+
     /// Return the database's execution plan for this query as a
     /// plain-text string. Doesn't run the underlying query — just
     /// asks the DB how it would be executed.
