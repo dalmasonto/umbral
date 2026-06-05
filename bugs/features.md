@@ -130,15 +130,11 @@ These are the QuerySet features and model-level capabilities that Django develop
 31. [x] **JSONField / JSONB query operations** 🟡 Medium
        — Shipped on `JsonCol` / `NullableJsonCol` with full backend dispatch. `meta.has_key("name")` renders as Postgres `meta ? 'name'` or SQLite `json_extract(meta, '$.name') IS NOT NULL`. `meta.path_text(&["a", "b"])` returns a chainable that supports `.eq/.ne/.is_null/.is_not_null`; rendering is `meta -> 'a' ->> 'b'` on Postgres or `json_extract(meta, '$.a.b')` on SQLite. Tests: Postgres render shape in `crates/umbra-core/tests/json_ops.rs`; live SQLite end-to-end in `crates/umbra-core/tests/json_sqlite_live.rs`. **Deferred**: REST filter-parser hooks for `?meta__has_key=name` (lives with REST plugin work).
 
-32. [ ] **ArrayField operations** 🟢 Low
-    > Why: Postgres arrays are powerful, but most use cases (tags, permissions) are better served by a junction table (M2M) or a JSONB column. Only reach for this if a real app needs `tags__contains` containment checks on a native array.
-    >
-    > How: Defer until a concrete app demands it. If needed, add `ArrayField<T>` with Postgres-specific DDL (`TEXT[]`, `INTEGER[]`) and operators (`@>`, `&&`, `array_length`). Gate behind backend check; SQLite falls back to JSONB storage with runtime emulation.
+32. [x] **ArrayField operations** 🟢 Low
+       — Substantially shipped, Postgres-only with boot-time gating. `Vec<T>` on a model classifies as `SqlType::Array(ArrayElement::*)`; DDL renders `<type>[]`. `ArrayCol<T>` / `NullableArrayCol<T>` column types ship the relational operators: `.contains(val)` (`@>`), `.contains_all(&[vals])`, `.contained_by(&[vals])` (`<@`), `.overlaps(&[vals])` (`&&`). System check rejects Array-having models on SQLite with a clear backend-mismatch diagnostic. Tests: `crates/umbra-core/tests/array_field.rs` (4 unit + 3 ignored live-PG) and `array_ops.rs` (9 unit + 1 ignored live-PG). **Deferred**: SQLite JSONB-storage fallback (the spec described this as a "v1 nice-to-have"; the boot-time rejection is the cleaner default).
 
-33. [ ] **Full-text search integration** 🟡 Medium
-    > Why: A content-heavy app (blogs, documentation) cannot ship with only exact `LIKE` search. Postgres `to_tsvector` / `ts_rank` and SQLite FTS5 are the standard backends.
-    >
-    > How: Add `SearchField` (Postgres-only at v1) that creates a `tsvector` column via GIN index. `Post::objects().filter(body__search("rust async"))` emits `to_tsvector('english', body) @@ plainto_tsquery('rust async')`. For SQLite, ship an FTS5 virtual table as a fallback. This is a medium-sized plugin-level feature, not a core ORM change.
+33. [~] **Full-text search integration** 🟡 Medium
+       — Postgres surface shipped, with limitations. `TsVector` newtype field type classifies as `SqlType::FullText`; DDL renders `tsvector`. System check rejects on SQLite. `FullTextCol<T>` / `NullableFullTextCol<T>` ship `.matches("query")` (`@@ to_tsquery`) and `.matches_websearch("query")` (`@@ websearch_to_tsquery`). Tests: `crates/umbra-core/tests/fulltext_field.rs` (7 unit + 2 ignored live-PG). **Still open**: auto-GIN-index creation on the tsvector column (currently the caller manages indexes manually); the `to_tsvector('english', body) @@ plainto_tsquery('...')` form for text-column-into-tsvector-at-query-time (today the column must already be `tsvector`-typed); SQLite FTS5 fallback (deliberately deferred — different model, virtual tables vs typed column).
 
 34. [x] **`in_bulk()` — fetch many rows by PK into a HashMap** 🟢 Low
        — `QuerySet::in_bulk(pks)` shipped. Builds `SELECT * WHERE pk IN (...)`, groups by the existing `HydrateRelated::pk_i64` hook, returns `HashMap<i64, T>`. Missing ids silently absent; empty input short-circuits. v1 limitation: i64-PK models only. Tests in `crates/umbra-core/tests/in_bulk.rs`.
