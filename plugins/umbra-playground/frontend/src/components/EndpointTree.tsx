@@ -137,7 +137,7 @@ export function EndpointTree() {
   const loadingSpec = usePlayground((s) => s.loadingSpec);
   const specError = usePlayground((s) => s.specError);
   const selected = usePlayground((s) => s.selectedOperationId);
-  const select = usePlayground((s) => s.selectEndpoint);
+  const openTab = usePlayground((s) => s.openTab);
   const [search, setSearch] = usePersistedState<string>(
     "endpoint-tree.search",
     "",
@@ -300,7 +300,7 @@ export function EndpointTree() {
                           <TooltipTrigger asChild>
                             <button
                               type="button"
-                              onClick={() => select(e.operationId)}
+                              onClick={() => openTab(e.operationId)}
                               className={`w-full min-w-0 text-left px-2.5 py-2 rounded-lg text-xs flex items-start gap-2 transition-all ${
                                 selected === e.operationId
                                   ? "bg-primary/8 text-primary ring-1 ring-primary/15 shadow-sm"

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useReducer } from "react";
 import type { OpenAPIV3 } from "openapi-types";
 import { usePlayground } from "@/state/store";
 import { loadHistory } from "@/state/history";
+import { loadTabs } from "@/state/tabsStorage";
 import { useTheme } from "@/hooks/useTheme";
 import {
   Sidebar,
@@ -33,6 +34,7 @@ import { EndpointTree } from "@/components/EndpointTree";
 import { KeyValueEditor } from "@/components/KeyValueEditor";
 import { RequestBuilder } from "@/components/RequestBuilder";
 import { ResponseViewer } from "@/components/ResponseViewer";
+import { TabStrip } from "@/components/TabStrip";
 import { Toaster } from "@/components/Toaster";
 import {
   Activity,
@@ -413,6 +415,29 @@ export function App() {
     void usePlayground.getState().hydrateFromDexie();
   }, []);
 
+  // Restore the open tab list from Dexie once after mount.
+  // If a snapshot is present, set `openTabs` and pick the
+  // first valid active id (or the first tab when the persisted
+  // active is gone). The store's openTab/setActiveTab actions
+  // are reused so the rest of the app (RequestBuilder,
+  // ResponseViewer) hydrates through the existing selectEndpoint
+  // path.
+  useEffect(() => {
+    let active = true;
+    void loadTabs().then((snapshot) => {
+      if (!active) return;
+      if (!snapshot) return;
+      const { tabs, activeTabId } = snapshot;
+      if (tabs.length === 0) return;
+      const target = tabs.find((t) => t.id === activeTabId) ?? tabs[0]!;
+      usePlayground.setState({ openTabs: tabs });
+      usePlayground.getState().setActiveTab(target.id);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
   const operations = useMemo(() => collectOperations(spec), [spec]);
   const selectedOperation = useMemo(
     () => operations.find((operation) => operation.id === selectedOperationId),
@@ -610,7 +635,7 @@ export function App() {
             </Button>
           </header>
 
-          <div className="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] overflow-hidden">
+          <div className="grid min-h-0 flex-1 grid-rows-[auto_auto_minmax(0,1fr)] overflow-hidden">
             <section className="border-b border-border bg-muted/25 px-4 py-3">
               <div className="grid gap-3 md:grid-cols-4">
                 <div className="flex items-center gap-2">
@@ -664,7 +689,9 @@ export function App() {
               </div>
             </section>
 
-            <div className="grid min-h-0 grid-cols-1 lg:grid-cols-2">
+            <TabStrip spec={spec} />
+
+            <div className="grid min-h-0 grid-cols-1 lg:grid-cols-2 min-h-[640px] lg:min-h-[720px]">
               <section className="flex min-h-0 flex-col overflow-hidden border-b border-border lg:border-b-0 lg:border-r">
                 <RequestBuilder />
               </section>

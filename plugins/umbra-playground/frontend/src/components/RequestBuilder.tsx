@@ -912,7 +912,7 @@ export function RequestBuilder() {
             </div>
 
             {current.bodyType === "json" ? (
-              <div className="flex-1 min-h-[12rem] rounded-md overflow-hidden border border-border">
+              <div className="flex-1 min-h-full rounded-md overflow-hidden border border-border">
                 <Editor
                   height="100%"
                   language="json"
