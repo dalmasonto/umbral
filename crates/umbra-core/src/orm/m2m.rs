@@ -206,47 +206,103 @@ impl<T: Model, P: PrimaryKey> M2M<T, P> {
     /// — duplicate `(parent_id, child_id)` inserts succeed silently
     /// (`ON CONFLICT DO NOTHING` on both backends). Returns `Ok(())`
     /// when the M2M slot is unattached.
+    ///
+    /// Fires `m2m_changed:<junction>` with `action: "add"`, the parent
+    /// id, the child PK in `added`, an empty `removed`, and the actor
+    /// task-local. The event fires even when the row already existed
+    /// (the ON CONFLICT made it a no-op) so audit consumers see the
+    /// user intent.
     pub async fn add(&self, child: &T) -> Result<(), sqlx::Error> {
         let Some((parent_id, junction)) = self.junction_handle() else {
             return Ok(());
         };
         let child_pk: T::PrimaryKey = child.primary_key();
+        let child_pk_json = pk_seaval_to_json(child_pk.clone().into());
         let mut q = Query::insert();
         q.into_table(Alias::new(junction))
             .columns([Alias::new("parent_id"), Alias::new("child_id")])
-            .values_panic([Expr::value(parent_id).into(), Expr::value(child_pk).into()])
+            .values_panic([
+                Expr::value(parent_id.clone()).into(),
+                Expr::value(child_pk).into(),
+            ])
             .on_conflict(
                 OnConflict::columns([Alias::new("parent_id"), Alias::new("child_id")])
                     .do_nothing()
                     .to_owned(),
             );
-        execute_sql(&q).await
+        execute_sql(&q).await?;
+        let parent_id_json = pk_seaval_to_json(parent_id.into());
+        crate::signals::emit_m2m_changed(
+            junction,
+            "add",
+            parent_id_json,
+            vec![child_pk_json],
+            Vec::new(),
+        )
+        .await;
+        Ok(())
     }
 
     /// Delete the junction row linking this parent to `child`. No-op
     /// when the relation doesn't exist or the M2M slot is unattached.
+    ///
+    /// Fires `m2m_changed:<junction>` with `action: "remove"`, the
+    /// parent id, the child PK in `removed`, an empty `added`, and the
+    /// actor task-local. The event fires regardless of whether the
+    /// junction row existed (matching the intent-based semantics of
+    /// [`Self::add`]).
     pub async fn remove(&self, child: &T) -> Result<(), sqlx::Error> {
         let Some((parent_id, junction)) = self.junction_handle() else {
             return Ok(());
         };
         let child_pk: T::PrimaryKey = child.primary_key();
+        let child_pk_json = pk_seaval_to_json(child_pk.clone().into());
         let mut q = Query::delete();
         q.from_table(Alias::new(junction))
-            .and_where(Expr::col(Alias::new("parent_id")).eq(parent_id))
+            .and_where(Expr::col(Alias::new("parent_id")).eq(parent_id.clone()))
             .and_where(Expr::col(Alias::new("child_id")).eq(child_pk));
-        execute_delete(&q).await.map(|_| ())
+        execute_delete(&q).await?;
+        let parent_id_json = pk_seaval_to_json(parent_id.into());
+        crate::signals::emit_m2m_changed(
+            junction,
+            "remove",
+            parent_id_json,
+            Vec::new(),
+            vec![child_pk_json],
+        )
+        .await;
+        Ok(())
     }
 
     /// Delete every junction row for this parent. No-op when the
     /// M2M slot is unattached. Returns the number of rows removed.
+    ///
+    /// Fires `m2m_changed:<junction>` with `action: "clear"`, the
+    /// parent id, the prior child PKs in `removed`, and an empty
+    /// `added` — but only when at least one row was removed. Empty
+    /// clears stay silent.
     pub async fn clear(&self) -> Result<u64, sqlx::Error> {
         let Some((parent_id, junction)) = self.junction_handle() else {
             return Ok(0);
         };
         let mut q = Query::delete();
         q.from_table(Alias::new(junction))
-            .and_where(Expr::col(Alias::new("parent_id")).eq(parent_id));
-        execute_delete(&q).await
+            .and_where(Expr::col(Alias::new("parent_id")).eq(parent_id.clone()))
+            .returning_col(Alias::new("child_id"));
+        let removed_ids = execute_delete_returning_ids::<T>(&q).await?;
+        let count = removed_ids.len() as u64;
+        if !removed_ids.is_empty() {
+            let parent_id_json = pk_seaval_to_json(parent_id.into());
+            crate::signals::emit_m2m_changed(
+                junction,
+                "clear",
+                parent_id_json,
+                Vec::new(),
+                removed_ids,
+            )
+            .await;
+        }
+        Ok(count)
     }
 
     /// Replace the entire set of relations for this parent with
@@ -259,16 +315,35 @@ impl<T: Model, P: PrimaryKey> M2M<T, P> {
         let Some((parent_id, junction)) = self.junction_handle() else {
             return Ok(());
         };
+        // Capture the supplied children's PKs up front for the signal
+        // payload's `added` list. The DELETE-then-INSERT loop below
+        // moves the typed `child_pk` value into the SQL, so we clone
+        // its JSON shape first.
+        let added_json: Vec<serde_json::Value> = children
+            .iter()
+            .map(|c| pk_seaval_to_json(c.primary_key().into()))
+            .collect();
         let pool = crate::db::pool_dispatched();
-        match pool {
+        // Build the DELETE statement once — it's identical on both
+        // backends. The RETURNING child_id rider captures the prior
+        // set so the signal payload's `removed` list reflects what the
+        // DB actually cleared.
+        let mut delete = Query::delete();
+        delete
+            .from_table(Alias::new(junction))
+            .and_where(Expr::col(Alias::new("parent_id")).eq(parent_id.clone()))
+            .returning_col(Alias::new("child_id"));
+        let child_pk_ty = child_pk_ty::<T>();
+
+        let removed_json: Vec<serde_json::Value> = match pool {
             crate::db::DbPool::Sqlite(p) => {
                 let mut tx = p.begin().await?;
-                let mut delete = Query::delete();
-                delete
-                    .from_table(Alias::new(junction))
-                    .and_where(Expr::col(Alias::new("parent_id")).eq(parent_id.clone()));
                 let (sql, values) = delete.build_sqlx(SqliteQueryBuilder);
-                sqlx::query_with(&sql, values).execute(&mut *tx).await?;
+                let rows = sqlx::query_with(&sql, values).fetch_all(&mut *tx).await?;
+                let removed: Vec<serde_json::Value> = rows
+                    .iter()
+                    .map(|r| child_id_to_json_sqlite(r, child_pk_ty))
+                    .collect::<Result<_, _>>()?;
                 for child in children {
                     let child_pk: T::PrimaryKey = child.primary_key();
                     let mut insert = Query::insert();
@@ -288,15 +363,16 @@ impl<T: Model, P: PrimaryKey> M2M<T, P> {
                     sqlx::query_with(&sql, values).execute(&mut *tx).await?;
                 }
                 tx.commit().await?;
+                removed
             }
             crate::db::DbPool::Postgres(p) => {
                 let mut tx = p.begin().await?;
-                let mut delete = Query::delete();
-                delete
-                    .from_table(Alias::new(junction))
-                    .and_where(Expr::col(Alias::new("parent_id")).eq(parent_id.clone()));
                 let (sql, values) = delete.build_sqlx(PostgresQueryBuilder);
-                sqlx::query_with(&sql, values).execute(&mut *tx).await?;
+                let rows = sqlx::query_with(&sql, values).fetch_all(&mut *tx).await?;
+                let removed: Vec<serde_json::Value> = rows
+                    .iter()
+                    .map(|r| child_id_to_json_pg(r, child_pk_ty))
+                    .collect::<Result<_, _>>()?;
                 for child in children {
                     let child_pk: T::PrimaryKey = child.primary_key();
                     let mut insert = Query::insert();
@@ -316,8 +392,13 @@ impl<T: Model, P: PrimaryKey> M2M<T, P> {
                     sqlx::query_with(&sql, values).execute(&mut *tx).await?;
                 }
                 tx.commit().await?;
+                removed
             }
-        }
+        };
+
+        let parent_id_json = pk_seaval_to_json(parent_id.into());
+        crate::signals::emit_m2m_changed(junction, "set", parent_id_json, added_json, removed_json)
+            .await;
         Ok(())
     }
 
@@ -645,6 +726,108 @@ async fn execute_sql(q: &sea_query::InsertStatement) -> Result<(), sqlx::Error> 
         }
     }
     Ok(())
+}
+
+/// Convert a `sea_query::Value` into a `serde_json::Value`, preserving
+/// numeric/string types where possible and falling back to the
+/// Display-style stringification for unusual variants. Used by the M2M
+/// signal-emission paths to land typed PKs in `serde_json` payloads
+/// without forcing every PK type to implement Serialize.
+fn pk_seaval_to_json(v: sea_query::Value) -> serde_json::Value {
+    use sea_query::Value as SV;
+    use serde_json::json;
+    match v {
+        SV::TinyInt(Some(n)) => json!(n),
+        SV::SmallInt(Some(n)) => json!(n),
+        SV::Int(Some(n)) => json!(n),
+        SV::BigInt(Some(n)) => json!(n),
+        SV::TinyUnsigned(Some(n)) => json!(n),
+        SV::SmallUnsigned(Some(n)) => json!(n),
+        SV::Unsigned(Some(n)) => json!(n),
+        SV::BigUnsigned(Some(n)) => json!(n),
+        SV::Float(Some(f)) => json!(f),
+        SV::Double(Some(f)) => json!(f),
+        SV::String(Some(s)) => json!(*s),
+        // Uuid + any other sea_query::Value variant falls through to a
+        // best-effort Display rendering. Uuid's Display gives the
+        // canonical hyphenated form which round-trips cleanly.
+        other => json!(format!("{:?}", other)),
+    }
+}
+
+/// Look up the child model's PK SqlType so the `RETURNING child_id`
+/// decoder can pick the right typed `try_get`.
+fn child_pk_ty<T: Model>() -> super::SqlType {
+    T::FIELDS
+        .iter()
+        .find(|f| f.primary_key)
+        .map(|f| f.ty)
+        .unwrap_or(super::SqlType::BigInt)
+}
+
+/// Decode a junction row's `child_id` column into a JSON value
+/// suitable for the m2m_changed signal payload. Mirrors
+/// `stringify_sqlite_child_id` but returns `serde_json::Value` so
+/// integers stay numeric.
+fn child_id_to_json_sqlite(
+    row: &sqlx::sqlite::SqliteRow,
+    ty: super::SqlType,
+) -> Result<serde_json::Value, sqlx::Error> {
+    use serde_json::json;
+    use sqlx::Row;
+    Ok(match ty {
+        super::SqlType::SmallInt | super::SqlType::Integer => {
+            json!(row.try_get::<i32, _>("child_id")?)
+        }
+        super::SqlType::BigInt | super::SqlType::ForeignKey => {
+            json!(row.try_get::<i64, _>("child_id")?)
+        }
+        super::SqlType::Uuid => json!(row.try_get::<uuid::Uuid, _>("child_id")?.to_string()),
+        _ => json!(row.try_get::<String, _>("child_id")?),
+    })
+}
+
+fn child_id_to_json_pg(
+    row: &sqlx::postgres::PgRow,
+    ty: super::SqlType,
+) -> Result<serde_json::Value, sqlx::Error> {
+    use serde_json::json;
+    use sqlx::Row;
+    Ok(match ty {
+        super::SqlType::SmallInt => json!(row.try_get::<i16, _>("child_id")?),
+        super::SqlType::Integer => json!(row.try_get::<i32, _>("child_id")?),
+        super::SqlType::BigInt | super::SqlType::ForeignKey => {
+            json!(row.try_get::<i64, _>("child_id")?)
+        }
+        super::SqlType::Uuid => json!(row.try_get::<uuid::Uuid, _>("child_id")?.to_string()),
+        _ => json!(row.try_get::<String, _>("child_id")?),
+    })
+}
+
+/// DELETE that also captures the affected `child_id`s via RETURNING.
+/// Used by [`M2M::clear`] (and the standalone `clear` paths) to feed
+/// the m2m_changed signal's `removed` list without a separate SELECT.
+async fn execute_delete_returning_ids<T: Model>(
+    q: &sea_query::DeleteStatement,
+) -> Result<Vec<serde_json::Value>, sqlx::Error> {
+    let ty = child_pk_ty::<T>();
+    let pool = crate::db::pool_dispatched();
+    Ok(match pool {
+        crate::db::DbPool::Sqlite(p) => {
+            let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
+            let rows = sqlx::query_with(&sql, values).fetch_all(p).await?;
+            rows.iter()
+                .map(|r| child_id_to_json_sqlite(r, ty))
+                .collect::<Result<_, _>>()?
+        }
+        crate::db::DbPool::Postgres(p) => {
+            let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
+            let rows = sqlx::query_with(&sql, values).fetch_all(p).await?;
+            rows.iter()
+                .map(|r| child_id_to_json_pg(r, ty))
+                .collect::<Result<_, _>>()?
+        }
+    })
 }
 
 /// Build and execute a DELETE against the ambient dispatched pool,
