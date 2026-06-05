@@ -2119,6 +2119,153 @@ impl<T: Model> Manager<T> {
         Ok(row)
     }
 
+    /// Apply per-row differing values to a list of instances in one
+    /// statement. Each instance carries its own PK and its own
+    /// column values; the generated SQL uses one `CASE pk WHEN ...
+    /// THEN ... END` per non-PK column, plus a `WHERE pk IN (...)`
+    /// to scope the update.
+    ///
+    /// Mirrors Django's `QuerySet.bulk_update(objs, fields)` but
+    /// updates every non-PK column rather than asking the caller to
+    /// list them. Returns the number of rows affected.
+    ///
+    /// Empty input is a no-op (returns 0). The pattern works on both
+    /// SQLite and Postgres — the `CASE` expression is SQL-standard.
+    ///
+    /// Limitations:
+    /// - All instances must have a non-default PK (the caller has
+    ///   already loaded the rows). Default-PK instances are skipped.
+    /// - Bulk-write signals are NOT fired by this path — it's the
+    ///   `Manager::bulk_create` analogue for UPDATE, deliberately
+    ///   silent for speed.
+    pub async fn bulk_update(&self, instances: Vec<T>) -> Result<u64, crate::orm::write::WriteError>
+    where
+        T: serde::Serialize,
+    {
+        use crate::orm::write::{WriteError, is_default_pk, json_to_sea_value};
+        if instances.is_empty() {
+            return Ok(0);
+        }
+        let pk = pk_field::<T>().ok_or_else(|| {
+            WriteError::Sqlx(sqlx::Error::Protocol(
+                "bulk_update: model has no primary key".to_string(),
+            ))
+        })?;
+        let pk_name = pk.name;
+        let pk_ty = pk.ty;
+
+        // Serialize every instance, collecting (pk_value, full_map)
+        // for the CASE branches and the IN clause. Skip rows whose
+        // PK is still the default sentinel — they were never
+        // persisted and a bulk UPDATE on them is a no-op anyway.
+        let mut serialized: Vec<(
+            serde_json::Value,
+            serde_json::Map<String, serde_json::Value>,
+        )> = Vec::with_capacity(instances.len());
+        for instance in &instances {
+            let map = serialize_to_map(instance)?;
+            let pk_val = map.get(pk_name).cloned().unwrap_or(serde_json::Value::Null);
+            if is_default_pk(pk_ty, &pk_val) {
+                continue;
+            }
+            serialized.push((pk_val, map));
+        }
+        if serialized.is_empty() {
+            return Ok(0);
+        }
+
+        // Collect the list of non-PK columns to update from the
+        // first row (every row contributes the same column set
+        // because they're typed instances of T).
+        let update_cols: Vec<&crate::orm::FieldSpec> =
+            T::FIELDS.iter().filter(|f| !f.primary_key).collect();
+
+        // Build the UPDATE: one CASE per column, IN clause for the
+        // WHERE. Goes through sea-query's update statement for
+        // backend portability.
+        let mut stmt = sea_query::Query::update();
+        stmt.table(Alias::new(T::TABLE));
+
+        for field in &update_cols {
+            // CASE pk_col
+            //   WHEN <pk1> THEN <val1>
+            //   WHEN <pk2> THEN <val2>
+            //   ...
+            // END
+            let mut case = sea_query::CaseStatement::new();
+            for (pk_val, map) in &serialized {
+                let val = map
+                    .get(field.name)
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
+                let cell = json_to_sea_value(field.ty, &val, field.nullable, field.name)?;
+                let pk_sea = json_to_sea_value(pk_ty, pk_val, false, pk_name)?;
+                case = case.case(sea_query::Expr::col(Alias::new(pk_name)).eq(pk_sea), cell);
+            }
+            stmt.value(Alias::new(field.name), case);
+        }
+
+        // WHERE pk IN (<pk1>, <pk2>, ...)
+        let pk_seas: Vec<sea_query::Value> = serialized
+            .iter()
+            .map(|(pk_val, _)| json_to_sea_value(pk_ty, pk_val, false, pk_name))
+            .collect::<Result<_, _>>()?;
+        stmt.and_where(sea_query::Expr::col(Alias::new(pk_name)).is_in(pk_seas));
+
+        let pool = resolve_pool::<T>(None);
+        let affected = match pool {
+            DbPool::Sqlite(pool) => {
+                let (sql, values) = stmt.build_sqlx(SqliteQueryBuilder);
+                sqlx::query_with::<sqlx::Sqlite, _>(&sql, values)
+                    .execute(&pool)
+                    .await
+                    .map_err(WriteError::Sqlx)?
+                    .rows_affected()
+            }
+            DbPool::Postgres(pool) => {
+                let (sql, values) = stmt.build_sqlx(PostgresQueryBuilder);
+                sqlx::query_with::<sqlx::Postgres, _>(&sql, values)
+                    .execute(&pool)
+                    .await
+                    .map_err(WriteError::Sqlx)?
+                    .rows_affected()
+            }
+        };
+        Ok(affected)
+    }
+
+    /// Run a hand-written SQL query and return typed `Vec<T>` rows.
+    ///
+    /// The escape hatch for queries the QuerySet builder can't (or
+    /// shouldn't) model — CTEs, vendor-specific functions, ad-hoc
+    /// reporting. Delegates to `sqlx::query_as` against the ambient
+    /// pool and dispatches on backend, so user code stays portable.
+    /// The string is sent verbatim; no parameter binding (use
+    /// `Predicate` / the typed query path for parameterised
+    /// queries). Inject input only after manual sanitisation.
+    ///
+    /// Skips the `select_related` / `prefetch_related` chain — those
+    /// only apply to the typed QuerySet build path.
+    pub async fn raw(&self, sql: &str) -> Result<Vec<T>, sqlx::Error>
+    where
+        T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
+            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
+    {
+        let pool = resolve_pool::<T>(None);
+        match pool {
+            DbPool::Sqlite(pool) => {
+                sqlx::query_as::<sqlx::Sqlite, T>(sql)
+                    .fetch_all(&pool)
+                    .await
+            }
+            DbPool::Postgres(pool) => {
+                sqlx::query_as::<sqlx::Postgres, T>(sql)
+                    .fetch_all(&pool)
+                    .await
+            }
+        }
+    }
+
     /// `bulk_create` against an explicit Postgres pool.
     pub async fn bulk_create_pg(
         &self,
