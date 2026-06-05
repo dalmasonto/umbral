@@ -54,3 +54,9 @@ After `cargo build -p umbra-playground` with the CLIs installed:
 6. Click "Send"; the right pane shows the response status, body, headers, and a `cURL` tab.
 7. Click Send again; the History tab in the right pane shows 2 entries; click an entry to restore.
 8. Reload the page; the History tab should still show the entries (loaded from localStorage).
+9. Click a second endpoint in the sidebar. A second tab pill appears in the strip between the stats row and the request builder. The new tab is active.
+10. Edit a header in the active tab. An amber dot appears on the tab pill indicating unsaved edits.
+11. Refresh the page. The two tabs are still there, the same one is active, the draft is preserved.
+12. Press `Cmd/Ctrl+W` (or `Ctrl+W` on Linux/Windows). The active tab closes; the next one to the right becomes active.
+13. Click the download icon in the tab strip. A `umbra-playground-<scope>-<YYYY-MM-DD>.json` file downloads.
+14. Open a private window at the same URL, click the upload icon, choose the file. The tabs and history appear in the import; the local empty workspace is filled.
