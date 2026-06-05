@@ -1,7 +1,7 @@
 ---
 title: Aggregates and annotate
 description: Count, Sum, Avg, Max, Min on a QuerySet, with single-row aggregates and GROUP BY annotate.
-sidebar_position: 7
+sidebar_position: 5
 tags: [orm, aggregates, count, sum, group-by, analytics]
 ---
 
@@ -107,6 +107,6 @@ ORDER BY / LIMIT / OFFSET are intentionally dropped on the aggregate paths.
 
 ## See also
 
-- [QuerySet expressions](/docs/v0.0.1/orm/expressions) — F-expressions, Q-objects, `exclude`.
+- [Querying](/docs/v0.0.1/orm/querying) — F-expressions, Q-objects, `exclude`, projections, subqueries, JSON ops.
 - [Relationships](/docs/v0.0.1/orm/relationships) — `prefetch_related` for batched M2M loads alongside aggregate dashboards.
 - [Transactions](/docs/v0.0.1/orm/transactions) — `.atomic()` for write paths; aggregates are read-only and always single-statement.

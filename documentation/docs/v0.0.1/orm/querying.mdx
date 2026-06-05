@@ -1,12 +1,14 @@
 ---
-title: Expressions
-description: F-expressions for column references and atomic arithmetic, Q-objects for composable predicates.
+title: Querying
+description: The full QuerySet surface — F-expressions, Q-objects, exclude, projections, sugar, subqueries, set ops, JSON ops, and the write-side terminals (update_or_create, bulk_update, raw).
 sidebar_position: 4
 icon: formula
-tags: [orm, f-expressions, q-objects, queryset, filter, update]
+tags: [orm, queryset, filter, expressions, querying, project, write]
 ---
 
-Umbra ships two expression helpers that mirror Django's `F()` and `Q()` - both are in scope via `use umbra::prelude::*` or `use umbra::orm::{F, FColExt, Q}`.
+Everything you do against a QuerySet that isn't covered by [Models](/docs/v0.0.1/orm/models), [Column types](/docs/v0.0.1/orm/column-types), [Relationships](/docs/v0.0.1/orm/relationships), [Aggregates](/docs/v0.0.1/orm/aggregates), [Transactions](/docs/v0.0.1/orm/transactions), or [Signals](/docs/v0.0.1/orm/signals) lives on this page.
+
+That's broad on purpose — it grew organically as the ORM shipped. A future split lands the read surface, the expressions surface, and the write surface on three focused pages (`querying.mdx`, `expressions.mdx`, `writes.mdx`); the design is captured in `docs/decisions/2026-06-06-orm-docs-restructure.md`. Until then, the H2 sections below group related material so the page is at least skimmable: **F-expressions** and **Q-objects** for composable predicates; **values**, **DB-function helpers**, and **QuerySet sugar** for read-side composition; **Mutate-side terminals** for the write-and-return-row APIs; **Composition** for subqueries + set ops + `in_bulk`; **JSON column ops** at the end.
 
 ## F-expressions
 
