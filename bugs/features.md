@@ -55,6 +55,7 @@
     > Why: The current playground loses your in-progress request when you click another endpoint. This is a pure UX pain point with clear completion criteria and a small scope.
     >
     > How: Add a `tabs` slice to the existing Zustand store. Each tab holds `endpoint, method, params, body, headers, auth`. The sidebar click opens a new tab if the endpoint is not already open; clicking an existing tab switches to it. Save the full `tabs` array to Dexie on every change (debounced). On reload, restore tabs from Dexie and pre-populate the UI. This is a contained frontend task with immediate payoff.
+    > Also with this, we can add data export from the playground as is, ie I can export from my browser and share it with a colleague who can import and get the same snapshot data
 
 ---
 
@@ -191,6 +192,19 @@ These are the QuerySet features and model-level capabilities that Django develop
     > Why: Hooks that fire around ORM operations so plugins and user code can react: auto-generate a slug on `pre_save`, clear a cache on `post_delete`, send an email on `post_save`. The permissions plugin currently auto-creates standard permissions on boot; signals would let it do that reactively when a new model is registered. This is a foundational extensibility mechanism.
     >
     > How: A `Signal` type in `umbra-core/src/signals.rs` (already exists but not wired). Define `ModelEvent { kind, table, pk, before, after, actor }`. Fire from `QuerySet::create`, `update_values`, `delete`, and `bulk_create` terminals. The `actor` field comes from a tokio task-local set by an axum middleware (gap #48, structured logging, can share the same task-local infrastructure). This unlocks gaps #1 (logs plugin), #2 (notifications), and #77 (ORM audit trail).
+
+38.1 [ ] **Atomic transactions at the ORM level — opt-in via builder** 🔴 High
+    > Why: Manual `begin` / `commit` / `rollback` via `umbra::db::transaction()` works today, but every multi-write endpoint (nested REST creates, admin inlines, bulk imports) has to hand-roll the same transaction wrapping. Django's `with transaction.atomic():` context manager makes this invisible. Umbra needs an equivalent so that `POST /api/order/` with nested `items` (feature #58) can create the parent and all children in one transaction without the REST handler knowing about `sqlx::Transaction`. Without this, a failure mid-way leaves half-written rows in the database.
+    >
+    > How: Two layers — an **ORM-level** convenience and a **framework-level** default.
+    >
+    > **ORM layer**: `QuerySet::atomic()` wraps the terminal call in a transaction. `Post::objects().atomic().create(post).await` starts a transaction, runs the insert, commits on `Ok`, rolls back on `Err`. `Manager::bulk_create_atomic(instances)` does the same for the multi-row path. This uses the ambient `DbPool` to `BEGIN` against the correct backend, so the caller never types `pool` or `Transaction`.
+    >
+    > **Builder layer (opt-in)**: `App::builder().atomic_transactions(true)` sets a global default that makes *every* ORM terminal (`create`, `update_values`, `delete`, `bulk_create`) run inside a transaction unless explicitly opted out with `.non_atomic()`. This is the safe-by-default posture: a framework that claims "secure by default" should also be "transaction-safe by default." The opt-out exists for high-throughput paths where the caller manages batching themselves (e.g. a seed script that already wraps 1000 inserts in one outer transaction).
+    >
+    > **REST layer**: `ResourceConfig::new("order").atomic_writes(true)` opts a single resource into the transaction wrapper. The REST handler's `create` path calls `Manager::create_atomic()` instead of `create()` when the flag is on. Nested writes (feature #58) inherit the outer transaction automatically — the junction/child inserts share the same `sqlx::Transaction` because the ORM's `atomic()` path stashes the active transaction in a tokio task-local or a `QuerySet` field.
+    >
+    > **Why opt-in at the builder?** Because `DbPool` is resolved ambiently, and a global default would silently change the behaviour of existing code that already does its own transaction management. `App::builder().atomic_transactions(true)` is an explicit contract: the developer says "I want every write protected." Without the flag, the framework stays exactly as it is today — manual control, no surprises.
 
 ---
 
