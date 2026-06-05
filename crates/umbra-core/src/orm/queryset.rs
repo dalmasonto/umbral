@@ -36,7 +36,9 @@
 use std::collections::HashMap;
 use std::marker::PhantomData;
 
-use sea_query::{Alias, Expr, Func, Order, PostgresQueryBuilder, Query, SqliteQueryBuilder};
+use sea_query::{
+    Alias, Expr, Func, IntoIden, Order, PostgresQueryBuilder, Query, SqliteQueryBuilder,
+};
 use sea_query_binder::SqlxBinder;
 use serde_json::Value as JsonValue;
 use sqlx::Column as _;
@@ -733,6 +735,208 @@ impl<T: Model> QuerySet<T> {
                     for col in &chosen {
                         let v = crate::orm::dynamic::decode_pg_to_json(row, col)?;
                         obj.insert(col.name.clone(), v);
+                    }
+                    out.push(JsonValue::Object(obj));
+                }
+                Ok(out)
+            }
+        }
+    }
+
+    /// Single-row aggregate. Runs `SELECT AGG(col) AS name, ...` with
+    /// the QuerySet's accumulated WHERE clause (ORDER BY / LIMIT /
+    /// OFFSET are dropped — they make no sense over an aggregate
+    /// without GROUP BY).
+    ///
+    /// Returns a `serde_json::Value::Object` keyed by the supplied
+    /// names. COUNT comes back as an integer; AVG as a float; SUM /
+    /// MAX / MIN inherit the source column's declared type.
+    ///
+    /// ```rust,ignore
+    /// use umbra::orm::Aggregate;
+    /// let summary = Post::objects()
+    ///     .filter(post::PUBLISHED.eq(true))
+    ///     .aggregate(&[
+    ///         ("count", Aggregate::count()),
+    ///         ("total", Aggregate::sum("view_count")),
+    ///     ])
+    ///     .await?;
+    /// // { "count": 42, "total": 9999 }
+    /// ```
+    pub async fn aggregate(
+        self,
+        aggs: &[(&str, crate::orm::Aggregate)],
+    ) -> Result<JsonValue, sqlx::Error> {
+        let meta = crate::migrate::ModelMeta::for_::<T>();
+        // Validate every aggregate's source column exists.
+        for (name, agg) in aggs {
+            if let Some(col) = agg.source_column()
+                && !meta.fields.iter().any(|c| c.name == col)
+            {
+                return Err(sqlx::Error::Protocol(format!(
+                    "umbra::orm::aggregate: unknown column `{}` on model `{}` for aggregate `{}`",
+                    col,
+                    T::NAME,
+                    name
+                )));
+            }
+        }
+        let pool = resolve_pool::<T>(self.explicit_pool.clone());
+        let backend = pool.backend_name();
+        let mut q = self.build_query_for(backend);
+        q.clear_selects();
+        q.reset_limit();
+        q.reset_offset();
+        for (name, agg) in aggs {
+            q.expr_as(agg.to_simple_expr(), Alias::new(*name));
+        }
+        match pool {
+            DbPool::Sqlite(pool) => {
+                let (sql, vals) = q.build_sqlx(SqliteQueryBuilder);
+                let row = sqlx::query_with::<sqlx::Sqlite, _>(&sql, vals)
+                    .fetch_one(&pool)
+                    .await?;
+                let mut obj = serde_json::Map::with_capacity(aggs.len());
+                for (name, agg) in aggs {
+                    let source_ty = agg
+                        .source_column()
+                        .and_then(|c| meta.fields.iter().find(|f| f.name == c).map(|f| f.ty));
+                    obj.insert(
+                        name.to_string(),
+                        decode_agg_sqlite(&row, name, agg, source_ty)?,
+                    );
+                }
+                Ok(JsonValue::Object(obj))
+            }
+            DbPool::Postgres(pool) => {
+                let (sql, vals) = q.build_sqlx(PostgresQueryBuilder);
+                let row = sqlx::query_with::<sqlx::Postgres, _>(&sql, vals)
+                    .fetch_one(&pool)
+                    .await?;
+                let mut obj = serde_json::Map::with_capacity(aggs.len());
+                for (name, agg) in aggs {
+                    let source_ty = agg
+                        .source_column()
+                        .and_then(|c| meta.fields.iter().find(|f| f.name == c).map(|f| f.ty));
+                    obj.insert(name.to_string(), decode_agg_pg(&row, name, agg, source_ty)?);
+                }
+                Ok(JsonValue::Object(obj))
+            }
+        }
+    }
+
+    /// Grouped aggregate. Runs `SELECT <group_cols>, AGG(col) AS name,
+    /// ... GROUP BY <group_cols>` with the accumulated WHERE clause.
+    ///
+    /// Returns one `Value::Object` per group, with both the group
+    /// columns and each named aggregate as fields. Group columns are
+    /// decoded per their declared SqlType (so an integer
+    /// `author_id` stays a JSON number).
+    ///
+    /// ```rust,ignore
+    /// let by_author = Post::objects()
+    ///     .annotate(&["author_id"], &[("count", Aggregate::count())])
+    ///     .await?;
+    /// // [ { "author_id": 1, "count": 3 }, { "author_id": 2, "count": 2 } ]
+    /// ```
+    pub async fn annotate(
+        self,
+        group_cols: &[&str],
+        aggs: &[(&str, crate::orm::Aggregate)],
+    ) -> Result<Vec<JsonValue>, sqlx::Error> {
+        let meta = crate::migrate::ModelMeta::for_::<T>();
+        // Resolve group columns up front so unknown names fail
+        // before any SQL runs.
+        let mut chosen_groups: Vec<&crate::migrate::Column> = Vec::with_capacity(group_cols.len());
+        for name in group_cols {
+            let col = meta
+                .fields
+                .iter()
+                .find(|c| c.name == *name)
+                .ok_or_else(|| {
+                    sqlx::Error::Protocol(format!(
+                        "umbra::orm::annotate: unknown group column `{}` on model `{}`",
+                        name,
+                        T::NAME
+                    ))
+                })?;
+            chosen_groups.push(col);
+        }
+        // Validate aggregate source columns.
+        for (name, agg) in aggs {
+            if let Some(col) = agg.source_column()
+                && !meta.fields.iter().any(|c| c.name == col)
+            {
+                return Err(sqlx::Error::Protocol(format!(
+                    "umbra::orm::annotate: unknown column `{}` on model `{}` for aggregate `{}`",
+                    col,
+                    T::NAME,
+                    name
+                )));
+            }
+        }
+        let pool = resolve_pool::<T>(self.explicit_pool.clone());
+        let backend = pool.backend_name();
+        let mut q = self.build_query_for(backend);
+        q.clear_selects();
+        // GROUP BY columns appear in the SELECT list AND the GROUP BY
+        // clause. Aggregates only in the SELECT.
+        for col in &chosen_groups {
+            q.column(Alias::new(col.name.as_str()));
+            q.add_group_by([sea_query::SimpleExpr::Column(sea_query::ColumnRef::Column(
+                Alias::new(col.name.as_str()).into_iden(),
+            ))]);
+        }
+        for (name, agg) in aggs {
+            q.expr_as(agg.to_simple_expr(), Alias::new(*name));
+        }
+        match pool {
+            DbPool::Sqlite(pool) => {
+                let (sql, vals) = q.build_sqlx(SqliteQueryBuilder);
+                let rows = sqlx::query_with::<sqlx::Sqlite, _>(&sql, vals)
+                    .fetch_all(&pool)
+                    .await?;
+                let mut out: Vec<JsonValue> = Vec::with_capacity(rows.len());
+                for row in &rows {
+                    let mut obj = serde_json::Map::with_capacity(chosen_groups.len() + aggs.len());
+                    for col in &chosen_groups {
+                        obj.insert(
+                            col.name.clone(),
+                            crate::orm::dynamic::decode_to_json(row, col)?,
+                        );
+                    }
+                    for (name, agg) in aggs {
+                        let source_ty = agg
+                            .source_column()
+                            .and_then(|c| meta.fields.iter().find(|f| f.name == c).map(|f| f.ty));
+                        obj.insert(
+                            name.to_string(),
+                            decode_agg_sqlite(row, name, agg, source_ty)?,
+                        );
+                    }
+                    out.push(JsonValue::Object(obj));
+                }
+                Ok(out)
+            }
+            DbPool::Postgres(pool) => {
+                let (sql, vals) = q.build_sqlx(PostgresQueryBuilder);
+                let rows = sqlx::query_with::<sqlx::Postgres, _>(&sql, vals)
+                    .fetch_all(&pool)
+                    .await?;
+                let mut out: Vec<JsonValue> = Vec::with_capacity(rows.len());
+                for row in &rows {
+                    let mut obj = serde_json::Map::with_capacity(chosen_groups.len() + aggs.len());
+                    for col in &chosen_groups {
+                        obj.insert(
+                            col.name.clone(),
+                            crate::orm::dynamic::decode_pg_to_json(row, col)?,
+                        );
+                    }
+                    for (name, agg) in aggs {
+                        let source_ty = agg
+                            .source_column()
+                            .and_then(|c| meta.fields.iter().find(|f| f.name == c).map(|f| f.ty));
+                        obj.insert(name.to_string(), decode_agg_pg(row, name, agg, source_ty)?);
                     }
                     out.push(JsonValue::Object(obj));
                 }
@@ -2637,4 +2841,82 @@ fn pk_to_json_pg(
 /// model has no PK (pathological — every macro-generated Model has one).
 fn pk_field<T: Model>() -> Option<&'static crate::orm::FieldSpec> {
     T::FIELDS.iter().find(|f| f.primary_key)
+}
+
+// =========================================================================
+// Aggregate result decoding
+//
+// COUNT always returns BIGINT, AVG always returns DOUBLE — both backends
+// agree on this. SUM/MAX/MIN inherit the source column's type, so the
+// decoder dispatches on the FieldSpec's SqlType we collected at
+// terminal-build time.
+// =========================================================================
+
+fn decode_agg_sqlite(
+    row: &sqlx::sqlite::SqliteRow,
+    name: &str,
+    agg: &crate::orm::Aggregate,
+    source_ty: Option<crate::orm::SqlType>,
+) -> Result<JsonValue, sqlx::Error> {
+    use crate::orm::SqlType::*;
+    use crate::orm::aggregate::AggregateKind;
+    use serde_json::json;
+    use sqlx::Row;
+    Ok(match agg.kind() {
+        AggregateKind::Count => json!(row.try_get::<i64, _>(name)?),
+        AggregateKind::Avg => row
+            .try_get::<Option<f64>, _>(name)?
+            .map_or(JsonValue::Null, |f| json!(f)),
+        AggregateKind::Sum | AggregateKind::Max | AggregateKind::Min => match source_ty {
+            Some(SmallInt | Integer | BigInt | ForeignKey) => row
+                .try_get::<Option<i64>, _>(name)?
+                .map_or(JsonValue::Null, |n| json!(n)),
+            Some(Real | Double) => row
+                .try_get::<Option<f64>, _>(name)?
+                .map_or(JsonValue::Null, |f| json!(f)),
+            // Default to a string read for date/time/text/uuid; SQLite
+            // stores them as TEXT, so a MIN/MAX comes back stringified.
+            _ => row
+                .try_get::<Option<String>, _>(name)?
+                .map_or(JsonValue::Null, JsonValue::String),
+        },
+    })
+}
+
+fn decode_agg_pg(
+    row: &sqlx::postgres::PgRow,
+    name: &str,
+    agg: &crate::orm::Aggregate,
+    source_ty: Option<crate::orm::SqlType>,
+) -> Result<JsonValue, sqlx::Error> {
+    use crate::orm::SqlType::*;
+    use crate::orm::aggregate::AggregateKind;
+    use serde_json::json;
+    use sqlx::Row;
+    Ok(match agg.kind() {
+        AggregateKind::Count => json!(row.try_get::<i64, _>(name)?),
+        AggregateKind::Avg => row
+            .try_get::<Option<f64>, _>(name)?
+            .map_or(JsonValue::Null, |f| json!(f)),
+        AggregateKind::Sum | AggregateKind::Max | AggregateKind::Min => match source_ty {
+            Some(SmallInt) => row
+                .try_get::<Option<i16>, _>(name)?
+                .map_or(JsonValue::Null, |n| json!(n)),
+            Some(Integer) => row
+                .try_get::<Option<i32>, _>(name)?
+                .map_or(JsonValue::Null, |n| json!(n)),
+            Some(BigInt | ForeignKey) => row
+                .try_get::<Option<i64>, _>(name)?
+                .map_or(JsonValue::Null, |n| json!(n)),
+            Some(Real) => row
+                .try_get::<Option<f32>, _>(name)?
+                .map_or(JsonValue::Null, |f| json!(f as f64)),
+            Some(Double) => row
+                .try_get::<Option<f64>, _>(name)?
+                .map_or(JsonValue::Null, |f| json!(f)),
+            _ => row
+                .try_get::<Option<String>, _>(name)?
+                .map_or(JsonValue::Null, JsonValue::String),
+        },
+    })
 }
