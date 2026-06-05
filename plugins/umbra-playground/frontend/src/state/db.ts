@@ -1,6 +1,6 @@
 import Dexie, { type EntityTable } from "dexie";
 import { getAppScope } from "./scope";
-import type { PlaygroundSettings, RequestDraft, ResponseRecord } from "./store";
+import type { PlaygroundSettings, RequestDraft, ResponseRecord, Tab } from "./store";
 
 export interface HistoryRow extends ResponseRecord {
   /** Dexie auto-increment PK. Optional on the type because we never
@@ -54,6 +54,7 @@ export const db = new Dexie(DB_NAME) as Dexie & {
   editorState: EntityTable<EditorStateRow, "key">;
   settings: EntityTable<SettingsRow, "key">;
   drafts: EntityTable<DraftRow, "operationId">;
+  tabs: EntityTable<TabsRow, "key">;
 };
 
 // v1: history table. v2 adds the editorState table for persistent
@@ -87,6 +88,18 @@ db.version(4).stores({
   drafts: "&operationId, updatedAt",
 });
 
+// v5 adds the tabs table — singleton row keyed `"workspace"`,
+// holding the open tab list and the active tab id. The previous
+// v4 tables are kept verbatim so Dexie doesn't drop the user's
+// data on upgrade.
+db.version(5).stores({
+  history: "++id, operationId, timestamp",
+  editorState: "&key",
+  settings: "&key",
+  drafts: "&operationId, updatedAt",
+  tabs: "&key",
+});
+
 /** Schema version stamped on every `SettingsRow`. Bump alongside any
  *  breaking change to `PlaygroundSettings`. Reads with a lower
  *  version go through the normaliser to fill in missing fields;
@@ -97,3 +110,26 @@ export const SETTINGS_SCHEMA_VERSION = 1;
 /** Schema version stamped on every `DraftRow`. See
  *  [`SETTINGS_SCHEMA_VERSION`] for the upgrade convention. */
 export const DRAFT_SCHEMA_VERSION = 1;
+
+/** Per-app workspace tabs. One singleton row per app DB, keyed
+ *  `"workspace"`, holding the list of open tabs and the id of
+ *  the active one. Mirrors the `settings` table shape — same
+ *  schema-versioning + per-app DB isolation story. The tabs row
+ *  is rewritten whenever the list of open tabs changes or the
+ *  pristine snapshot of a tab's draft is updated. It is NOT
+ *  rewritten on every keystroke — the per-endpoint draft lives
+ *  in the `drafts` table. */
+export interface TabsRow {
+  /** Singleton key. Always `"workspace"`. */
+  key: "workspace";
+  schema: number;
+  tabs: Tab[];
+  activeTabId: string | null;
+  updatedAt: number;
+}
+
+/** Schema version stamped on every `TabsRow`. Bump alongside
+ *  any breaking change to the `Tab` shape. Reads with a higher
+ *  version are discarded back to defaults so we don't pretend
+ *  to understand them. */
+export const TABS_SCHEMA_VERSION = 1;
