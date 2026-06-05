@@ -369,6 +369,19 @@ impl<T> QuerySet<T> {
         }
         self
     }
+
+    /// Emit `SELECT DISTINCT ...` for this query (gap #17). Most
+    /// useful when combined with [`Self::values`] to dedupe a
+    /// column-projected list (`distinct().values(&["tag"])`); the
+    /// full-row DISTINCT is rarely what you want.
+    ///
+    /// Postgres-specific `DISTINCT ON (cols)` is deferred until a
+    /// real consumer surfaces the need — the standard `DISTINCT`
+    /// covers most use cases.
+    pub fn distinct(mut self) -> Self {
+        self.query.distinct();
+        self
+    }
 }
 
 /// Resolve the pool to run a terminal against.
@@ -570,6 +583,96 @@ impl<T: Model> QuerySet<T> {
         let pool = resolve_pool::<T>(self.explicit_pool.clone());
         hydrate_select_related::<T>(&mut rows, &sr_fields, &pool).await?;
         Ok(Some(rows.pop().unwrap()))
+    }
+
+    /// Return the row with the smallest value in `col_name`. Sugar
+    /// for `order_by(col.asc()).first()`. Mirrors Django's
+    /// `QuerySet.earliest('created_at')`.
+    ///
+    /// Takes a `&'static str` column name (same shape as
+    /// `select_related`) so the call site stays Django-flavoured —
+    /// `.earliest("created_at")` reads naturally without spelling out
+    /// `.asc()`.
+    pub async fn earliest(self, col_name: &'static str) -> Result<Option<T>, sqlx::Error>
+    where
+        T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
+            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>
+            + HydrateRelated,
+    {
+        self.order_by(OrderExpr::new(col_name, false)).first().await
+    }
+
+    /// Return the row with the largest value in `col_name`. Sugar
+    /// for `order_by(col.desc()).first()`. Mirrors Django's
+    /// `QuerySet.latest('created_at')`.
+    pub async fn latest(self, col_name: &'static str) -> Result<Option<T>, sqlx::Error>
+    where
+        T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
+            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>
+            + HydrateRelated,
+    {
+        self.order_by(OrderExpr::new(col_name, true)).first().await
+    }
+
+    /// Return the database's execution plan for this query as a
+    /// plain-text string. Doesn't run the underlying query — just
+    /// asks the DB how it would be executed.
+    ///
+    /// Backend dispatch:
+    ///
+    /// - SQLite: `EXPLAIN QUERY PLAN <sql>` — returns the planner's
+    ///   nested loop hierarchy, one row per access step.
+    /// - Postgres: `EXPLAIN <sql>` — returns the default text plan.
+    ///   For machine-readable output use raw sqlx with
+    ///   `EXPLAIN (FORMAT JSON)`; the framework defaults to text
+    ///   because most callers want eyeball-able output.
+    ///
+    /// Lines are joined with newlines. The returned string is what a
+    /// developer would paste into a debugger or a perf-review issue.
+    pub async fn explain(self) -> Result<String, sqlx::Error> {
+        let pool = resolve_pool::<T>(self.explicit_pool.clone());
+        let backend = pool.backend_name();
+        let q = self.build_query_for(backend);
+        match pool {
+            DbPool::Sqlite(pool) => {
+                let (sql, vals) = q.build_sqlx(SqliteQueryBuilder);
+                let explain_sql = format!("EXPLAIN QUERY PLAN {sql}");
+                let rows = sqlx::query_with::<sqlx::Sqlite, _>(&explain_sql, vals)
+                    .fetch_all(&pool)
+                    .await?;
+                let mut out = String::new();
+                for row in &rows {
+                    use sqlx::Row;
+                    // SQLite returns: id, parent, notused, detail.
+                    // The `detail` column is the human-readable step.
+                    let detail: String = row.try_get("detail")?;
+                    if !out.is_empty() {
+                        out.push('\n');
+                    }
+                    out.push_str(&detail);
+                }
+                Ok(out)
+            }
+            DbPool::Postgres(pool) => {
+                let (sql, vals) = q.build_sqlx(PostgresQueryBuilder);
+                let explain_sql = format!("EXPLAIN {sql}");
+                let rows = sqlx::query_with::<sqlx::Postgres, _>(&explain_sql, vals)
+                    .fetch_all(&pool)
+                    .await?;
+                let mut out = String::new();
+                for row in &rows {
+                    use sqlx::Row;
+                    // Postgres EXPLAIN returns one column named
+                    // "QUERY PLAN", one row per line of the plan.
+                    let line: String = row.try_get("QUERY PLAN")?;
+                    if !out.is_empty() {
+                        out.push('\n');
+                    }
+                    out.push_str(&line);
+                }
+                Ok(out)
+            }
+        }
     }
 
     /// Run `SELECT COUNT(*)` against the same FROM + WHERE.
@@ -1835,6 +1938,95 @@ impl<T: Model> Manager<T> {
         {
             return Ok((existing, false));
         }
+        let created = self.create(defaults).await?;
+        Ok((created, true))
+    }
+
+    /// Django's `update_or_create`: fetch the first row matching
+    /// `predicate`; if found, update its non-PK columns with the
+    /// `defaults` instance's values and return the fresh row;
+    /// otherwise insert `defaults` and return it. Returns
+    /// `(row, created)` so the caller can branch on the path taken.
+    ///
+    /// The defaults' PK is intentionally ignored on the update path —
+    /// the matched row keeps its original PK. On the insert path the
+    /// defaults' PK is honoured (autoincrement sentinel `0` → DB
+    /// assigns; explicit value → DB uses it).
+    ///
+    /// Race condition mirrors `get_or_create`: a concurrent writer
+    /// can win between the SELECT and the UPDATE / INSERT. Pair the
+    /// match columns with a UNIQUE constraint for true at-most-one
+    /// semantics.
+    ///
+    /// Implementation: 2 queries on the hit path (`first` + `save`),
+    /// 2 queries on the miss path (`first` + `create`).
+    pub async fn update_or_create(
+        &self,
+        predicate: Predicate<T>,
+        defaults: T,
+    ) -> Result<(T, bool), crate::orm::write::WriteError>
+    where
+        T: serde::Serialize
+            + for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
+            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>
+            + HydrateRelated,
+    {
+        use crate::orm::write::WriteError;
+        let pk = pk_field::<T>().ok_or_else(|| {
+            WriteError::Sqlx(sqlx::Error::Protocol(
+                "update_or_create: model has no primary key".to_string(),
+            ))
+        })?;
+        let pk_name = pk.name;
+
+        if let Some(existing) = self
+            .filter(predicate)
+            .first()
+            .await
+            .map_err(WriteError::Sqlx)?
+        {
+            // Serialize defaults to a JSON map, drop the PK so the
+            // existing row's PK is preserved, then UPDATE WHERE
+            // <pk_col> = <existing_pk>. Re-fetch to return the
+            // populated row.
+            let mut update_map = serialize_to_map(&defaults)?;
+            update_map.remove(pk_name);
+            // Build a PK predicate from the existing row's serialized
+            // PK value. Goes through serde_json so any built-in PK
+            // type (i64, String, Uuid) round-trips through sea-query.
+            let existing_json =
+                serde_json::to_value(&existing).map_err(WriteError::SerializeFailed)?;
+            let pk_value_json = existing_json
+                .get(pk_name)
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            let pk_sea =
+                crate::orm::write::json_to_sea_value(pk.ty, &pk_value_json, false, pk_name)?;
+            let pk_pred: Predicate<T> =
+                Predicate::new(sea_query::Expr::col(sea_query::Alias::new(pk_name)).eq(pk_sea));
+            // Run the UPDATE.
+            self.filter(pk_pred).update_values(update_map).await?;
+            // Re-fetch to return the populated row. The PK predicate
+            // is rebuilt because Predicate isn't Clone and the prior
+            // one was moved into update_values.
+            let pk_value_json2 = pk_value_json.clone();
+            let pk_sea2 =
+                crate::orm::write::json_to_sea_value(pk.ty, &pk_value_json2, false, pk_name)?;
+            let refetch_pred: Predicate<T> =
+                Predicate::new(sea_query::Expr::col(sea_query::Alias::new(pk_name)).eq(pk_sea2));
+            let updated = self
+                .filter(refetch_pred)
+                .first()
+                .await
+                .map_err(WriteError::Sqlx)?
+                .ok_or_else(|| {
+                    WriteError::Sqlx(sqlx::Error::Protocol(
+                        "update_or_create: row vanished between UPDATE and re-fetch".to_string(),
+                    ))
+                })?;
+            return Ok((updated, false));
+        }
+
         let created = self.create(defaults).await?;
         Ok((created, true))
     }
