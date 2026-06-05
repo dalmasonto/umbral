@@ -34,6 +34,7 @@ import { EndpointTree } from "@/components/EndpointTree";
 import { KeyValueEditor } from "@/components/KeyValueEditor";
 import { RequestBuilder } from "@/components/RequestBuilder";
 import { ResponseViewer } from "@/components/ResponseViewer";
+import { SaveStatusIndicator } from "@/components/SaveStatusIndicator";
 import { TabStrip } from "@/components/TabStrip";
 import { Toaster } from "@/components/Toaster";
 import {
@@ -415,6 +416,26 @@ export function App() {
     void usePlayground.getState().hydrateFromDexie();
   }, []);
 
+  // Cmd/Ctrl+S — manual settings save. Bypasses the silent
+  // auto-save path and fires a toast so the user gets explicit
+  // confirmation. The browser's "Save Page As" dialog is
+  // suppressed via preventDefault. Suppressed when focus is
+  // inside an editable element so a user mid-typing in a
+  // header value can still use the OS-level Save shortcut
+  // … actually, no — they probably want OUR save, not the
+  // browser's. We swallow the event unconditionally when the
+  // modifier is held.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey)) return;
+      if (e.key.toLowerCase() !== "s") return;
+      e.preventDefault();
+      void usePlayground.getState().saveSettingsNow();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
+
   // Restore the open tab list from Dexie once after mount.
   // If a snapshot is present, set `openTabs` and pick the
   // first valid active id (or the first tab when the persisted
@@ -615,6 +636,9 @@ export function App() {
                 <Globe className="size-3" />
                 {defaultHeaderCount} headers
               </Badge>
+            </div>
+            <div className="hidden sm:block">
+              <SaveStatusIndicator />
             </div>
             <div className="hidden sm:block">
               <SettingsSheetButton />
