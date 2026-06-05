@@ -5,6 +5,7 @@ import { saveHistoryDebounced } from "./history";
 import { mockSpec, getMockResponse } from "../data/mockSpec";
 import { scopedKey } from "./scope";
 import { deleteDraft, loadDraft, saveDraft } from "./draftStorage";
+import { saveTabs } from "./tabsStorage";
 import {
   hydrateInitialSettings,
   persistSettings,
@@ -296,6 +297,23 @@ interface PlaygroundState {
    *  in-memory state when another tab (or a stale cache) caused a
    *  divergence. Idempotent — safe to call on every mount. */
   hydrateFromDexie: () => Promise<void>;
+
+  // tabs
+  openTabs: Tab[];
+  activeTabId: string | null;
+  /** Idempotent. If a tab for `operationId` is already open,
+   *  activate it. Otherwise append a new tab and activate. */
+  openTab: (operationId: string) => void;
+  setActiveTab: (id: string) => void;
+  closeTab: (id: string) => void;
+  /** Reserved for the drag-and-drop follow-up. Persisting now
+   *  means the future UI doesn't need to touch the storage
+   *  layer. */
+  reorderTab: (id: string, toIndex: number) => void;
+  /** Mark the current active tab's pristineDraft = current.
+   *  Called automatically after the post-open draft hydration
+   *  completes so the dirty dot starts clean. */
+  markCurrentClean: () => void;
 }
 
 const initialSettings = loadSettings();
@@ -323,6 +341,37 @@ function scheduleDraftSave(operationId: string | null, draft: RequestDraft) {
       // block the UI but would also not be observable. The
       // caller doesn't need a confirmation.
       void saveDraft(snapshot.operationId, snapshot.draft);
+    }
+  }, 250);
+}
+
+// Debounced "tabs changed" persistence. Sibling of
+// `scheduleDraftSave`: structural changes (open/close/activate/
+// reorder) and `markCurrentClean` go through this 250ms debounce.
+// NOT fired on every keystroke — the per-endpoint draft already
+// lives in the `drafts` table, so we only need to write the
+// tabs row when the list or the pristine snapshot changes.
+let tabsSaveTimer: ReturnType<typeof setTimeout> | null = null;
+let tabsSavePending: {
+  tabs: Tab[];
+  activeTabId: string | null;
+} | null = null;
+
+function scheduleTabsSave(
+  tabs: Tab[],
+  activeTabId: string | null,
+): void {
+  tabsSavePending = { tabs, activeTabId };
+  if (tabsSaveTimer) return;
+  tabsSaveTimer = setTimeout(() => {
+    tabsSaveTimer = null;
+    const snapshot = tabsSavePending;
+    tabsSavePending = null;
+    if (snapshot) {
+      // Fire-and-forget — see `scheduleDraftSave` for the
+      // rationale (the setter returned synchronously, awaiting
+      // here would not block the UI but would not be observable).
+      void saveTabs(snapshot);
     }
   }, 250);
 }
@@ -620,6 +669,27 @@ export const usePlayground = create<PlaygroundState>((set, get) => ({
       const { [operationId]: _op, ...rest } = s.history;
       return { history: rest };
     }),
+
+  openTabs: [],
+  activeTabId: null,
+  openTab: (_operationId) => {
+    // Filled in by Task 5. The temporary body just keeps
+    // `scheduleTabsSave` referenced so the noUnusedLocals
+    // check passes while the slice is being scaffolded.
+    scheduleTabsSave(get().openTabs, get().activeTabId);
+  },
+  setActiveTab: (_id) => {
+    // Filled in by Task 5.
+  },
+  closeTab: (_id) => {
+    // Filled in by Task 5.
+  },
+  reorderTab: (_id, _toIndex) => {
+    // Filled in by Task 5.
+  },
+  markCurrentClean: () => {
+    // Filled in by Task 5.
+  },
 
   settings: initialSettings,
   saveStatus: "saved",
