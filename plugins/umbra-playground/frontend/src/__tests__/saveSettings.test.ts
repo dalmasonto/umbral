@@ -249,4 +249,29 @@ describe("playground settings persistence (Dexie + boot cache)", () => {
     const row = await db.settings.get("workspace");
     expect(row?.value.baseUrl).toBe("https://migrated.example");
   });
+
+  it("auto-save (setSettings) is silent — no toast, but the badge updates", async () => {
+    const use = await reload();
+    const { useToastStore } = await import("../state/toastStore");
+    const before = useToastStore.getState().toasts.length;
+    use.getState().setBaseUrl("https://silent.test");
+    await tick();
+    await tick();
+    // No new toast was pushed — auto-save is silent. The
+    // persistent SaveStatusIndicator in the header is the
+    // only feedback (verified via saveStatus flipping to
+    // "saved" below).
+    expect(useToastStore.getState().toasts.length).toBe(before);
+    expect(use.getState().saveStatus).toBe("saved");
+  });
+
+  it("manual save (saveSettingsNow) pushes a toast", async () => {
+    const use = await reload();
+    const { useToastStore } = await import("../state/toastStore");
+    const before = useToastStore.getState().toasts.length;
+    await use.getState().saveSettingsNow();
+    expect(useToastStore.getState().toasts.length).toBe(before + 1);
+    const last = useToastStore.getState().toasts.at(-1);
+    expect(last?.message).toBe("Settings saved");
+  });
 });

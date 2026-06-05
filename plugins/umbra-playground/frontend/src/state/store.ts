@@ -376,27 +376,13 @@ function scheduleTabsSave(
   }, 250);
 }
 
-// Debounced "Settings saved" toast (gap #76). setSettings fires on
-// every keystroke; the debounce coalesces a typing burst into a
-// single confirmation. Lives at module scope so a global reset can
-// clear it without exposing it on the store.
-let saveToastTimer: ReturnType<typeof setTimeout> | null = null;
-function scheduleSaveToast(success: boolean) {
-  if (saveToastTimer) clearTimeout(saveToastTimer);
-  saveToastTimer = setTimeout(() => {
-    pushToast(
-      success
-        ? { kind: "success", message: "Settings saved" }
-        : {
-            kind: "error",
-            message:
-              "Couldn't save settings — your browser may be blocking localStorage (private mode? quota full?).",
-            durationMs: 5000,
-          },
-    );
-    saveToastTimer = null;
-  }, 600);
-}
+// Auto-save is silent — the persistent SaveStatusIndicator
+// (in the header) is the only feedback on a typing burst. The
+// toast fires only on the manual `saveSettingsNow` path
+// (Ctrl+S / the "Save now" button), where an explicit user
+// action warrants explicit confirmation. The manual path's
+// toast lives inline in `saveSettingsNow` and pushes
+// directly via `pushToast`.
 
 /** Internal helper for switching which tab is active. Updates
  *  `activeTabId`, fires `selectEndpoint` for the new active
@@ -796,22 +782,26 @@ export const usePlayground = create<PlaygroundState>((set, get) => ({
   saveStatus: "saved",
   lastSavedAt: null,
   setSettings: (patch) => {
-    // 1. Apply the patch synchronously and flip to "saving" so the
-    //    settings sheet's badge reflects the burst-window state.
+    // 1. Apply the patch synchronously and flip to "saving" so
+    //    the persistent badge reflects the burst-window state.
     set((s) => ({
       settings: normalizeSettings({ ...s.settings, ...patch }),
       saveStatus: "saving",
     }));
     // 2. Persist asynchronously. Dexie is the source of truth,
-    //    localStorage is a boot cache. saveStatus flips to "saved"
-    //    on a confirmed Dexie write, "dirty" otherwise. The toast
-    //    is debounced so a typing burst surfaces one confirmation.
+    //    localStorage is a boot cache. saveStatus flips to
+    //    "saved" on a confirmed Dexie write, "dirty" otherwise.
+    //
+    //    Auto-save is silent — no toast. The persistent
+    //    SaveStatusIndicator is the only feedback. The toast
+    //    fires only on the manual `saveSettingsNow` path
+    //    (Ctrl+S / the "Save now" button), where an explicit
+    //    user action warrants explicit confirmation.
     void saveSettings(get().settings).then((ok) => {
       set({
         saveStatus: ok ? "saved" : "dirty",
         lastSavedAt: ok ? Date.now() : get().lastSavedAt,
       });
-      scheduleSaveToast(ok);
     });
   },
   setBaseUrl: (baseUrl) => get().setSettings({ baseUrl }),
@@ -830,12 +820,10 @@ export const usePlayground = create<PlaygroundState>((set, get) => ({
       saveStatus: ok ? "saved" : "dirty",
       lastSavedAt: ok ? Date.now() : get().lastSavedAt,
     });
-    // Manual flush bypasses the debounce — fire the toast right
-    // away so the click feels responsive.
-    if (saveToastTimer) {
-      clearTimeout(saveToastTimer);
-      saveToastTimer = null;
-    }
+    // Manual flush is the loud path: a toast confirms the write
+    // landed. Auto-save (setSettings) is silent by contrast;
+    // its only feedback is the persistent SaveStatusIndicator
+    // in the header.
     pushToast(
       ok
         ? { kind: "success", message: "Settings saved" }
@@ -889,13 +877,9 @@ export const usePlayground = create<PlaygroundState>((set, get) => ({
         saveStatus: ok ? "saved" : "dirty",
         lastSavedAt: ok ? Date.now() : get().lastSavedAt,
       });
-      // Reset is an explicit user action — bypass the debounce so
-      // the confirmation lands immediately. Different toast text
-      // distinguishes it from the autosave path.
-      if (saveToastTimer) {
-        clearTimeout(saveToastTimer);
-        saveToastTimer = null;
-      }
+      // Reset is an explicit user action — fire the toast
+      // directly. Different toast text distinguishes it from
+      // the autosave path (which is silent).
       pushToast(
         ok
           ? { kind: "info", message: "Settings reset to defaults" }
