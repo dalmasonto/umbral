@@ -27,7 +27,7 @@ App::builder()
 
 ## Accepting an upload
 
-The plugin doesn't ship its own upload route — write a handler that parses a multipart form and calls `media.save(...)` once you have the bytes:
+The plugin doesn't ship its own upload route - write a handler that parses a multipart form and calls `media.save(...)` once you have the bytes:
 
 ```rust
 use axum::extract::Multipart;
@@ -62,8 +62,8 @@ async fn upload(
 
 `save` writes the bytes under `<dir>/<uuid>-<safe-filename>`, inserts a row in `media_file`, and returns:
 
-- `file: MediaFile` — the new row, with `id` populated.
-- `url: String` — the public URL (`<mount>/<key>`).
+- `file: MediaFile` - the new row, with `id` populated.
+- `url: String` - the public URL (`<mount>/<key>`).
 
 ## The `MediaFile` model
 
@@ -78,7 +78,7 @@ Every upload is one row:
 | `size`          | `i64`                           | Byte count                                     |
 | `uploaded_at`   | `DateTime<Utc>`                 | Time of save                                   |
 
-The model is registered through `Plugin::models()`, so the migration engine creates the table on the next `migrate run` and the admin lists it under the **media** sidebar group automatically. Every column is `#[umbra(noedit)]` — the admin shows the row read-only because mutating it from the UI would diverge from what's on disk.
+The model is registered through `Plugin::models()`, so the migration engine creates the table on the next `migrate run` and the admin lists it under the **media** sidebar group automatically. Every column is `#[umbra(noedit)]` - the admin shows the row read-only because mutating it from the UI would diverge from what's on disk.
 
 To delete a file, write a small handler that calls `MediaFile::objects().filter(media_file::ID.eq(id)).delete_instance(...)` and then `tokio::fs::remove_file(...)`. v0 does not auto-cleanup on row delete; that's wired in v0.2 when the storage backend trait lands.
 
@@ -95,13 +95,13 @@ Files come back at `<mount>/<key>`. Reference them like any other URL:
    download="{{ doc.filename }}">Download {{ doc.filename }}</a>
 ```
 
-The plugin sets `X-Content-Type-Options: nosniff` on every response so the browser respects the MIME type the file was uploaded with — a small defence against a user uploading an HTML file disguised as `.png` and getting it interpreted on the same origin.
+The plugin sets `X-Content-Type-Options: nosniff` on every response so the browser respects the MIME type the file was uploaded with - a small defence against a user uploading an HTML file disguised as `.png` and getting it interpreted on the same origin.
 
 ## Configuration knobs
 
 | Method                          | Default | What it does                                                                      |
 |---------------------------------|---------|-----------------------------------------------------------------------------------|
-| `.new(mount, dir)`              | —       | Mount path + on-disk directory.                                                   |
+| `.new(mount, dir)`              | -       | Mount path + on-disk directory.                                                   |
 | `.max_size(bytes)`              | unlimited | Hard cap on upload size. `save` returns `MediaError::TooLarge` when exceeded.   |
 
 ## What v0 does not ship

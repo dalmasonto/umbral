@@ -227,7 +227,7 @@ pub struct User {
 }
 ```
 
-The attribute lands at M3.1; per-field attributes for `db_index`, `default`, `on_delete` are scheduled as the plugins that need them ship. (`choices` is shipped — `#[derive(Choices)]` on the enum + `#[umbra(choices)]` on the field; see [Column types - Using a Rust enum](./column-types#derivechoices---using-a-rust-enum-as-a-field-type).)
+The attribute lands at M3.1; per-field attributes for `db_index`, `default`, `on_delete` are scheduled as the plugins that need them ship. (`choices` is shipped - `#[derive(Choices)]` on the enum + `#[umbra(choices)]` on the field; see [Column types - Using a Rust enum](./column-types#derivechoices---using-a-rust-enum-as-a-field-type).)
 
 ## Display hints (`string`, `max_length`)
 
@@ -431,7 +431,7 @@ let (ct, created) = ContentType::objects()
     )
     .await?;
 if created {
-    tracing::info!("first boot — seeded blog.post content type");
+    tracing::info!("first boot - seeded blog.post content type");
 }
 ```
 

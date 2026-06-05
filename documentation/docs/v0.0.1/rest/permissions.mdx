@@ -36,7 +36,7 @@ RestPlugin::default()
 
 ## Combinators
 
-### OrPermission — pass if any child passes
+### OrPermission - pass if any child passes
 
 ```rust
 use umbra_rest::{OrPermission, IsAuthenticated, IsStaff, ResourceConfig};
@@ -48,7 +48,7 @@ ResourceConfig::new("post").permission(p);
 
 `OrPermission` preserves the *strongest* error code from the failed children: a chain of `[IsAuthenticated, IsStaff]` on anonymous traffic surfaces as 401 (from `IsAuthenticated`) rather than 403 (from `IsStaff`). That matches the principle "tell the caller the more actionable thing first."
 
-### AndPermission — pass only if all children pass
+### AndPermission - pass only if all children pass
 
 ```rust
 use umbra_rest::{AndPermission, IsAuthenticated, IsStaff};
@@ -60,7 +60,7 @@ let p = AndPermission::new(vec![Box::new(IsAuthenticated), Box::new(IsStaff)]);
 
 ## Writing a custom Permission
 
-Worked example: `IsOwner` — list and retrieve work for everyone, but write actions on a row only succeed if the row's `user_id` matches the caller's `user_id`. The row-level check happens inside the handler (the permission layer runs *before* the row is loaded); the permission class enforces the framing.
+Worked example: `IsOwner` - list and retrieve work for everyone, but write actions on a row only succeed if the row's `user_id` matches the caller's `user_id`. The row-level check happens inside the handler (the permission layer runs *before* the row is loaded); the permission class enforces the framing.
 
 ```rust
 use umbra_rest::{Action, Identity, Permission, PermissionError};
@@ -116,7 +116,7 @@ impl Permission for StaffWritesOnly {
 }
 ```
 
-`PUT` and `PATCH` both map to `Action::Update` — the plugin doesn't separate the two (DRF's `update` / `partial_update` split was a design choice; ours is simpler).
+`PUT` and `PATCH` both map to `Action::Update` - the plugin doesn't separate the two (DRF's `update` / `partial_update` split was a design choice; ours is simpler).
 
 ### Custom actions
 
@@ -134,12 +134,12 @@ match action {
 
 ## Why `check` is sync
 
-Permission classes inspect an already-resolved `Identity` against an in-memory rule set. They don't hit the database — the database hit happened in authentication. Keeping `check` synchronous makes the type signature smaller and prevents the easy mistake of "let me just sneak a query in here" (which produces N+1 patterns and surprising latency).
+Permission classes inspect an already-resolved `Identity` against an in-memory rule set. They don't hit the database - the database hit happened in authentication. Keeping `check` synchronous makes the type signature smaller and prevents the easy mistake of "let me just sneak a query in here" (which produces N+1 patterns and surprising latency).
 
 If you need row-level data to authorize ("only the author can edit this post"), do it inside the handler after the row is loaded, not in the permission class. The permission class enforces *class-level* policy; the handler enforces *instance-level* policy.
 
 ## Where to look next
 
 - The full trait + the built-in source: `plugins/umbra-rest/src/permission.rs`.
-- Wiring permissions onto a resource: [`ResourceConfig::permission`](/docs/v0.0.1/rest/) — see the example app at `examples/derive-demo/src/main.rs` for an end-to-end wire-up.
+- Wiring permissions onto a resource: [`ResourceConfig::permission`](/docs/v0.0.1/rest/) - see the example app at `examples/derive-demo/src/main.rs` for an end-to-end wire-up.
 - The authentication side of the gate: [Authentication](/docs/v0.0.1/rest/authentication).

@@ -6,7 +6,7 @@ icon: formula
 tags: [orm, f-expressions, q-objects, queryset, filter, update]
 ---
 
-Umbra ships two expression helpers that mirror Django's `F()` and `Q()` — both are in scope via `use umbra::prelude::*` or `use umbra::orm::{F, FColExt, Q}`.
+Umbra ships two expression helpers that mirror Django's `F()` and `Q()` - both are in scope via `use umbra::prelude::*` or `use umbra::orm::{F, FColExt, Q}`.
 
 ## F-expressions
 
@@ -35,14 +35,14 @@ let posts = Post::objects()
 ```rust
 use umbra::orm::F;
 
-// SET views = views + 1 — no read-modify-write round-trip
+// SET views = views + 1 - no read-modify-write round-trip
 Post::objects()
     .filter(post::ID.eq(42))
     .update_expr("views", F::col("views").add(1))
     .await?;
 ```
 
-`FExpr` supports four arithmetic operations — `.add(n)`, `.sub(n)`, `.mul(n)`, `.div(n)` — each taking an `i64` operand. Chaining is supported: `F::col("x").add(3).mul(2)` emits `(x + 3) * 2`.
+`FExpr` supports four arithmetic operations - `.add(n)`, `.sub(n)`, `.mul(n)`, `.div(n)` - each taking an `i64` operand. Chaining is supported: `F::col("x").add(3).mul(2)` emits `(x + 3) * 2`.
 
 `update_expr` returns `WriteError::UnknownColumn` when the column name is not present on the model. It silently skips the PK column (same as `update_values`).
 
@@ -107,15 +107,15 @@ Post::objects()
     .await?;
 ```
 
-Chained `.filter()` calls still AND together as before — `Q` is purely additive.
+Chained `.filter()` calls still AND together as before - `Q` is purely additive.
 
 ---
 
 ## See also
 
-- [Declaring models](/docs/v0.0.1/orm/models) — the QuerySet API (`filter`, `update_values`, `fetch`, `get`, etc.) that F and Q plug into.
-- [Relationships](/docs/v0.0.1/orm/relationships) — `ForeignKey<T>` and `select_related`; `ForeignKeyCol` supports `eq_f` / `ne_f` for column-vs-column WHERE.
-- [Transactions](/docs/v0.0.1/orm/transactions) — combining F-expression updates with other writes atomically.
+- [Declaring models](/docs/v0.0.1/orm/models) - the QuerySet API (`filter`, `update_values`, `fetch`, `get`, etc.) that F and Q plug into.
+- [Relationships](/docs/v0.0.1/orm/relationships) - `ForeignKey<T>` and `select_related`; `ForeignKeyCol` supports `eq_f` / `ne_f` for column-vs-column WHERE.
+- [Transactions](/docs/v0.0.1/orm/transactions) - combining F-expression updates with other writes atomically.
 
 ## Design rationale
 

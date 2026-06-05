@@ -58,7 +58,7 @@ CREATE TABLE "post" (
 
 ## Referential actions: `on_delete` / `on_update`
 
-By default the FK emits no `ON DELETE` / `ON UPDATE` clause, which means "NO ACTION" — the database blocks a delete of the parent if any child row references it, and refuses to update the parent's primary key. Override per FK with the `on_delete` and `on_update` attributes:
+By default the FK emits no `ON DELETE` / `ON UPDATE` clause, which means "NO ACTION" - the database blocks a delete of the parent if any child row references it, and refuses to update the parent's primary key. Override per FK with the `on_delete` and `on_update` attributes:
 
 ```rust
 #[derive(Model)]
@@ -80,13 +80,13 @@ The attribute accepts four values, mirroring the SQL standard:
 | `"restrict"` | `ON DELETE RESTRICT` | block immediately, no commit-time deferral |
 | `"set_null"` | `ON DELETE SET NULL` | null the child column (only valid on `Option<ForeignKey<T>>`) |
 
-`on_update` accepts the same vocabulary; useful when the parent PK might move (rare in practice — most apps use immutable PKs).
+`on_update` accepts the same vocabulary; useful when the parent PK might move (rare in practice - most apps use immutable PKs).
 
-The attribute applies at `CREATE TABLE` time only. Changing the action on an already-created table needs a hand-written migration — SQLite can't ALTER FK actions in place, and the diff engine doesn't watch constraint flags yet.
+The attribute applies at `CREATE TABLE` time only. Changing the action on an already-created table needs a hand-written migration - SQLite can't ALTER FK actions in place, and the diff engine doesn't watch constraint flags yet.
 
 ## Self-referential foreign keys
 
-A model can hold a `ForeignKey` to itself — useful for category trees, threaded comments, replies, manager hierarchies, anything that nests. Write the type literally:
+A model can hold a `ForeignKey` to itself - useful for category trees, threaded comments, replies, manager hierarchies, anything that nests. Write the type literally:
 
 ```rust
 #[derive(Model)]
@@ -100,9 +100,9 @@ pub struct Category {
 }
 ```
 
-No `Self` keyword (Rust doesn't allow `Self` in a field type), no string sentinel like Django's `ForeignKey('self', ...)` — just the struct's own name. Why it works: `ForeignKey<T>` stores `T::PrimaryKey` and `Option<Box<T>>` (boxed so the type stays finite-size), and `<T as Model>::TABLE` resolves at the same expansion step that emits `impl Model for Category`, so `T = Category` is satisfied within one derive pass.
+No `Self` keyword (Rust doesn't allow `Self` in a field type), no string sentinel like Django's `ForeignKey('self', ...)` - just the struct's own name. Why it works: `ForeignKey<T>` stores `T::PrimaryKey` and `Option<Box<T>>` (boxed so the type stays finite-size), and `<T as Model>::TABLE` resolves at the same expansion step that emits `impl Model for Category`, so `T = Category` is satisfied within one derive pass.
 
-The DDL is a normal inline `REFERENCES` clause — the table references itself within the same `CREATE TABLE` statement, which both SQLite and Postgres handle natively:
+The DDL is a normal inline `REFERENCES` clause - the table references itself within the same `CREATE TABLE` statement, which both SQLite and Postgres handle natively:
 
 ```sql
 CREATE TABLE "category" (
@@ -112,7 +112,7 @@ CREATE TABLE "category" (
 )
 ```
 
-Querying a self-FK is the same as any other FK — the column constants live in the model's sibling module and accept `i64` comparisons. To walk the tree, fetch one level at a time (or write a recursive CTE by hand if depth matters):
+Querying a self-FK is the same as any other FK - the column constants live in the model's sibling module and accept `i64` comparisons. To walk the tree, fetch one level at a time (or write a recursive CTE by hand if depth matters):
 
 ```rust
 // Direct children of category 1:
@@ -124,7 +124,7 @@ let children = Category::objects()
 
 ## One-to-one relationships
 
-Django's `OneToOneField` is `ForeignKey(unique=True)` underneath. Umbra spells it the same way — pair `ForeignKey<T>` with `#[umbra(unique)]` and the column gets both `REFERENCES "<target>"("id")` and `UNIQUE`. Only one row in the referencing table may reference any given target row.
+Django's `OneToOneField` is `ForeignKey(unique=True)` underneath. Umbra spells it the same way - pair `ForeignKey<T>` with `#[umbra(unique)]` and the column gets both `REFERENCES "<target>"("id")` and `UNIQUE`. Only one row in the referencing table may reference any given target row.
 
 ```rust
 #[derive(Model)]
@@ -149,7 +149,7 @@ CREATE TABLE "profile" (
 
 Why no dedicated `OneToOne<T>` type? The DB-level shape is identical to a FK + UNIQUE; the type-level guarantee a wrapper would give you (only one slot per target row) is already enforced by the constraint. A future `OneToOne<T>` wrapper that adds eager-loading ergonomics (`profile.user_resolved()`) lands when there's a real consumer asking for it; the attribute-based pattern works fine today.
 
-To fetch the related row, query the FK side with `.filter(profile::USER_ID.eq(user.id)).first()` — the UNIQUE constraint guarantees at most one match.
+To fetch the related row, query the FK side with `.filter(profile::USER_ID.eq(user.id)).first()` - the UNIQUE constraint guarantees at most one match.
 
 ## Querying with a foreign key
 
@@ -199,7 +199,7 @@ println!("written by {}", author.name);
 
 ## Eager loading with select_related
 
-By default, a fetched `Post` carries only the raw integer in its `author` FK field. Accessing `post.author.resolve(&pool)` requires a second database round-trip. When you need the referenced row without an extra query — especially when rendering templates — call `.select_related("author")` on the QuerySet.
+By default, a fetched `Post` carries only the raw integer in its `author` FK field. Accessing `post.author.resolve(&pool)` requires a second database round-trip. When you need the referenced row without an extra query - especially when rendering templates - call `.select_related("author")` on the QuerySet.
 
 ```rust
 let post = Post::objects()
@@ -217,7 +217,7 @@ let ctx = serde_json::to_value(&post)?;
 // ctx["author"]["username"] == "alice"
 ```
 
-Under the hood, `select_related` runs a single batch `SELECT ... FROM user WHERE id IN (...)` after the main query. If the result set contains 50 posts, one batch query fetches all referenced users — not 50 individual queries.
+Under the hood, `select_related` runs a single batch `SELECT ... FROM user WHERE id IN (...)` after the main query. If the result set contains 50 posts, one batch query fetches all referenced users - not 50 individual queries.
 
 ### Multiple FK fields
 
@@ -247,9 +247,9 @@ This means `{{ post.author.username }}` in a minijinja template renders correctl
 
 ### What is deferred
 
-- **`prefetch_related`** — for reverse FKs (all posts by a user) and M2M. Requires a separate query per related set and a reverse-accessor mechanism that doesn't exist yet. Tracked in `docs/specs/relationships.md`.
-- **Nested traversal** (`select_related("author__manager")`) — single-hop only at v1. Chains require calling `select_related` on the resolved row after the first fetch.
-- **Reverse accessors** (`User::posts`) — tracked in `docs/specs/relationships.md`.
+- **`prefetch_related`** - for reverse FKs (all posts by a user) and M2M. Requires a separate query per related set and a reverse-accessor mechanism that doesn't exist yet. Tracked in `docs/specs/relationships.md`.
+- **Nested traversal** (`select_related("author__manager")`) - single-hop only at v1. Chains require calling `select_related` on the resolved row after the first fetch.
+- **Reverse accessors** (`User::posts`) - tracked in `docs/specs/relationships.md`.
 - **`ON DELETE` behaviour beyond the default RESTRICT.**
 - **FK columns referencing a non-`i64` primary key.**
 
@@ -291,4 +291,4 @@ PostTag::objects().create(PostTag {
 }).await?;
 ```
 
-The `umbra-permissions` plugin uses this exact pattern for its `GroupPermission`, `UserGroup`, and `UserPermission` join tables — they are good reference implementations. M2M first-class support (a `ManyToMany<T>` field type, reverse accessors, `prefetch_related`) is tracked in `docs/specs/relationships.md`.
+The `umbra-permissions` plugin uses this exact pattern for its `GroupPermission`, `UserGroup`, and `UserPermission` join tables - they are good reference implementations. M2M first-class support (a `ManyToMany<T>` field type, reverse accessors, `prefetch_related`) is tracked in `docs/specs/relationships.md`.

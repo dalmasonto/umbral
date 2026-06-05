@@ -45,7 +45,7 @@ async fn dashboard(headers: HeaderMap) -> Result<Html<String>, StatusCode> {
 
 ## Expose the current user in every template (Django-style)
 
-Opt in with `.with_user_in_templates()` on the plugin builder and every template render in the app gets `{{ user }}` for free — Django's `request.user` shape, no per-handler ctx threading:
+Opt in with `.with_user_in_templates()` on the plugin builder and every template render in the app gets `{{ user }}` for free - Django's `request.user` shape, no per-handler ctx threading:
 
 ```rust
 App::builder()
@@ -54,7 +54,7 @@ App::builder()
     .build()?;
 ```
 
-Under the hood: an axum layer resolves the current user once per request and stashes the serialized value in a tokio task-local. `umbra::templates::render` reads the task-local and merges into the ctx under key `user` — but only when the handler didn't already supply its own `user` (explicit ctx wins).
+Under the hood: an axum layer resolves the current user once per request and stashes the serialized value in a tokio task-local. `umbra::templates::render` reads the task-local and merges into the ctx under key `user` - but only when the handler didn't already supply its own `user` (explicit ctx wins).
 
 Templates can branch uniformly:
 
@@ -103,6 +103,6 @@ The spec lives in `docs/specs/02-plugin-contract.md`. Source: `plugins/umbra-ses
 
 ## See also
 
-- [Auth plugin](/docs/v0.0.1/plugins/auth) — `AuthUser`, password hashing, custom user model.
-- [Auth gating](/docs/v0.0.1/web/auth-gating) — `LoggedIn<U>` extractor and `LoginRequiredLayer` for protecting routes.
-- [Permissions (RBAC)](/docs/v0.0.1/plugins/permissions) — group-based and direct permission grants.
+- [Auth plugin](/docs/v0.0.1/plugins/auth) - `AuthUser`, password hashing, custom user model.
+- [Auth gating](/docs/v0.0.1/web/auth-gating) - `LoggedIn<U>` extractor and `LoginRequiredLayer` for protecting routes.
+- [Permissions (RBAC)](/docs/v0.0.1/plugins/permissions) - group-based and direct permission grants.

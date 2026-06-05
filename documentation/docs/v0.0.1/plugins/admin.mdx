@@ -35,15 +35,15 @@ App::builder()
 
 ### Opt-in features (and what makes them visible)
 
-Several admin features ship with full backend wiring but only appear in the UI when you opt in by configuring the model. If you don't see them, it's because the registration is missing — not because the feature isn't there.
+Several admin features ship with full backend wiring but only appear in the UI when you opt in by configuring the model. If you don't see them, it's because the registration is missing - not because the feature isn't there.
 
 | Feature | Visible when … |
 |---|---|
 | Inline cell edit (double-click) | `AdminModel::new("post").inline_edit_fields(&["title", "status"])` lists the columns. |
 | "Change password" button on the edit sheet | `AdminModel::new("auth_user").password_field("password_hash")` names the hash column. The route + audit-log handler are always wired; this flag is what makes the footer button render. |
 | Bulk actions (toolbar appears when ≥1 row is selected) | Default delete-selected ships; custom ones via `.actions(vec![Action::new("publish", handler)])`. |
-| Async FK combobox | Automatic for every `ForeignKey<T>` field — no opt-in. |
-| `<select>` for closed-set enums | Automatic for every `#[umbra(choices)]` / `MultiChoice<E>` field — no opt-in. |
+| Async FK combobox | Automatic for every `ForeignKey<T>` field - no opt-in. |
+| `<select>` for closed-set enums | Automatic for every `#[umbra(choices)]` / `MultiChoice<E>` field - no opt-in. |
 | Search box on list view | `AdminModel::new("post").search_fields(&["title", "body"])`. Without this, the search box is hidden. |
 | Filter sidebar | `.list_filter(&["status", "published_at"])`. Each column gets its own facet. |
 | Customisable column set on the list view | `.list_display(&["title", "status", "published_at"])`. Without this, every column shows. |

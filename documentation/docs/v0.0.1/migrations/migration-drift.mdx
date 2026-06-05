@@ -52,9 +52,9 @@ In the example above, `0003_add_post_tag` is recorded in the tracking table but 
 
 Your teammate applied `0003_add_post_tag` but never pushed the file. You pull, the tracking table has the row, the file is absent.
 
-**Option 1 — restore the file.** Check out the file from VCS (or ask the teammate to push it). Once the file is back on disk, `migrate` proceeds normally.
+**Option 1 - restore the file.** Check out the file from VCS (or ask the teammate to push it). Once the file is back on disk, `migrate` proceeds normally.
 
-**Option 2 — `--allow-drift`.** If you know the schema change represented by `0003` is already in the database and you just want to apply the pending `0004`, run:
+**Option 2 - `--allow-drift`.** If you know the schema change represented by `0003` is already in the database and you just want to apply the pending `0004`, run:
 
 ```bash
 cargo run -- migrate --allow-drift
@@ -76,7 +76,7 @@ If the tables do not exist yet, `--fake-initial` skips that plugin. Run `migrate
 
 ## Recovery: mark one migration as applied (`--fake`)
 
-Sometimes you need finer control than `--fake-initial` — you want to declare a specific migration applied without running its SQL. Examples:
+Sometimes you need finer control than `--fake-initial` - you want to declare a specific migration applied without running its SQL. Examples:
 
 - The schema change was applied by hand via `psql` or a maintenance script.
 - You are reconstructing the tracking table after a database restore.
@@ -111,9 +111,9 @@ error: umbra migrate: drift detected
   3. Run `umbra migrate --fake <plugin/name>` to mark an individual migration as applied.
 ```
 
-**Path A — restore the file.** This is the safest option. The file encodes the exact operation that changed the schema. Restore it from VCS history (`git log --all -- migrations/app/0003_add_post_tag.json`) and run `migrate` normally.
+**Path A - restore the file.** This is the safest option. The file encodes the exact operation that changed the schema. Restore it from VCS history (`git log --all -- migrations/app/0003_add_post_tag.json`) and run `migrate` normally.
 
-**Path B — skip it.** If you cannot recover the file and you know the schema is correct (the `[X]` means the SQL ran successfully), run:
+**Path B - skip it.** If you cannot recover the file and you know the schema is correct (the `[X]` means the SQL ran successfully), run:
 
 ```bash
 cargo run -- migrate --allow-drift

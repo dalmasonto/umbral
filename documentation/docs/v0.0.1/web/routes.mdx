@@ -1,6 +1,6 @@
 ---
 title: Routes
-description: Declare your app's URL patterns once with the Routes builder — handlers and the dev-mode 404 panel stay in sync without parallel declarations.
+description: Declare your app's URL patterns once with the Routes builder - handlers and the dev-mode 404 panel stay in sync without parallel declarations.
 sidebar_position: 1
 icon: route
 tags: [web, routing]
@@ -43,7 +43,7 @@ One method per call, with the framework wrapping your handler in the right `axum
 | HEAD | `.head(path, handler)` |
 | OPTIONS | `.options(path, handler)` |
 
-`handler` is any axum `Handler<T, ()>` — async fn returning anything that `IntoResponse`s.
+`handler` is any axum `Handler<T, ()>` - async fn returning anything that `IntoResponse`s.
 
 ## Per-route middleware: `.layered`
 
@@ -84,7 +84,7 @@ The `methods` slice is what shows up as method badges on the dev 404 panel; the 
 
 ## Escape hatch for axum power-users: `.with_router`
 
-For features the per-method shorthands don't expose — typed `State`, `nest`, `fallback`, custom middleware stacks — build a plain `axum::Router` and merge it in:
+For features the per-method shorthands don't expose - typed `State`, `nest`, `fallback`, custom middleware stacks - build a plain `axum::Router` and merge it in:
 
 ```rust
 use axum::Router;
@@ -99,10 +99,10 @@ Routes::new()
     )
 ```
 
-Paths inside the external router contribute their handlers but **don't** appear in the framework's route registry — axum doesn't expose its internal route table, so the dev 404 panel can't see them. Declare any paths you want surfaced explicitly via `.get/.post/...` on the outer `Routes`.
+Paths inside the external router contribute their handlers but **don't** appear in the framework's route registry - axum doesn't expose its internal route table, so the dev 404 panel can't see them. Declare any paths you want surfaced explicitly via `.get/.post/...` on the outer `Routes`.
 
 ## See also
 
-- [Auth gating](./auth-gating) — the `login_required_*` layers commonly used with `.layered`
-- [Trailing slash](./trailing-slash) — `SlashRedirect` policy
-- [Error pages](./error-pages) — `not_found_template` / `server_error_template` (the dev 404 panel lives in the default 404 template)
+- [Auth gating](./auth-gating) - the `login_required_*` layers commonly used with `.layered`
+- [Trailing slash](./trailing-slash) - `SlashRedirect` policy
+- [Error pages](./error-pages) - `not_found_template` / `server_error_template` (the dev 404 panel lives in the default 404 template)

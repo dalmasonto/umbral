@@ -6,7 +6,7 @@ icon: radio
 tags: [plugins, signals, events, orm]
 ---
 
-`umbra-signals` brings Django's signal shape to Rust: subscribe to per-model lifecycle events and the ORM fires your handler automatically on every `save` or `delete`. It's strictly **in-process** at v1 — no cross-process broker, no persistence, no replay. For work that must survive a process crash, pair signals with [`umbra-tasks`](/docs/v0.0.1/plugins/tasks): the signal handler enqueues a task; the worker runs it.
+`umbra-signals` brings Django's signal shape to Rust: subscribe to per-model lifecycle events and the ORM fires your handler automatically on every `save` or `delete`. It's strictly **in-process** at v1 - no cross-process broker, no persistence, no replay. For work that must survive a process crash, pair signals with [`umbra-tasks`](/docs/v0.0.1/plugins/tasks): the signal handler enqueues a task; the worker runs it.
 
 ## Register the plugin
 
@@ -21,9 +21,9 @@ App::builder()
 
 `SignalsPlugin` carries no models or routes. It exists so other plugins can declare `"signals"` as a dependency and be confident the registry is alive before their `on_ready` fires.
 
-## Per-model signals — the primary API
+## Per-model signals - the primary API
 
-Subscribe per model type using `on_model::<M>()`. The ORM fires the handler automatically — no manual `emit` calls needed.
+Subscribe per model type using `on_model::<M>()`. The ORM fires the handler automatically - no manual `emit` calls needed.
 
 ```rust
 use umbra_signals::on_model;
@@ -43,13 +43,13 @@ on_model::<Post>().post_save(|post, created| async move {
 |--------|-------|---------------|
 | `pre_save(handler(instance, created))` | before INSERT or UPDATE | `true` = INSERT, `false` = UPDATE |
 | `post_save(handler(instance, created))` | after INSERT or UPDATE (DB row) | same |
-| `pre_delete(handler(instance))` | before per-row DELETE | — |
-| `post_delete(handler(instance))` | after per-row DELETE | — |
+| `pre_delete(handler(instance))` | before per-row DELETE | - |
+| `post_delete(handler(instance))` | after per-row DELETE | - |
 
 **Trigger methods:**
 
-- `Model::objects().save(instance).await` — fires `pre_save` + `post_save`.
-- `Model::objects().delete_instance(&instance).await` — fires `pre_delete` + `post_delete`.
+- `Model::objects().save(instance).await` - fires `pre_save` + `post_save`.
+- `Model::objects().delete_instance(&instance).await` - fires `pre_delete` + `post_delete`.
 
 ### Handler signature
 
@@ -67,7 +67,7 @@ on_model::<M>().pre_delete(|instance: &M| async move {
 
 `M` must implement `serde::Serialize + serde::Deserialize`. Any model with `#[derive(Model, Serialize, Deserialize)]` already satisfies this.
 
-## Worked example — welcome email on user signup
+## Worked example - welcome email on user signup
 
 The canonical pattern for "send a welcome email when a new user registers":
 
@@ -110,12 +110,12 @@ on_model::<AuthUser>().post_save(|user, created| async move {
 The signal handler's only job is to enqueue a row. The task worker handles retry, backoff, and dead-letter accounting. See [`umbra-tasks`](/docs/v0.0.1/plugins/tasks) for the worker side.
 
 <Callout type="warning" title="Bulk methods do NOT fire signals">
-The following write paths bypass signals entirely — matching Django's own behaviour:
+The following write paths bypass signals entirely - matching Django's own behaviour:
 
-- `Manager::create(instance)` — use `Manager::save(instance)` instead if you need signals.
-- `Manager::bulk_create(vec)` — never fires signals; use per-row `save` in a loop if needed.
-- `QuerySet::update_values(map)` — bulk UPDATE, no signals.
-- `QuerySet::delete()` — bulk DELETE, no signals.
+- `Manager::create(instance)` - use `Manager::save(instance)` instead if you need signals.
+- `Manager::bulk_create(vec)` - never fires signals; use per-row `save` in a loop if needed.
+- `QuerySet::update_values(map)` - bulk UPDATE, no signals.
+- `QuerySet::delete()` - bulk DELETE, no signals.
 
 **If you need per-row signals on a bulk path:** fetch the rows first, then iterate calling `delete_instance` per row inside a transaction:
 
@@ -129,10 +129,10 @@ umbra::db::transaction(|tx| Box::pin(async move {
 })).await?;
 ```
 
-This is intentionally verbose — bulk deletes are usually hot paths where the cost of serialising every row to JSON and calling N signal handlers would be a surprise.
+This is intentionally verbose - bulk deletes are usually hot paths where the cost of serialising every row to JSON and calling N signal handlers would be a surprise.
 </Callout>
 
-## Generic pub/sub — the escape hatch
+## Generic pub/sub - the escape hatch
 
 For application-defined events that aren't tied to a model lifecycle, the lower-level name-keyed API is still available:
 
@@ -175,7 +175,7 @@ The `on_model::<M>()` API handles naming automatically. You only need the raw na
 
 ## Payload shape
 
-For reference — the `on_model` API deserialises these for you, so you only need this when subscribing via the raw `subscribe` / `subscribe_async` functions:
+For reference - the `on_model` API deserialises these for you, so you only need this when subscribing via the raw `subscribe` / `subscribe_async` functions:
 
 | Signal | Payload |
 |--------|---------|
@@ -191,7 +191,7 @@ For reference — the `on_model` API deserialises these for you, so you only nee
 
 ## See also
 
-- [`umbra-tasks` plugin docs](/docs/v0.0.1/plugins/tasks) — the durable side of fire-and-forget work.
-- [Settings and environment](/docs/v0.0.1/getting-started/settings-and-env) — reading config inside a signal handler.
-- [Plugin trait](/docs/v0.0.1/plugins/the-plugin-trait) — `on_ready` is the canonical place to register subscriptions.
-- [`arch.md`](https://github.com/umbra-framework/umbra/blob/main/arch.md) — design rationale for the core-vs-plugin dependency inversion that makes the registry live in `umbra-core`.
+- [`umbra-tasks` plugin docs](/docs/v0.0.1/plugins/tasks) - the durable side of fire-and-forget work.
+- [Settings and environment](/docs/v0.0.1/getting-started/settings-and-env) - reading config inside a signal handler.
+- [Plugin trait](/docs/v0.0.1/plugins/the-plugin-trait) - `on_ready` is the canonical place to register subscriptions.
+- [`arch.md`](https://github.com/umbra-framework/umbra/blob/main/arch.md) - design rationale for the core-vs-plugin dependency inversion that makes the registry live in `umbra-core`.

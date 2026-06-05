@@ -72,7 +72,7 @@ async fn home(cache: Extension<Cache>) -> impl IntoResponse {
 
 ## View-level caching (cache_page)
 
-`cache_page(ttl)` is a tower `Layer` that caches full GET/HEAD responses for a route subtree — the Rust equivalent of Django's `@cache_page(seconds)`.
+`cache_page(ttl)` is a tower `Layer` that caches full GET/HEAD responses for a route subtree - the Rust equivalent of Django's `@cache_page(seconds)`.
 
 ```rust
 use umbra_cache::cache_page;
@@ -93,11 +93,11 @@ What gets cached: only `GET` and `HEAD` responses with status 200. The following
 - Response carries `Cache-Control: no-store`
 - Response carries a `Set-Cookie` header (personalised responses)
 
-If the ambient cache was not initialised, misses and stores are silently skipped — the handler fires normally.
+If the ambient cache was not initialised, misses and stores are silently skipped - the handler fires normally.
 
 ## Scaling to production
 
-Development: `Cache::memory()` — zero config. Staging or small prod: `Cache::sqlite(pool)` — durable, no extra service. Multi-instance production: `Cache::redis(url)` — shared across all app processes, server-side TTL, millisecond latency.
+Development: `Cache::memory()` - zero config. Staging or small prod: `Cache::sqlite(pool)` - durable, no extra service. Multi-instance production: `Cache::redis(url)` - shared across all app processes, server-side TTL, millisecond latency.
 
 ## Deferred
 

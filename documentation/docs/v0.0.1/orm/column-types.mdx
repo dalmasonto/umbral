@@ -113,7 +113,11 @@ Custom PK names (`pub user_id: i64` instead of `pub id: i64`) aren't supported a
 
 ## Attributes the derive accepts today
 
-### Struct-level
+Every attribute lives in **one of two places** - either on the **struct itself** (model-wide settings) or on an **individual field** inside the struct (column-specific settings). The examples below show both placements explicitly.
+
+### Struct-level - placed on `#[derive(Model)]` above the `struct`
+
+These four attributes configure the model as a whole. They go **on the struct**, not on any field inside it:
 
 | Attribute | Effect |
 |---|---|
@@ -123,6 +127,7 @@ Custom PK names (`pub user_id: i64` instead of `pub id: i64`) aren't supported a
 | `#[umbra(icon = "...")]` | Lucide icon slug. Defaults to `database`. |
 
 ```rust
+// ← Struct-level attributes go HERE, above the struct keyword
 #[derive(Model)]
 #[umbra(table = "auth_user", display = "Users", icon = "users")]
 pub struct User {
@@ -131,26 +136,40 @@ pub struct User {
 }
 ```
 
-### Field-level
+### Field-level - placed on each field inside the struct
 
-The macro reads every field-level attribute below straight off the struct field. Empty cells (`-`) mean the attribute has no effect at that layer; cells with a `✓` mean the framework wires the corresponding behaviour automatically.
+Every attribute below is declared **on the field line itself**, right before the field's name and type. They control how that single column behaves in the database, the admin, and the REST API:
+
+```rust
+#[derive(Model)]
+pub struct Post {
+    pub id: i64,
+    // ↓ Field-level attribute on this specific column
+    #[umbra(string, max_length = 64)]
+    pub title: String,
+}
+```
+
+The macro reads each field-level attribute straight off the struct field. Empty cells (`-`) mean the attribute has no effect at that layer; cells with a `✓` mean the framework wires the corresponding behaviour automatically.
+
+**Field-level reference table**
 
 | Attribute | Effect |
 |---|---|
 | `#[umbra(auto_now_add)]` | Stamp `Utc::now()` on INSERT. The required-field check skips the column; clients can omit it from the body and the ORM fills it in at the write seam. Standard `created_at` pattern. |
 | `#[umbra(auto_now)]` | Stamp `Utc::now()` on INSERT **and every UPDATE**. `auto_now_add` columns stay frozen at their creation timestamp; `auto_now` columns refresh continuously. Standard `updated_at` pattern. |
-| `#[umbra(noform)]` | Client never writes — stripped from `insert_json` / `update_json` bodies. The admin hides the column on every form. Use for `password_hash`, internal tokens, server-managed audit fields. |
+| `#[umbra(noform)]` | Client never writes - stripped from `insert_json` / `update_json` bodies. The admin hides the column on every form. Use for `password_hash`, internal tokens, server-managed audit fields. |
 | `#[umbra(noedit)]` | Admin edit form shows the field read-only (UX hint, not an API contract). REST writes still accept the value. |
 | `#[umbra(index)]` | Single-column index in the DDL. The migration engine emits `CREATE INDEX` on both backends. |
-| `#[umbra(unique)]` | UNIQUE constraint in the DDL. UNIQUE violations on insert / update surface as `WriteError::UniqueViolation { field, value }` — REST renders them as `{ "slug": ["A row with slug='widget' already exists."] }`. |
-| `#[umbra(default = "...")]` | DDL default for the column. Required when adding a NOT NULL column to a populated table — Postgres / SQLite reject the ALTER otherwise. Also the value the DB uses when an INSERT omits the column. |
+| `#[umbra(unique)]` | UNIQUE constraint in the DDL. UNIQUE violations on insert / update surface as `WriteError::UniqueViolation { field, value }` - REST renders them as `{ "slug": ["A row with slug='widget' already exists."] }`. |
+| `#[umbra(default = "...")]` | DDL default for the column. Required when adding a NOT NULL column to a populated table - Postgres / SQLite reject the ALTER otherwise. Also the value the DB uses when an INSERT omits the column. |
 | `#[umbra(help = "...")]` | OpenAPI `description` + admin form help text. Carries the column's intent into both surfaces without a second source of documentation. |
 | `#[umbra(example = "...")]` | OpenAPI `example` value. Generated clients show it as a placeholder; the playground uses it to seed the request body. |
-| `#[umbra(on_delete = "cascade" \| "restrict" \| "set_null" \| "no_action")]` | FK `ON DELETE` clause. Default `no_action` (SQL standard's default — no extra clause emitted). Applies only to `ForeignKey<T>` columns; a typed error fires at derive time if you set it on a non-FK field. |
+| `#[umbra(on_delete = "cascade" \| "restrict" \| "set_null" \| "no_action")]` | FK `ON DELETE` clause. Default `no_action` (SQL standard's default - no extra clause emitted). Applies only to `ForeignKey<T>` columns; a typed error fires at derive time if you set it on a non-FK field. |
 | `#[umbra(on_update = "...")]` | FK `ON UPDATE` clause. Same vocabulary as `on_delete`. |
 | `#[umbra(min = N)]` / `#[umbra(max = N)]` | Numeric range validator. The dynamic-write path returns `WriteError::Validator { field, message }`; Postgres also gets a DDL CHECK so direct DB writes are caught. SQLite skips the CHECK (its CHECK syntax is more friction than safety here). |
 | `#[umbra(backend = "postgres")]` / `#[umbra(backend = "sqlite")]` | Restrict this field to a specific backend. The boot-time system check fails when the active backend isn't in the allow-list. Repeat the attribute to allow several. |
-| `#[umbra(string)]` / `#[umbra(string = true)]` | Mark this field as the Django-style `__str__`. The admin uses it as the label column in the default `list_display` and as the picker label in FK / M2M choosers. See [Models — Display hints](./models#display-hints-string-max_length). |
+| `#[umbra(string)]` / `#[umbra(string = true)]` | Mark this field as the Django-style `__str__`. The admin uses it as the label column in the default `list_display` and as the picker label in FK / M2M choosers. See [Models - Display hints](./models#display-hints-string-max_length). |
 | `#[umbra(max_length = N)]` | Cap on a `String` field. Postgres DDL emits `VARCHAR(N)`; SQLite stays `TEXT` (affinity-equivalent). Admin form renders as `<input maxlength="N">` instead of `<textarea>`; changelist truncates display at N chars. |
 | `#[umbra(choices)]` | The field's type implements [`umbra::orm::ChoiceField`] (typically via `#[derive(Choices)]`). Stored as TEXT; admin renders a `<select>`; Postgres gets a CHECK constraint. See ["Using a Rust enum"](#derivechoices---using-a-rust-enum-as-a-field-type) below. |
 
@@ -186,7 +205,7 @@ pub struct Post {
 
 ### Validation that's not on the model
 
-Some constraints belong at the request boundary instead of the schema — `min_length`, `email` shape, `password` strength, multi-field invariants. Use `#[derive(Form)]` for those:
+Some constraints belong at the request boundary instead of the schema - `min_length`, `email` shape, `password` strength, multi-field invariants. Use `#[derive(Form)]` for those:
 
 ```rust
 #[derive(serde::Deserialize, Form)]
@@ -200,9 +219,9 @@ pub struct CreateUser {
 }
 ```
 
-`Form` and the model derive compose — the model shapes the DDL and the admin; `Form` validates inputs ahead of the model. See [`#[derive(Form)]`](#deriveform---request-boundary-validation) below.
+`Form` and the model derive compose - the model shapes the DDL and the admin; `Form` validates inputs ahead of the model. See [`#[derive(Form)]`](#deriveform---request-boundary-validation) below.
 
-Foreign derive attributes (`#[serde(...)]`, `#[sqlx(...)]`, `#[validate(...)]`, etc.) are passed through untouched — the derive doesn't reject them, which lets you stack umbra's macro on top of whatever serialization / validation stack you already use.
+Foreign derive attributes (`#[serde(...)]`, `#[sqlx(...)]`, `#[validate(...)]`, etc.) are passed through untouched - the derive doesn't reject them, which lets you stack umbra's macro on top of whatever serialization / validation stack you already use.
 
 ## All derive macros at a glance
 
@@ -237,20 +256,14 @@ pub struct Post {
 }
 ```
 
-**Reference:**
+**Model Level**
 
-| Where | Attribute | What it does |
-|---|---|---|
-| Struct | `table = "..."` | SQL table name. Default: snake_case of struct ident. |
-| Struct | `plugin = "..."` | Table prefix (`blog_post`). `plugin = "app"` is a no-op since `"app"` is the implicit user-binary namespace. |
-| Struct | `display = "..."` | Sidebar label in the admin. Default: struct name. |
-| Struct | `icon = "..."` | Lucide icon slug. Default: `"database"`. |
-| Field | `noform` | Never rendered on any admin form (create or edit). For `password_hash`, internal tokens. |
-| Field | `noedit` | Rendered read-only on edit forms; omitted on create. |
-| Field | `string` / `string = true` | Mark this field as Django's `__str__`. Default `list_display` becomes `[<this>, <other short columns>]`. |
-| Field | `max_length = N` | Cap on a `String`. PG → `VARCHAR(N)`, SQLite stays `TEXT`. Admin form → `<input maxlength="N">` instead of `<textarea>`. List display truncates at N chars. |
-| Field | `choices` | The field's type implements [`umbra::orm::ChoiceField`] (typically via `#[derive(Choices)]`). Stored as `TEXT`; admin renders a `<select>`; Postgres gets a `CHECK` constraint. See ["Using a Rust enum"](#derivechoices---using-a-rust-enum-as-a-field-type). |
-| Field | `default = "..."` | SQL `DEFAULT` clause for the column. String literal at v1; emitted on both `CREATE TABLE` and `ALTER TABLE ADD COLUMN`. Required when adding a NOT NULL column to a non-empty table — Postgres / SQLite reject the `ADD` otherwise. |
+| Attribute | What it does |
+|---|---|
+| `table = "..."` | SQL table name. Default: snake_case of struct ident. |
+| `plugin = "..."` | Table prefix (`blog_post`). `plugin = "app"` is a no-op since `"app"` is the implicit user-binary namespace. |
+| `display = "..."` | Sidebar label in the admin. Default: struct name. |
+| `icon = "..."` | Lucide icon slug. Default: `"database"`. |
 
 ### `#[derive(Form)]` - request-boundary validation
 
@@ -331,7 +344,7 @@ pub struct Post {
 
 That's the whole setup. `Post { status: PostStatus::Draft, .. }` round-trips through `INSERT` / `SELECT` as `'draft'`. The admin's create / edit sheet shows a `<select>` with the four variants. The migration engine emits `status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'review', 'published', 'archived'))` on Postgres; SQLite gets plain `TEXT DEFAULT 'draft'` (SQLite's CHECK syntax differs and `CHECK` adds friction more than safety on a column the Rust enum already constrains).
 
-The `default = "..."` is required when you add the `status` column to an existing populated table — both Postgres and SQLite reject `ALTER TABLE ADD COLUMN` for a NOT NULL column without a default. It also doubles as the value the DB uses on any future `INSERT` that omits the column.
+The `default = "..."` is required when you add the `status` column to an existing populated table - both Postgres and SQLite reject `ALTER TABLE ADD COLUMN` for a NOT NULL column without a default. It also doubles as the value the DB uses on any future `INSERT` that omits the column.
 
 #### What `#[derive(Choices)]` emits
 
@@ -362,12 +375,12 @@ This composes with `#[derive(Form)]` if you have additional request-shape rules 
 #### Limits at v1
 
 - `Option<T>` of a `Choices` enum isn't accepted by the derive yet. For a nullable choice, add a `None` variant to the enum and use the non-Option field. (Tracked.)
-- Adding a new variant to the enum doesn't auto-rewrite the existing Postgres `CHECK` constraint — re-running `make` after adding a variant generates a migration that drops + re-adds the constraint, which is fine but requires the migration step.
+- Adding a new variant to the enum doesn't auto-rewrite the existing Postgres `CHECK` constraint - re-running `make` after adding a variant generates a migration that drops + re-adds the constraint, which is fine but requires the migration step.
 - Removing a variant is a data migration the user owns: existing rows that hold the dropped variant become invalid; clean up the data first, then drop the variant.
 
 ### `MultiChoice<E>` - multi-valued choices
 
-`MultiChoice<E>` is the multi-valued counterpart to `#[derive(Choices)]`. Where a `Choices` field carries one variant, a `MultiChoice<E>` field carries an ordered list of distinct variants of the same enum. Storage is a single TEXT column holding a comma-separated list of the variants' DB strings — e.g. `"design,frontend"`. The admin renders the field as a checkbox-chip group (one chip per variant) backed by a hidden CSV input.
+`MultiChoice<E>` is the multi-valued counterpart to `#[derive(Choices)]`. Where a `Choices` field carries one variant, a `MultiChoice<E>` field carries an ordered list of distinct variants of the same enum. Storage is a single TEXT column holding a comma-separated list of the variants' DB strings - e.g. `"design,frontend"`. The admin renders the field as a checkbox-chip group (one chip per variant) backed by a hidden CSV input.
 
 ```rust
 use umbra::prelude::*;
@@ -387,25 +400,25 @@ pub struct Article {
 }
 ```
 
-The Rust type drives detection — no `#[umbra(multichoice)]` marker is required; the macro recognises `MultiChoice<E>` directly. `#[umbra(default = "...")]` is a CSV of the initial variants, used both as the SQL `DEFAULT` and as the value `ALTER TABLE ADD COLUMN` applies to existing rows.
+The Rust type drives detection - no `#[umbra(multichoice)]` marker is required; the macro recognises `MultiChoice<E>` directly. `#[umbra(default = "...")]` is a CSV of the initial variants, used both as the SQL `DEFAULT` and as the value `ALTER TABLE ADD COLUMN` applies to existing rows.
 
-**Reading and writing.** `Article { tags: vec![Tag::Design, Tag::Backend].into(), .. }` round-trips through sqlx as the TEXT value `'design,backend'`. The wrapper exposes the usual collection surface — `.as_slice()`, `.into_vec()`, `.push(...)`, `.contains(...)`, iteration, `Deref<Target=[E]>`. On the serde side it serialises to a JSON array of strings (`["design","backend"]`); deserialisation accepts both the JSON array form and the CSV string form (the latter is what HTML form posts produce).
+**Reading and writing.** `Article { tags: vec![Tag::Design, Tag::Backend].into(), .. }` round-trips through sqlx as the TEXT value `'design,backend'`. The wrapper exposes the usual collection surface - `.as_slice()`, `.into_vec()`, `.push(...)`, `.contains(...)`, iteration, `Deref<Target=[E]>`. On the serde side it serialises to a JSON array of strings (`["design","backend"]`); deserialisation accepts both the JSON array form and the CSV string form (the latter is what HTML form posts produce).
 
 #### What's different from `Choices`
 
 | Concern | `Choices` (single) | `MultiChoice<E>` (multi) |
 |---|---|---|
 | Rust field type | `EnumName` directly | `MultiChoice<EnumName>` wrapper |
-| Attribute marker | `#[umbra(choices)]` required | Detected from the type — no marker |
+| Attribute marker | `#[umbra(choices)]` required | Detected from the type - no marker |
 | DB storage | TEXT, one variant string | TEXT, CSV of variant strings |
-| Postgres `CHECK` | `CHECK (col IN ('a', 'b', ...))` | Skipped at v1 — application-layer enforcement via sqlx `Decode` |
+| Postgres `CHECK` | `CHECK (col IN ('a', 'b', ...))` | Skipped at v1 - application-layer enforcement via sqlx `Decode` |
 | Admin widget | `<select>` | Checkbox-chip group + hidden CSV |
-| Order preserved? | n/a | Yes — declaration order in the `Vec<E>` round-trips |
+| Order preserved? | n/a | Yes - declaration order in the `Vec<E>` round-trips |
 
 #### Limits at v1
 
-- No `Option<MultiChoice<E>>` — at v1 the field is non-nullable. Use an empty selection (`MultiChoice::new()`) instead of NULL.
-- No `CHECK` constraint emitted on Postgres — validating "every CSV piece is a known variant" needs a regex with per-variant escaping. Application-layer enforcement via sqlx's `Decode` path is the v1 stance; a defence-in-depth `CHECK` lands when a real consumer needs it.
+- No `Option<MultiChoice<E>>` - at v1 the field is non-nullable. Use an empty selection (`MultiChoice::new()`) instead of NULL.
+- No `CHECK` constraint emitted on Postgres - validating "every CSV piece is a known variant" needs a regex with per-variant escaping. Application-layer enforcement via sqlx's `Decode` path is the v1 stance; a defence-in-depth `CHECK` lands when a real consumer needs it.
 - Filtering on a `MultiChoice` column uses string predicates (`MyModel::TAGS.contains("design")`). No element-level membership filter at v1.
 
 ## Nullability

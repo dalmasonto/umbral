@@ -8,11 +8,11 @@ tags: [getting-started, settings, env]
 
 Every umbra app has one ambient `Settings` value loaded once at boot from three sources, with later sources overriding earlier ones:
 
-1. **Built-in defaults** — `database_url = "sqlite::memory:"`, `bind_addr = "127.0.0.1:8000"`, etc.
+1. **Built-in defaults** - `database_url = "sqlite::memory:"`, `bind_addr = "127.0.0.1:8000"`, etc.
 2. **`umbra.toml`** at the project root.
 3. **`UMBRA_`-prefixed environment variables.**
 
-After `App::build` runs, `umbra::settings::get()` returns the resolved value from anywhere in the app — handlers, plugin code, task bodies, signal handlers. No state plumbing, no extractors.
+After `App::build` runs, `umbra::settings::get()` returns the resolved value from anywhere in the app - handlers, plugin code, task bodies, signal handlers. No state plumbing, no extractors.
 
 ## The known fields
 
@@ -71,7 +71,7 @@ export UMBRA_ENVIRONMENT="prod"
 cargo run -- serve
 ```
 
-The `UMBRA_` prefix marks the env var as framework-owned. Anything else in your shell is invisible to umbra's settings loader — no accidental capture.
+The `UMBRA_` prefix marks the env var as framework-owned. Anything else in your shell is invisible to umbra's settings loader - no accidental capture.
 
 ## Reading settings from anywhere
 
@@ -102,15 +102,15 @@ async fn ping_external_api(payload: PingPayload) -> Result<(), String> {
 }
 ```
 
-`umbra::settings::get()` returns `&'static Settings` and panics if `App::build` hasn't run. `umbra::settings::get_opt()` returns `Option<&'static Settings>` — use this in code that may run before `App::build` finishes (rare, but possible in macro-emitted helpers, test fixtures, etc.).
+`umbra::settings::get()` returns `&'static Settings` and panics if `App::build` hasn't run. `umbra::settings::get_opt()` returns `Option<&'static Settings>` - use this in code that may run before `App::build` finishes (rare, but possible in macro-emitted helpers, test fixtures, etc.).
 
 <Callout type="info">
-The `&'static` lifetime is real — the settings live for the process. You can stash field clones (`settings.secret_key.clone()`) freely; the underlying struct doesn't move.
+The `&'static` lifetime is real - the settings live for the process. You can stash field clones (`settings.secret_key.clone()`) freely; the underlying struct doesn't move.
 </Callout>
 
 ## Custom settings (the `extra` field)
 
-Most real apps need keys umbra doesn't know about — `OPENAI_API_KEY`, `STRIPE_SECRET`, third-party plugin config. The `extra: HashMap<String, toml::Value>` field catches everything that doesn't match a known field name:
+Most real apps need keys umbra doesn't know about - `OPENAI_API_KEY`, `STRIPE_SECRET`, third-party plugin config. The `extra: HashMap<String, toml::Value>` field catches everything that doesn't match a known field name:
 
 ```bash
 # Env var
@@ -118,7 +118,7 @@ export UMBRA_OPENAI_API_KEY="sk-test"
 ```
 
 ```toml
-# umbra.toml — both work
+# umbra.toml - both work
 openai_api_key = "sk-test"
 
 # Or nested
@@ -162,7 +162,7 @@ cargo run
 dotenv -- cargo run
 ```
 
-This is deliberate — `.env` is one of N possible conventions and we don't want to pick one for you. The single source of truth is `umbra.toml` + `UMBRA_`-prefixed env vars.
+This is deliberate - `.env` is one of N possible conventions and we don't want to pick one for you. The single source of truth is `umbra.toml` + `UMBRA_`-prefixed env vars.
 
 ## Precedence summary
 
@@ -200,7 +200,7 @@ let settings = umbra::Settings {
 
 ## See also
 
-- [Management commands](/docs/v0.0.1/cli/management-commands) — env vars affect every subcommand the same way.
-- [Backends → Postgres](/docs/v0.0.1/backends/postgres) and [SQLite](/docs/v0.0.1/backends/sqlite) — what to put in `database_url` per backend.
-- [`umbra-tasks`](/docs/v0.0.1/plugins/tasks) — `settings::get()` works in task handlers too.
-- [`umbra-signals`](/docs/v0.0.1/plugins/signals) — same in signal handlers.
+- [Management commands](/docs/v0.0.1/cli/management-commands) - env vars affect every subcommand the same way.
+- [Backends → Postgres](/docs/v0.0.1/backends/postgres) and [SQLite](/docs/v0.0.1/backends/sqlite) - what to put in `database_url` per backend.
+- [`umbra-tasks`](/docs/v0.0.1/plugins/tasks) - `settings::get()` works in task handlers too.
+- [`umbra-signals`](/docs/v0.0.1/plugins/signals) - same in signal handlers.

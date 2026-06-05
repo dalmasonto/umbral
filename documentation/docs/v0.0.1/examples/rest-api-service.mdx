@@ -1,6 +1,6 @@
 ---
 title: REST API service
-description: API-only umbra app — REST + OpenAPI + token auth, no HTML, no admin. The "Rust microservice" shape.
+description: API-only umbra app - REST + OpenAPI + token auth, no HTML, no admin. The "Rust microservice" shape.
 sidebar_position: 3
 icon: cloud
 tags: [examples, rest, api, openapi]
@@ -148,7 +148,7 @@ fn project_resource() -> ResourceConfig {
             let _ = row;
             json!(null)
         })
-        // /api/project/{id}/archive/  — soft-delete pattern.
+        // /api/project/{id}/archive/  - soft-delete pattern.
         .action(
             "archive",
             Method::POST,
@@ -179,7 +179,7 @@ fn task_resource() -> ResourceConfig {
     ResourceConfig::new("task")
         // Auth required for every operation.
         .permission(IsAuthenticated)
-        // /api/task/mine/  — collection scope: tasks assigned to me.
+        // /api/task/mine/  - collection scope: tasks assigned to me.
         .action(
             "mine",
             Method::GET,
@@ -198,7 +198,7 @@ fn task_resource() -> ResourceConfig {
                 Ok(json!({ "results": rows }))
             },
         )
-        // /api/task/{id}/done/  — flip status to "done".
+        // /api/task/{id}/done/  - flip status to "done".
         .action(
             "done",
             Method::POST,
@@ -241,7 +241,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .settings(settings)
         .database("default", pool)
         // Auth plugin: ships the AuthUser model and password hashing.
-        // We don't expose its routes — this is an API-only service.
+        // We don't expose its routes - this is an API-only service.
         .plugin(umbra_auth::AuthPlugin)
         // Register the bearer-token model so migrations track it.
         .model::<auth::ApiToken>()
@@ -265,7 +265,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .at("/openapi.json")
                 .title("API Service")
                 .version("1.0.0")
-                .description("Project / task tracker — bearer-token authenticated."),
+                .description("Project / task tracker - bearer-token authenticated."),
         )
         .build()?;
 
@@ -329,13 +329,13 @@ curl http://localhost:8000/openapi.json | jq '.paths | keys'
 | Workflow transition | `done` detail action sets `status = "done"` |
 | Hiding internal tables | `RestPlugin::exclude(["auth_user"])` |
 | OpenAPI document | `umbra_openapi::OpenApiPlugin::new().title(...).version(...)` |
-| Per-route security headers + CSRF defaults | On by default — see [Web → Error pages](../web/error-pages) |
+| Per-route security headers + CSRF defaults | On by default - see [Web → Error pages](../web/error-pages) |
 
 ## What it deliberately doesn't ship
 
 - **No HTML rendering.** Add `templates_dir(...)` + a handler that returns `Html<String>` if you need a docs landing.
 - **No admin UI.** Add `.plugin(umbra_admin::AdminPlugin::default())` if you want one.
-- **No background tasks / email.** Both plug in with one line — see [Batteries included](./batteries-included).
+- **No background tasks / email.** Both plug in with one line - see [Batteries included](./batteries-included).
 
 ## Next
 

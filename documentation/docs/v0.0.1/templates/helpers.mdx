@@ -5,7 +5,7 @@ sidebar_position: 2
 tags: [templates, filters, helpers, minijinja]
 ---
 
-umbra templates run on [minijinja 2](https://docs.rs/minijinja/latest/minijinja/), which ships a Jinja2-compatible filter set out of the box. umbra does not yet register any custom filters of its own — the full set you have available today is the minijinja standard library. Custom filter registration through `Plugin::on_ready` is [deferred](rendering-html#what-ships-at-v1-vs-deferred) until the admin plugin lands at M11.
+umbra templates run on [minijinja 2](https://docs.rs/minijinja/latest/minijinja/), which ships a Jinja2-compatible filter set out of the box. umbra does not yet register any custom filters of its own - the full set you have available today is the minijinja standard library. Custom filter registration through `Plugin::on_ready` is [deferred](rendering-html#what-ships-at-v1-vs-deferred) until the admin plugin lands at M11.
 
 This page catalogues the filters and globals umbra users reach for most, with examples written in the umbra template style.
 
@@ -139,7 +139,7 @@ minijinja exposes a small set of global functions callable anywhere in a templat
 
 ## The `safe` filter and autoescape
 
-umbra enables autoescape on every `.html` and `.htm` template. A value that contains `<script>` will be emitted as `&lt;script&gt;` automatically. To render pre-trusted HTML — for example, a sanitised rich-text field — pipe it through `safe`:
+umbra enables autoescape on every `.html` and `.htm` template. A value that contains `<script>` will be emitted as `&lt;script&gt;` automatically. To render pre-trusted HTML - for example, a sanitised rich-text field - pipe it through `safe`:
 
 ```html
 {# Only do this for content you have already sanitised server-side #}

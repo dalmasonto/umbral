@@ -1,6 +1,6 @@
 ---
 title: Transactions
-description: Atomic multi-statement operations — commit on Ok, roll back on Err.
+description: Atomic multi-statement operations - commit on Ok, roll back on Err.
 sidebar_position: 5
 tags: [orm, database, transactions, atomicity]
 ---
@@ -89,8 +89,8 @@ Using `on_tx(tx).create(instance)` is equivalent and preferred when you are alre
 
 The closure-based helpers (`transaction`, `transaction_sqlite`, `transaction_pg`) handle the lifecycle automatically:
 
-- Closure returns `Ok(value)` — the transaction is committed; `Ok(value)` is returned to the caller.
-- Closure returns `Err(e)` — a best-effort rollback is attempted; `Err(e)` is returned to the caller.
+- Closure returns `Ok(value)` - the transaction is committed; `Ok(value)` is returned to the caller.
+- Closure returns `Err(e)` - a best-effort rollback is attempted; `Err(e)` is returned to the caller.
 - The rollback in the `Err` path is best-effort: if the rollback itself fails (e.g. the connection was dropped), the original error is still surfaced.
 
 For manual control, use `begin_sqlite` / `begin_pg` / `begin` to open a transaction and call `tx.commit()` or `tx.rollback()` yourself:
@@ -117,7 +117,7 @@ This is the `TxFuture<'_, T, E>` type alias. If your project already uses the `f
 
 ## Pitfalls
 
-**Cross-task transactions are not supported.** The `&mut Transaction` borrow must stay on a single task. Passing it to a `tokio::spawn` closure is a compile error — and rightly so: the spawned task might outlive the transaction.
+**Cross-task transactions are not supported.** The `&mut Transaction` borrow must stay on a single task. Passing it to a `tokio::spawn` closure is a compile error - and rightly so: the spawned task might outlive the transaction.
 
 **Do not hold a transaction across a long I/O wait.** Databases lock resources for the duration of a transaction. Awaiting an external HTTP call or a slow computation inside a transaction holds those locks for its duration. If you need to do slow I/O, complete the external call before opening the transaction.
 
@@ -127,7 +127,7 @@ This is the `TxFuture<'_, T, E>` type alias. If your project already uses the `f
 
 ## See also
 
-- `arch.md` — ambient pool design and the `OnceLock`-backed global.
-- `docs/specs/03-orm-querysets.md` — the QuerySet surface.
-- `documentation/docs/v0.0.1/orm/models.mdx` — model declarations.
-- `documentation/docs/v0.0.1/backends/sqlite.mdx` — SQLite backend.
+- `arch.md` - ambient pool design and the `OnceLock`-backed global.
+- `docs/specs/03-orm-querysets.md` - the QuerySet surface.
+- `documentation/docs/v0.0.1/orm/models.mdx` - model declarations.
+- `documentation/docs/v0.0.1/backends/sqlite.mdx` - SQLite backend.

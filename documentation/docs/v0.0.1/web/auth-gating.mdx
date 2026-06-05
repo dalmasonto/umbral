@@ -6,7 +6,7 @@ icon: shield
 tags: [web, auth, middleware]
 ---
 
-Two complementary shapes for the Django `@login_required` pattern: an axum **extractor** for per-handler gating and a tower::Layer **middleware** for gating whole Router subtrees. Both ship from `umbra-auth`. Both share one `LoginRequired` config that picks between two error responses — JSON 401 for APIs, 302 redirect for HTML pages.
+Two complementary shapes for the Django `@login_required` pattern: an axum **extractor** for per-handler gating and a tower::Layer **middleware** for gating whole Router subtrees. Both ship from `umbra-auth`. Both share one `LoginRequired` config that picks between two error responses - JSON 401 for APIs, 302 redirect for HTML pages.
 
 The full reference lives under the auth plugin: [Guarding views](/docs/v0.0.1/plugins/auth#guarding-views).
 
@@ -16,12 +16,12 @@ The full reference lives under the auth plugin: [Guarding views](/docs/v0.0.1/pl
 use umbra_auth::{AuthUser, login_required::{LoggedIn, LoginRequired, login_required, login_required_html}};
 use umbra::web::{Router, get, Json, Html};
 
-// 1. Extractor — per-handler. Handler only runs on a valid session.
+// 1. Extractor - per-handler. Handler only runs on a valid session.
 async fn me(LoggedIn(user): LoggedIn<AuthUser>) -> Json<serde_json::Value> {
     Json(serde_json::json!({ "username": user.username }))
 }
 
-// 2. Layer — per-Router. Gates every route under it.
+// 2. Layer - per-Router. Gates every route under it.
 let api = Router::new()
     .route("/api/me", get(me))
     .route("/api/posts", get(list_posts))

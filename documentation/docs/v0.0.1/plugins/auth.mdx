@@ -1,6 +1,6 @@
 ---
 title: Authentication
-description: umbra-auth plugin — AuthUser model, argon2 password hashing, session login helpers, and the custom user model swap.
+description: umbra-auth plugin - AuthUser model, argon2 password hashing, session login helpers, and the custom user model swap.
 sidebar_position: 2
 tags: [auth, users, passwords, custom-user-model]
 ---
@@ -138,12 +138,12 @@ Drop `LoggedIn<U>` into a handler signature. The handler only runs when the requ
 ```rust
 use umbra_auth::{AuthUser, login_required::LoggedIn};
 
-// REST handler — 401 JSON when unauthenticated (default config).
+// REST handler - 401 JSON when unauthenticated (default config).
 async fn me(LoggedIn(user): LoggedIn<AuthUser>) -> Json<serde_json::Value> {
     Json(serde_json::json!({ "username": user.username }))
 }
 
-// HTML handler — same extractor, different rejection when the
+// HTML handler - same extractor, different rejection when the
 // LoginRequiredLayer above it has set LoginRequired::html.
 async fn dashboard(LoggedIn(user): LoggedIn<AuthUser>) -> Html<String> {
     Html(format!("<h1>Hello, {}!</h1>", user.username))
@@ -152,7 +152,7 @@ async fn dashboard(LoggedIn(user): LoggedIn<AuthUser>) -> Html<String> {
 
 `LoggedIn<U>` is generic over any `U: UserModel`, so a custom user model (see "Swapping the user model") uses `LoggedIn<TenantUser>` without extra adapters.
 
-When used without a layer, the extractor falls back to `LoginRequired::API` (401 JSON). Pair it with `LoginRequiredLayer` to get the HTML redirect shape — the layer injects its config into request extensions and the extractor picks it up automatically.
+When used without a layer, the extractor falls back to `LoginRequired::API` (401 JSON). Pair it with `LoginRequiredLayer` to get the HTML redirect shape - the layer injects its config into request extensions and the extractor picks it up automatically.
 
 ### Per-router: `LoginRequiredLayer`
 
@@ -162,19 +162,19 @@ Wrap a Router subtree with `LoginRequiredLayer` to gate every route in one call.
 use umbra_auth::login_required::{login_required, login_required_html};
 use umbra::web::{Router, get};
 
-// API subtree — 401 JSON.
+// API subtree - 401 JSON.
 let api_routes = Router::new()
     .route("/api/me", get(me))
     .route("/api/posts", get(list_posts))
     .layer(login_required());
 
-// HTML subtree — 302 to /login?next=<uri>.
+// HTML subtree - 302 to /login?next=<uri>.
 let app_routes = Router::new()
     .route("/dashboard", get(dashboard))
     .route("/settings", get(settings_page))
     .layer(login_required_html("/login"));
 
-// Open routes — no layer.
+// Open routes - no layer.
 let public_routes = Router::new()
     .route("/", get(home))
     .route("/login", get(login_page));
@@ -218,9 +218,9 @@ let protected = Router::new()
     .layer(login_required_html("/login"));
 ```
 
-The layer checks the session once at the middleware boundary; the extractor hydrates the full user struct in the handler. No double database round-trip — the layer only reads the `session` table; the extractor reads both `session` and `auth_user` (or your custom user table).
+The layer checks the session once at the middleware boundary; the extractor hydrates the full user struct in the handler. No double database round-trip - the layer only reads the `session` table; the extractor reads both `session` and `auth_user` (or your custom user table).
 
-### `API` vs `html(...)` — which to use
+### `API` vs `html(...)` - which to use
 
 | Shape | When to reach for it |
 |---|---|
@@ -231,8 +231,8 @@ Mix both in one app: wrap the `/api/*` subtree with `login_required()` and the `
 
 ### See also
 
-- `plugins/umbra-auth/src/login_required.rs` — implementation with inline docs.
-- [Sessions](./sessions) — how the session cookie is created and how `current_user` works.
+- `plugins/umbra-auth/src/login_required.rs` - implementation with inline docs.
+- [Sessions](./sessions) - how the session cookie is created and how `current_user` works.
 
 ## Swapping the user model
 
@@ -312,7 +312,7 @@ impl UserModel for EmailUser {
 }
 ```
 
-Then `authenticate::<EmailUser>("alice@example.com", "s3cret").await?` looks the row up by `email`. This is the same role Django's `USERNAME_FIELD` setting plays — except in umbra it's a trait method on your struct, not a separate config string.
+Then `authenticate::<EmailUser>("alice@example.com", "s3cret").await?` looks the row up by `email`. This is the same role Django's `USERNAME_FIELD` setting plays - except in umbra it's a trait method on your struct, not a separate config string.
 
 The framework never assumes your handle column is called `username`. The only requirement: a unique column the user supplies at login time, and you point `username()` at it.
 
@@ -320,7 +320,7 @@ The framework never assumes your handle column is called `username`. The only re
 
 `UserModel::id()` returns `i64` today. The framework's stored-id surfaces match: `umbra-sessions` writes `Option<i64>`, `Identity` from `umbra-rest` carries `user_id: i64`. A custom user model with a `uuid::Uuid` PK isn't fully supported through this trait yet; a follow-up generalises `id()` to an associated `Pk` type.
 
-In the meantime, `umbra-permissions` is PK-agnostic — its `user_id` columns are `TEXT`, and `has_perm` / `user_perms` take `&str`. Callers stringify whatever their user PK is at the perm-call boundary:
+In the meantime, `umbra-permissions` is PK-agnostic - its `user_id` columns are `TEXT`, and `has_perm` / `user_perms` take `&str`. Callers stringify whatever their user PK is at the perm-call boundary:
 
 ```rust
 // i64 PK (today's AuthUser):

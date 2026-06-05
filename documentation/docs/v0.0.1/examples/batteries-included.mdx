@@ -1,6 +1,6 @@
 ---
 title: Batteries included
-description: Everything wired — ORM, REST + OpenAPI, admin, auth, sessions, email, tasks. The kitchen-sink reference.
+description: Everything wired - ORM, REST + OpenAPI, admin, auth, sessions, email, tasks. The kitchen-sink reference.
 sidebar_position: 2
 icon: package-2
 tags: [examples, full-stack]
@@ -50,10 +50,10 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ```
 
-## `src/blog.rs` — the app's domain plugin
+## `src/blog.rs` - the app's domain plugin
 
 ```rust
-//! The blog plugin — owns the Post model, mounts /blog routes,
+//! The blog plugin - owns the Post model, mounts /blog routes,
 //! bundles REST customisation (hide/transform/computed) and a
 //! DRF-style @action endpoint for publishing.
 
@@ -99,7 +99,7 @@ async fn post_detail(Path(id): Path<i64>) -> Result<Json<Post>, (StatusCode, Str
     }
 }
 
-/// Per-table REST config — bundled with the plugin so main.rs doesn't
+/// Per-table REST config - bundled with the plugin so main.rs doesn't
 /// thread customisation per-table.
 pub fn rest_resource() -> ResourceConfig {
     ResourceConfig::new("post")
@@ -215,7 +215,7 @@ async fn me(OptionalUser(maybe): OptionalUser) -> Html<String> {
     }
 }
 
-/// Background task — would normally live in a `tasks.rs` module.
+/// Background task - would normally live in a `tasks.rs` module.
 #[umbra_tasks::task]
 async fn send_welcome(email: String) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let backend = umbra_email::ConsoleBackend::default();
@@ -292,14 +292,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let addr = "127.0.0.1:3000".parse::<std::net::SocketAddr>()?;
     println!("listening on http://{addr}");
-    println!("  /                       — blog (HTML)");
-    println!("  /api/post/              — REST CRUD");
-    println!("  /api/post/{{id}}/publish/  — @action publish");
-    println!("  /admin/                 — admin UI (staff only)");
-    println!("  /docs                   — OpenAPI / Swagger UI");
-    println!("  /openapi.json           — OpenAPI schema");
-    println!("  /me                     — request.user demo");
-    println!("  /login · /logout        — auth");
+    println!("  /                       - blog (HTML)");
+    println!("  /api/post/              - REST CRUD");
+    println!("  /api/post/{{id}}/publish/  - @action publish");
+    println!("  /admin/                 - admin UI (staff only)");
+    println!("  /docs                   - OpenAPI / Swagger UI");
+    println!("  /openapi.json           - OpenAPI schema");
+    println!("  /me                     - request.user demo");
+    println!("  /login · /logout        - auth");
 
     app.serve(addr).await?;
     Ok(())

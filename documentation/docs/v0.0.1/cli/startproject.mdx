@@ -76,7 +76,7 @@ cargo run -- migrate   # apply auth, sessions, and Post migrations
 cargo run -- serve     # boot at http://127.0.0.1:8000
 ```
 
-What you get is a **complete blog-style demo** — not a hello-world skeleton.
+What you get is a **complete blog-style demo** - not a hello-world skeleton.
 The first `cargo run -- serve` boots into a working application that exercises
 every major umbra surface.
 
@@ -158,7 +158,7 @@ a build step. Replace the CDN tag with a compiled stylesheet for production.
 
 `umbra.toml` holds configuration that is safe to commit (bind address, dev
 environment flag, dev secret key). `.env` holds the same values but is listed in
-`.gitignore` — it is the working override file you never check in. In production,
+`.gitignore` - it is the working override file you never check in. In production,
 set `UMBRA_SECRET_KEY`, `UMBRA_DATABASE_URL`, and `UMBRA_ENVIRONMENT=prod` in
 your environment directly.
 
@@ -233,7 +233,7 @@ Pick a name that names your domain (`blog`, `billing`, `inventory`) rather than 
 
 ## startplugin
 
-`startapp` is the minimal stub. `startplugin` is the richer version — same destination (`plugins/<name>/`), but the generated scaffold is shaped for a plugin you intend to publish or share across projects:
+`startapp` is the minimal stub. `startplugin` is the richer version - same destination (`plugins/<name>/`), but the generated scaffold is shaped for a plugin you intend to publish or share across projects:
 
 ```bash
 umbra startplugin widgets
@@ -251,7 +251,7 @@ plugins/widgets/
     └── handlers.rs         # one example axum handler
 ```
 
-The generated `src/lib.rs` is the full Plugin impl, not the stub — `models()` returns the example model's meta so the migration engine picks it up, `routes()` registers the example handler at `/<name>/hello`, `on_ready()` is wired and ready for setup work.
+The generated `src/lib.rs` is the full Plugin impl, not the stub - `models()` returns the example model's meta so the migration engine picks it up, `routes()` registers the example handler at `/<name>/hello`, `on_ready()` is wired and ready for setup work.
 
 The generated `src/models.rs` shows the field-type attributes most plugin authors hit on day one:
 
@@ -287,7 +287,7 @@ After scaffolding, the printed next-steps walk you through wiring it into your p
 |---|---|
 | An internal module that just needs a `Plugin` seam | `startapp` (one `lib.rs`, easy to read in one sitting) |
 | A reusable plugin you'll share or publish | `startplugin` (separate `models.rs` / `handlers.rs`, README, real deps) |
-| You're learning the Plugin trait surface | `startplugin` — seeing the full impl is more useful than a stub |
+| You're learning the Plugin trait surface | `startplugin` - seeing the full impl is more useful than a stub |
 
 Same reserved-name list and same already-exists guard for both.
 

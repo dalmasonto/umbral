@@ -39,11 +39,11 @@ Plus one framework-managed M2M junction:
 
 | Junction table | Backing field |
 |---|---|
-| `permissions_group_permissions` | `Group.permissions: M2M<Permission>` — the typed M2M replaces the old `GroupPermission` model. |
+| `permissions_group_permissions` | `Group.permissions: M2M<Permission>` - the typed M2M replaces the old `GroupPermission` model. |
 
 ### Why `user_id` is `String`, not `i64` or `ForeignKey<U>`
 
-The plugin doesn't own a `User` struct. Different apps wire different user models — some with `i64` PKs, some with `uuid::Uuid`, some with slug-style `String`. Storing the column as `TEXT` (max 64 chars — covers UUIDs at 36 and i64-as-string at 20) lets *any* PK type round-trip. The trade-off vs `ForeignKey<U>`: deleting a user does NOT cascade-delete their `UserGroup`/`UserPermission` rows. Apps that need that guarantee add a per-user cleanup hook in their user-delete path.
+The plugin doesn't own a `User` struct. Different apps wire different user models - some with `i64` PKs, some with `uuid::Uuid`, some with slug-style `String`. Storing the column as `TEXT` (max 64 chars - covers UUIDs at 36 and i64-as-string at 20) lets *any* PK type round-trip. The trade-off vs `ForeignKey<U>`: deleting a user does NOT cascade-delete their `UserGroup`/`UserPermission` rows. Apps that need that guarantee add a per-user cleanup hook in their user-delete path.
 
 ## Checking permissions
 
@@ -52,7 +52,7 @@ use umbra_permissions::{has_perm, user_perms};
 
 // One specific permission. `&user.id().to_string()` for an i64 PK;
 // for a Uuid PK the same `.to_string()` gives the canonical
-// hyphenated form. The perm layer takes `&str` — pass whatever
+// hyphenated form. The perm layer takes `&str` - pass whatever
 // stringified shape your user PK lands in.
 if !has_perm(&user.id().to_string(), "blog.publish_post").await? {
     return Err((StatusCode::FORBIDDEN, "missing publish permission").into());
@@ -119,27 +119,27 @@ Permission::objects().on(&pool).create(Permission {
 
 Putting `has_perm` on the [`UserModel`](/docs/v0.0.1/plugins/auth#swapping-the-user-model) trait would require `umbra-auth` to call into `umbra-permissions` (to query permissions) *and* `umbra-permissions` to read `UserModel` from `umbra-auth` (for the receiver type). That's a circular crate dependency Cargo refuses to compile.
 
-The clean resolution: `has_perm(user_id: &str, codename: &str)` is a free function that takes the stringified user ID. The dependency arrow stays one-way (`umbra-permissions` → `umbra-auth` would be needed if at all, but isn't). Apps using a [custom user model](/docs/v0.0.1/plugins/auth#swapping-the-user-model) work without adapters — including ones with UUID, slug, or any other PK type, because the `&str` parameter accepts whatever stringified form the caller passes.
+The clean resolution: `has_perm(user_id: &str, codename: &str)` is a free function that takes the stringified user ID. The dependency arrow stays one-way (`umbra-permissions` → `umbra-auth` would be needed if at all, but isn't). Apps using a [custom user model](/docs/v0.0.1/plugins/auth#swapping-the-user-model) work without adapters - including ones with UUID, slug, or any other PK type, because the `&str` parameter accepts whatever stringified form the caller passes.
 
 ### Three different M2M shapes, three different reasons
 
-- **`Group.permissions: M2M<Permission>`** — a framework-managed M2M field on the typed `Group` model. The migration engine auto-generates the `permissions_group_permissions` junction (with the right typed PK columns for Group's `i64` PK and Permission's `String` codename PK); the macro emits typed helpers `Group::permissions_contains_any` / `Group::permissions_union_for` so application code never has to spell the junction name. This is what the perm-query layer's group-mediated check rides on.
-- **`UserGroup` / `UserPermission`** — explicit join models, kept because the plugin is user-agnostic (no User struct to attach `M2M<...>` to) and `user_id` needs to stay a string to round-trip any PK type. `ForeignKey<Group>` / `ForeignKey<Permission>` on the join row sides carry their typed FK guarantees.
+- **`Group.permissions: M2M<Permission>`** - a framework-managed M2M field on the typed `Group` model. The migration engine auto-generates the `permissions_group_permissions` junction (with the right typed PK columns for Group's `i64` PK and Permission's `String` codename PK); the macro emits typed helpers `Group::permissions_contains_any` / `Group::permissions_union_for` so application code never has to spell the junction name. This is what the perm-query layer's group-mediated check rides on.
+- **`UserGroup` / `UserPermission`** - explicit join models, kept because the plugin is user-agnostic (no User struct to attach `M2M<...>` to) and `user_id` needs to stay a string to round-trip any PK type. `ForeignKey<Group>` / `ForeignKey<Permission>` on the join row sides carry their typed FK guarantees.
 
 ## Gating routes with `permission_required`
 
-Mount the layer on any Router subtree to require a specific permission for every route inside it. The layer resolves the session cookie, looks up the user id, and calls `has_perm` — no handler-level boilerplate.
+Mount the layer on any Router subtree to require a specific permission for every route inside it. The layer resolves the session cookie, looks up the user id, and calls `has_perm` - no handler-level boilerplate.
 
 ```rust
 use umbra::prelude::*;
 use umbra_permissions::{permission_required, permission_required_html};
 
-// REST subtree — 401 JSON if not logged in, 403 JSON if logged-in but lacks perm.
+// REST subtree - 401 JSON if not logged in, 403 JSON if logged-in but lacks perm.
 let api = Router::new()
     .route("/api/posts/{id}/publish", post(publish_handler))
     .layer(permission_required("blog.publish_post"));
 
-// HTML subtree — 302 to /login?next=... if not logged in; 403 JSON on no-perm.
+// HTML subtree - 302 to /login?next=... if not logged in; 403 JSON on no-perm.
 let admin = Router::new()
     .route("/admin/posts/{id}/publish", post(publish_handler))
     .layer(permission_required_html("blog.publish_post", "/login"));
@@ -147,7 +147,7 @@ let admin = Router::new()
 
 ### Superuser bypass
 
-When the layer fires, it first checks whether the row in `auth_user` has `is_superuser = 1` — superusers pass every `permission_required` check without consulting the perm tables. This is best-effort and silent: custom user models that don't carry an `is_superuser` column simply never trigger the bypass. If you want explicit superuser-only gates instead, use a separate `is_superuser_required()` middleware (not shipped at v1; the convention is to add a `LoggedIn<U>` extractor inside the handler that returns 403 when `!user.is_superuser()`).
+When the layer fires, it first checks whether the row in `auth_user` has `is_superuser = 1` - superusers pass every `permission_required` check without consulting the perm tables. This is best-effort and silent: custom user models that don't carry an `is_superuser` column simply never trigger the bypass. If you want explicit superuser-only gates instead, use a separate `is_superuser_required()` middleware (not shipped at v1; the convention is to add a `LoggedIn<U>` extractor inside the handler that returns 403 when `!user.is_superuser()`).
 
 ### Composition with `login_required`
 
@@ -162,14 +162,14 @@ let gated = Router::new()
     .layer(login_required_html("/login"));
 ```
 
-In practice the single-layer form `permission_required_html(perm, login_url)` is usually enough — it captures both concerns in one place.
+In practice the single-layer form `permission_required_html(perm, login_url)` is usually enough - it captures both concerns in one place.
 
 ## What's not shipped at v0.0.1
 
 - Built-in admin UI for editing group → permission and user → group assignments. The six RBAC tables (`auth_group`, `auth_permission`, `auth_contenttype`, `auth_grouppermission`, `auth_usergroup`, `auth_userpermission`) are visible to the admin as standard models; an assignment-matrix UI (Django's "permission widget") lands in a follow-up.
-- `Meta.permissions = [...]` syntax for declaring custom perms on a model — custom perms ship via direct INSERT in a data migration today.
-- RLS predicate injection from permissions — that's `umbra-rls`'s responsibility.
-- Object-level permissions (per-row grants) — Django needs `django-guardian` for this; same shape would land as a follow-up crate.
+- `Meta.permissions = [...]` syntax for declaring custom perms on a model - custom perms ship via direct INSERT in a data migration today.
+- RLS predicate injection from permissions - that's `umbra-rls`'s responsibility.
+- Object-level permissions (per-row grants) - Django needs `django-guardian` for this; same shape would land as a follow-up crate.
 
 ## See also
 

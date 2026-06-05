@@ -80,7 +80,7 @@ against an in-memory pool that vanishes when the process exits. Set
 the URL once in `umbra.toml` or your shell, and forget about it.
 </Callout>
 
-## serve — boot the HTTP server
+## serve - boot the HTTP server
 
 Default subcommand. If you `cargo run` with no subcommand, this is what fires.
 
@@ -108,7 +108,7 @@ UMBRA_BIND_ADDR=0.0.0.0:8080 cargo run -- serve
 
 Precedence: `--addr` flag wins over `UMBRA_BIND_ADDR` wins over `umbra.toml`'s `bind_addr` wins over the built-in default.
 
-## dev — auto-reload loop for development
+## dev - auto-reload loop for development
 
 `dev` wraps [`cargo-watch`](https://crates.io/crates/cargo-watch) to rebuild and restart the binary every time you save a Rust file. Templates already hot-reload in-process when `settings.environment == Dev`, so this is specifically for the `.rs` edit → recompile → restart cycle.
 
@@ -133,18 +133,18 @@ cargo run -- dev -- serve --addr 0.0.0.0:8080
 
 | Flag | Default | Effect |
 |---|---|---|
-| `-w <path>` / `--watch <path>` | cargo-watch's own (`src/`, `Cargo.toml`) | Add a path to the watch list. Repeat the flag for multiple paths — `-w plugins/ -w migrations/`. Hyphenated paths like `--watch=plugins/` also work. |
+| `-w <path>` / `--watch <path>` | cargo-watch's own (`src/`, `Cargo.toml`) | Add a path to the watch list. Repeat the flag for multiple paths - `-w plugins/ -w migrations/`. Hyphenated paths like `--watch=plugins/` also work. |
 | `-- <run_args>...` | `cargo run` with no args | Pass-through args for the inner cargo command. Everything after `--` is forwarded to `cargo run --`. |
 
-Without `cargo-watch` installed, `umbra dev` prints the install hint and exits 1 — no cryptic failure, no half-started server.
+Without `cargo-watch` installed, `umbra dev` prints the install hint and exits 1 - no cryptic failure, no half-started server.
 
 <Callout type="info">
-**You don't need `dev` for template edits.** When `settings.environment == Dev`, the templates engine re-reads `.html` files from disk on every render. Save a template, refresh the browser, see the change — no restart, no `dev` subcommand. `dev` is only for Rust-source edits that need a recompile.
+**You don't need `dev` for template edits.** When `settings.environment == Dev`, the templates engine re-reads `.html` files from disk on every render. Save a template, refresh the browser, see the change - no restart, no `dev` subcommand. `dev` is only for Rust-source edits that need a recompile.
 </Callout>
 
 The fallback if you don't want another global tool: leave `cargo run` running in a terminal and `Ctrl-C + arrow-up + enter` after each `.rs` edit. The keystrokes are what `dev` saves you, nothing more.
 
-## makemigrations — generate migration files
+## makemigrations - generate migration files
 
 Diffs the live model registry against the latest snapshot on disk and writes a new migration file per plugin that has changes.
 
@@ -160,7 +160,7 @@ cargo run -- makemigrations
 
 No flags. The output is one `Wrote <path>` line per plugin with changes. Apply the new files with `migrate`.
 
-## migrate — apply pending migrations
+## migrate - apply pending migrations
 
 ```bash
 # Everyday: apply everything pending.
@@ -175,14 +175,14 @@ cargo run -- migrate --fake app/0003_add_post_tag
 
 # Skip the drift error and apply only the pending ones (a
 # teammate deleted a migration file you've already applied
-# locally — proceed anyway).
+# locally - proceed anyway).
 cargo run -- migrate --allow-drift
 ```
 
 | Flag | Default | Effect |
 |---|---|---|
 | *(none)* | apply pending | Apply every pending migration. Errors on drift (applied-but-missing-on-disk). |
-| `--fake <plugin/name>` | — | Mark one migration as applied in the tracking table WITHOUT running its SQL. Format: `app/0001_create_post`. Recovery path when the schema already exists outside umbra's control. |
+| `--fake <plugin/name>` | - | Mark one migration as applied in the tracking table WITHOUT running its SQL. Format: `app/0001_create_post`. Recovery path when the schema already exists outside umbra's control. |
 | `--fake-initial` | off | Per plugin: if the `0001_*` migration's target tables already exist in the database, mark it applied without running SQL. Use when onboarding a database bootstrapped by hand or by another tool. |
 | `--allow-drift` | off | Proceed even when some applied migrations are missing from disk. Logs a warning per missing file and applies the genuinely-pending ones. |
 
@@ -198,20 +198,20 @@ Prints each migration's state, grouped by plugin:
 
 ```
 # plugin: app
-[X] app/0001_create_post    — applied
-[ ] app/0002_add_post_slug  — pending
-[!] app/0003_add_post_tag   — applied but file missing on disk (drift)
-[?] app/0004_add_post_body  — on disk but out of order
+[X] app/0001_create_post    - applied
+[ ] app/0002_add_post_slug  - pending
+[!] app/0003_add_post_tag   - applied but file missing on disk (drift)
+[?] app/0004_add_post_body  - on disk but out of order
 ```
 
 | Marker | State |
 |---|---|
-| `[X]` | Applied — in the tracking table and the file exists on disk. |
-| `[ ]` | Pending — on disk, newer than the last applied migration. |
-| `[!]` | Applied but missing on disk — tracking table is ahead of VCS. Critical drift. |
-| `[?]` | Out of order — on disk, not applied, but older than the last applied migration. Warning only. |
+| `[X]` | Applied - in the tracking table and the file exists on disk. |
+| `[ ]` | Pending - on disk, newer than the last applied migration. |
+| `[!]` | Applied but missing on disk - tracking table is ahead of VCS. Critical drift. |
+| `[?]` | Out of order - on disk, not applied, but older than the last applied migration. Warning only. |
 
-## inspectdb — generate models from an existing database
+## inspectdb - generate models from an existing database
 
 The porting on-ramp. Reads the connected database's schema and writes a `models.rs` + a `0001_initial` migration that captures it.
 
@@ -228,12 +228,12 @@ UMBRA_DATABASE_URL=postgres://user:pass@localhost/legacy \
 
 | Flag | Default | Effect |
 |---|---|---|
-| `--output <path>` | — (required) | Where `models.rs` and `migrations/app/0001_initial.json` land. The directory is created if it doesn't exist. |
-| `--mark-applied` | off | Record `0001_initial` in the `umbra_migrations` tracking table without running its SQL. Pass when the target DB already holds the introspected tables — without this flag, the next `migrate` would try to `CREATE TABLE` over them. |
+| `--output <path>` | - (required) | Where `models.rs` and `migrations/app/0001_initial.json` land. The directory is created if it doesn't exist. |
+| `--mark-applied` | off | Record `0001_initial` in the `umbra_migrations` tracking table without running its SQL. Pass when the target DB already holds the introspected tables - without this flag, the next `migrate` would try to `CREATE TABLE` over them. |
 
 Full porting workflow in [the inspectdb guide](/docs/v0.0.1/migrations/inspectdb).
 
-## dumpdata / loaddata — JSON snapshot and restore
+## dumpdata / loaddata - JSON snapshot and restore
 
 ```bash
 # Snapshot every registered model's rows to one JSON envelope
@@ -245,16 +245,16 @@ cargo run -- migrate
 cargo run -- loaddata backup.json
 ```
 
-`dumpdata` walks the registered models in topological order so foreign-key parents land before children; `loaddata` inserts in the same order. The envelope is portable across SQLite and Postgres — dump from one, load into the other.
+`dumpdata` walks the registered models in topological order so foreign-key parents land before children; `loaddata` inserts in the same order. The envelope is portable across SQLite and Postgres - dump from one, load into the other.
 
 | Command | Flag / Arg | Default | Effect |
 |---|---|---|---|
-| `dumpdata` | `--output <path>` | — (required) | Where the JSON envelope is written. Existing file is overwritten. |
-| `loaddata` | `<input>` (positional) | — (required) | Path to a `dumpdata` JSON envelope. |
+| `dumpdata` | `--output <path>` | - (required) | Where the JSON envelope is written. Existing file is overwritten. |
+| `loaddata` | `<input>` (positional) | - (required) | Path to a `dumpdata` JSON envelope. |
 
 Use case: the upgrade-safety snapshot. Dump before a risky migration; if the migration goes sideways, drop the DB, `migrate` from scratch, `loaddata` the snapshot.
 
-## createsuperuser — `umbra-auth`
+## createsuperuser - `umbra-auth`
 
 Interactive prompt for username / email / password; creates a row in `auth_user` with `is_staff = is_superuser = true` and the password argon2id-hashed.
 
@@ -277,11 +277,11 @@ UMBRA_SUPERUSER_PASSWORD='strong-password' \
 | `--email <addr>` | non-interactive | Skip the email prompt; use this value. |
 | `--noinput` | non-interactive | No prompts at all. Username, email, and `UMBRA_SUPERUSER_PASSWORD` must all be set or the command errors. |
 
-Password is read from `UMBRA_SUPERUSER_PASSWORD` in `--noinput` mode (never via a flag — flags land in shell history).
+Password is read from `UMBRA_SUPERUSER_PASSWORD` in `--noinput` mode (never via a flag - flags land in shell history).
 
-## tasks-worker — `umbra-tasks`
+## tasks-worker - `umbra-tasks`
 
-Drain the task queue. Without flags, loops forever. With `--once`, processes one batch and exits — cron-friendly.
+Drain the task queue. Without flags, loops forever. With `--once`, processes one batch and exits - cron-friendly.
 
 ```bash
 # Long-running worker (run under systemd / Docker)

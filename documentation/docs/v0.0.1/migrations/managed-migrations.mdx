@@ -56,7 +56,7 @@ Diff every registered model against its latest snapshot and write one new file p
 cargo run -- makemigrations
 ```
 
-No flags. Returns `no changes detected` and exit 0 when every plugin's diff is empty. Output paths land at `migrations/<plugin>/<sequence>_<suffix>.json` — the sequence is zero-padded so lexical sort matches the apply order.
+No flags. Returns `no changes detected` and exit 0 when every plugin's diff is empty. Output paths land at `migrations/<plugin>/<sequence>_<suffix>.json` - the sequence is zero-padded so lexical sort matches the apply order.
 
 ### `migrate`
 
@@ -73,7 +73,7 @@ cargo run -- migrate --fake-initial                  # for each plugin, fake-app
 |---|---|---|
 | `--allow-drift` | Logs each missing-on-disk migration as a warning and proceeds. The orphan rows stay in `umbra_migrations`. | You deleted a migration file and the schema change it represented is already in the DB. |
 | `--fake <plugin>/<name>` | Inserts a tracking row for the named migration without executing its SQL. | A schema change was applied out-of-band (psql, raw script) and you're reconciling state. |
-| `--fake-initial` | For every plugin, if the tables the `0001_*` migration would create already exist, mark it applied without SQL. | Adopting a legacy database — paired with [`inspectdb`](./inspectdb). |
+| `--fake-initial` | For every plugin, if the tables the `0001_*` migration would create already exist, mark it applied without SQL. | Adopting a legacy database - paired with [`inspectdb`](./inspectdb). |
 
 Full drift-recovery walk-throughs (lost-file scenario, legacy-database scenario, the four `[X]` / `[ ]` / `[!]` / `[?]` state markers) live on the [Recovering from migration drift](./migration-drift) page.
 
@@ -104,7 +104,7 @@ diff produces the right operation:
 - New field → `AddColumn`
 - Removed field → `DropColumn`
 - Nullable flip → `AlterColumn` (rendered via the SQLite table-recreation dance:
-  CREATE _umbra_new, INSERT SELECT, DROP, RENAME — Postgres uses native
+  CREATE _umbra_new, INSERT SELECT, DROP, RENAME - Postgres uses native
   `ALTER COLUMN ... SET NOT NULL` / `DROP NOT NULL`).
 - **Safe type change** → `AlterColumn`. The engine keeps a whitelist of
   data-preserving casts:
