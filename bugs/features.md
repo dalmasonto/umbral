@@ -84,10 +84,8 @@ These are the QuerySet features and model-level capabilities that Django develop
     >
     > How: Add `distinct()` (no args → `SELECT DISTINCT`) and `distinct_on(&[&str])` (Postgres only → `SELECT DISTINCT ON (...)`). Gate `distinct_on` behind a runtime backend check that errors on SQLite. Small change; low priority because it has workarounds.
 
-18. [ ] **`select_related()` — FK prefetch via JOIN** 🔴 High
-    > Why: Currently every list view that shows an FK's resolved value is an N+1. The `resolved` slot exists on `ForeignKey<T>` but nothing populates it in the QuerySet fetch path. This is the most visible ORM performance gap.
-    >
-    > How: `QuerySet::select_related("author")` adds the target table to the JOIN clause (`INNER JOIN "auth_user" ON "post"."author" = "auth_user"."id"`). In `HydrateRelated`, after the main `fetch`, walk the joined rows and populate `resolved` on every `ForeignKey` field that was requested. Requires teaching the macro's `FromRow` impl to read the joined columns (prefixed with the target table name). This is a medium-sized change but well-scoped.
+18. [x] **`select_related()` — FK prefetch via JOIN** 🔴 High
+       — Already shipped. `QuerySet::select_related(field)` and `.select_related_many(&[...])` accumulate FK names; the `fetch` / `first` terminals run one batched `SELECT ... WHERE id IN (...)` per FK after the main query and call `HydrateRelated::hydrate_fk` to populate `ForeignKey<U>.resolved` on every row. Lives in `crates/umbra-core/src/orm/queryset.rs::hydrate_select_related`. Tests in `crates/umbra-core/tests/select_related.rs` cover single FK, multi-FK, serde JSON projection (`post["author"]` renders as the full object after select_related and stays an integer without it), and template-context access. **Deferred**: nested traversal (`"author__manager"`) — current implementation supports one-hop FKs only; chains require successive `.select_related` on the resolved row.
 
 19. [ ] **`prefetch_related()` — M2M and reverse-FK batch loading** 🟡 Medium
     > Why: `select_related` handles FKs via JOIN; `prefetch_related` handles M2M and reverse-FKs via two queries (parents, then children) stitched in Rust. Since M2M was just shipped, the junction-table query is possible but the QuerySet terminal doesn't know how to batch-resolve related collections yet.

@@ -652,6 +652,95 @@ impl<T: Model> QuerySet<T> {
     // wrap their callers or assert a row count via `.count()` first.
     // =====================================================================
 
+    /// Project the query to only the named columns, returning a
+    /// vector of `serde_json::Value::Object` rows instead of typed
+    /// `T` instances. Mirrors Django's `QuerySet.values('id', 'title')`.
+    ///
+    /// Use when a list view only needs a few fields — skipping the
+    /// 50KB body BLOB on every Post saves both memory and the
+    /// FromRow hydration overhead. Each returned `Value` is an
+    /// object keyed by the requested column names, with values
+    /// typed per the column's declared SqlType (integers stay
+    /// integers, booleans stay booleans, dates render as ISO
+    /// strings).
+    ///
+    /// Unknown column names fail loudly with
+    /// `sqlx::Error::Protocol` naming the offending column.
+    /// Composes with `filter`, `exclude`, `order_by`, `limit`,
+    /// `offset` exactly the way the typed terminals do.
+    ///
+    /// ```rust,ignore
+    /// let rows = Post::objects()
+    ///     .filter(post::PUBLISHED.eq(true))
+    ///     .order_by(post::ID.desc())
+    ///     .values(&["id", "title"])
+    ///     .await?;
+    /// // [ { "id": 3, "title": "c" }, ... ]
+    /// ```
+    pub async fn values(self, columns: &[&str]) -> Result<Vec<JsonValue>, sqlx::Error> {
+        let meta = crate::migrate::ModelMeta::for_::<T>();
+        // Resolve every requested name against the model's metadata
+        // up front so an unknown column errors before any SQL runs.
+        let mut chosen: Vec<&crate::migrate::Column> = Vec::with_capacity(columns.len());
+        for name in columns {
+            let col = meta
+                .fields
+                .iter()
+                .find(|c| c.name == *name)
+                .ok_or_else(|| {
+                    sqlx::Error::Protocol(format!(
+                        "umbra::orm::values: unknown column `{}` on model `{}`",
+                        name,
+                        T::NAME
+                    ))
+                })?;
+            chosen.push(col);
+        }
+        let pool = resolve_pool::<T>(self.explicit_pool.clone());
+        let backend = pool.backend_name();
+        // Build the base query (predicates + ORDER BY) then swap its
+        // SELECT list for only the requested columns.
+        let mut q = self.build_query_for(backend);
+        q.clear_selects();
+        for col in &chosen {
+            q.column(Alias::new(col.name.as_str()));
+        }
+        match pool {
+            DbPool::Sqlite(pool) => {
+                let (sql, vals) = q.build_sqlx(SqliteQueryBuilder);
+                let rows = sqlx::query_with::<sqlx::Sqlite, _>(&sql, vals)
+                    .fetch_all(&pool)
+                    .await?;
+                let mut out: Vec<JsonValue> = Vec::with_capacity(rows.len());
+                for row in &rows {
+                    let mut obj = serde_json::Map::with_capacity(chosen.len());
+                    for col in &chosen {
+                        let v = crate::orm::dynamic::decode_to_json(row, col)?;
+                        obj.insert(col.name.clone(), v);
+                    }
+                    out.push(JsonValue::Object(obj));
+                }
+                Ok(out)
+            }
+            DbPool::Postgres(pool) => {
+                let (sql, vals) = q.build_sqlx(PostgresQueryBuilder);
+                let rows = sqlx::query_with::<sqlx::Postgres, _>(&sql, vals)
+                    .fetch_all(&pool)
+                    .await?;
+                let mut out: Vec<JsonValue> = Vec::with_capacity(rows.len());
+                for row in &rows {
+                    let mut obj = serde_json::Map::with_capacity(chosen.len());
+                    for col in &chosen {
+                        let v = crate::orm::dynamic::decode_pg_to_json(row, col)?;
+                        obj.insert(col.name.clone(), v);
+                    }
+                    out.push(JsonValue::Object(obj));
+                }
+                Ok(out)
+            }
+        }
+    }
+
     /// `DELETE FROM table WHERE <predicates>`. Returns the number of
     /// rows deleted. With no `.filter` calls, deletes every row.
     ///
