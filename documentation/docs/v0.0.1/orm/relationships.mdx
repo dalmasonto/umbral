@@ -292,3 +292,63 @@ PostTag::objects().create(PostTag {
 ```
 
 The `umbra-permissions` plugin uses this exact pattern for its `GroupPermission`, `UserGroup`, and `UserPermission` join tables - they are good reference implementations. M2M first-class support (a `ManyToMany<T>` field type, reverse accessors, `prefetch_related`) is tracked in `docs/specs/relationships.md`.
+
+## Reverse FK accessors
+
+For every `ForeignKey<Parent>` field on a derived Child, the macro emits a method on the Parent type:
+
+```rust
+#[derive(umbra::orm::Model)]
+#[umbra(table = "user")]
+pub struct User { pub id: i64, pub name: String }
+
+#[derive(umbra::orm::Model)]
+#[umbra(table = "comment")]
+pub struct Comment {
+    pub id: i64,
+    pub body: String,
+    pub author: ForeignKey<User>,
+}
+
+// Macro emits: impl User { pub fn comment_set(&self) -> QuerySet<Comment> }
+let comments: Vec<Comment> = alice.comment_set().fetch().await?;
+
+// Compose with the rest of the QuerySet API:
+let recent = alice
+    .comment_set()
+    .filter(comment::ID.gt(last_seen))
+    .order_by(comment::ID.desc())
+    .limit(10)
+    .fetch()
+    .await?;
+```
+
+The accessor name is `<snake_case(Child)>_set`. When one Child has **multiple** FKs to the same Parent (e.g. `author: FK<User>` AND `reviewer: FK<User>`), the accessor names disambiguate to `<child>_via_<field>_set` (`user.post_via_author_set()`, `user.post_via_reviewer_set()`).
+
+Limitations: parent type must be local (Rust's orphan rule on inherent impls); parent's primary-key type must implement `Into<sea_query::Value>` (every built-in PK type does).
+
+## prefetch_related for M2M batching
+
+The M2M counterpart of `select_related` for FKs. After the main query returns N parent rows, `prefetch_related("tags")` issues **one** batched join through the junction table for all parents, groups results by `parent_id`, and populates each parent's `M2M.resolved` slot.
+
+```rust
+let groups: Vec<Group> = Group::objects()
+    .filter(group::ID.gt(0))
+    .prefetch_related("tags")
+    .fetch()
+    .await?;
+
+for g in &groups {
+    // .resolved() returns Some(&[Tag]) after prefetch — even an empty
+    // slice for parents with no children, never None.
+    for tag in g.tags.resolved().unwrap_or_default() {
+        println!("{}: {}", g.name, tag.label);
+    }
+}
+```
+
+Without `.prefetch_related(...)`, `M2M.resolved()` stays `None` and accessing the relation would issue a per-parent fetch (the N+1 path).
+
+`.prefetch_related_many(&["tags", "categories"])` batches several relations at once.
+
+v1 scope: M2M only (`prefetch_related("comment_set")` for reverse-FK collections is a deferred follow-up); i64 parent PK only (matches the rest of the M2M plumbing).

@@ -63,10 +63,8 @@
 
 These are the QuerySet features and model-level capabilities that Django developers reach for every day. Without them, complex reporting, analytics, and relationship-heavy apps are painful or impossible.
 
-13. [ ] **`annotate()` + aggregation functions** 🔴 High
-    > Why: `COUNT`, `SUM`, `AVG`, `MAX`, `MIN` are required for every dashboard, report, and analytics page. Currently the only way to get aggregates is raw SQL. This is the single biggest blocker for business-intelligence use cases.
-    >
-    > How: Add an `annotate` method to `QuerySet` that accepts `Vec<(String, AggregateExpr)>` and appends `SELECT ... COUNT(*) AS count, AVG(price) AS avg_price ... GROUP BY <annotated_cols>` to the generated SQL. Return a `Vec<serde_json::Value>` (or a user-supplied struct) rather than full model instances. The `AggregateExpr` enum covers `Count`, `Sum`, `Avg`, `Max`, `Min`, `StdDev`, `Variance`. Each variant knows its SQL fragment and return type. This composes with `filter()` and `order_by()` naturally.
+13. [x] **`annotate()` + aggregation functions** 🔴 High
+       — Shipped. `Aggregate` enum in `crates/umbra-core/src/orm/aggregate.rs` covers `Count`, `Sum`, `Avg`, `Max`, `Min` with named constructors. `QuerySet::aggregate(&[(name, Aggregate)])` returns a single `serde_json::Value::Object` (with COUNT as int, AVG as float, SUM/MAX/MIN inheriting source column type). `QuerySet::annotate(group_cols, &[(name, Aggregate)])` returns `Vec<Value::Object>` with the group columns and named aggregates per row. Both compose with `filter` / `exclude` so WHERE applies before aggregation. Unknown columns fail loudly with `sqlx::Error::Protocol` before any SQL runs. Tests in `crates/umbra-core/tests/aggregates.rs` (7 tests). **Deferred**: `StdDev` / `Variance`, window-function aggregates.
 
 14. [x] **`Q` objects for complex boolean logic** 🔴 High
        — Already shipped in `crates/umbra-core/src/orm/expr.rs:276-311`. `Q::and(a, b)`, `Q::or(a, b)`, `Q::not(p)` compose predicates explicitly; the existing `&` / `|` operator overloads on `Predicate` keep working alongside them. Both styles dispatch through the same per-backend `cond_for(backend)` path so SQLite-specific overrides survive composition. Re-exported from `umbra::orm::Q`. Test coverage in `crates/umbra-core/tests/q_objects.rs` (8 tests pinning render shape, AND/OR/NOT semantics, nested composition, and live SQLite execution).
@@ -74,10 +72,8 @@ These are the QuerySet features and model-level capabilities that Django develop
 15. [x] **`exclude()` — negated filtering** 🟡 Medium
        — Shipped on both `QuerySet<T>` and `Manager<T>` (`crates/umbra-core/src/orm/queryset.rs`). Implemented as sugar over `filter(Q::not(p))` so the predicate chain still ANDs naturally — `.filter(A).exclude(B).filter(C)` renders as `WHERE A AND NOT B AND C`. No new SQL-generation surface; Q::not handles backend-specific override negation. Tests in `crates/umbra-core/tests/exclude.rs`.
 
-16. [ ] **`values()` and `values_list()` — column projection** 🟡 Medium
-    > Why: The primary tool for reducing memory pressure on large lists. `Post::objects().values("id", "title")` skips the 50KB `body` blob. Without this, every list view pays the cost of every column.
-    >
-    > How: `QuerySet::values(&[&str])` stores a `projection: Vec<String>` field. In the SQL builder, replace `SELECT *` with `SELECT "id", "title"`. In the hydration path, skip `FromRow` and instead build a `serde_json::Value::Object` directly from the row. `values_list` is the same but returns tuples (requires a generic `Vec<(T1, T2, ...)>` path, which is harder — start with `values` and defer `values_list`).
+16. [x] **`values()` and `values_list()` — column projection** 🟡 Medium
+       — `values(&["id", "title"])` shipped on both `QuerySet<T>` and `Manager<T>`. Returns `Vec<serde_json::Value::Object>` instead of typed `T` rows; skips both the unused-column transfer cost and the FromRow hydration overhead. Reuses `decode_to_json` / `decode_pg_to_json` from `orm::dynamic` so every column type round-trips correctly (int / string / bool / date / Json). Composes with `filter` / `exclude` / `order_by` / `limit` / `offset`. Unknown column names fail loudly before any SQL runs. Tests in `crates/umbra-core/tests/values_projection.rs`. **Deferred**: `values_list()` (typed-tuple return) — needs a different generic-arity story; ship when a consumer surfaces the need.
 
 17. [ ] **`distinct()` — duplicate elimination** 🟢 Low
     > Why: Used for tag clouds and deduplication, but `GROUP BY` (via `annotate`) often covers the same use case. The Postgres-specific `DISTINCT ON` is more valuable than plain `DISTINCT`.
@@ -87,10 +83,8 @@ These are the QuerySet features and model-level capabilities that Django develop
 18. [x] **`select_related()` — FK prefetch via JOIN** 🔴 High
        — Already shipped. `QuerySet::select_related(field)` and `.select_related_many(&[...])` accumulate FK names; the `fetch` / `first` terminals run one batched `SELECT ... WHERE id IN (...)` per FK after the main query and call `HydrateRelated::hydrate_fk` to populate `ForeignKey<U>.resolved` on every row. Lives in `crates/umbra-core/src/orm/queryset.rs::hydrate_select_related`. Tests in `crates/umbra-core/tests/select_related.rs` cover single FK, multi-FK, serde JSON projection (`post["author"]` renders as the full object after select_related and stays an integer without it), and template-context access. **Deferred**: nested traversal (`"author__manager"`) — current implementation supports one-hop FKs only; chains require successive `.select_related` on the resolved row.
 
-19. [ ] **`prefetch_related()` — M2M and reverse-FK batch loading** 🟡 Medium
-    > Why: `select_related` handles FKs via JOIN; `prefetch_related` handles M2M and reverse-FKs via two queries (parents, then children) stitched in Rust. Since M2M was just shipped, the junction-table query is possible but the QuerySet terminal doesn't know how to batch-resolve related collections yet.
-    >
-    > How: `QuerySet::prefetch_related("tags")` or `"comment_set"`. After the main query, issue a second query `SELECT * FROM "comment" WHERE "post" IN (1, 2, 3, ...)`, group by the FK column in a `HashMap<i64, Vec<Comment>>`, and attach to each parent instance. For M2M, the second query hits the junction table joined to the target. Requires a new `Prefetch` struct and changes to the M2M struct to accept the pre-fetched data.
+19. [~] **`prefetch_related()` — M2M and reverse-FK batch loading** 🟡 Medium
+       — M2M batching shipped. `QuerySet::prefetch_related("tags")` / `prefetch_related_many(&[...])` issue one batched JOIN through the junction table for every parent, group results by `parent_id`, and populate each parent's `M2M.resolved` slot via the new `HydrateRelated::set_m2m_resolved_json` hook. Macro override emits the per-M2M-field arms; new `HydrateRelated::pk_i64` hook (also macro-emitted, only for i64-PK models) feeds the parent-id collection. v1 constraints: M2M only, i64 parent PK only — same as the rest of the M2M plumbing. Tests in `crates/umbra-core/tests/prefetch_related.rs` (3 tests). **Still open**: reverse-FK collection prefetch (`prefetch_related("comment_set")`) — needs a Vec-on-parent slot that doesn't exist yet.
 
 20. [ ] **`bulk_update()` — mass updates without N round-trips** 🟡 Medium
     > Why: `update_values` works for a single set of values across all filtered rows, but `bulk_update` takes a `Vec<Instance>` and updates each row individually in one statement. Needed for import workflows and sync jobs.
@@ -142,10 +136,8 @@ These are the QuerySet features and model-level capabilities that Django develop
     >
     > How: `QuerySet::iterator()` returns a struct implementing `Stream` (or an async `Iterator` if `Stream` is too heavy). Under the hood, use `sqlx::query_as().fetch()` which yields rows as they arrive. The challenge is lifetime management — the `Stream` must hold the `sqlx::Pool` reference and the query state. This is medium-sized but critical for large datasets.
 
-30. [ ] **Reverse relation accessors — `post.comment_set`, `category.post_set`** 🔴 High
-    > Why: Django auto-generates `related_name` managers on the "one" side of a FK. Umbra has `ForeignKey<T>` on the child but no `QuerySet<T>` on the parent. A `Category` has no ergonomic way to get `Vec<Post>` without writing `Post::objects().filter(category.eq(id)).fetch()`. This is the biggest ergonomics gap in the ORM.
-    >
-    > How: The macro already emits `ModelMeta` with `fk_target` information. Add a `related_managers()` method to `ModelMeta` that emits `ReverseFK` descriptors. At runtime, `category.post_set()` returns a `QuerySet<Post>` pre-filtered to `post::CATEGORY.eq(category.id)`. This is a medium-sized macro + runtime change but transforms the ORM's ergonomics.
+30. [x] **Reverse relation accessors — `post.comment_set`, `category.post_set`** 🔴 High
+       — Shipped via `#[derive(Model)]`. For every `ForeignKey<Parent>` field on a derived Child, the macro emits `impl Parent { pub fn <child_snake>_set(&self) -> QuerySet<Child> }` returning a QuerySet pre-filtered by the FK column = parent's primary key. Multiple FKs from one Child to the same Parent are disambiguated with `<child>_via_<field>_set`. `ForeignKeyCol::eq` / `ne` generalised from `i64` to `impl Into<sea_query::Value>` so the accessor body works for any PK type. Tests in `crates/umbra-core/tests/reverse_fk.rs`. **Limitations**: parent type must be local (Rust orphan rule); parent PK must implement `Into<sea_query::Value>` (every built-in PK type does).
 
 31. [ ] **JSONField / JSONB query operations** 🟡 Medium
     > Why: `serde_json::Value` stores as JSONB but cannot be queried by path or checked for containment. This blocks any schema-less or semi-structured data model.

@@ -1,0 +1,112 @@
+---
+title: Aggregates and annotate
+description: Count, Sum, Avg, Max, Min on a QuerySet, with single-row aggregates and GROUP BY annotate.
+sidebar_position: 7
+tags: [orm, aggregates, count, sum, group-by, analytics]
+---
+
+# Aggregates and annotate
+
+Two QuerySet terminals plus a closed `Aggregate` enum cover the SQL standard aggregate functions for dashboards and reports.
+
+The full surface lives in `umbra::orm`: `Aggregate`, `QuerySet::aggregate`, `QuerySet::annotate`.
+
+## The `Aggregate` enum
+
+```rust
+use umbra::orm::Aggregate;
+
+Aggregate::count();              // COUNT(*)
+Aggregate::count_col("body");    // COUNT(body) — skips NULL bodies
+Aggregate::sum("view_count");    // SUM(view_count)
+Aggregate::avg("price");         // AVG(price)
+Aggregate::max("created_at");    // MAX(created_at)
+Aggregate::min("created_at");    // MIN(created_at)
+```
+
+Each variant carries the source column it operates on (or `*` for `count()`). The macro emits no special metadata for aggregates — they are pure runtime constructions, validated against the model's `FIELDS` list before any SQL runs.
+
+## Single-row: `.aggregate(...)`
+
+Runs the WHERE clause and computes one row of named aggregates:
+
+```rust
+let summary = Post::objects()
+    .filter(post::PUBLISHED.eq(true))
+    .aggregate(&[
+        ("count", Aggregate::count()),
+        ("views", Aggregate::sum("view_count")),
+        ("avg_views", Aggregate::avg("view_count")),
+    ])
+    .await?;
+
+// summary["count"]    → JSON integer (always i64)
+// summary["views"]    → JSON integer or null (SUM of empty set is NULL)
+// summary["avg_views"] → JSON float (always f64)
+```
+
+Return shape is `serde_json::Value::Object` keyed by the supplied names. ORDER BY / LIMIT / OFFSET are dropped on the aggregate path (they make no sense without GROUP BY); the WHERE accumulated by upstream `.filter()` / `.exclude()` calls is preserved.
+
+Return-type rules:
+
+| Aggregate | Type |
+|---|---|
+| `Count(_)` | i64 (integer) |
+| `Avg(_)` | f64 (float) |
+| `Sum(col)` / `Max(col)` / `Min(col)` | matches the source column's `SqlType` |
+
+A `SUM` over zero rows is `null` in JSON; a `COUNT(*)` over zero rows is `0`.
+
+## Grouped: `.annotate(group_cols, ...)`
+
+Runs `SELECT <group_cols>, AGG(...) AS name, ... GROUP BY <group_cols>` with the accumulated WHERE clause:
+
+```rust
+let by_author = Post::objects()
+    .filter(post::PUBLISHED.eq(true))
+    .annotate(
+        &["author_id"],
+        &[("count", Aggregate::count()), ("views", Aggregate::sum("view_count"))],
+    )
+    .await?;
+
+// [
+//   { "author_id": 1, "count": 12, "views": 350 },
+//   { "author_id": 2, "count": 3,  "views": 80 }
+// ]
+```
+
+Return shape is `Vec<serde_json::Value::Object>` — one entry per group. Each row carries the group column values (typed per their declared `SqlType`) plus each named aggregate.
+
+Group columns are validated against `Model::FIELDS`; aggregate source columns are validated the same way. An unknown column name fails loudly with `sqlx::Error::Protocol` before any SQL runs.
+
+## Composing with the rest of the QuerySet API
+
+Both terminals respect the upstream chain — `filter`, `exclude`, even `.on(&pool)` for tests:
+
+```rust
+let summary = Post::objects()
+    .filter(post::PUBLISHED.eq(true))
+    .exclude(post::AUTHOR_ID.eq(spam_user))
+    .on(&pool)
+    .aggregate(&[("count", Aggregate::count())])
+    .await?;
+```
+
+ORDER BY / LIMIT / OFFSET are intentionally dropped on the aggregate paths.
+
+## Pitfalls
+
+**Empty-set SUM is NULL, not 0.** Dashboards that display `summary["total"]` should treat the JSON `null` as zero explicitly. `COUNT(*)` is always an integer, never NULL — use it when you need an unconditional integer return.
+
+**`AVG` is always a float.** Even when averaging an INTEGER column on SQLite, the aggregate returns `f64`. JSON serialisation produces a number with a decimal even when the value is whole (e.g. `2.0`).
+
+**`SUM` / `MAX` / `MIN` inherit the source column's SqlType.** Averaging timestamps would yield a non-meaningful float; `MAX("created_at")` returns the timestamp as an ISO string on SQLite. The runtime trusts the declared SqlType to dispatch the right `try_get`.
+
+**Deferred features.** `StdDev`, `Variance`, and window-function aggregates are not in v1 — extend the `Aggregate` enum when a concrete consumer needs them.
+
+## See also
+
+- [QuerySet expressions](/docs/v0.0.1/orm/expressions) — F-expressions, Q-objects, `exclude`.
+- [Relationships](/docs/v0.0.1/orm/relationships) — `prefetch_related` for batched M2M loads alongside aggregate dashboards.
+- [Transactions](/docs/v0.0.1/orm/transactions) — `.atomic()` for write paths; aggregates are read-only and always single-statement.
