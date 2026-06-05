@@ -1066,6 +1066,13 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
     // auto-generated junction-table name themselves.
     let mut m2m_field_idents: Vec<syn::Ident> = Vec::new();
     let mut m2m_field_children: Vec<syn::Type> = Vec::new();
+    // Gap 30: collect (field_ident, parent_type) pairs from every
+    // non-nullable ForeignKey field so we can emit reverse-set
+    // accessors on the parent type. The token-string of the parent
+    // type doubles as the disambiguation key: two FKs to the same
+    // type from this Child get `<child_snake>_via_<field>_set`
+    // names instead of a colliding `<child_snake>_set`.
+    let mut reverse_fk_entries: Vec<(syn::Ident, syn::Type)> = Vec::new();
     for field in fields.iter() {
         let field_name = field.ident.as_ref().unwrap();
         let field_name_str = field_name.to_string();
@@ -1076,6 +1083,7 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                 m2m_field_children.push((**inner_ty).clone());
             }
             FieldKind::ForeignKey(inner_ty) => {
+                reverse_fk_entries.push((field_name.clone(), (**inner_ty).clone()));
                 hydrate_arms.push(quote! {
                     #field_name_str => {
                         if let Ok(resolved) = ::umbra::_serde_json::from_value::<#inner_ty>(row.clone()) {
@@ -1232,6 +1240,63 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             }
         })
         .collect();
+
+    // Gap 30: emit reverse-FK accessors on each FK target type. For
+    // every `pub author: ForeignKey<User>` on this Child, emit
+    // `impl User { pub fn <child>_set(&self) -> QuerySet<Child> }`.
+    // The body filters `Child::objects()` by the FK column equal to
+    // the parent's PK. Disambiguates with the field name when this
+    // Child has multiple FKs to the same parent type (so two
+    // `ForeignKey<User>` fields on Post become `post_via_author_set`
+    // and `post_via_reviewer_set`).
+    //
+    // Naming derived from `to_snake_case(struct_name)` + `_set`.
+    // Limitations:
+    //  - parent must be a local type (orphan rule);
+    //  - parent's PrimaryKey must be `i64` (the column eq path is
+    //    hardcoded to i64 today — non-i64 PKs surface as a clean
+    //    compile error at the call site, prompting the caller to
+    //    opt the FK out via `#[umbra(no_reverse)]` once that
+    //    attribute lands).
+    let child_snake = to_snake_case(&struct_name.to_string());
+    // Group occurrences by the parent type's token-string so the
+    // disambiguation decision is local to a single FK target.
+    let mut parent_type_counts: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    for (_, parent_ty) in &reverse_fk_entries {
+        let key = quote!(#parent_ty).to_string();
+        *parent_type_counts.entry(key).or_insert(0) += 1;
+    }
+    let reverse_fk_impls: Vec<TokenStream2> = reverse_fk_entries
+        .iter()
+        .map(|(field_ident, parent_ty)| {
+            let key = quote!(#parent_ty).to_string();
+            let count = parent_type_counts.get(&key).copied().unwrap_or(1);
+            let accessor_name = if count > 1 {
+                format_ident!("{}_via_{}_set", child_snake, field_ident)
+            } else {
+                format_ident!("{}_set", child_snake)
+            };
+            let fk_const = format_ident!("{}", to_screaming_snake_case(&field_ident.to_string()));
+            quote! {
+                impl #parent_ty {
+                    /// Reverse FK accessor (gap #30). Returns a
+                    /// `QuerySet<Child>` pre-filtered to rows whose
+                    /// FK column points at `self`. Compose with
+                    /// `.filter` / `.order_by` / `.fetch` the same
+                    /// way as any other QuerySet.
+                    pub fn #accessor_name(
+                        &self,
+                    ) -> ::umbra::orm::QuerySet<#struct_name> {
+                        let __pk = <Self as ::umbra::orm::Model>::primary_key(self);
+                        #struct_name::objects()
+                            .filter(#module_name::#fk_const.eq(__pk))
+                    }
+                }
+            }
+        })
+        .collect();
+
     let output = quote! {
         impl ::umbra::orm::Model for #struct_name {
             type PrimaryKey = #pk_ty_tokens;
@@ -1292,6 +1357,11 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
 
             #(#m2m_helper_methods)*
         }
+
+        // Reverse-FK accessors emitted on each FK target (gap #30).
+        // One inherent-impl block per FK on this Child; multiple FKs
+        // to the same parent are disambiguated with the field name.
+        #(#reverse_fk_impls)*
 
         #[allow(clippy::module_inception)]
         pub mod #module_name {

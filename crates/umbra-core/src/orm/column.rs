@@ -2238,18 +2238,26 @@ impl<T> ForeignKeyCol<T> {
 
     /// SQL `=`.
     ///
+    /// Accepts any value convertible to `sea_query::Value` — i64 for
+    /// the common autoincrement-PK case, String for slug-keyed
+    /// parents (`umbra-permissions::Permission.codename`), Uuid for
+    /// UUID-keyed models. The type bound is permissive so reverse-FK
+    /// accessors (gap #30) emitted by the derive macro can pass the
+    /// parent's `Model::PrimaryKey` directly regardless of width.
+    ///
     /// # Examples
     ///
     /// ```ignore
-    /// Post::objects().filter(post::AUTHOR.eq(1))
+    /// Post::objects().filter(post::AUTHOR.eq(1));
+    /// UserGroup::objects().filter(usergroup::GROUP_ID.eq(group.id));
     /// ```
-    pub fn eq(&self, val: i64) -> Predicate<T> {
-        Predicate::new(Expr::col(Alias::new(self.name)).eq(val))
+    pub fn eq<V: Into<sea_query::Value>>(&self, val: V) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).eq(val.into()))
     }
 
-    /// SQL `<>`.
-    pub fn ne(&self, val: i64) -> Predicate<T> {
-        Predicate::new(Expr::col(Alias::new(self.name)).ne(val))
+    /// SQL `<>`. See [`Self::eq`] for the type bound rationale.
+    pub fn ne<V: Into<sea_query::Value>>(&self, val: V) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).ne(val.into()))
     }
 
     /// SQL `<`.
