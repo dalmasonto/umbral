@@ -55,21 +55,27 @@ pub enum PageTemplate {
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
 pub struct Category {
     pub id: i64,
-    #[umbra(unique)] pub slug: String,
-    #[umbra(string)] pub name: String,
+    #[umbra(unique)]
+    pub slug: String,
+    #[umbra(string)]
+    pub name: String,
     pub description: Option<String>,
     pub image: Option<String>,
     pub parent: Option<ForeignKey<Category>>,
-    #[umbra(default = "0")] pub position: i32,
-    #[umbra(default = "true")] pub is_active: bool,
+    #[umbra(default = "0")]
+    pub position: i32,
+    #[umbra(default = "true")]
+    pub is_active: bool,
     pub test_field: Option<String>,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
 pub struct Tag {
     pub id: i64,
-    #[umbra(unique)] pub name: String,
-    #[umbra(unique)] pub slug: String,
+    #[umbra(unique, string)]
+    pub name: String,
+    #[umbra(unique)]
+    pub slug: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -79,22 +85,36 @@ pub struct Tag {
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
 pub struct Post {
     pub id: i64,
-    #[umbra(unique)] pub slug: String,
-    #[umbra(string)] pub title: String,
+    #[umbra(unique)]
+    pub slug: String,
+    #[umbra(string)]
+    pub title: String,
     pub excerpt: Option<String>,
     pub body: String,
-    #[umbra(choices)] pub status: PostStatus,
+    #[umbra(choices)]
+    pub status: PostStatus,
     pub author: ForeignKey<AuthUser>,
     pub category: Option<ForeignKey<Category>>,
+    /// Many-to-many to Tag. The framework auto-creates a junction
+    /// table called `post_tags` with `(parent_id, child_id)` columns
+    /// at migration time.
+    #[sqlx(skip)]
+    #[serde(skip)]
+    pub tags: M2M<Tag>,
     pub cover_image: Option<String>,
     pub attachment: Option<String>,
-    #[umbra(default = "false")] pub is_featured: bool,
-    #[umbra(default = "0")] pub reading_minutes: i32,
-    #[umbra(default = "0")] pub view_count: i64,
+    #[umbra(default = "false")]
+    pub is_featured: bool,
+    #[umbra(default = "0")]
+    pub reading_minutes: i32,
+    #[umbra(default = "0")]
+    pub view_count: i64,
     pub seo_title: Option<String>,
     pub seo_description: Option<String>,
     pub published_at: Option<DateTime<Utc>>,
+    #[umbra(auto_now_add)]
     pub created_at: DateTime<Utc>,
+    #[umbra(auto_now)]
     pub updated_at: DateTime<Utc>,
 }
 
@@ -107,7 +127,8 @@ pub struct Comment {
     pub author_name: Option<String>,
     pub author_email: Option<String>,
     pub body: String,
-    #[umbra(default = "false")] pub is_approved: bool,
+    #[umbra(default = "false")]
+    pub is_approved: bool,
     pub created_at: DateTime<Utc>,
 }
 
@@ -118,13 +139,18 @@ pub struct Comment {
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
 pub struct Page {
     pub id: i64,
-    #[umbra(unique)] pub slug: String,
-    #[umbra(string)] pub title: String,
+    #[umbra(unique)]
+    pub slug: String,
+    #[umbra(string)]
+    pub title: String,
     pub content: String,
-    #[umbra(choices)] pub template: PageTemplate,
+    #[umbra(choices)]
+    pub template: PageTemplate,
     pub parent: Option<ForeignKey<Page>>,
-    #[umbra(default = "0")] pub position: i32,
-    #[umbra(default = "false")] pub is_published: bool,
+    #[umbra(default = "0")]
+    pub position: i32,
+    #[umbra(default = "false")]
+    pub is_published: bool,
     pub seo_title: Option<String>,
     pub seo_description: Option<String>,
     pub published_at: Option<DateTime<Utc>>,
@@ -137,8 +163,10 @@ pub struct Faq {
     pub question: String,
     pub answer: String,
     pub category: Option<String>,
-    #[umbra(default = "0")] pub position: i32,
-    #[umbra(default = "true")] pub is_published: bool,
+    #[umbra(default = "0")]
+    pub position: i32,
+    #[umbra(default = "true")]
+    pub is_published: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -148,8 +176,10 @@ pub struct Faq {
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
 pub struct Menu {
     pub id: i64,
-    #[umbra(unique)] pub name: String,
-    #[umbra(unique)] pub slug: String,
+    #[umbra(unique)]
+    pub name: String,
+    #[umbra(unique)]
+    pub slug: String,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
@@ -160,9 +190,12 @@ pub struct MenuItem {
     pub label: String,
     pub url: Option<String>,
     pub page: Option<ForeignKey<Page>>,
-    #[umbra(default = "0")] pub position: i32,
-    #[umbra(default = "_self")] pub target: String,
-    #[umbra(default = "true")] pub is_active: bool,
+    #[umbra(default = "0")]
+    pub position: i32,
+    #[umbra(default = "_self")]
+    pub target: String,
+    #[umbra(default = "true")]
+    pub is_active: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -172,26 +205,32 @@ pub struct MenuItem {
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
 pub struct Banner {
     pub id: i64,
-    #[umbra(string)] pub title: String,
+    #[umbra(string)]
+    pub title: String,
     pub content: Option<String>,
     pub image: Option<String>,
     pub link_url: Option<String>,
     pub starts_at: Option<DateTime<Utc>>,
     pub ends_at: Option<DateTime<Utc>>,
-    #[umbra(default = "0")] pub position: i32,
-    #[umbra(default = "true")] pub is_active: bool,
+    #[umbra(default = "0")]
+    pub position: i32,
+    #[umbra(default = "true")]
+    pub is_active: bool,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
 pub struct Testimonial {
     pub id: i64,
-    #[umbra(string)] pub author_name: String,
+    #[umbra(string)]
+    pub author_name: String,
     pub author_title: Option<String>,
     pub avatar: Option<String>,
     pub quote: String,
     pub rating: Option<i32>,
-    #[umbra(default = "false")] pub is_featured: bool,
-    #[umbra(default = "0")] pub position: i32,
+    #[umbra(default = "false")]
+    pub is_featured: bool,
+    #[umbra(default = "0")]
+    pub position: i32,
 }
 
 // ---------------------------------------------------------------------------
@@ -201,12 +240,14 @@ pub struct Testimonial {
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
 pub struct ContactMessage {
     pub id: i64,
-    #[umbra(string)] pub name: String,
+    #[umbra(string)]
+    pub name: String,
     pub email: String,
     pub phone: Option<String>,
     pub subject: String,
     pub message: String,
-    #[umbra(choices)] pub status: ContactStatus,
+    #[umbra(choices)]
+    pub status: ContactStatus,
     pub ip_address: Option<String>,
     pub created_at: DateTime<Utc>,
 }
@@ -214,8 +255,10 @@ pub struct ContactMessage {
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
 pub struct Subscriber {
     pub id: i64,
-    #[umbra(unique)] pub email: String,
-    #[umbra(default = "false")] pub is_confirmed: bool,
+    #[umbra(unique)]
+    pub email: String,
+    #[umbra(default = "false")]
+    pub is_confirmed: bool,
     pub confirmed_at: Option<DateTime<Utc>>,
     pub source: Option<String>,
     pub created_at: DateTime<Utc>,
@@ -245,17 +288,22 @@ pub struct MediaAsset {
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
 pub struct Redirect {
     pub id: i64,
-    #[umbra(unique)] pub from_path: String,
+    #[umbra(unique)]
+    pub from_path: String,
     pub to_path: String,
-    #[umbra(choices)] pub code: RedirectCode,
-    #[umbra(default = "true")] pub is_active: bool,
-    #[umbra(default = "0")] pub hits: i64,
+    #[umbra(choices)]
+    pub code: RedirectCode,
+    #[umbra(default = "true")]
+    pub is_active: bool,
+    #[umbra(default = "0")]
+    pub hits: i64,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
 pub struct SiteSetting {
     pub id: i64,
-    #[umbra(string)] pub site_name: String,
+    #[umbra(string)]
+    pub site_name: String,
     pub tagline: Option<String>,
     pub logo: Option<String>,
     pub favicon: Option<String>,

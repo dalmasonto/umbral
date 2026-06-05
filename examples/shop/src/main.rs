@@ -80,14 +80,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 // `cost` is internal margin data — never leaks out.
                 // Combined with #[umbra(noform)] / noedit on the model
                 // this would also lock the field on the write path.
-                .resource(
-                    ResourceConfig::new("product")
-                        .hide("cost")
-                        .permission(OrPermission::new(vec![
-                            Box::new(ReadOnly),
-                            Box::new(IsStaff),
-                        ])),
-                )
+                .resource(ResourceConfig::new("product").hide("cost").permission(
+                    OrPermission::new(vec![Box::new(ReadOnly), Box::new(IsStaff)]),
+                ))
                 // order: every action requires an authenticated caller
                 // (the cookie path is the realistic one for a real
                 // shop; bearer / token are convenient for curl smoke
@@ -462,14 +457,46 @@ async fn seed_blogs() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if Tag::objects().count().await? == 0 {
         Tag::objects()
             .bulk_create(vec![
-                Tag { id: 0, name: "Rust".into(), slug: "rust".into() },
-                Tag { id: 0, name: "Web Development".into(), slug: "web-development".into() },
-                Tag { id: 0, name: "Database".into(), slug: "database".into() },
-                Tag { id: 0, name: "Performance".into(), slug: "performance".into() },
-                Tag { id: 0, name: "Architecture".into(), slug: "architecture".into() },
-                Tag { id: 0, name: "API Design".into(), slug: "api-design".into() },
-                Tag { id: 0, name: "Security".into(), slug: "security".into() },
-                Tag { id: 0, name: "DevOps".into(), slug: "devops".into() },
+                Tag {
+                    id: 0,
+                    name: "Rust".into(),
+                    slug: "rust".into(),
+                },
+                Tag {
+                    id: 0,
+                    name: "Web Development".into(),
+                    slug: "web-development".into(),
+                },
+                Tag {
+                    id: 0,
+                    name: "Database".into(),
+                    slug: "database".into(),
+                },
+                Tag {
+                    id: 0,
+                    name: "Performance".into(),
+                    slug: "performance".into(),
+                },
+                Tag {
+                    id: 0,
+                    name: "Architecture".into(),
+                    slug: "architecture".into(),
+                },
+                Tag {
+                    id: 0,
+                    name: "API Design".into(),
+                    slug: "api-design".into(),
+                },
+                Tag {
+                    id: 0,
+                    name: "Security".into(),
+                    slug: "security".into(),
+                },
+                Tag {
+                    id: 0,
+                    name: "DevOps".into(),
+                    slug: "devops".into(),
+                },
             ])
             .await?;
     }
@@ -481,26 +508,166 @@ async fn seed_blogs() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let category = ForeignKey::new(1); // gadgets category
 
         let posts = vec![
-            heavy_post(1, "building-high-performance-apis-in-rust", "Building High-Performance APIs in Rust", &author, &category, &now),
-            heavy_post(2, "understanding-database-indexes", "Understanding Database Indexes: A Deep Dive", &author, &category, &now),
-            heavy_post(3, "async-rust-patterns", "Async Rust Patterns for Production Systems", &author, &category, &now),
-            heavy_post(4, "zero-copy-serialization", "Zero-Copy Serialization Techniques", &author, &category, &now),
-            heavy_post(5, "web-framework-design-principles", "Web Framework Design Principles", &author, &category, &now),
-            heavy_post(6, "memory-management-in-systems-programming", "Memory Management in Systems Programming", &author, &category, &now),
-            heavy_post(7, "scaling-sqlite-to-millions-of-rows", "Scaling SQLite to Millions of Rows", &author, &category, &now),
-            heavy_post(8, "postgres-query-optimization", "PostgreSQL Query Optimization Strategies", &author, &category, &now),
-            heavy_post(9, "rust-ownership-model-explained", "The Rust Ownership Model Explained", &author, &category, &now),
-            heavy_post(10, "building-django-like-frameworks", "Building Django-Like Frameworks in Rust", &author, &category, &now),
-            heavy_post(11, "concurrency-patterns-in-modern-web-servers", "Concurrency Patterns in Modern Web Servers", &author, &category, &now),
-            heavy_post(12, "type-safe-database-migrations", "Type-Safe Database Migrations", &author, &category, &now),
-            heavy_post(13, "rest-api-versioning-strategies", "REST API Versioning Strategies", &author, &category, &now),
-            heavy_post(14, "caching-strategies-for-web-applications", "Caching Strategies for Web Applications", &author, &category, &now),
-            heavy_post(15, "securing-web-applications-owasp-top-ten", "Securing Web Applications: OWASP Top Ten", &author, &category, &now),
-            heavy_post(16, "microservices-vs-monoliths", "Microservices vs Monoliths: A Practical Guide", &author, &category, &now),
-            heavy_post(17, "real-time-data-processing", "Real-Time Data Processing with Rust", &author, &category, &now),
-            heavy_post(18, "error-handling-in-distributed-systems", "Error Handling in Distributed Systems", &author, &category, &now),
-            heavy_post(19, "load-testing-and-benchmarking", "Load Testing and Benchmarking Web APIs", &author, &category, &now),
-            heavy_post(20, "future-of-web-development", "The Future of Web Development: 2026 and Beyond", &author, &category, &now),
+            heavy_post(
+                1,
+                "building-high-performance-apis-in-rust",
+                "Building High-Performance APIs in Rust",
+                &author,
+                &category,
+                &now,
+            ),
+            heavy_post(
+                2,
+                "understanding-database-indexes",
+                "Understanding Database Indexes: A Deep Dive",
+                &author,
+                &category,
+                &now,
+            ),
+            heavy_post(
+                3,
+                "async-rust-patterns",
+                "Async Rust Patterns for Production Systems",
+                &author,
+                &category,
+                &now,
+            ),
+            heavy_post(
+                4,
+                "zero-copy-serialization",
+                "Zero-Copy Serialization Techniques",
+                &author,
+                &category,
+                &now,
+            ),
+            heavy_post(
+                5,
+                "web-framework-design-principles",
+                "Web Framework Design Principles",
+                &author,
+                &category,
+                &now,
+            ),
+            heavy_post(
+                6,
+                "memory-management-in-systems-programming",
+                "Memory Management in Systems Programming",
+                &author,
+                &category,
+                &now,
+            ),
+            heavy_post(
+                7,
+                "scaling-sqlite-to-millions-of-rows",
+                "Scaling SQLite to Millions of Rows",
+                &author,
+                &category,
+                &now,
+            ),
+            heavy_post(
+                8,
+                "postgres-query-optimization",
+                "PostgreSQL Query Optimization Strategies",
+                &author,
+                &category,
+                &now,
+            ),
+            heavy_post(
+                9,
+                "rust-ownership-model-explained",
+                "The Rust Ownership Model Explained",
+                &author,
+                &category,
+                &now,
+            ),
+            heavy_post(
+                10,
+                "building-django-like-frameworks",
+                "Building Django-Like Frameworks in Rust",
+                &author,
+                &category,
+                &now,
+            ),
+            heavy_post(
+                11,
+                "concurrency-patterns-in-modern-web-servers",
+                "Concurrency Patterns in Modern Web Servers",
+                &author,
+                &category,
+                &now,
+            ),
+            heavy_post(
+                12,
+                "type-safe-database-migrations",
+                "Type-Safe Database Migrations",
+                &author,
+                &category,
+                &now,
+            ),
+            heavy_post(
+                13,
+                "rest-api-versioning-strategies",
+                "REST API Versioning Strategies",
+                &author,
+                &category,
+                &now,
+            ),
+            heavy_post(
+                14,
+                "caching-strategies-for-web-applications",
+                "Caching Strategies for Web Applications",
+                &author,
+                &category,
+                &now,
+            ),
+            heavy_post(
+                15,
+                "securing-web-applications-owasp-top-ten",
+                "Securing Web Applications: OWASP Top Ten",
+                &author,
+                &category,
+                &now,
+            ),
+            heavy_post(
+                16,
+                "microservices-vs-monoliths",
+                "Microservices vs Monoliths: A Practical Guide",
+                &author,
+                &category,
+                &now,
+            ),
+            heavy_post(
+                17,
+                "real-time-data-processing",
+                "Real-Time Data Processing with Rust",
+                &author,
+                &category,
+                &now,
+            ),
+            heavy_post(
+                18,
+                "error-handling-in-distributed-systems",
+                "Error Handling in Distributed Systems",
+                &author,
+                &category,
+                &now,
+            ),
+            heavy_post(
+                19,
+                "load-testing-and-benchmarking",
+                "Load Testing and Benchmarking Web APIs",
+                &author,
+                &category,
+                &now,
+            ),
+            heavy_post(
+                20,
+                "future-of-web-development",
+                "The Future of Web Development: 2026 and Beyond",
+                &author,
+                &category,
+                &now,
+            ),
         ];
 
         Post::objects().bulk_create(posts).await?;
@@ -604,7 +771,8 @@ fn heavy_post(
 <p>We hope this guide has given you a solid foundation. The techniques described here have served us well across multiple projects and teams. As always, the code is available in our repository. Pull requests and issue reports are welcome.</p>
 
 <p><em>This is post number {} in our technical deep-dive series. If you enjoyed it, consider subscribing to our newsletter for weekly updates on backend engineering, distributed systems, and framework internals.</em></p>"#,
-        title.to_lowercase(), idx
+        title.to_lowercase(),
+        idx
     );
 
     let excerpt = format!(
@@ -621,6 +789,7 @@ fn heavy_post(
         status: PostStatus::Published,
         author: author.clone(),
         category: Some(category.clone()),
+        tags: M2M::empty(),
         cover_image: Some(format!("/static/images/post-{}.jpg", idx)),
         attachment: None,
         is_featured: idx <= 5,
