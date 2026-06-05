@@ -39,6 +39,32 @@ use std::marker::PhantomData;
 use std::ops::{BitAnd, BitOr};
 
 pub use aggregate::{Aggregate, AggregateKind};
+
+/// A typed wrapper around a `sea_query::SelectStatement` for use in
+/// `col IN (SELECT col FROM ...)` predicates (gap #26).
+///
+/// Built by [`QuerySet::into_subquery`] or
+/// [`Manager::into_subquery`]; consumed by `IntCol::in_subquery` /
+/// `ForeignKeyCol::in_subquery` to produce a `Predicate`. The inner
+/// SelectStatement only knows the projected column the caller
+/// requested.
+pub struct Subquery {
+    inner: sea_query::SelectStatement,
+}
+
+impl Subquery {
+    /// Construct from a `SelectStatement` (internal — the
+    /// QuerySet/Manager helpers are the supported entry points).
+    pub(crate) fn from_select(inner: sea_query::SelectStatement) -> Self {
+        Self { inner }
+    }
+
+    /// Consume the wrapper and hand back the inner SelectStatement
+    /// — sea-query's `in_subquery` builder takes ownership.
+    pub(crate) fn into_statement(self) -> sea_query::SelectStatement {
+        self.inner
+    }
+}
 pub use choices::ChoiceField;
 pub use dynamic::{DynError, DynQuerySet, decode_to_string};
 pub use expr::{F, FColExt, FExpr, Q};

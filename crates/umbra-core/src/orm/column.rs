@@ -101,6 +101,13 @@ impl<T> IntCol<T> {
         Predicate::new(Expr::col(Alias::new(self.name)).is_in(vals.iter().copied()))
     }
 
+    /// SQL `<col> IN (SELECT ...)` against a [`super::Subquery`]
+    /// built from another QuerySet via `.into_subquery("col")`
+    /// (gap #26).
+    pub fn in_subquery(&self, sub: super::Subquery) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).in_subquery(sub.into_statement()))
+    }
+
     /// SQL `ORDER BY ... ASC`.
     pub fn asc(&self) -> OrderExpr<T> {
         OrderExpr::new(self.name, false)
@@ -2295,6 +2302,12 @@ impl<T> ForeignKeyCol<T> {
     /// SQL `IN (...)`.
     pub fn in_(&self, vals: &[i64]) -> Predicate<T> {
         Predicate::new(Expr::col(Alias::new(self.name)).is_in(vals.iter().copied()))
+    }
+
+    /// SQL `<col> IN (SELECT ...)` against a [`super::Subquery`]
+    /// (gap #26). See [`IntCol::in_subquery`].
+    pub fn in_subquery(&self, sub: super::Subquery) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).in_subquery(sub.into_statement()))
     }
 
     /// SQL `ORDER BY ... ASC`.

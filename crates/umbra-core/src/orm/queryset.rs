@@ -370,6 +370,56 @@ impl<T> QuerySet<T> {
         self
     }
 
+    /// Convert this QuerySet into a [`Subquery`] suitable for use in
+    /// an `IN (SELECT ...)` predicate. Projects only the named
+    /// column; the accumulated WHERE / ORDER BY survive.
+    ///
+    /// `Post::objects().filter(...).into_subquery("author_id")` →
+    /// `Subquery` you can hand to `user::ID.in_subquery(...)`.
+    pub fn into_subquery(self, col_name: &str) -> crate::orm::Subquery {
+        let mut q = self.build_query_for("sqlite");
+        q.clear_selects();
+        q.column(Alias::new(col_name));
+        crate::orm::Subquery::from_select(q)
+    }
+
+    /// Combine this QuerySet with `other` via SQL `UNION` (gap #28).
+    /// Both QuerySets must produce the same column shape — which
+    /// they always do here because both are typed `QuerySet<T>`.
+    /// Duplicates are removed (the de-duplicating UNION, not UNION
+    /// ALL).
+    pub fn union(self, other: QuerySet<T>) -> Self {
+        self.combine(other, sea_query::UnionType::Distinct)
+    }
+
+    /// Combine this QuerySet with `other` via SQL `INTERSECT`
+    /// (gap #28). Returns rows present in BOTH inputs.
+    pub fn intersect(self, other: QuerySet<T>) -> Self {
+        self.combine(other, sea_query::UnionType::Intersect)
+    }
+
+    /// Combine this QuerySet with `other` via SQL `EXCEPT`
+    /// (gap #28). Returns rows present in `self` but not in `other`.
+    pub fn except(self, other: QuerySet<T>) -> Self {
+        self.combine(other, sea_query::UnionType::Except)
+    }
+
+    /// Internal: attach `other`'s SelectStatement to `self`'s
+    /// SelectStatement with the given UnionType. Both sides apply
+    /// their accumulated predicates / ORDER BY before the union.
+    fn combine(mut self, other: QuerySet<T>, ty: sea_query::UnionType) -> Self {
+        let backend = "sqlite";
+        let other_select = other.build_query_for(backend);
+        // Fold our own predicates into the base query so the union
+        // sees them; further `.filter()` calls on the returned
+        // QuerySet would still apply to the OUTER (combined) query.
+        let mut base = self.build_query_for(backend);
+        self.predicates.clear();
+        base.union(ty, other_select);
+        self.query = base;
+        self
+    }
+
     /// Emit `SELECT DISTINCT ...` for this query (gap #17). Most
     /// useful when combined with [`Self::values`] to dedupe a
     /// column-projected list (`distinct().values(&["tag"])`); the
@@ -1573,6 +1623,11 @@ impl<T: Model> Manager<T> {
     /// See `QuerySet::exclude`.
     pub fn exclude(&self, p: Predicate<T>) -> QuerySet<T> {
         self.queryset().exclude(p)
+    }
+
+    /// See `QuerySet::into_subquery`.
+    pub fn into_subquery(&self, col_name: &str) -> crate::orm::Subquery {
+        self.queryset().into_subquery(col_name)
     }
 
     /// See `QuerySet::order_by`.
