@@ -93,36 +93,42 @@ These are the QuerySet features and model-level capabilities that Django develop
 22. [x] **`raw()` / `raw_sql()` — escape hatch** 🟡 Medium
        — `Manager::raw(sql)` shipped. Delegates to `sqlx::query_as::<DB, T>` against the ambient pool; dispatches on backend so user code stays portable. Returns typed `Vec<T>` decoded by `FromRow`. Skips `select_related` / `prefetch_related` chains (those only apply to the typed builder path); no parameter binding (sanitise input before calling). Tests in `crates/umbra-core/tests/bulk_update_raw.rs`.
 
-23. [ ] **`defer()` / `only()` — lazy column loading** 🟢 Low
-    > Why: `values()` (gap #16) covers 80% of the use case. `defer`/`only` are Django sugar for "skip this column in the initial SELECT, fetch it on first access." The complexity (lazy loading via a second query on property access) is high for marginal gain.
-    >
-    > How: Defer until `values()` is shipped. If users still ask for it, add a `projection` field to `QuerySet` and implement `defer` as "all columns except these" and `only` as "only these columns." The lazy-fetch-on-access part is the hard bit; start without it and just treat `defer` as a `values()` alias with the full struct return type.
+23. [—] **`defer()` / `only()` — lazy column loading** 🟢 Low — **won't ship as spec'd**
+       — Recommendation: don't ship as a distinct API. The lazy-fetch-on-access part is what makes `defer` interesting in Django; Rust doesn't have property accessors to intercept (`post.body` is a field access, not a method call). The non-lazy variant is `values()` (#16, shipped) with the column set complemented or restricted. Best move: pin this entry as "intentionally not shipped" so it stops getting re-evaluated; rename `values()` to `project()` if naming clarity matters later. **Revisit only if** a user request specifies the lazy-fetch behaviour and accepts the complexity (either macro-generated partial types per model, or a FromRow extension that tolerates missing columns).
 
 24. [~] **Database functions — `Lower`, `Upper`, `Length`, `Now`, `Coalesce`, `Concat`, `Trim`** 🟡 Medium
        — Partial. `StrColExt` trait shipped with `.lower()`, `.upper()`, `.length()` on `StrCol` and `NullableStrCol`. Each returns `ColExpr<T>`; chain `.eq/.ne/.lt/.le/.gt/.ge(val)` to produce a `Predicate<T>` ready for `filter`. Tests in `crates/umbra-core/tests/db_functions.rs`. **Still open**: `trim`, `coalesce`, `concat`, `now` — add to `StrColExt` (or a new `NumColExt`) following the same pattern when a consumer surfaces the need. Order-by via DB function is also deferred (it would need OrderExpr to accept a SimpleExpr).
 
-25. [ ] **Conditional expressions — `Case`, `When`, `Default`** 🟢 Low
+25. [ ] **Conditional expressions — `Case`, `When`, `Default`** 🟢 Low — **wait for demand**
     > Why: `CASE WHEN ... THEN ... ELSE ... END` is powerful for tiered badges and computed status fields, but it has workarounds (compute in Rust after fetching, or use raw SQL). The SQL generation is straightforward; the ergonomics in Rust are the challenge.
     >
-    > How: A builder API: `Case::new().when(view_count.gt(1000), 2).when(view_count.gt(100), 1).default(0)`. Each `when` takes a `Predicate` and a `Value`. Render to `CASE WHEN ... THEN ... ELSE ... END`. Defer until `annotate()` (gap #13) is shipped, since conditional expressions are primarily useful as annotated columns.
+    > How: A builder API: `Case::new().when(view_count.gt(1000), 2).when(view_count.gt(100), 1).default(0)`. Each `when` takes a `Predicate` and a `Value`. Render to `CASE WHEN ... THEN ... ELSE ... END`.
+    >
+    > **Design call**: ship as a peer of `Aggregate`, **not** as a variant. Different semantics — `Case` is per-row, aggregates collapse rows. Introduce `Annotation` as a thin enum `{ Aggregate(...), Case(...) }`, take that in `annotate()`. The Case builder is ~30 lines + tests. **Triggering condition**: a user actually doing tiered-badge SQL in `raw()` — that's the demand signal. `annotate()` shipped in Wave B; today no consumer.
 
 26. [~] **Subqueries — `Subquery` and `Exists`** 🟡 Medium
        — Partial. `Subquery` type ships in `crates/umbra-core/src/orm/mod.rs`; built via `QuerySet::into_subquery(col_name)` / `Manager::into_subquery(col_name)`. `IntCol::in_subquery(sub)` and `ForeignKeyCol::in_subquery(sub)` produce `Predicate<T>` rendering as `<col> IN (SELECT col FROM ...)`. Most "is there a row that references me" queries collapse to in_subquery without correlated EXISTS. Tests in `crates/umbra-core/tests/subquery.rs`. **Still open**: correlated `EXISTS(...)` with `OuterRef` references back to the outer query's columns.
 
-27. [ ] **Window functions — `RowNumber`, `Rank`, `DenseRank`, `Lead`, `Lag`, `NthValue`** 🟢 Low
-    > Why: Needed for leaderboards and "top N per category," but Postgres-only (SQLite needs window-function support compiled in). The user base for this is smaller than the core QuerySet gaps.
+27. [ ] **Window functions — `RowNumber`, `Rank`, `DenseRank`, `Lead`, `Lag`, `NthValue`** 🟢 Low — **defer hard**
+    > Why: Needed for leaderboards and "top N per category," but Postgres-only practically (SQLite needs window-function support compiled in). The user base for this is smaller than the core QuerySet gaps.
     >
-    > How: Add a `Window` struct and an `Over` clause. Gate the entire feature behind a runtime backend check that returns a clear error on SQLite. Start with `RowNumber` and `Rank` since they cover the 80% use case. Defer until `annotate()` (gap #13) is shipped, since window functions are a form of annotation.
+    > How: Add a `Window` struct and an `Over` clause.
+    >
+    > **Design call**: when this does ship, do the minimum — `RowNumber` / `Rank` / `DenseRank` with `PARTITION BY` + `ORDER BY` only. Skip frame specs (`ROWS BETWEEN ...`) entirely until a real bug forces them. That's 60% of the code for 95% of the value. **Until then**: users with this need have `raw()` as the escape hatch and it's tolerable. No demand signal today; revisit when one surfaces.
 
 28. [x] **`union()`, `intersection()`, `difference()` — set operations** 🟢 Low
        — Shipped. `QuerySet::union(other)`, `intersect(other)`, `except(other)` combine two `QuerySet<T>` values via sea-query's `UnionType::{Distinct, Intersect, Except}`. The shared `T` type-param enforces column-shape compatibility at compile time — no runtime check needed. Default is the de-duplicating UNION (UNION ALL would be a future variant). Both sides apply their accumulated WHERE before the combine; further `.filter()` on the returned QuerySet applies to the OUTER combined query. Tests in `crates/umbra-core/tests/set_ops.rs`.
 
-29. [ ] **`iterator()` — memory-efficient streaming** 🟡 Medium
+29. [ ] **`iterator()` — memory-efficient streaming** 🟡 Medium — **ship in two phases**
     > Why: For tables with millions of rows, `fetch()` collects into a `Vec` and would OOM. `iterator()` yields rows one at a time — the only viable path for exports, migrations, and bulk transforms.
     >
-    > How: `QuerySet::iterator()` returns a struct implementing `Stream` (or an async `Iterator` if `Stream` is too heavy). Under the hood, use `sqlx::query_as().fetch()` which yields rows as they arrive. The challenge is lifetime management — the `Stream` must hold the `sqlx::Pool` reference and the query state. This is medium-sized but critical for large datasets.
+    > **Design call (two phases)**:
     >
-    > **Deferred this round** — the true-Stream impl requires `futures-util` as a workspace dep (cross-cutting change); a callback-shape `try_for_each(|row| ...)` variant ships the same memory bound without it. Coming next session if requested.
+    > **Phase 1 — `try_for_each(|row| -> Result<(), E>)` (callback shape)**: ~40 lines, no new workspace dep, idiomatic Rust callback. Ships the same memory bound as a Stream (one row at a time). Critically: do NOT name this `iterator()` — that's a lie about what it returns. Two names, two semantics.
+    >
+    > **Phase 2 — `iterator()` returning `Stream`**: ships once `futures-util` is in the workspace for some other reason (probably SSE / WebSockets — gap #45). At that point `iterator()` is the BoxStream'd variant and `try_for_each` stays for callers who prefer the callback shape.
+    >
+    > **Next-session action**: Phase 1 is a one-commit feature whenever it surfaces — write it, ship it, move on. Phase 2 is gated on futures-util landing for another reason; don't pull it in just for iterator().
 
 30. [x] **Reverse relation accessors — `post.comment_set`, `category.post_set`** 🔴 High
        — Shipped via `#[derive(Model)]`. For every `ForeignKey<Parent>` field on a derived Child, the macro emits `impl Parent { pub fn <child_snake>_set(&self) -> QuerySet<Child> }` returning a QuerySet pre-filtered by the FK column = parent's primary key. Multiple FKs from one Child to the same Parent are disambiguated with `<child>_via_<field>_set`. `ForeignKeyCol::eq` / `ne` generalised from `i64` to `impl Into<sea_query::Value>` so the accessor body works for any PK type. Tests in `crates/umbra-core/tests/reverse_fk.rs`. **Limitations**: parent type must be local (Rust orphan rule); parent PK must implement `Into<sea_query::Value>` (every built-in PK type does).
