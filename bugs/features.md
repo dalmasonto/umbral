@@ -51,7 +51,7 @@
     >
     > How: Close the "HTMX + Alpine.js" interpretation as already done. If the user wants true SSR+hydration, open a separate feature for "SSR with client-side hydration" and scope it as a v1.5 research project. The current gap description should be rewritten to clarify which interpretation is intended.
 
-12. [ ] **Playground tabs (Dexie persistence)** 🟡 Medium
+12. [~] **Playground tabs (Dexie persistence)** 🟡 Medium
     > Why: The current playground loses your in-progress request when you click another endpoint. This is a pure UX pain point with clear completion criteria and a small scope.
     >
     > How: Add a `tabs` slice to the existing Zustand store. Each tab holds `endpoint, method, params, body, headers, auth`. The sidebar click opens a new tab if the endpoint is not already open; clicking an existing tab switches to it. Save the full `tabs` array to Dexie on every change (debounced). On reload, restore tabs from Dexie and pre-populate the UI. This is a contained frontend task with immediate payoff.
