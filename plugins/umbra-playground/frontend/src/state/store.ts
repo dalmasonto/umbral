@@ -34,6 +34,23 @@ export interface RequestDraft {
   authToken: string;
 }
 
+/** A single open tab in the playground tab strip. */
+export interface Tab {
+  /** Stable id for this open-tab slot — independent of
+   *  operationId so the same endpoint can be opened twice in
+   *  principle. Generated with crypto.randomUUID() on open. */
+  id: string;
+  operationId: string;
+  /** Wall-clock the tab was opened. Used as the default display
+   *  order: older first, newer last. */
+  openedAt: number;
+  /** Snapshot of the draft as it existed when this tab was
+   *  opened (or after a manual "reset to opened" action). The
+   *  dirty dot compares `current` against this — equal means
+   *  clean. */
+  pristineDraft: RequestDraft;
+}
+
 export interface GlobalAuthSettings {
   /** Master toggle so users can stash a token without it leaking
    *  into every request. */
