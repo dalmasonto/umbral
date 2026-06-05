@@ -152,6 +152,16 @@ impl<T> QuerySet<T> {
         self
     }
 
+    /// Add a negated WHERE condition. The negated predicate ANDs into
+    /// the chain alongside any `filter()` calls, so
+    /// `.filter(A).exclude(B).filter(C)` renders as `WHERE A AND NOT B
+    /// AND C`. Sugar for `filter(Q::not(p))`.
+    ///
+    /// Mirrors Django's `QuerySet.exclude()`.
+    pub fn exclude(self, p: Predicate<T>) -> Self {
+        self.filter(crate::orm::Q::not(p))
+    }
+
     /// Add an ORDER BY clause. Multiple `.order_by` calls append.
     /// The first explicit call also opts out of the model's
     /// `#[umbra(ordering = [...])]` default (BUG-8) — Django semantics:
@@ -856,6 +866,11 @@ impl<T: Model> Manager<T> {
         self.queryset().filter(p)
     }
 
+    /// See `QuerySet::exclude`.
+    pub fn exclude(&self, p: Predicate<T>) -> QuerySet<T> {
+        self.queryset().exclude(p)
+    }
+
     /// See `QuerySet::order_by`.
     pub fn order_by(&self, o: OrderExpr<T>) -> QuerySet<T> {
         self.queryset().order_by(o)
@@ -1007,8 +1022,7 @@ impl<T: Model> Manager<T> {
         // time. We only validate the things the typed path
         // can't catch at compile time.
         let meta = crate::migrate::ModelMeta::for_::<T>();
-        let validation_errors =
-            crate::orm::validation::validate_on_typed_create(&meta, &map).await;
+        let validation_errors = crate::orm::validation::validate_on_typed_create(&meta, &map).await;
         if !validation_errors.is_empty() {
             return Err(WriteError::Multiple {
                 errors: validation_errors,
