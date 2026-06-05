@@ -19,7 +19,7 @@ use serde_json::{Value, json};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio::sync::OnceCell;
 use tower::ServiceExt;
-use umbra::orm::M2M;
+use umbra::orm::{M2M, SqlType, load_junction_selection};
 use umbra_rest::RestPlugin;
 
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
@@ -100,12 +100,16 @@ async fn boot() -> &'static axum::Router {
             .await
             .expect("enable fks");
 
-        sqlx::query(
-            "INSERT INTO tag (name) VALUES ('rust'), ('web'), ('database')",
-        )
-        .execute(&pool)
-        .await
-        .expect("seed tags");
+        // Seed three tags through the typed Manager — the
+        // ORM owns inserts; tests should not.
+        Tag::objects()
+            .bulk_create(vec![
+                Tag { id: 0, name: "rust".into() },
+                Tag { id: 0, name: "web".into() },
+                Tag { id: 0, name: "database".into() },
+            ])
+            .await
+            .expect("seed tags");
 
         app.into_router()
     })
@@ -140,15 +144,20 @@ async fn patch_json(router: axum::Router, uri: &str, body: Value) -> (StatusCode
     (status, parsed)
 }
 
+/// Read the junction rows through the ORM's public dynamic
+/// helper (no raw SQL in the test). Returns child ids parsed
+/// back to `i64` and sorted so assertions don't depend on
+/// insert order.
 async fn junction_rows_for(post_id: i64) -> Vec<i64> {
-    let pool = umbra::db::pool();
-    sqlx::query_scalar::<_, i64>(
-        "SELECT child_id FROM post_tags WHERE parent_id = ? ORDER BY child_id",
-    )
-    .bind(post_id)
-    .fetch_all(&pool)
-    .await
-    .expect("read junction")
+    let parent = sea_query::Value::BigInt(Some(post_id));
+    let mut ids: Vec<i64> = load_junction_selection("post_tags", parent, SqlType::BigInt)
+        .await
+        .expect("read junction")
+        .into_iter()
+        .map(|s| s.parse::<i64>().expect("child_id is i64"))
+        .collect();
+    ids.sort();
+    ids
 }
 
 // =========================================================================
