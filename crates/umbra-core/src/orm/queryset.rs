@@ -599,26 +599,53 @@ impl<T: Model> QuerySet<T> {
 
     /// `DELETE FROM table WHERE <predicates>`. Returns the number of
     /// rows deleted. With no `.filter` calls, deletes every row.
+    ///
+    /// Fires `bulk_post_delete:<table>` once with the list of removed
+    /// PKs when at least one row was deleted. Per-row `pre_delete` /
+    /// `post_delete` are NOT fired by this path — use
+    /// [`Manager::delete_instance`] when per-row signal semantics are
+    /// required.
     pub async fn delete(self) -> Result<u64, sqlx::Error> {
         let pool = resolve_pool::<T>(self.explicit_pool.clone());
         let backend = pool.backend_name();
-        let stmt = self.build_delete_for(backend);
-        match pool {
+        let mut stmt = self.build_delete_for(backend);
+        let pk = pk_field::<T>();
+        if let Some(field) = pk {
+            stmt.returning_col(Alias::new(field.name));
+        }
+        let ids: Vec<JsonValue> = match pool {
             DbPool::Sqlite(pool) => {
                 let (sql, values) = stmt.build_sqlx(SqliteQueryBuilder);
-                let result = sqlx::query_with::<sqlx::Sqlite, _>(&sql, values)
-                    .execute(&pool)
+                let rows = sqlx::query_with::<sqlx::Sqlite, _>(&sql, values)
+                    .fetch_all(&pool)
                     .await?;
-                Ok(result.rows_affected())
+                match pk {
+                    Some(field) => rows
+                        .iter()
+                        .map(|r| pk_to_json_sqlite(r, field.name, field.ty))
+                        .collect::<Result<_, _>>()?,
+                    None => Vec::new(),
+                }
             }
             DbPool::Postgres(pool) => {
                 let (sql, values) = stmt.build_sqlx(PostgresQueryBuilder);
-                let result = sqlx::query_with::<sqlx::Postgres, _>(&sql, values)
-                    .execute(&pool)
+                let rows = sqlx::query_with::<sqlx::Postgres, _>(&sql, values)
+                    .fetch_all(&pool)
                     .await?;
-                Ok(result.rows_affected())
+                match pk {
+                    Some(field) => rows
+                        .iter()
+                        .map(|r| pk_to_json_pg(r, field.name, field.ty))
+                        .collect::<Result<_, _>>()?,
+                    None => Vec::new(),
+                }
             }
+        };
+        let count = ids.len() as u64;
+        if !ids.is_empty() {
+            crate::signals::emit_bulk_post_delete::<T>(ids).await;
         }
+        Ok(count)
     }
 
     /// `UPDATE table SET col = <expr> WHERE <predicates>` using an
@@ -669,23 +696,46 @@ impl<T: Model> QuerySet<T> {
         for p in &self.predicates {
             stmt.and_where(p.cond_for(backend));
         }
+        let pk = pk_field::<T>();
+        if let Some(pkf) = pk {
+            stmt.returning_col(Alias::new(pkf.name));
+        }
 
-        match pool {
+        let ids: Vec<JsonValue> = match pool {
             DbPool::Sqlite(pool) => {
                 let (sql, values) = stmt.build_sqlx(SqliteQueryBuilder);
-                let result = sqlx::query_with::<sqlx::Sqlite, _>(&sql, values)
-                    .execute(&pool)
+                let rows = sqlx::query_with::<sqlx::Sqlite, _>(&sql, values)
+                    .fetch_all(&pool)
                     .await?;
-                Ok(result.rows_affected())
+                match pk {
+                    Some(pkf) => rows
+                        .iter()
+                        .map(|r| pk_to_json_sqlite(r, pkf.name, pkf.ty))
+                        .collect::<Result<_, _>>()
+                        .map_err(crate::orm::write::WriteError::Sqlx)?,
+                    None => Vec::new(),
+                }
             }
             DbPool::Postgres(pool) => {
                 let (sql, values) = stmt.build_sqlx(PostgresQueryBuilder);
-                let result = sqlx::query_with::<sqlx::Postgres, _>(&sql, values)
-                    .execute(&pool)
+                let rows = sqlx::query_with::<sqlx::Postgres, _>(&sql, values)
+                    .fetch_all(&pool)
                     .await?;
-                Ok(result.rows_affected())
+                match pk {
+                    Some(pkf) => rows
+                        .iter()
+                        .map(|r| pk_to_json_pg(r, pkf.name, pkf.ty))
+                        .collect::<Result<_, _>>()
+                        .map_err(crate::orm::write::WriteError::Sqlx)?,
+                    None => Vec::new(),
+                }
             }
+        };
+        let count = ids.len() as u64;
+        if !ids.is_empty() {
+            crate::signals::emit_bulk_post_save::<T>(ids, false).await;
         }
+        Ok(count)
     }
 
     /// `UPDATE table SET k=v[, ...] WHERE <predicates>`. The values
@@ -699,29 +749,58 @@ impl<T: Model> QuerySet<T> {
     /// non-nullable columns; supplying a column that exists but is
     /// absent from the map is silently a no-op (the column keeps its
     /// current value — PATCH semantics, not PUT).
+    ///
+    /// Fires `bulk_post_save:<table>` once with `{ ids, created:
+    /// false, actor }` when at least one row matched. Per-row
+    /// `pre_save` / `post_save` are NOT fired — use [`Manager::save`]
+    /// when per-row signal semantics are required.
     pub async fn update_values(
         self,
         values: serde_json::Map<String, serde_json::Value>,
     ) -> Result<u64, crate::orm::write::WriteError> {
         let pool = resolve_pool::<T>(self.explicit_pool.clone());
         let backend = pool.backend_name();
-        let stmt = self.build_update_for(backend, &values)?;
-        match pool {
+        let mut stmt = self.build_update_for(backend, &values)?;
+        // RETURNING <pk> so bulk_post_save can include the matched ids.
+        let pk = pk_field::<T>();
+        if let Some(field) = pk {
+            stmt.returning_col(Alias::new(field.name));
+        }
+        let ids: Vec<JsonValue> = match pool {
             DbPool::Sqlite(pool) => {
                 let (sql, values) = stmt.build_sqlx(SqliteQueryBuilder);
-                let result = sqlx::query_with::<sqlx::Sqlite, _>(&sql, values)
-                    .execute(&pool)
+                let rows = sqlx::query_with::<sqlx::Sqlite, _>(&sql, values)
+                    .fetch_all(&pool)
                     .await?;
-                Ok(result.rows_affected())
+                match pk {
+                    Some(field) => rows
+                        .iter()
+                        .map(|r| pk_to_json_sqlite(r, field.name, field.ty))
+                        .collect::<Result<_, _>>()
+                        .map_err(crate::orm::write::WriteError::Sqlx)?,
+                    None => Vec::new(),
+                }
             }
             DbPool::Postgres(pool) => {
                 let (sql, values) = stmt.build_sqlx(PostgresQueryBuilder);
-                let result = sqlx::query_with::<sqlx::Postgres, _>(&sql, values)
-                    .execute(&pool)
+                let rows = sqlx::query_with::<sqlx::Postgres, _>(&sql, values)
+                    .fetch_all(&pool)
                     .await?;
-                Ok(result.rows_affected())
+                match pk {
+                    Some(field) => rows
+                        .iter()
+                        .map(|r| pk_to_json_pg(r, field.name, field.ty))
+                        .collect::<Result<_, _>>()
+                        .map_err(crate::orm::write::WriteError::Sqlx)?,
+                    None => Vec::new(),
+                }
             }
+        };
+        let count = ids.len() as u64;
+        if !ids.is_empty() {
+            crate::signals::emit_bulk_post_save::<T>(ids, false).await;
         }
+        Ok(count)
     }
 
     /// Helper: build the DELETE statement for the active backend.
@@ -1069,13 +1148,18 @@ impl<T: Model> Manager<T> {
     }
 
     /// INSERT many rows in a single statement. Returns the number of
-    /// rows inserted. Doesn't RETURNING-read-back the rows — use a
-    /// follow-up `Model::objects().filter(...).fetch()` if you need
-    /// them populated.
+    /// rows inserted. The full populated rows aren't materialised —
+    /// use a follow-up `Model::objects().filter(...).fetch()` if you
+    /// need them.
     ///
     /// Empty input is a no-op (returns Ok(0)) — the alternative
-    /// (building a `INSERT INTO t () VALUES ()` and failing at the
+    /// (building an `INSERT INTO t () VALUES ()` and failing at the
     /// DB) doesn't help anyone.
+    ///
+    /// Fires `bulk_post_save:<table>` once with `{ ids, created: true,
+    /// actor }` when at least one row was inserted. Per-row
+    /// `pre_save` / `post_save` are NOT fired — use [`Self::save`]
+    /// when per-row signal semantics are required.
     pub async fn bulk_create(&self, instances: Vec<T>) -> Result<u64, crate::orm::write::WriteError>
     where
         T: serde::Serialize,
@@ -1101,37 +1185,65 @@ impl<T: Model> Manager<T> {
         }
         let pool = resolve_pool::<T>(None);
         let backend = pool.backend_name();
-        let stmt = build_insert_many_for::<T>(backend, &maps)?;
+        let mut stmt = build_insert_many_for::<T>(backend, &maps)?;
         // First row's map is used to enrich UNIQUE / FK
         // messages with the offending value when the engine
         // doesn't name it. Imperfect for bulk (the failing row
         // could be later in the batch) but better than the raw
         // sqlx error.
         let first_map = maps.first().cloned().unwrap_or_default();
-        match pool {
+        // Add `RETURNING <pk>` so the bulk_post_save signal payload can
+        // carry the inserted PKs. Both backends support this — SQLite
+        // since 3.35, Postgres natively. Replaces the previous
+        // `execute()` + rows_affected path; count comes from the
+        // returned row vector instead.
+        let pk = pk_field::<T>();
+        if let Some(field) = pk {
+            stmt.returning_col(Alias::new(field.name));
+        }
+        let ids: Vec<JsonValue> = match pool {
             DbPool::Sqlite(pool) => {
                 let (sql, values) = stmt.build_sqlx(SqliteQueryBuilder);
-                let result = sqlx::query_with::<sqlx::Sqlite, _>(&sql, values)
-                    .execute(&pool)
+                let rows = sqlx::query_with::<sqlx::Sqlite, _>(&sql, values)
+                    .fetch_all(&pool)
                     .await
                     .map_err(|e| {
                         crate::orm::validation::classify_sql_error(&e, &first_map)
                             .unwrap_or(WriteError::Sqlx(e))
                     })?;
-                Ok(result.rows_affected())
+                match pk {
+                    Some(field) => rows
+                        .iter()
+                        .map(|r| pk_to_json_sqlite(r, field.name, field.ty))
+                        .collect::<Result<_, _>>()
+                        .map_err(WriteError::Sqlx)?,
+                    None => Vec::new(),
+                }
             }
             DbPool::Postgres(pool) => {
                 let (sql, values) = stmt.build_sqlx(PostgresQueryBuilder);
-                let result = sqlx::query_with::<sqlx::Postgres, _>(&sql, values)
-                    .execute(&pool)
+                let rows = sqlx::query_with::<sqlx::Postgres, _>(&sql, values)
+                    .fetch_all(&pool)
                     .await
                     .map_err(|e| {
                         crate::orm::validation::classify_sql_error(&e, &first_map)
                             .unwrap_or(WriteError::Sqlx(e))
                     })?;
-                Ok(result.rows_affected())
+                match pk {
+                    Some(field) => rows
+                        .iter()
+                        .map(|r| pk_to_json_pg(r, field.name, field.ty))
+                        .collect::<Result<_, _>>()
+                        .map_err(WriteError::Sqlx)?,
+                    None => Vec::new(),
+                }
             }
+        };
+        let count = ids.len() as u64;
+        if !ids.is_empty() {
+            crate::signals::emit_bulk_post_save::<T>(ids, true).await;
         }
+        Ok(count)
     }
 
     /// Django's `get_or_create`: fetch the first row matching `predicate`;
@@ -2165,4 +2277,59 @@ fn build_insert_many_for<T: Model>(
         })?;
     }
     Ok(stmt)
+}
+
+// =========================================================================
+// Primary-key decoding for bulk signal payloads
+//
+// Bulk write terminals (bulk_create, update_values, update_expr, delete)
+// add `RETURNING <pk>` to their statements when at least one subscriber
+// is registered for the corresponding bulk signal. The returned rows
+// then go through one of these helpers to land as serde_json::Value in
+// the signal payload's `ids` array.
+//
+// The dispatch is keyed on the FieldSpec's SqlType. Anything beyond the
+// built-in PK types (i32 / i64 / String / Uuid / FK) lands as Value::Null
+// — the signal still fires, just without a usable id for that row. In
+// practice the PK type is one of the four built-ins.
+// =========================================================================
+
+fn pk_to_json_sqlite(
+    row: &sqlx::sqlite::SqliteRow,
+    col_name: &str,
+    ty: crate::orm::SqlType,
+) -> Result<JsonValue, sqlx::Error> {
+    use crate::orm::SqlType::*;
+    use serde_json::json;
+    use sqlx::Row;
+    Ok(match ty {
+        SmallInt | Integer | BigInt | ForeignKey => json!(row.try_get::<i64, _>(col_name)?),
+        Text => json!(row.try_get::<String, _>(col_name)?),
+        Uuid => json!(row.try_get::<uuid::Uuid, _>(col_name)?.to_string()),
+        _ => JsonValue::Null,
+    })
+}
+
+fn pk_to_json_pg(
+    row: &sqlx::postgres::PgRow,
+    col_name: &str,
+    ty: crate::orm::SqlType,
+) -> Result<JsonValue, sqlx::Error> {
+    use crate::orm::SqlType::*;
+    use serde_json::json;
+    use sqlx::Row;
+    Ok(match ty {
+        SmallInt => json!(row.try_get::<i16, _>(col_name)?),
+        Integer => json!(row.try_get::<i32, _>(col_name)?),
+        BigInt | ForeignKey => json!(row.try_get::<i64, _>(col_name)?),
+        Text => json!(row.try_get::<String, _>(col_name)?),
+        Uuid => json!(row.try_get::<uuid::Uuid, _>(col_name)?.to_string()),
+        _ => JsonValue::Null,
+    })
+}
+
+/// Locate the primary-key FieldSpec for a model. Returns `None` if the
+/// model has no PK (pathological — every macro-generated Model has one).
+fn pk_field<T: Model>() -> Option<&'static crate::orm::FieldSpec> {
+    T::FIELDS.iter().find(|f| f.primary_key)
 }
