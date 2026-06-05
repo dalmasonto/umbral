@@ -130,6 +130,30 @@ impl From<PgPool> for DbPool {
 /// The "default" pool is always present after `App::build()` succeeds.
 static POOLS: OnceLock<HashMap<String, DbPool>> = OnceLock::new();
 
+/// Global default for whether ORM write terminals should wrap in a
+/// transaction. Set by `AppBuilder::atomic_transactions(...)`; read by
+/// every terminal that supports `.atomic()` / `.non_atomic()`. Unset
+/// (the default) means "no wrapping" — preserves existing behaviour for
+/// apps that don't opt in.
+static ATOMIC_DEFAULT: OnceLock<bool> = OnceLock::new();
+
+/// Publish the app-wide atomic-transactions default. Called by
+/// `AppBuilder::build()` exactly when the user set the flag via
+/// `atomic_transactions(...)`. Idempotent across re-init attempts —
+/// the first set wins, matching the rest of the OnceLock-backed
+/// ambient state.
+pub(crate) fn init_atomic_default(enabled: bool) {
+    let _ = ATOMIC_DEFAULT.set(enabled);
+}
+
+/// Read the app-wide atomic-transactions default. Returns `false` when
+/// the builder didn't call `atomic_transactions(...)` (or when the
+/// ambient state hasn't been published yet, as in unit tests that
+/// drive the ORM with `.on(&pool)` and never call `App::build()`).
+pub fn atomic_default() -> bool {
+    *ATOMIC_DEFAULT.get().unwrap_or(&false)
+}
+
 /// Initialize the pool registry. Called by `AppBuilder::build()` only.
 pub(crate) fn init(pools: HashMap<String, DbPool>) {
     POOLS

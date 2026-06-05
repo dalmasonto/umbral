@@ -87,6 +87,12 @@ pub struct AppBuilder {
     /// is installed at all and browsers apply the same-origin
     /// default. Configure via [`AppBuilder::cors`].
     cors: Option<crate::cors::CorsConfig>,
+    /// When `Some(true)`, every ORM write terminal that supports
+    /// `.atomic()` / `.non_atomic()` runs inside a transaction by
+    /// default. Per-call `.non_atomic()` overrides. `None` keeps the
+    /// pre-flag behaviour (no auto-wrapping). See
+    /// [`AppBuilder::atomic_transactions`].
+    atomic_transactions: Option<bool>,
 }
 
 impl Default for AppBuilder {
@@ -105,6 +111,7 @@ impl Default for AppBuilder {
             server_error_hook: None,
             default_error_pages: true,
             cors: None,
+            atomic_transactions: None,
         }
     }
 }
@@ -355,6 +362,27 @@ impl AppBuilder {
         self
     }
 
+    /// Default every ORM write to run inside its own transaction.
+    ///
+    /// When `enabled = true`, terminals that opt into the contract
+    /// (`Manager::create`, `Manager::bulk_create`,
+    /// `Manager::get_or_create`, `QuerySet::update_values`,
+    /// `QuerySet::delete`) wrap their work in a BEGIN / COMMIT pair
+    /// unless the caller explicitly opts out with `.non_atomic()`.
+    ///
+    /// This is the safe-by-default posture: a framework that claims
+    /// "secure by default" should also be "transaction-safe by
+    /// default." Opting out matters mostly for high-throughput seed
+    /// scripts that already wrap an outer transaction themselves.
+    ///
+    /// Without this flag the framework's behaviour is unchanged —
+    /// writes run with whatever transaction the caller arranges. The
+    /// per-call `.atomic()` / `.non_atomic()` overrides still work.
+    pub fn atomic_transactions(mut self, enabled: bool) -> Self {
+        self.atomic_transactions = Some(enabled);
+        self
+    }
+
     /// Finalize the application.
     ///
     /// Phases (see spec 01 §Mechanics and invariants and spec 02
@@ -507,6 +535,9 @@ impl AppBuilder {
         crate::settings::init(&settings);
         db::init(self.databases);
         crate::backend::init(backend);
+        if let Some(enabled) = self.atomic_transactions {
+            db::init_atomic_default(enabled);
+        }
 
         let mut per_plugin: HashMap<String, Vec<ModelMeta>> = HashMap::new();
         per_plugin.insert(

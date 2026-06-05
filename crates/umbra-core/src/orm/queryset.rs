@@ -51,13 +51,35 @@ use crate::orm::{FExpr, HydrateRelated, Model, OrderExpr, Predicate};
 /// `Post::objects()` is the only door.
 pub struct Manager<T> {
     _phantom: PhantomData<T>,
+    /// Per-Manager override for the `atomic_transactions` builder
+    /// default. `None` = inherit the global default; `Some(true)` =
+    /// wrap subsequent writes in a transaction; `Some(false)` =
+    /// explicitly opt out. Propagates into the QuerySet `queryset()`
+    /// constructs.
+    atomic: Option<bool>,
 }
 
 impl<T> Manager<T> {
     pub(crate) fn new() -> Self {
         Self {
             _phantom: PhantomData,
+            atomic: None,
         }
+    }
+
+    /// Wrap every write terminal that hangs off this Manager in a
+    /// transaction. Equivalent to calling `.atomic()` on each
+    /// QuerySet derived from it. Per-call `.non_atomic()` overrides.
+    pub fn atomic(mut self) -> Self {
+        self.atomic = Some(true);
+        self
+    }
+
+    /// Opt this Manager (and every QuerySet derived from it) out of
+    /// the global `App::builder().atomic_transactions(true)` default.
+    pub fn non_atomic(mut self) -> Self {
+        self.atomic = Some(false);
+        self
     }
 }
 
@@ -99,6 +121,12 @@ pub struct QuerySet<T> {
     /// Set to `true` the first time `.order_by(...)` is called; when
     /// `false`, `build_query_for` applies `default_ordering`.
     pub(crate) explicit_order: bool,
+    /// Per-QuerySet override for the `atomic_transactions` builder
+    /// default. `None` = inherit the global default via
+    /// [`crate::db::atomic_default`]; `Some(true)` = wrap this
+    /// QuerySet's write terminal in a transaction; `Some(false)` =
+    /// explicitly opt out.
+    pub(crate) atomic: Option<bool>,
     _phantom: PhantomData<T>,
 }
 
@@ -111,8 +139,35 @@ impl<T> QuerySet<T> {
             predicates: Vec::new(),
             explicit_pool: None,
             select_related: Vec::new(),
+            atomic: None,
             _phantom: PhantomData,
         }
+    }
+
+    /// Wrap this QuerySet's write terminal in a transaction. Reads are
+    /// unaffected (read terminals are single statements and the DB
+    /// gives them a consistent snapshot). Mutually exclusive with
+    /// [`Self::on_tx`] — if both are set, `on_tx` wins (you're
+    /// already inside a transaction, so wrapping again would deadlock
+    /// or fail on backends without nested transactions).
+    pub fn atomic(mut self) -> Self {
+        self.atomic = Some(true);
+        self
+    }
+
+    /// Opt this QuerySet's write terminal out of the global
+    /// `App::builder().atomic_transactions(true)` default. Useful in
+    /// hot-path batches where the caller already owns the outer
+    /// transaction.
+    pub fn non_atomic(mut self) -> Self {
+        self.atomic = Some(false);
+        self
+    }
+
+    /// Resolve whether this QuerySet should auto-wrap its write
+    /// terminal in a transaction. Per-call override > builder global.
+    pub(crate) fn should_atomic_wrap(&self) -> bool {
+        self.atomic.unwrap_or_else(crate::db::atomic_default)
     }
 
     /// Clone the base query and weave in the accumulated predicates,
@@ -606,6 +661,7 @@ impl<T: Model> QuerySet<T> {
     /// [`Manager::delete_instance`] when per-row signal semantics are
     /// required.
     pub async fn delete(self) -> Result<u64, sqlx::Error> {
+        let atomic = self.should_atomic_wrap();
         let pool = resolve_pool::<T>(self.explicit_pool.clone());
         let backend = pool.backend_name();
         let mut stmt = self.build_delete_for(backend);
@@ -616,9 +672,26 @@ impl<T: Model> QuerySet<T> {
         let ids: Vec<JsonValue> = match pool {
             DbPool::Sqlite(pool) => {
                 let (sql, values) = stmt.build_sqlx(SqliteQueryBuilder);
-                let rows = sqlx::query_with::<sqlx::Sqlite, _>(&sql, values)
-                    .fetch_all(&pool)
-                    .await?;
+                let rows = if atomic {
+                    let mut tx = pool.begin().await?;
+                    let r = sqlx::query_with::<sqlx::Sqlite, _>(&sql, values)
+                        .fetch_all(&mut *tx)
+                        .await;
+                    match r {
+                        Ok(rows) => {
+                            tx.commit().await?;
+                            rows
+                        }
+                        Err(e) => {
+                            let _ = tx.rollback().await;
+                            return Err(e);
+                        }
+                    }
+                } else {
+                    sqlx::query_with::<sqlx::Sqlite, _>(&sql, values)
+                        .fetch_all(&pool)
+                        .await?
+                };
                 match pk {
                     Some(field) => rows
                         .iter()
@@ -629,9 +702,26 @@ impl<T: Model> QuerySet<T> {
             }
             DbPool::Postgres(pool) => {
                 let (sql, values) = stmt.build_sqlx(PostgresQueryBuilder);
-                let rows = sqlx::query_with::<sqlx::Postgres, _>(&sql, values)
-                    .fetch_all(&pool)
-                    .await?;
+                let rows = if atomic {
+                    let mut tx = pool.begin().await?;
+                    let r = sqlx::query_with::<sqlx::Postgres, _>(&sql, values)
+                        .fetch_all(&mut *tx)
+                        .await;
+                    match r {
+                        Ok(rows) => {
+                            tx.commit().await?;
+                            rows
+                        }
+                        Err(e) => {
+                            let _ = tx.rollback().await;
+                            return Err(e);
+                        }
+                    }
+                } else {
+                    sqlx::query_with::<sqlx::Postgres, _>(&sql, values)
+                        .fetch_all(&pool)
+                        .await?
+                };
                 match pk {
                     Some(field) => rows
                         .iter()
@@ -758,6 +848,7 @@ impl<T: Model> QuerySet<T> {
         self,
         values: serde_json::Map<String, serde_json::Value>,
     ) -> Result<u64, crate::orm::write::WriteError> {
+        let atomic = self.should_atomic_wrap();
         let pool = resolve_pool::<T>(self.explicit_pool.clone());
         let backend = pool.backend_name();
         let mut stmt = self.build_update_for(backend, &values)?;
@@ -769,9 +860,31 @@ impl<T: Model> QuerySet<T> {
         let ids: Vec<JsonValue> = match pool {
             DbPool::Sqlite(pool) => {
                 let (sql, values) = stmt.build_sqlx(SqliteQueryBuilder);
-                let rows = sqlx::query_with::<sqlx::Sqlite, _>(&sql, values)
-                    .fetch_all(&pool)
-                    .await?;
+                let rows = if atomic {
+                    let mut tx = pool
+                        .begin()
+                        .await
+                        .map_err(crate::orm::write::WriteError::Sqlx)?;
+                    let r = sqlx::query_with::<sqlx::Sqlite, _>(&sql, values)
+                        .fetch_all(&mut *tx)
+                        .await;
+                    match r {
+                        Ok(rows) => {
+                            tx.commit()
+                                .await
+                                .map_err(crate::orm::write::WriteError::Sqlx)?;
+                            rows
+                        }
+                        Err(e) => {
+                            let _ = tx.rollback().await;
+                            return Err(crate::orm::write::WriteError::Sqlx(e));
+                        }
+                    }
+                } else {
+                    sqlx::query_with::<sqlx::Sqlite, _>(&sql, values)
+                        .fetch_all(&pool)
+                        .await?
+                };
                 match pk {
                     Some(field) => rows
                         .iter()
@@ -783,9 +896,31 @@ impl<T: Model> QuerySet<T> {
             }
             DbPool::Postgres(pool) => {
                 let (sql, values) = stmt.build_sqlx(PostgresQueryBuilder);
-                let rows = sqlx::query_with::<sqlx::Postgres, _>(&sql, values)
-                    .fetch_all(&pool)
-                    .await?;
+                let rows = if atomic {
+                    let mut tx = pool
+                        .begin()
+                        .await
+                        .map_err(crate::orm::write::WriteError::Sqlx)?;
+                    let r = sqlx::query_with::<sqlx::Postgres, _>(&sql, values)
+                        .fetch_all(&mut *tx)
+                        .await;
+                    match r {
+                        Ok(rows) => {
+                            tx.commit()
+                                .await
+                                .map_err(crate::orm::write::WriteError::Sqlx)?;
+                            rows
+                        }
+                        Err(e) => {
+                            let _ = tx.rollback().await;
+                            return Err(crate::orm::write::WriteError::Sqlx(e));
+                        }
+                    }
+                } else {
+                    sqlx::query_with::<sqlx::Postgres, _>(&sql, values)
+                        .fetch_all(&pool)
+                        .await?
+                };
                 match pk {
                     Some(field) => rows
                         .iter()
@@ -937,7 +1072,16 @@ impl<T: Model> Manager<T> {
         // terminals that don't see an explicit `.order_by(...)` still
         // get a deterministic row order.
         qs.default_ordering = T::ORDERING.to_vec();
+        // Propagate the Manager's atomic override so QuerySet
+        // terminals inherit it without the caller re-specifying.
+        qs.atomic = self.atomic;
         qs
+    }
+
+    /// Resolve whether write terminals on this Manager should auto-wrap
+    /// in a transaction. Per-call override > builder global.
+    fn should_atomic_wrap(&self) -> bool {
+        self.atomic.unwrap_or_else(crate::db::atomic_default)
     }
 
     /// See `QuerySet::filter`.
@@ -1111,6 +1255,7 @@ impl<T: Model> Manager<T> {
         let pool = resolve_pool::<T>(None);
         let backend = pool.backend_name();
         let stmt = build_insert_one_for::<T>(backend, &map)?;
+        let atomic = self.should_atomic_wrap();
         // Post-execution SQL classification: turns the DB's
         // UNIQUE / FK / NOT NULL / CHECK violations into the
         // structured `WriteError` variants instead of a raw
@@ -1118,13 +1263,30 @@ impl<T: Model> Manager<T> {
         match pool {
             DbPool::Sqlite(pool) => {
                 let (sql, values) = stmt.build_sqlx(SqliteQueryBuilder);
-                let mut row = sqlx::query_as_with::<sqlx::Sqlite, T, _>(&sql, values)
-                    .fetch_one(&pool)
-                    .await
-                    .map_err(|e| {
-                        crate::orm::validation::classify_sql_error(&e, &map)
-                            .unwrap_or(WriteError::Sqlx(e))
-                    })?;
+                let row_result = if atomic {
+                    let mut tx = pool.begin().await.map_err(WriteError::Sqlx)?;
+                    let r = sqlx::query_as_with::<sqlx::Sqlite, T, _>(&sql, values)
+                        .fetch_one(&mut *tx)
+                        .await;
+                    match r {
+                        Ok(row) => {
+                            tx.commit().await.map_err(WriteError::Sqlx)?;
+                            Ok(row)
+                        }
+                        Err(e) => {
+                            let _ = tx.rollback().await;
+                            Err(e)
+                        }
+                    }
+                } else {
+                    sqlx::query_as_with::<sqlx::Sqlite, T, _>(&sql, values)
+                        .fetch_one(&pool)
+                        .await
+                };
+                let mut row = row_result.map_err(|e| {
+                    crate::orm::validation::classify_sql_error(&e, &map)
+                        .unwrap_or(WriteError::Sqlx(e))
+                })?;
                 // BUG-16 step 2: every materialised row, including the
                 // post-INSERT readback, needs `parent_id` +
                 // `junction_table` seeded on its M2M slots — otherwise
@@ -1134,13 +1296,30 @@ impl<T: Model> Manager<T> {
             }
             DbPool::Postgres(pool) => {
                 let (sql, values) = stmt.build_sqlx(PostgresQueryBuilder);
-                let mut row = sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
-                    .fetch_one(&pool)
-                    .await
-                    .map_err(|e| {
-                        crate::orm::validation::classify_sql_error(&e, &map)
-                            .unwrap_or(WriteError::Sqlx(e))
-                    })?;
+                let row_result = if atomic {
+                    let mut tx = pool.begin().await.map_err(WriteError::Sqlx)?;
+                    let r = sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
+                        .fetch_one(&mut *tx)
+                        .await;
+                    match r {
+                        Ok(row) => {
+                            tx.commit().await.map_err(WriteError::Sqlx)?;
+                            Ok(row)
+                        }
+                        Err(e) => {
+                            let _ = tx.rollback().await;
+                            Err(e)
+                        }
+                    }
+                } else {
+                    sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
+                        .fetch_one(&pool)
+                        .await
+                };
+                let mut row = row_result.map_err(|e| {
+                    crate::orm::validation::classify_sql_error(&e, &map)
+                        .unwrap_or(WriteError::Sqlx(e))
+                })?;
                 row.set_m2m_parent_ids();
                 Ok(row)
             }
@@ -1201,16 +1380,35 @@ impl<T: Model> Manager<T> {
         if let Some(field) = pk {
             stmt.returning_col(Alias::new(field.name));
         }
+        let atomic = self.should_atomic_wrap();
         let ids: Vec<JsonValue> = match pool {
             DbPool::Sqlite(pool) => {
                 let (sql, values) = stmt.build_sqlx(SqliteQueryBuilder);
-                let rows = sqlx::query_with::<sqlx::Sqlite, _>(&sql, values)
-                    .fetch_all(&pool)
-                    .await
-                    .map_err(|e| {
-                        crate::orm::validation::classify_sql_error(&e, &first_map)
-                            .unwrap_or(WriteError::Sqlx(e))
-                    })?;
+                let rows = if atomic {
+                    let mut tx = pool.begin().await.map_err(WriteError::Sqlx)?;
+                    let r = sqlx::query_with::<sqlx::Sqlite, _>(&sql, values)
+                        .fetch_all(&mut *tx)
+                        .await;
+                    match r {
+                        Ok(rows) => {
+                            tx.commit().await.map_err(WriteError::Sqlx)?;
+                            rows
+                        }
+                        Err(e) => {
+                            let _ = tx.rollback().await;
+                            return Err(crate::orm::validation::classify_sql_error(&e, &first_map)
+                                .unwrap_or(WriteError::Sqlx(e)));
+                        }
+                    }
+                } else {
+                    sqlx::query_with::<sqlx::Sqlite, _>(&sql, values)
+                        .fetch_all(&pool)
+                        .await
+                        .map_err(|e| {
+                            crate::orm::validation::classify_sql_error(&e, &first_map)
+                                .unwrap_or(WriteError::Sqlx(e))
+                        })?
+                };
                 match pk {
                     Some(field) => rows
                         .iter()
@@ -1222,13 +1420,31 @@ impl<T: Model> Manager<T> {
             }
             DbPool::Postgres(pool) => {
                 let (sql, values) = stmt.build_sqlx(PostgresQueryBuilder);
-                let rows = sqlx::query_with::<sqlx::Postgres, _>(&sql, values)
-                    .fetch_all(&pool)
-                    .await
-                    .map_err(|e| {
-                        crate::orm::validation::classify_sql_error(&e, &first_map)
-                            .unwrap_or(WriteError::Sqlx(e))
-                    })?;
+                let rows = if atomic {
+                    let mut tx = pool.begin().await.map_err(WriteError::Sqlx)?;
+                    let r = sqlx::query_with::<sqlx::Postgres, _>(&sql, values)
+                        .fetch_all(&mut *tx)
+                        .await;
+                    match r {
+                        Ok(rows) => {
+                            tx.commit().await.map_err(WriteError::Sqlx)?;
+                            rows
+                        }
+                        Err(e) => {
+                            let _ = tx.rollback().await;
+                            return Err(crate::orm::validation::classify_sql_error(&e, &first_map)
+                                .unwrap_or(WriteError::Sqlx(e)));
+                        }
+                    }
+                } else {
+                    sqlx::query_with::<sqlx::Postgres, _>(&sql, values)
+                        .fetch_all(&pool)
+                        .await
+                        .map_err(|e| {
+                            crate::orm::validation::classify_sql_error(&e, &first_map)
+                                .unwrap_or(WriteError::Sqlx(e))
+                        })?
+                };
                 match pk {
                     Some(field) => rows
                         .iter()
