@@ -677,6 +677,13 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
     // type verbatim so user crate paths (`uuid::Uuid`, `::uuid::Uuid`,
     // bare `Uuid`) round-trip unchanged through the emitted tokens.
     let pk_ty_tokens = &id_field.ty;
+    // Gap 19: detect whether the PK type is `i64` so we can emit the
+    // `HydrateRelated::pk_i64` override that the prefetch_related
+    // hydration uses to collect parent ids. Match on the type's
+    // token-string; covers the bare `i64` form. Non-i64 PK models
+    // inherit the default (`None`), silently disabling prefetch on
+    // them — same v1 constraint as `set_m2m_parent_ids`.
+    let pk_is_i64 = quote!(#pk_ty_tokens).to_string().trim() == "i64";
 
     // The default table name is snake_case of the struct name. Two opt-in
     // attribute keys change this, with explicit-table winning over plugin
@@ -1181,6 +1188,26 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
     // queries against the junction — admin chip-picker HTMX backends
     // and similar low-level integrations. Application code should
     // prefer the typed helpers and never touch the string.
+    // Gap 19: per-M2M-field arm for `set_m2m_resolved_json`. For
+    // `pub tags: M2M<Tag>` on this model, emit
+    // `"tags" => { ... self.tags.set_resolved(...) }`.
+    let m2m_resolved_arms: Vec<TokenStream2> = m2m_field_idents
+        .iter()
+        .zip(m2m_field_children.iter())
+        .map(|(ident, child_ty)| {
+            let field_name_str = ident.to_string();
+            quote! {
+                #field_name_str => {
+                    let parsed: ::std::vec::Vec<#child_ty> = rows
+                        .into_iter()
+                        .filter_map(|r| ::umbra::_serde_json::from_value::<#child_ty>(r).ok())
+                        .collect();
+                    self.#ident.set_resolved(parsed);
+                }
+            }
+        })
+        .collect();
+
     let m2m_helper_methods: Vec<TokenStream2> = m2m_field_idents
         .iter()
         .zip(m2m_field_children.iter())
@@ -1297,6 +1324,20 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         })
         .collect();
 
+    // Gap 19: emit the `pk_i64` override only when the model's PK is
+    // `i64`. Non-i64 PK models inherit the default (returns None) and
+    // become a silent no-op for prefetch_related, matching the rest
+    // of the v1 M2M-i64 constraint.
+    let pk_i64_override: TokenStream2 = if pk_is_i64 {
+        quote! {
+            fn pk_i64(&self) -> ::core::option::Option<i64> {
+                ::core::option::Option::Some(self.#pk_field_name)
+            }
+        }
+    } else {
+        quote! {}
+    };
+
     let output = quote! {
         impl ::umbra::orm::Model for #struct_name {
             type PrimaryKey = #pk_ty_tokens;
@@ -1347,6 +1388,23 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                 // would do the same, but emitting the override
                 // explicitly keeps the macro output uniform.
                 #set_m2m_body
+            }
+            #pk_i64_override
+            fn set_m2m_resolved_json(
+                &mut self,
+                field_name: &str,
+                rows: ::std::vec::Vec<::umbra::_serde_json::Value>,
+            ) {
+                // Gap 19: prefetch_related populates each parent
+                // row's M2M slot via this hook. The macro emits one
+                // arm per M2M field on this model; per-row
+                // deserialisation errors silently drop a row rather
+                // than fail the prefetch (same forgive-and-continue
+                // posture as hydrate_fk).
+                match field_name {
+                    #(#m2m_resolved_arms)*
+                    _ => {}
+                }
             }
         }
 

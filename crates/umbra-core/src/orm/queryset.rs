@@ -114,6 +114,13 @@ pub struct QuerySet<T> {
     /// fetches the related rows for each named field and calls
     /// `HydrateRelated::hydrate_fk` to populate `ForeignKey.resolved`.
     pub(crate) select_related: Vec<String>,
+    /// M2M field names requested for eager loading via
+    /// `prefetch_related`. After the main query, one batched JOIN
+    /// against the junction + child table fetches every related row
+    /// for every parent in a single round-trip; each parent's
+    /// `M2M.resolved` slot is populated via
+    /// `HydrateRelated::set_m2m_resolved_json`. Gap #19.
+    pub(crate) prefetch_related: Vec<String>,
     /// BUG-8: `#[umbra(ordering = [...])]` lowers to a default ORDER
     /// BY applied at terminal time when the caller didn't supply an
     /// explicit `.order_by(...)`. Mirrors Django's
@@ -141,6 +148,7 @@ impl<T> QuerySet<T> {
             predicates: Vec::new(),
             explicit_pool: None,
             select_related: Vec::new(),
+            prefetch_related: Vec::new(),
             atomic: None,
             _phantom: PhantomData,
         }
@@ -324,6 +332,43 @@ impl<T> QuerySet<T> {
         }
         self
     }
+
+    /// Eagerly load an M2M relation via a single batched join.
+    ///
+    /// After the main SELECT returns rows, one query of the shape
+    /// `SELECT j.parent_id, child.* FROM <child_table> child INNER
+    /// JOIN <junction> j ON child.<pk> = j.child_id WHERE
+    /// j.parent_id IN (...)` fetches every related child for every
+    /// parent in one round-trip. Each parent's `M2M.resolved` slot
+    /// is populated with its matching children.
+    ///
+    /// The M2M counterpart of [`Self::select_related`] for FKs —
+    /// same goal of killing N+1. Mirrors Django's
+    /// `prefetch_related('tags')`.
+    ///
+    /// ## Scope (v1)
+    ///
+    /// - **M2M only.** Reverse-FK collections
+    ///   (`prefetch_related("comment_set")`) need a Vec-on-parent
+    ///   slot that doesn't exist yet — a follow-up.
+    /// - **i64 parent PK only.** Same constraint as the rest of the
+    ///   M2M plumbing; models with non-i64 PKs surface a clean
+    ///   compile error.
+    /// - **Unknown field name** is a silent no-op — same forgiving
+    ///   posture as `select_related`.
+    pub fn prefetch_related(mut self, field_name: impl Into<String>) -> Self {
+        self.prefetch_related.push(field_name.into());
+        self
+    }
+
+    /// Eagerly load multiple M2M relations. Sugar for chained
+    /// `.prefetch_related(name)` calls.
+    pub fn prefetch_related_many(mut self, field_names: &[&str]) -> Self {
+        for name in field_names {
+            self.prefetch_related.push(name.to_string());
+        }
+        self
+    }
 }
 
 /// Resolve the pool to run a terminal against.
@@ -448,6 +493,7 @@ impl<T: Model> QuerySet<T> {
             + HydrateRelated,
     {
         let sr_fields = self.select_related.clone();
+        let prefetch_fields = self.prefetch_related.clone();
         // The turbofish on `query_as_with::<DB, _, _>` is load-bearing:
         // with both `sqlx-sqlite` and `sqlx-postgres` features on
         // sea-query-binder, `SqlxValues` implements `IntoArguments` for
@@ -479,6 +525,10 @@ impl<T: Model> QuerySet<T> {
         if !sr_fields.is_empty() {
             let pool = resolve_pool::<T>(self.explicit_pool.clone());
             hydrate_select_related::<T>(&mut rows, &sr_fields, &pool).await?;
+        }
+        if !prefetch_fields.is_empty() {
+            let pool = resolve_pool::<T>(self.explicit_pool.clone());
+            hydrate_prefetch_related::<T>(&mut rows, &prefetch_fields, &pool).await?;
         }
         Ok(rows)
     }
@@ -2577,6 +2627,175 @@ async fn hydrate_select_related<T: Model + HydrateRelated>(
                     row.hydrate_fk(field_name.as_str(), resolved_json);
                 }
             }
+        }
+    }
+    Ok(())
+}
+
+/// Gap 19: post-fetch hydration for `prefetch_related` names.
+///
+/// For each requested M2M field, runs one query joining the child
+/// table to the junction:
+///
+///   SELECT j.parent_id AS __parent_id, child.<col1>, child.<col2>, ...
+///   FROM <child_table> child
+///   INNER JOIN <junction> j ON child.<child_pk> = j.child_id
+///   WHERE j.parent_id IN (<parent_ids>)
+///
+/// Each result row decodes its child columns to a `serde_json::Value`
+/// object (using the child ModelMeta's column types — same machinery
+/// as `values()`). Rows are bucketed by parent_id; each parent in
+/// `rows` then receives the matching bucket via
+/// `HydrateRelated::set_m2m_resolved_json`.
+///
+/// V1 scope: i64 parent PK only (parents whose `pk_i64()` returns
+/// `None` are skipped). Unknown field names, models with no
+/// matching `M2M_RELATIONS` entry, and child models that aren't
+/// registered are silently no-op'd — matches the forgiving posture
+/// of `hydrate_select_related`.
+async fn hydrate_prefetch_related<T: Model + HydrateRelated>(
+    rows: &mut [T],
+    prefetch_fields: &[String],
+    pool: &DbPool,
+) -> Result<(), sqlx::Error> {
+    for field_name in prefetch_fields {
+        // 1. Locate the M2M relation spec on T for this field name.
+        let spec = match T::M2M_RELATIONS
+            .iter()
+            .find(|s| s.field_name == field_name.as_str())
+        {
+            Some(s) => s,
+            None => continue,
+        };
+        let junction_table = format!("{}_{}", T::TABLE, spec.field_name);
+
+        // 2. Look up the child model's ModelMeta via the migrate
+        //    registry so we can iterate its columns at decode time.
+        let registered: Vec<crate::migrate::ModelMeta> = crate::migrate::registered_models();
+        let child_meta = match registered
+            .into_iter()
+            .find(|m| m.table == spec.target_table)
+        {
+            Some(m) => m,
+            None => continue,
+        };
+        let child_pk_col = match child_meta.fields.iter().find(|c| c.primary_key) {
+            Some(c) => c.name.clone(),
+            None => continue,
+        };
+
+        // 3. Collect parent PKs (i64 only) from the main rows.
+        let mut parent_ids: Vec<i64> = Vec::with_capacity(rows.len());
+        for row in rows.iter() {
+            if let Some(pk) = row.pk_i64() {
+                parent_ids.push(pk);
+            }
+        }
+        if parent_ids.is_empty() {
+            // Still need to set empty resolved on every parent so
+            // `tags.resolved()` returns `Some(&[])` after prefetch,
+            // matching the documented "empty Vec, not None" contract.
+            for r in rows.iter_mut() {
+                r.set_m2m_resolved_json(field_name.as_str(), Vec::new());
+            }
+            continue;
+        }
+
+        // 4. Build the SELECT joining child + junction.
+        let mut q = sea_query::Query::select();
+        q.expr_as(
+            sea_query::Expr::col((
+                sea_query::Alias::new("j"),
+                sea_query::Alias::new("parent_id"),
+            )),
+            sea_query::Alias::new("__parent_id"),
+        );
+        for col in &child_meta.fields {
+            q.expr_as(
+                sea_query::Expr::col((
+                    sea_query::Alias::new("c"),
+                    sea_query::Alias::new(col.name.as_str()),
+                )),
+                sea_query::Alias::new(col.name.as_str()),
+            );
+        }
+        q.from_as(
+            sea_query::Alias::new(child_meta.table.as_str()),
+            sea_query::Alias::new("c"),
+        )
+        .join_as(
+            sea_query::JoinType::InnerJoin,
+            sea_query::Alias::new(&junction_table),
+            sea_query::Alias::new("j"),
+            sea_query::Expr::col((
+                sea_query::Alias::new("j"),
+                sea_query::Alias::new("child_id"),
+            ))
+            .equals((
+                sea_query::Alias::new("c"),
+                sea_query::Alias::new(child_pk_col.as_str()),
+            )),
+        )
+        .and_where(
+            sea_query::Expr::col((
+                sea_query::Alias::new("j"),
+                sea_query::Alias::new("parent_id"),
+            ))
+            .is_in(parent_ids.iter().copied()),
+        );
+
+        // 5. Execute and group by parent_id.
+        let mut buckets: HashMap<i64, Vec<JsonValue>> = HashMap::new();
+        match pool {
+            DbPool::Sqlite(p) => {
+                let (sql, vals) = q.build_sqlx(SqliteQueryBuilder);
+                let raw_rows = sqlx::query_with::<sqlx::Sqlite, _>(&sql, vals)
+                    .fetch_all(p)
+                    .await?;
+                for raw in &raw_rows {
+                    use sqlx::Row;
+                    let parent_id: i64 = raw.try_get("__parent_id")?;
+                    let mut obj = serde_json::Map::with_capacity(child_meta.fields.len());
+                    for col in &child_meta.fields {
+                        let v = crate::orm::dynamic::decode_to_json(raw, col)?;
+                        obj.insert(col.name.clone(), v);
+                    }
+                    buckets
+                        .entry(parent_id)
+                        .or_default()
+                        .push(JsonValue::Object(obj));
+                }
+            }
+            DbPool::Postgres(p) => {
+                let (sql, vals) = q.build_sqlx(PostgresQueryBuilder);
+                let raw_rows = sqlx::query_with::<sqlx::Postgres, _>(&sql, vals)
+                    .fetch_all(p)
+                    .await?;
+                for raw in &raw_rows {
+                    use sqlx::Row;
+                    let parent_id: i64 = raw.try_get("__parent_id")?;
+                    let mut obj = serde_json::Map::with_capacity(child_meta.fields.len());
+                    for col in &child_meta.fields {
+                        let v = crate::orm::dynamic::decode_pg_to_json(raw, col)?;
+                        obj.insert(col.name.clone(), v);
+                    }
+                    buckets
+                        .entry(parent_id)
+                        .or_default()
+                        .push(JsonValue::Object(obj));
+                }
+            }
+        }
+
+        // 6. Hand each parent its bucket. Parents without children
+        //    still get an empty Vec so .resolved() returns Some(&[])
+        //    consistently after prefetch.
+        for row in rows.iter_mut() {
+            let bucket = match row.pk_i64() {
+                Some(id) => buckets.remove(&id).unwrap_or_default(),
+                None => Vec::new(),
+            };
+            row.set_m2m_resolved_json(field_name.as_str(), bucket);
         }
     }
     Ok(())

@@ -72,6 +72,35 @@ pub trait HydrateRelated {
     /// with non-i64 PKs fail to compile here, which matches the
     /// constraint documented in `M2M<T>`.
     fn set_m2m_parent_ids(&mut self) {}
+
+    /// Return this row's primary key as an `i64`, when the model uses
+    /// an i64 PK. Used by `prefetch_related` (gap #19) to collect
+    /// parent ids for the batched JOIN against the junction table.
+    ///
+    /// Default: `None` — models with non-i64 PKs silently skip the
+    /// prefetch hydration. The macro emits an override returning
+    /// `Some(self.<pk>)` only when the PK type is `i64`, matching
+    /// the M2M-plumbing's overall i64 constraint.
+    fn pk_i64(&self) -> Option<i64> {
+        None
+    }
+
+    /// Attach a list of pre-fetched child rows to the named `M2M<U>`
+    /// field's `resolved` slot. Called by `QuerySet::prefetch_related`
+    /// (gap #19) after a batched JOIN through the junction table
+    /// returns one Vec<U> per parent.
+    ///
+    /// `rows` carries the child rows as JSON objects ready for
+    /// `serde_json::from_value::<U>(...)`. Decoding failures (e.g. a
+    /// row that doesn't match the target struct shape) silently drop
+    /// that one row from the resolved set — same forgive-and-continue
+    /// posture as `hydrate_fk` for `select_related`.
+    ///
+    /// A field name that doesn't match any M2M field on this model is
+    /// a no-op. The macro-emitted body pattern-matches the M2M fields
+    /// declared on this struct; the default below is empty so models
+    /// without M2M fields pay nothing.
+    fn set_m2m_resolved_json(&mut self, _field_name: &str, _rows: Vec<serde_json::Value>) {}
 }
 
 /// The trait every model implements.
