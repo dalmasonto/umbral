@@ -1677,14 +1677,23 @@ impl<T: Model> Manager<T> {
     ///
     /// ## Signal contract
     ///
-    /// - `pre_save` fires before the database write with `{ "instance": ..., "created": bool }`.
-    /// - `post_save` fires after the database write with the DB-read-back row.
+    /// - `pre_save:<table>` fires before the database write with
+    ///   `{ "instance": ..., "created": bool, "actor": ... }`.
+    /// - `post_save:<table>` fires after the database write with the
+    ///   DB-read-back row and the same envelope keys.
     ///
-    /// ## Bulk paths do NOT fire signals
+    /// The `"actor"` value is set by the nearest enclosing
+    /// [`crate::signals::with_actor`] scope; `Value::Null` when no
+    /// scope is active.
+    ///
+    /// ## Bulk paths fire bulk signals, not per-row signals
     ///
     /// `Manager::create`, `Manager::bulk_create`, and
-    /// `QuerySet::update_values` / `QuerySet::delete` are signal-free.
-    /// Use `save` / `delete_instance` when per-row signal semantics are needed.
+    /// `QuerySet::update_values` / `QuerySet::delete` do NOT fire
+    /// per-row `post_save` / `post_delete`. They fire
+    /// `bulk_post_save:<table>` / `bulk_post_delete:<table>` once per
+    /// statement with the affected PKs in the payload. Use `save` /
+    /// `delete_instance` when per-row signal semantics are needed.
     pub async fn save(&self, instance: T) -> Result<T, crate::orm::write::SaveError>
     where
         T: serde::Serialize
@@ -1792,17 +1801,24 @@ impl<T: Model> Manager<T> {
     ///
     /// ## Signal contract
     ///
-    /// - `pre_delete` fires before the DELETE with `{ "instance": ... }`.
-    /// - `post_delete` fires after the DELETE with `{ "instance": ... }`.
+    /// - `pre_delete:<table>` fires before the DELETE with
+    ///   `{ "instance": ..., "actor": ... }`.
+    /// - `post_delete:<table>` fires after the DELETE with the same
+    ///   payload shape.
     ///
-    /// The instance value passed to both signals is the value supplied by
-    /// the caller — not a DB read-back. If you need the freshest DB state
-    /// before deletion, fetch it first with `.get(...)` then pass to this method.
+    /// The `"actor"` value is set by the nearest enclosing
+    /// [`crate::signals::with_actor`] scope; `Value::Null` when no
+    /// scope is active. The instance value passed to both signals is
+    /// the value supplied by the caller — not a DB read-back. If you
+    /// need the freshest DB state before deletion, fetch it first with
+    /// `.get(...)` then pass to this method.
     ///
-    /// ## Bulk paths do NOT fire signals
+    /// ## Bulk paths fire bulk signals
     ///
-    /// `QuerySet::delete()` (which deletes all rows matching a filter chain)
-    /// is signal-free. Use `delete_instance` for per-row signal semantics.
+    /// `QuerySet::delete()` (the filter-chain DELETE) fires
+    /// `bulk_post_delete:<table>` with the list of affected PKs, not
+    /// per-row `pre_delete` / `post_delete`. Use `delete_instance` for
+    /// per-row signal semantics.
     pub async fn delete_instance(&self, instance: &T) -> Result<u64, crate::orm::write::SaveError>
     where
         T: serde::Serialize,
