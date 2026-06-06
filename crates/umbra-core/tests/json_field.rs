@@ -150,3 +150,60 @@ fn json_model_typechecks_against_pg_pool() {
         Ok(())
     }
 }
+
+/// Regression for BUG-3 in `bugs/db-testing.md`: Postgres bulk
+/// inserts must bind `serde_json::Value` through JSON/JSONB, not as
+/// plain text parameters.
+#[tokio::test]
+#[ignore = "needs UMBRA_TEST_POSTGRES_URL pointing at a Postgres server"]
+async fn bulk_create_json_values_round_trip_through_postgres() {
+    let url =
+        std::env::var("UMBRA_TEST_POSTGRES_URL").expect("UMBRA_TEST_POSTGRES_URL must be set");
+    let pool = sqlx::PgPool::connect(&url).await.unwrap();
+
+    sqlx::query("DROP TABLE IF EXISTS umbra_phase4_json_event")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "CREATE TABLE umbra_phase4_json_event ( \
+            id BIGSERIAL PRIMARY KEY, \
+            kind TEXT NOT NULL, \
+            payload JSONB NOT NULL, \
+            meta JSONB \
+         )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let affected = Event::objects()
+        .bulk_create_pg(
+            vec![
+                Event {
+                    id: 0,
+                    kind: "startup".to_string(),
+                    payload: json!({ "level": "info", "count": 42 }),
+                    meta: Some(json!({ "source": "bulk" })),
+                },
+                Event {
+                    id: 0,
+                    kind: "shutdown".to_string(),
+                    payload: json!({ "level": "warn", "count": 1 }),
+                    meta: None,
+                },
+            ],
+            &pool,
+        )
+        .await
+        .unwrap();
+    assert_eq!(affected, 2);
+
+    let mut rows = Event::objects().fetch_pg(&pool).await.unwrap();
+    rows.sort_by_key(|row| row.id);
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].payload, json!({ "level": "info", "count": 42 }));
+    assert_eq!(rows[0].meta, Some(json!({ "source": "bulk" })));
+    assert_eq!(rows[1].payload, json!({ "level": "warn", "count": 1 }));
+    assert!(rows[1].meta.is_none());
+}

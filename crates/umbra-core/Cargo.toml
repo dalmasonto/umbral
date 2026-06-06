@@ -25,8 +25,8 @@ clap = { version = "4", features = ["derive", "string"] }
 async-trait = "0.1"
 dotenvy = "0.15"
 figment = { version = "0.10", features = ["env", "toml"] }
-sea-query = { version = "0.32", features = ["with-ipnetwork", "with-mac_address", "with-rust_decimal"] }
-sea-query-binder = { version = "0.7", features = ["sqlx-sqlite", "sqlx-postgres", "with-chrono", "with-uuid", "with-ipnetwork", "with-mac_address", "with-rust_decimal"] }
+sea-query = { version = "0.32", features = ["with-json", "with-ipnetwork", "with-mac_address", "with-rust_decimal"] }
+sea-query-binder = { version = "0.7", features = ["sqlx-sqlite", "sqlx-postgres", "with-chrono", "with-uuid", "with-json", "with-ipnetwork", "with-mac_address", "with-rust_decimal"] }
 serde = { version = "1", features = ["derive"] }
 # JSON serde for migration files (Snapshot + MigrationFile) and snapshot
 # hashing input.

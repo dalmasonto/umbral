@@ -456,11 +456,9 @@ pub fn json_to_sea_value(
             Ok(SeaValue::Uuid(Some(Box::new(u))))
         }
         SqlType::Json => {
-            // Store the JSON as-is — sqlx-sqlite will TEXT it, sqlx-pg
-            // will jsonb-encode it. sea-query has a Json variant when
-            // its `with-json` feature is on; we're going through the
-            // string path for portability.
-            Ok(SeaValue::String(Some(Box::new(value.to_string()))))
+            // Store the JSON as-is so sqlx binds JSON/JSONB with the
+            // backend's typed encoder instead of a plain text parameter.
+            Ok(SeaValue::Json(Some(Box::new(value.clone()))))
         }
         // Postgres-only catalogue. Returned as a serialized string;
         // the per-backend bind layer downstream handles the cast.
@@ -607,7 +605,8 @@ pub(crate) fn null_for(sql_type: SqlType) -> SeaValue {
         SqlType::BigInt | SqlType::ForeignKey => SeaValue::BigInt(None),
         SqlType::Real => SeaValue::Float(None),
         SqlType::Double => SeaValue::Double(None),
-        SqlType::Text | SqlType::Json => SeaValue::String(None),
+        SqlType::Text => SeaValue::String(None),
+        SqlType::Json => SeaValue::Json(None),
         SqlType::Date => SeaValue::ChronoDate(None),
         SqlType::Time => SeaValue::ChronoTime(None),
         SqlType::Timestamptz => SeaValue::ChronoDateTimeUtc(None),
@@ -803,6 +802,8 @@ mod tests {
         assert!(matches!(v, SeaValue::String(Some(_))));
         let v = json_to_sea_value(SqlType::Boolean, &json!(true), false, "x").unwrap();
         assert!(matches!(v, SeaValue::Bool(Some(true))));
+        let v = json_to_sea_value(SqlType::Json, &json!({ "nested": true }), false, "x").unwrap();
+        assert!(matches!(v, SeaValue::Json(Some(_))));
     }
 
     #[test]
@@ -823,6 +824,8 @@ mod tests {
     fn json_to_sea_value_accepts_null_on_nullable_field() {
         let v = json_to_sea_value(SqlType::Integer, &json!(null), true, "x").unwrap();
         assert!(matches!(v, SeaValue::Int(None)));
+        let v = json_to_sea_value(SqlType::Json, &json!(null), true, "x").unwrap();
+        assert!(matches!(v, SeaValue::Json(None)));
     }
 
     #[test]

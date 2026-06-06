@@ -2050,6 +2050,7 @@ dependencies = [
  "mac_address",
  "rust_decimal",
  "sea-query-derive",
+ "serde_json",
  "uuid",
 ]
 
@@ -2064,6 +2065,7 @@ dependencies = [
  "mac_address",
  "rust_decimal",
  "sea-query",
+ "serde_json",
  "sqlx",
  "uuid",
 ]
