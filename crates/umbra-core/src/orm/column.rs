@@ -2455,6 +2455,77 @@ impl<T> NullableBytesCol<T> {
     }
 }
 
+// =============================================================================
+// DecimalCol — rust_decimal::Decimal / NUMERIC(19, 4) columns.
+// =============================================================================
+
+/// A fixed-point `NUMERIC(19, 4)` column carrying `rust_decimal::Decimal`.
+/// Decimal is Postgres-only at v1, but the predicate surface follows the
+/// numeric columns: comparisons, equality, and ordering.
+pub struct DecimalCol<T> {
+    pub(crate) name: &'static str,
+    _phantom: PhantomData<T>,
+}
+
+impl<T> DecimalCol<T> {
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            _phantom: PhantomData,
+        }
+    }
+
+    /// SQL `=`.
+    pub fn eq(&self, val: rust_decimal::Decimal) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).eq(val))
+    }
+
+    /// SQL `<>`.
+    pub fn ne(&self, val: rust_decimal::Decimal) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).ne(val))
+    }
+
+    /// SQL `<`.
+    pub fn lt(&self, val: rust_decimal::Decimal) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).lt(val))
+    }
+
+    /// SQL `<=`.
+    pub fn le(&self, val: rust_decimal::Decimal) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).lte(val))
+    }
+
+    /// Django-style alias for [`Self::le`].
+    pub fn lte(&self, val: rust_decimal::Decimal) -> Predicate<T> {
+        self.le(val)
+    }
+
+    /// SQL `>`.
+    pub fn gt(&self, val: rust_decimal::Decimal) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).gt(val))
+    }
+
+    /// SQL `>=`.
+    pub fn ge(&self, val: rust_decimal::Decimal) -> Predicate<T> {
+        Predicate::new(Expr::col(Alias::new(self.name)).gte(val))
+    }
+
+    /// Django-style alias for [`Self::ge`].
+    pub fn gte(&self, val: rust_decimal::Decimal) -> Predicate<T> {
+        self.ge(val)
+    }
+
+    /// SQL `ORDER BY ... ASC`.
+    pub fn asc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, false)
+    }
+
+    /// SQL `ORDER BY ... DESC`.
+    pub fn desc(&self) -> OrderExpr<T> {
+        OrderExpr::new(self.name, true)
+    }
+}
+
 // =========================================================================
 // Gap #24 + #36 — DB-function helpers (`ColExpr<T>`)
 //
