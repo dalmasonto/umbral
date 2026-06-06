@@ -86,9 +86,10 @@ The callers (`dump()` and `load()`) pass `crate::db::pool()` (a `DbPool`) throug
 **Fix**: Change `dump_one` and `load_one` to accept `&DbPool` and dispatch SQL generation per backend. For Postgres, use `$1` placeholders instead of `?`, and handle JSONB/UUID binding properly.
 **Implemented**: `backup` now dispatches on `DbPool`, keeps the SQLite path intact, and adds Postgres readers/binders for core ORM types including JSONB, UUID, arrays, bytes, network types, full-text vectors, and decimal. Added `backup_postgres` regression coverage plus the missing ORM `DecimalCol` wrapper the derive macro already emitted.
 
-### BUG-3: `bulk_create` serializes `serde_json::Value` as text on Postgres
+### BUG-3: `bulk_create` serializes `serde_json::Value` as text on Postgres [fixed]
 
 **Severity**: High — breaks any model with JSON/JSONB fields on Postgres
+**Status**: Fixed in `fcc25f1` (`fix(orm): bind JSON writes as typed values`).
 **Repro**: On Postgres, call `Model::objects().bulk_create(vec![instance])` where the model has a `serde_json::Value` field (e.g., `Product.metadata` or `Product.dimensions`).
 **Expected**: Rows insert successfully
 **Actual**:
@@ -107,11 +108,14 @@ SqlType::Json => {
 ```
 This assumption is wrong: sqlx-pg does **not** automatically coerce a string `"{}"` to jsonb. It needs to be bound as `sqlx::types::Json<T>` or the SQL needs an explicit `::jsonb` cast.
 **Fix**: In the Postgres branch of `bulk_create`, bind JSON values via `sqlx::types::Json(serde_json::Value)` instead of plain strings. Or add a `SeaValue::Json` variant that sea-query's Postgres builder can handle.
+**Implemented**: Enabled SeaQuery/sea-query-binder JSON support and changed the ORM write conversion for `SqlType::Json` to emit `SeaValue::Json`, including typed JSON nulls. This fixes the shared ORM write path rather than patching only the Postgres bulk-create branch. Added an ignored live Postgres regression in `json_field.rs` for JSONB `bulk_create_pg`.
 
-### BUG-4: `dumpdata` on SQLite produces `"{}"` string for JSON fields instead of preserving type
+### BUG-4: `dumpdata` on SQLite produces `"{}"` string for JSON fields instead of preserving type [verified fixed]
 
 **Severity**: Low — cosmetic, but could cause issues on round-trip
+**Status**: Verified fixed in `c8c57d9` (`test(backup): verify SQLite JSON dump shape`).
 **Observation**: In the dumped JSON, `metadata` fields appear as `"{}"` (a JSON string) rather than `{}` (a JSON object). This is because `json_to_sea_value` serializes to string before storing. On round-trip to Postgres, even if BUG-2 and BUG-3 were fixed, the dump format might need explicit type annotations.
+**Verified**: Current backup reads SQLite `SqlType::Json` columns as `serde_json::Value`, not `String`, so dump output preserves object/array/null shapes. Added `backup_json.rs` regression coverage that seeds SQLite JSON as raw TEXT, asserts `dump()` emits JSON values rather than strings, and verifies `load()` round-trips the shapes.
 
 ## Raw Results Files
 
@@ -121,7 +125,5 @@ This assumption is wrong: sqlx-pg does **not** automatically coerce a string `"{
 
 ## Recommendations
 
-1. **Fix BUG-3 next** — `bulk_create` with JSON/JSONB fields is now the remaining serious Postgres blocker.
-2. **Verify BUG-4 against current JSON dump behavior** — the backup path now reads JSON columns as `serde_json::Value`, but the original shop dump should be rechecked before marking this closed.
-3. **Consider a release build benchmark** — debug builds skew absolute numbers; the *relative* SQLite vs Postgres comparison is still valid.
-4. **Test write-heavy endpoints** — all tests above were reads. Postgres write performance (especially with concurrent writers) will diverge more significantly from SQLite WAL.
+1. **Consider a release build benchmark** — debug builds skew absolute numbers; the *relative* SQLite vs Postgres comparison is still valid.
+2. **Test write-heavy endpoints** — all tests above were reads. Postgres write performance (especially with concurrent writers) will diverge more significantly from SQLite WAL.
