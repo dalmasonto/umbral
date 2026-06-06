@@ -23,6 +23,7 @@ tower-http = { version = "0.6", default-features = false, features = ["catch-pan
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "string"] }
 async-trait = "0.1"
+dotenvy = "0.15"
 figment = { version = "0.10", features = ["env", "toml"] }
 sea-query = { version = "0.32", features = ["with-ipnetwork", "with-mac_address", "with-rust_decimal"] }
 sea-query-binder = { version = "0.7", features = ["sqlx-sqlite", "sqlx-postgres", "with-chrono", "with-uuid", "with-ipnetwork", "with-mac_address", "with-rust_decimal"] }

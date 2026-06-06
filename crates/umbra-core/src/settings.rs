@@ -1,6 +1,7 @@
 use figment::Figment;
-use figment::providers::{Env, Format, Toml};
+use figment::providers::{Env, Format, Serialized, Toml};
 use serde::Deserialize;
+use std::collections::HashSet;
 use std::sync::OnceLock;
 
 /// Ambient settings, published during `AppBuilder::build()`.
@@ -61,6 +62,44 @@ fn default_bind_addr() -> String {
     // is a deliberate keystroke. Override with UMBRA_BIND_ADDR or
     // umbra.toml.
     "127.0.0.1:8000".into()
+}
+
+fn dotenv_key(key: &str) -> Option<String> {
+    const PREFIX: &str = "UMBRA_";
+
+    let key = key.trim();
+    if key.len() <= PREFIX.len() || !key.get(..PREFIX.len())?.eq_ignore_ascii_case(PREFIX) {
+        return None;
+    }
+
+    let key = key[PREFIX.len()..].replace("__", ".").to_ascii_lowercase();
+    if key.split('.').any(str::is_empty) {
+        return None;
+    }
+
+    Some(key)
+}
+
+fn merge_dotenv(mut figment: Figment) -> Figment {
+    let Ok(iter) = dotenvy::from_filename_iter(".env") else {
+        return figment;
+    };
+    let mut seen = HashSet::new();
+
+    for (key, value) in iter.flatten() {
+        let Some(key) = dotenv_key(&key) else {
+            continue;
+        };
+        if !seen.insert(key.clone()) {
+            continue;
+        }
+        let value = value
+            .parse::<figment::value::Value>()
+            .expect("figment value parsing is infallible");
+        figment = figment.merge(Serialized::default(&key, value));
+    }
+
+    figment
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -127,9 +166,11 @@ impl Settings {
         self.extra.get(key).and_then(|v| v.as_str())
     }
 
-    /// Load settings from defaults, `umbra.toml`, and `UMBRA_`-prefixed env vars.
+    /// Load settings from defaults, `.env`, `umbra.toml`, and `UMBRA_`-prefixed env vars.
     ///
-    /// Precedence (later wins): struct defaults → `umbra.toml` → env vars.
+    /// Precedence (later wins): struct defaults → `umbra.toml` → env vars. A
+    /// local `.env` file is merged as an environment-shaped provider first,
+    /// but existing process env vars keep precedence over values from `.env`.
     /// Implementation uses `merge` (not `join`) for both providers so each
     /// subsequent source overrides the previous one's values. With `join`
     /// the first provider to set a key would keep it, which would invert
@@ -138,8 +179,7 @@ impl Settings {
     /// The error type is boxed because `figment::Error` is large (over 200
     /// bytes); see `clippy::result_large_err`.
     pub fn from_env() -> Result<Self, Box<figment::Error>> {
-        Figment::new()
-            .merge(Toml::file("umbra.toml"))
+        merge_dotenv(Figment::new().merge(Toml::file("umbra.toml")))
             .merge(Env::prefixed("UMBRA_").split("__"))
             .extract()
             .map_err(Box::new)
@@ -216,6 +256,41 @@ mod tests {
             jail.set_env("UMBRA_SECRET_KEY", "from-env");
             let s = Settings::from_env().unwrap();
             assert_eq!(s.secret_key, "from-env");
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn dotenv_file_overrides_toml() {
+        Jail::expect_with(|jail| {
+            jail.create_file("umbra.toml", r#"database_url = "sqlite://from-toml.db""#)?;
+            jail.create_file(".env", "UMBRA_DATABASE_URL=postgres://from-dotenv\n")?;
+            let s = Settings::from_env().unwrap();
+            assert_eq!(s.database_url, "postgres://from-dotenv");
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn dotenv_file_populates_nested_databases_map() {
+        Jail::expect_with(|jail| {
+            jail.create_file(".env", "UMBRA_DATABASES__REPLICA=sqlite://replica.db\n")?;
+            let s = Settings::from_env().unwrap();
+            assert_eq!(
+                s.databases.get("replica").map(String::as_str),
+                Some("sqlite://replica.db"),
+            );
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn process_env_overrides_dotenv_file() {
+        Jail::expect_with(|jail| {
+            jail.create_file(".env", "UMBRA_DATABASE_URL=postgres://from-dotenv\n")?;
+            jail.set_env("UMBRA_DATABASE_URL", "postgres://from-process-env");
+            let s = Settings::from_env().unwrap();
+            assert_eq!(s.database_url, "postgres://from-process-env");
             Ok(())
         });
     }

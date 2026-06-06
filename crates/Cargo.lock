@@ -3047,6 +3047,7 @@ dependencies = [
  "axum",
  "chrono",
  "clap",
+ "dotenvy",
  "figment",
  "http",
  "http-body-util",

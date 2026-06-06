@@ -156,11 +156,7 @@ a build step. Replace the CDN tag with a compiled stylesheet for production.
 
 ### .env vs umbra.toml
 
-`umbra.toml` holds configuration that is safe to commit (bind address, dev
-environment flag, dev secret key). `.env` holds the same values but is listed in
-`.gitignore` - it is the working override file you never check in. In production,
-set `UMBRA_SECRET_KEY`, `UMBRA_DATABASE_URL`, and `UMBRA_ENVIRONMENT=prod` in
-your environment directly.
+`umbra.toml` holds configuration that is safe to commit (bind address, dev environment flag, dev secret key). `.env` holds the same values but is listed in `.gitignore` - it is the working override file you never check in. `Settings::from_env()` reads `.env` automatically, and real process environment variables still win over duplicate keys from the file. In production, set `UMBRA_SECRET_KEY`, `UMBRA_DATABASE_URL`, and `UMBRA_ENVIRONMENT=prod` in your environment directly.
 
 ## startapp
 

@@ -1,16 +1,17 @@
 ---
 title: Settings and environment variables
-description: How umbra reads umbra.toml + UMBRA_-prefixed env vars and how to access them from any handler, plugin, or task body.
+description: How umbra reads umbra.toml, .env, and UMBRA_-prefixed env vars, plus how to access settings from handlers, plugins, or task bodies.
 sidebar_position: 2
 icon: settings
 tags: [getting-started, settings, env]
 ---
 
-Every umbra app has one ambient `Settings` value loaded once at boot from three sources, with later sources overriding earlier ones:
+Every umbra app has one ambient `Settings` value loaded once at boot from configuration files and environment variables, with later sources overriding earlier ones:
 
 1. **Built-in defaults** - `database_url = "sqlite::memory:"`, `bind_addr = "127.0.0.1:8000"`, etc.
 2. **`umbra.toml`** at the project root.
-3. **`UMBRA_`-prefixed environment variables.**
+3. **`.env`** at the project root, merged like environment variables for local development.
+4. **`UMBRA_`-prefixed environment variables already set in the process.**
 
 After `App::build` runs, `umbra::settings::get()` returns the resolved value from anywhere in the app - handlers, plugin code, task bodies, signal handlers. No state plumbing, no extractors.
 
@@ -147,22 +148,20 @@ let model: &str = cfg.extra
     .unwrap_or("gpt-4o");
 ```
 
-## A `.env` file is not loaded automatically
+## .env files
 
-umbra does not parse `.env` files. If you want `.env` for local dev, source it explicitly:
+`Settings::from_env()` automatically reads a project-root `.env` file before reading `UMBRA_` variables from the process environment. This is the local-dev place for values you do not want to commit:
 
 ```bash
-# Bash / zsh:
-set -a
-source .env
-set +a
-cargo run
+cat > .env <<'EOF'
+UMBRA_DATABASE_URL=postgres://app:pw@localhost/app_dev
+UMBRA_SECRET_KEY=dev-only-secret
+EOF
 
-# Or use a tool like `direnv` or `dotenv-cli`:
-dotenv -- cargo run
+cargo run -- serve
 ```
 
-This is deliberate - `.env` is one of N possible conventions and we don't want to pick one for you. The single source of truth is `umbra.toml` + `UMBRA_`-prefixed env vars.
+Values already exported by the shell, Docker, systemd, or a hosting provider win over `.env`. That keeps production configuration explicit while still making local development convenient.
 
 ## Precedence summary
 
@@ -170,8 +169,9 @@ Later wins:
 
 1. Struct defaults (in `Settings::default_*` functions).
 2. `umbra.toml` at the project root.
-3. `UMBRA_`-prefixed env vars.
-4. The `--addr` flag on `umbra serve` (one-off override; doesn't write back to settings).
+3. `UMBRA_` variables from `.env`, unless the process already set the same key.
+4. `UMBRA_`-prefixed env vars already present in the process environment.
+5. The `--addr` flag on `umbra serve` (one-off override; doesn't write back to settings).
 
 Run `cargo run -- serve` to see the resolved values logged at startup:
 
