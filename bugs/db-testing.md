@@ -54,17 +54,20 @@ App: examples/shop (e-commerce + content demo, 41 models)
 
 ## Bugs Found
 
-### BUG-1: `.env` file is not automatically loaded
+### BUG-1: `.env` file is not automatically loaded [fixed]
 
 **Severity**: Medium — affects developer experience
+**Status**: Fixed in `1dd9e07` (`fix(settings): load .env files in Settings::from_env`).
 **Repro**: Put `UMBRA_DATABASE_URL=postgres://...` in `.env` and run `cargo run -- serve`. The app still connects to the URL in `umbra.toml`.
 **Root cause**: `Settings::from_env()` does not call `dotenvy::dotenv()` (or equivalent) to load the `.env` file into the process environment.
 **Workaround**: Export the env var explicitly before running: `UMBRA_DATABASE_URL=postgres://... cargo run -- serve`
 **Fix**: Add `dotenvy::dotenv().ok()` at the top of `Settings::from_env()`.
+**Implemented**: `Settings::from_env()` now reads project-root `.env` values through Figment without mutating the global process environment; real process env vars still override `.env`.
 
-### BUG-2: `loaddata` panics on Postgres — backup module is SQLite-only
+### BUG-2: `loaddata` panics on Postgres — backup module is SQLite-only [fixed]
 
 **Severity**: High — blocks data portability
+**Status**: Fixed in `49efd0c` (`fix(backup): support Postgres dumpdata and loaddata`).
 **Repro**:
 1. Set database to Postgres
 2. Run `cargo run -- dumpdata --output dump.json`
@@ -81,6 +84,7 @@ async fn load_one(pool: &sqlx::SqlitePool, model: &ModelMeta, ...) -> ...
 ```
 The callers (`dump()` and `load()`) pass `crate::db::pool()` (a `DbPool`) through a `Deref`/`AsRef` that calls `sqlite_or_panic()`.
 **Fix**: Change `dump_one` and `load_one` to accept `&DbPool` and dispatch SQL generation per backend. For Postgres, use `$1` placeholders instead of `?`, and handle JSONB/UUID binding properly.
+**Implemented**: `backup` now dispatches on `DbPool`, keeps the SQLite path intact, and adds Postgres readers/binders for core ORM types including JSONB, UUID, arrays, bytes, network types, full-text vectors, and decimal. Added `backup_postgres` regression coverage plus the missing ORM `DecimalCol` wrapper the derive macro already emitted.
 
 ### BUG-3: `bulk_create` serializes `serde_json::Value` as text on Postgres
 
@@ -117,7 +121,7 @@ This assumption is wrong: sqlx-pg does **not** automatically coerce a string `"{
 
 ## Recommendations
 
-1. **Fix BUG-2 and BUG-3 first** — they are blockers for any serious Postgres usage.
-2. **Add `.env` auto-loading** (BUG-1) — small UX win, aligns with developer expectations.
+1. **Fix BUG-3 next** — `bulk_create` with JSON/JSONB fields is now the remaining serious Postgres blocker.
+2. **Verify BUG-4 against current JSON dump behavior** — the backup path now reads JSON columns as `serde_json::Value`, but the original shop dump should be rechecked before marking this closed.
 3. **Consider a release build benchmark** — debug builds skew absolute numbers; the *relative* SQLite vs Postgres comparison is still valid.
 4. **Test write-heavy endpoints** — all tests above were reads. Postgres write performance (especially with concurrent writers) will diverge more significantly from SQLite WAL.
