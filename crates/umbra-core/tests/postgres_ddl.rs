@@ -44,6 +44,7 @@ fn id_pk() -> Column {
         min: None,
         max: None,
         text_format: ::core::option::Option::None,
+        slug_from: ::core::option::Option::None,
     }
 }
 
@@ -75,6 +76,7 @@ fn text_not_null(name: &str) -> Column {
         min: None,
         max: None,
         text_format: ::core::option::Option::None,
+        slug_from: ::core::option::Option::None,
     }
 }
 
@@ -106,6 +108,7 @@ fn text_nullable(name: &str) -> Column {
         min: None,
         max: None,
         text_format: ::core::option::Option::None,
+        slug_from: ::core::option::Option::None,
     }
 }
 
@@ -371,6 +374,7 @@ fn col(name: &str, ty: SqlType) -> Column {
         min: None,
         max: None,
         text_format: ::core::option::Option::None,
+        slug_from: ::core::option::Option::None,
     }
 }
 
@@ -524,6 +528,7 @@ fn create_table_int_with_min_max_emits_check_on_postgres() {
         min: Some(0),
         max: Some(150),
         text_format: ::core::option::Option::None,
+        slug_from: ::core::option::Option::None,
     };
     let op = Operation::CreateTable {
         table: "person".to_string(),

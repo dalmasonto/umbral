@@ -140,6 +140,7 @@ fn create_table_emits_references_sqlite() {
                 min: None,
                 max: None,
                 text_format: ::core::option::Option::None,
+                slug_from: ::core::option::Option::None,
             },
             Column {
                 name: "title".to_string(),
@@ -167,6 +168,7 @@ fn create_table_emits_references_sqlite() {
                 min: None,
                 max: None,
                 text_format: ::core::option::Option::None,
+                slug_from: ::core::option::Option::None,
             },
             Column {
                 name: "author".to_string(),
@@ -194,6 +196,7 @@ fn create_table_emits_references_sqlite() {
                 min: None,
                 max: None,
                 text_format: ::core::option::Option::None,
+                slug_from: ::core::option::Option::None,
             },
         ],
         unique_together: Vec::new(),
@@ -256,6 +259,7 @@ fn create_table_emits_references_postgres() {
                 min: None,
                 max: None,
                 text_format: ::core::option::Option::None,
+                slug_from: ::core::option::Option::None,
             },
             Column {
                 name: "title".to_string(),
@@ -283,6 +287,7 @@ fn create_table_emits_references_postgres() {
                 min: None,
                 max: None,
                 text_format: ::core::option::Option::None,
+                slug_from: ::core::option::Option::None,
             },
             Column {
                 name: "author".to_string(),
@@ -310,6 +315,7 @@ fn create_table_emits_references_postgres() {
                 min: None,
                 max: None,
                 text_format: ::core::option::Option::None,
+                slug_from: ::core::option::Option::None,
             },
         ],
         unique_together: Vec::new(),

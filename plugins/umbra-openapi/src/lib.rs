@@ -331,12 +331,7 @@ fn model_schema(
         // those should appear in `required`; making them so
         // would force clients to ship server-managed timestamps
         // and password hashes on every POST.
-        if !col.nullable
-            && !col.primary_key
-            && !col.auto_now
-            && !col.auto_now_add
-            && !col.noform
-        {
+        if !col.nullable && !col.primary_key && !col.auto_now && !col.auto_now_add && !col.noform {
             required.push(Value::String(col.name.clone()));
         }
     }
@@ -1049,6 +1044,7 @@ mod tests {
             min: None,
             max: None,
             text_format: ::core::option::Option::None,
+            slug_from: ::core::option::Option::None,
         }
     }
 
@@ -1463,7 +1459,10 @@ mod tests {
         // Vendor extensions: aware clients flag these as
         // server-populated. Both extensions present, keyed
         // under the right column.
-        assert_eq!(schema["properties"]["created_at"]["x-umbra-auto-now-add"], true);
+        assert_eq!(
+            schema["properties"]["created_at"]["x-umbra-auto-now-add"],
+            true
+        );
         assert_eq!(schema["properties"]["updated_at"]["x-umbra-auto-now"], true);
 
         // NOT marked `readOnly` — the client can still send an

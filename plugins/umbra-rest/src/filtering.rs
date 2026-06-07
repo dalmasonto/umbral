@@ -639,6 +639,7 @@ mod search {
             min: None,
             max: None,
             text_format: ::core::option::Option::None,
+            slug_from: ::core::option::Option::None,
         }
     }
 
@@ -751,6 +752,7 @@ mod choice_validation {
             min: None,
             max: None,
             text_format: ::core::option::Option::None,
+            slug_from: ::core::option::Option::None,
         }
     }
 

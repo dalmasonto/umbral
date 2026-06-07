@@ -104,9 +104,18 @@ async fn boot() -> &'static axum::Router {
         // ORM owns inserts; tests should not.
         Tag::objects()
             .bulk_create(vec![
-                Tag { id: 0, name: "rust".into() },
-                Tag { id: 0, name: "web".into() },
-                Tag { id: 0, name: "database".into() },
+                Tag {
+                    id: 0,
+                    name: "rust".into(),
+                },
+                Tag {
+                    id: 0,
+                    name: "web".into(),
+                },
+                Tag {
+                    id: 0,
+                    name: "database".into(),
+                },
             ])
             .await
             .expect("seed tags");
@@ -311,5 +320,8 @@ async fn post_with_a_missing_tag_id_is_rejected_before_the_junction_write() {
     assert_eq!(body["code"], "validation_error");
     let tag_errs = body["tags"].as_array().expect("tags errors; got {body}");
     let msg = tag_errs[0].as_str().unwrap_or("");
-    assert!(msg.contains("999") && msg.contains("not exist"), "got {msg:?}");
+    assert!(
+        msg.contains("999") && msg.contains("not exist"),
+        "got {msg:?}"
+    );
 }

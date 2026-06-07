@@ -822,7 +822,8 @@ pub async fn write_outputs(
                 | Operation::AddColumn { .. }
                 | Operation::DropColumn { .. }
                 | Operation::AlterColumn { .. }
-                | Operation::RenameTable { .. } => (t, c),
+                | Operation::RenameTable { .. }
+                | Operation::RenameColumn { .. } => (t, c),
             });
 
     Ok(InspectReport {
@@ -868,6 +869,7 @@ impl From<&IntrospectedColumn> for Column {
             min: None,
             max: None,
             text_format: ::core::option::Option::None,
+            slug_from: ::core::option::Option::None,
         }
     }
 }

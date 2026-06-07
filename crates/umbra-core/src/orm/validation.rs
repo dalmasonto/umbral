@@ -559,6 +559,7 @@ mod tests {
             min: None,
             max: None,
             text_format: None,
+            slug_from: None,
             auto_now: false,
             auto_now_add: false,
             help: String::new(),

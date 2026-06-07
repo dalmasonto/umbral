@@ -437,13 +437,36 @@ pub fn json_to_sea_value(
         }
         SqlType::Timestamptz => {
             let s = coerce_string(value, field_name)?;
+            // Accept several wire shapes that real callers send:
+            //   1. RFC3339 with offset / Z — the canonical machine form
+            //      and what serde / API clients emit.
+            //   2. Naive `YYYY-MM-DDTHH:MM:SS` — common for hand-written
+            //      JSON and Django's default form serializer.
+            //   3. Naive `YYYY-MM-DDTHH:MM` — the literal output of HTML
+            //      `<input type="datetime-local">`. The admin's
+            //      auto-generated forms post exactly this shape, so
+            //      rejecting it broke every Timestamptz field edit.
+            // Gap 106: naive forms are interpreted in the
+            // configured `Settings::time_zone` (falling back to UTC
+            // when the setting is absent), then converted to UTC
+            // for storage. Tz-bearing RFC3339 inputs win regardless
+            // of the project tz — the offset they carry is the
+            // ground truth.
             let dt = chrono::DateTime::parse_from_rfc3339(&s)
+                .map(|d| d.with_timezone(&chrono::Utc))
+                .or_else(|_| {
+                    chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S")
+                        .or_else(|_| chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M"))
+                        .map(|naive| {
+                            crate::timezone::naive_local_to_utc(naive)
+                                .unwrap_or_else(|| naive.and_utc())
+                        })
+                })
                 .map_err(|_| WriteError::TypeMismatch {
                     field: field_name.to_string(),
                     expected: sql_type,
                     got: format!("{value:?}"),
-                })?
-                .with_timezone(&chrono::Utc);
+                })?;
             Ok(SeaValue::ChronoDateTimeUtc(Some(Box::new(dt))))
         }
         SqlType::Uuid => {
@@ -585,6 +608,79 @@ fn hex_nibble(b: u8) -> Option<u8> {
 /// non-time columns at derive time; we defer that polish to the
 /// macro pass where it lands alongside other "wrong attribute on
 /// wrong type" diagnostics.
+/// Gap 109: Django-style slug derivation. Lowercases the input, replaces
+/// runs of non-alphanumeric ASCII characters with a single `-`, trims
+/// leading/trailing dashes, and collapses repeated dashes. Empty / pure-
+/// punctuation input returns the empty string.
+///
+/// Mirrors what most slug libraries do for the ASCII path; non-ASCII
+/// characters are dropped (we don't transliterate at v1 — a unicode
+/// transliterator is a heavier dep and our admins typically slugify
+/// English-language titles).
+pub fn slugify(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut last_was_dash = true; // suppresses leading dashes
+    for c in s.chars() {
+        if c.is_ascii_alphanumeric() {
+            for low in c.to_lowercase() {
+                out.push(low);
+            }
+            last_was_dash = false;
+        } else if !last_was_dash {
+            out.push('-');
+            last_was_dash = true;
+        }
+    }
+    // Trim trailing dash if any.
+    while out.ends_with('-') {
+        out.pop();
+    }
+    out
+}
+
+/// Gap 109: walk the body and auto-derive slug columns from their
+/// configured source field where the slug column is missing or empty.
+///
+/// Called from the dynamic insert/update entry points BEFORE validation
+/// so the validator sees the populated slug. The `is_update` flag
+/// constrains the rule: on update, the slug is regenerated only when
+/// the source field is also present in the body. Without that guard,
+/// editing an unrelated column on an existing row would clobber a hand-
+/// tuned slug.
+pub fn apply_slug_from(
+    fields: &[crate::migrate::Column],
+    body: &mut serde_json::Map<String, serde_json::Value>,
+    is_update: bool,
+) {
+    for col in fields {
+        let Some(source) = col.slug_from.as_deref() else {
+            continue;
+        };
+        // Slug already explicitly supplied (non-empty string) — keep it.
+        let explicit = body
+            .get(&col.name)
+            .and_then(|v| v.as_str())
+            .map(|s| !s.is_empty())
+            .unwrap_or(false);
+        if explicit {
+            continue;
+        }
+        // On update, only regenerate when the source field is in the body.
+        let source_value = body.get(source).and_then(|v| v.as_str()).unwrap_or("");
+        if source_value.is_empty() {
+            continue;
+        }
+        if is_update && !body.contains_key(source) {
+            continue;
+        }
+        let slug = slugify(source_value);
+        if slug.is_empty() {
+            continue;
+        }
+        body.insert(col.name.clone(), serde_json::Value::String(slug));
+    }
+}
+
 pub fn now_for_column(sql_type: SqlType) -> SeaValue {
     let now = chrono::Utc::now();
     match sql_type {
@@ -826,6 +922,50 @@ mod tests {
         assert!(matches!(v, SeaValue::Int(None)));
         let v = json_to_sea_value(SqlType::Json, &json!(null), true, "x").unwrap();
         assert!(matches!(v, SeaValue::Json(None)));
+    }
+
+    #[test]
+    fn json_to_sea_value_accepts_datetime_local_form_shape() {
+        // RFC3339 with offset — the canonical wire form.
+        let v = json_to_sea_value(
+            SqlType::Timestamptz,
+            &json!("2026-06-03T22:24:00Z"),
+            false,
+            "x",
+        )
+        .unwrap();
+        let SeaValue::ChronoDateTimeUtc(Some(dt)) = v else {
+            panic!("expected ChronoDateTimeUtc");
+        };
+        assert_eq!(dt.to_rfc3339(), "2026-06-03T22:24:00+00:00");
+
+        // Naive with seconds — common JSON / Django-form shape.
+        let v = json_to_sea_value(
+            SqlType::Timestamptz,
+            &json!("2026-06-03T22:24:00"),
+            false,
+            "x",
+        )
+        .unwrap();
+        let SeaValue::ChronoDateTimeUtc(Some(dt)) = v else {
+            panic!("expected ChronoDateTimeUtc");
+        };
+        assert_eq!(dt.to_rfc3339(), "2026-06-03T22:24:00+00:00");
+
+        // Naive without seconds — the literal HTML
+        // `<input type="datetime-local">` shape that the admin's
+        // auto-generated forms post. This was the regression.
+        let v = json_to_sea_value(SqlType::Timestamptz, &json!("2026-06-03T22:24"), false, "x")
+            .unwrap();
+        let SeaValue::ChronoDateTimeUtc(Some(dt)) = v else {
+            panic!("expected ChronoDateTimeUtc");
+        };
+        assert_eq!(dt.to_rfc3339(), "2026-06-03T22:24:00+00:00");
+
+        // Garbage still rejected.
+        let err =
+            json_to_sea_value(SqlType::Timestamptz, &json!("not a date"), false, "x").unwrap_err();
+        assert!(matches!(err, WriteError::TypeMismatch { .. }));
     }
 
     #[test]

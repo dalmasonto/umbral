@@ -118,6 +118,7 @@ fn int_pk_column() -> Column {
         min: None,
         max: None,
         text_format: ::core::option::Option::None,
+        slug_from: ::core::option::Option::None,
     }
 }
 
@@ -148,6 +149,7 @@ fn uuid_pk_column() -> Column {
         min: None,
         max: None,
         text_format: ::core::option::Option::None,
+        slug_from: ::core::option::Option::None,
     }
 }
 
@@ -178,6 +180,7 @@ fn string_pk_column() -> Column {
         min: None,
         max: None,
         text_format: ::core::option::Option::None,
+        slug_from: ::core::option::Option::None,
     }
 }
 
@@ -208,6 +211,7 @@ fn label_column() -> Column {
         min: None,
         max: None,
         text_format: ::core::option::Option::None,
+        slug_from: ::core::option::Option::None,
     }
 }
 

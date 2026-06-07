@@ -69,6 +69,7 @@ fn postgres_ddl_renders_tsvector_type() {
                 min: None,
                 max: None,
                 text_format: ::core::option::Option::None,
+                slug_from: ::core::option::Option::None,
             },
             Column {
                 name: "search".to_string(),
@@ -96,6 +97,7 @@ fn postgres_ddl_renders_tsvector_type() {
                 min: None,
                 max: None,
                 text_format: ::core::option::Option::None,
+                slug_from: ::core::option::Option::None,
             },
         ],
         unique_together: Vec::new(),

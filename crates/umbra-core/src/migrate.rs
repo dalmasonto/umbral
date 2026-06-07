@@ -478,6 +478,25 @@ pub enum Operation {
     /// Drop a many-to-many junction table. Auto-emitted when an `M2M<T>`
     /// field is removed from a model.
     DropM2MTable { junction_table: String },
+    /// Gap 88: rename a column on an existing table. Emitted by the
+    /// diff engine when a single column with one shape was dropped
+    /// and one with the same shape was added in the same diff —
+    /// the heuristic match for "the user renamed `title` to
+    /// `headline`." Both SQLite (3.25+) and Postgres render as
+    /// `ALTER TABLE "<t>" RENAME COLUMN "<from>" TO "<to>"`.
+    ///
+    /// `column` carries the post-rename column shape so the
+    /// snapshot stays in sync. The migration only renames; never
+    /// alters other column attributes — a rename combined with a
+    /// type change emits a RenameColumn AND a follow-on AlterColumn
+    /// against the new name.
+    RenameColumn {
+        table: String,
+        from: String,
+        to: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        column: Option<Column>,
+    },
 }
 
 impl Operation {
@@ -494,7 +513,8 @@ impl Operation {
             | Operation::DropTable { table }
             | Operation::AddColumn { table, .. }
             | Operation::DropColumn { table, .. }
-            | Operation::AlterColumn { table, .. } => table,
+            | Operation::AlterColumn { table, .. }
+            | Operation::RenameColumn { table, .. } => table,
             Operation::RenameTable { from, .. } => from,
             Operation::CreateM2MTable { junction_table, .. }
             | Operation::DropM2MTable { junction_table } => junction_table,
@@ -640,6 +660,15 @@ pub struct Column {
     /// pre-validates the body via `validate_text_format`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text_format: Option<String>,
+
+    /// Gap 109: auto-derive source. When `Some("title")`, the slug is
+    /// computed from the row's `title` column at write time if the
+    /// slug column itself is empty / missing on the body. Pure
+    /// runtime behaviour — has no DDL effect, so the diff engine
+    /// ignores changes to this field. `#[serde(default)]` keeps
+    /// older snapshots round-tripping.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slug_from: Option<String>,
 }
 
 fn is_no_action(a: &crate::orm::FkAction) -> bool {
@@ -783,6 +812,7 @@ impl From<&FieldSpec> for Column {
             min: f.min,
             max: f.max,
             text_format: f.text_format.map(|s| s.to_string()),
+            slug_from: f.slug_from.map(|s| s.to_string()),
         }
     }
 }
@@ -2387,28 +2417,134 @@ fn diff_columns(
         });
     }
 
-    // Drops first so a same-position add can reuse the column slot.
+    // Collect the dropped + added column names. We need both lists in
+    // memory so the rename heuristic can pair them.
+    let mut dropped: Vec<&Column> = Vec::new();
+    let mut added: Vec<&Column> = Vec::new();
     for (name, prev_col) in &prev_cols {
         if !curr_cols.contains_key(name) {
-            ops.push(Operation::DropColumn {
-                table: current.table.clone(),
-                column: prev_col.name.clone(),
-            });
+            dropped.push(prev_col);
         }
+    }
+    for col in &current.fields {
+        if !prev_cols.contains_key(col.name.as_str()) {
+            added.push(col);
+        }
+    }
+
+    // Gap 88 — column rename detection. When the same diff yields
+    // exactly one drop and one add whose column shapes (sans name)
+    // match bit-for-bit, the most likely interpretation is a rename
+    // rather than a coincidental drop+add of two unrelated columns.
+    // Emit RenameColumn instead and warn the user so they can
+    // verify. Anything more ambiguous (multiple drops or adds, or
+    // mismatched shapes) falls back to the drop+add path so the
+    // rename is never inferred against the user's actual intent.
+    //
+    // The heuristic deliberately stays conservative — Django's
+    // makemigrations asks interactively in this case; we don't have
+    // a prompt at v1, so the conservative auto-pair is the safest
+    // shape. Users can always override by writing the
+    // `RenameColumn` op into the migration file by hand.
+    let mut paired_drop: Option<&str> = None;
+    let mut paired_add: Option<&str> = None;
+    if dropped.len() == 1 && added.len() == 1 {
+        let d = dropped[0];
+        let a = added[0];
+        if column_shape_matches(d, a) {
+            eprintln!(
+                "umbra makemigrations: column rename detected on `{}`: \
+                 `{}` → `{}` — verify this is a rename and not a coincidental \
+                 shape match; edit the migration file if it's wrong",
+                current.table, d.name, a.name,
+            );
+            ops.push(Operation::RenameColumn {
+                table: current.table.clone(),
+                from: d.name.clone(),
+                to: a.name.clone(),
+                column: Some(a.clone()),
+            });
+            paired_drop = Some(d.name.as_str());
+            paired_add = Some(a.name.as_str());
+        }
+    }
+
+    // Drops first so a same-position add can reuse the column slot.
+    for col in &dropped {
+        if Some(col.name.as_str()) == paired_drop {
+            continue;
+        }
+        ops.push(Operation::DropColumn {
+            table: current.table.clone(),
+            column: col.name.clone(),
+        });
     }
 
     // Then adds, in current declaration order so the schema retains
     // the user-written column order even after re-runs.
-    for col in &current.fields {
-        if !prev_cols.contains_key(col.name.as_str()) {
-            ops.push(Operation::AddColumn {
-                table: current.table.clone(),
-                column: col.clone(),
+    for col in &added {
+        if Some(col.name.as_str()) == paired_add {
+            continue;
+        }
+        // Gap 97 — refuse to add a NOT NULL column without a default
+        // (and without `auto_now_add` / `auto_now`, which fill the
+        // column server-side at insert). SQLite + Postgres both
+        // reject the ADD on a non-empty table; we surface the same
+        // failure at diff time with actionable guidance so the user
+        // doesn't ship a migration that bricks every deploy.
+        if !col.nullable
+            && col.default.is_empty()
+            && !col.auto_now_add
+            && !col.auto_now
+            && !col.primary_key
+        {
+            return Err(MigrateError::UnsafeAlter {
+                model: model.to_string(),
+                column: col.name.clone(),
+                reason: format!(
+                    "adding NOT NULL column `{}` without a default to existing \
+                     table `{}` would fail on every populated row. Pick one: \
+                     (a) make the field `Option<T>`, (b) add `#[umbra(default = \
+                     \"...\")]` so the migration backfills, or (c) add \
+                     `#[umbra(auto_now_add)]` for timestamp columns",
+                    col.name, current.table,
+                ),
             });
         }
+        ops.push(Operation::AddColumn {
+            table: current.table.clone(),
+            column: (*col).clone(),
+        });
     }
 
     Ok(ops)
+}
+
+/// Gap 88 helper: compare two column snapshots for shape identity (every
+/// schema-meaningful attribute except `name`). Used by the rename-
+/// detection heuristic — bit-identical attrs are the signal that a
+/// dropped column matches an added column and the diff is actually a
+/// rename. Excludes UI-only flags (`noform`, `noedit`, `max_length`,
+/// `is_string_repr`, `help`, `example`, `slug_from`) for the same
+/// reason the AlterColumn diff excludes them: they have no DB effect.
+fn column_shape_matches(a: &Column, b: &Column) -> bool {
+    a.ty == b.ty
+        && a.primary_key == b.primary_key
+        && a.nullable == b.nullable
+        && a.fk_target == b.fk_target
+        && a.choices == b.choices
+        && a.choice_labels == b.choice_labels
+        && a.default == b.default
+        && a.is_multichoice == b.is_multichoice
+        && a.unique == b.unique
+        && a.on_delete == b.on_delete
+        && a.on_update == b.on_update
+        && a.index == b.index
+        && a.auto_now_add == b.auto_now_add
+        && a.auto_now == b.auto_now
+        && a.min == b.min
+        && a.max == b.max
+        && a.text_format == b.text_format
 }
 
 /// Pick the suffix used in a migration filename. Single-op migrations
@@ -2421,6 +2557,11 @@ fn suffix_for(ops: &[Operation]) -> String {
         [Operation::DropColumn { table, column }] => format!("drop_{table}_{column}"),
         [Operation::AlterColumn { table, column, .. }] => format!("alter_{table}_{column}"),
         [Operation::RenameTable { from, to }] => format!("rename_{from}_to_{to}"),
+        [
+            Operation::RenameColumn {
+                table, from, to, ..
+            },
+        ] => format!("rename_{table}_{from}_to_{to}"),
         _ => "auto".to_string(),
     }
 }
@@ -2641,6 +2782,20 @@ fn render_operation_sqlite(op: &Operation) -> Vec<String> {
                     .build(SqliteQueryBuilder),
             ]
         }
+        Operation::RenameColumn {
+            table, from, to, ..
+        } => {
+            // SQLite 3.25+ supports `ALTER TABLE ... RENAME COLUMN`
+            // natively. Quote both sides to allow names that need
+            // escaping; sea-query's column-rename builder isn't
+            // exposed cleanly so we render the DDL string directly.
+            let t = table.replace('"', "\"\"");
+            let f = from.replace('"', "\"\"");
+            let tn = to.replace('"', "\"\"");
+            vec![format!(
+                "ALTER TABLE \"{t}\" RENAME COLUMN \"{f}\" TO \"{tn}\""
+            )]
+        }
     }
 }
 
@@ -2751,6 +2906,16 @@ fn render_operation_postgres(op: &Operation) -> Vec<String> {
                     .table(Alias::new(from.as_str()), Alias::new(to.as_str()))
                     .build(PostgresQueryBuilder),
             ]
+        }
+        Operation::RenameColumn {
+            table, from, to, ..
+        } => {
+            let t = table.replace('"', "\"\"");
+            let f = from.replace('"', "\"\"");
+            let tn = to.replace('"', "\"\"");
+            vec![format!(
+                "ALTER TABLE \"{t}\" RENAME COLUMN \"{f}\" TO \"{tn}\""
+            )]
         }
     }
 }
@@ -3399,6 +3564,7 @@ mod tests {
             min: None,
             max: None,
             text_format: ::core::option::Option::None,
+            slug_from: ::core::option::Option::None,
         };
         let username = Column {
             name: "username".into(),
@@ -3426,6 +3592,7 @@ mod tests {
             min: None,
             max: None,
             text_format: ::core::option::Option::None,
+            slug_from: ::core::option::Option::None,
         };
         let email = Column {
             name: "email".into(),
@@ -3453,6 +3620,7 @@ mod tests {
             min: None,
             max: None,
             text_format: ::core::option::Option::None,
+            slug_from: ::core::option::Option::None,
         };
 
         for backend in ["sqlite", "postgres"] {
@@ -3550,6 +3718,7 @@ mod tests {
             min: None,
             max: None,
             text_format: ::core::option::Option::None,
+            slug_from: ::core::option::Option::None,
         };
         let cascade_fk = Column {
             on_delete: crate::orm::FkAction::Cascade,
@@ -3662,6 +3831,7 @@ mod tests {
                 min: None,
                 max: None,
                 text_format: ::core::option::Option::None,
+                slug_from: ::core::option::Option::None,
             }
         }
         fn meta_with(col: Column) -> ModelMeta {
@@ -3739,6 +3909,7 @@ mod tests {
             min: None,
             max: None,
             text_format: ::core::option::Option::None,
+            slug_from: ::core::option::Option::None,
         };
 
         // unique false → true: emit ADD CONSTRAINT ... UNIQUE
@@ -3842,6 +4013,7 @@ mod tests {
             min: None,
             max: None,
             text_format: ::core::option::Option::None,
+            slug_from: ::core::option::Option::None,
         };
         let mut stmt = Table::create();
         stmt.table(Alias::new("t"));
@@ -3921,6 +4093,7 @@ mod tests {
             min: None,
             max: None,
             text_format: ::core::option::Option::None,
+            slug_from: ::core::option::Option::None,
         };
         let slug = Column {
             name: "slug".into(),

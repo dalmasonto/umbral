@@ -111,6 +111,7 @@ fn write_migration(dir: &Path, plugin: &str, id: &str, table: &str) {
                     min: None,
                     max: None,
                     text_format: ::core::option::Option::None,
+                    slug_from: ::core::option::Option::None,
                 },
                 Column {
                     name: "title".to_string(),
@@ -138,6 +139,7 @@ fn write_migration(dir: &Path, plugin: &str, id: &str, table: &str) {
                     min: None,
                     max: None,
                     text_format: ::core::option::Option::None,
+                    slug_from: ::core::option::Option::None,
                 },
             ],
             unique_together: Vec::new(),

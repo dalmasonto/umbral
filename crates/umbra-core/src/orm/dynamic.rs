@@ -94,19 +94,68 @@ impl<'a> DynQuerySet<'a> {
         self
     }
 
-    /// Add `WHERE (field1 LIKE ?% OR field2 LIKE ?% OR ...)` for the
-    /// supplied search columns. Empty `fields` or empty `term` is a
-    /// no-op. Columns that don't exist on the model are dropped.
+    /// Add `WHERE (<predicate1> OR <predicate2> OR ...)` for a free-text
+    /// term against the model's searchable columns. Per-column predicate
+    /// depends on the column's [`SqlType`]:
+    ///
+    /// | SqlType | Predicate |
+    /// |---|---|
+    /// | `Text` | `UPPER(col) LIKE '%TERM%'` — case-insensitive substring |
+    /// | `SmallInt` / `Integer` / `BigInt` / `ForeignKey` | `col = term` when `term.parse::<i64>().is_ok()` |
+    /// | `Real` / `Double` | `col = term` when `term.parse::<f64>().is_ok()` |
+    /// | `Boolean` | `col = term` when `term` parses as `true` / `false` |
+    /// | everything else (Date, Time, Uuid, Json, Bytes, Array, …) | skipped |
+    ///
+    /// `fields` controls which columns participate:
+    ///
+    /// - **Non-empty:** restricted to the named columns. Names that
+    ///   don't exist on the model are silently dropped.
+    /// - **Empty:** every column on the model is a candidate; the
+    ///   per-type table above decides which actually contribute. This
+    ///   is the "no `search_fields` configured" default Django gives
+    ///   you out of the box.
+    ///
+    /// Empty `term` (after trimming) is always a no-op. If the column
+    /// selection results in zero predicates (e.g. `term = "abc"` and
+    /// the only candidate columns are numeric), nothing is appended.
     pub fn search(mut self, fields: &[String], term: &str) -> Self {
-        if fields.is_empty() || term.is_empty() {
+        let term = term.trim();
+        if term.is_empty() {
             return self;
         }
-        let pattern = format!("%{term}%");
+
+        let restricted = !fields.is_empty();
+        let as_int = term.parse::<i64>().ok();
+        let as_float = term.parse::<f64>().ok();
+        let as_bool = match term.to_ascii_lowercase().as_str() {
+            "true" => Some(true),
+            "false" => Some(false),
+            _ => None,
+        };
+        let like_pat = format!("%{term}%").to_uppercase();
+
         let mut cond = Condition::any();
         let mut added = 0;
-        for f in fields {
-            if self.meta.fields.iter().any(|c| &c.name == f) {
-                cond = cond.add(Expr::col(Alias::new(f)).like(pattern.clone()));
+        for col in &self.meta.fields {
+            if restricted && !fields.iter().any(|f| f == &col.name) {
+                continue;
+            }
+            let predicate: Option<sea_query::SimpleExpr> = match col.ty {
+                SqlType::Text => Some(
+                    Expr::expr(Func::upper(Expr::col(Alias::new(&col.name))))
+                        .like(like_pat.clone()),
+                ),
+                SqlType::SmallInt | SqlType::Integer | SqlType::BigInt | SqlType::ForeignKey => {
+                    as_int.map(|n| Expr::col(Alias::new(&col.name)).eq(n))
+                }
+                SqlType::Real | SqlType::Double => {
+                    as_float.map(|n| Expr::col(Alias::new(&col.name)).eq(n))
+                }
+                SqlType::Boolean => as_bool.map(|b| Expr::col(Alias::new(&col.name)).eq(b)),
+                _ => None,
+            };
+            if let Some(p) = predicate {
+                cond = cond.add(p);
                 added += 1;
             }
         }
@@ -613,19 +662,31 @@ impl<'a> DynQuerySet<'a> {
         // write seam so every consumer (REST, admin, custom
         // handlers) gets it for free. The owned clone lets us
         // continue to take `&body` from the caller.
+        //
+        // Gap 109: we also need a mutable view to auto-derive
+        // `#[umbra(slug_from = "...")]` columns before validation
+        // runs (so a missing-required check doesn't fire on a
+        // slug we're about to fill). When either rule triggers we
+        // take the owned copy; otherwise the borrow passes
+        // through.
+        let needs_owned = self
+            .meta
+            .fields
+            .iter()
+            .any(|c| c.noform || c.slug_from.is_some());
         let mut body_owned: serde_json::Map<String, serde_json::Value>;
-        let body: &serde_json::Map<String, serde_json::Value> =
-            if self.meta.fields.iter().any(|c| c.noform) {
-                body_owned = body.clone();
-                for col in &self.meta.fields {
-                    if col.noform {
-                        body_owned.remove(&col.name);
-                    }
+        let body: &serde_json::Map<String, serde_json::Value> = if needs_owned {
+            body_owned = body.clone();
+            for col in &self.meta.fields {
+                if col.noform {
+                    body_owned.remove(&col.name);
                 }
-                &body_owned
-            } else {
-                body
-            };
+            }
+            crate::orm::write::apply_slug_from(&self.meta.fields, &mut body_owned, false);
+            &body_owned
+        } else {
+            body
+        };
 
         // Phase 0 — pre-DB validation. Required-field + FK
         // existence + choices + M2M shape checks run together
@@ -829,19 +890,28 @@ impl<'a> DynQuerySet<'a> {
 
         // Phase -1 — strip `noform` columns (server-managed
         // fields the client must not overwrite).
+        //
+        // Gap 109: also auto-derive `slug_from` columns when the
+        // source field is part of the update body (see
+        // `apply_slug_from`'s update guard for why).
+        let needs_owned = self
+            .meta
+            .fields
+            .iter()
+            .any(|c| c.noform || c.slug_from.is_some());
         let mut body_owned: serde_json::Map<String, serde_json::Value>;
-        let body: &serde_json::Map<String, serde_json::Value> =
-            if self.meta.fields.iter().any(|c| c.noform) {
-                body_owned = body.clone();
-                for col in &self.meta.fields {
-                    if col.noform {
-                        body_owned.remove(&col.name);
-                    }
+        let body: &serde_json::Map<String, serde_json::Value> = if needs_owned {
+            body_owned = body.clone();
+            for col in &self.meta.fields {
+                if col.noform {
+                    body_owned.remove(&col.name);
                 }
-                &body_owned
-            } else {
-                body
-            };
+            }
+            crate::orm::write::apply_slug_from(&self.meta.fields, &mut body_owned, true);
+            &body_owned
+        } else {
+            body
+        };
 
         // Phase 0 — pre-DB validation. Update-shape: required-
         // field check only complains about EXPLICIT blanks

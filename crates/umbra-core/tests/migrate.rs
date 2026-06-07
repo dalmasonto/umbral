@@ -157,6 +157,7 @@ async fn migrated_dir() -> &'static Path {
                 min: None,
                 max: None,
                 text_format: ::core::option::Option::None,
+                slug_from: ::core::option::Option::None,
             };
             let file = MigrationFile {
                 id: M8_ADD_COLUMN_MIGRATION_ID.to_string(),
@@ -227,6 +228,7 @@ async fn migrated_dir() -> &'static Path {
                     min: None,
                     max: None,
                     text_format: ::core::option::Option::None,
+                    slug_from: ::core::option::Option::None,
                 },
                 Column {
                     name: "note".to_string(),
@@ -254,6 +256,7 @@ async fn migrated_dir() -> &'static Path {
                     min: None,
                     max: None,
                     text_format: ::core::option::Option::None,
+                    slug_from: ::core::option::Option::None,
                 },
             ];
             let file = MigrationFile {
@@ -349,6 +352,7 @@ fn create_table_names(ops: &[Operation]) -> Vec<String> {
             | Operation::DropColumn { .. }
             | Operation::AlterColumn { .. }
             | Operation::RenameTable { .. }
+            | Operation::RenameColumn { .. }
             | Operation::CreateM2MTable { .. } => None,
         })
         .collect();
@@ -758,6 +762,7 @@ fn id_column() -> Column {
         min: None,
         max: None,
         text_format: ::core::option::Option::None,
+        slug_from: ::core::option::Option::None,
     }
 }
 
@@ -790,23 +795,37 @@ fn text_column(name: &str) -> Column {
         min: None,
         max: None,
         text_format: ::core::option::Option::None,
+        slug_from: ::core::option::Option::None,
     }
 }
 
-/// M8 — `diff` emits one `AddColumn` when a new field appears on an
-/// existing model. The previous snapshot has `Post { id, title }`; the
-/// current has `Post { id, title, body }`. Spec 06 §"What shipped at
-/// M8 v1" calls this the headline case for the column-level diff.
+/// Nullable sibling of `text_column`. Used by tests that exercise the
+/// post-gap-97 AddColumn path: a NOT NULL column without a default is
+/// rejected at diff time, so adding `body: Option<String>` is the safe
+/// shape for "new field on an existing table."
+fn nullable_text_column(name: &str) -> Column {
+    let mut c = text_column(name);
+    c.nullable = true;
+    c
+}
+
+/// M8 — `diff` emits one `AddColumn` when a new (nullable) field
+/// appears on an existing model. The previous snapshot has
+/// `Post { id, title }`; the current has `Post { id, title, body }`.
+/// Spec 06 §"What shipped at M8 v1" calls this the headline case for
+/// the column-level diff. Gap 97: the column has to be nullable (or
+/// carry a default / auto_now*) — adding a NOT NULL column without a
+/// default to an existing table would fail on every populated row.
 #[test]
 fn diff_emits_add_column_for_a_new_field() {
     let previous = snapshot_of(post_model(vec![id_column(), text_column("title")]));
     let current = snapshot_of(post_model(vec![
         id_column(),
         text_column("title"),
-        text_column("body"),
+        nullable_text_column("body"),
     ]));
 
-    let ops = diff(&previous, &current).expect("a single AddColumn is always safe");
+    let ops = diff(&previous, &current).expect("a nullable AddColumn is always safe");
     assert_eq!(
         ops.len(),
         1,
@@ -817,11 +836,55 @@ fn diff_emits_add_column_for_a_new_field() {
             assert_eq!(table, "post");
             assert_eq!(column.name, "body");
             assert_eq!(column.ty, SqlType::Text);
-            assert!(!column.nullable);
+            assert!(column.nullable);
             assert!(!column.primary_key);
         }
         other => panic!("expected Operation::AddColumn, got {other:?}"),
     }
+}
+
+/// Gap 97 — adding a NOT NULL column without a default to an
+/// existing table is rejected at diff time. SQLite + Postgres would
+/// reject the ADD; we surface the same failure with actionable
+/// guidance so the user picks one of: make the field Optional, add a
+/// default, or add auto_now_add.
+#[test]
+fn diff_rejects_not_null_add_column_without_default() {
+    let previous = snapshot_of(post_model(vec![id_column(), text_column("title")]));
+    let current = snapshot_of(post_model(vec![
+        id_column(),
+        text_column("title"),
+        text_column("body"), // NOT NULL, no default — should fail
+    ]));
+
+    let err = diff(&previous, &current).expect_err("NOT NULL without default must fail");
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("body"),
+        "error names the offending column: {msg}"
+    );
+    assert!(
+        msg.contains("default") || msg.contains("Option") || msg.contains("auto_now"),
+        "error guides the user: {msg}",
+    );
+}
+
+/// Gap 97 — a NOT NULL field that carries `default = "..."` is fine
+/// (the migration backfills existing rows from the DEFAULT).
+#[test]
+fn diff_accepts_not_null_add_column_with_default() {
+    let previous = snapshot_of(post_model(vec![id_column(), text_column("title")]));
+    let mut body_with_default = text_column("body");
+    body_with_default.default = "draft".to_string();
+    let current = snapshot_of(post_model(vec![
+        id_column(),
+        text_column("title"),
+        body_with_default,
+    ]));
+
+    let ops = diff(&previous, &current).expect("default unblocks NOT NULL add");
+    assert_eq!(ops.len(), 1);
+    assert!(matches!(&ops[0], Operation::AddColumn { .. }));
 }
 
 /// M8 — `diff` emits one `DropColumn` when a field is removed from an
@@ -851,14 +914,13 @@ fn diff_emits_drop_column_for_a_removed_field() {
     }
 }
 
-/// M8 — a rename surfaces as `DropColumn` + `AddColumn`, in that
-/// order. Spec 06 calls out the ordering: drops first so a same-position
-/// add can reuse the column slot, and a same-name rename doesn't fight
-/// itself mid-migration. The heuristic detector that disambiguates
-/// rename vs drop+add is deferred past M8 v1; the user can hand-edit if
-/// they need to preserve data.
+/// Gap 88 — a single column rename is detected by the diff engine
+/// and emitted as `RenameColumn`, not as the legacy `DropColumn` +
+/// `AddColumn` pair. Triggered when exactly one drop and one add
+/// share identical column shapes (sans name). Anything more
+/// ambiguous (multi-rename, shape mismatch) falls back to drop+add.
 #[test]
-fn diff_emits_drop_then_add_for_a_renamed_column() {
+fn diff_emits_rename_column_for_a_single_renamed_column() {
     let previous = snapshot_of(post_model(vec![
         id_column(),
         text_column("title"),
@@ -870,29 +932,63 @@ fn diff_emits_drop_then_add_for_a_renamed_column() {
         text_column("content"),
     ]));
 
+    let ops = diff(&previous, &current).expect("rename is always safe");
+    assert_eq!(
+        ops.len(),
+        1,
+        "single rename should produce exactly one RenameColumn; got {ops:?}",
+    );
+    match &ops[0] {
+        Operation::RenameColumn {
+            table,
+            from,
+            to,
+            column,
+        } => {
+            assert_eq!(table, "post");
+            assert_eq!(from, "body");
+            assert_eq!(to, "content");
+            let c = column.as_ref().expect("column shape carried");
+            assert_eq!(c.name, "content");
+            assert_eq!(c.ty, SqlType::Text);
+        }
+        other => panic!("expected Operation::RenameColumn, got {other:?}"),
+    }
+}
+
+/// Gap 88 — when shapes don't match, fall back to the legacy
+/// drop+add. Here `body: Text` drops and `count: Integer` adds; the
+/// types differ so the heuristic stays out of the way (avoids
+/// silently inferring a rename against the user's intent).
+#[test]
+fn diff_falls_back_to_drop_and_add_when_shapes_differ() {
+    let previous = snapshot_of(post_model(vec![
+        id_column(),
+        text_column("title"),
+        text_column("body"),
+    ]));
+    let mut count_col = nullable_text_column("count");
+    count_col.ty = SqlType::Integer;
+    let current = snapshot_of(post_model(vec![
+        id_column(),
+        text_column("title"),
+        count_col,
+    ]));
+
     let ops = diff(&previous, &current).expect("drop+add is always safe");
     assert_eq!(
         ops.len(),
         2,
-        "a rename should emit one drop and one add; got {ops:?}",
+        "shape mismatch falls back to drop+add: {ops:?}"
     );
-    match &ops[0] {
-        Operation::DropColumn { table, column } => {
-            assert_eq!(table, "post");
-            assert_eq!(
-                column, "body",
-                "drop comes first per the diff_columns ordering"
-            );
-        }
-        other => panic!("expected DropColumn first, got {other:?}"),
-    }
-    match &ops[1] {
-        Operation::AddColumn { table, column } => {
-            assert_eq!(table, "post");
-            assert_eq!(column.name, "content");
-        }
-        other => panic!("expected AddColumn second, got {other:?}"),
-    }
+    assert!(
+        matches!(&ops[0], Operation::DropColumn { column, .. } if column == "body"),
+        "drop comes first: {ops:?}",
+    );
+    assert!(
+        matches!(&ops[1], Operation::AddColumn { column, .. } if column.name == "count"),
+        "add comes second: {ops:?}",
+    );
 }
 
 /// M8 — an in-place column type change surfaces as
@@ -931,6 +1027,7 @@ fn diff_returns_unsafe_alter_for_a_type_change() {
             min: None,
             max: None,
             text_format: ::core::option::Option::None,
+            slug_from: ::core::option::Option::None,
         },
     ]));
 
@@ -987,6 +1084,7 @@ fn diff_emits_alter_column_for_a_nullable_flip() {
             min: None,
             max: None,
             text_format: ::core::option::Option::None,
+            slug_from: ::core::option::Option::None,
         },
     ]));
 
@@ -1052,6 +1150,7 @@ fn diff_emits_alter_column_for_safe_type_cast_bigint_to_text() {
         min: None,
         max: None,
         text_format: ::core::option::Option::None,
+        slug_from: ::core::option::Option::None,
     };
     let mut curr_user_id = prev_user_id.clone();
     curr_user_id.ty = SqlType::Text;
@@ -1118,6 +1217,7 @@ fn diff_still_refuses_text_to_bigint_as_unsafe() {
         min: None,
         max: None,
         text_format: ::core::option::Option::None,
+        slug_from: ::core::option::Option::None,
     };
     let mut curr_value = prev_value.clone();
     curr_value.ty = SqlType::BigInt;

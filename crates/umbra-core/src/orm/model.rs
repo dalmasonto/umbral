@@ -531,6 +531,25 @@ pub struct FieldSpec {
     /// because they're produced from the same single match arm in
     /// `umbra-macros::classify_field_type`.
     pub text_format: Option<&'static str>,
+
+    /// Source column for an auto-derived slug. Set via
+    /// `#[umbra(slug_from = "title")]` on a `Slug` / `String` field;
+    /// names a sibling column on the same model whose value seeds
+    /// this column at write time. Gap 109.
+    ///
+    /// **Where this fires:** the dynamic write path
+    /// ([`crate::orm::DynQuerySet::insert_json`] +
+    /// [`crate::orm::DynQuerySet::update_json`]). On insert, an empty
+    /// or absent slug column is replaced by `slugify(source_value)`
+    /// derived from the source column in the same body. On update,
+    /// the slug is regenerated only when the source column is also
+    /// in the update payload, so callers who edit nothing but the
+    /// slug itself keep their hand-tuned value.
+    ///
+    /// `None` is the default — no auto-derive. The string is a
+    /// column name (snake_case), not a Rust field name, so it must
+    /// match exactly what ends up in `FieldSpec::name`.
+    pub slug_from: Option<&'static str>,
 }
 
 /// Referential action emitted in the SQL `REFERENCES ... ON

@@ -138,6 +138,7 @@ impl Plugin for TestPlugin {
                 min: None,
                 max: None,
                 text_format: ::core::option::Option::None,
+                slug_from: ::core::option::Option::None,
             }],
         }]
     }

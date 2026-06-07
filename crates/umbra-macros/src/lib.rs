@@ -152,6 +152,7 @@ struct UmbraStructAttr {
 }
 
 /// Field-level `#[umbra(...)]` attribute parsed from a struct field.
+#[derive(Default)]
 struct UmbraFieldAttr {
     /// `#[umbra(noform)]` — never show on any form.
     noform: bool,
@@ -164,6 +165,16 @@ struct UmbraFieldAttr {
     /// `#[umbra(primary_key)] pub codename: String` instead of
     /// `pub id: String`.
     primary_key: bool,
+    /// `#[umbra(no_reverse)]` — suppress the Gap-30 reverse-FK
+    /// accessor (`<child>_set` on the parent type) for this FK.
+    /// Required when the FK target is defined in another crate
+    /// (e.g. `ForeignKey<AuthUser>` from `umbra-auth`), because
+    /// Rust's orphan rules forbid emitting an inherent `impl
+    /// AuthUser { ... }` from the child's crate. Without this
+    /// opt-out, the Model derive produces an E0116. No-ops on
+    /// non-FK fields and on `Option<ForeignKey<_>>` (nullable FKs
+    /// already skip reverse-set generation).
+    no_reverse: bool,
     /// `#[umbra(string)]` — Django-style "__str__" marker. The admin's
     /// default `list_display` falls back to this field when the model
     /// has no explicit `list_display` config, so the table shows a
@@ -228,6 +239,13 @@ struct UmbraFieldAttr {
     min: Option<i64>,
     /// `#[umbra(max = N)]` — numeric upper bound. Closes IMP-3.
     max: Option<i64>,
+    /// `#[umbra(slug_from = "title")]` — auto-derive this column from
+    /// a sibling column at write time. Gap 109. Only meaningful on
+    /// `Slug` / `String` columns; the runtime in
+    /// `umbra-core::orm::write` computes the slug when the column
+    /// itself isn't supplied on the body, leaving explicit
+    /// user-supplied slugs alone.
+    slug_from: Option<String>,
 }
 
 fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAttr> {
@@ -235,6 +253,7 @@ fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAtt
         noform: false,
         noedit: false,
         primary_key: false,
+        no_reverse: false,
         is_string_repr: false,
         max_length: 0,
         choices_ty: None,
@@ -250,6 +269,7 @@ fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAtt
         backends: Vec::new(),
         min: None,
         max: None,
+        slug_from: None,
     };
     for attr in attrs {
         if !attr.path().is_ident("umbra") {
@@ -264,6 +284,9 @@ fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAtt
                 Ok(())
             } else if meta.path.is_ident("primary_key") {
                 parsed.primary_key = true;
+                Ok(())
+            } else if meta.path.is_ident("no_reverse") {
+                parsed.no_reverse = true;
                 Ok(())
             } else if meta.path.is_ident("string") {
                 // Both `#[umbra(string)]` and `#[umbra(string = true)]` work.
@@ -359,6 +382,14 @@ fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAtt
                 let lit: syn::LitInt = value.parse()?;
                 parsed.max = Some(lit.base10_parse()?);
                 Ok(())
+            } else if meta.path.is_ident("slug_from") {
+                // `#[umbra(slug_from = "title")]` — auto-derive at
+                // write time. Gap 109. The string is a sibling column
+                // name (snake_case form, matching FieldSpec::name).
+                let value = meta.value()?;
+                let lit: syn::LitStr = value.parse()?;
+                parsed.slug_from = Some(lit.value());
+                Ok(())
             } else {
                 // Unknown key. Report it with the known set so the
                 // common typo case (`is_string_repr` instead of
@@ -381,13 +412,14 @@ fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAtt
                     .unwrap_or_else(|| "<unknown>".to_string());
                 Err(meta.error(format!(
                     "unknown field-level umbra attribute `{path}` — known keys are \
-                     `noform`, `noedit`, `string` (or `string = true`), \
+                     `noform`, `noedit`, `primary_key`, `no_reverse`, \
+                     `string` (or `string = true`), \
                      `max_length = N`, `choices`, `default = \"...\"`, \
                      `unique`, `on_delete = \"...\"`, \
                      `on_update = \"...\"`, `index`, `auto_now`, \
                      `auto_now_add`, `help = \"...\"`, \
                      `example = \"...\"`, `backend = \"...\"`, \
-                     `min = N`, and `max = N`"
+                     `min = N`, `max = N`, and `slug_from = \"...\"`"
                 )))
             }
         })?;
@@ -1010,6 +1042,14 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             _ => quote!(::core::option::Option::None),
         };
 
+        // Gap 109: `#[umbra(slug_from = "title")]` carries through to
+        // FieldSpec so the dynamic write path can auto-derive the
+        // slug when the body omits the column.
+        let slug_from_tokens = match &field_attr.slug_from {
+            Some(s) => quote!(::core::option::Option::Some(#s)),
+            None => quote!(::core::option::Option::None),
+        };
+
         field_specs.push(quote! {
             ::umbra::orm::FieldSpec {
                 name: #field_name_str,
@@ -1037,6 +1077,7 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                 min: #min_tokens,
                 max: #max_tokens,
                 text_format: #text_format_tokens,
+                slug_from: #slug_from_tokens,
             }
         });
 
@@ -1084,13 +1125,21 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         let field_name = field.ident.as_ref().unwrap();
         let field_name_str = field_name.to_string();
         let kind = classify_field_type(&field.ty);
+        // Re-parse the field attr here so we can honour `no_reverse`
+        // when deciding whether to emit a Gap-30 accessor. The first
+        // pass at line ~797 already validated the attrs, so a parse
+        // error is impossible here — fall back to defaults to keep
+        // the call infallible.
+        let field_attr = parse_umbra_field_attr(&field.attrs).unwrap_or_default();
         match &kind {
             FieldKind::Many2Many(inner_ty) => {
                 m2m_field_idents.push(field_name.clone());
                 m2m_field_children.push((**inner_ty).clone());
             }
             FieldKind::ForeignKey(inner_ty) => {
-                reverse_fk_entries.push((field_name.clone(), (**inner_ty).clone()));
+                if !field_attr.no_reverse {
+                    reverse_fk_entries.push((field_name.clone(), (**inner_ty).clone()));
+                }
                 hydrate_arms.push(quote! {
                     #field_name_str => {
                         if let Ok(resolved) = ::umbra::_serde_json::from_value::<#inner_ty>(row.clone()) {
@@ -1268,23 +1317,36 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         })
         .collect();
 
-    // Gap 30: emit reverse-FK accessors on each FK target type. For
-    // every `pub author: ForeignKey<User>` on this Child, emit
-    // `impl User { pub fn <child>_set(&self) -> QuerySet<Child> }`.
-    // The body filters `Child::objects()` by the FK column equal to
-    // the parent's PK. Disambiguates with the field name when this
-    // Child has multiple FKs to the same parent type (so two
-    // `ForeignKey<User>` fields on Post become `post_via_author_set`
-    // and `post_via_reviewer_set`).
+    // Gap 30 + Gap 105: emit reverse-FK accessors on each FK target
+    // type. For every `pub author: ForeignKey<User>` on this Child,
+    // emit a trait `<Child><Field>Reverse` plus an
+    // `impl ... for User`. Trait-based emission sidesteps Rust's
+    // orphan rule, so the accessor works even when the parent type
+    // lives in another crate — the canonical case is
+    // `ForeignKey<AuthUser>` from `umbra-auth` consumed by a model in
+    // an app crate. The user imports the trait
+    // (`use blog::PostAuthorReverse;` or `use blog::*;`) and writes
+    // `user.post_set()` exactly like Django.
     //
-    // Naming derived from `to_snake_case(struct_name)` + `_set`.
+    // Trait naming: `<Child><FieldPascal>Reverse`. One trait per
+    // `(Child, field)` pair, scoped to this crate, so unique within
+    // the consumer's namespace and never collides across plugins.
+    //
+    // Method naming: `<child_snake>_set` when the child has exactly
+    // one FK to this parent type; `<child_snake>_via_<field>_set`
+    // when the child has multiple FKs to the same parent (so two
+    // `ForeignKey<User>` fields on Post emit `post_via_author_set`
+    // and `post_via_reviewer_set`, both impl'd on User — no
+    // method-name collision).
+    //
     // Limitations:
-    //  - parent must be a local type (orphan rule);
-    //  - parent's PrimaryKey must be `i64` (the column eq path is
-    //    hardcoded to i64 today — non-i64 PKs surface as a clean
-    //    compile error at the call site, prompting the caller to
-    //    opt the FK out via `#[umbra(no_reverse)]` once that
-    //    attribute lands).
+    //  - parent's PrimaryKey type must satisfy the column-const's
+    //    `.eq` bound. For i64-keyed parents (the default) this is
+    //    trivially true; non-i64 PKs work too as long as the FK
+    //    column's predicate constant accepts the PK type.
+    //  - The opt-out `#[umbra(no_reverse)]` still works: it skips
+    //    both the trait and the impl, no E0116 because we no longer
+    //    emit an inherent impl on the parent.
     let child_snake = to_snake_case(&struct_name.to_string());
     // Group occurrences by the parent type's token-string so the
     // disambiguation decision is local to a single FK target.
@@ -1305,16 +1367,24 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                 format_ident!("{}_set", child_snake)
             };
             let fk_const = format_ident!("{}", to_screaming_snake_case(&field_ident.to_string()));
+            let field_pascal = to_pascal_case(&field_ident.to_string());
+            let trait_name = format_ident!("{}{}Reverse", struct_name, field_pascal);
+            let trait_doc = format!(
+                "Reverse-FK trait emitted by `#[derive(Model)]` for `{}::{}`. \
+                 Importing this trait lets callers spell `parent.{}()` to get \
+                 a `QuerySet<{}>` filtered to children whose `{}` FK points at \
+                 the parent. Trait-based emission (gap 105) sidesteps the \
+                 orphan rule, so the accessor works even when the parent \
+                 type is defined in another crate.",
+                struct_name, field_ident, accessor_name, struct_name, field_ident,
+            );
             quote! {
-                impl #parent_ty {
-                    /// Reverse FK accessor (gap #30). Returns a
-                    /// `QuerySet<Child>` pre-filtered to rows whose
-                    /// FK column points at `self`. Compose with
-                    /// `.filter` / `.order_by` / `.fetch` the same
-                    /// way as any other QuerySet.
-                    pub fn #accessor_name(
-                        &self,
-                    ) -> ::umbra::orm::QuerySet<#struct_name> {
+                #[doc = #trait_doc]
+                pub trait #trait_name {
+                    fn #accessor_name(&self) -> ::umbra::orm::QuerySet<#struct_name>;
+                }
+                impl #trait_name for #parent_ty {
+                    fn #accessor_name(&self) -> ::umbra::orm::QuerySet<#struct_name> {
                         let __pk = <Self as ::umbra::orm::Model>::primary_key(self);
                         #struct_name::objects()
                             .filter(#module_name::#fk_const.eq(__pk))
@@ -1826,6 +1896,15 @@ fn classify_field_type(ty: &Type) -> FieldKind {
     }
 
     if let Some(inner) = option_inner(ty) {
+        // Gap 85 — `Option<M2M<T>>`. M2M is a relation, not a column;
+        // there's no nullable variant because the junction-table model
+        // already represents "no relation" as the absence of a row.
+        // We treat `Option<M2M<T>>` exactly like `M2M<T>` so authors
+        // who reflexively wrap relations in `Option` (as you would
+        // for a nullable FK) don't hit an "unsupported type" error.
+        if let Some(m2m_target) = m2m_inner(inner) {
+            return FieldKind::Many2Many(Box::new(m2m_target.clone()));
+        }
         if type_is_ident(inner, "i8") || type_is_ident(inner, "i16") || type_is_ident(inner, "u8") {
             return FieldKind::NullableSmallInt;
         }
@@ -2353,6 +2432,33 @@ fn to_snake_case(camel: &str) -> String {
 /// ASCII; non-ASCII characters pass through, uppercased where possible.
 fn to_screaming_snake_case(name: &str) -> String {
     to_snake_case(name).to_ascii_uppercase()
+}
+
+/// Convert `snake_case` (or anything mixed) to `PascalCase`.
+///
+/// Routes through `to_snake_case` so a struct field already written in
+/// PascalCase or camelCase round-trips cleanly. Used to build trait
+/// names like `<Child><Field>Reverse` for gap 105's reverse-FK
+/// emission. Non-ASCII pass through unchanged.
+fn to_pascal_case(name: &str) -> String {
+    let snake = to_snake_case(name);
+    let mut out = String::with_capacity(snake.len());
+    let mut capitalise_next = true;
+    for c in snake.chars() {
+        if c == '_' {
+            capitalise_next = true;
+            continue;
+        }
+        if capitalise_next {
+            for u in c.to_uppercase() {
+                out.push(u);
+            }
+            capitalise_next = false;
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 // =========================================================================
