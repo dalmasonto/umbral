@@ -51,7 +51,7 @@
       u.searchParams.delete('row');
       history.replaceState({}, '', u.pathname + (u.search || '') + (u.hash || ''));
     } catch (e) { /* URL not supported — skip the rewrite */ }
-    htmx.ajax('GET', '/admin/' + table + '/' + rowId + '/sheet', {
+    htmx.ajax('GET', '{{ admin_base }}/' + table + '/' + rowId + '/sheet', {
       target: '#umbra-sheet-slot',
       swap: 'innerHTML'
     });

@@ -220,7 +220,7 @@
 
   umbra._filterFkSearch = function(field, table, query) {
     var relTable = field.replace(/_id$/, '');
-    var url = '/admin/api/' + table + '/' + field + '/options?search=' + encodeURIComponent(query) + '&page_size=10';
+    var url = '{{ admin_base }}/api/' + table + '/' + field + '/options?search=' + encodeURIComponent(query) + '&page_size=10';
     fetch(url, { headers: { 'HX-Request': 'true' } })
       .then(function(r) { return r.text(); })
       .then(function(html) {
@@ -235,7 +235,7 @@
       filter = _pendingFilter.field + '=' + _pendingFilter.value;
     }
     umbra.closeFilterDialog();
-    var url = '/admin/' + table + '/rows?search=' + encodeURIComponent(search)
+    var url = '{{ admin_base }}/' + table + '/rows?search=' + encodeURIComponent(search)
       + '&filter=' + encodeURIComponent(filter)
       + '&sort=' + encodeURIComponent(sort)
       + '&order=' + encodeURIComponent(order)
@@ -245,7 +245,7 @@
 
   umbra._filterClear = function(table, search, sort, order) {
     umbra.closeFilterDialog();
-    var url = '/admin/' + table + '/rows?search=' + encodeURIComponent(search)
+    var url = '{{ admin_base }}/' + table + '/rows?search=' + encodeURIComponent(search)
       + '&sort=' + encodeURIComponent(sort)
       + '&order=' + encodeURIComponent(order)
       + '&page=1';

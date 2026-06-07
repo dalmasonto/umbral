@@ -82,7 +82,7 @@
             </div>
             {%- endif %}
 
-            <form method="post" action="/admin/login" class="space-y-md">
+            <form method="post" action="{{ admin_base }}/login" class="space-y-md">
                 <!-- CSRF token — per-session, verified on POST -->
                 <input
                     type="hidden"

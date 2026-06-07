@@ -28,7 +28,10 @@ pub(crate) async fn preview_sheet(
     headers: HeaderMap,
     Path((table, id)): Path<(String, String)>,
 ) -> Response {
-    let path = format!("/admin/{table}/{id}/sheet");
+    let path = format!(
+        "{}/{table}/{id}/sheet",
+        crate::branding::current().base_path
+    );
     let _user = match require_staff(&headers, &path).await {
         Ok(u) => u,
         Err(r) => return r,
@@ -66,7 +69,11 @@ pub(crate) async fn preview_sheet(
             Err(e) => e.into_response(),
         }
     } else {
-        Redirect::to(&format!("/admin/{table}/?row={id}")).into_response()
+        Redirect::to(&format!(
+            "{}/{table}/?row={id}",
+            crate::branding::current().base_path
+        ))
+        .into_response()
     }
 }
 
@@ -78,7 +85,10 @@ pub(crate) async fn edit_sheet_handler(
     headers: HeaderMap,
     Path((table, id)): Path<(String, String)>,
 ) -> Response {
-    let path = format!("/admin/{table}/{id}/edit-sheet");
+    let path = format!(
+        "{}/{table}/{id}/edit-sheet",
+        crate::branding::current().base_path
+    );
     let _user = match require_staff(&headers, &path).await {
         Ok(u) => u,
         Err(r) => return r,
@@ -122,7 +132,11 @@ pub(crate) async fn edit_sheet_handler(
             Err(e) => e.into_response(),
         }
     } else {
-        Redirect::to(&format!("/admin/{table}/?row={id}")).into_response()
+        Redirect::to(&format!(
+            "{}/{table}/?row={id}",
+            crate::branding::current().base_path
+        ))
+        .into_response()
     }
 }
 
@@ -132,7 +146,7 @@ pub(crate) async fn new_sheet(
     headers: HeaderMap,
     Path(table): Path<String>,
 ) -> Response {
-    let path = format!("/admin/{table}/new-sheet");
+    let path = format!("{}/{table}/new-sheet", crate::branding::current().base_path);
     let _user = match require_staff(&headers, &path).await {
         Ok(u) => u,
         Err(r) => return r,
@@ -166,7 +180,10 @@ pub(crate) async fn confirm_delete_dialog(
     headers: HeaderMap,
     Path((table, id)): Path<(String, String)>,
 ) -> Response {
-    let path = format!("/admin/{table}/{id}/_confirm-delete");
+    let path = format!(
+        "{}/{table}/{id}/_confirm-delete",
+        crate::branding::current().base_path
+    );
     if let Err(r) = require_staff(&headers, &path).await {
         return r;
     }
@@ -199,7 +216,7 @@ pub(crate) async fn sheet_create(
     Path(table): Path<String>,
     body: String,
 ) -> Response {
-    let path = format!("/admin/{table}/create");
+    let path = format!("{}/{table}/create", crate::branding::current().base_path);
     let who = match require_staff(&headers, &path).await {
         Ok(u) => u,
         Err(r) => return r,
@@ -231,15 +248,31 @@ pub(crate) async fn sheet_create(
             )
             .await;
             if is_htmx(&headers) {
-                axum::response::Response::builder()
+                // In-place refresh: close the sheet + re-fetch rows so
+                // the new record appears without a full page nav.
+                // Matches `crud::update`'s success path.
+                let mut resp = axum::response::Response::builder()
                     .status(StatusCode::OK)
-                    .header("HX-Redirect", format!("/admin/{}/", model.table))
+                    .header("HX-Trigger", r#"{"closeSheet": {}, "refreshTable": {}}"#)
                     .body(axum::body::Body::empty())
                     .unwrap_or_else(|_| {
-                        Redirect::to(&format!("/admin/{}/", model.table)).into_response()
-                    })
+                        Redirect::to(&format!(
+                            "{}/{}/",
+                            crate::branding::current().base_path,
+                            model.table
+                        ))
+                        .into_response()
+                    });
+                resp.headers_mut()
+                    .insert("Content-Type", "text/html; charset=utf-8".parse().unwrap());
+                resp
             } else {
-                Redirect::to(&format!("/admin/{}/", model.table)).into_response()
+                Redirect::to(&format!(
+                    "{}/{}/",
+                    crate::branding::current().base_path,
+                    model.table
+                ))
+                .into_response()
             }
         }
         Err(e) => {
@@ -273,7 +306,10 @@ pub(crate) async fn change_password_handler(
     Path((table, id)): Path<(String, String)>,
     body: String,
 ) -> Response {
-    let path = format!("/admin/{table}/{id}/change-password");
+    let path = format!(
+        "{}/{table}/{id}/change-password",
+        crate::branding::current().base_path
+    );
     let actor = match require_staff(&headers, &path).await {
         Ok(u) => u,
         Err(r) => return r,

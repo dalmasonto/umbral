@@ -2,14 +2,14 @@
 {% block title %}{{ model.name }} #{{ row[pk] }} — {{ site_title }}{% endblock %}
 {% block content %}
   <div class="breadcrumb">
-    <a href="/admin">admin</a> / <a href="/admin/{{ model.table }}/">{{ model.name }}</a> / #{{ row[pk] }}
+    <a href="{{ admin_base }}">admin</a> / <a href="{{ admin_base }}/{{ model.table }}/">{{ model.name }}</a> / #{{ row[pk] }}
   </div>
   <div class="panel">
     <h2 style="display:flex;align-items:center;justify-content:space-between">
       <span>{{ model.name }} <span class="meta">#{{ row[pk] }}</span></span>
       <span class="actions">
-        <a class="btn" href="/admin/{{ model.table }}/{{ row[pk] }}/edit">Edit</a>
-        <form method="post" action="/admin/{{ model.table }}/{{ row[pk] }}/delete" style="display:inline" onsubmit="return confirm('Delete this row? This cannot be undone.')">
+        <a class="btn" href="{{ admin_base }}/{{ model.table }}/{{ row[pk] }}/edit">Edit</a>
+        <form method="post" action="{{ admin_base }}/{{ model.table }}/{{ row[pk] }}/delete" style="display:inline" onsubmit="return confirm('Delete this row? This cannot be undone.')">
           <button class="btn btn-danger" type="submit">Delete</button>
         </form>
       </span>

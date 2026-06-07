@@ -1,7 +1,7 @@
 {% extends "admin/base.html" %}
 {% block title %}{{ model.name }} — {{ site_title }}{% endblock %}
 {% block content %}
-  <div class="breadcrumb"><a href="/admin">admin</a> / {{ model.name }}</div>
+  <div class="breadcrumb"><a href="{{ admin_base }}">admin</a> / {{ model.name }}</div>
 
   {%- if flash %}
   <div class="flash">{{ flash }}</div>
@@ -13,7 +13,7 @@
       <div class="panel">
         <h2 style="display:flex;align-items:center;justify-content:space-between">
           <span>{{ model.name }} <span class="meta">({{ rows|length }} row{% if rows|length != 1 %}s{% endif %})</span></span>
-          <a class="btn btn-primary" href="/admin/{{ model.table }}/new">Add {{ model.name }}</a>
+          <a class="btn btn-primary" href="{{ admin_base }}/{{ model.table }}/new">Add {{ model.name }}</a>
         </h2>
 
         {# Search box #}
@@ -22,14 +22,14 @@
           <div style="display:flex;gap:0.5rem">
             <input type="text" name="q" value="{{ search_val }}" placeholder="Search…" style="flex:1;padding:0.45rem 0.6rem;border:1px solid var(--border);border-radius:4px;font-size:0.9rem">
             <button type="submit" class="btn btn-primary">Search</button>
-            {% if search_val %}<a class="btn" href="/admin/{{ model.table }}/">Clear</a>{% endif %}
+            {% if search_val %}<a class="btn" href="{{ admin_base }}/{{ model.table }}/">Clear</a>{% endif %}
           </div>
         </form>
         {% endif %}
 
         {# Bulk actions #}
         {% if actions %}
-        <form method="post" action="/admin/{{ model.table }}/action" id="action-form" style="margin-bottom:1rem">
+        <form method="post" action="{{ admin_base }}/{{ model.table }}/action" id="action-form" style="margin-bottom:1rem">
           <div style="display:flex;gap:0.5rem;align-items:center">
             <select name="action" style="padding:0.4rem 0.6rem;border:1px solid var(--border);border-radius:4px;font-size:0.9rem">
               {% for a in actions %}
@@ -55,8 +55,8 @@
                 {% if actions %}<td><input type="checkbox" name="selected" value="{{ row[pk] }}" form="action-form"></td>{% endif %}
                 {% for col in model.fields %}<td>{{ row[col.name] }}</td>{% endfor %}
                 <td class="actions">
-                  <a class="btn" href="/admin/{{ model.table }}/{{ row[pk] }}">View</a>
-                  <a class="btn" href="/admin/{{ model.table }}/{{ row[pk] }}/edit">Edit</a>
+                  <a class="btn" href="{{ admin_base }}/{{ model.table }}/{{ row[pk] }}">View</a>
+                  <a class="btn" href="{{ admin_base }}/{{ model.table }}/{{ row[pk] }}/edit">Edit</a>
                 </td>
               </tr>
             {% endfor %}
@@ -80,11 +80,11 @@
         <div style="font-size:0.75rem;font-weight:600;text-transform:uppercase;color:var(--muted);margin-bottom:0.5rem">{{ facet.field }}</div>
         <ul style="list-style:none;margin:0;padding:0">
           <li style="margin-bottom:0.35rem">
-            <a href="/admin/{{ model.table }}/" style="font-size:0.88rem;color:var(--muted){% if not active_filter %};font-weight:600{% endif %}">All</a>
+            <a href="{{ admin_base }}/{{ model.table }}/" style="font-size:0.88rem;color:var(--muted){% if not active_filter %};font-weight:600{% endif %}">All</a>
           </li>
           {% for val in facet.values %}
           <li style="margin-bottom:0.35rem">
-            <a href="/admin/{{ model.table }}/?filter_{{ facet.field }}={{ val }}" style="font-size:0.88rem{% if active_filter == facet.field ~ "=" ~ val %};font-weight:600{% endif %}">{{ val }}</a>
+            <a href="{{ admin_base }}/{{ model.table }}/?filter_{{ facet.field }}={{ val }}" style="font-size:0.88rem{% if active_filter == facet.field ~ "=" ~ val %};font-weight:600{% endif %}">{{ val }}</a>
           </li>
           {% endfor %}
         </ul>

@@ -1,7 +1,7 @@
 {#
   history.html
   ============
-  Audit history sheet/fragment for GET /admin/{table}/{id}/history.
+  Audit history sheet/fragment for GET {{ admin_base }}/{table}/{id}/history.
   Rendered as an HTMX fragment (sheet body content) or as a standalone div.
 #}
 {% from "admin/_macros/audit_timeline.html" import audit_timeline %}

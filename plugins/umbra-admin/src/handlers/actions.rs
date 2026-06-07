@@ -25,7 +25,7 @@ pub(crate) async fn run_action(
     Path(table): Path<String>,
     body: String,
 ) -> Response {
-    let path = format!("/admin/{table}/action");
+    let path = format!("{}/{table}/action", crate::branding::current().base_path);
     let who = match require_staff(&headers, &path).await {
         Ok(u) => u,
         Err(r) => return r,
@@ -81,7 +81,11 @@ pub(crate) async fn run_action(
             return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response();
         }
     };
-    let location = format!("/admin/{table}/?flash={}", urlencoding_simple(&flash));
+    let location = format!(
+        "{}/{table}/?flash={}",
+        crate::branding::current().base_path,
+        urlencoding_simple(&flash)
+    );
     Redirect::to(&location).into_response()
 }
 
@@ -115,7 +119,10 @@ pub(crate) async fn dispatch_action(
     Path((table, key)): Path<(String, String)>,
     body: String,
 ) -> Response {
-    let path = format!("/admin/{table}/actions/{key}");
+    let path = format!(
+        "{}/{table}/actions/{key}",
+        crate::branding::current().base_path
+    );
     let who = match require_staff(&headers, &path).await {
         Ok(u) => u,
         Err(r) => return r,

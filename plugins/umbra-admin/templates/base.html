@@ -9,13 +9,28 @@
         font-variant-numeric: tabular-nums;
     }
     /* Custom thin scrollbar for the sidebar — theme-aware via tokens */
+    #umbra-admin-sidebar,
+    #sidebar-nav {
+        scrollbar-width: thin;
+        scrollbar-color: var(--outline-variant) var(--surface-container);
+    }
     #umbra-admin-sidebar::-webkit-scrollbar {
         width: 4px;
     }
+    #sidebar-nav::-webkit-scrollbar {
+        width: 3px;
+    }
     #umbra-admin-sidebar::-webkit-scrollbar-track {
-        background: transparent;
+        background: var(--surface-container);
+    }
+    #sidebar-nav::-webkit-scrollbar-track {
+        background: var(--surface-container);
     }
     #umbra-admin-sidebar::-webkit-scrollbar-thumb {
+        background: var(--outline-variant);
+        border-radius: 10px;
+    }
+    #sidebar-nav::-webkit-scrollbar-thumb {
         background: var(--outline-variant);
         border-radius: 10px;
     }
@@ -31,49 +46,62 @@
         backdrop-filter: blur(12px);
         -webkit-backdrop-filter: blur(12px);
     }
-    /* Sidebar link sizing.
-     Non-active rows are rounded; the active row is a flat rectangle
-     with the 2px primary border on the leading edge — feels more
-     "rail-anchored" than a floating pill. */
+    /* Sidebar link sizing. */
     .sidebar-model-link {
         font-size: 13px;
         line-height: 18px;
     }
 </style>
 {% endblock %} {% block body_attrs %}class="bg-background text-on-background
-antialiased flex" id="umbra-admin-body"{% endblock %} {% block body %}
+antialiased flex admin-shell" id="umbra-admin-body"{% endblock %} {% block body %}
+<button
+    id="umbra-admin-mobile-scrim"
+    type="button"
+    class="fixed inset-0 z-40 bg-background/65 backdrop-blur-sm"
+    onclick="umbra.closeSidebar()"
+    aria-label="Close navigation"
+></button>
+
 <!-- ========================================================
      SIDEBAR  260px fixed left, full height, independent scroll
      ======================================================== -->
 <aside
     id="umbra-admin-sidebar"
-    class="fixed left-0 top-0 h-full w-sidebar-width bg-surface-container border-r border-outline-variant flex flex-col z-50 transition-all duration-300 overflow-y-auto"
+    class="fixed left-0 top-0 h-full bg-surface-container border-r border-outline-variant flex flex-col z-50 overflow-y-auto"
     aria-label="Admin navigation"
 >
     <!-- Logo area -->
-    <div class="p-lg flex items-center gap-sm flex-shrink-0">
+    <div class="p-md flex items-center gap-sm flex-shrink-0">
         <div
-            class="w-8 h-8 rounded-xl bg-primary-container flex items-center justify-center"
+            class="w-9 h-9 rounded-lg bg-primary text-on-primary flex items-center justify-center flex-shrink-0"
         >
             <i
                 data-lucide="layers"
-                class="w-[18px] h-[18px] text-on-primary-container"
+                class="w-[18px] h-[18px]"
             ></i>
         </div>
-        <div>
+        <div class="sidebar-text min-w-0 flex-1">
             <h2 class="font-h3 text-h3 text-on-surface leading-none">
                 {{ site_title }}
             </h2>
             <p
-                class="text-[10px] text-outline tracking-widest uppercase mt-0.5"
+                class="sidebar-meta text-[10px] text-outline tracking-widest uppercase mt-0.5 truncate"
             >
                 {% if site_description %}{{ site_description }}{% else %}v0.0.1{% endif %}
             </p>
         </div>
+        <button
+            type="button"
+            class="md:hidden w-8 h-8 flex items-center justify-center rounded-lg text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface transition-all"
+            onclick="umbra.closeSidebar()"
+            aria-label="Close navigation"
+        >
+            <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
     </div>
 
     <!-- Model search box -->
-    <div class="px-md mb-md flex-shrink-0">
+    <div class="sidebar-search-wrap px-md mb-md flex-shrink-0">
         <div class="relative group">
             <i
                 data-lucide="search"
@@ -82,9 +110,9 @@ antialiased flex" id="umbra-admin-body"{% endblock %} {% block body %}
             <input
                 id="sidebar-search"
                 type="text"
-                placeholder="Search models..."
+                placeholder="Search models"
                 oninput="umbra.sidebarFilter(this.value)"
-                class="w-full bg-surface-container-low border border-outline-variant rounded-xl pl-9 pr-md py-2 text-body-sm text-on-surface focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary transition-all placeholder:text-outline/60"
+                class="w-full bg-surface-container-high border border-transparent rounded-xl pl-9 pr-md py-2 text-body-sm text-on-surface focus:outline-none focus:ring-1 focus:ring-outline focus:border-transparent transition-all placeholder:text-outline"
                 aria-label="Filter sidebar models"
             />
         </div>
@@ -99,21 +127,23 @@ antialiased flex" id="umbra-admin-body"{% endblock %} {% block body %}
         <!-- Pinned dashboard link -->
         <div id="sidebar-group-core">
             <p
-                class="px-md mb-xs font-label-sm text-label-sm text-outline uppercase tracking-wider"
+                class="sidebar-section-label px-md mb-xs font-label-sm text-label-sm text-outline uppercase tracking-wider"
             >
                 Core
             </p>
             <div class="space-y-1 px-md">
                 <a
-                    href="/admin/"
-                    class="sidebar-model-link flex items-center gap-2 px-sm py-1.5 {% if active_table == '' %}bg-primary-container/10 text-primary border-l-2 border-primary rounded-none{% else %}text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface rounded-md{% endif %} font-body-sm transition-all"
+                    href="{{ admin_base }}/"
+                    class="sidebar-link sidebar-model-link flex items-center gap-2 px-sm py-1.5 rounded-xl border border-transparent {% if active_table == '' %}bg-primary-container text-on-primary-container{% else %}text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface{% endif %} font-body-sm transition-all"
                     data-model-name="dashboard"
+                    data-sidebar-tooltip="Dashboard"
+                    aria-label="Dashboard"
                 >
                     <i
                         data-lucide="layout-dashboard"
-                        class="w-[18px] h-[18px]"
+                        class="w-[18px] h-[18px] flex-shrink-0"
                     ></i>
-                    <span>Dashboard</span>
+                    <span class="sidebar-text truncate">Dashboard</span>
                 </a>
             </div>
         </div>
@@ -122,22 +152,24 @@ antialiased flex" id="umbra-admin-body"{% endblock %} {% block body %}
         {%- for app in apps %}
         <div class="sidebar-plugin-group" id="sidebar-group-{{ app.plugin }}">
             <p
-                class="px-md mb-xs font-label-sm text-label-sm text-outline uppercase tracking-wider"
+                class="sidebar-section-label px-md mb-xs font-label-sm text-label-sm text-outline uppercase tracking-wider"
             >
                 {{ app.label }}
             </p>
             <div class="space-y-1 px-md">
                 {%- for reg in app.models %}
                 <a
-                    href="/admin/{{ reg.table }}/"
-                    class="sidebar-model-link flex items-center gap-2 px-sm py-1.5 {% if active_table == reg.table %}bg-primary-container/10 text-primary border-l-2 border-primary rounded-none{% else %}text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface rounded-md{% endif %} font-body-sm transition-all"
+                    href="{{ admin_base }}/{{ reg.table }}/"
+                    class="sidebar-link sidebar-model-link flex items-center gap-2 px-sm py-1.5 rounded-xl border border-transparent {% if active_table == reg.table %}bg-primary-container text-on-primary-container{% else %}text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface{% endif %} font-body-sm transition-all"
                     data-model-name="{{ reg.label | lower }}"
+                    data-sidebar-tooltip="{{ reg.label }}"
+                    aria-label="{{ reg.label }}"
                 >
                     <i
                         data-lucide="{{ reg.icon }}"
                         class="w-[18px] h-[18px] flex-shrink-0"
                     ></i>
-                    <span class="flex-1 truncate">{{ reg.label }}</span>
+                    <span class="sidebar-text flex-1 truncate">{{ reg.label }}</span>
                 </a>
                 {%- endfor %}
             </div>
@@ -150,11 +182,13 @@ antialiased flex" id="umbra-admin-body"{% endblock %} {% block body %}
         class="p-md border-t border-outline-variant bg-surface-container-low flex-shrink-0"
     >
         <a
-            href="/admin/logout"
-            class="flex items-center gap-3 px-md py-2 rounded-xl text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high font-body-sm transition-all"
+            href="{{ admin_base }}/logout"
+            class="sidebar-link flex items-center gap-3 px-md py-2 rounded-xl text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high font-body-sm transition-all"
+            data-sidebar-tooltip="Sign out"
+            aria-label="Sign out"
         >
             <i data-lucide="log-out" class="w-[18px] h-[18px]"></i>
-            <span>Sign out</span>
+            <span class="sidebar-footer-text">Sign out</span>
         </a>
     </div>
 </aside>
@@ -162,21 +196,32 @@ antialiased flex" id="umbra-admin-body"{% endblock %} {% block body %}
 <!-- ========================================================
      MAIN WRAPPER — everything to the right of the sidebar
      ======================================================== -->
-<div class="ml-sidebar-width flex-1 flex flex-col min-h-screen">
+<div id="umbra-admin-main" class="flex-1 flex flex-col min-h-screen min-w-0">
     <!-- TOPBAR: sticky 56px -->
     <header
         id="umbra-admin-topbar"
-        class="sticky top-0 z-40 h-topbar-height topbar-glass border-b border-outline-variant flex items-center justify-between px-lg"
+        class="sticky top-0 z-30 h-topbar-height topbar-glass border-b border-outline-variant flex items-center justify-between gap-md px-md sm:px-lg"
         aria-label="Admin top bar"
     >
+        <div class="flex items-center gap-sm min-w-0">
+            <button
+                id="sidebar-toggle"
+                aria-label="Toggle navigation"
+                aria-expanded="true"
+                type="button"
+                onclick="umbra.toggleSidebar()"
+                class="w-9 h-9 flex items-center justify-center rounded-lg text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface transition-all flex-shrink-0"
+            >
+                <i data-lucide="panel-left" class="w-[18px] h-[18px]"></i>
+            </button>
         <!-- Breadcrumbs (set by each handler via context variable `breadcrumbs`) -->
         <nav
-            class="flex items-center gap-xs font-label-md text-label-md"
+            class="flex items-center gap-xs font-label-md text-label-md min-w-0"
             aria-label="Breadcrumb"
         >
             <a
-                href="/admin/"
-                class="text-outline hover:text-on-surface transition-colors"
+                href="{{ admin_base }}/"
+                class="text-outline hover:text-on-surface transition-colors shrink-0"
                 >Home</a
             >
             {%- for crumb in breadcrumbs %}
@@ -194,14 +239,15 @@ antialiased flex" id="umbra-admin-body"{% endblock %} {% block body %}
             >
             {%- endif %} {%- endfor %}
         </nav>
+        </div>
 
         <!-- Center: command palette trigger -->
         <button
             id="cmd-palette-trigger"
-            aria-label="Open command palette (Cmd+K)"
-            class="bg-surface-container-low border border-outline-variant px-md py-1.5 rounded-xl flex items-center gap-xl hover:bg-surface-container transition-colors"
+            aria-label="Open command palette (Ctrl+K)"
+            class="hidden md:flex bg-surface-container-high border border-transparent px-md py-1.5 rounded-xl items-center gap-xl hover:bg-surface-container-highest transition-colors min-w-[260px]"
             onclick="
-                htmx.ajax('GET', '/admin/api/palette', {
+                htmx.ajax('GET', '{{ admin_base }}/api/palette', {
                     target: '#umbra-palette-slot',
                     swap: 'innerHTML',
                 })
@@ -214,24 +260,33 @@ antialiased flex" id="umbra-admin-body"{% endblock %} {% block body %}
                     class="w-[16px] h-[16px] text-outline"
                 ></i>
                 <span class="text-body-sm text-outline"
-                    >Search everything...</span
+                    >Search everything</span
                 >
             </div>
-            <kbd
-                class="text-[10px] bg-outline-variant/20 text-on-surface-variant border border-outline-variant/25 px-1.5 py-0.5 rounded ml-sm"
-                >⌘K</kbd
+            <span
+                class="ml-sm inline-flex items-center gap-1 text-[10px] text-outline"
+                aria-hidden="true"
             >
+                <kbd
+                    class="rounded-md border border-transparent bg-surface-container-low px-1.5 py-0.5 font-medium text-on-surface-variant"
+                    >Ctrl</kbd
+                >
+                <kbd
+                    class="rounded-md border border-transparent bg-surface-container-low px-1.5 py-0.5 font-medium text-on-surface-variant"
+                    >K</kbd
+                >
+            </span>
         </button>
 
         <!-- Right: theme toggle + user menu -->
-        <div class="flex items-center gap-md">
+        <div class="flex items-center gap-sm sm:gap-md">
             <!-- Theme toggle — persisted in localStorage under umbra-admin-theme -->
             <button
                 id="theme-toggle"
                 aria-label="Toggle light/dark theme"
                 type="button"
                 onclick="umbra.toggleTheme()"
-                class="w-9 h-9 flex items-center justify-center rounded-xl text-on-surface-variant hover:bg-surface-container-lowest transition-all"
+                class="w-9 h-9 flex items-center justify-center rounded-lg text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface transition-all"
             >
                 <i
                     data-lucide="sun"
@@ -245,11 +300,11 @@ antialiased flex" id="umbra-admin-body"{% endblock %} {% block body %}
                 ></i>
             </button>
 
-            <div class="w-px h-6 bg-outline-variant"></div>
+            <div class="hidden sm:block w-px h-6 bg-outline-variant"></div>
 
             <!-- User menu -->
             <div
-                class="flex items-center gap-3 cursor-pointer group"
+                class="hidden sm:flex items-center gap-3 cursor-pointer group"
                 role="button"
                 tabindex="0"
                 aria-label="User menu"
@@ -269,7 +324,7 @@ antialiased flex" id="umbra-admin-body"{% endblock %} {% block body %}
                 </div>
                 <!-- Avatar initials circle -->
                 <div
-                    class="w-9 h-9 rounded-xl bg-primary-container flex items-center justify-center border border-outline-variant group-hover:border-primary transition-colors"
+                    class="w-9 h-9 rounded-lg bg-primary-container flex items-center justify-center border border-outline-variant group-hover:border-primary transition-colors"
                 >
                     <span
                         class="font-label-sm text-label-sm text-on-primary-container uppercase"
@@ -282,9 +337,10 @@ antialiased flex" id="umbra-admin-body"{% endblock %} {% block body %}
 
     <!-- CONTENT region — overflow-x-hidden so wide tables don't push
          the entire main area; the table wrapper has overflow-x-auto. -->
-    <main id="umbra-admin-content" class="flex-1 p-lg overflow-x-hidden">
+    <main id="umbra-admin-content" class="flex-1 p-md sm:p-lg lg:p-xl overflow-x-hidden">
         {% block content %}{% endblock %}
     </main>
 </div>
 <!-- end main wrapper -->
+<div id="umbra-sidebar-tooltip" role="tooltip" aria-hidden="true"></div>
 {% endblock %}

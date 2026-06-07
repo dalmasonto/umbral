@@ -17,7 +17,7 @@ use crate::AdminState;
 use crate::auth::require_staff;
 use crate::discovery::{find_model, pk_column};
 use crate::error::AdminError;
-use crate::util::{html_escape, is_htmx};
+use crate::util::{html_escape, is_htmx, urlencoding_simple};
 
 /// `GET /admin/api/{table}/{field}/options?search=&page=&page_size=20`
 ///
@@ -38,7 +38,10 @@ pub(crate) async fn fk_options(
     Path((table, field)): Path<(String, String)>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Response {
-    let path = format!("/admin/api/{table}/{field}/options");
+    let path = format!(
+        "{}/api/{table}/{field}/options",
+        crate::branding::current().base_path
+    );
     if let Err(r) = require_staff(&headers, &path).await {
         return r;
     }
@@ -137,18 +140,30 @@ pub(crate) async fn fk_options(
 
     if is_htmx(&headers) {
         let mut html = String::new();
+        html.push_str(r#"<div class="py-xs">"#);
         for item in &items {
             let value = item["value"].as_i64().unwrap_or(0);
             let label = item["label"].as_str().unwrap_or("");
+            let escaped_label = html_escape(label);
             html.push_str(&format!(
-                r#"<button type="button" data-fk-value="{value}" class="w-full text-left px-md py-sm hover:bg-surface-container-high font-body-md text-on-surface transition-colors">{}</button>"#,
-                html_escape(label)
+                r##"<button type="button" data-fk-value="{value}" data-fk-label="{escaped_label}" class="w-full text-left px-md py-sm hover:bg-surface-container-high font-body-md text-on-surface transition-colors"><span class="block truncate"><span class="font-medium tabular-nums">{value}</span><span class="text-outline">: </span>{escaped_label}</span></button>"##
             ));
         }
-        if html.is_empty() {
+        if items.is_empty() {
             html.push_str(
                 r#"<p class="px-md py-sm text-outline text-body-sm italic">No results</p>"#,
             );
+        }
+        html.push_str("</div>");
+        if total > page_size as i64 {
+            let prev_page = page.saturating_sub(1).max(1);
+            let next_page = page + 1;
+            let encoded_search = urlencoding_simple(search);
+            let prev_disabled = if page <= 1 { " disabled" } else { "" };
+            let next_disabled = if !has_more { " disabled" } else { "" };
+            html.push_str(&format!(
+                r##"<div class="flex items-center justify-between gap-sm border-t border-outline-variant px-sm py-xs"><button type="button" class="px-sm py-xs rounded-lg border border-outline-variant text-label-sm text-on-surface-variant hover:bg-surface-container-high disabled:opacity-40 disabled:cursor-not-allowed" hx-get="/admin/api/{table}/{field}/options?search={encoded_search}&page={prev_page}&page_size={page_size}" hx-target="closest .fk-options" hx-swap="innerHTML"{prev_disabled}>Previous</button><span class="text-label-sm text-outline tabular-nums">Page {page}</span><button type="button" class="px-sm py-xs rounded-lg border border-outline-variant text-label-sm text-on-surface-variant hover:bg-surface-container-high disabled:opacity-40 disabled:cursor-not-allowed" hx-get="/admin/api/{table}/{field}/options?search={encoded_search}&page={next_page}&page_size={page_size}" hx-target="closest .fk-options" hx-swap="innerHTML"{next_disabled}>Next</button></div>"##
+            ));
         }
         return axum::response::Response::builder()
             .status(StatusCode::OK)
@@ -178,7 +193,10 @@ pub(crate) async fn fk_options_resolve(
     Path((table, field)): Path<(String, String)>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Response {
-    let path = format!("/admin/api/{table}/{field}/options/resolve");
+    let path = format!(
+        "{}/api/{table}/{field}/options/resolve",
+        crate::branding::current().base_path
+    );
     if let Err(r) = require_staff(&headers, &path).await {
         return r;
     }

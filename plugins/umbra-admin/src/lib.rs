@@ -117,11 +117,26 @@ use umbra::web::post;
 ///     .plugin(admin)
 ///     .build()?;
 /// ```
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct AdminPlugin {
     registry: AdminRegistry,
     widget_catalog: Vec<Widget>,
     branding: branding::AdminBranding,
+    /// Gap 107: base URL prefix for every admin route. Default
+    /// `/admin`. Override with `AdminPlugin::default().at("/myadmin")`.
+    /// Always normalised to one leading slash, no trailing slash.
+    base_path: String,
+}
+
+impl Default for AdminPlugin {
+    fn default() -> Self {
+        Self {
+            registry: AdminRegistry::default(),
+            widget_catalog: Vec::new(),
+            branding: branding::AdminBranding::default(),
+            base_path: "/admin".to_string(),
+        }
+    }
 }
 
 impl AdminPlugin {
@@ -202,6 +217,38 @@ impl AdminPlugin {
         self.branding.brand_color = color.into();
         self
     }
+
+    /// Gap 107: mount the admin at a path other than the default
+    /// `/admin`. Useful when a single domain hosts multiple umbra
+    /// admins, or when the operations team enforces a different
+    /// vanity URL. Accepts `"/myadmin"`, `"myadmin"`, or
+    /// `"/myadmin/"` — all normalise to `"/myadmin"`.
+    ///
+    /// ```ignore
+    /// AdminPlugin::default().at("/backoffice")
+    /// // → routes mount at /backoffice/login, /backoffice/{table}/, ...
+    /// ```
+    ///
+    /// Templates read the configured base via the `admin_base`
+    /// Jinja global, so cross-page links resolve to the new path
+    /// automatically. Handler-side redirects and `sanitise_next`
+    /// also use the configured base.
+    pub fn at(mut self, path: impl Into<String>) -> Self {
+        let raw = path.into();
+        let trimmed = raw.trim_matches('/');
+        self.base_path = if trimmed.is_empty() {
+            String::new()
+        } else {
+            format!("/{trimmed}")
+        };
+        self
+    }
+
+    /// The normalised admin base path. Public so plugin authors and
+    /// the OpenAPI plugin can reference it.
+    pub fn base_path(&self) -> &str {
+        &self.base_path
+    }
 }
 
 /// Shared state injected into every route via [`axum::extract::State`].
@@ -218,6 +265,20 @@ impl AdminState {
     fn config_for(&self, table: &str) -> Option<&AdminConfig> {
         self.registry.get(table).map(|r| &r.model)
     }
+}
+
+/// Gap 107 — join an admin sub-path with the configured base.
+///
+/// `route("/login", "/admin")` → `"/admin/login"`. Used at routes()
+/// construction so every `.route(...)` call honours the
+/// `AdminPlugin::at()` override without hardcoding `/admin` anywhere.
+/// An empty `sub` (the index page) returns the base path itself, so
+/// `route("", "/admin")` → `"/admin"` and not `"/admin/"`.
+fn route(sub: &str, base: &str) -> String {
+    if sub.is_empty() {
+        return base.to_string();
+    }
+    format!("{base}{sub}")
 }
 
 impl Plugin for AdminPlugin {
@@ -247,7 +308,12 @@ impl Plugin for AdminPlugin {
         // the template engine picks it up on first init. Subsequent
         // attempts to set it are silent no-ops; the typical flow is
         // exactly one Plugin::routes() call per process.
-        let _ = branding::BRANDING.set(self.branding.clone());
+        //
+        // Gap 107: the configured `base_path` rides along with the
+        // branding so templates and handlers read it from one place.
+        let mut sealed_branding = self.branding.clone();
+        sealed_branding.base_path = self.base_path.clone();
+        let _ = branding::BRANDING.set(sealed_branding);
 
         // Seed the catalog with the two built-in widgets, then append
         // developer-registered ones.
@@ -264,127 +330,145 @@ impl Plugin for AdminPlugin {
         Router::new()
             // Login / logout (no auth required)
             .route(
-                "/admin/login",
+                &route("/login", &self.base_path),
                 axum::routing::get(login_get).post(login_post),
             )
-            .route("/admin/logout", axum::routing::get(logout_handler))
-            // Index + CRUD routes (all require staff session)
-            .route("/admin", axum::routing::get(handlers::list::index))
-            .route("/admin/", axum::routing::get(handlers::list::index))
-            .route("/admin/{table}/", axum::routing::get(handlers::list::list))
             .route(
-                "/admin/{table}/new",
+                &route("/logout", &self.base_path),
+                axum::routing::get(logout_handler),
+            )
+            // Index + CRUD routes (all require staff session)
+            .route(
+                &route("", &self.base_path),
+                axum::routing::get(handlers::list::index),
+            )
+            .route(
+                &route("/", &self.base_path),
+                axum::routing::get(handlers::list::index),
+            )
+            .route(
+                &route("/{table}/", &self.base_path),
+                axum::routing::get(handlers::list::list),
+            )
+            .route(
+                &route("/{table}/new", &self.base_path),
                 axum::routing::get(handlers::crud::new_form).post(handlers::crud::create),
             )
-            .route("/admin/{table}/action", post(handlers::actions::run_action))
+            .route(
+                &route("/{table}/action", &self.base_path),
+                post(handlers::actions::run_action),
+            )
             // Phase 2: fragment-only rows endpoint (search/sort/filter/paginate)
             .route(
-                "/admin/{table}/rows",
+                &route("/{table}/rows", &self.base_path),
                 axum::routing::get(handlers::list::rows_fragment),
             )
             // Filter dialog fragment
             .route(
-                "/admin/{table}/filter-dialog",
+                &route("/{table}/filter-dialog", &self.base_path),
                 axum::routing::get(handlers::list::filter_dialog_handler),
             )
             // Phase 2: new-record sheet (create mode)
             .route(
-                "/admin/{table}/new-sheet",
+                &route("/{table}/new-sheet", &self.base_path),
                 axum::routing::get(handlers::sheet::new_sheet),
             )
             // Phase 2: delete confirm dialog fragment
             .route(
-                "/admin/{table}/{id}/_confirm-delete",
+                &route("/{table}/{id}/_confirm-delete", &self.base_path),
                 axum::routing::get(handlers::sheet::confirm_delete_dialog),
             )
             // Phase 2: sheet fragments (preview + edit)
             .route(
-                "/admin/{table}/{id}/sheet",
+                &route("/{table}/{id}/sheet", &self.base_path),
                 axum::routing::get(handlers::sheet::preview_sheet),
             )
             .route(
-                "/admin/{table}/{id}/edit-sheet",
+                &route("/{table}/{id}/edit-sheet", &self.base_path),
                 axum::routing::get(handlers::sheet::edit_sheet_handler),
             )
             .route(
-                "/admin/{table}/{id}",
+                &route("/{table}/{id}", &self.base_path),
                 axum::routing::get(handlers::crud::detail),
             )
             .route(
-                "/admin/{table}/{id}/edit",
+                &route("/{table}/{id}/edit", &self.base_path),
                 axum::routing::get(handlers::crud::edit_form).post(handlers::crud::update),
             )
             // Phase 2: create via sheet (POST)
             .route(
-                "/admin/{table}/create",
+                &route("/{table}/create", &self.base_path),
                 axum::routing::post(handlers::sheet::sheet_create),
             )
             // Phase 2: DELETE method for HTMX delete button
             .route(
-                "/admin/{table}/{id}",
+                &route("/{table}/{id}", &self.base_path),
                 axum::routing::delete(handlers::crud::htmx_delete),
             )
-            .route("/admin/{table}/{id}/delete", post(handlers::crud::delete))
+            .route(
+                &route("/{table}/{id}/delete", &self.base_path),
+                post(handlers::crud::delete),
+            )
             // Phase 3: per-key action dispatch
             .route(
-                "/admin/{table}/actions/{key}",
+                &route("/{table}/actions/{key}", &self.base_path),
                 axum::routing::post(handlers::actions::dispatch_action),
             )
             // Phase 3: FK/M2M async picker endpoints
             .route(
-                "/admin/api/{table}/{field}/options/resolve",
+                &route("/api/{table}/{field}/options/resolve", &self.base_path),
                 axum::routing::get(handlers::fk_picker::fk_options_resolve),
             )
             .route(
-                "/admin/api/{table}/{field}/options",
+                &route("/api/{table}/{field}/options", &self.base_path),
                 axum::routing::get(handlers::fk_picker::fk_options),
             )
             // Phase 3: inline cell edit
             .route(
-                "/admin/{table}/{id}/cell/{field}/edit",
+                &route("/{table}/{id}/cell/{field}/edit", &self.base_path),
                 axum::routing::get(handlers::inline_edit::cell_edit_get),
             )
             .route(
-                "/admin/{table}/{id}/cell/{field}",
+                &route("/{table}/{id}/cell/{field}", &self.base_path),
                 axum::routing::post(handlers::inline_edit::cell_edit_post),
             )
             // Password change for models with password_field set
             .route(
-                "/admin/{table}/{id}/change-password",
+                &route("/{table}/{id}/change-password", &self.base_path),
                 axum::routing::post(handlers::sheet::change_password_handler),
             )
             // Phase 4: user prefs
             .route(
-                "/admin/api/prefs",
+                &route("/api/prefs", &self.base_path),
                 axum::routing::get(handlers::prefs::get_prefs_handler)
                     .put(handlers::prefs::put_prefs_handler),
             )
             // Phase 4: audit history
             .route(
-                "/admin/{table}/{id}/history",
+                &route("/{table}/{id}/history", &self.base_path),
                 axum::routing::get(handlers::history::history_handler),
             )
             // Phase 4: dashboard
             .route(
-                "/admin/api/dashboard/catalog",
+                &route("/api/dashboard/catalog", &self.base_path),
                 axum::routing::get(handlers::dashboard::dashboard_catalog),
             )
             .route(
-                "/admin/api/dashboard/layout",
+                &route("/api/dashboard/layout", &self.base_path),
                 axum::routing::get(handlers::dashboard::dashboard_layout_get)
                     .put(handlers::dashboard::dashboard_layout_put),
             )
             .route(
-                "/admin/api/dashboard/widgets/{key}/data",
+                &route("/api/dashboard/widgets/{key}/data", &self.base_path),
                 axum::routing::get(handlers::dashboard::dashboard_widget_data),
             )
             // Phase 4: command palette fragment + global record search
             .route(
-                "/admin/api/palette",
+                &route("/api/palette", &self.base_path),
                 axum::routing::get(handlers::palette::palette_fragment),
             )
             .route(
-                "/admin/api/palette/search",
+                &route("/api/palette/search", &self.base_path),
                 axum::routing::get(handlers::palette::palette_search),
             )
             // Static admin.css is mounted by the framework via
@@ -407,36 +491,51 @@ impl Plugin for AdminPlugin {
         let gpd = || vec!["GET", "POST", "DELETE"];
         let gput = || vec!["GET", "PUT"];
         vec![
-            RouteSpec::new("/admin", g()),
-            RouteSpec::new("/admin/", g()),
-            RouteSpec::new("/admin/login", gp()),
-            RouteSpec::new("/admin/logout", g()),
-            RouteSpec::new("/admin/{table}/", g()),
-            RouteSpec::new("/admin/{table}/new", gp()),
-            RouteSpec::new("/admin/{table}/action", p()),
-            RouteSpec::new("/admin/{table}/rows", g()),
-            RouteSpec::new("/admin/{table}/filter-dialog", g()),
-            RouteSpec::new("/admin/{table}/new-sheet", g()),
-            RouteSpec::new("/admin/{table}/create", p()),
-            RouteSpec::new("/admin/{table}/{id}", gpd()),
-            RouteSpec::new("/admin/{table}/{id}/edit", gp()),
-            RouteSpec::new("/admin/{table}/{id}/edit-sheet", g()),
-            RouteSpec::new("/admin/{table}/{id}/sheet", g()),
-            RouteSpec::new("/admin/{table}/{id}/delete", p()),
-            RouteSpec::new("/admin/{table}/{id}/_confirm-delete", g()),
-            RouteSpec::new("/admin/{table}/{id}/history", g()),
-            RouteSpec::new("/admin/{table}/{id}/change-password", p()),
-            RouteSpec::new("/admin/{table}/{id}/cell/{field}", p()),
-            RouteSpec::new("/admin/{table}/{id}/cell/{field}/edit", g()),
-            RouteSpec::new("/admin/{table}/actions/{key}", p()),
-            RouteSpec::new("/admin/api/{table}/{field}/options", g()),
-            RouteSpec::new("/admin/api/{table}/{field}/options/resolve", g()),
-            RouteSpec::new("/admin/api/prefs", gput()),
-            RouteSpec::new("/admin/api/palette", g()),
-            RouteSpec::new("/admin/api/palette/search", g()),
-            RouteSpec::new("/admin/api/dashboard/catalog", g()),
-            RouteSpec::new("/admin/api/dashboard/layout", gput()),
-            RouteSpec::new("/admin/api/dashboard/widgets/{key}/data", g()),
+            RouteSpec::new(&route("", &self.base_path), g()),
+            RouteSpec::new(&route("/", &self.base_path), g()),
+            RouteSpec::new(&route("/login", &self.base_path), gp()),
+            RouteSpec::new(&route("/logout", &self.base_path), g()),
+            RouteSpec::new(&route("/{table}/", &self.base_path), g()),
+            RouteSpec::new(&route("/{table}/new", &self.base_path), gp()),
+            RouteSpec::new(&route("/{table}/action", &self.base_path), p()),
+            RouteSpec::new(&route("/{table}/rows", &self.base_path), g()),
+            RouteSpec::new(&route("/{table}/filter-dialog", &self.base_path), g()),
+            RouteSpec::new(&route("/{table}/new-sheet", &self.base_path), g()),
+            RouteSpec::new(&route("/{table}/create", &self.base_path), p()),
+            RouteSpec::new(&route("/{table}/{id}", &self.base_path), gpd()),
+            RouteSpec::new(&route("/{table}/{id}/edit", &self.base_path), gp()),
+            RouteSpec::new(&route("/{table}/{id}/edit-sheet", &self.base_path), g()),
+            RouteSpec::new(&route("/{table}/{id}/sheet", &self.base_path), g()),
+            RouteSpec::new(&route("/{table}/{id}/delete", &self.base_path), p()),
+            RouteSpec::new(
+                &route("/{table}/{id}/_confirm-delete", &self.base_path),
+                g(),
+            ),
+            RouteSpec::new(&route("/{table}/{id}/history", &self.base_path), g()),
+            RouteSpec::new(
+                &route("/{table}/{id}/change-password", &self.base_path),
+                p(),
+            ),
+            RouteSpec::new(&route("/{table}/{id}/cell/{field}", &self.base_path), p()),
+            RouteSpec::new(
+                &route("/{table}/{id}/cell/{field}/edit", &self.base_path),
+                g(),
+            ),
+            RouteSpec::new(&route("/{table}/actions/{key}", &self.base_path), p()),
+            RouteSpec::new(&route("/api/{table}/{field}/options", &self.base_path), g()),
+            RouteSpec::new(
+                &route("/api/{table}/{field}/options/resolve", &self.base_path),
+                g(),
+            ),
+            RouteSpec::new(&route("/api/prefs", &self.base_path), gput()),
+            RouteSpec::new(&route("/api/palette", &self.base_path), g()),
+            RouteSpec::new(&route("/api/palette/search", &self.base_path), g()),
+            RouteSpec::new(&route("/api/dashboard/catalog", &self.base_path), g()),
+            RouteSpec::new(&route("/api/dashboard/layout", &self.base_path), gput()),
+            RouteSpec::new(
+                &route("/api/dashboard/widgets/{key}/data", &self.base_path),
+                g(),
+            ),
         ]
     }
 

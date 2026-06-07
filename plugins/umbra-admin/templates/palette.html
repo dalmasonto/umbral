@@ -6,7 +6,7 @@
   Two-tier search:
   - Models + Commands: always visible at full opacity; client-side filter just
     shows a "Nothing found" hint, never dims/disables items.
-  - Records: debounced 200ms hx-get to /admin/api/palette/search?q=... returns
+  - Records: debounced 200ms hx-get to {{ admin_base }}/api/palette/search?q=... returns
     up to 10 matching rows across all registered models with search_fields.
 
   `models`   — list of {table, label, icon} for jump targets.
@@ -29,8 +29,8 @@
     class="relative w-full max-w-[600px] mx-md bg-surface rounded-2xl border border-outline-variant shadow-2xl overflow-hidden"
     style="border-radius: 14px;"
   >
-    {# Search row: single outer border, inner input has no border (Bug 3 fix) #}
-    <div class="flex items-center gap-sm bg-surface-container-low border border-outline-variant rounded-t-[14px] px-md py-sm">
+    {# Search row: quiet token background; the inner input has no border. #}
+    <div class="flex items-center gap-sm bg-surface-container-high border border-transparent rounded-xl px-md py-sm m-sm">
       <i data-lucide="search" class="w-5 h-5 text-outline flex-shrink-0 pointer-events-none"></i>
       <input
         id="umbra-palette-input"
@@ -42,7 +42,7 @@
         aria-controls="umbra-palette-results"
         oninput="umbra._paletteFilter(this.value)"
         onkeydown="umbra._paletteKeydown(event)"
-        hx-get="/admin/api/palette/search"
+        hx-get="{{ admin_base }}/api/palette/search"
         hx-trigger="input changed delay:200ms"
         hx-target="#umbra-palette-records"
         hx-swap="innerHTML"
@@ -78,31 +78,38 @@
       {# "Nothing found" banner — hidden by default, shown by JS when nothing matches static items #}
       <li>
         <div id="umbra-palette-empty" class="hidden px-lg py-sm bg-surface-container/50 border-b border-outline-variant">
-          <p class="text-body-sm text-outline italic">No models or commands match — try searching records above.</p>
+          <p class="text-body-sm text-outline italic">No matching models or commands.</p>
         </div>
       </li>
 
-      {# Jump targets: registered models — ALWAYS visible at full opacity #}
+      {# Jump targets: registered models — ALWAYS visible at full opacity.
+         Rendered as a 2-column grid of cards. `auto-rows-fr` + `h-full`
+         on each card keeps cards in the same row equal-height even when
+         one model's label wraps to two lines. `break-words` on the label
+         lets long table names wrap instead of overflowing. #}
       {% if models %}
       <li id="palette-header-models" class="px-lg py-xs">
         <span class="text-label-sm text-outline uppercase tracking-wider">Models</span>
       </li>
-      {% for m in models %}
-      <li
-        role="option"
-        data-palette-label="{{ m.label | lower }}"
-        data-palette-href="/admin/{{ m.table }}/"
-        class="palette-item flex items-center gap-sm px-lg py-sm cursor-pointer hover:bg-surface-container-high transition-colors group"
-        onclick="umbra._paletteGo(this)"
-        tabindex="-1"
-      >
-        <div class="w-8 h-8 rounded-xl bg-surface-container border border-outline-variant flex items-center justify-center flex-shrink-0">
-          <i data-lucide="{{ m.icon | default('database') }}" class="w-4 h-4 text-on-surface-variant"></i>
+      <li class="px-lg pb-xs">
+        <div class="grid grid-cols-2 gap-xs auto-rows-fr">
+          {% for m in models %}
+          <div
+            role="option"
+            data-palette-label="{{ m.label | lower }}"
+            data-palette-href="{{ admin_base }}/{{ m.table }}/"
+            class="palette-item flex flex-col h-full gap-sm p-sm cursor-pointer hover:bg-surface-container-high transition-colors group rounded-lg border border-outline-variant focus:outline-none focus:ring-2 focus:ring-primary"
+            onclick="umbra._paletteGo(this)"
+            tabindex="-1"
+          >
+            <div class="w-8 h-8 rounded-xl bg-surface-container border border-outline-variant flex items-center justify-center flex-shrink-0">
+              <i data-lucide="{{ m.icon | default('database') }}" class="w-4 h-4 text-on-surface-variant"></i>
+            </div>
+            <span class="text-body-md text-on-surface break-words">{{ m.label }}</span>
+          </div>
+          {% endfor %}
         </div>
-        <span class="text-body-md text-on-surface">{{ m.label }}</span>
-        <span class="ml-auto text-label-sm text-outline opacity-0 group-hover:opacity-100 transition-opacity">Jump</span>
       </li>
-      {% endfor %}
       {% endif %}
 
       {# Fixed commands — ALWAYS visible at full opacity #}
@@ -217,7 +224,7 @@
   umbra._paletteAction = function(key) {
     umbra.closePalette();
     if (key === 'toggle_theme') { umbra.toggleTheme(); }
-    else if (key === 'logout') { window.location.href = '/admin/logout'; }
+    else if (key === 'logout') { window.location.href = '{{ admin_base }}/logout'; }
   };
 })();
 </script>

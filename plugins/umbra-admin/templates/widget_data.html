@@ -1,7 +1,7 @@
 {#
   widget_data.html
   ================
-  HTMX fragment returned by GET /admin/api/dashboard/widgets/{key}/data.
+  HTMX fragment returned by GET {{ admin_base }}/api/dashboard/widgets/{key}/data.
   Renders the correct widget macro based on `kind`.
 #}
 {% from "admin/_macros/widgets/kpi.html" import kpi_widget, sparkline_svg %}

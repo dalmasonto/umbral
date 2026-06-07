@@ -15,6 +15,11 @@ pub struct AdminBranding {
     pub site_title: String,
     pub site_description: String,
     pub brand_color: String,
+    /// Gap 107: admin base path (default `/admin`). Surfaced to
+    /// templates as the `admin_base` Jinja global so cross-page
+    /// links and HTMX targets resolve under whatever prefix
+    /// `AdminPlugin::at()` configured.
+    pub base_path: String,
 }
 
 impl Default for AdminBranding {
@@ -23,6 +28,7 @@ impl Default for AdminBranding {
             site_title: "umbra admin".to_string(),
             site_description: String::new(),
             brand_color: String::new(),
+            base_path: "/admin".to_string(),
         }
     }
 }

@@ -48,12 +48,12 @@ Drag-resize: ~50 LOC vanilla JS at the bottom; width in localStorage.
       {% if mode != "create" %}
       <div class="flex bg-surface-container-high rounded-lg p-0.5">
         <button type="button"
-          hx-get="/admin/{{ table }}/{{ instance_id }}/sheet"
+          hx-get="{{ admin_base }}/{{ table }}/{{ instance_id }}/sheet"
           hx-target="#umbra-sheet-slot" hx-swap="innerHTML" hx-push-url="false"
           class="px-sm py-1 {% if mode == 'preview' %}bg-surface-container-highest text-primary{% else %}text-on-surface-variant hover:text-on-surface{% endif %} font-label-md text-label-md rounded-md transition-all"
         >Preview</button>
         <button type="button"
-          hx-get="/admin/{{ table }}/{{ instance_id }}/edit-sheet"
+          hx-get="{{ admin_base }}/{{ table }}/{{ instance_id }}/edit-sheet"
           hx-target="#umbra-sheet-slot" hx-swap="innerHTML" hx-push-url="false"
           class="px-sm py-1 {% if mode == 'edit' %}bg-surface-container-highest text-primary{% else %}text-on-surface-variant hover:text-on-surface{% endif %} font-label-md text-label-md rounded-md transition-all"
         >Edit</button>
@@ -77,11 +77,11 @@ Drag-resize: ~50 LOC vanilla JS at the bottom; width in localStorage.
     {% if is_edit %}
     <form id="sheet-form" method="post"
       {% if mode == "create" %}
-      action="/admin/{{ table }}/create"
-      hx-post="/admin/{{ table }}/create"
+      action="{{ admin_base }}/{{ table }}/create"
+      hx-post="{{ admin_base }}/{{ table }}/create"
       {% else %}
-      action="/admin/{{ table }}/{{ instance_id }}/edit"
-      hx-post="/admin/{{ table }}/{{ instance_id }}/edit"
+      action="{{ admin_base }}/{{ table }}/{{ instance_id }}/edit"
+      hx-post="{{ admin_base }}/{{ table }}/{{ instance_id }}/edit"
       {% endif %}
       hx-target="#umbra-sheet-slot" hx-swap="innerHTML" hx-push-url="false"
       class="space-y-xs"
@@ -201,30 +201,50 @@ Drag-resize: ~50 LOC vanilla JS at the bottom; width in localStorage.
         {% set fk_table = field.fk_table | default("") %}
         <div class="relative fk-picker" data-field="{{ field.name }}" data-fk-table="{{ fk_table }}">
           <input type="hidden" id="f_{{ field.name }}" {% if not is_readonly %}name="{{ field.name }}"{% endif %} value="{{ field.value }}" />
+          <div
+            data-fk-active
+            class="{% if not field.value %}hidden {% endif %}mb-xs rounded-xl border border-primary/20 bg-primary-container px-md py-sm"
+          >
+            <div class="flex items-start justify-between gap-sm">
+              <div class="min-w-0">
+                <p class="text-label-sm text-on-primary-container uppercase tracking-wider">Selected</p>
+                <p class="text-body-sm font-medium text-on-primary-container truncate" data-fk-active-label>
+                  {% if field.value %}Loading selected option{% else %}Selected option{% endif %}
+                </p>
+                <p class="text-[11px] text-on-primary-container tabular-nums" data-fk-active-value>{% if field.value %}#{{ field.value }}{% endif %}</p>
+              </div>
+              {% if field.nullable and not is_readonly %}
+              <button type="button" data-fk-clear class="flex-shrink-0 inline-flex items-center gap-xs rounded-lg border border-primary/20 bg-surface-container px-sm py-xs text-label-sm text-on-surface-variant hover:text-on-surface transition-colors">
+                <i data-lucide="x" class="w-3 h-3"></i>
+                Clear
+              </button>
+              {% endif %}
+            </div>
+          </div>
           <input
             type="text"
             id="fk_text_{{ field.name }}"
-            placeholder="Search {{ field.name | replace('_id', '') | replace('_', ' ') | title }}..."
+            placeholder="{% if field.value %}Search to replace {{ field.name | replace('_id', '') | replace('_', ' ') | title }}{% else %}Search {{ field.name | replace('_id', '') | replace('_', ' ') | title }}{% endif %}"
             autocomplete="off"
             value=""
             class="w-full bg-surface-container-low border border-outline-variant rounded-xl px-md py-sm text-on-surface text-body-md focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all placeholder:text-outline/50 {% if is_readonly %}opacity-70 cursor-default{% endif %}"
             {% if is_readonly %}readonly{% endif %}
-            hx-get="/admin/api/{{ table }}/{{ field.name }}/options"
+            hx-get="{{ admin_base }}/api/{{ table }}/{{ field.name }}/options"
             hx-trigger="input changed delay:250ms, focus"
-            hx-target="next .fk-options"
+            hx-target="#fk_options_{{ field.name }}"
             hx-swap="innerHTML"
             hx-include="this"
             name="search"
           />
           {% if field.value and not is_readonly %}
           <span id="fk_resolve_{{ field.name }}"
-            hx-get="/admin/api/{{ table }}/{{ field.name }}/options/resolve?ids={{ field.value }}"
+            hx-get="{{ admin_base }}/api/{{ table }}/{{ field.name }}/options/resolve?ids={{ field.value }}"
             hx-trigger="load"
             hx-swap="none"
             hx-on:htmx:after-request="if(window.umbra&&umbra.fkResolve)umbra.fkResolve('{{ field.name }}', event)"
           ></span>
           {% endif %}
-          <div class="fk-options hidden absolute left-0 right-0 top-full mt-xs z-30 bg-surface-container border border-outline-variant rounded-xl shadow-lg max-h-48 overflow-y-auto">
+          <div id="fk_options_{{ field.name }}" class="fk-options hidden absolute left-0 right-0 top-full mt-xs z-30 bg-surface-container border border-outline-variant rounded-xl shadow-lg max-h-64 overflow-y-auto">
             {# Populated by HTMX #}
           </div>
         </div>
@@ -268,32 +288,63 @@ Drag-resize: ~50 LOC vanilla JS at the bottom; width in localStorage.
          as repeated `m2m_<field>` values that the POST handler
          hands to `set_junction_dynamic`. #}
       {% for m in m2m_fields %}
-      <div class="space-y-1.5 mb-md">
-        <div class="flex items-center gap-xs">
+      <div class="m2m-field-picker space-y-sm mb-lg" data-page-size="12">
+        <div class="flex items-center justify-between gap-sm">
+          <div class="flex items-center gap-xs min-w-0">
           <label class="font-label-md text-label-md text-on-surface-variant select-none">
             {{ m.label | replace("_", " ") | title }}
           </label>
           <span class="text-[10px] text-outline bg-surface-container-high px-1.5 py-0.5 rounded font-label-sm">
             {{ m.candidates | length }} available
           </span>
+          </div>
+          <span class="text-[10px] text-outline bg-surface-container-low px-1.5 py-0.5 rounded font-label-sm" data-m2m-count>
+            {{ m.selected_values | length }} selected
+          </span>
         </div>
-        <div class="max-h-64 overflow-y-auto bg-surface-container-low border border-outline-variant rounded-xl p-md space-y-1">
-          {% if not m.candidates %}
+
+        <div class="rounded-xl border border-outline-variant bg-surface-container-low p-sm">
+          <p class="text-label-sm text-outline uppercase tracking-wider px-xs pb-xs">Active selection</p>
+          <div class="flex flex-wrap gap-xs min-h-7 px-xs" data-m2m-selected></div>
+          <p class="text-body-sm text-outline px-xs py-xs" data-m2m-selected-empty>No rows selected.</p>
+        </div>
+
+        {% if not m.candidates %}
+          <div class="rounded-xl border border-outline-variant bg-surface-container-low px-md py-sm">
             <p class="text-body-sm text-outline">No candidate rows in the target table yet.</p>
-          {% else %}
+          </div>
+        {% else %}
+          <div class="relative">
+            <i data-lucide="search" class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-outline pointer-events-none"></i>
+            <input
+              type="text"
+              data-m2m-search
+              placeholder="Search {{ m.label | replace('_', ' ') | title }}"
+              class="w-full bg-surface-container-low border border-outline-variant rounded-xl pl-9 pr-md py-sm text-on-surface text-body-md focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all placeholder:text-outline/50"
+            />
+          </div>
+          <div class="bg-surface-container-low border border-outline-variant rounded-xl overflow-hidden">
+            <div class="max-h-64 overflow-y-auto p-sm space-y-1">
             {% for opt in m.candidates %}
               {% set is_selected = opt.value in m.selected_values %}
-              <label class="flex items-center gap-sm cursor-pointer text-body-sm text-on-surface hover:bg-surface-container rounded-lg px-sm py-1">
+              <label data-m2m-option data-label="{{ opt.label }}" class="flex items-center gap-sm cursor-pointer text-body-sm text-on-surface hover:bg-surface-container rounded-lg px-sm py-1.5">
                 <input type="checkbox"
                        name="m2m_{{ m.name }}"
                        value="{{ opt.value }}"
                        {% if is_selected %}checked{% endif %}
                        class="w-4 h-4 accent-primary" />
-                <span>{{ opt.label }}</span>
+                <span class="min-w-0 truncate">{{ opt.label }}</span>
               </label>
             {% endfor %}
-          {% endif %}
-        </div>
+              <p class="hidden text-body-sm text-outline px-sm py-sm" data-m2m-empty>No matching rows.</p>
+            </div>
+            <div class="flex items-center justify-between gap-sm border-t border-outline-variant px-sm py-xs">
+              <button type="button" data-m2m-prev class="px-sm py-xs rounded-lg border border-outline-variant text-label-sm text-on-surface-variant hover:bg-surface-container-high disabled:opacity-40 disabled:cursor-not-allowed">Previous</button>
+              <span class="text-label-sm text-outline tabular-nums" data-m2m-page>Page 1</span>
+              <button type="button" data-m2m-next class="px-sm py-xs rounded-lg border border-outline-variant text-label-sm text-on-surface-variant hover:bg-surface-container-high disabled:opacity-40 disabled:cursor-not-allowed">Next</button>
+            </div>
+          </div>
+        {% endif %}
       </div>
       {% endfor %}
     </form>
@@ -340,7 +391,7 @@ Drag-resize: ~50 LOC vanilla JS at the bottom; width in localStorage.
   <footer class="sticky bottom-0 z-10 flex items-center justify-between px-lg py-md bg-surface-container/95 backdrop-blur-sm border-t border-outline-variant flex-shrink-0">
     {% if is_edit and mode != "create" %}
     <button type="button"
-      hx-get="/admin/{{ table }}/{{ instance_id }}/_confirm-delete"
+      hx-get="{{ admin_base }}/{{ table }}/{{ instance_id }}/_confirm-delete"
       hx-target="#umbra-dialog-slot" hx-swap="innerHTML"
       class="flex items-center gap-sm px-md py-sm text-error hover:bg-error-container/10 transition-colors rounded-xl font-label-md text-label-md focus:outline-none focus:ring-2 focus:ring-error/40">
       <i data-lucide="trash-2" class="w-4 h-4"></i>
@@ -353,7 +404,7 @@ Drag-resize: ~50 LOC vanilla JS at the bottom; width in localStorage.
     <div class="flex items-center gap-md">
       {% if mode == "preview" %}
       <button type="button"
-        hx-get="/admin/{{ table }}/{{ instance_id }}/edit-sheet"
+        hx-get="{{ admin_base }}/{{ table }}/{{ instance_id }}/edit-sheet"
         hx-target="#umbra-sheet-slot" hx-swap="innerHTML"
         class="px-lg py-sm bg-primary text-on-primary rounded-xl font-label-md text-label-md hover:opacity-90 active:scale-[0.98] transition-all focus:outline-none focus:ring-2 focus:ring-primary/40">
         <i data-lucide="pencil" class="w-4 h-4 inline-block mr-xs"></i>Edit

@@ -119,7 +119,7 @@ pub(crate) async fn detail(
     headers: HeaderMap,
     Path((table, id)): Path<(String, String)>,
 ) -> Response {
-    let path = format!("/admin/{table}/{id}");
+    let path = format!("{}/{table}/{id}", crate::branding::current().base_path);
     let user = match require_staff(&headers, &path).await {
         Ok(u) => u,
         Err(r) => return r,
@@ -140,8 +140,8 @@ pub(crate) async fn detail(
     };
     let apps = sidebar_apps(&state, &user);
     let breadcrumbs = vec![
-        serde_json::json!({ "label": model.name.clone(), "url": format!("/admin/{table}/") }),
-        serde_json::json!({ "label": format!("#{id}"), "url": format!("/admin/{table}/{id}") }),
+        serde_json::json!({ "label": model.name.clone(), "url": format!("{}/{table}/", crate::branding::current().base_path) }),
+        serde_json::json!({ "label": format!("#{id}"), "url": format!("{}/{table}/{id}", crate::branding::current().base_path) }),
     ];
     let initial_theme = user_theme(&user).await;
     match render(
@@ -168,7 +168,7 @@ pub(crate) async fn new_form(
     headers: HeaderMap,
     Path(table): Path<String>,
 ) -> Response {
-    let path = format!("/admin/{table}/new");
+    let path = format!("{}/{table}/new", crate::branding::current().base_path);
     let user = match require_staff(&headers, &path).await {
         Ok(u) => u,
         Err(r) => return r,
@@ -184,8 +184,8 @@ pub(crate) async fn new_form(
     let m2m_fields = form_m2m_fields_for(&model, None).await;
     let apps = sidebar_apps(&state, &user);
     let breadcrumbs = vec![
-        serde_json::json!({ "label": model.name.clone(), "url": format!("/admin/{table}/") }),
-        serde_json::json!({ "label": "Add", "url": format!("/admin/{table}/new") }),
+        serde_json::json!({ "label": model.name.clone(), "url": format!("{}/{table}/", crate::branding::current().base_path) }),
+        serde_json::json!({ "label": "Add", "url": format!("{}/{table}/new", crate::branding::current().base_path) }),
     ];
     let initial_theme = user_theme(&user).await;
     match render(
@@ -196,7 +196,7 @@ pub(crate) async fn new_form(
             fields        => fields,
             m2m_fields    => m2m_fields,
             verb          => "Create",
-            action        => format!("/admin/{}/new", model.table),
+            action        => format!("{}/{}/new", crate::branding::current().base_path, model.table),
             error         => "",
             apps          => apps,
             active_table  => table,
@@ -218,7 +218,7 @@ pub(crate) async fn create(
     Path(table): Path<String>,
     body: String,
 ) -> Response {
-    let path = format!("/admin/{table}/new");
+    let path = format!("{}/{table}/new", crate::branding::current().base_path);
     let user = match require_staff(&headers, &path).await {
         Ok(u) => u,
         Err(r) => return r,
@@ -254,15 +254,20 @@ pub(crate) async fn create(
                 &format!("created {} (via form)", model.name),
             )
             .await;
-            Redirect::to(&format!("/admin/{}/", model.table)).into_response()
+            Redirect::to(&format!(
+                "{}/{}/",
+                crate::branding::current().base_path,
+                model.table
+            ))
+            .into_response()
         }
         Err(e) => {
             let fields = form_fields_for(&model, Some(&form), cfg);
             let m2m_fields = form_m2m_fields_for(&model, None).await;
             let apps = sidebar_apps(&state, &user);
             let breadcrumbs = vec![
-                serde_json::json!({ "label": model.name.clone(), "url": format!("/admin/{table}/") }),
-                serde_json::json!({ "label": "Add", "url": format!("/admin/{table}/new") }),
+                serde_json::json!({ "label": model.name.clone(), "url": format!("{}/{table}/", crate::branding::current().base_path) }),
+                serde_json::json!({ "label": "Add", "url": format!("{}/{table}/new", crate::branding::current().base_path) }),
             ];
             let initial_theme = user_theme(&user).await;
             match render(
@@ -273,7 +278,7 @@ pub(crate) async fn create(
                     fields        => fields,
                     m2m_fields    => m2m_fields,
                     verb          => "Create",
-                    action        => format!("/admin/{}/new", model.table),
+                    action        => format!("{}/{}/new", crate::branding::current().base_path, model.table),
                     error         => sanitise_form_error(&e),
                     apps          => apps,
                     active_table  => table,
@@ -294,7 +299,7 @@ pub(crate) async fn edit_form(
     headers: HeaderMap,
     Path((table, id)): Path<(String, String)>,
 ) -> Response {
-    let path = format!("/admin/{table}/{id}/edit");
+    let path = format!("{}/{table}/{id}/edit", crate::branding::current().base_path);
     let user = match require_staff(&headers, &path).await {
         Ok(u) => u,
         Err(r) => return r,
@@ -324,9 +329,9 @@ pub(crate) async fn edit_form(
     let m2m_fields = form_m2m_fields_for(&model, Some(&id)).await;
     let apps = sidebar_apps(&state, &user);
     let breadcrumbs = vec![
-        serde_json::json!({ "label": model.name.clone(), "url": format!("/admin/{table}/") }),
-        serde_json::json!({ "label": format!("#{id}"), "url": format!("/admin/{table}/{id}") }),
-        serde_json::json!({ "label": "Edit", "url": format!("/admin/{table}/{id}/edit") }),
+        serde_json::json!({ "label": model.name.clone(), "url": format!("{}/{table}/", crate::branding::current().base_path) }),
+        serde_json::json!({ "label": format!("#{id}"), "url": format!("{}/{table}/{id}", crate::branding::current().base_path) }),
+        serde_json::json!({ "label": "Edit", "url": format!("{}/{table}/{id}/edit", crate::branding::current().base_path) }),
     ];
     let initial_theme = user_theme(&user).await;
     match render(
@@ -337,7 +342,7 @@ pub(crate) async fn edit_form(
             fields        => fields,
             m2m_fields    => m2m_fields,
             verb          => "Edit",
-            action        => format!("/admin/{}/{}/edit", model.table, id),
+            action        => format!("{}/{}/{}/edit", crate::branding::current().base_path, model.table, id),
             row           => row,
             pk            => pk.name.clone(),
             error         => "",
@@ -366,7 +371,7 @@ pub(crate) async fn update(
     Path((table, id)): Path<(String, String)>,
     body: String,
 ) -> Response {
-    let path = format!("/admin/{table}/{id}/edit");
+    let path = format!("{}/{table}/{id}/edit", crate::branding::current().base_path);
     let user = match require_staff(&headers, &path).await {
         Ok(u) => u,
         Err(r) => return r,
@@ -414,16 +419,22 @@ pub(crate) async fn update(
                 return resp;
             }
 
-            Redirect::to(&format!("/admin/{}/{}", model.table, id)).into_response()
+            Redirect::to(&format!(
+                "{}/{}/{}",
+                crate::branding::current().base_path,
+                model.table,
+                id
+            ))
+            .into_response()
         }
         Err(e) => {
             let fields = form_fields_for(&model, Some(&form), cfg);
             let m2m_fields = form_m2m_fields_for(&model, Some(&id)).await;
             let apps = sidebar_apps(&state, &user);
             let breadcrumbs = vec![
-                serde_json::json!({ "label": model.name.clone(), "url": format!("/admin/{table}/") }),
-                serde_json::json!({ "label": format!("#{id}"), "url": format!("/admin/{table}/{id}") }),
-                serde_json::json!({ "label": "Edit", "url": format!("/admin/{table}/{id}/edit") }),
+                serde_json::json!({ "label": model.name.clone(), "url": format!("{}/{table}/", crate::branding::current().base_path) }),
+                serde_json::json!({ "label": format!("#{id}"), "url": format!("{}/{table}/{id}", crate::branding::current().base_path) }),
+                serde_json::json!({ "label": "Edit", "url": format!("{}/{table}/{id}/edit", crate::branding::current().base_path) }),
             ];
             let initial_theme = user_theme(&user).await;
             match render(
@@ -434,7 +445,7 @@ pub(crate) async fn update(
                     fields        => fields,
                     m2m_fields    => m2m_fields,
                     verb          => "Edit",
-                    action        => format!("/admin/{}/{}/edit", model.table, id),
+                    action        => format!("{}/{}/{}/edit", crate::branding::current().base_path, model.table, id),
                     error         => sanitise_form_error(&e),
                     apps          => apps,
                     active_table  => table,
@@ -455,7 +466,10 @@ pub(crate) async fn delete(
     headers: HeaderMap,
     Path((table, id)): Path<(String, String)>,
 ) -> Response {
-    let path = format!("/admin/{table}/{id}/delete");
+    let path = format!(
+        "{}/{table}/{id}/delete",
+        crate::branding::current().base_path
+    );
     let who = match require_staff(&headers, &path).await {
         Ok(u) => u,
         Err(r) => return r,
@@ -481,20 +495,28 @@ pub(crate) async fn delete(
                 &format!("deleted {} #{}", model.name, id),
             )
             .await;
-            Redirect::to(&format!("/admin/{}/", model.table)).into_response()
+            Redirect::to(&format!(
+                "{}/{}/",
+                crate::branding::current().base_path,
+                model.table
+            ))
+            .into_response()
         }
         Err(e) => AdminError::Sqlx(e).into_response(),
     }
 }
 
-/// `DELETE /admin/{table}/{id}` — HTMX delete. Returns `HX-Redirect`
-/// so HTMX reloads the changelist after the row is gone.
+/// `DELETE /admin/{table}/{id}` — HTMX delete. Returns an empty body
+/// with `HX-Trigger: closeSheet + refreshTable` so the changelist
+/// swaps in place (matches the in-place refresh `update` does after
+/// a save). Falls back to a full reload on the listener side when
+/// the caller isn't on a changelist (detail page delete).
 pub(crate) async fn htmx_delete(
     State(_state): State<AdminState>,
     headers: HeaderMap,
     Path((table, id)): Path<(String, String)>,
 ) -> Response {
-    let path = format!("/admin/{table}/{id}");
+    let path = format!("{}/{table}/{id}", crate::branding::current().base_path);
     let who = match require_staff(&headers, &path).await {
         Ok(u) => u,
         Err(r) => return r,
@@ -520,13 +542,21 @@ pub(crate) async fn htmx_delete(
                 &format!("deleted {} #{}", model.name, id),
             )
             .await;
-            axum::response::Response::builder()
+            let mut resp = axum::response::Response::builder()
                 .status(StatusCode::OK)
-                .header("HX-Redirect", format!("/admin/{}/", model.table))
+                .header("HX-Trigger", r#"{"closeSheet": {}, "refreshTable": {}}"#)
                 .body(axum::body::Body::empty())
                 .unwrap_or_else(|_| {
-                    Redirect::to(&format!("/admin/{}/", model.table)).into_response()
-                })
+                    Redirect::to(&format!(
+                        "{}/{}/",
+                        crate::branding::current().base_path,
+                        model.table
+                    ))
+                    .into_response()
+                });
+            resp.headers_mut()
+                .insert("Content-Type", "text/html; charset=utf-8".parse().unwrap());
+            resp
         }
         Err(e) => AdminError::Sqlx(e).into_response(),
     }

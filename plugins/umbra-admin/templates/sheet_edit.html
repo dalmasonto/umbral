@@ -1,6 +1,6 @@
 {#
   Sheet edit fragment — returned for HTMX requests to
-  GET /admin/{table}/{id}/edit-sheet
+  GET {{ admin_base }}/{table}/{id}/edit-sheet
 
   For full-page (non-HTMX) requests, changelist.html wraps this.
   password_field: optional column name that holds a password hash.

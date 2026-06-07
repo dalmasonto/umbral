@@ -377,7 +377,16 @@ pub(crate) fn format_for_input(raw: &str, ty: SqlType) -> String {
     }
     match ty {
         SqlType::Timestamptz => match chrono::DateTime::parse_from_rfc3339(raw) {
-            Ok(dt) => dt.format("%Y-%m-%dT%H:%M").to_string(),
+            // Gap 106: the stored value is UTC; convert to the
+            // active project timezone before stripping to the
+            // `datetime-local` wire form so users see local
+            // wall-clock time in the form. Settings absent →
+            // active_tz() returns UTC and this is a no-op.
+            Ok(dt) => {
+                let utc = dt.with_timezone(&chrono::Utc);
+                let local = umbra::timezone::utc_to_naive_local(utc);
+                local.format("%Y-%m-%dT%H:%M").to_string()
+            }
             Err(_) => raw.to_string(),
         },
         SqlType::Time => {
@@ -556,8 +565,12 @@ mod tests {
 
     #[test]
     fn format_for_input_handles_rfc3339_with_offset() {
+        // Gap 106: stored values normalize to UTC before display.
+        // The input is `17:00+05:00`, i.e. UTC `12:00`; the admin
+        // form shows the UTC wall-clock since no project time_zone
+        // is configured in the test process.
         let coerced = format_for_input("2026-05-30T17:00:00+05:00", SqlType::Timestamptz);
-        assert_eq!(coerced, "2026-05-30T17:00");
+        assert_eq!(coerced, "2026-05-30T12:00");
     }
 
     #[test]

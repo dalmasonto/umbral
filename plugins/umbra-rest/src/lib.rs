@@ -149,6 +149,10 @@ pub struct RestPlugin {
     /// `?search=`. Tables not in the map default to "every
     /// searchable column" (see `filtering::parse_search`).
     search_fields: HashMap<String, Vec<String>>,
+    /// Gap 107: base URL prefix for all REST endpoints. Default
+    /// `/api`. Set via `RestPlugin::at("/v1")`. Always normalised
+    /// to one leading slash, no trailing slash.
+    base_path: String,
 }
 
 impl std::fmt::Debug for RestPlugin {
@@ -243,7 +247,36 @@ impl RestPlugin {
             filters_disabled: std::collections::HashSet::new(),
             search_disabled: std::collections::HashSet::new(),
             search_fields: HashMap::new(),
+            base_path: "/api".to_string(),
         }
+    }
+
+    /// Gap 107: override the URL prefix for all REST endpoints.
+    /// Default is `/api`. Use `RestPlugin::default().at("/v1")` to
+    /// version your API, or `.at("/internal/api")` to nest it under a
+    /// deeper segment. The path is normalised to one leading slash
+    /// and no trailing slash, so `"api"`, `"/api"`, and `"/api/"`
+    /// all produce the same routes. Empty string mounts at the root
+    /// (rare but supported).
+    ///
+    /// ```ignore
+    /// RestPlugin::default().at("/v1")  // → /v1/post/, /v1/post/{id}, ...
+    /// ```
+    pub fn at(mut self, path: impl Into<String>) -> Self {
+        let raw = path.into();
+        let trimmed = raw.trim_matches('/');
+        self.base_path = if trimmed.is_empty() {
+            String::new()
+        } else {
+            format!("/{trimmed}")
+        };
+        self
+    }
+
+    /// The normalised base path for this plugin. Public for the
+    /// OpenAPI plugin to read so the spec mirrors the live routes.
+    pub fn base_path(&self) -> &str {
+        &self.base_path
     }
 
     /// Set the authentication backend run on every request. Default
@@ -684,11 +717,12 @@ impl Plugin for RestPlugin {
         // setting it here is safe.
         let _ = CONFIG.set(self.clone());
 
+        let base = &self.base_path;
         let mut router = Router::new()
-            .route("/api/{table}/", get(list).post(create))
-            .route("/api/{table}", get(list).post(create))
+            .route(&format!("{base}/{{table}}/"), get(list).post(create))
+            .route(&format!("{base}/{{table}}"), get(list).post(create))
             .route(
-                "/api/{table}/{id}",
+                &format!("{base}/{{table}}/{{id}}"),
                 get(retrieve).put(update).patch(update).delete(destroy),
             );
 
@@ -706,10 +740,10 @@ impl Plugin for RestPlugin {
             for def in action_list {
                 let path = match def.scope {
                     ActionScope::Collection => {
-                        format!("/api/{}/{}", q_seg(table), q_seg(&def.name))
+                        format!("{base}/{}/{}", q_seg(table), q_seg(&def.name))
                     }
                     ActionScope::Detail => {
-                        format!("/api/{}/{{id}}/{}", q_seg(table), q_seg(&def.name))
+                        format!("{base}/{}/{{id}}/{}", q_seg(table), q_seg(&def.name))
                     }
                 };
                 let method_router =
@@ -742,22 +776,23 @@ impl Plugin for RestPlugin {
         // (update), DELETE (destroy). Custom `@action` endpoints use
         // whatever method the closure registered with.
         use umbra::routes::RouteSpec;
+        let base = &self.base_path;
         let mut specs: Vec<RouteSpec> = Vec::new();
         for meta in umbra::migrate::registered_models() {
             specs.push(RouteSpec::new(
-                format!("/api/{}/", meta.table),
+                format!("{base}/{}/", meta.table),
                 vec!["GET", "POST"],
             ));
             specs.push(RouteSpec::new(
-                format!("/api/{}/{{id}}", meta.table),
+                format!("{base}/{}/{{id}}", meta.table),
                 vec!["GET", "PUT", "PATCH", "DELETE"],
             ));
         }
         for (table, action_list) in &self.actions {
             for def in action_list {
                 let path = match def.scope {
-                    ActionScope::Collection => format!("/api/{table}/{}", def.name),
-                    ActionScope::Detail => format!("/api/{table}/{{id}}/{}", def.name),
+                    ActionScope::Collection => format!("{base}/{table}/{}", def.name),
+                    ActionScope::Detail => format!("{base}/{table}/{{id}}/{}", def.name),
                 };
                 // The action's registered method name is the only one
                 // it accepts. `http::Method` stringifies as the

@@ -7,39 +7,78 @@ use umbra::web::{HeaderMap, IntoResponse, Json, Path, Response, StatusCode};
 
 use crate::AdminState;
 use crate::auth::require_staff;
-use crate::discovery::{discover_models, find_model};
+use crate::discovery::find_model;
 use crate::engine::render;
 use crate::error::AdminError;
 use crate::models;
 use crate::util::is_htmx;
 use crate::widgets::{
-    CatalogEntry, FeedItem, FeedPayload, KpiPayload, Span, Widget, WidgetDataFn, WidgetKind,
-    WidgetPayload,
+    BarPayload, CatalogEntry, ChartPoint, FeedItem, FeedPayload, Series, Span, Widget,
+    WidgetDataFn, WidgetKind, WidgetPayload,
 };
 
 // =========================================================================
 // Built-in widgets
 // =========================================================================
 
-/// `Total models` KPI — counts every model the migration registry knows
-/// about. Cheap to compute and always present.
+/// `Models by plugin` bar chart — counts every model the migration
+/// registry knows about, grouped by plugin. Cheap to compute and
+/// always present.
 pub(crate) fn builtin_total_models_widget() -> Widget {
     Widget {
         key: "umbra_total_models",
-        title: "Total Models".to_string(),
-        kind: WidgetKind::Kpi,
-        default_span: Span { cols: 3, rows: 1 },
+        title: "Models by Plugin".to_string(),
+        kind: WidgetKind::Bar,
+        default_span: Span { cols: 4, rows: 2 },
         permission: None,
         data: WidgetDataFn::new(|_user| async move {
-            let count = discover_models().len();
-            WidgetPayload::Kpi(KpiPayload {
-                value: count.to_string(),
-                unit: Some("models".to_string()),
-                delta: None,
-                sparkline: None,
+            let points = models_by_plugin_points();
+            WidgetPayload::Bar(BarPayload {
+                series: vec![Series {
+                    name: "models".to_string(),
+                    points,
+                }],
+                x_type: "plugin".to_string(),
             })
         }),
     }
+}
+
+fn models_by_plugin_points() -> Vec<ChartPoint> {
+    let mut assigned = std::collections::HashSet::new();
+    let mut points: Vec<ChartPoint> = Vec::new();
+
+    for plugin in umbra::migrate::registered_plugins() {
+        let models = umbra::migrate::models_for_plugin(&plugin);
+        for model in &models {
+            assigned.insert(model.table.clone());
+        }
+        if !models.is_empty() {
+            points.push(ChartPoint {
+                x: plugin,
+                y: models.len() as f64,
+            });
+        }
+    }
+
+    let app_count = umbra::migrate::registered_models()
+        .into_iter()
+        .filter(|model| !assigned.contains(&model.table))
+        .count();
+    if app_count > 0 {
+        points.push(ChartPoint {
+            x: "app".to_string(),
+            y: app_count as f64,
+        });
+    }
+
+    points.sort_by(|a, b| match (a.x.as_str(), b.x.as_str()) {
+        ("app", "app") => std::cmp::Ordering::Equal,
+        ("app", _) => std::cmp::Ordering::Greater,
+        (_, "app") => std::cmp::Ordering::Less,
+        _ => a.x.cmp(&b.x),
+    });
+    points
 }
 
 /// `Recent signups` feed — last 5 `auth_user` rows ordered by
@@ -73,8 +112,8 @@ pub(crate) fn builtin_recent_users_widget() -> Widget {
                             .into_iter()
                             .map(|r| FeedItem {
                                 actor: r.get("username").cloned().unwrap_or_default(),
-                                verb: "joined".to_string(),
-                                object: "account".to_string(),
+                                verb: "signed".to_string(),
+                                object: "up".to_string(),
                                 object_link: None,
                                 at: r.get("date_joined").cloned().unwrap_or_default(),
                             })

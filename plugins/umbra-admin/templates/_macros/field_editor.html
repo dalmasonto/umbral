@@ -134,7 +134,7 @@
 
   {% elif field.kind == "fk" %}
     {# Async FK combobox — never preloads the whole table.
-       Endpoint: /admin/api/<parent_table>/<field.name>/options — the
+       Endpoint: {{ admin_base }}/api/<parent_table>/<field.name>/options — the
        handler looks the column up on the parent model to follow
        `col.fk_target` to the target. On edit-mode load,
        /options/resolve?ids=<current> resolves the label.
@@ -144,29 +144,46 @@
     {% set fk_table = field.fk_table | default("") %}
     <div class="relative fk-picker" data-field="{{ field.name }}" data-fk-table="{{ fk_table }}">
       <input type="hidden" id="f_{{ field.name }}" name="{{ field.name }}" value="{{ value }}" />
+      <div
+        data-fk-active
+        class="{% if not value %}hidden {% endif %}mb-xs rounded-xl border border-primary/20 bg-primary-container px-md py-sm"
+      >
+        <div class="flex items-start justify-between gap-sm">
+          <div class="min-w-0">
+            <p class="text-label-sm text-on-primary-container uppercase tracking-wider">Selected</p>
+            <p class="text-body-sm font-medium text-on-primary-container truncate" data-fk-active-label>
+              {% if value %}Loading selected option{% else %}Selected option{% endif %}
+            </p>
+            <p class="text-[11px] text-on-primary-container tabular-nums" data-fk-active-value>{% if value %}#{{ value }}{% endif %}</p>
+          </div>
+          {% if field.nullable and not is_readonly %}
+          <button type="button" data-fk-clear class="flex-shrink-0 inline-flex items-center gap-xs rounded-lg border border-primary/20 bg-surface-container px-sm py-xs text-label-sm text-on-surface-variant hover:text-on-surface transition-colors">Clear</button>
+          {% endif %}
+        </div>
+      </div>
       <input
         type="text"
         id="fk_text_{{ field.name }}"
-        placeholder="Search {{ field.name | replace('_id', '') | replace('_', ' ') | title }}..."
+        placeholder="{% if value %}Search to replace {{ field.name | replace('_id', '') | replace('_', ' ') | title }}{% else %}Search {{ field.name | replace('_id', '') | replace('_', ' ') | title }}{% endif %}"
         autocomplete="off"
         class="w-full bg-surface-container-low border {% if error %}border-error{% else %}border-outline-variant{% endif %} rounded-xl px-md py-sm text-on-surface text-body-md focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all placeholder:text-outline/50 {% if is_readonly %}opacity-70 cursor-default{% endif %}"
         {% if is_readonly %}readonly{% endif %}
-        hx-get="/admin/api/{{ parent_table }}/{{ field.name }}/options"
+        hx-get="{{ admin_base }}/api/{{ parent_table }}/{{ field.name }}/options"
         hx-trigger="input changed delay:250ms, focus"
-        hx-target="next .fk-options"
+        hx-target="#fk_options_{{ field.name }}"
         hx-swap="innerHTML"
         hx-include="this"
         name="search"
       />
       {% if value and not is_readonly %}
       <span id="fk_resolve_{{ field.name }}"
-        hx-get="/admin/api/{{ parent_table }}/{{ field.name }}/options/resolve?ids={{ value }}"
+        hx-get="{{ admin_base }}/api/{{ parent_table }}/{{ field.name }}/options/resolve?ids={{ value }}"
         hx-trigger="load"
         hx-swap="none"
         hx-on:htmx:after-request="if(window.umbra&&umbra.fkResolve)umbra.fkResolve('{{ field.name }}', event)"
       ></span>
       {% endif %}
-      <div class="fk-options hidden absolute left-0 right-0 top-full mt-xs z-30 bg-surface-container border border-outline-variant rounded-xl shadow-lg max-h-48 overflow-y-auto">
+      <div id="fk_options_{{ field.name }}" class="fk-options hidden absolute left-0 right-0 top-full mt-xs z-30 bg-surface-container border border-outline-variant rounded-xl shadow-lg max-h-64 overflow-y-auto">
         {# Populated by HTMX #}
       </div>
     </div>
@@ -283,51 +300,3 @@
   {% endif %}
 </div>
 {% endmacro %}
-
-{# FK combobox JS — wires up all .fk-picker instances on the page.
-   Runs once per page load; re-runs after HTMX swaps sheet content. #}
-<script>
-(function() {
-  function initFkPickers(root) {
-    root = root || document;
-    root.querySelectorAll('.fk-picker:not([data-fk-init])').forEach(function(picker) {
-      picker.setAttribute('data-fk-init', '1');
-      var textInput = picker.querySelector('input[type=text]');
-      var hiddenInput = picker.querySelector('input[type=hidden]');
-      var dropdown = picker.querySelector('.fk-options');
-      if (!textInput || !hiddenInput || !dropdown) return;
-
-      textInput.addEventListener('focus', function() { dropdown.classList.remove('hidden'); });
-      document.addEventListener('click', function(e) {
-        if (!picker.contains(e.target)) dropdown.classList.add('hidden');
-      });
-
-      picker.addEventListener('htmx:afterSwap', function() {
-        dropdown.classList.remove('hidden');
-        dropdown.querySelectorAll('[data-fk-value]').forEach(function(opt) {
-          opt.addEventListener('mousedown', function(e) {
-            e.preventDefault();
-            hiddenInput.value = opt.getAttribute('data-fk-value');
-            textInput.value = opt.textContent.trim();
-            dropdown.classList.add('hidden');
-          });
-        });
-      });
-    });
-  }
-
-  window.umbra = window.umbra || {};
-  umbra.fkResolve = function(field, event) {
-    try {
-      var data = JSON.parse(event.detail.xhr.responseText);
-      if (data.items && data.items[0]) {
-        var el = document.getElementById('fk_text_' + field);
-        if (el) el.value = data.items[0].label;
-      }
-    } catch(e) {}
-  };
-
-  initFkPickers();
-  document.body.addEventListener('htmx:afterSwap', function() { initFkPickers(); });
-})();
-</script>

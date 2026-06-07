@@ -23,7 +23,10 @@ pub(crate) async fn cell_edit_get(
     headers: HeaderMap,
     Path((table, id, field)): Path<(String, String, String)>,
 ) -> Response {
-    let path = format!("/admin/{table}/{id}/cell/{field}/edit");
+    let path = format!(
+        "{}/{table}/{id}/cell/{field}/edit",
+        crate::branding::current().base_path
+    );
     if let Err(r) = require_staff(&headers, &path).await {
         return r;
     }
@@ -94,7 +97,10 @@ pub(crate) async fn cell_edit_post(
     Path((table, id, field)): Path<(String, String, String)>,
     body: String,
 ) -> Response {
-    let path = format!("/admin/{table}/{id}/cell/{field}");
+    let path = format!(
+        "{}/{table}/{id}/cell/{field}",
+        crate::branding::current().base_path
+    );
     let user = match require_staff(&headers, &path).await {
         Ok(u) => u,
         Err(r) => return r,

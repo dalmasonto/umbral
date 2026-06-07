@@ -94,13 +94,10 @@ pub(crate) async fn palette_search(
             break;
         }
         let cfg = state.config_for(&model.table);
-        let search_fields: Vec<String> = cfg
-            .filter(|c| !c.search_fields.is_empty())
-            .map(|c| c.search_fields.clone())
-            .unwrap_or_default();
-        if search_fields.is_empty() {
-            continue;
-        }
+        // Explicit `search_fields` config wins; otherwise empty here
+        // means "every searchable column" — `DynQuerySet::search`
+        // expands the default per the column type table.
+        let search_fields: Vec<String> = cfg.map(|c| c.search_fields.clone()).unwrap_or_default();
 
         let pk = match pk_column(&model) {
             Some(p) => p.name.clone(),
@@ -141,7 +138,12 @@ pub(crate) async fn palette_search(
                 .cloned()
                 .unwrap_or_else(|| format!("#{id}"));
             let item_label = format!("{}: {}", model.name, label);
-            let href = format!("/admin/{}/{}/sheet", model.table, id);
+            let href = format!(
+                "{}/{}/{}/sheet",
+                crate::branding::current().base_path,
+                model.table,
+                id
+            );
             html.push_str(&format!(
                 r#"<li role="option" data-palette-href="{href}" class="palette-item flex items-center gap-sm px-lg py-sm cursor-pointer hover:bg-surface-container-high transition-colors group" onclick="umbra._paletteGo(this)" tabindex="-1">
   <div class="w-8 h-8 rounded-xl bg-primary-container/10 border border-primary/20 flex items-center justify-center flex-shrink-0">

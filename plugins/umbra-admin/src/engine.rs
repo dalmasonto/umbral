@@ -206,6 +206,18 @@ pub(crate) fn engine() -> &'static Environment<'static> {
             minijinja::Value::from(branding.site_description),
         );
         env.add_global("brand_color", minijinja::Value::from(branding.brand_color));
+        // Gap 107: the admin base path. Templates reference this
+        // via `{{ admin_base }}` so cross-page links and HTMX
+        // targets resolve under whatever prefix the developer
+        // configured. Defaults to `/admin`. Registered as a safe
+        // string so inline-script contexts (e.g.
+        // `htmx.ajax('GET', '{{ admin_base }}/api/...')`) don't
+        // HTML-entity-escape the leading slash. The value is a
+        // URL path under the framework's control, never user input.
+        env.add_global(
+            "admin_base",
+            minijinja::Value::from_safe_string(branding.base_path),
+        );
 
         env
     })

@@ -19,7 +19,10 @@ pub(crate) async fn history_handler(
     headers: HeaderMap,
     Path((table, id)): Path<(String, String)>,
 ) -> Response {
-    let path = format!("/admin/{table}/{id}/history");
+    let path = format!(
+        "{}/{table}/{id}/history",
+        crate::branding::current().base_path
+    );
     let user = match require_staff(&headers, &path).await {
         Ok(u) => u,
         Err(r) => return r,

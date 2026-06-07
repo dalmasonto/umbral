@@ -37,7 +37,8 @@ pub(crate) async fn require_staff(
     // Encode the `next` parameter: drop double-slash / external URLs.
     let next = sanitise_next(current_path);
     let login_redirect = || {
-        let location = format!("/admin/login?next={}", urlencoding_simple(&next));
+        let base = crate::branding::current().base_path;
+        let location = format!("{base}/login?next={}", urlencoding_simple(&next));
         Redirect::to(&location).into_response()
     };
 
@@ -77,7 +78,7 @@ pub(crate) async fn login_get(
                 .get("next")
                 .map(|n| sanitise_next(n))
                 .filter(|n| !n.is_empty())
-                .unwrap_or_else(|| "/admin/".to_string());
+                .unwrap_or_else(|| format!("{}/", crate::branding::current().base_path));
             return Redirect::to(&next).into_response();
         }
     }
@@ -174,7 +175,7 @@ pub(crate) async fn login_post(headers: HeaderMap, body: String) -> Response {
     }
 
     let redirect_to = if next.is_empty() {
-        "/admin/".to_string()
+        format!("{}/", crate::branding::current().base_path)
     } else {
         next.clone()
     };
@@ -228,7 +229,8 @@ fn bad_login_response_with_csrf(
 
 /// `GET /admin/logout` — destroy session, redirect to login.
 pub(crate) async fn logout_handler(headers: HeaderMap) -> Response {
-    let mut response = Redirect::to("/admin/login").into_response();
+    let base = crate::branding::current().base_path;
+    let mut response = Redirect::to(&format!("{base}/login")).into_response();
     let _ = umbra_sessions::logout(&headers, response.headers_mut()).await;
     response
 }
@@ -243,15 +245,16 @@ pub(crate) async fn logout_handler(headers: HeaderMap) -> Response {
 // =========================================================================
 
 pub(crate) fn sanitise_next(raw: &str) -> String {
+    let base = crate::branding::current().base_path;
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return String::new();
     }
     if trimmed.starts_with("//") || trimmed.contains("://") {
-        return "/admin/".to_string();
+        return format!("{base}/");
     }
-    if !trimmed.starts_with("/admin") {
-        return "/admin/".to_string();
+    if !trimmed.starts_with(&*base) {
+        return format!("{base}/");
     }
     trimmed.to_string()
 }

@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 
 use axum::extract::{Path, Query, State};
+use chrono::Timelike;
 use minijinja::context;
 use serde::Serialize;
 use umbra::orm::{DynQuerySet, SqlType};
@@ -69,12 +70,22 @@ pub(crate) async fn index(State(state): State<AdminState>, headers: HeaderMap) -
                     "label":  sidebar_model.label,
                     "icon":   if sidebar_model.icon.is_empty() { "database".to_string() } else { sidebar_model.icon.clone() },
                     "count":  count,
-                    "url":    format!("/admin/{}/", sidebar_model.table),
+                    "url":    format!("{}/{}/", crate::branding::current().base_path, sidebar_model.table),
                 }));
             }
         }
         cards
     };
+
+    let total_rows: i64 = model_cards.iter().filter_map(|c| c["count"].as_i64()).sum();
+    let model_count = model_cards.len();
+    let plugin_count = apps.len();
+
+    // Hour/minute for the time-of-day greeting.
+    use chrono::Utc;
+    let now = Utc::now();
+    let now_hour: u32 = now.hour();
+    let now_minute: u32 = now.minute();
 
     let initial_theme = user_theme(&user).await;
 
@@ -85,6 +96,11 @@ pub(crate) async fn index(State(state): State<AdminState>, headers: HeaderMap) -
             widgets       => widgets,
             model_cards   => model_cards,
             apps          => apps,
+            total_rows    => total_rows,
+            model_count   => model_count,
+            plugin_count  => plugin_count,
+            now_hour      => now_hour,
+            now_minute    => now_minute,
             active_table  => "",
             breadcrumbs   => Vec::<serde_json::Value>::new(),
             initial_theme => initial_theme,
@@ -102,7 +118,7 @@ pub(crate) async fn list(
     Path(table): Path<String>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Response {
-    let path = format!("/admin/{table}/");
+    let path = format!("{}/{table}/", crate::branding::current().base_path);
     let user = match require_staff(&headers, &path).await {
         Ok(u) => u,
         Err(r) => return r,
@@ -194,8 +210,9 @@ pub(crate) async fn list(
         .map(|(f, v)| format!("{f}={v}"))
         .unwrap_or_default();
     let apps = sidebar_apps(&state, &user);
-    let breadcrumbs =
-        vec![serde_json::json!({ "label": model.name.clone(), "url": format!("/admin/{table}/") })];
+    let breadcrumbs = vec![
+        serde_json::json!({ "label": model.name.clone(), "url": format!("{}/{table}/", crate::branding::current().base_path) }),
+    ];
     let flash = params.get("flash").cloned().unwrap_or_default();
     let open_row = params.get("row").cloned().unwrap_or_default();
 
@@ -276,16 +293,16 @@ pub(crate) async fn rows_fragment(
     Path(table): Path<String>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Response {
-    let path = format!("/admin/{table}/rows");
+    let path = format!("{}/{table}/rows", crate::branding::current().base_path);
     if let Err(r) = require_staff(&headers, &path).await {
         return r;
     }
     if !is_htmx(&headers) {
         let qs = serde_urlencoded::to_string(&params).unwrap_or_default();
         let target = if qs.is_empty() {
-            format!("/admin/{table}/")
+            format!("{}/{table}/", crate::branding::current().base_path)
         } else {
-            format!("/admin/{table}/?{qs}")
+            format!("{}/{table}/?{qs}", crate::branding::current().base_path)
         };
         return Redirect::to(&target).into_response();
     }
@@ -400,7 +417,10 @@ pub(crate) async fn filter_dialog_handler(
     Path(table): Path<String>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Response {
-    let path = format!("/admin/{table}/filter-dialog");
+    let path = format!(
+        "{}/{table}/filter-dialog",
+        crate::branding::current().base_path
+    );
     if let Err(r) = require_staff(&headers, &path).await {
         return r;
     }
