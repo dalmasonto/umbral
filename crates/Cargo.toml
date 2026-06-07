@@ -22,6 +22,7 @@ members = [
     "../plugins/umbra-rls",
     "../plugins/umbra-permissions",
     "../plugins/umbra-playground",
+    "../plugins/umbra-health",
 ]
 
 [workspace.package]

@@ -1,0 +1,24 @@
+[package]
+name = "umbra-health"
+description = "Liveness + readiness probes for umbra. Mounts /healthz and /ready."
+workspace = "../../crates"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+umbra = { path = "../../crates/umbra", version = "0.0.1" }
+axum = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sqlx = { version = "0.8", features = ["sqlite", "postgres", "runtime-tokio"] }
+tracing = "0.1"
+async-trait = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync"] }
+http-body-util = "0.1"
+tower = { version = "0.5", default-features = false, features = ["util"] }
