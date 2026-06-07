@@ -187,18 +187,32 @@ label:has([type="file"]),
   cursor: pointer;
 }
 
-/* Gap 87 — slim horizontal/vertical scrollbar for elements that
- * legitimately need to scroll (e.g. the TabStrip overflow row, the
- * RequestBuilder tab content panel). Tuned for visibility in both
- * themes: `--foreground` carries the right "ink colour" in either
- * mode (near-black in light, near-white in dark), and 0.35 / 0.55
- * opacity keeps the rail subtle without disappearing on a dark
- * background the way `muted-foreground @ 0.25` did. The padding-box
- * border trick gives the thumb a 1px transparent gutter so it
- * doesn't visually touch the panel edges. */
+/* Gap 87 — themed scrollbar for every scrolling pane in the
+ * playground (TabStrip overflow row, RequestBuilder tab content,
+ * ResponseViewer body/history/headers, sidebar tree, etc.).
+ *
+ * The shadcn theme tokens are OKLCH (`oklch(...)`) — `hsl(var(--x)
+ * / a)` produces an INVALID color value in that case and the
+ * browser silently falls back to the default chunky system
+ * scrollbar. We expose dedicated `--scrollbar-thumb` /
+ * `--scrollbar-thumb-hover` tokens computed once per theme so the
+ * rail picks up the right ink colour in both modes (dark grey on
+ * light backgrounds, light grey on dark backgrounds) without
+ * touching whichever color-space the theme uses elsewhere. The
+ * padding-box border-trick gives the thumb a 1px transparent
+ * gutter so it doesn't visually touch the panel edges. */
+:root {
+  --scrollbar-thumb: rgba(0, 0, 0, 0.35);
+  --scrollbar-thumb-hover: rgba(0, 0, 0, 0.55);
+}
+.dark {
+  --scrollbar-thumb: rgba(255, 255, 255, 0.35);
+  --scrollbar-thumb-hover: rgba(255, 255, 255, 0.6);
+}
+
 .umbra-thin-scrollbar {
   scrollbar-width: thin;
-  scrollbar-color: hsl(var(--foreground) / 0.35) transparent;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 .umbra-thin-scrollbar::-webkit-scrollbar {
   height: 8px;
@@ -208,29 +222,27 @@ label:has([type="file"]),
   background: transparent;
 }
 .umbra-thin-scrollbar::-webkit-scrollbar-thumb {
-  background-color: hsl(var(--foreground) / 0.35);
+  background-color: var(--scrollbar-thumb);
   border-radius: 4px;
   border: 1px solid transparent;
   background-clip: padding-box;
 }
 .umbra-thin-scrollbar::-webkit-scrollbar-thumb:hover {
-  background-color: hsl(var(--foreground) / 0.55);
+  background-color: var(--scrollbar-thumb-hover);
 }
 .umbra-thin-scrollbar::-webkit-scrollbar-corner {
   background: transparent;
 }
 
-/* Apply the same shape globally so every scrolling pane (Request
- * params/headers/body/auth, Response body/history/headers, code-
- * snippet block, etc.) picks up the themed scrollbar without each
- * one having to opt in via a class. Targets actually-scrolling
- * elements via [class*="overflow-..."] so plain containers stay
- * unaffected. */
+/* Apply the same shape globally so every scrolling pane picks up
+ * the themed scrollbar without opting in per element. Targets
+ * actually-scrolling elements via [class*="overflow-..."] so plain
+ * containers stay unaffected. */
 [class*="overflow-y-auto"],
 [class*="overflow-x-auto"],
 [class*="overflow-auto"] {
   scrollbar-width: thin;
-  scrollbar-color: hsl(var(--foreground) / 0.35) transparent;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 [class*="overflow-y-auto"]::-webkit-scrollbar,
 [class*="overflow-x-auto"]::-webkit-scrollbar,
@@ -246,7 +258,7 @@ label:has([type="file"]),
 [class*="overflow-y-auto"]::-webkit-scrollbar-thumb,
 [class*="overflow-x-auto"]::-webkit-scrollbar-thumb,
 [class*="overflow-auto"]::-webkit-scrollbar-thumb {
-  background-color: hsl(var(--foreground) / 0.35);
+  background-color: var(--scrollbar-thumb);
   border-radius: 4px;
   border: 1px solid transparent;
   background-clip: padding-box;
@@ -254,5 +266,5 @@ label:has([type="file"]),
 [class*="overflow-y-auto"]::-webkit-scrollbar-thumb:hover,
 [class*="overflow-x-auto"]::-webkit-scrollbar-thumb:hover,
 [class*="overflow-auto"]::-webkit-scrollbar-thumb:hover {
-  background-color: hsl(var(--foreground) / 0.55);
+  background-color: var(--scrollbar-thumb-hover);
 }
