@@ -21,6 +21,7 @@ pub mod routes;
 pub mod settings;
 pub mod signals;
 pub mod slash;
+pub mod fixtures;
 pub mod templates;
 pub mod timezone;
 pub mod web;

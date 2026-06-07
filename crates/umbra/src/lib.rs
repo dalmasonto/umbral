@@ -59,6 +59,14 @@ pub mod cors {
     pub use umbra_core::cors::CorsConfig;
 }
 
+/// Feature #74 — per-model JSON fixture load / dump for tests
+/// and dev seeding. Plain JSON arrays of row objects; hand-
+/// editable, diff-friendly. See [`umbra_core::fixtures`] for the
+/// full API surface.
+pub mod fixtures {
+    pub use umbra_core::fixtures::{FixtureError, dump_fixture, load_fixture};
+}
+
 /// Gap 106: IANA timezone-aware datetime marshalling.
 ///
 /// Re-exports the helpers the admin form layer uses to render

@@ -209,10 +209,8 @@ These are the cross-cutting capabilities that turn a framework from a neat ORM d
     >
     > How: Middleware that checks a Redis-backed counter per key (`ip:192.168.1.1`, `user:123`). Return `429 Too Many Requests` with `Retry-After`. Configurable via `App::builder().rate_limit(...)` or per-route decorators. Use `redis::expire` for TTL-based windows.
 
-47. [ ] **Health checks and readiness probes** 🟡 Medium
-    > Why: Kubernetes and load balancers require `GET /healthz` (liveness) and `GET /ready` (readiness). Without these, the framework is invisible to infrastructure.
-    >
-    > How: Built-in routes at `/healthz` (always returns 200 if the process is running) and `/ready` (checks DB connectivity, migration status, and any plugin-specific health checks). Returns JSON with `status: "ok"` and per-dependency details. Add `Plugin::health_check()` optional hook.
+47. [x] **Health checks and readiness probes** 🟡 Medium
+       — Shipped as `umbra-health` plugin. `GET /healthz` is unconditional 200 (liveness — the binary answered the syscall). `GET /ready` runs the DB probe (`SELECT 1` against the default pool) + every developer-registered `HealthCheck` and returns 200 + JSON on success or 503 + JSON when any check fails, with per-dependency status in the body so on-call can see which dependency is degraded without log-grepping. `HealthCheck` trait carries `name() -> &'static str` + `async fn check() -> Result<(), HealthError>`; register via `HealthPlugin::default().check(MyCheck)`. Checks run sequentially in `/ready` to avoid amplifying tail latency across the probe response. Routes are unconditionally mounted when the plugin is installed and never carry authentication (k8s + load balancers must reach them without credentials). 4 integration tests pin liveness + readiness behavior under each scenario.
 
 48. [ ] **Structured logging / OpenTelemetry** 🟡 Medium
     > Why: JSON-structured logs with `trace_id`, `span_id`, `request_id` are required for debugging in distributed systems.
@@ -330,10 +328,8 @@ These are the cross-cutting capabilities that turn a framework from a neat ORM d
     >
     > How: `Response` builder with `.gzip(true)` or `.brotli(true)` using `tower-http::compression`. For streaming, use axum's `Stream` body type instead of `String`. Defer until a real app generates multi-megabyte responses.
 
-71. [ ] **Management command extensions** 🟡 Medium
-    > Why: A `Command` trait so plugins can register CLI subcommands. `umbra-auth` already does this with `createsuperuser`; the pattern should be generalized.
-    >
-    > How: Define `Plugin::commands() -> Vec<Box<dyn Command>>`. The CLI dispatcher walks all plugins and matches argv against contributed commands. This makes `createsuperuser`, `tasks-worker`, and future plugin commands follow the same pattern.
+71. [x] **Management command extensions** 🟡 Medium
+       — Already shipped at the trait + CLI layer. `Plugin::commands(&self) -> Vec<Box<dyn PluginCommand>>` is on the `Plugin` trait (default empty); `PluginCommand` lives in `crates/umbra-core/src/cli.rs` with a `clap::Command` builder + an async `run` handler. `umbra_core::cli::dispatch(plugins, argv)` walks every plugin's commands and routes argv to the matching handler. `umbra_cli::dispatch(app)` (the user-binary entry point in `crates/umbra-cli/src/lib.rs`) calls into it. `umbra-auth`'s `createsuperuser` and `umbra-tasks`'s `worker` are real consumers — the pattern is generalized and the surface is stable.
 
 72. [x] **Soft deletes** 🟡 Medium
        — Shipped. New `#[umbra(soft_delete)]` struct-level attr emits `Model::SOFT_DELETE = true`. The user declares `pub deleted_at: Option<DateTime<Utc>>` on the struct themselves (derive macros can't add fields). `QuerySet::build_query_for` auto-injects `WHERE deleted_at IS NULL` on every terminal for soft-delete models; `.with_deleted()` skips the filter, `.only_deleted()` inverts it (admin trash view), `.hard_delete()` bypasses the soft path on the next `.delete()` call (GDPR purge / test cleanup). `QuerySet::delete()` rewrites to `UPDATE ... SET deleted_at = NOW() WHERE ... AND deleted_at IS NULL` (idempotency guard so re-soft-deleting doesn't bump the timestamp); `Manager::delete_instance(&row)` does the same for the typed per-row path. `bulk_post_delete` signal still fires with the affected PKs so subscribers see the same event shape regardless of the underlying SQL. Hard-delete and the with/only/hard_delete builders are also exposed on `Manager<T>` so `Post::objects().only_deleted().fetch()` works without dropping into a queryset. 4 tests in `crates/umbra-core/tests/soft_delete.rs` pin: const is set from macro, delete rewrites to UPDATE, with/only_deleted visibility flips, hard_delete after with_deleted truly purges. Non-soft models stay byte-identical (SOFT_DELETE defaults to false).
@@ -343,10 +339,8 @@ These are the cross-cutting capabilities that turn a framework from a neat ORM d
     >
     > How: `#[derive(Model)]` struct with `#[umbra(view = "...")]` that maps to `CREATE VIEW` instead of a table. The migration engine emits the view DDL. Materialized views: `#[umbra(materialized_view = "...", refresh = "1h")]`. Defer until a real app needs it.
 
-74. [ ] **Data seeding / fixture system** 🟡 Medium
-    > Why: `cargo run -- seed --fixture users.json` loads fixture files. `seed_blogs()` in `examples/shop/src/main.rs` is ad-hoc; a formal system makes it reusable.
-    >
-    > How: `Fixture` trait with `load(path)` and `dump(path)` methods. Use `fake` crate for generating realistic data. A `Factory` macro that derives `Fixture` and provides `fake_user()`, `fake_post()`. Integration with the test system (gap #52) so fixtures auto-load per test.
+74. [x] **Data seeding / fixture system** 🟡 Medium
+       — Shipped as `umbra::fixtures::{load_fixture, dump_fixture}` plus Manager method shims. Per-model JSON-array files: hand-editable, diff-friendly, plain `[{...}, {...}]` shape with no envelope (the `backup` module already covers whole-DB dumps; fixtures are for the test-and-dev case). `Post::objects().load_fixture("tests/fixtures/posts.json").await` bulk-inserts through the same `DynQuerySet::insert_json` path the REST plugin uses, so auto_now / slug_from / validators / FK existence checks / soft-delete WHERE auto-filter all apply transparently. `dump_fixture("path.json")` writes pretty-printed JSON for round-trip. New `FixtureError` enum splits Io / Json / NotAnArray / Write / Read so callers can branch on the failure kind. Tests: 3 in `crates/umbra-core/tests/fixtures.rs` (round-trip via tempfile, non-array rejection, Manager shim). **Deferred**: `cargo run -- seed --fixture <path>` CLI subcommand (needs string-to-model resolution which the typed shape doesn't expose); `Factory` + `fake` crate for generated data; transaction-scoped per-test lifecycle (lands with `TestClient` from feature #52).
 
 75. [ ] **Admin permissions per model** 🟡 Medium
     > Why: Not just global `is_staff`, but `can_view_product`, `can_change_order` enforced in the admin UI. The permissions plugin already creates these rules; the admin doesn't yet check them before rendering actions.
