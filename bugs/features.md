@@ -119,7 +119,7 @@ These are the QuerySet features and model-level capabilities that Django develop
 28. [x] **`union()`, `intersection()`, `difference()` — set operations** 🟢 Low
        — Shipped. `QuerySet::union(other)`, `intersect(other)`, `except(other)` combine two `QuerySet<T>` values via sea-query's `UnionType::{Distinct, Intersect, Except}`. The shared `T` type-param enforces column-shape compatibility at compile time — no runtime check needed. Default is the de-duplicating UNION (UNION ALL would be a future variant). Both sides apply their accumulated WHERE before the combine; further `.filter()` on the returned QuerySet applies to the OUTER combined query. Tests in `crates/umbra-core/tests/set_ops.rs`.
 
-29. [ ] **`iterator()` — memory-efficient streaming** 🟡 Medium — **ship in two phases**
+29. [~] **`iterator()` — memory-efficient streaming** 🟡 Medium — **ship in two phases**
     > Why: For tables with millions of rows, `fetch()` collects into a `Vec` and would OOM. `iterator()` yields rows one at a time — the only viable path for exports, migrations, and bulk transforms.
     >
     > **Design call (two phases)**:
@@ -129,6 +129,7 @@ These are the QuerySet features and model-level capabilities that Django develop
     > **Phase 2 — `iterator()` returning `Stream`**: ships once `futures-util` is in the workspace for some other reason (probably SSE / WebSockets — gap #45). At that point `iterator()` is the BoxStream'd variant and `try_for_each` stays for callers who prefer the callback shape.
     >
     > **Next-session action**: Phase 1 is a one-commit feature whenever it surfaces — write it, ship it, move on. Phase 2 is gated on futures-util landing for another reason; don't pull it in just for iterator().
+       — Phase 1 shipped. `QuerySet::try_for_each(chunk_size, |row| -> Result<(), E>)` runs the SELECT in pages of `chunk_size` rows and invokes the callback per row. Memory bound = `chunk_size * sizeof::<T>` instead of the full result set, so a million-row export doesn't OOM the way `fetch()` would. New `TryForEachError<E>` enum distinguishes Sqlx vs Callback failures; first error stops the walk. Deliberately NOT named `iterator()` per the design note — the callback shape requires no new deps. select_related / prefetch_related hooks are not applied (raw column data, one row at a time). 4 tests pin: cross-chunk traversal, oversized chunk = single fetch, short-circuit on callback error, empty filter = no-op. Phase 2 (BoxStream-returning `iterator()`) stays gated on `futures-util` landing for SSE / WebSockets.
 
 30. [x] **Reverse relation accessors — `post.comment_set`, `category.post_set`** 🔴 High
        — Shipped via `#[derive(Model)]`. For every `ForeignKey<Parent>` field on a derived Child, the macro emits `impl Parent { pub fn <child_snake>_set(&self) -> QuerySet<Child> }` returning a QuerySet pre-filtered by the FK column = parent's primary key. Multiple FKs from one Child to the same Parent are disambiguated with `<child>_via_<field>_set`. `ForeignKeyCol::eq` / `ne` generalised from `i64` to `impl Into<sea_query::Value>` so the accessor body works for any PK type. Tests in `crates/umbra-core/tests/reverse_fk.rs`. **Limitations**: parent type must be local (Rust orphan rule); parent PK must implement `Into<sea_query::Value>` (every built-in PK type does).
@@ -148,8 +149,8 @@ These are the QuerySet features and model-level capabilities that Django develop
 35. [x] **`explain()` — query plan inspection** 🟡 Medium
        — `QuerySet::explain()` returns the execution plan as a plain-text `String`. SQLite: prepends `EXPLAIN QUERY PLAN` and joins the `detail` column; Postgres: prepends `EXPLAIN` and joins the `QUERY PLAN` column. Tests in `crates/umbra-core/tests/earliest_latest_distinct.rs`. **Deferred**: Postgres `EXPLAIN (FORMAT JSON)` for machine-readable output — use raw sqlx when needed.
 
-36. [~] **Date/time extract functions — `year`, `month`, `day`, `week_day`** 🟡 Medium
-       — Partial. `DateTimeColExt` trait shipped with `.year()`, `.month()`, `.day()` on `DateTimeCol` and `NullableDateTimeCol`. Backend-aware rendering hidden in `ColExpr<T>`: Postgres uses `CAST(EXTRACT(<part> FROM col) AS INTEGER)`, SQLite uses `CAST(strftime('<fmt>', col) AS INTEGER)`. Compose with `.eq/.ne/.lt/.le/.gt/.ge(int)`. Tests in `crates/umbra-core/tests/db_functions.rs`. **Still open**: `hour`, `minute`, `second`, `week_day` — add following the same pattern when needed.
+36. [x] **Date/time extract functions — `year`, `month`, `day`, `week_day`** 🟡 Medium
+       — Shipped. `DateTimeColExt` trait covers `.year()`, `.month()`, `.day()`, `.hour()`, `.minute()`, `.second()`, `.week_day()` on both `DateTimeCol` and `NullableDateTimeCol`. Backend-aware rendering hidden in `ColExpr<T>`: Postgres uses `CAST(EXTRACT(<part> FROM col) AS INTEGER)`, SQLite uses `CAST(strftime('<fmt>', col) AS INTEGER)`. `week_day()` returns 0=Sunday..6=Saturday on both backends (PG `EXTRACT(DOW ...)` and SQLite `strftime('%w', ...)` happen to agree). Compose with `.eq/.ne/.lt/.le/.gt/.ge(int)`. 12 tests in `crates/umbra-core/tests/db_functions.rs` (7 string/year/month/day + 5 new for the time-of-day + weekday extracts).
 
 37. [x] **`earliest()` / `latest()` — convenience wrappers** 🟢 Low
        — Shipped. `QuerySet::earliest("col_name")` = `order_by(col.asc()).first()`; `latest("col_name")` = `order_by(col.desc()).first()`. Takes a `&'static str` column name to match Django's call shape. Tests in `crates/umbra-core/tests/earliest_latest_distinct.rs`.
@@ -257,6 +258,7 @@ These are the cross-cutting capabilities that turn a framework from a neat ORM d
     > Why: See feature #7. This is the general-framework framing of the same capability — "Recent orders", "Pending comments", "New users today" as default dashboard cards.
     >
     > How: Same as #7. Hardcoded widgets first, then a `Widget` trait for custom ones. Render on the admin index page as a grid.
+    > Addition: Widgets can be complex ie mapping 2 years together using a line widget ie sales from previous year with the current year or 2 years (any number of years). Something like a card widget specifically showing sales totals (Meaning this widget can take in currency ie USD, EUR, etc. or a label before the value), values to be shown as comma-separated numbers where necessary. A widget showing a sparkline. Widget cards that show increment, decrement, or percentage change over time which can be a week from previous week or any number of days.
 
 57. [ ] **Admin autocomplete fields** 🟢 Low
     > Why: For FKs with thousands of options, the current async combobox loads all rows. An autocomplete that queries `/api/product/?search=...` as the user types is needed for production datasets.
@@ -318,7 +320,7 @@ These are the cross-cutting capabilities that turn a framework from a neat ORM d
     >
     > How: Define `Middleware` trait with `before_request(Request) -> Request` and `after_response(Response) -> Response`. A `MiddlewareStack` that runs all registered middleware in order. Convert existing CORS (gap #80), rate limiting (gap #46), and cache page (gap #15) to implement this trait. This unifies the middleware surface.
 
-69. [ ] **Database routers for multi-DB** 🟢 Low
+69. [ ] **Database routers for multi-DB (And DB backups)** 🟢 Low
     > Why: Read-replica scaling and geo-distributed writes. Only needed at scale.
     >
     > How: `DbRouter` trait with `read_db_for::<Product>() -> "replica"` and `write_db_for::<Order>() -> "primary"`. The `QuerySet` and `Manager` already support `on(&pool)`; a router would auto-select the pool based on the operation type. Defer until read-replica scaling is a real bottleneck.
@@ -333,10 +335,8 @@ These are the cross-cutting capabilities that turn a framework from a neat ORM d
     >
     > How: Define `Plugin::commands() -> Vec<Box<dyn Command>>`. The CLI dispatcher walks all plugins and matches argv against contributed commands. This makes `createsuperuser`, `tasks-worker`, and future plugin commands follow the same pattern.
 
-72. [ ] **Soft deletes** 🟡 Medium
-    > Why: `#[umbra(soft_delete)]` adds `deleted_at: Option<DateTime<Utc>>`. `QuerySet::filter(...)` auto-excludes soft-deleted rows unless `.with_deleted()` is called. Needed for audit trails and accidental-deletion recovery.
-    >
-    > How: The macro detects `#[umbra(soft_delete)]` and adds the `deleted_at` column. `QuerySet::filter` auto-injects `deleted_at IS NULL` unless `.with_deleted()` is called. `instance.delete()` sets `deleted_at` instead of issuing `DELETE`. Small, well-scoped change.
+72. [x] **Soft deletes** 🟡 Medium
+       — Shipped. New `#[umbra(soft_delete)]` struct-level attr emits `Model::SOFT_DELETE = true`. The user declares `pub deleted_at: Option<DateTime<Utc>>` on the struct themselves (derive macros can't add fields). `QuerySet::build_query_for` auto-injects `WHERE deleted_at IS NULL` on every terminal for soft-delete models; `.with_deleted()` skips the filter, `.only_deleted()` inverts it (admin trash view), `.hard_delete()` bypasses the soft path on the next `.delete()` call (GDPR purge / test cleanup). `QuerySet::delete()` rewrites to `UPDATE ... SET deleted_at = NOW() WHERE ... AND deleted_at IS NULL` (idempotency guard so re-soft-deleting doesn't bump the timestamp); `Manager::delete_instance(&row)` does the same for the typed per-row path. `bulk_post_delete` signal still fires with the affected PKs so subscribers see the same event shape regardless of the underlying SQL. Hard-delete and the with/only/hard_delete builders are also exposed on `Manager<T>` so `Post::objects().only_deleted().fetch()` works without dropping into a queryset. 4 tests in `crates/umbra-core/tests/soft_delete.rs` pin: const is set from macro, delete rewrites to UPDATE, with/only_deleted visibility flips, hard_delete after with_deleted truly purges. Non-soft models stay byte-identical (SOFT_DELETE defaults to false).
 
 73. [ ] **Database views (materialized and regular)** 🟢 Low
     > Why: Complex reports that are too slow to compute per-request. Only needed when a real query is prohibitively expensive.

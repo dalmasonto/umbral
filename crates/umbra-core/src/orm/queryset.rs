@@ -136,6 +136,24 @@ pub struct QuerySet<T> {
     /// QuerySet's write terminal in a transaction; `Some(false)` =
     /// explicitly opt out.
     pub(crate) atomic: Option<bool>,
+    /// Feature #72 — soft-delete state. Snapshotted from
+    /// `T::SOFT_DELETE` when the QuerySet is constructed from a
+    /// Manager (the no-bounds `QuerySet::new` constructor leaves
+    /// this `false` so hand-built QuerySets stay opt-out by
+    /// default).
+    pub(crate) soft_delete_active: bool,
+    /// True when the caller opted back into soft-deleted rows via
+    /// `.with_deleted()`. Skips the auto `WHERE deleted_at IS NULL`
+    /// injection.
+    pub(crate) with_deleted: bool,
+    /// True when the caller wants ONLY soft-deleted rows via
+    /// `.only_deleted()`. Inverts the auto-filter to
+    /// `WHERE deleted_at IS NOT NULL`.
+    pub(crate) only_deleted: bool,
+    /// True when the caller asked for a real DELETE via
+    /// `.hard_delete()` — bypasses the soft-delete rewrite that
+    /// would normally turn `delete()` into an UPDATE.
+    pub(crate) hard_delete: bool,
     _phantom: PhantomData<T>,
 }
 
@@ -150,8 +168,40 @@ impl<T> QuerySet<T> {
             select_related: Vec::new(),
             prefetch_related: Vec::new(),
             atomic: None,
+            soft_delete_active: false,
+            with_deleted: false,
+            only_deleted: false,
+            hard_delete: false,
             _phantom: PhantomData,
         }
+    }
+
+    /// Feature #72 — include soft-deleted rows in this query. Skips
+    /// the auto `WHERE deleted_at IS NULL` injection. No-op on
+    /// models that aren't tagged `#[umbra(soft_delete)]`.
+    pub fn with_deleted(mut self) -> Self {
+        self.with_deleted = true;
+        self
+    }
+
+    /// Feature #72 — only soft-deleted rows. Useful for admin
+    /// trash views and undelete workflows. No-op on models that
+    /// aren't tagged `#[umbra(soft_delete)]`.
+    pub fn only_deleted(mut self) -> Self {
+        self.only_deleted = true;
+        self
+    }
+
+    /// Feature #72 — force a real DELETE for the next `.delete()`
+    /// terminal call. Soft-delete models normally rewrite delete()
+    /// as `UPDATE ... SET deleted_at = NOW()`; `.hard_delete()`
+    /// bypasses that for GDPR purges, test cleanup, or any other
+    /// case where the row truly should be gone. No-op on models
+    /// that aren't tagged `#[umbra(soft_delete)]` (their delete()
+    /// is already a hard DELETE).
+    pub fn hard_delete(mut self) -> Self {
+        self.hard_delete = true;
+        self
     }
 
     /// Wrap this QuerySet's write terminal in a transaction. Reads are
@@ -188,6 +238,20 @@ impl<T> QuerySet<T> {
         let mut q = self.query.clone();
         for p in &self.predicates {
             q.and_where(p.cond_for(backend_name));
+        }
+        // Feature #72 — soft-delete auto-filter. When the model
+        // opted in via `#[umbra(soft_delete)]` AND the caller
+        // didn't switch the visibility via `.with_deleted()` /
+        // `.only_deleted()`, inject `WHERE deleted_at IS NULL`.
+        // `.with_deleted()` shows everything; `.only_deleted()`
+        // shows just the soft-deleted rows.
+        if self.soft_delete_active {
+            use sea_query::Expr;
+            if self.only_deleted {
+                q.and_where(Expr::col(Alias::new("deleted_at")).is_not_null());
+            } else if !self.with_deleted {
+                q.and_where(Expr::col(Alias::new("deleted_at")).is_null());
+            }
         }
         // BUG-8: default ORDER BY applies only when the caller didn't
         // supply an explicit `.order_by(...)`. Mirrors Django's
@@ -1304,7 +1368,20 @@ impl<T: Model> QuerySet<T> {
     /// `post_delete` are NOT fired by this path — use
     /// [`Manager::delete_instance`] when per-row signal semantics are
     /// required.
+    ///
+    /// Feature #72: for `#[umbra(soft_delete)]` models this rewrites
+    /// to `UPDATE ... SET deleted_at = NOW() WHERE ...` so rows
+    /// survive in the DB (filtered out of subsequent queries by the
+    /// auto `WHERE deleted_at IS NULL`). Call `.hard_delete()`
+    /// beforehand for a real DELETE (GDPR purge, test cleanup).
     pub async fn delete(self) -> Result<u64, sqlx::Error> {
+        // Feature #72 — soft-delete redirect. The whole `delete()`
+        // contract collapses to an UPDATE setting `deleted_at`. We
+        // keep the bulk_post_delete signal so subscribers see the
+        // same event shape regardless of the underlying SQL.
+        if self.soft_delete_active && !self.hard_delete {
+            return self.soft_delete_update().await;
+        }
         let atomic = self.should_atomic_wrap();
         let pool = resolve_pool::<T>(self.explicit_pool.clone());
         let backend = pool.backend_name();
@@ -1594,6 +1671,102 @@ impl<T: Model> QuerySet<T> {
         stmt
     }
 
+    /// Feature #72 — soft-delete rewrite: turn `DELETE FROM table
+    /// WHERE ...` into `UPDATE table SET deleted_at = NOW() WHERE
+    /// ... AND deleted_at IS NULL`. The trailing `IS NULL` guard
+    /// makes the operation idempotent: re-soft-deleting an already-
+    /// soft-deleted row doesn't bump its timestamp. Fires
+    /// `bulk_post_delete:<table>` so subscribers see the same event
+    /// shape as a hard delete.
+    async fn soft_delete_update(self) -> Result<u64, sqlx::Error> {
+        let atomic = self.should_atomic_wrap();
+        let pool = resolve_pool::<T>(self.explicit_pool.clone());
+        let backend = pool.backend_name();
+        let now = chrono::Utc::now();
+        let mut stmt = sea_query::Query::update();
+        stmt.table(Alias::new(T::TABLE));
+        stmt.value(
+            Alias::new("deleted_at"),
+            sea_query::Value::ChronoDateTimeUtc(Some(Box::new(now))),
+        );
+        for p in &self.predicates {
+            stmt.and_where(p.cond_for(backend));
+        }
+        // Idempotency guard — never bump an already-set deleted_at.
+        stmt.and_where(sea_query::Expr::col(Alias::new("deleted_at")).is_null());
+        let pk = pk_field::<T>();
+        if let Some(pkf) = pk {
+            stmt.returning_col(Alias::new(pkf.name));
+        }
+        let ids: Vec<JsonValue> = match pool {
+            DbPool::Sqlite(pool) => {
+                let (sql, values) = stmt.build_sqlx(SqliteQueryBuilder);
+                let rows = if atomic {
+                    let mut tx = pool.begin().await?;
+                    let r = sqlx::query_with::<sqlx::Sqlite, _>(&sql, values)
+                        .fetch_all(&mut *tx)
+                        .await;
+                    match r {
+                        Ok(rows) => {
+                            tx.commit().await?;
+                            rows
+                        }
+                        Err(e) => {
+                            let _ = tx.rollback().await;
+                            return Err(e);
+                        }
+                    }
+                } else {
+                    sqlx::query_with::<sqlx::Sqlite, _>(&sql, values)
+                        .fetch_all(&pool)
+                        .await?
+                };
+                match pk {
+                    Some(field) => rows
+                        .iter()
+                        .map(|r| pk_to_json_sqlite(r, field.name, field.ty))
+                        .collect::<Result<_, _>>()?,
+                    None => Vec::new(),
+                }
+            }
+            DbPool::Postgres(pool) => {
+                let (sql, values) = stmt.build_sqlx(PostgresQueryBuilder);
+                let rows = if atomic {
+                    let mut tx = pool.begin().await?;
+                    let r = sqlx::query_with::<sqlx::Postgres, _>(&sql, values)
+                        .fetch_all(&mut *tx)
+                        .await;
+                    match r {
+                        Ok(rows) => {
+                            tx.commit().await?;
+                            rows
+                        }
+                        Err(e) => {
+                            let _ = tx.rollback().await;
+                            return Err(e);
+                        }
+                    }
+                } else {
+                    sqlx::query_with::<sqlx::Postgres, _>(&sql, values)
+                        .fetch_all(&pool)
+                        .await?
+                };
+                match pk {
+                    Some(field) => rows
+                        .iter()
+                        .map(|r| pk_to_json_pg(r, field.name, field.ty))
+                        .collect::<Result<_, _>>()?,
+                    None => Vec::new(),
+                }
+            }
+        };
+        let count = ids.len() as u64;
+        if !ids.is_empty() {
+            crate::signals::emit_bulk_post_delete::<T>(ids).await;
+        }
+        Ok(count)
+    }
+
     /// Helper: build the UPDATE statement for the active backend.
     /// Walks the `values` map, validates each column against the
     /// model's `FIELDS` metadata, converts the JSON value via
@@ -1719,6 +1892,12 @@ impl<T: Model> Manager<T> {
         // Propagate the Manager's atomic override so QuerySet
         // terminals inherit it without the caller re-specifying.
         qs.atomic = self.atomic;
+        // Feature #72 — snapshot the model's soft-delete opt-in into
+        // the QuerySet so the build_query_for path knows whether to
+        // auto-inject `WHERE deleted_at IS NULL`. Without this
+        // snapshot the `impl<T> QuerySet<T>` path can't read
+        // `T::SOFT_DELETE` (T is unbounded there).
+        qs.soft_delete_active = T::SOFT_DELETE;
         qs
     }
 
@@ -1736,6 +1915,21 @@ impl<T: Model> Manager<T> {
     /// See `QuerySet::exclude`.
     pub fn exclude(&self, p: Predicate<T>) -> QuerySet<T> {
         self.queryset().exclude(p)
+    }
+
+    /// Feature #72 — see `QuerySet::with_deleted`.
+    pub fn with_deleted(&self) -> QuerySet<T> {
+        self.queryset().with_deleted()
+    }
+
+    /// Feature #72 — see `QuerySet::only_deleted`.
+    pub fn only_deleted(&self) -> QuerySet<T> {
+        self.queryset().only_deleted()
+    }
+
+    /// Feature #72 — see `QuerySet::hard_delete`.
+    pub fn hard_delete(&self) -> QuerySet<T> {
+        self.queryset().hard_delete()
     }
 
     /// See `QuerySet::into_subquery`.
@@ -3055,24 +3249,63 @@ impl<T: Model> Manager<T> {
                 .map_err(SaveError::Write)?;
 
         use sea_query::{Alias, Expr, Query};
-        let mut stmt = Query::delete();
-        stmt.from_table(Alias::new(T::TABLE));
-        stmt.and_where(Expr::col(Alias::new(pk_field.name)).eq(pk_sea));
+        // Feature #72 — soft-delete redirect. For models tagged
+        // `#[umbra(soft_delete)]`, set deleted_at instead of issuing
+        // DELETE. Pre/post_delete signals still fire because the
+        // logical contract ("this row is gone from the visible
+        // table") is preserved — only the physical SQL changed.
+        // Hard-delete is not exposed through delete_instance (it's
+        // a typed per-row helper); call `QuerySet::filter(pk =
+        // instance.id).hard_delete().delete()` when you need it.
+        let stmt_sql = if T::SOFT_DELETE {
+            let now = chrono::Utc::now();
+            let mut up = Query::update();
+            up.table(Alias::new(T::TABLE));
+            up.value(
+                Alias::new("deleted_at"),
+                sea_query::Value::ChronoDateTimeUtc(Some(Box::new(now))),
+            );
+            up.and_where(Expr::col(Alias::new(pk_field.name)).eq(pk_sea));
+            // Idempotency guard — don't bump an already-set timestamp.
+            up.and_where(Expr::col(Alias::new("deleted_at")).is_null());
+            SoftOrHardStatement::Update(up)
+        } else {
+            let mut stmt = Query::delete();
+            stmt.from_table(Alias::new(T::TABLE));
+            stmt.and_where(Expr::col(Alias::new(pk_field.name)).eq(pk_sea));
+            SoftOrHardStatement::Delete(stmt)
+        };
 
         let pool = resolve_pool::<T>(None);
-        let affected = match pool {
-            DbPool::Sqlite(pool) => {
+        let affected = match (&pool, stmt_sql) {
+            (DbPool::Sqlite(pool), SoftOrHardStatement::Delete(stmt)) => {
                 let (sql, values) = stmt.build_sqlx(SqliteQueryBuilder);
                 sqlx::query_with::<sqlx::Sqlite, _>(&sql, values)
-                    .execute(&pool)
+                    .execute(pool)
                     .await
                     .map_err(|e| SaveError::Write(crate::orm::write::WriteError::Sqlx(e)))?
                     .rows_affected()
             }
-            DbPool::Postgres(pool) => {
+            (DbPool::Postgres(pool), SoftOrHardStatement::Delete(stmt)) => {
                 let (sql, values) = stmt.build_sqlx(PostgresQueryBuilder);
                 sqlx::query_with::<sqlx::Postgres, _>(&sql, values)
-                    .execute(&pool)
+                    .execute(pool)
+                    .await
+                    .map_err(|e| SaveError::Write(crate::orm::write::WriteError::Sqlx(e)))?
+                    .rows_affected()
+            }
+            (DbPool::Sqlite(pool), SoftOrHardStatement::Update(stmt)) => {
+                let (sql, values) = stmt.build_sqlx(SqliteQueryBuilder);
+                sqlx::query_with::<sqlx::Sqlite, _>(&sql, values)
+                    .execute(pool)
+                    .await
+                    .map_err(|e| SaveError::Write(crate::orm::write::WriteError::Sqlx(e)))?
+                    .rows_affected()
+            }
+            (DbPool::Postgres(pool), SoftOrHardStatement::Update(stmt)) => {
+                let (sql, values) = stmt.build_sqlx(PostgresQueryBuilder);
+                sqlx::query_with::<sqlx::Postgres, _>(&sql, values)
+                    .execute(pool)
                     .await
                     .map_err(|e| SaveError::Write(crate::orm::write::WriteError::Sqlx(e)))?
                     .rows_affected()
@@ -3084,6 +3317,14 @@ impl<T: Model> Manager<T> {
 
         Ok(affected)
     }
+}
+
+/// Internal enum used by `Manager::delete_instance` to dispatch on
+/// soft-delete vs hard-delete without duplicating the four backend ×
+/// statement match arms inline. One variant per SQL shape.
+enum SoftOrHardStatement {
+    Delete(sea_query::DeleteStatement),
+    Update(sea_query::UpdateStatement),
 }
 
 // =========================================================================

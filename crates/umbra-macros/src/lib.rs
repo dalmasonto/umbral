@@ -137,6 +137,14 @@ struct UmbraStructAttr {
     /// `#[umbra(singleton)]` — single-row model marker.
     /// Closes BUG-9 from bugs/tests/testBugs.md.
     singleton: bool,
+    /// Feature #72 — `#[umbra(soft_delete)]`. Set when the model
+    /// opts into soft-delete semantics. Emitted as
+    /// `Model::SOFT_DELETE = true`; the framework's QuerySet /
+    /// Manager paths read this const to inject `WHERE deleted_at
+    /// IS NULL` and rewrite delete operations as updates. The
+    /// user must declare `pub deleted_at: Option<DateTime<Utc>>`
+    /// on the struct themselves (derive macros can't add fields).
+    soft_delete: bool,
     /// `#[umbra(unique_together = [["a", "b"], ["c"]])]` — composite
     /// UNIQUE constraints. Each inner array names a constraint over the
     /// listed column names. Closes BUG-6.
@@ -527,6 +535,7 @@ fn parse_umbra_struct_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraStructA
         icon: None,
         database: None,
         singleton: false,
+        soft_delete: false,
         unique_together: Vec::new(),
         indexes: Vec::new(),
         ordering: Vec::new(),
@@ -572,6 +581,16 @@ fn parse_umbra_struct_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraStructA
                 // hide the "+ New" button.
                 parsed.singleton = true;
                 Ok(())
+            } else if meta.path.is_ident("soft_delete") {
+                // Feature #72 — soft-delete marker. The user MUST
+                // also declare `pub deleted_at:
+                // Option<DateTime<Utc>>` on the struct (derive
+                // macros can't add fields). The framework reads
+                // `Model::SOFT_DELETE` to inject
+                // `WHERE deleted_at IS NULL` on QuerySet terminals
+                // and to rewrite delete() as an UPDATE.
+                parsed.soft_delete = true;
+                Ok(())
             } else if meta.path.is_ident("unique_together") {
                 // `#[umbra(unique_together = [["a","b"], ["c"]])]`
                 // — composite UNIQUE constraints. Closes BUG-6.
@@ -611,7 +630,7 @@ fn parse_umbra_struct_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraStructA
             } else {
                 Err(meta.error(
                     "umbra::Model derive accepts struct-level `table = \"...\"`, `plugin = \"...\"`, \
-                     `display = \"...\"`, `icon = \"...\"`, `database = \"...\"`, `singleton`, \
+                     `display = \"...\"`, `icon = \"...\"`, `database = \"...\"`, `singleton`, `soft_delete`, \
                      `unique_together = [[...]]`, `indexes = [[...]]`, `ordering = [\"-col\", \"col\"]`; \
                      and field-level `noform` and `noedit`. \
                      Other attributes (max_length, db_index, default, choices, on_delete) land as \
@@ -763,6 +782,11 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
     let database_tokens = match struct_attr.database {
         Some(alias) => quote! { ::core::option::Option::Some(#alias) },
         None => quote! { ::core::option::Option::None },
+    };
+    let soft_delete_lit = if struct_attr.soft_delete {
+        quote!(true)
+    } else {
+        quote!(false)
     };
     let singleton_lit = if struct_attr.singleton {
         quote!(true)
@@ -1420,6 +1444,7 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             const ICON: &'static str = #icon_lit;
             const DATABASE: ::core::option::Option<&'static str> = #database_tokens;
             const SINGLETON: bool = #singleton_lit;
+            const SOFT_DELETE: bool = #soft_delete_lit;
             const UNIQUE_TOGETHER: &'static [&'static [&'static str]] = #unique_together_tokens;
             const INDEXES: &'static [&'static [&'static str]] = #indexes_tokens;
             const ORDERING: &'static [(&'static str, bool)] = #ordering_tokens;

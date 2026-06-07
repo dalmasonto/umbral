@@ -178,6 +178,28 @@ pub trait Model: Sized + Send + Sync + Unpin + 'static {
     /// tool know the model is singleton-shaped.
     const SINGLETON: bool = false;
 
+    /// Feature #72 — soft-delete marker. Set via
+    /// `#[umbra(soft_delete)]` on the struct. When true, the
+    /// framework treats this model as having a `deleted_at:
+    /// Option<DateTime<Utc>>` column (which the user MUST declare
+    /// — derive macros can't add fields to the input struct), and:
+    ///
+    /// - Every `QuerySet<T>` terminal auto-injects
+    ///   `WHERE deleted_at IS NULL` so soft-deleted rows are
+    ///   invisible by default.
+    /// - `Manager::delete_instance(&row)` and `QuerySet::delete()`
+    ///   issue `UPDATE table SET deleted_at = NOW() WHERE ...`
+    ///   instead of a hard `DELETE FROM table WHERE ...`.
+    /// - Callers who actually want the soft-deleted rows (admin
+    ///   trash views, audit dumps, undelete flows) opt back in
+    ///   per-query via `.with_deleted()` or `.only_deleted()`.
+    /// - Callers who need a hard DELETE (GDPR purge, etc.) use
+    ///   `.hard_delete()` to bypass the soft path on a per-call
+    ///   basis.
+    ///
+    /// Default false so existing models compile unchanged.
+    const SOFT_DELETE: bool = false;
+
     /// Composite-UNIQUE constraints. Each inner slice names a
     /// constraint over the listed column names. Set via
     /// `#[umbra(unique_together = [["a", "b"]])]`. Closes BUG-6 in
