@@ -59,6 +59,17 @@ pub mod cors {
     pub use umbra_core::cors::CorsConfig;
 }
 
+/// Gap 106: IANA timezone-aware datetime marshalling.
+///
+/// Re-exports the helpers the admin form layer uses to render
+/// stored UTC values as wall-clock local time, and to interpret
+/// naive form inputs in the configured project tz. The active tz
+/// comes from [`Settings::time_zone`]; `None` falls back to UTC
+/// (the historical behaviour).
+pub mod timezone {
+    pub use umbra_core::timezone::{active_tz, naive_local_to_utc, tz_or_utc, utc_to_naive_local};
+}
+
 /// Settings accessors — `get()` returns the live `Settings` published
 /// at `App::build` time. Used by plugin code that needs to branch on
 /// `environment` / `bind_addr` etc. (e.g. umbra-email checking whether

@@ -38,6 +38,7 @@ fn make_settings(environment: Environment, secret_key: &str) -> Settings {
         allowed_hosts: vec!["localhost".to_string(), "127.0.0.1".to_string()],
         log_level: "info".to_string(),
         bind_addr: "127.0.0.1:8000".to_string(),
+        time_zone: None,
         extra: HashMap::new(),
     }
 }

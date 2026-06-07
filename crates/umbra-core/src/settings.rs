@@ -128,6 +128,29 @@ pub struct Settings {
     #[serde(default = "default_bind_addr")]
     pub bind_addr: String,
 
+    /// Gap 106 — timezone for marshalling naive datetimes on the
+    /// read and write boundary. `None` (default) keeps the
+    /// historical UTC-everywhere behaviour: naive input is treated
+    /// as UTC, admin-form display renders the stored UTC value
+    /// verbatim.
+    ///
+    /// `Some("Africa/Nairobi")` (any IANA tz name resolvable via
+    /// `chrono-tz`) flips both ends: HTML `<input type="datetime-
+    /// local">` values arriving naive are interpreted in the
+    /// configured tz then converted to UTC before storage; the
+    /// admin form renders stored UTC values converted back to the
+    /// configured tz so the user sees wall-clock time, not UTC.
+    /// Column type stays `TIMESTAMPTZ` (Postgres) / `TEXT`
+    /// (SQLite) — only the marshalling layer changes.
+    ///
+    /// Set via `UMBRA_TIME_ZONE=Africa/Nairobi` or
+    /// `time_zone = "Africa/Nairobi"` in `umbra.toml`. An unknown
+    /// tz name falls back to UTC at lookup time with a tracing
+    /// warning rather than panicking — startup never fails on a
+    /// tz config error.
+    #[serde(default)]
+    pub time_zone: Option<String>,
+
     /// Catch-all for `UMBRA_`-prefixed environment variables (and
     /// `umbra.toml` keys) that don't map to a named field above.
     ///

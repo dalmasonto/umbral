@@ -22,6 +22,7 @@ pub mod settings;
 pub mod signals;
 pub mod slash;
 pub mod templates;
+pub mod timezone;
 pub mod web;
 
 /// Top-level transaction helper. Sugar for `umbra_core::db::transaction`.
