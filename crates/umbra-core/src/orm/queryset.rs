@@ -498,6 +498,42 @@ impl From<sqlx::Error> for GetError {
     }
 }
 
+/// Feature 29 — composite error returned by
+/// [`QuerySet::try_for_each`]. The chunked streaming terminal can
+/// fail in two ways and the call site usually wants to distinguish:
+/// a SQL fetch failure is a system-level problem (DB went away,
+/// schema mismatch, etc.), while a callback error is whatever
+/// domain-specific failure the user's body produced (file write
+/// blew up, validation rejected the row, etc.).
+#[derive(Debug)]
+pub enum TryForEachError<E> {
+    /// A database fetch returned an error mid-iteration. The
+    /// callback never saw this row.
+    Sqlx(sqlx::Error),
+    /// The user's callback returned an error for some row. The
+    /// walk stopped immediately; rows after the failing one were
+    /// not fetched.
+    Callback(E),
+}
+
+impl<E: std::fmt::Display> std::fmt::Display for TryForEachError<E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Sqlx(e) => write!(f, "{e}"),
+            Self::Callback(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl<E: std::fmt::Debug + std::fmt::Display> std::error::Error for TryForEachError<E> {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Sqlx(e) => Some(e),
+            Self::Callback(_) => None,
+        }
+    }
+}
+
 /// Terminal methods for every `QuerySet<T>` where `T: Model`.
 ///
 /// Each terminal that materializes `T` carries a FromRow bound on the
@@ -594,6 +630,83 @@ impl<T: Model> QuerySet<T> {
             hydrate_prefetch_related::<T>(&mut rows, &prefetch_fields, &pool).await?;
         }
         Ok(rows)
+    }
+
+    /// Feature 29 Phase 1 — chunked streaming via a callback.
+    ///
+    /// Runs the SELECT in pages of `chunk_size` rows and invokes
+    /// `callback` once per row. Memory bound = `chunk_size *
+    /// sizeof::<T>` instead of the full row count `fetch()` would
+    /// buffer, so this is the right shape for million-row exports,
+    /// migrations, and batch transforms.
+    ///
+    /// Deliberately NOT named `iterator()` — that name suggests a
+    /// `Stream`-shaped return value, which would force a
+    /// `futures-util` dep. The callback shape is idiomatic Rust,
+    /// requires no new crates, and ships the same memory bound. A
+    /// future `iterator()` returning `BoxStream<T>` can land later
+    /// once `futures-util` is in the workspace for some other reason
+    /// (likely SSE / WebSockets).
+    ///
+    /// Error contract: the callback may return any error type `E`.
+    /// SQL failures become `TryForEachError::Sqlx`; callback errors
+    /// become `TryForEachError::Callback(e)`. The first error stops
+    /// the walk — subsequent rows are not fetched.
+    ///
+    /// Caveats: pages are stable only if the result set isn't being
+    /// mutated concurrently. For consistent-snapshot iteration over
+    /// a live table, wrap the call in a serialised-or-repeatable-read
+    /// transaction. `select_related` and `prefetch_related` hooks
+    /// are NOT applied on each row — `try_for_each` is intentionally
+    /// the "raw column data, one row at a time" terminal.
+    pub async fn try_for_each<F, E>(
+        self,
+        chunk_size: usize,
+        mut callback: F,
+    ) -> Result<(), TryForEachError<E>>
+    where
+        T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
+            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>
+            + HydrateRelated,
+        F: FnMut(T) -> Result<(), E>,
+    {
+        let chunk_size = chunk_size.max(1);
+        let pool = resolve_pool::<T>(self.explicit_pool.clone());
+        let mut offset: u64 = 0;
+        loop {
+            let mut rows: Vec<T> = match &pool {
+                DbPool::Sqlite(pg) => {
+                    let mut q = self.build_query_for("sqlite");
+                    q.limit(chunk_size as u64).offset(offset);
+                    let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
+                    sqlx::query_as_with::<sqlx::Sqlite, T, _>(&sql, values)
+                        .fetch_all(pg)
+                        .await
+                        .map_err(TryForEachError::Sqlx)?
+                }
+                DbPool::Postgres(pg) => {
+                    let mut q = self.build_query_for("postgres");
+                    q.limit(chunk_size as u64).offset(offset);
+                    let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
+                    sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
+                        .fetch_all(pg)
+                        .await
+                        .map_err(TryForEachError::Sqlx)?
+                }
+            };
+            let fetched = rows.len();
+            if fetched == 0 {
+                break;
+            }
+            for row in rows.drain(..) {
+                callback(row).map_err(TryForEachError::Callback)?;
+            }
+            if fetched < chunk_size {
+                break;
+            }
+            offset += fetched as u64;
+        }
+        Ok(())
     }
 
     /// Run the SELECT with LIMIT 1 and return the first row, if any.

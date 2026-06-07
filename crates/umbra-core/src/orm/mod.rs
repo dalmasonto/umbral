@@ -75,7 +75,7 @@ pub use model::{
 };
 pub use multichoice::MultiChoice;
 pub use post::Post;
-pub use queryset::{GetError, Manager, QuerySet, QuerySetTx};
+pub use queryset::{GetError, Manager, QuerySet, QuerySetTx, TryForEachError};
 pub use tsvector::TsVector;
 pub use validators::{Email, Slug, Url, ValidatorError, validate_text_format};
 pub use write::SaveError;
