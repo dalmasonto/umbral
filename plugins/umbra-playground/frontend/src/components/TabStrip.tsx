@@ -96,7 +96,7 @@ export function TabStrip({ spec }: TabStripProps) {
 
   if (openTabs.length === 0) {
     return (
-      <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border bg-muted/30 px-2">
+      <div className="flex h-11 w-full min-w-0 shrink-0 items-center gap-2 overflow-hidden border-b border-border bg-muted/30 px-2">
         <span className="text-[11px] italic text-muted-foreground">
           No tabs open — pick an endpoint from the sidebar to start a request.
         </span>
@@ -106,13 +106,17 @@ export function TabStrip({ spec }: TabStripProps) {
   }
 
   return (
-    // Gap 87 — h-11 (was h-10), the tabs row spans the full workspace
-    // width and the inner scroller uses `umbra-thin-scrollbar` so the
-    // horizontal scrollbar doesn't dominate when many tabs overflow.
-    // The duplicate `<span flex-1 />` after the tab list was removed
-    // so the tab container actually fills the available width rather
-    // than splitting it 50/50 with an empty spacer.
-    <div className="flex h-11 w-full shrink-0 items-center gap-1 border-b border-border bg-muted/30 px-2">
+    // Gap 87 — `min-w-0` + `overflow-hidden` on the outer row are
+    // the width-creep fix: without them, the inner `flex-1 min-w-0
+    // overflow-x-auto` scroller's content (tab pills with
+    // `whitespace-nowrap`) propagates its min-content width up
+    // through the flex parents, eventually pushing the SidebarInset
+    // and the request/response grid horizontally as more tabs open.
+    // h-11 (was h-10) gives the tabs slightly more vertical space;
+    // the duplicate `<span flex-1 />` after the tab list was removed
+    // so the tab container actually fills the available width
+    // instead of splitting it 50/50 with an empty spacer.
+    <div className="flex h-11 w-full min-w-0 shrink-0 items-center gap-1 overflow-hidden border-b border-border bg-muted/30 px-2">
       <div className="umbra-thin-scrollbar flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
         {openTabs.map((tab) => {
           const info = lookup.get(tab.operationId);

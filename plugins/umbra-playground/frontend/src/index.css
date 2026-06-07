@@ -188,25 +188,71 @@ label:has([type="file"]),
 }
 
 /* Gap 87 — slim horizontal/vertical scrollbar for elements that
- * legitimately need to scroll (e.g. the TabStrip overflow row).
- * `scrollbar-width: thin` is the Firefox/modern-browsers shape;
- * `::-webkit-scrollbar` is the Webkit/Blink override that drops the
- * default chunky 14-16px scrollbar to a more subtle 6px. */
+ * legitimately need to scroll (e.g. the TabStrip overflow row, the
+ * RequestBuilder tab content panel). Tuned for visibility in both
+ * themes: `--foreground` carries the right "ink colour" in either
+ * mode (near-black in light, near-white in dark), and 0.35 / 0.55
+ * opacity keeps the rail subtle without disappearing on a dark
+ * background the way `muted-foreground @ 0.25` did. The padding-box
+ * border trick gives the thumb a 1px transparent gutter so it
+ * doesn't visually touch the panel edges. */
 .umbra-thin-scrollbar {
   scrollbar-width: thin;
-  scrollbar-color: hsl(var(--muted-foreground) / 0.25) transparent;
+  scrollbar-color: hsl(var(--foreground) / 0.35) transparent;
 }
 .umbra-thin-scrollbar::-webkit-scrollbar {
-  height: 6px;
-  width: 6px;
+  height: 8px;
+  width: 8px;
 }
 .umbra-thin-scrollbar::-webkit-scrollbar-track {
   background: transparent;
 }
 .umbra-thin-scrollbar::-webkit-scrollbar-thumb {
-  background-color: hsl(var(--muted-foreground) / 0.25);
-  border-radius: 3px;
+  background-color: hsl(var(--foreground) / 0.35);
+  border-radius: 4px;
+  border: 1px solid transparent;
+  background-clip: padding-box;
 }
 .umbra-thin-scrollbar::-webkit-scrollbar-thumb:hover {
-  background-color: hsl(var(--muted-foreground) / 0.4);
+  background-color: hsl(var(--foreground) / 0.55);
+}
+.umbra-thin-scrollbar::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Apply the same shape globally so every scrolling pane (Request
+ * params/headers/body/auth, Response body/history/headers, code-
+ * snippet block, etc.) picks up the themed scrollbar without each
+ * one having to opt in via a class. Targets actually-scrolling
+ * elements via [class*="overflow-..."] so plain containers stay
+ * unaffected. */
+[class*="overflow-y-auto"],
+[class*="overflow-x-auto"],
+[class*="overflow-auto"] {
+  scrollbar-width: thin;
+  scrollbar-color: hsl(var(--foreground) / 0.35) transparent;
+}
+[class*="overflow-y-auto"]::-webkit-scrollbar,
+[class*="overflow-x-auto"]::-webkit-scrollbar,
+[class*="overflow-auto"]::-webkit-scrollbar {
+  height: 8px;
+  width: 8px;
+}
+[class*="overflow-y-auto"]::-webkit-scrollbar-track,
+[class*="overflow-x-auto"]::-webkit-scrollbar-track,
+[class*="overflow-auto"]::-webkit-scrollbar-track {
+  background: transparent;
+}
+[class*="overflow-y-auto"]::-webkit-scrollbar-thumb,
+[class*="overflow-x-auto"]::-webkit-scrollbar-thumb,
+[class*="overflow-auto"]::-webkit-scrollbar-thumb {
+  background-color: hsl(var(--foreground) / 0.35);
+  border-radius: 4px;
+  border: 1px solid transparent;
+  background-clip: padding-box;
+}
+[class*="overflow-y-auto"]::-webkit-scrollbar-thumb:hover,
+[class*="overflow-x-auto"]::-webkit-scrollbar-thumb:hover,
+[class*="overflow-auto"]::-webkit-scrollbar-thumb:hover {
+  background-color: hsl(var(--foreground) / 0.55);
 }

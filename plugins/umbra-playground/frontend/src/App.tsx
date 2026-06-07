@@ -728,12 +728,21 @@ export function App() {
                 `min-h-[640px]` lets the constraint actually bind,
                 so long param/header lists scroll inside the panels
                 instead of pushing the page taller than the viewport
-                (which used to leak into a full-document scroll). */}
+                (which used to leak into a full-document scroll).
+
+                `min-w-0` on each `<section>` is the column-width
+                fix: grid children default to `min-width: auto`
+                (= min-content), so content with a wide min-content
+                (a long URL, a wide tab strip, a Monaco editor)
+                would push the column wider than `1fr` allows and
+                cause the panel — and indirectly the main pane —
+                to grow horizontally. With `min-w-0` each column
+                shrinks to its allotted `1fr`. */}
             <div className="grid min-h-0 h-full grid-cols-1 lg:grid-cols-2 overflow-hidden">
-              <section className="flex min-h-0 flex-col overflow-hidden border-b border-border lg:border-b-0 lg:border-r">
+              <section className="flex min-w-0 min-h-0 flex-col overflow-hidden border-b border-border lg:border-b-0 lg:border-r">
                 <RequestBuilder />
               </section>
-              <section className="flex min-h-0 flex-col overflow-hidden">
+              <section className="flex min-w-0 min-h-0 flex-col overflow-hidden">
                 <ResponseViewer />
               </section>
             </div>
