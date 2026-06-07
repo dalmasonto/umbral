@@ -2676,6 +2676,21 @@ pub trait DateTimeColExt<T> {
     fn month(&self) -> ColExpr<T>;
     /// Day of month, 1..=31.
     fn day(&self) -> ColExpr<T>;
+    /// Hour of day, 0..=23.
+    fn hour(&self) -> ColExpr<T>;
+    /// Minute of hour, 0..=59.
+    fn minute(&self) -> ColExpr<T>;
+    /// Second of minute, 0..=59 (whole seconds; subsecond fragments
+    /// are truncated by the cast).
+    fn second(&self) -> ColExpr<T>;
+    /// Day of week. **Numbering differs by backend** to keep each
+    /// dialect's native form: Postgres `EXTRACT(DOW ...)` returns
+    /// 0=Sunday..6=Saturday; SQLite `strftime('%w', ...)` matches
+    /// that numbering too, so both backends agree. Use this for
+    /// "rows posted on weekends" / "rows posted on a Friday" style
+    /// queries — compare against the integer (`week_day().eq(5)`
+    /// for Friday).
+    fn week_day(&self) -> ColExpr<T>;
 }
 
 fn date_part_exprs(
@@ -2705,6 +2720,22 @@ impl<T> DateTimeColExt<T> for DateTimeCol<T> {
         let (pg, sqlite) = date_part_exprs(self.name, "DAY", "%d");
         ColExpr::new_with_sqlite(pg, sqlite)
     }
+    fn hour(&self) -> ColExpr<T> {
+        let (pg, sqlite) = date_part_exprs(self.name, "HOUR", "%H");
+        ColExpr::new_with_sqlite(pg, sqlite)
+    }
+    fn minute(&self) -> ColExpr<T> {
+        let (pg, sqlite) = date_part_exprs(self.name, "MINUTE", "%M");
+        ColExpr::new_with_sqlite(pg, sqlite)
+    }
+    fn second(&self) -> ColExpr<T> {
+        let (pg, sqlite) = date_part_exprs(self.name, "SECOND", "%S");
+        ColExpr::new_with_sqlite(pg, sqlite)
+    }
+    fn week_day(&self) -> ColExpr<T> {
+        let (pg, sqlite) = date_part_exprs(self.name, "DOW", "%w");
+        ColExpr::new_with_sqlite(pg, sqlite)
+    }
 }
 
 impl<T> DateTimeColExt<T> for NullableDateTimeCol<T> {
@@ -2718,6 +2749,22 @@ impl<T> DateTimeColExt<T> for NullableDateTimeCol<T> {
     }
     fn day(&self) -> ColExpr<T> {
         let (pg, sqlite) = date_part_exprs(self.name, "DAY", "%d");
+        ColExpr::new_with_sqlite(pg, sqlite)
+    }
+    fn hour(&self) -> ColExpr<T> {
+        let (pg, sqlite) = date_part_exprs(self.name, "HOUR", "%H");
+        ColExpr::new_with_sqlite(pg, sqlite)
+    }
+    fn minute(&self) -> ColExpr<T> {
+        let (pg, sqlite) = date_part_exprs(self.name, "MINUTE", "%M");
+        ColExpr::new_with_sqlite(pg, sqlite)
+    }
+    fn second(&self) -> ColExpr<T> {
+        let (pg, sqlite) = date_part_exprs(self.name, "SECOND", "%S");
+        ColExpr::new_with_sqlite(pg, sqlite)
+    }
+    fn week_day(&self) -> ColExpr<T> {
+        let (pg, sqlite) = date_part_exprs(self.name, "DOW", "%w");
         ColExpr::new_with_sqlite(pg, sqlite)
     }
 }

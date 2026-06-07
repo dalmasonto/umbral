@@ -159,3 +159,78 @@ async fn year_and_month_compose() {
     // Both June-2026 rows.
     assert_eq!(rows.len(), 2);
 }
+
+// =====================================================================
+// Feature #36 — hour / minute / second / week_day extracts
+// =====================================================================
+
+#[tokio::test]
+async fn hour_eq_filters_by_hour_of_day() {
+    let pool = fresh_pool().await;
+    // 12:00, 08:30, 10:00, 15:00 — `.hour().eq(12)` matches only Hello.
+    let rows = Post::objects()
+        .filter(post::CREATED_AT.hour().eq(12))
+        .on(&pool)
+        .fetch()
+        .await
+        .expect("filter HOUR");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].title, "Hello");
+}
+
+#[tokio::test]
+async fn minute_eq_filters_by_minute_of_hour() {
+    let pool = fresh_pool().await;
+    // Only WORLD has a non-zero minute (08:30).
+    let rows = Post::objects()
+        .filter(post::CREATED_AT.minute().eq(30))
+        .on(&pool)
+        .fetch()
+        .await
+        .expect("filter MINUTE");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].title, "WORLD");
+}
+
+#[tokio::test]
+async fn second_eq_filters_by_whole_seconds() {
+    let pool = fresh_pool().await;
+    // Every seed row uses "00" seconds, so the predicate matches all 4.
+    let rows = Post::objects()
+        .filter(post::CREATED_AT.second().eq(0))
+        .on(&pool)
+        .fetch()
+        .await
+        .expect("filter SECOND");
+    assert_eq!(rows.len(), 4);
+}
+
+#[tokio::test]
+async fn week_day_filters_match_calendar_days() {
+    let pool = fresh_pool().await;
+    // 2024-06-04 is a Tuesday (DOW=2). Both 2026-06-04 (Thursday=4)
+    // and 2026-06-20 (Saturday=6) differ. So `.week_day().eq(2)` should
+    // match only Hello.
+    let rows = Post::objects()
+        .filter(post::CREATED_AT.week_day().eq(2))
+        .on(&pool)
+        .fetch()
+        .await
+        .expect("filter DOW");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].title, "Hello");
+}
+
+#[tokio::test]
+async fn hour_and_minute_compose() {
+    let pool = fresh_pool().await;
+    let rows = Post::objects()
+        .filter(post::CREATED_AT.hour().eq(15))
+        .filter(post::CREATED_AT.minute().eq(0))
+        .on(&pool)
+        .fetch()
+        .await
+        .expect("filter HOUR+MINUTE");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].title, "Mixed Case");
+}
