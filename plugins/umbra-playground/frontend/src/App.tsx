@@ -591,7 +591,13 @@ export function App() {
           </SidebarFooter>
         </Sidebar>
 
-        <SidebarInset className="min-w-0 bg-background">
+        {/* Gap 87 — `h-svh overflow-hidden` bounds the entire
+            workspace to viewport height. shadcn's SidebarProvider
+            wraps in `min-h-svh` (can grow), so without an explicit
+            cap here a long params/headers list would push the
+            document past the viewport and the whole page would
+            scroll instead of just the inner panel. */}
+        <SidebarInset className="min-w-0 bg-background h-svh overflow-hidden">
           <header className="flex h-[60px] min-h-[60px] shrink-0 items-center gap-3 border-b border-border bg-card/80 px-4">
             <SidebarTrigger />
             <div className="sm:hidden">
@@ -715,7 +721,15 @@ export function App() {
 
             <TabStrip spec={spec} />
 
-            <div className="grid min-h-0 grid-cols-1 lg:grid-cols-2 min-h-[640px] lg:min-h-[720px]">
+            {/* Gap 87: request + response sections fill exactly the
+                remaining viewport height. The outer grid is
+                `grid-rows-[auto_auto_minmax(0,1fr)]` so this row
+                already gets the leftover space; removing the old
+                `min-h-[640px]` lets the constraint actually bind,
+                so long param/header lists scroll inside the panels
+                instead of pushing the page taller than the viewport
+                (which used to leak into a full-document scroll). */}
+            <div className="grid min-h-0 h-full grid-cols-1 lg:grid-cols-2 overflow-hidden">
               <section className="flex min-h-0 flex-col overflow-hidden border-b border-border lg:border-b-0 lg:border-r">
                 <RequestBuilder />
               </section>

@@ -136,6 +136,19 @@ export function buildFetchArgs(draft: RequestDraft, options: BuildFetchOptions =
         }
         body = resolvedBody;
       }
+    } else if (draft.bodyType === "raw") {
+      // Gap 102 — raw text body. Caller-supplied string is sent
+      // as-is after variable interpolation. Content-Type defaults
+      // to `text/plain` unless the caller set their own header.
+      // No JSON parse / form-encode step; this is the escape
+      // hatch for XML, NDJSON, gRPC-style binary payloads, etc.
+      if (draft.body) {
+        const resolvedBody = interpolate(draft.body, variables);
+        if (!headers["Content-Type"]) {
+          headers["Content-Type"] = "text/plain";
+        }
+        body = resolvedBody;
+      }
     } else if (draft.bodyType === "form") {
       const entries = draft.formFields.filter((f) => f.enabled && f.key);
       const hasFiles = entries.some((f) => f.type === "file");

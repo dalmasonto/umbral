@@ -16,6 +16,7 @@ import {
   listItemSchema,
   requestBodySchema,
   responseSchemaEntries,
+  synthesizeFormFields,
   synthesizeJsonBody,
   type FieldInfo,
 } from "@/lib/openapiSchema";
@@ -282,11 +283,28 @@ export function RequestBuilder() {
       // either the user typed, or the saved draft loaded, or
       // another autofill won the race. In all three cases, do
       // nothing.
-      const body = usePlayground.getState().current.body;
-      if (body !== "") return;
+      const live = usePlayground.getState().current;
+      // Gap 86 — also autofill the form-body editor when it's
+      // empty. The user might switch to the "Form" tab without
+      // having touched JSON; pre-populating from the same
+      // required-fields list means they don't have to type the
+      // column names by hand. We only fill the form rows when
+      // formFields is empty to avoid clobbering a saved draft.
+      const skipJson = live.body !== "";
+      const skipForm =
+        live.formFields.length > 0 &&
+        live.formFields.some((f) => f.key !== "" || f.value !== "");
+      if (skipJson && skipForm) return;
       autofilledOpsRef.current.add(key);
-      setBody(synthesizeJsonBody(requestBodyFields, { allFields: false }));
-      setBodyType("json");
+      if (!skipJson) {
+        setBody(synthesizeJsonBody(requestBodyFields, { allFields: false }));
+        setBodyType("json");
+      }
+      if (!skipForm) {
+        setFormFields(
+          synthesizeFormFields(requestBodyFields, { allFields: false }),
+        );
+      }
     }, 0);
     return () => clearTimeout(timer);
   }, [
@@ -296,6 +314,7 @@ export function RequestBuilder() {
     requestBodyFields,
     setBody,
     setBodyType,
+    setFormFields,
   ]);
 
   // Merged parameter list: OpenAPI 3.0 puts shared parameters on the
@@ -917,6 +936,18 @@ export function RequestBuilder() {
                   <FormInput className="size-3" />
                   Form
                 </button>
+                {/* Gap 102: raw text body for XML, NDJSON, etc. */}
+                <button
+                  type="button"
+                  onClick={() => setBodyType("raw")}
+                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[10px] font-semibold uppercase tracking-wide transition-colors border ${
+                    current.bodyType === "raw"
+                      ? "bg-primary/10 text-primary border-primary/20"
+                      : "text-muted-foreground border-transparent hover:text-foreground hover:bg-muted"
+                  }`}
+                >
+                  Raw
+                </button>
               </div>
               {current.bodyType === "json" && (
                 <Button
@@ -960,6 +991,19 @@ export function RequestBuilder() {
                   }}
                 />
               </div>
+            ) : current.bodyType === "raw" ? (
+              <div className="flex-1 min-h-0 h-full flex flex-col gap-2">
+                <p className="text-[10px] text-muted-foreground">
+                  text/plain (override via the Content-Type header)
+                </p>
+                <textarea
+                  className="flex-1 min-h-0 w-full resize-none rounded-md border border-border bg-background px-3 py-2 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-primary"
+                  value={current.body}
+                  onChange={(e) => setBody(e.target.value)}
+                  placeholder="Raw body — any content type."
+                  spellCheck={false}
+                />
+              </div>
             ) : (
               <div className="space-y-2">
                 <p className="text-[10px] text-muted-foreground">
@@ -993,6 +1037,42 @@ export function RequestBuilder() {
 
         {activeTab === "auth" && (
           <div className="space-y-4">
+            {/* Gap 101 — quick-type dropdown for common auth shapes.
+                Sets the scheme + clears any per-request token so the
+                user sees the change reflected in the preview line. */}
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <Lock className="size-3.5 text-muted-foreground" />
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold">
+                  Type
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-1.5">
+                {[
+                  { label: "None", scheme: "" },
+                  { label: "Bearer", scheme: "Bearer" },
+                  { label: "Token", scheme: "Token" },
+                  { label: "Basic", scheme: "Basic" },
+                ].map((opt) => {
+                  const active =
+                    (current.authScheme || "") === opt.scheme;
+                  return (
+                    <button
+                      key={opt.label}
+                      type="button"
+                      onClick={() => setAuthScheme(opt.scheme)}
+                      className={`px-2.5 py-1 rounded-md text-[10px] font-semibold uppercase tracking-wide transition-colors border ${
+                        active
+                          ? "bg-primary/10 text-primary border-primary/20"
+                          : "text-muted-foreground border-transparent hover:text-foreground hover:bg-muted"
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
             <div className="space-y-2">
               <div className="flex items-center gap-2">
                 <Lock className="size-3.5 text-muted-foreground" />
@@ -1021,6 +1101,42 @@ export function RequestBuilder() {
                 </code>
               </p>
             </div>
+            {/* Gap 101 — surface the workspace globalAuth fallback
+                so the user knows what the request will actually send
+                when the per-request token is empty. */}
+            {settings.globalAuth.enabled && settings.globalAuth.token && (
+              <div className="p-3 rounded-lg bg-primary/5 border border-primary/20">
+                <div className="flex items-center justify-between gap-2 mb-1">
+                  <div className="flex items-center gap-1.5">
+                    <Lock className="size-3 text-primary" />
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-primary">
+                      Global auth active
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="xs"
+                    className="h-6 px-2 text-[10px]"
+                    onClick={() => {
+                      setAuthScheme(settings.globalAuth.scheme);
+                      setAuthToken(settings.globalAuth.token);
+                    }}
+                  >
+                    Copy to request
+                  </Button>
+                </div>
+                <p className="text-[10px] text-muted-foreground leading-relaxed">
+                  When this request leaves the Authorization field empty, the
+                  workspace global auth (
+                  <code className="font-mono text-foreground">
+                    {settings.globalAuth.scheme || "Bearer"} &lt;global token&gt;
+                  </code>
+                  ) is applied automatically. Click <em>Copy to request</em> to
+                  override and edit a per-request value.
+                </p>
+              </div>
+            )}
             <Separator />
             <div className="p-3 rounded-lg bg-muted/50 border border-border/50">
               <p className="text-[10px] text-muted-foreground leading-relaxed">
@@ -1057,47 +1173,86 @@ export function RequestBuilder() {
                     {requestBody.required ? " · required" : " · optional"}
                   </p>
                   {requestBodyFields.length > 0 && (
-                    <div className="flex flex-wrap items-center gap-1.5 rounded-md border border-border bg-muted/20 p-2">
-                      <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mr-1">
-                        Autofill body
-                      </span>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="xs"
-                        onClick={() => {
-                          const skeleton = synthesizeJsonBody(
-                            requestBodyFields,
-                            { allFields: false },
-                          );
-                          setBodyType("json");
-                          setBody(skeleton);
-                          setActiveTab("body");
-                        }}
-                        className="h-6 px-2 font-mono text-[10px]"
-                      >
-                        Required only
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="xs"
-                        onClick={() => {
-                          const skeleton = synthesizeJsonBody(
-                            requestBodyFields,
-                            { allFields: true },
-                          );
-                          setBodyType("json");
-                          setBody(skeleton);
-                          setActiveTab("body");
-                        }}
-                        className="h-6 px-2 font-mono text-[10px]"
-                      >
-                        All fields
-                      </Button>
-                      <span className="ml-auto text-[10px] text-muted-foreground/70">
-                        Lands in the Body tab as JSON.
-                      </span>
+                    <div className="space-y-1.5">
+                      <div className="flex flex-wrap items-center gap-1.5 rounded-md border border-border bg-muted/20 p-2">
+                        <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mr-1">
+                          JSON
+                        </span>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="xs"
+                          onClick={() => {
+                            const skeleton = synthesizeJsonBody(
+                              requestBodyFields,
+                              { allFields: false },
+                            );
+                            setBodyType("json");
+                            setBody(skeleton);
+                            setActiveTab("body");
+                          }}
+                          className="h-6 px-2 font-mono text-[10px]"
+                        >
+                          Required only
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="xs"
+                          onClick={() => {
+                            const skeleton = synthesizeJsonBody(
+                              requestBodyFields,
+                              { allFields: true },
+                            );
+                            setBodyType("json");
+                            setBody(skeleton);
+                            setActiveTab("body");
+                          }}
+                          className="h-6 px-2 font-mono text-[10px]"
+                        >
+                          All fields
+                        </Button>
+                      </div>
+                      {/* Gap 86 — form-body counterpart. */}
+                      <div className="flex flex-wrap items-center gap-1.5 rounded-md border border-border bg-muted/20 p-2">
+                        <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mr-1">
+                          Form
+                        </span>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="xs"
+                          onClick={() => {
+                            const rows = synthesizeFormFields(
+                              requestBodyFields,
+                              { allFields: false },
+                            );
+                            setBodyType("form");
+                            setFormFields(rows);
+                            setActiveTab("body");
+                          }}
+                          className="h-6 px-2 font-mono text-[10px]"
+                        >
+                          Required only
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="xs"
+                          onClick={() => {
+                            const rows = synthesizeFormFields(
+                              requestBodyFields,
+                              { allFields: true },
+                            );
+                            setBodyType("form");
+                            setFormFields(rows);
+                            setActiveTab("body");
+                          }}
+                          className="h-6 px-2 font-mono text-[10px]"
+                        >
+                          All fields
+                        </Button>
+                      </div>
                     </div>
                   )}
                   <SchemaTable

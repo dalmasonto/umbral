@@ -28,7 +28,7 @@ export interface RequestDraft {
   url: string;
   params: KVItem[];
   headers: KVItem[];
-  bodyType: "json" | "form";
+  bodyType: "json" | "form" | "raw";
   body: string;
   formFields: KVItem[];
   authScheme: string;
@@ -248,7 +248,7 @@ interface PlaygroundState {
   setUrl: (u: string) => void;
   setParams: (params: KVItem[]) => void;
   setHeaders: (headers: KVItem[]) => void;
-  setBodyType: (t: "json" | "form") => void;
+  setBodyType: (t: "json" | "form" | "raw") => void;
   setBody: (raw: string) => void;
   setFormFields: (fields: KVItem[]) => void;
   setAuthScheme: (s: string) => void;

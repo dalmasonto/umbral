@@ -154,11 +154,15 @@ export function EndpointTree() {
     if (!spec) return null;
     const all = extractOperations(spec);
     const q = search.trim().toLowerCase();
+    // Gap 103: search no longer matches against e.method. Method
+    // labels (GET, POST, PUT, etc.) are short, ambiguous, and
+    // collide with common path segments — searching for "post" used
+    // to return every POST endpoint plus every URL containing the
+    // word "post". The search now scopes to path + summary + tag.
     const filtered = q
       ? all.filter(
           (e) =>
             e.path.toLowerCase().includes(q) ||
-            e.method.toLowerCase().includes(q) ||
             (e.summary?.toLowerCase().includes(q) ?? false) ||
             e.tag.toLowerCase().includes(q),
         )

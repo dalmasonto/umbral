@@ -52,7 +52,7 @@ export interface RequestSnapshot {
   /** Original body shape, so the generator can pick `application/
    *  json` vs `application/x-www-form-urlencoded` vs `multipart/
    *  form-data` rendering. */
-  bodyType: "json" | "form" | "none";
+  bodyType: "json" | "form" | "raw" | "none";
   /** Multipart fields (post-interpolation) when a form body
    *  contains files; empty for non-multipart cases. The
    *  generators pick this up to render `-F` flags / `FormData`

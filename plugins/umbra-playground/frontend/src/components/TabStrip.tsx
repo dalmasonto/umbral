@@ -96,19 +96,24 @@ export function TabStrip({ spec }: TabStripProps) {
 
   if (openTabs.length === 0) {
     return (
-      <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border bg-muted/30 px-2">
+      <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border bg-muted/30 px-2">
         <span className="text-[11px] italic text-muted-foreground">
           No tabs open — pick an endpoint from the sidebar to start a request.
         </span>
-        <span className="flex-1" />
         <ExportImportControls />
       </div>
     );
   }
 
   return (
-    <div className="flex h-10 shrink-0 items-center gap-1 border-b border-border bg-muted/30 px-2">
-      <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+    // Gap 87 — h-11 (was h-10), the tabs row spans the full workspace
+    // width and the inner scroller uses `umbra-thin-scrollbar` so the
+    // horizontal scrollbar doesn't dominate when many tabs overflow.
+    // The duplicate `<span flex-1 />` after the tab list was removed
+    // so the tab container actually fills the available width rather
+    // than splitting it 50/50 with an empty spacer.
+    <div className="flex h-11 w-full shrink-0 items-center gap-1 border-b border-border bg-muted/30 px-2">
+      <div className="umbra-thin-scrollbar flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
         {openTabs.map((tab) => {
           const info = lookup.get(tab.operationId);
           const isActive = tab.id === activeTabId;
@@ -119,7 +124,7 @@ export function TabStrip({ spec }: TabStripProps) {
               role="tab"
               aria-selected={isActive}
               className={cn(
-                "group inline-flex shrink-0 items-center gap-2 h-7 rounded-md border px-2 text-[11px] font-mono whitespace-nowrap transition-colors",
+                "group inline-flex shrink-0 items-center gap-2 h-8 rounded-md border px-2.5 text-[11px] font-mono whitespace-nowrap transition-colors",
                 isActive
                   ? "bg-background border-border text-foreground shadow-sm"
                   : "bg-muted/50 border-transparent text-muted-foreground hover:text-foreground hover:bg-muted",
@@ -162,7 +167,6 @@ export function TabStrip({ spec }: TabStripProps) {
         })}
         <OpenTabPopover spec={spec} />
       </div>
-      <span className="flex-1" />
       <ExportImportControls />
     </div>
   );

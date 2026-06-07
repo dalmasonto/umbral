@@ -281,6 +281,33 @@ export function synthesizeJsonBody(
   return JSON.stringify(obj, null, 2);
 }
 
+/** Gap 86 — form-body counterpart of [`synthesizeJsonBody`]. Walks the
+ *  same `FieldInfo[]` and produces `{ key, value, enabled, type }`
+ *  rows the playground's `KeyValueEditor` consumes. Default behaviour
+ *  matches the JSON skeleton: required-only by default, skipping
+ *  `readOnly` columns. Each value is the same placeholder
+ *  `placeholderForField` produces, JSON-stringified when the type
+ *  isn't already a string (so a `boolean` field renders as "false"
+ *  in the form input rather than as nothing). */
+export function synthesizeFormFields(
+  fields: FieldInfo[],
+  options: SynthesizeOptions = {},
+): { key: string; value: string; enabled: boolean; type: "text" }[] {
+  const { allFields = false, includeReadOnly = false } = options;
+  const out: { key: string; value: string; enabled: boolean; type: "text" }[] = [];
+  for (const f of fields) {
+    if (!allFields && !f.required) continue;
+    if (!includeReadOnly && f.readOnly) continue;
+    const raw = placeholderForField(f);
+    let value: string;
+    if (raw === null) value = "";
+    else if (typeof raw === "string") value = raw;
+    else value = JSON.stringify(raw);
+    out.push({ key: f.name, value, enabled: true, type: "text" });
+  }
+  return out;
+}
+
 /** True when the operation looks like a list-collection endpoint
  *  whose response item is a single schema we can introspect. Used to
  *  decide whether to offer filter affordances in the params tab. */

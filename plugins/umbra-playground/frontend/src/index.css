@@ -186,3 +186,27 @@ label:has([type="file"]),
 [data-state] {
   cursor: pointer;
 }
+
+/* Gap 87 — slim horizontal/vertical scrollbar for elements that
+ * legitimately need to scroll (e.g. the TabStrip overflow row).
+ * `scrollbar-width: thin` is the Firefox/modern-browsers shape;
+ * `::-webkit-scrollbar` is the Webkit/Blink override that drops the
+ * default chunky 14-16px scrollbar to a more subtle 6px. */
+.umbra-thin-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: hsl(var(--muted-foreground) / 0.25) transparent;
+}
+.umbra-thin-scrollbar::-webkit-scrollbar {
+  height: 6px;
+  width: 6px;
+}
+.umbra-thin-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.umbra-thin-scrollbar::-webkit-scrollbar-thumb {
+  background-color: hsl(var(--muted-foreground) / 0.25);
+  border-radius: 3px;
+}
+.umbra-thin-scrollbar::-webkit-scrollbar-thumb:hover {
+  background-color: hsl(var(--muted-foreground) / 0.4);
+}
