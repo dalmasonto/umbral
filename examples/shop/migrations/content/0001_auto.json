@@ -188,6 +188,16 @@
           "is_string_repr": false,
           "max_length": 0,
           "default": "true"
+        },
+        {
+          "name": "test_field",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": true,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
         }
       ]
     },
@@ -904,7 +914,7 @@
           "nullable": false,
           "noform": false,
           "noedit": false,
-          "is_string_repr": false,
+          "is_string_repr": true,
           "max_length": 0,
           "unique": true
         },
@@ -1299,7 +1309,8 @@
           "noform": false,
           "noedit": false,
           "is_string_repr": false,
-          "max_length": 0
+          "max_length": 0,
+          "auto_now_add": true
         },
         {
           "name": "updated_at",
@@ -1309,7 +1320,8 @@
           "noform": false,
           "noedit": false,
           "is_string_repr": false,
-          "max_length": 0
+          "max_length": 0,
+          "auto_now": true
         }
       ]
     },
@@ -1412,6 +1424,16 @@
           "max_length": 0
         }
       ]
+    },
+    {
+      "kind": "CreateM2MTable",
+      "junction_table": "post_tags",
+      "parent_table": "post",
+      "parent_col": "id",
+      "child_table": "tag",
+      "child_col": "id",
+      "parent_ty": "BigInt",
+      "child_ty": "BigInt"
     }
   ],
   "snapshot_after": {
@@ -1603,6 +1625,16 @@
             "is_string_repr": false,
             "max_length": 0,
             "default": "true"
+          },
+          {
+            "name": "test_field",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": true,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
           }
         ],
         "display": "Category",
@@ -2463,7 +2495,8 @@
             "noform": false,
             "noedit": false,
             "is_string_repr": false,
-            "max_length": 0
+            "max_length": 0,
+            "auto_now_add": true
           },
           {
             "name": "updated_at",
@@ -2473,11 +2506,19 @@
             "noform": false,
             "noedit": false,
             "is_string_repr": false,
-            "max_length": 0
+            "max_length": 0,
+            "auto_now": true
           }
         ],
         "display": "Post",
-        "icon": "database"
+        "icon": "database",
+        "m2m_relations": [
+          {
+            "field_name": "tags",
+            "target_table": "tag",
+            "target_name": "Tag"
+          }
+        ]
       },
       {
         "name": "Redirect",
@@ -2747,7 +2788,7 @@
             "nullable": false,
             "noform": false,
             "noedit": false,
-            "is_string_repr": false,
+            "is_string_repr": true,
             "max_length": 0,
             "unique": true
           },

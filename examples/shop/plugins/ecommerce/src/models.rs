@@ -174,7 +174,13 @@ pub struct ProductVariant {
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
 pub struct Customer {
     pub id: i64,
-    pub user: ForeignKey<AuthUser>,
+    /// Cross-crate 1:1 to AuthUser via the `OneToOne<T>` sugar
+    /// (lives in umbra-auth; Customer lives here in ecommerce).
+    /// Equivalent to `#[umbra(unique)] pub user: ForeignKey<AuthUser>`
+    /// — emits a UNIQUE FK column AND exposes `auth_user.customer()
+    /// .await?` as a back-link accessor on AuthUser via the
+    /// cross-crate reverse-O2O trait.
+    pub user: OneToOne<AuthUser>,
     pub phone: Option<String>,
     pub date_of_birth: Option<NaiveDate>,
     #[umbra(default = "false")]

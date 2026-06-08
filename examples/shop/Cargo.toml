@@ -34,6 +34,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
+# Used by the demo seed for Order.public_id. ecommerce transitively
+# depends on it, but a direct dep here lets main.rs name `uuid::Uuid`
+# without going through the plugin re-export path.
+uuid = { version = "1", features = ["v4"] }
 # Required when writing a custom `Authentication` impl (the trait
 # uses `async fn` desugared through `async-trait`).
 async-trait = "0.1"

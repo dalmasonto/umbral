@@ -203,7 +203,8 @@
           "noform": false,
           "noedit": false,
           "is_string_repr": false,
-          "max_length": 0
+          "max_length": 0,
+          "unique": true
         },
         {
           "name": "phone",
@@ -715,7 +716,8 @@
           "noform": false,
           "noedit": false,
           "is_string_repr": false,
-          "max_length": 0
+          "max_length": 0,
+          "auto_now_add": true
         },
         {
           "name": "updated_at",
@@ -725,7 +727,8 @@
           "noform": false,
           "noedit": false,
           "is_string_repr": false,
-          "max_length": 0
+          "max_length": 0,
+          "auto_now": true
         }
       ]
     },
@@ -1991,7 +1994,8 @@
             "noform": false,
             "noedit": false,
             "is_string_repr": false,
-            "max_length": 0
+            "max_length": 0,
+            "unique": true
           },
           {
             "name": "phone",
@@ -2808,7 +2812,8 @@
             "noform": false,
             "noedit": false,
             "is_string_repr": false,
-            "max_length": 0
+            "max_length": 0,
+            "auto_now_add": true
           },
           {
             "name": "updated_at",
@@ -2818,7 +2823,8 @@
             "noform": false,
             "noedit": false,
             "is_string_repr": false,
-            "max_length": 0
+            "max_length": 0,
+            "auto_now": true
           }
         ],
         "display": "Product",
