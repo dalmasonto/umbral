@@ -182,6 +182,23 @@ umbra-cli  →  umbra (facade)  →  { umbra-core, umbra-macros }
 - **Power-user surface** (raw SQL query builders, `DatabaseBackend` trait, the migration engine's operation enum). Add to `umbra-core`, re-export from `umbra` under a module (e.g. `umbra::db::query!`, `umbra::backends::*`), but **not** in the prelude. The prelude stays free of ambiguity.
 - **Internal-only**. `pub(crate)` in the originating crate. Never appears in the facade.
 
+## Never stash the user's working tree
+
+`git stash`, `git stash push`, `git stash --keep-index`, `git stash -u`, and the equivalent "park changes elsewhere" moves — `git reset --soft`, `git checkout -- <file>` to clear a dirty path, copying changed files aside before reverting them — **are off-limits without explicit consent for the specific operation**, regardless of permission mode. This applies even on auto-mode / autopilot.
+
+Why: the user works on multiple things in parallel. Their dirty tree IS state — half-finished refactors, in-flight migrations, paste-buffer notes left in a file. `git stash` looks innocuous but the stash is then a needle in a haystack: it doesn't show up in any history view by default, and a later `git stash drop` (or any `git gc --prune` after the stash falls off `git stash list`) silently destroys real work. We already lost a dashboard pass that way; recovering it took `git fsck --unreachable` and SHA-by-SHA blob fishing.
+
+Concretely:
+
+- **Don't** `git stash` to "clear the tree" so a `cargo` command works. Investigate why the dirty state is in the way; usually the right move is to leave it alone.
+- **Don't** stash to switch contexts within a session ("let me try something else for a minute"). The user is the one steering context; if you need a clean tree, ask them first.
+- **Don't** quietly undo dirty changes via `git checkout -- <file>` or `git restore <file>` either — same family of "silently throw the user's work away" anti-patterns.
+- If a `git` command genuinely needs a clean tree (`rebase`, `bisect`, `pull --rebase`), surface the conflict and let the user decide whether to stash, commit, or abandon. Don't pick for them.
+
+The exception is when the user says, in this session, "stash this" or "park these changes" or otherwise explicitly authorizes the move. That authorization doesn't carry across sessions or to a different set of changes — every stash is one explicit ask.
+
+This rule is in the same family as [never wipe the database to bypass a migration](#never-wipe-the-database-or-migration-files-to-bypass-a-migration): a destructive shortcut that makes the immediate obstacle go away while hiding the work it just destroyed.
+
 ## Commit cadence
 
 **One feature, one fix, one commit.** Don't batch unrelated changes. If a feature took multiple WIP commits during development, squash them before merging into the public history.
