@@ -4018,6 +4018,110 @@ async fn hydrate_select_related_nested<T: Model + HydrateRelated>(
     Ok(())
 }
 
+/// Gap #44 — reverse-FK collection hydration. Runs one batched
+/// `SELECT * FROM <target_table> WHERE <fk_column> IN (parent_pks)`,
+/// groups rows by their `<fk_column>` value, and feeds each parent's
+/// bucket to `HydrateRelated::set_reverse_fk_resolved_json`.
+///
+/// Query budget: 1 query per declared `prefetch_related("...")`
+/// field regardless of parent count. Same no-N+1 guarantee the M2M
+/// path has. Parents without an i64 PK (`pk_i64()` returns `None`)
+/// are skipped — same v1 constraint as the rest of the M2M plumbing.
+async fn hydrate_reverse_fk_for_field<T: Model + HydrateRelated>(
+    rows: &mut [T],
+    spec: &crate::orm::model::ReverseFkRelationSpec,
+    pool: &DbPool,
+) -> Result<(), sqlx::Error> {
+    // Parent PKs (i64 only at v1).
+    let mut parent_ids: Vec<i64> = rows.iter().filter_map(|r| r.pk_i64()).collect();
+    if parent_ids.is_empty() {
+        // Set empty resolved on every parent so `comment_set.resolved()`
+        // returns `Some(&[])` after prefetch (matches the "no children
+        // found" shape — distinct from "not loaded").
+        for r in rows.iter_mut() {
+            r.set_reverse_fk_resolved_json(spec.field_name, Vec::new());
+        }
+        return Ok(());
+    }
+    parent_ids.sort_unstable();
+    parent_ids.dedup();
+    // Query children: SELECT * FROM <target> WHERE <fk_col> IN (...)
+    // We use a raw query because the target table's column list is
+    // fixed (every column comes back) and we want the rows as JSON
+    // for the hydrate trait method.
+    let child_rows =
+        fetch_reverse_fk_children(spec.target_table, spec.fk_column, &parent_ids, pool).await?;
+    // Bucket children by their fk_column value.
+    let mut by_parent: HashMap<i64, Vec<JsonValue>> = HashMap::new();
+    for row in child_rows {
+        let parent_id = row
+            .as_object()
+            .and_then(|m| m.get(spec.fk_column))
+            .and_then(|v| v.as_i64());
+        if let Some(pid) = parent_id {
+            by_parent.entry(pid).or_default().push(row);
+        }
+    }
+    // Populate each parent's ReverseSet — empty bucket → empty Vec
+    // (matches the documented "loaded, no children" shape).
+    for row in rows.iter_mut() {
+        if let Some(pk) = row.pk_i64() {
+            let bucket = by_parent.remove(&pk).unwrap_or_default();
+            row.set_reverse_fk_resolved_json(spec.field_name, bucket);
+        }
+    }
+    Ok(())
+}
+
+/// Batched `SELECT * FROM <target_table> WHERE <fk_column> IN (?, ?, ...)`
+/// returning each child row as a `serde_json::Value::Object`. Reuses
+/// the sqlite_row_to_json / postgres_row_to_json decoders so NULL
+/// columns map correctly to JsonValue::Null (post-#42 fix).
+async fn fetch_reverse_fk_children(
+    target_table: &str,
+    fk_column: &str,
+    parent_ids: &[i64],
+    pool: &DbPool,
+) -> Result<Vec<JsonValue>, sqlx::Error> {
+    if parent_ids.is_empty() {
+        return Ok(vec![]);
+    }
+    match pool {
+        DbPool::Sqlite(pool) => {
+            let placeholders: Vec<String> =
+                (0..parent_ids.len()).map(|_| "?".to_string()).collect();
+            let sql = format!(
+                "SELECT * FROM \"{}\" WHERE \"{}\" IN ({})",
+                target_table.replace('"', "\"\""),
+                fk_column.replace('"', "\"\""),
+                placeholders.join(", ")
+            );
+            let mut q = sqlx::query(&sql);
+            for id in parent_ids {
+                q = q.bind(*id);
+            }
+            let rows = q.fetch_all(pool).await?;
+            Ok(rows.iter().map(sqlite_row_to_json).collect())
+        }
+        DbPool::Postgres(pool) => {
+            let placeholders: Vec<String> =
+                (1..=parent_ids.len()).map(|i| format!("${i}")).collect();
+            let sql = format!(
+                "SELECT * FROM \"{}\" WHERE \"{}\" IN ({})",
+                target_table.replace('"', "\"\""),
+                fk_column.replace('"', "\"\""),
+                placeholders.join(", ")
+            );
+            let mut q = sqlx::query(&sql);
+            for id in parent_ids {
+                q = q.bind(*id);
+            }
+            let rows = q.fetch_all(pool).await?;
+            Ok(rows.iter().map(postgres_row_to_json).collect())
+        }
+    }
+}
+
 /// Gap 19: post-fetch hydration for `prefetch_related` names.
 ///
 /// For each requested M2M field, runs one query joining the child
@@ -4053,10 +4157,21 @@ async fn hydrate_prefetch_related<T: Model + HydrateRelated>(
         //    Reverse-FK ("comment_set"-style) prefetch is gap #44 —
         //    when that ships, we'll route unmatched names through
         //    the reverse-FK lookup before erroring.
-        let spec = match T::M2M_RELATIONS
+        // Try M2M first.
+        let m2m_spec = T::M2M_RELATIONS
             .iter()
-            .find(|s| s.field_name == field_name.as_str())
-        {
+            .find(|s| s.field_name == field_name.as_str());
+        // If not M2M, try reverse-FK (gap #44 — needs a ReverseSet<C>
+        // field declared on the parent with `#[umbra(reverse_fk =
+        // "<fk_col>")]`).
+        let rfk_spec = T::REVERSE_FK_RELATIONS
+            .iter()
+            .find(|s| s.field_name == field_name.as_str());
+        if let Some(spec) = rfk_spec {
+            hydrate_reverse_fk_for_field::<T>(rows, spec, pool).await?;
+            continue;
+        }
+        let spec = match m2m_spec {
             Some(s) => s,
             None => {
                 let is_fk = T::FIELDS
@@ -4068,12 +4183,11 @@ async fn hydrate_prefetch_related<T: Model + HydrateRelated>(
                          or `.join_related(...)` instead"
                     )
                 } else {
-                    " — no M2M relation with that name on this model. Reverse-FK collection \
-                     prefetch is not yet implemented (gap #44 in bugs/gaps.md)"
+                    " — no M2M relation or ReverseSet field with that name on this model"
                         .to_string()
                 };
                 return Err(sqlx::Error::Protocol(format!(
-                    "umbra::orm::prefetch_related: unknown M2M field `{field_name}` on model `{}`{hint}",
+                    "umbra::orm::prefetch_related: unknown field `{field_name}` on model `{}`{hint}",
                     T::NAME
                 )));
             }

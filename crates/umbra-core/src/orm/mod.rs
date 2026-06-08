@@ -30,6 +30,7 @@ pub mod model;
 pub mod multichoice;
 pub mod post;
 pub mod queryset;
+pub mod reverse_set;
 pub mod tsvector;
 pub mod validation;
 pub mod validators;
@@ -71,11 +72,13 @@ pub use expr::{F, FColExt, FExpr, Q};
 pub use foreign_key::ForeignKey;
 pub use m2m::{M2M, load_junction_selection, set_junction_dynamic};
 pub use model::{
-    ArrayElement, FieldSpec, FkAction, HydrateRelated, M2MRelationSpec, Model, PrimaryKey, SqlType,
+    ArrayElement, FieldSpec, FkAction, HydrateRelated, M2MRelationSpec, Model, PrimaryKey,
+    ReverseFkRelationSpec, SqlType,
 };
 pub use multichoice::MultiChoice;
 pub use post::Post;
 pub use queryset::{GetError, Manager, QuerySet, QuerySetTx, TryForEachError};
+pub use reverse_set::ReverseSet;
 pub use tsvector::TsVector;
 pub use validators::{Email, Slug, Url, ValidatorError, validate_text_format};
 pub use write::SaveError;

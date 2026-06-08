@@ -101,6 +101,27 @@ pub trait HydrateRelated {
     /// declared on this struct; the default below is empty so models
     /// without M2M fields pay nothing.
     fn set_m2m_resolved_json(&mut self, _field_name: &str, _rows: Vec<serde_json::Value>) {}
+
+    /// Gap #44 — attach a list of pre-fetched child rows to the
+    /// named `ReverseSet<C>` field's `resolved` slot. Counterpart
+    /// to `set_m2m_resolved_json` but for reverse-FK collections
+    /// (one parent, many children pointing at it via a FK column).
+    ///
+    /// Called by `QuerySet::prefetch_related` after the batched
+    /// `SELECT * FROM <child> WHERE <fk_col> IN (parent_pks)` query
+    /// returns child rows grouped by `<fk_col>` value.
+    ///
+    /// `rows` carries the child rows as JSON objects ready for
+    /// `serde_json::from_value::<C>(...)`. Decoding failures
+    /// silently drop that one row — same forgive-and-continue
+    /// posture as the M2M variant.
+    ///
+    /// A field name that doesn't match any `ReverseSet` field on
+    /// this model is a no-op. The macro-emitted body pattern-
+    /// matches the ReverseSet fields declared on this struct; the
+    /// default below is empty so models without reverse-FK fields
+    /// pay nothing.
+    fn set_reverse_fk_resolved_json(&mut self, _field_name: &str, _rows: Vec<serde_json::Value>) {}
 }
 
 /// The trait every model implements.
@@ -230,6 +251,15 @@ pub trait Model: Sized + Send + Sync + Unpin + 'static {
     /// pickers. Default empty.
     const M2M_RELATIONS: &'static [M2MRelationSpec] = &[];
 
+    /// Gap #44 — reverse-FK collections declared on this model via
+    /// `#[umbra(reverse_fk = "<fk_col>")] pub <name>: ReverseSet<C>`.
+    /// Each entry tells `prefetch_related` how to fetch the children:
+    /// `SELECT * FROM <target_table> WHERE <fk_column> IN (parent_pks)`
+    /// then group by `<fk_column>` value, populate each parent's
+    /// `ReverseSet.resolved`. Default empty; the macro emits one
+    /// entry per declared `ReverseSet<C>` field.
+    const REVERSE_FK_RELATIONS: &'static [ReverseFkRelationSpec] = &[];
+
     /// Return the primary key of this instance.
     fn primary_key(&self) -> Self::PrimaryKey;
 }
@@ -248,6 +278,32 @@ pub struct M2MRelationSpec {
     /// The target model's struct name (e.g. `"Tag"`). Used for reverse
     /// accessor lookups and OpenAPI schema references.
     pub target_name: &'static str,
+}
+
+/// Static metadata for one reverse-FK collection field on a model
+/// (gap #44). Carried by `Model::REVERSE_FK_RELATIONS`.
+///
+/// Example: `pub struct Post` with
+/// `#[umbra(reverse_fk = "post")] pub comment_set: ReverseSet<Comment>`
+/// emits one entry: `{ field_name: "comment_set", target_table:
+/// "comment", target_name: "Comment", fk_column: "post" }`.
+///
+/// `prefetch_related("comment_set")` uses this to issue
+/// `SELECT * FROM comment WHERE post IN (parent_pks)` then group
+/// rows by `post` value, populating each parent's `ReverseSet`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReverseFkRelationSpec {
+    /// The Rust field name on the parent (e.g. `"comment_set"`).
+    pub field_name: &'static str,
+    /// The child model's table name (e.g. `"comment"`).
+    pub target_table: &'static str,
+    /// The child model's struct name (e.g. `"Comment"`). Reserved
+    /// for symmetry with `M2MRelationSpec`.
+    pub target_name: &'static str,
+    /// Name of the FK column on the child that points back at the
+    /// parent (e.g. `"post"`). The prefetch loader filters on this
+    /// column: `WHERE <fk_column> IN (parent_pks)`.
+    pub fk_column: &'static str,
 }
 
 /// Types that can serve as a model's primary key.
