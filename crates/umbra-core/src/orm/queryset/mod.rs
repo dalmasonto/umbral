@@ -33,6 +33,18 @@
 //! a generic-over-`R` impl, so a user struct with standard field
 //! types satisfies both bounds without any per-backend ceremony.
 
+mod backend_pg;
+mod backend_sqlite;
+mod errors;
+mod hydration;
+mod tx;
+mod write_helpers;
+
+pub use errors::{GetError, TryForEachError};
+use hydration::{hydrate_prefetch_related, hydrate_select_related};
+pub use tx::QuerySetTx;
+use write_helpers::{build_insert_many_for, build_insert_one_for, pk_field, serialize_to_map};
+
 use std::collections::HashMap;
 use std::marker::PhantomData;
 
@@ -41,7 +53,6 @@ use sea_query::{
 };
 use sea_query_binder::SqlxBinder;
 use serde_json::Value as JsonValue;
-use sqlx::Column as _;
 
 use crate::db::DbPool;
 use crate::orm::{FExpr, HydrateRelated, Model, OrderExpr, Predicate};
@@ -707,88 +718,7 @@ fn resolve_pool<T: Model>(explicit: Option<DbPool>) -> DbPool {
     crate::db::pool_dispatched().clone()
 }
 
-/// Error type for [`QuerySet::get`] / [`Manager::get`] (Django's
-/// exactly-one shape).
-///
-/// `.get()` deliberately returns this rather than `Result<Option<T>,
-/// sqlx::Error>` because three outcomes need three branches:
-///
-/// - `Ok(row)` — exactly one matched.
-/// - `Err(NotFound)` — zero matched. The common 404 path.
-/// - `Err(MultipleObjectsReturned)` — more than one matched. A
-///   data-integrity signal: filters that should pin a unique row
-///   (PK lookup, UNIQUE-constrained column) hitting this variant
-///   means an invariant has already broken upstream.
-/// - `Err(Sqlx)` — the DB itself returned an error.
-#[derive(Debug)]
-pub enum GetError {
-    NotFound,
-    MultipleObjectsReturned,
-    Sqlx(sqlx::Error),
-}
-
-impl std::fmt::Display for GetError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NotFound => write!(f, "no matching row"),
-            Self::MultipleObjectsReturned => {
-                write!(f, "expected exactly one row, found more")
-            }
-            Self::Sqlx(e) => write!(f, "{e}"),
-        }
-    }
-}
-
-impl std::error::Error for GetError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Sqlx(e) => Some(e),
-            _ => None,
-        }
-    }
-}
-
-impl From<sqlx::Error> for GetError {
-    fn from(e: sqlx::Error) -> Self {
-        Self::Sqlx(e)
-    }
-}
-
-/// Feature 29 — composite error returned by
-/// [`QuerySet::try_for_each`]. The chunked streaming terminal can
-/// fail in two ways and the call site usually wants to distinguish:
-/// a SQL fetch failure is a system-level problem (DB went away,
-/// schema mismatch, etc.), while a callback error is whatever
-/// domain-specific failure the user's body produced (file write
-/// blew up, validation rejected the row, etc.).
-#[derive(Debug)]
-pub enum TryForEachError<E> {
-    /// A database fetch returned an error mid-iteration. The
-    /// callback never saw this row.
-    Sqlx(sqlx::Error),
-    /// The user's callback returned an error for some row. The
-    /// walk stopped immediately; rows after the failing one were
-    /// not fetched.
-    Callback(E),
-}
-
-impl<E: std::fmt::Display> std::fmt::Display for TryForEachError<E> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Sqlx(e) => write!(f, "{e}"),
-            Self::Callback(e) => write!(f, "{e}"),
-        }
-    }
-}
-
-impl<E: std::fmt::Debug + std::fmt::Display> std::error::Error for TryForEachError<E> {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Sqlx(e) => Some(e),
-            Self::Callback(_) => None,
-        }
-    }
-}
+// GetError / TryForEachError moved to `errors`; re-exported above.
 
 /// Terminal methods for every `QuerySet<T>` where `T: Model`.
 ///
@@ -1021,7 +951,7 @@ impl<T: Model> QuerySet<T> {
                     let mut typed = Vec::with_capacity(raw_rows.len());
                     for row in &raw_rows {
                         let mut t = <T as sqlx::FromRow<_>>::from_row(row)?;
-                        hydrate_joined_rels_sqlite::<T>(&mut t, row, &join_fields)?;
+                        backend_sqlite::hydrate_joined_rels::<T>(&mut t, row, &join_fields)?;
                         typed.push(t);
                     }
                     typed
@@ -1042,7 +972,7 @@ impl<T: Model> QuerySet<T> {
                     let mut typed = Vec::with_capacity(raw_rows.len());
                     for row in &raw_rows {
                         let mut t = <T as sqlx::FromRow<_>>::from_row(row)?;
-                        hydrate_joined_rels_pg::<T>(&mut t, row, &join_fields)?;
+                        backend_pg::hydrate_joined_rels::<T>(&mut t, row, &join_fields)?;
                         typed.push(t);
                     }
                     typed
@@ -1848,7 +1778,7 @@ impl<T: Model> QuerySet<T> {
                         .and_then(|c| meta.fields.iter().find(|f| f.name == c).map(|f| f.ty));
                     obj.insert(
                         name.to_string(),
-                        decode_agg_sqlite(&row, name, agg, source_ty)?,
+                        backend_sqlite::decode_agg(&row, name, agg, source_ty)?,
                     );
                 }
                 Ok(JsonValue::Object(obj))
@@ -1863,7 +1793,10 @@ impl<T: Model> QuerySet<T> {
                     let source_ty = agg
                         .source_column()
                         .and_then(|c| meta.fields.iter().find(|f| f.name == c).map(|f| f.ty));
-                    obj.insert(name.to_string(), decode_agg_pg(&row, name, agg, source_ty)?);
+                    obj.insert(
+                        name.to_string(),
+                        backend_pg::decode_agg(&row, name, agg, source_ty)?,
+                    );
                 }
                 Ok(JsonValue::Object(obj))
             }
@@ -1956,7 +1889,7 @@ impl<T: Model> QuerySet<T> {
                             .and_then(|c| meta.fields.iter().find(|f| f.name == c).map(|f| f.ty));
                         obj.insert(
                             name.to_string(),
-                            decode_agg_sqlite(row, name, agg, source_ty)?,
+                            backend_sqlite::decode_agg(row, name, agg, source_ty)?,
                         );
                     }
                     out.push(JsonValue::Object(obj));
@@ -1981,7 +1914,10 @@ impl<T: Model> QuerySet<T> {
                         let source_ty = agg
                             .source_column()
                             .and_then(|c| meta.fields.iter().find(|f| f.name == c).map(|f| f.ty));
-                        obj.insert(name.to_string(), decode_agg_pg(row, name, agg, source_ty)?);
+                        obj.insert(
+                            name.to_string(),
+                            backend_pg::decode_agg(row, name, agg, source_ty)?,
+                        );
                     }
                     out.push(JsonValue::Object(obj));
                 }
@@ -2046,7 +1982,7 @@ impl<T: Model> QuerySet<T> {
                 match pk {
                     Some(field) => rows
                         .iter()
-                        .map(|r| pk_to_json_sqlite(r, field.name, field.ty))
+                        .map(|r| backend_sqlite::pk_to_json(r, field.name, field.ty))
                         .collect::<Result<_, _>>()?,
                     None => Vec::new(),
                 }
@@ -2076,7 +2012,7 @@ impl<T: Model> QuerySet<T> {
                 match pk {
                     Some(field) => rows
                         .iter()
-                        .map(|r| pk_to_json_pg(r, field.name, field.ty))
+                        .map(|r| backend_pg::pk_to_json(r, field.name, field.ty))
                         .collect::<Result<_, _>>()?,
                     None => Vec::new(),
                 }
@@ -2151,7 +2087,7 @@ impl<T: Model> QuerySet<T> {
                 match pk {
                     Some(pkf) => rows
                         .iter()
-                        .map(|r| pk_to_json_sqlite(r, pkf.name, pkf.ty))
+                        .map(|r| backend_sqlite::pk_to_json(r, pkf.name, pkf.ty))
                         .collect::<Result<_, _>>()
                         .map_err(crate::orm::write::WriteError::Sqlx)?,
                     None => Vec::new(),
@@ -2165,7 +2101,7 @@ impl<T: Model> QuerySet<T> {
                 match pk {
                     Some(pkf) => rows
                         .iter()
-                        .map(|r| pk_to_json_pg(r, pkf.name, pkf.ty))
+                        .map(|r| backend_pg::pk_to_json(r, pkf.name, pkf.ty))
                         .collect::<Result<_, _>>()
                         .map_err(crate::orm::write::WriteError::Sqlx)?,
                     None => Vec::new(),
@@ -2239,7 +2175,7 @@ impl<T: Model> QuerySet<T> {
                 match pk {
                     Some(field) => rows
                         .iter()
-                        .map(|r| pk_to_json_sqlite(r, field.name, field.ty))
+                        .map(|r| backend_sqlite::pk_to_json(r, field.name, field.ty))
                         .collect::<Result<_, _>>()
                         .map_err(crate::orm::write::WriteError::Sqlx)?,
                     None => Vec::new(),
@@ -2275,7 +2211,7 @@ impl<T: Model> QuerySet<T> {
                 match pk {
                     Some(field) => rows
                         .iter()
-                        .map(|r| pk_to_json_pg(r, field.name, field.ty))
+                        .map(|r| backend_pg::pk_to_json(r, field.name, field.ty))
                         .collect::<Result<_, _>>()
                         .map_err(crate::orm::write::WriteError::Sqlx)?,
                     None => Vec::new(),
@@ -2354,7 +2290,7 @@ impl<T: Model> QuerySet<T> {
                 match pk {
                     Some(field) => rows
                         .iter()
-                        .map(|r| pk_to_json_sqlite(r, field.name, field.ty))
+                        .map(|r| backend_sqlite::pk_to_json(r, field.name, field.ty))
                         .collect::<Result<_, _>>()?,
                     None => Vec::new(),
                 }
@@ -2384,7 +2320,7 @@ impl<T: Model> QuerySet<T> {
                 match pk {
                     Some(field) => rows
                         .iter()
-                        .map(|r| pk_to_json_pg(r, field.name, field.ty))
+                        .map(|r| backend_pg::pk_to_json(r, field.name, field.ty))
                         .collect::<Result<_, _>>()?,
                     None => Vec::new(),
                 }
@@ -2925,7 +2861,7 @@ impl<T: Model> Manager<T> {
                 match pk {
                     Some(field) => rows
                         .iter()
-                        .map(|r| pk_to_json_sqlite(r, field.name, field.ty))
+                        .map(|r| backend_sqlite::pk_to_json(r, field.name, field.ty))
                         .collect::<Result<_, _>>()
                         .map_err(WriteError::Sqlx)?,
                     None => Vec::new(),
@@ -2961,7 +2897,7 @@ impl<T: Model> Manager<T> {
                 match pk {
                     Some(field) => rows
                         .iter()
-                        .map(|r| pk_to_json_pg(r, field.name, field.ty))
+                        .map(|r| backend_pg::pk_to_json(r, field.name, field.ty))
                         .collect::<Result<_, _>>()
                         .map_err(WriteError::Sqlx)?,
                     None => Vec::new(),
@@ -3356,271 +3292,7 @@ impl<T: Model> Manager<T> {
     }
 }
 
-// =========================================================================
-// QuerySetTx — a QuerySet bound to an open transaction
-// =========================================================================
-
-/// A `QuerySet` bound to an open transaction.
-///
-/// Obtained via [`QuerySet::on_tx`]. All terminals execute inside the
-/// transaction so they commit or roll back as a unit with every other
-/// operation in the same `umbra::db::transaction(...)` closure.
-///
-/// The struct borrows `&mut Transaction` so the borrow checker enforces
-/// that only one `QuerySetTx` uses the transaction at a time, and that
-/// the transaction stays alive for the duration of each terminal call.
-pub struct QuerySetTx<'tx, T> {
-    qs: QuerySet<T>,
-    tx: &'tx mut crate::db::Transaction,
-}
-
-impl<'tx, T: Model> QuerySetTx<'tx, T> {
-    // -----------------------------------------------------------------------
-    // Read terminals
-    // -----------------------------------------------------------------------
-
-    /// SELECT all matching rows inside the transaction.
-    pub async fn fetch(self) -> Result<Vec<T>, sqlx::Error>
-    where
-        T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
-            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>
-            + HydrateRelated,
-    {
-        let q = self.qs.build_query_for(self.tx.backend_name());
-        let mut rows = match self.tx.backend_name() {
-            "sqlite" => {
-                let tx = self.tx.as_sqlite_mut().unwrap();
-                let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
-                sqlx::query_as_with::<sqlx::Sqlite, T, _>(&sql, values)
-                    .fetch_all(&mut **tx)
-                    .await?
-            }
-            _ => {
-                let tx = self.tx.as_pg_mut().unwrap();
-                let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
-                sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
-                    .fetch_all(&mut **tx)
-                    .await?
-            }
-        };
-        // BUG-16 step 2: wire each row's PK into its M2M slots so
-        // junction-table accessors used inside the transaction see
-        // the right parent.
-        for r in &mut rows {
-            r.set_m2m_parent_ids();
-        }
-        Ok(rows)
-    }
-
-    /// SELECT LIMIT 1 and return the first row, if any.
-    pub async fn first(mut self) -> Result<Option<T>, sqlx::Error>
-    where
-        T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
-            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>
-            + HydrateRelated,
-    {
-        self.qs.query.limit(1);
-        let q = self.qs.build_query_for(self.tx.backend_name());
-        let mut row = match self.tx.backend_name() {
-            "sqlite" => {
-                let tx = self.tx.as_sqlite_mut().unwrap();
-                let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
-                sqlx::query_as_with::<sqlx::Sqlite, T, _>(&sql, values)
-                    .fetch_optional(&mut **tx)
-                    .await?
-            }
-            _ => {
-                let tx = self.tx.as_pg_mut().unwrap();
-                let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
-                sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
-                    .fetch_optional(&mut **tx)
-                    .await?
-            }
-        };
-        if let Some(r) = row.as_mut() {
-            r.set_m2m_parent_ids();
-        }
-        Ok(row)
-    }
-
-    /// SELECT COUNT(*) inside the transaction.
-    pub async fn count(self) -> Result<i64, sqlx::Error> {
-        let backend = self.tx.backend_name();
-        let mut rebuilt = self.qs.build_query_for(backend);
-        rebuilt.clear_selects();
-        rebuilt.expr(Func::count(Expr::col(Alias::new("*"))));
-        rebuilt.reset_limit();
-        rebuilt.reset_offset();
-        match backend {
-            "sqlite" => {
-                let tx = self.tx.as_sqlite_mut().unwrap();
-                let (sql, values) = rebuilt.build_sqlx(SqliteQueryBuilder);
-                let (n,): (i64,) = sqlx::query_as_with::<sqlx::Sqlite, (i64,), _>(&sql, values)
-                    .fetch_one(&mut **tx)
-                    .await?;
-                Ok(n)
-            }
-            _ => {
-                let tx = self.tx.as_pg_mut().unwrap();
-                let (sql, values) = rebuilt.build_sqlx(PostgresQueryBuilder);
-                let (n,): (i64,) = sqlx::query_as_with::<sqlx::Postgres, (i64,), _>(&sql, values)
-                    .fetch_one(&mut **tx)
-                    .await?;
-                Ok(n)
-            }
-        }
-    }
-
-    /// Return whether any row matches, inside the transaction.
-    pub async fn exists(mut self) -> Result<bool, sqlx::Error>
-    where
-        T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
-            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
-    {
-        self.qs.query.limit(1);
-        let backend = self.tx.backend_name();
-        let q = self.qs.build_query_for(backend);
-        let row_opt: Option<T> = match backend {
-            "sqlite" => {
-                let tx = self.tx.as_sqlite_mut().unwrap();
-                let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
-                sqlx::query_as_with::<sqlx::Sqlite, T, _>(&sql, values)
-                    .fetch_optional(&mut **tx)
-                    .await?
-            }
-            _ => {
-                let tx = self.tx.as_pg_mut().unwrap();
-                let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
-                sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
-                    .fetch_optional(&mut **tx)
-                    .await?
-            }
-        };
-        Ok(row_opt.is_some())
-    }
-
-    /// Exactly-one terminal inside the transaction. See [`QuerySet::get`].
-    pub async fn get(mut self) -> Result<T, GetError>
-    where
-        T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
-            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
-    {
-        self.qs.query.limit(2);
-        let q = self.qs.build_query_for(self.tx.backend_name());
-        let mut rows: Vec<T> = match self.tx.backend_name() {
-            "sqlite" => {
-                let tx = self.tx.as_sqlite_mut().unwrap();
-                let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
-                sqlx::query_as_with::<sqlx::Sqlite, T, _>(&sql, values)
-                    .fetch_all(&mut **tx)
-                    .await
-                    .map_err(GetError::Sqlx)?
-            }
-            _ => {
-                let tx = self.tx.as_pg_mut().unwrap();
-                let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
-                sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
-                    .fetch_all(&mut **tx)
-                    .await
-                    .map_err(GetError::Sqlx)?
-            }
-        };
-        match rows.len() {
-            0 => Err(GetError::NotFound),
-            1 => Ok(rows.pop().unwrap()),
-            _ => Err(GetError::MultipleObjectsReturned),
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // Write terminals
-    // -----------------------------------------------------------------------
-
-    /// DELETE inside the transaction. Returns the number of rows deleted.
-    pub async fn delete(self) -> Result<u64, sqlx::Error> {
-        let stmt = self.qs.build_delete_for(self.tx.backend_name());
-        match self.tx.backend_name() {
-            "sqlite" => {
-                let tx = self.tx.as_sqlite_mut().unwrap();
-                let (sql, values) = stmt.build_sqlx(SqliteQueryBuilder);
-                let result = sqlx::query_with::<sqlx::Sqlite, _>(&sql, values)
-                    .execute(&mut **tx)
-                    .await?;
-                Ok(result.rows_affected())
-            }
-            _ => {
-                let tx = self.tx.as_pg_mut().unwrap();
-                let (sql, values) = stmt.build_sqlx(PostgresQueryBuilder);
-                let result = sqlx::query_with::<sqlx::Postgres, _>(&sql, values)
-                    .execute(&mut **tx)
-                    .await?;
-                Ok(result.rows_affected())
-            }
-        }
-    }
-
-    /// UPDATE inside the transaction. Takes the same `column → JSON value`
-    /// map as [`QuerySet::update_values`].
-    pub async fn update_values(
-        self,
-        values: serde_json::Map<String, serde_json::Value>,
-    ) -> Result<u64, crate::orm::write::WriteError> {
-        let stmt = self.qs.build_update_for(self.tx.backend_name(), &values)?;
-        match self.tx.backend_name() {
-            "sqlite" => {
-                let tx = self.tx.as_sqlite_mut().unwrap();
-                let (sql, values) = stmt.build_sqlx(SqliteQueryBuilder);
-                let result = sqlx::query_with::<sqlx::Sqlite, _>(&sql, values)
-                    .execute(&mut **tx)
-                    .await?;
-                Ok(result.rows_affected())
-            }
-            _ => {
-                let tx = self.tx.as_pg_mut().unwrap();
-                let (sql, values) = stmt.build_sqlx(PostgresQueryBuilder);
-                let result = sqlx::query_with::<sqlx::Postgres, _>(&sql, values)
-                    .execute(&mut **tx)
-                    .await?;
-                Ok(result.rows_affected())
-            }
-        }
-    }
-
-    /// INSERT one row and return the populated row, inside the transaction.
-    ///
-    /// This is the `Manager::create_in_tx` equivalent called through the
-    /// QuerySet API: `Post::objects().on_tx(tx).create(instance).await?`.
-    pub async fn create(self, instance: T) -> Result<T, crate::orm::write::WriteError>
-    where
-        T: serde::Serialize
-            + for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
-            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>
-            + HydrateRelated,
-    {
-        let map = serialize_to_map(&instance)?;
-        let stmt = build_insert_one_for::<T>(self.tx.backend_name(), &map)?;
-        match self.tx.backend_name() {
-            "sqlite" => {
-                let tx = self.tx.as_sqlite_mut().unwrap();
-                let (sql, values) = stmt.build_sqlx(SqliteQueryBuilder);
-                let mut row = sqlx::query_as_with::<sqlx::Sqlite, T, _>(&sql, values)
-                    .fetch_one(&mut **tx)
-                    .await?;
-                row.set_m2m_parent_ids();
-                Ok(row)
-            }
-            _ => {
-                let tx = self.tx.as_pg_mut().unwrap();
-                let (sql, values) = stmt.build_sqlx(PostgresQueryBuilder);
-                let mut row = sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
-                    .fetch_one(&mut **tx)
-                    .await?;
-                row.set_m2m_parent_ids();
-                Ok(row)
-            }
-        }
-    }
-}
+// QuerySetTx (struct + impl) moved to `super::tx`; re-exported above.
 
 impl<T: Model> Manager<T> {
     /// Begin a new query on this manager attached to the given open transaction.
@@ -3997,992 +3669,12 @@ enum SoftOrHardStatement {
     Update(sea_query::UpdateStatement),
 }
 
-// =========================================================================
-// select_related hydration
-//
-// After the main query returns rows, for each FK field name in
-// `select_related`:
-//
-// 1. Look up the field's `fk_target` table name from `T::FIELDS`.
-// 2. Serialize all main rows to JSON and collect the FK integer values for
-//    that field (using the field name as a JSON key).
-// 3. Run `SELECT <cols> FROM <target_table> WHERE id IN (...)` to load all
-//    referenced rows in one batch.
-// 4. Build a `HashMap<i64, JsonValue>` from the fetched rows.
-// 5. Call `HydrateRelated::hydrate_fk` on each main row with the matching
-//    resolved JSON object.
-//
-// This approach requires no JOIN changes to the main query and no macro
-// changes to `FromRow`. The cost is one extra round-trip per FK field
-// named in `select_related` (not one per row).
-// =========================================================================
+// Hydration helpers (hydrate_select_related, hydrate_select_related_nested,
+// hydrate_prefetch_related, hydrate_reverse_fk_for_field, fetch_related_as_json,
+// fetch_reverse_fk_children) moved to `super::hydration`.
 
-/// Fetch related rows for each FK field name in `sr_fields` and hydrate
-/// JOIN-path hydration (SQLite). For each `join_field` in
-/// `join_fields`, pulls the `<field>__<col>` aliased columns out of
-/// the row into a `serde_json::Value::Object` and calls
-/// `HydrateRelated::hydrate_fk` to populate `ForeignKey<U>.resolved`.
-///
-/// LEFT JOIN miss → the related PK column comes back NULL → skip
-/// hydration (the FK stays unresolved, matching the unloaded shape).
-/// Unknown fields / unregistered related models / models without a
-/// PK are silently skipped — the SQL build path emitted no JOIN for
-/// them either, so the columns wouldn't be in the row.
-fn hydrate_joined_rels_sqlite<T: Model + HydrateRelated>(
-    t: &mut T,
-    row: &sqlx::sqlite::SqliteRow,
-    join_fields: &[String],
-) -> Result<(), sqlx::Error> {
-    use sqlx::Row;
-    let registered = crate::migrate::registered_models();
-    for field_name in join_fields {
-        let Some(fk_field) = T::FIELDS.iter().find(|f| f.name == field_name.as_str()) else {
-            continue;
-        };
-        let Some(related_table) = fk_field.fk_target else {
-            continue;
-        };
-        let Some(related_meta) = registered.iter().find(|m| m.table == related_table) else {
-            continue;
-        };
-        let Some(pk_col) = related_meta.fields.iter().find(|c| c.primary_key) else {
-            continue;
-        };
-        let pk_alias = format!("{}__{}", field_name, pk_col.name);
-        // LEFT JOIN miss → all aliased cols are NULL → skip.
-        let pk_is_null = row
-            .try_get::<Option<i64>, _>(pk_alias.as_str())
-            .map(|v| v.is_none())
-            .unwrap_or(true);
-        if pk_is_null {
-            continue;
-        }
-        let mut obj = serde_json::Map::with_capacity(related_meta.fields.len());
-        for col in &related_meta.fields {
-            let alias = format!("{}__{}", field_name, col.name);
-            let val = crate::orm::dynamic::decode_to_json_aliased(row, col, &alias)?;
-            obj.insert(col.name.clone(), val);
-        }
-        t.hydrate_fk(field_name, &serde_json::Value::Object(obj));
-    }
-    Ok(())
-}
+// Insert builders (serialize_to_map, build_insert_one_for, build_insert_many_for)
+// and pk_field moved to `super::write_helpers`.
 
-/// Postgres counterpart to [`hydrate_joined_rels_sqlite`].
-fn hydrate_joined_rels_pg<T: Model + HydrateRelated>(
-    t: &mut T,
-    row: &sqlx::postgres::PgRow,
-    join_fields: &[String],
-) -> Result<(), sqlx::Error> {
-    use sqlx::Row;
-    let registered = crate::migrate::registered_models();
-    for field_name in join_fields {
-        let Some(fk_field) = T::FIELDS.iter().find(|f| f.name == field_name.as_str()) else {
-            continue;
-        };
-        let Some(related_table) = fk_field.fk_target else {
-            continue;
-        };
-        let Some(related_meta) = registered.iter().find(|m| m.table == related_table) else {
-            continue;
-        };
-        let Some(pk_col) = related_meta.fields.iter().find(|c| c.primary_key) else {
-            continue;
-        };
-        let pk_alias = format!("{}__{}", field_name, pk_col.name);
-        let pk_is_null = row
-            .try_get::<Option<i64>, _>(pk_alias.as_str())
-            .map(|v| v.is_none())
-            .unwrap_or(true);
-        if pk_is_null {
-            continue;
-        }
-        let mut obj = serde_json::Map::with_capacity(related_meta.fields.len());
-        for col in &related_meta.fields {
-            let alias = format!("{}__{}", field_name, col.name);
-            let val = crate::orm::dynamic::decode_pg_to_json_aliased(row, col, &alias)?;
-            obj.insert(col.name.clone(), val);
-        }
-        t.hydrate_fk(field_name, &serde_json::Value::Object(obj));
-    }
-    Ok(())
-}
-
-/// `HydrateRelated::hydrate_fk` on each main row.
-///
-/// Generic parameters:
-/// - `T`: the main model type. Bound on `HydrateRelated` so we can call
-///   `fk_id_for` and `hydrate_fk` on each row.
-async fn hydrate_select_related<T: Model + HydrateRelated>(
-    rows: &mut [T],
-    sr_fields: &[String],
-    pool: &DbPool,
-) -> Result<(), sqlx::Error> {
-    for field_name in sr_fields {
-        // Nested traversal: `select_related("author__manager")` walks
-        // the hop chain (author → manager → ...) one batched query
-        // per hop, embedding each level's row into the prior level's
-        // JSON. Recursive `ForeignKey<T>::Deserialize` (post-#42)
-        // then unpacks the full chain into `resolved` slots at every
-        // depth in one `hydrate_fk` call on the root parent.
-        if field_name.contains("__") {
-            hydrate_select_related_nested::<T>(rows, field_name, pool).await?;
-            continue;
-        }
-        // Single-hop path: the original behaviour kept byte-for-byte.
-        let field_spec = T::FIELDS
-            .iter()
-            .find(|f| f.name == field_name.as_str())
-            .ok_or_else(|| {
-                sqlx::Error::Protocol(format!(
-                    "umbra::orm::select_related: unknown field `{field_name}` on model `{}`",
-                    T::NAME
-                ))
-            })?;
-        let fk_target = field_spec.fk_target.ok_or_else(|| {
-            sqlx::Error::Protocol(format!(
-                "umbra::orm::select_related: field `{field_name}` on `{}` is not a foreign key",
-                T::NAME
-            ))
-        })?;
-
-        // Collect all FK IDs from the main rows via `HydrateRelated::fk_id_for`.
-        // This avoids serializing the whole row just to read one integer.
-        let mut ids: Vec<i64> = Vec::with_capacity(rows.len());
-        for row in rows.iter() {
-            if let Some(id) = row.fk_id_for(field_name.as_str()) {
-                ids.push(id);
-            }
-        }
-        if ids.is_empty() {
-            continue;
-        }
-        ids.sort_unstable();
-        ids.dedup();
-
-        let related_rows = fetch_related_as_json(fk_target, &ids, pool).await?;
-        let id_to_json: HashMap<i64, JsonValue> = related_rows
-            .into_iter()
-            .filter_map(|obj| {
-                if let JsonValue::Object(ref map) = obj {
-                    if let Some(JsonValue::Number(n)) = map.get("id") {
-                        if let Some(id) = n.as_i64() {
-                            return Some((id, obj.clone()));
-                        }
-                    }
-                }
-                None
-            })
-            .collect();
-
-        for row in rows.iter_mut() {
-            if let Some(fk_id) = row.fk_id_for(field_name.as_str()) {
-                if let Some(resolved_json) = id_to_json.get(&fk_id) {
-                    row.hydrate_fk(field_name.as_str(), resolved_json);
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Nested `select_related("a__b__c")` traversal. Walks the hop chain
-/// through `crate::migrate::registered_models()` (rather than the
-/// typed `T::FIELDS` after hop 1, since deeper hops live on the
-/// related model whose type isn't in scope here), runs ONE batched
-/// `IN (...)` query per hop, and embeds each level's row into the
-/// prior level's JSON. The root parent then sees one
-/// `hydrate_fk(first_hop, fully_nested_json)` call and the recursive
-/// `ForeignKey<T>::Deserialize` (post-#42) unpacks every depth into
-/// its `resolved` slot.
-///
-/// Query budget = `1 + len(hops)` round-trips. No N+1 — each hop is
-/// one batched query across every parent (and every dedup'd parent of
-/// prior hops). So `select_related("a__b__c")` on N parents takes
-/// 1 (main) + 3 (hops) = 4 queries regardless of N.
-async fn hydrate_select_related_nested<T: Model + HydrateRelated>(
-    rows: &mut [T],
-    path: &str,
-    pool: &DbPool,
-) -> Result<(), sqlx::Error> {
-    let hops: Vec<&str> = path.split("__").filter(|s| !s.is_empty()).collect();
-    if hops.is_empty() {
-        return Ok(());
-    }
-    let registered = crate::migrate::registered_models();
-
-    // Resolve every hop's (from_table, field, to_table) trio up
-    // front so a typo in any hop surfaces before any SQL runs.
-    let mut current_table = T::TABLE;
-    let mut hop_targets: Vec<&str> = Vec::with_capacity(hops.len());
-    for hop in &hops {
-        let meta = registered
-            .iter()
-            .find(|m| m.table == current_table)
-            .ok_or_else(|| {
-                sqlx::Error::Protocol(format!(
-                    "umbra::orm::select_related: model for table `{current_table}` is not registered \
-                     (needed for nested traversal of `{path}`)"
-                ))
-            })?;
-        let col = meta.fields.iter().find(|c| c.name == *hop).ok_or_else(|| {
-            sqlx::Error::Protocol(format!(
-                "umbra::orm::select_related: unknown field `{hop}` on table `{current_table}` \
-                 (full path `{path}`)"
-            ))
-        })?;
-        let target = col.fk_target.as_deref().ok_or_else(|| {
-            sqlx::Error::Protocol(format!(
-                "umbra::orm::select_related: field `{hop}` on table `{current_table}` is not a \
-                 foreign key (full path `{path}`)"
-            ))
-        })?;
-        hop_targets.push(target);
-        current_table = target;
-    }
-
-    // Phase 1: fetch each level's rows top-down, one batched IN
-    // query per hop. `levels[i]` holds the rows at depth i (before
-    // any nesting is embedded), keyed for later lookup by id.
-    let first_field = hops[0];
-    let mut ids: Vec<i64> = rows
-        .iter()
-        .filter_map(|r| r.fk_id_for(first_field))
-        .collect();
-    if ids.is_empty() {
-        return Ok(());
-    }
-    ids.sort_unstable();
-    ids.dedup();
-    let mut levels: Vec<Vec<JsonValue>> = Vec::with_capacity(hops.len());
-    levels.push(fetch_related_as_json(hop_targets[0], &ids, pool).await?);
-
-    for hop_idx in 1..hops.len() {
-        let hop_field = hops[hop_idx];
-        let hop_target = hop_targets[hop_idx];
-        let prev_lvl = &levels[hop_idx - 1];
-        let mut next_ids: Vec<i64> = prev_lvl
-            .iter()
-            .filter_map(|r| r.as_object()?.get(hop_field)?.as_i64())
-            .collect();
-        if next_ids.is_empty() {
-            // The chain bottoms out: the prior level has only NULL
-            // for this hop. Subsequent hops would also be empty;
-            // stop here. Earlier levels still embed below.
-            break;
-        }
-        next_ids.sort_unstable();
-        next_ids.dedup();
-        levels.push(fetch_related_as_json(hop_target, &next_ids, pool).await?);
-    }
-
-    // Phase 2: bottom-up embed. For each level from the second-to-
-    // last down to the first, embed the next level's matching row
-    // into the corresponding `hop_field` slot. By the time we hit
-    // levels[0], its rows carry the full nested chain.
-    if levels.len() > 1 {
-        for i in (0..levels.len() - 1).rev() {
-            let next_by_id: HashMap<i64, JsonValue> = levels[i + 1]
-                .iter()
-                .filter_map(|obj| {
-                    let map = obj.as_object()?;
-                    let id = map.get("id")?.as_i64()?;
-                    Some((id, obj.clone()))
-                })
-                .collect();
-            let hop_field = hops[i + 1];
-            for row in levels[i].iter_mut() {
-                let Some(map) = row.as_object_mut() else {
-                    continue;
-                };
-                let Some(JsonValue::Number(n)) = map.get(hop_field) else {
-                    continue;
-                };
-                let Some(id) = n.as_i64() else { continue };
-                if let Some(next_json) = next_by_id.get(&id) {
-                    map.insert(hop_field.to_string(), next_json.clone());
-                }
-            }
-        }
-    }
-
-    // Phase 3: hydrate root parents with the fully-nested level-0
-    // rows. Recursive ForeignKey<T>::Deserialize unpacks the chain
-    // into resolved slots at every depth.
-    let first_by_id: HashMap<i64, JsonValue> = levels
-        .into_iter()
-        .next()
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|obj| {
-            let map = obj.as_object()?;
-            let id = map.get("id")?.as_i64()?;
-            Some((id, obj.clone()))
-        })
-        .collect();
-    for row in rows.iter_mut() {
-        if let Some(id) = row.fk_id_for(first_field) {
-            if let Some(json) = first_by_id.get(&id) {
-                row.hydrate_fk(first_field, json);
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Gap #44 — reverse-FK collection hydration. Runs one batched
-/// `SELECT * FROM <target_table> WHERE <fk_column> IN (parent_pks)`,
-/// groups rows by their `<fk_column>` value, and feeds each parent's
-/// bucket to `HydrateRelated::set_reverse_fk_resolved_json`.
-///
-/// Query budget: 1 query per declared `prefetch_related("...")`
-/// field regardless of parent count. Same no-N+1 guarantee the M2M
-/// path has. Parents without an i64 PK (`pk_i64()` returns `None`)
-/// are skipped — same v1 constraint as the rest of the M2M plumbing.
-async fn hydrate_reverse_fk_for_field<T: Model + HydrateRelated>(
-    rows: &mut [T],
-    spec: &crate::orm::model::ReverseFkRelationSpec,
-    pool: &DbPool,
-) -> Result<(), sqlx::Error> {
-    // Parent PKs (i64 only at v1).
-    let mut parent_ids: Vec<i64> = rows.iter().filter_map(|r| r.pk_i64()).collect();
-    if parent_ids.is_empty() {
-        // Set empty resolved on every parent so `comment_set.resolved()`
-        // returns `Some(&[])` after prefetch (matches the "no children
-        // found" shape — distinct from "not loaded").
-        for r in rows.iter_mut() {
-            r.set_reverse_fk_resolved_json(spec.field_name, Vec::new());
-        }
-        return Ok(());
-    }
-    parent_ids.sort_unstable();
-    parent_ids.dedup();
-    // Query children: SELECT * FROM <target> WHERE <fk_col> IN (...)
-    // We use a raw query because the target table's column list is
-    // fixed (every column comes back) and we want the rows as JSON
-    // for the hydrate trait method.
-    let child_rows =
-        fetch_reverse_fk_children(spec.target_table, spec.fk_column, &parent_ids, pool).await?;
-    // Bucket children by their fk_column value.
-    let mut by_parent: HashMap<i64, Vec<JsonValue>> = HashMap::new();
-    for row in child_rows {
-        let parent_id = row
-            .as_object()
-            .and_then(|m| m.get(spec.fk_column))
-            .and_then(|v| v.as_i64());
-        if let Some(pid) = parent_id {
-            by_parent.entry(pid).or_default().push(row);
-        }
-    }
-    // Populate each parent's ReverseSet — empty bucket → empty Vec
-    // (matches the documented "loaded, no children" shape).
-    for row in rows.iter_mut() {
-        if let Some(pk) = row.pk_i64() {
-            let bucket = by_parent.remove(&pk).unwrap_or_default();
-            row.set_reverse_fk_resolved_json(spec.field_name, bucket);
-        }
-    }
-    Ok(())
-}
-
-/// Batched `SELECT * FROM <target_table> WHERE <fk_column> IN (?, ?, ...)`
-/// returning each child row as a `serde_json::Value::Object`. Reuses
-/// the sqlite_row_to_json / postgres_row_to_json decoders so NULL
-/// columns map correctly to JsonValue::Null (post-#42 fix).
-async fn fetch_reverse_fk_children(
-    target_table: &str,
-    fk_column: &str,
-    parent_ids: &[i64],
-    pool: &DbPool,
-) -> Result<Vec<JsonValue>, sqlx::Error> {
-    if parent_ids.is_empty() {
-        return Ok(vec![]);
-    }
-    match pool {
-        DbPool::Sqlite(pool) => {
-            let placeholders: Vec<String> =
-                (0..parent_ids.len()).map(|_| "?".to_string()).collect();
-            let sql = format!(
-                "SELECT * FROM \"{}\" WHERE \"{}\" IN ({})",
-                target_table.replace('"', "\"\""),
-                fk_column.replace('"', "\"\""),
-                placeholders.join(", ")
-            );
-            let mut q = sqlx::query(&sql);
-            for id in parent_ids {
-                q = q.bind(*id);
-            }
-            let rows = q.fetch_all(pool).await?;
-            Ok(rows.iter().map(sqlite_row_to_json).collect())
-        }
-        DbPool::Postgres(pool) => {
-            let placeholders: Vec<String> =
-                (1..=parent_ids.len()).map(|i| format!("${i}")).collect();
-            let sql = format!(
-                "SELECT * FROM \"{}\" WHERE \"{}\" IN ({})",
-                target_table.replace('"', "\"\""),
-                fk_column.replace('"', "\"\""),
-                placeholders.join(", ")
-            );
-            let mut q = sqlx::query(&sql);
-            for id in parent_ids {
-                q = q.bind(*id);
-            }
-            let rows = q.fetch_all(pool).await?;
-            Ok(rows.iter().map(postgres_row_to_json).collect())
-        }
-    }
-}
-
-/// Gap 19: post-fetch hydration for `prefetch_related` names.
-///
-/// For each requested M2M field, runs one query joining the child
-/// table to the junction:
-///
-///   SELECT j.parent_id AS __parent_id, child.<col1>, child.<col2>, ...
-///   FROM <child_table> child
-///   INNER JOIN <junction> j ON child.<child_pk> = j.child_id
-///   WHERE j.parent_id IN (<parent_ids>)
-///
-/// Each result row decodes its child columns to a `serde_json::Value`
-/// object (using the child ModelMeta's column types — same machinery
-/// as `values()`). Rows are bucketed by parent_id; each parent in
-/// `rows` then receives the matching bucket via
-/// `HydrateRelated::set_m2m_resolved_json`.
-///
-/// V1 scope: i64 parent PK only (parents whose `pk_i64()` returns
-/// `None` are skipped). Unknown field names, models with no
-/// matching `M2M_RELATIONS` entry, and child models that aren't
-/// registered are silently no-op'd — matches the forgiving posture
-/// of `hydrate_select_related`.
-async fn hydrate_prefetch_related<T: Model + HydrateRelated>(
-    rows: &mut [T],
-    prefetch_fields: &[String],
-    pool: &DbPool,
-) -> Result<(), sqlx::Error> {
-    for field_name in prefetch_fields {
-        // 1. Locate the M2M relation spec on T for this field name.
-        //    Loud-error path (post-#42): if the field doesn't match
-        //    an M2M relation, fail fast rather than silently no-op
-        //    (the prior silent-skip made typos invisible). FK-shaped
-        //    fields point at select_related / join_related instead.
-        //    Reverse-FK ("comment_set"-style) prefetch is gap #44 —
-        //    when that ships, we'll route unmatched names through
-        //    the reverse-FK lookup before erroring.
-        // Try M2M first.
-        let m2m_spec = T::M2M_RELATIONS
-            .iter()
-            .find(|s| s.field_name == field_name.as_str());
-        // If not M2M, try reverse-FK (gap #44 — needs a ReverseSet<C>
-        // field declared on the parent with `#[umbra(reverse_fk =
-        // "<fk_col>")]`).
-        let rfk_spec = T::REVERSE_FK_RELATIONS
-            .iter()
-            .find(|s| s.field_name == field_name.as_str());
-        if let Some(spec) = rfk_spec {
-            hydrate_reverse_fk_for_field::<T>(rows, spec, pool).await?;
-            continue;
-        }
-        let spec = match m2m_spec {
-            Some(s) => s,
-            None => {
-                let is_fk = T::FIELDS
-                    .iter()
-                    .any(|f| f.name == field_name.as_str() && f.fk_target.is_some());
-                let hint = if is_fk {
-                    format!(
-                        " — `{field_name}` is a foreign key, use `.select_related(...)` \
-                         or `.join_related(...)` instead"
-                    )
-                } else {
-                    " — no M2M relation or ReverseSet field with that name on this model"
-                        .to_string()
-                };
-                return Err(sqlx::Error::Protocol(format!(
-                    "umbra::orm::prefetch_related: unknown field `{field_name}` on model `{}`{hint}",
-                    T::NAME
-                )));
-            }
-        };
-        let junction_table = format!("{}_{}", T::TABLE, spec.field_name);
-
-        // 2. Look up the child model's ModelMeta via the migrate
-        //    registry so we can iterate its columns at decode time.
-        let registered: Vec<crate::migrate::ModelMeta> = crate::migrate::registered_models();
-        let child_meta = match registered
-            .into_iter()
-            .find(|m| m.table == spec.target_table)
-        {
-            Some(m) => m,
-            None => continue,
-        };
-        let child_pk_col = match child_meta.fields.iter().find(|c| c.primary_key) {
-            Some(c) => c.name.clone(),
-            None => continue,
-        };
-
-        // 3. Collect parent PKs (i64 only) from the main rows.
-        let mut parent_ids: Vec<i64> = Vec::with_capacity(rows.len());
-        for row in rows.iter() {
-            if let Some(pk) = row.pk_i64() {
-                parent_ids.push(pk);
-            }
-        }
-        if parent_ids.is_empty() {
-            // Still need to set empty resolved on every parent so
-            // `tags.resolved()` returns `Some(&[])` after prefetch,
-            // matching the documented "empty Vec, not None" contract.
-            for r in rows.iter_mut() {
-                r.set_m2m_resolved_json(field_name.as_str(), Vec::new());
-            }
-            continue;
-        }
-
-        // 4. Build the SELECT joining child + junction.
-        let mut q = sea_query::Query::select();
-        q.expr_as(
-            sea_query::Expr::col((
-                sea_query::Alias::new("j"),
-                sea_query::Alias::new("parent_id"),
-            )),
-            sea_query::Alias::new("__parent_id"),
-        );
-        for col in &child_meta.fields {
-            q.expr_as(
-                sea_query::Expr::col((
-                    sea_query::Alias::new("c"),
-                    sea_query::Alias::new(col.name.as_str()),
-                )),
-                sea_query::Alias::new(col.name.as_str()),
-            );
-        }
-        q.from_as(
-            sea_query::Alias::new(child_meta.table.as_str()),
-            sea_query::Alias::new("c"),
-        )
-        .join_as(
-            sea_query::JoinType::InnerJoin,
-            sea_query::Alias::new(&junction_table),
-            sea_query::Alias::new("j"),
-            sea_query::Expr::col((
-                sea_query::Alias::new("j"),
-                sea_query::Alias::new("child_id"),
-            ))
-            .equals((
-                sea_query::Alias::new("c"),
-                sea_query::Alias::new(child_pk_col.as_str()),
-            )),
-        )
-        .and_where(
-            sea_query::Expr::col((
-                sea_query::Alias::new("j"),
-                sea_query::Alias::new("parent_id"),
-            ))
-            .is_in(parent_ids.iter().copied()),
-        );
-
-        // 5. Execute and group by parent_id.
-        let mut buckets: HashMap<i64, Vec<JsonValue>> = HashMap::new();
-        match pool {
-            DbPool::Sqlite(p) => {
-                let (sql, vals) = q.build_sqlx(SqliteQueryBuilder);
-                let raw_rows = sqlx::query_with::<sqlx::Sqlite, _>(&sql, vals)
-                    .fetch_all(p)
-                    .await?;
-                for raw in &raw_rows {
-                    use sqlx::Row;
-                    let parent_id: i64 = raw.try_get("__parent_id")?;
-                    let mut obj = serde_json::Map::with_capacity(child_meta.fields.len());
-                    for col in &child_meta.fields {
-                        let v = crate::orm::dynamic::decode_to_json(raw, col)?;
-                        obj.insert(col.name.clone(), v);
-                    }
-                    buckets
-                        .entry(parent_id)
-                        .or_default()
-                        .push(JsonValue::Object(obj));
-                }
-            }
-            DbPool::Postgres(p) => {
-                let (sql, vals) = q.build_sqlx(PostgresQueryBuilder);
-                let raw_rows = sqlx::query_with::<sqlx::Postgres, _>(&sql, vals)
-                    .fetch_all(p)
-                    .await?;
-                for raw in &raw_rows {
-                    use sqlx::Row;
-                    let parent_id: i64 = raw.try_get("__parent_id")?;
-                    let mut obj = serde_json::Map::with_capacity(child_meta.fields.len());
-                    for col in &child_meta.fields {
-                        let v = crate::orm::dynamic::decode_pg_to_json(raw, col)?;
-                        obj.insert(col.name.clone(), v);
-                    }
-                    buckets
-                        .entry(parent_id)
-                        .or_default()
-                        .push(JsonValue::Object(obj));
-                }
-            }
-        }
-
-        // 6. Hand each parent its bucket. Parents without children
-        //    still get an empty Vec so .resolved() returns Some(&[])
-        //    consistently after prefetch.
-        for row in rows.iter_mut() {
-            let bucket = match row.pk_i64() {
-                Some(id) => buckets.remove(&id).unwrap_or_default(),
-                None => Vec::new(),
-            };
-            row.set_m2m_resolved_json(field_name.as_str(), bucket);
-        }
-    }
-    Ok(())
-}
-
-/// Fetch rows from `table` where `id IN ids` and return them as a `Vec` of
-/// `serde_json::Value::Object`. Uses the backup-style column-walk approach to
-/// avoid needing a `FromRow` bound on the target model type.
-async fn fetch_related_as_json(
-    table: &str,
-    ids: &[i64],
-    pool: &DbPool,
-) -> Result<Vec<JsonValue>, sqlx::Error> {
-    if ids.is_empty() {
-        return Ok(vec![]);
-    }
-    // Build a raw SQL query: SELECT * FROM <table> WHERE id IN (?, ?, ...)
-    // using positional placeholders appropriate for the backend.
-    match pool {
-        DbPool::Sqlite(pool) => {
-            let placeholders: Vec<String> = (0..ids.len()).map(|_| "?".to_string()).collect();
-            let sql = format!(
-                "SELECT * FROM \"{}\" WHERE id IN ({})",
-                table.replace('"', "\"\""),
-                placeholders.join(", ")
-            );
-            let mut query = sqlx::query(&sql);
-            for id in ids {
-                query = query.bind(*id);
-            }
-            let rows = query.fetch_all(pool).await?;
-            let result = rows.iter().map(sqlite_row_to_json).collect::<Vec<_>>();
-            Ok(result)
-        }
-        DbPool::Postgres(pool) => {
-            let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("${i}")).collect();
-            let sql = format!(
-                "SELECT * FROM \"{}\" WHERE id IN ({})",
-                table.replace('"', "\"\""),
-                placeholders.join(", ")
-            );
-            let mut query = sqlx::query(&sql);
-            for id in ids {
-                query = query.bind(*id);
-            }
-            let rows = query.fetch_all(pool).await?;
-            let result = rows.iter().map(postgres_row_to_json).collect::<Vec<_>>();
-            Ok(result)
-        }
-    }
-}
-
-/// Convert a SQLite row to a `serde_json::Value::Object`. Reads every column
-/// by index and maps the SQLite type to the closest JSON primitive.
-///
-/// Type-cascade uses `Option<T>` for every decode so a NULL column
-/// reliably maps to `JsonValue::Null` instead of getting silently
-/// coerced to `0` / `false` / etc. The pre-#42 cascade used bare
-/// `try_get::<i64>` which SQLite affinity coerces from NULL to 0 —
-/// fine when the row never had nullable integer-shaped columns, but
-/// wrong as soon as a nullable FK was in scope (the nested
-/// `select_related` traversal hit this immediately).
-fn sqlite_row_to_json(row: &sqlx::sqlite::SqliteRow) -> JsonValue {
-    use sqlx::Row;
-    let mut map = serde_json::Map::new();
-    for col in row.columns() {
-        let name = col.name().to_string();
-        let ord = col.ordinal();
-        let val: JsonValue = if let Ok(opt) = row.try_get::<Option<i64>, _>(ord) {
-            opt.map_or(JsonValue::Null, |v| JsonValue::Number(v.into()))
-        } else if let Ok(opt) = row.try_get::<Option<f64>, _>(ord) {
-            opt.map_or(JsonValue::Null, |v| serde_json::json!(v))
-        } else if let Ok(opt) = row.try_get::<Option<bool>, _>(ord) {
-            opt.map_or(JsonValue::Null, JsonValue::Bool)
-        } else if let Ok(opt) = row.try_get::<Option<String>, _>(ord) {
-            opt.map_or(JsonValue::Null, JsonValue::String)
-        } else {
-            JsonValue::Null
-        };
-        map.insert(name, val);
-    }
-    JsonValue::Object(map)
-}
-
-/// Convert a Postgres row to a `serde_json::Value::Object`. See the
-/// note on `sqlite_row_to_json` — same `Option<T>`-first cascade so
-/// NULL columns map to `JsonValue::Null` rather than the type's
-/// default (`0`, `false`, `""`).
-fn postgres_row_to_json(row: &sqlx::postgres::PgRow) -> JsonValue {
-    use sqlx::Row;
-    let mut map = serde_json::Map::new();
-    for col in row.columns() {
-        let name = col.name().to_string();
-        let ord = col.ordinal();
-        let val: JsonValue = if let Ok(opt) = row.try_get::<Option<i64>, _>(ord) {
-            opt.map_or(JsonValue::Null, |v| JsonValue::Number(v.into()))
-        } else if let Ok(opt) = row.try_get::<Option<f64>, _>(ord) {
-            opt.map_or(JsonValue::Null, |v| serde_json::json!(v))
-        } else if let Ok(opt) = row.try_get::<Option<bool>, _>(ord) {
-            opt.map_or(JsonValue::Null, JsonValue::Bool)
-        } else if let Ok(opt) = row.try_get::<Option<String>, _>(ord) {
-            opt.map_or(JsonValue::Null, JsonValue::String)
-        } else {
-            JsonValue::Null
-        };
-        map.insert(name, val);
-    }
-    JsonValue::Object(map)
-}
-
-/// Convert a `T: Serialize` instance to a `Map<String, Value>` for
-/// the insert path. Errors out if the instance doesn't serialize to a
-/// JSON object (only flat structs and HashMap-like shapes do).
-fn serialize_to_map<T: serde::Serialize>(
-    instance: &T,
-) -> Result<serde_json::Map<String, serde_json::Value>, crate::orm::write::WriteError> {
-    let value = serde_json::to_value(instance)?;
-    match value {
-        serde_json::Value::Object(map) => Ok(map),
-        _ => Err(crate::orm::write::WriteError::NotAnObject),
-    }
-}
-
-/// Build a single-row INSERT statement for one map of column values.
-/// Skips the PK column when its value is the autoincrement sentinel
-/// (see [`crate::orm::write::is_default_pk`]). Adds a `RETURNING *`
-/// clause so the caller can read back the populated instance.
-fn build_insert_one_for<T: Model>(
-    _backend_name: &str,
-    map: &serde_json::Map<String, serde_json::Value>,
-) -> Result<sea_query::InsertStatement, crate::orm::write::WriteError> {
-    use crate::orm::write::{is_default_pk, json_to_sea_value};
-    let mut columns: Vec<Alias> = Vec::new();
-    let mut values: Vec<sea_query::SimpleExpr> = Vec::new();
-    for field in T::FIELDS {
-        let val = map
-            .get(field.name)
-            .cloned()
-            .unwrap_or(serde_json::Value::Null);
-        // Skip PK if it's the default sentinel — let the DB
-        // autoincrement / default kick in.
-        if field.primary_key && is_default_pk(field.ty, &val) {
-            continue;
-        }
-        // Skip absent fields when nullable (caller didn't supply them).
-        if val.is_null() && field.nullable && !map.contains_key(field.name) {
-            continue;
-        }
-        let sea_value = json_to_sea_value(field.ty, &val, field.nullable, field.name)?;
-        columns.push(Alias::new(field.name));
-        values.push(sea_value.into());
-    }
-
-    let mut stmt = Query::insert();
-    stmt.into_table(Alias::new(T::TABLE)).columns(columns);
-    stmt.values(values).map_err(|e| {
-        crate::orm::write::WriteError::Sqlx(sqlx::Error::Protocol(format!(
-            "umbra::orm::write: sea-query rejected INSERT values: {e}"
-        )))
-    })?;
-    // RETURNING * so the caller can read the populated row back. Works
-    // on Postgres natively; sqlx-sqlite 0.8 supports it via SQLite >= 3.35.
-    stmt.returning_all();
-    Ok(stmt)
-}
-
-/// Build a multi-row INSERT. Reuses the per-row column-selection logic
-/// from `build_insert_one_for` for the first map, then asserts every
-/// subsequent map exposes the same column set (heterogeneous row shapes
-/// would change the column list mid-INSERT, which SQL forbids).
-fn build_insert_many_for<T: Model>(
-    _backend_name: &str,
-    maps: &[serde_json::Map<String, serde_json::Value>],
-) -> Result<sea_query::InsertStatement, crate::orm::write::WriteError> {
-    use crate::orm::write::{is_default_pk, json_to_sea_value};
-    // Decide column set from the first row. Subsequent rows MUST
-    // produce the same column set — anything else would break the
-    // INSERT's columns clause.
-    let first = &maps[0];
-    let included_fields: Vec<&crate::orm::FieldSpec> = T::FIELDS
-        .iter()
-        .filter(|field| {
-            let val = first
-                .get(field.name)
-                .cloned()
-                .unwrap_or(serde_json::Value::Null);
-            if field.primary_key && is_default_pk(field.ty, &val) {
-                return false;
-            }
-            if val.is_null() && field.nullable && !first.contains_key(field.name) {
-                return false;
-            }
-            true
-        })
-        .collect();
-
-    let columns: Vec<Alias> = included_fields.iter().map(|f| Alias::new(f.name)).collect();
-
-    let mut stmt = Query::insert();
-    stmt.into_table(Alias::new(T::TABLE)).columns(columns);
-    for map in maps {
-        let row_values: Result<Vec<_>, _> = included_fields
-            .iter()
-            .map(|field| {
-                let val = map
-                    .get(field.name)
-                    .cloned()
-                    .unwrap_or(serde_json::Value::Null);
-                json_to_sea_value(field.ty, &val, field.nullable, field.name)
-                    .map(sea_query::SimpleExpr::from)
-            })
-            .collect();
-        stmt.values(row_values?).map_err(|e| {
-            crate::orm::write::WriteError::Sqlx(sqlx::Error::Protocol(format!(
-                "umbra::orm::write: sea-query rejected INSERT values: {e}"
-            )))
-        })?;
-    }
-    Ok(stmt)
-}
-
-// =========================================================================
-// Primary-key decoding for bulk signal payloads
-//
-// Bulk write terminals (bulk_create, update_values, update_expr, delete)
-// add `RETURNING <pk>` to their statements when at least one subscriber
-// is registered for the corresponding bulk signal. The returned rows
-// then go through one of these helpers to land as serde_json::Value in
-// the signal payload's `ids` array.
-//
-// The dispatch is keyed on the FieldSpec's SqlType. Anything beyond the
-// built-in PK types (i32 / i64 / String / Uuid / FK) lands as Value::Null
-// — the signal still fires, just without a usable id for that row. In
-// practice the PK type is one of the four built-ins.
-// =========================================================================
-
-fn pk_to_json_sqlite(
-    row: &sqlx::sqlite::SqliteRow,
-    col_name: &str,
-    ty: crate::orm::SqlType,
-) -> Result<JsonValue, sqlx::Error> {
-    use crate::orm::SqlType::*;
-    use serde_json::json;
-    use sqlx::Row;
-    Ok(match ty {
-        SmallInt | Integer | BigInt | ForeignKey => json!(row.try_get::<i64, _>(col_name)?),
-        Text => json!(row.try_get::<String, _>(col_name)?),
-        Uuid => json!(row.try_get::<uuid::Uuid, _>(col_name)?.to_string()),
-        _ => JsonValue::Null,
-    })
-}
-
-fn pk_to_json_pg(
-    row: &sqlx::postgres::PgRow,
-    col_name: &str,
-    ty: crate::orm::SqlType,
-) -> Result<JsonValue, sqlx::Error> {
-    use crate::orm::SqlType::*;
-    use serde_json::json;
-    use sqlx::Row;
-    Ok(match ty {
-        SmallInt => json!(row.try_get::<i16, _>(col_name)?),
-        Integer => json!(row.try_get::<i32, _>(col_name)?),
-        BigInt | ForeignKey => json!(row.try_get::<i64, _>(col_name)?),
-        Text => json!(row.try_get::<String, _>(col_name)?),
-        Uuid => json!(row.try_get::<uuid::Uuid, _>(col_name)?.to_string()),
-        _ => JsonValue::Null,
-    })
-}
-
-/// Locate the primary-key FieldSpec for a model. Returns `None` if the
-/// model has no PK (pathological — every macro-generated Model has one).
-fn pk_field<T: Model>() -> Option<&'static crate::orm::FieldSpec> {
-    T::FIELDS.iter().find(|f| f.primary_key)
-}
-
-// =========================================================================
-// Aggregate result decoding
-//
-// COUNT always returns BIGINT, AVG always returns DOUBLE — both backends
-// agree on this. SUM/MAX/MIN inherit the source column's type, so the
-// decoder dispatches on the FieldSpec's SqlType we collected at
-// terminal-build time.
-// =========================================================================
-
-fn decode_agg_sqlite(
-    row: &sqlx::sqlite::SqliteRow,
-    name: &str,
-    agg: &crate::orm::Aggregate,
-    source_ty: Option<crate::orm::SqlType>,
-) -> Result<JsonValue, sqlx::Error> {
-    use crate::orm::SqlType::*;
-    use crate::orm::aggregate::AggregateKind;
-    use serde_json::json;
-    use sqlx::Row;
-    Ok(match agg.kind() {
-        AggregateKind::Count => json!(row.try_get::<i64, _>(name)?),
-        AggregateKind::Avg => row
-            .try_get::<Option<f64>, _>(name)?
-            .map_or(JsonValue::Null, |f| json!(f)),
-        AggregateKind::Sum | AggregateKind::Max | AggregateKind::Min => match source_ty {
-            Some(SmallInt | Integer | BigInt | ForeignKey) => row
-                .try_get::<Option<i64>, _>(name)?
-                .map_or(JsonValue::Null, |n| json!(n)),
-            Some(Real | Double) => row
-                .try_get::<Option<f64>, _>(name)?
-                .map_or(JsonValue::Null, |f| json!(f)),
-            // Default to a string read for date/time/text/uuid; SQLite
-            // stores them as TEXT, so a MIN/MAX comes back stringified.
-            _ => row
-                .try_get::<Option<String>, _>(name)?
-                .map_or(JsonValue::Null, JsonValue::String),
-        },
-    })
-}
-
-fn decode_agg_pg(
-    row: &sqlx::postgres::PgRow,
-    name: &str,
-    agg: &crate::orm::Aggregate,
-    source_ty: Option<crate::orm::SqlType>,
-) -> Result<JsonValue, sqlx::Error> {
-    use crate::orm::SqlType::*;
-    use crate::orm::aggregate::AggregateKind;
-    use serde_json::json;
-    use sqlx::Row;
-    Ok(match agg.kind() {
-        AggregateKind::Count => json!(row.try_get::<i64, _>(name)?),
-        AggregateKind::Avg => row
-            .try_get::<Option<f64>, _>(name)?
-            .map_or(JsonValue::Null, |f| json!(f)),
-        AggregateKind::Sum | AggregateKind::Max | AggregateKind::Min => match source_ty {
-            Some(SmallInt) => row
-                .try_get::<Option<i16>, _>(name)?
-                .map_or(JsonValue::Null, |n| json!(n)),
-            Some(Integer) => row
-                .try_get::<Option<i32>, _>(name)?
-                .map_or(JsonValue::Null, |n| json!(n)),
-            Some(BigInt | ForeignKey) => row
-                .try_get::<Option<i64>, _>(name)?
-                .map_or(JsonValue::Null, |n| json!(n)),
-            Some(Real) => row
-                .try_get::<Option<f32>, _>(name)?
-                .map_or(JsonValue::Null, |f| json!(f as f64)),
-            Some(Double) => row
-                .try_get::<Option<f64>, _>(name)?
-                .map_or(JsonValue::Null, |f| json!(f)),
-            _ => row
-                .try_get::<Option<String>, _>(name)?
-                .map_or(JsonValue::Null, JsonValue::String),
-        },
-    })
-}
+// `decode_agg_sqlite` / `decode_agg_pg` moved to
+// `backend_sqlite::decode_agg` / `backend_pg::decode_agg`.
