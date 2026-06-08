@@ -71,20 +71,30 @@
 {% endif %}
 
 {# ================================================================
-   Widget grid — Important data first, before the model registry.
-   Per-kind loading skeleton lives here so the first-paint matches
-   the eventual widget shape (KPI / card / line / bar / feed /
-   table), preventing the page from jumping when HTMX swaps in
-   the real content.
+   Widget sections — each named group renders as its own
+   <section> with title + (optional) subtitle + widget grid.
+   Important data first, registry second, so the operator's
+   eye lands on KPIs before navigating to the data tables.
+
+   Per-kind loading skeletons live inside each widget cell so
+   the first-paint matches the eventual widget shape (KPI / card
+   / line / bar / feed / table), preventing the page from
+   jumping when HTMX swaps in the real content.
    ================================================================ #}
-{% if widgets %}
+{% for section in widget_sections %}
+{% if section.widgets and section.widgets | length > 0 %}
 <section class="mb-xl">
-  <div class="flex items-center justify-between mb-md">
-    <h2 class="font-h3 text-h3 text-on-surface">Widgets</h2>
-    <span class="text-label-sm text-outline">{{ widgets | length }} active</span>
+  <div class="flex items-end justify-between mb-md gap-md">
+    <div class="min-w-0">
+      <h2 class="font-h3 text-h3 text-on-surface">{{ section.title }}</h2>
+      {% if section.subtitle %}
+      <p class="text-label-sm text-outline mt-xs truncate">{{ section.subtitle }}</p>
+      {% endif %}
+    </div>
+    <span class="text-label-sm text-outline flex-shrink-0">{{ section.widgets | length }} active</span>
   </div>
   <div class="grid grid-cols-12 gap-sm auto-rows-[120px]">
-    {% for w in widgets %}
+    {% for w in section.widgets %}
     {%- set col_span = w.span.cols if w.span and w.span.cols else 3 -%}
     {%- set row_span = w.span.rows if w.span and w.span.rows else 1 -%}
     <div
@@ -162,6 +172,7 @@
   </div>
 </section>
 {% endif %}
+{% endfor %}
 
 {# ================================================================
    Model cards grid — one card per registered model. Icon top-
@@ -177,9 +188,14 @@
    ================================================================ #}
 {% if model_cards %}
 <section class="mb-xl">
-  <div class="flex items-center justify-between mb-md">
-    <h2 class="font-h3 text-h3 text-on-surface">Models</h2>
-    <span class="text-label-sm text-outline tabular-nums">{{ model_cards | length }} total</span>
+  <div class="flex items-end justify-between mb-md gap-md">
+    <div class="min-w-0">
+      <h2 class="font-h3 text-h3 text-on-surface">{{ dashboard_models_title or "Models" }}</h2>
+      {% if dashboard_models_subtitle %}
+      <p class="text-label-sm text-outline mt-xs truncate">{{ dashboard_models_subtitle }}</p>
+      {% endif %}
+    </div>
+    <span class="text-label-sm text-outline tabular-nums flex-shrink-0">{{ model_cards | length }} total</span>
   </div>
   <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-6 gap-sm">
     {% for card in model_cards %}
@@ -209,11 +225,12 @@
 </section>
 {% endif %}
 
-{# Empty-state fallback — shown only when BOTH widgets and model
-   cards are empty. With the new ordering Widgets come first;
-   this block stays as the catch-all for fresh installs that
-   haven't registered anything yet. ================================ #}
-{% if not widgets and not model_cards %}
+{# Empty-state fallback — shown only when BOTH every widget
+   section is empty AND model_cards is empty. With the new
+   ordering Widgets come first; this block stays as the catch-
+   all for fresh installs that haven't registered anything yet. #}
+{%- set total_widgets = widget_sections | map(attribute="widgets") | map("length") | sum -%}
+{% if total_widgets == 0 and not model_cards %}
 <div class="flex flex-col items-center justify-center py-xl text-center">
   <div class="w-20 h-20 rounded-2xl bg-surface-container-low border border-outline-variant flex items-center justify-center mb-lg">
     <i data-lucide="layout-dashboard" class="w-10 h-10 text-outline/40"></i>

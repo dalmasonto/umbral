@@ -459,3 +459,70 @@ pub struct CatalogEntry {
     pub kind: String,
     pub default_span: Span,
 }
+
+// =========================================================================
+// Sections — grouped widgets
+// =========================================================================
+
+/// A named group of widgets on the dashboard. Each section renders
+/// as its own heading + (optional) subtitle + widget grid, so a
+/// dashboard with 20 widgets reads as themed clusters rather than
+/// one mega-grid.
+///
+/// Build with the chainable API:
+///
+/// ```rust,ignore
+/// use umbra_admin::WidgetSection;
+///
+/// let sales = WidgetSection::new("Sales overview")
+///     .subtitle("Daily KPIs across the storefront")
+///     .widget(shop_total_sales_widget())
+///     .widget(shop_orders_widget())
+///     .widget(shop_avg_order_value_widget());
+///
+/// AdminPlugin::default().dashboard_section(sales);
+/// ```
+///
+/// Register multiple sections by chaining `.dashboard_section(...)`.
+/// Widgets registered via the legacy `.register_widget(...)` end up
+/// in an implicit final section titled "Widgets" — so existing apps
+/// keep working without code changes.
+#[derive(Debug, Clone)]
+pub struct WidgetSection {
+    /// Heading shown above the section (e.g. "Sales overview").
+    pub title: String,
+    /// Optional descriptive line under the title — keep it short,
+    /// it's not a paragraph.
+    pub subtitle: Option<String>,
+    /// Widgets in this section, rendered in registration order.
+    pub widgets: Vec<Widget>,
+}
+
+impl WidgetSection {
+    /// New empty section with just a title.
+    pub fn new(title: impl Into<String>) -> Self {
+        Self {
+            title: title.into(),
+            subtitle: None,
+            widgets: Vec::new(),
+        }
+    }
+
+    /// Add a one-line subtitle under the heading.
+    pub fn subtitle(mut self, subtitle: impl Into<String>) -> Self {
+        self.subtitle = Some(subtitle.into());
+        self
+    }
+
+    /// Append one widget to the section.
+    pub fn widget(mut self, w: Widget) -> Self {
+        self.widgets.push(w);
+        self
+    }
+
+    /// Append many widgets at once (handy for splatting a Vec).
+    pub fn widgets(mut self, ws: impl IntoIterator<Item = Widget>) -> Self {
+        self.widgets.extend(ws);
+        self
+    }
+}

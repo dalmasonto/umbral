@@ -240,18 +240,35 @@ pub(crate) async fn index(State(state): State<AdminState>, headers: HeaderMap) -
     };
     let apps = sidebar_apps(&state, &user);
 
-    let catalog = state.widget_catalog.as_ref();
-    let widgets: Vec<serde_json::Value> = catalog
+    // Sectioned widget list — each entry carries its own title +
+    // optional subtitle + widget array. The template renders one
+    // <section> per entry, so a dashboard with 20 widgets across
+    // 4 sections reads as themed clusters rather than one
+    // mega-grid. Falls back to a single un-named section when the
+    // developer only uses the legacy `register_widget(...)` API.
+    let widget_sections: Vec<serde_json::Value> = state
+        .dashboard_sections
         .iter()
-        .map(|w| {
+        .map(|section| {
+            let widgets_json: Vec<serde_json::Value> = section
+                .widgets
+                .iter()
+                .map(|w| {
+                    serde_json::json!({
+                        "key":   w.key,
+                        "title": w.title,
+                        "kind":  w.kind.as_str(),
+                        "span":  {
+                            "cols": w.default_span.cols,
+                            "rows": w.default_span.rows,
+                        },
+                    })
+                })
+                .collect();
             serde_json::json!({
-                "key":  w.key,
-                "title": w.title,
-                "kind": w.kind.as_str(),
-                "span": {
-                    "cols": w.default_span.cols,
-                    "rows": w.default_span.rows,
-                },
+                "title":    section.title,
+                "subtitle": section.subtitle,
+                "widgets":  widgets_json,
             })
         })
         .collect();
@@ -318,18 +335,20 @@ pub(crate) async fn index(State(state): State<AdminState>, headers: HeaderMap) -
     match render(
         "admin/dashboard.html",
         context!(
-            user          => user.username.clone(),
-            widgets       => widgets,
-            model_cards   => model_cards,
-            apps          => apps,
-            total_rows    => total_rows,
-            model_count   => model_count,
-            plugin_count  => plugin_count,
-            now_hour      => now_hour,
-            now_minute    => now_minute,
-            active_table  => "",
-            breadcrumbs   => Vec::<serde_json::Value>::new(),
-            initial_theme => initial_theme,
+            user                      => user.username.clone(),
+            widget_sections           => widget_sections,
+            model_cards               => model_cards,
+            dashboard_models_title    => state.dashboard_models_title.clone(),
+            dashboard_models_subtitle => state.dashboard_models_subtitle.clone(),
+            apps                      => apps,
+            total_rows                => total_rows,
+            model_count               => model_count,
+            plugin_count              => plugin_count,
+            now_hour                  => now_hour,
+            now_minute                => now_minute,
+            active_table              => "",
+            breadcrumbs               => Vec::<serde_json::Value>::new(),
+            initial_theme             => initial_theme,
         ),
     ) {
         Ok(html) => html.into_response(),

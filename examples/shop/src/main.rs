@@ -106,23 +106,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         .icon("users")
                         .password_field("password_hash"),
                 )
-                // Dashboard widgets in render order. The two
-                // builtins ship from umbra-admin as plain Widget
-                // constructors — register them where you want them
-                // to appear and override the grid span via
-                // `.with_span(cols, rows)`. We put the four shop
-                // KPI cards on top (most-watched daily), then the
-                // bar chart, then recent signups feed at the
-                // bottom.
+                // Dashboard layout — named sections beat one
+                // mega-grid as widget count grows. Each section
+                // gets a title + optional subtitle + its own
+                // widget grid below the heading.
                 //
-                // Model-cards section: pick a curated subset via
-                // the type-safe `models![T, U, V]` macro instead of
-                // raw table strings — renaming a struct or its
-                // `#[umbra(table = "...")]` propagates here
-                // automatically. Use `.dashboard_models_hidden()`
-                // to drop the section entirely (the 200-model
-                // enterprise case), `.dashboard_models_all()` for
-                // every registered model (default).
+                // Model-cards section also gets a humanized title
+                // ("Data") and a subtitle. Curated allowlist via
+                // the type-safe `models![T, U, V]` macro — renames
+                // propagate without chasing strings.
+                .dashboard_models_title("Data")
+                .dashboard_models_subtitle("Jump straight to a managed table")
                 .dashboard_models_only(&umbra::models![
                     ecommerce::models::Product,
                     ecommerce::models::Order,
@@ -131,12 +125,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     ecommerce::models::Coupon,
                     content::models::Post,
                 ])
-                .register_widget(shop_total_sales_widget())
-                .register_widget(shop_orders_widget())
-                .register_widget(shop_customers_widget())
-                .register_widget(shop_avg_order_value_widget())
-                .register_widget(umbra_admin::builtin_total_models_widget().with_span(8, 2))
-                .register_widget(umbra_admin::builtin_recent_users_widget().with_span(4, 2)),
+                .dashboard_section(
+                    umbra_admin::WidgetSection::new("Sales overview")
+                        .subtitle("Daily KPIs across the storefront")
+                        .widget(shop_total_sales_widget())
+                        .widget(shop_orders_widget())
+                        .widget(shop_customers_widget())
+                        .widget(shop_avg_order_value_widget()),
+                )
+                .dashboard_section(
+                    umbra_admin::WidgetSection::new("System")
+                        .subtitle("Framework-wide health + recent activity")
+                        .widget(
+                            umbra_admin::builtin_total_models_widget().with_span(8, 2),
+                        )
+                        .widget(
+                            umbra_admin::builtin_recent_users_widget().with_span(4, 2),
+                        ),
+                ),
         )
         // REST: three resources, three different auth + permission
         // postures, plus per-resource field-exposure controls. The

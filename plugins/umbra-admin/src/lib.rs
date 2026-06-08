@@ -90,7 +90,7 @@ pub use handlers::dashboard::{builtin_recent_users_widget, builtin_total_models_
 pub use widgets::{
     BarPayload, CardPayload, CatalogEntry, ChartPoint, FeedItem, FeedPayload, KpiPayload,
     LinePayload, Series, Span, TableColumn, TablePayload, Widget, WidgetDataFn, WidgetInstance,
-    WidgetKind, WidgetPayload, format_thousands, humanize_number,
+    WidgetKind, WidgetPayload, WidgetSection, format_thousands, humanize_number,
 };
 
 use std::sync::Arc;
@@ -158,6 +158,12 @@ impl Default for DashboardModelsConfig {
 pub struct AdminPlugin {
     registry: AdminRegistry,
     widget_catalog: Vec<Widget>,
+    /// Explicit named sections (each with title + subtitle + widget
+    /// list). Empty by default — back-compat for apps that only use
+    /// the legacy `register_widget` call. When non-empty, the
+    /// dashboard renders these sections first; any widgets in
+    /// `widget_catalog` get an implicit final "Widgets" section.
+    dashboard_sections: Vec<WidgetSection>,
     branding: branding::AdminBranding,
     /// Gap 107: base URL prefix for every admin route. Default
     /// `/admin`. Override with `AdminPlugin::default().at("/myadmin")`.
@@ -166,6 +172,11 @@ pub struct AdminPlugin {
     /// Dashboard model-cards config. Defaults to `All` so the
     /// dashboard does something sensible on a fresh install.
     dashboard_models: DashboardModelsConfig,
+    /// Heading shown above the model-cards section. Default
+    /// "Models" — override with `.dashboard_models_title(...)`.
+    dashboard_models_title: String,
+    /// Optional one-line subtitle under the heading.
+    dashboard_models_subtitle: Option<String>,
 }
 
 impl Default for AdminPlugin {
@@ -173,9 +184,12 @@ impl Default for AdminPlugin {
         Self {
             registry: AdminRegistry::default(),
             widget_catalog: Vec::new(),
+            dashboard_sections: Vec::new(),
             branding: branding::AdminBranding::default(),
             base_path: "/admin".to_string(),
             dashboard_models: DashboardModelsConfig::default(),
+            dashboard_models_title: "Models".to_string(),
+            dashboard_models_subtitle: None,
         }
     }
 }
@@ -333,6 +347,44 @@ impl AdminPlugin {
         self.dashboard_models = DashboardModelsConfig::All;
         self
     }
+
+    /// Append a named widget section to the dashboard. Sections
+    /// render in registration order, each with its own heading
+    /// + (optional) subtitle + widget grid:
+    ///
+    /// ```ignore
+    /// AdminPlugin::default()
+    ///   .dashboard_section(
+    ///       WidgetSection::new("Sales overview")
+    ///           .subtitle("Daily KPIs across the storefront")
+    ///           .widget(shop_total_sales_widget())
+    ///           .widget(shop_orders_widget()))
+    ///   .dashboard_section(
+    ///       WidgetSection::new("Engagement")
+    ///           .widget(umbra_admin::builtin_recent_users_widget()))
+    /// ```
+    ///
+    /// Widgets registered via the legacy `register_widget(...)`
+    /// land in an implicit final section titled "Widgets" so
+    /// pre-existing apps keep working without refactor.
+    pub fn dashboard_section(mut self, section: WidgetSection) -> Self {
+        self.dashboard_sections.push(section);
+        self
+    }
+
+    /// Override the heading shown above the model-cards section.
+    /// Default "Models". Pair with `dashboard_models_subtitle`
+    /// for a one-line explainer.
+    pub fn dashboard_models_title(mut self, title: impl Into<String>) -> Self {
+        self.dashboard_models_title = title.into();
+        self
+    }
+
+    /// Optional one-line caption under the model-cards heading.
+    pub fn dashboard_models_subtitle(mut self, subtitle: impl Into<String>) -> Self {
+        self.dashboard_models_subtitle = Some(subtitle.into());
+        self
+    }
 }
 
 /// Shared state injected into every route via [`axum::extract::State`].
@@ -341,11 +393,20 @@ impl AdminPlugin {
 #[derive(Clone, Debug)]
 struct AdminState {
     registry: Arc<AdminRegistry>,
-    /// Dashboard widget catalog — registered at plugin-build time.
+    /// Flat widget catalog — every widget across all sections.
+    /// Used by `GET /admin/api/dashboard/widgets/<key>/data` to
+    /// look up by key without knowing which section owns it.
     widget_catalog: Arc<Vec<Widget>>,
+    /// Dashboard sections in render order. Each carries its own
+    /// title + subtitle + widgets. The implicit "Widgets" section
+    /// (from legacy `register_widget(...)` calls) lives at the end.
+    dashboard_sections: Arc<Vec<WidgetSection>>,
     /// Dashboard model-cards section config. Read by the
     /// dashboard handler to filter (or skip) the model grid.
     dashboard_models: DashboardModelsConfig,
+    /// Heading + optional subtitle for the model-cards section.
+    dashboard_models_title: String,
+    dashboard_models_subtitle: Option<String>,
 }
 
 impl AdminState {
@@ -402,24 +463,37 @@ impl Plugin for AdminPlugin {
         sealed_branding.base_path = self.base_path.clone();
         let _ = branding::BRANDING.set(sealed_branding);
 
-        // The catalog is exactly what the developer registered via
-        // `.register_widget(...)`, in registration order. The two
-        // builtins (`builtin_total_models_widget`,
-        // `builtin_recent_users_widget`) used to auto-prepend here
-        // — that was removed so callers control ordering AND can
-        // resize via `.with_span(cols, rows)`. To get the old
-        // behaviour:
-        //
-        //   AdminPlugin::default()
-        //     .register_widget(umbra_admin::builtin_total_models_widget())
-        //     .register_widget(umbra_admin::builtin_recent_users_widget())
-        //     ...your widgets...
-        let catalog: Vec<Widget> = self.widget_catalog.clone();
+        // Final section list: developer-declared sections first
+        // (preserving registration order), then an implicit
+        // "Widgets" section at the end containing any legacy
+        // `register_widget(...)` calls. Apps that exclusively
+        // use the new `.dashboard_section(...)` API end up with
+        // a clean sectioned dashboard; apps that only use the
+        // legacy call see one un-sectioned grid like before;
+        // mixed-mode apps see explicit sections first and a
+        // catch-all at the bottom.
+        let mut sections: Vec<WidgetSection> = self.dashboard_sections.clone();
+        if !self.widget_catalog.is_empty() {
+            sections.push(
+                WidgetSection::new("Widgets")
+                    .widgets(self.widget_catalog.iter().cloned()),
+            );
+        }
+        // Flat catalog — feeds the per-widget data API. Built by
+        // flattening every section so a single lookup-by-key
+        // works regardless of which section a widget lives in.
+        let catalog: Vec<Widget> = sections
+            .iter()
+            .flat_map(|s| s.widgets.iter().cloned())
+            .collect();
 
         let state = AdminState {
             registry: Arc::new(self.registry.clone()),
             widget_catalog: Arc::new(catalog),
+            dashboard_sections: Arc::new(sections),
             dashboard_models: self.dashboard_models.clone(),
+            dashboard_models_title: self.dashboard_models_title.clone(),
+            dashboard_models_subtitle: self.dashboard_models_subtitle.clone(),
         };
         Router::new()
             // Login / logout (no auth required)
