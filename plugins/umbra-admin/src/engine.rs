@@ -30,10 +30,18 @@ pub(crate) fn engine() -> &'static Environment<'static> {
         // default; we route through serde_json so every kind a
         // template might pass (string, array, object, number) lands as
         // a valid JS literal. Falls back to `null` if serialisation
-        // refuses the input — the receiving JS just sees null and
-        // moves on rather than producing a malformed script.
-        env.add_filter("tojson", |v: minijinja::Value| -> String {
-            serde_json::to_string(&v).unwrap_or_else(|_| "null".to_string())
+        // refuses the input.
+        //
+        // Returns a `from_safe_string` Value so the auto-escape
+        // callback skips it — otherwise `{"foo":"bar"}` would land in
+        // a <script> block as `{&quot;foo&quot;:&quot;bar&quot;}` and
+        // the JS parser would die on the first `&`. That cascade
+        // killed every JS function defined later in the same block,
+        // which is why the FK search input's oninput handler couldn't
+        // find `umbra._filterFkSearch`.
+        env.add_filter("tojson", |v: minijinja::Value| -> minijinja::Value {
+            let json = serde_json::to_string(&v).unwrap_or_else(|_| "null".to_string());
+            minijinja::Value::from_safe_string(json)
         });
         env.add_template(
             "admin/wrapper.html",
