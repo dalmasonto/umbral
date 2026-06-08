@@ -777,6 +777,57 @@
       };
     }
 
+    // Sparkline mode — area chart with chrome stripped. Used by
+    // the card widget's trend trail; ApexCharts gives us
+    // animation + tooltip + responsive resizing without any of
+    // our own SVG plumbing. The colour comes from the card's
+    // delta tone (emerald = positive, red = negative, default
+    // primary) and is read off `data-spark-color`.
+    function sparklineChartOptions(el) {
+      var values = [];
+      el.querySelectorAll('[data-chart-point]').forEach(function(point) {
+        var v = Number(point.getAttribute('data-value') || 0);
+        values.push(Number.isFinite(v) ? v : 0);
+      });
+      if (values.length === 0) return null;
+      var color = el.getAttribute('data-spark-color') || token('--primary', 'rgb(99 102 241)');
+      return {
+        chart: {
+          type: 'area',
+          height: '100%',
+          width: '100%',
+          background: 'transparent',
+          sparkline: { enabled: true },
+          animations: {
+            enabled: true,
+            speed: 380,
+            animateGradually: { enabled: false },
+            dynamicAnimation: { enabled: true, speed: 220 },
+          },
+        },
+        series: [{ name: el.getAttribute('data-chart-series') || 'series', data: values }],
+        colors: [color],
+        stroke: { curve: 'smooth', width: 2 },
+        fill: {
+          type: 'gradient',
+          gradient: {
+            shadeIntensity: 1,
+            opacityFrom: 0.35,
+            opacityTo: 0,
+            stops: [0, 100],
+          },
+        },
+        tooltip: {
+          enabled: true,
+          theme: chartIsDark() ? 'dark' : 'light',
+          fixed: { enabled: false },
+          x: { show: false },
+          y: { formatter: function(v) { return Math.round(v); } },
+          marker: { show: false },
+        },
+      };
+    }
+
     function initCharts(root) {
       root = root || document;
       root.querySelectorAll('[data-umbra-chart="bar"]').forEach(function(el) {
@@ -789,6 +840,24 @@
         }
         if (fallback) fallback.classList.add('hidden');
         var options = barChartOptions(el);
+        if (!options) return;
+        if (canvas._umbraApexChart) {
+          canvas._umbraApexChart.updateOptions(options, false, true);
+          return;
+        }
+        canvas._umbraApexChart = new ApexCharts(canvas, options);
+        canvas._umbraApexChart.render();
+      });
+      root.querySelectorAll('[data-umbra-chart="sparkline"]').forEach(function(el) {
+        var canvas = el.querySelector('[data-chart-canvas]');
+        var fallback = el.querySelector('[data-chart-unavailable]');
+        if (!canvas) return;
+        if (!window.ApexCharts) {
+          if (fallback) fallback.classList.remove('hidden');
+          return;
+        }
+        if (fallback) fallback.classList.add('hidden');
+        var options = sparklineChartOptions(el);
         if (!options) return;
         if (canvas._umbraApexChart) {
           canvas._umbraApexChart.updateOptions(options, false, true);

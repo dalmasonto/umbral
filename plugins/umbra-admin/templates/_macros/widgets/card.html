@@ -87,21 +87,28 @@
     {% endif %}
   </div>
 
-  {# === Bottom: sparkline (optional) ================================= #}
+  {# === Bottom: sparkline (optional, ApexCharts-rendered) ============
+     Emits the DOM shape `wrapper.html`'s `initCharts()` looks for
+     under the `sparkline` kind. ApexCharts mounts on
+     `[data-chart-canvas]`; the points are read off hidden
+     `[data-chart-point]` siblings. `data-spark-color` picks
+     emerald/red based on the delta tone — ApexCharts uses it for
+     both the stroke and the fill gradient. =========================== #}
   {% if payload.sparkline and payload.sparkline | length > 1 %}
-    {%- set pts = payload.sparkline -%}
-    {%- set n = pts | length -%}
-    {%- set lo = pts | min -%}
-    {%- set hi = pts | max -%}
-    {%- set rng = (hi - lo) if (hi > lo) else 1.0 -%}
-    <div class="h-10 w-full overflow-hidden"
-         style="mask-image: linear-gradient(to right, black 75%, transparent); -webkit-mask-image: linear-gradient(to right, black 75%, transparent);">
-      <svg viewBox="0 0 100 20" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg"
-           class="w-full h-full fill-none stroke-2
-                  {% if delta_tone == 'red' %}stroke-red-400{% else %}stroke-emerald-400{% endif %}">
-        {%- set step = 100 / (n - 1) -%}
-        <path stroke-linecap="round" stroke-linejoin="round" d="{% for v in pts %}{% if loop.first %}M{% else %}L{% endif %}{{ (loop.index0 * step) | round(2) }},{{ (18 - ((v - lo) / rng) * 16) | round(2) }} {% endfor %}" />
-      </svg>
+    {%- if delta_tone == 'red' -%}
+      {%- set spark_color = "#f87171" -%}{# tailwind red-400 #}
+    {%- else -%}
+      {%- set spark_color = "#34d399" -%}{# tailwind emerald-400 #}
+    {%- endif -%}
+    <div class="h-10 w-full relative"
+         data-umbra-chart="sparkline"
+         data-chart-series="{{ title }}"
+         data-spark-color="{{ spark_color }}">
+      {% for v in payload.sparkline %}
+      <span data-chart-point data-value="{{ v }}" hidden></span>
+      {% endfor %}
+      <div data-chart-canvas class="absolute inset-0"></div>
+      <div data-chart-unavailable class="absolute inset-0 hidden"></div>
     </div>
   {% endif %}
 </div>
