@@ -1,0 +1,83 @@
+{#
+  card.html
+  =========
+  Summary card widget — the everyday "total sales / orders /
+  customers" tile.
+
+  Layout:
+
+    ┌──────────────────────────────────────────────┐
+    │ TITLE                              [icon]    │
+    │                                              │
+    │ unit                       value-large       │
+    │                                              │
+    │ subtitle           ↑ 12.3% delta-label       │
+    └──────────────────────────────────────────────┘
+
+  Payload shape (CardPayload):
+    { value, unit?, icon?, subtitle?, delta_percent?, delta_label? }
+
+  All optionals fall through cleanly when absent — a payload with
+  just `value` set renders a minimal "big number" card.
+#}
+
+{% macro card_widget(title, payload) %}
+<div class="card-widget h-full flex flex-col justify-between p-md">
+  {# Header row — title left, optional icon right. #}
+  <div class="flex items-start justify-between gap-sm">
+    <p class="text-label-sm text-outline uppercase tracking-wider truncate">{{ title }}</p>
+    {% if payload.icon %}
+    <div class="w-8 h-8 rounded-lg bg-primary-container/40 border border-primary/15 flex items-center justify-center flex-shrink-0">
+      <i data-lucide="{{ payload.icon }}" class="w-4 h-4 text-on-primary-container"></i>
+    </div>
+    {% endif %}
+  </div>
+
+  {# Value row — unit (small, muted, left) + value (big, right). #}
+  <div class="flex items-baseline justify-between gap-sm mt-sm">
+    {% if payload.unit %}
+    <span class="text-label-md text-on-surface-variant uppercase tracking-wide font-medium flex-shrink-0">
+      {{ payload.unit }}
+    </span>
+    {% else %}
+    <span></span>
+    {% endif %}
+    <span class="font-h2 text-h2 text-on-surface tabular-nums leading-none truncate" title="{{ payload.value }}">
+      {{ payload.value }}
+    </span>
+  </div>
+
+  {# Footer row — subtitle + growth indicator. Whole row hidden
+     when both are absent so empty cards collapse cleanly. #}
+  {% if payload.subtitle or payload.delta_percent is not none %}
+  <div class="flex items-center justify-between gap-sm mt-sm pt-sm border-t border-outline-variant/40">
+    {% if payload.subtitle %}
+    <span class="text-label-sm text-on-surface-variant truncate">{{ payload.subtitle }}</span>
+    {% else %}
+    <span></span>
+    {% endif %}
+
+    {% if payload.delta_percent is not none %}
+      {%- set delta = payload.delta_percent -%}
+      {%- if delta > 0 -%}
+        {%- set tone_color = "text-emerald-400 dark:text-emerald-400" -%}
+        {%- set arrow = "trending-up" -%}
+      {%- elif delta < 0 -%}
+        {%- set tone_color = "text-red-400 dark:text-red-400" -%}
+        {%- set arrow = "trending-down" -%}
+      {%- else -%}
+        {%- set tone_color = "text-on-surface-variant" -%}
+        {%- set arrow = "minus" -%}
+      {%- endif -%}
+    <span class="inline-flex items-center gap-1 text-label-sm font-medium tabular-nums {{ tone_color }}">
+      <i data-lucide="{{ arrow }}" class="w-3.5 h-3.5"></i>
+      <span>{{ delta | round(1) }}%</span>
+      {% if payload.delta_label %}
+      <span class="text-on-surface-variant font-normal ml-xs">{{ payload.delta_label }}</span>
+      {% endif %}
+    </span>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+{% endmacro %}

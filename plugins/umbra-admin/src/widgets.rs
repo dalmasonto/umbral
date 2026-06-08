@@ -66,7 +66,12 @@ impl Default for Span {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum WidgetKind {
+    /// Simple single-value KPI (legacy, kept for backwards compat).
     Kpi,
+    /// Shop-style summary card: title + icon + small unit / subtitle
+    /// + large humanized value + optional growth-vs-previous-period.
+    /// The everyday "Total sales / Orders / Customers" tile.
+    Card,
     Line,
     Bar,
     Table,
@@ -77,6 +82,7 @@ impl WidgetKind {
     pub fn as_str(&self) -> &'static str {
         match self {
             WidgetKind::Kpi => "kpi",
+            WidgetKind::Card => "card",
             WidgetKind::Line => "line",
             WidgetKind::Bar => "bar",
             WidgetKind::Table => "table",
@@ -100,6 +106,177 @@ pub struct KpiPayload {
     pub delta: Option<f64>,
     /// Optional sparkline data points (values only; x is implicit index).
     pub sparkline: Option<Vec<f64>>,
+}
+
+// =========================================================================
+// Card payload — the everyday "summary tile" widget.
+// =========================================================================
+
+/// Summary card payload. Renders as:
+///
+/// ```text
+/// ┌──────────────────────────────────────────┐
+/// │ TITLE                          [icon]    │  ← title row (from Widget)
+/// │                                          │
+/// │ USD                       12,438.20      │  ← unit (sm, left) + value (lg, right)
+/// │                                          │
+/// │ This month        ↑ 12.3% vs last month  │  ← subtitle + growth
+/// └──────────────────────────────────────────┘
+/// ```
+///
+/// Build with [`CardPayload::new`] + the chained setters; pass to
+/// [`WidgetPayload::Card`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CardPayload {
+    /// Formatted primary value, e.g. "12,438.20" or "12.4K". Use
+    /// [`humanize_number`] for the K/M/B/T compaction.
+    pub value: String,
+    /// Optional unit / context label shown on the left side of the
+    /// value row, e.g. "USD", "rows", "today".
+    pub unit: Option<String>,
+    /// Optional Lucide icon name (e.g. "dollar-sign", "shopping-cart").
+    /// Rendered via the data-lucide attribute the wrapper already
+    /// initializes.
+    pub icon: Option<String>,
+    /// Optional caption below the value, e.g. "This month".
+    pub subtitle: Option<String>,
+    /// Percentage delta vs. the previous period, signed:
+    /// `+12.3` = up 12.3%, `-4.1` = down 4.1%. The renderer picks
+    /// the arrow + color from the sign.
+    pub delta_percent: Option<f64>,
+    /// Optional comparison label, e.g. "vs last month".
+    pub delta_label: Option<String>,
+}
+
+impl CardPayload {
+    /// New card with just a primary value. Caller picks the format
+    /// — strings stay as-is, numbers should be pre-humanized with
+    /// [`humanize_number`] / [`format_thousands`].
+    pub fn new(value: impl Into<String>) -> Self {
+        Self {
+            value: value.into(),
+            unit: None,
+            icon: None,
+            subtitle: None,
+            delta_percent: None,
+            delta_label: None,
+        }
+    }
+
+    pub fn unit(mut self, unit: impl Into<String>) -> Self {
+        self.unit = Some(unit.into());
+        self
+    }
+
+    pub fn icon(mut self, icon: impl Into<String>) -> Self {
+        self.icon = Some(icon.into());
+        self
+    }
+
+    pub fn subtitle(mut self, subtitle: impl Into<String>) -> Self {
+        self.subtitle = Some(subtitle.into());
+        self
+    }
+
+    /// Compute the delta automatically from current + previous raw
+    /// numbers. Skips the delta when `previous` is zero (no baseline
+    /// to grow from) or non-finite — the renderer just won't show
+    /// the growth row in that case.
+    pub fn growth(mut self, current: f64, previous: f64) -> Self {
+        if previous.is_finite() && previous != 0.0 && current.is_finite() {
+            self.delta_percent = Some(((current - previous) / previous.abs()) * 100.0);
+        }
+        self
+    }
+
+    /// Explicit delta percent (signed) + label. Use when you've
+    /// computed the percentage yourself or want a custom label.
+    pub fn delta(mut self, percent: f64, label: impl Into<String>) -> Self {
+        self.delta_percent = Some(percent);
+        self.delta_label = Some(label.into());
+        self
+    }
+
+    /// Standalone label for the delta — pairs with [`Self::growth`]
+    /// for the common case "auto-compute the percent but customize
+    /// the comparison label" (e.g. `"vs prior 30d"`).
+    pub fn delta_label(mut self, label: impl Into<String>) -> Self {
+        self.delta_label = Some(label.into());
+        self
+    }
+}
+
+/// Humanize a number into a compact display string:
+///
+/// | input            | output     |
+/// |------------------|------------|
+/// | `42.0`           | `"42"`     |
+/// | `1_234.5`        | `"1,234.50"` |
+/// | `12_438.2`       | `"12.4K"`  |
+/// | `1_500_000.0`    | `"1.50M"`  |
+/// | `2_700_000_000.` | `"2.70B"`  |
+///
+/// Suitable for card values where horizontal space is scarce.
+pub fn humanize_number(n: f64) -> String {
+    if !n.is_finite() {
+        return "—".to_string();
+    }
+    let abs = n.abs();
+    let sign = if n < 0.0 { "-" } else { "" };
+    if abs < 1000.0 {
+        // Two decimals when there's a fractional part; integer otherwise.
+        if (abs.fract() - 0.0).abs() < f64::EPSILON {
+            return format!("{sign}{}", abs as i64);
+        }
+        return format!("{sign}{:.2}", abs);
+    }
+    if abs < 1_000_000.0 {
+        if abs < 10_000.0 {
+            // Keep the thousands separator at the low end of the K
+            // range — "9,876" reads better than "9.9K" for amounts a
+            // user is likely to mentally verify against the data.
+            return format_thousands(n);
+        }
+        return format!("{sign}{:.1}K", abs / 1_000.0);
+    }
+    if abs < 1_000_000_000.0 {
+        return format!("{sign}{:.2}M", abs / 1_000_000.0);
+    }
+    if abs < 1_000_000_000_000.0 {
+        return format!("{sign}{:.2}B", abs / 1_000_000_000.0);
+    }
+    format!("{sign}{:.2}T", abs / 1_000_000_000_000.0)
+}
+
+/// Format a number with thousands separators and (when fractional)
+/// two decimal places. Use for values where the full digits matter
+/// (currency totals, audit counts) — for compact display use
+/// [`humanize_number`].
+pub fn format_thousands(n: f64) -> String {
+    if !n.is_finite() {
+        return "—".to_string();
+    }
+    let sign = if n < 0.0 { "-" } else { "" };
+    let abs = n.abs();
+    let int_part = abs.trunc() as u128;
+    let frac_part = abs - abs.trunc();
+
+    // Insert commas every 3 digits, right-to-left.
+    let int_str = int_part.to_string();
+    let bytes = int_str.as_bytes();
+    let mut grouped = String::with_capacity(int_str.len() + int_str.len() / 3);
+    for (i, b) in bytes.iter().enumerate() {
+        if i > 0 && (bytes.len() - i) % 3 == 0 {
+            grouped.push(',');
+        }
+        grouped.push(*b as char);
+    }
+
+    if frac_part > 0.0 {
+        format!("{sign}{grouped}.{:02}", (frac_part * 100.0).round() as u64)
+    } else {
+        format!("{sign}{grouped}")
+    }
 }
 
 /// One data series for Line or Bar charts.
@@ -166,6 +343,7 @@ pub struct FeedPayload {
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum WidgetPayload {
     Kpi(KpiPayload),
+    Card(CardPayload),
     Line(LinePayload),
     Bar(BarPayload),
     Table(TablePayload),

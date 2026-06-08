@@ -81,8 +81,9 @@ pub use config::{
 };
 pub use registry::{AdminRegistration, AdminRegistry, App as AdminApp};
 pub use widgets::{
-    BarPayload, CatalogEntry, FeedItem, FeedPayload, KpiPayload, LinePayload, Series, Span,
-    TableColumn, TablePayload, Widget, WidgetDataFn, WidgetInstance, WidgetKind, WidgetPayload,
+    BarPayload, CardPayload, CatalogEntry, ChartPoint, FeedItem, FeedPayload, KpiPayload,
+    LinePayload, Series, Span, TableColumn, TablePayload, Widget, WidgetDataFn, WidgetInstance,
+    WidgetKind, WidgetPayload, format_thousands, humanize_number,
 };
 
 use std::sync::Arc;

@@ -5,6 +5,7 @@
   Renders the correct widget macro based on `kind`.
 #}
 {% from "admin/_macros/widgets/kpi.html" import kpi_widget, sparkline_svg %}
+{% from "admin/_macros/widgets/card.html" import card_widget %}
 {% from "admin/_macros/widgets/bar.html" import bar_widget %}
 {% from "admin/_macros/widgets/line.html" import line_widget %}
 {% from "admin/_macros/widgets/feed.html" import feed_widget %}
@@ -12,6 +13,8 @@
 
 {% if kind == "kpi" %}
   {{ kpi_widget(title, payload) }}
+{% elif kind == "card" %}
+  {{ card_widget(title, payload) }}
 {% elif kind == "bar" %}
   {{ bar_widget(title, payload) }}
 {% elif kind == "line" %}

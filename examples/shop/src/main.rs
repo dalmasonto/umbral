@@ -99,7 +99,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     AdminModel::new("order")
                         .search_fields(&["number"])
                         .list_filter(&["status", "payment_status", "currency"]),
-                ),
+                )
+                .register(
+                    umbra_admin::AdminModel::new("auth_user")
+                        .label("Users")
+                        .icon("users")
+                        .password_field("password_hash"),
+                )
+                // Four shop-facing card widgets — the everyday tiles
+                // the operator sees on dashboard login. Each is a
+                // simple `Widget::card` registration with an async
+                // data closure that hits the ORM and builds a
+                // `CardPayload`. Numbers go through `humanize_number`
+                // so "12,438" becomes "12.4K" when space is tight.
+                .register_widget(shop_total_sales_widget())
+                .register_widget(shop_orders_widget())
+                .register_widget(shop_customers_widget())
+                .register_widget(shop_avg_order_value_widget()),
         )
         // REST: three resources, three different auth + permission
         // postures, plus per-resource field-exposure controls. The
@@ -162,11 +178,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     get(staff_only)
                         .layer(permission_required_html("ecommerce.view_product", "/login")),
                 )
-                .layered(
-                    "GET",
-                    "/me",
-                    get(me).layer(login_required_html("/login")),
-                ),
+                .layered("GET", "/me", get(me).layer(login_required_html("/login"))),
         )
         .build()?;
 
@@ -271,9 +283,7 @@ async fn staff_only() -> Result<Html<String>, (StatusCode, String)> {
 ///
 /// Plain-text response keeps the demo focused on the relationship
 /// walk, no template engine in the way.
-async fn me(
-    user: umbra_auth::LoggedIn<AuthUser>,
-) -> Result<Html<String>, (StatusCode, String)> {
+async fn me(user: umbra_auth::LoggedIn<AuthUser>) -> Result<Html<String>, (StatusCode, String)> {
     let username = user.0.username().to_string();
     let user_id = user.0.id;
 
@@ -959,10 +969,13 @@ async fn seed_demo_data() -> Result<(), Box<dyn std::error::Error + Send + Sync>
                     id: 0,
                     user: umbra::orm::OneToOne::new(u.id),
                     phone: Some(format!("+15555550{:03}", 100 + i)),
-                    date_of_birth: Some(chrono::NaiveDate::from_ymd_opt(1990, 1, 1 + i as u32).unwrap()),
+                    date_of_birth: Some(
+                        chrono::NaiveDate::from_ymd_opt(1990, 1, 1 + i as u32).unwrap(),
+                    ),
                     accepts_marketing: i % 2 == 0,
                     loyalty_points: (i as i32) * 50,
                     created_at: now,
+                    updated_at: now,
                 })
                 .await?;
         }
@@ -1054,11 +1067,41 @@ async fn seed_demo_data() -> Result<(), Box<dyn std::error::Error + Send + Sync>
         }
 
         let orders_data = [
-            (0_usize, OrderStatus::Pending, PaymentStatus::Pending, PaymentMethod::Card, "PEN-001"),
-            (0, OrderStatus::Paid, PaymentStatus::Captured, PaymentMethod::Mpesa, "PAID-002"),
-            (1, OrderStatus::Shipped, PaymentStatus::Captured, PaymentMethod::Card, "SHIP-003"),
-            (1, OrderStatus::Delivered, PaymentStatus::Captured, PaymentMethod::Paypal, "DLV-004"),
-            (2, OrderStatus::Cancelled, PaymentStatus::Refunded, PaymentMethod::Card, "CANCEL-005"),
+            (
+                0_usize,
+                OrderStatus::Pending,
+                PaymentStatus::Pending,
+                PaymentMethod::Card,
+                "PEN-001",
+            ),
+            (
+                0,
+                OrderStatus::Paid,
+                PaymentStatus::Captured,
+                PaymentMethod::Mpesa,
+                "PAID-002",
+            ),
+            (
+                1,
+                OrderStatus::Shipped,
+                PaymentStatus::Captured,
+                PaymentMethod::Card,
+                "SHIP-003",
+            ),
+            (
+                1,
+                OrderStatus::Delivered,
+                PaymentStatus::Captured,
+                PaymentMethod::Paypal,
+                "DLV-004",
+            ),
+            (
+                2,
+                OrderStatus::Cancelled,
+                PaymentStatus::Refunded,
+                PaymentMethod::Card,
+                "CANCEL-005",
+            ),
         ];
         for (i, (cust_idx, status, pay_status, method, number)) in orders_data.iter().enumerate() {
             let cust = &customers[*cust_idx % customers.len()];
@@ -1234,4 +1277,154 @@ fn _force_customer_module_in_scope() {
     // handlers below happen not to use it. The model column module
     // is part of the public surface this example demonstrates.
     let _ = customer::ID;
+}
+
+// ---------------------------------------------------------------------------
+// Shop card widgets
+// ---------------------------------------------------------------------------
+// Four facing-page tiles for the admin dashboard. Each follows the
+// same shape: build a `Widget` with kind `Card`, hand it an async
+// data closure that hits the ORM, hands back a `CardPayload` built
+// with chained setters (`.unit().icon().subtitle().growth(...)`).
+// Numbers go through `humanize_number` so "12,438" → "12.4K" when
+// the column gets narrow.
+
+/// Sum order grand_total for orders placed in a window.
+async fn sales_between(
+    start: chrono::DateTime<chrono::Utc>,
+    end: chrono::DateTime<chrono::Utc>,
+) -> f64 {
+    use ecommerce::models::order;
+    let rows = Order::objects()
+        .filter(order::PLACED_AT.gte(start))
+        .filter(order::PLACED_AT.lt(end))
+        .fetch()
+        .await
+        .unwrap_or_default();
+    rows.iter()
+        .filter_map(|o| o.grand_total.parse::<f64>().ok())
+        .sum()
+}
+
+/// Count orders placed in a window.
+async fn orders_between(
+    start: chrono::DateTime<chrono::Utc>,
+    end: chrono::DateTime<chrono::Utc>,
+) -> i64 {
+    use ecommerce::models::order;
+    Order::objects()
+        .filter(order::PLACED_AT.gte(start))
+        .filter(order::PLACED_AT.lt(end))
+        .count()
+        .await
+        .unwrap_or(0)
+}
+
+fn shop_total_sales_widget() -> umbra_admin::Widget {
+    use umbra_admin::{CardPayload, Span, Widget, WidgetDataFn, WidgetKind, WidgetPayload};
+    Widget {
+        key: "shop_total_sales",
+        title: "Total Sales".to_string(),
+        kind: WidgetKind::Card,
+        default_span: Span { cols: 3, rows: 1 },
+        permission: None,
+        data: WidgetDataFn::new(|_user| async move {
+            let now = chrono::Utc::now();
+            let month_ago = now - chrono::Duration::days(30);
+            let two_months_ago = now - chrono::Duration::days(60);
+
+            let current = sales_between(month_ago, now).await;
+            let previous = sales_between(two_months_ago, month_ago).await;
+
+            WidgetPayload::Card(
+                CardPayload::new(umbra_admin::humanize_number(current))
+                    .unit("USD")
+                    .icon("dollar-sign")
+                    .subtitle("Last 30 days")
+                    .growth(current, previous)
+                    .delta_label("vs prior 30d".to_string()),
+            )
+        }),
+    }
+}
+
+fn shop_orders_widget() -> umbra_admin::Widget {
+    use umbra_admin::{CardPayload, Span, Widget, WidgetDataFn, WidgetKind, WidgetPayload};
+    Widget {
+        key: "shop_orders",
+        title: "Orders".to_string(),
+        kind: WidgetKind::Card,
+        default_span: Span { cols: 3, rows: 1 },
+        permission: None,
+        data: WidgetDataFn::new(|_user| async move {
+            let now = chrono::Utc::now();
+            let month_ago = now - chrono::Duration::days(30);
+            let two_months_ago = now - chrono::Duration::days(60);
+
+            let current = orders_between(month_ago, now).await;
+            let previous = orders_between(two_months_ago, month_ago).await;
+
+            WidgetPayload::Card(
+                CardPayload::new(umbra_admin::humanize_number(current as f64))
+                    .unit("total")
+                    .icon("shopping-cart")
+                    .subtitle("Last 30 days")
+                    .growth(current as f64, previous as f64)
+                    .delta_label("vs prior 30d".to_string()),
+            )
+        }),
+    }
+}
+
+fn shop_customers_widget() -> umbra_admin::Widget {
+    use umbra_admin::{CardPayload, Span, Widget, WidgetDataFn, WidgetKind, WidgetPayload};
+    Widget {
+        key: "shop_customers",
+        title: "Customers".to_string(),
+        kind: WidgetKind::Card,
+        default_span: Span { cols: 3, rows: 1 },
+        permission: None,
+        data: WidgetDataFn::new(|_user| async move {
+            let total = Customer::objects().count().await.unwrap_or(0);
+            WidgetPayload::Card(
+                CardPayload::new(umbra_admin::humanize_number(total as f64))
+                    .unit("total")
+                    .icon("users")
+                    .subtitle("All time"),
+            )
+        }),
+    }
+}
+
+fn shop_avg_order_value_widget() -> umbra_admin::Widget {
+    use umbra_admin::{CardPayload, Span, Widget, WidgetDataFn, WidgetKind, WidgetPayload};
+    Widget {
+        key: "shop_avg_order_value",
+        title: "Avg Order Value".to_string(),
+        kind: WidgetKind::Card,
+        default_span: Span { cols: 3, rows: 1 },
+        permission: None,
+        data: WidgetDataFn::new(|_user| async move {
+            let now = chrono::Utc::now();
+            let month_ago = now - chrono::Duration::days(30);
+            let two_months_ago = now - chrono::Duration::days(60);
+
+            let cur_sales = sales_between(month_ago, now).await;
+            let cur_orders = orders_between(month_ago, now).await.max(1) as f64;
+            let cur_aov = cur_sales / cur_orders;
+
+            let prev_sales = sales_between(two_months_ago, month_ago).await;
+            let prev_orders = orders_between(two_months_ago, month_ago).await.max(1) as f64;
+            let prev_aov = prev_sales / prev_orders;
+
+            WidgetPayload::Card(
+                CardPayload::new(umbra_admin::format_thousands(cur_aov))
+                    .unit("USD")
+                    .icon("trending-up")
+                    .subtitle("Per order, 30d")
+                    .growth(cur_aov, prev_aov)
+                    .delta_label("vs prior 30d".to_string()),
+            )
+        }),
+    }
 }
