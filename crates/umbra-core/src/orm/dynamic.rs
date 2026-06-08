@@ -1353,6 +1353,33 @@ pub fn decode_pg_to_string(
 /// become `Value::Null`). This is the row → JSON converter the REST
 /// plugin's auto-CRUD list / detail handlers feed straight into their
 /// HTTP body.
+/// Alias-aware sibling of [`decode_to_json`] — same decode logic but
+/// pulls from a different column name (the aliased name in a JOIN
+/// SELECT). Used by `QuerySet::join_related` to read child columns
+/// out of a JOIN row where every child column is exposed as
+/// `<field>__<col>`. Cheap clone of `Column` because the existing
+/// decoder is keyed off `col.name.as_str()`.
+pub fn decode_to_json_aliased(
+    row: &sqlx::sqlite::SqliteRow,
+    col: &Column,
+    alias: &str,
+) -> Result<serde_json::Value, sqlx::Error> {
+    let mut aliased = col.clone();
+    aliased.name = alias.to_string();
+    decode_to_json(row, &aliased)
+}
+
+/// Postgres counterpart to [`decode_to_json_aliased`].
+pub fn decode_pg_to_json_aliased(
+    row: &sqlx::postgres::PgRow,
+    col: &Column,
+    alias: &str,
+) -> Result<serde_json::Value, sqlx::Error> {
+    let mut aliased = col.clone();
+    aliased.name = alias.to_string();
+    decode_pg_to_json(row, &aliased)
+}
+
 pub fn decode_to_json(
     row: &sqlx::sqlite::SqliteRow,
     col: &Column,

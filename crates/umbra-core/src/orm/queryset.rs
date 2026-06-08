@@ -162,6 +162,15 @@ pub struct QuerySet<T> {
     /// hydrate `T` from a partial-column row). `None` keeps the
     /// pre-#111 behaviour (full SELECT).
     pub(crate) only_cols: Option<Vec<String>>,
+    /// FK field names requested for JOIN-based prefetch via
+    /// [`Self::join_related`]. Distinct from `select_related`:
+    /// `join_related` weaves `LEFT JOIN <related_table>` into the
+    /// main SELECT (with aliased columns `<field>__<col>`) so one
+    /// round-trip pulls parent + related rows together. The existing
+    /// `select_related` path keeps its "batched-IN-followup-query"
+    /// shape — both are valid; this one wins when round-trip count
+    /// matters more than the per-row column overhead.
+    pub(crate) join_related: Vec<String>,
     _phantom: PhantomData<T>,
 }
 
@@ -181,6 +190,7 @@ impl<T> QuerySet<T> {
             only_deleted: false,
             hard_delete: false,
             only_cols: None,
+            join_related: Vec::new(),
             _phantom: PhantomData,
         }
     }
@@ -443,6 +453,49 @@ impl<T> QuerySet<T> {
         self
     }
 
+    /// JOIN-based eager FK loading — emits `LEFT JOIN <related> ON ...`
+    /// in the main SELECT (with aliased child columns `<field>__<col>`)
+    /// so one round-trip pulls the parent + related rows together.
+    ///
+    /// Trade-off vs. [`Self::select_related`]:
+    ///   - `select_related` runs ONE extra batched query after the
+    ///     main fetch (`SELECT * FROM related WHERE id IN (...)`).
+    ///     Two round-trips total; rows stay narrow.
+    ///   - `join_related` runs the main query AS the join — one
+    ///     round-trip total — at the cost of a wider per-row payload
+    ///     (every related column rides along even for duplicated
+    ///     parents).
+    ///
+    /// Both populate `ForeignKey<U>.resolved` the same way so
+    /// downstream code (templates, serde) doesn't care which path
+    /// was used. Pick `join_related` when round-trip count dominates
+    /// (hot listing pages, small related tables) and `select_related`
+    /// when the related row is wide or only loaded for a subset of
+    /// the parent rows.
+    ///
+    /// Composes with `.select_related(other_fk)` and
+    /// `.prefetch_related(m2m)` — different fields can take different
+    /// paths in the same query.
+    ///
+    /// **Constraints at v1**: one-hop only (no `"author__manager"`
+    /// chains), FK fields must live in `model.fields` (M2M routes
+    /// through `prefetch_related`), and the related model must be
+    /// registered with the framework (`App::builder().model::<U>()`
+    /// or contributed by a plugin) so we can resolve its column
+    /// layout for the aliased SELECT.
+    pub fn join_related(mut self, field_name: impl Into<String>) -> Self {
+        self.join_related.push(field_name.into());
+        self
+    }
+
+    /// Sugar for chained [`Self::join_related`] calls.
+    pub fn join_related_many(mut self, field_names: &[&str]) -> Self {
+        for name in field_names {
+            self.join_related.push(name.to_string());
+        }
+        self
+    }
+
     /// Eagerly load an M2M relation via a single batched join.
     ///
     /// After the main SELECT returns rows, one query of the shape
@@ -687,6 +740,7 @@ impl<T: Model> QuerySet<T> {
     /// regardless of which pool is registered.
     pub fn to_sql(&self) -> String {
         let mut q = self.build_query_for("sqlite");
+        self.apply_join_related(&mut q);
         self.apply_only_projection(&mut q);
         let (sql, _values) = q.build_sqlx(SqliteQueryBuilder);
         sql
@@ -704,6 +758,7 @@ impl<T: Model> QuerySet<T> {
     /// in tests.
     pub fn to_sql_pg(&self) -> String {
         let mut q = self.build_query_for("postgres");
+        self.apply_join_related(&mut q);
         self.apply_only_projection(&mut q);
         let (sql, _values) = q.build_sqlx(PostgresQueryBuilder);
         sql
@@ -722,6 +777,81 @@ impl<T: Model> QuerySet<T> {
         }
     }
 
+    /// Internal helper — when `.join_related(name)` was set, wrap the
+    /// current query as a subquery and build an outer SELECT that
+    /// LEFT JOINs every requested related table (with child columns
+    /// aliased as `<field>__<col>`). The subquery wrapper is the
+    /// load-bearing trick: WHERE / ORDER BY / LIMIT predicates inside
+    /// the inner query reference parent columns only — there's no
+    /// JOIN in scope, so bare names like `id` resolve unambiguously
+    /// to the parent. Without this wrapper SQLite raises
+    /// "ambiguous column name: id" on any predicate sharing a column
+    /// name with a JOIN'd table.
+    ///
+    /// No-op when `join_related` is empty. Unknown field names /
+    /// unregistered related models / FK columns missing `fk_target`
+    /// are silently skipped — the SQL just won't carry the JOIN and
+    /// the caller notices when `ForeignKey::resolved()` stays empty.
+    fn apply_join_related(&self, q: &mut sea_query::SelectStatement) {
+        if self.join_related.is_empty() {
+            return;
+        }
+        use sea_query::{Expr, Query};
+        let registered = crate::migrate::registered_models();
+        // Take ownership of the existing query (parent SELECT + WHERE
+        // + ORDER BY + LIMIT) so we can re-mount it as the FROM
+        // clause of the new outer SELECT.
+        let inner = std::mem::replace(q, Query::select().take());
+        let parent_alias = Alias::new("__p");
+        let mut outer = Query::select();
+        outer.from_subquery(inner, parent_alias.clone());
+        // Re-project the parent's full column set so the outer SELECT
+        // exposes them unaliased — FromRow on `T` reads parent
+        // columns by their bare names (`id`, `name`, ...).
+        for f in T::FIELDS {
+            outer.expr(Expr::col((parent_alias.clone(), Alias::new(f.name))));
+        }
+        for field_name in &self.join_related {
+            let Some(fk_field) = T::FIELDS.iter().find(|f| f.name == field_name.as_str()) else {
+                continue;
+            };
+            let Some(related_table) = fk_field.fk_target else {
+                continue;
+            };
+            let Some(related_meta) = registered.iter().find(|m| m.table == related_table) else {
+                continue;
+            };
+            let Some(related_pk) = related_meta.fields.iter().find(|c| c.primary_key) else {
+                continue;
+            };
+            // Per-field table alias so two FKs to the SAME related
+            // table (e.g. `category` and `brand` both → `category`)
+            // each get a distinct identifier in the JOIN. Without
+            // this SQLite raises "ambiguous column name" on the
+            // second JOIN.
+            let join_alias = Alias::new(format!("__j_{field_name}"));
+            outer.join_as(
+                sea_query::JoinType::LeftJoin,
+                Alias::new(related_table),
+                join_alias.clone(),
+                Expr::col((parent_alias.clone(), Alias::new(field_name.as_str())))
+                    .equals((join_alias.clone(), Alias::new(related_pk.name.as_str()))),
+            );
+            // Aliased child cols pull from the per-field JOIN alias,
+            // so `category__name` and `brand__name` resolve to two
+            // different jr_category rows even though they share a
+            // table.
+            for col in &related_meta.fields {
+                let alias = format!("{}__{}", field_name, col.name);
+                outer.expr_as(
+                    Expr::col((join_alias.clone(), Alias::new(col.name.as_str()))),
+                    Alias::new(alias),
+                );
+            }
+        }
+        *q = outer;
+    }
+
     /// Run the SELECT and return every matching row.
     ///
     /// If `.select_related(name)` was called, a follow-up batch query
@@ -738,6 +868,7 @@ impl<T: Model> QuerySet<T> {
         }
         let sr_fields = self.select_related.clone();
         let prefetch_fields = self.prefetch_related.clone();
+        let join_fields = self.join_related.clone();
         // The turbofish on `query_as_with::<DB, _, _>` is load-bearing:
         // with both `sqlx-sqlite` and `sqlx-postgres` features on
         // sea-query-binder, `SqlxValues` implements `IntoArguments` for
@@ -746,18 +877,48 @@ impl<T: Model> QuerySet<T> {
         // checked.
         let mut rows = match resolve_pool::<T>(self.explicit_pool.clone()) {
             DbPool::Sqlite(pool) => {
-                let q = self.build_query_for("sqlite");
+                let mut q = self.build_query_for("sqlite");
+                self.apply_join_related(&mut q);
                 let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
-                sqlx::query_as_with::<sqlx::Sqlite, T, _>(&sql, values)
-                    .fetch_all(&pool)
-                    .await?
+                if join_fields.is_empty() {
+                    sqlx::query_as_with::<sqlx::Sqlite, T, _>(&sql, values)
+                        .fetch_all(&pool)
+                        .await?
+                } else {
+                    // JOIN path: pull raw rows so we can decode the
+                    // aliased child columns alongside the parent.
+                    let raw_rows = sqlx::query_with::<sqlx::Sqlite, _>(&sql, values)
+                        .fetch_all(&pool)
+                        .await?;
+                    let mut typed = Vec::with_capacity(raw_rows.len());
+                    for row in &raw_rows {
+                        let mut t = <T as sqlx::FromRow<_>>::from_row(row)?;
+                        hydrate_joined_rels_sqlite::<T>(&mut t, row, &join_fields)?;
+                        typed.push(t);
+                    }
+                    typed
+                }
             }
             DbPool::Postgres(pool) => {
-                let q = self.build_query_for("postgres");
+                let mut q = self.build_query_for("postgres");
+                self.apply_join_related(&mut q);
                 let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
-                sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
-                    .fetch_all(&pool)
-                    .await?
+                if join_fields.is_empty() {
+                    sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
+                        .fetch_all(&pool)
+                        .await?
+                } else {
+                    let raw_rows = sqlx::query_with::<sqlx::Postgres, _>(&sql, values)
+                        .fetch_all(&pool)
+                        .await?;
+                    let mut typed = Vec::with_capacity(raw_rows.len());
+                    for row in &raw_rows {
+                        let mut t = <T as sqlx::FromRow<_>>::from_row(row)?;
+                        hydrate_joined_rels_pg::<T>(&mut t, row, &join_fields)?;
+                        typed.push(t);
+                    }
+                    typed
+                }
             }
         };
         // BUG-16 step 2: wire each row's PK into its `M2M<U>` slots so
@@ -2014,6 +2175,16 @@ impl<T: Model> Manager<T> {
     /// Gap #111 — see [`QuerySet::only`].
     pub fn only(&self, cols: &[&str]) -> QuerySet<T> {
         self.queryset().only(cols)
+    }
+
+    /// See [`QuerySet::join_related`].
+    pub fn join_related(&self, field_name: impl Into<String>) -> QuerySet<T> {
+        self.queryset().join_related(field_name)
+    }
+
+    /// See [`QuerySet::join_related_many`].
+    pub fn join_related_many(&self, field_names: &[&str]) -> QuerySet<T> {
+        self.queryset().join_related_many(field_names)
     }
 
     /// Feature #72 — see `QuerySet::hard_delete`.
@@ -3442,6 +3613,96 @@ enum SoftOrHardStatement {
 // =========================================================================
 
 /// Fetch related rows for each FK field name in `sr_fields` and hydrate
+/// JOIN-path hydration (SQLite). For each `join_field` in
+/// `join_fields`, pulls the `<field>__<col>` aliased columns out of
+/// the row into a `serde_json::Value::Object` and calls
+/// `HydrateRelated::hydrate_fk` to populate `ForeignKey<U>.resolved`.
+///
+/// LEFT JOIN miss → the related PK column comes back NULL → skip
+/// hydration (the FK stays unresolved, matching the unloaded shape).
+/// Unknown fields / unregistered related models / models without a
+/// PK are silently skipped — the SQL build path emitted no JOIN for
+/// them either, so the columns wouldn't be in the row.
+fn hydrate_joined_rels_sqlite<T: Model + HydrateRelated>(
+    t: &mut T,
+    row: &sqlx::sqlite::SqliteRow,
+    join_fields: &[String],
+) -> Result<(), sqlx::Error> {
+    use sqlx::Row;
+    let registered = crate::migrate::registered_models();
+    for field_name in join_fields {
+        let Some(fk_field) = T::FIELDS.iter().find(|f| f.name == field_name.as_str()) else {
+            continue;
+        };
+        let Some(related_table) = fk_field.fk_target else {
+            continue;
+        };
+        let Some(related_meta) = registered.iter().find(|m| m.table == related_table) else {
+            continue;
+        };
+        let Some(pk_col) = related_meta.fields.iter().find(|c| c.primary_key) else {
+            continue;
+        };
+        let pk_alias = format!("{}__{}", field_name, pk_col.name);
+        // LEFT JOIN miss → all aliased cols are NULL → skip.
+        let pk_is_null = row
+            .try_get::<Option<i64>, _>(pk_alias.as_str())
+            .map(|v| v.is_none())
+            .unwrap_or(true);
+        if pk_is_null {
+            continue;
+        }
+        let mut obj = serde_json::Map::with_capacity(related_meta.fields.len());
+        for col in &related_meta.fields {
+            let alias = format!("{}__{}", field_name, col.name);
+            let val = crate::orm::dynamic::decode_to_json_aliased(row, col, &alias)?;
+            obj.insert(col.name.clone(), val);
+        }
+        t.hydrate_fk(field_name, &serde_json::Value::Object(obj));
+    }
+    Ok(())
+}
+
+/// Postgres counterpart to [`hydrate_joined_rels_sqlite`].
+fn hydrate_joined_rels_pg<T: Model + HydrateRelated>(
+    t: &mut T,
+    row: &sqlx::postgres::PgRow,
+    join_fields: &[String],
+) -> Result<(), sqlx::Error> {
+    use sqlx::Row;
+    let registered = crate::migrate::registered_models();
+    for field_name in join_fields {
+        let Some(fk_field) = T::FIELDS.iter().find(|f| f.name == field_name.as_str()) else {
+            continue;
+        };
+        let Some(related_table) = fk_field.fk_target else {
+            continue;
+        };
+        let Some(related_meta) = registered.iter().find(|m| m.table == related_table) else {
+            continue;
+        };
+        let Some(pk_col) = related_meta.fields.iter().find(|c| c.primary_key) else {
+            continue;
+        };
+        let pk_alias = format!("{}__{}", field_name, pk_col.name);
+        let pk_is_null = row
+            .try_get::<Option<i64>, _>(pk_alias.as_str())
+            .map(|v| v.is_none())
+            .unwrap_or(true);
+        if pk_is_null {
+            continue;
+        }
+        let mut obj = serde_json::Map::with_capacity(related_meta.fields.len());
+        for col in &related_meta.fields {
+            let alias = format!("{}__{}", field_name, col.name);
+            let val = crate::orm::dynamic::decode_pg_to_json_aliased(row, col, &alias)?;
+            obj.insert(col.name.clone(), val);
+        }
+        t.hydrate_fk(field_name, &serde_json::Value::Object(obj));
+    }
+    Ok(())
+}
+
 /// `HydrateRelated::hydrate_fk` on each main row.
 ///
 /// Generic parameters:
