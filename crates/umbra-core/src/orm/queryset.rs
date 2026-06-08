@@ -1468,6 +1468,14 @@ impl<T: Model> QuerySet<T> {
     /// // [ { "id": 3, "title": "c" }, ... ]
     /// ```
     pub async fn values(self, columns: &[&str]) -> Result<Vec<JsonValue>, sqlx::Error> {
+        // Gap #46 follow-up: if any name uses `__` traversal
+        // (`author__id`), route to the JOIN-aware path that builds
+        // nested per-relation JSON objects. The unbranched path
+        // below stays byte-for-byte identical for the common
+        // parent-cols-only case.
+        if columns.iter().any(|c| c.contains("__")) {
+            return self.values_with_traversal(columns).await;
+        }
         let meta = crate::migrate::ModelMeta::for_::<T>();
         // Resolve every requested name against the model's metadata
         // up front so an unknown column errors before any SQL runs.
@@ -1523,6 +1531,255 @@ impl<T: Model> QuerySet<T> {
                     for col in &chosen {
                         let v = crate::orm::dynamic::decode_pg_to_json(row, col)?;
                         obj.insert(col.name.clone(), v);
+                    }
+                    out.push(JsonValue::Object(obj));
+                }
+                Ok(out)
+            }
+        }
+    }
+
+    /// `.values("author__name")`-style traversal. One-hop only at
+    /// v1 (`a__b`, not `a__b__c` — that fails loudly so the user
+    /// doesn't get a silent partial result). Emits one LEFT JOIN
+    /// per distinct relation referenced, aliases child columns as
+    /// `<rel>__<col>`, and returns each row as a nested JSON
+    /// object: `{id, title, author: {id, name}, editor: {id}}`.
+    ///
+    /// A LEFT JOIN miss (nullable FK pointing at nothing) maps the
+    /// whole relation key to `Value::Null` rather than a nested
+    /// object full of nulls — caller code that branches on
+    /// `obj["author"].is_null()` works naturally.
+    ///
+    /// Validates every name up front so a typo errors before any
+    /// SQL runs. Unknown parent col / non-FK relation name /
+    /// unknown child col / deeper-than-one-hop path all surface
+    /// distinct messages.
+    async fn values_with_traversal(self, columns: &[&str]) -> Result<Vec<JsonValue>, sqlx::Error> {
+        use sea_query::{Expr, Query};
+        let meta = crate::migrate::ModelMeta::for_::<T>();
+        let registered = crate::migrate::registered_models();
+
+        // Split each column name into (relation, child_col) or
+        // (None, parent_col). Reject paths with more than one `__`
+        // hop — nested traversal across two relation layers is a
+        // separate piece of work (it'd need to chain JOINs and
+        // build doubly-nested JSON).
+        let mut parent_cols: Vec<String> = Vec::new();
+        let mut per_rel: std::collections::BTreeMap<String, Vec<String>> =
+            std::collections::BTreeMap::new();
+        for raw in columns {
+            let mut parts = raw.splitn(3, "__");
+            let first = parts.next().unwrap_or("");
+            let second = parts.next();
+            let third = parts.next();
+            if third.is_some() {
+                return Err(sqlx::Error::Protocol(format!(
+                    "umbra::orm::values: nested `{raw}` is not supported in v1 \
+                     (one-hop only — `a__b`, not `a__b__c`)"
+                )));
+            }
+            match second {
+                Some(child) => {
+                    per_rel
+                        .entry(first.to_string())
+                        .or_default()
+                        .push(child.to_string());
+                }
+                None => parent_cols.push(first.to_string()),
+            }
+        }
+
+        // Validate every parent name against T::FIELDS.
+        for name in &parent_cols {
+            if !meta.fields.iter().any(|c| c.name == *name) {
+                return Err(sqlx::Error::Protocol(format!(
+                    "umbra::orm::values: unknown column `{name}` on model `{}`",
+                    T::NAME
+                )));
+            }
+        }
+
+        // Validate every relation + child trio. Build a struct per
+        // relation that the SQL/decoder loops below need.
+        struct RelInfo<'a> {
+            rel_name: String,
+            related_table: &'a str,
+            related_pk: &'a crate::migrate::Column,
+            child_cols: Vec<&'a crate::migrate::Column>,
+        }
+        let mut rel_infos: Vec<RelInfo<'_>> = Vec::with_capacity(per_rel.len());
+        for (rel_name, child_names) in &per_rel {
+            let fk_field = meta.fields.iter().find(|c| c.name == *rel_name);
+            let Some(fk_field) = fk_field else {
+                return Err(sqlx::Error::Protocol(format!(
+                    "umbra::orm::values: unknown relation `{rel_name}` on model `{}` \
+                     (used in `{rel_name}__...`)",
+                    T::NAME
+                )));
+            };
+            let Some(related_table) = fk_field.fk_target.as_deref() else {
+                return Err(sqlx::Error::Protocol(format!(
+                    "umbra::orm::values: field `{rel_name}` on `{}` is not a foreign \
+                     key — `__` traversal only works through FK fields",
+                    T::NAME
+                )));
+            };
+            let Some(related_meta) = registered.iter().find(|m| m.table == related_table) else {
+                return Err(sqlx::Error::Protocol(format!(
+                    "umbra::orm::values: related model for table `{related_table}` \
+                     is not registered"
+                )));
+            };
+            let Some(related_pk) = related_meta.fields.iter().find(|c| c.primary_key) else {
+                return Err(sqlx::Error::Protocol(format!(
+                    "umbra::orm::values: related model `{related_table}` has no \
+                     primary key column"
+                )));
+            };
+            let mut child_cols: Vec<&crate::migrate::Column> =
+                Vec::with_capacity(child_names.len());
+            for name in child_names {
+                let col = related_meta
+                    .fields
+                    .iter()
+                    .find(|c| c.name == *name)
+                    .ok_or_else(|| {
+                        sqlx::Error::Protocol(format!(
+                            "umbra::orm::values: unknown child column `{name}` on \
+                             related model `{related_table}` (full path `{rel_name}__{name}`)"
+                        ))
+                    })?;
+                child_cols.push(col);
+            }
+            rel_infos.push(RelInfo {
+                rel_name: rel_name.clone(),
+                related_table,
+                related_pk,
+                child_cols,
+            });
+        }
+
+        // Build the SQL. Subquery-wrap the parent (WHERE / ORDER
+        // BY / LIMIT all stay scoped to it) so JOIN'd tables can't
+        // shadow bare-column predicates — same trick
+        // apply_join_related uses.
+        let pool = resolve_pool::<T>(self.explicit_pool.clone());
+        let backend = pool.backend_name();
+        let inner = self.build_query_for(backend);
+        let parent_alias = Alias::new("__p");
+        let mut outer = Query::select();
+        outer.from_subquery(inner, parent_alias.clone());
+        // Outer SELECT: parent cols (bare), aliased child cols.
+        for name in &parent_cols {
+            outer.expr_as(
+                Expr::col((parent_alias.clone(), Alias::new(name.as_str()))),
+                Alias::new(name.as_str()),
+            );
+        }
+        for info in &rel_infos {
+            let join_alias = Alias::new(format!("__j_{}", info.rel_name));
+            outer.join_as(
+                sea_query::JoinType::LeftJoin,
+                Alias::new(info.related_table),
+                join_alias.clone(),
+                Expr::col((parent_alias.clone(), Alias::new(info.rel_name.as_str()))).equals((
+                    join_alias.clone(),
+                    Alias::new(info.related_pk.name.as_str()),
+                )),
+            );
+            // Always include the related PK alias so the decoder
+            // can detect a LEFT JOIN miss → emit Value::Null for
+            // the whole relation. Plus every requested child col.
+            let pk_alias = format!("{}__{}", info.rel_name, info.related_pk.name);
+            outer.expr_as(
+                Expr::col((
+                    join_alias.clone(),
+                    Alias::new(info.related_pk.name.as_str()),
+                )),
+                Alias::new(pk_alias),
+            );
+            for col in &info.child_cols {
+                let alias = format!("{}__{}", info.rel_name, col.name);
+                outer.expr_as(
+                    Expr::col((join_alias.clone(), Alias::new(col.name.as_str()))),
+                    Alias::new(alias),
+                );
+            }
+        }
+
+        // Execute + decode. Per-backend dispatch.
+        match pool {
+            DbPool::Sqlite(pool) => {
+                let (sql, vals) = outer.build_sqlx(SqliteQueryBuilder);
+                let rows = sqlx::query_with::<sqlx::Sqlite, _>(&sql, vals)
+                    .fetch_all(&pool)
+                    .await?;
+                let mut out: Vec<JsonValue> = Vec::with_capacity(rows.len());
+                for row in &rows {
+                    let mut obj = serde_json::Map::new();
+                    // Parent cols decode by their bare alias name.
+                    for name in &parent_cols {
+                        if let Some(col) = meta.fields.iter().find(|c| c.name == *name) {
+                            let v = crate::orm::dynamic::decode_to_json_aliased(row, col, name)?;
+                            obj.insert(name.clone(), v);
+                        }
+                    }
+                    // Per-relation nested object — `null` on LEFT JOIN miss.
+                    for info in &rel_infos {
+                        let pk_alias = format!("{}__{}", info.rel_name, info.related_pk.name);
+                        let pk_is_null =
+                            sqlx::Row::try_get::<Option<i64>, _>(row, pk_alias.as_str())
+                                .map(|v| v.is_none())
+                                .unwrap_or(true);
+                        if pk_is_null {
+                            obj.insert(info.rel_name.clone(), JsonValue::Null);
+                            continue;
+                        }
+                        let mut nested = serde_json::Map::with_capacity(info.child_cols.len());
+                        for col in &info.child_cols {
+                            let alias = format!("{}__{}", info.rel_name, col.name);
+                            let v = crate::orm::dynamic::decode_to_json_aliased(row, col, &alias)?;
+                            nested.insert(col.name.clone(), v);
+                        }
+                        obj.insert(info.rel_name.clone(), JsonValue::Object(nested));
+                    }
+                    out.push(JsonValue::Object(obj));
+                }
+                Ok(out)
+            }
+            DbPool::Postgres(pool) => {
+                let (sql, vals) = outer.build_sqlx(PostgresQueryBuilder);
+                let rows = sqlx::query_with::<sqlx::Postgres, _>(&sql, vals)
+                    .fetch_all(&pool)
+                    .await?;
+                let mut out: Vec<JsonValue> = Vec::with_capacity(rows.len());
+                for row in &rows {
+                    let mut obj = serde_json::Map::new();
+                    for name in &parent_cols {
+                        if let Some(col) = meta.fields.iter().find(|c| c.name == *name) {
+                            let v = crate::orm::dynamic::decode_pg_to_json_aliased(row, col, name)?;
+                            obj.insert(name.clone(), v);
+                        }
+                    }
+                    for info in &rel_infos {
+                        let pk_alias = format!("{}__{}", info.rel_name, info.related_pk.name);
+                        let pk_is_null =
+                            sqlx::Row::try_get::<Option<i64>, _>(row, pk_alias.as_str())
+                                .map(|v| v.is_none())
+                                .unwrap_or(true);
+                        if pk_is_null {
+                            obj.insert(info.rel_name.clone(), JsonValue::Null);
+                            continue;
+                        }
+                        let mut nested = serde_json::Map::with_capacity(info.child_cols.len());
+                        for col in &info.child_cols {
+                            let alias = format!("{}__{}", info.rel_name, col.name);
+                            let v =
+                                crate::orm::dynamic::decode_pg_to_json_aliased(row, col, &alias)?;
+                            nested.insert(col.name.clone(), v);
+                        }
+                        obj.insert(info.rel_name.clone(), JsonValue::Object(nested));
                     }
                     out.push(JsonValue::Object(obj));
                 }
