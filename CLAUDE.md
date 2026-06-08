@@ -64,6 +64,19 @@ This **declare → migrate → change → migrate** cycle *is* the product. It's
 
 The hard cases Django spent years on (rename vs. drop+add disambiguation, data-preserving alters, complex constraint changes) get iterated on. They don't gate anything.
 
+### Never wipe the database (or migration files) to bypass a migration
+
+The whole declare → migrate → change → migrate loop is the product. Running it against a freshly-deleted DB proves nothing — it just bypasses the very test that surfaces real bugs (a UNIQUE addition trips an existing duplicate; a new NOT NULL column needs a default for the backfill; a cross-plugin FK orders wrong against existing rows). **Existing rows are the test, not an obstacle.**
+
+Concretely, when a model change needs a schema migration in any example app or local DB:
+
+- **Never** `rm -f *.db` (or `shop.db`, or any backing store) to "get a clean run." If the migration fails on existing data, that failure is the bug you want to find — diagnose it, fix the model, or write a data migration. The user almost certainly has rows you can't see; deleting their DB silently destroys real state.
+- **Never** delete files under `migrations/` to "regenerate cleanly." Migration history is the schema's audit trail; removing entries makes the DB un-migratable from older deploys and erases the record of how each column got its shape.
+- The correct flow is two commands in order: `cargo run -- makemigrations` to autodetect the diff and write a new migration file, then `cargo run -- migrate` to apply it against the live DB. If `makemigrations` writes a migration that can't apply (UNIQUE on a column with duplicates, NOT NULL with no default, etc.), that's exactly the surface area the migration engine exists to expose.
+- The only legitimate reason to delete an example app's DB is when the user explicitly asks for a fresh demo state. Even then, **ask first** — the user may have populated rows that look like demo data but aren't.
+
+Wiping the DB to bypass a migration is a destructive shortcut in the same category as `git reset --hard` or `--no-verify`: it makes the immediate obstacle go away while hiding the bug that the obstacle was warning about.
+
 ## Build order
 
 Build the primitives by hand first, then extract abstractions. Managed migrations aren't deferred; the declare → migrate loop lands as soon as models exist. Full rationale in `arch.md §8`.
