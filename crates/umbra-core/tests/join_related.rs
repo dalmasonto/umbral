@@ -213,10 +213,30 @@ async fn manager_join_related_forwards_to_queryset() {
 async fn unknown_field_name_is_silently_skipped_in_sql() {
     boot().await;
     let sql = Product::objects().join_related("nope_not_a_field").to_sql();
-    // Unknown name → no JOIN emitted (silent skip, matches the
-    // existing select_related behavior). The SQL still renders
-    // cleanly without panic.
+    // Unknown name in to_sql() → no JOIN emitted (silent skip — the
+    // SQL inspection surface is debug-only, so we render cleanly
+    // instead of panicking). The fetch() path is loud — see
+    // `unknown_field_name_fetch_errors_loudly` below.
     assert!(!sql.contains("LEFT JOIN"), "should be no JOIN: {sql}");
+}
+
+#[tokio::test]
+async fn unknown_field_name_fetch_errors_loudly() {
+    boot().await;
+    let err = Product::objects()
+        .join_related("nope_not_a_field")
+        .fetch()
+        .await
+        .expect_err("fetch must reject unknown join field");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("nope_not_a_field"),
+        "error names the bad field: {msg}"
+    );
+    assert!(
+        msg.contains("join_related"),
+        "error names the method: {msg}"
+    );
 }
 
 #[tokio::test]

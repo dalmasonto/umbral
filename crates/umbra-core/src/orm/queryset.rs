@@ -431,13 +431,36 @@ impl<T> QuerySet<T> {
     /// `.select_related("author").select_related("editor")` works the same as
     /// `.select_related_many(&["author", "editor"])`.
     ///
-    /// ## What is NOT in scope
+    /// ## Nested traversal (post-#42)
     ///
-    /// - Nested traversal (`"author__manager"`) — deferred. Only one-hop FKs
-    ///   are supported. Chains require successive `.select_related` calls on
-    ///   the resolved row, not a dot-notation shorthand.
-    /// - Reverse FK (`prefetch_related`) — deferred. See gap 28 docs.
-    /// - Many-to-many joins — deferred.
+    /// `.select_related("author__manager")` walks the FK chain through
+    /// the `__` separator. One batched `IN (...)` query per hop —
+    /// `1 + len(hops)` round-trips regardless of parent count. No
+    /// N+1. Each hop's related row is embedded into the prior level's
+    /// JSON, and recursive `ForeignKey<T>::Deserialize` unpacks the
+    /// chain into `resolved()` slots at every depth. Bonus: a
+    /// select_related'd model now round-trips through
+    /// `serde_json::to_value(&t)` / `from_value` without losing the
+    /// resolved relation.
+    ///
+    /// ## Companion shapes
+    ///
+    /// - **`join_related(name)`** — same goal (load related rows) via
+    ///   a true `LEFT JOIN` in the main SELECT. One round-trip total
+    ///   vs. `select_related`'s `1 + N` batched-IN approach. Wider
+    ///   per-row payload; better when round-trip count dominates.
+    /// - **`prefetch_related(name)`** — M2M batched loading (one
+    ///   query per declared M2M field). For reverse-FK collections
+    ///   (`prefetch_related("comment_set")`-style) see gap #44 — not
+    ///   yet implemented.
+    ///
+    /// ## Loud errors
+    ///
+    /// Unknown field names (typos, M2M names accidentally passed
+    /// here, fields without `fk_target`) return a clear
+    /// `sqlx::Error::Protocol` from the terminal naming the bad hop
+    /// and the table it was looked up against. Pre-#42 these
+    /// silently no-op'd.
     pub fn select_related(mut self, field_name: impl Into<String>) -> Self {
         self.select_related.push(field_name.into());
         self
@@ -512,13 +535,17 @@ impl<T> QuerySet<T> {
     /// ## Scope (v1)
     ///
     /// - **M2M only.** Reverse-FK collections
-    ///   (`prefetch_related("comment_set")`) need a Vec-on-parent
-    ///   slot that doesn't exist yet — a follow-up.
+    ///   (`prefetch_related("comment_set")`) need a new
+    ///   `ReverseSet<Child>` parent slot and macro support — tracked
+    ///   as gap #44, not yet implemented.
     /// - **i64 parent PK only.** Same constraint as the rest of the
     ///   M2M plumbing; models with non-i64 PKs surface a clean
     ///   compile error.
-    /// - **Unknown field name** is a silent no-op — same forgiving
-    ///   posture as `select_related`.
+    /// - **Unknown field name → loud error** (post-#42). If the name
+    ///   doesn't match an M2M relation, fetch returns a clear
+    ///   `sqlx::Error::Protocol` pointing at the right method
+    ///   (`select_related` / `join_related` for FK names, or noting
+    ///   the gap #44 reverse-FK limitation for anything else).
     pub fn prefetch_related(mut self, field_name: impl Into<String>) -> Self {
         self.prefetch_related.push(field_name.into());
         self
@@ -604,6 +631,46 @@ impl<T> QuerySet<T> {
 /// via `Plugin::database()` (FEATURES.md #6); then the `"default"`
 /// pool. Tests that skip the App builder pass an explicit pool and
 /// bypass the alias lookup entirely.
+/// Validate that every name passed to `.join_related(...)` resolves
+/// to a foreign-key field on `T`. Loud-error path that replaces the
+/// pre-#42 silent no-op (where an unknown field, an M2M field, or a
+/// non-FK column produced an empty JOIN list and a confusing
+/// "ForeignKey::resolved() returned None" downstream).
+fn validate_join_related_fields<T: Model>(fields: &[String]) -> Result<(), sqlx::Error> {
+    for field_name in fields {
+        // Try as a regular column first.
+        let col = T::FIELDS.iter().find(|f| f.name == field_name.as_str());
+        if let Some(col) = col {
+            if col.fk_target.is_some() {
+                continue; // FK column — OK.
+            }
+            return Err(sqlx::Error::Protocol(format!(
+                "umbra::orm::join_related: field `{field_name}` on `{}` is not a foreign \
+                 key (it has no fk_target)",
+                T::NAME
+            )));
+        }
+        // M2M field name? Tell the caller to route through
+        // prefetch_related — M2M-via-JOIN is gap #43, not shipped.
+        if T::M2M_RELATIONS
+            .iter()
+            .any(|r| r.field_name == field_name.as_str())
+        {
+            return Err(sqlx::Error::Protocol(format!(
+                "umbra::orm::join_related: `{field_name}` is an M2M field on `{}`. M2M via \
+                 LEFT JOIN is gap #43 (not yet implemented); use `.prefetch_related(\"{field_name}\")` \
+                 to load the M2M rows in one batched query.",
+                T::NAME
+            )));
+        }
+        return Err(sqlx::Error::Protocol(format!(
+            "umbra::orm::join_related: unknown field `{field_name}` on model `{}`",
+            T::NAME
+        )));
+    }
+    Ok(())
+}
+
 /// Gap #111 — error returned when a typed terminal (`fetch` / `first`
 /// / `get`) runs against a QuerySet that has `.only(...)` set. A
 /// partial-column row can't satisfy `T`'s `FromRow` impl, so the
@@ -869,6 +936,12 @@ impl<T: Model> QuerySet<T> {
         let sr_fields = self.select_related.clone();
         let prefetch_fields = self.prefetch_related.clone();
         let join_fields = self.join_related.clone();
+        // Validate join_related field names up front so a typo or an
+        // M2M field name doesn't silently no-op (it used to render a
+        // SELECT with no JOIN). Pre-#42 the failure mode was
+        // `ForeignKey::resolved()` stays None and the caller debugs
+        // the wrong thing. Now they get a typed error.
+        validate_join_related_fields::<T>(&join_fields)?;
         // The turbofish on `query_as_with::<DB, _, _>` is load-bearing:
         // with both `sqlx-sqlite` and `sqlx-postgres` features on
         // sea-query-binder, `SqlxValues` implements `IntoArguments` for
@@ -3973,12 +4046,37 @@ async fn hydrate_prefetch_related<T: Model + HydrateRelated>(
 ) -> Result<(), sqlx::Error> {
     for field_name in prefetch_fields {
         // 1. Locate the M2M relation spec on T for this field name.
+        //    Loud-error path (post-#42): if the field doesn't match
+        //    an M2M relation, fail fast rather than silently no-op
+        //    (the prior silent-skip made typos invisible). FK-shaped
+        //    fields point at select_related / join_related instead.
+        //    Reverse-FK ("comment_set"-style) prefetch is gap #44 —
+        //    when that ships, we'll route unmatched names through
+        //    the reverse-FK lookup before erroring.
         let spec = match T::M2M_RELATIONS
             .iter()
             .find(|s| s.field_name == field_name.as_str())
         {
             Some(s) => s,
-            None => continue,
+            None => {
+                let is_fk = T::FIELDS
+                    .iter()
+                    .any(|f| f.name == field_name.as_str() && f.fk_target.is_some());
+                let hint = if is_fk {
+                    format!(
+                        " — `{field_name}` is a foreign key, use `.select_related(...)` \
+                         or `.join_related(...)` instead"
+                    )
+                } else {
+                    " — no M2M relation with that name on this model. Reverse-FK collection \
+                     prefetch is not yet implemented (gap #44 in bugs/gaps.md)"
+                        .to_string()
+                };
+                return Err(sqlx::Error::Protocol(format!(
+                    "umbra::orm::prefetch_related: unknown M2M field `{field_name}` on model `{}`{hint}",
+                    T::NAME
+                )));
+            }
         };
         let junction_table = format!("{}_{}", T::TABLE, spec.field_name);
 
