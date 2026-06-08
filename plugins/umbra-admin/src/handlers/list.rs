@@ -60,25 +60,71 @@ async fn resolve_fk_label(
 
 /// Build the template-facing `active_filters` JSON list, resolving FK
 /// fields to their related-model labels so chips render
-/// `category: Coffee` rather than `category: 1`. Falls back to the
-/// raw value when no label resolves (unknown id, no text column on the
-/// target, or a DB error).
+/// `category: Coffee` rather than `category: 1`. Multi-value selections
+/// (e.g. `?filter_brand=1,2`) fan out into one chip per id so each can
+/// be removed independently. Falls back to the raw value when no label
+/// resolves.
 async fn build_active_filter_list(
     model: &umbra::migrate::ModelMeta,
     active_filters: &[(String, String)],
 ) -> Vec<serde_json::Value> {
-    let mut out = Vec::with_capacity(active_filters.len());
-    for (field, value) in active_filters {
-        let display = resolve_fk_label(model, field, value)
-            .await
-            .unwrap_or_else(|| value.clone());
-        out.push(serde_json::json!({
-            "field": field,
-            "value": value,
-            "display": display,
-        }));
+    // Pre-split every filter so we can fan multi-value selections
+    // into per-id chips AND compute each chip's "remove me" URL
+    // against the same fanned-out set.
+    let groups: Vec<(String, Vec<String>)> = active_filters
+        .iter()
+        .map(|(f, v)| {
+            let parts: Vec<String> = if v.contains(',') {
+                v.split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            } else {
+                vec![v.clone()]
+            };
+            (f.clone(), parts)
+        })
+        .collect();
+
+    let mut out = Vec::new();
+    for (field_idx, (field, values)) in groups.iter().enumerate() {
+        for (val_idx, raw) in values.iter().enumerate() {
+            let display = resolve_fk_label(model, field, raw)
+                .await
+                .unwrap_or_else(|| raw.clone());
+            // Rebuild every filter except this one (field_idx, val_idx),
+            // joining surviving values per-field on `,`. Empty surviving
+            // sets drop the field entirely. The leading `&` lets the
+            // template concatenate this against `?search=...&sort=...`.
+            let mut qs = String::new();
+            for (i, (other_f, other_vs)) in groups.iter().enumerate() {
+                let kept: Vec<&str> = other_vs
+                    .iter()
+                    .enumerate()
+                    .filter(|(j, _)| !(i == field_idx && *j == val_idx))
+                    .map(|(_, s)| s.as_str())
+                    .collect();
+                if kept.is_empty() {
+                    continue;
+                }
+                qs.push_str("&filter_");
+                qs.push_str(&urlencode(other_f));
+                qs.push('=');
+                qs.push_str(&urlencode(&kept.join(",")));
+            }
+            out.push(serde_json::json!({
+                "field": field,
+                "value": raw,
+                "display": display,
+                "remove_qs": qs,
+            }));
+        }
     }
     out
+}
+
+fn urlencode(s: &str) -> String {
+    crate::util::urlencoding_simple(s)
 }
 
 /// Build one [`FilterFacet`] for the dialog. Centralises the

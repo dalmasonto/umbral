@@ -58,12 +58,13 @@
 <div class="flex flex-wrap items-center gap-xs mb-sm">
   <span class="font-label-sm text-label-sm text-outline uppercase tracking-wider">Active filters:</span>
   {% for af in active_filters %}
-  {# Build the URL with every OTHER active filter preserved. #}
+  {# The handler precomputes `remove_qs` — the `&filter_<f>=<v>` tail
+     that drops THIS chip but keeps every other selection (including
+     siblings of the same multi-value field). Doing this in Jinja is
+     awkward because templating can't easily dedup the per-field
+     comma-joined values. #}
   {% set remove_url -%}
-    {{ admin_base }}/{{ model.table }}/rows?search={{ search_val | urlencode }}&sort={{ sort_col | urlencode }}&order={{ sort_order | urlencode }}
-    {%- for other in active_filters -%}
-      {%- if other.field != af.field -%}&filter_{{ other.field | urlencode }}={{ other.value | urlencode }}{%- endif -%}
-    {%- endfor -%}
+    {{ admin_base }}/{{ model.table }}/rows?search={{ search_val | urlencode }}&sort={{ sort_col | urlencode }}&order={{ sort_order | urlencode }}{{ af.remove_qs | default("") }}
   {%- endset %}
   <div class="inline-flex items-center gap-xs bg-primary-container/10 border border-primary/20 text-primary px-sm py-xs rounded-full font-label-sm text-label-sm">
     <span class="text-on-surface-variant">{{ af.field | replace("_", " ") }}:</span>

@@ -16,6 +16,34 @@ use umbra::orm::{DynQuerySet, SqlType};
 use crate::AdminError;
 use crate::config::AdminConfig;
 
+/// Apply the active-filter slice to a [`DynQuerySet`], honouring the
+/// admin's two filter shapes:
+///   - single-value: `?filter_status=published` → `WHERE status = ?`
+///   - multi-value: `?filter_brand=1,2,3` → `WHERE brand IN (?, ?, ?)`
+///
+/// The comma is the URL-level multi-select separator (the FK and M2M
+/// dialogs serialise their pill arrays this way). Single-value calls
+/// stay byte-identical to the pre-multi-select path: no comma in the
+/// value → exactly one `filter_eq_string` clause.
+fn apply_active_filters<'a>(
+    mut qs: DynQuerySet<'a>,
+    active_filters: &[(String, String)],
+) -> DynQuerySet<'a> {
+    for (field, value) in active_filters {
+        if value.contains(',') {
+            let parts: Vec<String> = value
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            qs = qs.filter_in_strings(field, &parts);
+        } else {
+            qs = qs.filter_eq_string(field, value);
+        }
+    }
+    qs
+}
+
 /// COUNT(*) for one filtered changelist query. Returns the total so
 /// the Pagination footer can compute total_pages.
 ///
@@ -35,9 +63,7 @@ pub(crate) async fn count_rows_filtered(
         let restrict: &[String] = cfg.map(|c| c.search_fields.as_slice()).unwrap_or(&[]);
         qs = qs.search(restrict, term);
     }
-    for (field, value) in active_filters {
-        qs = qs.filter_eq_string(field, value);
-    }
+    qs = apply_active_filters(qs, active_filters);
     let count = qs.count().await?;
     Ok(count as usize)
 }
@@ -66,9 +92,7 @@ pub(crate) async fn fetch_rows_paged(
         let restrict: &[String] = cfg.map(|c| c.search_fields.as_slice()).unwrap_or(&[]);
         qs = qs.search(restrict, term);
     }
-    for (field, value) in active_filters {
-        qs = qs.filter_eq_string(field, value);
-    }
+    qs = apply_active_filters(qs, active_filters);
     for (col, desc) in parse_order_clause(order_clause) {
         qs = qs.order_by_col(&col, desc);
     }

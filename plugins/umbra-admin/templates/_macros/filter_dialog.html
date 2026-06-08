@@ -122,22 +122,12 @@
                  data-fk-field="{{ facet.field }}"
                  data-fk-table="{{ model.table }}"
                  data-fk-related="{{ facet.related_table }}"
-                 data-fk-active-id="{{ active_val }}">
-              {# Pill slot: shows the resolved label of the active id
-                 (filled in by JS via the /options/resolve endpoint on
-                 dialog open). Clicking the × clears the selection. #}
-              <div id="filter-fk-pill-{{ facet.field }}" class="hidden flex items-center gap-xs">
-                <span
-                  class="inline-flex items-center gap-xs bg-primary/10 text-primary border border-primary/20 px-sm py-xs rounded-full font-label-sm text-label-sm"
-                  data-fk-pill-label
-                >Loading…</span>
-                <button
-                  type="button"
-                  onclick="umbra._filterFkClear('{{ facet.field }}')"
-                  class="text-on-surface-variant hover:text-on-surface text-label-sm"
-                  aria-label="Clear {{ facet.field }} filter"
-                >×</button>
-              </div>
+                 data-fk-active-ids="{{ active_val }}">
+              {# Pills row: one pill per currently-selected id. JS
+                 resolves labels via /options/resolve on open. Each
+                 pill's × removes only that id. The trailing "Clear
+                 all" button drops every pill in one click. #}
+              <div id="filter-fk-pills-{{ facet.field }}" class="flex flex-wrap items-center gap-xs"></div>
               <div class="relative">
                 <input
                   type="text"
@@ -156,8 +146,13 @@
               </div>
             </div>
 
-            {# Choice / enum: checkbox list (default for unknown/uuid etc.) #}
+            {# Choice / enum: checkbox list. Multi-select — pick any
+               number of values; the URL emits `filter_<field>=a,b,c`
+               and the backend ANDs each comma-joined IN clause. #}
             {% else %}
+            {# Pre-split the comma list so each value's check state
+               can be evaluated independently. #}
+            {% set active_vals = active_val.split(",") if active_val else [] %}
             <div class="space-y-xs">
               {% for val in facet.values %}
               <label class="flex items-center gap-sm cursor-pointer hover:bg-surface-container-high px-sm py-xs rounded-lg transition-colors">
@@ -166,7 +161,7 @@
                   name="filter_choice_{{ facet.field }}"
                   value="{{ val }}"
                   data-filter-field="{{ facet.field }}"
-                  {% if active_val == val %}checked{% endif %}
+                  {% if val in active_vals %}checked{% endif %}
                   class="w-4 h-4 rounded border-outline-variant text-primary focus:ring-primary"
                   onchange="umbra._filterChoiceChange(this)"
                 />
@@ -214,8 +209,9 @@
 
   // Pending selections, keyed by field. Pre-seeded from the
   // currently-active filters so an already-applied selection survives
-  // re-opening the dialog. An entry whose value is empty or `"any"`
-  // is treated as "no filter on this field" by _filterApply.
+  // re-opening the dialog. Values are strings for single-select facets
+  // (boolean) and arrays for multi-select facets (choice, fk, m2m).
+  // The serialiser below treats anything array-shaped as a comma list.
   var _pending = (function seed() {
     var m = {};
     {% for key, val in active_filters | items %}
@@ -223,6 +219,15 @@
     {% endfor %}
     return m;
   })();
+
+  // Coerce a pending entry to an array. Boolean facets stay scalar;
+  // every other facet is normalised to a list so we can push/remove
+  // values without branching everywhere.
+  function asArray(v) {
+    if (Array.isArray(v)) return v;
+    if (v == null || v === '') return [];
+    return String(v).split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+  }
 
   umbra.closeFilterDialog = function() {
     var el = document.getElementById('umbra-filter-dialog');
@@ -256,22 +261,31 @@
 
   umbra._filterChoiceChange = function(cb) {
     var field = cb.getAttribute('data-filter-field');
+    var arr   = asArray(_pending[field]);
     if (cb.checked) {
-      // Single-value semantics per field: uncheck siblings so the
-      // checkbox list behaves like radio buttons (the backend's
-      // filter_eq_string takes one value per column).
-      var siblings = cb.closest('.space-y-xs').querySelectorAll('input[type="checkbox"][data-filter-field="' + field + '"]');
-      siblings.forEach(function(other) { if (other !== cb) other.checked = false; });
-      _pending[field] = cb.value;
+      if (arr.indexOf(cb.value) === -1) arr.push(cb.value);
     } else {
-      delete _pending[field];
+      arr = arr.filter(function(v) { return v !== cb.value; });
     }
+    if (arr.length === 0) delete _pending[field];
+    else _pending[field] = arr;
   };
+
+  // Track labels per (field, value) so we don't have to re-resolve a
+  // pill's label every time the user toggles selections.
+  var _fkLabels = {};
+  function setFkLabel(field, value, label) {
+    if (!_fkLabels[field]) _fkLabels[field] = {};
+    _fkLabels[field][String(value)] = label || ('#' + value);
+  }
+  function getFkLabel(field, value) {
+    return (_fkLabels[field] && _fkLabels[field][String(value)]) || ('#' + value);
+  }
 
   // Centralised FK option fetcher. Pulls results in HTML form from the
   // FK picker endpoint, then rewires each <button data-fk-value="..."
-  // data-fk-label="..."> to commit a filter selection instead of the
-  // edit-form's "set the combobox" semantics.
+  // data-fk-label="..."> to commit/toggle a filter selection instead
+  // of the edit-form's "set the combobox" semantics.
   umbra._filterFkSearch = function(field, table, query) {
     var url = '{{ admin_base }}/api/' + table + '/' + field + '/options?search=' + encodeURIComponent(query) + '&page_size=20';
     var container = document.getElementById('filter-fk-results-' + field);
@@ -280,79 +294,137 @@
       .then(function(r) { return r.text(); })
       .then(function(html) {
         container.innerHTML = html;
-        // Rewire each result button to commit to _pending on click.
         container.querySelectorAll('button[data-fk-value]').forEach(function(btn) {
-          btn.onclick = function() {
-            umbra._filterFkPick(field, btn.getAttribute('data-fk-value'), btn.getAttribute('data-fk-label') || '');
-          };
+          var value = btn.getAttribute('data-fk-value');
+          var label = btn.getAttribute('data-fk-label') || '';
+          setFkLabel(field, value, label);
+          btn.onclick = function() { umbra._filterFkToggle(field, value, label); };
         });
+        _filterFkRefreshHighlights(field);
       })
       .catch(function() {
         container.innerHTML = '<p class="px-md py-sm text-outline text-body-sm italic">Failed to load.</p>';
       });
   };
 
-  // Commit a FK pick to _pending, render the active pill, and visually
-  // mark the chosen result row.
-  umbra._filterFkPick = function(field, value, label) {
-    _pending[field] = value;
-    var pill      = document.getElementById('filter-fk-pill-' + field);
-    var pillLabel = pill ? pill.querySelector('[data-fk-pill-label]') : null;
-    if (pill)      pill.classList.remove('hidden');
-    if (pillLabel) pillLabel.textContent = label || ('#' + value);
-    var container = document.getElementById('filter-fk-results-' + field);
-    if (container) {
-      container.querySelectorAll('button[data-fk-value]').forEach(function(b) {
-        var active = b.getAttribute('data-fk-value') === String(value);
-        b.classList.toggle('bg-primary/10', active);
-        b.classList.toggle('text-primary',  active);
-      });
+  // Toggle a single value in the field's selection array. Same handler
+  // for both "user clicked a result row" and "user clicked a pill's ×".
+  umbra._filterFkToggle = function(field, value, label) {
+    var arr = asArray(_pending[field]);
+    var idx = arr.indexOf(String(value));
+    if (idx === -1) {
+      arr.push(String(value));
+      setFkLabel(field, value, label);
+    } else {
+      arr.splice(idx, 1);
     }
+    if (arr.length === 0) delete _pending[field];
+    else _pending[field] = arr;
+    _filterFkRenderPills(field);
+    _filterFkRefreshHighlights(field);
   };
 
+  // Drop every selection on a field (the "Clear all" affordance after
+  // the pills row).
   umbra._filterFkClear = function(field) {
     delete _pending[field];
-    var pill = document.getElementById('filter-fk-pill-' + field);
-    if (pill) pill.classList.add('hidden');
-    var container = document.getElementById('filter-fk-results-' + field);
-    if (container) {
-      container.querySelectorAll('button[data-fk-value]').forEach(function(b) {
-        b.classList.remove('bg-primary/10', 'text-primary');
-      });
-    }
+    _filterFkRenderPills(field);
+    _filterFkRefreshHighlights(field);
   };
 
-  // Per-FK init: load the first page of options + resolve the active id
-  // (if any) to a label so the pre-selected pill renders with a real
-  // name, not a bare "#5".
-  function initFkFacet(node) {
-    var field   = node.getAttribute('data-fk-field');
-    var table   = node.getAttribute('data-fk-table');
-    var active  = node.getAttribute('data-fk-active-id');
-    umbra._filterFkSearch(field, table, '');
-    if (active) {
-      var resolveUrl = '{{ admin_base }}/api/' + table + '/' + field
-        + '/options/resolve?ids=' + encodeURIComponent(active);
-      fetch(resolveUrl, { headers: { 'Accept': 'application/json' } })
-        .then(function(r) { return r.json(); })
-        .then(function(j) {
-          var label = (j && j.items && j.items[0] && j.items[0].label) || ('#' + active);
-          umbra._filterFkPick(field, active, label);
-        })
-        .catch(function() { umbra._filterFkPick(field, active, '#' + active); });
+  // Re-render the pills row from _pending[field]. Each pill carries
+  // its value so the × can toggle it back off without re-resolving.
+  function _filterFkRenderPills(field) {
+    var host = document.getElementById('filter-fk-pills-' + field);
+    if (!host) return;
+    var arr = asArray(_pending[field]);
+    if (arr.length === 0) { host.innerHTML = ''; return; }
+    var html = '';
+    arr.forEach(function(value) {
+      var label = getFkLabel(field, value);
+      html += '<span class="inline-flex items-center gap-xs bg-primary/10 text-primary border border-primary/20 px-sm py-xs rounded-full font-label-sm text-label-sm">'
+        + '<span>' + escapeHtml(label) + '</span>'
+        + '<button type="button" data-pill-value="' + escapeAttr(value) + '" class="text-on-surface-variant hover:text-on-surface text-label-sm" aria-label="Remove">×</button>'
+        + '</span>';
+    });
+    if (arr.length > 1) {
+      html += '<button type="button" data-fk-clear class="ml-xs text-label-sm text-on-surface-variant hover:text-on-surface underline">Clear all</button>';
     }
+    host.innerHTML = html;
+    host.querySelectorAll('button[data-pill-value]').forEach(function(btn) {
+      btn.onclick = function() {
+        umbra._filterFkToggle(field, btn.getAttribute('data-pill-value'), '');
+      };
+    });
+    var clearBtn = host.querySelector('button[data-fk-clear]');
+    if (clearBtn) clearBtn.onclick = function() { umbra._filterFkClear(field); };
+  }
+
+  // Mark every currently-selected result button with the active style.
+  function _filterFkRefreshHighlights(field) {
+    var container = document.getElementById('filter-fk-results-' + field);
+    if (!container) return;
+    var arr = asArray(_pending[field]);
+    container.querySelectorAll('button[data-fk-value]').forEach(function(b) {
+      var active = arr.indexOf(b.getAttribute('data-fk-value')) !== -1;
+      b.classList.toggle('bg-primary/10', active);
+      b.classList.toggle('text-primary',  active);
+    });
+  }
+
+  function escapeHtml(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function(c) { return '&#' + c.charCodeAt(0) + ';'; }); }
+  function escapeAttr(s) { return escapeHtml(s); }
+
+  // Per-FK init: load the first page of options + resolve every
+  // pre-selected id (one HTTP call per facet, batched via the
+  // comma-separated `ids=` param) so each pill renders with a real
+  // name instead of a bare `#5`.
+  function initFkFacet(node) {
+    var field      = node.getAttribute('data-fk-field');
+    var table      = node.getAttribute('data-fk-table');
+    var activeRaw  = node.getAttribute('data-fk-active-ids') || '';
+    var activeIds  = activeRaw.split(',').map(function(s){return s.trim();}).filter(Boolean);
+    umbra._filterFkSearch(field, table, '');
+    if (activeIds.length === 0) { _filterFkRenderPills(field); return; }
+    var resolveUrl = '{{ admin_base }}/api/' + table + '/' + field
+      + '/options/resolve?ids=' + encodeURIComponent(activeIds.join(','));
+    fetch(resolveUrl, { headers: { 'Accept': 'application/json' } })
+      .then(function(r) { return r.json(); })
+      .then(function(j) {
+        var items = (j && j.items) || [];
+        items.forEach(function(it) { setFkLabel(field, it.value, it.label); });
+        // Make sure every id even if not resolved still gets a pill —
+        // fall back to "#<id>" via getFkLabel's default.
+        activeIds.forEach(function(id) { if (!_fkLabels[field] || !_fkLabels[field][id]) setFkLabel(field, id, '#' + id); });
+        _pending[field] = activeIds.slice();
+        _filterFkRenderPills(field);
+        _filterFkRefreshHighlights(field);
+      })
+      .catch(function() {
+        _pending[field] = activeIds.slice();
+        _filterFkRenderPills(field);
+      });
   }
   document.querySelectorAll('#umbra-filter-dialog [data-fk-facet]').forEach(initFkFacet);
 
-  // Build `&filter_<field>=<value>` for every pending entry whose value
-  // is non-empty and not `"any"`. Drop the rest — a cleared selection
-  // shouldn't leak into the URL.
+  // Build `&filter_<field>=<value>` per pending entry. Array-valued
+  // entries (choice / fk / m2m multi-select) join on `,`, matching
+  // the backend's comma-split parser. Empty / `"any"` / empty-array
+  // entries are dropped so a cleared selection doesn't leak into the
+  // URL.
   function buildFilterQs() {
     var qs = '';
     Object.keys(_pending).forEach(function(field) {
       var v = _pending[field];
-      if (!v || v === 'any') return;
-      qs += '&filter_' + encodeURIComponent(field) + '=' + encodeURIComponent(v);
+      if (v == null || v === '' || v === 'any') return;
+      var serialised;
+      if (Array.isArray(v)) {
+        if (v.length === 0) return;
+        serialised = v.join(',');
+      } else {
+        serialised = String(v);
+      }
+      qs += '&filter_' + encodeURIComponent(field) + '=' + encodeURIComponent(serialised);
     });
     return qs;
   }

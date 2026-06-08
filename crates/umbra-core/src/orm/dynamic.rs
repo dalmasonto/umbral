@@ -186,6 +186,63 @@ impl<'a> DynQuerySet<'a> {
         self
     }
 
+    /// Add `WHERE <col> IN (?, ?, ...)` for any column. Each value is
+    /// parsed against the column's [`SqlType`] (same coercion as
+    /// [`Self::filter_eq_string`]) so SQLite's affinity rules see the
+    /// right operand type. Values that fail to parse are dropped from
+    /// the IN list. Empty `vals` (or all-unparseable) is a no-op;
+    /// unknown columns are silently dropped.
+    ///
+    /// Single-value calls degenerate to `<col> = ?` via sea-query's
+    /// `is_in` lowering — callers can use this for both the "one
+    /// selection" and "multi-selection" filter paths and get the
+    /// natural SQL in each case.
+    pub fn filter_in_strings(mut self, col: &str, vals: &[String]) -> Self {
+        let Some(meta_col) = self.meta.fields.iter().find(|c| c.name == col) else {
+            return self;
+        };
+        if vals.is_empty() {
+            return self;
+        }
+        let expr = Expr::col(Alias::new(col));
+        // Coerce each string value to the column's native type so the
+        // bind kind matches and SQLite's STRICT mode (and Postgres's
+        // type system) accepts the parameter.
+        let cond = match meta_col.ty {
+            SqlType::SmallInt | SqlType::Integer => {
+                let parsed: Vec<i32> = vals.iter().filter_map(|s| s.parse().ok()).collect();
+                if parsed.is_empty() {
+                    return self;
+                }
+                Condition::all().add(expr.is_in(parsed))
+            }
+            SqlType::BigInt | SqlType::ForeignKey => {
+                let parsed: Vec<i64> = vals.iter().filter_map(|s| s.parse().ok()).collect();
+                if parsed.is_empty() {
+                    return self;
+                }
+                Condition::all().add(expr.is_in(parsed))
+            }
+            SqlType::Real | SqlType::Double => {
+                let parsed: Vec<f64> = vals.iter().filter_map(|s| s.parse().ok()).collect();
+                if parsed.is_empty() {
+                    return self;
+                }
+                Condition::all().add(expr.is_in(parsed))
+            }
+            SqlType::Boolean => {
+                let parsed: Vec<bool> = vals
+                    .iter()
+                    .map(|s| matches!(s.as_str(), "true" | "on" | "1"))
+                    .collect();
+                Condition::all().add(expr.is_in(parsed))
+            }
+            _ => Condition::all().add(expr.is_in(vals.iter().map(|s| s.to_string()))),
+        };
+        self.where_clauses.push(cond);
+        self
+    }
+
     /// Add `WHERE <col> = <value>` where the value is parsed against
     /// the column's `SqlType` so SQLite's affinity rules see the right
     /// operand type.
