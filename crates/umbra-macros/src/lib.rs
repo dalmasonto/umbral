@@ -265,6 +265,31 @@ struct UmbraFieldAttr {
     reverse_fk: Option<String>,
 }
 
+/// Detect `#[sqlx(skip)]` on a struct field. Used by the OneToOne
+/// dispatch: a `OneToOne<T>` field with `#[sqlx(skip)]` is the
+/// PARENT-side back-link (no DB column); without `#[sqlx(skip)]` it
+/// is the CHILD-side sugar (equivalent to `#[umbra(unique)] pub
+/// <f>: ForeignKey<T>`). We can't tell from the type alone; the
+/// sqlx attr is the disambiguator.
+fn has_sqlx_skip(attrs: &[syn::Attribute]) -> bool {
+    for attr in attrs {
+        if !attr.path().is_ident("sqlx") {
+            continue;
+        }
+        let mut found = false;
+        let _ = attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("skip") {
+                found = true;
+            }
+            Ok(())
+        });
+        if found {
+            return true;
+        }
+    }
+    false
+}
+
 fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAttr> {
     let mut parsed = UmbraFieldAttr {
         noform: false,
@@ -944,13 +969,23 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             continue;
         }
 
-        // OneToOne<C> — no column on the parent. Unlike ReverseSet
-        // this requires NO `#[umbra(...)]` attribute: the back-
-        // pointing FK column is resolved at runtime by scanning
-        // the child's FIELDS for the UNIQUE FK whose `fk_target`
-        // is this parent's table. The macro just emits the spec
-        // + the hydration arms.
-        if let FieldKind::OneToOne(ref inner_ty) = kind {
+        // OneToOne<T> dispatch:
+        //  - With `#[sqlx(skip)]`: PARENT-side back-link. No DB
+        //    column on this side. Hydrated by `prefetch_related`
+        //    via the back-pointing UNIQUE FK on the child. This
+        //    branch runs and `continue`s.
+        //  - Without `#[sqlx(skip)]`: CHILD-side sugar — exactly
+        //    equivalent to `#[umbra(unique)] pub <f>: ForeignKey<T>`.
+        //    We do NOT enter this branch; we let the field fall
+        //    through to the FK column emission path below, after
+        //    flipping `field_attr.unique = true` and rewriting the
+        //    classification to `FieldKind::ForeignKey(T)`. That
+        //    keeps the entire downstream code path (column spec,
+        //    hydrate arms, reverse-FK and reverse-O2O accessors)
+        //    in ONE branch — no parallel implementation to drift.
+        if let FieldKind::OneToOne(ref inner_ty) = kind
+            && has_sqlx_skip(&field.attrs)
+        {
             let inner = inner_ty.as_ref();
             one_to_one_specs.push(quote! {
                 ::umbra::orm::OneToOneRelationSpec {
@@ -970,14 +1005,30 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                             ::umbra::_serde_json::from_value::<#inner>(v).ok(),
                         ::core::option::Option::None => ::core::option::Option::None,
                     };
-                    self.#field_ident.set_resolved(decoded);
+                    // Parent-side OneToOne: `set_resolved_opt` accepts
+                    // None to mean "loaded, no matching row". The
+                    // `set_resolved(C)` variant (used by child-side
+                    // FK-style hydration) would lose that bit.
+                    self.#field_ident.set_resolved_opt(decoded);
                 }
             });
             continue;
         }
 
+        // Child-side `OneToOne<T>` sugar — same shape on the wire as
+        // `#[umbra(unique)] pub <f>: ForeignKey<T>`. Rewrite the
+        // classification here so all downstream code (column spec,
+        // hydrate arms, reverse-FK accessor, reverse-O2O accessor)
+        // treats it identically to a unique FK.
+        let mut kind = kind;
+        let mut force_unique = false;
+        if let FieldKind::OneToOne(inner) = kind {
+            kind = FieldKind::ForeignKey(inner);
+            force_unique = true;
+        }
+
         // Parse field-level `#[umbra(noform)]` / `#[umbra(noedit)]`.
-        let field_attr = match parse_umbra_field_attr(&field.attrs) {
+        let mut field_attr = match parse_umbra_field_attr(&field.attrs) {
             Ok(a) => a,
             Err(e) => {
                 field_specs.push(e.to_compile_error());
@@ -985,6 +1036,9 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                 continue;
             }
         };
+        if force_unique {
+            field_attr.unique = true;
+        }
         let noform_lit = if field_attr.noform {
             quote!(true)
         } else {
@@ -1281,13 +1335,23 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
     for field in fields.iter() {
         let field_name = field.ident.as_ref().unwrap();
         let field_name_str = field_name.to_string();
-        let kind = classify_field_type(&field.ty);
+        let mut kind = classify_field_type(&field.ty);
         // Re-parse the field attr here so we can honour `no_reverse`
         // when deciding whether to emit a Gap-30 accessor. The first
         // pass at line ~797 already validated the attrs, so a parse
         // error is impossible here — fall back to defaults to keep
         // the call infallible.
-        let field_attr = parse_umbra_field_attr(&field.attrs).unwrap_or_default();
+        let mut field_attr = parse_umbra_field_attr(&field.attrs).unwrap_or_default();
+        // Mirror the rewrite from the first loop: child-side
+        // `OneToOne<T>` (no `#[sqlx(skip)]`) → unique FK. Without
+        // this the reverse-set + reverse-o2o accessors would skip
+        // emission for sugar fields.
+        if matches!(kind, FieldKind::OneToOne(_)) && !has_sqlx_skip(&field.attrs) {
+            if let FieldKind::OneToOne(inner) = kind {
+                kind = FieldKind::ForeignKey(inner);
+            }
+            field_attr.unique = true;
+        }
         match &kind {
             FieldKind::Many2Many(inner_ty) => {
                 m2m_field_idents.push(field_name.clone());

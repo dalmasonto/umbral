@@ -104,6 +104,34 @@ impl<C: Model> OneToOne<C> {
         }
     }
 
+    /// Construct a child-side OneToOne carrying the FK value for the
+    /// target row. Mirrors [`super::ForeignKey::new`]. Used when the
+    /// field is declared `pub user: OneToOne<AuthUser>` (no
+    /// `#[sqlx(skip)]`) — the macro routes such fields through the
+    /// unique-FK column path, and `OneToOne<T>::new(id)` is what the
+    /// caller writes to construct a row before insert. The `id` lands
+    /// in the same `parent_id` slot the parent-side back-link uses,
+    /// because the two directions never share an instance — a given
+    /// `OneToOne<T>` is either child-side (FK value) or parent-side
+    /// (parent PK for prefetch bucketing).
+    pub fn new(id: i64) -> Self {
+        Self {
+            parent_id: Some(id),
+            resolved: None,
+            loaded: false,
+            _phantom: PhantomData,
+        }
+    }
+
+    /// Read the FK value on a child-side `OneToOne<T>`. Mirrors
+    /// [`super::ForeignKey::id`]. Panics when called on an unset
+    /// slot — the v1 contract matches `ForeignKey::id` (the caller
+    /// constructed the row, so they should have set the FK).
+    pub fn id(&self) -> i64 {
+        self.parent_id
+            .expect("OneToOne::id called on an unset slot — construct with OneToOne::new(id)")
+    }
+
     /// Borrow the resolved child. `None` means either prefetch
     /// wasn't called OR the prefetch found no matching child. Use
     /// [`Self::is_loaded`] to distinguish the two cases.
@@ -133,11 +161,21 @@ impl<C: Model> OneToOne<C> {
         self.parent_id = Some(id);
     }
 
-    /// Populate (or clear) the resolved bucket. Called once by the
-    /// prefetch loader after running the batched IN query. Setting
-    /// `None` here is legitimate ("loaded but no matching row");
-    /// `is_loaded()` flips to true either way.
-    pub fn set_resolved(&mut self, row: Option<C>) {
+    /// Populate the resolved bucket from a definitely-present child
+    /// row. Mirrors [`super::ForeignKey::set_resolved`] so the
+    /// child-side `OneToOne<T>` sugar can share the same
+    /// macro-emitted hydration arm. Setting marks the slot as
+    /// loaded.
+    pub fn set_resolved(&mut self, row: C) {
+        self.resolved = Some(Box::new(row));
+        self.loaded = true;
+    }
+
+    /// Populate (or clear) the resolved bucket. Called by the
+    /// parent-side prefetch loader after running the batched IN
+    /// query. Setting `None` here is legitimate ("loaded but no
+    /// matching row"); `is_loaded()` flips to true either way.
+    pub fn set_resolved_opt(&mut self, row: Option<C>) {
         self.resolved = row.map(Box::new);
         self.loaded = true;
     }
@@ -201,8 +239,12 @@ impl<'r, C: Model> sqlx::Decode<'r, sqlx::Sqlite> for OneToOne<C> {
     fn decode(
         value: sqlx::sqlite::SqliteValueRef<'r>,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        let _ = <i64 as sqlx::Decode<sqlx::Sqlite>>::decode(value)?;
-        Ok(Self::empty())
+        // Real decode for the child-side OneToOne<T> sugar — keep the
+        // i64 so .id() works after a select_related-less fetch.
+        // Parent-side fields are `#[sqlx(skip)]` and never hit this
+        // path, so the upgrade is backwards-compatible.
+        let raw = <i64 as sqlx::Decode<sqlx::Sqlite>>::decode(value)?;
+        Ok(Self::new(raw))
     }
 }
 
@@ -210,7 +252,31 @@ impl<'r, C: Model> sqlx::Decode<'r, sqlx::Postgres> for OneToOne<C> {
     fn decode(
         value: sqlx::postgres::PgValueRef<'r>,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        let _ = <i64 as sqlx::Decode<sqlx::Postgres>>::decode(value)?;
-        Ok(Self::empty())
+        let raw = <i64 as sqlx::Decode<sqlx::Postgres>>::decode(value)?;
+        Ok(Self::new(raw))
+    }
+}
+
+// Encode — required for child-side OneToOne<T> on INSERT/UPDATE. The
+// FK value is in `parent_id`; encode it as `i64` exactly like the FK
+// column would. Parent-side OneToOne<C> fields are `#[sqlx(skip)]`
+// and never reach the encoder.
+impl<'q, C: Model> sqlx::Encode<'q, sqlx::Sqlite> for OneToOne<C> {
+    fn encode_by_ref(
+        &self,
+        buf: &mut <sqlx::Sqlite as sqlx::Database>::ArgumentBuffer<'q>,
+    ) -> Result<sqlx::encode::IsNull, Box<dyn std::error::Error + Send + Sync>> {
+        let id = self.parent_id.unwrap_or_default();
+        <i64 as sqlx::Encode<'q, sqlx::Sqlite>>::encode_by_ref(&id, buf)
+    }
+}
+
+impl<'q, C: Model> sqlx::Encode<'q, sqlx::Postgres> for OneToOne<C> {
+    fn encode_by_ref(
+        &self,
+        buf: &mut <sqlx::Postgres as sqlx::Database>::ArgumentBuffer<'q>,
+    ) -> Result<sqlx::encode::IsNull, Box<dyn std::error::Error + Send + Sync>> {
+        let id = self.parent_id.unwrap_or_default();
+        <i64 as sqlx::Encode<'q, sqlx::Postgres>>::encode_by_ref(&id, buf)
     }
 }

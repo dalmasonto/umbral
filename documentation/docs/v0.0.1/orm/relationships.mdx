@@ -124,7 +124,23 @@ let children = Category::objects()
 
 ## One-to-one relationships
 
-Django's `OneToOneField` is `ForeignKey(unique=True)` underneath. Umbra spells it the same way on the **child** (referencing) side — pair `ForeignKey<T>` with `#[umbra(unique)]` and the column gets both `REFERENCES "<target>"("id")` and `UNIQUE`. Only one row in the referencing table may reference any given target row.
+Django's `OneToOneField` is `ForeignKey(unique=True)` underneath. Umbra ships **two equivalent spellings** on the child (referencing) side. Pick whichever reads cleaner — both compile to the same column shape and emit the same back-link accessors.
+
+### Sugar spelling — `OneToOne<T>`
+
+```rust
+#[derive(Model)]
+pub struct Profile {
+    pub id: i64,
+    pub user: OneToOne<AuthUser>,   // ← sugar
+    pub bio: String,
+    pub avatar: String,
+}
+```
+
+The derive macro sees `OneToOne<T>` without `#[sqlx(skip)]` and rewrites it internally to `#[umbra(unique)] pub user: ForeignKey<AuthUser>` — same column DDL (`bigint NOT NULL UNIQUE REFERENCES "auth_user"("id")`), same `select_related("user")` behavior, same reverse-O2O accessor on the parent (`auth_user.profile().await?`). The `OneToOne<T>` type carries the FK value at runtime: construct with `OneToOne::new(id)`, read with `.id()`, and (after `select_related`) `.resolved() -> Option<&T>` — symmetric with `ForeignKey<T>`.
+
+### Longhand spelling — `#[umbra(unique)] ForeignKey<T>`
 
 ```rust
 #[derive(Model)]
