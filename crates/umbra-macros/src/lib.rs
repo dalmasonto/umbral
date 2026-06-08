@@ -254,6 +254,15 @@ struct UmbraFieldAttr {
     /// itself isn't supplied on the body, leaving explicit
     /// user-supplied slugs alone.
     slug_from: Option<String>,
+    /// Gap #44 — `#[umbra(reverse_fk = "post")]` on a
+    /// `ReverseSet<Comment>` field names the FK column on `Comment`
+    /// that points back at this parent. The macro emits one
+    /// `ReverseFkRelationSpec` entry per such field and wires
+    /// `set_parent_id` / `set_fk_column` / `set_reverse_fk_resolved_json`
+    /// arms so `prefetch_related("comment_set")` lights up.
+    /// Required when the field type is `ReverseSet<C>`; ignored on
+    /// any other field type.
+    reverse_fk: Option<String>,
 }
 
 fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAttr> {
@@ -278,6 +287,7 @@ fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAtt
         min: None,
         max: None,
         slug_from: None,
+        reverse_fk: None,
     };
     for attr in attrs {
         if !attr.path().is_ident("umbra") {
@@ -397,6 +407,15 @@ fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAtt
                 let value = meta.value()?;
                 let lit: syn::LitStr = value.parse()?;
                 parsed.slug_from = Some(lit.value());
+                Ok(())
+            } else if meta.path.is_ident("reverse_fk") {
+                // Gap #44 — `#[umbra(reverse_fk = "post")]` on a
+                // `ReverseSet<Comment>` field names the FK column on
+                // `Comment` that points back at this parent. Required
+                // for ReverseSet fields; ignored on others.
+                let value = meta.value()?;
+                let lit: syn::LitStr = value.parse()?;
+                parsed.reverse_fk = Some(lit.value());
                 Ok(())
             } else {
                 // Unknown key. Report it with the known set so the
@@ -823,6 +842,18 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
     let mut field_specs: Vec<TokenStream2> = Vec::new();
     let mut column_consts: Vec<TokenStream2> = Vec::new();
     let mut m2m_specs: Vec<TokenStream2> = Vec::new();
+    // Gap #44 — one entry per `ReverseSet<C>` field. Emitted as
+    // `Model::REVERSE_FK_RELATIONS` so the prefetch_related dispatch
+    // can look them up at terminal time.
+    let mut reverse_fk_specs: Vec<TokenStream2> = Vec::new();
+    // Arms for the macro-emitted `set_m2m_parent_ids` body: each
+    // calls `set_parent_id(__pk)` + `set_fk_column("<fk_col>")` on
+    // one ReverseSet field, so the slot knows which children to
+    // associate with itself.
+    let mut reverse_fk_parent_arms: Vec<TokenStream2> = Vec::new();
+    // Match arms for the per-field
+    // `HydrateRelated::set_reverse_fk_resolved_json` body.
+    let mut reverse_fk_resolved_arms: Vec<TokenStream2> = Vec::new();
 
     for field in fields.iter() {
         let field_name = field.ident.as_ref().unwrap();
@@ -844,6 +875,62 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                     field_name: #field_name_str,
                     target_table: <#inner as ::umbra::orm::Model>::TABLE,
                     target_name: <#inner as ::umbra::orm::Model>::NAME,
+                }
+            });
+            continue;
+        }
+
+        // Gap #44: ReverseSet<C> fields also have no column on the
+        // parent table. Skip from FIELDS/column_consts; collect into
+        // reverse_fk_specs (plus the field ident so the hydrate /
+        // set_parent_id arms can reference it later). The
+        // `#[umbra(reverse_fk = "...")]` attribute is REQUIRED on
+        // ReverseSet fields — without it we'd have no FK column
+        // name to filter children on. Emit a compile-error if
+        // missing so the failure surfaces at the right span.
+        if let FieldKind::ReverseSet(ref inner_ty) = kind {
+            let inner = inner_ty.as_ref();
+            let field_attr = match parse_umbra_field_attr(&field.attrs) {
+                Ok(a) => a,
+                Err(e) => {
+                    field_specs.push(e.to_compile_error());
+                    continue;
+                }
+            };
+            let Some(fk_col) = field_attr.reverse_fk.as_ref() else {
+                let err = syn::Error::new_spanned(
+                    field,
+                    "ReverseSet<C> fields require `#[umbra(reverse_fk = \"<fk_column>\")]` \
+                     naming the FK column on the child model that points back at this parent",
+                );
+                field_specs.push(err.to_compile_error());
+                continue;
+            };
+            reverse_fk_specs.push(quote! {
+                ::umbra::orm::ReverseFkRelationSpec {
+                    field_name: #field_name_str,
+                    target_table: <#inner as ::umbra::orm::Model>::TABLE,
+                    target_name: <#inner as ::umbra::orm::Model>::NAME,
+                    fk_column: #fk_col,
+                }
+            });
+            let field_ident = field.ident.as_ref().expect("named field has ident").clone();
+            let fk_col_lit = fk_col.clone();
+            reverse_fk_parent_arms.push(quote! {
+                self.#field_ident.set_parent_id(__pk);
+                self.#field_ident.set_fk_column(#fk_col_lit);
+            });
+            reverse_fk_resolved_arms.push(quote! {
+                #field_name_str => {
+                    let mut decoded: ::std::vec::Vec<#inner> = ::std::vec::Vec::with_capacity(rows.len());
+                    for row in rows {
+                        if let ::core::result::Result::Ok(c) =
+                            ::umbra::_serde_json::from_value::<#inner>(row)
+                        {
+                            decoded.push(c);
+                        }
+                    }
+                    self.#field_ident.set_resolved(decoded);
                 }
             });
             continue;
@@ -1218,19 +1305,29 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
     // emits CREATE TABLE under the same name, so the two sides agree.
     // `.clone()` on __pk handles models with multiple M2M fields
     // (set_parent_id takes the PK by value).
-    let set_m2m_body = if m2m_field_idents.is_empty() {
+    // Gap #44: extend the per-field block to cover ReverseSet<C>
+    // slots too. The body runs once after each parent is decoded,
+    // seeding `parent_id` + (for M2M) `junction_table` / (for
+    // reverse-FK) `fk_column` on every relation slot.
+    let set_m2m_body = if m2m_field_idents.is_empty() && reverse_fk_parent_arms.is_empty() {
         quote!({})
     } else {
-        let per_field = m2m_field_idents.iter().map(|ident| {
+        let m2m_arms = m2m_field_idents.iter().map(|ident| {
             let junction_name = format!("{}_{}", table_name, ident);
             quote! {
                 self.#ident.set_parent_id(__pk.clone());
                 self.#ident.set_junction_table(#junction_name);
             }
         });
+        // ReverseSet arms expect a bare `__pk: i64` (the slot stores
+        // Option<i64>). Models with non-i64 PKs that happen to have
+        // a ReverseSet field will fail to compile here — matches the
+        // same v1 i64-PK constraint as the M2M plumbing.
+        let rfk_arms = reverse_fk_parent_arms.iter();
         quote! {{
             let __pk = <Self as ::umbra::orm::Model>::primary_key(self);
-            #(#per_field)*
+            #(#m2m_arms)*
+            #(#rfk_arms)*
         }}
     };
 
@@ -1451,6 +1548,9 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             const M2M_RELATIONS: &'static [::umbra::orm::M2MRelationSpec] = &[
                 #(#m2m_specs),*
             ];
+            const REVERSE_FK_RELATIONS: &'static [::umbra::orm::ReverseFkRelationSpec] = &[
+                #(#reverse_fk_specs),*
+            ];
             fn primary_key(&self) -> #pk_ty_tokens {
                 // `.clone()` works for every PK type the trait accepts
                 // (the bound is `Clone`, not `Copy`). For `i32`, `i64`,
@@ -1498,6 +1598,19 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                 // posture as hydrate_fk).
                 match field_name {
                     #(#m2m_resolved_arms)*
+                    _ => {}
+                }
+            }
+            fn set_reverse_fk_resolved_json(
+                &mut self,
+                field_name: &str,
+                rows: ::std::vec::Vec<::umbra::_serde_json::Value>,
+            ) {
+                // Gap #44: prefetch_related's reverse-FK path calls
+                // this hook with each parent's bucket of children.
+                // The macro emits one arm per `ReverseSet<C>` field.
+                match field_name {
+                    #(#reverse_fk_resolved_arms)*
                     _ => {}
                 }
             }
@@ -1611,6 +1724,12 @@ enum FieldKind {
     /// the migration engine auto-generates a junction table. The inner
     /// `Type` is the target model `T`. Closes BUG-16.
     Many2Many(Box<Type>),
+    /// `ReverseSet<C>` — reverse-FK collection. No column on the
+    /// parent table; the child has a FK column pointing back. The
+    /// `#[umbra(reverse_fk = "<fk_col>")]` attribute names that
+    /// column. The macro emits one `ReverseFkRelationSpec` entry +
+    /// the hydration arms. Closes gap #44.
+    ReverseSet(Box<Type>),
     /// `ipnetwork::IpNetwork` — Postgres INET column (Phase 4.4).
     Inet,
     NullableInet,
@@ -1740,6 +1859,7 @@ impl FieldKind {
             // are skipped before reaching this point; the arm exists only
             // to keep the match exhaustive.
             FieldKind::Many2Many(_) => return None,
+            FieldKind::ReverseSet(_) => return None,
             FieldKind::Unsupported(_) => return None,
         };
         let nullable = if self.is_nullable() {
@@ -1916,6 +2036,11 @@ fn classify_field_type(ty: &Type) -> FieldKind {
     if let Some(inner) = m2m_inner(ty) {
         return FieldKind::Many2Many(Box::new(inner.clone()));
     }
+    // Gap #44 — `ReverseSet<C>` is a reverse-FK collection on the
+    // parent. Same "no column on the parent table" shape as M2M.
+    if let Some(inner) = reverse_set_inner(ty) {
+        return FieldKind::ReverseSet(Box::new(inner.clone()));
+    }
     if is_wide_or_unsigned_int(ty) {
         return FieldKind::Unsupported(UnsupportedReason::WideOrUnsignedInt);
     }
@@ -2031,6 +2156,31 @@ fn multichoice_inner(ty: &Type) -> Option<&Type> {
     };
     let last = path.segments.last()?;
     if last.ident != "MultiChoice" {
+        return None;
+    }
+    let PathArguments::AngleBracketed(ref args) = last.arguments else {
+        return None;
+    };
+    let mut type_args = args.args.iter().filter_map(|a| match a {
+        GenericArgument::Type(t) => Some(t),
+        _ => None,
+    });
+    let inner = type_args.next()?;
+    if type_args.next().is_some() {
+        return None;
+    }
+    Some(inner)
+}
+
+/// If `ty` is `ReverseSet<C>` (gap #44), return the inner child
+/// model type `C`. Returns `None` otherwise. Mirrors
+/// [`m2m_inner`] — leaf ident `ReverseSet` plus one generic arg.
+fn reverse_set_inner(ty: &Type) -> Option<&Type> {
+    let Type::Path(TypePath { qself: None, path }) = ty else {
+        return None;
+    };
+    let last = path.segments.last()?;
+    if last.ident != "ReverseSet" {
         return None;
     }
     let PathArguments::AngleBracketed(ref args) = last.arguments else {
@@ -2412,6 +2562,7 @@ fn column_const_for(
         // token stream as a defensive default.
         FieldKind::MultiChoice(_) => return TokenStream2::new(),
         FieldKind::Many2Many(_) => return TokenStream2::new(),
+        FieldKind::ReverseSet(_) => return TokenStream2::new(),
         FieldKind::Unsupported(_) => return TokenStream2::new(),
     };
     quote_spanned! { span =>
