@@ -61,6 +61,25 @@ use super::Model;
 /// finding the unique back-pointing FK column on `C` at runtime.
 /// Without that chain method `resolved()` returns `None` and the
 /// slot is inert.
+/// Which side of the OneToOne a slot represents. Set at
+/// construction time and used by [`Serialize`] to pick the right
+/// JSON shape (child-side: emit the FK value as a number; parent-
+/// side: emit the resolved row or null).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Side {
+    /// Default. Parent-side back-link slot — has no DB column on
+    /// this side. JSON shape: full child row (after prefetch) or
+    /// null. The `parent_id` here is the parent's own PK, used
+    /// only for prefetch bucketing — it must NEVER leak into JSON
+    /// output as the field value.
+    Parent,
+    /// Child-side FK column sugar. JSON shape mirrors
+    /// `ForeignKey<T>`: the FK value as a number when unresolved,
+    /// the full row when select_related'd. `parent_id` here IS the
+    /// FK value, decoded from the BIGINT column.
+    Child,
+}
+
 #[derive(Debug, Clone)]
 pub struct OneToOne<C: Model> {
     /// Cached parent-row PK. Set by the macro-emitted
@@ -81,6 +100,10 @@ pub struct OneToOne<C: Model> {
     /// when the child wasn't found. Lets `is_loaded()` distinguish
     /// "no prefetch yet" from "prefetched, no match".
     loaded: bool,
+    /// Which side this slot represents. `Parent` is the default
+    /// because that's the pre-sugar behaviour; `Child` is set by
+    /// [`Self::new`] and the [`sqlx::Decode`] impl.
+    side: Side,
     _phantom: PhantomData<C>,
 }
 
@@ -95,11 +118,16 @@ impl<C: Model> Default for OneToOne<C> {
 
 impl<C: Model> OneToOne<C> {
     /// Construct an empty (unloaded, no parent yet) OneToOne.
+    /// Defaults to `Side::Parent` because the no-arg constructor
+    /// is what `#[sqlx(skip)]` parent-side fields use; child-side
+    /// fields are always constructed via [`Self::new`] or
+    /// [`sqlx::Decode`], both of which switch to `Side::Child`.
     pub fn empty() -> Self {
         Self {
             parent_id: None,
             resolved: None,
             loaded: false,
+            side: Side::Parent,
             _phantom: PhantomData,
         }
     }
@@ -119,6 +147,7 @@ impl<C: Model> OneToOne<C> {
             parent_id: Some(id),
             resolved: None,
             loaded: false,
+            side: Side::Child,
             _phantom: PhantomData,
         }
     }
@@ -181,15 +210,28 @@ impl<C: Model> OneToOne<C> {
     }
 }
 
-/// Serialize: emit the resolved child (or `null` if not loaded /
-/// no match). Symmetric with `ForeignKey<T>` when resolved — gives
-/// templates and REST consumers a clean `obj.profile.avatar`
-/// shape.
+/// Serialize:
+///   - Parent-side (`Side::Parent`, the default): emit the
+///     resolved row (the nested-object shape after prefetch)
+///     or `null`. The parent's own PK in `parent_id` must NOT
+///     leak — it's bookkeeping, not the field's value.
+///   - Child-side (`Side::Child`, set by `new(id)` /
+///     `Decode`): mirror [`super::ForeignKey`]: emit the
+///     resolved row if present, otherwise the FK value as a
+///     number. This is what keeps the create-path validator
+///     happy (it sees the FK value in the JSON map and the
+///     non-null `user` column is satisfied).
 impl<C: Model + Serialize> Serialize for OneToOne<C> {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        match &self.resolved {
-            Some(row) => row.serialize(s),
-            None => s.serialize_none(),
+        if let Some(row) = &self.resolved {
+            return row.serialize(s);
+        }
+        match self.side {
+            Side::Child => match self.parent_id {
+                Some(id) => id.serialize(s),
+                None => s.serialize_none(),
+            },
+            Side::Parent => s.serialize_none(),
         }
     }
 }
@@ -205,6 +247,9 @@ impl<'de, C: Model + Deserialize<'de>> Deserialize<'de> for OneToOne<C> {
             parent_id: None,
             resolved: opt.map(Box::new),
             loaded,
+            // Round-trip — preserve the parent-side default
+            // (matches the pre-sugar behaviour of this Deserialize).
+            side: Side::Parent,
             _phantom: PhantomData,
         })
     }

@@ -23,7 +23,7 @@ pub mod prelude {
     //! not pollute the prelude with bare names like `pool`.
 
     pub use crate::orm::{
-        ChoiceField, Choices, F, FColExt, ForeignKey, M2M, Model, MultiChoice, Q,
+        ChoiceField, Choices, F, FColExt, ForeignKey, M2M, Model, MultiChoice, OneToOne, Q,
     };
     pub use crate::plugin::{AppContext, Plugin};
     pub use crate::routes::Routes;

@@ -215,6 +215,41 @@ async fn sugar_field_also_emits_cross_crate_reverse_accessor() {
     assert_eq!(profile.user.id(), user.id);
 }
 
+/// Critical regression test for the Side discriminator.
+/// Without it, the Serialize impl would emit `parent_id` for the
+/// PARENT-side back-link slot too, breaking the
+/// `template_shaped_json_emits_nested_profile_or_null` shape
+/// AND poisoning the create-path validator with the parent's own
+/// PK leaking into the field's JSON value.
+#[tokio::test]
+async fn serialize_emits_fk_id_for_child_side_only() {
+    use umbra::orm::OneToOne;
+
+    // Child-side: constructed via `new(id)` → Side::Child.
+    // Serialize emits the FK value as a number — that's what the
+    // create-path validator reads to satisfy NOT NULL on the column.
+    let child: OneToOne<AuthUser> = OneToOne::new(42);
+    let j = serde_json::to_value(&child).expect("serialize");
+    assert_eq!(
+        j,
+        serde_json::json!(42),
+        "child-side OneToOne::new(42) must serialize as the FK id `42`, got {j}"
+    );
+
+    // Parent-side: default constructor → Side::Parent. Even with a
+    // parent_id set via set_parent_id() (which the macro emits at
+    // row-decode time for prefetch bucketing), the FIELD VALUE must
+    // serialize as null — the parent_id is the parent's OWN PK, not
+    // the field's data, and leaking it would break JSON output.
+    let mut parent: OneToOne<AuthUser> = OneToOne::empty();
+    parent.set_parent_id(99);
+    let j = serde_json::to_value(&parent).expect("serialize");
+    assert!(
+        j.is_null(),
+        "parent-side OneToOne must serialize as null (not the parent's own PK), got {j}"
+    );
+}
+
 #[tokio::test]
 async fn id_panics_on_unset_slot() {
     // OneToOne::id() panics when unset — matches ForeignKey::id().
