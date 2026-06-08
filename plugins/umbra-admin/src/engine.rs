@@ -162,6 +162,11 @@ pub(crate) fn engine() -> &'static Environment<'static> {
         )
         .expect("admin/_macros/widgets/bar.html parses");
         env.add_template(
+            "admin/_macros/widgets/card.html",
+            include_str!("../templates/_macros/widgets/card.html"),
+        )
+        .expect("admin/_macros/widgets/card.html parses");
+        env.add_template(
             "admin/_macros/widgets/line.html",
             include_str!("../templates/_macros/widgets/line.html"),
         )
