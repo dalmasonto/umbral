@@ -186,6 +186,60 @@ impl<'a> DynQuerySet<'a> {
         self
     }
 
+    /// Filter the parent set down to rows that have an M2M link to at
+    /// least one of `child_ids` through the named M2M field. Emits:
+    ///
+    /// ```sql
+    /// WHERE <pk> IN (
+    ///     SELECT parent_id FROM <parent_table>_<field_name>
+    ///     WHERE child_id IN (?, ?, ...)
+    /// )
+    /// ```
+    ///
+    /// The junction table name follows the framework's
+    /// `{parent_table}_{field_name}` convention (same as
+    /// `set_junction_dynamic` and the migration emitter use). Returns
+    /// `self` unchanged when:
+    ///   - `child_ids` is empty,
+    ///   - no M2M relation with that `field_name` exists on the model,
+    ///   - the parent model has no PK column,
+    ///   - every value in `child_ids` fails to parse as `i64`
+    ///     (M2M PKs are i64 at v1 across the framework).
+    ///
+    /// Use case: admin filter for "products with tag 1 OR tag 2 OR
+    /// tag 3" — call once with all three child ids; the IN subquery
+    /// is one round-trip regardless of selection count.
+    pub fn filter_m2m_contains_any(mut self, field_name: &str, child_ids: &[String]) -> Self {
+        if child_ids.is_empty() {
+            return self;
+        }
+        let Some(rel) = self
+            .meta
+            .m2m_relations
+            .iter()
+            .find(|r| r.field_name == field_name)
+        else {
+            return self;
+        };
+        let Some(pk_col) = self.meta.pk_column() else {
+            return self;
+        };
+        let parsed: Vec<i64> = child_ids.iter().filter_map(|s| s.parse().ok()).collect();
+        if parsed.is_empty() {
+            return self;
+        }
+        let junction_table = format!("{}_{}", self.meta.table, rel.field_name);
+        let subq = Query::select()
+            .column(Alias::new("parent_id"))
+            .from(Alias::new(junction_table))
+            .and_where(Expr::col(Alias::new("child_id")).is_in(parsed))
+            .to_owned();
+        let cond =
+            Condition::all().add(Expr::col(Alias::new(pk_col.name.clone())).in_subquery(subq));
+        self.where_clauses.push(cond);
+        self
+    }
+
     /// Add `WHERE <col> IN (?, ?, ...)` for any column. Each value is
     /// parsed against the column's [`SqlType`] (same coercion as
     /// [`Self::filter_eq_string`]) so SQLite's affinity rules see the
