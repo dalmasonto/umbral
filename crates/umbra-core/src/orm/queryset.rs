@@ -154,6 +154,14 @@ pub struct QuerySet<T> {
     /// `.hard_delete()` — bypasses the soft-delete rewrite that
     /// would normally turn `delete()` into an UPDATE.
     pub(crate) hard_delete: bool,
+    /// Gap #111 — column projection set by [`Self::only`]. When
+    /// `Some`, [`Self::to_sql`] / [`Self::to_sql_pg`] swap the
+    /// SELECT list for just these columns, and the typed terminals
+    /// (`fetch` / `first` / `get`) refuse to run with a clear error
+    /// pointing the caller at [`Self::values`] (FromRow can't
+    /// hydrate `T` from a partial-column row). `None` keeps the
+    /// pre-#111 behaviour (full SELECT).
+    pub(crate) only_cols: Option<Vec<String>>,
     _phantom: PhantomData<T>,
 }
 
@@ -172,6 +180,7 @@ impl<T> QuerySet<T> {
             with_deleted: false,
             only_deleted: false,
             hard_delete: false,
+            only_cols: None,
             _phantom: PhantomData,
         }
     }
@@ -201,6 +210,43 @@ impl<T> QuerySet<T> {
     /// is already a hard DELETE).
     pub fn hard_delete(mut self) -> Self {
         self.hard_delete = true;
+        self
+    }
+
+    /// Gap #111 — restrict the SELECT to the named columns.
+    ///
+    /// Affects [`Self::to_sql`] / [`Self::to_sql_pg`] (the SELECT list
+    /// shrinks to just these columns) and propagates into
+    /// [`Self::values`] when that terminal is called without its own
+    /// explicit column slice.
+    ///
+    /// **The typed terminals (`fetch` / `first` / `get`) refuse to
+    /// run with `.only()` set** because a partial-column row can't
+    /// satisfy `T`'s `FromRow` impl. The error message points at
+    /// `.values(...)` (returns `Vec<serde_json::Value>`) as the
+    /// execution path. Use `.only()` for `.to_sql()` inspection and
+    /// `.values()` for actual reads.
+    ///
+    /// ```rust,ignore
+    /// // Inspect: "SELECT \"id\", \"name\" FROM \"brand\" WHERE \"id\" = ?"
+    /// let sql = Brand::objects()
+    ///     .filter(brand::ID.eq(1))
+    ///     .only(&["id", "name"])
+    ///     .to_sql();
+    ///
+    /// // Execute (returns JSON rows):
+    /// let rows = Brand::objects()
+    ///     .filter(brand::ID.eq(1))
+    ///     .values(&["id", "name"])
+    ///     .await?;
+    /// ```
+    ///
+    /// Unknown column names are not validated here — they surface at
+    /// terminal time the same way `.values()` reports them (the
+    /// rendered SQL contains the bad identifier and SQLite/Postgres
+    /// raises). This keeps the chainable surface return-type-stable.
+    pub fn only(mut self, cols: &[&str]) -> Self {
+        self.only_cols = Some(cols.iter().map(|s| s.to_string()).collect());
         self
     }
 
@@ -505,6 +551,23 @@ impl<T> QuerySet<T> {
 /// via `Plugin::database()` (FEATURES.md #6); then the `"default"`
 /// pool. Tests that skip the App builder pass an explicit pool and
 /// bypass the alias lookup entirely.
+/// Gap #111 — error returned when a typed terminal (`fetch` / `first`
+/// / `get`) runs against a QuerySet that has `.only(...)` set. A
+/// partial-column row can't satisfy `T`'s `FromRow` impl, so the
+/// caller has to either drop the `.only(...)` (full SELECT, typed
+/// rows back) or terminate via `.values(&[...])` (JSON rows with
+/// just the requested columns). The message names the offending
+/// terminal so the fix is one rename away.
+fn only_with_typed_terminal_error(terminal: &'static str) -> sqlx::Error {
+    sqlx::Error::Protocol(format!(
+        "umbra::orm::{terminal}: cannot run a typed terminal on a QuerySet \
+         with `.only(...)` set — a partial-column row can't hydrate `T` via \
+         FromRow. Either drop `.only(...)` to fetch full typed rows, or \
+         terminate via `.values(&[...])` to get JSON rows with just the \
+         projected columns."
+    ))
+}
+
 fn resolve_pool<T: Model>(explicit: Option<DbPool>) -> DbPool {
     if let Some(pool) = explicit {
         return pool;
@@ -623,7 +686,8 @@ impl<T: Model> QuerySet<T> {
     /// continues to emit SQLite-style for stability across calls
     /// regardless of which pool is registered.
     pub fn to_sql(&self) -> String {
-        let q = self.build_query_for("sqlite");
+        let mut q = self.build_query_for("sqlite");
+        self.apply_only_projection(&mut q);
         let (sql, _values) = q.build_sqlx(SqliteQueryBuilder);
         sql
     }
@@ -639,9 +703,23 @@ impl<T: Model> QuerySet<T> {
     /// debugging a Postgres query or asserting on the rendered shape
     /// in tests.
     pub fn to_sql_pg(&self) -> String {
-        let q = self.build_query_for("postgres");
+        let mut q = self.build_query_for("postgres");
+        self.apply_only_projection(&mut q);
         let (sql, _values) = q.build_sqlx(PostgresQueryBuilder);
         sql
+    }
+
+    /// Internal helper — when `.only(...)` was set, swap the SELECT
+    /// list for just those columns. Shared by `to_sql` / `to_sql_pg`
+    /// so the inspection surface stays in sync with what `values()`
+    /// would emit. No-op when `only_cols` is `None`.
+    fn apply_only_projection(&self, q: &mut sea_query::SelectStatement) {
+        if let Some(cols) = &self.only_cols {
+            q.clear_selects();
+            for c in cols {
+                q.column(Alias::new(c.as_str()));
+            }
+        }
     }
 
     /// Run the SELECT and return every matching row.
@@ -655,6 +733,9 @@ impl<T: Model> QuerySet<T> {
             + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>
             + HydrateRelated,
     {
+        if self.only_cols.is_some() {
+            return Err(only_with_typed_terminal_error("fetch"));
+        }
         let sr_fields = self.select_related.clone();
         let prefetch_fields = self.prefetch_related.clone();
         // The turbofish on `query_as_with::<DB, _, _>` is load-bearing:
@@ -780,6 +861,9 @@ impl<T: Model> QuerySet<T> {
             + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>
             + HydrateRelated,
     {
+        if self.only_cols.is_some() {
+            return Err(only_with_typed_terminal_error("first"));
+        }
         let sr_fields = self.select_related.clone();
         self.query.limit(1);
         let row = match resolve_pool::<T>(self.explicit_pool.clone()) {
@@ -1927,6 +2011,11 @@ impl<T: Model> Manager<T> {
         self.queryset().only_deleted()
     }
 
+    /// Gap #111 — see [`QuerySet::only`].
+    pub fn only(&self, cols: &[&str]) -> QuerySet<T> {
+        self.queryset().only(cols)
+    }
+
     /// Feature #72 — see `QuerySet::hard_delete`.
     pub fn hard_delete(&self) -> QuerySet<T> {
         self.queryset().hard_delete()
@@ -1985,6 +2074,11 @@ impl<T: Model> Manager<T> {
     /// See `QuerySet::count`.
     pub async fn count(&self) -> Result<i64, sqlx::Error> {
         self.queryset().count().await
+    }
+
+    /// See [`QuerySet::values`].
+    pub async fn values(&self, columns: &[&str]) -> Result<Vec<JsonValue>, sqlx::Error> {
+        self.queryset().values(columns).await
     }
 
     /// See `QuerySet::exists`.
