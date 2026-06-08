@@ -84,6 +84,74 @@ pub(crate) fn sanitise_form_error(e: &AdminError) -> String {
     }
 }
 
+/// Parse a datetime string in any of the shapes umbra hands to
+/// templates (RFC3339 with optional sub-second precision, SQLite
+/// `datetime('now')` shape `YYYY-MM-DD HH:MM:SS`, plain RFC3339
+/// without tz, just a date). Returns UTC. None on parse failure
+/// so the filter caller can fall back to the raw string.
+fn parse_any_datetime(raw: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
+    let s = raw.trim();
+    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
+        return Some(dt.with_timezone(&Utc));
+    }
+    // SQLite shape — no T, no tz.
+    for fmt in &["%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%d %H:%M:%S"] {
+        if let Ok(naive) = NaiveDateTime::parse_from_str(s, fmt) {
+            return Some(naive.and_utc());
+        }
+    }
+    if let Ok(naive) = NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.f") {
+        return Some(naive.and_utc());
+    }
+    if let Ok(d) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+        return d.and_hms_opt(0, 0, 0).map(|n| n.and_utc());
+    }
+    None
+}
+
+/// Django-style absolute datetime humanizer:
+///   `2026-06-08T21:23:20.619672614+00:00` → `Jun 8, 2026 at 9:23 PM`
+/// The default format hits the common case (audit trails, "joined
+/// on" labels). Falls back to the raw input if parsing fails so
+/// the template never renders blank.
+pub(crate) fn humanize_date(raw: &str) -> String {
+    match parse_any_datetime(raw) {
+        Some(dt) => dt.format("%b %-d, %Y at %-I:%M %p").to_string(),
+        None => raw.to_string(),
+    }
+}
+
+/// Django-style relative time humanizer:
+///   `2026-06-08T21:23:20Z` → "2 hours ago" / "yesterday" / "just now"
+/// The "now" reference is `chrono::Utc::now()` — UTC-only at v1
+/// (matches the rest of the timestamp handling). Negative deltas
+/// (a future timestamp) render as "in N <unit>" symmetrically.
+pub(crate) fn naturaltime(raw: &str) -> String {
+    let Some(dt) = parse_any_datetime(raw) else {
+        return raw.to_string();
+    };
+    let now = chrono::Utc::now();
+    let delta = now.signed_duration_since(dt);
+    let secs = delta.num_seconds();
+    let (n, unit, past) = match secs.abs() {
+        s if s < 5 => return "just now".to_string(),
+        s if s < 60 => (s, "second", secs >= 0),
+        s if s < 3600 => (s / 60, "minute", secs >= 0),
+        s if s < 86_400 => (s / 3600, "hour", secs >= 0),
+        s if s < 604_800 => (s / 86_400, "day", secs >= 0),
+        s if s < 2_592_000 => (s / 604_800, "week", secs >= 0),
+        s if s < 31_536_000 => (s / 2_592_000, "month", secs >= 0),
+        s => (s / 31_536_000, "year", secs >= 0),
+    };
+    let plural = if n == 1 { "" } else { "s" };
+    if past {
+        format!("{n} {unit}{plural} ago")
+    } else {
+        format!("in {n} {unit}{plural}")
+    }
+}
+
 /// Try to extract the column name from a UNIQUE constraint error
 /// message. Returns the bare column (`"email"`) without the table
 /// prefix so the user-facing message reads naturally regardless of

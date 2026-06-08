@@ -43,6 +43,26 @@ pub(crate) fn engine() -> &'static Environment<'static> {
             let json = serde_json::to_string(&v).unwrap_or_else(|_| "null".to_string());
             minijinja::Value::from_safe_string(json)
         });
+        // Django-style date/datetime humanizers. Templates render
+        // raw RFC3339 / SQL-shaped timestamps through one of these
+        // instead of dumping the unreadable `2026-06-08T21:23:20.619...`
+        // straight at the user:
+        //
+        //   {{ item.at | humanize_date }}  → "Jun 8, 2026 at 9:23 PM"
+        //   {{ item.at | naturaltime }}    → "2 hours ago"
+        //
+        // Both accept anything `chrono::DateTime::parse_from_rfc3339`
+        // or `NaiveDateTime::parse_from_str` can handle (the SQLite
+        // `datetime('now')` shape `2026-06-08 21:23:20` included).
+        // On parse failure the original value is returned untouched —
+        // a "couldn't humanize" template should still render legible
+        // text rather than throw.
+        env.add_filter("humanize_date", |s: String| -> String {
+            crate::util::humanize_date(&s)
+        });
+        env.add_filter("naturaltime", |s: String| -> String {
+            crate::util::naturaltime(&s)
+        });
         env.add_template(
             "admin/wrapper.html",
             include_str!("../templates/wrapper.html"),

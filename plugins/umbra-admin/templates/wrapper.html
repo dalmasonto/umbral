@@ -794,7 +794,12 @@
       return {
         chart: {
           type: 'area',
-          height: '100%',
+          // ApexCharts sparkline mode needs an explicit pixel height —
+          // `'100%'` evaluates to 0 inside an absolutely-positioned
+          // canvas because the parent's computed height hasn't
+          // finished layout when ApexCharts measures. 48px matches
+          // the card's reserved sparkline strip (h-12 below).
+          height: 48,
           width: '100%',
           background: 'transparent',
           sparkline: { enabled: true },

@@ -9,23 +9,33 @@
 <div class="feed-widget h-full flex flex-col p-md">
   <p class="text-label-sm text-outline uppercase tracking-wider mb-sm flex-shrink-0">{{ title }}</p>
   {% if payload.items and payload.items | length > 0 %}
-  <ul class="flex-1 overflow-y-auto divide-y divide-gray-800/100">
+  <ul class="flex-1 overflow-y-auto divide-y divide-outline-variant/30">
     {% for item in payload.items %}
     <li class="flex items-start gap-sm py-sm first:pt-0 last:pb-0">
-      <div class="w-7 h-7 rounded-full bg-primary-container/40 border border-primary/15 flex items-center justify-center flex-shrink-0 mt-0.5">
-        <span class="text-[10px] font-semibold text-on-primary-container uppercase tracking-wide">{{ item.actor[:2] }}</span>
+      <div class="w-7 h-7 rounded-full bg-surface-container-high border border-outline-variant/60 flex items-center justify-center flex-shrink-0 mt-0.5">
+        <span class="text-[10px] font-semibold text-on-surface-variant uppercase tracking-wide">{{ item.actor[:2] }}</span>
       </div>
       <div class="flex-1 min-w-0">
-        <p class="text-body-sm text-on-surface leading-snug">
-          <span class="font-medium">{{ item.actor }}</span>
-          <span class="text-on-surface-variant"> {{ item.verb }} </span>
+        {# Username takes `on-surface-variant` (softer) instead of
+           `on-surface` (near-white) — pure white feels shouty in
+           dark mode and crowds the more important data (the verb
+           + relative time). Hover bumps it to full contrast. #}
+        <p class="text-body-sm leading-snug">
+          <span class="font-medium text-on-surface-variant hover:text-on-surface transition-colors">{{ item.actor }}</span>
+          <span class="text-outline"> {{ item.verb }} </span>
           {% if item.object_link %}
           <a href="{{ item.object_link }}" class="text-primary hover:underline">{{ item.object }}</a>
           {% else %}
-          <span class="text-on-surface">{{ item.object }}</span>
+          <span class="text-on-surface-variant">{{ item.object }}</span>
           {% endif %}
         </p>
-        <time class="text-label-sm text-outline/80 tabular-nums">{{ item.at }}</time>
+        {# Relative time: "2 hours ago" reads at a glance; absolute
+           datetime lives in the tooltip for the rare "but exactly
+           WHEN?" question. #}
+        <time
+          class="text-label-sm text-outline/70 tabular-nums"
+          title="{{ item.at | humanize_date }}"
+        >{{ item.at | naturaltime }}</time>
       </div>
     </li>
     {% endfor %}
