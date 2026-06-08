@@ -532,20 +532,29 @@ impl<T> QuerySet<T> {
     /// same goal of killing N+1. Mirrors Django's
     /// `prefetch_related('tags')`.
     ///
+    /// ## Reverse-FK collections (post-#44)
+    ///
+    /// `prefetch_related` also loads `ReverseSet<C>` fields — the
+    /// "for each Post, give me every Comment that points at it"
+    /// shape. Declare the field on the parent with
+    /// `#[sqlx(skip)] #[serde(skip)]
+    /// #[umbra(reverse_fk = "<fk_col>")] pub <name>: ReverseSet<C>`
+    /// where `<fk_col>` names the FK column on `C` pointing back.
+    /// One `SELECT * FROM <child> WHERE <fk_col> IN (parent_pks)`
+    /// regardless of parent count — no N+1.
+    ///
     /// ## Scope (v1)
     ///
-    /// - **M2M only.** Reverse-FK collections
-    ///   (`prefetch_related("comment_set")`) need a new
-    ///   `ReverseSet<Child>` parent slot and macro support — tracked
-    ///   as gap #44, not yet implemented.
+    /// - **M2M + reverse-FK only.** FK fields go through
+    ///   [`Self::select_related`] (batched IN) or
+    ///   [`Self::join_related`] (LEFT JOIN).
     /// - **i64 parent PK only.** Same constraint as the rest of the
     ///   M2M plumbing; models with non-i64 PKs surface a clean
     ///   compile error.
-    /// - **Unknown field name → loud error** (post-#42). If the name
-    ///   doesn't match an M2M relation, fetch returns a clear
-    ///   `sqlx::Error::Protocol` pointing at the right method
-    ///   (`select_related` / `join_related` for FK names, or noting
-    ///   the gap #44 reverse-FK limitation for anything else).
+    /// - **Unknown field name → loud error** (post-#42). If the
+    ///   name matches neither an M2M nor a `ReverseSet` field,
+    ///   fetch returns a clear `sqlx::Error::Protocol` pointing at
+    ///   the right method.
     pub fn prefetch_related(mut self, field_name: impl Into<String>) -> Self {
         self.prefetch_related.push(field_name.into());
         self
