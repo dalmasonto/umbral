@@ -89,39 +89,68 @@ textarea:disabled {
    WebKit / Blink: pseudo-elements.
    The selectors are global so cards, dropdowns, picker popovers,
    and the main content all match. */
-* {
-  /* Matches the sidebar's existing thin-rail aesthetic so the
-     whole admin reads as one family — feed widget, dropdowns,
-     picker popovers, main content. `outline-variant` on
-     `surface-container` is the same pair the sidebar uses (and
-     just looks better than the earlier `surface-container-highest`
-     on transparent — that combo collapsed to invisible against
-     dark card backgrounds because the thumb and bg were nearly
-     identical tokens). */
+/* Theme-adaptive scrollbars — two-pronged so we win regardless
+   of how the build pipeline minifies pseudo-element selectors:
+     1. `html ::-webkit-scrollbar` — descendant combinator on
+        every element under <html>. Survives cssnano's
+        "drop the leading `*`" optimization (the leading `html`
+        is a real type selector, not a universal one).
+     2. Explicit `.overflow-*` targets — Tailwind utility
+        classes used by every scrollable surface (feed widget,
+        dropdowns, dialogs, main content). Higher specificity
+        than (1), so even if a browser quirk or a third-party
+        reset wipes the universal rule, the utility-class
+        rules still apply.
+   Color tokens (outline-variant thumb on surface-container
+   track) match the sidebar override in base.html so the whole
+   admin reads as one rail family. */
+html {
   scrollbar-width: thin;
   scrollbar-color: var(--outline-variant) var(--surface-container);
 }
-/* Vertical AND horizontal — `width` styles the vertical rail,
-   `height` styles the horizontal one. 4px matches the sidebar's
-   thin-rail aesthetic; the sidebar itself stays a touch tighter
-   (3-4px) via its own override in `base.html` because that
-   column has the least horizontal real-estate to spare. */
-*::-webkit-scrollbar {
+html ::-webkit-scrollbar,
+.overflow-auto::-webkit-scrollbar,
+.overflow-y-auto::-webkit-scrollbar,
+.overflow-x-auto::-webkit-scrollbar,
+.overflow-y-scroll::-webkit-scrollbar,
+.overflow-x-scroll::-webkit-scrollbar {
   width: 4px;
   height: 4px;
 }
-*::-webkit-scrollbar-track {
+html ::-webkit-scrollbar-track,
+.overflow-auto::-webkit-scrollbar-track,
+.overflow-y-auto::-webkit-scrollbar-track,
+.overflow-x-auto::-webkit-scrollbar-track,
+.overflow-y-scroll::-webkit-scrollbar-track,
+.overflow-x-scroll::-webkit-scrollbar-track {
   background: var(--surface-container);
 }
-*::-webkit-scrollbar-thumb {
+html ::-webkit-scrollbar-thumb,
+.overflow-auto::-webkit-scrollbar-thumb,
+.overflow-y-auto::-webkit-scrollbar-thumb,
+.overflow-x-auto::-webkit-scrollbar-thumb,
+.overflow-y-scroll::-webkit-scrollbar-thumb,
+.overflow-x-scroll::-webkit-scrollbar-thumb {
   background: var(--outline-variant);
   border-radius: 10px;
 }
-*::-webkit-scrollbar-thumb:hover {
-  /* One token brighter on hover so the user knows the rail is
-     grabbable (outline is a touch lighter than outline-variant). */
+html ::-webkit-scrollbar-thumb:hover,
+.overflow-auto::-webkit-scrollbar-thumb:hover,
+.overflow-y-auto::-webkit-scrollbar-thumb:hover,
+.overflow-x-auto::-webkit-scrollbar-thumb:hover {
+  /* One token brighter on hover — affordance cue. */
   background: var(--outline);
 }
-*::-webkit-scrollbar-corner {
+html ::-webkit-scrollbar-corner {
   background: transparent;
+}
+/* Firefox can also pick up `scrollbar-color` per-element on the
+   common overflow utility classes so theming works there too. */
+.overflow-auto,
+.overflow-y-auto,
+.overflow-x-auto,
+.overflow-y-scroll,
+.overflow-x-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--outline-variant) var(--surface-container);
 }
