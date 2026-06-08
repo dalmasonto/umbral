@@ -375,35 +375,45 @@
   function escapeHtml(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function(c) { return '&#' + c.charCodeAt(0) + ';'; }); }
   function escapeAttr(s) { return escapeHtml(s); }
 
-  // Per-FK init: load the first page of options + resolve every
-  // pre-selected id (one HTTP call per facet, batched via the
-  // comma-separated `ids=` param) so each pill renders with a real
-  // name instead of a bare `#5`.
+  // Per-FK init: render pills SYNCHRONOUSLY with placeholder labels
+  // first so the user sees their selection the instant the dialog
+  // opens — even if the /options/resolve fetch errors, hangs, or
+  // returns an empty items array (which would happen if the labels
+  // table got truncated mid-session). The fetch then upgrades each
+  // `#<id>` placeholder to the real label in-place.
   function initFkFacet(node) {
     var field      = node.getAttribute('data-fk-field');
     var table      = node.getAttribute('data-fk-table');
     var activeRaw  = node.getAttribute('data-fk-active-ids') || '';
     var activeIds  = activeRaw.split(',').map(function(s){return s.trim();}).filter(Boolean);
+
+    // 1. Commit the selection to _pending and render pills NOW with
+    //    `#<id>` placeholder labels. Anything Apply / Clear reads
+    //    from _pending sees the right shape immediately.
+    if (activeIds.length > 0) {
+      _pending[field] = activeIds.slice();
+      activeIds.forEach(function(id) { setFkLabel(field, id, '#' + id); });
+    }
+    _filterFkRenderPills(field);
+
+    // 2. Kick off the search-results panel (loads the first 20 options).
     umbra._filterFkSearch(field, table, '');
-    if (activeIds.length === 0) { _filterFkRenderPills(field); return; }
+
+    // 3. Background label-resolve to upgrade the pills. No-op when
+    //    nothing's selected.
+    if (activeIds.length === 0) return;
     var resolveUrl = '{{ admin_base }}/api/' + table + '/' + field
       + '/options/resolve?ids=' + encodeURIComponent(activeIds.join(','));
     fetch(resolveUrl, { headers: { 'Accept': 'application/json' } })
       .then(function(r) { return r.json(); })
       .then(function(j) {
         var items = (j && j.items) || [];
+        if (items.length === 0) return;
         items.forEach(function(it) { setFkLabel(field, it.value, it.label); });
-        // Make sure every id even if not resolved still gets a pill —
-        // fall back to "#<id>" via getFkLabel's default.
-        activeIds.forEach(function(id) { if (!_fkLabels[field] || !_fkLabels[field][id]) setFkLabel(field, id, '#' + id); });
-        _pending[field] = activeIds.slice();
         _filterFkRenderPills(field);
         _filterFkRefreshHighlights(field);
       })
-      .catch(function() {
-        _pending[field] = activeIds.slice();
-        _filterFkRenderPills(field);
-      });
+      .catch(function() { /* keep the #<id> placeholders */ });
   }
   document.querySelectorAll('#umbra-filter-dialog [data-fk-facet]').forEach(initFkFacet);
 

@@ -90,6 +90,20 @@ fn build_filter_qs(active_filters: &[(String, String)]) -> String {
     out
 }
 
+/// One JSON entry per unique active-filter field for the hidden
+/// `#dt-active-filters` inputs. `value` is the comma-joined group
+/// string — one input per field — so HTMX `hx-include` lands a
+/// single `filter_<field>=<comma>` URL param on each downstream
+/// request rather than the fanned-out chip list (which the HashMap
+/// query extractor would collapse to one value).
+fn build_filter_groups(active_filters: &[(String, String)]) -> Vec<serde_json::Value> {
+    active_filters
+        .iter()
+        .filter(|(_, v)| !v.is_empty())
+        .map(|(f, v)| serde_json::json!({ "field": f, "value": v }))
+        .collect()
+}
+
 async fn build_active_filter_list(
     model: &umbra::migrate::ModelMeta,
     active_filters: &[(String, String)],
@@ -389,6 +403,7 @@ pub(crate) async fn list(
     let search_val = search_term.unwrap_or_default();
     let active_filter_list = build_active_filter_list(&model, &active_filters).await;
     let filter_qs = build_filter_qs(&active_filters);
+    let filter_groups = build_filter_groups(&active_filters);
     let apps = sidebar_apps(&state, &user);
     let breadcrumbs = vec![
         serde_json::json!({ "label": model.name.clone(), "url": format!("{}/{table}/", crate::branding::current().base_path) }),
@@ -428,6 +443,7 @@ pub(crate) async fn list(
             search_val         => search_val,
             active_filters     => active_filter_list,
             filter_qs          => filter_qs,
+            filter_groups      => filter_groups,
             pagination         => pagination,
             sort_col           => sort_col,
             sort_order         => sort_order,
@@ -550,6 +566,7 @@ pub(crate) async fn rows_fragment(
     let columns = model_for_template_cols(&model, &display_cols).fields;
     let active_filter_list = build_active_filter_list(&model, &active_filters).await;
     let filter_qs = build_filter_qs(&active_filters);
+    let filter_groups = build_filter_groups(&active_filters);
     let search_val = search_term.unwrap_or_default();
 
     let action_names: Vec<serde_json::Value> = cfg
@@ -571,6 +588,7 @@ pub(crate) async fn rows_fragment(
             pagination         => pagination,
             active_filters     => active_filter_list,
             filter_qs          => filter_qs,
+            filter_groups      => filter_groups,
             search_val         => search_val,
             sort_col           => sort_col,
             sort_order         => sort_order,

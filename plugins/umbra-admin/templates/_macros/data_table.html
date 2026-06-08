@@ -154,16 +154,16 @@
        query params get serialised into the dialog URL so the dialog
        can pre-select committed values when re-opened. #}
     {% if facets %}
-    {# Build the dialog URL via the precomputed filter_qs so multi-value
-       selections survive the round-trip. The dialog handler reads the
-       same `filter_<field>=<comma-joined>` params and feeds them
-       into active_filters for the dialog's pre-fill seeding. #}
-    {% set dialog_url -%}
-      {{ admin_base }}/{{ model.table }}/filter-dialog?search={{ search_val | urlencode }}&sort={{ sort_col | urlencode }}&order={{ sort_order | urlencode }}{{ filter_qs }}
-    {%- endset %}
+    {# hx-include attaches the LIVE values of the search input, sort
+       hidden inputs, and every active-filter hidden input at click
+       time so the dialog handler always sees the current URL state
+       — not whatever search_val/filter_qs was baked into this macro
+       at page render time. (Typing in #dt-search swaps the tbody via
+       HTMX but doesn't re-render data_table.html itself.) #}
     <button
       type="button"
-      hx-get="{{ dialog_url }}"
+      hx-get="{{ admin_base }}/{{ model.table }}/filter-dialog"
+      hx-include="#dt-search, #dt-active-filters input, #dt-sort-col, #dt-sort-order"
       hx-target="#umbra-filter-dialog-slot"
       hx-swap="innerHTML"
       class="flex items-center gap-sm px-md py-sm hover:bg-surface-container-high rounded-xl text-on-surface transition-colors font-label-md text-label-md border border-outline-variant"
@@ -230,13 +230,15 @@
    Table + pagination  (both inside the HTMX-swap target)
    ================================================================ #}
 
-{# Hidden inputs carried along on partial swaps. The active-filter
-   container holds one <input name="filter_<field>"> per committed
-   selection; the search input's hx-include targets `#dt-active-filters
-   input` so every filter rides along on each refetch. #}
+{# Hidden inputs carried along on partial swaps. One <input> per
+   UNIQUE active filter field; multi-value selections collapse into a
+   comma-joined `value`. HTMX `hx-include` lands these as single
+   `filter_<field>=<comma>` URL params downstream — fanning them out
+   per id would make the HashMap query extractor drop all but the
+   last value (the prefill bug). #}
 <span id="dt-active-filters" style="display:none">
-  {% for af in active_filters %}
-  <input type="hidden" name="filter_{{ af.field }}" value="{{ af.value }}"/>
+  {% for fg in filter_groups %}
+  <input type="hidden" name="filter_{{ fg.field }}" value="{{ fg.value }}"/>
   {% endfor %}
 </span>
 <input type="hidden" id="dt-sort-col"     name="sort"   value="{{ sort_col }}"/>
