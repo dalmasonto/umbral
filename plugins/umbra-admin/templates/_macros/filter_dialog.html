@@ -10,7 +10,12 @@
   Text/numeric fields in list_filter are silently skipped (search covers them).
 #}
 
-{% macro filter_dialog(model, facets, columns, search_val, sort_col, sort_order, active_filter) %}
+{#
+  active_filters: dict { field: value } — the currently-committed
+  selections. Each facet pre-selects from this map. Pass {} from the
+  handler when none are active.
+#}
+{% macro filter_dialog(model, facets, columns, search_val, sort_col, sort_order, active_filters) %}
 <div
   id="umbra-filter-dialog"
   class="fixed inset-0 z-[400] flex items-center justify-center"
@@ -37,10 +42,24 @@
       </button>
     </div>
 
-    {# Filter controls — one per filterable facet #}
+    {# Filter controls — one per filterable facet, plus an in-dialog
+       search input. The dialog is the single place to commit search +
+       every filter in one go. #}
     <div class="px-lg py-md space-y-lg max-h-[60vh] overflow-y-auto" id="filter-dialog-body">
+      <div class="space-y-sm">
+        <p class="font-label-sm text-label-sm text-outline uppercase tracking-wider">Search</p>
+        <input
+          type="text"
+          id="filter-dialog-search"
+          value="{{ search_val }}"
+          placeholder="Search across {{ model.name | lower }}..."
+          class="w-full bg-surface-container-low border border-outline-variant rounded-xl px-md py-sm text-body-md text-on-surface focus:outline-none focus:ring-1 focus:ring-primary placeholder:text-outline/50"
+        />
+      </div>
       {% set has_filterable = false %}
       {% for facet in facets %}
+        {# Pull this facet's currently-committed value out of the map. #}
+        {% set active_val = active_filters[facet.field] | default("") %}
         {# Determine the column type for this facet #}
         {% set col_type = "" %}
         {% for col in columns %}
@@ -61,13 +80,12 @@
             {% if col_type == "boolean" %}
             <div class="flex gap-xs" role="group" aria-label="{{ facet.field }} filter">
               {% for opt in ["any", "true", "false"] %}
-              {% set filter_val = facet.field ~ "=" ~ opt %}
               <button
                 type="button"
                 data-filter-field="{{ facet.field }}"
                 data-filter-value="{{ opt }}"
                 onclick="umbra._filterSelectBool(this)"
-                class="flex-1 px-md py-sm rounded-xl border font-label-md text-label-md transition-colors {% if (opt == 'any' and not active_filter) or active_filter == filter_val %}bg-primary text-on-primary border-primary{% else %}border-outline-variant text-on-surface-variant hover:border-primary hover:text-primary{% endif %}"
+                class="flex-1 px-md py-sm rounded-xl border font-label-md text-label-md transition-colors {% if (opt == 'any' and not active_val) or active_val == opt %}bg-primary text-on-primary border-primary{% else %}border-outline-variant text-on-surface-variant hover:border-primary hover:text-primary{% endif %}"
               >{{ opt | title }}</button>
               {% endfor %}
             </div>
@@ -115,7 +133,7 @@
                   data-filter-field="{{ facet.field }}"
                   data-filter-value="{{ val }}"
                   onclick="umbra._filterSelectValue(this)"
-                  class="w-full text-left px-sm py-xs text-body-md text-on-surface hover:bg-surface-container-high transition-colors {% if active_filter == facet.field ~ '=' ~ val %}bg-primary/10 text-primary{% endif %}"
+                  class="w-full text-left px-sm py-xs text-body-md text-on-surface hover:bg-surface-container-high transition-colors {% if active_val == val %}bg-primary/10 text-primary{% endif %}"
                 >{{ val }}</button>
                 {% endfor %}
               </div>
@@ -131,7 +149,7 @@
                   name="filter_choice_{{ facet.field }}"
                   value="{{ val }}"
                   data-filter-field="{{ facet.field }}"
-                  {% if active_filter == facet.field ~ "=" ~ val %}checked{% endif %}
+                  {% if active_val == val %}checked{% endif %}
                   class="w-4 h-4 rounded border-outline-variant text-primary focus:ring-primary"
                   onchange="umbra._filterChoiceChange(this)"
                 />
@@ -177,8 +195,17 @@
 (function() {
   if (window.lucide) lucide.createIcons({ el: document.getElementById('umbra-filter-dialog') });
 
-  // Currently pending filter selection.
-  var _pendingFilter = { field: '', value: '' };
+  // Pending selections, keyed by field. Pre-seeded from the
+  // currently-active filters so an already-applied selection survives
+  // re-opening the dialog. An entry whose value is empty or `"any"`
+  // is treated as "no filter on this field" by _filterApply.
+  var _pending = (function seed() {
+    var m = {};
+    {% for key, val in active_filters | items %}
+    m[{{ key | tojson }}] = {{ val | tojson }};
+    {% endfor %}
+    return m;
+  })();
 
   umbra.closeFilterDialog = function() {
     var el = document.getElementById('umbra-filter-dialog');
@@ -187,8 +214,8 @@
 
   umbra._filterSelectBool = function(btn) {
     var field = btn.getAttribute('data-filter-field');
-    var val = btn.getAttribute('data-filter-value');
-    _pendingFilter = { field: field, value: val };
+    var val   = btn.getAttribute('data-filter-value');
+    _pending[field] = val;
     btn.closest('[role="group"]').querySelectorAll('button').forEach(function(b) {
       b.className = b.className
         .replace('bg-primary text-on-primary border-primary', '')
@@ -202,8 +229,8 @@
 
   umbra._filterSelectValue = function(btn) {
     var field = btn.getAttribute('data-filter-field');
-    var val = btn.getAttribute('data-filter-value');
-    _pendingFilter = { field: field, value: val };
+    var val   = btn.getAttribute('data-filter-value');
+    _pending[field] = val;
     btn.parentElement.querySelectorAll('button').forEach(function(b) {
       b.classList.remove('bg-primary/10', 'text-primary');
     });
@@ -211,15 +238,20 @@
   };
 
   umbra._filterChoiceChange = function(cb) {
+    var field = cb.getAttribute('data-filter-field');
     if (cb.checked) {
-      _pendingFilter = { field: cb.getAttribute('data-filter-field'), value: cb.value };
-    } else if (_pendingFilter.field === cb.getAttribute('data-filter-field')) {
-      _pendingFilter = { field: '', value: '' };
+      // Single-value semantics per field: uncheck siblings so the
+      // checkbox list behaves like radio buttons (the backend's
+      // filter_eq_string takes one value per column).
+      var siblings = cb.closest('.space-y-xs').querySelectorAll('input[type="checkbox"][data-filter-field="' + field + '"]');
+      siblings.forEach(function(other) { if (other !== cb) other.checked = false; });
+      _pending[field] = cb.value;
+    } else {
+      delete _pending[field];
     }
   };
 
   umbra._filterFkSearch = function(field, table, query) {
-    var relTable = field.replace(/_id$/, '');
     var url = '{{ admin_base }}/api/' + table + '/' + field + '/options?search=' + encodeURIComponent(query) + '&page_size=10';
     fetch(url, { headers: { 'HX-Request': 'true' } })
       .then(function(r) { return r.text(); })
@@ -229,26 +261,41 @@
       });
   };
 
-  umbra._filterApply = function(table, search, sort, order) {
-    var filter = '';
-    if (_pendingFilter.field && _pendingFilter.value && _pendingFilter.value !== 'any') {
-      filter = _pendingFilter.field + '=' + _pendingFilter.value;
-    }
-    umbra.closeFilterDialog();
+  // Build `&filter_<field>=<value>` for every pending entry whose value
+  // is non-empty and not `"any"`. Drop the rest — a cleared selection
+  // shouldn't leak into the URL.
+  function buildFilterQs() {
+    var qs = '';
+    Object.keys(_pending).forEach(function(field) {
+      var v = _pending[field];
+      if (!v || v === 'any') return;
+      qs += '&filter_' + encodeURIComponent(field) + '=' + encodeURIComponent(v);
+    });
+    return qs;
+  }
+
+  umbra._filterApply = function(table, _search, sort, order) {
+    // The in-dialog search input overrides the toolbar's search so the
+    // user can commit search + filters atomically.
+    var searchEl = document.getElementById('filter-dialog-search');
+    var search   = searchEl ? searchEl.value : (_search || '');
     var url = '{{ admin_base }}/' + table + '/rows?search=' + encodeURIComponent(search)
-      + '&filter=' + encodeURIComponent(filter)
+      + buildFilterQs()
       + '&sort=' + encodeURIComponent(sort)
       + '&order=' + encodeURIComponent(order)
       + '&page=1';
+    umbra.closeFilterDialog();
     htmx.ajax('GET', url, { target: '#table-body', swap: 'innerHTML', pushUrl: true });
   };
 
-  umbra._filterClear = function(table, search, sort, order) {
-    umbra.closeFilterDialog();
-    var url = '{{ admin_base }}/' + table + '/rows?search=' + encodeURIComponent(search)
+  umbra._filterClear = function(table, _search, sort, order) {
+    // Clear both search and every filter — Clear is the "back to
+    // square one" button per the dialog's footer affordance.
+    var url = '{{ admin_base }}/' + table + '/rows?search='
       + '&sort=' + encodeURIComponent(sort)
       + '&order=' + encodeURIComponent(order)
       + '&page=1';
+    umbra.closeFilterDialog();
     htmx.ajax('GET', url, { target: '#table-body', swap: 'innerHTML', pushUrl: true });
   };
 

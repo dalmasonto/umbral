@@ -26,16 +26,16 @@ pub(crate) async fn count_rows_filtered(
     model: &ModelMeta,
     search_term: Option<&str>,
     cfg: Option<&AdminConfig>,
-    active_filter: Option<(&str, &str)>,
+    active_filters: &[(String, String)],
 ) -> Result<usize, AdminError> {
     let mut qs = DynQuerySet::for_meta(model);
-    if let Some(term) = search_term
-        && let Some(c) = cfg
-        && !c.search_fields.is_empty()
-    {
-        qs = qs.search(&c.search_fields, term);
+    if let Some(term) = search_term {
+        // Pass cfg.search_fields when present; empty slice means
+        // "search every searchable column" (DynQuerySet::search default).
+        let restrict: &[String] = cfg.map(|c| c.search_fields.as_slice()).unwrap_or(&[]);
+        qs = qs.search(restrict, term);
     }
-    if let Some((field, value)) = active_filter {
+    for (field, value) in active_filters {
         qs = qs.filter_eq_string(field, value);
     }
     let count = qs.count().await?;
@@ -57,18 +57,16 @@ pub(crate) async fn fetch_rows_paged(
     order_clause: &str,
     search_term: Option<&str>,
     cfg: Option<&AdminConfig>,
-    active_filter: Option<(&str, &str)>,
+    active_filters: &[(String, String)],
     limit: usize,
     offset: usize,
 ) -> Result<Vec<HashMap<String, String>>, AdminError> {
     let mut qs = DynQuerySet::for_meta(model).select_cols(display_cols);
-    if let Some(term) = search_term
-        && let Some(c) = cfg
-        && !c.search_fields.is_empty()
-    {
-        qs = qs.search(&c.search_fields, term);
+    if let Some(term) = search_term {
+        let restrict: &[String] = cfg.map(|c| c.search_fields.as_slice()).unwrap_or(&[]);
+        qs = qs.search(restrict, term);
     }
-    if let Some((field, value)) = active_filter {
+    for (field, value) in active_filters {
         qs = qs.filter_eq_string(field, value);
     }
     for (col, desc) in parse_order_clause(order_clause) {

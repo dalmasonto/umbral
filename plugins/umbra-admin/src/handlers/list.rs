@@ -140,7 +140,7 @@ pub(crate) async fn list(
         default_list_display(&model)
     };
 
-    let (search_term, active_filter, sort_col, sort_order, page, page_size) =
+    let (search_term, active_filters, sort_col, sort_order, page, page_size) =
         parse_list_params(&params, cfg, pk);
 
     let fetch_cols: Vec<String> = {
@@ -153,19 +153,11 @@ pub(crate) async fn list(
 
     let order_clause = build_order_clause_phase2(cfg, pk, &sort_col, &sort_order);
 
-    let total = match count_rows_filtered(
-        &model,
-        search_term.as_deref(),
-        cfg,
-        active_filter
-            .as_ref()
-            .map(|(f, v)| (f.as_str(), v.as_str())),
-    )
-    .await
-    {
-        Ok(t) => t,
-        Err(e) => return e.into_response(),
-    };
+    let total =
+        match count_rows_filtered(&model, search_term.as_deref(), cfg, &active_filters).await {
+            Ok(t) => t,
+            Err(e) => return e.into_response(),
+        };
     let pagination = Pagination::new(total, page, page_size);
 
     let rows = match fetch_rows_paged(
@@ -174,9 +166,7 @@ pub(crate) async fn list(
         &order_clause,
         search_term.as_deref(),
         cfg,
-        active_filter
-            .as_ref()
-            .map(|(f, v)| (f.as_str(), v.as_str())),
+        &active_filters,
         pagination.page_size,
         pagination.offset(),
     )
@@ -205,10 +195,10 @@ pub(crate) async fn list(
 
     let has_search = cfg.is_some_and(|c| !c.search_fields.is_empty());
     let search_val = search_term.unwrap_or_default();
-    let active_filter_str = active_filter
-        .as_ref()
-        .map(|(f, v)| format!("{f}={v}"))
-        .unwrap_or_default();
+    let active_filter_list: Vec<serde_json::Value> = active_filters
+        .iter()
+        .map(|(f, v)| serde_json::json!({ "field": f, "value": v }))
+        .collect();
     let apps = sidebar_apps(&state, &user);
     let breadcrumbs = vec![
         serde_json::json!({ "label": model.name.clone(), "url": format!("{}/{table}/", crate::branding::current().base_path) }),
@@ -246,7 +236,7 @@ pub(crate) async fn list(
             actions            => action_names,
             has_search         => has_search,
             search_val         => search_val,
-            active_filter      => active_filter_str,
+            active_filters     => active_filter_list,
             pagination         => pagination,
             sort_col           => sort_col,
             sort_order         => sort_order,
@@ -314,7 +304,7 @@ pub(crate) async fn rows_fragment(
     };
 
     let cfg = state.config_for(&table);
-    let (search_term, active_filter, sort_col, sort_order, page, page_size) =
+    let (search_term, active_filters, sort_col, sort_order, page, page_size) =
         parse_list_params(&params, cfg, pk);
 
     let display_cols: Vec<String> = if let Some(c) = cfg
@@ -335,19 +325,11 @@ pub(crate) async fn rows_fragment(
 
     let order_clause = build_order_clause_phase2(cfg, pk, &sort_col, &sort_order);
 
-    let total = match count_rows_filtered(
-        &model,
-        search_term.as_deref(),
-        cfg,
-        active_filter
-            .as_ref()
-            .map(|(f, v)| (f.as_str(), v.as_str())),
-    )
-    .await
-    {
-        Ok(t) => t,
-        Err(e) => return e.into_response(),
-    };
+    let total =
+        match count_rows_filtered(&model, search_term.as_deref(), cfg, &active_filters).await {
+            Ok(t) => t,
+            Err(e) => return e.into_response(),
+        };
     let pagination = Pagination::new(total, page, page_size);
 
     let rows = match fetch_rows_paged(
@@ -356,9 +338,7 @@ pub(crate) async fn rows_fragment(
         &order_clause,
         search_term.as_deref(),
         cfg,
-        active_filter
-            .as_ref()
-            .map(|(f, v)| (f.as_str(), v.as_str())),
+        &active_filters,
         pagination.page_size,
         pagination.offset(),
     )
@@ -369,10 +349,10 @@ pub(crate) async fn rows_fragment(
     };
 
     let columns = model_for_template_cols(&model, &display_cols).fields;
-    let active_filter_str = active_filter
-        .as_ref()
-        .map(|(f, v)| format!("{f}={v}"))
-        .unwrap_or_default();
+    let active_filter_list: Vec<serde_json::Value> = active_filters
+        .iter()
+        .map(|(f, v)| serde_json::json!({ "field": f, "value": v }))
+        .collect();
     let search_val = search_term.unwrap_or_default();
 
     let action_names: Vec<serde_json::Value> = cfg
@@ -392,7 +372,7 @@ pub(crate) async fn rows_fragment(
             pk                 => pk.name.clone(),
             columns            => columns,
             pagination         => pagination,
-            active_filter      => active_filter_str,
+            active_filters     => active_filter_list,
             search_val         => search_val,
             sort_col           => sort_col,
             sort_order         => sort_order,
@@ -475,19 +455,30 @@ pub(crate) async fn filter_dialog_handler(
     let search_val = params.get("search").cloned().unwrap_or_default();
     let sort_col = params.get("sort").cloned().unwrap_or_default();
     let sort_order = params.get("order").cloned().unwrap_or_default();
-    let active_filter = params.get("active_filter").cloned().unwrap_or_default();
     let columns = model_for_template(&model).fields;
+    // Build a `{field: value}` JSON map of currently-active filters so
+    // the dialog can pre-select each facet's committed value when
+    // re-opened. Comes from the same `filter_<field>=value` query
+    // params the list handler parses — keeps a single source of truth.
+    let mut active_map = serde_json::Map::new();
+    for (k, v) in &params {
+        if let Some(field) = k.strip_prefix("filter_") {
+            if !v.is_empty() {
+                active_map.insert(field.to_string(), serde_json::Value::String(v.clone()));
+            }
+        }
+    }
 
     match render(
         "admin/filter_dialog_fragment.html",
         context!(
-            model         => model_for_template(&model),
-            facets        => facets,
-            columns       => columns,
-            search_val    => search_val,
-            sort_col      => sort_col,
-            sort_order    => sort_order,
-            active_filter => active_filter,
+            model          => model_for_template(&model),
+            facets         => facets,
+            columns        => columns,
+            search_val     => search_val,
+            sort_col       => sort_col,
+            sort_order     => sort_order,
+            active_filters => serde_json::Value::Object(active_map),
         ),
     ) {
         Ok(html) => html.into_response(),

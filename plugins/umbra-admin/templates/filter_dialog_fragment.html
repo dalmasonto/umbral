@@ -5,4 +5,4 @@
   Used by GET {{ admin_base }}/{table}/filter-dialog (HTMX fragment).
 #}
 {% from "admin/_macros/filter_dialog.html" import filter_dialog %}
-{{ filter_dialog(model, facets, columns, search_val, sort_col, sort_order, active_filter) }}
+{{ filter_dialog(model, facets, columns, search_val, sort_col, sort_order, active_filters) }}

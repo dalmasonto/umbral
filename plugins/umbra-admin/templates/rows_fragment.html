@@ -6,9 +6,16 @@
 
   Variables passed from the handler:
     table, model_name, rows, pk, columns, pagination,
-    active_filter, search_val, sort_col, sort_order,
+    active_filters, search_val, sort_col, sort_order,
     actions, inline_edit_fields
 #}
+
+{# Pre-built `&filter_<field>=<value>` URL fragment, used by every
+   pagination button. Mirrors the data_table.html macro so both
+   templates share the multi-filter URL shape. #}
+{% set filter_qs -%}
+  {%- for af in active_filters -%}&filter_{{ af.field | urlencode }}={{ af.value | urlencode }}{%- endfor -%}
+{%- endset %}
 
 {% if rows %}
   {% for row in rows %}
@@ -135,7 +142,7 @@
 {% else %}
   <tr>
     <td colspan="{{ columns | length + 2 }}" class="px-md py-xl text-center">
-      {% if search_val or active_filter %}
+      {% if search_val or (active_filters and active_filters | length > 0) %}
       <div class="flex flex-col items-center gap-md">
         <i data-lucide="search-x" class="w-10 h-10 text-outline opacity-50"></i>
         <p class="text-body-md text-on-surface-variant">No {{ model_name | lower }} records match your search.</p>
@@ -174,7 +181,7 @@
             hx-trigger="change"
             hx-target="#table-body"
             hx-swap="innerHTML"
-            hx-include="#dt-search, #dt-active-filter, #dt-sort-col, #dt-sort-order"
+            hx-include="#dt-search, #dt-active-filters input, #dt-sort-col, #dt-sort-order"
             hx-push-url="true"
             class="bg-surface-container border border-outline-variant rounded-lg px-sm py-xs pr-8 min-w-[5rem] font-label-md text-label-md text-on-surface focus:outline-none focus:ring-1 focus:ring-primary">
             {% for sz in [10, 25, 50, 100] %}
@@ -187,14 +194,14 @@
       <div class="flex items-center gap-xs">
         <button type="button"
           {% if pagination.page <= 1 %}disabled{% endif %}
-          hx-get="{{ admin_base }}/{{ table }}/rows?search={{ search_val }}&filter={{ active_filter }}&sort={{ sort_col }}&order={{ sort_order }}&page=1&page_size={{ pagination.page_size }}"
+          hx-get="{{ admin_base }}/{{ table }}/rows?search={{ search_val }}{{ filter_qs }}&sort={{ sort_col }}&order={{ sort_order }}&page=1&page_size={{ pagination.page_size }}"
           hx-target="#table-body" hx-swap="innerHTML" hx-push-url="true"
           class="p-sm text-on-surface-variant hover:bg-surface-container-high rounded-xl disabled:opacity-30 disabled:cursor-not-allowed transition-colors" title="First">
           <i data-lucide="chevrons-left" class="w-4 h-4"></i>
         </button>
         <button type="button"
           {% if pagination.page <= 1 %}disabled{% endif %}
-          hx-get="{{ admin_base }}/{{ table }}/rows?search={{ search_val }}&filter={{ active_filter }}&sort={{ sort_col }}&order={{ sort_order }}&page={{ pagination.page - 1 }}&page_size={{ pagination.page_size }}"
+          hx-get="{{ admin_base }}/{{ table }}/rows?search={{ search_val }}{{ filter_qs }}&sort={{ sort_col }}&order={{ sort_order }}&page={{ pagination.page - 1 }}&page_size={{ pagination.page_size }}"
           hx-target="#table-body" hx-swap="innerHTML" hx-push-url="true"
           class="p-sm text-on-surface-variant hover:bg-surface-container-high rounded-xl disabled:opacity-30 disabled:cursor-not-allowed transition-colors" title="Previous">
           <i data-lucide="chevron-left" class="w-4 h-4"></i>
@@ -206,14 +213,14 @@
 
         <button type="button"
           {% if pagination.page >= pagination.total_pages %}disabled{% endif %}
-          hx-get="{{ admin_base }}/{{ table }}/rows?search={{ search_val }}&filter={{ active_filter }}&sort={{ sort_col }}&order={{ sort_order }}&page={{ pagination.page + 1 }}&page_size={{ pagination.page_size }}"
+          hx-get="{{ admin_base }}/{{ table }}/rows?search={{ search_val }}{{ filter_qs }}&sort={{ sort_col }}&order={{ sort_order }}&page={{ pagination.page + 1 }}&page_size={{ pagination.page_size }}"
           hx-target="#table-body" hx-swap="innerHTML" hx-push-url="true"
           class="p-sm text-on-surface-variant hover:bg-surface-container-high rounded-xl disabled:opacity-30 disabled:cursor-not-allowed transition-colors" title="Next">
           <i data-lucide="chevron-right" class="w-4 h-4"></i>
         </button>
         <button type="button"
           {% if pagination.page >= pagination.total_pages %}disabled{% endif %}
-          hx-get="{{ admin_base }}/{{ table }}/rows?search={{ search_val }}&filter={{ active_filter }}&sort={{ sort_col }}&order={{ sort_order }}&page={{ pagination.total_pages }}&page_size={{ pagination.page_size }}"
+          hx-get="{{ admin_base }}/{{ table }}/rows?search={{ search_val }}{{ filter_qs }}&sort={{ sort_col }}&order={{ sort_order }}&page={{ pagination.total_pages }}&page_size={{ pagination.page_size }}"
           hx-target="#table-body" hx-swap="innerHTML" hx-push-url="true"
           class="p-sm text-on-surface-variant hover:bg-surface-container-high rounded-xl disabled:opacity-30 disabled:cursor-not-allowed transition-colors" title="Last">
           <i data-lucide="chevrons-right" class="w-4 h-4"></i>

@@ -18,6 +18,13 @@ pub(crate) fn engine() -> &'static Environment<'static> {
     ENGINE.get_or_init(|| {
         let mut env = Environment::new();
         env.set_auto_escape_callback(|_| minijinja::AutoEscape::Html);
+        // Percent-encode for safe embedding in query strings — used by
+        // the active-filter chip links and pagination URLs in
+        // data_table.html. Reuses the existing `urlencoding_simple`
+        // helper so we don't pull a new crate just to expose a filter.
+        env.add_filter("urlencode", |s: String| -> String {
+            crate::util::urlencoding_simple(&s)
+        });
         env.add_template(
             "admin/wrapper.html",
             include_str!("../templates/wrapper.html"),

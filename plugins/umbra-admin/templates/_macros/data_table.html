@@ -11,7 +11,7 @@
   columns      : Vec<ColumnView> — the display columns (list_display)
   pk           : string     — primary key column name
   facets       : Vec<FilterFacet> — { field, values }
-  active_filter: string     — "field=value" or "" for no active filter
+  active_filters: Vec<{field, value}> — committed filter selections; empty means none
   has_search   : bool
   search_val   : string
   actions      : Vec<{name, label}>
@@ -37,30 +37,49 @@
 
 {% from "admin/_macros/filter_dialog.html" import filter_dialog %}
 
-{% macro data_table(model, rows, columns, pk, facets, active_filter, has_search, search_val, actions, pagination, sort_col, sort_order, flash, inline_edit_fields=[], column_widths=[]) %}
+{% macro data_table(model, rows, columns, pk, facets, active_filters, has_search, search_val, actions, pagination, sort_col, sort_order, flash, inline_edit_fields=[], column_widths=[]) %}
+
+{# Pre-built `&filter_<field>=<value>` URL fragment, used by every
+   pagination button + the active-filter chip remove links. Centralised
+   here so the multi-filter URL shape lives in exactly one place. #}
+{% set filter_qs -%}
+  {%- for af in active_filters -%}&filter_{{ af.field | urlencode }}={{ af.value | urlencode }}{%- endfor -%}
+{%- endset %}
 
 {# Filter dialog slot — rendered here, populated by JS when filter button is clicked #}
 <div id="umbra-filter-dialog-slot"></div>
 
 {# ================================================================
-   Active filter chips (above the table)
+   Active filter chips (above the table). One chip per (field, value);
+   each chip's `x` removes only that filter and keeps the rest, so the
+   chip row matches the dialog's multi-filter shape.
    ================================================================ #}
-{% if active_filter %}
+{% if active_filters and active_filters | length > 0 %}
 <div class="flex flex-wrap items-center gap-xs mb-sm">
   <span class="font-label-sm text-label-sm text-outline uppercase tracking-wider">Active filters:</span>
+  {% for af in active_filters %}
+  {# Build the URL with every OTHER active filter preserved. #}
+  {% set remove_url -%}
+    {{ admin_base }}/{{ model.table }}/rows?search={{ search_val | urlencode }}&sort={{ sort_col | urlencode }}&order={{ sort_order | urlencode }}
+    {%- for other in active_filters -%}
+      {%- if other.field != af.field -%}&filter_{{ other.field | urlencode }}={{ other.value | urlencode }}{%- endif -%}
+    {%- endfor -%}
+  {%- endset %}
   <div class="inline-flex items-center gap-xs bg-primary-container/10 border border-primary/20 text-primary px-sm py-xs rounded-full font-label-sm text-label-sm">
-    {{ active_filter }}
+    <span class="text-on-surface-variant">{{ af.field | replace("_", " ") }}:</span>
+    <span>{{ af.value }}</span>
     <a
-      href="?search={{ search_val }}&sort={{ sort_col }}&order={{ sort_order }}"
-      hx-get="{{ admin_base }}/{{ model.table }}/rows?search={{ search_val }}&sort={{ sort_col }}&order={{ sort_order }}"
+      href="{{ remove_url }}"
+      hx-get="{{ remove_url }}"
       hx-target="#table-body"
       hx-swap="innerHTML"
       hx-push-url="true"
-      aria-label="Remove filter"
+      aria-label="Remove filter {{ af.field }}"
     >
       <i data-lucide="x" class="w-3 h-3 cursor-pointer hover:text-on-primary-container transition-colors"></i>
     </a>
   </div>
+  {% endfor %}
 </div>
 {% endif %}
 
@@ -117,26 +136,32 @@
         hx-trigger="input changed delay:300ms, search"
         hx-target="#table-body"
         hx-swap="innerHTML"
-        hx-include="#dt-search, #dt-page-size, [name=filter], [name=sort], [name=order]"
+        hx-include="#dt-search, #dt-page-size, #dt-active-filters input, [name=sort], [name=order]"
         hx-push-url="true"
         class="w-full bg-surface-container-lowest border border-outline-variant rounded-xl pl-9 pr-md py-sm font-body-md text-body-md text-on-surface focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all placeholder:text-outline/50"
       />
     </div>
     {% endif %}
 
-    {# Filter button — opens the filter dialog modal #}
+    {# Filter button — opens the filter dialog modal. The active-filter
+       query params get serialised into the dialog URL so the dialog
+       can pre-select committed values when re-opened. #}
     {% if facets %}
+    {% set dialog_url -%}
+      {{ admin_base }}/{{ model.table }}/filter-dialog?search={{ search_val | urlencode }}&sort={{ sort_col | urlencode }}&order={{ sort_order | urlencode }}
+      {%- for af in active_filters -%}&filter_{{ af.field | urlencode }}={{ af.value | urlencode }}{%- endfor -%}
+    {%- endset %}
     <button
       type="button"
-      hx-get="{{ admin_base }}/{{ model.table }}/filter-dialog?search={{ search_val }}&sort={{ sort_col }}&order={{ sort_order }}&active_filter={{ active_filter }}"
+      hx-get="{{ dialog_url }}"
       hx-target="#umbra-filter-dialog-slot"
       hx-swap="innerHTML"
       class="flex items-center gap-sm px-md py-sm hover:bg-surface-container-high rounded-xl text-on-surface transition-colors font-label-md text-label-md border border-outline-variant"
     >
       <i data-lucide="sliders-horizontal" class="w-4 h-4"></i>
       Filter
-      {% if active_filter %}
-      <span class="w-2 h-2 rounded-full bg-primary ml-xs"></span>
+      {% if active_filters and active_filters | length > 0 %}
+      <span class="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-primary text-on-primary text-[10px] font-medium ml-xs tabular-nums">{{ active_filters | length }}</span>
       {% endif %}
     </button>
     {% endif %}
@@ -195,8 +220,15 @@
    Table + pagination  (both inside the HTMX-swap target)
    ================================================================ #}
 
-{# Hidden inputs carried along on partial swaps #}
-<input type="hidden" id="dt-active-filter" name="filter" value="{{ active_filter }}"/>
+{# Hidden inputs carried along on partial swaps. The active-filter
+   container holds one <input name="filter_<field>"> per committed
+   selection; the search input's hx-include targets `#dt-active-filters
+   input` so every filter rides along on each refetch. #}
+<span id="dt-active-filters" style="display:none">
+  {% for af in active_filters %}
+  <input type="hidden" name="filter_{{ af.field }}" value="{{ af.value }}"/>
+  {% endfor %}
+</span>
 <input type="hidden" id="dt-sort-col"     name="sort"   value="{{ sort_col }}"/>
 <input type="hidden" id="dt-sort-order"   name="order"  value="{{ sort_order }}"/>
 
@@ -427,7 +459,7 @@
           {# Empty / no-results state #}
           <tr>
             <td colspan="{{ columns | length + 2 }}" class="px-md py-xl text-center">
-              {% if search_val or active_filter %}
+              {% if search_val or (active_filters and active_filters | length > 0) %}
               <div class="flex flex-col items-center gap-md">
                 <i data-lucide="search-x" class="w-10 h-10 text-outline opacity-50"></i>
                 <p class="text-body-md text-on-surface-variant">No {{ model.name | lower }} records match your search.</p>
@@ -478,7 +510,7 @@
                     hx-trigger="change"
                     hx-target="#table-body"
                     hx-swap="innerHTML"
-                    hx-include="#dt-search, #dt-active-filter, #dt-sort-col, #dt-sort-order"
+                    hx-include="#dt-search, #dt-active-filters input, #dt-sort-col, #dt-sort-order"
                     hx-push-url="true"
                     class="bg-surface-container border border-outline-variant rounded-lg px-sm py-xs pr-8 min-w-[5rem] font-label-md text-label-md text-on-surface focus:outline-none focus:ring-1 focus:ring-primary"
                   >
@@ -495,7 +527,7 @@
                 <button
                   type="button"
                   {% if pagination.page <= 1 %}disabled{% endif %}
-                  hx-get="{{ admin_base }}/{{ model.table }}/rows?search={{ search_val }}&filter={{ active_filter }}&sort={{ sort_col }}&order={{ sort_order }}&page=1&page_size={{ pagination.page_size }}"
+                  hx-get="{{ admin_base }}/{{ model.table }}/rows?search={{ search_val }}{{ filter_qs }}&sort={{ sort_col }}&order={{ sort_order }}&page=1&page_size={{ pagination.page_size }}"
                   hx-target="#table-body"
                   hx-swap="innerHTML"
                   hx-push-url="true"
@@ -509,7 +541,7 @@
                 <button
                   type="button"
                   {% if pagination.page <= 1 %}disabled{% endif %}
-                  hx-get="{{ admin_base }}/{{ model.table }}/rows?search={{ search_val }}&filter={{ active_filter }}&sort={{ sort_col }}&order={{ sort_order }}&page={{ pagination.page - 1 }}&page_size={{ pagination.page_size }}"
+                  hx-get="{{ admin_base }}/{{ model.table }}/rows?search={{ search_val }}{{ filter_qs }}&sort={{ sort_col }}&order={{ sort_order }}&page={{ pagination.page - 1 }}&page_size={{ pagination.page_size }}"
                   hx-target="#table-body"
                   hx-swap="innerHTML"
                   hx-push-url="true"
@@ -526,7 +558,7 @@
 
                   {# Always show page 1 #}
                   <button type="button"
-                    hx-get="{{ admin_base }}/{{ model.table }}/rows?search={{ search_val }}&filter={{ active_filter }}&sort={{ sort_col }}&order={{ sort_order }}&page=1&page_size={{ pagination.page_size }}"
+                    hx-get="{{ admin_base }}/{{ model.table }}/rows?search={{ search_val }}{{ filter_qs }}&sort={{ sort_col }}&order={{ sort_order }}&page=1&page_size={{ pagination.page_size }}"
                     hx-target="#table-body" hx-swap="innerHTML" hx-push-url="true"
                     class="w-8 h-8 flex items-center justify-center {% if pagination.page == 1 %}bg-primary text-on-primary{% else %}text-on-surface-variant hover:bg-surface-container-high{% endif %} rounded-lg font-label-md text-label-md transition-colors tabular-nums"
                   >1</button>
@@ -537,7 +569,7 @@
 
                   {% for p in range(win_start, win_end + 1) %}
                   <button type="button"
-                    hx-get="{{ admin_base }}/{{ model.table }}/rows?search={{ search_val }}&filter={{ active_filter }}&sort={{ sort_col }}&order={{ sort_order }}&page={{ p }}&page_size={{ pagination.page_size }}"
+                    hx-get="{{ admin_base }}/{{ model.table }}/rows?search={{ search_val }}{{ filter_qs }}&sort={{ sort_col }}&order={{ sort_order }}&page={{ p }}&page_size={{ pagination.page_size }}"
                     hx-target="#table-body" hx-swap="innerHTML" hx-push-url="true"
                     class="w-8 h-8 flex items-center justify-center {% if pagination.page == p %}bg-primary text-on-primary{% else %}text-on-surface-variant hover:bg-surface-container-high{% endif %} rounded-lg font-label-md text-label-md transition-colors tabular-nums"
                   >{{ p }}</button>
@@ -550,7 +582,7 @@
                   {# Always show last page if more than 1 #}
                   {% if pagination.total_pages > 1 %}
                   <button type="button"
-                    hx-get="{{ admin_base }}/{{ model.table }}/rows?search={{ search_val }}&filter={{ active_filter }}&sort={{ sort_col }}&order={{ sort_order }}&page={{ pagination.total_pages }}&page_size={{ pagination.page_size }}"
+                    hx-get="{{ admin_base }}/{{ model.table }}/rows?search={{ search_val }}{{ filter_qs }}&sort={{ sort_col }}&order={{ sort_order }}&page={{ pagination.total_pages }}&page_size={{ pagination.page_size }}"
                     hx-target="#table-body" hx-swap="innerHTML" hx-push-url="true"
                     class="w-8 h-8 flex items-center justify-center {% if pagination.page == pagination.total_pages %}bg-primary text-on-primary{% else %}text-on-surface-variant hover:bg-surface-container-high{% endif %} rounded-lg font-label-md text-label-md transition-colors tabular-nums"
                   >{{ pagination.total_pages }}</button>
@@ -561,7 +593,7 @@
                 <button
                   type="button"
                   {% if pagination.page >= pagination.total_pages %}disabled{% endif %}
-                  hx-get="{{ admin_base }}/{{ model.table }}/rows?search={{ search_val }}&filter={{ active_filter }}&sort={{ sort_col }}&order={{ sort_order }}&page={{ pagination.page + 1 }}&page_size={{ pagination.page_size }}"
+                  hx-get="{{ admin_base }}/{{ model.table }}/rows?search={{ search_val }}{{ filter_qs }}&sort={{ sort_col }}&order={{ sort_order }}&page={{ pagination.page + 1 }}&page_size={{ pagination.page_size }}"
                   hx-target="#table-body"
                   hx-swap="innerHTML"
                   hx-push-url="true"
@@ -575,7 +607,7 @@
                 <button
                   type="button"
                   {% if pagination.page >= pagination.total_pages %}disabled{% endif %}
-                  hx-get="{{ admin_base }}/{{ model.table }}/rows?search={{ search_val }}&filter={{ active_filter }}&sort={{ sort_col }}&order={{ sort_order }}&page={{ pagination.total_pages }}&page_size={{ pagination.page_size }}"
+                  hx-get="{{ admin_base }}/{{ model.table }}/rows?search={{ search_val }}{{ filter_qs }}&sort={{ sort_col }}&order={{ sort_order }}&page={{ pagination.total_pages }}&page_size={{ pagination.page_size }}"
                   hx-target="#table-body"
                   hx-swap="innerHTML"
                   hx-push-url="true"
@@ -801,11 +833,9 @@
     var sortColEl   = document.getElementById('dt-sort-col');
     var sortOrderEl = document.getElementById('dt-sort-order');
     var searchEl    = document.getElementById('dt-search');
-    var filterEl    = document.getElementById('dt-active-filter');
     var curCol   = sortColEl   ? sortColEl.value   : '';
     var curOrder = sortOrderEl ? sortOrderEl.value : 'asc';
     var search   = searchEl   ? searchEl.value     : '';
-    var filter   = filterEl   ? filterEl.value     : '';
     var newOrder = (curCol === col)
       ? (curOrder === 'asc' ? 'desc' : 'asc')
       : 'asc';
@@ -813,8 +843,15 @@
     // sees the new state even before HTMX finishes the swap.
     if (sortColEl)   sortColEl.value   = col;
     if (sortOrderEl) sortOrderEl.value = newOrder;
+    // Carry every committed filter through as `filter_<field>=value`.
+    var filterQs = '';
+    var filterInputs = document.querySelectorAll('#dt-active-filters input');
+    for (var i = 0; i < filterInputs.length; i++) {
+      var inp = filterInputs[i];
+      filterQs += '&' + encodeURIComponent(inp.name) + '=' + encodeURIComponent(inp.value);
+    }
     var qs = '?search=' + encodeURIComponent(search) +
-             '&filter=' + encodeURIComponent(filter) +
+             filterQs +
              '&sort=' + encodeURIComponent(col) +
              '&order=' + newOrder +
              '&page=1&page_size=' + pageSize;
@@ -870,25 +907,41 @@
       (function syncHiddenInputsFromUrl() {
         var qs = window.location.search;
         if (!qs) return;
-        var params = {};
+        // Build {name: value} for scalars + collect every filter_* pair.
+        var scalars = {};
+        var filterPairs = [];
         qs.replace(/^\?/, '').split('&').forEach(function(pair) {
           var idx = pair.indexOf('=');
           if (idx === -1) return;
           var k = decodeURIComponent(pair.slice(0, idx));
           var v = decodeURIComponent(pair.slice(idx + 1).replace(/\+/g, ' '));
-          params[k] = v;
+          if (k.indexOf('filter_') === 0) filterPairs.push({name: k, value: v});
+          else scalars[k] = v;
         });
         var map = {
           'search': 'dt-search',
-          'filter': 'dt-active-filter',
           'sort':   'dt-sort-col',
           'order':  'dt-sort-order'
         };
         Object.keys(map).forEach(function(param) {
           var el = document.getElementById(map[param]);
-          if (el && params[param] !== undefined) el.value = params[param];
-          else if (el && params[param] === undefined) el.value = '';
+          if (el && scalars[param] !== undefined) el.value = scalars[param];
+          else if (el && scalars[param] === undefined) el.value = '';
         });
+        // Rebuild the active-filter hidden inputs to mirror the URL —
+        // the server-rendered ones are stale after a sort/page swap.
+        var holder = document.getElementById('dt-active-filters');
+        if (holder) {
+          holder.innerHTML = '';
+          filterPairs.forEach(function(p) {
+            if (!p.value) return;
+            var inp = document.createElement('input');
+            inp.type = 'hidden';
+            inp.name = p.name;
+            inp.value = p.value;
+            holder.appendChild(inp);
+          });
+        }
       })();
     }
   });
