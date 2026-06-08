@@ -20,7 +20,7 @@ use umbra::migrate::MigrateError;
 use umbra::prelude::*;
 use umbra::templates::context;
 use umbra::web::{Html, Path, SlashRedirect, StatusCode};
-use umbra_admin::AdminPlugin;
+use umbra_admin::{AdminModel, AdminPlugin};
 use umbra_auth::{AuthPlugin, AuthUser, BearerAuthentication, UserModel, login_required_html};
 use umbra_openapi::OpenApiPlugin;
 use umbra_permissions::{PermissionsPlugin, permission_required_html};
@@ -61,7 +61,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .plugin(PermissionsPlugin)
         .plugin(ContentPlugin)
         .plugin(EcommercePlugin)
-        .plugin(AdminPlugin::default())
+        // Admin: declare per-model search + filter columns on the
+        // ecommerce side so the changelist toolbar shows the search
+        // input + Filter button. `register_for("ecommerce", ...)` keeps
+        // the sidebar grouping AND the per-model permission codenames
+        // (`ecommerce.view_product`, etc.) aligned with the plugin
+        // that owns each model. Auto-discovered models without an
+        // explicit AdminModel keep their defaults — empty list_filter
+        // and empty search_fields hide the toolbar controls, which is
+        // the intended behaviour when nothing is declared.
+        .plugin(
+            AdminPlugin::default()
+                .site_title("Shop".to_string())
+                .register_for(
+                    "ecommerce",
+                    AdminModel::new("product")
+                        .search_fields(&["name", "sku", "slug"])
+                        .list_filter(&[
+                            "status",
+                            "category",
+                            "brand",
+                            "is_featured",
+                            "currency",
+                        ]),
+                )
+                .register_for(
+                    "ecommerce",
+                    AdminModel::new("brand").search_fields(&["name", "slug"]),
+                )
+                .register_for(
+                    "ecommerce",
+                    AdminModel::new("order")
+                        .search_fields(&["number"])
+                        .list_filter(&["status", "payment_status", "currency"]),
+                ),
+        )
         // REST: three resources, three different auth + permission
         // postures, plus per-resource field-exposure controls. The
         // global authenticator is a CHAIN — try session first (browsers
@@ -125,6 +159,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 ),
         )
         .build()?;
+
+    let explained_query = Brand::objects().filter(brand::ID.eq(1)).to_sql();
+    eprintln!("explain: {}", explained_query);
 
     if is_serve_invocation() {
         auto_migrate().await?;
