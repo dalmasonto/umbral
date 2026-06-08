@@ -446,7 +446,8 @@ fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAtt
                      `on_update = \"...\"`, `index`, `auto_now`, \
                      `auto_now_add`, `help = \"...\"`, \
                      `example = \"...\"`, `backend = \"...\"`, \
-                     `min = N`, `max = N`, and `slug_from = \"...\"`"
+                     `min = N`, `max = N`, `slug_from = \"...\"`, \
+                     and `reverse_fk = \"...\"`"
                 )))
             }
         })?;
