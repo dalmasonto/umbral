@@ -71,6 +71,25 @@ async fn resolve_fk_label(
 /// (e.g. `?filter_brand=1,2`) fan out into one chip per id so each can
 /// be removed independently. Falls back to the raw value when no label
 /// resolves.
+/// Build the `&filter_<field>=<comma-joined>` query-string fragment
+/// that pagination buttons, the Filter dialog URL, and the chip
+/// remove links all reuse. Built once per request from the raw
+/// `Vec<(field, value)>` so iterating the fanned-out chip list
+/// downstream doesn't collapse repeated keys.
+fn build_filter_qs(active_filters: &[(String, String)]) -> String {
+    let mut out = String::new();
+    for (field, value) in active_filters {
+        if value.is_empty() {
+            continue;
+        }
+        out.push_str("&filter_");
+        out.push_str(&urlencode(field));
+        out.push('=');
+        out.push_str(&urlencode(value));
+    }
+    out
+}
+
 async fn build_active_filter_list(
     model: &umbra::migrate::ModelMeta,
     active_filters: &[(String, String)],
@@ -369,6 +388,7 @@ pub(crate) async fn list(
     let has_search = cfg.is_some_and(|c| !c.search_fields.is_empty());
     let search_val = search_term.unwrap_or_default();
     let active_filter_list = build_active_filter_list(&model, &active_filters).await;
+    let filter_qs = build_filter_qs(&active_filters);
     let apps = sidebar_apps(&state, &user);
     let breadcrumbs = vec![
         serde_json::json!({ "label": model.name.clone(), "url": format!("{}/{table}/", crate::branding::current().base_path) }),
@@ -407,6 +427,7 @@ pub(crate) async fn list(
             has_search         => has_search,
             search_val         => search_val,
             active_filters     => active_filter_list,
+            filter_qs          => filter_qs,
             pagination         => pagination,
             sort_col           => sort_col,
             sort_order         => sort_order,
@@ -528,6 +549,7 @@ pub(crate) async fn rows_fragment(
 
     let columns = model_for_template_cols(&model, &display_cols).fields;
     let active_filter_list = build_active_filter_list(&model, &active_filters).await;
+    let filter_qs = build_filter_qs(&active_filters);
     let search_val = search_term.unwrap_or_default();
 
     let action_names: Vec<serde_json::Value> = cfg
@@ -548,6 +570,7 @@ pub(crate) async fn rows_fragment(
             columns            => columns,
             pagination         => pagination,
             active_filters     => active_filter_list,
+            filter_qs          => filter_qs,
             search_val         => search_val,
             sort_col           => sort_col,
             sort_order         => sort_order,

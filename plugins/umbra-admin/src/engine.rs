@@ -25,6 +25,16 @@ pub(crate) fn engine() -> &'static Environment<'static> {
         env.add_filter("urlencode", |s: String| -> String {
             crate::util::urlencoding_simple(&s)
         });
+        // Serialise a value to JSON for safe embedding in an inline
+        // <script> block. Minijinja stable doesn't ship `tojson` by
+        // default; we route through serde_json so every kind a
+        // template might pass (string, array, object, number) lands as
+        // a valid JS literal. Falls back to `null` if serialisation
+        // refuses the input — the receiving JS just sees null and
+        // moves on rather than producing a malformed script.
+        env.add_filter("tojson", |v: minijinja::Value| -> String {
+            serde_json::to_string(&v).unwrap_or_else(|_| "null".to_string())
+        });
         env.add_template(
             "admin/wrapper.html",
             include_str!("../templates/wrapper.html"),

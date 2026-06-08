@@ -39,12 +39,13 @@
 
 {% macro data_table(model, rows, columns, pk, facets, active_filters, has_search, search_val, actions, pagination, sort_col, sort_order, flash, inline_edit_fields=[], column_widths=[]) %}
 
-{# Pre-built `&filter_<field>=<value>` URL fragment, used by every
-   pagination button + the active-filter chip remove links. Centralised
-   here so the multi-filter URL shape lives in exactly one place. #}
-{% set filter_qs -%}
-  {%- for af in active_filters -%}&filter_{{ af.field | urlencode }}={{ af.value | urlencode }}{%- endfor -%}
-{%- endset %}
+{# `filter_qs` arrives from the handler precomputed as one
+   `&filter_<field>=<comma-joined>` per UNIQUE field. Iterating
+   `active_filters` here would not work for multi-value selections —
+   chips are fanned-out per-id, so a Jinja loop would emit one URL
+   param per id and the HashMap-based query extractor would collapse
+   them to a single value (the prefill bug). #}
+{% set filter_qs = filter_qs | default("") %}
 
 {# Filter dialog slot — rendered here, populated by JS when filter button is clicked #}
 <div id="umbra-filter-dialog-slot"></div>
@@ -153,9 +154,12 @@
        query params get serialised into the dialog URL so the dialog
        can pre-select committed values when re-opened. #}
     {% if facets %}
+    {# Build the dialog URL via the precomputed filter_qs so multi-value
+       selections survive the round-trip. The dialog handler reads the
+       same `filter_<field>=<comma-joined>` params and feeds them
+       into active_filters for the dialog's pre-fill seeding. #}
     {% set dialog_url -%}
-      {{ admin_base }}/{{ model.table }}/filter-dialog?search={{ search_val | urlencode }}&sort={{ sort_col | urlencode }}&order={{ sort_order | urlencode }}
-      {%- for af in active_filters -%}&filter_{{ af.field | urlencode }}={{ af.value | urlencode }}{%- endfor -%}
+      {{ admin_base }}/{{ model.table }}/filter-dialog?search={{ search_val | urlencode }}&sort={{ sort_col | urlencode }}&order={{ sort_order | urlencode }}{{ filter_qs }}
     {%- endset %}
     <button
       type="button"

@@ -10,12 +10,10 @@
     actions, inline_edit_fields
 #}
 
-{# Pre-built `&filter_<field>=<value>` URL fragment, used by every
-   pagination button. Mirrors the data_table.html macro so both
-   templates share the multi-filter URL shape. #}
-{% set filter_qs -%}
-  {%- for af in active_filters -%}&filter_{{ af.field | urlencode }}={{ af.value | urlencode }}{%- endfor -%}
-{%- endset %}
+{# `filter_qs` arrives from the handler precomputed as one
+   `&filter_<field>=<comma-joined>` per UNIQUE field. See data_table.html
+   for the rationale (HashMap-based extractor collapses repeated keys). #}
+{% set filter_qs = filter_qs | default("") %}
 
 {% if rows %}
   {% for row in rows %}
