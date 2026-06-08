@@ -221,6 +221,71 @@ async fn unknown_field_name_is_silently_skipped_in_sql() {
 }
 
 #[tokio::test]
+async fn only_with_join_related_trims_inner_subquery_columns() {
+    boot().await;
+    // When .only() narrows the outer projection, the inner subquery
+    // should only carry the columns the outer still consumes — the
+    // parent columns named in .only() (intersected with T::FIELDS so
+    // joined-child aliases don't leak) plus the FK column the JOIN
+    // ON clause needs. Skipping per-row columns the outer drops
+    // anyway is a measurable win on wide tables.
+    let sql = Product::objects()
+        .only(&["id", "name", "category__name"])
+        .join_related("category")
+        .filter(product::ID.eq(1))
+        .to_sql();
+    // Outer SELECT: only the three requested columns.
+    assert!(
+        sql.contains("SELECT \"id\", \"name\", \"category__name\""),
+        "outer projection: {sql}"
+    );
+    // Inner subquery now carries ONLY: id, name, category (the FK
+    // needed for the JOIN ON). brand should NOT appear — it's a
+    // parent column the outer never touches.
+    let inner_start = sql.find("FROM (SELECT").expect("subquery wrap: {sql}");
+    let inner_end = inner_start
+        + sql[inner_start..]
+            .find(") AS \"__p\"")
+            .expect("subquery close: {sql}");
+    let inner = &sql[inner_start..inner_end];
+    assert!(
+        inner.contains("\"id\""),
+        "inner needs id (in only): {inner}"
+    );
+    assert!(
+        inner.contains("\"name\""),
+        "inner needs name (in only): {inner}"
+    );
+    assert!(
+        inner.contains("\"category\""),
+        "inner needs category (FK for JOIN ON): {inner}"
+    );
+    assert!(
+        !inner.contains("\"brand\""),
+        "brand must be trimmed: {inner}"
+    );
+}
+
+#[tokio::test]
+async fn join_related_without_only_keeps_full_inner_select() {
+    boot().await;
+    // Without .only(), the inner subquery keeps every parent
+    // column — the pre-#46 behaviour, byte-for-byte. We only trim
+    // when the outer projection has been narrowed.
+    let sql = Product::objects().join_related("category").to_sql();
+    let inner_start = sql.find("FROM (SELECT").expect("subquery wrap: {sql}");
+    let inner_end = inner_start
+        + sql[inner_start..]
+            .find(") AS \"__p\"")
+            .expect("subquery close: {sql}");
+    let inner = &sql[inner_start..inner_end];
+    assert!(
+        inner.contains("\"brand\""),
+        "no .only() → full parent col list: {inner}"
+    );
+}
+
+#[tokio::test]
 async fn unknown_field_name_fetch_errors_loudly() {
     boot().await;
     let err = Product::objects()

@@ -874,16 +874,62 @@ impl<T: Model> QuerySet<T> {
         }
         use sea_query::{Expr, Query};
         let registered = crate::migrate::registered_models();
-        // Take ownership of the existing query (parent SELECT + WHERE
-        // + ORDER BY + LIMIT) so we can re-mount it as the FROM
-        // clause of the new outer SELECT.
+
+        // Inner-subquery column trim. When `.only(...)` is also set,
+        // the outer SELECT only references a subset of parent
+        // columns (plus the JOIN'd child columns it gets through
+        // its alias). The inner subquery only needs to expose:
+        //   - parent columns named in `.only(...)` (intersected
+        //     with T::FIELDS so the JOIN aliases like
+        //     `category__name` don't leak in here — those live on
+        //     the JOIN'd table, not on the parent),
+        //   - PLUS the FK columns each `.join_related(name)` needs
+        //     for its `ON __p.<name> = <child>.<pk>` clause.
+        // WHERE / ORDER BY inside the inner subquery can still
+        // reference any parent column (SQL doesn't require an
+        // ORDER BY column to be in the SELECT list), so we don't
+        // need to promote those. Postgres often skips this prune
+        // through subquery boundaries; SQLite usually doesn't —
+        // either way trimming here is a measurable win on wide
+        // tables (think 30-column Product on a busy hot path).
+        if let Some(only) = &self.only_cols {
+            let parent_field_names: std::collections::HashSet<&str> =
+                T::FIELDS.iter().map(|f| f.name).collect();
+            let mut needed: std::collections::HashSet<String> = only
+                .iter()
+                .filter(|c| parent_field_names.contains(c.as_str()))
+                .cloned()
+                .collect();
+            for join_field in &self.join_related {
+                if parent_field_names.contains(join_field.as_str()) {
+                    needed.insert(join_field.clone());
+                }
+            }
+            if !needed.is_empty() {
+                q.clear_selects();
+                // Stable ordering so the SQL is deterministic
+                // across runs (HashSet iteration is not).
+                let mut ordered: Vec<String> = needed.into_iter().collect();
+                ordered.sort();
+                for col in &ordered {
+                    q.column(Alias::new(col.as_str()));
+                }
+            }
+        }
+
+        // Take ownership of the (possibly-trimmed) inner query and
+        // re-mount it as the FROM clause of the new outer SELECT.
         let inner = std::mem::replace(q, Query::select().take());
         let parent_alias = Alias::new("__p");
         let mut outer = Query::select();
         outer.from_subquery(inner, parent_alias.clone());
         // Re-project the parent's full column set so the outer SELECT
         // exposes them unaliased — FromRow on `T` reads parent
-        // columns by their bare names (`id`, `name`, ...).
+        // columns by their bare names (`id`, `name`, ...). When
+        // `.only(...)` later clears this list in
+        // `apply_only_projection`, the inner-subquery trim above
+        // means we still didn't pay for columns we ended up
+        // dropping anyway.
         for f in T::FIELDS {
             outer.expr(Expr::col((parent_alias.clone(), Alias::new(f.name))));
         }
