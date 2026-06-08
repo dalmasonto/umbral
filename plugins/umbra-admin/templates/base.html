@@ -8,35 +8,84 @@
     .tabular-nums {
         font-variant-numeric: tabular-nums;
     }
-    /* Custom thin scrollbar for the sidebar — theme-aware via tokens.
-       Kept at 3-4px (tighter than the global 4px rail) because the
-       sidebar is a navigation column where every horizontal pixel
-       counts. Color tokens match the global rule so the rail still
-       reads as the same family across the admin. */
+    /* ============================================================
+       Theme-aware scrollbars — inline because in DEV the admin
+       loads the Tailwind CDN (utility classes only), NOT the
+       pre-compiled admin.css, so any custom CSS in `css/input.css`
+       never reaches the browser in dev. The sidebar's tighter
+       3-4px rail used to live here for the same reason; the
+       global rule for everywhere else now joins it.
+       ============================================================ */
+    /* Sidebar — tightest rail (every horizontal pixel matters in
+       a nav column). */
     #umbra-admin-sidebar,
     #sidebar-nav {
         scrollbar-width: thin;
         scrollbar-color: var(--outline-variant) var(--surface-container);
     }
-    #umbra-admin-sidebar::-webkit-scrollbar {
-        width: 4px;
-    }
-    #sidebar-nav::-webkit-scrollbar {
-        width: 3px;
-    }
-    #umbra-admin-sidebar::-webkit-scrollbar-track {
-        background: var(--surface-container);
-    }
+    #umbra-admin-sidebar::-webkit-scrollbar { width: 4px; }
+    #sidebar-nav::-webkit-scrollbar         { width: 3px; }
+    #umbra-admin-sidebar::-webkit-scrollbar-track,
     #sidebar-nav::-webkit-scrollbar-track {
         background: var(--surface-container);
     }
-    #umbra-admin-sidebar::-webkit-scrollbar-thumb {
-        background: var(--outline-variant);
-        border-radius: 10px;
-    }
+    #umbra-admin-sidebar::-webkit-scrollbar-thumb,
     #sidebar-nav::-webkit-scrollbar-thumb {
         background: var(--outline-variant);
         border-radius: 10px;
+    }
+
+    /* Global — applies to every scrollable surface in the admin
+       (feed widget, dropdowns, tables, dialogs, main content).
+       Targets the actual Tailwind utility classes used by those
+       surfaces so the selectors survive any minification quirk
+       and have enough specificity to win against UA defaults. */
+    html {
+        scrollbar-width: thin;
+        scrollbar-color: var(--outline-variant) var(--surface-container);
+    }
+    .overflow-auto,
+    .overflow-y-auto,
+    .overflow-x-auto,
+    .overflow-y-scroll,
+    .overflow-x-scroll {
+        scrollbar-width: thin;
+        scrollbar-color: var(--outline-variant) var(--surface-container);
+    }
+    html ::-webkit-scrollbar,
+    .overflow-auto::-webkit-scrollbar,
+    .overflow-y-auto::-webkit-scrollbar,
+    .overflow-x-auto::-webkit-scrollbar,
+    .overflow-y-scroll::-webkit-scrollbar,
+    .overflow-x-scroll::-webkit-scrollbar {
+        width: 4px;
+        height: 4px;
+    }
+    html ::-webkit-scrollbar-track,
+    .overflow-auto::-webkit-scrollbar-track,
+    .overflow-y-auto::-webkit-scrollbar-track,
+    .overflow-x-auto::-webkit-scrollbar-track,
+    .overflow-y-scroll::-webkit-scrollbar-track,
+    .overflow-x-scroll::-webkit-scrollbar-track {
+        background: var(--surface-container);
+    }
+    html ::-webkit-scrollbar-thumb,
+    .overflow-auto::-webkit-scrollbar-thumb,
+    .overflow-y-auto::-webkit-scrollbar-thumb,
+    .overflow-x-auto::-webkit-scrollbar-thumb,
+    .overflow-y-scroll::-webkit-scrollbar-thumb,
+    .overflow-x-scroll::-webkit-scrollbar-thumb {
+        background: var(--outline-variant);
+        border-radius: 10px;
+    }
+    html ::-webkit-scrollbar-thumb:hover,
+    .overflow-auto::-webkit-scrollbar-thumb:hover,
+    .overflow-y-auto::-webkit-scrollbar-thumb:hover,
+    .overflow-x-auto::-webkit-scrollbar-thumb:hover {
+        background: var(--outline);
+    }
+    html ::-webkit-scrollbar-corner {
+        background: transparent;
     }
     /* Topbar glass effect — translucent over the page background.
      Uses var(--surface-container) so light mode gets a light glass,
