@@ -27,7 +27,19 @@
   wrapper — the strip's contents vanish but the wrapper div stays
   in place (with the same id), so subsequent OOB swaps still have a
   target.
+
+  CRITICAL: this fragment is HTMX-swapped into `<tbody id="table-body">`.
+  A bare `<div>` at the top of the response sits inside <tbody> in
+  the browser's HTML parser, which aborts table-mode and collapses
+  every <td colspan="N"> in the rows that follow into column 1
+  (post-#115 ship bug — empty-state + pagination got cramped into
+  the first column). The HTMX-documented fix is to wrap non-row OOB
+  content in a `<template>` tag so the parser treats it as inert;
+  HTMX still finds the inner element by id+`hx-swap-oob` and
+  routes it to `#dt-active-filters-strip`.
+  See https://htmx.org/attributes/hx-swap-oob/#using-template-tags
 #}
+<template>
 <div id="dt-active-filters-strip"
      hx-swap-oob="outerHTML"
      class="flex flex-wrap items-center gap-xs {% if active_filters and active_filters | length > 0 %}mb-sm{% endif %}">
@@ -54,6 +66,7 @@
   {% endfor %}
   {% endif %}
 </div>
+</template>
 
 {% if rows %}
   {% for row in rows %}

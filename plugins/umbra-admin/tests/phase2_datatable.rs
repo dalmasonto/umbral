@@ -500,6 +500,32 @@ async fn test_chip_strip_oob_swap_clears_when_filter_removed() {
         "label must be present when at least one filter is active: {}",
         &body[..body.len().min(2000)]
     );
+    // CRITICAL: the OOB <div> MUST be inside a <template> tag.
+    // The fragment is HTMX-swapped into <tbody>; a bare <div> at
+    // that position aborts the browser's table-mode parsing and
+    // collapses every subsequent cell into column 1 (the original
+    // ship had this bug — empty-state and pagination cramped into
+    // one column). The <template> wrap keeps HTMX able to find
+    // the OOB by id while telling the parser "this isn't table
+    // content."
+    let oob_pos = body
+        .find(r#"id="dt-active-filters-strip""#)
+        .expect("OOB block present");
+    let pre_oob = &body[..oob_pos];
+    let last_template_open = pre_oob.rfind("<template");
+    let last_template_close = pre_oob.rfind("</template>");
+    let inside_template = match (last_template_open, last_template_close) {
+        (Some(open), Some(close)) => open > close,
+        (Some(_), None) => true,
+        _ => false,
+    };
+    assert!(
+        inside_template,
+        "OOB <div id=\"dt-active-filters-strip\"> MUST be inside a \
+         <template> wrapper or the browser strips it from tbody \
+         context and the table layout collapses. Body so far:\n{}",
+        &body[..body.len().min(800)]
+    );
 
     // (2) Same endpoint with the filter removed — strip should
     //     come back EMPTY (no label, no chip text) but still
