@@ -17,27 +17,41 @@ use crate::AdminError;
 use crate::config::AdminConfig;
 
 /// Apply the active-filter slice to a [`DynQuerySet`], honouring the
-/// admin's two filter shapes:
-///   - single-value: `?filter_status=published` → `WHERE status = ?`
-///   - multi-value: `?filter_brand=1,2,3` → `WHERE brand IN (?, ?, ?)`
+/// admin's three filter shapes:
+///   - column eq: `?filter_status=published` → `WHERE status = ?`
+///   - column in: `?filter_brand=1,2,3` → `WHERE brand IN (?, ?, ?)`
+///   - M2M any: `?filter_tags=1,2,3` → `WHERE id IN (SELECT parent_id
+///     FROM <junction> WHERE child_id IN (?, ?, ?))`
 ///
-/// The comma is the URL-level multi-select separator (the FK and M2M
-/// dialogs serialise their pill arrays this way). Single-value calls
-/// stay byte-identical to the pre-multi-select path: no comma in the
-/// value → exactly one `filter_eq_string` clause.
+/// The comma is the URL-level multi-select separator (the FK / choice
+/// / M2M dialogs all serialise their pill arrays this way). M2M
+/// dispatch is keyed by `model.m2m_relations` membership so a regular
+/// scalar column with the same name (impossible by derive contract, but
+/// cheap to be defensive about) would still fall through to the
+/// column path.
 fn apply_active_filters<'a>(
     mut qs: DynQuerySet<'a>,
+    model: &ModelMeta,
     active_filters: &[(String, String)],
 ) -> DynQuerySet<'a> {
     for (field, value) in active_filters {
-        if value.contains(',') {
-            let parts: Vec<String> = value
+        let parts: Vec<String> = if value.contains(',') {
+            value
                 .split(',')
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
-                .collect();
+                .collect()
+        } else {
+            vec![value.clone()]
+        };
+        if model.m2m_relations.iter().any(|r| &r.field_name == field) {
+            qs = qs.filter_m2m_contains_any(field, &parts);
+        } else if parts.len() > 1 {
             qs = qs.filter_in_strings(field, &parts);
         } else {
+            // Single value — same byte-identical path as the pre-
+            // multi-select implementation. Keeps any per-type
+            // affinity rules in filter_eq_string intact.
             qs = qs.filter_eq_string(field, value);
         }
     }
@@ -63,7 +77,7 @@ pub(crate) async fn count_rows_filtered(
         let restrict: &[String] = cfg.map(|c| c.search_fields.as_slice()).unwrap_or(&[]);
         qs = qs.search(restrict, term);
     }
-    qs = apply_active_filters(qs, active_filters);
+    qs = apply_active_filters(qs, model, active_filters);
     let count = qs.count().await?;
     Ok(count as usize)
 }
@@ -92,7 +106,7 @@ pub(crate) async fn fetch_rows_paged(
         let restrict: &[String] = cfg.map(|c| c.search_fields.as_slice()).unwrap_or(&[]);
         qs = qs.search(restrict, term);
     }
-    qs = apply_active_filters(qs, active_filters);
+    qs = apply_active_filters(qs, model, active_filters);
     for (col, desc) in parse_order_clause(order_clause) {
         qs = qs.order_by_col(&col, desc);
     }

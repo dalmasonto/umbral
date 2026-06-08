@@ -31,14 +31,21 @@ async fn resolve_fk_label(
     field: &str,
     raw_id: &str,
 ) -> Option<String> {
-    let col = parent.fields.iter().find(|c| c.name == field)?;
-    if !matches!(col.ty, SqlType::ForeignKey) {
+    // Resolve `field` against both FK columns and M2M relations — the
+    // chip row treats them uniformly (one chip per selected id) so the
+    // resolution path also folds together.
+    let related_table = if let Some(col) = parent.fields.iter().find(|c| c.name == field) {
+        if !matches!(col.ty, SqlType::ForeignKey) {
+            return None;
+        }
+        col.fk_target
+            .clone()
+            .unwrap_or_else(|| field.trim_end_matches("_id").to_string())
+    } else if let Some(rel) = parent.m2m_relations.iter().find(|r| r.field_name == field) {
+        rel.target_table.clone()
+    } else {
         return None;
-    }
-    let related_table = col
-        .fk_target
-        .clone()
-        .unwrap_or_else(|| field.trim_end_matches("_id").to_string());
+    };
     let (_, related) = find_model(&related_table)?;
     let pk = related.fields.iter().find(|c| c.primary_key)?;
     let label_col = related
@@ -133,6 +140,17 @@ fn urlencode(s: &str) -> String {
 /// one path. FK columns skip the distinct-value fetch entirely —
 /// the dialog hits the FK picker endpoint for label-rich options.
 async fn build_facet(model: &umbra::migrate::ModelMeta, field: &str) -> FilterFacet {
+    // M2M fields aren't columns — they live in `model.m2m_relations`.
+    // Surface them as `col_type = "m2m"` so the dialog can reuse the
+    // FK searchable-picker branch (same UX, different SQL underneath).
+    if let Some(rel) = model.m2m_relations.iter().find(|r| r.field_name == field) {
+        return FilterFacet {
+            field: field.to_string(),
+            col_type: "m2m".to_string(),
+            values: Vec::new(),
+            related_table: rel.target_table.clone(),
+        };
+    }
     let col = model.fields.iter().find(|c| c.name == field);
     let col_type = col
         .map(|c| sql_type_name(c.ty).to_string())

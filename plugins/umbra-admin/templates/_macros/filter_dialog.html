@@ -110,13 +110,13 @@
               />
             </div>
 
-            {# FK: searchable async picker. Reuses the same /options
-               endpoint the edit-form combobox hits, so a category with
-               1000 brands is paginated server-side. The currently-
-               selected pill (if any) sits above the search input and
-               carries data-filter-value so _pending stays correct
-               across re-renders of the results list. #}
-            {% elif col_type == "fk" %}
+            {# FK / M2M: searchable async picker. Reuses the same
+               /options endpoint the edit-form combobox hits, so 1000
+               brands (FK) or 1000 tags (M2M) paginate server-side.
+               The picker UX is identical for both — only the SQL
+               underneath differs (col = ? / IN vs. junction subquery)
+               and the handler dispatches per `col_type` already. #}
+            {% elif col_type == "fk" or col_type == "m2m" %}
             <div class="space-y-xs"
                  data-fk-facet
                  data-fk-field="{{ facet.field }}"

@@ -48,14 +48,19 @@ pub(crate) async fn fk_options(
     let Some((_, model)) = find_model(&table) else {
         return AdminError::NotFound(format!("no model `{table}`")).into_response();
     };
-    let col = model.fields.iter().find(|c| c.name == field);
-    let Some(col) = col else {
+    // Resolve `field` against both regular columns (FK case) and the
+    // model's M2M relations. M2M fields aren't in `model.fields` —
+    // they live in `model.m2m_relations` and target a different table.
+    // Either path yields the same `related_table` the picker queries.
+    let related_table = if let Some(col) = model.fields.iter().find(|c| c.name == field) {
+        col.fk_target
+            .clone()
+            .unwrap_or_else(|| field.trim_end_matches("_id").to_string())
+    } else if let Some(rel) = model.m2m_relations.iter().find(|r| r.field_name == field) {
+        rel.target_table.clone()
+    } else {
         return AdminError::NotFound(format!("no field `{field}` on `{table}`")).into_response();
     };
-    let related_table = col
-        .fk_target
-        .clone()
-        .unwrap_or_else(|| field.trim_end_matches("_id").to_string());
     let Some((_, related_model)) = find_model(&related_table) else {
         return (
             StatusCode::FORBIDDEN,
@@ -203,14 +208,18 @@ pub(crate) async fn fk_options_resolve(
     let Some((_, model)) = find_model(&table) else {
         return AdminError::NotFound(format!("no model `{table}`")).into_response();
     };
-    let col = model.fields.iter().find(|c| c.name == field);
-    let Some(col) = col else {
+    // Same dual-lookup as `fk_options`: FK columns live in
+    // `model.fields`, M2M relations in `model.m2m_relations`. Either
+    // path resolves to the same related table.
+    let related_table = if let Some(col) = model.fields.iter().find(|c| c.name == field) {
+        col.fk_target
+            .clone()
+            .unwrap_or_else(|| field.trim_end_matches("_id").to_string())
+    } else if let Some(rel) = model.m2m_relations.iter().find(|r| r.field_name == field) {
+        rel.target_table.clone()
+    } else {
         return AdminError::NotFound(format!("no field `{field}`")).into_response();
     };
-    let related_table = col
-        .fk_target
-        .clone()
-        .unwrap_or_else(|| field.trim_end_matches("_id").to_string());
     let Some((_, related_model)) = find_model(&related_table) else {
         return (StatusCode::FORBIDDEN, "related model not found").into_response();
     };
