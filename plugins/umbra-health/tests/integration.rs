@@ -49,7 +49,12 @@ async fn readiness_returns_200_when_db_is_up_and_no_checks_registered() {
     boot().await;
     let router = HealthPlugin::default().routes();
     let resp = router
-        .oneshot(Request::builder().uri("/ready").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/ready")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
@@ -89,7 +94,12 @@ async fn readiness_surfaces_registered_check_results() {
         .check(AlwaysFail)
         .routes();
     let resp = router
-        .oneshot(Request::builder().uri("/ready").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/ready")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(
