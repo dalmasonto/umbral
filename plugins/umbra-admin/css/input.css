@@ -90,27 +90,36 @@ textarea:disabled {
    The selectors are global so cards, dropdowns, picker popovers,
    and the main content all match. */
 * {
+  /* Matches the sidebar's existing thin-rail aesthetic so the
+     whole admin reads as one family — feed widget, dropdowns,
+     picker popovers, main content. `outline-variant` on
+     `surface-container` is the same pair the sidebar uses (and
+     just looks better than the earlier `surface-container-highest`
+     on transparent — that combo collapsed to invisible against
+     dark card backgrounds because the thumb and bg were nearly
+     identical tokens). */
   scrollbar-width: thin;
-  /* Thumb uses `surface-container-highest` — a true dark slate in
-     dark mode (much darker than `outline-variant` which reads as
-     a mid-gray and looks "light" against the dark card bg). */
-  scrollbar-color: var(--surface-container-highest) transparent;
+  scrollbar-color: var(--outline-variant) var(--surface-container);
 }
+/* Vertical AND horizontal — `width` styles the vertical rail,
+   `height` styles the horizontal one. Same 6px on both so an x-
+   scrollbar (changelist tables, data-table wide content) reads
+   the same as a y-scrollbar. */
 *::-webkit-scrollbar {
-  /* 6px reads as a thin rail; 8px was perceived as bulky. */
   width: 6px;
   height: 6px;
 }
 *::-webkit-scrollbar-track {
-  background: transparent;
+  background: var(--surface-container);
 }
 *::-webkit-scrollbar-thumb {
-  background: var(--surface-container-highest);
-  border-radius: 999px;
+  background: var(--outline-variant);
+  border-radius: 10px;
 }
 *::-webkit-scrollbar-thumb:hover {
-  /* Bump up one notch on hover so the user knows the rail is grabbable. */
-  background: var(--outline-variant);
+  /* One token brighter on hover so the user knows the rail is
+     grabbable (outline is a touch lighter than outline-variant). */
+  background: var(--outline);
 }
 *::-webkit-scrollbar-corner {
   background: transparent;
