@@ -2187,6 +2187,26 @@ impl<T: Model> Manager<T> {
         self.queryset().join_related_many(field_names)
     }
 
+    /// See [`QuerySet::select_related`].
+    pub fn select_related(&self, field_name: impl Into<String>) -> QuerySet<T> {
+        self.queryset().select_related(field_name)
+    }
+
+    /// See [`QuerySet::select_related_many`].
+    pub fn select_related_many(&self, field_names: &[&str]) -> QuerySet<T> {
+        self.queryset().select_related_many(field_names)
+    }
+
+    /// See [`QuerySet::prefetch_related`].
+    pub fn prefetch_related(&self, field_name: impl Into<String>) -> QuerySet<T> {
+        self.queryset().prefetch_related(field_name)
+    }
+
+    /// See [`QuerySet::prefetch_related_many`].
+    pub fn prefetch_related_many(&self, field_names: &[&str]) -> QuerySet<T> {
+        self.queryset().prefetch_related_many(field_names)
+    }
+
     /// Feature #72 — see `QuerySet::hard_delete`.
     pub fn hard_delete(&self) -> QuerySet<T> {
         self.queryset().hard_delete()
@@ -3714,15 +3734,32 @@ async fn hydrate_select_related<T: Model + HydrateRelated>(
     pool: &DbPool,
 ) -> Result<(), sqlx::Error> {
     for field_name in sr_fields {
-        // Look up the FK field spec to get the target table name.
-        let field_spec = match T::FIELDS.iter().find(|f| f.name == field_name.as_str()) {
-            Some(f) => f,
-            None => continue, // Unknown field — skip silently.
-        };
-        let fk_target = match field_spec.fk_target {
-            Some(t) => t,
-            None => continue, // Not a FK field — skip silently.
-        };
+        // Nested traversal: `select_related("author__manager")` walks
+        // the hop chain (author → manager → ...) one batched query
+        // per hop, embedding each level's row into the prior level's
+        // JSON. Recursive `ForeignKey<T>::Deserialize` (post-#42)
+        // then unpacks the full chain into `resolved` slots at every
+        // depth in one `hydrate_fk` call on the root parent.
+        if field_name.contains("__") {
+            hydrate_select_related_nested::<T>(rows, field_name, pool).await?;
+            continue;
+        }
+        // Single-hop path: the original behaviour kept byte-for-byte.
+        let field_spec = T::FIELDS
+            .iter()
+            .find(|f| f.name == field_name.as_str())
+            .ok_or_else(|| {
+                sqlx::Error::Protocol(format!(
+                    "umbra::orm::select_related: unknown field `{field_name}` on model `{}`",
+                    T::NAME
+                ))
+            })?;
+        let fk_target = field_spec.fk_target.ok_or_else(|| {
+            sqlx::Error::Protocol(format!(
+                "umbra::orm::select_related: field `{field_name}` on `{}` is not a foreign key",
+                T::NAME
+            ))
+        })?;
 
         // Collect all FK IDs from the main rows via `HydrateRelated::fk_id_for`.
         // This avoids serializing the whole row just to read one integer.
@@ -3738,12 +3775,7 @@ async fn hydrate_select_related<T: Model + HydrateRelated>(
         ids.sort_unstable();
         ids.dedup();
 
-        // Build `SELECT * FROM <target_table> WHERE id IN (...)`.
-        // We use sqlx raw queries here so we can read the rows as JSON
-        // maps via the backup-style column-by-column extraction.
         let related_rows = fetch_related_as_json(fk_target, &ids, pool).await?;
-
-        // Build id → JSON map.
         let id_to_json: HashMap<i64, JsonValue> = related_rows
             .into_iter()
             .filter_map(|obj| {
@@ -3758,12 +3790,155 @@ async fn hydrate_select_related<T: Model + HydrateRelated>(
             })
             .collect();
 
-        // Hydrate each main row.
         for row in rows.iter_mut() {
             if let Some(fk_id) = row.fk_id_for(field_name.as_str()) {
                 if let Some(resolved_json) = id_to_json.get(&fk_id) {
                     row.hydrate_fk(field_name.as_str(), resolved_json);
                 }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Nested `select_related("a__b__c")` traversal. Walks the hop chain
+/// through `crate::migrate::registered_models()` (rather than the
+/// typed `T::FIELDS` after hop 1, since deeper hops live on the
+/// related model whose type isn't in scope here), runs ONE batched
+/// `IN (...)` query per hop, and embeds each level's row into the
+/// prior level's JSON. The root parent then sees one
+/// `hydrate_fk(first_hop, fully_nested_json)` call and the recursive
+/// `ForeignKey<T>::Deserialize` (post-#42) unpacks every depth into
+/// its `resolved` slot.
+///
+/// Query budget = `1 + len(hops)` round-trips. No N+1 — each hop is
+/// one batched query across every parent (and every dedup'd parent of
+/// prior hops). So `select_related("a__b__c")` on N parents takes
+/// 1 (main) + 3 (hops) = 4 queries regardless of N.
+async fn hydrate_select_related_nested<T: Model + HydrateRelated>(
+    rows: &mut [T],
+    path: &str,
+    pool: &DbPool,
+) -> Result<(), sqlx::Error> {
+    let hops: Vec<&str> = path.split("__").filter(|s| !s.is_empty()).collect();
+    if hops.is_empty() {
+        return Ok(());
+    }
+    let registered = crate::migrate::registered_models();
+
+    // Resolve every hop's (from_table, field, to_table) trio up
+    // front so a typo in any hop surfaces before any SQL runs.
+    let mut current_table = T::TABLE;
+    let mut hop_targets: Vec<&str> = Vec::with_capacity(hops.len());
+    for hop in &hops {
+        let meta = registered
+            .iter()
+            .find(|m| m.table == current_table)
+            .ok_or_else(|| {
+                sqlx::Error::Protocol(format!(
+                    "umbra::orm::select_related: model for table `{current_table}` is not registered \
+                     (needed for nested traversal of `{path}`)"
+                ))
+            })?;
+        let col = meta.fields.iter().find(|c| c.name == *hop).ok_or_else(|| {
+            sqlx::Error::Protocol(format!(
+                "umbra::orm::select_related: unknown field `{hop}` on table `{current_table}` \
+                 (full path `{path}`)"
+            ))
+        })?;
+        let target = col.fk_target.as_deref().ok_or_else(|| {
+            sqlx::Error::Protocol(format!(
+                "umbra::orm::select_related: field `{hop}` on table `{current_table}` is not a \
+                 foreign key (full path `{path}`)"
+            ))
+        })?;
+        hop_targets.push(target);
+        current_table = target;
+    }
+
+    // Phase 1: fetch each level's rows top-down, one batched IN
+    // query per hop. `levels[i]` holds the rows at depth i (before
+    // any nesting is embedded), keyed for later lookup by id.
+    let first_field = hops[0];
+    let mut ids: Vec<i64> = rows
+        .iter()
+        .filter_map(|r| r.fk_id_for(first_field))
+        .collect();
+    if ids.is_empty() {
+        return Ok(());
+    }
+    ids.sort_unstable();
+    ids.dedup();
+    let mut levels: Vec<Vec<JsonValue>> = Vec::with_capacity(hops.len());
+    levels.push(fetch_related_as_json(hop_targets[0], &ids, pool).await?);
+
+    for hop_idx in 1..hops.len() {
+        let hop_field = hops[hop_idx];
+        let hop_target = hop_targets[hop_idx];
+        let prev_lvl = &levels[hop_idx - 1];
+        let mut next_ids: Vec<i64> = prev_lvl
+            .iter()
+            .filter_map(|r| r.as_object()?.get(hop_field)?.as_i64())
+            .collect();
+        if next_ids.is_empty() {
+            // The chain bottoms out: the prior level has only NULL
+            // for this hop. Subsequent hops would also be empty;
+            // stop here. Earlier levels still embed below.
+            break;
+        }
+        next_ids.sort_unstable();
+        next_ids.dedup();
+        levels.push(fetch_related_as_json(hop_target, &next_ids, pool).await?);
+    }
+
+    // Phase 2: bottom-up embed. For each level from the second-to-
+    // last down to the first, embed the next level's matching row
+    // into the corresponding `hop_field` slot. By the time we hit
+    // levels[0], its rows carry the full nested chain.
+    if levels.len() > 1 {
+        for i in (0..levels.len() - 1).rev() {
+            let next_by_id: HashMap<i64, JsonValue> = levels[i + 1]
+                .iter()
+                .filter_map(|obj| {
+                    let map = obj.as_object()?;
+                    let id = map.get("id")?.as_i64()?;
+                    Some((id, obj.clone()))
+                })
+                .collect();
+            let hop_field = hops[i + 1];
+            for row in levels[i].iter_mut() {
+                let Some(map) = row.as_object_mut() else {
+                    continue;
+                };
+                let Some(JsonValue::Number(n)) = map.get(hop_field) else {
+                    continue;
+                };
+                let Some(id) = n.as_i64() else { continue };
+                if let Some(next_json) = next_by_id.get(&id) {
+                    map.insert(hop_field.to_string(), next_json.clone());
+                }
+            }
+        }
+    }
+
+    // Phase 3: hydrate root parents with the fully-nested level-0
+    // rows. Recursive ForeignKey<T>::Deserialize unpacks the chain
+    // into resolved slots at every depth.
+    let first_by_id: HashMap<i64, JsonValue> = levels
+        .into_iter()
+        .next()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|obj| {
+            let map = obj.as_object()?;
+            let id = map.get("id")?.as_i64()?;
+            Some((id, obj.clone()))
+        })
+        .collect();
+    for row in rows.iter_mut() {
+        if let Some(id) = row.fk_id_for(first_field) {
+            if let Some(json) = first_by_id.get(&id) {
+                row.hydrate_fk(first_field, json);
             }
         }
     }
@@ -3988,21 +4163,28 @@ async fn fetch_related_as_json(
 
 /// Convert a SQLite row to a `serde_json::Value::Object`. Reads every column
 /// by index and maps the SQLite type to the closest JSON primitive.
+///
+/// Type-cascade uses `Option<T>` for every decode so a NULL column
+/// reliably maps to `JsonValue::Null` instead of getting silently
+/// coerced to `0` / `false` / etc. The pre-#42 cascade used bare
+/// `try_get::<i64>` which SQLite affinity coerces from NULL to 0 —
+/// fine when the row never had nullable integer-shaped columns, but
+/// wrong as soon as a nullable FK was in scope (the nested
+/// `select_related` traversal hit this immediately).
 fn sqlite_row_to_json(row: &sqlx::sqlite::SqliteRow) -> JsonValue {
     use sqlx::Row;
     let mut map = serde_json::Map::new();
-    let cols = row.columns();
-    for col in cols {
+    for col in row.columns() {
         let name = col.name().to_string();
-        // Try the types from most to least specific.
-        let val: JsonValue = if let Ok(v) = row.try_get::<i64, _>(col.ordinal()) {
-            JsonValue::Number(v.into())
-        } else if let Ok(v) = row.try_get::<f64, _>(col.ordinal()) {
-            serde_json::json!(v)
-        } else if let Ok(v) = row.try_get::<bool, _>(col.ordinal()) {
-            JsonValue::Bool(v)
-        } else if let Ok(v) = row.try_get::<String, _>(col.ordinal()) {
-            JsonValue::String(v)
+        let ord = col.ordinal();
+        let val: JsonValue = if let Ok(opt) = row.try_get::<Option<i64>, _>(ord) {
+            opt.map_or(JsonValue::Null, |v| JsonValue::Number(v.into()))
+        } else if let Ok(opt) = row.try_get::<Option<f64>, _>(ord) {
+            opt.map_or(JsonValue::Null, |v| serde_json::json!(v))
+        } else if let Ok(opt) = row.try_get::<Option<bool>, _>(ord) {
+            opt.map_or(JsonValue::Null, JsonValue::Bool)
+        } else if let Ok(opt) = row.try_get::<Option<String>, _>(ord) {
+            opt.map_or(JsonValue::Null, JsonValue::String)
         } else {
             JsonValue::Null
         };
@@ -4011,21 +4193,24 @@ fn sqlite_row_to_json(row: &sqlx::sqlite::SqliteRow) -> JsonValue {
     JsonValue::Object(map)
 }
 
-/// Convert a Postgres row to a `serde_json::Value::Object`.
+/// Convert a Postgres row to a `serde_json::Value::Object`. See the
+/// note on `sqlite_row_to_json` — same `Option<T>`-first cascade so
+/// NULL columns map to `JsonValue::Null` rather than the type's
+/// default (`0`, `false`, `""`).
 fn postgres_row_to_json(row: &sqlx::postgres::PgRow) -> JsonValue {
     use sqlx::Row;
     let mut map = serde_json::Map::new();
-    let cols = row.columns();
-    for col in cols {
+    for col in row.columns() {
         let name = col.name().to_string();
-        let val: JsonValue = if let Ok(v) = row.try_get::<i64, _>(col.ordinal()) {
-            JsonValue::Number(v.into())
-        } else if let Ok(v) = row.try_get::<f64, _>(col.ordinal()) {
-            serde_json::json!(v)
-        } else if let Ok(v) = row.try_get::<bool, _>(col.ordinal()) {
-            JsonValue::Bool(v)
-        } else if let Ok(v) = row.try_get::<String, _>(col.ordinal()) {
-            JsonValue::String(v)
+        let ord = col.ordinal();
+        let val: JsonValue = if let Ok(opt) = row.try_get::<Option<i64>, _>(ord) {
+            opt.map_or(JsonValue::Null, |v| JsonValue::Number(v.into()))
+        } else if let Ok(opt) = row.try_get::<Option<f64>, _>(ord) {
+            opt.map_or(JsonValue::Null, |v| serde_json::json!(v))
+        } else if let Ok(opt) = row.try_get::<Option<bool>, _>(ord) {
+            opt.map_or(JsonValue::Null, JsonValue::Bool)
+        } else if let Ok(opt) = row.try_get::<Option<String>, _>(ord) {
+            opt.map_or(JsonValue::Null, JsonValue::String)
         } else {
             JsonValue::Null
         };

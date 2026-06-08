@@ -250,13 +250,58 @@ where
     }
 }
 
-impl<'de, T: Model> Deserialize<'de> for ForeignKey<T>
+impl<'de, T: Model + serde::de::DeserializeOwned> Deserialize<'de> for ForeignKey<T>
 where
-    T::PrimaryKey: Deserialize<'de>,
+    T::PrimaryKey: serde::de::DeserializeOwned,
 {
+    /// Accepts BOTH shapes:
+    /// - a scalar (number / string) → the FK's raw PK value, with
+    ///   `resolved: None`. The pre-#42 shape; preserves backward
+    ///   compatibility with every `serde_json::from_str` site that
+    ///   reads an unresolved FK from JSON.
+    /// - a JSON object → parse as `T`, extract the PK out of the
+    ///   object, store both. This is what makes the nested
+    ///   `select_related("author__manager")` traversal work: the
+    ///   hydration path builds a nested object with the manager
+    ///   already embedded inside author, calls
+    ///   `parent.hydrate_fk("author", nested_json)`, and recursive
+    ///   Deserialize through this impl populates the chain end-to-end.
+    ///   Side benefit: a select_related'd model now round-trips
+    ///   through `serde_json::to_value(&t)` / `from_value` without
+    ///   losing the resolved relation.
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let raw = T::PrimaryKey::deserialize(d)?;
-        Ok(Self::new(raw))
+        use serde::de::Error;
+        let v = serde_json::Value::deserialize(d)?;
+        match v {
+            serde_json::Value::Object(_) => {
+                // PK field name comes from the Model's FIELDS table.
+                // Falls back to "id" if no primary_key flag is set
+                // (every umbra model has one by derive contract; the
+                // fallback is just defensive).
+                let pk_name = T::FIELDS
+                    .iter()
+                    .find(|f| f.primary_key)
+                    .map(|f| f.name)
+                    .unwrap_or("id");
+                let pk_v = v.get(pk_name).cloned().ok_or_else(|| {
+                    D::Error::custom(format!(
+                        "ForeignKey<{}>: nested object missing pk field `{pk_name}`",
+                        T::NAME
+                    ))
+                })?;
+                let raw: T::PrimaryKey = serde_json::from_value(pk_v).map_err(D::Error::custom)?;
+                let resolved: T = serde_json::from_value(v).map_err(D::Error::custom)?;
+                Ok(Self {
+                    raw,
+                    resolved: Some(Box::new(resolved)),
+                    _phantom: PhantomData,
+                })
+            }
+            other => {
+                let raw: T::PrimaryKey = serde_json::from_value(other).map_err(D::Error::custom)?;
+                Ok(Self::new(raw))
+            }
+        }
     }
 }
 
