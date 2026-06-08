@@ -54,9 +54,17 @@
    Active filter chips (above the table). One chip per (field, value);
    each chip's `x` removes only that filter and keeps the rest, so the
    chip row matches the dialog's multi-filter shape.
+
+   #115: the wrapper `<div id="dt-active-filters-strip">` is ALWAYS
+   rendered (even with zero chips), so the `hx-swap-oob` block in
+   rows_fragment.html — which re-renders this strip on every filter
+   change — always has a target to land on. Removing a chip then
+   refreshes both the table body AND this strip; previously the
+   strip stayed visible with stale chips because it sat outside the
+   `#table-body` swap region.
    ================================================================ #}
-{% if active_filters and active_filters | length > 0 %}
-<div class="flex flex-wrap items-center gap-xs mb-sm">
+<div id="dt-active-filters-strip" class="flex flex-wrap items-center gap-xs {% if active_filters and active_filters | length > 0 %}mb-sm{% endif %}">
+  {% if active_filters and active_filters | length > 0 %}
   <span class="font-label-sm text-label-sm text-outline uppercase tracking-wider">Active filters:</span>
   {% for af in active_filters %}
   {# The handler precomputes `remove_qs` — the `&filter_<f>=<v>` tail
@@ -82,8 +90,8 @@
     </a>
   </div>
   {% endfor %}
+  {% endif %}
 </div>
-{% endif %}
 
 {# ================================================================
    Header bar: model name + count + Add button

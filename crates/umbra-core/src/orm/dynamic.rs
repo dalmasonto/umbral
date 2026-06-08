@@ -1574,6 +1574,25 @@ fn form_str_to_sea_value(col: &Column, raw: &str) -> Result<SeaValue, WriteError
             field: col.name.clone(),
         });
     }
+    // #116: JSON / Array columns must PARSE the form string so the
+    // typed input becomes a real JsonValue::Object / Array / etc.
+    // Pre-fix every form value was wrapped as JsonValue::String —
+    // typing `{"k": 1}` into a JSON textarea stored the literal
+    // text `"\"{\\\"k\\\": 1}\""` rather than the object.
+    //
+    // serde_json::from_str rejects unbalanced braces / missing
+    // quotes / etc.; we surface that as a WriteError::Validator so
+    // the admin's inline error renders "Not valid JSON: <reason>"
+    // instead of either silently storing junk OR crashing the
+    // write with a raw sqlx Protocol error downstream.
+    if matches!(col.ty, SqlType::Json | SqlType::Array(_)) {
+        let parsed: serde_json::Value =
+            serde_json::from_str(raw).map_err(|e| WriteError::Validator {
+                field: col.name.clone(),
+                message: format!("Not valid JSON: {e}"),
+            })?;
+        return json_to_sea_value(col.ty, &parsed, col.nullable, &col.name);
+    }
     let json = serde_json::Value::String(raw.to_string());
     json_to_sea_value(col.ty, &json, col.nullable, &col.name)
 }

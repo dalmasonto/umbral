@@ -453,3 +453,86 @@ async fn test_rows_htmx_fragment_only() {
         "redirect target should be the changelist; got: {location}"
     );
 }
+
+/// Gap #115 regression: removing a filter must update the
+/// "Active filters:" chip strip, not just the table rows.
+///
+/// Before the fix: the chip strip lived OUTSIDE `#table-body`, the
+/// HTMX swap target. Clicking the x on a chip refreshed the rows
+/// but left the chip strip visible with the just-removed chip
+/// still showing. The fix: rows_fragment.html emits an OOB
+/// (`hx-swap-oob="outerHTML"`) block targeting `#dt-active-filters-strip`
+/// so the strip updates in lock-step with the row swap.
+///
+/// This test exercises three transitions:
+///   1) Initial filter-applied request → strip contains "published"
+///      chip + the OOB swap marker.
+///   2) Same endpoint with the filter removed → strip wrapper is
+///      empty (no chip text, no "Active filters:" label).
+///   3) The OOB swap wrapper is ALWAYS rendered (even when empty),
+///      so subsequent OOB swaps still have a target.
+#[tokio::test]
+async fn test_chip_strip_oob_swap_clears_when_filter_removed() {
+    let router = boot().await.clone();
+    let session = login_session(router.clone(), "dt_admin", "password123").await;
+
+    // (1) Filter applied — strip should have the chip + OOB marker.
+    let req_with_filter = Request::builder()
+        .uri("/admin/post/rows?filter_published=true&page_size=10")
+        .header(header::COOKIE, format!("umbra_session={session}"))
+        .header("hx-request", "true")
+        .body(Body::empty())
+        .unwrap();
+    let (status, body) = send(router.clone(), req_with_filter).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body.contains(r#"id="dt-active-filters-strip""#),
+        "OOB wrapper must be present so HTMX has a target: {}",
+        &body[..body.len().min(2000)]
+    );
+    assert!(
+        body.contains(r#"hx-swap-oob="outerHTML""#),
+        "OOB swap directive must be present so the strip updates with the rows: {}",
+        &body[..body.len().min(2000)]
+    );
+    assert!(
+        body.contains("Active filters:"),
+        "label must be present when at least one filter is active: {}",
+        &body[..body.len().min(2000)]
+    );
+
+    // (2) Same endpoint with the filter removed — strip should
+    //     come back EMPTY (no label, no chip text) but still
+    //     present so future OOB swaps land.
+    let req_without_filter = Request::builder()
+        .uri("/admin/post/rows?page_size=10")
+        .header(header::COOKIE, format!("umbra_session={session}"))
+        .header("hx-request", "true")
+        .body(Body::empty())
+        .unwrap();
+    let (status2, body2) = send(router.clone(), req_without_filter).await;
+    assert_eq!(status2, StatusCode::OK);
+    // Wrapper still rendered.
+    assert!(
+        body2.contains(r#"id="dt-active-filters-strip""#),
+        "wrapper must persist even with zero filters so the next OOB swap has a target"
+    );
+    assert!(
+        body2.contains(r#"hx-swap-oob="outerHTML""#),
+        "OOB directive must still be present"
+    );
+    // Label gone — "Active filters:" must NOT appear inside the strip.
+    // Find the strip block and assert the label isn't in it.
+    let strip_start = body2
+        .find(r#"id="dt-active-filters-strip""#)
+        .expect("wrapper present");
+    // Look at the next ~600 chars (enough for one chip + closing
+    // </div>). When the strip is empty, this slice has no "Active
+    // filters:" text.
+    let strip_window = &body2[strip_start..body2.len().min(strip_start + 600)];
+    assert!(
+        !strip_window.contains("Active filters:"),
+        "with no active filters, the label MUST NOT appear inside the \
+         OOB strip — chip-removal regression. Strip window:\n{strip_window}"
+    );
+}

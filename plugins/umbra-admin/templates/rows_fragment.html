@@ -15,6 +15,46 @@
    for the rationale (HashMap-based extractor collapses repeated keys). #}
 {% set filter_qs = filter_qs | default("") %}
 
+{#
+  #115: out-of-band swap of the active-filters chip strip. The HTMX
+  triggers that target `#table-body` (filter dialog Apply, chip x,
+  search input, sort/page change) all bring back this fragment, so
+  the OOB block lets the chip strip update in lock-step with the
+  row swap without the trigger having to remember to refresh both
+  elements explicitly.
+
+  When `active_filters` is empty the OOB block emits an EMPTY
+  wrapper — the strip's contents vanish but the wrapper div stays
+  in place (with the same id), so subsequent OOB swaps still have a
+  target.
+#}
+<div id="dt-active-filters-strip"
+     hx-swap-oob="outerHTML"
+     class="flex flex-wrap items-center gap-xs {% if active_filters and active_filters | length > 0 %}mb-sm{% endif %}">
+  {% if active_filters and active_filters | length > 0 %}
+  <span class="font-label-sm text-label-sm text-outline uppercase tracking-wider">Active filters:</span>
+  {% for af in active_filters %}
+  {% set remove_url -%}
+    {{ admin_base }}/{{ table }}/rows?search={{ search_val | urlencode }}&sort={{ sort_col | urlencode }}&order={{ sort_order | urlencode }}{{ af.remove_qs | default("") }}
+  {%- endset %}
+  <div class="inline-flex items-center gap-xs bg-primary-container/10 border border-primary/20 text-primary px-sm py-xs rounded-full font-label-sm text-label-sm">
+    <span class="text-on-surface-variant">{{ af.field | replace("_", " ") }}:</span>
+    <span>{{ af.display | default(af.value) }}</span>
+    <a
+      href="{{ remove_url }}"
+      hx-get="{{ remove_url }}"
+      hx-target="#table-body"
+      hx-swap="innerHTML"
+      hx-push-url="true"
+      aria-label="Remove filter {{ af.field }}"
+    >
+      <i data-lucide="x" class="w-3 h-3 cursor-pointer hover:text-on-primary-container transition-colors"></i>
+    </a>
+  </div>
+  {% endfor %}
+  {% endif %}
+</div>
+
 {% if rows %}
   {% for row in rows %}
   <tr
