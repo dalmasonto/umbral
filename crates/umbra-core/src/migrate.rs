@@ -2717,11 +2717,55 @@ fn render_operation_sqlite(op: &Operation) -> Vec<String> {
                 .build(SqliteQueryBuilder),
         ],
         Operation::AddColumn { table, column } => {
-            let mut stmt = Table::alter();
-            stmt.table(Alias::new(table));
-            let mut def = build_column_def_sqlite(column);
-            stmt.add_column(&mut def);
-            let mut stmts = vec![stmt.build(SqliteQueryBuilder)];
+            // SQLite-specific limitation: `ALTER TABLE ADD COLUMN`
+            // requires a CONSTANT default. `CURRENT_TIMESTAMP` is
+            // non-constant ("Cannot add a column with non-constant
+            // default"). So when we're adding a NOT NULL auto_now /
+            // auto_now_add column on top of an existing table, we
+            // emit a two-statement sequence:
+            //   1. ADD COLUMN as NULLABLE (no default needed).
+            //   2. UPDATE every existing row to `datetime('now')`.
+            // The column ends up NULL-permitting at the DB level on
+            // SQLite — but the Rust type stays `DateTime<Utc>` (not
+            // Option), and every INSERT through the ORM supplies a
+            // value via the macro-emitted auto_now arm. The DB-side
+            // NOT NULL guarantee is lost only for direct-SQL writers,
+            // which umbra already discourages (see CLAUDE.md "Plugins
+            // use the ORM"). Postgres has no such restriction —
+            // `DEFAULT now()` works there in ALTER, no backfill
+            // statement needed (see the Postgres render below).
+            let needs_backfill = (column.auto_now || column.auto_now_add)
+                && !column.nullable
+                && matches!(
+                    column.ty,
+                    SqlType::Timestamptz | SqlType::Date | SqlType::Time
+                );
+
+            let mut stmts = if needs_backfill {
+                let mut nullable_col = column.clone();
+                nullable_col.nullable = true;
+                let mut stmt = Table::alter();
+                stmt.table(Alias::new(table));
+                let mut def = build_column_def_sqlite(&nullable_col);
+                stmt.add_column(&mut def);
+                let add_sql = stmt.build(SqliteQueryBuilder);
+
+                // Manual UPDATE — sea-query's update builder is
+                // overkill for a single SET col = datetime('now').
+                let table_quoted = table.replace('"', "\"\"");
+                let col_quoted = column.name.replace('"', "\"\"");
+                let backfill_sql = format!(
+                    "UPDATE \"{table_quoted}\" SET \"{col_quoted}\" = datetime('now') \
+                     WHERE \"{col_quoted}\" IS NULL"
+                );
+                vec![add_sql, backfill_sql]
+            } else {
+                let mut stmt = Table::alter();
+                stmt.table(Alias::new(table));
+                let mut def = build_column_def_sqlite(column);
+                stmt.add_column(&mut def);
+                vec![stmt.build(SqliteQueryBuilder)]
+            };
             if column.index && !column.primary_key && !column.unique {
                 stmts.push(create_index_stmt(table, &column.name));
             }
@@ -3323,6 +3367,16 @@ fn build_column_def_sqlite(col: &Column) -> sea_query::ColumnDef {
             def.default(col.default.clone());
         }
     }
+    // NOTE: auto_now / auto_now_add deliberately does NOT emit a
+    // `DEFAULT CURRENT_TIMESTAMP` here. SQLite rejects non-constant
+    // defaults in `ALTER TABLE ADD COLUMN` ("Cannot add a column
+    // with non-constant default") and that's the path that matters
+    // for evolving an existing table. The SQLite `AddColumn` render
+    // path handles the auto_now backfill via a two-statement
+    // sequence (nullable ADD + UPDATE backfill). On CREATE TABLE
+    // we don't need a default at all because every INSERT goes
+    // through the macro-emitted Rust path which always supplies the
+    // value. See `Operation::AddColumn` render below.
     def
 }
 
@@ -3455,6 +3509,15 @@ fn build_column_def_postgres(col: &Column) -> sea_query::ColumnDef {
     // default or a separate backfill.
     if !col.default.is_empty() {
         def.default(col.default.clone());
+    } else if (col.auto_now || col.auto_now_add)
+        && matches!(col.ty, SqlType::Timestamptz | SqlType::Date | SqlType::Time)
+    {
+        // Mirror of the SQLite branch above. Without a DEFAULT
+        // Postgres rejects `ALTER TABLE ADD COLUMN ... NOT NULL`
+        // on a populated table. `now()` evaluates per-row during
+        // the backfill so every existing row gets a sane value;
+        // future INSERTs override via the macro-emitted Rust path.
+        def.default(sea_query::Expr::cust("now()"));
     }
     def
 }
@@ -4153,6 +4216,106 @@ mod tests {
             assert!(
                 ix.to_uppercase().contains("IF NOT EXISTS"),
                 "{backend}: should be idempotent via IF NOT EXISTS; got: {ix}",
+            );
+        }
+    }
+
+    /// Regression: adding an `auto_now` / `auto_now_add` column to an
+    /// existing populated table.
+    ///
+    ///   - SQLite: a 2-statement sequence (nullable ADD + UPDATE
+    ///     backfill) since SQLite refuses non-constant defaults in
+    ///     ALTER. The column ends up nullable at the DB level;
+    ///     Rust still enforces non-null at the type level.
+    ///   - Postgres: a single ALTER with `DEFAULT now()` — Postgres
+    ///     allows the non-constant default and backfills inline.
+    #[test]
+    fn auto_now_add_column_renders_safe_backfill_per_backend() {
+        for (label, auto_now, auto_now_add) in [
+            ("auto_now", true, false),
+            ("auto_now_add", false, true),
+        ] {
+            let col = Column {
+                name: "updated_at".to_string(),
+                ty: SqlType::Timestamptz,
+                primary_key: false,
+                nullable: false,
+                fk_target: None,
+                noform: false,
+                noedit: false,
+                is_string_repr: false,
+                max_length: 0,
+                choices: Vec::new(),
+                choice_labels: Vec::new(),
+                default: String::new(),
+                is_multichoice: false,
+                unique: false,
+                on_delete: crate::orm::FkAction::NoAction,
+                on_update: crate::orm::FkAction::NoAction,
+                index: false,
+                auto_now_add,
+                auto_now,
+                help: String::new(),
+                example: String::new(),
+                supported_backends: Vec::new(),
+                min: None,
+                max: None,
+                text_format: None,
+                slug_from: None,
+            };
+
+            // SQLite: the AddColumn op must produce TWO statements:
+            // an ADD COLUMN nullable + an UPDATE backfill. The ADD
+            // must NOT carry `NOT NULL` (otherwise SQLite rejects
+            // it on the populated rows), and must NOT carry a
+            // DEFAULT (otherwise SQLite rejects the non-constant).
+            let op = Operation::AddColumn {
+                table: "customer".to_string(),
+                column: col.clone(),
+            };
+            let stmts = render_operation_sqlite(&op);
+            assert_eq!(
+                stmts.len(),
+                2,
+                "{label} SQLite: must emit ADD + UPDATE, got: {stmts:?}",
+            );
+            let add_sql = stmts[0].to_uppercase();
+            assert!(
+                add_sql.contains("ADD COLUMN"),
+                "{label} SQLite: first stmt must be ADD COLUMN, got: {}",
+                stmts[0],
+            );
+            assert!(
+                !add_sql.contains("NOT NULL"),
+                "{label} SQLite: ADD COLUMN must be nullable (NOT NULL = SQLite reject), got: {}",
+                stmts[0],
+            );
+            assert!(
+                !add_sql.contains("DEFAULT"),
+                "{label} SQLite: ADD COLUMN must omit DEFAULT (non-constant = SQLite reject), got: {}",
+                stmts[0],
+            );
+            let backfill_sql = &stmts[1];
+            assert!(
+                backfill_sql.contains("UPDATE") && backfill_sql.contains("datetime('now')"),
+                "{label} SQLite: second stmt must be backfill UPDATE, got: {backfill_sql}",
+            );
+
+            // Postgres: single ALTER with NOT NULL + DEFAULT now().
+            let pstmts = render_operation_postgres(&op);
+            assert_eq!(
+                pstmts.len(),
+                1,
+                "{label} Postgres: single statement suffices, got: {pstmts:?}",
+            );
+            let p = &pstmts[0];
+            assert!(
+                p.to_lowercase().contains("default now()"),
+                "{label} Postgres: expected DEFAULT now() in ALTER, got: {p}",
+            );
+            assert!(
+                p.to_uppercase().contains("NOT NULL"),
+                "{label} Postgres: keeps NOT NULL (Postgres allows non-constant defaults), got: {p}",
             );
         }
     }
