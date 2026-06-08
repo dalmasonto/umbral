@@ -24,7 +24,7 @@ use crate::widgets::{
 /// `Models by plugin` bar chart — counts every model the migration
 /// registry knows about, grouped by plugin. Cheap to compute and
 /// always present.
-pub(crate) fn builtin_total_models_widget() -> Widget {
+pub fn builtin_total_models_widget() -> Widget {
     Widget {
         key: "umbra_total_models",
         title: "Models by Plugin".to_string(),
@@ -91,7 +91,7 @@ fn models_by_plugin_points() -> Vec<ChartPoint> {
 /// `AuthPlugin::<U>` registers, not just the built-in `AuthUser`. If
 /// the registry doesn't know about an `auth_user` table (the
 /// degraded-install case), the widget returns an empty feed.
-pub(crate) fn builtin_recent_users_widget() -> Widget {
+pub fn builtin_recent_users_widget() -> Widget {
     Widget {
         key: "umbra_recent_users",
         title: "Recent Signups".to_string(),

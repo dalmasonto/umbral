@@ -106,16 +106,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         .icon("users")
                         .password_field("password_hash"),
                 )
-                // Four shop-facing card widgets — the everyday tiles
-                // the operator sees on dashboard login. Each is a
-                // simple `Widget::card` registration with an async
-                // data closure that hits the ORM and builds a
-                // `CardPayload`. Numbers go through `humanize_number`
-                // so "12,438" becomes "12.4K" when space is tight.
+                // Dashboard widgets in render order. The two
+                // builtins ship from umbra-admin as plain Widget
+                // constructors — register them where you want them
+                // to appear and override the grid span via
+                // `.with_span(cols, rows)`. We put the four shop
+                // KPI cards on top (most-watched daily), then the
+                // bar chart, then recent signups feed at the
+                // bottom.
                 .register_widget(shop_total_sales_widget())
                 .register_widget(shop_orders_widget())
                 .register_widget(shop_customers_widget())
-                .register_widget(shop_avg_order_value_widget()),
+                .register_widget(shop_avg_order_value_widget())
+                .register_widget(
+                    umbra_admin::builtin_total_models_widget().with_span(8, 2),
+                )
+                .register_widget(
+                    umbra_admin::builtin_recent_users_widget().with_span(4, 2),
+                ),
         )
         // REST: three resources, three different auth + permission
         // postures, plus per-resource field-exposure controls. The

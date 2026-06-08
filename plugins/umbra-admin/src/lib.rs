@@ -80,6 +80,13 @@ pub use config::{
     AdminModel, InlineModel, ToastLevel,
 };
 pub use registry::{AdminRegistration, AdminRegistry, App as AdminApp};
+// The two builtin dashboard widgets — `Models by Plugin` (bar)
+// and `Recent Signups` (feed). Used to be auto-prepended to the
+// catalog; now exposed as public functions so the caller can
+// register them at the position they want and resize via
+// `.with_span(cols, rows)`. See `AdminPlugin::register_widget`
+// for the wiring shape.
+pub use handlers::dashboard::{builtin_recent_users_widget, builtin_total_models_widget};
 pub use widgets::{
     BarPayload, CardPayload, CatalogEntry, ChartPoint, FeedItem, FeedPayload, KpiPayload,
     LinePayload, Series, Span, TableColumn, TablePayload, Widget, WidgetDataFn, WidgetInstance,
@@ -317,13 +324,19 @@ impl Plugin for AdminPlugin {
         sealed_branding.base_path = self.base_path.clone();
         let _ = branding::BRANDING.set(sealed_branding);
 
-        // Seed the catalog with the two built-in widgets, then append
-        // developer-registered ones.
-        let mut catalog = vec![
-            handlers::dashboard::builtin_total_models_widget(),
-            handlers::dashboard::builtin_recent_users_widget(),
-        ];
-        catalog.extend(self.widget_catalog.iter().cloned());
+        // The catalog is exactly what the developer registered via
+        // `.register_widget(...)`, in registration order. The two
+        // builtins (`builtin_total_models_widget`,
+        // `builtin_recent_users_widget`) used to auto-prepend here
+        // — that was removed so callers control ordering AND can
+        // resize via `.with_span(cols, rows)`. To get the old
+        // behaviour:
+        //
+        //   AdminPlugin::default()
+        //     .register_widget(umbra_admin::builtin_total_models_widget())
+        //     .register_widget(umbra_admin::builtin_recent_users_widget())
+        //     ...your widgets...
+        let catalog: Vec<Widget> = self.widget_catalog.clone();
 
         let state = AdminState {
             registry: Arc::new(self.registry.clone()),

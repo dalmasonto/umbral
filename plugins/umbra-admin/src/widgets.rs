@@ -418,6 +418,24 @@ pub struct Widget {
     pub data: WidgetDataFn,
 }
 
+impl Widget {
+    /// Override the default grid span. Lets a caller resize a
+    /// builtin (or any pre-built widget) at registration time
+    /// without having to re-construct the whole struct literal:
+    ///
+    /// ```rust,ignore
+    /// .register_widget(builtin_total_models_widget().with_span(6, 2))
+    /// .register_widget(builtin_recent_users_widget().with_span(6, 2))
+    /// ```
+    ///
+    /// `cols` is clamped at the 12-col grid; `rows` is whatever
+    /// the dashboard's `auto-rows-[...]` accepts (1 = 120px).
+    pub fn with_span(mut self, cols: u8, rows: u8) -> Self {
+        self.default_span = Span { cols, rows };
+        self
+    }
+}
+
 // =========================================================================
 // WidgetInstance (user's saved layout entry)
 // =========================================================================

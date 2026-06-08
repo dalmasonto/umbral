@@ -59,7 +59,15 @@ async fn boot() -> &'static axum::Router {
             .database("default", pool_obj)
             .plugin(AuthPlugin::<AuthUser>::default())
             .plugin(SessionsPlugin::default().without_auto_layer())
-            .plugin(AdminPlugin::default().register_widget(custom_widget))
+            // Builtins are now opt-in (used to auto-prepend). The
+            // test exercises the catalog endpoint with all three
+            // shapes registered: both builtins + a custom widget.
+            .plugin(
+                AdminPlugin::default()
+                    .register_widget(umbra_admin::builtin_total_models_widget())
+                    .register_widget(umbra_admin::builtin_recent_users_widget())
+                    .register_widget(custom_widget),
+            )
             .build()
             .expect("App::build");
 
