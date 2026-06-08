@@ -124,7 +124,7 @@ let children = Category::objects()
 
 ## One-to-one relationships
 
-Django's `OneToOneField` is `ForeignKey(unique=True)` underneath. Umbra spells it the same way - pair `ForeignKey<T>` with `#[umbra(unique)]` and the column gets both `REFERENCES "<target>"("id")` and `UNIQUE`. Only one row in the referencing table may reference any given target row.
+Django's `OneToOneField` is `ForeignKey(unique=True)` underneath. Umbra spells it the same way on the **child** (referencing) side — pair `ForeignKey<T>` with `#[umbra(unique)]` and the column gets both `REFERENCES "<target>"("id")` and `UNIQUE`. Only one row in the referencing table may reference any given target row.
 
 ```rust
 #[derive(Model)]
@@ -132,8 +132,9 @@ pub struct Profile {
     pub id: i64,
     // Each user has at most one profile.
     #[umbra(unique, on_delete = "cascade")]
-    pub user_id: ForeignKey<AuthUser>,
+    pub user: ForeignKey<AuthUser>,
     pub bio: String,
+    pub avatar: String,
 }
 ```
 
@@ -142,14 +143,82 @@ The generated DDL:
 ```sql
 CREATE TABLE "profile" (
   "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
-  "user_id" bigint NOT NULL UNIQUE REFERENCES "auth_user"("id") ON DELETE CASCADE,
-  "bio" text NOT NULL
+  "user" bigint NOT NULL UNIQUE REFERENCES "auth_user"("id") ON DELETE CASCADE,
+  "bio" text NOT NULL,
+  "avatar" text NOT NULL
 )
 ```
 
-Why no dedicated `OneToOne<T>` type? The DB-level shape is identical to a FK + UNIQUE; the type-level guarantee a wrapper would give you (only one slot per target row) is already enforced by the constraint. A future `OneToOne<T>` wrapper that adds eager-loading ergonomics (`profile.user_resolved()`) lands when there's a real consumer asking for it; the attribute-based pattern works fine today.
+### Reading from the child side
 
-To fetch the related row, query the FK side with `.filter(profile::USER_ID.eq(user.id)).first()` - the UNIQUE constraint guarantees at most one match.
+The FK is a regular `ForeignKey<AuthUser>`, so `select_related` works the same as any other FK:
+
+```rust
+let profile = Profile::objects()
+    .select_related("user")
+    .get(profile::USER.eq(user.id))
+    .await?;
+// profile.user.resolved() → Some(&AuthUser)
+```
+
+### Reading from the parent side — `OneToOne<C>`
+
+Django's pattern `request.user.profile.avatar` reads the relation from the **parent**. Umbra ships a dedicated `OneToOne<C>` field type for this — declared on the parent, with no umbra-specific attribute (the back-link is discovered at runtime by scanning the child's `FIELDS` for the unique FK pointing back at the parent):
+
+```rust
+#[derive(Model)]
+pub struct AuthUser {
+    pub id: i64,
+    pub username: String,
+    // No `#[umbra(...)]` needed. The framework finds Profile's
+    // `#[umbra(unique)] pub user: ForeignKey<AuthUser>` at runtime.
+    #[sqlx(skip)]
+    pub profile: OneToOne<Profile>,
+}
+```
+
+Load it explicitly with `prefetch_related`:
+
+```rust
+let user = AuthUser::objects()
+    .prefetch_related("profile")
+    .get(auth_user::ID.eq(1))
+    .await?;
+
+// user.profile.resolved() → Option<&Profile>
+if let Some(profile) = user.profile.resolved() {
+    println!("{}", profile.avatar);
+}
+```
+
+Query budget: 1 (users) + 1 (profiles) regardless of how many users come back — no N+1.
+
+In a template the serialised user has the profile as a nested object (or `null`), so `{{ user.profile.avatar }}` works directly:
+
+```rust
+serde_json::to_value(&user)["profile"]["avatar"]  // → "alice.png"
+```
+
+### Loaded vs unloaded
+
+`OneToOne<C>::resolved()` returns `None` both when prefetch wasn't called *and* when prefetch ran but found no matching child. Use `is_loaded()` to distinguish the two:
+
+```rust
+if !user.profile.is_loaded() {
+    // never called .prefetch_related("profile")
+}
+if user.profile.is_loaded() && user.profile.resolved().is_none() {
+    // prefetched, but this user has no profile row
+}
+```
+
+### Ambiguity errors
+
+The back-link discovery requires **exactly one** UNIQUE FK on the child pointing at the parent. If the child has two unique FKs to the same parent (rare but possible), `prefetch_related` errors loudly naming the candidates and suggesting you either rename one or drop the `unique` attribute. If the child has *no* unique FK to the parent, the error tells you to add `#[umbra(unique)]`.
+
+### Unique-constraint violations in the admin
+
+Trying to create a second `Profile` for a user who already has one trips the UNIQUE constraint. The admin surfaces this as **"A record with this `user` already exists."** rather than a generic "database error" — the column name comes from the parser in `umbra-admin/src/util.rs::parse_unique_violation_column`, which handles both SQLite (`UNIQUE constraint failed: profile.user`) and Postgres (`Key (user)=(7) already exists.`) message formats.
 
 ## Querying with a foreign key
 

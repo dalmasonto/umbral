@@ -54,17 +54,128 @@ pub(crate) fn is_htmx(headers: &HeaderMap) -> bool {
 }
 
 /// Turn an `AdminError` into a string safe to show the user inside an
-/// inline form-error span. SQL errors are logged but never surfaced
-/// verbatim (they leak schema details); everything else passes its
-/// message through.
+/// inline form-error span. SQL errors are logged in full but the
+/// surfaced text is sanitised:
+///   - **UNIQUE constraint violations** translate to "A record with
+///     this `<col>` already exists." so OneToOne / unique-field
+///     duplicates surface a real error instead of "database error".
+///     Parses both backends:
+///       SQLite — "UNIQUE constraint failed: table.col"
+///       Postgres — "duplicate key value violates unique constraint"
+///                  + `Key (col)=(value) already exists.` in detail
+///   - Everything else falls back to the generic "database error" so
+///     no schema details leak (same posture as the original).
 pub(crate) fn sanitise_form_error(e: &AdminError) -> String {
     match e {
         AdminError::Sqlx(sqlx_err) => {
             tracing::error!(error = %sqlx_err, "admin: form submission database error");
+            let msg = sqlx_err.to_string();
+            if let Some(col) = parse_unique_violation_column(&msg) {
+                return format!("A record with this `{col}` already exists.");
+            }
+            if is_unique_violation(&msg) {
+                return "A record with one of these values already exists.".to_string();
+            }
             "database error".to_string()
         }
         AdminError::NotFound(msg) | AdminError::Render(msg) | AdminError::BadInput(msg) => {
             msg.clone()
         }
+    }
+}
+
+/// Try to extract the column name from a UNIQUE constraint error
+/// message. Returns the bare column (`"email"`) without the table
+/// prefix so the user-facing message reads naturally regardless of
+/// table naming.
+///
+/// Patterns recognised:
+///   SQLite     `UNIQUE constraint failed: profile.user`           → `user`
+///   SQLite     `UNIQUE constraint failed: profile.user, profile.x` → `user` (first wins)
+///   Postgres   `Key (user)=(7) already exists.`                    → `user`
+fn parse_unique_violation_column(msg: &str) -> Option<String> {
+    // SQLite — strip everything before "UNIQUE constraint failed: ".
+    if let Some(idx) = msg.find("UNIQUE constraint failed: ") {
+        let tail = &msg[idx + "UNIQUE constraint failed: ".len()..];
+        // First entry only — multi-column UNIQUE produces a comma-
+        // separated list, naming the first column is good enough.
+        let first = tail
+            .split(',')
+            .next()
+            .unwrap_or(tail)
+            .trim()
+            .trim_end_matches(|c: char| c == ')' || c == '"' || c == '\'');
+        // `table.col` → `col`. `col` (no dot) → `col` verbatim.
+        let bare = first.rsplit('.').next().unwrap_or(first);
+        if !bare.is_empty() {
+            return Some(bare.to_string());
+        }
+    }
+    // Postgres detail line: `Key (user)=(7) already exists.`
+    if let Some(idx) = msg.find("Key (") {
+        let tail = &msg[idx + "Key (".len()..];
+        if let Some(end) = tail.find(')') {
+            let col = tail[..end].trim();
+            if !col.is_empty() {
+                return Some(col.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Less precise — true when the message looks like a UNIQUE
+/// violation but we couldn't isolate the column name. Used as a
+/// fallback so the user at least sees "duplicate value" instead of
+/// "database error" when both parsers miss.
+fn is_unique_violation(msg: &str) -> bool {
+    msg.contains("UNIQUE constraint failed")
+        || msg.contains("duplicate key value violates unique constraint")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_unique_violation, parse_unique_violation_column};
+
+    #[test]
+    fn sqlite_unique_violation_extracts_column_after_dot() {
+        let msg =
+            "error returned from database: (code: 2067) UNIQUE constraint failed: profile.user";
+        assert_eq!(parse_unique_violation_column(msg).as_deref(), Some("user"));
+        assert!(is_unique_violation(msg));
+    }
+
+    #[test]
+    fn sqlite_unique_violation_takes_first_column_of_compound_index() {
+        let msg = "UNIQUE constraint failed: post.slug, post.lang";
+        assert_eq!(parse_unique_violation_column(msg).as_deref(), Some("slug"));
+    }
+
+    #[test]
+    fn postgres_unique_violation_extracts_column_from_key_clause() {
+        let msg = "error returned from database: duplicate key value violates unique constraint \
+                   \"profile_user_key\": Key (user)=(7) already exists.";
+        assert_eq!(parse_unique_violation_column(msg).as_deref(), Some("user"));
+        assert!(is_unique_violation(msg));
+    }
+
+    #[test]
+    fn non_unique_error_returns_none() {
+        let msg = "error returned from database: FOREIGN KEY constraint failed";
+        assert!(parse_unique_violation_column(msg).is_none());
+        assert!(!is_unique_violation(msg));
+    }
+
+    #[test]
+    fn fallback_detector_catches_unparseable_unique_errors() {
+        // The detail line is missing but the headline still says
+        // "UNIQUE constraint failed" — `is_unique_violation` should
+        // still flip true so the caller can pick the generic
+        // duplicate message rather than "database error".
+        let msg = "UNIQUE constraint failed";
+        // Column parse fails (no `: table.col`).
+        assert!(parse_unique_violation_column(msg).is_none());
+        // Fallback catches it.
+        assert!(is_unique_violation(msg));
     }
 }
