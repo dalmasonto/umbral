@@ -20,13 +20,118 @@ use crate::handlers;
 use crate::pagination::{Pagination, build_order_clause_phase2, parse_list_params};
 use crate::rows::{count_rows_filtered, fetch_rows_paged};
 use crate::util::is_htmx;
-use crate::view::{model_for_template, model_for_template_cols, sidebar_apps};
+use crate::view::{model_for_template, model_for_template_cols, sidebar_apps, sql_type_name};
+
+/// Resolve a foreign-key id to the related model's display label
+/// (first non-PK text column, same shape the FK picker uses). Returns
+/// `None` for non-FK columns, unresolvable ids, or any DB error —
+/// callers fall back to the raw value.
+async fn resolve_fk_label(
+    parent: &umbra::migrate::ModelMeta,
+    field: &str,
+    raw_id: &str,
+) -> Option<String> {
+    let col = parent.fields.iter().find(|c| c.name == field)?;
+    if !matches!(col.ty, SqlType::ForeignKey) {
+        return None;
+    }
+    let related_table = col
+        .fk_target
+        .clone()
+        .unwrap_or_else(|| field.trim_end_matches("_id").to_string());
+    let (_, related) = find_model(&related_table)?;
+    let pk = related.fields.iter().find(|c| c.primary_key)?;
+    let label_col = related
+        .fields
+        .iter()
+        .find(|c| !c.primary_key && matches!(c.ty, SqlType::Text))
+        .map(|c| c.name.clone())?;
+    let rows = DynQuerySet::for_meta(&related)
+        .select_cols(&[label_col.clone()])
+        .filter_eq_string(&pk.name, raw_id)
+        .limit(1)
+        .fetch_as_strings()
+        .await
+        .ok()?;
+    rows.into_iter()
+        .next()
+        .and_then(|r| r.get(&label_col).cloned())
+}
+
+/// Build the template-facing `active_filters` JSON list, resolving FK
+/// fields to their related-model labels so chips render
+/// `category: Coffee` rather than `category: 1`. Falls back to the
+/// raw value when no label resolves (unknown id, no text column on the
+/// target, or a DB error).
+async fn build_active_filter_list(
+    model: &umbra::migrate::ModelMeta,
+    active_filters: &[(String, String)],
+) -> Vec<serde_json::Value> {
+    let mut out = Vec::with_capacity(active_filters.len());
+    for (field, value) in active_filters {
+        let display = resolve_fk_label(model, field, value)
+            .await
+            .unwrap_or_else(|| value.clone());
+        out.push(serde_json::json!({
+            "field": field,
+            "value": value,
+            "display": display,
+        }));
+    }
+    out
+}
+
+/// Build one [`FilterFacet`] for the dialog. Centralises the
+/// "column type lookup + distinct-value fetch + FK target lookup"
+/// trio so both the changelist handler and the dialog handler share
+/// one path. FK columns skip the distinct-value fetch entirely —
+/// the dialog hits the FK picker endpoint for label-rich options.
+async fn build_facet(model: &umbra::migrate::ModelMeta, field: &str) -> FilterFacet {
+    let col = model.fields.iter().find(|c| c.name == field);
+    let col_type = col
+        .map(|c| sql_type_name(c.ty).to_string())
+        .unwrap_or_default();
+    let related_table = col
+        .filter(|c| matches!(c.ty, SqlType::ForeignKey))
+        .and_then(|c| c.fk_target.clone())
+        .unwrap_or_default();
+    // FK fields use the picker endpoint so the dialog can render
+    // labels, not raw ids. Fetching distinct ids here would be IO
+    // we then throw away.
+    let values = if col_type == "fk" {
+        Vec::new()
+    } else {
+        fetch_distinct_values(&model.table, field)
+            .await
+            .unwrap_or_default()
+    };
+    FilterFacet {
+        field: field.to_string(),
+        col_type,
+        values,
+        related_table,
+    }
+}
 
 /// Template-facing facet — one filter-dialog choice list.
+///
+/// `col_type` is computed on the server so the dialog template can
+/// `{% if facet.col_type == "fk" %}` directly. Jinja's `{% set %}`
+/// inside a `{% for %}` only writes to the loop scope, so the
+/// previous "compute it by iterating `columns`" approach silently
+/// reset to `""` after the loop and the FK branch was unreachable.
 #[derive(Debug, Clone, Serialize)]
 struct FilterFacet {
     field: String,
+    col_type: String,
+    /// Raw distinct values from the DB. For FK fields this list is
+    /// intentionally empty — the dialog loads label-rich options
+    /// from the FK picker endpoint instead of showing raw ids.
     values: Vec<String>,
+    /// FK only: the related table name so the dialog JS can hit
+    /// the right `/admin/api/{table}/{field}/options` endpoint.
+    /// Empty for non-FK fields.
+    related_table: String,
 }
 
 /// `GET /admin` — the dashboard. One card per registered model with a
@@ -189,13 +294,7 @@ pub(crate) async fn list(
     let mut facets: Vec<FilterFacet> = Vec::new();
     if let Some(c) = cfg {
         for field in &c.list_filter {
-            let values = fetch_distinct_values(&model.table, field)
-                .await
-                .unwrap_or_default();
-            facets.push(FilterFacet {
-                field: field.clone(),
-                values,
-            });
+            facets.push(build_facet(&model, field).await);
         }
     }
 
@@ -205,10 +304,7 @@ pub(crate) async fn list(
 
     let has_search = cfg.is_some_and(|c| !c.search_fields.is_empty());
     let search_val = search_term.unwrap_or_default();
-    let active_filter_list: Vec<serde_json::Value> = active_filters
-        .iter()
-        .map(|(f, v)| serde_json::json!({ "field": f, "value": v }))
-        .collect();
+    let active_filter_list = build_active_filter_list(&model, &active_filters).await;
     let apps = sidebar_apps(&state, &user);
     let breadcrumbs = vec![
         serde_json::json!({ "label": model.name.clone(), "url": format!("{}/{table}/", crate::branding::current().base_path) }),
@@ -367,10 +463,7 @@ pub(crate) async fn rows_fragment(
     };
 
     let columns = model_for_template_cols(&model, &display_cols).fields;
-    let active_filter_list: Vec<serde_json::Value> = active_filters
-        .iter()
-        .map(|(f, v)| serde_json::json!({ "field": f, "value": v }))
-        .collect();
+    let active_filter_list = build_active_filter_list(&model, &active_filters).await;
     let search_val = search_term.unwrap_or_default();
 
     let action_names: Vec<serde_json::Value> = cfg
@@ -399,7 +492,20 @@ pub(crate) async fn rows_fragment(
             perms              => perms,
         ),
     ) {
-        Ok(html) => html.into_response(),
+        Ok(html) => {
+            let mut response = html.into_response();
+            // Push the changelist URL (not this /rows partial URL) so the
+            // browser bar reflects the page a user would refresh into.
+            // Overrides any client-side `hx-push-url="true"` on the
+            // pagination buttons, chip remove links, and the page-size
+            // select — one fix covers every request that lands here.
+            let query = serde_urlencoded::to_string(&params).unwrap_or_default();
+            let push_url = format!("{}/{table}/?{query}", crate::branding::current().base_path);
+            if let Ok(v) = axum::http::HeaderValue::from_str(&push_url) {
+                response.headers_mut().insert("HX-Push-Url", v);
+            }
+            response
+        }
         Err(e) => e.into_response(),
     }
 }
@@ -461,13 +567,7 @@ pub(crate) async fn filter_dialog_handler(
                     _ => {}
                 }
             }
-            let values = fetch_distinct_values(&model.table, field)
-                .await
-                .unwrap_or_default();
-            facets.push(FilterFacet {
-                field: field.clone(),
-                values,
-            });
+            facets.push(build_facet(&model, field).await);
         }
     }
 

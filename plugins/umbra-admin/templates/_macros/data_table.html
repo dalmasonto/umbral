@@ -67,7 +67,7 @@
   {%- endset %}
   <div class="inline-flex items-center gap-xs bg-primary-container/10 border border-primary/20 text-primary px-sm py-xs rounded-full font-label-sm text-label-sm">
     <span class="text-on-surface-variant">{{ af.field | replace("_", " ") }}:</span>
-    <span>{{ af.value }}</span>
+    <span>{{ af.display | default(af.value) }}</span>
     <a
       href="{{ remove_url }}"
       hx-get="{{ remove_url }}"

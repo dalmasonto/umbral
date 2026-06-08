@@ -56,21 +56,19 @@
           class="w-full bg-surface-container-low border border-outline-variant rounded-xl px-md py-sm text-body-md text-on-surface focus:outline-none focus:ring-1 focus:ring-primary placeholder:text-outline/50"
         />
       </div>
-      {% set has_filterable = false %}
+      {% set ns = namespace(has_filterable=false) %}
       {% for facet in facets %}
         {# Pull this facet's currently-committed value out of the map. #}
         {% set active_val = active_filters[facet.field] | default("") %}
-        {# Determine the column type for this facet #}
-        {% set col_type = "" %}
-        {% for col in columns %}
-          {% if col.name == facet.field %}
-            {% set col_type = col.sql_type | default("") %}
-          {% endif %}
-        {% endfor %}
+        {# col_type is computed once on the server (FilterFacet.col_type).
+           Doing it in-template via `{% set col_type = ... %}` inside a
+           `{% for %}` over columns silently drops the value — Jinja's
+           for-loop scope doesn't write back to the parent. #}
+        {% set col_type = facet.col_type | default("") %}
 
         {# Skip text/numeric — search covers those. col_type comes from ColumnView.sql_type #}
         {% if col_type != "text" and col_type != "number" and col_type != "integer" and col_type != "bigint" %}
-          {% set has_filterable = true %}
+          {% set ns.has_filterable = true %}
           <div class="space-y-sm">
             <p class="font-label-sm text-label-sm text-outline uppercase tracking-wider">
               {{ facet.field | replace("_", " ") | title }}
@@ -112,30 +110,49 @@
               />
             </div>
 
-            {# FK: searchable async picker #}
+            {# FK: searchable async picker. Reuses the same /options
+               endpoint the edit-form combobox hits, so a category with
+               1000 brands is paginated server-side. The currently-
+               selected pill (if any) sits above the search input and
+               carries data-filter-value so _pending stays correct
+               across re-renders of the results list. #}
             {% elif col_type == "fk" %}
-            <div class="relative">
-              <input
-                type="text"
-                id="filter-fk-search-{{ facet.field }}"
-                data-filter-field="{{ facet.field }}"
-                placeholder="Search..."
-                class="w-full bg-surface-container-low border border-outline-variant rounded-xl px-sm py-xs text-body-md text-on-surface focus:outline-none focus:ring-1 focus:ring-primary"
-                oninput="umbra._filterFkSearch('{{ facet.field }}', '{{ model.table }}', this.value)"
-              />
-              <div
-                id="filter-fk-results-{{ facet.field }}"
-                class="mt-xs max-h-40 overflow-y-auto border border-outline-variant rounded-xl bg-surface-container-low divide-y divide-outline-variant/30"
-              >
-                {% for val in facet.values %}
+            <div class="space-y-xs"
+                 data-fk-facet
+                 data-fk-field="{{ facet.field }}"
+                 data-fk-table="{{ model.table }}"
+                 data-fk-related="{{ facet.related_table }}"
+                 data-fk-active-id="{{ active_val }}">
+              {# Pill slot: shows the resolved label of the active id
+                 (filled in by JS via the /options/resolve endpoint on
+                 dialog open). Clicking the × clears the selection. #}
+              <div id="filter-fk-pill-{{ facet.field }}" class="hidden flex items-center gap-xs">
+                <span
+                  class="inline-flex items-center gap-xs bg-primary/10 text-primary border border-primary/20 px-sm py-xs rounded-full font-label-sm text-label-sm"
+                  data-fk-pill-label
+                >Loading…</span>
                 <button
                   type="button"
+                  onclick="umbra._filterFkClear('{{ facet.field }}')"
+                  class="text-on-surface-variant hover:text-on-surface text-label-sm"
+                  aria-label="Clear {{ facet.field }} filter"
+                >×</button>
+              </div>
+              <div class="relative">
+                <input
+                  type="text"
+                  id="filter-fk-search-{{ facet.field }}"
                   data-filter-field="{{ facet.field }}"
-                  data-filter-value="{{ val }}"
-                  onclick="umbra._filterSelectValue(this)"
-                  class="w-full text-left px-sm py-xs text-body-md text-on-surface hover:bg-surface-container-high transition-colors {% if active_val == val %}bg-primary/10 text-primary{% endif %}"
-                >{{ val }}</button>
-                {% endfor %}
+                  placeholder="Search {{ facet.related_table | replace('_', ' ') }}..."
+                  class="w-full bg-surface-container-low border border-outline-variant rounded-xl px-sm py-xs text-body-md text-on-surface focus:outline-none focus:ring-1 focus:ring-primary"
+                  oninput="umbra._filterFkSearch('{{ facet.field }}', '{{ model.table }}', this.value)"
+                />
+              </div>
+              <div
+                id="filter-fk-results-{{ facet.field }}"
+                class="max-h-40 overflow-y-auto border border-outline-variant rounded-xl bg-surface-container-low"
+              >
+                <p class="px-md py-sm text-outline text-body-sm italic">Loading…</p>
               </div>
             </div>
 
@@ -162,7 +179,7 @@
         {% endif %}
       {% endfor %}
 
-      {% if not has_filterable %}
+      {% if not ns.has_filterable %}
       <p class="text-body-sm text-on-surface-variant italic py-md text-center">No filterable fields configured for this model.</p>
       {% endif %}
     </div>
@@ -251,15 +268,81 @@
     }
   };
 
+  // Centralised FK option fetcher. Pulls results in HTML form from the
+  // FK picker endpoint, then rewires each <button data-fk-value="..."
+  // data-fk-label="..."> to commit a filter selection instead of the
+  // edit-form's "set the combobox" semantics.
   umbra._filterFkSearch = function(field, table, query) {
-    var url = '{{ admin_base }}/api/' + table + '/' + field + '/options?search=' + encodeURIComponent(query) + '&page_size=10';
+    var url = '{{ admin_base }}/api/' + table + '/' + field + '/options?search=' + encodeURIComponent(query) + '&page_size=20';
+    var container = document.getElementById('filter-fk-results-' + field);
+    if (!container) return;
     fetch(url, { headers: { 'HX-Request': 'true' } })
       .then(function(r) { return r.text(); })
       .then(function(html) {
-        var container = document.getElementById('filter-fk-results-' + field);
-        if (container) container.innerHTML = html;
+        container.innerHTML = html;
+        // Rewire each result button to commit to _pending on click.
+        container.querySelectorAll('button[data-fk-value]').forEach(function(btn) {
+          btn.onclick = function() {
+            umbra._filterFkPick(field, btn.getAttribute('data-fk-value'), btn.getAttribute('data-fk-label') || '');
+          };
+        });
+      })
+      .catch(function() {
+        container.innerHTML = '<p class="px-md py-sm text-outline text-body-sm italic">Failed to load.</p>';
       });
   };
+
+  // Commit a FK pick to _pending, render the active pill, and visually
+  // mark the chosen result row.
+  umbra._filterFkPick = function(field, value, label) {
+    _pending[field] = value;
+    var pill      = document.getElementById('filter-fk-pill-' + field);
+    var pillLabel = pill ? pill.querySelector('[data-fk-pill-label]') : null;
+    if (pill)      pill.classList.remove('hidden');
+    if (pillLabel) pillLabel.textContent = label || ('#' + value);
+    var container = document.getElementById('filter-fk-results-' + field);
+    if (container) {
+      container.querySelectorAll('button[data-fk-value]').forEach(function(b) {
+        var active = b.getAttribute('data-fk-value') === String(value);
+        b.classList.toggle('bg-primary/10', active);
+        b.classList.toggle('text-primary',  active);
+      });
+    }
+  };
+
+  umbra._filterFkClear = function(field) {
+    delete _pending[field];
+    var pill = document.getElementById('filter-fk-pill-' + field);
+    if (pill) pill.classList.add('hidden');
+    var container = document.getElementById('filter-fk-results-' + field);
+    if (container) {
+      container.querySelectorAll('button[data-fk-value]').forEach(function(b) {
+        b.classList.remove('bg-primary/10', 'text-primary');
+      });
+    }
+  };
+
+  // Per-FK init: load the first page of options + resolve the active id
+  // (if any) to a label so the pre-selected pill renders with a real
+  // name, not a bare "#5".
+  function initFkFacet(node) {
+    var field   = node.getAttribute('data-fk-field');
+    var table   = node.getAttribute('data-fk-table');
+    var active  = node.getAttribute('data-fk-active-id');
+    umbra._filterFkSearch(field, table, '');
+    if (active) {
+      var resolveUrl = '{{ admin_base }}/api/' + table + '/' + field
+        + '/options/resolve?ids=' + encodeURIComponent(active);
+      fetch(resolveUrl, { headers: { 'Accept': 'application/json' } })
+        .then(function(r) { return r.json(); })
+        .then(function(j) {
+          var label = (j && j.items && j.items[0] && j.items[0].label) || ('#' + active);
+          umbra._filterFkPick(field, active, label);
+        })
+        .catch(function() { umbra._filterFkPick(field, active, '#' + active); });
+    }
+  }
+  document.querySelectorAll('#umbra-filter-dialog [data-fk-facet]').forEach(initFkFacet);
 
   // Build `&filter_<field>=<value>` for every pending entry whose value
   // is non-empty and not `"any"`. Drop the rest — a cleared selection
@@ -279,24 +362,31 @@
     // user can commit search + filters atomically.
     var searchEl = document.getElementById('filter-dialog-search');
     var search   = searchEl ? searchEl.value : (_search || '');
-    var url = '{{ admin_base }}/' + table + '/rows?search=' + encodeURIComponent(search)
+    var qs = '?search=' + encodeURIComponent(search)
       + buildFilterQs()
       + '&sort=' + encodeURIComponent(sort)
       + '&order=' + encodeURIComponent(order)
       + '&page=1';
+    // Fetch the rows fragment for the HTMX swap, but push the
+    // changelist URL (not the /rows endpoint) so refresh / share /
+    // bookmarks land back on the full page with the same filters.
+    var fetchUrl = '{{ admin_base }}/' + table + '/rows' + qs;
+    var pushUrl  = '{{ admin_base }}/' + table + '/'      + qs;
     umbra.closeFilterDialog();
-    htmx.ajax('GET', url, { target: '#table-body', swap: 'innerHTML', pushUrl: true });
+    htmx.ajax('GET', fetchUrl, { target: '#table-body', swap: 'innerHTML', pushUrl: pushUrl });
   };
 
   umbra._filterClear = function(table, _search, sort, order) {
     // Clear both search and every filter — Clear is the "back to
     // square one" button per the dialog's footer affordance.
-    var url = '{{ admin_base }}/' + table + '/rows?search='
+    var qs = '?search='
       + '&sort=' + encodeURIComponent(sort)
       + '&order=' + encodeURIComponent(order)
       + '&page=1';
+    var fetchUrl = '{{ admin_base }}/' + table + '/rows' + qs;
+    var pushUrl  = '{{ admin_base }}/' + table + '/'      + qs;
     umbra.closeFilterDialog();
-    htmx.ajax('GET', url, { target: '#table-body', swap: 'innerHTML', pushUrl: true });
+    htmx.ajax('GET', fetchUrl, { target: '#table-body', swap: 'innerHTML', pushUrl: pushUrl });
   };
 
   // Escape to close.
