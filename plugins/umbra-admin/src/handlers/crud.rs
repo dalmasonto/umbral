@@ -124,9 +124,15 @@ pub(crate) async fn detail(
         Ok(u) => u,
         Err(r) => return r,
     };
-    let Some((_, model)) = find_model(&table) else {
+    let Some((plugin_name, model)) = find_model(&table) else {
         return AdminError::NotFound(format!("no model with table `{table}`")).into_response();
     };
+    if let Err(r) =
+        crate::permcheck::require(&user, &plugin_name, &table, crate::permcheck::Action::View).await
+    {
+        return r;
+    }
+    let perms = crate::permcheck::AdminPerms::load(&user, &plugin_name, &table).await;
     let Some(pk) = pk_column(&model) else {
         return AdminError::Render(format!("model `{table}` has no primary key")).into_response();
     };
@@ -155,6 +161,7 @@ pub(crate) async fn detail(
             active_table  => table,
             breadcrumbs   => breadcrumbs,
             initial_theme => initial_theme,
+            perms         => perms,
         ),
     ) {
         Ok(html) => html.into_response(),
@@ -173,9 +180,15 @@ pub(crate) async fn new_form(
         Ok(u) => u,
         Err(r) => return r,
     };
-    let Some((_, model)) = find_model(&table) else {
+    let Some((plugin_name, model)) = find_model(&table) else {
         return AdminError::NotFound(format!("no model with table `{table}`")).into_response();
     };
+    if let Err(r) =
+        crate::permcheck::require(&user, &plugin_name, &table, crate::permcheck::Action::Add).await
+    {
+        return r;
+    }
+    let perms = crate::permcheck::AdminPerms::load(&user, &plugin_name, &table).await;
     let cfg = state.config_for(&table);
     let fields = form_fields_for(&model, None, cfg);
     // BUG-16 admin: empty M2M selection on the create form (no
@@ -202,6 +215,7 @@ pub(crate) async fn new_form(
             active_table  => table,
             breadcrumbs   => breadcrumbs,
             initial_theme => initial_theme,
+            perms         => perms,
         ),
     ) {
         Ok(html) => html.into_response(),
@@ -223,9 +237,14 @@ pub(crate) async fn create(
         Ok(u) => u,
         Err(r) => return r,
     };
-    let Some((_, model)) = find_model(&table) else {
+    let Some((plugin_name, model)) = find_model(&table) else {
         return AdminError::NotFound(format!("no model with table `{table}`")).into_response();
     };
+    if let Err(r) =
+        crate::permcheck::require(&user, &plugin_name, &table, crate::permcheck::Action::Add).await
+    {
+        return r;
+    }
     // Parse the body twice with different deserialisers:
     //   - HashMap collapses duplicates to "last wins" (right for
     //     scalar fields).
@@ -304,9 +323,20 @@ pub(crate) async fn edit_form(
         Ok(u) => u,
         Err(r) => return r,
     };
-    let Some((_, model)) = find_model(&table) else {
+    let Some((plugin_name, model)) = find_model(&table) else {
         return AdminError::NotFound(format!("no model with table `{table}`")).into_response();
     };
+    if let Err(r) = crate::permcheck::require(
+        &user,
+        &plugin_name,
+        &table,
+        crate::permcheck::Action::Change,
+    )
+    .await
+    {
+        return r;
+    }
+    let perms = crate::permcheck::AdminPerms::load(&user, &plugin_name, &table).await;
     let Some(pk) = pk_column(&model) else {
         return AdminError::Render(format!("model `{table}` has no primary key")).into_response();
     };
@@ -350,6 +380,7 @@ pub(crate) async fn edit_form(
             active_table  => table,
             breadcrumbs   => breadcrumbs,
             initial_theme => initial_theme,
+            perms         => perms,
         ),
     ) {
         Ok(html) => html.into_response(),
@@ -376,9 +407,19 @@ pub(crate) async fn update(
         Ok(u) => u,
         Err(r) => return r,
     };
-    let Some((_, model)) = find_model(&table) else {
+    let Some((plugin_name, model)) = find_model(&table) else {
         return AdminError::NotFound(format!("no model with table `{table}`")).into_response();
     };
+    if let Err(r) = crate::permcheck::require(
+        &user,
+        &plugin_name,
+        &table,
+        crate::permcheck::Action::Change,
+    )
+    .await
+    {
+        return r;
+    }
     let Some(pk) = pk_column(&model) else {
         return AdminError::Render(format!("model `{table}` has no primary key")).into_response();
     };
@@ -474,9 +515,15 @@ pub(crate) async fn delete(
         Ok(u) => u,
         Err(r) => return r,
     };
-    let Some((_, model)) = find_model(&table) else {
+    let Some((plugin_name, model)) = find_model(&table) else {
         return AdminError::NotFound(format!("no model with table `{table}`")).into_response();
     };
+    if let Err(r) =
+        crate::permcheck::require(&who, &plugin_name, &table, crate::permcheck::Action::Delete)
+            .await
+    {
+        return r;
+    }
     let Some(pk) = pk_column(&model) else {
         return AdminError::Render(format!("model `{table}` has no primary key")).into_response();
     };
@@ -521,9 +568,15 @@ pub(crate) async fn htmx_delete(
         Ok(u) => u,
         Err(r) => return r,
     };
-    let Some((_, model)) = find_model(&table) else {
+    let Some((plugin_name, model)) = find_model(&table) else {
         return AdminError::NotFound(format!("no model with table `{table}`")).into_response();
     };
+    if let Err(r) =
+        crate::permcheck::require(&who, &plugin_name, &table, crate::permcheck::Action::Delete)
+            .await
+    {
+        return r;
+    }
     let Some(pk) = pk_column(&model) else {
         return AdminError::Render(format!("model `{table}` has no primary key")).into_response();
     };

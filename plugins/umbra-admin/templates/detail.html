@@ -8,10 +8,14 @@
     <h2 style="display:flex;align-items:center;justify-content:space-between">
       <span>{{ model.name }} <span class="meta">#{{ row[pk] }}</span></span>
       <span class="actions">
+        {% if perms is undefined or perms.can_change %}
         <a class="btn" href="{{ admin_base }}/{{ model.table }}/{{ row[pk] }}/edit">Edit</a>
+        {% endif %}
+        {% if perms is undefined or perms.can_delete %}
         <form method="post" action="{{ admin_base }}/{{ model.table }}/{{ row[pk] }}/delete" style="display:inline" onsubmit="return confirm('Delete this row? This cannot be undone.')">
           <button class="btn btn-danger" type="submit">Delete</button>
         </form>
+        {% endif %}
       </span>
     </h2>
     <table>

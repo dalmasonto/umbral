@@ -3006,6 +3006,7 @@ dependencies = [
  "tracing",
  "umbra",
  "umbra-auth",
+ "umbra-permissions",
  "umbra-security",
  "umbra-sessions",
  "uuid",

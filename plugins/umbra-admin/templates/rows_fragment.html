@@ -41,7 +41,7 @@
 
     {% for col in columns %}
     <td class="px-md py-md {% if not loop.first %}hidden lg:table-cell{% endif %} dt-col" data-col="{{ col.name }}"
-      {% if col.name in inline_edit_fields %}
+      {% if col.name in inline_edit_fields and (perms is undefined or perms.can_change) %}
       hx-trigger="dblclick"
       hx-get="{{ admin_base }}/{{ table }}/{{ row[pk] }}/cell/{{ col.name }}/edit"
       hx-target="this"
@@ -78,6 +78,7 @@
           class="p-sm text-on-surface-variant hover:text-primary transition-colors rounded-lg hover:bg-surface-container-high">
           <i data-lucide="eye" class="w-4 h-4"></i>
         </button>
+        {% if perms is undefined or perms.can_change %}
         <button type="button"
           hx-get="{{ admin_base }}/{{ table }}/{{ row[pk] }}/edit-sheet"
           hx-target="#umbra-sheet-slot" hx-swap="innerHTML" hx-push-url="false"
@@ -85,6 +86,8 @@
           class="p-sm text-on-surface-variant hover:text-primary transition-colors rounded-lg hover:bg-surface-container-high">
           <i data-lucide="pencil" class="w-4 h-4"></i>
         </button>
+        {% endif %}
+        {% if perms is undefined or perms.can_delete %}
         <button type="button"
           hx-get="{{ admin_base }}/{{ table }}/{{ row[pk] }}/_confirm-delete"
           hx-target="#umbra-dialog-slot" hx-swap="innerHTML"
@@ -92,6 +95,7 @@
           class="p-sm text-on-surface-variant hover:text-error transition-colors rounded-lg hover:bg-surface-container-high">
           <i data-lucide="trash-2" class="w-4 h-4"></i>
         </button>
+        {% endif %}
 
         {# Custom row-scope actions (up to 2 inline, rest in overflow menu) #}
         {% set row_actions = [] %}

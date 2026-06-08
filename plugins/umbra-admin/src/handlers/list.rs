@@ -123,12 +123,22 @@ pub(crate) async fn list(
         Ok(u) => u,
         Err(r) => return r,
     };
-    let Some((_, model)) = find_model(&table) else {
+    let Some((plugin_name, model)) = find_model(&table) else {
         return AdminError::NotFound(format!("no model with table `{table}`")).into_response();
     };
     let Some(pk) = pk_column(&model) else {
         return AdminError::Render(format!("model `{table}` has no primary key")).into_response();
     };
+
+    // Feature #75: require view permission before rendering the
+    // changelist. Short-circuits to `Ok(())` when PermissionsPlugin
+    // is not installed, preserving pre-#75 staff-only behaviour.
+    if let Err(r) =
+        crate::permcheck::require(&user, &plugin_name, &table, crate::permcheck::Action::View).await
+    {
+        return r;
+    }
+    let perms = crate::permcheck::AdminPerms::load(&user, &plugin_name, &table).await;
 
     let cfg = state.config_for(&table);
 
@@ -248,6 +258,7 @@ pub(crate) async fn list(
             column_widths      => column_widths_json,
             inline_edit_fields => inline_edit_fields,
             initial_theme      => initial_theme,
+            perms              => perms,
         ),
     ) {
         Ok(html) => html.into_response(),
@@ -284,9 +295,10 @@ pub(crate) async fn rows_fragment(
     Query(params): Query<HashMap<String, String>>,
 ) -> Response {
     let path = format!("{}/{table}/rows", crate::branding::current().base_path);
-    if let Err(r) = require_staff(&headers, &path).await {
-        return r;
-    }
+    let user = match require_staff(&headers, &path).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
     if !is_htmx(&headers) {
         let qs = serde_urlencoded::to_string(&params).unwrap_or_default();
         let target = if qs.is_empty() {
@@ -296,9 +308,15 @@ pub(crate) async fn rows_fragment(
         };
         return Redirect::to(&target).into_response();
     }
-    let Some((_, model)) = find_model(&table) else {
+    let Some((plugin_name, model)) = find_model(&table) else {
         return AdminError::NotFound(format!("no model with table `{table}`")).into_response();
     };
+    if let Err(r) =
+        crate::permcheck::require(&user, &plugin_name, &table, crate::permcheck::Action::View).await
+    {
+        return r;
+    }
+    let perms = crate::permcheck::AdminPerms::load(&user, &plugin_name, &table).await;
     let Some(pk) = pk_column(&model) else {
         return AdminError::Render(format!("model `{table}` has no primary key")).into_response();
     };
@@ -378,6 +396,7 @@ pub(crate) async fn rows_fragment(
             sort_order         => sort_order,
             actions            => action_names,
             inline_edit_fields => inline_edit_fields,
+            perms              => perms,
         ),
     ) {
         Ok(html) => html.into_response(),

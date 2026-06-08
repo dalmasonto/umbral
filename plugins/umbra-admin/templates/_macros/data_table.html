@@ -94,6 +94,10 @@
     </div>
     <p class="text-on-surface-variant font-body-sm text-body-sm mt-xs">Manage all {{ model.name | lower }} records.</p>
   </div>
+  {# Feature #75: hide the Add affordance when the user lacks the
+     add_<model> permission. The POST handler still revalidates so
+     hiding the button is a UX nicety, not the security boundary. #}
+  {% if perms is undefined or perms.can_add %}
   <button
     type="button"
     hx-get="{{ admin_base }}/{{ model.table }}/new-sheet"
@@ -105,6 +109,7 @@
     <i data-lucide="plus" class="w-4 h-4"></i>
     Add {{ model.name }}
   </button>
+  {% endif %}
 </div>
 
 {# ================================================================
@@ -342,7 +347,7 @@
             {# Data cells #}
             {% for col in columns %}
             <td class="px-md py-md {% if not loop.first %}hidden lg:table-cell{% endif %} dt-col" data-col="{{ col.name }}"
-              {% if col.name in inline_edit_fields %}
+              {% if col.name in inline_edit_fields and (perms is undefined or perms.can_change) %}
               hx-trigger="dblclick"
               hx-get="{{ admin_base }}/{{ model.table }}/{{ row[pk] }}/cell/{{ col.name }}/edit"
               hx-target="this"
@@ -384,6 +389,7 @@
                 >
                   <i data-lucide="eye" class="w-4 h-4"></i>
                 </button>
+                {% if perms is undefined or perms.can_change %}
                 <button
                   type="button"
                   hx-get="{{ admin_base }}/{{ model.table }}/{{ row[pk] }}/edit-sheet"
@@ -395,6 +401,8 @@
                 >
                   <i data-lucide="pencil" class="w-4 h-4"></i>
                 </button>
+                {% endif %}
+                {% if perms is undefined or perms.can_delete %}
                 <button
                   type="button"
                   hx-get="{{ admin_base }}/{{ model.table }}/{{ row[pk] }}/_confirm-delete"
@@ -405,6 +413,7 @@
                 >
                   <i data-lucide="trash-2" class="w-4 h-4"></i>
                 </button>
+                {% endif %}
 
                 {# Custom actions: up to 2 inline, rest in overflow menu #}
                 {% set row_actions = [] %}
@@ -472,6 +481,7 @@
               <div class="flex flex-col items-center gap-md">
                 <i data-lucide="database" class="w-10 h-10 text-outline opacity-50"></i>
                 <p class="text-body-md text-on-surface-variant">No {{ model.name | lower }} records yet.</p>
+                {% if perms is undefined or perms.can_add %}
                 <button
                   type="button"
                   hx-get="{{ admin_base }}/{{ model.table }}/new-sheet"
@@ -479,6 +489,7 @@
                   hx-swap="innerHTML"
                   class="px-lg py-sm bg-primary text-on-primary rounded-xl font-label-md text-label-md hover:opacity-90 transition-opacity"
                 >Create the first one</button>
+                {% endif %}
               </div>
               {% endif %}
             </td>

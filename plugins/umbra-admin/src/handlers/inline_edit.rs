@@ -27,12 +27,23 @@ pub(crate) async fn cell_edit_get(
         "{}/{table}/{id}/cell/{field}/edit",
         crate::branding::current().base_path
     );
-    if let Err(r) = require_staff(&headers, &path).await {
-        return r;
-    }
-    let Some((_, model)) = find_model(&table) else {
+    let user = match require_staff(&headers, &path).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let Some((plugin_name, model)) = find_model(&table) else {
         return AdminError::NotFound(format!("no model `{table}`")).into_response();
     };
+    if let Err(r) = crate::permcheck::require(
+        &user,
+        &plugin_name,
+        &table,
+        crate::permcheck::Action::Change,
+    )
+    .await
+    {
+        return r;
+    }
     let Some(pk) = pk_column(&model) else {
         return AdminError::Render("no pk".to_string()).into_response();
     };
@@ -105,9 +116,19 @@ pub(crate) async fn cell_edit_post(
         Ok(u) => u,
         Err(r) => return r,
     };
-    let Some((_, model)) = find_model(&table) else {
+    let Some((plugin_name, model)) = find_model(&table) else {
         return AdminError::NotFound(format!("no model `{table}`")).into_response();
     };
+    if let Err(r) = crate::permcheck::require(
+        &user,
+        &plugin_name,
+        &table,
+        crate::permcheck::Action::Change,
+    )
+    .await
+    {
+        return r;
+    }
     let Some(pk) = pk_column(&model) else {
         return AdminError::Render("no pk".to_string()).into_response();
     };

@@ -19,6 +19,11 @@ axum = "0.8"
 # Required for the auth gate. The admin uses umbra-auth's
 # `authenticate` helper to verify credentials on login.
 umbra-auth = { path = "../umbra-auth", version = "0.0.1" }
+# Feature #75: per-model permission checks. The admin calls
+# `umbra_permissions::has_perm_for_superuser` at the top of every
+# CRUD handler. When PermissionsPlugin is NOT installed, all checks
+# short-circuit to allow (preserves pre-#75 staff-only gating).
+umbra-permissions = { path = "../umbra-permissions", version = "0.0.1" }
 # Session management: create_session, login, logout, current_user.
 # Used by the HTML login flow to replace the old Basic Auth challenge.
 umbra-sessions = { path = "../umbra-sessions", version = "0.0.1" }

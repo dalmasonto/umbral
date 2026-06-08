@@ -32,13 +32,19 @@ pub(crate) async fn preview_sheet(
         "{}/{table}/{id}/sheet",
         crate::branding::current().base_path
     );
-    let _user = match require_staff(&headers, &path).await {
+    let user = match require_staff(&headers, &path).await {
         Ok(u) => u,
         Err(r) => return r,
     };
-    let Some((_, model)) = find_model(&table) else {
+    let Some((plugin_name, model)) = find_model(&table) else {
         return AdminError::NotFound(format!("no model with table `{table}`")).into_response();
     };
+    if let Err(r) =
+        crate::permcheck::require(&user, &plugin_name, &table, crate::permcheck::Action::View).await
+    {
+        return r;
+    }
+    let perms = crate::permcheck::AdminPerms::load(&user, &plugin_name, &table).await;
     let Some(pk) = pk_column(&model) else {
         return AdminError::Render(format!("model `{table}` has no primary key")).into_response();
     };
@@ -63,6 +69,7 @@ pub(crate) async fn preview_sheet(
                 model       => model_view,
                 instance_id => id,
                 fields      => fields,
+                perms       => perms,
             ),
         ) {
             Ok(html) => html.into_response(),
@@ -89,13 +96,23 @@ pub(crate) async fn edit_sheet_handler(
         "{}/{table}/{id}/edit-sheet",
         crate::branding::current().base_path
     );
-    let _user = match require_staff(&headers, &path).await {
+    let user = match require_staff(&headers, &path).await {
         Ok(u) => u,
         Err(r) => return r,
     };
-    let Some((_, model)) = find_model(&table) else {
+    let Some((plugin_name, model)) = find_model(&table) else {
         return AdminError::NotFound(format!("no model with table `{table}`")).into_response();
     };
+    if let Err(r) = crate::permcheck::require(
+        &user,
+        &plugin_name,
+        &table,
+        crate::permcheck::Action::Change,
+    )
+    .await
+    {
+        return r;
+    }
     let Some(pk) = pk_column(&model) else {
         return AdminError::Render(format!("model `{table}` has no primary key")).into_response();
     };
@@ -147,13 +164,18 @@ pub(crate) async fn new_sheet(
     Path(table): Path<String>,
 ) -> Response {
     let path = format!("{}/{table}/new-sheet", crate::branding::current().base_path);
-    let _user = match require_staff(&headers, &path).await {
+    let user = match require_staff(&headers, &path).await {
         Ok(u) => u,
         Err(r) => return r,
     };
-    let Some((_, model)) = find_model(&table) else {
+    let Some((plugin_name, model)) = find_model(&table) else {
         return AdminError::NotFound(format!("no model with table `{table}`")).into_response();
     };
+    if let Err(r) =
+        crate::permcheck::require(&user, &plugin_name, &table, crate::permcheck::Action::Add).await
+    {
+        return r;
+    }
     let cfg = state.config_for(&table);
     let fields = form_fields_for(&model, None, cfg);
     let m2m_fields = form_m2m_fields_for(&model, None).await;
@@ -184,12 +206,23 @@ pub(crate) async fn confirm_delete_dialog(
         "{}/{table}/{id}/_confirm-delete",
         crate::branding::current().base_path
     );
-    if let Err(r) = require_staff(&headers, &path).await {
-        return r;
-    }
-    let Some((_, model)) = find_model(&table) else {
+    let user = match require_staff(&headers, &path).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let Some((plugin_name, model)) = find_model(&table) else {
         return AdminError::NotFound(format!("no model with table `{table}`")).into_response();
     };
+    if let Err(r) = crate::permcheck::require(
+        &user,
+        &plugin_name,
+        &table,
+        crate::permcheck::Action::Delete,
+    )
+    .await
+    {
+        return r;
+    }
     let model_view = model_for_template(&model);
     // Use the id as the display label — FK label resolution lands later.
     let display_label = format!("#{id}");
@@ -221,9 +254,14 @@ pub(crate) async fn sheet_create(
         Ok(u) => u,
         Err(r) => return r,
     };
-    let Some((_, model)) = find_model(&table) else {
+    let Some((plugin_name, model)) = find_model(&table) else {
         return AdminError::NotFound(format!("no model with table `{table}`")).into_response();
     };
+    if let Err(r) =
+        crate::permcheck::require(&who, &plugin_name, &table, crate::permcheck::Action::Add).await
+    {
+        return r;
+    }
     let form: HashMap<String, String> = match serde_urlencoded::from_str(&body) {
         Ok(m) => m,
         Err(e) => return AdminError::BadInput(e.to_string()).into_response(),
@@ -341,9 +379,19 @@ pub(crate) async fn change_password_handler(
             return AdminError::BadInput(format!("password hashing failed: {e}")).into_response();
         }
     };
-    let Some((_, model)) = find_model(&table) else {
+    let Some((plugin_name, model)) = find_model(&table) else {
         return AdminError::NotFound(format!("no model `{table}`")).into_response();
     };
+    if let Err(r) = crate::permcheck::require(
+        &actor,
+        &plugin_name,
+        &table,
+        crate::permcheck::Action::Change,
+    )
+    .await
+    {
+        return r;
+    }
     let Some(pk) = pk_column(&model) else {
         return AdminError::Render("no pk".to_string()).into_response();
     };

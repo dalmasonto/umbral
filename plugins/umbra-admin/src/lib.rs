@@ -61,6 +61,7 @@ mod engine;
 mod error;
 mod handlers;
 mod pagination;
+mod permcheck;
 mod rows;
 mod static_assets;
 mod util;

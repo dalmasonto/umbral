@@ -2,7 +2,7 @@
 {% block title %}{{ verb }} {{ model.name }} — {{ site_title }}{% endblock %}
 {% block content %}
   <div class="breadcrumb">
-    <a href="/admin">admin</a> / <a href="/admin/{{ model.table }}/">{{ model.name }}</a> / {{ verb }}
+    <a href="{{ admin_base }}">admin</a> / <a href="{{ admin_base }}/{{ model.table }}/">{{ model.name }}</a> / {{ verb }}
   </div>
   <div class="panel">
     <h2>{{ verb }} {{ model.name }}{% if row %} #{{ row[pk] }}{% endif %}</h2>
@@ -30,12 +30,29 @@
 
           {% elif field.kind == "fk" %}
             {% set fk_table = field.fk_table | default("") %}
-            <div class="fk-picker" data-field="{{ field.name }}" data-fk-table="{{ fk_table }}">
+            <div class="fk-picker relative" data-field="{{ field.name }}" data-fk-table="{{ fk_table }}">
               <input type="hidden" id="f_{{ field.name }}" name="{{ field.name }}" value="{{ field.value }}" />
-              <input type="text" id="fk_text_{{ field.name }}" placeholder="Search..." autocomplete="off" value=""
-                hx-get="/admin/api/{{ model.table }}/{{ field.name }}/options"
+              <div
+                data-fk-active
+                class="{% if not field.value %}hidden {% endif %}mb-xs rounded-xl border border-primary/20 bg-primary-container px-md py-sm"
+              >
+                <div class="flex items-start justify-between gap-sm">
+                  <div class="min-w-0">
+                    <p class="text-label-sm text-on-primary-container uppercase tracking-wider">Selected</p>
+                    <p class="text-body-sm font-medium text-on-primary-container truncate" data-fk-active-label>
+                      {% if field.value %}Loading selected option{% else %}Selected option{% endif %}
+                    </p>
+                    <p class="text-[11px] text-on-primary-container tabular-nums" data-fk-active-value>{% if field.value %}#{{ field.value }}{% endif %}</p>
+                  </div>
+                  {% if field.nullable %}
+                  <button type="button" data-fk-clear class="flex-shrink-0 inline-flex items-center gap-xs rounded-lg border border-primary/20 bg-surface-container px-sm py-xs text-label-sm text-on-surface-variant hover:text-on-surface transition-colors">Clear</button>
+                  {% endif %}
+                </div>
+              </div>
+              <input type="text" id="fk_text_{{ field.name }}" placeholder="{% if field.value %}Search to replace{% else %}Search{% endif %}..." autocomplete="off" value=""
+                hx-get="{{ admin_base }}/api/{{ model.table }}/{{ field.name }}/options"
                 hx-trigger="input changed delay:250ms, focus"
-                hx-target="next .fk-options"
+                hx-target="#fk_options_{{ field.name }}"
                 hx-swap="innerHTML"
                 hx-include="this"
                 name="search"
@@ -43,13 +60,13 @@
               />
               {% if field.value %}
               <span id="fk_resolve_{{ field.name }}"
-                hx-get="/admin/api/{{ model.table }}/{{ field.name }}/options/resolve?ids={{ field.value }}"
+                hx-get="{{ admin_base }}/api/{{ model.table }}/{{ field.name }}/options/resolve?ids={{ field.value }}"
                 hx-trigger="load"
                 hx-swap="none"
                 hx-on:htmx:after-request="if(window.umbra&&umbra.fkResolve)umbra.fkResolve('{{ field.name }}', event)"
               ></span>
               {% endif %}
-              <div class="fk-options" style="display:none; position:absolute; background:#fff; border:1px solid #ccc; max-height:200px; overflow-y:auto; z-index:100;">
+              <div id="fk_options_{{ field.name }}" class="fk-options hidden absolute left-0 right-0 top-full mt-xs z-30 bg-surface-container border border-outline-variant rounded-xl shadow-lg max-h-64 overflow-y-auto">
               </div>
             </div>
 
@@ -101,15 +118,24 @@
          `set_junction_dynamic`. #}
       {% if m2m_fields %}
         {% for m in m2m_fields %}
-          <div class="field">
+          <div class="field m2m-field-picker" data-page-size="12">
             <label>{{ m.label }} <span class="meta">({{ m.candidates | length }} available)</span></label>
-            <div class="m2m-checkbox-list" style="max-height: 220px; overflow-y: auto; border: 1px solid #ccc; border-radius: 4px; padding: 8px;">
-              {% if not m.candidates %}
-                <p class="meta">No candidate rows in the target table.</p>
-              {% else %}
+            <div class="rounded-xl border border-outline-variant bg-surface-container-low p-sm mb-sm">
+              <div class="flex items-center justify-between gap-sm mb-xs">
+                <span class="text-label-sm text-outline uppercase tracking-wider">Active selection</span>
+                <span class="text-label-sm text-outline" data-m2m-count>{{ m.selected_values | length }} selected</span>
+              </div>
+              <div class="flex flex-wrap gap-xs min-h-7" data-m2m-selected></div>
+              <p class="text-body-sm text-outline py-xs" data-m2m-selected-empty>No rows selected.</p>
+            </div>
+            {% if not m.candidates %}
+              <p class="meta">No candidate rows in the target table.</p>
+            {% else %}
+              <input type="text" data-m2m-search placeholder="Search {{ m.label | replace('_', ' ') | title }}" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; margin-bottom: 8px;" />
+              <div class="m2m-checkbox-list" style="max-height: 220px; overflow-y: auto; border: 1px solid #ccc; border-radius: 4px; padding: 8px;">
                 {% for opt in m.candidates %}
                   {% set is_selected = opt.value in m.selected_values %}
-                  <label style="display: block; padding: 2px 0; cursor: pointer;">
+                  <label data-m2m-option data-label="{{ opt.label }}" style="display: flex; align-items: center; gap: 8px; padding: 4px 0; cursor: pointer;">
                     <input type="checkbox"
                            name="m2m_{{ m.name }}"
                            value="{{ opt.value }}"
@@ -117,15 +143,29 @@
                     <span>{{ opt.label }}</span>
                   </label>
                 {% endfor %}
-              {% endif %}
-            </div>
+                <p class="hidden meta" data-m2m-empty>No matching rows.</p>
+              </div>
+              <div class="flex items-center justify-between gap-sm mt-sm">
+                <button type="button" data-m2m-prev class="btn">Previous</button>
+                <span class="text-label-sm text-outline tabular-nums" data-m2m-page>Page 1</span>
+                <button type="button" data-m2m-next class="btn">Next</button>
+              </div>
+            {% endif %}
           </div>
         {% endfor %}
       {% endif %}
 
       <div class="actions">
+        {# Save is gated on the relevant verb: a new-row form needs
+           can_add, an existing-row form needs can_change. The handler
+           re-validates either way; this hides the affordance. #}
+        {% set _save_ok = (perms is undefined)
+          or (verb == "Create" and perms.can_add)
+          or (verb != "Create" and perms.can_change) %}
+        {% if _save_ok %}
         <button type="submit" class="btn btn-primary">Save</button>
-        <a class="btn" href="/admin/{{ model.table }}/">Cancel</a>
+        {% endif %}
+        <a class="btn" href="{{ admin_base }}/{{ model.table }}/">Cancel</a>
       </div>
     </form>
   </div>
