@@ -256,27 +256,39 @@ pub(crate) async fn index(State(state): State<AdminState>, headers: HeaderMap) -
         })
         .collect();
 
-    // Per-model row count for the dashboard cards. Goes through
-    // DynQuerySet::count so the query path is identical to the
-    // changelist — no hand-built `SELECT COUNT(*) FROM "<table>"` here.
+    // Per-model row count for the dashboard cards. Fires every
+    // COUNT concurrently so a project with 30 registered models
+    // doesn't pay 30 sequential round-trips on every /admin/ load
+    // (the old serial loop made the dashboard's first-paint scale
+    // linearly with model count — a real N+1 from the admin user's
+    // POV, even though each individual query is one COUNT). The
+    // count path still routes through DynQuerySet::count so each
+    // query goes through the same builder the changelist uses.
     let model_cards: Vec<serde_json::Value> = {
-        let mut cards = Vec::new();
-        for app in &apps {
-            for sidebar_model in &app.models {
-                let count = match find_model(&sidebar_model.table) {
-                    Some((_, meta)) => DynQuerySet::for_meta(&meta).count().await.unwrap_or(0),
-                    None => 0,
-                };
-                cards.push(serde_json::json!({
+        // Flat list of every (app, model) pair so the concurrent
+        // futures stay aligned with the card-build order.
+        let pairs: Vec<&crate::view::SidebarModel> =
+            apps.iter().flat_map(|a| a.models.iter()).collect();
+        let count_futures = pairs.iter().map(|m| async move {
+            match find_model(&m.table) {
+                Some((_, meta)) => DynQuerySet::for_meta(&meta).count().await.unwrap_or(0),
+                None => 0,
+            }
+        });
+        let counts: Vec<i64> = futures_util::future::join_all(count_futures).await;
+        pairs
+            .into_iter()
+            .zip(counts)
+            .map(|(sidebar_model, count)| {
+                serde_json::json!({
                     "table":  sidebar_model.table,
                     "label":  sidebar_model.label,
                     "icon":   if sidebar_model.icon.is_empty() { "database".to_string() } else { sidebar_model.icon.clone() },
                     "count":  count,
                     "url":    format!("{}/{}/", crate::branding::current().base_path, sidebar_model.table),
-                }));
-            }
-        }
-        cards
+                })
+            })
+            .collect()
     };
 
     let total_rows: i64 = model_cards.iter().filter_map(|c| c["count"].as_i64()).sum();

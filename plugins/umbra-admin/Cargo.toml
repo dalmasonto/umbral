@@ -53,6 +53,10 @@ minijinja = "2"
 tracing = "0.1"
 # Phase 4: on_ready spawns async table creation via tokio::runtime::Handle.
 tokio = { version = "1", features = ["rt"] }
+# Concurrent COUNT futures for the dashboard's per-model row counters
+# (was a real N+1 from the user's perspective: every additional model
+# registered added another sequential round-trip to /admin/).
+futures-util = "0.3"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync"] }

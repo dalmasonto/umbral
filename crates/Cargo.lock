@@ -2993,6 +2993,7 @@ version = "0.0.1"
 dependencies = [
  "axum",
  "chrono",
+ "futures-util",
  "http",
  "http-body-util",
  "minijinja",
