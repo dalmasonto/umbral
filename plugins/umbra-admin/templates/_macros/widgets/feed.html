@@ -9,7 +9,11 @@
 <div class="feed-widget h-full flex flex-col p-md">
   <p class="text-label-sm text-outline uppercase tracking-wider mb-sm flex-shrink-0">{{ title }}</p>
   {% if payload.items and payload.items | length > 0 %}
-  <ul class="flex-1 overflow-y-auto divide-y divide-outline-variant/30">
+  {# Divider on each feed item — `surface-container-highest` gives
+     a barely-there separator in dark mode without the bluish-white
+     bloom `outline-variant` was leaving. Same token as the
+     scrollbar thumb so the two visual rails read as one family. #}
+  <ul class="flex-1 overflow-y-auto divide-y divide-surface-container-highest">
     {% for item in payload.items %}
     <li class="flex items-start gap-sm py-sm first:pt-0 last:pb-0">
       <div class="w-7 h-7 rounded-full bg-surface-container-high border border-outline-variant/60 flex items-center justify-center flex-shrink-0 mt-0.5">

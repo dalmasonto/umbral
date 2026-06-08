@@ -1351,7 +1351,10 @@ fn shop_total_sales_widget() -> umbra_admin::Widget {
         key: "shop_total_sales",
         title: "Total Sales".to_string(),
         kind: WidgetKind::Card,
-        default_span: Span { cols: 3, rows: 1 },
+        // rows: 2 (= 240px in a 120px auto-row grid). Cards with a
+        // sparkline need ~220px to fit icon row + body + 48px trail
+        // without clipping; 240px gives bottom padding too.
+        default_span: Span { cols: 3, rows: 2 },
         permission: None,
         data: WidgetDataFn::new(|_user| async move {
             let now = chrono::Utc::now();
@@ -1381,7 +1384,10 @@ fn shop_orders_widget() -> umbra_admin::Widget {
         key: "shop_orders",
         title: "Orders".to_string(),
         kind: WidgetKind::Card,
-        default_span: Span { cols: 3, rows: 1 },
+        // rows: 2 (= 240px in a 120px auto-row grid). Cards with a
+        // sparkline need ~220px to fit icon row + body + 48px trail
+        // without clipping; 240px gives bottom padding too.
+        default_span: Span { cols: 3, rows: 2 },
         permission: None,
         data: WidgetDataFn::new(|_user| async move {
             let now = chrono::Utc::now();
@@ -1411,7 +1417,7 @@ fn shop_customers_widget() -> umbra_admin::Widget {
         key: "shop_customers",
         title: "Customers".to_string(),
         kind: WidgetKind::Card,
-        default_span: Span { cols: 3, rows: 1 },
+        default_span: Span { cols: 3, rows: 2 },
         permission: None,
         data: WidgetDataFn::new(|_user| async move {
             let total = Customer::objects().count().await.unwrap_or(0);
@@ -1431,7 +1437,7 @@ fn shop_avg_order_value_widget() -> umbra_admin::Widget {
         key: "shop_avg_order_value",
         title: "Avg Order Value".to_string(),
         kind: WidgetKind::Card,
-        default_span: Span { cols: 3, rows: 1 },
+        default_span: Span { cols: 3, rows: 2 },
         permission: None,
         data: WidgetDataFn::new(|_user| async move {
             let now = chrono::Utc::now();

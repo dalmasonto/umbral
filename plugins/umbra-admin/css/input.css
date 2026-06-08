@@ -91,25 +91,26 @@ textarea:disabled {
    and the main content all match. */
 * {
   scrollbar-width: thin;
-  scrollbar-color: var(--outline-variant) transparent;
+  /* Thumb uses `surface-container-highest` — a true dark slate in
+     dark mode (much darker than `outline-variant` which reads as
+     a mid-gray and looks "light" against the dark card bg). */
+  scrollbar-color: var(--surface-container-highest) transparent;
 }
 *::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  /* 6px reads as a thin rail; 8px was perceived as bulky. */
+  width: 6px;
+  height: 6px;
 }
 *::-webkit-scrollbar-track {
   background: transparent;
 }
 *::-webkit-scrollbar-thumb {
-  background: var(--outline-variant);
+  background: var(--surface-container-highest);
   border-radius: 999px;
-  border: 2px solid transparent;
-  background-clip: content-box;
 }
 *::-webkit-scrollbar-thumb:hover {
-  background: var(--outline);
-  background-clip: content-box;
-  border: 2px solid transparent;
+  /* Bump up one notch on hover so the user knows the rail is grabbable. */
+  background: var(--outline-variant);
 }
 *::-webkit-scrollbar-corner {
   background: transparent;
