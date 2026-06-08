@@ -1,20 +1,57 @@
 {#
   line.html
   =========
-  Time-series line/area chart — full-size sibling of the card
-  sparkline. Mounts ApexCharts on `data-chart-canvas`; reads
+  Time-series area chart with an inline period-selector strip
+  in the header. Mounts ApexCharts on `data-chart-canvas`; reads
   (x, y) pairs from hidden `data-chart-point[data-x][data-y]`
-  siblings. Theme tokens, animation, tooltip, hover markers all
-  come from `lineChartOptions(el)` in wrapper.html.
+  siblings.
 
-  Expects payload: { series: [{name, points: [{x, y}]}], x_type }
-  Renders the first series only at v1 — multi-series support
-  layers on top of the same data-chart-point shape later.
+  Args:
+    title           — section heading
+    payload         — { series: [{name, points: [{x, y}]}], x_type }
+    widget_key      — used as the HTMX hx-target id (`#widget-<key>`)
+                      so chip clicks re-fetch + swap the cell.
+    active_period   — current `?period=` value (`""` / `"7d"` / `"30d"`
+                      / `"90d"`); the matching chip renders highlighted.
+
+  Period chip clicks:
+    hx-get   → /admin/api/dashboard/widgets/<key>/data?period=<X>
+    hx-target → #widget-<key>     (the parent cell; the chip strip
+                                   itself re-renders inside the swap)
+    hx-swap   → innerHTML
 #}
 
-{% macro line_widget(title, payload) %}
+{% macro line_widget(title, payload, widget_key="", active_period="") %}
+{%- set periods = [
+  {"key": "7d",  "label": "7d"},
+  {"key": "30d", "label": "30d"},
+  {"key": "90d", "label": "90d"},
+] -%}
+{%- set effective_period = active_period if active_period else "30d" -%}
+
 <div class="line-widget h-full flex flex-col p-md">
-  <p class="text-label-sm text-outline uppercase tracking-wider mb-sm flex-shrink-0">{{ title }}</p>
+  {# Header: title (left) + period chips (right) ============== #}
+  <div class="flex items-center justify-between gap-sm mb-sm flex-shrink-0">
+    <p class="text-label-sm text-outline uppercase tracking-wider truncate">{{ title }}</p>
+    {% if widget_key %}
+    <div class="inline-flex items-center bg-surface-container-low rounded-lg p-0.5 gap-0.5"
+         role="group" aria-label="Period">
+      {% for p in periods %}
+      {%- set is_active = (p.key == effective_period) -%}
+      <button
+        type="button"
+        hx-get="{{ admin_base }}/api/dashboard/widgets/{{ widget_key }}/data?period={{ p.key }}"
+        hx-target="#widget-{{ widget_key }}"
+        hx-swap="innerHTML"
+        class="text-label-sm font-medium px-2 py-0.5 rounded-md transition-colors
+               {% if is_active %}bg-surface-container-high text-on-surface{% else %}text-on-surface-variant hover:text-on-surface{% endif %}"
+        aria-pressed="{{ 'true' if is_active else 'false' }}"
+      >{{ p.label }}</button>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+
   {% if payload.series and payload.series | length > 0 %}
     {%- set series = payload.series[0] -%}
     {%- set points = series.points -%}
@@ -25,7 +62,6 @@
       data-umbra-chart="line"
       data-chart-series="{{ series.name }}"
     >
-      {# Data points — hidden, read by initCharts. #}
       {% for pt in points %}
       <span
         data-chart-point
@@ -34,14 +70,7 @@
         hidden
       ></span>
       {% endfor %}
-
-      {# ApexCharts mount target. #}
       <div data-chart-canvas class="absolute inset-0"></div>
-
-      {# No-JS / CDN-fail fallback — same SVG polyline shape as
-         the old hand-rolled renderer, kept just for graceful
-         degradation. initCharts() unhides it only when
-         ApexCharts can't load. #}
       <div data-chart-unavailable class="absolute inset-0 hidden flex flex-col">
         <p class="text-label-sm text-outline italic m-auto">Chart library unavailable</p>
       </div>

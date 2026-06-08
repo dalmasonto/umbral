@@ -90,7 +90,7 @@ pub use handlers::dashboard::{builtin_recent_users_widget, builtin_total_models_
 pub use widgets::{
     BarPayload, CardPayload, CatalogEntry, ChartPoint, FeedItem, FeedPayload, KpiPayload,
     LinePayload, Series, Span, TableColumn, TablePayload, Widget, WidgetDataFn, WidgetInstance,
-    WidgetKind, WidgetPayload, WidgetSection, format_thousands, humanize_number,
+    WidgetKind, WidgetParams, WidgetPayload, WidgetSection, format_thousands, humanize_number,
 };
 
 use std::sync::Arc;

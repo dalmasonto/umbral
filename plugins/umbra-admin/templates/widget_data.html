@@ -18,7 +18,7 @@
 {% elif kind == "bar" %}
   {{ bar_widget(title, payload) }}
 {% elif kind == "line" %}
-  {{ line_widget(title, payload) }}
+  {{ line_widget(title, payload, widget_key, active_period) }}
 {% elif kind == "feed" %}
   {{ feed_widget(title, payload) }}
 {% elif kind == "table" %}

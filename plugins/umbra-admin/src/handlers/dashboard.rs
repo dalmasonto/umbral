@@ -227,6 +227,7 @@ pub(crate) async fn dashboard_widget_data(
     State(state): State<AdminState>,
     headers: HeaderMap,
     Path(key): Path<String>,
+    axum::extract::RawQuery(query): axum::extract::RawQuery,
 ) -> Response {
     let user = match require_staff(&headers, "/admin/api/dashboard/widgets/.../data").await {
         Ok(u) => u,
@@ -236,19 +237,30 @@ pub(crate) async fn dashboard_widget_data(
         return AdminError::NotFound(format!("no widget `{key}`")).into_response();
     };
 
+    // Per-request parameters parsed from the query string.
+    // Closures registered via `WidgetDataFn::with_params` read
+    // these to vary the response (`?period=7d`, etc.); closures
+    // registered via plain `::new` see them dropped.
+    let params = crate::widgets::WidgetParams::from_query(query.as_deref().unwrap_or(""));
     let data_fn = widget.data.0.clone();
-    let payload = data_fn(user).await;
+    let payload = data_fn(user, params.clone()).await;
 
     if is_htmx(&headers) {
         let kind = widget.kind.as_str().to_string();
         let title = widget.title.clone();
         let payload_json = serde_json::to_value(&payload).unwrap_or(serde_json::Value::Null);
+        // Pass the active period through to the template so the
+        // chip strip can highlight the current selection.
+        let active_period = params.period.clone().unwrap_or_default();
+        let widget_key = widget.key.to_string();
         match render(
             "admin/widget_data.html",
             context!(
-                kind    => kind,
-                title   => title,
-                payload => payload_json,
+                kind          => kind,
+                title         => title,
+                payload       => payload_json,
+                widget_key    => widget_key,
+                active_period => active_period,
             ),
         ) {
             Ok(html) => html.into_response(),

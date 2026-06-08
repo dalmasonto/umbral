@@ -1519,14 +1519,21 @@ fn shop_daily_sales_chart() -> umbra_admin::Widget {
         kind: WidgetKind::Line,
         default_span: Span { cols: 8, rows: 3 },
         permission: None,
-        data: WidgetDataFn::new(|_user| async move {
+        // `with_params` swaps the closure signature from
+        // `Fn(AuthUser)` to `Fn(AuthUser, WidgetParams)` so the
+        // widget can honour the `?period=7d|30d|90d` chip clicks
+        // emitted by the line widget's header. Default 30d when
+        // no chip has been picked yet (initial page load).
+        data: WidgetDataFn::with_params(|_user, params| async move {
+            let days = params.period_days().unwrap_or(30);
             let now = chrono::Utc::now();
-            let trail = daily_sales_trail(30).await;
+            let trail = daily_sales_trail(days).await;
             let points: Vec<ChartPoint> = trail
                 .into_iter()
                 .enumerate()
                 .map(|(i, y)| {
-                    let day = now - chrono::Duration::days((29 - i as i64).max(0));
+                    let back = (days - 1 - i as i64).max(0);
+                    let day = now - chrono::Duration::days(back);
                     ChartPoint {
                         x: day.format("%b %-d").to_string(),
                         y,

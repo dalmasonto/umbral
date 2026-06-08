@@ -454,21 +454,129 @@ pub enum WidgetPayload {
 // WidgetDataFn
 // =========================================================================
 
-pub(crate) type DataFuture = Pin<Box<dyn Future<Output = WidgetPayload> + Send + 'static>>;
-pub(crate) type DataFnInner = Arc<dyn Fn(AuthUser) -> DataFuture + Send + Sync + 'static>;
+/// Per-request parameters a widget's data closure can read.
+/// Sourced from the query string on
+/// `GET /admin/api/dashboard/widgets/<key>/data?<params>`.
+///
+/// Defaults are all `None` — closures that don't care can use
+/// `WidgetDataFn::new(|user| ...)` and ignore params entirely.
+/// Closures that DO care use `WidgetDataFn::with_params` and
+/// branch on `params.period` / `params.start` / `params.end`.
+#[derive(Debug, Clone, Default)]
+pub struct WidgetParams {
+    /// Period preset like `"7d"`, `"30d"`, `"90d"`. The
+    /// rendering side emits chips that pass this through.
+    pub period: Option<String>,
+    /// Explicit ISO start date (`YYYY-MM-DD`) — overrides
+    /// `period` when both are present.
+    pub start: Option<String>,
+    /// Explicit ISO end date (`YYYY-MM-DD`).
+    pub end: Option<String>,
+    /// Catch-all for any other widget-specific query params
+    /// — `?model=order` for a future per-model filter, etc.
+    /// Closures read by `params.raw.get("...")`.
+    pub raw: std::collections::HashMap<String, String>,
+}
 
-/// Wrapper around the async data closure. Build via [`WidgetDataFn::new`].
+impl WidgetParams {
+    /// Build from a `?key=value&...` query string. Recognised
+    /// keys (`period`, `start`, `end`) populate the typed
+    /// fields; the rest land in `raw`.
+    pub fn from_query<S: AsRef<str>>(query: S) -> Self {
+        let mut out = Self::default();
+        for pair in query.as_ref().split('&').filter(|s| !s.is_empty()) {
+            let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
+            let value = urlencoding_decode(v);
+            match k {
+                "period" => out.period = Some(value),
+                "start" => out.start = Some(value),
+                "end" => out.end = Some(value),
+                _ => {
+                    out.raw.insert(k.to_string(), value);
+                }
+            }
+        }
+        out
+    }
+
+    /// Number of days the `period` preset represents. `"7d"`
+    /// → 7, `"30d"` → 30, `"90d"` → 90. None for unrecognised /
+    /// missing values so callers fall back to a default.
+    pub fn period_days(&self) -> Option<i64> {
+        let p = self.period.as_deref()?;
+        let digits: String = p.chars().take_while(|c| c.is_ascii_digit()).collect();
+        digits.parse().ok()
+    }
+}
+
+/// Minimal `%XX` → byte decoder; avoids pulling a query-string
+/// crate just for the four chars we need (`+` → space, `%2F` → `/`,
+/// etc.). Anything malformed passes through unchanged.
+fn urlencoding_decode(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let bytes = raw.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'+' => {
+                out.push(' ');
+                i += 1;
+            }
+            b'%' if i + 2 < bytes.len() => {
+                let hi = (bytes[i + 1] as char).to_digit(16);
+                let lo = (bytes[i + 2] as char).to_digit(16);
+                if let (Some(h), Some(l)) = (hi, lo) {
+                    out.push(char::from((h as u8) * 16 + l as u8));
+                    i += 3;
+                } else {
+                    out.push(bytes[i] as char);
+                    i += 1;
+                }
+            }
+            b => {
+                out.push(b as char);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+pub(crate) type DataFuture = Pin<Box<dyn Future<Output = WidgetPayload> + Send + 'static>>;
+pub(crate) type DataFnInner =
+    Arc<dyn Fn(AuthUser, WidgetParams) -> DataFuture + Send + Sync + 'static>;
+
+/// Wrapper around the async data closure. Build via
+/// [`WidgetDataFn::new`] (closure ignores per-request params) or
+/// [`WidgetDataFn::with_params`] (closure reads `WidgetParams` to
+/// honour period / date-range filters from the request URL).
 #[derive(Clone)]
 pub struct WidgetDataFn(pub(crate) DataFnInner);
 
 impl WidgetDataFn {
-    /// Create from any `async fn(AuthUser) -> WidgetPayload`.
+    /// Create from any `async fn(AuthUser) -> WidgetPayload` —
+    /// per-request params are dropped on the floor. Use when the
+    /// widget renders the same thing regardless of UI controls
+    /// (KPI counts, registry sizes, etc.).
     pub fn new<F, Fut>(f: F) -> Self
     where
         F: Fn(AuthUser) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = WidgetPayload> + Send + 'static,
     {
-        Self(Arc::new(move |user| Box::pin(f(user))))
+        Self(Arc::new(move |user, _params| Box::pin(f(user))))
+    }
+
+    /// Create from `async fn(AuthUser, WidgetParams) ->
+    /// WidgetPayload`. Use for filterable widgets — the line
+    /// chart reads `params.period` to switch between 7d / 30d /
+    /// 90d views, a future table widget might read
+    /// `params.raw.get("status")` for status filtering, etc.
+    pub fn with_params<F, Fut>(f: F) -> Self
+    where
+        F: Fn(AuthUser, WidgetParams) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = WidgetPayload> + Send + 'static,
+    {
+        Self(Arc::new(move |user, params| Box::pin(f(user, params))))
     }
 }
 
