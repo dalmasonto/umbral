@@ -216,6 +216,33 @@ if user.profile.is_loaded() && user.profile.resolved().is_none() {
 
 The back-link discovery requires **exactly one** UNIQUE FK on the child pointing at the parent. If the child has two unique FKs to the same parent (rare but possible), `prefetch_related` errors loudly naming the candidates and suggesting you either rename one or drop the `unique` attribute. If the child has *no* unique FK to the parent, the error tells you to add `#[umbra(unique)]`.
 
+### Cross-crate back-link — `auth_user.profile().await?`
+
+`OneToOne<C>` as a struct field needs the parent type to be in your crate or one you can edit. That doesn't fit `AuthUser`, which lives in `umbra-auth` and you don't want to fork. For exactly this case the derive macro emits a **trait-based reverse-OneToOne accessor** alongside the existing reverse-FK trait:
+
+```rust
+// In your app crate.
+#[derive(Model)]
+pub struct Profile {
+    pub id: i64,
+    #[umbra(unique, on_delete = "cascade")]
+    pub user: ForeignKey<AuthUser>,   // unique → o2o
+    pub bio: String,
+}
+
+// Anywhere with an AuthUser in scope:
+let user: AuthUser = ...;
+if let Some(profile) = user.profile().await? {
+    println!("{}", profile.bio);
+}
+```
+
+The macro emits both `pub trait ProfileUserOneToOneReverse { async fn profile(&self) -> Result<Option<Profile>, sqlx::Error> }` and `impl ProfileUserOneToOneReverse for AuthUser { ... }` in your crate — the same trait-on-foreign-type pattern that powers reverse-FK (`user.profile_set()`). Rust's orphan rule allows `impl LocalTrait for ForeignType`, so the accessor works without touching `AuthUser` at all.
+
+Naming is `<child_snake>()`, with `<child_snake>_via_<field>()` disambiguating when one child has multiple unique FKs to the same parent. The accessor is only emitted when the FK carries `#[umbra(unique)]` — a plain FK gets the `_set()` form but not the o2o form, since the cardinality is `0..N`.
+
+This is the right shape for `request.user.profile.avatar`-style templating across crates: one method call, one `LIMIT 1` query, no need for the user to know the back-link convention.
+
 ### Unique-constraint violations in the admin
 
 Trying to create a second `Profile` for a user who already has one trips the UNIQUE constraint. The admin surfaces this as **"A record with this `user` already exists."** rather than a generic "database error" — the column name comes from the parser in `umbra-admin/src/util.rs::parse_unique_violation_column`, which handles both SQLite (`UNIQUE constraint failed: profile.user`) and Postgres (`Key (user)=(7) already exists.`) message formats.

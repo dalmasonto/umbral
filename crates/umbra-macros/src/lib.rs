@@ -1272,6 +1272,12 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
     // type from this Child get `<child_snake>_via_<field>_set`
     // names instead of a colliding `<child_snake>_set`.
     let mut reverse_fk_entries: Vec<(syn::Ident, syn::Type)> = Vec::new();
+    // Cross-crate reverse-OneToOne accessor — parallel collector. Filled
+    // only for `#[umbra(unique)] pub <f>: ForeignKey<Parent>` (the
+    // OneToOne shape). Same trait-impl trick as reverse-FK (gap #105),
+    // so `parent.<child_snake>().await? -> Option<Child>` works across
+    // crates without touching the parent struct.
+    let mut reverse_o2o_entries: Vec<(syn::Ident, syn::Type)> = Vec::new();
     for field in fields.iter() {
         let field_name = field.ident.as_ref().unwrap();
         let field_name_str = field_name.to_string();
@@ -1290,6 +1296,15 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             FieldKind::ForeignKey(inner_ty) => {
                 if !field_attr.no_reverse {
                     reverse_fk_entries.push((field_name.clone(), (**inner_ty).clone()));
+                    // A UNIQUE FK is a OneToOne in disguise — emit the
+                    // ergonomic `parent.<child>()` accessor in addition
+                    // to `parent.<child>_set()`. The set variant still
+                    // works (at most one row); the o2o variant just
+                    // skips the QuerySet round-trip for callers who
+                    // know cardinality is 1.
+                    if field_attr.unique {
+                        reverse_o2o_entries.push((field_name.clone(), (**inner_ty).clone()));
+                    }
                 }
                 hydrate_arms.push(quote! {
                     #field_name_str => {
@@ -1560,6 +1575,79 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         })
         .collect();
 
+    // Cross-crate reverse-OneToOne accessor — same trait-trick as
+    // reverse-FK (above), but the method returns `Option<Child>`
+    // directly (not a QuerySet) because the UNIQUE constraint
+    // guarantees at most one row. Disambiguation is per-parent-type
+    // among the UNIQUE FKs only, separate from the reverse-FK count
+    // (a child with `user: FK<U> + unique` AND `manager: FK<U>` gets
+    // `customer()` for the o2o and `customer_via_user_set()` +
+    // `customer_via_manager_set()` for the FK reverses).
+    let mut o2o_parent_type_counts: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    for (_, parent_ty) in &reverse_o2o_entries {
+        let key = quote!(#parent_ty).to_string();
+        *o2o_parent_type_counts.entry(key).or_insert(0) += 1;
+    }
+    let reverse_o2o_impls: Vec<TokenStream2> = reverse_o2o_entries
+        .iter()
+        .map(|(field_ident, parent_ty)| {
+            let key = quote!(#parent_ty).to_string();
+            let count = o2o_parent_type_counts.get(&key).copied().unwrap_or(1);
+            let accessor_name = if count > 1 {
+                format_ident!("{}_via_{}", child_snake, field_ident)
+            } else {
+                format_ident!("{}", child_snake)
+            };
+            let fk_const = format_ident!("{}", to_screaming_snake_case(&field_ident.to_string()));
+            let field_pascal = to_pascal_case(&field_ident.to_string());
+            let trait_name = format_ident!("{}{}OneToOneReverse", struct_name, field_pascal);
+            let trait_doc = format!(
+                "Reverse-OneToOne trait emitted by `#[derive(Model)]` for the \
+                 UNIQUE FK `{}::{}`. Importing this trait lets callers spell \
+                 `parent.{}().await?` to get `Option<{}>` filtered to the \
+                 (at-most-one) child whose `{}` FK points at the parent. \
+                 Trait-based emission (mirrors gap #105) sidesteps the orphan \
+                 rule, so the accessor works even when the parent type is \
+                 defined in another crate — the canonical case is a model in \
+                 an app crate declaring `#[umbra(unique)] pub user: \
+                 ForeignKey<AuthUser>`.",
+                struct_name, field_ident, accessor_name, struct_name, field_ident,
+            );
+            quote! {
+                #[doc = #trait_doc]
+                pub trait #trait_name {
+                    fn #accessor_name(
+                        &self,
+                    ) -> impl ::core::future::Future<
+                        Output = ::core::result::Result<
+                            ::core::option::Option<#struct_name>,
+                            ::sqlx::Error,
+                        >,
+                    > + ::core::marker::Send;
+                }
+                impl #trait_name for #parent_ty {
+                    fn #accessor_name(
+                        &self,
+                    ) -> impl ::core::future::Future<
+                        Output = ::core::result::Result<
+                            ::core::option::Option<#struct_name>,
+                            ::sqlx::Error,
+                        >,
+                    > + ::core::marker::Send {
+                        let __pk = <Self as ::umbra::orm::Model>::primary_key(self);
+                        async move {
+                            #struct_name::objects()
+                                .filter(#module_name::#fk_const.eq(__pk))
+                                .first()
+                                .await
+                        }
+                    }
+                }
+            }
+        })
+        .collect();
+
     // Gap 19: emit the `pk_i64` override only when the model's PK is
     // `i64`. Non-i64 PK models inherit the default (returns None) and
     // become a silent no-op for prefetch_related, matching the rest
@@ -1690,6 +1778,12 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         // One inherent-impl block per FK on this Child; multiple FKs
         // to the same parent are disambiguated with the field name.
         #(#reverse_fk_impls)*
+
+        // Cross-crate reverse-OneToOne accessors emitted on each
+        // UNIQUE FK target. Like the reverse-FK accessors above but
+        // returns `Option<Child>` directly because the UNIQUE
+        // constraint guarantees at most one row.
+        #(#reverse_o2o_impls)*
 
         #[allow(clippy::module_inception)]
         pub mod #module_name {
