@@ -1,83 +1,108 @@
 {#
   card.html
   =========
-  Summary card widget — the everyday "total sales / orders /
-  customers" tile.
-
-  Layout:
+  Summary card widget — modeled on the user-supplied MetricPulse
+  reference. Three optional layers in a vertical stack:
 
     ┌──────────────────────────────────────────────┐
-    │ TITLE                              [icon]    │
+    │ [icon]                       [↑ +12.5%]      │  ← icon (left) + delta pill (right)
     │                                              │
-    │ unit                       value-large       │
+    │ TOTAL REVENUE                                │  ← uppercase label
+    │ $12,450.00                                   │  ← big metric (32px)
+    │ Last 30 days                                 │  ← optional subtitle
     │                                              │
-    │ subtitle           ↑ 12.3% delta-label       │
+    │ ▁▂▁▂▃▄▃▅▄▆▅▇▆█▇▆▇█       (sparkline)        │  ← optional fade-right trail
     └──────────────────────────────────────────────┘
 
   Payload shape (CardPayload):
-    { value, unit?, icon?, subtitle?, delta_percent?, delta_label? }
+    { value, unit?, icon?, subtitle?, delta_percent?, delta_label?, sparkline? }
 
-  All optionals fall through cleanly when absent — a payload with
-  just `value` set renders a minimal "big number" card.
+  Theme tokens:
+    - All neutrals come from --surface-container / --outline-variant
+      / --on-surface family so the card matches the rest of the
+      admin in both light and dark.
+    - Delta pill + sparkline stroke use semantic accents
+      (emerald-400 for positive, red-400 for negative). These
+      stay readable across both themes; the framework's only
+      defined semantic token is --error, which we use for the
+      destructive-action surface.
 #}
 
 {% macro card_widget(title, payload) %}
-<div class="card-widget h-full flex flex-col justify-between p-md">
-  {# Header row — title left, optional icon right. #}
+{%- set has_delta = payload.delta_percent is not none -%}
+{%- if has_delta -%}
+  {%- set delta = payload.delta_percent -%}
+  {%- if delta > 0 -%}
+    {%- set delta_tone = "emerald" -%}
+    {%- set delta_arrow = "trending-up" -%}
+  {%- elif delta < 0 -%}
+    {%- set delta_tone = "red" -%}
+    {%- set delta_arrow = "trending-down" -%}
+  {%- else -%}
+    {%- set delta_tone = "outline" -%}
+    {%- set delta_arrow = "minus" -%}
+  {%- endif -%}
+{%- endif -%}
+
+<div class="card-widget h-full flex flex-col justify-between gap-md p-md group">
+
+  {# === Top row: icon (left) + delta pill (right) =================== #}
   <div class="flex items-start justify-between gap-sm">
-    <p class="text-label-sm text-outline uppercase tracking-wider truncate">{{ title }}</p>
     {% if payload.icon %}
-    <div class="w-8 h-8 rounded-lg bg-primary-container/40 border border-primary/15 flex items-center justify-center flex-shrink-0">
-      <i data-lucide="{{ payload.icon }}" class="w-4 h-4 text-on-primary-container"></i>
+    <div class="w-9 h-9 rounded-lg bg-surface-container-high border border-outline-variant flex items-center justify-center flex-shrink-0">
+      <i data-lucide="{{ payload.icon }}" class="w-[18px] h-[18px] text-on-surface"></i>
     </div>
+    {% else %}
+    {# Empty placeholder keeps the delta pill flush-right when no icon. #}
+    <div class="w-9 h-9 flex-shrink-0"></div>
+    {% endif %}
+
+    {% if has_delta %}
+    <span
+      class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-label-sm text-label-sm tabular-nums flex-shrink-0
+             {% if delta_tone == 'emerald' %}bg-emerald-500/10 text-emerald-400{% endif %}
+             {% if delta_tone == 'red' %}bg-red-500/10 text-red-400{% endif %}
+             {% if delta_tone == 'outline' %}bg-surface-container-high text-on-surface-variant{% endif %}"
+      title="{{ payload.delta_label or 'vs previous period' }}"
+    >
+      <i data-lucide="{{ delta_arrow }}" class="w-3.5 h-3.5"></i>
+      <span>{{ "+" if delta > 0 else "" }}{{ delta | round(1) }}%</span>
+    </span>
     {% endif %}
   </div>
 
-  {# Value row — unit (small, muted, left) + value (big, right). #}
-  <div class="flex items-baseline justify-between gap-sm mt-sm">
-    {% if payload.unit %}
-    <span class="text-label-md text-on-surface-variant uppercase tracking-wide font-medium flex-shrink-0">
-      {{ payload.unit }}
-    </span>
-    {% else %}
-    <span></span>
-    {% endif %}
-    <span class="font-h2 text-h2 text-on-surface tabular-nums leading-none truncate" title="{{ payload.value }}">
-      {{ payload.value }}
-    </span>
-  </div>
-
-  {# Footer row — subtitle + growth indicator. Whole row hidden
-     when both are absent so empty cards collapse cleanly. #}
-  {% if payload.subtitle or payload.delta_percent is not none %}
-  <div class="flex items-center justify-between gap-sm mt-sm pt-sm border-t border-outline-variant/40">
-    {% if payload.subtitle %}
-    <span class="text-label-sm text-on-surface-variant truncate">{{ payload.subtitle }}</span>
-    {% else %}
-    <span></span>
-    {% endif %}
-
-    {% if payload.delta_percent is not none %}
-      {%- set delta = payload.delta_percent -%}
-      {%- if delta > 0 -%}
-        {%- set tone_color = "text-emerald-400 dark:text-emerald-400" -%}
-        {%- set arrow = "trending-up" -%}
-      {%- elif delta < 0 -%}
-        {%- set tone_color = "text-red-400 dark:text-red-400" -%}
-        {%- set arrow = "trending-down" -%}
-      {%- else -%}
-        {%- set tone_color = "text-on-surface-variant" -%}
-        {%- set arrow = "minus" -%}
-      {%- endif -%}
-    <span class="inline-flex items-center gap-1 text-label-sm font-medium tabular-nums {{ tone_color }}">
-      <i data-lucide="{{ arrow }}" class="w-3.5 h-3.5"></i>
-      <span>{{ delta | round(1) }}%</span>
-      {% if payload.delta_label %}
-      <span class="text-on-surface-variant font-normal ml-xs">{{ payload.delta_label }}</span>
+  {# === Body: label + big value (+ optional subtitle) =============== #}
+  <div class="min-w-0">
+    <p class="text-label-sm text-on-surface-variant uppercase tracking-wider mb-xs truncate">{{ title }}</p>
+    <div class="flex items-baseline gap-xs min-w-0">
+      {% if payload.unit %}
+      <span class="text-label-sm text-on-surface-variant font-medium flex-shrink-0">{{ payload.unit }}</span>
       {% endif %}
-    </span>
+      <span class="font-display text-3xl text-on-surface tabular-nums leading-none truncate" title="{{ payload.value }}">
+        {{ payload.value }}
+      </span>
+    </div>
+    {% if payload.subtitle %}
+    <p class="text-label-sm text-outline mt-xs truncate">{{ payload.subtitle }}</p>
     {% endif %}
   </div>
+
+  {# === Bottom: sparkline (optional) ================================= #}
+  {% if payload.sparkline and payload.sparkline | length > 1 %}
+    {%- set pts = payload.sparkline -%}
+    {%- set n = pts | length -%}
+    {%- set lo = pts | min -%}
+    {%- set hi = pts | max -%}
+    {%- set rng = (hi - lo) if (hi > lo) else 1.0 -%}
+    <div class="h-10 w-full overflow-hidden"
+         style="mask-image: linear-gradient(to right, black 75%, transparent); -webkit-mask-image: linear-gradient(to right, black 75%, transparent);">
+      <svg viewBox="0 0 100 20" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg"
+           class="w-full h-full fill-none stroke-2
+                  {% if delta_tone == 'red' %}stroke-red-400{% else %}stroke-emerald-400{% endif %}">
+        {%- set step = 100 / (n - 1) -%}
+        <path stroke-linecap="round" stroke-linejoin="round" d="{% for v in pts %}{% if loop.first %}M{% else %}L{% endif %}{{ (loop.index0 * step) | round(2) }},{{ (18 - ((v - lo) / rng) * 16) | round(2) }} {% endfor %}" />
+      </svg>
+    </div>
   {% endif %}
 </div>
 {% endmacro %}

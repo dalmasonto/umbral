@@ -1320,6 +1320,31 @@ async fn orders_between(
         .unwrap_or(0)
 }
 
+/// Daily sales totals for the last `days` days, oldest-first.
+/// Feeds the sparkline trail on the card widget.
+async fn daily_sales_trail(days: i64) -> Vec<f64> {
+    let now = chrono::Utc::now();
+    let mut out = Vec::with_capacity(days as usize);
+    for back in (0..days).rev() {
+        let end = now - chrono::Duration::days(back);
+        let start = end - chrono::Duration::days(1);
+        out.push(sales_between(start, end).await);
+    }
+    out
+}
+
+/// Daily order counts for the last `days` days, oldest-first.
+async fn daily_orders_trail(days: i64) -> Vec<f64> {
+    let now = chrono::Utc::now();
+    let mut out = Vec::with_capacity(days as usize);
+    for back in (0..days).rev() {
+        let end = now - chrono::Duration::days(back);
+        let start = end - chrono::Duration::days(1);
+        out.push(orders_between(start, end).await as f64);
+    }
+    out
+}
+
 fn shop_total_sales_widget() -> umbra_admin::Widget {
     use umbra_admin::{CardPayload, Span, Widget, WidgetDataFn, WidgetKind, WidgetPayload};
     Widget {
@@ -1335,6 +1360,7 @@ fn shop_total_sales_widget() -> umbra_admin::Widget {
 
             let current = sales_between(month_ago, now).await;
             let previous = sales_between(two_months_ago, month_ago).await;
+            let trail = daily_sales_trail(30).await;
 
             WidgetPayload::Card(
                 CardPayload::new(umbra_admin::humanize_number(current))
@@ -1342,7 +1368,8 @@ fn shop_total_sales_widget() -> umbra_admin::Widget {
                     .icon("dollar-sign")
                     .subtitle("Last 30 days")
                     .growth(current, previous)
-                    .delta_label("vs prior 30d".to_string()),
+                    .delta_label("vs prior 30d".to_string())
+                    .sparkline(trail),
             )
         }),
     }
@@ -1363,6 +1390,7 @@ fn shop_orders_widget() -> umbra_admin::Widget {
 
             let current = orders_between(month_ago, now).await;
             let previous = orders_between(two_months_ago, month_ago).await;
+            let trail = daily_orders_trail(30).await;
 
             WidgetPayload::Card(
                 CardPayload::new(umbra_admin::humanize_number(current as f64))
@@ -1370,7 +1398,8 @@ fn shop_orders_widget() -> umbra_admin::Widget {
                     .icon("shopping-cart")
                     .subtitle("Last 30 days")
                     .growth(current as f64, previous as f64)
-                    .delta_label("vs prior 30d".to_string()),
+                    .delta_label("vs prior 30d".to_string())
+                    .sparkline(trail),
             )
         }),
     }
@@ -1417,13 +1446,23 @@ fn shop_avg_order_value_widget() -> umbra_admin::Widget {
             let prev_orders = orders_between(two_months_ago, month_ago).await.max(1) as f64;
             let prev_aov = prev_sales / prev_orders;
 
+            // Daily AOV trail — sales/orders per day, last 30 days.
+            let sales_trail = daily_sales_trail(30).await;
+            let orders_trail = daily_orders_trail(30).await;
+            let aov_trail: Vec<f64> = sales_trail
+                .iter()
+                .zip(orders_trail.iter())
+                .map(|(s, o)| if *o > 0.0 { s / o } else { 0.0 })
+                .collect();
+
             WidgetPayload::Card(
                 CardPayload::new(umbra_admin::format_thousands(cur_aov))
                     .unit("USD")
                     .icon("trending-up")
                     .subtitle("Per order, 30d")
                     .growth(cur_aov, prev_aov)
-                    .delta_label("vs prior 30d".to_string()),
+                    .delta_label("vs prior 30d".to_string())
+                    .sparkline(aov_trail),
             )
         }),
     }

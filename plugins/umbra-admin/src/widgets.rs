@@ -146,6 +146,13 @@ pub struct CardPayload {
     pub delta_percent: Option<f64>,
     /// Optional comparison label, e.g. "vs last month".
     pub delta_label: Option<String>,
+    /// Optional trend trail — a flat series of N points the
+    /// renderer plots as a fade-right sparkline under the value.
+    /// X is implicit (evenly spaced); Y autoscales between
+    /// min/max. Pair with `growth(...)` so the pill matches the
+    /// trail visually. Keep the series small (7–30 points) —
+    /// anything denser turns into noise at sparkline scale.
+    pub sparkline: Option<Vec<f64>>,
 }
 
 impl CardPayload {
@@ -160,6 +167,7 @@ impl CardPayload {
             subtitle: None,
             delta_percent: None,
             delta_label: None,
+            sparkline: None,
         }
     }
 
@@ -202,6 +210,15 @@ impl CardPayload {
     /// the comparison label" (e.g. `"vs prior 30d"`).
     pub fn delta_label(mut self, label: impl Into<String>) -> Self {
         self.delta_label = Some(label.into());
+        self
+    }
+
+    /// Attach a trend trail rendered as a fade-right sparkline
+    /// under the value. Pass 7–30 raw numbers (daily totals,
+    /// hourly counts, etc.); the renderer autoscales and colors
+    /// the stroke to match [`Self::delta_percent`]'s sign.
+    pub fn sparkline(mut self, points: impl IntoIterator<Item = f64>) -> Self {
+        self.sparkline = Some(points.into_iter().collect());
         self
     }
 }
