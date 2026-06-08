@@ -8,11 +8,36 @@
     .tabular-nums {
         font-variant-numeric: tabular-nums;
     }
-    /* Sidebar scrollbar: inherits from the global `*` rule in
-       css/input.css now (same `outline-variant` thumb on
-       `surface-container` track at 6px / 10px radius). No
-       sidebar-specific override needed — keeping the whole admin
-       on one scrollbar style. */
+    /* Custom thin scrollbar for the sidebar — theme-aware via tokens.
+       Kept at 3-4px (tighter than the global 4px rail) because the
+       sidebar is a navigation column where every horizontal pixel
+       counts. Color tokens match the global rule so the rail still
+       reads as the same family across the admin. */
+    #umbra-admin-sidebar,
+    #sidebar-nav {
+        scrollbar-width: thin;
+        scrollbar-color: var(--outline-variant) var(--surface-container);
+    }
+    #umbra-admin-sidebar::-webkit-scrollbar {
+        width: 4px;
+    }
+    #sidebar-nav::-webkit-scrollbar {
+        width: 3px;
+    }
+    #umbra-admin-sidebar::-webkit-scrollbar-track {
+        background: var(--surface-container);
+    }
+    #sidebar-nav::-webkit-scrollbar-track {
+        background: var(--surface-container);
+    }
+    #umbra-admin-sidebar::-webkit-scrollbar-thumb {
+        background: var(--outline-variant);
+        border-radius: 10px;
+    }
+    #sidebar-nav::-webkit-scrollbar-thumb {
+        background: var(--outline-variant);
+        border-radius: 10px;
+    }
     /* Topbar glass effect — translucent over the page background.
      Uses var(--surface-container) so light mode gets a light glass,
      dark mode a dark glass. */

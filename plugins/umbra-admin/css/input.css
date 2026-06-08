@@ -102,12 +102,13 @@ textarea:disabled {
   scrollbar-color: var(--outline-variant) var(--surface-container);
 }
 /* Vertical AND horizontal — `width` styles the vertical rail,
-   `height` styles the horizontal one. Same 6px on both so an x-
-   scrollbar (changelist tables, data-table wide content) reads
-   the same as a y-scrollbar. */
+   `height` styles the horizontal one. 4px matches the sidebar's
+   thin-rail aesthetic; the sidebar itself stays a touch tighter
+   (3-4px) via its own override in `base.html` because that
+   column has the least horizontal real-estate to spare. */
 *::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 4px;
+  height: 4px;
 }
 *::-webkit-scrollbar-track {
   background: var(--surface-container);
