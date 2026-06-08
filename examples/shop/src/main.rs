@@ -114,16 +114,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 // KPI cards on top (most-watched daily), then the
                 // bar chart, then recent signups feed at the
                 // bottom.
+                //
+                // Model-cards section: pick a curated subset via
+                // the type-safe `models![T, U, V]` macro instead of
+                // raw table strings — renaming a struct or its
+                // `#[umbra(table = "...")]` propagates here
+                // automatically. Use `.dashboard_models_hidden()`
+                // to drop the section entirely (the 200-model
+                // enterprise case), `.dashboard_models_all()` for
+                // every registered model (default).
+                .dashboard_models_only(&umbra::models![
+                    ecommerce::models::Product,
+                    ecommerce::models::Order,
+                    ecommerce::models::Customer,
+                    ecommerce::models::Brand,
+                    ecommerce::models::Coupon,
+                    content::models::Post,
+                ])
                 .register_widget(shop_total_sales_widget())
                 .register_widget(shop_orders_widget())
                 .register_widget(shop_customers_widget())
                 .register_widget(shop_avg_order_value_widget())
-                .register_widget(
-                    umbra_admin::builtin_total_models_widget().with_span(8, 2),
-                )
-                .register_widget(
-                    umbra_admin::builtin_recent_users_widget().with_span(4, 2),
-                ),
+                .register_widget(umbra_admin::builtin_total_models_widget().with_span(8, 2))
+                .register_widget(umbra_admin::builtin_recent_users_widget().with_span(4, 2)),
         )
         // REST: three resources, three different auth + permission
         // postures, plus per-resource field-exposure controls. The

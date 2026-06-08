@@ -31,6 +31,35 @@ pub mod prelude {
         Form, IntoResponse, Json, JsonResponse, Path, Query, Router, delete, get, patch, post, put,
     };
     pub use crate::{App, AppBuilder, Environment, Settings};
+    // `models![Product, Order, Customer]` — type-safe shorthand
+    // for "the TABLE strings of these models." Brought into the
+    // prelude because it pairs with the rest of the model APIs.
+    pub use crate::models;
+}
+
+/// Resolve a list of `Model` types to their `TABLE` strings.
+/// Use anywhere an API takes table names — admin config, model
+/// allowlists, anywhere — so a `#[umbra(table = "...")]` rename
+/// or a struct rename propagates without chasing string
+/// references through downstream config.
+///
+/// ```rust,ignore
+/// use umbra::prelude::*;
+/// use ecommerce::models::{Product, Order, Customer};
+///
+/// AdminPlugin::default()
+///     .dashboard_models_only(&models![Product, Order, Customer])
+/// ```
+///
+/// Each type must implement `umbra::orm::Model` (every
+/// `#[derive(Model)]` struct does). Expansion is a plain array
+/// literal `[T::TABLE, U::TABLE, ...]` so you can pass it as
+/// `&models![...]` to any `&[&str]`-accepting API.
+#[macro_export]
+macro_rules! models {
+    ($($model:ty),+ $(,)?) => {
+        [$(<$model as $crate::orm::Model>::TABLE),+]
+    };
 }
 
 /// Re-export of `serde_json` for use in macro-generated code.

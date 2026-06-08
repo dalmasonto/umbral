@@ -27,3 +27,9 @@ serde_json = "1"
 # with matching feature flags. Feature set mirrors umbra-core: native
 # Sqlite + Postgres + chrono / uuid / json.
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "postgres", "chrono", "uuid", "json"] }
+
+[dev-dependencies]
+# `tests/models_macro.rs` declares throwaway `#[derive(Model)]`
+# structs to exercise the `models![T, U, V]` macro expansion.
+# `Model` requires `serde::{Serialize, Deserialize} + sqlx::FromRow`.
+serde = { version = "1", features = ["derive"] }
