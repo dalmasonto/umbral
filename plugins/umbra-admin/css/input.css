@@ -75,3 +75,42 @@ textarea:disabled {
 #umbra-admin-content {
   overflow-x: hidden;
 }
+
+/* Theme-adaptive scrollbars. The browser default scrollbar uses the
+   user-agent palette, which clashes with our dark theme — a recent-
+   signups feed inside a dark card surfaced as a thick light-grey
+   bar against the dark surface. Pinning the colors to design
+   tokens lets the same rule work in both light and dark themes
+   without per-theme overrides. `color-scheme` (set above) already
+   handles the OS-level cue; this gives us a uniform admin look on
+   top of it.
+
+   Firefox: `scrollbar-width` + `scrollbar-color`.
+   WebKit / Blink: pseudo-elements.
+   The selectors are global so cards, dropdowns, picker popovers,
+   and the main content all match. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--outline-variant) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--outline-variant);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--outline);
+  background-clip: content-box;
+  border: 2px solid transparent;
+}
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
