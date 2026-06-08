@@ -12,6 +12,26 @@
     .tabular-nums {
         font-variant-numeric: tabular-nums;
     }
+    /* Slanted grid mesh painted behind the top half of the page.
+       Hairline grid lines in `--outline-variant` (the same token
+       used by card borders) so the pattern stays subtle in BOTH
+       light and dark themes without any per-theme override. A
+       vertical mask fades the grid out before it reaches the auth
+       card, so the card sits on a clean background. Rotated by a
+       few degrees and scaled up to keep the corners filled after
+       the rotation crops them. `pointer-events-none` keeps the
+       mesh purely decorative. */
+    .login-grid-mesh {
+        background-image:
+            linear-gradient(to right, var(--outline-variant) 1px, transparent 1px),
+            linear-gradient(to bottom, var(--outline-variant) 1px, transparent 1px);
+        background-size: 56px 56px;
+        -webkit-mask-image: linear-gradient(to bottom, black 0%, transparent 100%);
+        mask-image: linear-gradient(to bottom, black 0%, transparent 100%);
+        transform: rotate(-4deg) scale(1.4);
+        transform-origin: 50% 0%;
+        opacity: 0.55;
+    }
 </style>
 {% endblock %}
 
@@ -22,8 +42,20 @@
 {% block body_attrs %}class="bg-surface-container min-h-screen flex items-center justify-center p-md text-on-surface"{% endblock %}
 
 {% block body %}
-    <!-- Auth container -->
-    <div class="w-full max-w-[420px]">
+    <!-- Decorative slanted grid mesh in the upper half of the page.
+         Sits behind everything (z-0 with the auth container at z-10).
+         55vh tall, so it fades out well before the footer. The CSS
+         lives in `extra_head` — theme adaptable via `--outline-variant`. -->
+    <div
+        class="fixed inset-x-0 top-0 h-[55vh] z-0 pointer-events-none overflow-hidden"
+        aria-hidden="true"
+    >
+        <div class="login-grid-mesh absolute inset-0"></div>
+    </div>
+
+    <!-- Auth container. `relative z-10` lifts it above the grid
+         mesh so the card never gets crossed by stray hairlines. -->
+    <div class="relative z-10 w-full max-w-[420px]">
         <!-- Brand identity -->
         <div class="flex flex-col items-center mb-xl">
             <div
