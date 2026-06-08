@@ -372,6 +372,25 @@ impl AdminPlugin {
         self
     }
 
+    /// Insert a section at a specific position in the dashboard.
+    /// Useful when a wrapper builder appended sections earlier
+    /// and you want a new one above them. `index` is clamped at
+    /// the current section count, so `usize::MAX` is equivalent
+    /// to [`Self::dashboard_section`].
+    ///
+    /// ```ignore
+    /// AdminPlugin::default()
+    ///   .dashboard_section(sales_section)
+    ///   .dashboard_section(system_section)
+    ///   // Slot a new section between the two:
+    ///   .dashboard_section_at(1, alerts_section)
+    /// ```
+    pub fn dashboard_section_at(mut self, index: usize, section: WidgetSection) -> Self {
+        let i = index.min(self.dashboard_sections.len());
+        self.dashboard_sections.insert(i, section);
+        self
+    }
+
     /// Override the heading shown above the model-cards section.
     /// Default "Models". Pair with `dashboard_models_subtitle`
     /// for a one-line explainer.

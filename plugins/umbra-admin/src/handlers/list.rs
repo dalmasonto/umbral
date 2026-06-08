@@ -282,33 +282,59 @@ pub(crate) async fn index(State(state): State<AdminState>, headers: HeaderMap) -
     // count path still routes through DynQuerySet::count so each
     // query goes through the same builder the changelist uses.
     //
-    // Filtering by `state.dashboard_models`:
-    //   - All     → every (app, model) pair (default)
-    //   - Hidden  → empty Vec, dashboard.html skips the section
-    //   - Only(t) → keep pairs whose table is in t, in t's order
-    //     (so the operator controls card order via the allowlist)
+    // Two distinct concerns:
+    //
+    // 1. Top-strip GLOBAL stats — Total Entries / Models / Plugins.
+    //    These describe the whole project regardless of which
+    //    cards the operator chose to surface, so they fan COUNTs
+    //    over EVERY registered (app, model) pair.
+    //
+    // 2. The Models card grid — narrowed by
+    //    `state.dashboard_models`:
+    //      - All     → every pair (default)
+    //      - Hidden  → empty Vec, the section is skipped
+    //      - Only(t) → keep pairs whose table is in t, in t's order
+    //
+    // Both share one COUNT fan-out keyed by table → no double round-
+    // trips. The fan-out runs concurrently so a 200-model project
+    // still pays one parallel batch on each dashboard load.
+    let all_pairs: Vec<&crate::view::SidebarModel> =
+        apps.iter().flat_map(|a| a.models.iter()).collect();
+    let count_futures = all_pairs.iter().map(|m| async move {
+        let count = match find_model(&m.table) {
+            Some((_, meta)) => DynQuerySet::for_meta(&meta).count().await.unwrap_or(0),
+            None => 0,
+        };
+        (m.table.clone(), count)
+    });
+    let counts: std::collections::HashMap<String, i64> =
+        futures_util::future::join_all(count_futures)
+            .await
+            .into_iter()
+            .collect();
+
+    // Global stats — from the FULL set, not the dashboard-filtered
+    // subset. "Total entries" answers "how many rows are in this
+    // project" honestly even when the operator has curated the
+    // model-cards grid down to 6 tiles.
+    let total_rows: i64 = counts.values().sum();
+    let model_count: usize = all_pairs.len();
+    let plugin_count: usize = apps.len();
+
+    // Filtered cards — reuses the precomputed counts.
     let model_cards: Vec<serde_json::Value> = {
-        let all_pairs: Vec<&crate::view::SidebarModel> =
-            apps.iter().flat_map(|a| a.models.iter()).collect();
-        let pairs: Vec<&crate::view::SidebarModel> = match &state.dashboard_models {
-            crate::DashboardModelsConfig::All => all_pairs,
+        let filtered: Vec<&crate::view::SidebarModel> = match &state.dashboard_models {
+            crate::DashboardModelsConfig::All => all_pairs.clone(),
             crate::DashboardModelsConfig::Hidden => Vec::new(),
             crate::DashboardModelsConfig::Only(allowlist) => allowlist
                 .iter()
                 .filter_map(|table| all_pairs.iter().find(|p| p.table == *table).copied())
                 .collect(),
         };
-        let count_futures = pairs.iter().map(|m| async move {
-            match find_model(&m.table) {
-                Some((_, meta)) => DynQuerySet::for_meta(&meta).count().await.unwrap_or(0),
-                None => 0,
-            }
-        });
-        let counts: Vec<i64> = futures_util::future::join_all(count_futures).await;
-        pairs
+        filtered
             .into_iter()
-            .zip(counts)
-            .map(|(sidebar_model, count)| {
+            .map(|sidebar_model| {
+                let count = counts.get(&sidebar_model.table).copied().unwrap_or(0);
                 serde_json::json!({
                     "table":  sidebar_model.table,
                     "label":  sidebar_model.label,
@@ -319,10 +345,6 @@ pub(crate) async fn index(State(state): State<AdminState>, headers: HeaderMap) -
             })
             .collect()
     };
-
-    let total_rows: i64 = model_cards.iter().filter_map(|c| c["count"].as_i64()).sum();
-    let model_count = model_cards.len();
-    let plugin_count = apps.len();
 
     // Hour/minute for the time-of-day greeting.
     use chrono::Utc;
