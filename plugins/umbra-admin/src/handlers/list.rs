@@ -264,11 +264,23 @@ pub(crate) async fn index(State(state): State<AdminState>, headers: HeaderMap) -
     // POV, even though each individual query is one COUNT). The
     // count path still routes through DynQuerySet::count so each
     // query goes through the same builder the changelist uses.
+    //
+    // Filtering by `state.dashboard_models`:
+    //   - All     → every (app, model) pair (default)
+    //   - Hidden  → empty Vec, dashboard.html skips the section
+    //   - Only(t) → keep pairs whose table is in t, in t's order
+    //     (so the operator controls card order via the allowlist)
     let model_cards: Vec<serde_json::Value> = {
-        // Flat list of every (app, model) pair so the concurrent
-        // futures stay aligned with the card-build order.
-        let pairs: Vec<&crate::view::SidebarModel> =
+        let all_pairs: Vec<&crate::view::SidebarModel> =
             apps.iter().flat_map(|a| a.models.iter()).collect();
+        let pairs: Vec<&crate::view::SidebarModel> = match &state.dashboard_models {
+            crate::DashboardModelsConfig::All => all_pairs,
+            crate::DashboardModelsConfig::Hidden => Vec::new(),
+            crate::DashboardModelsConfig::Only(allowlist) => allowlist
+                .iter()
+                .filter_map(|table| all_pairs.iter().find(|p| p.table == *table).copied())
+                .collect(),
+        };
         let count_futures = pairs.iter().map(|m| async move {
             match find_model(&m.table) {
                 Some((_, meta)) => DynQuerySet::for_meta(&meta).count().await.unwrap_or(0),

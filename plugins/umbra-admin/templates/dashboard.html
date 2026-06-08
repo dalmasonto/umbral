@@ -71,53 +71,14 @@
 {% endif %}
 
 {# ================================================================
-   Model cards grid — one card per registered model. Icon top-
-   right, count + "entries" label bottom-left, and a thin
-   progress bar at the bottom showing this model's share of
-   total rows across the app.
-   ================================================================ #}
-{% if model_cards %}
-<section class="mb-xl">
-  <div class="flex items-center justify-between mb-md">
-    <h2 class="font-h3 text-h3 text-on-surface">Models</h2>
-    <span class="text-label-sm text-outline tabular-nums">{{ model_cards | length }} total</span>
-  </div>
-  <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-6 gap-sm">
-    {% for card in model_cards %}
-    <a
-      href="{{ card.url }}"
-      class="group relative flex min-h-[104px] flex-col justify-between gap-md p-md bg-surface-container border border-outline-variant rounded-xl hover:bg-surface-container-high transition-all duration-200 cursor-pointer no-underline overflow-hidden"
-    >
-      <div class="relative flex items-start justify-between gap-sm">
-        <p class="text-label-sm text-outline uppercase tracking-wider truncate leading-snug group-hover:text-on-surface-variant transition-colors">{{ card.label }}</p>
-        <span class="w-9 h-9 rounded-lg bg-surface-container-high flex items-center justify-center flex-shrink-0 text-on-surface-variant group-hover:bg-surface-container-highest group-hover:text-on-surface transition-colors" aria-hidden="true">
-          <i data-lucide="{{ card.icon }}" class="w-[18px] h-[18px]"></i>
-        </span>
-      </div>
-      <div class="relative flex items-baseline gap-xs">
-        <p class="font-display text-2xl text-on-surface tabular-nums leading-none">{{ card.count }}</p>
-        <span class="text-label-sm text-outline">{{ "entry" if card.count == 1 else "entries" }}</span>
-      </div>
-      <div class="relative mt-auto">
-        <div class="h-1 bg-surface-container-low rounded-full overflow-hidden">
-          {% set fill_pct = (card.count / (total_rows + 1)) * 100 %}
-          <div class="h-full bg-primary/20 group-hover:bg-primary/40 transition-colors duration-300 rounded-full" style="width: {{ [fill_pct, 100] | min | round(1) }}%"></div>
-        </div>
-      </div>
-    </a>
-    {% endfor %}
-  </div>
-</section>
-{% endif %}
-
-{# ================================================================
-   Widget grid — per-kind loading skeleton lives here so the
-   first-paint matches the eventual widget shape (KPI / line /
-   bar / feed / table / card), preventing the page from jumping
-   when HTMX swaps in the real content.
+   Widget grid — Important data first, before the model registry.
+   Per-kind loading skeleton lives here so the first-paint matches
+   the eventual widget shape (KPI / card / line / bar / feed /
+   table), preventing the page from jumping when HTMX swaps in
+   the real content.
    ================================================================ #}
 {% if widgets %}
-<section>
+<section class="mb-xl">
   <div class="flex items-center justify-between mb-md">
     <h2 class="font-h3 text-h3 text-on-surface">Widgets</h2>
     <span class="text-label-sm text-outline">{{ widgets | length }} active</span>
@@ -200,8 +161,59 @@
     {% endfor %}
   </div>
 </section>
-{% else %}
-{% if not model_cards %}
+{% endif %}
+
+{# ================================================================
+   Model cards grid — one card per registered model. Icon top-
+   right, count + "entries" label bottom-left, and a thin
+   progress bar at the bottom showing this model's share of
+   total rows across the app.
+
+   Filtering happens in the handler via `DashboardModelsConfig`
+   (default `All`, configurable with `.dashboard_models_only(...)`
+   or `.dashboard_models_hidden()`) — `model_cards` here is just
+   the final slice the operator wants to see. An empty Vec hides
+   the whole section.
+   ================================================================ #}
+{% if model_cards %}
+<section class="mb-xl">
+  <div class="flex items-center justify-between mb-md">
+    <h2 class="font-h3 text-h3 text-on-surface">Models</h2>
+    <span class="text-label-sm text-outline tabular-nums">{{ model_cards | length }} total</span>
+  </div>
+  <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-6 gap-sm">
+    {% for card in model_cards %}
+    <a
+      href="{{ card.url }}"
+      class="group relative flex min-h-[104px] flex-col justify-between gap-md p-md bg-surface-container border border-outline-variant rounded-xl hover:bg-surface-container-high transition-all duration-200 cursor-pointer no-underline overflow-hidden"
+    >
+      <div class="relative flex items-start justify-between gap-sm">
+        <p class="text-label-sm text-outline uppercase tracking-wider truncate leading-snug group-hover:text-on-surface-variant transition-colors">{{ card.label }}</p>
+        <span class="w-9 h-9 rounded-lg bg-surface-container-high flex items-center justify-center flex-shrink-0 text-on-surface-variant group-hover:bg-surface-container-highest group-hover:text-on-surface transition-colors" aria-hidden="true">
+          <i data-lucide="{{ card.icon }}" class="w-[18px] h-[18px]"></i>
+        </span>
+      </div>
+      <div class="relative flex items-baseline gap-xs">
+        <p class="font-display text-2xl text-on-surface tabular-nums leading-none">{{ card.count }}</p>
+        <span class="text-label-sm text-outline">{{ "entry" if card.count == 1 else "entries" }}</span>
+      </div>
+      <div class="relative mt-auto">
+        <div class="h-1 bg-surface-container-low rounded-full overflow-hidden">
+          {% set fill_pct = (card.count / (total_rows + 1)) * 100 %}
+          <div class="h-full bg-primary/20 group-hover:bg-primary/40 transition-colors duration-300 rounded-full" style="width: {{ [fill_pct, 100] | min | round(1) }}%"></div>
+        </div>
+      </div>
+    </a>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
+{# Empty-state fallback — shown only when BOTH widgets and model
+   cards are empty. With the new ordering Widgets come first;
+   this block stays as the catch-all for fresh installs that
+   haven't registered anything yet. ================================ #}
+{% if not widgets and not model_cards %}
 <div class="flex flex-col items-center justify-center py-xl text-center">
   <div class="w-20 h-20 rounded-2xl bg-surface-container-low border border-outline-variant flex items-center justify-center mb-lg">
     <i data-lucide="layout-dashboard" class="w-10 h-10 text-outline/40"></i>
@@ -215,7 +227,6 @@
     <span class="px-lg py-sm rounded-xl border border-outline-variant bg-surface-container text-on-surface-variant font-label-md text-label-md cursor-default">No data yet</span>
   </div>
 </div>
-{% endif %}
 {% endif %}
 
 {# Command palette slot for Ctrl-K #}

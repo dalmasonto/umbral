@@ -126,6 +126,34 @@ use umbra::web::post;
 ///     .plugin(admin)
 ///     .build()?;
 /// ```
+/// How the dashboard renders its "Models" cards section.
+///
+/// Default: [`Self::All`] — every registered model gets a card.
+/// This works for a 5-20 model app but turns into a wall of 200
+/// cards on a real-world enterprise install. Use [`Self::Only`]
+/// to pick a curated subset, or [`Self::Hidden`] to drop the
+/// section entirely (e.g. when the operator's primary view is
+/// purely widget-driven).
+#[derive(Debug, Clone)]
+pub enum DashboardModelsConfig {
+    /// Default — show a card for every registered model.
+    All,
+    /// Hide the section entirely. The dashboard becomes:
+    /// greeting → quick stats → widgets, no model grid.
+    Hidden,
+    /// Show only these tables, in the given order. Unknown
+    /// table names are dropped silently (typo-safe; if a
+    /// plugin you reference is unregistered the rest still
+    /// render).
+    Only(Vec<String>),
+}
+
+impl Default for DashboardModelsConfig {
+    fn default() -> Self {
+        Self::All
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AdminPlugin {
     registry: AdminRegistry,
@@ -135,6 +163,9 @@ pub struct AdminPlugin {
     /// `/admin`. Override with `AdminPlugin::default().at("/myadmin")`.
     /// Always normalised to one leading slash, no trailing slash.
     base_path: String,
+    /// Dashboard model-cards config. Defaults to `All` so the
+    /// dashboard does something sensible on a fresh install.
+    dashboard_models: DashboardModelsConfig,
 }
 
 impl Default for AdminPlugin {
@@ -144,6 +175,7 @@ impl Default for AdminPlugin {
             widget_catalog: Vec::new(),
             branding: branding::AdminBranding::default(),
             base_path: "/admin".to_string(),
+            dashboard_models: DashboardModelsConfig::default(),
         }
     }
 }
@@ -258,6 +290,49 @@ impl AdminPlugin {
     pub fn base_path(&self) -> &str {
         &self.base_path
     }
+
+    /// Hide the dashboard's "Models" cards section entirely. Use
+    /// when the operator's primary view is widget-driven and a
+    /// long model grid would be noise (200-model enterprise
+    /// installs, single-purpose admins, etc.).
+    ///
+    /// ```ignore
+    /// AdminPlugin::default().dashboard_models_hidden()
+    /// ```
+    pub fn dashboard_models_hidden(mut self) -> Self {
+        self.dashboard_models = DashboardModelsConfig::Hidden;
+        self
+    }
+
+    /// Show only a curated subset of models on the dashboard, in
+    /// the given order. Unknown table names are dropped silently
+    /// (typo-safe — if one plugin is unregistered the rest still
+    /// render).
+    ///
+    /// ```ignore
+    /// AdminPlugin::default().dashboard_models_only(&[
+    ///     "product", "order", "customer",
+    /// ])
+    /// ```
+    ///
+    /// Type-safe alternative coming in a follow-up: a
+    /// `models![Product, Order, Customer]` macro that resolves
+    /// each type to its `Model::TABLE` so a rename in the
+    /// struct doesn't require updating string references here.
+    pub fn dashboard_models_only<S: Into<String> + Clone>(mut self, tables: &[S]) -> Self {
+        self.dashboard_models =
+            DashboardModelsConfig::Only(tables.iter().cloned().map(Into::into).collect());
+        self
+    }
+
+    /// Explicit reset to the default — show every registered
+    /// model. Useful when a wrapper builder has previously
+    /// configured a subset / hidden and you want the full grid
+    /// back.
+    pub fn dashboard_models_all(mut self) -> Self {
+        self.dashboard_models = DashboardModelsConfig::All;
+        self
+    }
 }
 
 /// Shared state injected into every route via [`axum::extract::State`].
@@ -268,6 +343,9 @@ struct AdminState {
     registry: Arc<AdminRegistry>,
     /// Dashboard widget catalog — registered at plugin-build time.
     widget_catalog: Arc<Vec<Widget>>,
+    /// Dashboard model-cards section config. Read by the
+    /// dashboard handler to filter (or skip) the model grid.
+    dashboard_models: DashboardModelsConfig,
 }
 
 impl AdminState {
@@ -341,6 +419,7 @@ impl Plugin for AdminPlugin {
         let state = AdminState {
             registry: Arc::new(self.registry.clone()),
             widget_catalog: Arc::new(catalog),
+            dashboard_models: self.dashboard_models.clone(),
         };
         Router::new()
             // Login / logout (no auth required)
