@@ -93,6 +93,36 @@ pub(super) fn hydrate_joined_rels<T: Model + HydrateRelated>(
     Ok(())
 }
 
+/// Extract one M2M child row from a JOIN'd row, given the field
+/// name and child model meta. Returns `Some(JsonValue::Object)`
+/// when the child PK column is non-null (= real match), `None`
+/// when the LEFT JOIN missed (no junction row for this parent —
+/// parent still appears once with all child cols NULL).
+pub(super) fn extract_m2m_child_json(
+    row: &sqlx::sqlite::SqliteRow,
+    field_name: &str,
+    child_meta: &crate::migrate::ModelMeta,
+) -> Result<Option<JsonValue>, sqlx::Error> {
+    let Some(pk_col) = child_meta.fields.iter().find(|c| c.primary_key) else {
+        return Ok(None);
+    };
+    let pk_alias = format!("{field_name}__{}", pk_col.name);
+    let pk_null = row
+        .try_get::<Option<i64>, _>(pk_alias.as_str())
+        .map(|v| v.is_none())
+        .unwrap_or(true);
+    if pk_null {
+        return Ok(None);
+    }
+    let mut obj = serde_json::Map::with_capacity(child_meta.fields.len());
+    for col in &child_meta.fields {
+        let alias = format!("{field_name}__{}", col.name);
+        let val = crate::orm::dynamic::decode_to_json_aliased(row, col, &alias)?;
+        obj.insert(col.name.clone(), val);
+    }
+    Ok(Some(JsonValue::Object(obj)))
+}
+
 /// Decode a primary-key column to JSON. SQLite stores integers,
 /// text, and UUIDs as TEXT-affinity values — the typed try_get
 /// paths handle the read; the json! macro takes care of the rest.

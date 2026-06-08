@@ -74,6 +74,34 @@ pub(super) fn hydrate_joined_rels<T: Model + HydrateRelated>(
     Ok(())
 }
 
+/// Postgres counterpart of
+/// [`super::backend_sqlite::extract_m2m_child_json`]. See that
+/// function for the algorithm — only the row type differs.
+pub(super) fn extract_m2m_child_json(
+    row: &sqlx::postgres::PgRow,
+    field_name: &str,
+    child_meta: &crate::migrate::ModelMeta,
+) -> Result<Option<JsonValue>, sqlx::Error> {
+    let Some(pk_col) = child_meta.fields.iter().find(|c| c.primary_key) else {
+        return Ok(None);
+    };
+    let pk_alias = format!("{field_name}__{}", pk_col.name);
+    let pk_null = row
+        .try_get::<Option<i64>, _>(pk_alias.as_str())
+        .map(|v| v.is_none())
+        .unwrap_or(true);
+    if pk_null {
+        return Ok(None);
+    }
+    let mut obj = serde_json::Map::with_capacity(child_meta.fields.len());
+    for col in &child_meta.fields {
+        let alias = format!("{field_name}__{}", col.name);
+        let val = crate::orm::dynamic::decode_pg_to_json_aliased(row, col, &alias)?;
+        obj.insert(col.name.clone(), val);
+    }
+    Ok(Some(JsonValue::Object(obj)))
+}
+
 /// Decode a primary-key column to JSON. Postgres preserves integer
 /// widths (i16 / i32 / i64), so we dispatch per SmallInt / Integer /
 /// BigInt instead of folding everything into i64 like the SQLite

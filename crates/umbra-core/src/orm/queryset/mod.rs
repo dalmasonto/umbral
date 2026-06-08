@@ -670,18 +670,19 @@ fn validate_join_related_fields<T: Model>(fields: &[String]) -> Result<(), sqlx:
                 T::NAME
             )));
         }
-        // M2M field name? Tell the caller to route through
-        // prefetch_related — M2M-via-JOIN is gap #43, not shipped.
+        // M2M field name? Post-#113 these go through the double
+        // LEFT JOIN path: apply_join_related emits
+        // `LEFT JOIN <junction> LEFT JOIN <child>` with aliased
+        // child cols, and fetch()'s dedup-aware path collects M2M
+        // children per parent. Trade-off documented at the join_related
+        // docstring — M2M JOINs multiply parent rows by avg
+        // cardinality, so prefetch_related stays the default for
+        // any list page where M2M cardinality isn't tiny.
         if T::M2M_RELATIONS
             .iter()
             .any(|r| r.field_name == field_name.as_str())
         {
-            return Err(sqlx::Error::Protocol(format!(
-                "umbra::orm::join_related: `{field_name}` is an M2M field on `{}`. M2M via \
-                 LEFT JOIN is gap #43 (not yet implemented); use `.prefetch_related(\"{field_name}\")` \
-                 to load the M2M rows in one batched query.",
-                T::NAME
-            )));
+            continue;
         }
         return Err(sqlx::Error::Protocol(format!(
             "umbra::orm::join_related: unknown field `{field_name}` on model `{}`",
@@ -864,41 +865,80 @@ impl<T: Model> QuerySet<T> {
             outer.expr(Expr::col((parent_alias.clone(), Alias::new(f.name))));
         }
         for field_name in &self.join_related {
-            let Some(fk_field) = T::FIELDS.iter().find(|f| f.name == field_name.as_str()) else {
-                continue;
-            };
-            let Some(related_table) = fk_field.fk_target else {
-                continue;
-            };
-            let Some(related_meta) = registered.iter().find(|m| m.table == related_table) else {
-                continue;
-            };
-            let Some(related_pk) = related_meta.fields.iter().find(|c| c.primary_key) else {
-                continue;
-            };
-            // Per-field table alias so two FKs to the SAME related
-            // table (e.g. `category` and `brand` both → `category`)
-            // each get a distinct identifier in the JOIN. Without
-            // this SQLite raises "ambiguous column name" on the
-            // second JOIN.
-            let join_alias = Alias::new(format!("__j_{field_name}"));
-            outer.join_as(
-                sea_query::JoinType::LeftJoin,
-                Alias::new(related_table),
-                join_alias.clone(),
-                Expr::col((parent_alias.clone(), Alias::new(field_name.as_str())))
-                    .equals((join_alias.clone(), Alias::new(related_pk.name.as_str()))),
-            );
-            // Aliased child cols pull from the per-field JOIN alias,
-            // so `category__name` and `brand__name` resolve to two
-            // different jr_category rows even though they share a
-            // table.
-            for col in &related_meta.fields {
-                let alias = format!("{}__{}", field_name, col.name);
-                outer.expr_as(
-                    Expr::col((join_alias.clone(), Alias::new(col.name.as_str()))),
-                    Alias::new(alias),
+            // FK branch first (the original path).
+            if let Some(fk_field) = T::FIELDS.iter().find(|f| f.name == field_name.as_str())
+                && let Some(related_table) = fk_field.fk_target
+                && let Some(related_meta) = registered.iter().find(|m| m.table == related_table)
+                && let Some(related_pk) = related_meta.fields.iter().find(|c| c.primary_key)
+            {
+                // Per-field table alias so two FKs to the SAME related
+                // table (e.g. `category` and `brand` both → `category`)
+                // each get a distinct identifier in the JOIN. Without
+                // this SQLite raises "ambiguous column name" on the
+                // second JOIN.
+                let join_alias = Alias::new(format!("__j_{field_name}"));
+                outer.join_as(
+                    sea_query::JoinType::LeftJoin,
+                    Alias::new(related_table),
+                    join_alias.clone(),
+                    Expr::col((parent_alias.clone(), Alias::new(field_name.as_str())))
+                        .equals((join_alias.clone(), Alias::new(related_pk.name.as_str()))),
                 );
+                // Aliased child cols pull from the per-field JOIN alias,
+                // so `category__name` and `brand__name` resolve to two
+                // different jr_category rows even though they share a
+                // table.
+                for col in &related_meta.fields {
+                    let alias = format!("{}__{}", field_name, col.name);
+                    outer.expr_as(
+                        Expr::col((join_alias.clone(), Alias::new(col.name.as_str()))),
+                        Alias::new(alias),
+                    );
+                }
+                continue;
+            }
+
+            // M2M branch (post-#113). Emit the double LEFT JOIN
+            // through the junction table:
+            //   LEFT JOIN <junction> AS __jm_<field>
+            //     ON __p.<parent_pk> = __jm_<field>.parent_id
+            //   LEFT JOIN <child_table> AS __j_<field>
+            //     ON __jm_<field>.child_id = __j_<field>.<child_pk>
+            // Aliased child cols use the same `<field>__<col>` shape
+            // as the FK branch so the decode helper can be reused.
+            if let Some(m2m_rel) = T::M2M_RELATIONS
+                .iter()
+                .find(|r| r.field_name == field_name.as_str())
+                && let Some(parent_pk) = T::FIELDS.iter().find(|f| f.primary_key)
+                && let Some(child_meta) =
+                    registered.iter().find(|m| m.table == m2m_rel.target_table)
+                && let Some(child_pk) = child_meta.fields.iter().find(|c| c.primary_key)
+            {
+                let junction_table = format!("{}_{}", T::TABLE, field_name);
+                let junction_alias = Alias::new(format!("__jm_{field_name}"));
+                let child_alias = Alias::new(format!("__j_{field_name}"));
+                outer.join_as(
+                    sea_query::JoinType::LeftJoin,
+                    Alias::new(junction_table),
+                    junction_alias.clone(),
+                    Expr::col((parent_alias.clone(), Alias::new(parent_pk.name)))
+                        .equals((junction_alias.clone(), Alias::new("parent_id"))),
+                );
+                outer.join_as(
+                    sea_query::JoinType::LeftJoin,
+                    Alias::new(m2m_rel.target_table),
+                    child_alias.clone(),
+                    Expr::col((junction_alias.clone(), Alias::new("child_id")))
+                        .equals((child_alias.clone(), Alias::new(child_pk.name.as_str()))),
+                );
+                for col in &child_meta.fields {
+                    let alias = format!("{}__{}", field_name, col.name);
+                    outer.expr_as(
+                        Expr::col((child_alias.clone(), Alias::new(col.name.as_str()))),
+                        Alias::new(alias),
+                    );
+                }
+                continue;
             }
         }
         *q = outer;
@@ -933,6 +973,16 @@ impl<T: Model> QuerySet<T> {
         // both backends, so the compiler can't infer DB from the values
         // alone. Naming DB explicitly pins which `FromRow` bound is
         // checked.
+        // Split join_fields into FK vs M2M groups up front. The
+        // M2M branch needs parent dedup (one parent row per JOIN
+        // combo would surface duplicate Ts to the caller); the FK
+        // branch is one-to-one with rows.
+        let (m2m_join_fields, fk_join_fields): (Vec<String>, Vec<String>) = join_fields
+            .iter()
+            .cloned()
+            .partition(|f| T::M2M_RELATIONS.iter().any(|r| r.field_name == f.as_str()));
+        let has_m2m_join = !m2m_join_fields.is_empty();
+
         let mut rows = match resolve_pool::<T>(self.explicit_pool.clone()) {
             DbPool::Sqlite(pool) => {
                 let mut q = self.build_query_for("sqlite");
@@ -942,19 +992,26 @@ impl<T: Model> QuerySet<T> {
                     sqlx::query_as_with::<sqlx::Sqlite, T, _>(&sql, values)
                         .fetch_all(&pool)
                         .await?
-                } else {
-                    // JOIN path: pull raw rows so we can decode the
-                    // aliased child columns alongside the parent.
+                } else if !has_m2m_join {
+                    // FK-only JOIN path: one row in → one T out.
                     let raw_rows = sqlx::query_with::<sqlx::Sqlite, _>(&sql, values)
                         .fetch_all(&pool)
                         .await?;
                     let mut typed = Vec::with_capacity(raw_rows.len());
                     for row in &raw_rows {
                         let mut t = <T as sqlx::FromRow<_>>::from_row(row)?;
-                        backend_sqlite::hydrate_joined_rels::<T>(&mut t, row, &join_fields)?;
+                        backend_sqlite::hydrate_joined_rels::<T>(&mut t, row, &fk_join_fields)?;
                         typed.push(t);
                     }
                     typed
+                } else {
+                    // Mixed (FK + M2M) or pure M2M JOIN path:
+                    // dedup parents, collect M2M children per
+                    // (parent_pk, field).
+                    let raw_rows = sqlx::query_with::<sqlx::Sqlite, _>(&sql, values)
+                        .fetch_all(&pool)
+                        .await?;
+                    dedup_decode_sqlite::<T>(&raw_rows, &fk_join_fields, &m2m_join_fields)?
                 }
             }
             DbPool::Postgres(pool) => {
@@ -965,17 +1022,22 @@ impl<T: Model> QuerySet<T> {
                     sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
                         .fetch_all(&pool)
                         .await?
-                } else {
+                } else if !has_m2m_join {
                     let raw_rows = sqlx::query_with::<sqlx::Postgres, _>(&sql, values)
                         .fetch_all(&pool)
                         .await?;
                     let mut typed = Vec::with_capacity(raw_rows.len());
                     for row in &raw_rows {
                         let mut t = <T as sqlx::FromRow<_>>::from_row(row)?;
-                        backend_pg::hydrate_joined_rels::<T>(&mut t, row, &join_fields)?;
+                        backend_pg::hydrate_joined_rels::<T>(&mut t, row, &fk_join_fields)?;
                         typed.push(t);
                     }
                     typed
+                } else {
+                    let raw_rows = sqlx::query_with::<sqlx::Postgres, _>(&sql, values)
+                        .fetch_all(&pool)
+                        .await?;
+                    dedup_decode_pg::<T>(&raw_rows, &fk_join_fields, &m2m_join_fields)?
                 }
             }
         };
@@ -3678,3 +3740,188 @@ enum SoftOrHardStatement {
 
 // `decode_agg_sqlite` / `decode_agg_pg` moved to
 // `backend_sqlite::decode_agg` / `backend_pg::decode_agg`.
+
+// =========================================================================
+// #113: M2M-via-JOIN dedup decoders
+//
+// When .join_related() includes one or more M2M fields, the result
+// set has one row per (parent, child) combo, so a parent with N
+// matching children appears N times. The caller wants ONE T per
+// parent with the M2M slot populated.
+//
+// The algorithm:
+//   - First time we see a parent PK: decode T via FromRow, hydrate
+//     any FK joins from this row.
+//   - Every subsequent row for the same parent: extract the M2M
+//     child JsonValue (or skip on LEFT JOIN miss).
+//   - Dedup children by (parent_pk, field, child_pk) so that
+//     joining TWO M2Ms doesn't multiply the child sets (the JOIN
+//     produces parent × m2m1 × m2m2 rows).
+//   - Hand each parent its M2M buckets via set_m2m_resolved_json.
+// =========================================================================
+
+fn dedup_decode_sqlite<T: Model + HydrateRelated>(
+    raw_rows: &[sqlx::sqlite::SqliteRow],
+    fk_join_fields: &[String],
+    m2m_join_fields: &[String],
+) -> Result<Vec<T>, sqlx::Error>
+where
+    T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>,
+{
+    let pk_name = T::FIELDS
+        .iter()
+        .find(|f| f.primary_key)
+        .map(|f| f.name)
+        .ok_or_else(|| {
+            sqlx::Error::Protocol(format!(
+                "umbra::orm::join_related: model `{}` has no primary key, M2M JOIN \
+                 dedup requires one",
+                T::NAME
+            ))
+        })?;
+    let registered = crate::migrate::registered_models();
+    let mut typed: Vec<T> = Vec::new();
+    let mut idx_by_pk: HashMap<i64, usize> = HashMap::new();
+    // (parent_pk, field) → Vec<JsonValue> + a Set tracking seen child PKs.
+    let mut buckets: HashMap<(i64, String), Vec<JsonValue>> = HashMap::new();
+    let mut seen_children: HashMap<(i64, String), std::collections::HashSet<i64>> = HashMap::new();
+    for row in raw_rows {
+        use sqlx::Row;
+        let Ok(parent_pk) = row.try_get::<i64, _>(pk_name) else {
+            continue;
+        };
+        if let std::collections::hash_map::Entry::Vacant(e) = idx_by_pk.entry(parent_pk) {
+            let mut t = <T as sqlx::FromRow<_>>::from_row(row)?;
+            backend_sqlite::hydrate_joined_rels::<T>(&mut t, row, fk_join_fields)?;
+            e.insert(typed.len());
+            typed.push(t);
+        }
+        for m2m_field in m2m_join_fields {
+            let Some(rel) = T::M2M_RELATIONS
+                .iter()
+                .find(|r| r.field_name == m2m_field.as_str())
+            else {
+                continue;
+            };
+            let Some(child_meta) = registered.iter().find(|m| m.table == rel.target_table) else {
+                continue;
+            };
+            let Some(child_json) =
+                backend_sqlite::extract_m2m_child_json(row, m2m_field, child_meta)?
+            else {
+                continue;
+            };
+            // Dedup by child PK so multi-M2M cartesian doesn't
+            // duplicate this field's children.
+            let child_pk = child_json
+                .as_object()
+                .and_then(|m| {
+                    let pk_col = child_meta.fields.iter().find(|c| c.primary_key)?;
+                    m.get(&pk_col.name)?.as_i64()
+                })
+                .unwrap_or(0);
+            let key = (parent_pk, m2m_field.clone());
+            let seen = seen_children.entry(key.clone()).or_default();
+            if seen.insert(child_pk) {
+                buckets.entry(key).or_default().push(child_json);
+            }
+        }
+    }
+    for ((parent_pk, field), children) in buckets {
+        if let Some(&idx) = idx_by_pk.get(&parent_pk) {
+            typed[idx].set_m2m_resolved_json(&field, children);
+        }
+    }
+    // LEFT JOIN miss handling: walk every (parent, field) pair
+    // we expected to populate and zero-init any slot that never
+    // got a hit. Without this a parent with no matching M2M
+    // children would leave its slot None — distinguishable from
+    // "loaded, empty" only by callers checking the absence.
+    for (&parent_pk, &idx) in idx_by_pk.iter() {
+        for field in m2m_join_fields {
+            if !seen_children.contains_key(&(parent_pk, field.clone())) {
+                typed[idx].set_m2m_resolved_json(field, Vec::new());
+            }
+        }
+    }
+    Ok(typed)
+}
+
+fn dedup_decode_pg<T: Model + HydrateRelated>(
+    raw_rows: &[sqlx::postgres::PgRow],
+    fk_join_fields: &[String],
+    m2m_join_fields: &[String],
+) -> Result<Vec<T>, sqlx::Error>
+where
+    T: for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
+{
+    let pk_name = T::FIELDS
+        .iter()
+        .find(|f| f.primary_key)
+        .map(|f| f.name)
+        .ok_or_else(|| {
+            sqlx::Error::Protocol(format!(
+                "umbra::orm::join_related: model `{}` has no primary key, M2M JOIN \
+                 dedup requires one",
+                T::NAME
+            ))
+        })?;
+    let registered = crate::migrate::registered_models();
+    let mut typed: Vec<T> = Vec::new();
+    let mut idx_by_pk: HashMap<i64, usize> = HashMap::new();
+    let mut buckets: HashMap<(i64, String), Vec<JsonValue>> = HashMap::new();
+    let mut seen_children: HashMap<(i64, String), std::collections::HashSet<i64>> = HashMap::new();
+    for row in raw_rows {
+        use sqlx::Row;
+        let Ok(parent_pk) = row.try_get::<i64, _>(pk_name) else {
+            continue;
+        };
+        if let std::collections::hash_map::Entry::Vacant(e) = idx_by_pk.entry(parent_pk) {
+            let mut t = <T as sqlx::FromRow<_>>::from_row(row)?;
+            backend_pg::hydrate_joined_rels::<T>(&mut t, row, fk_join_fields)?;
+            e.insert(typed.len());
+            typed.push(t);
+        }
+        for m2m_field in m2m_join_fields {
+            let Some(rel) = T::M2M_RELATIONS
+                .iter()
+                .find(|r| r.field_name == m2m_field.as_str())
+            else {
+                continue;
+            };
+            let Some(child_meta) = registered.iter().find(|m| m.table == rel.target_table) else {
+                continue;
+            };
+            let Some(child_json) = backend_pg::extract_m2m_child_json(row, m2m_field, child_meta)?
+            else {
+                continue;
+            };
+            let child_pk = child_json
+                .as_object()
+                .and_then(|m| {
+                    let pk_col = child_meta.fields.iter().find(|c| c.primary_key)?;
+                    m.get(&pk_col.name)?.as_i64()
+                })
+                .unwrap_or(0);
+            let key = (parent_pk, m2m_field.clone());
+            let seen = seen_children.entry(key.clone()).or_default();
+            if seen.insert(child_pk) {
+                buckets.entry(key).or_default().push(child_json);
+            }
+        }
+    }
+    for ((parent_pk, field), children) in buckets {
+        if let Some(&idx) = idx_by_pk.get(&parent_pk) {
+            typed[idx].set_m2m_resolved_json(&field, children);
+        }
+    }
+    // Same LEFT JOIN miss zero-init as the SQLite path.
+    for (&parent_pk, &idx) in idx_by_pk.iter() {
+        for field in m2m_join_fields {
+            if !seen_children.contains_key(&(parent_pk, field.clone())) {
+                typed[idx].set_m2m_resolved_json(field, Vec::new());
+            }
+        }
+    }
+    Ok(typed)
+}

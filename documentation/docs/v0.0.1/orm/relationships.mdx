@@ -420,4 +420,47 @@ Without `.prefetch_related(...)`, `M2M.resolved()` stays `None` and accessing th
 
 `.prefetch_related_many(&["tags", "categories"])` batches several relations at once.
 
-v1 scope: M2M only (`prefetch_related("comment_set")` for reverse-FK collections is a deferred follow-up); i64 parent PK only (matches the rest of the M2M plumbing).
+Scope: M2M, `ReverseSet<C>` reverse-FK collections, and `OneToOne<C>` (see [One-to-one relationships](#one-to-one-relationships)). All three flow through the same dispatch in `hydrate_prefetch_related`. i64 parent PK only (matches the rest of the M2M plumbing).
+
+## M2M via LEFT JOIN — `join_related("<m2m_field>")`
+
+An alternative to `prefetch_related` for M2M: instead of one extra round-trip, fold the M2M load into the main SELECT via a double LEFT JOIN through the junction. One query, but the row set multiplies by avg M2M cardinality (a parent with 3 tags appears as 3 rows pre-dedup).
+
+```rust
+let posts: Vec<Post> = Post::objects()
+    .filter(post::PUBLISHED.eq(true))
+    .join_related("tags")    // double LEFT JOIN
+    .fetch()
+    .await?;
+
+for p in &posts {
+    // Same shape as prefetch_related — populated M2M slot.
+    for tag in p.tags.resolved().unwrap_or_default() {
+        println!("{}: {}", p.title, tag.name);
+    }
+}
+```
+
+The framework dedups parents in the row decoder and collects each parent's M2M children into one `set_m2m_resolved_json` call. LEFT JOIN miss (parent with zero children) surfaces as `Some(&[])`, distinguishing "loaded, no children" from "not loaded" the same way `prefetch_related` does.
+
+Composes with FK `join_related` in one query:
+
+```rust
+Post::objects()
+    .join_related("category")  // FK join (one-to-one with rows)
+    .join_related("tags")      // M2M join (multiplies row count)
+    .fetch().await?;
+// → each post has resolved category + tags slot in one round-trip.
+```
+
+**When to choose which:**
+
+| | `prefetch_related("tags")` | `join_related("tags")` |
+|---|---|---|
+| Queries | 2 (parent IN + child IN) | 1 (double LEFT JOIN) |
+| Row count | One per parent | parent × avg M2M cardinality |
+| Network bytes | Compact (no parent dup) | Wider rows × duplication |
+| Best for | List pages with non-trivial M2M cardinality | Hot path detail / small fixed-set M2Ms (tags-on-post) |
+| Multi-M2M | Independent — each is one query | Cartesian (m2m_a × m2m_b) — measurable cost |
+
+For most list views `prefetch_related` is the right default. Reach for `join_related` when the second round-trip dominates AND the M2M cardinality is small + bounded.
