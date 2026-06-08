@@ -1,9 +1,15 @@
 {#
   line.html
   =========
-  Line chart widget renderer — SVG polyline, no external deps.
+  Time-series line/area chart — full-size sibling of the card
+  sparkline. Mounts ApexCharts on `data-chart-canvas`; reads
+  (x, y) pairs from hidden `data-chart-point[data-x][data-y]`
+  siblings. Theme tokens, animation, tooltip, hover markers all
+  come from `lineChartOptions(el)` in wrapper.html.
+
   Expects payload: { series: [{name, points: [{x, y}]}], x_type }
-  Renders the first series only for the minimal v1 shape.
+  Renders the first series only at v1 — multi-series support
+  layers on top of the same data-chart-point shape later.
 #}
 
 {% macro line_widget(title, payload) %}
@@ -14,46 +20,31 @@
     {%- set points = series.points -%}
     {%- set n = points | length -%}
     {% if n > 1 %}
-    {%- set max_y = points | map(attribute="y") | max -%}
-    {%- set min_y = points | map(attribute="y") | min -%}
-    {%- set range = (max_y - min_y) | float -%}
-    {%- set range = range if range > 0 else 1.0 -%}
-    {%- set chart_w = 100 -%}
-    {%- set chart_h = 64 -%}
-    <div class="flex-1 overflow-hidden">
-      <svg viewBox="0 0 {{ chart_w }} {{ chart_h }}" xmlns="http://www.w3.org/2000/svg"
-           class="w-full h-full" preserveAspectRatio="none">
-        {# Area fill #}
-        <defs>
-          <linearGradient id="line-grad-{{ title | replace(' ', '-') | lower }}" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stop-color="var(--primary)" stop-opacity="0.18"/>
-            <stop offset="100%" stop-color="var(--primary)" stop-opacity="0"/>
-          </linearGradient>
-        </defs>
-        <polygon
-          fill="url(#line-grad-{{ title | replace(' ', '-') | lower }})"
-          points="
-          0,{{ chart_h }}
-          {% for pt in points %}
-            {{ (loop.index0 / (n - 1) * chart_w) | round(1) }},{{ ((max_y - pt.y) / range * (chart_h - 6) + 3) | round(1) }}
-          {% endfor %}
-          {{ chart_w }},{{ chart_h }}
-          "
-        />
-        <polyline
-          fill="none"
-          stroke="var(--primary)"
-          stroke-width="1.5"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          points="
-          {%- for pt in points -%}
-            {{ (loop.index0 / (n - 1) * chart_w) | round(1) }},{{ ((max_y - pt.y) / range * (chart_h - 6) + 3) | round(1) }}
-            {{ " " if not loop.last else "" }}
-          {%- endfor -%}
-          "
-        />
-      </svg>
+    <div
+      class="flex-1 min-h-0 relative"
+      data-umbra-chart="line"
+      data-chart-series="{{ series.name }}"
+    >
+      {# Data points — hidden, read by initCharts. #}
+      {% for pt in points %}
+      <span
+        data-chart-point
+        data-x="{{ pt.x }}"
+        data-y="{{ pt.y }}"
+        hidden
+      ></span>
+      {% endfor %}
+
+      {# ApexCharts mount target. #}
+      <div data-chart-canvas class="absolute inset-0"></div>
+
+      {# No-JS / CDN-fail fallback — same SVG polyline shape as
+         the old hand-rolled renderer, kept just for graceful
+         degradation. initCharts() unhides it only when
+         ApexCharts can't load. #}
+      <div data-chart-unavailable class="absolute inset-0 hidden flex flex-col">
+        <p class="text-label-sm text-outline italic m-auto">Chart library unavailable</p>
+      </div>
     </div>
     {% else %}
     <p class="text-label-sm text-outline italic mt-auto">Not enough data</p>

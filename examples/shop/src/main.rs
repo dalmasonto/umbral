@@ -134,6 +134,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         .widget(shop_avg_order_value_widget()),
                 )
                 .dashboard_section(
+                    umbra_admin::WidgetSection::new("Trends")
+                        .subtitle("Daily sales + recent order activity")
+                        .widget(shop_daily_sales_chart())
+                        .widget(shop_recent_orders_table()),
+                )
+                .dashboard_section(
                     umbra_admin::WidgetSection::new("System")
                         .subtitle("Framework-wide health + recent activity")
                         .widget(
@@ -1496,6 +1502,93 @@ fn shop_avg_order_value_widget() -> umbra_admin::Widget {
                     .growth(cur_aov, prev_aov)
                     .delta_label("vs prior 30d".to_string())
                     .sparkline(aov_trail),
+            )
+        }),
+    }
+}
+
+/// Daily-sales line chart — full-size area chart with day-of-
+/// month x labels. Demonstrates `WidgetKind::Line` end-to-end.
+fn shop_daily_sales_chart() -> umbra_admin::Widget {
+    use umbra_admin::{
+        ChartPoint, LinePayload, Series, Span, Widget, WidgetDataFn, WidgetKind, WidgetPayload,
+    };
+    Widget {
+        key: "shop_daily_sales_chart",
+        title: "Daily Sales".to_string(),
+        kind: WidgetKind::Line,
+        default_span: Span { cols: 8, rows: 3 },
+        permission: None,
+        data: WidgetDataFn::new(|_user| async move {
+            let now = chrono::Utc::now();
+            let trail = daily_sales_trail(30).await;
+            let points: Vec<ChartPoint> = trail
+                .into_iter()
+                .enumerate()
+                .map(|(i, y)| {
+                    let day = now - chrono::Duration::days((29 - i as i64).max(0));
+                    ChartPoint {
+                        x: day.format("%b %-d").to_string(),
+                        y,
+                    }
+                })
+                .collect();
+            WidgetPayload::Line(LinePayload {
+                series: vec![Series {
+                    name: "USD".to_string(),
+                    points,
+                }],
+                x_type: "date".to_string(),
+            })
+        }),
+    }
+}
+
+/// Recent-orders table — five most-recent orders with a
+/// "View all →" link to the admin's order changelist.
+fn shop_recent_orders_table() -> umbra_admin::Widget {
+    use ecommerce::models::order;
+    use umbra_admin::{
+        Span, TableColumn, TablePayload, Widget, WidgetDataFn, WidgetKind, WidgetPayload,
+    };
+    Widget {
+        key: "shop_recent_orders",
+        title: "Recent Orders".to_string(),
+        kind: WidgetKind::Table,
+        default_span: Span { cols: 4, rows: 3 },
+        permission: None,
+        data: WidgetDataFn::new(|_user| async move {
+            let columns = vec![
+                TableColumn {
+                    key: "number".to_string(),
+                    label: "Order".to_string(),
+                },
+                TableColumn {
+                    key: "status".to_string(),
+                    label: "Status".to_string(),
+                },
+                TableColumn {
+                    key: "grand_total".to_string(),
+                    label: "Total".to_string(),
+                },
+            ];
+            let rows: Vec<serde_json::Value> = Order::objects()
+                .order_by(order::PLACED_AT.desc())
+                .limit(5)
+                .fetch()
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .map(|o| {
+                    serde_json::json!({
+                        "number":      o.number,
+                        "status":      format!("{:?}", o.status).to_lowercase(),
+                        "grand_total": format!("${}", o.grand_total),
+                    })
+                })
+                .collect();
+            WidgetPayload::Table(
+                TablePayload::new(columns, rows).view_all_for::<Order>(),
             )
         }),
     }

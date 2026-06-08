@@ -833,6 +833,87 @@
       };
     }
 
+    // Full-size line/area chart for dashboard widgets — like the
+    // sparkline but with axes, grid, and tooltip x-labels.
+    // Reads (x, y) pairs from `[data-chart-point][data-x][data-y]`
+    // siblings; ApexCharts mounts on `[data-chart-canvas]`.
+    function lineChartOptions(el) {
+      var labels = [];
+      var values = [];
+      el.querySelectorAll('[data-chart-point]').forEach(function(point) {
+        labels.push(point.getAttribute('data-x') || '');
+        var v = Number(point.getAttribute('data-y') || 0);
+        values.push(Number.isFinite(v) ? v : 0);
+      });
+      if (values.length === 0) return null;
+      var primary = token('--primary', 'rgb(99 102 241)');
+      var muted   = token('--outline', 'rgb(148 163 184)');
+      var grid    = token('--outline-variant', 'rgb(51 65 85)');
+      return {
+        chart: {
+          type: 'area',
+          height: '100%',
+          width: '100%',
+          background: 'transparent',
+          toolbar: { show: false },
+          zoom: { enabled: false },
+          parentHeightOffset: 0,
+          fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
+          foreColor: muted,
+          animations: {
+            enabled: true,
+            speed: 380,
+            animateGradually: { enabled: false },
+            dynamicAnimation: { enabled: true, speed: 220 },
+          },
+        },
+        series: [{
+          name: el.getAttribute('data-chart-series') || 'series',
+          data: values,
+        }],
+        colors: [primary],
+        stroke: { curve: 'smooth', width: 2 },
+        fill: {
+          type: 'gradient',
+          gradient: {
+            shadeIntensity: 1,
+            opacityFrom: 0.30,
+            opacityTo: 0,
+            stops: [0, 100],
+          },
+        },
+        dataLabels: { enabled: false },
+        grid: {
+          borderColor: grid,
+          strokeDashArray: 3,
+          padding: { top: 0, right: 8, bottom: 0, left: 4 },
+        },
+        markers: { size: 0, hover: { size: 4 } },
+        xaxis: {
+          categories: labels,
+          labels: {
+            style: { colors: muted, fontSize: '11px' },
+            // Show every Nth label for dense series so they don't
+            // crowd the axis. 7 ticks reads cleanly across widths.
+            rotate: 0,
+            hideOverlappingLabels: true,
+          },
+          axisBorder: { show: false },
+          axisTicks: { show: false },
+        },
+        yaxis: {
+          labels: {
+            style: { colors: muted, fontSize: '11px' },
+            formatter: function(v) { return Math.round(v); },
+          },
+        },
+        tooltip: {
+          theme: chartIsDark() ? 'dark' : 'light',
+          y: { formatter: function(v) { return Math.round(v); } },
+        },
+      };
+    }
+
     function initCharts(root) {
       root = root || document;
       root.querySelectorAll('[data-umbra-chart="bar"]').forEach(function(el) {
@@ -863,6 +944,24 @@
         }
         if (fallback) fallback.classList.add('hidden');
         var options = sparklineChartOptions(el);
+        if (!options) return;
+        if (canvas._umbraApexChart) {
+          canvas._umbraApexChart.updateOptions(options, false, true);
+          return;
+        }
+        canvas._umbraApexChart = new ApexCharts(canvas, options);
+        canvas._umbraApexChart.render();
+      });
+      root.querySelectorAll('[data-umbra-chart="line"]').forEach(function(el) {
+        var canvas = el.querySelector('[data-chart-canvas]');
+        var fallback = el.querySelector('[data-chart-unavailable]');
+        if (!canvas) return;
+        if (!window.ApexCharts) {
+          if (fallback) fallback.classList.remove('hidden');
+          return;
+        }
+        if (fallback) fallback.classList.add('hidden');
+        var options = lineChartOptions(el);
         if (!options) return;
         if (canvas._umbraApexChart) {
           canvas._umbraApexChart.updateOptions(options, false, true);

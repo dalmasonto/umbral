@@ -337,6 +337,51 @@ pub struct TableColumn {
 pub struct TablePayload {
     pub columns: Vec<TableColumn>,
     pub rows: Vec<serde_json::Value>,
+    /// Optional "View all →" link in the widget header. Populated
+    /// via [`Self::view_all_for`] (auto-resolves the admin URL
+    /// from a `Model` type) or set explicitly when the target
+    /// isn't a managed admin model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view_all_url: Option<String>,
+}
+
+impl TablePayload {
+    /// New payload from columns + rows; no `view_all` link.
+    pub fn new(columns: Vec<TableColumn>, rows: Vec<serde_json::Value>) -> Self {
+        Self {
+            columns,
+            rows,
+            view_all_url: None,
+        }
+    }
+
+    /// Auto-resolve the "View all" link from a `Model` type — the
+    /// admin's changelist URL for that table. Mirrors the pattern
+    /// used by `models![T, U, V]`: rename the struct's
+    /// `#[umbra(table = "...")]` and the link follows automatically.
+    ///
+    /// ```rust,ignore
+    /// WidgetPayload::Table(
+    ///     TablePayload::new(columns, rows)
+    ///         .view_all_for::<Order>()
+    /// )
+    /// // → "View all →" links to {admin_base}/order/
+    /// ```
+    pub fn view_all_for<T: umbra::orm::Model>(mut self) -> Self {
+        self.view_all_url = Some(format!(
+            "{}/{}/",
+            crate::branding::current().base_path,
+            T::TABLE,
+        ));
+        self
+    }
+
+    /// Explicit URL override — use when the link target isn't a
+    /// managed admin model (an external dashboard, a custom route).
+    pub fn view_all_url(mut self, url: impl Into<String>) -> Self {
+        self.view_all_url = Some(url.into());
+        self
+    }
 }
 
 /// One item in an activity feed.
@@ -353,6 +398,44 @@ pub struct FeedItem {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FeedPayload {
     pub items: Vec<FeedItem>,
+    /// Optional "View all →" link in the widget header. Same
+    /// shape as [`TablePayload::view_all_url`] — auto-resolve
+    /// from a `Model` via [`Self::view_all_for`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view_all_url: Option<String>,
+}
+
+impl FeedPayload {
+    /// New payload from items; no `view_all` link.
+    pub fn new(items: Vec<FeedItem>) -> Self {
+        Self {
+            items,
+            view_all_url: None,
+        }
+    }
+
+    /// Auto-resolve the "View all" link from a `Model` type. The
+    /// recent-signups feed for instance:
+    ///
+    /// ```rust,ignore
+    /// WidgetPayload::Feed(
+    ///     FeedPayload::new(items).view_all_for::<AuthUser>()
+    /// )
+    /// // → "View all →" links to {admin_base}/auth_user/
+    /// ```
+    pub fn view_all_for<T: umbra::orm::Model>(mut self) -> Self {
+        self.view_all_url = Some(format!(
+            "{}/{}/",
+            crate::branding::current().base_path,
+            T::TABLE,
+        ));
+        self
+    }
+
+    pub fn view_all_url(mut self, url: impl Into<String>) -> Self {
+        self.view_all_url = Some(url.into());
+        self
+    }
 }
 
 /// Union of all widget payloads. The JSON discriminant is the variant name.

@@ -126,7 +126,19 @@ pub fn builtin_recent_users_widget() -> Widget {
                 }
                 None => vec![],
             };
-            WidgetPayload::Feed(FeedPayload { items })
+            // Auto-resolve "View all →" to the admin's auth_user
+            // changelist — works for any UserModel registered with
+            // AuthPlugin since the table name is read from the
+            // ModelMeta we already looked up.
+            let mut payload = FeedPayload::new(items);
+            if let Some((_, meta)) = find_model("auth_user") {
+                payload.view_all_url = Some(format!(
+                    "{}/{}/",
+                    crate::branding::current().base_path,
+                    meta.table,
+                ));
+            }
+            WidgetPayload::Feed(payload)
         }),
     }
 }

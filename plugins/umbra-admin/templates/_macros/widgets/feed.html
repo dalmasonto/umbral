@@ -7,7 +7,18 @@
 
 {% macro feed_widget(title, payload) %}
 <div class="feed-widget h-full flex flex-col p-md">
-  <p class="text-label-sm text-outline uppercase tracking-wider mb-sm flex-shrink-0">{{ title }}</p>
+  <div class="flex items-center justify-between gap-sm mb-sm flex-shrink-0">
+    <p class="text-label-sm text-outline uppercase tracking-wider truncate">{{ title }}</p>
+    {% if payload.view_all_url %}
+    <a
+      href="{{ payload.view_all_url }}"
+      class="text-label-sm text-on-surface-variant hover:text-primary transition-colors inline-flex items-center gap-1 flex-shrink-0 no-underline"
+    >
+      View all
+      <i data-lucide="arrow-up-right" class="w-3.5 h-3.5"></i>
+    </a>
+    {% endif %}
+  </div>
   {% if payload.items and payload.items | length > 0 %}
   {# Divider on each feed item — `surface-container-highest` gives
      a barely-there separator in dark mode without the bluish-white
