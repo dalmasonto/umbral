@@ -352,10 +352,10 @@ pub mod orm {
     pub use umbra_core::orm::{
         Aggregate, AggregateKind, ArrayElement, ChoiceField, DynError, DynQuerySet, Email, F,
         FColExt, FExpr, FieldSpec, FkAction, ForeignKey, GetError, HydrateRelated, M2M,
-        M2MRelationSpec, Manager, Model, MultiChoice, Post, Predicate, PrimaryKey, Q, QuerySet,
-        QuerySetTx, ReverseFkRelationSpec, ReverseSet, Slug, SqlType, TryForEachError, TsVector,
-        Url, ValidatorError, column, decode_to_string, load_junction_selection,
-        set_junction_dynamic, validate_text_format, write,
+        M2MRelationSpec, Manager, Model, MultiChoice, OneToOne, OneToOneRelationSpec, Post,
+        Predicate, PrimaryKey, Q, QuerySet, QuerySetTx, ReverseFkRelationSpec, ReverseSet, Slug,
+        SqlType, TryForEachError, TsVector, Url, ValidatorError, column, decode_to_string,
+        load_junction_selection, set_junction_dynamic, validate_text_format, write,
     };
 
     /// The `#[derive(Model)]` proc macro. Shares the `Model` name with the

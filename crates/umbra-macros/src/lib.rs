@@ -847,6 +847,13 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
     // `Model::REVERSE_FK_RELATIONS` so the prefetch_related dispatch
     // can look them up at terminal time.
     let mut reverse_fk_specs: Vec<TokenStream2> = Vec::new();
+    // OneToOne — same collector trio as ReverseSet but emits to
+    // ONE_TO_ONE_RELATIONS, set_m2m_parent_ids (parent_id only —
+    // no fk_column, that's resolved at runtime), and
+    // set_one_to_one_resolved_json.
+    let mut one_to_one_specs: Vec<TokenStream2> = Vec::new();
+    let mut one_to_one_parent_arms: Vec<TokenStream2> = Vec::new();
+    let mut one_to_one_resolved_arms: Vec<TokenStream2> = Vec::new();
     // Arms for the macro-emitted `set_m2m_parent_ids` body: each
     // calls `set_parent_id(__pk)` + `set_fk_column("<fk_col>")` on
     // one ReverseSet field, so the slot knows which children to
@@ -931,6 +938,38 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                             decoded.push(c);
                         }
                     }
+                    self.#field_ident.set_resolved(decoded);
+                }
+            });
+            continue;
+        }
+
+        // OneToOne<C> — no column on the parent. Unlike ReverseSet
+        // this requires NO `#[umbra(...)]` attribute: the back-
+        // pointing FK column is resolved at runtime by scanning
+        // the child's FIELDS for the UNIQUE FK whose `fk_target`
+        // is this parent's table. The macro just emits the spec
+        // + the hydration arms.
+        if let FieldKind::OneToOne(ref inner_ty) = kind {
+            let inner = inner_ty.as_ref();
+            one_to_one_specs.push(quote! {
+                ::umbra::orm::OneToOneRelationSpec {
+                    field_name: #field_name_str,
+                    target_table: <#inner as ::umbra::orm::Model>::TABLE,
+                    target_name: <#inner as ::umbra::orm::Model>::NAME,
+                }
+            });
+            let field_ident = field.ident.as_ref().expect("named field has ident").clone();
+            one_to_one_parent_arms.push(quote! {
+                self.#field_ident.set_parent_id(__pk);
+            });
+            one_to_one_resolved_arms.push(quote! {
+                #field_name_str => {
+                    let decoded: ::core::option::Option<#inner> = match row {
+                        ::core::option::Option::Some(v) =>
+                            ::umbra::_serde_json::from_value::<#inner>(v).ok(),
+                        ::core::option::Option::None => ::core::option::Option::None,
+                    };
                     self.#field_ident.set_resolved(decoded);
                 }
             });
@@ -1310,7 +1349,10 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
     // slots too. The body runs once after each parent is decoded,
     // seeding `parent_id` + (for M2M) `junction_table` / (for
     // reverse-FK) `fk_column` on every relation slot.
-    let set_m2m_body = if m2m_field_idents.is_empty() && reverse_fk_parent_arms.is_empty() {
+    let set_m2m_body = if m2m_field_idents.is_empty()
+        && reverse_fk_parent_arms.is_empty()
+        && one_to_one_parent_arms.is_empty()
+    {
         quote!({})
     } else {
         let m2m_arms = m2m_field_idents.iter().map(|ident| {
@@ -1325,10 +1367,12 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         // a ReverseSet field will fail to compile here — matches the
         // same v1 i64-PK constraint as the M2M plumbing.
         let rfk_arms = reverse_fk_parent_arms.iter();
+        let o2o_arms = one_to_one_parent_arms.iter();
         quote! {{
             let __pk = <Self as ::umbra::orm::Model>::primary_key(self);
             #(#m2m_arms)*
             #(#rfk_arms)*
+            #(#o2o_arms)*
         }}
     };
 
@@ -1552,6 +1596,9 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             const REVERSE_FK_RELATIONS: &'static [::umbra::orm::ReverseFkRelationSpec] = &[
                 #(#reverse_fk_specs),*
             ];
+            const ONE_TO_ONE_RELATIONS: &'static [::umbra::orm::OneToOneRelationSpec] = &[
+                #(#one_to_one_specs),*
+            ];
             fn primary_key(&self) -> #pk_ty_tokens {
                 // `.clone()` works for every PK type the trait accepts
                 // (the bound is `Clone`, not `Copy`). For `i32`, `i64`,
@@ -1612,6 +1659,20 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                 // The macro emits one arm per `ReverseSet<C>` field.
                 match field_name {
                     #(#reverse_fk_resolved_arms)*
+                    _ => {}
+                }
+            }
+            fn set_one_to_one_resolved_json(
+                &mut self,
+                field_name: &str,
+                row: ::core::option::Option<::umbra::_serde_json::Value>,
+            ) {
+                // OneToOne reverse path: prefetch_related feeds at
+                // most one child JSON object (or None for "loaded
+                // but no row"). The macro emits one arm per
+                // `OneToOne<C>` field.
+                match field_name {
+                    #(#one_to_one_resolved_arms)*
                     _ => {}
                 }
             }
@@ -1731,6 +1792,12 @@ enum FieldKind {
     /// column. The macro emits one `ReverseFkRelationSpec` entry +
     /// the hydration arms. Closes gap #44.
     ReverseSet(Box<Type>),
+    /// `OneToOne<C>` — reverse OneToOne accessor. No column on the
+    /// parent table; the child has a UNIQUE FK column pointing
+    /// back. Unlike ReverseSet, no `#[umbra(...)]` attribute is
+    /// needed — the macro resolves the back-pointing column at
+    /// runtime by scanning the child's FIELDS for the UNIQUE FK.
+    OneToOne(Box<Type>),
     /// `ipnetwork::IpNetwork` — Postgres INET column (Phase 4.4).
     Inet,
     NullableInet,
@@ -1861,6 +1928,7 @@ impl FieldKind {
             // to keep the match exhaustive.
             FieldKind::Many2Many(_) => return None,
             FieldKind::ReverseSet(_) => return None,
+            FieldKind::OneToOne(_) => return None,
             FieldKind::Unsupported(_) => return None,
         };
         let nullable = if self.is_nullable() {
@@ -2042,6 +2110,9 @@ fn classify_field_type(ty: &Type) -> FieldKind {
     if let Some(inner) = reverse_set_inner(ty) {
         return FieldKind::ReverseSet(Box::new(inner.clone()));
     }
+    if let Some(inner) = one_to_one_inner(ty) {
+        return FieldKind::OneToOne(Box::new(inner.clone()));
+    }
     if is_wide_or_unsigned_int(ty) {
         return FieldKind::Unsupported(UnsupportedReason::WideOrUnsignedInt);
     }
@@ -2157,6 +2228,31 @@ fn multichoice_inner(ty: &Type) -> Option<&Type> {
     };
     let last = path.segments.last()?;
     if last.ident != "MultiChoice" {
+        return None;
+    }
+    let PathArguments::AngleBracketed(ref args) = last.arguments else {
+        return None;
+    };
+    let mut type_args = args.args.iter().filter_map(|a| match a {
+        GenericArgument::Type(t) => Some(t),
+        _ => None,
+    });
+    let inner = type_args.next()?;
+    if type_args.next().is_some() {
+        return None;
+    }
+    Some(inner)
+}
+
+/// If `ty` is `OneToOne<C>`, return the inner child model type
+/// `C`. Returns `None` otherwise. Mirrors [`m2m_inner`] /
+/// [`reverse_set_inner`].
+fn one_to_one_inner(ty: &Type) -> Option<&Type> {
+    let Type::Path(TypePath { qself: None, path }) = ty else {
+        return None;
+    };
+    let last = path.segments.last()?;
+    if last.ident != "OneToOne" {
         return None;
     }
     let PathArguments::AngleBracketed(ref args) = last.arguments else {
@@ -2564,6 +2660,7 @@ fn column_const_for(
         FieldKind::MultiChoice(_) => return TokenStream2::new(),
         FieldKind::Many2Many(_) => return TokenStream2::new(),
         FieldKind::ReverseSet(_) => return TokenStream2::new(),
+        FieldKind::OneToOne(_) => return TokenStream2::new(),
         FieldKind::Unsupported(_) => return TokenStream2::new(),
     };
     quote_spanned! { span =>

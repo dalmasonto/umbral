@@ -122,6 +122,17 @@ pub trait HydrateRelated {
     /// default below is empty so models without reverse-FK fields
     /// pay nothing.
     fn set_reverse_fk_resolved_json(&mut self, _field_name: &str, _rows: Vec<serde_json::Value>) {}
+
+    /// Reverse-OneToOne counterpart to
+    /// `set_reverse_fk_resolved_json`. Called by `prefetch_related`
+    /// with `Some(child_json)` when the runtime FK lookup found
+    /// exactly one matching child, or `None` when no child matched
+    /// (the slot still flips `is_loaded()` to `true`).
+    ///
+    /// Default: no-op. The macro emits per-field arms for any model
+    /// declaring `pub <name>: OneToOne<C>` fields.
+    fn set_one_to_one_resolved_json(&mut self, _field_name: &str, _row: Option<serde_json::Value>) {
+    }
 }
 
 /// The trait every model implements.
@@ -260,6 +271,16 @@ pub trait Model: Sized + Send + Sync + Unpin + 'static {
     /// entry per declared `ReverseSet<C>` field.
     const REVERSE_FK_RELATIONS: &'static [ReverseFkRelationSpec] = &[];
 
+    /// Reverse OneToOne accessors declared on this model via
+    /// `pub <name>: OneToOne<C>` (no umbra attribute required).
+    /// Unlike `REVERSE_FK_RELATIONS`, the FK column on the child is
+    /// not named at macro time — `prefetch_related` looks it up at
+    /// runtime by scanning the child's `FIELDS` for the UNIQUE FK
+    /// pointing back at this model's table. Exactly one match
+    /// required; 0 or 2+ matches surface a loud error naming the
+    /// ambiguity.
+    const ONE_TO_ONE_RELATIONS: &'static [OneToOneRelationSpec] = &[];
+
     /// Return the primary key of this instance.
     fn primary_key(&self) -> Self::PrimaryKey;
 }
@@ -277,6 +298,29 @@ pub struct M2MRelationSpec {
     pub target_table: &'static str,
     /// The target model's struct name (e.g. `"Tag"`). Used for reverse
     /// accessor lookups and OpenAPI schema references.
+    pub target_name: &'static str,
+}
+
+/// Static metadata for one reverse OneToOne field on a model. The
+/// FK column on the child is intentionally omitted — `prefetch_related`
+/// resolves it at runtime by scanning the child's `FIELDS` for the
+/// UNIQUE FK pointing back at `target_table`. Carried by
+/// [`Model::ONE_TO_ONE_RELATIONS`].
+///
+/// Example: `pub struct User { pub profile: OneToOne<Profile>, ... }`
+/// emits one entry: `{ field_name: "profile", target_table:
+/// "profile", target_name: "Profile" }`. At prefetch time the loader
+/// finds the column on Profile (`pub user: ForeignKey<User>` with
+/// `#[umbra(unique)]`) and issues `SELECT * FROM profile WHERE user
+/// IN (parent_pks)`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OneToOneRelationSpec {
+    /// The Rust field name on the parent (e.g. `"profile"`).
+    pub field_name: &'static str,
+    /// The child model's table name (e.g. `"profile"`).
+    pub target_table: &'static str,
+    /// The child model's struct name (e.g. `"Profile"`). Reserved
+    /// for symmetry with `M2MRelationSpec` / `ReverseFkRelationSpec`.
     pub target_name: &'static str,
 }
 

@@ -28,6 +28,7 @@ pub mod foreign_key;
 pub mod m2m;
 pub mod model;
 pub mod multichoice;
+pub mod one_to_one;
 pub mod post;
 pub mod queryset;
 pub mod reverse_set;
@@ -72,10 +73,11 @@ pub use expr::{F, FColExt, FExpr, Q};
 pub use foreign_key::ForeignKey;
 pub use m2m::{M2M, load_junction_selection, set_junction_dynamic};
 pub use model::{
-    ArrayElement, FieldSpec, FkAction, HydrateRelated, M2MRelationSpec, Model, PrimaryKey,
-    ReverseFkRelationSpec, SqlType,
+    ArrayElement, FieldSpec, FkAction, HydrateRelated, M2MRelationSpec, Model,
+    OneToOneRelationSpec, PrimaryKey, ReverseFkRelationSpec, SqlType,
 };
 pub use multichoice::MultiChoice;
+pub use one_to_one::OneToOne;
 pub use post::Post;
 pub use queryset::{GetError, Manager, QuerySet, QuerySetTx, TryForEachError};
 pub use reverse_set::ReverseSet;

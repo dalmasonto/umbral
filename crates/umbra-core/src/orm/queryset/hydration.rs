@@ -363,6 +363,111 @@ async fn fetch_reverse_fk_children(
     }
 }
 
+/// OneToOne reverse hydration. Discovers the back-pointing FK
+/// column on the child at runtime by scanning the child's
+/// `FIELDS` for a UNIQUE FK whose `fk_target` is this parent's
+/// table. Exactly one match is required; 0 or 2+ matches surface
+/// a loud error naming the candidates so the user can either:
+///
+///   - add `#[umbra(unique)]` to make a non-unique FK unique
+///     (turning a one-to-many into a one-to-one), or
+///   - rename one of the multiple FKs (the ambiguity is on them).
+///
+/// Once the column is resolved, the loader runs ONE batched
+/// `SELECT * FROM <child_table> WHERE <fk_col> IN (parent_pks)`
+/// — same shape as the ReverseSet path — and feeds each parent
+/// the FIRST matching row (the UNIQUE constraint guarantees at
+/// most one, but for safety the loader takes the first if the
+/// DB ever has dupes from an unconstrained legacy column).
+async fn hydrate_one_to_one_for_field<T: Model + HydrateRelated>(
+    rows: &mut [T],
+    spec: &crate::orm::model::OneToOneRelationSpec,
+    pool: &DbPool,
+) -> Result<(), sqlx::Error> {
+    // Resolve the FK column on the child at runtime.
+    let registered = crate::migrate::registered_models();
+    let Some(child_meta) = registered.iter().find(|m| m.table == spec.target_table) else {
+        return Err(sqlx::Error::Protocol(format!(
+            "umbra::orm::prefetch_related: child model for table `{}` is not \
+             registered (needed by OneToOne field `{}` on `{}`)",
+            spec.target_table,
+            spec.field_name,
+            T::NAME,
+        )));
+    };
+    let candidates: Vec<&str> = child_meta
+        .fields
+        .iter()
+        .filter(|c| c.unique && c.fk_target.as_deref() == Some(T::TABLE))
+        .map(|c| c.name.as_str())
+        .collect();
+    let fk_column = match candidates.len() {
+        1 => candidates[0],
+        0 => {
+            return Err(sqlx::Error::Protocol(format!(
+                "umbra::orm::prefetch_related: OneToOne field `{}` on `{}` \
+                 has no back-link — `{}` needs a `#[umbra(unique)]` \
+                 ForeignKey<{}> pointing back (none found)",
+                spec.field_name,
+                T::NAME,
+                spec.target_name,
+                T::NAME
+            )));
+        }
+        _ => {
+            return Err(sqlx::Error::Protocol(format!(
+                "umbra::orm::prefetch_related: OneToOne field `{}` on `{}` \
+                 is ambiguous — `{}` has multiple UNIQUE ForeignKey<{}> \
+                 columns ({}). Rename one or use a typed ReverseSet field \
+                 instead.",
+                spec.field_name,
+                T::NAME,
+                spec.target_name,
+                T::NAME,
+                candidates.join(", "),
+            )));
+        }
+    };
+
+    // Parent PKs (i64 only at v1 — same constraint as ReverseSet).
+    let mut parent_ids: Vec<i64> = rows.iter().filter_map(|r| r.pk_i64()).collect();
+    if parent_ids.is_empty() {
+        // Mark every parent as loaded-with-no-child so
+        // `is_loaded()` flips even on empty parents.
+        for r in rows.iter_mut() {
+            r.set_one_to_one_resolved_json(spec.field_name, None);
+        }
+        return Ok(());
+    }
+    parent_ids.sort_unstable();
+    parent_ids.dedup();
+
+    let child_rows =
+        fetch_reverse_fk_children(spec.target_table, fk_column, &parent_ids, pool).await?;
+    // Index by parent id. Take FIRST per parent — the UNIQUE
+    // constraint guarantees uniqueness, but if there are dupes
+    // (legacy data, deferred constraint, race condition during
+    // an in-flight migration) the loader doesn't crash; it
+    // picks one deterministically.
+    let mut by_parent: std::collections::HashMap<i64, JsonValue> = std::collections::HashMap::new();
+    for row in child_rows {
+        let parent_id = row
+            .as_object()
+            .and_then(|m| m.get(fk_column))
+            .and_then(|v| v.as_i64());
+        if let Some(pid) = parent_id {
+            by_parent.entry(pid).or_insert(row);
+        }
+    }
+    for row in rows.iter_mut() {
+        if let Some(pk) = row.pk_i64() {
+            let child = by_parent.remove(&pk);
+            row.set_one_to_one_resolved_json(spec.field_name, child);
+        }
+    }
+    Ok(())
+}
+
 /// Gap 19: post-fetch hydration for `prefetch_related` names.
 ///
 /// For each requested M2M field, runs one query joining the child
@@ -403,6 +508,17 @@ pub(super) async fn hydrate_prefetch_related<T: Model + HydrateRelated>(
             hydrate_reverse_fk_for_field::<T>(rows, spec, pool).await?;
             continue;
         }
+        // OneToOne reverse: zero-config. The FK column on the
+        // child isn't named at macro time — discover it at
+        // runtime by scanning the child's FIELDS for the UNIQUE
+        // FK pointing back at this parent's table.
+        let o2o_spec = T::ONE_TO_ONE_RELATIONS
+            .iter()
+            .find(|s| s.field_name == field_name.as_str());
+        if let Some(spec) = o2o_spec {
+            hydrate_one_to_one_for_field::<T>(rows, spec, pool).await?;
+            continue;
+        }
         let spec = match m2m_spec {
             Some(s) => s,
             None => {
@@ -415,7 +531,7 @@ pub(super) async fn hydrate_prefetch_related<T: Model + HydrateRelated>(
                          or `.join_related(...)` instead"
                     )
                 } else {
-                    " — no M2M relation or ReverseSet field with that name on this model"
+                    " — no M2M, ReverseSet, or OneToOne field with that name on this model"
                         .to_string()
                 };
                 return Err(sqlx::Error::Protocol(format!(
