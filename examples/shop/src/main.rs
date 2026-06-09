@@ -195,6 +195,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .get("/", views::home)
                 .get("/products", views::product_list)
                 .get("/products/{id}", views::product_detail)
+                .get("/posts", views::post_list)
+                .get("/posts/{slug}", views::post_detail)
+                .get("/faqs", views::faqs)
+                .get("/contact", views::contact)
+                .post("/contact", views::submit_contact)
                 .layered(
                     "GET",
                     "/dashboard",

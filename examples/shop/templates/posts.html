@@ -1,0 +1,124 @@
+{% extends "wrapper.html" %}
+{% block title %}Journal | Umbra Shop{% endblock %}
+{% block content %}
+<section class="border-b border-zinc-200 bg-white">
+  <div class="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8 lg:py-14">
+    <div class="grid gap-8 lg:grid-cols-[0.8fr_1.2fr] lg:items-end">
+      <div>
+        <p class="text-sm font-semibold uppercase tracking-wide text-emerald-700">Journal</p>
+        <h1 class="mt-2 max-w-2xl text-4xl font-extrabold tracking-tight text-zinc-950 sm:text-5xl">Field notes from the shop.</h1>
+        <p class="mt-4 max-w-2xl text-base leading-7 text-zinc-600">
+          Long-form posts from the content plugin, rendered through the same storefront shell as the catalog.
+        </p>
+      </div>
+      <div class="grid gap-3 sm:grid-cols-3">
+        <div class="rounded-2xl border border-zinc-200 bg-[oklch(0.985_0.01_87)] p-4">
+          <p class="text-xs font-semibold uppercase tracking-wide text-zinc-500">Published</p>
+          <p class="mt-1 text-2xl font-extrabold text-zinc-950">{{ post_count }}</p>
+        </div>
+        <div class="rounded-2xl border border-zinc-200 bg-[oklch(0.985_0.01_87)] p-4">
+          <p class="text-xs font-semibold uppercase tracking-wide text-zinc-500">Featured</p>
+          <p class="mt-1 text-2xl font-extrabold text-zinc-950">{{ featured_posts | length }}</p>
+        </div>
+        <div class="rounded-2xl border border-zinc-200 bg-[oklch(0.985_0.01_87)] p-4">
+          <p class="text-xs font-semibold uppercase tracking-wide text-zinc-500">Format</p>
+          <p class="mt-1 text-2xl font-extrabold text-zinc-950">Guides</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+{% if featured_posts %}
+<section class="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8">
+  <div class="mb-6 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+    <div>
+      <p class="text-sm font-semibold uppercase tracking-wide text-emerald-700">Featured reads</p>
+      <h2 class="mt-1 text-2xl font-bold tracking-tight text-zinc-950">Start here</h2>
+    </div>
+    <a href="/products" class="text-sm font-semibold text-zinc-700 hover:text-zinc-950">Back to catalog</a>
+  </div>
+
+  <div class="grid gap-6 lg:grid-cols-[1.25fr_0.75fr]">
+    {% for post in featured_posts %}
+      {% if loop.first %}
+      <a href="/posts/{{ post.slug }}" class="group flex min-h-[360px] overflow-hidden rounded-3xl border border-zinc-200 bg-zinc-950 shadow-sm no-underline transition hover:-translate-y-0.5 hover:shadow-xl" style="{% if post.cover_image %}background-image: linear-gradient(135deg, rgba(9, 9, 11, 0.82), rgba(6, 78, 59, 0.74)), url('{{ post.cover_image }}');{% else %}background-image: linear-gradient(135deg, rgb(24 24 27), rgb(6 78 59));{% endif %} background-position: center; background-size: cover;">
+        <div class="flex min-h-full w-full flex-col justify-end p-6 sm:p-8">
+          <div class="max-w-2xl">
+            <span class="inline-flex rounded-full bg-emerald-100 px-3 py-1 text-xs font-bold uppercase tracking-wide text-emerald-900">Featured</span>
+            <h2 class="mt-5 text-3xl font-extrabold leading-tight tracking-tight text-white sm:text-4xl">{{ post.title }}</h2>
+            {% if post.excerpt %}
+            <p class="mt-4 max-w-2xl text-base leading-7 text-zinc-200">{{ post.excerpt }}</p>
+            {% endif %}
+            <div class="mt-6 flex flex-wrap gap-3 text-sm font-semibold text-zinc-200">
+              <span>{{ post.reading_minutes }} min read</span>
+              <span>{{ post.view_count }} views</span>
+            </div>
+          </div>
+        </div>
+      </a>
+      {% endif %}
+    {% endfor %}
+
+    <div class="grid gap-4">
+      {% for post in featured_posts %}
+        {% if not loop.first %}
+        <a href="/posts/{{ post.slug }}" class="group flex min-h-[170px] flex-col justify-between rounded-3xl border border-zinc-200 bg-white p-5 shadow-sm no-underline transition hover:-translate-y-0.5 hover:shadow-lg">
+          <div>
+            <p class="text-xs font-bold uppercase tracking-wide text-emerald-700">Featured guide</p>
+            <h3 class="mt-2 text-xl font-bold leading-snug text-zinc-950 group-hover:text-emerald-800">{{ post.title }}</h3>
+          </div>
+          <div class="mt-5 flex items-center justify-between gap-3 text-sm text-zinc-500">
+            <span>{{ post.reading_minutes }} min read</span>
+            <span class="font-semibold text-zinc-700">Read article</span>
+          </div>
+        </a>
+        {% endif %}
+      {% endfor %}
+    </div>
+  </div>
+</section>
+{% endif %}
+
+<section class="border-t border-zinc-200 bg-[oklch(0.985_0.01_87)]">
+  <div class="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8">
+    <div class="mb-6 flex items-end justify-between gap-4">
+      <div>
+        <p class="text-sm font-semibold uppercase tracking-wide text-emerald-700">All posts</p>
+        <h2 class="mt-1 text-2xl font-bold tracking-tight text-zinc-950">Browse the archive</h2>
+      </div>
+    </div>
+
+    {% if posts %}
+    <div class="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
+      {% for post in posts %}
+      <article class="group flex min-h-full flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg">
+        <a href="/posts/{{ post.slug }}" class="block no-underline">
+          <div class="flex aspect-[16/9] items-end bg-[linear-gradient(135deg,oklch(0.94_0.028_95),oklch(0.84_0.08_158))] p-4">
+            <span class="rounded-full bg-white/85 px-3 py-1 text-xs font-bold uppercase tracking-wide text-zinc-700">{{ post.reading_minutes }} min read</span>
+          </div>
+        </a>
+        <div class="flex flex-1 flex-col p-5">
+          <h3 class="text-lg font-bold leading-snug text-zinc-950">
+            <a href="/posts/{{ post.slug }}" class="hover:text-emerald-800">{{ post.title }}</a>
+          </h3>
+          {% if post.excerpt %}
+          <p class="mt-3 flex-1 text-sm leading-6 text-zinc-600">{{ post.excerpt }}</p>
+          {% endif %}
+          <div class="mt-5 flex items-center justify-between gap-3 border-t border-zinc-100 pt-4 text-sm">
+            <span class="font-medium text-zinc-500">{{ post.view_count }} views</span>
+            <a href="/posts/{{ post.slug }}" class="font-semibold text-zinc-800 hover:text-emerald-800">Read</a>
+          </div>
+        </div>
+      </article>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="rounded-2xl border border-dashed border-zinc-300 bg-white p-10 text-center">
+      <h2 class="text-xl font-bold text-zinc-950">No posts published yet</h2>
+      <p class="mt-2 text-zinc-500">Seed the shop content plugin to populate the journal.</p>
+    </div>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

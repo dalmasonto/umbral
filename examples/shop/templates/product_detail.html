@@ -1,28 +1,94 @@
-{% extends "base.html" %}
-{% block title %}{{ product.name }}{% endblock %}
+{% extends "wrapper.html" %}
+{% block title %}{{ product.name }} | Umbra Shop{% endblock %}
 {% block content %}
-  <div class="mb-4">
-    <a href="/products" class="text-sm text-gray-500 hover:text-gray-800">← Back to products</a>
-  </div>
+<section class="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+  <a href="/products" class="inline-flex items-center rounded-lg px-0 py-2 text-sm font-semibold text-zinc-600 hover:text-zinc-950">
+    Back to products
+  </a>
 
-  <div class="bg-white rounded-lg shadow p-6">
-    <div class="flex flex-col md:flex-row gap-6">
-      <div class="w-full md:w-1/2 h-64 bg-gray-100 rounded flex items-center justify-center text-gray-400">
-        No image
-      </div>
-      <div class="flex-1">
-        <h1 class="text-2xl font-bold mb-2">{{ product.name }}</h1>
-        <p class="text-gray-500 mb-4">{{ product.slug }}</p>
-        <p class="text-3xl font-bold text-green-700 mb-4">${{ product.price }}</p>
-        {% if product.compare_at_price %}
-          <p class="text-sm text-gray-400 line-through mb-4">${{ product.compare_at_price }}</p>
-        {% endif %}
-        <p class="text-gray-700 mb-6">{{ product.description }}</p>
-        <div class="flex gap-3">
-          <span class="px-3 py-1 bg-gray-100 rounded text-sm">SKU: {{ product.sku }}</span>
-          <span class="px-3 py-1 bg-gray-100 rounded text-sm">Stock: {{ product.stock_quantity }}</span>
+  <div class="mt-4 grid gap-8 lg:grid-cols-[1fr_0.9fr]">
+    <div class="overflow-hidden rounded-3xl border border-zinc-200 bg-white shadow-sm">
+      <div class="flex aspect-square max-h-[620px] items-center justify-center overflow-hidden bg-zinc-100">
+        {% if product.thumbnail %}
+        <img src="{{ product.thumbnail }}" alt="{{ product.name }}" class="h-full w-full object-cover">
+        {% else %}
+        <div class="flex h-full w-full flex-col items-center justify-center bg-[linear-gradient(135deg,oklch(0.96_0.02_85),oklch(0.84_0.08_155))] p-10 text-center">
+          <span class="rounded-full bg-white/85 px-4 py-2 text-sm font-bold text-zinc-600 shadow-sm">{{ product.sku }}</span>
+          <span class="mt-6 max-w-md text-4xl font-extrabold leading-tight text-zinc-950">{{ product.name }}</span>
         </div>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="flex flex-col">
+      <div class="rounded-3xl border border-zinc-200 bg-white p-6 shadow-sm sm:p-8">
+        <div class="flex flex-wrap items-center gap-2">
+          {% if product.is_featured %}
+          <span class="rounded-full bg-amber-100 px-3 py-1 text-xs font-bold uppercase tracking-wide text-amber-800">Featured</span>
+          {% endif %}
+          <span class="rounded-full bg-emerald-50 px-3 py-1 text-xs font-bold uppercase tracking-wide text-emerald-800">{{ product.currency }}</span>
+          <span class="rounded-full bg-zinc-100 px-3 py-1 text-xs font-bold uppercase tracking-wide text-zinc-600">{{ product.sku }}</span>
+        </div>
+
+        <h1 class="mt-5 text-3xl font-extrabold tracking-tight text-zinc-950 sm:text-4xl">{{ product.name }}</h1>
+        <p class="mt-3 text-sm text-zinc-500">{{ product.slug }}</p>
+
+        <div class="mt-6 flex flex-wrap items-end gap-3">
+          <p class="text-4xl font-extrabold text-zinc-950">${{ product.price }}</p>
+          {% if product.compare_at_price %}
+          <p class="pb-1 text-lg font-semibold text-zinc-400 line-through">${{ product.compare_at_price }}</p>
+          {% endif %}
+        </div>
+
+        <p class="mt-6 text-base leading-8 text-zinc-600">{{ product.description }}</p>
+
+        <div class="mt-8 grid grid-cols-2 gap-3">
+          <div class="rounded-2xl border border-zinc-200 bg-[oklch(0.985_0.01_87)] p-4">
+            <p class="text-xs font-semibold uppercase tracking-wide text-zinc-500">Stock</p>
+            <p class="mt-1 text-lg font-bold {% if product.stock_quantity > 0 %}text-emerald-700{% else %}text-rose-700{% endif %}">
+              {% if product.stock_quantity > 0 %}{{ product.stock_quantity }} available{% else %}Out of stock{% endif %}
+            </p>
+          </div>
+          <div class="rounded-2xl border border-zinc-200 bg-[oklch(0.985_0.01_87)] p-4">
+            <p class="text-xs font-semibold uppercase tracking-wide text-zinc-500">Rating</p>
+            <p class="mt-1 text-lg font-bold text-zinc-950">
+              {% if product.review_count > 0 %}{{ product.rating_avg }} / 5{% else %}New arrival{% endif %}
+            </p>
+          </div>
+        </div>
+
+        <div class="mt-8 flex flex-col gap-3 sm:flex-row">
+          <a href="/products" class="inline-flex flex-1 items-center justify-center rounded-xl bg-zinc-950 px-5 py-3 text-sm font-semibold text-white shadow-sm hover:bg-zinc-800">
+            Continue shopping
+          </a>
+          <a href="/api/docs/" class="inline-flex flex-1 items-center justify-center rounded-xl border border-zinc-200 bg-white px-5 py-3 text-sm font-semibold text-zinc-800 shadow-sm hover:border-zinc-300">
+            View API
+          </a>
+        </div>
+      </div>
+
+      <div class="mt-5 rounded-3xl border border-zinc-200 bg-white p-6 shadow-sm">
+        <h2 class="text-lg font-bold text-zinc-950">Product details</h2>
+        <dl class="mt-4 grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
+          <div class="rounded-xl bg-zinc-50 p-3">
+            <dt class="font-semibold text-zinc-500">SKU</dt>
+            <dd class="mt-1 text-zinc-950">{{ product.sku }}</dd>
+          </div>
+          <div class="rounded-xl bg-zinc-50 p-3">
+            <dt class="font-semibold text-zinc-500">Barcode</dt>
+            <dd class="mt-1 text-zinc-950">{% if product.barcode %}{{ product.barcode }}{% else %}Not listed{% endif %}</dd>
+          </div>
+          <div class="rounded-xl bg-zinc-50 p-3">
+            <dt class="font-semibold text-zinc-500">Weight</dt>
+            <dd class="mt-1 text-zinc-950">{% if product.weight_kg %}{{ product.weight_kg }} kg{% else %}Not listed{% endif %}</dd>
+          </div>
+          <div class="rounded-xl bg-zinc-50 p-3">
+            <dt class="font-semibold text-zinc-500">Reviews</dt>
+            <dd class="mt-1 text-zinc-950">{{ product.review_count }}</dd>
+          </div>
+        </dl>
       </div>
     </div>
   </div>
+</section>
 {% endblock %}

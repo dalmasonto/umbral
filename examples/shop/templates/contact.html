@@ -1,0 +1,85 @@
+{% extends "wrapper.html" %}
+{% block title %}Contact | Umbra Shop{% endblock %}
+{% block content %}
+<section class="border-b border-zinc-200 bg-white">
+  <div class="mx-auto grid max-w-7xl gap-8 px-4 py-10 sm:px-6 lg:grid-cols-[0.82fr_1.18fr] lg:px-8 lg:py-14">
+    <div class="flex flex-col justify-between">
+      <div>
+        <p class="text-sm font-semibold uppercase tracking-wide text-emerald-700">Contact</p>
+        <h1 class="mt-2 max-w-2xl text-4xl font-extrabold tracking-tight text-zinc-950 sm:text-5xl">Talk to the shop team.</h1>
+        <p class="mt-4 max-w-xl text-base leading-7 text-zinc-600">
+          Product questions, order help, partnership notes, and support requests all flow into the content plugin contact model.
+        </p>
+      </div>
+
+      <div class="mt-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
+        <div class="rounded-2xl border border-zinc-200 bg-[oklch(0.985_0.01_87)] p-4">
+          <p class="text-xs font-semibold uppercase tracking-wide text-zinc-500">Typical response</p>
+          <p class="mt-1 text-lg font-bold text-zinc-950">Within one business day</p>
+        </div>
+        <div class="rounded-2xl border border-zinc-200 bg-[oklch(0.985_0.01_87)] p-4">
+          <p class="text-xs font-semibold uppercase tracking-wide text-zinc-500">Need answers first?</p>
+          <a href="/faqs" class="mt-1 inline-flex text-lg font-bold text-zinc-950 hover:text-emerald-800">Read FAQs</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="rounded-3xl border border-zinc-200 bg-[oklch(0.985_0.01_87)] p-4 shadow-sm sm:p-5">
+      <form method="post" action="/contact" class="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm sm:p-6">
+        {% if sent %}
+        <div class="mb-5 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-900">
+          Message sent. We will get back to you soon.
+        </div>
+        {% endif %}
+
+        {% if errors.form %}
+        <div class="mb-5 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-900">
+          {{ errors.form }}
+        </div>
+        {% endif %}
+
+        <div class="grid gap-4 sm:grid-cols-2">
+          <label class="block">
+            <span class="text-sm font-semibold text-zinc-700">Name</span>
+            <input name="name" type="text" required autocomplete="name" value="{{ form.name }}" class="mt-2 w-full rounded-xl border {% if errors.name %}border-rose-300 focus:border-rose-600 focus:ring-rose-100{% else %}border-zinc-200 focus:border-emerald-700 focus:ring-emerald-100{% endif %} bg-white px-4 py-3 text-base text-zinc-950 outline-none transition placeholder:text-zinc-400 focus:ring-4">
+            {% if errors.name %}
+            <p class="mt-2 text-sm font-medium text-rose-700">{{ errors.name }}</p>
+            {% endif %}
+          </label>
+          <label class="block">
+            <span class="text-sm font-semibold text-zinc-700">Email</span>
+            <input name="email" type="email" required autocomplete="email" value="{{ form.email }}" class="mt-2 w-full rounded-xl border {% if errors.email %}border-rose-300 focus:border-rose-600 focus:ring-rose-100{% else %}border-zinc-200 focus:border-emerald-700 focus:ring-emerald-100{% endif %} bg-white px-4 py-3 text-base text-zinc-950 outline-none transition placeholder:text-zinc-400 focus:ring-4">
+            {% if errors.email %}
+            <p class="mt-2 text-sm font-medium text-rose-700">{{ errors.email }}</p>
+            {% endif %}
+          </label>
+          <label class="block">
+            <span class="text-sm font-semibold text-zinc-700">Phone</span>
+            <input name="phone" type="tel" autocomplete="tel" value="{{ form.phone }}" class="mt-2 w-full rounded-xl border border-zinc-200 bg-white px-4 py-3 text-base text-zinc-950 outline-none transition placeholder:text-zinc-400 focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100">
+          </label>
+          <label class="block">
+            <span class="text-sm font-semibold text-zinc-700">Subject</span>
+            <input name="subject" type="text" required value="{{ form.subject }}" class="mt-2 w-full rounded-xl border {% if errors.subject %}border-rose-300 focus:border-rose-600 focus:ring-rose-100{% else %}border-zinc-200 focus:border-emerald-700 focus:ring-emerald-100{% endif %} bg-white px-4 py-3 text-base text-zinc-950 outline-none transition placeholder:text-zinc-400 focus:ring-4">
+            {% if errors.subject %}
+            <p class="mt-2 text-sm font-medium text-rose-700">{{ errors.subject }}</p>
+            {% endif %}
+          </label>
+        </div>
+
+        <label class="mt-4 block">
+          <span class="text-sm font-semibold text-zinc-700">Message</span>
+          <textarea name="message" rows="7" required class="mt-2 w-full resize-y rounded-xl border {% if errors.message %}border-rose-300 focus:border-rose-600 focus:ring-rose-100{% else %}border-zinc-200 focus:border-emerald-700 focus:ring-emerald-100{% endif %} bg-white px-4 py-3 text-base leading-7 text-zinc-950 outline-none transition placeholder:text-zinc-400 focus:ring-4">{{ form.message }}</textarea>
+          {% if errors.message %}
+          <p class="mt-2 text-sm font-medium text-rose-700">{{ errors.message }}</p>
+          {% endif %}
+        </label>
+
+        <div class="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <p class="text-sm leading-6 text-zinc-500">We will reply using the details you provide.</p>
+          <button type="submit" class="inline-flex items-center justify-center rounded-xl bg-zinc-950 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-zinc-800 focus:outline-none focus:ring-4 focus:ring-zinc-200">Send message</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</section>
+{% endblock %}
