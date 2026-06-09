@@ -126,6 +126,31 @@ If the ORM can't express a row-level operation you need, **the right fix is to a
 
 **Reviewing this rule:** every PR touching a plugin gets a grep for `sqlx::query` / `sqlx::query_as` in `plugins/<name>/src/`. New hits need a comment justifying which exception applies; otherwise the change is rewritten through the ORM.
 
+## Fix, don't patch. Root cause over symptom.
+
+When code is broken because a framework piece doesn't exist yet, **build the framework piece**. Don't paper over the missing surface with a defensive template guard, a `try { ... } catch { swallow }`, a `#[allow(unused)]`, or a "TODO: wire this later" comment that lets the code compile while the underlying behaviour stays broken.
+
+The litmus test: **does the workaround you're about to write hide the bug from the next developer who hits it?** If yes, stop and fix the real thing.
+
+Concretely, in this codebase, these are workarounds — not fixes:
+
+- A template that writes `{% if user is defined and user.is_authenticated and user.is_staff %}` to hide a 500 when the `user_context_layer` middleware isn't mounted. The fix is to mount the middleware (build the `AuthPlugin::with_user_in_templates()` builder + the `Plugin::wrap_router` hook) so `user` IS defined; then the template stays `{% if user.is_staff %}` like the docs claim.
+- A `.ok()` that silently discards a secondary error because the recovery path itself failed. The fix is to log the secondary error AND make the recovery path correct; not to keep the silent fallback. See gaps2.md #9 for an example.
+- A `Result<T, ()>` that drops the error type because the caller can't be bothered to plumb it. The fix is to plumb it; an error you can't reproduce is one you'll never fix.
+- An `unwrap_or_default()` on a value that's never legitimately `None` in production. The fix is to make the type non-optional; `unwrap_or_default()` is a silent data-loss bug waiting for the wrong row to land.
+- A `cfg(not(test))` that hides broken-in-test behaviour. The fix is to make it work in tests; otherwise tests prove nothing about production.
+- Renaming an unused variable with a `_` prefix to silence a warning instead of asking why it was unused. Often the original author forgot to wire it; the `_` prefix preserves the bug.
+
+The rule applies to the doc-comment surface too. If `plugins/umbra-auth/src/session_user.rs:261` says "opt in via `AuthPlugin::with_user_in_templates`" and the method doesn't exist, **the fix is to write the method**, not to delete the doc-comment claim or to manually wire the middleware in the consumer's main.rs. The docstring describes the framework's intended surface; making the surface match the docstring IS the fix.
+
+When you're tempted to patch:
+
+1. **Name the thing that's broken at the right level.** Not "the template threw" — "the framework promised `user` would be in templates and no middleware mounts it." Patches address symptoms; fixes address contracts.
+2. **Find where the contract should live.** Is there already a Plugin trait method, builder hook, or extension point that the broken piece SHOULD have used? If yes, implement it. If no, the gap is "this contract doesn't exist yet" — log it and decide whether to ship the contract now or open a focused PR for it.
+3. **If the proper fix is out of scope for this turn**, log a gaps2.md entry with the exact file + line + the contract that's missing, and write the *narrowest possible* workaround at the call site with a `// TODO(gaps2 #N): proper fix lives in <file>` comment that NAMES the gap and points to the file the proper fix would touch. The comment is the breadcrumb the next developer follows.
+
+Workarounds without a logged gap entry are how frameworks accumulate the kind of debt that takes a year to pay down. Every workaround is one entry in the backlog; treat the backlog as load-bearing.
+
 ## Commands
 
 The Cargo workspace lives at `crates/Cargo.toml`, **not** at the repo root. Every `cargo` command runs from inside `crates/`:

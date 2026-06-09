@@ -69,7 +69,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .settings(settings)
         .database("default", pool)
         // --- Plugins ---------------------------------------------------------
-        .plugin(AuthPlugin::<AuthUser>::default().with_default_routes())
+        .plugin(
+            AuthPlugin::<AuthUser>::default()
+                .with_default_routes()
+                // Mounts `user_context_layer` globally — every
+                // template render gets `user` in its context
+                // (`is_authenticated`, `is_staff`, `username`, ...).
+                // Cost: one DB read per request. Worth it for an
+                // HTML-heavy app; would be off for REST-only.
+                .with_user_in_templates(),
+        )
         .plugin(SessionsPlugin::default())
         .plugin(PermissionsPlugin)
         .plugin(ContentPlugin)
@@ -173,7 +182,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     ])),
                 ),
         )
-        .plugin(OpenApiPlugin::new())
+        .plugin(OpenApiPlugin::new().at("/api/docs"))
         .plugin(PlaygroundPlugin::new("shop"))
         // --- Templates -------------------------------------------------------
         .templates_dir("templates")

@@ -311,6 +311,13 @@ pub struct AuthPlugin<U: UserModel = AuthUser> {
     /// settable on `AuthPlugin<AuthUser>` (the handlers FK into
     /// `AuthToken` → `AuthUser`); custom user models bring their own.
     pub default_routes_prefix: Option<String>,
+    /// When true, wrap the app router with [`user_context_layer`] so
+    /// every template render has `user` in its global context:
+    /// `{ is_authenticated, is_staff, username, ... }`. Opt-in because
+    /// it costs one DB read per request (cookie → session → user); a
+    /// REST-only service has nothing to gain from it. Set via
+    /// [`AuthPlugin::with_user_in_templates`].
+    pub user_in_templates: bool,
     _u: PhantomData<U>,
 }
 
@@ -319,6 +326,7 @@ impl<U: UserModel> Default for AuthPlugin<U> {
         Self {
             user_model_name: None,
             default_routes_prefix: None,
+            user_in_templates: false,
             _u: PhantomData,
         }
     }
@@ -329,6 +337,33 @@ impl<U: UserModel> AuthPlugin<U> {
     /// Fluent builder method; the return type is `Self` so it chains.
     pub fn user_model_name(mut self, name: impl Into<String>) -> Self {
         self.user_model_name = Some(name.into());
+        self
+    }
+
+    /// Mount the [`user_context_layer`] middleware globally so every
+    /// HTML template gets `user` in its render context — anonymous
+    /// requests see `{ is_authenticated: false }`, authenticated
+    /// requests see the full serialized [`AuthUser`] merged with
+    /// `is_authenticated: true`. Lets templates write
+    /// `{% if user.is_staff %}` without the consumer having to thread
+    /// a user value into every handler's context manually.
+    ///
+    /// One DB read per request (cookie → session → user row). Off by
+    /// default because REST-only services have no templates and the
+    /// cost would be pure overhead. Turn it on for HTML-heavy apps:
+    ///
+    /// ```ignore
+    /// AuthPlugin::<AuthUser>::default()
+    ///     .with_default_routes()
+    ///     .with_user_in_templates()   // ← here
+    /// ```
+    ///
+    /// Implemented via [`Plugin::wrap_router`]; the wrapper wraps the
+    /// merged app router (including every other plugin's routes), so
+    /// admin / REST / playground / your own handlers all see the
+    /// populated context with one builder call.
+    pub fn with_user_in_templates(mut self) -> Self {
+        self.user_in_templates = true;
         self
     }
 }
@@ -407,6 +442,25 @@ impl<U: UserModel> Plugin for AuthPlugin<U> {
         match &self.default_routes_prefix {
             Some(prefix) => auth_routes::openapi_paths(prefix),
             None => Vec::new(),
+        }
+    }
+
+    /// Mount [`user_context_layer`] on the full merged router when the
+    /// `user_in_templates` flag is on (see
+    /// [`AuthPlugin::with_user_in_templates`]). The layer reads the
+    /// session cookie, hydrates the [`AuthUser`], and pushes a
+    /// `serde_json` representation into [`umbra::templates::CURRENT_USER`]
+    /// for the duration of the request — every template render
+    /// downstream gets `user` in its global context with no per-handler
+    /// plumbing.
+    ///
+    /// Off by default — see the builder method's docstring for the
+    /// "why" (one DB read per request, pointless for REST-only apps).
+    fn wrap_router(&self, router: umbra::web::Router) -> umbra::web::Router {
+        if self.user_in_templates {
+            router.layer(axum::middleware::from_fn(user_context_layer))
+        } else {
+            router
         }
     }
 }
