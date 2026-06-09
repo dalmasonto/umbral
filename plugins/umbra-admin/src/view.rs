@@ -142,6 +142,18 @@ pub(crate) fn form_fields_for(
             if c.noform {
                 return false;
             }
+            // auto_now / auto_now_add: the framework fills these on
+            // INSERT (auto_now_add) and on every INSERT/UPDATE
+            // (auto_now). Showing them on the form is wrong — an
+            // empty value would 500 the write path with a NOT-NULL
+            // violation, and a user-supplied value would defeat the
+            // whole purpose of the annotation. Both shapes get
+            // hidden from create AND edit forms; the dynamic write
+            // path (DynQuerySet::insert_json / update_json) supplies
+            // the timestamp without needing the body to carry it.
+            if c.auto_now || c.auto_now_add {
+                return false;
+            }
             if let Some(c2) = cfg.and_then(|cfg| cfg.password_field.as_deref()) {
                 if c.name == c2 {
                     return false;
@@ -554,8 +566,99 @@ pub(crate) fn model_for_template_cols(model: &ModelMeta, display_cols: &[String]
 
 #[cfg(test)]
 mod tests {
-    use super::format_for_input;
-    use umbra::orm::SqlType;
+    use super::{form_fields_for, format_for_input};
+    use umbra::migrate::{Column, ModelMeta};
+    use umbra::orm::{FkAction, SqlType};
+
+    /// Helper: build a `Column` carrying only the flags the
+    /// form-field filter cares about. Every other field gets a
+    /// neutral default. Inlined here instead of derived because
+    /// `Column` has many fields without a `Default` impl + adding
+    /// one would require Default impls all the way down (SqlType,
+    /// FkAction); a single test isn't worth that surface bump.
+    fn col(name: &str, auto_now: bool, auto_now_add: bool, primary_key: bool) -> Column {
+        Column {
+            name: name.to_string(),
+            ty: SqlType::Timestamptz,
+            primary_key,
+            nullable: false,
+            fk_target: None,
+            noform: false,
+            noedit: false,
+            is_string_repr: false,
+            max_length: 0,
+            choices: Vec::new(),
+            choice_labels: Vec::new(),
+            default: String::new(),
+            is_multichoice: false,
+            unique: false,
+            on_delete: FkAction::NoAction,
+            on_update: FkAction::NoAction,
+            index: false,
+            auto_now_add,
+            auto_now,
+            help: String::new(),
+            example: String::new(),
+            supported_backends: Vec::new(),
+            min: None,
+            max: None,
+            text_format: None,
+            slug_from: None,
+        }
+    }
+
+    fn meta(table: &str, fields: Vec<Column>) -> ModelMeta {
+        ModelMeta {
+            name: table.to_string(),
+            table: table.to_string(),
+            fields,
+            display: table.to_string(),
+            icon: "database".to_string(),
+            database: None,
+            singleton: false,
+            unique_together: Vec::new(),
+            indexes: Vec::new(),
+            ordering: Vec::new(),
+            m2m_relations: Vec::new(),
+        }
+    }
+
+    /// Regression test: a model with `auto_now` / `auto_now_add`
+    /// timestamp columns (e.g. `Customer.created_at`,
+    /// `Customer.updated_at`) must NOT surface those columns on the
+    /// admin create / edit form. The dynamic write path fills them
+    /// at INSERT / UPDATE time; rendering them as user-editable
+    /// inputs would either ask the user to fill server-managed
+    /// data (NOT-NULL violation on empty submit) or let them
+    /// override the timestamp (defeats the annotation).
+    ///
+    /// Reported 2026-06-09: a Customer create form was asking the
+    /// user to enter `created_at` and `updated_at` despite both
+    /// being annotated `#[umbra(auto_now_add)]` / `#[umbra(auto_now)]`.
+    #[test]
+    fn form_excludes_auto_now_columns() {
+        let model = meta(
+            "customer",
+            vec![
+                col("id", false, false, true),
+                col("phone", false, false, false),
+                col("created_at", false, true, false),
+                col("updated_at", true, false, false),
+            ],
+        );
+        let fields = form_fields_for(&model, None, None);
+        let names: Vec<&str> = fields.iter().map(|f| f.name.as_str()).collect();
+        assert!(names.contains(&"phone"), "regular fields still surface");
+        assert!(
+            !names.contains(&"created_at"),
+            "auto_now_add column hidden from form; got {names:?}"
+        );
+        assert!(
+            !names.contains(&"updated_at"),
+            "auto_now column hidden from form; got {names:?}"
+        );
+        assert!(!names.contains(&"id"), "PK already excluded (sanity)");
+    }
 
     #[test]
     fn format_for_input_coerces_rfc3339_to_datetime_local() {
