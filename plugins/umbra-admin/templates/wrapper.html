@@ -6,7 +6,14 @@
   <title>{% block title %}{{ site_title }}{% endblock %}</title>
   {% if site_description %}<meta name="description" content="{{ site_description }}"/>{% endif %}
   <!-- HTMX: same-origin only -->
-  <meta name="htmx-config" content='{"selfRequestsOnly":true}'/>
+  {# `responseHandling` swaps content for 400/409/422 too —
+     the admin's form-submit handlers re-render the form with an
+     inline error span on validation failure, and HTMX's default
+     "errors mean no swap" rule would leave the user staring at
+     a stale form with no feedback. The pattern matches DRF's
+     400-with-body convention: validation errors are user-fixable
+     and the response body is the new state to show. #}
+  <meta name="htmx-config" content='{"selfRequestsOnly":true,"responseHandling":[{"code":"204","swap":false},{"code":"[23]..","swap":true},{"code":"400","swap":true},{"code":"409","swap":true},{"code":"422","swap":true},{"code":"[45]..","swap":false,"error":true}]}'/>
   <!--
     FOUC prevention (Bug 4): apply theme from localStorage BEFORE any paint.
     This runs synchronously in <head> so the browser never renders the wrong
@@ -1205,7 +1212,21 @@
     }, 4000);
   };
 
-  document.body.addEventListener('htmx:responseError', function() {
+  document.body.addEventListener('htmx:responseError', function(e) {
+    // HTMX classifies every 4xx + 5xx as a "response error" — but
+    // 400 / 409 / 422 from the admin's form-submit handlers are
+    // validation responses that re-render the form with an inline
+    // error span ALREADY visible to the user. Firing a generic
+    // "Server error" toast on top of that is noise: the user sees
+    // both the precise field-level message AND a misleading
+    // "server" toast that suggests a crash. Skip the toast for
+    // these statuses; swap-bearing validation responses already
+    // surface the real message inline. Only 5xx + the catch-all
+    // 4xxs that DON'T carry a re-render body get the toast.
+    var status = e.detail && e.detail.xhr ? e.detail.xhr.status : 0;
+    if (status === 400 || status === 409 || status === 422) {
+      return;
+    }
     umbra.showToast('Server error', 'error');
   });
 

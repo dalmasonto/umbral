@@ -136,6 +136,22 @@ impl OpenApiPlugin {
 // version / block-list at request time.
 static CONFIG: OnceLock<OpenApiPlugin> = OnceLock::new();
 
+/// Public read of the configured spec URL — the path the JSON
+/// document is served at after `App::build()` runs. Returns
+/// `None` when OpenApiPlugin isn't installed (the OnceLock
+/// hasn't been populated by `Plugin::routes()` yet); returns
+/// `Some("/openapi/openapi.json")` for the default mount and
+/// `Some("/api/docs/openapi.json")` when the user calls
+/// `OpenApiPlugin::default().at("/api/docs")`.
+///
+/// The playground plugin reads this at HTML-render time to inject
+/// the URL into the shell page as a JS global, so a re-mounted
+/// spec is auto-discovered by the SPA without the user having to
+/// also configure the playground.
+pub fn spec_url() -> Option<String> {
+    CONFIG.get().map(|cfg| cfg.spec_url())
+}
+
 impl Plugin for OpenApiPlugin {
     fn name(&self) -> &'static str {
         "openapi"
@@ -147,6 +163,11 @@ impl Plugin for OpenApiPlugin {
 
     fn routes(&self) -> Router {
         let _ = CONFIG.set(self.clone());
+        // Publish the spec URL to the core registry so cross-plugin
+        // consumers (umbra-playground's SPA fetches it from the
+        // browser) can discover the configured mount without
+        // hardcoding `/openapi/openapi.json`.
+        umbra::routes::init_openapi_spec_url(self.spec_url());
         let mut router = Router::new()
             .route(&self.spec_url(), get(spec_handler))
             .route(&self.ui_route(), get(swagger_ui_handler));

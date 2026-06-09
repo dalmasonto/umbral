@@ -230,7 +230,8 @@ pub mod routes {
     //! request misses every match.
 
     pub use umbra_core::routes::{
-        RouteRegistry, RouteSpec, Routes, get, init, init_openapi, registered_openapi_paths,
+        RouteRegistry, RouteSpec, Routes, get, init, init_openapi, init_openapi_spec_url,
+        registered_openapi_paths, registered_openapi_spec_url,
     };
 }
 

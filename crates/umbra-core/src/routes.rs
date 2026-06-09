@@ -410,6 +410,30 @@ pub fn registered_openapi_paths() -> Option<&'static [(String, serde_json::Value
     OPENAPI_REGISTRY.get().map(|v| v.as_slice())
 }
 
+// The URL the OpenAPI JSON spec is served at. Populated by
+// `umbra-openapi`'s `Plugin::routes()` so cross-plugin consumers
+// (notably `umbra-playground`, which has to fetch the spec from
+// the SPA) can discover the configured mount without taking a
+// cross-plugin dependency on `umbra-openapi`. The default of
+// `/openapi/openapi.json` becomes wrong the moment the user calls
+// `OpenApiPlugin::default().at("/api/docs")`; this registry is
+// how the playground's SPA learns about that remap.
+static OPENAPI_SPEC_URL: OnceLock<String> = OnceLock::new();
+
+/// Publish the OpenAPI spec URL. Called from
+/// `OpenApiPlugin::routes()` with the configured mount point.
+pub fn init_openapi_spec_url(url: String) {
+    let _ = OPENAPI_SPEC_URL.set(url);
+}
+
+/// Read the OpenAPI spec URL. `None` when OpenApiPlugin isn't
+/// installed (the OnceLock was never populated). Consumers
+/// typically fall back to `/openapi/openapi.json` for backwards
+/// compat when this returns `None`.
+pub fn registered_openapi_spec_url() -> Option<&'static str> {
+    OPENAPI_SPEC_URL.get().map(|s| s.as_str())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

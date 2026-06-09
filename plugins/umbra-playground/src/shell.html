@@ -13,6 +13,13 @@
   <link rel="stylesheet" href="__CSS_PATH__" />
   <script>
     window.__UMBRA_PLAYGROUND_APP__ = __APP_NAME_JSON__;
+    // Server-injected: the OpenAPI JSON spec URL the user
+    // actually configured (e.g. `/api/docs/openapi.json` when the
+    // OpenApiPlugin was remapped via `.at("/api/docs")`). The
+    // SPA's `loadSpec()` reads this with a sensible fallback so a
+    // playground served from a backend without OpenApiPlugin
+    // still degrades to the historical default URL.
+    window.__UMBRA_OPENAPI_URL__ = __OPENAPI_URL_JSON__;
   </script>
 </head>
 <body>

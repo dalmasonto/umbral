@@ -408,8 +408,22 @@ export const usePlayground = create<PlaygroundState>((set, get) => ({
 
   loadSpec: async () => {
     set({ loadingSpec: true, specError: null });
+    // Server-injected URL — the backend stuffs the configured
+    // OpenApiPlugin mount into `window.__UMBRA_OPENAPI_URL__`
+    // (see `plugins/umbra-playground/src/shell.html`), so a
+    // remapped spec (e.g. `/api/docs/openapi.json`) is
+    // auto-discovered without the user having to also
+    // configure the playground. Fall back to the historical
+    // default for the (rare) case where the global isn't set —
+    // e.g. dev server serving the SPA standalone without the
+    // shell page wrapping it.
+    const specUrl =
+      (typeof window !== "undefined" &&
+        (window as typeof window & { __UMBRA_OPENAPI_URL__?: string })
+          .__UMBRA_OPENAPI_URL__) ||
+      "/openapi/openapi.json";
     try {
-      const res = await fetch("/openapi/openapi.json");
+      const res = await fetch(specUrl);
       if (!res.ok) {
         throw new Error(`HTTP ${res.status} fetching spec`);
       }

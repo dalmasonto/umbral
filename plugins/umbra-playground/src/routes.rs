@@ -60,11 +60,22 @@ fn render_shell(state: &PlaygroundState) -> String {
     let js = format!("{}/assets/{}", state.base_path, JS);
     let app_meta = html_escape_attr(&state.app_name);
     let app_js = json_escape(&state.app_name);
+    // Read the OpenAPI spec URL the user actually configured —
+    // falls back to the historical default when OpenApiPlugin
+    // isn't installed OR the registry isn't populated yet
+    // (boot-time race, shouldn't happen in practice since
+    // Plugin::routes() runs in dependency order and the
+    // playground depends on the rest plugin which depends on
+    // openapi being mounted alongside).
+    let spec_url = umbra::routes::registered_openapi_spec_url()
+        .unwrap_or("/openapi/openapi.json");
+    let spec_url_json = json_escape(spec_url);
     SHELL_HTML
         .replace("__CSS_PATH__", &css)
         .replace("__JS_PATH__", &js)
         .replace("__APP_NAME_ATTR__", &app_meta)
         .replace("__APP_NAME_JSON__", &app_js)
+        .replace("__OPENAPI_URL_JSON__", &spec_url_json)
 }
 
 /// HTML attribute escape. Replaces `&`, `<`, `>`, `"`, `'` with
