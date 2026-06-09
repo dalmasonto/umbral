@@ -32,6 +32,11 @@ serde = { version = "1", features = ["derive"] }
 # JSON serde for migration files (Snapshot + MigrationFile) and snapshot
 # hashing input.
 serde_json = "1"
+# x-www-form-urlencoded body parsing for the `Form<T>` extractor
+# (gaps2 #19). axum::extract::Form uses the same crate internally;
+# we bind it directly because we lift to a HashMap before handing
+# to the validator.
+serde_urlencoded = "0.7"
 # SHA-256 for snapshot_hash drift detection in the umbra_migrations
 # tracking table.
 sha2 = "0.10"

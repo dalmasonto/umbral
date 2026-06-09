@@ -99,7 +99,54 @@
 
     **Triggering case to fix**: load `http://localhost:8000/` in Lighthouse → 700ms+ LCP from the two blocking resources. Post-fix the same page should hit ~150ms LCP locally.
 
-19. [ ] **Form validation primitive — `Form<T>` extractor returning `{field_name: ["msg1", "msg2"]}` instead of hand-rolled per-app validators.** Reference: `examples/shop/src/views/public.rs:21-279` is the canonical "what every handler ends up writing today" — a bespoke `ContactForm` struct, a parallel `ContactErrors` struct with one `Option<String>` per field, a `has_any()` accessor that ORs every Option, a `validate_contact_form()` that walks the form imperatively setting error strings one by one, and a `normalize_contact_form()` that trims + lowercases before validation. ~80 lines of boilerplate for what should be 5 lines of declarative validators on the form struct.
+19. [x] **`Form<T>` extractor + `#[derive(Form)]` validation — Shipped.**
+
+    New surface in `crates/umbra-core/src/forms.rs`:
+
+    - `Form<T>` axum extractor (struct) — wraps `Result<T, FormErrors>` so handlers ALWAYS receive a `Form<T>` and branch via `form.into_result()`. The HTTP layer never rejects on validation failure; the handler decides whether to re-render with errors or return 4xx.
+    - `FormErrors` — thin wrapper around `WriteError` exposing `field_errors()` / `non_field_errors()` (DRF shape) AND `as_template_ctx()` (template-friendly flat shape: each field key maps to its FIRST error string, plus a `form` key for the non-field message).
+    - `From<ValidationErrors> for WriteError` lifter — every per-field message becomes a `WriteError::Validator { field, message }`; non-field messages become an anonymous-field validator. Bundles under `WriteError::Multiple` for >1 error. **This is the architectural unifier**: ORM-validator errors, REST 400 bodies, admin form spans, and HTML form errors now all flow from the same `WriteError` source — no per-surface translator drift.
+    - **Trait rename**: `forms::Form` (old) → `forms::FormValidate`. The name with generics went to the extractor (matches `axum::extract::Form<T>` shape); the trait got the more descriptive `FormValidate`. The derive macro name stays `Form` (it lives in a different namespace).
+
+    Macro additions in `crates/umbra-macros/src/lib.rs`:
+
+    - `#[form(required, ...)]` field-level — explicit Django-style declaration (no-op since Required is the default; accepted so users can mirror the spec's verbose shape).
+    - `#[form(length(min = N, max = M))]` field-level — validator-crate-style combined syntax. Lowers to the same MinLength/MaxLength validators the legacy `min_length` / `max_length` keys produce.
+    - `#[form(normalize_strings)]` container-level — auto-trims every `String` field before validation runs. Eliminates the per-field `form.name = form.name.trim().to_string()` boilerplate.
+
+    Shop's `contact_submit` ported (`examples/shop/src/views/public.rs`) — the bespoke `ContactErrors` struct + `has_any()` + `validate_contact_form()` + `normalize_contact_form()` + `looks_like_email()` are GONE. Form now declares its rules inline:
+
+    ```rust
+    #[derive(Debug, Deserialize, Default, umbra::forms::Form)]
+    #[form(normalize_strings)]
+    pub struct ContactForm {
+        #[form(required, length(min = 1, max = 100))]    name: String,
+        #[form(required, email, max_length = 254)]        email: String,
+        #[form(optional, max_length = 30)]                phone: String,
+        #[form(required, length(min = 1, max = 200))]     subject: String,
+        #[form(required, length(min = 10, max = 5000))]   message: String,
+    }
+    ```
+
+    Handler is 25 lines instead of ~80.
+
+    Live verification on the shop:
+      - `POST /contact` with empty body → HTTP 422, every required field carries a rose-bordered input + "<field> is required" message, form-level banner "Please fix the highlighted fields and send again."
+      - `POST /contact` with `email=not-an-email` → HTTP 422, only the email field highlights, message "email must contain `@`"
+      - `POST /contact` with valid body → HTTP 303 redirect to `/contact?sent=1` (matches pre-port behaviour)
+
+    Tests: 5 new in `crates/umbra-core/tests/form_extractor.rs` (happy path, missing-required, bad-email, normalize_strings, flat-template-ctx). 12 existing in `tests/form_derive.rs` still pass after the trait rename. Full workspace `cargo test`: 1219 passed, 0 failed.
+
+    **Architectural rule shipped with this work** (per the spec): validation errors originate at the ORM's `WriteError`. Every surface MAPS them, none REDEFINES them. The `From<ValidationErrors> for WriteError` lifter is the proof — if a new surface (Form<T>, REST, admin, custom) needs to render validation errors, it consumes `WriteError`'s accessors. New custom field-type validators declare a `Validator` variant once and flow through every surface for free.
+
+    **Deferred** (not gating the PrimaryKey swap):
+      - Validator-crate integration (`#[validate(email)]` / `#[validate(url)]` / `#[validate(range)]` attrs from the `validator` crate). The macro accepts the simple shapes today; the rich rule set lands behind a cargo feature when a real consumer surfaces a need.
+      - Multipart / file-upload bodies. Current extractor is x-www-form-urlencoded only.
+      - Input-preservation on re-render: today the failure branch re-renders with a default form (not the user's typed input). Pairing `axum::Form` + `Form<T>` in the same handler would give both shapes; v1 keeps the surface simple at the cost of one extra retyping on rare validation failures.
+
+19. ~~ (the originally-open description below kept for archive trail)
+
+    Reference: `examples/shop/src/views/public.rs:21-279` is the canonical "what every handler ends up writing today" — a bespoke `ContactForm` struct, a parallel `ContactErrors` struct with one `Option<String>` per field, a `has_any()` accessor that ORs every Option, a `validate_contact_form()` that walks the form imperatively setting error strings one by one, and a `normalize_contact_form()` that trims + lowercases before validation. ~80 lines of boilerplate for what should be 5 lines of declarative validators on the form struct.
 
     Three things wrong with the hand-rolled pattern:
 

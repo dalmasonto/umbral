@@ -285,13 +285,15 @@ pub mod forms {
     //!   the typed struct and renders the HTML.
 
     pub use umbra_core::forms::{
-        EmailFormat, Field, Form, InputKind, MaxLength, MinLength, Required, ValidationErrors,
-        Validator,
+        EmailFormat, Field, Form, FormErrors, FormValidate, InputKind, MaxLength, MinLength,
+        Required, ValidationErrors, Validator,
     };
 
     /// The `#[derive(Form)]` proc-macro. Shares the `Form` name with
-    /// the trait — Rust's type and macro namespaces are separate so
-    /// both ride in on one import.
+    /// the extractor struct — Rust's type and macro namespaces are
+    /// separate so both ride in on one import. The derive emits
+    /// `impl FormValidate for <Struct>`; the `Form<T>` extractor
+    /// then calls into that impl via `FromRequest`.
     pub use umbra_macros::Form;
 }
 

@@ -11,7 +11,10 @@
 
 use std::collections::HashMap;
 
-use umbra::forms::{Form, ValidationErrors};
+// `Form` is now the axum extractor (gaps2 #19). The `validate()`
+// method comes from the `FormValidate` trait the derive emits an
+// impl of. Imports keep the test surface short.
+use umbra::forms::{FormValidate, ValidationErrors};
 
 fn data(pairs: &[(&str, &str)]) -> HashMap<String, String> {
     pairs

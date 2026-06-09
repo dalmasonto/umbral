@@ -1,5 +1,20 @@
 //! Form parsing, validation, and HTML rendering.
 //!
+//! ## Two names, two layers (gaps2 #19)
+//!
+//! - **`FormValidate` trait** (the primitive, was `Form`): a struct
+//!   implements this to provide a `validate(&HashMap)` method. The
+//!   `#[derive(Form)]` macro emits it.
+//! - **`Form<T>` extractor** (the axum entry point): wraps the
+//!   parsed-and-validated `T` in a `Result<T, FormErrors>`. Use in
+//!   handler signatures: `Form<ContactForm>`.
+//!
+//! The trait used to be called `Form` too, but that collided with
+//! the extractor type in the same module. The name with generics
+//! went to the extractor (matches `axum::extract::Form<T>` /
+//! `axum::Json<T>` shape) and the trait got the more descriptive
+//! `FormValidate`.
+//!
 //! The piece that fills out the request-handling story between axum's
 //! `Form<T>` extractor (raw key/value access) and a typed Rust struct
 //! (the application's view of validated input). Django's
@@ -53,7 +68,7 @@ use std::collections::HashMap;
 /// edit views). The default impl walks `fields()` and concatenates
 /// each field's `render_html` — most macro-derived forms inherit
 /// this and only override when they need custom layout.
-pub trait Form: Sized {
+pub trait FormValidate: Sized {
     /// Parse and validate the form's input. Returns the typed struct
     /// on success; returns `ValidationErrors` with every field's
     /// problems accumulated on failure.
@@ -457,6 +472,235 @@ fn html_escape(input: &str) -> String {
         }
     }
     out
+}
+
+// =========================================================================
+// gaps2 #19 — `Form<T>` axum extractor + `FormErrors` lifter
+//
+// The architectural rule (per gaps2 #19's spec): validation errors
+// originate at the ORM's `WriteError`. Every surface MAPS them, none
+// REDEFINES them. `ValidationErrors` is the form-specific producer;
+// `WriteError::Multiple` is the unified consumer. `FormErrors` is a
+// thin wrapper around `WriteError` that adds the
+// template-friendly flat view (`errors.name` → first error string).
+// =========================================================================
+
+use crate::orm::write::WriteError;
+
+/// Form-validation error envelope. Wraps the ORM's `WriteError` so
+/// every surface (REST 400 bodies, admin form spans, HTML form
+/// renders) sees the same structured shape. The template helper
+/// `as_template_ctx` produces the flat single-string-per-field view
+/// that most form templates ask for.
+///
+/// Not `Clone` because `WriteError` carries a `sqlx::Error` variant
+/// that's also not Clone. If you need a cheap copyable bundle of
+/// rendered messages, use [`Self::as_template_ctx`] which returns
+/// an owned `serde_json::Map`.
+#[derive(Debug)]
+pub struct FormErrors {
+    inner: WriteError,
+}
+
+impl FormErrors {
+    /// Wrap any [`WriteError`]. Use [`From`] for free conversion in
+    /// `?` chains.
+    pub fn new(err: WriteError) -> Self {
+        Self { inner: err }
+    }
+
+    /// Borrow the underlying [`WriteError`] — keeps every accessor
+    /// available (`field_errors()`, `non_field_errors()`,
+    /// `error_code()`).
+    pub fn as_write_error(&self) -> &WriteError {
+        &self.inner
+    }
+
+    /// Move out the underlying [`WriteError`] (e.g. to feed a
+    /// REST-style DRF body builder).
+    pub fn into_write_error(self) -> WriteError {
+        self.inner
+    }
+
+    /// Per-field error map — see [`WriteError::field_errors`].
+    pub fn field_errors(&self) -> std::collections::BTreeMap<String, Vec<String>> {
+        self.inner.field_errors()
+    }
+
+    /// Cross-field / non-field error list — see
+    /// [`WriteError::non_field_errors`].
+    pub fn non_field_errors(&self) -> Vec<String> {
+        self.inner.non_field_errors()
+    }
+
+    /// Template-friendly flat view: each field maps to its FIRST
+    /// error message (string), plus the FIRST non-field error under
+    /// the `form` key. Renders directly under the `errors` context
+    /// key — templates write `{{ errors.name }}` or
+    /// `{% if errors.form %}`.
+    ///
+    /// For templates that need to render EVERY error per field
+    /// (rare), call [`field_errors`] / [`non_field_errors`]
+    /// directly and pass the maps as-is.
+    pub fn as_template_ctx(&self) -> serde_json::Map<String, serde_json::Value> {
+        let mut out = serde_json::Map::new();
+        for (key, msgs) in self.field_errors() {
+            if let Some(first) = msgs.into_iter().next() {
+                out.insert(key, serde_json::Value::String(first));
+            }
+        }
+        if let Some(first) = self.non_field_errors().into_iter().next() {
+            out.insert("form".to_string(), serde_json::Value::String(first));
+        }
+        out
+    }
+}
+
+impl std::fmt::Display for FormErrors {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.inner)
+    }
+}
+
+impl std::error::Error for FormErrors {}
+
+impl From<WriteError> for FormErrors {
+    fn from(e: WriteError) -> Self {
+        Self::new(e)
+    }
+}
+
+/// Lift the form-primitive [`ValidationErrors`] into the canonical
+/// [`WriteError`]. Each per-field message becomes a
+/// `WriteError::Validator { field, message }`; non-field messages
+/// become an `Anonymous` validator carrying the bare message.
+/// Wrapped under `WriteError::Multiple` when there's more than one.
+impl From<ValidationErrors> for WriteError {
+    fn from(e: ValidationErrors) -> Self {
+        let mut out: Vec<WriteError> = Vec::new();
+        for (field, msgs) in e.fields {
+            for message in msgs {
+                out.push(WriteError::Validator {
+                    field: field.clone(),
+                    message,
+                });
+            }
+        }
+        for message in e.non_field {
+            out.push(WriteError::Validator {
+                field: String::new(),
+                message,
+            });
+        }
+        if out.len() == 1 {
+            out.into_iter().next().expect("len == 1")
+        } else {
+            WriteError::Multiple { errors: out }
+        }
+    }
+}
+
+impl From<ValidationErrors> for FormErrors {
+    fn from(e: ValidationErrors) -> Self {
+        Self::new(e.into())
+    }
+}
+
+/// Axum extractor that validates a form body before the handler
+/// runs. On extraction success the wrapped result is
+/// `Ok(T)` (the validated struct); on validation failure the
+/// wrapped result is `Err(FormErrors)`. The HTTP layer never
+/// rejects — handlers ALWAYS see a `Form<T>` and decide what to
+/// render via [`Self::into_result`].
+///
+/// ```ignore
+/// use umbra::forms::Form;
+///
+/// pub async fn submit(form: Form<ContactForm>) -> impl IntoResponse {
+///     match form.into_result() {
+///         Ok(valid)  => persist_and_redirect(valid).await,
+///         Err(errs)  => render_form_with_errors(errs),
+///     }
+/// }
+/// ```
+///
+/// The "always wrap, handler unwraps" shape (vs. axum's rejection-
+/// type pattern) lets the handler render the form template with
+/// the user's original input AND the per-field errors in one place
+/// — no double-render dance, no rejection-type IntoResponse impl
+/// to write per form.
+pub struct Form<T> {
+    inner: Result<T, FormErrors>,
+}
+
+impl<T> Form<T> {
+    /// Construct a `Form<T>` carrying a validated value.
+    pub fn valid(value: T) -> Self {
+        Self { inner: Ok(value) }
+    }
+
+    /// Construct a `Form<T>` carrying validation errors.
+    pub fn invalid(errors: FormErrors) -> Self {
+        Self { inner: Err(errors) }
+    }
+
+    /// Move the wrapped `Result` out. Handlers branch on this.
+    pub fn into_result(self) -> Result<T, FormErrors> {
+        self.inner
+    }
+
+    /// Borrow the wrapped `Result` for inspection without consuming.
+    pub fn as_result(&self) -> Result<&T, &FormErrors> {
+        self.inner.as_ref()
+    }
+}
+
+impl<T, S> axum::extract::FromRequest<S> for Form<T>
+where
+    T: FormValidate + serde::de::DeserializeOwned + Send + 'static,
+    S: Send + Sync,
+{
+    type Rejection = axum::response::Response;
+
+    async fn from_request(
+        req: axum::extract::Request,
+        _state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        use axum::body::to_bytes;
+        use axum::http::StatusCode;
+        use axum::response::IntoResponse;
+
+        // Read the body up to a sane limit (2 MiB matches axum's
+        // default Form extractor). Anything larger almost certainly
+        // means a misuse (file upload through the form extractor)
+        // and we'd rather 413 than buffer megabytes silently.
+        const MAX_BODY: usize = 2 * 1024 * 1024;
+        let bytes = match to_bytes(req.into_body(), MAX_BODY).await {
+            Ok(b) => b,
+            Err(_) => {
+                return Err(
+                    (StatusCode::PAYLOAD_TOO_LARGE, "form body exceeds 2 MiB").into_response()
+                );
+            }
+        };
+
+        // Parse x-www-form-urlencoded into a String->String map.
+        // Empty bodies parse to an empty map — `FormValidate::validate`
+        // then sees every field as missing and surfaces the right
+        // per-field "required" errors.
+        let pairs: std::collections::HashMap<String, String> =
+            serde_urlencoded::from_bytes(&bytes).unwrap_or_default();
+
+        // Run validation. On success, we've already proven the data
+        // fits T's shape — return Ok(T). On failure, lift the
+        // ValidationErrors to a FormErrors and hand back as a
+        // Form::invalid so the handler can render the template with
+        // the original input still in the map.
+        match T::validate(&pairs) {
+            Ok(value) => Ok(Self::valid(value)),
+            Err(errs) => Ok(Self::invalid(FormErrors::from(errs))),
+        }
+    }
 }
 
 // =========================================================================

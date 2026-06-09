@@ -2950,6 +2950,13 @@ fn parse_form_attrs(attrs: &[syn::Attribute]) -> syn::Result<FormFieldAttr> {
             } else if meta.path.is_ident("optional") {
                 out.optional = true;
                 Ok(())
+            } else if meta.path.is_ident("required") {
+                // gaps2 #19: `required` is the explicit form of the
+                // default behaviour. No-op (the derive already
+                // emits Required unless `optional` is set), but
+                // accepting it lets users mirror Django's positive
+                // declaration shape (`#[form(required, length(...))]`).
+                Ok(())
             } else if meta.path.is_ident("min_length") {
                 let lit: syn::LitInt = meta.value()?.parse()?;
                 out.min_length = Some(lit.base10_parse()?);
@@ -2958,11 +2965,65 @@ fn parse_form_attrs(attrs: &[syn::Attribute]) -> syn::Result<FormFieldAttr> {
                 let lit: syn::LitInt = meta.value()?.parse()?;
                 out.max_length = Some(lit.base10_parse()?);
                 Ok(())
+            } else if meta.path.is_ident("length") {
+                // gaps2 #19: combined `length(min = N, max = M)`
+                // syntax (validator-crate style). Either bound is
+                // optional — `length(min = 1)` and `length(max = 200)`
+                // both work. Lowers to the same MinLength /
+                // MaxLength validators the legacy `min_length` /
+                // `max_length` keys produce.
+                meta.parse_nested_meta(|inner| {
+                    if inner.path.is_ident("min") {
+                        let lit: syn::LitInt = inner.value()?.parse()?;
+                        out.min_length = Some(lit.base10_parse()?);
+                        Ok(())
+                    } else if inner.path.is_ident("max") {
+                        let lit: syn::LitInt = inner.value()?.parse()?;
+                        out.max_length = Some(lit.base10_parse()?);
+                        Ok(())
+                    } else {
+                        Err(inner.error("`length(...)` accepts `min = N` and `max = N`"))
+                    }
+                })?;
+                Ok(())
             } else {
                 Err(meta.error(
-                    "umbra::Form derive accepts `email`, `password`, \
-                     `optional`, `min_length = N`, `max_length = N`",
+                    "umbra::Form derive accepts `required`, `optional`, \
+                     `email`, `password`, `min_length = N`, `max_length = N`, \
+                     `length(min = N, max = M)`",
                 ))
+            }
+        })?;
+    }
+    Ok(out)
+}
+
+/// Container-level `#[form(...)]` parsed off the struct attrs
+/// (gaps2 #19). Currently carries one flag.
+#[derive(Default)]
+struct FormStructAttr {
+    /// `#[form(normalize_strings)]` — auto-trim every `String` field
+    /// before validation runs. Eliminates the per-field
+    /// `form.name = form.name.trim().to_string()` boilerplate that
+    /// every contact-form / signup-form handler ended up writing.
+    /// Does NOT lowercase (some fields like usernames are case-
+    /// sensitive); for email-style lowercasing, do it explicitly
+    /// in a hand-written validator.
+    normalize_strings: bool,
+}
+
+fn parse_form_struct_attrs(attrs: &[syn::Attribute]) -> syn::Result<FormStructAttr> {
+    let mut out = FormStructAttr::default();
+    for attr in attrs {
+        if !attr.path().is_ident("form") {
+            continue;
+        }
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("normalize_strings") {
+                out.normalize_strings = true;
+                Ok(())
+            } else {
+                Err(meta.error("umbra::Form container-level attrs accept `normalize_strings`"))
             }
         })?;
     }
@@ -3288,6 +3349,11 @@ fn expand_form(input: DeriveInput) -> syn::Result<TokenStream2> {
         }
     };
 
+    // gaps2 #19: container-level `#[form(normalize_strings)]` toggle.
+    // Emitted per-String-field as `raw.trim().to_string()` before
+    // validation runs.
+    let container = parse_form_struct_attrs(&input.attrs)?;
+
     let mut field_builders: Vec<TokenStream2> = Vec::new();
     let mut validate_body: Vec<TokenStream2> = Vec::new();
     let mut struct_inits: Vec<TokenStream2> = Vec::new();
@@ -3337,11 +3403,24 @@ fn expand_form(input: DeriveInput) -> syn::Result<TokenStream2> {
         // Validation step.
         let raw_var = format_ident!("_{}_raw", field_ident);
         let parsed_var = format_ident!("_{}_parsed", field_ident);
+        // gaps2 #19: when the struct opts into `normalize_strings`,
+        // trim every String-typed field's raw value before validation
+        // so a stray leading/trailing space doesn't trip a length
+        // rule or end up persisted as part of the user's data.
+        // Numbers / bools / Option<non-String> keep their raw value
+        // — trim isn't meaningful there.
+        let normalize = matches!(kind, FormFieldKind::String) && container.normalize_strings;
+        let normalize_stmt = if normalize {
+            quote! { let #raw_var: String = #raw_var.trim().to_string(); }
+        } else {
+            quote! {}
+        };
         validate_body.push(quote! {
             let #raw_var: String = data
                 .get(#field_name)
                 .cloned()
                 .unwrap_or_default();
+            #normalize_stmt
             #field_var.validate(&#raw_var, &mut errs);
         });
 
@@ -3422,7 +3501,7 @@ fn expand_form(input: DeriveInput) -> syn::Result<TokenStream2> {
         .collect();
 
     let output = quote! {
-        impl ::umbra::forms::Form for #struct_name {
+        impl ::umbra::forms::FormValidate for #struct_name {
             fn validate(
                 data: &::std::collections::HashMap<::std::string::String, ::std::string::String>,
             ) -> ::std::result::Result<Self, ::umbra::forms::ValidationErrors> {

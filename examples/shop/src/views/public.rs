@@ -8,8 +8,9 @@ use chrono::Utc;
 use content::models::{ContactMessage, ContactStatus, Faq, Post, faq, post};
 use ecommerce::models::{Brand, Product, Review, brand, product, review};
 use serde::{Deserialize, Serialize};
+use umbra::forms::{Form, FormErrors};
 use umbra::templates::context;
-use umbra::web::{Form, Html, IntoResponse, Path, Query, Redirect, Response, StatusCode};
+use umbra::web::{Html, IntoResponse, Path, Query, Redirect, Response, StatusCode};
 
 use super::internal_error;
 
@@ -18,33 +19,31 @@ pub struct ContactQuery {
     sent: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize, Default)]
+/// gaps2 #19: the contact form's validation is now declared via
+/// `#[derive(Form)]` attributes. The ~80 lines of bespoke
+/// `ContactErrors` / `validate_contact_form` / `normalize_contact_form`
+/// that used to live here are gone — the `Form<ContactForm>`
+/// extractor runs validation before the handler, the result lands
+/// in a `Result<ContactForm, FormErrors>`, and the template reads
+/// `errors.<field>` straight off `FormErrors::as_template_ctx`.
+#[derive(Debug, Deserialize, Serialize, Default, umbra::forms::Form)]
 #[serde(default)]
+#[form(normalize_strings)]
 pub struct ContactForm {
+    #[form(required, length(min = 1, max = 100))]
     name: String,
+
+    #[form(required, email, max_length = 254)]
     email: String,
+
+    #[form(optional, max_length = 30)]
     phone: String,
+
+    #[form(required, length(min = 1, max = 200))]
     subject: String,
+
+    #[form(required, length(min = 10, max = 5000))]
     message: String,
-}
-
-#[derive(Debug, Serialize, Default)]
-struct ContactErrors {
-    form: Option<String>,
-    name: Option<String>,
-    email: Option<String>,
-    subject: Option<String>,
-    message: Option<String>,
-}
-
-impl ContactErrors {
-    fn has_any(&self) -> bool {
-        self.form.is_some()
-            || self.name.is_some()
-            || self.email.is_some()
-            || self.subject.is_some()
-            || self.message.is_some()
-    }
 }
 
 pub async fn home() -> Result<Html<String>, (StatusCode, String)> {
@@ -186,40 +185,51 @@ pub async fn faqs() -> Result<Html<String>, (StatusCode, String)> {
 
 pub async fn contact(Query(query): Query<ContactQuery>) -> Result<Response, (StatusCode, String)> {
     let sent = query.sent.as_deref() == Some("1");
-
     render_contact_page(
         sent,
         &ContactForm::default(),
-        &ContactErrors::default(),
+        serde_json::Map::new(),
         StatusCode::OK,
     )
 }
 
-pub async fn submit_contact(
-    Form(form): Form<ContactForm>,
-) -> Result<Response, (StatusCode, String)> {
+pub async fn submit_contact(form: Form<ContactForm>) -> Result<Response, (StatusCode, String)> {
     let now = Utc::now();
-    let form = normalize_contact_form(form);
-    let errors = validate_contact_form(&form);
+    // gaps2 #19: the extractor already ran validation. On Err we
+    // re-render the form with the per-field error map AND the
+    // user's original input (axum's deserialize step ran first, so
+    // the parsed struct is still accessible via the inner Result —
+    // but on failure we don't have the typed T, so re-render with
+    // a default ContactForm and rely on the template's `value=""`
+    // fallback). For full input-preservation across re-renders the
+    // caller would extract `axum::Form` AND `Form<T>` together;
+    // the v1 trade-off is to keep the surface simple.
+    let valid = match form.into_result() {
+        Ok(v) => v,
+        Err(errs) => {
+            return render_contact_page(
+                false,
+                &ContactForm::default(),
+                ctx_with_form_summary(&errs),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            );
+        }
+    };
 
-    if errors.has_any() {
-        return render_contact_page(false, &form, &errors, StatusCode::UNPROCESSABLE_ENTITY);
-    }
-
-    let phone = if form.phone.is_empty() {
+    let phone = if valid.phone.is_empty() {
         None
     } else {
-        Some(form.phone.clone())
+        Some(valid.phone.clone())
     };
 
     ContactMessage::objects()
         .create(ContactMessage {
             id: 0,
-            name: form.name.clone(),
-            email: form.email.clone(),
+            name: valid.name.clone(),
+            email: valid.email.to_lowercase(),
             phone,
-            subject: form.subject.clone(),
-            message: form.message.clone(),
+            subject: valid.subject.clone(),
+            message: valid.message.clone(),
             status: ContactStatus::New,
             ip_address: None,
             created_at: now,
@@ -233,7 +243,7 @@ pub async fn submit_contact(
 fn render_contact_page(
     sent: bool,
     form: &ContactForm,
-    errors: &ContactErrors,
+    errors: serde_json::Map<String, serde_json::Value>,
     status: StatusCode,
 ) -> Result<Response, (StatusCode, String)> {
     let body = umbra::templates::render("contact.html", &context!(sent, form, errors))
@@ -241,57 +251,23 @@ fn render_contact_page(
     Ok((status, Html(body)).into_response())
 }
 
-fn normalize_contact_form(mut form: ContactForm) -> ContactForm {
-    form.name = form.name.trim().to_string();
-    form.email = form.email.trim().to_lowercase();
-    form.phone = form.phone.trim().to_string();
-    form.subject = form.subject.trim().to_string();
-    form.message = form.message.trim().to_string();
-    form
-}
-
-fn validate_contact_form(form: &ContactForm) -> ContactErrors {
-    let mut errors = ContactErrors::default();
-
-    if form.name.is_empty() {
-        errors.name = Some("Enter your name.".to_string());
+/// Lift `FormErrors` into the flat template ctx the
+/// `contact.html` partial expects (`errors.name`, `errors.email`,
+/// ..., `errors.form`), AND add the "Please fix the highlighted
+/// fields..." form-level banner the legacy hand-rolled validator
+/// used to write. `FormErrors::as_template_ctx` only emits a
+/// `form` key when there's a non-field error; per-field-only
+/// failures need an explicit banner so the user sees ONE summary
+/// at the top of the form.
+fn ctx_with_form_summary(errs: &FormErrors) -> serde_json::Map<String, serde_json::Value> {
+    let mut ctx = errs.as_template_ctx();
+    if !ctx.contains_key("form") {
+        ctx.insert(
+            "form".to_string(),
+            serde_json::Value::String(
+                "Please fix the highlighted fields and send again.".to_string(),
+            ),
+        );
     }
-
-    if form.email.is_empty() {
-        errors.email = Some("Enter your email address.".to_string());
-    } else if !looks_like_email(&form.email) {
-        errors.email = Some("Enter a valid email address.".to_string());
-    }
-
-    if form.subject.is_empty() {
-        errors.subject = Some("Add a subject.".to_string());
-    }
-
-    if form.message.is_empty() {
-        errors.message = Some("Write a message.".to_string());
-    }
-
-    if errors.has_any() {
-        errors.form = Some("Please fix the highlighted fields and send again.".to_string());
-    }
-
-    errors
-}
-
-fn looks_like_email(email: &str) -> bool {
-    let Some((local, domain)) = email.split_once('@') else {
-        return false;
-    };
-
-    if local.is_empty()
-        || domain.is_empty()
-        || domain.contains('@')
-        || email.chars().any(char::is_whitespace)
-        || domain.starts_with('.')
-        || domain.ends_with('.')
-    {
-        return false;
-    }
-
-    domain.split('.').all(|part| !part.is_empty()) && domain.contains('.')
+    ctx
 }
