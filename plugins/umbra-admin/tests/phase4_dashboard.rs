@@ -44,7 +44,7 @@ async fn boot() -> &'static axum::Router {
             kind: WidgetKind::Kpi,
             default_span: Span { cols: 3, rows: 1 },
             permission: None,
-        default_period: None,
+            default_period: None,
             data: WidgetDataFn::new(|_user| async move {
                 WidgetPayload::Kpi(KpiPayload {
                     value: "99".to_string(),
@@ -228,6 +228,48 @@ async fn dashboard_page_renders_widget_placeholders() {
     assert!(
         html.contains("hx-get=\"/admin/api/dashboard/widgets/"),
         "expected HTMX widget placeholders in dashboard HTML"
+    );
+}
+
+/// gaps2 #3 — change-password dialog lives as an HTML `<template>`
+/// in wrapper.html rather than JS-string concatenation. The opener
+/// (`umbra._openChangePasswordDialog`) clones the template and
+/// patches `hx-post` to the target URL.
+///
+/// Regression pin: ensure both the template element AND the form
+/// selector hook (`data-change-pw-form`) are present, and that the
+/// old JS-built shape is fully gone.
+#[tokio::test]
+async fn change_password_dialog_uses_html_template_not_js_concat() {
+    let _guard = LOCK.lock().await;
+    let router = boot().await;
+    let cookie = staff_cookie().await;
+
+    let req = Request::builder()
+        .uri("/admin/?dashboard=1")
+        .header(header::COOKIE, cookie)
+        .body(Body::empty())
+        .unwrap();
+    let resp = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let html = String::from_utf8_lossy(&body);
+
+    assert!(
+        html.contains("<template id=\"umbra-change-password-dialog-template\">"),
+        "expected change-password <template> block in wrapper.html"
+    );
+    assert!(
+        html.contains("data-change-pw-form"),
+        "expected `data-change-pw-form` selector hook on the form"
+    );
+    // Negative pin: the old JS-string-concat shape's literal
+    // `'/' + id + '/change-password"' + ...` should be gone. If
+    // someone reverts to the pre-fix builder, this test catches it.
+    assert!(
+        !html.contains("change-password\"' +"),
+        "old JS-string-concat change-password builder should be removed"
     );
 }
 

@@ -1,6 +1,6 @@
 # Seen/Known gaps - Continued from @gaps.md
 
-1. [ ] When you save an item in the create/edit sheet in the admin panel, you don't see any feedback toast ie was it saved successfully or did it fail?
+1. [x] **Save-feedback toast in the admin sheet — SHIPPED in commit `d2916d5` as gaps2 #13.** Same symptom; `d2916d5` wired `showToast` alongside the existing `closeSheet` + `refreshTable` HX-Trigger events on every CRUD success path (`sheet::sheet_create`, `crud::update`, `crud::htmx_delete`). 3 regression tests in `plugins/umbra-admin/tests/phase2_sheet.rs` pin the trigger payload. The failure-path toast already worked via the inline error fragment (commit `5b163ab`); this commit completed the success-side symmetry.
 2. [ ] Can we have a posthog wiring maybe as a plugin, or a way of linking such logging systems into umbra
 3. [ ] The change password widget is in js - Very wrong, write this in html, give it an id, query, get the inner html and replace the replaceable parts. Don't try this game for js inline html. That is the work for HTML templates. This is in wrapper.html around line `// ---- Change password dialog ----`
 4. [ ] Wrapper.html is growing larger and larger. Replace most widget specific js with `/static/<WIDGET>.js` files. Static assets should be auto served from the admin plugin using the static plugin, we don't have to manually write them anywhere. Just reference the static assets into wrappet.html. The same goes with the inline style elements. Move them to `/static/index.css` files and reference them in wrapper.html.

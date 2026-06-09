@@ -1185,6 +1185,47 @@
 {# Toast notification container #}
 <div id="umbra-toast-container" class="fixed bottom-4 right-4 z-[300] flex flex-col gap-sm pointer-events-none" aria-live="polite"></div>
 
+{# gaps2 #3: change-password dialog as a `<template>` element
+   rather than JS-built string concatenation. The JS opener clones
+   the content and patches the form's `hx-post` to the right
+   `<table>/<id>/change-password` URL. Designers and Tailwind's
+   content scanner both see real HTML; the form's classes get
+   compiled into shop.css the same way every other markup block
+   does. #}
+<template id="umbra-change-password-dialog-template">
+  <div id="umbra-dialog-overlay"
+       class="fixed inset-0 z-[200] flex items-center justify-center bg-background/60 backdrop-blur-sm"
+       onclick="if(event.target===this)umbra.closeDialog()"
+       role="dialog"
+       aria-modal="true">
+    <div class="bg-surface-container border border-outline-variant rounded-[14px] shadow-2xl w-full max-w-sm mx-md p-xl flex flex-col gap-lg">
+      <div class="flex items-center gap-md">
+        <div class="w-10 h-10 rounded-xl bg-primary-container/20 border border-primary/20 flex items-center justify-center flex-shrink-0">
+          <i data-lucide="key" class="w-5 h-5 text-primary"></i>
+        </div>
+        <h2 class="font-h3 text-h3 text-on-surface">Change password</h2>
+      </div>
+      <form data-change-pw-form
+            class="space-y-sm"
+            hx-swap="none"
+            hx-on::after-request="umbra.closeDialog()">
+        <input type="password" name="new_password" placeholder="New password" required
+               autocomplete="new-password"
+               class="w-full bg-surface-container-low border border-outline-variant rounded-xl px-md py-sm text-body-md text-on-surface focus:outline-none focus:ring-1 focus:ring-primary" />
+        <input type="password" name="confirm_password" placeholder="Confirm password" required
+               autocomplete="new-password"
+               class="w-full bg-surface-container-low border border-outline-variant rounded-xl px-md py-sm text-body-md text-on-surface focus:outline-none focus:ring-1 focus:ring-primary" />
+        <div class="flex justify-end gap-md pt-sm">
+          <button type="button" onclick="umbra.closeDialog()"
+                  class="px-lg py-sm rounded-xl border border-outline-variant text-on-surface-variant hover:bg-surface-container-high font-label-md text-label-md transition-all">Cancel</button>
+          <button type="submit"
+                  class="px-lg py-sm rounded-xl bg-primary text-on-primary hover:opacity-90 font-label-md text-label-md transition-all">Change</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</template>
+
 <script>
 (function() {
   window.umbra = window.umbra || {};
@@ -1539,29 +1580,29 @@
     if (slot) slot.innerHTML = '';
   };
 
-  // ---- Change password dialog ----
+  // ---- Change password dialog (gaps2 #3) ----
+  //
+  // Pre-fix this built ~25 lines of dialog HTML via string concat
+  // inside JS. Designers couldn't edit the markup without touching
+  // a script tag; Tailwind's content scanner couldn't find every
+  // class used in the dialog without scanning the JS literally;
+  // every Tailwind class lived twice (here AND in any template that
+  // wanted the same styling). The dialog now lives as a
+  // `<template id="umbra-change-password-dialog-template">` block
+  // higher up in this file. The opener clones the template content
+  // and patches only the form's `hx-post` URL — that's the only
+  // call-site-varying piece.
   umbra._openChangePasswordDialog = function(table, id) {
     var slot = document.getElementById('umbra-dialog-slot');
-    if (!slot) return;
-    slot.innerHTML =
-      '<div id="umbra-dialog-overlay" class="fixed inset-0 z-[200] flex items-center justify-center bg-background/60 backdrop-blur-sm" onclick="if(event.target===this)umbra.closeDialog()" role="dialog" aria-modal="true">' +
-      '<div class="bg-surface-container border border-outline-variant rounded-[14px] shadow-2xl w-full max-w-sm mx-md p-xl flex flex-col gap-lg">' +
-      '<div class="flex items-center gap-md">' +
-      '<div class="w-10 h-10 rounded-xl bg-primary-container/20 border border-primary/20 flex items-center justify-center flex-shrink-0">' +
-      '<i data-lucide="key" class="w-5 h-5 text-primary"></i></div>' +
-      '<h2 class="font-h3 text-h3 text-on-surface">Change password</h2></div>' +
-      '<form id="change-pw-form" class="space-y-sm"' +
-      ' hx-post="{{ admin_base }}/' + table + '/' + id + '/change-password"' +
-      ' hx-swap="none"' +
-      ' hx-on::after-request="umbra.closeDialog()">' +
-      '<input type="password" name="new_password" placeholder="New password" required autocomplete="new-password"' +
-      ' class="w-full bg-surface-container-low border border-outline-variant rounded-xl px-md py-sm text-body-md text-on-surface focus:outline-none focus:ring-1 focus:ring-primary" />' +
-      '<input type="password" name="confirm_password" placeholder="Confirm password" required autocomplete="new-password"' +
-      ' class="w-full bg-surface-container-low border border-outline-variant rounded-xl px-md py-sm text-body-md text-on-surface focus:outline-none focus:ring-1 focus:ring-primary" />' +
-      '<div class="flex justify-end gap-md pt-sm">' +
-      '<button type="button" onclick="umbra.closeDialog()" class="px-lg py-sm rounded-xl border border-outline-variant text-on-surface-variant hover:bg-surface-container-high font-label-md text-label-md transition-all">Cancel</button>' +
-      '<button type="submit" class="px-lg py-sm rounded-xl bg-primary text-on-primary hover:opacity-90 font-label-md text-label-md transition-all">Change</button>' +
-      '</div></form></div></div>';
+    var tpl = document.getElementById('umbra-change-password-dialog-template');
+    if (!slot || !tpl || !tpl.content) return;
+    var node = tpl.content.cloneNode(true);
+    var form = node.querySelector('[data-change-pw-form]');
+    if (form) {
+      form.setAttribute('hx-post', '{{ admin_base }}/' + table + '/' + id + '/change-password');
+    }
+    slot.innerHTML = '';
+    slot.appendChild(node);
     if (window.lucide) lucide.createIcons({ el: slot });
     htmx.process(slot);
   };
