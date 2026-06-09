@@ -450,9 +450,19 @@ pub(crate) async fn update(
                 if form.contains_key("_save_continue") {
                     return edit_sheet_handler(State(state), headers, Path((table, id))).await;
                 }
+                // gaps2 #13: success toast alongside closeSheet +
+                // refreshTable. Symmetric with `sheet::sheet_create`.
+                let trigger = serde_json::json!({
+                    "closeSheet": {},
+                    "refreshTable": {},
+                    "showToast": {
+                        "message": format!("{} updated", model.name),
+                        "level": "success"
+                    },
+                });
                 let mut resp = axum::response::Response::builder()
                     .status(StatusCode::OK)
-                    .header("HX-Trigger", r#"{"closeSheet": {}, "refreshTable": {}}"#)
+                    .header("HX-Trigger", trigger.to_string())
                     .body(axum::body::Body::empty())
                     .unwrap();
                 resp.headers_mut()
@@ -598,9 +608,18 @@ pub(crate) async fn htmx_delete(
                 &format!("deleted {} #{}", model.name, id),
             )
             .await;
+            // gaps2 #13: success toast on delete too.
+            let trigger = serde_json::json!({
+                "closeSheet": {},
+                "refreshTable": {},
+                "showToast": {
+                    "message": format!("{} #{} deleted", model.name, id),
+                    "level": "success"
+                },
+            });
             let mut resp = axum::response::Response::builder()
                 .status(StatusCode::OK)
-                .header("HX-Trigger", r#"{"closeSheet": {}, "refreshTable": {}}"#)
+                .header("HX-Trigger", trigger.to_string())
                 .body(axum::body::Body::empty())
                 .unwrap_or_else(|_| {
                     Redirect::to(&format!(

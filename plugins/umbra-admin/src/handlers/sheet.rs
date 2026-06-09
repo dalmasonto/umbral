@@ -289,9 +289,22 @@ pub(crate) async fn sheet_create(
                 // In-place refresh: close the sheet + re-fetch rows so
                 // the new record appears without a full page nav.
                 // Matches `crud::update`'s success path.
+                //
+                // gaps2 #13: emit `showToast` alongside `closeSheet` +
+                // `refreshTable` so the user gets visible confirmation
+                // a row landed. The wrapper.html listener at line ~1233
+                // already handles `{message, level}` payloads.
+                let trigger = serde_json::json!({
+                    "closeSheet": {},
+                    "refreshTable": {},
+                    "showToast": {
+                        "message": format!("{} created", model.name),
+                        "level": "success"
+                    },
+                });
                 let mut resp = axum::response::Response::builder()
                     .status(StatusCode::OK)
-                    .header("HX-Trigger", r#"{"closeSheet": {}, "refreshTable": {}}"#)
+                    .header("HX-Trigger", trigger.to_string())
                     .body(axum::body::Body::empty())
                     .unwrap_or_else(|_| {
                         Redirect::to(&format!(

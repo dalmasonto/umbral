@@ -479,3 +479,143 @@ async fn test_confirm_delete_dialog_fragment() {
     // Should not be a full HTML page
     assert!(!body.contains("<!doctype html>"), "not full page: {body}");
 }
+
+// =========================================================================
+// gaps2 #13 — success-path HX-Trigger pins
+//
+// Each CRUD success path must emit the `showToast` event alongside
+// `closeSheet` + `refreshTable`. Without `showToast` the user gets no
+// visible feedback that the action worked; with all three the sheet
+// closes, the table refreshes the new row, and a toast confirms.
+// =========================================================================
+
+#[tokio::test]
+async fn test_sheet_create_success_emits_show_toast_trigger() {
+    let _g = NOTE_LOCK.lock().await;
+    let router = boot().await.clone();
+    let session = login_session(router.clone(), "sheet_admin", "password123").await;
+
+    let body = "title=ToastCreateNote&body=Hello&published=false";
+    let req = Request::builder()
+        .method("POST")
+        .uri("/admin/note/create")
+        .header(header::COOKIE, format!("umbra_session={session}"))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header("hx-request", "true")
+        .body(Body::from(body))
+        .unwrap();
+    let (status, headers, _body) = send(router, req).await;
+    assert_eq!(status, StatusCode::OK, "HTMX create returns 200");
+    let trigger = headers
+        .get("hx-trigger")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(
+        trigger.contains("showToast"),
+        "create success must fire showToast: {trigger}"
+    );
+    assert!(
+        trigger.contains("closeSheet") && trigger.contains("refreshTable"),
+        "create success must also close sheet + refresh table: {trigger}"
+    );
+    assert!(
+        trigger.contains("\"level\":\"success\""),
+        "toast level = success: {trigger}"
+    );
+}
+
+#[tokio::test]
+async fn test_sheet_update_success_emits_show_toast_trigger() {
+    let _g = NOTE_LOCK.lock().await;
+    let router = boot().await.clone();
+    let session = login_session(router.clone(), "sheet_admin", "password123").await;
+
+    let body = "title=ToastUpdateNote&body=ChangedBody&published=true";
+    let req = Request::builder()
+        .method("POST")
+        .uri("/admin/note/1/edit")
+        .header(header::COOKIE, format!("umbra_session={session}"))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header("hx-request", "true")
+        .body(Body::from(body))
+        .unwrap();
+    let (status, headers, _body) = send(router, req).await;
+    assert_eq!(status, StatusCode::OK, "HTMX update returns 200");
+    let trigger = headers
+        .get("hx-trigger")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(
+        trigger.contains("showToast"),
+        "update success must fire showToast: {trigger}"
+    );
+    assert!(
+        trigger.contains("\"level\":\"success\""),
+        "toast level = success: {trigger}"
+    );
+}
+
+#[tokio::test]
+async fn test_sheet_delete_success_emits_show_toast_trigger() {
+    let _g = NOTE_LOCK.lock().await;
+    let router = boot().await.clone();
+    let session = login_session(router.clone(), "sheet_admin", "password123").await;
+
+    // Create a fresh note specifically to delete so we don't compete
+    // with other tests for note id 1.
+    let req_create = Request::builder()
+        .method("POST")
+        .uri("/admin/note/create")
+        .header(header::COOKIE, format!("umbra_session={session}"))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header("hx-request", "true")
+        .body(Body::from(
+            "title=ToastDeleteNote&body=GoneSoon&published=false",
+        ))
+        .unwrap();
+    send(router.clone(), req_create).await;
+
+    // Find the just-created note's id.
+    let req_list = Request::builder()
+        .uri("/admin/note/rows?search=ToastDeleteNote&page_size=10")
+        .header(header::COOKIE, format!("umbra_session={session}"))
+        .header("hx-request", "true")
+        .body(Body::empty())
+        .unwrap();
+    let (_, _h, list_body) = send(router.clone(), req_list).await;
+    let id_marker = "data-row-id=\"";
+    let note_id = list_body
+        .find(id_marker)
+        .and_then(|pos| {
+            let after = &list_body[pos + id_marker.len()..];
+            let end = after.find('"')?;
+            Some(after[..end].to_string())
+        })
+        .filter(|s| !s.is_empty())
+        .expect("created note id present in list");
+
+    // The HTMX delete handler is mounted at `DELETE /admin/{table}/{id}`
+    // (not the legacy `POST /admin/{table}/{id}/delete` form-POST path,
+    // which returns 303 Redirect and predates the HX-Trigger contract).
+    let req_delete = Request::builder()
+        .method("DELETE")
+        .uri(format!("/admin/note/{note_id}"))
+        .header(header::COOKIE, format!("umbra_session={session}"))
+        .header("hx-request", "true")
+        .body(Body::empty())
+        .unwrap();
+    let (status, headers, _body) = send(router, req_delete).await;
+    assert_eq!(status, StatusCode::OK, "HTMX delete returns 200");
+    let trigger = headers
+        .get("hx-trigger")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(
+        trigger.contains("showToast"),
+        "delete success must fire showToast: {trigger}"
+    );
+    assert!(
+        trigger.contains("\"level\":\"success\""),
+        "toast level = success: {trigger}"
+    );
+}
