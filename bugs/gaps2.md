@@ -275,7 +275,19 @@
 
     **Related**: gap #15 (FK include — shipped) and the dotted-fields work (commit 182703e) built the backend surface. This gap is the SPA UI making it usable without manual typing. Until shipped, users have to know columns by name; once shipped, building a request is point-and-click.
 
-16. [ ] **M2M echo on `DynQuerySet::fetch_as_json` is N+1.** `crates/umbra-core/src/orm/dynamic.rs` lines ~744 + ~766: for every row in `fetch_as_json`, if `meta.m2m_relations` is non-empty, the loop calls `hydrate_m2m_into(meta, pk, &mut entry).await?` — which runs ONE `SELECT child_id FROM <junction> WHERE parent_id = ?` per parent per M2M relation. So `GET /api/post/` against N posts with M m2m relations issues `1 + N*M` queries total.
+16. [x] **M2M echo on `DynQuerySet::fetch_as_json` is N+1.** — Shipped.
+
+    `hydrate_m2m_batched(meta, pk_name, &mut rows)` in `crates/umbra-core/src/orm/dynamic.rs` runs ONE `SELECT parent_id, child_id FROM <junction> WHERE parent_id IN (...)` per registered M2M relation, then groups by parent and splices each row's `<relation>: [child_id, ...]` array. Per-row, per-relation `hydrate_m2m_into` calls were removed from `fetch_as_json`'s row loop and replaced with a single post-loop batched call. Query budget drops from `1 + N*M` to `1 + count(M2M relations)` regardless of N.
+
+    Preserves the existing contract: parents with no junction rows still surface the field as an empty array (initialised up front before the SELECT). Mixed integer + string PK shapes both work (`pk_json_key` namespaces the group key as `n:` vs `s:` so a numeric PK and a stringified-equal PK can't collide).
+
+    Single-row insert / update paths still use the per-row `hydrate_m2m_into` (they only have one row — batching there would be ceremony, not savings).
+
+    Demo: `GET /api/post/?fields=id,title,tags` on a 20-post page now issues 2 queries (1 + 1) instead of 21.
+
+16. ~~ (the originally-open description below kept for archive trail)
+
+    `crates/umbra-core/src/orm/dynamic.rs` lines ~744 + ~766: for every row in `fetch_as_json`, if `meta.m2m_relations` is non-empty, the loop calls `hydrate_m2m_into(meta, pk, &mut entry).await?` — which runs ONE `SELECT child_id FROM <junction> WHERE parent_id = ?` per parent per M2M relation. So `GET /api/post/` against N posts with M m2m relations issues `1 + N*M` queries total.
 
     Pre-existing — predates the `?include=` work in commit f6f204a — but the same batched-IN pattern that fixed FK expansion fixes this too:
       - Collect all parent PKs across the N rows (already in scope).

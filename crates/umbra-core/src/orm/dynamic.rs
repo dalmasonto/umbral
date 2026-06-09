@@ -784,14 +784,6 @@ impl<'a> DynQuerySet<'a> {
                             entry.insert(col_name.clone(), decode_to_json(&row, col_meta)?);
                         }
                     }
-                    // Echo M2M relations alongside the scalar
-                    // columns. Per-row, per-relation `SELECT` is
-                    // the v1 shape; `prefetch_related`-style batch
-                    // loading is deferred.
-                    if !self.meta.m2m_relations.is_empty() {
-                        let pk_val = entry.get(&pk_name).cloned();
-                        hydrate_m2m_into(&self.meta, pk_val.as_ref(), &mut entry).await?;
-                    }
                     out.push(entry);
                 }
                 out
@@ -810,15 +802,24 @@ impl<'a> DynQuerySet<'a> {
                             entry.insert(col_name.clone(), decode_pg_to_json(&row, col_meta)?);
                         }
                     }
-                    if !self.meta.m2m_relations.is_empty() {
-                        let pk_val = entry.get(&pk_name).cloned();
-                        hydrate_m2m_into(&self.meta, pk_val.as_ref(), &mut entry).await?;
-                    }
                     out.push(entry);
                 }
                 out
             }
         };
+
+        // M2M echo via one batched IN per relation across every
+        // parent row in `out`. Replaces the per-row, per-relation
+        // SELECT that ran inside the row loop above (gap2 #16) —
+        // query budget drops from `1 + N*M` to `1 + count(M2M
+        // relations)` regardless of how many parent rows came back.
+        // Each row picks up its `<relation>: [child_id, ...]`
+        // array via PK→children grouping, with an empty array
+        // for parents that have no junction rows (preserves the
+        // per-row helper's "always echo the key" contract).
+        if !self.meta.m2m_relations.is_empty() && !out.is_empty() {
+            hydrate_m2m_batched(&self.meta, &pk_name, &mut out).await?;
+        }
 
         // FK expansion via select_related — one batched
         // `IN (...)` per requested FK after the main query, then
@@ -1834,6 +1835,147 @@ async fn hydrate_select_related_into(
         }
     }
     Ok(())
+}
+
+/// Batched M2M echo across every row returned by `fetch_as_json`.
+/// One `SELECT parent_id, child_id FROM <junction> WHERE parent_id
+/// IN (...)` per registered M2M relation — query budget is
+/// `count(meta.m2m_relations)` regardless of how many parent rows
+/// came back. Replaces the per-row [`hydrate_m2m_into`] call site
+/// in the read loop (gap2 #16) which was a 1+N*M issuer.
+///
+/// Each row's `<relation>` key is inserted as an array of `child_id`
+/// values (integers or strings, matching the junction column's
+/// declared shape). Parents with no junction rows still get the key
+/// — initialised to an empty array — so the response shape is
+/// consistent regardless of link presence (same contract the
+/// per-row helper already maintained).
+async fn hydrate_m2m_batched(
+    meta: &crate::migrate::ModelMeta,
+    pk_name: &str,
+    rows: &mut [serde_json::Map<String, serde_json::Value>],
+) -> Result<(), sqlx::Error> {
+    if meta.m2m_relations.is_empty() || rows.is_empty() {
+        return Ok(());
+    }
+
+    // Initialise every row's relation arrays up front so parents
+    // with zero junction rows still surface the field. Matches the
+    // per-row helper's behaviour where the `SELECT` returning zero
+    // rows produced `<rel>: []` rather than omitting the key.
+    for row in rows.iter_mut() {
+        for rel in &meta.m2m_relations {
+            row.insert(rel.field_name.clone(), serde_json::Value::Array(Vec::new()));
+        }
+    }
+
+    // Collect parent PKs once across all rows, deduped. Skip rows
+    // missing the PK column or whose PK value isn't a shape the
+    // junction can bind (numbers + strings; see `json_pk_to_sea`).
+    let mut parent_sea_vals: Vec<sea_query::Value> = Vec::with_capacity(rows.len());
+    let mut seen_keys: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for row in rows.iter() {
+        let Some(pk_json) = row.get(pk_name) else {
+            continue;
+        };
+        let Some(sea_val) = json_pk_to_sea(pk_json) else {
+            continue;
+        };
+        let key = pk_json_key(pk_json);
+        if seen_keys.insert(key) {
+            parent_sea_vals.push(sea_val);
+        }
+    }
+    if parent_sea_vals.is_empty() {
+        return Ok(());
+    }
+
+    for rel in &meta.m2m_relations {
+        let junction_table = format!("{}_{}", meta.table, rel.field_name);
+        let mut sel = Query::select();
+        sel.from(Alias::new(&junction_table));
+        sel.column(Alias::new("parent_id"));
+        sel.column(Alias::new("child_id"));
+        sel.and_where(Expr::col(Alias::new("parent_id")).is_in(parent_sea_vals.clone()));
+
+        let mut children_by_parent: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
+        match pool_dispatched() {
+            DbPool::Sqlite(pool) => {
+                let (sql, values) = sel.build_sqlx(SqliteQueryBuilder);
+                let db_rows = sqlx::query_with(&sql, values).fetch_all(pool).await?;
+                for r in &db_rows {
+                    let parent = read_junction_id_sqlite(r, "parent_id")?;
+                    let child = read_junction_id_sqlite(r, "child_id")?;
+                    children_by_parent
+                        .entry(pk_json_key(&parent))
+                        .or_default()
+                        .push(child);
+                }
+            }
+            DbPool::Postgres(pool) => {
+                let (sql, values) = sel.build_sqlx(PostgresQueryBuilder);
+                let db_rows = sqlx::query_with(&sql, values).fetch_all(pool).await?;
+                for r in &db_rows {
+                    let parent = read_junction_id_pg(r, "parent_id")?;
+                    let child = read_junction_id_pg(r, "child_id")?;
+                    children_by_parent
+                        .entry(pk_json_key(&parent))
+                        .or_default()
+                        .push(child);
+                }
+            }
+        }
+
+        for row in rows.iter_mut() {
+            let Some(pk_json) = row.get(pk_name) else {
+                continue;
+            };
+            let key = pk_json_key(pk_json);
+            if let Some(children) = children_by_parent.remove(&key) {
+                row.insert(rel.field_name.clone(), serde_json::Value::Array(children));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Stable string key for a parent PK JSON value, used to group
+/// junction rows under their owning parent in
+/// [`hydrate_m2m_batched`]. Integers and strings get their own
+/// disjoint namespaces (`n:42` vs `s:42`) so a numeric PK and a
+/// string PK that stringify identically never collide.
+fn pk_json_key(v: &serde_json::Value) -> String {
+    match v {
+        serde_json::Value::Number(n) => format!("n:{n}"),
+        serde_json::Value::String(s) => format!("s:{s}"),
+        other => format!("o:{other}"),
+    }
+}
+
+/// Read a junction-table id column as JSON (number or string).
+/// Junction columns are i64 for integer PKs and TEXT for string /
+/// uuid PKs; we don't know at compile time which one a relation
+/// uses, so try i64 first and fall back to String.
+fn read_junction_id_sqlite(
+    row: &sqlx::sqlite::SqliteRow,
+    col: &str,
+) -> Result<serde_json::Value, sqlx::Error> {
+    if let Ok(i) = row.try_get::<i64, _>(col) {
+        return Ok(serde_json::Value::Number(i.into()));
+    }
+    let s = row.try_get::<String, _>(col)?;
+    Ok(serde_json::Value::String(s))
+}
+
+fn read_junction_id_pg(
+    row: &sqlx::postgres::PgRow,
+    col: &str,
+) -> Result<serde_json::Value, sqlx::Error> {
+    if let Ok(i) = row.try_get::<i64, _>(col) {
+        return Ok(serde_json::Value::Number(i.into()));
+    }
+    let s = row.try_get::<String, _>(col)?;
+    Ok(serde_json::Value::String(s))
 }
 
 async fn hydrate_m2m_into(
