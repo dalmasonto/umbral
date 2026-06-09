@@ -1,0 +1,230 @@
+---
+title: Forms (Form<T> + #[derive(Form)])
+description: Declare form validation as field attributes on a struct; the Form<T> extractor parses + validates the body and the handler branches on the structured FormErrors.
+sidebar_position: 4
+icon: clipboard-check
+tags: [web, forms, validation]
+---
+
+Declarative form validation. Annotate a struct with `#[derive(Form)]` and per-field `#[form(...)]` rules; write `Form<T>` in the handler signature. The extractor parses the `application/x-www-form-urlencoded` body, runs validation, and hands the handler a `Result<T, FormErrors>` to branch on. No `Option<String>`-per-field error structs, no hand-rolled `looks_like_email`, no parallel form-only types.
+
+## The one rule
+
+**Validation errors originate at the ORM's `WriteError`. Every surface MAPS them, none REDEFINES them.** REST 400 bodies, admin form spans, and HTML form re-renders all consume the same `WriteError` accessors (`field_errors()` + `non_field_errors()`). A custom field validator declares a `WriteError::Validator { field, message }` once and surfaces everywhere — no per-surface translation drift.
+
+`FormErrors` is a thin wrapper around `WriteError` that adds the template-friendly flat view (`{{ errors.name }}` instead of `{{ errors.fields.name[0] }}`).
+
+## Quick start
+
+```rust
+use serde::{Deserialize, Serialize};
+use umbra::forms::Form;
+
+#[derive(Debug, Default, Deserialize, Serialize, umbra::forms::Form)]
+#[form(normalize_strings)]                  // auto-trim every String field
+pub struct ContactForm {
+    #[form(required, length(min = 1, max = 100))]
+    name: String,
+
+    #[form(required, email, max_length = 254)]
+    email: String,
+
+    #[form(optional, max_length = 30)]
+    phone: String,
+
+    #[form(required, length(min = 1, max = 200))]
+    subject: String,
+
+    #[form(required, length(min = 10, max = 5000))]
+    message: String,
+}
+
+pub async fn submit_contact(form: Form<ContactForm>) -> impl IntoResponse {
+    match form.into_result() {
+        Ok(valid)  => persist_and_redirect(valid).await,
+        Err(errs)  => render_form_with_errors(errs),
+    }
+}
+```
+
+The extractor **never rejects** on validation failure. Handlers always receive a `Form<T>` and decide what to render — re-render the page with errors, return a 4xx, queue a retry, whatever fits.
+
+## Field attributes
+
+Under `#[form(...)]`, per field:
+
+| Attribute | Effect |
+|---|---|
+| `required` | Reject empty values. **Default** for non-`Option<T>` types — `required` is the explicit/declarative form. |
+| `optional` | Accept empty values (skip `Required` check). Forced on for `Option<T>` fields. |
+| `email` | Validate as a syntactic email (`@` + dot in domain, non-empty local part). |
+| `password` | Render as `<input type="password">`. Same validation rules as text. |
+| `min_length = N` | Minimum character count. |
+| `max_length = N` | Maximum character count. |
+| `length(min = N, max = M)` | Combined shorthand. Either bound optional. |
+
+Container-level (on the struct):
+
+| Attribute | Effect |
+|---|---|
+| `#[form(normalize_strings)]` | Auto-trim every `String` field before validation runs. Eliminates the per-field `form.x = form.x.trim().to_string()` boilerplate. |
+
+## Reuse the Model struct (recommended)
+
+You don't need a parallel form type. Apply `#[derive(Form)]` directly to your persisted `Model` struct — the macro reads the existing `#[umbra(...)]` field attrs and skips server-managed fields automatically:
+
+| Field marker | Skipped from form? | How it gets filled |
+|---|---|---|
+| field named `id` | ✓ | DB auto-increment / `is_default_pk` sentinel |
+| `#[umbra(primary_key)]` | ✓ | DB auto-increment / sentinel |
+| `#[umbra(auto_now_add)]` | ✓ | ORM stamps `Utc::now()` on INSERT |
+| `#[umbra(auto_now)]` | ✓ | ORM stamps `Utc::now()` on INSERT + UPDATE |
+| `#[umbra(noform)]` | ✓ | Caller's responsibility (or `Default::default()` for safe values) |
+| everything else | validated per `#[form(...)]` | parsed from the user's input |
+
+The macro fills skipped fields via `..Default::default()`, so the struct (and every choice enum on it) must derive `Default`.
+
+```rust
+use serde::{Deserialize, Serialize};
+use umbra::orm::{ChoiceField, Model};
+use chrono::{DateTime, Utc};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, umbra::orm::Choices, Default)]
+#[choices(rename_all = "lowercase")]
+#[serde(rename_all = "lowercase")]
+pub enum ContactStatus {
+    #[default]                              // ← Default::default() = New
+    New,
+    Read,
+    Replied,
+    Closed,
+}
+
+#[derive(Debug, Clone, Default, sqlx::FromRow,
+         Serialize, Deserialize,
+         Model, umbra::forms::Form)]
+#[form(normalize_strings)]
+pub struct ContactMessage {
+    pub id: i64,                            // skipped — implicit PK
+
+    #[umbra(string)]                        // admin display hint
+    #[form(required, length(min = 1, max = 100))]
+    pub name: String,
+
+    #[form(required, email, max_length = 254)]
+    pub email: String,
+
+    #[form(optional, max_length = 30)]
+    pub phone: Option<String>,
+
+    #[form(required, length(min = 1, max = 200))]
+    pub subject: String,
+
+    #[form(required, length(min = 10, max = 5000))]
+    pub message: String,
+
+    #[umbra(choices, noform)]               // skipped — defaults to New
+    pub status: ContactStatus,
+
+    #[umbra(noform)]                        // skipped — None default
+    pub ip_address: Option<String>,
+
+    #[umbra(auto_now_add)]                  // skipped — ORM stamps Utc::now()
+    pub created_at: DateTime<Utc>,
+}
+
+pub async fn submit_contact(form: Form<ContactMessage>) -> impl IntoResponse {
+    let msg = match form.into_result() {
+        Ok(m)     => m,
+        Err(errs) => return render_form_with_errors(errs),
+    };
+    // msg.status = ContactStatus::New, msg.ip_address = None,
+    // msg.created_at = epoch (the ORM overwrites with Utc::now() on INSERT).
+    ContactMessage::objects().create(msg).await?;
+    Ok(Redirect::to("/contact?sent=1"))
+}
+```
+
+The user's submission AND the persisted Model are now one declaration. No `ContactForm` mirror, no field-by-field copy, no drift when you add a field.
+
+## Rendering errors in templates
+
+`FormErrors::as_template_ctx()` returns a `serde_json::Map` where each field key maps to the **first** error message for that field, plus a `form` key with the first non-field error if any. Templates write the flat shape:
+
+```html
+{% if errors.form %}
+  <div class="banner-error">{{ errors.form }}</div>
+{% endif %}
+
+<label for="email">Email</label>
+<input name="email" type="email" value="{{ form.email }}"
+       class="{% if errors.email %}border-rose-300{% endif %}">
+{% if errors.email %}
+  <p class="error">{{ errors.email }}</p>
+{% endif %}
+```
+
+Handler-side:
+
+```rust
+fn render_form_with_errors(errs: FormErrors) -> Response {
+    let mut ctx = errs.as_template_ctx();
+    // Synthesise a form-level banner when no non-field error exists
+    // but per-field errors did fire (the common case).
+    if !ctx.contains_key("form") {
+        ctx.insert("form".into(), serde_json::json!(
+            "Please fix the highlighted fields and send again."
+        ));
+    }
+    let body = umbra::templates::render(
+        "contact.html",
+        &context!(form = ContactMessage::default(), errors = ctx),
+    ).unwrap();
+    (StatusCode::UNPROCESSABLE_ENTITY, Html(body)).into_response()
+}
+```
+
+For templates that need to render **every** error per field (multiple validators firing on one input), call `errs.field_errors()` and pass the `HashMap<String, Vec<String>>` directly.
+
+## How errors flow
+
+```
+User input
+   │
+   ▼
+Form<T>::from_request       (parse body → HashMap<String, String>)
+   │
+   ▼
+T::validate(&data)          (FormValidate trait — derived)
+   │
+   ├── Ok(T)               → handler runs persistence
+   │
+   └── Err(ValidationErrors)
+              │
+              ▼
+        FormErrors::from(ValidationErrors)
+              │             (lifts to WriteError::Multiple internally)
+              │
+              ▼
+        handler renders:
+          ├ as_template_ctx()   → flat HTML form errors
+          ├ field_errors()      → DRF-style {"field": ["msg"]} for REST
+          ├ non_field_errors()  → form-level banner messages
+          └ into_write_error()  → feed to admin form-span renderer
+```
+
+The lift through `WriteError` is what unifies all surfaces. A custom validator that produces `WriteError::Validator { field, message }` works across REST, admin, and HTML forms without a per-surface adapter.
+
+## Constraints (v1)
+
+- Content type: `application/x-www-form-urlencoded` only. `multipart/form-data` (file uploads) is a follow-up.
+- Body size: capped at 2 MiB. Larger requests return 413.
+- Field types: `String`, `i8`..`i64` / `u8`..`u64` / `isize` / `usize`, `f32` / `f64`, `bool`, and `Option<T>` of those. Server-managed Model fields (DateTime, choice enums) get skipped via `#[umbra(...)]` markers and need `Default`.
+- Input preservation on validation failure: the failure branch hands back a `FormErrors`, not the user's raw input. Re-rendering the form with the typed input requires either calling `axum::Form<T>` alongside (parses but doesn't validate) or accepting the `Default::default()` template fallback. The latter is what the shop's contact form does.
+
+## See also
+
+- [`examples/shop/plugins/content/src/models.rs`](https://github.com/dalmas-ogembo/umbra/tree/main/examples/shop/plugins/content/src/models.rs) — `ContactMessage` is both the Model and the Form (the canonical reuse example).
+- [`examples/shop/src/views/public.rs`](https://github.com/dalmas-ogembo/umbra/tree/main/examples/shop/src/views/public.rs) — `submit_contact` is the 25-line handler that drives the above.
+- [`umbra::orm::write::WriteError`](/docs/v0.0.1/orm/models) — the canonical error type every form surface lifts to.
+- [Admin per-field error rendering](/docs/v0.0.1/plugins/admin) — same `WriteError`, different surface.
