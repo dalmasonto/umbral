@@ -663,10 +663,7 @@ impl RestPlugin {
             if let Some((parent, child)) = token.split_once('.') {
                 let parent = parent.to_string();
                 top_level.insert(parent.clone());
-                nested
-                    .entry(parent)
-                    .or_default()
-                    .insert(child.to_string());
+                nested.entry(parent).or_default().insert(child.to_string());
             } else {
                 top_level.insert(token.to_string());
             }
@@ -1231,8 +1228,7 @@ async fn retrieve(
     // its `user` FK expanded to the full AuthUser object. Same
     // parser, same 400-on-bad-name semantics.
     let include = parse_include(params.get("include").map(|s| s.as_str()), &model)?;
-    let mut rows =
-        fetch_rows(&model, Some((&pk.name, &id)), None, &no_filter, &include).await?;
+    let mut rows = fetch_rows(&model, Some((&pk.name, &id)), None, &no_filter, &include).await?;
     let Some(mut row) = rows.pop() else {
         return Err(ApiError::NotFound(format!(
             "no row with {} = {} in {}",
@@ -1281,8 +1277,7 @@ async fn update(
 
     // 404 if the target row doesn't exist before we attempt the UPDATE.
     let no_filter = FilterClause::default();
-    let existing =
-        fetch_rows(&model, Some((&pk.name, &id)), None, &no_filter, &[]).await?;
+    let existing = fetch_rows(&model, Some((&pk.name, &id)), None, &no_filter, &[]).await?;
     if existing.is_empty() {
         return Err(ApiError::NotFound(format!(
             "no row with {} = {} in {}",
@@ -1479,29 +1474,79 @@ async fn fetch_rows(
 /// client expectation — silently ignoring it would let the caller
 /// think the field was expanded when it wasn't.
 fn parse_include(raw: Option<&str>, model: &ModelMeta) -> Result<Vec<String>, ApiError> {
+    /// Hard cap on `?include=` chain depth. Pathologically deep
+    /// chains (`?include=a.b.c.d.e.f`) are almost always a typo —
+    /// fail loud rather than fan out a 6-query chain on a typo'd
+    /// param. Matches the gap2 #18 spec recommendation.
+    const MAX_DEPTH: usize = 3;
+
     let Some(raw) = raw else {
         return Ok(Vec::new());
     };
+    let registered = umbra::migrate::registered_models();
     let mut out: Vec<String> = Vec::new();
     for token in raw.split(',') {
         let name = token.trim();
         if name.is_empty() {
             continue;
         }
-        let Some(col) = model.fields.iter().find(|c| c.name == name) else {
+        // Accept both `.` (URL-natural) and `__` (Django/DRF
+        // muscle-memory) as hop separators (gap2 #18). Mixed
+        // separators in one token flatten the same way; the
+        // canonical internal form is dotted.
+        let canonical = name.replace("__", ".");
+        let hops: Vec<&str> = canonical.split('.').filter(|s| !s.is_empty()).collect();
+        if hops.is_empty() {
+            continue;
+        }
+        if hops.len() > MAX_DEPTH {
             return Err(ApiError::BadInput(format!(
-                "?include=: unknown field `{name}` on `{}`",
-                model.table
-            )));
-        };
-        if col.fk_target.is_none() {
-            return Err(ApiError::BadInput(format!(
-                "?include=: field `{name}` on `{}` is not a foreign key",
-                model.table
+                "?include=: chain `{name}` exceeds max depth of {MAX_DEPTH} hops"
             )));
         }
-        if !out.iter().any(|n| n == name) {
-            out.push(name.to_string());
+        // Walk the chain, validating each hop against the FK
+        // graph. Reject the whole token on the first failure so
+        // the client gets the exact resolved chain that broke (not
+        // a silent drop, which hides typos).
+        let mut current_table: String = model.table.clone();
+        let mut hop_idx = 0;
+        for hop in &hops {
+            let meta_owned: Option<ModelMeta>;
+            let meta_ref: &ModelMeta = if hop_idx == 0 {
+                model
+            } else {
+                meta_owned = registered
+                    .iter()
+                    .find(|m| m.table == current_table)
+                    .cloned();
+                match meta_owned.as_ref() {
+                    Some(m) => m,
+                    None => {
+                        return Err(ApiError::BadInput(format!(
+                            "?include=: model for table `{current_table}` is not registered \
+                             (resolving chain `{canonical}` at hop `{hop}`)"
+                        )));
+                    }
+                }
+            };
+            let Some(col) = meta_ref.fields.iter().find(|c| &c.name == hop) else {
+                return Err(ApiError::BadInput(format!(
+                    "?include=: unknown field `{hop}` on `{}` (resolving chain `{canonical}`)",
+                    meta_ref.table
+                )));
+            };
+            let Some(target) = col.fk_target.clone() else {
+                return Err(ApiError::BadInput(format!(
+                    "?include=: field `{hop}` on `{}` is not a foreign key \
+                     (resolving chain `{canonical}`)",
+                    meta_ref.table
+                )));
+            };
+            current_table = target;
+            hop_idx += 1;
+        }
+        if !out.iter().any(|n| n == &canonical) {
+            out.push(canonical);
         }
     }
     Ok(out)

@@ -205,7 +205,24 @@
 
     **Related to**: gap #12 (admin per-field rendering), features.md #51 (form validation framework — currently a stub).
 
-18. [ ] **Nested `?include=` + dotted `?fields=` traversal (Django `__`-chain equivalent).** Today (commits f6f204a + 182703e) `?include=` and `?fields=` are ONE HOP only on the dynamic / REST path:
+18. [x] **Nested `?include=` (dotted / `__` chain) — ORM half shipped.**
+
+    ORM-side fix landed in `crates/umbra-core/src/orm/dynamic.rs`:
+
+    - `normalize_sr_token` accepts both `.` and `__` separators (mixed in one token is fine too) and normalises to the canonical dotted form.
+    - `validate_sr_chain` walks the FK graph hop-by-hop against `registered_models()`; rejects on missing meta / unknown column / non-FK column.
+    - `select_related_dyn` calls `validate_sr_chain` and silently drops invalid chains (preserves the pre-existing single-hop drop contract for power-user/internal callers).
+    - `hydrate_select_related_into` rewritten to mirror `queryset::hydration::hydrate_select_related_nested`: per-hop batched IN through `fetch_related_as_json`, bottom-up embed of each level into the previous one's hop slot, then splice level-0 into the root rows. Query budget = `1 + len(hops)` per chain regardless of parent count.
+
+    REST surface (`plugins/umbra-rest/src/lib.rs::parse_include`) now validates the same way upstream — loud 400 with the resolved chain on the failing hop (not a silent drop), depth-capped at 3 hops per the spec.
+
+    Demo: `GET /api/post/?include=author.profile` issues 3 queries total (posts → authors IN → profiles IN); `GET /api/post/?include=author__profile` is identical; `GET /api/post/?include=author.banana` returns 400 with "?include=: unknown field `banana` on `author` (resolving chain `author.banana`)".
+
+    **Deferred to a follow-up**: `?fields=user.profile.email` recursive sparse-fieldset walk (gap's part 4) — REST-side concern in `apply_sparse_fields`, untouched by this turn. The ORM contract is now nested-capable; the sparse-fieldset reader just needs to recurse instead of `split_once('.')`.
+
+18. ~~ (the originally-open description below kept for archive trail)
+
+    Today (commits f6f204a + 182703e) `?include=` and `?fields=` are ONE HOP only on the dynamic / REST path:
 
       - `?include=author` works; `?include=author.profile` is silently dropped.
       - `?fields=user.id` works; `?fields=user.profile.email` no-ops (the inner `profile.email` is treated as a literal key on the user object).

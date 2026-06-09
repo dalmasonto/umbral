@@ -104,33 +104,39 @@ impl<'a> DynQuerySet<'a> {
     }
 
     /// Expand the named FK columns via a batched `IN (...)` lookup
-    /// after the main query — same one-hop semantics as the typed
-    /// `QuerySet::select_related`. After this call, the FK field in
+    /// after the main query — mirrors the typed
+    /// `QuerySet::select_related` shape (single-hop and `__`-chained
+    /// alike). After this call, every FK field along the chain in
     /// the response JSON renders as the full related-row object
-    /// instead of the raw integer id. One query per FK regardless of
-    /// how many parent rows came back (no N+1).
+    /// instead of the raw integer id. Query budget is
+    /// `1 + len(hops)` per chain regardless of how many parent rows
+    /// came back (no N+1) — gap2 #18.
     ///
-    /// Names that don't exist on the model OR aren't FK columns are
-    /// silently dropped — the REST plugin's `?include=` handler does
-    /// its own up-front validation with a 400 on unknown names, so
-    /// stale dynamic includes (e.g. an internal call site that
-    /// hardcoded a name that was later renamed) just skip without
-    /// crashing the request.
+    /// Names may use either `.` (URL-natural) or `__` (Django
+    /// muscle-memory) as the hop separator; both normalize to the
+    /// same canonical chain internally. Mixed separators in one
+    /// token (e.g. `author.profile__org`) are accepted too.
+    ///
+    /// Names that don't exist on the model OR aren't FK columns at
+    /// any hop are silently dropped — the REST plugin's `?include=`
+    /// handler does its own up-front validation with a 400 on
+    /// unknown names, so stale dynamic includes (e.g. an internal
+    /// call site that hardcoded a name that was later renamed) just
+    /// skip without crashing the request.
     ///
     /// ```ignore
     /// DynQuerySet::for_meta(&meta)
-    ///     .select_related_dyn(&["user".into(), "billing_address".into()])
+    ///     .select_related_dyn(&["user".into(), "author.profile".into()])
     ///     .fetch_as_json().await
     /// ```
     pub fn select_related_dyn(mut self, fields: &[String]) -> Self {
         for name in fields {
-            let is_fk = self
-                .meta
-                .fields
-                .iter()
-                .any(|c| &c.name == name && c.fk_target.is_some());
-            if is_fk && !self.select_related.iter().any(|n| n == name) {
-                self.select_related.push(name.clone());
+            let canonical = normalize_sr_token(name);
+            if validate_sr_chain(self.meta, &canonical).is_none() {
+                continue;
+            }
+            if !self.select_related.iter().any(|n| n == &canonical) {
+                self.select_related.push(canonical);
             }
         }
         self
@@ -1756,42 +1762,98 @@ fn json_pk_to_sea(v: &serde_json::Value) -> Option<sea_query::Value> {
 /// caller just wrote (otherwise the `tags: [1, 2]` they POSTed
 /// would never appear in the response, since `M2M<T>` is
 /// `#[serde(skip)]` on the parent struct).
-/// FK expansion for the dynamic-dispatch read path. For each FK
-/// name in `sr_fields`, collect the integer ids across `rows`,
-/// run one batched `SELECT * FROM <target> WHERE id IN (...)`,
-/// and splice the resolved row's JSON object in where the
-/// integer id was. Mirrors the typed
-/// `queryset::hydration::hydrate_select_related` semantics —
-/// one round-trip per FK regardless of how many parent rows came
-/// back. No N+1.
+/// Normalize a select_related token: accept both `.` and `__` as
+/// hop separators (gap2 #18), return the canonical dotted form
+/// (`author.profile`). Mixed separators in one token are flattened
+/// the same way (`author.profile__org` → `author.profile.org`).
+///
+/// Edge case: a column whose actual name contains `__` (rare; real
+/// models don't do this) would alias to a dotted chain after this
+/// pass and fail validation; the caller silently drops it, matching
+/// the existing "unknown column" behaviour.
+fn normalize_sr_token(name: &str) -> String {
+    name.replace("__", ".")
+}
+
+/// Validate a dotted select_related chain (e.g. `"author.profile"`)
+/// against the model graph. Each hop must be an FK on the prior
+/// hop's target meta. Returns the per-hop target tables on success
+/// (same length as `hops.len()`); returns `None` on any failure so
+/// the caller can drop the token silently — same contract as the
+/// pre-existing single-hop validation in `select_related_dyn`.
+///
+/// Empty chains, missing meta lookups, and non-FK columns all
+/// return `None`.
+fn validate_sr_chain(root_meta: &crate::migrate::ModelMeta, chain: &str) -> Option<Vec<String>> {
+    let hops: Vec<&str> = chain.split('.').filter(|s| !s.is_empty()).collect();
+    if hops.is_empty() {
+        return None;
+    }
+    let registered = crate::migrate::registered_models();
+    let mut targets: Vec<String> = Vec::with_capacity(hops.len());
+    let mut current_table: String = root_meta.table.clone();
+    let mut current_meta: Option<crate::migrate::ModelMeta> = None;
+    for hop in &hops {
+        let meta_ref: &crate::migrate::ModelMeta =
+            if current_table == root_meta.table && current_meta.is_none() {
+                root_meta
+            } else {
+                current_meta = registered
+                    .iter()
+                    .find(|m| m.table == current_table)
+                    .cloned();
+                current_meta.as_ref()?
+            };
+        let col = meta_ref.fields.iter().find(|c| &c.name == hop)?;
+        let target = col.fk_target.clone()?;
+        targets.push(target.clone());
+        current_table = target;
+    }
+    Some(targets)
+}
+
+/// FK expansion for the dynamic-dispatch read path. For each name
+/// in `sr_fields` (canonical dotted form — `select_related_dyn`
+/// has already normalized + validated), collect the integer ids
+/// across `rows`, run one batched `SELECT * FROM <target> WHERE id
+/// IN (...)` per hop, and splice the resolved chain back where the
+/// root FK id was. Query budget is `1 + len(hops)` per chain
+/// regardless of how many parent rows came back. No N+1.
+///
+/// Mirrors the typed
+/// `queryset::hydration::hydrate_select_related_nested` semantics:
+/// per-hop fetch top-down, then bottom-up embed so the root rows
+/// carry the full nested chain.
 ///
 /// Caller has already validated that every name in `sr_fields`
-/// is a single-hop FK on `meta` (via `select_related_dyn`).
+/// resolves to an FK chain on `meta` (via `select_related_dyn` →
+/// [`validate_sr_chain`]).
 async fn hydrate_select_related_into(
     meta: &crate::migrate::ModelMeta,
     sr_fields: &[String],
     rows: &mut [serde_json::Map<String, serde_json::Value>],
 ) -> Result<(), sqlx::Error> {
-    use std::collections::HashMap;
     let pool = pool_dispatched();
-    for field_name in sr_fields {
-        // Find the FK column's target table. select_related_dyn
-        // already filtered to FK columns, but re-verify here
-        // because we need fk_target anyway.
-        let Some(target_table) = meta
-            .fields
-            .iter()
-            .find(|c| &c.name == field_name)
-            .and_then(|c| c.fk_target.clone())
-        else {
+    for chain in sr_fields {
+        let hops: Vec<&str> = chain.split('.').filter(|s| !s.is_empty()).collect();
+        if hops.is_empty() {
+            continue;
+        }
+        let Some(targets) = validate_sr_chain(meta, chain) else {
+            // select_related_dyn validates up front; if a chain
+            // slipped through validation but fails here (e.g. an
+            // unregistered intermediate model — only possible from
+            // a direct internal caller), skip rather than crash.
             continue;
         };
 
-        // Collect the FK ids across every row, dedup so the
-        // IN(...) list is minimal.
+        // Phase 1: per-hop fetch, top-down. levels[i] holds the
+        // related-row JSON objects at depth i, BEFORE any nesting
+        // is embedded.
+        let first_field = hops[0];
         let mut ids: Vec<i64> = Vec::with_capacity(rows.len());
         for row in rows.iter() {
-            if let Some(serde_json::Value::Number(n)) = row.get(field_name) {
+            if let Some(serde_json::Value::Number(n)) = row.get(first_field) {
                 if let Some(id) = n.as_i64() {
                     ids.push(id);
                 }
@@ -1802,34 +1864,90 @@ async fn hydrate_select_related_into(
         }
         ids.sort_unstable();
         ids.dedup();
+        let mut levels: Vec<Vec<serde_json::Value>> = Vec::with_capacity(hops.len());
+        levels.push(
+            crate::orm::queryset::hydration::fetch_related_as_json(&targets[0], &ids, &pool)
+                .await?,
+        );
 
-        // One batched query through the shared helper that powers
-        // the typed select_related path.
-        let related =
-            crate::orm::queryset::hydration::fetch_related_as_json(&target_table, &ids, &pool)
-                .await?;
-        let mut id_to_obj: HashMap<i64, serde_json::Value> = HashMap::new();
-        for obj in related {
-            if let serde_json::Value::Object(ref map) = obj {
-                if let Some(serde_json::Value::Number(n)) = map.get("id") {
-                    if let Some(id) = n.as_i64() {
-                        id_to_obj.insert(id, obj.clone());
+        for hop_idx in 1..hops.len() {
+            let hop_field = hops[hop_idx];
+            let hop_target = &targets[hop_idx];
+            let prev_lvl = &levels[hop_idx - 1];
+            let mut next_ids: Vec<i64> = prev_lvl
+                .iter()
+                .filter_map(|r| r.as_object()?.get(hop_field)?.as_i64())
+                .collect();
+            if next_ids.is_empty() {
+                // Chain bottoms out (every prior-level row has
+                // NULL for this hop). Subsequent hops would also
+                // be empty; stop here. Earlier levels still embed
+                // below.
+                break;
+            }
+            next_ids.sort_unstable();
+            next_ids.dedup();
+            levels.push(
+                crate::orm::queryset::hydration::fetch_related_as_json(
+                    hop_target, &next_ids, &pool,
+                )
+                .await?,
+            );
+        }
+
+        // Phase 2: bottom-up embed. For each level from second-
+        // to-last down to first, splice the next level's matching
+        // row into the corresponding hop slot. By the time we hit
+        // level 0 its rows carry the full nested chain.
+        if levels.len() > 1 {
+            for i in (0..levels.len() - 1).rev() {
+                let next_by_id: HashMap<i64, serde_json::Value> = levels[i + 1]
+                    .iter()
+                    .filter_map(|obj| {
+                        let map = obj.as_object()?;
+                        let id = map.get("id")?.as_i64()?;
+                        Some((id, obj.clone()))
+                    })
+                    .collect();
+                let hop_field = hops[i + 1];
+                for row in levels[i].iter_mut() {
+                    let Some(map) = row.as_object_mut() else {
+                        continue;
+                    };
+                    let Some(serde_json::Value::Number(n)) = map.get(hop_field) else {
+                        continue;
+                    };
+                    let Some(id) = n.as_i64() else { continue };
+                    if let Some(next_json) = next_by_id.get(&id) {
+                        map.insert(hop_field.to_string(), next_json.clone());
                     }
                 }
             }
         }
 
-        // Splice the resolved object in place of the integer id.
-        // Rows pointing at an id that didn't resolve (target row
-        // deleted between the parent fetch and the IN-lookup —
-        // a race window) keep the integer; the alternative would
-        // be silently nulling the field which hides a real
-        // referential-integrity issue from the caller.
+        // Phase 3: splice level-0 rows (now fully nested) into
+        // the root rows. Rows pointing at an id that didn't
+        // resolve (target row deleted between the parent fetch
+        // and the IN-lookup — a race window) keep the integer;
+        // the alternative would be silently nulling the field
+        // which hides a real referential-integrity issue from
+        // the caller.
+        let first_by_id: HashMap<i64, serde_json::Value> = levels
+            .into_iter()
+            .next()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|obj| {
+                let map = obj.as_object()?;
+                let id = map.get("id")?.as_i64()?;
+                Some((id, obj.clone()))
+            })
+            .collect();
         for row in rows.iter_mut() {
-            let id = row.get(field_name).and_then(|v| v.as_i64());
+            let id = row.get(first_field).and_then(|v| v.as_i64());
             if let Some(id) = id {
-                if let Some(resolved) = id_to_obj.get(&id) {
-                    row.insert(field_name.clone(), resolved.clone());
+                if let Some(resolved) = first_by_id.get(&id) {
+                    row.insert(first_field.to_string(), resolved.clone());
                 }
             }
         }
