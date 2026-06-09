@@ -90,6 +90,28 @@ fn boot() {
             "{% if user is defined and user.is_authenticated %}hi {{ user.username }}{% else %}anon{% endif %}",
         );
 
+        // gaps2 #21 — `img` filter templates. One minimal, one with
+        // every kwarg set, one with an alt-text that needs HTML
+        // escaping. The filter output goes through `from_safe_string`
+        // so autoescape doesn't double-escape the wrapping `<`/`>`,
+        // but attribute values themselves DO get escaped — the
+        // hostile-alt case pins that.
+        write_template(
+            &dir_b,
+            "img_minimal.html",
+            "{{ url | img }}",
+        );
+        write_template(
+            &dir_b,
+            "img_full.html",
+            r#"{{ url | img(alt="A product", width=400, height=300, class="rounded-md") }}"#,
+        );
+        write_template(
+            &dir_b,
+            "img_hostile_alt.html",
+            r#"{{ url | img(alt=alt_text) }}"#,
+        );
+
         (dir_a, dir_b, dir_c)
     });
 
@@ -221,4 +243,94 @@ async fn explicit_ctx_user_wins_over_ambient_layer_value() {
     .await;
 
     assert_eq!(output, "hi bob");
+}
+
+// =========================================================================
+// gaps2 #21 — `img` filter
+//
+// Pins the four contracts the filter promises:
+//   1. minimal call emits loading/decoding + empty-alt default,
+//   2. kwargs flow through (alt, width, height, class),
+//   3. attribute values get escaped (hostile alt-text can't break out),
+//   4. the wrapper `<img>` is marked safe (autoescape doesn't
+//      double-escape its angle brackets).
+// =========================================================================
+
+#[test]
+fn img_filter_minimal_call_emits_perf_attributes_with_empty_alt() {
+    boot();
+    let ctx = minijinja::context! { url => "/static/products/cup.jpg" };
+    let html = templates::render("img_minimal.html", &ctx).expect("render");
+
+    // No double-escape of the wrapper tag — the filter's output is
+    // marked safe.
+    assert!(
+        html.starts_with("<img "),
+        "filter output must be raw HTML, not autoescaped; got: {html:?}"
+    );
+    assert!(html.contains(r#"src="/static/products/cup.jpg""#));
+    // Empty alt is intentional — screen readers treat it as
+    // decorative-image; better than the markup not having alt at all
+    // (which would cause some readers to read the URL).
+    assert!(html.contains(r#"alt="""#), "minimal call sets alt=\"\": {html}");
+    assert!(
+        html.contains(r#"loading="lazy""#),
+        "loading=lazy must be on every img: {html}"
+    );
+    assert!(
+        html.contains(r#"decoding="async""#),
+        "decoding=async must be on every img: {html}"
+    );
+    // No width/height/class on the minimal call.
+    assert!(!html.contains("width="), "minimal has no width: {html}");
+    assert!(!html.contains("height="), "minimal has no height: {html}");
+    assert!(!html.contains("class="), "minimal has no class: {html}");
+}
+
+#[test]
+fn img_filter_full_kwargs_flow_through() {
+    boot();
+    let ctx = minijinja::context! { url => "/static/p/hero.jpg" };
+    let html = templates::render("img_full.html", &ctx).expect("render");
+
+    assert!(html.contains(r#"src="/static/p/hero.jpg""#));
+    assert!(html.contains(r#"alt="A product""#));
+    assert!(html.contains(r#"width="400""#), "width passed through: {html}");
+    assert!(html.contains(r#"height="300""#), "height passed through: {html}");
+    assert!(
+        html.contains(r#"class="rounded-md""#),
+        "class passed through: {html}"
+    );
+    assert!(html.contains(r#"loading="lazy""#));
+    assert!(html.contains(r#"decoding="async""#));
+}
+
+#[test]
+fn img_filter_escapes_attribute_values_against_quote_breakout() {
+    boot();
+    // A hostile alt-text trying to break out of the attribute quote
+    // and inject an event handler. The filter MUST escape the quote
+    // and angle brackets so the rendered tag stays well-formed and
+    // the payload lands as visible text instead of executing.
+    let ctx = minijinja::context! {
+        url => "/static/x.jpg",
+        alt_text => r#"" onerror="alert(1)"#,
+    };
+    let html = templates::render("img_hostile_alt.html", &ctx).expect("render");
+
+    assert!(
+        !html.contains(r#""alert(1)""#),
+        "raw quote must not appear unescaped in attribute value: {html}"
+    );
+    assert!(
+        html.contains("&quot;"),
+        "double quote must escape to &quot;: {html}"
+    );
+    // Tag well-formed: `<img ...>` with no extra `>` from a hostile
+    // payload (an unescaped `>` would close the tag early).
+    let close_count = html.matches('>').count();
+    assert_eq!(
+        close_count, 1,
+        "exactly one `>` (the tag's own close): {html}"
+    );
 }

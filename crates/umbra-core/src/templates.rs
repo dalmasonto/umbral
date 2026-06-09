@@ -99,6 +99,104 @@ static ENGINE: OnceLock<Environment<'static>> = OnceLock::new();
 /// silently replace the built-in — which is the intended escape hatch.
 /// (Callers who want a cleaner opt-out should use
 /// `App::builder().disable_default_error_pages()` instead.)
+/// gaps2 #21 — register the `img` MiniJinja filter that turns a URL
+/// into a fully-formed, performance-correct `<img>` tag.
+///
+/// Filter signature:
+///   `{{ url | img(alt="…", width=N, height=N, class="…") }}`
+///
+/// Output shape:
+///   `<img src="<url>" alt="<alt>" loading="lazy" decoding="async"
+///        width="<w>" height="<h>" class="<class>">`
+///
+/// Why this set of attributes:
+/// - `loading="lazy"` — the gap's primary ask. Browsers defer
+///   off-viewport image fetches until they're about to be needed,
+///   shrinking LCP + initial bandwidth.
+/// - `decoding="async"` — lets the browser decode the image off
+///   the main thread; prevents render-blocking decode work on
+///   slower devices.
+/// - explicit `width`/`height` (when provided) reserves layout
+///   space immediately so lazy-loading doesn't cause CLS
+///   (cumulative layout shift). Omitted if either is missing.
+/// - empty `alt=""` default is screen-reader-friendly for
+///   decorative images. Callers SHOULD pass a real `alt` for
+///   meaningful content images.
+///
+/// What's NOT included on day one (deferred to a later slice):
+/// - `srcset` for responsive resolutions — needs the on-the-fly
+///   resize handler (gap 21 Option C) before the filter knows
+///   real asset dimensions.
+/// - `<picture>` with `webp`/`avif` sources — same blocker; the
+///   transcode endpoint has to exist first.
+///
+/// Output is wrapped in `minijinja::value::Value::from_safe_string`
+/// so MiniJinja's autoescape doesn't double-escape the `<` / `>`
+/// characters — the attribute values themselves still go through
+/// `html_escape` so a hostile alt-text can't break out of the
+/// attribute quote.
+fn register_img_filter(env: &mut Environment<'static>) {
+    env.add_filter(
+        "img",
+        |url: String, kwargs: minijinja::value::Kwargs| -> Result<minijinja::Value, minijinja::Error> {
+            let alt: String = kwargs.get::<Option<String>>("alt")?.unwrap_or_default();
+            let width: Option<i64> = kwargs.get("width")?;
+            let height: Option<i64> = kwargs.get("height")?;
+            let class: Option<String> = kwargs.get("class")?;
+            // Accept the extras even when the call doesn't pass them
+            // — kwargs.get returns Ok(None) for absent keys but
+            // .assert_all_used() at the end will catch a typo'd
+            // `alt_text` so the user gets a clear error instead of
+            // silent drop. Matches the rest of the framework's
+            // strict-input posture.
+            kwargs.assert_all_used()?;
+
+            let mut out = String::with_capacity(url.len() + 128);
+            out.push_str("<img src=\"");
+            html_escape_into(&mut out, &url);
+            out.push_str("\" alt=\"");
+            html_escape_into(&mut out, &alt);
+            out.push_str("\" loading=\"lazy\" decoding=\"async\"");
+            if let Some(w) = width {
+                out.push_str(" width=\"");
+                out.push_str(&w.to_string());
+                out.push('"');
+            }
+            if let Some(h) = height {
+                out.push_str(" height=\"");
+                out.push_str(&h.to_string());
+                out.push('"');
+            }
+            if let Some(c) = class {
+                if !c.is_empty() {
+                    out.push_str(" class=\"");
+                    html_escape_into(&mut out, &c);
+                    out.push('"');
+                }
+            }
+            out.push('>');
+            Ok(minijinja::Value::from_safe_string(out))
+        },
+    );
+}
+
+/// Tiny HTML attribute-value escape — covers the four characters
+/// that can break out of a double-quoted attribute context.
+/// Centralised here because the framework doesn't otherwise need
+/// to ship an html_escape crate dep just for the img filter.
+fn html_escape_into(out: &mut String, s: &str) {
+    for ch in s.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            c => out.push(c),
+        }
+    }
+}
+
 fn register_default_templates(
     env: &mut Environment<'static>,
     seen: &mut std::collections::HashSet<String>,
@@ -183,6 +281,17 @@ fn build_env(dirs: &[PathBuf]) -> Result<(Environment<'static>, Vec<String>), Te
             AutoEscape::None
         }
     });
+
+    // gaps2 #21 — register the `img` filter for ergonomic, perf-
+    // forward image markup. `{{ url | img(alt="...", width=400,
+    // height=300) }}` expands to a fully-formed `<img>` with the
+    // hat-trick that catches LCP regressions out of the box:
+    // `loading="lazy"`, `decoding="async"`, explicit `width`/
+    // `height` to reserve layout space (no CLS), and an `alt`
+    // attribute that's empty rather than omitted (screen-reader-
+    // friendly default for purely decorative images). Optional
+    // `class="..."` flows through for Tailwind / scoped styling.
+    register_img_filter(&mut env);
 
     let mut seen: HashSet<String> = HashSet::new();
     let mut collisions: Vec<String> = Vec::new();

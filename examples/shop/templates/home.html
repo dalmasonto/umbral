@@ -45,7 +45,8 @@
             <a href="/products/{{ p.id }}" class="group block overflow-hidden rounded-xl border border-zinc-200 bg-[oklch(0.94_0.018_93)] no-underline">
               <div class="flex aspect-[4/3] items-center justify-center overflow-hidden bg-zinc-100">
                 {% if p.thumbnail %}
-                  <img src="{{ p.thumbnail }}" alt="{{ p.name }}" class="h-full w-full object-cover transition duration-300 group-hover:scale-105">
+                  {# gaps2 #21 #}
+                  {{ p.thumbnail | img(alt=p.name, class="h-full w-full object-cover transition duration-300 group-hover:scale-105") }}
                 {% else %}
                   <div class="flex h-full w-full flex-col items-center justify-center bg-[linear-gradient(135deg,oklch(0.93_0.04_75),oklch(0.82_0.08_155))] px-8 text-center">
                     <span class="rounded-full bg-white/80 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-zinc-700">{{ p.sku }}</span>
@@ -91,7 +92,8 @@
     <a href="/products/{{ p.id }}" class="group flex min-h-full flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-sm no-underline transition hover:-translate-y-0.5 hover:shadow-lg">
       <div class="flex aspect-[4/3] items-center justify-center overflow-hidden bg-zinc-100">
         {% if p.thumbnail %}
-        <img src="{{ p.thumbnail }}" alt="{{ p.name }}" class="h-full w-full object-cover transition duration-300 group-hover:scale-105">
+        {# gaps2 #21 #}
+        {{ p.thumbnail | img(alt=p.name, class="h-full w-full object-cover transition duration-300 group-hover:scale-105") }}
         {% else %}
         <div class="flex h-full w-full flex-col items-center justify-center bg-[linear-gradient(135deg,oklch(0.96_0.02_88),oklch(0.88_0.07_165))] p-6 text-center">
           <span class="rounded-full bg-white/80 px-3 py-1 text-xs font-bold text-zinc-600">{{ p.sku }}</span>

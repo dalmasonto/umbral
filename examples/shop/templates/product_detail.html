@@ -10,7 +10,11 @@
     <div class="overflow-hidden rounded-3xl border border-zinc-200 bg-white shadow-sm">
       <div class="flex aspect-square max-h-[620px] items-center justify-center overflow-hidden bg-zinc-100">
         {% if product.thumbnail %}
-        <img src="{{ product.thumbnail }}" alt="{{ product.name }}" class="h-full w-full object-cover">
+        {# gaps2 #21 — img filter adds loading=lazy + decoding=async. The
+           hero image on the detail page is above-the-fold but lazy is
+           still safe — modern browsers fetch the first lazy image
+           immediately when it's already in viewport. #}
+        {{ product.thumbnail | img(alt=product.name, class="h-full w-full object-cover") }}
         {% else %}
         <div class="flex h-full w-full flex-col items-center justify-center bg-[linear-gradient(135deg,oklch(0.96_0.02_85),oklch(0.84_0.08_155))] p-10 text-center">
           <span class="rounded-full bg-white/85 px-4 py-2 text-sm font-bold text-zinc-600 shadow-sm">{{ product.sku }}</span>

@@ -26,7 +26,8 @@
       <a href="/products/{{ p.id }}" class="block no-underline">
         <div class="flex aspect-[4/3] items-center justify-center overflow-hidden bg-zinc-100">
           {% if p.thumbnail %}
-          <img src="{{ p.thumbnail }}" alt="{{ p.name }}" class="h-full w-full object-cover transition duration-300 group-hover:scale-105">
+          {# gaps2 #21 — img filter adds loading="lazy" + decoding="async" automatically. #}
+          {{ p.thumbnail | img(alt=p.name, class="h-full w-full object-cover transition duration-300 group-hover:scale-105") }}
           {% else %}
           <div class="flex h-full w-full flex-col items-center justify-center bg-[linear-gradient(135deg,oklch(0.97_0.015_87),oklch(0.87_0.075_150))] p-8 text-center">
             <span class="rounded-full bg-white/85 px-3 py-1 text-xs font-bold text-zinc-600 shadow-sm">{{ p.sku }}</span>
