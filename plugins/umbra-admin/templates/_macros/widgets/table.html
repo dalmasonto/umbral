@@ -43,55 +43,52 @@
   </div>
 
   {% if payload.columns and payload.rows and payload.rows | length > 0 %}
-  {# Table panel — own border + radius. Theme-adaptive tokens:
-     `on-surface/10` for the outer hairline and `on-surface/8`
-     for row dividers. `on-surface` is the foreground color
-     (dark in light mode, light in dark mode), so at low
-     opacity it renders as the same subtle "ink at 10%
-     transparency" rail in either theme — never the bright
-     `outline-variant` look in dark mode. `mx-md mb-md` gives
-     the panel breathing room inside the card; `overflow-hidden`
-     clips first/last row corners against the radius. #}
-  <div class="mx-md mb-md flex-1 min-h-0 overflow-hidden rounded-lg border border-on-surface/10">
-    <div class="h-full overflow-auto">
-      <table class="w-full text-sm text-left text-on-surface-variant">
-        <thead class="text-sm text-on-surface-variant bg-surface-container-low">
-          <tr>
-            {% for col in payload.columns %}
-            <th
-              scope="col"
-              class="px-md py-sm font-medium whitespace-nowrap"
-            >{{ col.label }}</th>
-            {% endfor %}
-          </tr>
-        </thead>
-        {# `divide-y` produces inter-row dividers automatically;
-           no border on the last child so the table doesn't end
-           on a hairline that meets the panel's bottom border. #}
-        <tbody class="divide-y divide-on-surface/8">
-          {% for row in payload.rows %}
-          <tr class="bg-surface-container hover:bg-surface-container-high transition-colors">
-            {% for col in payload.columns %}
-            {%- set v = row[col.key] -%}
-            {%- set vstr = "" if v is none else (v | string) -%}
-            {% if loop.first %}
-            <th
-              scope="row"
-              class="px-md py-md font-medium text-on-surface whitespace-nowrap truncate max-w-[220px]"
-              title="{{ vstr }}"
-            >{{ vstr }}</th>
-            {% else %}
-            <td
-              class="px-md py-md truncate max-w-[200px] tabular-nums"
-              title="{{ vstr }}"
-            >{{ vstr }}</td>
-            {% endif %}
-            {% endfor %}
-          </tr>
+  <div class="flex-1 overflow-auto">
+    <table class="w-full text-sm text-left text-on-surface-variant">
+      {# Header — slightly different surface from the card bg so
+         the band reads as a contrasting strip without needing a
+         bottom border. #}
+      <thead class="text-sm text-on-surface-variant bg-surface-container-low">
+        <tr>
+          {% for col in payload.columns %}
+          <th
+            scope="col"
+            class="px-md py-sm font-medium text-on-surface-variant whitespace-nowrap"
+          >{{ col.label }}</th>
           {% endfor %}
-        </tbody>
-      </table>
-    </div>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in payload.rows %}
+        {# Body row — bottom hairline on `surface-container-highest`
+           (the same token the divider, scrollbar, and other soft
+           rails use); `last:border-b-0` drops the trailing border
+           on the final row so the table doesn't end on a hairline. #}
+        <tr class="bg-surface-container border-b border-surface-container-highest last:border-b-0 hover:bg-surface-container-high transition-colors">
+          {% for col in payload.columns %}
+          {%- set v = row[col.key] -%}
+          {%- set vstr = "" if v is none else (v | string) -%}
+          {% if loop.first %}
+          {# Row anchor cell — heavier weight, stronger color, no
+             wrap. Matches the reference's `<th scope="row">`
+             pattern (the leftmost column tells you which entity
+             the row is about). #}
+          <th
+            scope="row"
+            class="px-md py-md font-medium text-on-surface whitespace-nowrap truncate max-w-[220px]"
+            title="{{ vstr }}"
+          >{{ vstr }}</th>
+          {% else %}
+          <td
+            class="px-md py-md truncate max-w-[200px] tabular-nums"
+            title="{{ vstr }}"
+          >{{ vstr }}</td>
+          {% endif %}
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
   </div>
   {% else %}
   <p class="text-label-sm text-outline italic px-md py-md mt-auto">No data</p>
