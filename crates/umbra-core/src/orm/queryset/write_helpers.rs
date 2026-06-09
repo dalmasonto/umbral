@@ -32,7 +32,7 @@ pub(super) fn build_insert_one_for<T: Model>(
     _backend_name: &str,
     map: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<sea_query::InsertStatement, crate::orm::write::WriteError> {
-    use crate::orm::write::{is_default_pk, json_to_sea_value};
+    use crate::orm::write::{is_default_pk, json_to_sea_value, now_for_column};
     let mut columns: Vec<Alias> = Vec::new();
     let mut values: Vec<sea_query::SimpleExpr> = Vec::new();
     for field in T::FIELDS {
@@ -43,6 +43,21 @@ pub(super) fn build_insert_one_for<T: Model>(
         // Skip PK if it's the default sentinel — let the DB
         // autoincrement / default kick in.
         if field.primary_key && is_default_pk(field.ty, &val) {
+            continue;
+        }
+        // gaps2 #19 follow-up: `auto_now_add` / `auto_now` columns
+        // are framework-managed timestamps. Django's behavior: the
+        // INSERT path always writes `now()` regardless of what the
+        // struct carries (the user can't override via Model.save()).
+        // Without this overwrite, `Manager::create(instance)` where
+        // `instance.created_at` was filled by `Default::default()`
+        // (gaps2 #19's Form-derive `..Default::default()` tail) would
+        // persist the epoch sentinel. The dynamic insert paths
+        // (`insert_form` / `insert_json`) already do this; the typed
+        // path was lagging.
+        if field.auto_now_add || field.auto_now {
+            columns.push(Alias::new(field.name));
+            values.push(now_for_column(field.ty).into());
             continue;
         }
         // Skip absent fields when nullable (caller didn't supply them).
@@ -75,7 +90,7 @@ pub(super) fn build_insert_many_for<T: Model>(
     _backend_name: &str,
     maps: &[serde_json::Map<String, serde_json::Value>],
 ) -> Result<sea_query::InsertStatement, crate::orm::write::WriteError> {
-    use crate::orm::write::{is_default_pk, json_to_sea_value};
+    use crate::orm::write::{is_default_pk, json_to_sea_value, now_for_column};
     // Decide column set from the first row. Subsequent rows MUST
     // produce the same column set — anything else would break the
     // INSERT's columns clause.
@@ -105,6 +120,13 @@ pub(super) fn build_insert_many_for<T: Model>(
         let row_values: Result<Vec<_>, _> = included_fields
             .iter()
             .map(|field| {
+                // gaps2 #19 follow-up: bulk-insert path honors
+                // `auto_now_add` / `auto_now` the same way the single-
+                // row path does — every row's timestamp column gets
+                // `now()` regardless of what the source struct carries.
+                if field.auto_now_add || field.auto_now {
+                    return Ok(sea_query::SimpleExpr::from(now_for_column(field.ty)));
+                }
                 let val = map
                     .get(field.name)
                     .cloned()
