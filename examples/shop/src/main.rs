@@ -33,7 +33,7 @@ use umbra_sessions::SessionsPlugin;
 
 use crate::auth::{TokenSchemeAuthentication, session_authentication};
 
-use content::models::{Category, Comment, Faq, Post, PostStatus, Tag, Testimonial};
+use content::models::{Category, Comment, Faq, Post, PostStatus, Subscriber, Tag, Testimonial};
 use ecommerce::models::{
     AddressType, Brand, Coupon, Currency, Customer, DiscountType, Order, OrderItem, OrderStatus,
     Payment, PaymentMethod, PaymentStatus, Product, ProductStatus, Review, Shipment, brand,
@@ -135,21 +135,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 )
                 .dashboard_section(
                     umbra_admin::WidgetSection::new("Trends")
-                        .subtitle("Daily sales + multi-series activity + status mix + recent orders")
+                        .subtitle(
+                            "Daily sales + multi-series activity + status mix + recent orders",
+                        )
                         .widget(shop_daily_sales_chart())
+                        .widget(shop_recent_orders_table())
                         .widget(shop_activity_chart())
-                        .widget(shop_order_status_donut())
-                        .widget(shop_recent_orders_table()),
+                        .widget(shop_order_status_donut()),
                 )
                 .dashboard_section(
                     umbra_admin::WidgetSection::new("System")
                         .subtitle("Framework-wide health + recent activity")
-                        .widget(
-                            umbra_admin::builtin_total_models_widget().with_span(8, 2),
-                        )
-                        .widget(
-                            umbra_admin::builtin_recent_users_widget().with_span(4, 2),
-                        ),
+                        .widget(umbra_admin::builtin_total_models_widget().with_span(8, 2))
+                        .widget(umbra_admin::builtin_recent_users_widget().with_span(4, 2)),
                 ),
         )
         // REST: three resources, three different auth + permission
@@ -1665,9 +1663,7 @@ fn shop_activity_chart() -> umbra_admin::Widget {
 /// where the relative share matters more than absolute count.
 fn shop_order_status_donut() -> umbra_admin::Widget {
     use std::collections::HashMap;
-    use umbra_admin::{
-        DonutPayload, Span, Widget, WidgetDataFn, WidgetKind, WidgetPayload,
-    };
+    use umbra_admin::{DonutPayload, Span, Widget, WidgetDataFn, WidgetKind, WidgetPayload};
     Widget {
         key: "shop_order_status_donut",
         title: "Order Status".to_string(),
@@ -1685,7 +1681,15 @@ fn shop_order_status_donut() -> umbra_admin::Widget {
             // canonical progression so the donut reads as a
             // lifecycle, not random alphabetical. Pull known
             // statuses in order first, then any unexpected ones.
-            let order = ["pending", "paid", "fulfilled", "shipped", "delivered", "cancelled", "refunded"];
+            let order = [
+                "pending",
+                "paid",
+                "fulfilled",
+                "shipped",
+                "delivered",
+                "cancelled",
+                "refunded",
+            ];
             let mut pairs: Vec<(String, f64)> = Vec::new();
             for k in order {
                 if let Some(v) = counts.remove(k) {
@@ -1741,8 +1745,126 @@ fn shop_recent_orders_table() -> umbra_admin::Widget {
                     })
                 })
                 .collect();
-            WidgetPayload::Table(
-                TablePayload::new(columns, rows).view_all_for::<Order>(),
+            WidgetPayload::Table(TablePayload::new(columns, rows).view_all_for::<Order>())
+        }),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Content plugin widgets
+// ---------------------------------------------------------------------------
+// Mirrors the ecommerce widgets but reads the `content` plugin's
+// Post / Subscriber models. Demonstrates the same widget kinds
+// (Table / Donut / Card) reused for a different domain — no new
+// renderer code, just new data closures.
+
+/// Recent-posts table — five most-recent posts with a "View
+/// all →" link to /admin/post/. Same table shape as the
+/// shop's Recent Orders.
+fn content_recent_posts_table() -> umbra_admin::Widget {
+    use content::models::post;
+    use umbra_admin::{
+        Span, TableColumn, TablePayload, Widget, WidgetDataFn, WidgetKind, WidgetPayload,
+    };
+    Widget {
+        key: "content_recent_posts",
+        title: "Recent Posts".to_string(),
+        kind: WidgetKind::Table,
+        default_span: Span { cols: 6, rows: 3 },
+        permission: None,
+        data: WidgetDataFn::new(|_user| async move {
+            let columns = vec![
+                TableColumn {
+                    key: "title".to_string(),
+                    label: "Title".to_string(),
+                },
+                TableColumn {
+                    key: "status".to_string(),
+                    label: "Status".to_string(),
+                },
+                TableColumn {
+                    key: "views".to_string(),
+                    label: "Views".to_string(),
+                },
+            ];
+            let rows: Vec<serde_json::Value> = Post::objects()
+                .order_by(post::CREATED_AT.desc())
+                .limit(5)
+                .fetch()
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .map(|p| {
+                    serde_json::json!({
+                        "title":  p.title,
+                        "status": format!("{:?}", p.status).to_lowercase(),
+                        "views":  umbra_admin::humanize_number(p.view_count as f64),
+                    })
+                })
+                .collect();
+            WidgetPayload::Table(TablePayload::new(columns, rows).view_all_for::<Post>())
+        }),
+    }
+}
+
+/// Post-status donut — draft / published / scheduled
+/// distribution. Same donut shape as the order-status one;
+/// just a different model + label set.
+fn content_post_status_donut() -> umbra_admin::Widget {
+    use std::collections::HashMap;
+    use umbra_admin::{DonutPayload, Span, Widget, WidgetDataFn, WidgetKind, WidgetPayload};
+    Widget {
+        key: "content_post_status_donut",
+        title: "Post Status".to_string(),
+        kind: WidgetKind::Donut,
+        default_span: Span { cols: 3, rows: 3 },
+        permission: None,
+        data: WidgetDataFn::new(|_user| async move {
+            let posts = Post::objects().fetch().await.unwrap_or_default();
+            let mut counts: HashMap<String, f64> = HashMap::new();
+            for p in &posts {
+                let label = format!("{:?}", p.status).to_lowercase();
+                *counts.entry(label).or_insert(0.0) += 1.0;
+            }
+            // Canonical lifecycle order — draft → scheduled →
+            // published. Matches the PostStatus enum.
+            let order = ["draft", "scheduled", "published"];
+            let mut pairs: Vec<(String, f64)> = Vec::new();
+            for k in order {
+                if let Some(v) = counts.remove(k) {
+                    pairs.push((k.to_string(), v));
+                }
+            }
+            pairs.extend(counts.into_iter());
+            WidgetPayload::Donut(DonutPayload::from_pairs(pairs))
+        }),
+    }
+}
+
+/// Newsletter-subscribers card — total subscribers with
+/// confirmed/unconfirmed breakdown in the subtitle. KPI-style
+/// tile sized at the standard 3×2 card span.
+fn content_subscribers_card() -> umbra_admin::Widget {
+    use content::models::subscriber;
+    use umbra_admin::{CardPayload, Span, Widget, WidgetDataFn, WidgetKind, WidgetPayload};
+    Widget {
+        key: "content_subscribers",
+        title: "Subscribers".to_string(),
+        kind: WidgetKind::Card,
+        default_span: Span { cols: 3, rows: 2 },
+        permission: None,
+        data: WidgetDataFn::new(|_user| async move {
+            let total = Subscriber::objects().count().await.unwrap_or(0);
+            let confirmed = Subscriber::objects()
+                .filter(subscriber::IS_CONFIRMED.eq(true))
+                .count()
+                .await
+                .unwrap_or(0);
+            WidgetPayload::Card(
+                CardPayload::new(umbra_admin::humanize_number(total as f64))
+                    .unit("total")
+                    .icon("mail")
+                    .subtitle(format!("{confirmed} confirmed")),
             )
         }),
     }
