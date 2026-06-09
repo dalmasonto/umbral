@@ -63,6 +63,11 @@ const RESERVED_KEYS: &[&str] = &[
     "search",
     "fields",
     "ordering",
+    // `?include=fk1,fk2` — consumed by the include parser in
+    // lib.rs::parse_include for FK expansion via select_related.
+    // Skipped here so the filter parser doesn't mistake it for a
+    // column name and reject as "unknown field".
+    "include",
 ];
 
 /// A parsed filter ready to splice into a DynQuerySet.
