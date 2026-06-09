@@ -74,6 +74,12 @@ pub enum WidgetKind {
     Card,
     Line,
     Bar,
+    /// Donut chart — labeled slices summing to 100%. Best for
+    /// low-cardinality breakdowns (status distribution, top N
+    /// regions, mode share) where a bar chart's axes are
+    /// overkill. 3-6 slices reads cleanly; past that switch
+    /// to a bar.
+    Donut,
     Table,
     Feed,
 }
@@ -85,6 +91,7 @@ impl WidgetKind {
             WidgetKind::Card => "card",
             WidgetKind::Line => "line",
             WidgetKind::Bar => "bar",
+            WidgetKind::Donut => "donut",
             WidgetKind::Table => "table",
             WidgetKind::Feed => "feed",
         }
@@ -325,6 +332,44 @@ pub struct BarPayload {
     pub x_type: String,
 }
 
+/// One slice of a donut chart.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DonutSlice {
+    pub label: String,
+    pub value: f64,
+    /// Optional explicit color (CSS hex / rgb / token name).
+    /// `None` falls back to the chart's default palette.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+}
+
+/// Donut chart payload — categorical breakdown summing to 100%.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DonutPayload {
+    pub slices: Vec<DonutSlice>,
+}
+
+impl DonutPayload {
+    pub fn new(slices: Vec<DonutSlice>) -> Self {
+        Self { slices }
+    }
+
+    /// Build slices from `(label, value)` tuples; the chart
+    /// picks colors from its default palette.
+    pub fn from_pairs<L: Into<String>>(pairs: impl IntoIterator<Item = (L, f64)>) -> Self {
+        Self::new(
+            pairs
+                .into_iter()
+                .map(|(label, value)| DonutSlice {
+                    label: label.into(),
+                    value,
+                    color: None,
+                })
+                .collect(),
+        )
+    }
+}
+
 /// Table widget column descriptor.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TableColumn {
@@ -446,6 +491,7 @@ pub enum WidgetPayload {
     Card(CardPayload),
     Line(LinePayload),
     Bar(BarPayload),
+    Donut(DonutPayload),
     Table(TablePayload),
     Feed(FeedPayload),
 }

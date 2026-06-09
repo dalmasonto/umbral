@@ -8,6 +8,7 @@
 {% from "admin/_macros/widgets/card.html" import card_widget %}
 {% from "admin/_macros/widgets/bar.html" import bar_widget %}
 {% from "admin/_macros/widgets/line.html" import line_widget %}
+{% from "admin/_macros/widgets/donut.html" import donut_widget %}
 {% from "admin/_macros/widgets/feed.html" import feed_widget %}
 {% from "admin/_macros/widgets/table.html" import table_widget %}
 
@@ -19,6 +20,8 @@
   {{ bar_widget(title, payload) }}
 {% elif kind == "line" %}
   {{ line_widget(title, payload, widget_key, active_period) }}
+{% elif kind == "donut" %}
+  {{ donut_widget(title, payload) }}
 {% elif kind == "feed" %}
   {{ feed_widget(title, payload) }}
 {% elif kind == "table" %}

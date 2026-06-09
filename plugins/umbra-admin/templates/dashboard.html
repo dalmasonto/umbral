@@ -123,6 +123,13 @@
         <div class="h-3 bg-surface-container-high rounded w-1/3 flex-shrink-0 mb-sm"></div>
         <div class="flex-1 bg-surface-container-high rounded"></div>
       </div>
+      {% elif w.kind == "donut" %}
+      <div class="h-full p-md flex flex-col animate-pulse">
+        <div class="h-3 bg-surface-container-high rounded w-1/3 flex-shrink-0 mb-md"></div>
+        <div class="flex-1 flex items-center justify-center">
+          <div class="w-24 h-24 rounded-full border-[14px] border-surface-container-high"></div>
+        </div>
+      </div>
       {% elif w.kind == "feed" %}
       <div class="h-full p-md flex flex-col animate-pulse">
         <div class="h-3 bg-surface-container-high rounded w-1/3 flex-shrink-0 mb-sm"></div>

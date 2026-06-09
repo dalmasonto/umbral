@@ -135,9 +135,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 )
                 .dashboard_section(
                     umbra_admin::WidgetSection::new("Trends")
-                        .subtitle("Daily sales + multi-series activity + recent orders")
+                        .subtitle("Daily sales + multi-series activity + status mix + recent orders")
                         .widget(shop_daily_sales_chart())
                         .widget(shop_activity_chart())
+                        .widget(shop_order_status_donut())
                         .widget(shop_recent_orders_table()),
                 )
                 .dashboard_section(
@@ -1654,6 +1655,45 @@ fn shop_activity_chart() -> umbra_admin::Widget {
                 ],
                 x_type: "date".to_string(),
             })
+        }),
+    }
+}
+
+/// Order-status donut — slices every order into its status
+/// bucket (pending / paid / shipped / delivered / cancelled /
+/// refunded). Bar-chart alternative for a 6-bucket breakdown
+/// where the relative share matters more than absolute count.
+fn shop_order_status_donut() -> umbra_admin::Widget {
+    use std::collections::HashMap;
+    use umbra_admin::{
+        DonutPayload, Span, Widget, WidgetDataFn, WidgetKind, WidgetPayload,
+    };
+    Widget {
+        key: "shop_order_status_donut",
+        title: "Order Status".to_string(),
+        kind: WidgetKind::Donut,
+        default_span: Span { cols: 4, rows: 3 },
+        permission: None,
+        data: WidgetDataFn::new(|_user| async move {
+            let orders = Order::objects().fetch().await.unwrap_or_default();
+            let mut counts: HashMap<String, f64> = HashMap::new();
+            for o in &orders {
+                let label = format!("{:?}", o.status).to_lowercase();
+                *counts.entry(label).or_insert(0.0) += 1.0;
+            }
+            // Stable bucket order — matches the OrderStatus enum's
+            // canonical progression so the donut reads as a
+            // lifecycle, not random alphabetical. Pull known
+            // statuses in order first, then any unexpected ones.
+            let order = ["pending", "paid", "fulfilled", "shipped", "delivered", "cancelled", "refunded"];
+            let mut pairs: Vec<(String, f64)> = Vec::new();
+            for k in order {
+                if let Some(v) = counts.remove(k) {
+                    pairs.push((k.to_string(), v));
+                }
+            }
+            pairs.extend(counts.into_iter());
+            WidgetPayload::Donut(DonutPayload::from_pairs(pairs))
         }),
     }
 }

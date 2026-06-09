@@ -1,0 +1,43 @@
+{#
+  donut.html
+  ==========
+  Donut chart widget — labeled slices summing to 100%. Best for
+  3-6 categorical buckets (status distribution, top regions,
+  mode share). Past ~6 slices the labels collide; switch to
+  WidgetKind::Bar.
+
+  Mounts ApexCharts on `data-chart-canvas`; reads slices from
+  hidden `[data-chart-slice][data-label][data-value][data-color]`
+  siblings. Center label shows the total; legend on the right.
+
+  Expects payload:
+    { slices: [{ label, value, color? }] }
+#}
+
+{% macro donut_widget(title, payload) %}
+<div class="donut-widget h-full flex flex-col p-md">
+  <p class="text-label-sm text-outline uppercase tracking-wider mb-sm flex-shrink-0">{{ title }}</p>
+  {% if payload.slices and payload.slices | length > 0 %}
+  <div
+    class="flex-1 min-h-0 relative"
+    data-umbra-chart="donut"
+  >
+    {% for s in payload.slices %}
+    <span
+      data-chart-slice
+      data-label="{{ s.label }}"
+      data-value="{{ s.value }}"
+      {% if s.color %}data-color="{{ s.color }}"{% endif %}
+      hidden
+    ></span>
+    {% endfor %}
+    <div data-chart-canvas class="absolute inset-0"></div>
+    <div data-chart-unavailable class="absolute inset-0 hidden flex flex-col">
+      <p class="text-label-sm text-outline italic m-auto">Chart library unavailable</p>
+    </div>
+  </div>
+  {% else %}
+  <p class="text-label-sm text-outline italic mt-auto">No data</p>
+  {% endif %}
+</div>
+{% endmacro %}

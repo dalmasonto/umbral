@@ -88,9 +88,10 @@ pub use registry::{AdminRegistration, AdminRegistry, App as AdminApp};
 // for the wiring shape.
 pub use handlers::dashboard::{builtin_recent_users_widget, builtin_total_models_widget};
 pub use widgets::{
-    BarPayload, CardPayload, CatalogEntry, ChartPoint, FeedItem, FeedPayload, KpiPayload,
-    LinePayload, Series, Span, TableColumn, TablePayload, Widget, WidgetDataFn, WidgetInstance,
-    WidgetKind, WidgetParams, WidgetPayload, WidgetSection, format_thousands, humanize_number,
+    BarPayload, CardPayload, CatalogEntry, ChartPoint, DonutPayload, DonutSlice, FeedItem,
+    FeedPayload, KpiPayload, LinePayload, Series, Span, TableColumn, TablePayload, Widget,
+    WidgetDataFn, WidgetInstance, WidgetKind, WidgetParams, WidgetPayload, WidgetSection,
+    format_thousands, humanize_number,
 };
 
 use std::sync::Arc;
