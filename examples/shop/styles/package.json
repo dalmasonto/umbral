@@ -1,0 +1,14 @@
+{
+  "name": "shop-css",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Tailwind CSS build for the shop example",
+  "scripts": {
+    "build": "tailwindcss -c tailwind.config.js -i input.css -o ../static/css/shop.css --minify",
+    "watch": "tailwindcss -c tailwind.config.js -i input.css -o ../static/css/shop.css --watch"
+  },
+  "devDependencies": {
+    "tailwindcss": "^3.4.0",
+    "@fontsource/inter": "^5.0.0"
+  }
+}

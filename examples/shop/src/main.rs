@@ -41,6 +41,7 @@ use umbra_rest::{
     PageNumberPagination, ReadOnly, ResourceConfig, RestPlugin,
 };
 use umbra_sessions::SessionsPlugin;
+use umbra_static::StaticPlugin;
 
 use crate::auth::{TokenSchemeAuthentication, session_authentication};
 
@@ -184,6 +185,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         )
         .plugin(OpenApiPlugin::new().at("/api/docs"))
         .plugin(PlaygroundPlugin::new("shop"))
+        // gaps2 #20: serve compiled Tailwind (styles/input.css →
+        // static/css/shop.css via build.rs) instead of the CDN. The
+        // wrapper.html template references /static/css/shop.css.
+        // Self-hosted Inter woff2 files live alongside the CSS.
+        .plugin(StaticPlugin::new("/static", "./static"))
         // --- Templates -------------------------------------------------------
         .templates_dir("templates")
         .not_found_template("404.html")

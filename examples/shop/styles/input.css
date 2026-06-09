@@ -1,0 +1,36 @@
+/* Self-hosted Inter via @fontsource — eliminates Google Fonts blocking
+ * request. font-display:swap lets text paint immediately in the
+ * fallback while Inter loads, then re-renders.
+ *
+ * @fontsource/inter ships per-weight files under
+ *   node_modules/@fontsource/inter/<weight>00.css
+ * The CSS files reference woff2 paths relative to themselves; the
+ * Tailwind build inlines the @import → @font-face declarations into
+ * the compiled output and tailwindcss copies the woff2 files into
+ * the same dir as the output CSS via its url() rewriting (Tailwind
+ * v3 + PostCSS — bundle mode).
+ *
+ * For each weight used by wrapper.html (400/500/600/700/800) the
+ * @import below pulls in the matching @fontsource sub-CSS.
+ */
+/* Latin subset only — the shop's English UI doesn't need Cyrillic,
+ * Greek, or Vietnamese subsets. Each `<weight>.css` would pull 11
+ * woff2 subset files; `latin-<weight>.css` pulls just 1. Total
+ * shipped: 5 woff2 files (one per weight), ~75 KiB. */
+@import '@fontsource/inter/latin-400.css';
+@import '@fontsource/inter/latin-500.css';
+@import '@fontsource/inter/latin-600.css';
+@import '@fontsource/inter/latin-700.css';
+@import '@fontsource/inter/latin-800.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+body {
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
