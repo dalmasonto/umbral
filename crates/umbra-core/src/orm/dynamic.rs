@@ -483,6 +483,21 @@ impl<'a> DynQuerySet<'a> {
             if col.primary_key || skip.iter().any(|s| s == &col.name) {
                 continue;
             }
+            // `auto_now` columns refresh on every update — push
+            // `Utc::now()` regardless of whether the form carried
+            // the column. `auto_now_add` stays frozen on update
+            // (fired once at INSERT time); it falls through to the
+            // standard "form omitted → skip" path below. Mirrors
+            // `update_json` (line ~1047) so form + JSON write paths
+            // honor the annotation identically.
+            if col.auto_now {
+                q.value(
+                    Alias::new(&col.name),
+                    crate::orm::write::now_for_column(col.ty),
+                );
+                any = true;
+                continue;
+            }
             let Some(raw) = form.get(&col.name) else {
                 continue;
             };
@@ -539,6 +554,20 @@ impl<'a> DynQuerySet<'a> {
                 )
                 && form.get(&col.name).is_none_or(|v| v.is_empty())
             {
+                continue;
+            }
+            // `auto_now_add` / `auto_now` columns: when the form
+            // omits the field (the post-fix admin shape — these
+            // columns are hidden from create + edit forms), fill
+            // with `Utc::now()` here. Mirrors the same handling on
+            // `insert_json` (line ~836) so the form path and the
+            // JSON path stay consistent — both honor the annotation
+            // without the body / form having to carry the value.
+            if (col.auto_now_add || col.auto_now)
+                && form.get(&col.name).is_none_or(|v| v.is_empty())
+            {
+                cols.push(&col.name);
+                values.push(crate::orm::write::now_for_column(col.ty));
                 continue;
             }
             let raw = form.get(&col.name).map(|s| s.as_str()).unwrap_or("");

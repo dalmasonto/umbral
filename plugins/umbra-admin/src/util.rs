@@ -76,6 +76,36 @@ pub(crate) fn sanitise_form_error(e: &AdminError) -> String {
             if is_unique_violation(&msg) {
                 return "A record with one of these values already exists.".to_string();
             }
+            // ORM write-validator errors (RequiredFieldMissing /
+            // BlankNotAllowed / ForeignKeyNotFound / TypeMismatch /
+            // Validator) reach us via `DynQuerySet`'s form path as
+            // `sqlx::Error::Protocol("umbra::orm::write: <message>")`
+            // — see `crates/umbra-core/src/orm/write.rs` Display impl.
+            // Strip the prefix and surface the human-readable tail
+            // (e.g. "required field `created_at` is missing or null"
+            // → "Required field `created_at` is missing or null").
+            // Without this every write-validator failure renders as
+            // the opaque "database error" placeholder, hiding the
+            // actual reason the form was rejected.
+            if let Some(tail) = msg.strip_prefix("umbra::orm::write: ") {
+                let mut chars = tail.chars();
+                return match chars.next() {
+                    Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+                    None => "database error".to_string(),
+                };
+            }
+            // sqlx wraps its own Protocol payloads with the variant
+            // tag in the Display form ("error returned from
+            // database: ..."). Surface the inner message if it
+            // looks like a constraint message users can act on.
+            if msg.starts_with("error returned from database:") {
+                if let Some(tail) = msg.splitn(2, ':').nth(1) {
+                    let trimmed = tail.trim();
+                    if !trimmed.is_empty() {
+                        return trimmed.to_string();
+                    }
+                }
+            }
             "database error".to_string()
         }
         AdminError::NotFound(msg) | AdminError::Render(msg) | AdminError::BadInput(msg) => {
