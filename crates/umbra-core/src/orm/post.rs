@@ -173,7 +173,7 @@ impl crate::orm::Model for Post {
 
 /// `Post` has no FK fields, so `HydrateRelated` is a no-op.
 impl crate::orm::HydrateRelated for Post {
-    fn fk_id_for(&self, _field_name: &str) -> Option<i64> {
+    fn fk_id_for(&self, _field_name: &str) -> Option<serde_json::Value> {
         None
     }
     fn hydrate_fk(&mut self, _field_name: &str, _row: &serde_json::Value) {}

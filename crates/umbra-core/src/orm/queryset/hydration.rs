@@ -74,44 +74,83 @@ pub(super) async fn hydrate_select_related<T: Model + HydrateRelated>(
             ))
         })?;
 
-        // Collect all FK IDs from the main rows via `HydrateRelated::fk_id_for`.
-        // This avoids serializing the whole row just to read one integer.
-        let mut ids: Vec<i64> = Vec::with_capacity(rows.len());
+        // PK lift Pass D: collect FK values as `serde_json::Value`
+        // (was `Vec<i64>`). The macro's `fk_id_for` now returns the
+        // FK's PK in whatever JSON shape the target uses — i64
+        // targets stay as `Number`, String / UUID targets land as
+        // `String`. Dedup goes through `pk_json_key` because
+        // `serde_json::Value` isn't `Hash`.
+        let mut ids: Vec<JsonValue> = Vec::with_capacity(rows.len());
         for row in rows.iter() {
-            if let Some(id) = row.fk_id_for(field_name.as_str()) {
-                ids.push(id);
+            if let Some(v) = row.fk_id_for(field_name.as_str()) {
+                if !v.is_null() {
+                    ids.push(v);
+                }
             }
         }
         if ids.is_empty() {
             continue;
         }
-        ids.sort_unstable();
-        ids.dedup();
+        dedup_by_pk_key(&mut ids);
 
-        let related_rows = fetch_related_as_json(fk_target, &ids, pool).await?;
-        let id_to_json: HashMap<i64, JsonValue> = related_rows
+        // Look up the FK target's PK column name. Pre-fix this was
+        // hardcoded as `"id"`; now we route through the target's
+        // registered ModelMeta so codename- and slug-keyed targets
+        // bind against the right column. When the registry hasn't
+        // been initialised (low-level tests that drive the QuerySet
+        // without App::build), fall back to `"id"` — the legacy
+        // behaviour, byte-identical for every integer-PK target.
+        let target_pk_col = if crate::migrate::is_initialised() {
+            crate::migrate::registered_models()
+                .iter()
+                .find(|m| m.table == fk_target)
+                .and_then(|m| m.pk_column().map(|c| c.name.clone()))
+                .unwrap_or_else(|| "id".to_string())
+        } else {
+            "id".to_string()
+        };
+        let related_rows =
+            fetch_related_as_json_by_pk(fk_target, &target_pk_col, &ids, pool).await?;
+        let id_to_json: HashMap<String, JsonValue> = related_rows
             .into_iter()
             .filter_map(|obj| {
-                if let JsonValue::Object(ref map) = obj {
-                    if let Some(JsonValue::Number(n)) = map.get("id") {
-                        if let Some(id) = n.as_i64() {
-                            return Some((id, obj.clone()));
-                        }
-                    }
-                }
-                None
+                let map = obj.as_object()?;
+                let pk_val = map.get(target_pk_col.as_str())?;
+                Some((pk_json_key(pk_val), obj.clone()))
             })
             .collect();
 
         for row in rows.iter_mut() {
-            if let Some(fk_id) = row.fk_id_for(field_name.as_str()) {
-                if let Some(resolved_json) = id_to_json.get(&fk_id) {
+            if let Some(fk_val) = row.fk_id_for(field_name.as_str()) {
+                if let Some(resolved_json) = id_to_json.get(&pk_json_key(&fk_val)) {
                     row.hydrate_fk(field_name.as_str(), resolved_json);
                 }
             }
         }
     }
     Ok(())
+}
+
+/// PK lift Pass D — local cycle-set / lookup-key helper. Stable
+/// `String` for any `serde_json::Value`, namespaced by shape so a
+/// numeric 42 and a string "42" stay in different buckets. Mirrors
+/// the same-named helper in `umbra-core::orm::dynamic` (kept local
+/// while only two call sites need it).
+fn pk_json_key(v: &JsonValue) -> String {
+    match v {
+        JsonValue::Number(n) => format!("n:{n}"),
+        JsonValue::String(s) => format!("s:{s}"),
+        other => format!("o:{other}"),
+    }
+}
+
+/// PK lift Pass D — dedup a `Vec<Value>` of PK ids by stable string
+/// key. `serde_json::Value` isn't `Hash`, so the standard
+/// sort+dedup doesn't apply. Used for the IN-list dedup in both
+/// `hydrate_select_related` and `hydrate_select_related_nested`.
+fn dedup_by_pk_key(ids: &mut Vec<JsonValue>) {
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    ids.retain(|v| seen.insert(pk_json_key(v)));
 }
 
 /// Nested `select_related("a__b__c")` traversal. Walks the hop chain
@@ -169,29 +208,55 @@ pub(super) async fn hydrate_select_related_nested<T: Model + HydrateRelated>(
         current_table = target;
     }
 
+    // PK lift Pass D: resolve each hop target's PK column name
+    // (was hardcoded `"id"`) so codename / slug / UUID-keyed
+    // targets bind against the right column.
+    let hop_target_pk_cols: Vec<String> = hop_targets
+        .iter()
+        .filter_map(|t| {
+            registered
+                .iter()
+                .find(|m| &m.table == t)
+                .and_then(|m| m.pk_column().map(|c| c.name.clone()))
+        })
+        .collect();
+    if hop_target_pk_cols.len() != hops.len() {
+        // A target meta lookup failed mid-chain. Same shape the
+        // dynamic-side hydrator falls back with — skip the chain
+        // rather than crash.
+        return Ok(());
+    }
+
     // Phase 1: fetch each level's rows top-down, one batched IN
     // query per hop. `levels[i]` holds the rows at depth i (before
-    // any nesting is embedded), keyed for later lookup by id.
+    // any nesting is embedded), keyed for later lookup by PK key.
     let first_field = hops[0];
-    let mut ids: Vec<i64> = rows
+    let mut ids: Vec<JsonValue> = rows
         .iter()
-        .filter_map(|r| r.fk_id_for(first_field))
+        .filter_map(|r| {
+            let v = r.fk_id_for(first_field)?;
+            if v.is_null() { None } else { Some(v) }
+        })
         .collect();
     if ids.is_empty() {
         return Ok(());
     }
-    ids.sort_unstable();
-    ids.dedup();
+    dedup_by_pk_key(&mut ids);
     let mut levels: Vec<Vec<JsonValue>> = Vec::with_capacity(hops.len());
-    levels.push(fetch_related_as_json(hop_targets[0], &ids, pool).await?);
+    levels.push(
+        fetch_related_as_json_by_pk(hop_targets[0], &hop_target_pk_cols[0], &ids, pool).await?,
+    );
 
     for hop_idx in 1..hops.len() {
         let hop_field = hops[hop_idx];
         let hop_target = hop_targets[hop_idx];
         let prev_lvl = &levels[hop_idx - 1];
-        let mut next_ids: Vec<i64> = prev_lvl
+        let mut next_ids: Vec<JsonValue> = prev_lvl
             .iter()
-            .filter_map(|r| r.as_object()?.get(hop_field)?.as_i64())
+            .filter_map(|r| {
+                let v = r.as_object()?.get(hop_field)?;
+                if v.is_null() { None } else { Some(v.clone()) }
+            })
             .collect();
         if next_ids.is_empty() {
             // The chain bottoms out: the prior level has only NULL
@@ -199,9 +264,11 @@ pub(super) async fn hydrate_select_related_nested<T: Model + HydrateRelated>(
             // stop here. Earlier levels still embed below.
             break;
         }
-        next_ids.sort_unstable();
-        next_ids.dedup();
-        levels.push(fetch_related_as_json(hop_target, &next_ids, pool).await?);
+        dedup_by_pk_key(&mut next_ids);
+        levels.push(
+            fetch_related_as_json_by_pk(hop_target, &hop_target_pk_cols[hop_idx], &next_ids, pool)
+                .await?,
+        );
     }
 
     // Phase 2: bottom-up embed. For each level from the second-to-
@@ -210,12 +277,13 @@ pub(super) async fn hydrate_select_related_nested<T: Model + HydrateRelated>(
     // levels[0], its rows carry the full nested chain.
     if levels.len() > 1 {
         for i in (0..levels.len() - 1).rev() {
-            let next_by_id: HashMap<i64, JsonValue> = levels[i + 1]
+            let next_pk_col = &hop_target_pk_cols[i + 1];
+            let next_by_pk: HashMap<String, JsonValue> = levels[i + 1]
                 .iter()
                 .filter_map(|obj| {
                     let map = obj.as_object()?;
-                    let id = map.get("id")?.as_i64()?;
-                    Some((id, obj.clone()))
+                    let pk_val = map.get(next_pk_col.as_str())?;
+                    Some((pk_json_key(pk_val), obj.clone()))
                 })
                 .collect();
             let hop_field = hops[i + 1];
@@ -223,11 +291,13 @@ pub(super) async fn hydrate_select_related_nested<T: Model + HydrateRelated>(
                 let Some(map) = row.as_object_mut() else {
                     continue;
                 };
-                let Some(JsonValue::Number(n)) = map.get(hop_field) else {
+                let Some(fk_val) = map.get(hop_field) else {
                     continue;
                 };
-                let Some(id) = n.as_i64() else { continue };
-                if let Some(next_json) = next_by_id.get(&id) {
+                if fk_val.is_null() {
+                    continue;
+                }
+                if let Some(next_json) = next_by_pk.get(&pk_json_key(fk_val)) {
                     map.insert(hop_field.to_string(), next_json.clone());
                 }
             }
@@ -237,20 +307,21 @@ pub(super) async fn hydrate_select_related_nested<T: Model + HydrateRelated>(
     // Phase 3: hydrate root parents with the fully-nested level-0
     // rows. Recursive ForeignKey<T>::Deserialize unpacks the chain
     // into resolved slots at every depth.
-    let first_by_id: HashMap<i64, JsonValue> = levels
+    let first_pk_col = &hop_target_pk_cols[0];
+    let first_by_pk: HashMap<String, JsonValue> = levels
         .into_iter()
         .next()
         .unwrap_or_default()
         .into_iter()
         .filter_map(|obj| {
             let map = obj.as_object()?;
-            let id = map.get("id")?.as_i64()?;
-            Some((id, obj.clone()))
+            let pk_val = map.get(first_pk_col.as_str())?;
+            Some((pk_json_key(pk_val), obj.clone()))
         })
         .collect();
     for row in rows.iter_mut() {
-        if let Some(id) = row.fk_id_for(first_field) {
-            if let Some(json) = first_by_id.get(&id) {
+        if let Some(fk_val) = row.fk_id_for(first_field) {
+            if let Some(json) = first_by_pk.get(&pk_json_key(&fk_val)) {
                 row.hydrate_fk(first_field, json);
             }
         }
@@ -674,23 +745,13 @@ pub(super) async fn hydrate_prefetch_related<T: Model + HydrateRelated>(
     Ok(())
 }
 
-/// Fetch rows from `table` where `id IN ids` and return them as a
-/// `Vec` of `serde_json::Value::Object`. Uses the per-backend
-/// `row_to_json` decoders so we don't need a `FromRow` bound on the
-/// target model type. Used by both single-hop and nested
-/// `select_related` paths.
-pub(crate) async fn fetch_related_as_json(
-    table: &str,
-    ids: &[i64],
-    pool: &DbPool,
-) -> Result<Vec<JsonValue>, sqlx::Error> {
-    // gaps #112 / PK lift Pass A: delegate to the JSON-shape-aware
-    // helper so the typed call site and the dynamic call site share
-    // one SQL builder + bind path. Lifts i64 ids to JSON values at
-    // the boundary.
-    let json_ids: Vec<JsonValue> = ids.iter().map(|i| JsonValue::Number((*i).into())).collect();
-    fetch_related_as_json_by_pk(table, "id", &json_ids, pool).await
-}
+// PK lift Pass D — `fetch_related_as_json(table, &[i64], pool)` was
+// retired here. Pass A introduced it as a thin delegate to keep the
+// typed-side select_related (then i64-bound via Vec<i64>) running
+// while the JSON-shape-aware helper landed. Pass D lifted the typed
+// hydrator to use `Vec<serde_json::Value>` directly, so the i64
+// shim has no callers — every consumer goes through
+// `fetch_related_as_json_by_pk` now.
 
 /// PK-shape-agnostic `SELECT * FROM "<table>" WHERE "<pk_col>" IN
 /// (...)` — used by the dynamic ORM's `hydrate_select_related_into`

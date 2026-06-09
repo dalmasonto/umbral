@@ -1377,17 +1377,13 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                         }
                     }
                 });
-                // PK serialised through serde_json then coerced back
-                // to i64. i64-keyed FK targets round-trip cleanly;
-                // String/UUID-keyed targets serialise to a JSON
-                // string whose `as_i64()` returns None, silently
-                // disabling `select_related` on this FK field — a
-                // v1 limitation while the related-loading machinery
-                // is still i64-shaped.
+                // PK lift Pass D: serialise the FK's PK through
+                // serde_json directly. Returns `Option<Value>` so
+                // the value carries its native shape — `Number` for
+                // i64 targets, `String` for String / UUID targets.
+                // No more i64-coerce-and-drop step.
                 fk_id_arms.push(quote! {
-                    #field_name_str => ::umbra::_serde_json::to_value(&self.#field_name.id())
-                        .ok()
-                        .and_then(|v| v.as_i64()),
+                    #field_name_str => ::umbra::_serde_json::to_value(&self.#field_name.id()).ok(),
                 });
             }
             FieldKind::NullableForeignKey(inner_ty) => {
@@ -1400,11 +1396,14 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                         }
                     }
                 });
+                // PK lift Pass D: see the non-null arm above for the
+                // shape change. Nullable FKs absent or unset return
+                // None as before; present FKs return their PK as a
+                // typed JSON value.
                 fk_id_arms.push(quote! {
                     #field_name_str => self.#field_name
                         .as_ref()
-                        .and_then(|fk| ::umbra::_serde_json::to_value(&fk.id()).ok())
-                        .and_then(|v| v.as_i64()),
+                        .and_then(|fk| ::umbra::_serde_json::to_value(&fk.id()).ok()),
                 });
             }
             _ => {}
@@ -1762,7 +1761,10 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         }
 
         impl ::umbra::orm::HydrateRelated for #struct_name {
-            fn fk_id_for(&self, field_name: &str) -> ::core::option::Option<i64> {
+            fn fk_id_for(
+                &self,
+                field_name: &str,
+            ) -> ::core::option::Option<::umbra::_serde_json::Value> {
                 match field_name {
                     #(#fk_id_arms)*
                     _ => ::core::option::Option::None,

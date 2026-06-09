@@ -35,12 +35,21 @@
 /// All umbra models already derive `Deserialize`, so this bound is always
 /// satisfied in practice.
 pub trait HydrateRelated {
-    /// Return the raw FK integer stored in the field named `field_name`,
+    /// Return the raw FK value stored in the field named `field_name`,
     /// or `None` if the field doesn't exist on this model or is not a FK.
     ///
-    /// Used by `select_related` to collect all FK IDs from the result set
-    /// before running the batch `IN (...)` lookup.
-    fn fk_id_for(&self, field_name: &str) -> Option<i64>;
+    /// Used by `select_related` to collect all FK ids from the result
+    /// set before running the batch `IN (...)` lookup.
+    ///
+    /// PK lift Pass D: returns `Option<serde_json::Value>` (was
+    /// `Option<i64>`) so FK targets keyed by `String` / `Uuid` /
+    /// composite codename flow through the typed select_related
+    /// path. The macro emits `serde_json::to_value(self.<field>.id())`
+    /// — works for any `Serialize` PK type without per-target
+    /// specialization. Integer-PK targets carry through as
+    /// `Value::Number`; the existing i64 hot path is unchanged at
+    /// the JSON layer.
+    fn fk_id_for(&self, field_name: &str) -> Option<serde_json::Value>;
 
     /// Set `ForeignKey<U>.resolved` for the field named `field_name` by
     /// deserialising `row` as the target model type.
