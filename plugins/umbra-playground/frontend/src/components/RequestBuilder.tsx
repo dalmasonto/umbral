@@ -11,6 +11,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { KeyValueEditor } from "./KeyValueEditor";
 import { MethodBadge } from "./MethodBadge";
 import { SchemaTable } from "./SchemaTable";
+import { IncludeFieldsPicker } from "./IncludeFieldsPicker";
 import {
   fieldInfosFromSchema,
   listItemSchema,
@@ -742,14 +743,58 @@ export function RequestBuilder() {
                         <div className="min-w-0 flex items-center gap-1">
                           {isChecked ? (
                             <>
-                              <Input
-                                value={existing?.value ?? ""}
-                                onChange={(e) =>
-                                  setParamValue(e.target.value)
-                                }
-                                placeholder="value"
-                                className="h-7 text-xs font-mono rounded-md flex-1 min-w-0"
-                              />
+                              {/* gaps2 #17 — `?include=` and `?fields=`
+                                  get checkbox pickers driven by the
+                                  spec instead of free-text inputs.
+                                  Everything else stays a plain
+                                  `<Input>`. */}
+                              {(p.name === "include" || p.name === "fields") &&
+                              listItem ? (
+                                <IncludeFieldsPicker
+                                  paramName={p.name as "include" | "fields"}
+                                  value={existing?.value ?? ""}
+                                  onChange={setParamValue}
+                                  listItem={listItem.schema}
+                                  spec={spec}
+                                  includeValue={
+                                    current.params.find(
+                                      (q) => q.key === "include" && q.enabled,
+                                    )?.value ?? ""
+                                  }
+                                  onIncludeChange={(next) => {
+                                    const has = current.params.some(
+                                      (q) => q.key === "include",
+                                    );
+                                    if (has) {
+                                      setParams(
+                                        current.params.map((q) =>
+                                          q.key === "include"
+                                            ? { ...q, value: next, enabled: true }
+                                            : q,
+                                        ),
+                                      );
+                                    } else {
+                                      setParams([
+                                        ...current.params,
+                                        {
+                                          key: "include",
+                                          value: next,
+                                          enabled: true,
+                                        },
+                                      ]);
+                                    }
+                                  }}
+                                />
+                              ) : (
+                                <Input
+                                  value={existing?.value ?? ""}
+                                  onChange={(e) =>
+                                    setParamValue(e.target.value)
+                                  }
+                                  placeholder="value"
+                                  className="h-7 text-xs font-mono rounded-md flex-1 min-w-0"
+                                />
+                              )}
                               <Button
                                 type="button"
                                 variant="ghost"
