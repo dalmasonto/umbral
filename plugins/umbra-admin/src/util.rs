@@ -76,17 +76,14 @@ pub(crate) fn sanitise_form_error(e: &AdminError) -> String {
             if is_unique_violation(&msg) {
                 return "A record with one of these values already exists.".to_string();
             }
-            // ORM write-validator errors (RequiredFieldMissing /
-            // BlankNotAllowed / ForeignKeyNotFound / TypeMismatch /
-            // Validator) reach us via `DynQuerySet`'s form path as
-            // `sqlx::Error::Protocol("umbra::orm::write: <message>")`
-            // — see `crates/umbra-core/src/orm/write.rs` Display impl.
-            // Strip the prefix and surface the human-readable tail
-            // (e.g. "required field `created_at` is missing or null"
-            // → "Required field `created_at` is missing or null").
-            // Without this every write-validator failure renders as
-            // the opaque "database error" placeholder, hiding the
-            // actual reason the form was rejected.
+            // Legacy path (kept as a back-compat shim): pre-gaps2 #12
+            // the dynamic form path flattened WriteError to
+            // `sqlx::Error::Protocol("umbra::orm::write: <message>")`.
+            // The new path lands in the `Write(WriteError)` arm
+            // below with the structure intact; this branch survives
+            // for any future call site that re-introduces the
+            // string-flattening shape (custom validators in
+            // third-party plugins, etc.).
             if let Some(tail) = msg.strip_prefix("umbra::orm::write: ") {
                 let mut chars = tail.chars();
                 return match chars.next() {
@@ -107,6 +104,28 @@ pub(crate) fn sanitise_form_error(e: &AdminError) -> String {
                 }
             }
             "database error".to_string()
+        }
+        // gaps2 #12: structured umbra-validator failure. Today we
+        // render the Display message directly (which gives the
+        // user a single readable line per failure). The per-field
+        // map rendering (showing each column's error under its
+        // own input) lands in part 2 of gap #12 — at that point
+        // this arm flips from returning a string to threading
+        // `field_errors()` / `non_field_errors()` into the form
+        // template context.
+        AdminError::Write(write_err) => {
+            tracing::error!(error = %write_err, "admin: form submission validator error");
+            let msg = write_err.to_string();
+            // The Display impl prefixes with `umbra::orm::write: `
+            // (see `crates/umbra-core/src/orm/write.rs` Display).
+            // Strip and capitalise to match the rendered shape the
+            // legacy sqlx::Error::Protocol path produced.
+            let tail = msg.strip_prefix("umbra::orm::write: ").unwrap_or(&msg);
+            let mut chars = tail.chars();
+            match chars.next() {
+                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+                None => "validation failed".to_string(),
+            }
         }
         AdminError::NotFound(msg) | AdminError::Render(msg) | AdminError::BadInput(msg) => {
             msg.clone()

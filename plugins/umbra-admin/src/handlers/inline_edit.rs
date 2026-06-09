@@ -168,9 +168,12 @@ pub(crate) async fn cell_edit_post(
                 .unwrap_or_else(|_| StatusCode::OK.into_response())
         }
         Err(e) => {
-            // sqlx::Error::Protocol carries WriteError messages; sanitise_form_error
-            // already special-cases AdminError::Sqlx vs the others.
-            let msg = sanitise_form_error(&AdminError::Sqlx(e));
+            // gaps2 #12: route through `AdminError::from(DynError)`
+            // so Write(WriteError) variants reach `sanitise_form_error`
+            // with the per-field structure intact. Pre-fix this site
+            // always landed on the Sqlx arm because DynError was a
+            // bare sqlx::Error alias.
+            let msg = sanitise_form_error(&AdminError::from(e));
             let err_html = format!(
                 r#"<span class="text-error text-body-sm">{}</span>"#,
                 html_escape(&msg)

@@ -400,7 +400,9 @@ pub(crate) async fn change_password_handler(
         .update_one(pw_col, &hash)
         .await
     {
-        return AdminError::Sqlx(e).into_response();
+        // gaps2 #12: `update_one` returns `DynError`; route via
+        // `From<DynError>` so the per-field WriteError survives.
+        return AdminError::from(e).into_response();
     }
     // Audit log — password change is a special-cased update we want
     // visible in the timeline. Don't log the new hash itself.

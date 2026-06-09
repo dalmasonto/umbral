@@ -40,9 +40,70 @@ use crate::migrate::{Column, ModelMeta};
 use crate::orm::SqlType;
 use crate::orm::write::{WriteError, json_to_sea_value, null_for};
 
-/// Errors a runtime-typed query can produce. Thin alias — sqlx errors
-/// drive every actual failure.
-pub type DynError = sqlx::Error;
+/// Errors a runtime-typed query can produce.
+///
+/// Carries the structured [`WriteError`] when the failure originates
+/// in the umbra write-validator (form-coercion failures, required-
+/// field misses, future per-field validation), and bare
+/// [`sqlx::Error`] otherwise — DB-driver failures, constraint
+/// violations the validator can't pre-detect, connection drops.
+///
+/// gaps2 #12: prior to this change `DynError` was a bare alias for
+/// `sqlx::Error`, so every `WriteError` that flowed through the
+/// `DynQuerySet` form path was flattened to
+/// `sqlx::Error::Protocol("umbra::orm::write: <message>")` and the
+/// per-field map (`field_errors()` / `non_field_errors()`) was lost
+/// before the admin handler could render it. The enum preserves the
+/// structure all the way to the response surface; the admin's
+/// per-field rendering work (gaps2 #12 part 2) and the `Form<T>`
+/// extractor (gaps2 #19) both consume it directly.
+///
+/// The two-arm shape composes with `?` ergonomically because both
+/// `sqlx::Error` and `WriteError` lift via `From` — handlers can
+/// keep their existing `?` chains and reach for `match` only at the
+/// boundary where the per-field map is rendered.
+#[derive(Debug)]
+pub enum DynError {
+    /// Structured umbra-validator failure (per-field errors,
+    /// validator rules, FK / unique violations the validator
+    /// pre-detected). The carried [`WriteError`] keeps its
+    /// `field_errors()` / `non_field_errors()` accessors.
+    Write(WriteError),
+    /// Bare sqlx failure (driver-level error, connection drop,
+    /// constraint violation the validator didn't catch). Surface
+    /// the message via [`sqlx::Error`]'s own `Display`.
+    Sqlx(sqlx::Error),
+}
+
+impl std::fmt::Display for DynError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Write(e) => write!(f, "{e}"),
+            Self::Sqlx(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for DynError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Write(e) => Some(e),
+            Self::Sqlx(e) => Some(e),
+        }
+    }
+}
+
+impl From<sqlx::Error> for DynError {
+    fn from(e: sqlx::Error) -> Self {
+        Self::Sqlx(e)
+    }
+}
+
+impl From<WriteError> for DynError {
+    fn from(e: WriteError) -> Self {
+        Self::Write(e)
+    }
+}
 
 /// A runtime-typed, lazy SQL query against one `ModelMeta`.
 ///
@@ -496,7 +557,13 @@ impl<'a> DynQuerySet<'a> {
         };
         let sea_value = match form_str_to_sea_value(col_meta, value) {
             Ok(v) => v,
-            Err(e) => return Err(sqlx::Error::Protocol(e.to_string())),
+            // gaps2 #12: per-field validator failure (see `update_form`).
+            Err(e) => {
+                return Err(DynError::Write(WriteError::Validator {
+                    field: col_meta.name.clone(),
+                    message: e.to_string(),
+                }));
+            }
         };
 
         let mut q = Query::update();
@@ -558,7 +625,17 @@ impl<'a> DynQuerySet<'a> {
             };
             let sea_value = match form_str_to_sea_value(col, raw) {
                 Ok(v) => v,
-                Err(e) => return Err(sqlx::Error::Protocol(e.to_string())),
+                // gaps2 #12: emit a structured per-field validator
+                // failure so the admin / Form<T> consumer can render
+                // it under the offending input. The pre-fix path
+                // flattened to `sqlx::Error::Protocol(...)` and the
+                // per-field hint was lost.
+                Err(e) => {
+                    return Err(DynError::Write(WriteError::Validator {
+                        field: col.name.clone(),
+                        message: e.to_string(),
+                    }));
+                }
             };
             q.value(Alias::new(&col.name), sea_value);
             any = true;
@@ -628,7 +705,14 @@ impl<'a> DynQuerySet<'a> {
             let raw = form.get(&col.name).map(|s| s.as_str()).unwrap_or("");
             let sea_value = match form_str_to_sea_value(col, raw) {
                 Ok(v) => v,
-                Err(e) => return Err(sqlx::Error::Protocol(e.to_string())),
+                // gaps2 #12: structured per-field validator failure
+                // (see the matching site in `update_form`).
+                Err(e) => {
+                    return Err(DynError::Write(WriteError::Validator {
+                        field: col.name.clone(),
+                        message: e.to_string(),
+                    }));
+                }
             };
             cols.push(&col.name);
             values.push(sea_value);

@@ -549,7 +549,10 @@ pub(crate) async fn delete(
             ))
             .into_response()
         }
-        Err(e) => AdminError::Sqlx(e).into_response(),
+        // gaps2 #12: `e` is `DynError` now; route through the
+        // `From<DynError>` impl so Write(WriteError) keeps its
+        // structure instead of flattening to "database error".
+        Err(e) => AdminError::from(e).into_response(),
     }
 }
 
@@ -611,6 +614,7 @@ pub(crate) async fn htmx_delete(
                 .insert("Content-Type", "text/html; charset=utf-8".parse().unwrap());
             resp
         }
-        Err(e) => AdminError::Sqlx(e).into_response(),
+        // gaps2 #12: `e` is `DynError`; route via `From<DynError>`.
+        Err(e) => AdminError::from(e).into_response(),
     }
 }

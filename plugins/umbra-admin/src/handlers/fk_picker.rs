@@ -112,7 +112,7 @@ pub(crate) async fn fk_options(
     let base = DynQuerySet::for_meta(&related_model).search(&search_cols, search);
     let total: i64 = match base.count().await {
         Ok(t) => t,
-        Err(e) => return AdminError::Sqlx(e).into_response(),
+        Err(e) => return AdminError::from(e).into_response(),
     };
 
     let rows = match DynQuerySet::for_meta(&related_model)
@@ -125,7 +125,7 @@ pub(crate) async fn fk_options(
         .await
     {
         Ok(r) => r,
-        Err(e) => return AdminError::Sqlx(e).into_response(),
+        Err(e) => return AdminError::from(e).into_response(),
     };
 
     let items: Vec<serde_json::Value> = rows
@@ -274,6 +274,6 @@ pub(crate) async fn fk_options_resolve(
                 .collect();
             Json(serde_json::json!({ "items": items })).into_response()
         }
-        Err(e) => AdminError::Sqlx(e).into_response(),
+        Err(e) => AdminError::from(e).into_response(),
     }
 }

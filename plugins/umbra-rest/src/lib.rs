@@ -992,6 +992,19 @@ impl From<sqlx::Error> for ApiError {
     }
 }
 
+impl From<umbra::orm::DynError> for ApiError {
+    fn from(e: umbra::orm::DynError) -> Self {
+        // gaps2 #12: `DynError` is now a real enum (was an alias
+        // for `sqlx::Error`). Route each variant to the right
+        // translator so the structured `WriteError` keeps its
+        // per-field map all the way to the response body.
+        match e {
+            umbra::orm::DynError::Write(w) => Self::from(w),
+            umbra::orm::DynError::Sqlx(s) => Self::from(s),
+        }
+    }
+}
+
 impl From<umbra::orm::write::WriteError> for ApiError {
     fn from(e: umbra::orm::write::WriteError) -> Self {
         use umbra::orm::write::WriteError;
