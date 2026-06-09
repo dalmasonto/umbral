@@ -90,6 +90,18 @@ fn boot() {
             "{% if user is defined and user.is_authenticated %}hi {{ user.username }}{% else %}anon{% endif %}",
         );
 
+        // gaps2 #19 follow-up — pin that `None` / `Undefined`
+        // renders as empty string, not the literal "none" /
+        // "undefined" tokens MiniJinja defaults to. Bug screenshot
+        // 2026-06-10 01-08-30: an Option<String>::None on a fresh
+        // form rendered `value="none"` in the HTML, breaking the
+        // form's repopulation flow on visit.
+        write_template(
+            &dir_b,
+            "none_renders_empty.html",
+            r#"<input value="{{ phone }}" type="tel">"#,
+        );
+
         // gaps2 #21 — `img` filter templates. One minimal, one with
         // every kwarg set, one with an alt-text that needs HTML
         // escaping. The filter output goes through `from_safe_string`
@@ -255,6 +267,54 @@ async fn explicit_ctx_user_wins_over_ambient_layer_value() {
 //   4. the wrapper `<img>` is marked safe (autoescape doesn't
 //      double-escape its angle brackets).
 // =========================================================================
+
+// =========================================================================
+// gaps2 #19 follow-up — None / Undefined formatter
+//
+// MiniJinja's default formatter renders `Value::None` as the literal
+// "none" and `Undefined` as "undefined". The framework overrides the
+// formatter so both render as empty string, which is the right
+// default for HTML form values (`value=""` vs `value="none"`) and
+// for missing context keys in general.
+// =========================================================================
+
+#[test]
+fn none_value_renders_as_empty_string_in_attribute_context() {
+    boot();
+    // Optional field set to None — pre-fix this rendered `value="none"`,
+    // which the user then had to manually clear before typing.
+    let ctx = minijinja::context! { phone => Option::<String>::None };
+    let html =
+        templates::render("none_renders_empty.html", &ctx).expect("render");
+    assert_eq!(
+        html, r#"<input value="" type="tel">"#,
+        "None should render as empty string, not the literal `none`: {html}",
+    );
+}
+
+#[test]
+fn undefined_value_renders_as_empty_string_in_attribute_context() {
+    boot();
+    // No `phone` key in the context at all — pre-fix this rendered
+    // `value="undefined"` (or crashed depending on strict-undefined).
+    let html = templates::render("none_renders_empty.html", &minijinja::context! {})
+        .expect("render");
+    assert_eq!(
+        html, r#"<input value="" type="tel">"#,
+        "Undefined should render as empty, not the literal `undefined`: {html}",
+    );
+}
+
+#[test]
+fn explicit_string_values_still_render_unchanged() {
+    boot();
+    // Make sure the formatter override didn't break the happy path:
+    // an actual `Some("555-1234")` still renders verbatim.
+    let ctx = minijinja::context! { phone => "555-1234" };
+    let html =
+        templates::render("none_renders_empty.html", &ctx).expect("render");
+    assert_eq!(html, r#"<input value="555-1234" type="tel">"#);
+}
 
 #[test]
 fn img_filter_minimal_call_emits_perf_attributes_with_empty_alt() {

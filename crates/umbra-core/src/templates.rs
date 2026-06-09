@@ -293,6 +293,26 @@ fn build_env(dirs: &[PathBuf]) -> Result<(Environment<'static>, Vec<String>), Te
     // `class="..."` flows through for Tailwind / scoped styling.
     register_img_filter(&mut env);
 
+    // gaps2 #19 follow-up — render `None` / `Undefined` as the
+    // empty string instead of the literal "none" / "undefined" tokens
+    // MiniJinja defaults to. Bug screenshot 2026-06-10 01-08-30: an
+    // `Option<String>` model field with `value=None` rendered into
+    // `<input value="{{ form.phone }}">` produced `value="none"` on a
+    // fresh form, which the user then has to manually clear before
+    // typing. Every form with optional fields hit this footgun.
+    //
+    // Defining a custom formatter is the framework-level fix — every
+    // template (admin, shop, plugins) inherits the new behaviour
+    // automatically. Non-null/non-undefined values pass through the
+    // default formatter unchanged so HTML escaping, number / bool /
+    // string rendering, and safe-string handling stay identical.
+    env.set_formatter(|out, state, value| {
+        if value.is_none() || value.is_undefined() {
+            return Ok(());
+        }
+        minijinja::escape_formatter(out, state, value)
+    });
+
     let mut seen: HashSet<String> = HashSet::new();
     let mut collisions: Vec<String> = Vec::new();
 
