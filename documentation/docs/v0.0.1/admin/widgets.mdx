@@ -1,0 +1,373 @@
+---
+title: Dashboard widgets
+description: KPI cards, line + donut + bar charts, tables, feed widgets — declared in Rust, rendered via ApexCharts, grouped into named sections.
+sidebar_position: 1
+icon: layout-dashboard
+---
+
+The admin dashboard is more than a list of tables. Cards summarise the day, charts trace trends, tables surface recent activity, donuts show distribution. Each one is a `Widget` — declared in Rust, registered against `AdminPlugin`, and rendered through ApexCharts (charts) or minijinja (cards / tables / feed).
+
+The shape is the same across every kind: pick a `WidgetKind`, declare a `default_span` (grid cells wide × rows tall), and hand a `WidgetDataFn` async closure that returns a typed payload.
+
+## A widget in 10 lines
+
+```rust
+use umbra_admin::{
+    CardPayload, Span, Widget, WidgetDataFn, WidgetKind, WidgetPayload,
+};
+
+pub fn shop_customers_card() -> Widget {
+    Widget {
+        key: "shop_customers",
+        title: "Customers".to_string(),
+        kind: WidgetKind::Card,
+        default_span: Span { cols: 3, rows: 2 },
+        permission: None,
+        default_period: None,
+        data: WidgetDataFn::new(|_user| async move {
+            let total = Customer::objects().count().await.unwrap_or(0);
+            WidgetPayload::Card(
+                CardPayload::new(umbra_admin::humanize_number(total as f64))
+                    .unit("total")
+                    .icon("users")
+                    .subtitle("All time"),
+            )
+        }),
+    }
+}
+```
+
+Then register it in the dashboard:
+
+```rust
+.plugin(
+    AdminPlugin::default()
+        .dashboard_section(
+            umbra_admin::WidgetSection::new("Overview")
+                .widget(shop_customers_card()),
+        )
+)
+```
+
+## Widget kinds
+
+| Kind | When to reach for it | Payload |
+|---|---|---|
+| `Card` | KPI tiles — sales total, order count, AOV. Icon + headline value + optional growth-vs-previous-period + sparkline trail. | [`CardPayload`](#card-) |
+| `Line` | Time series. Single series (one metric over time) or multi (overlay 2-5 metrics on the same x-axis). Period chips `[7d] [30d] [90d]` in the header. | [`LinePayload`](#line-) |
+| `Donut` | Categorical breakdown — 3-6 buckets (status mix, top regions). Center label shows the total. | [`DonutPayload`](#donut-) |
+| `Bar` | Categorical counts that exceed donut's 6-slice readability. | [`BarPayload`](#bar-) |
+| `Table` | "Recent orders / posts / comments." Three or four columns, 5-10 rows, optional "View all →" link. | [`TablePayload`](#table-) |
+| `Feed` | Chronological activity — recent signups, comments, audit log entries. Avatar + title + timestamp per item. | [`FeedPayload`](#feed-) |
+| `Kpi` | The original simple stat card. Superseded by `Card` for most cases; kept for backwards compat. | `KpiPayload` |
+
+## Span — sizing widgets on the grid
+
+The dashboard is a 12-column grid; rows auto-size to 120px each. `Span { cols, rows }` says how many cells a widget occupies.
+
+```rust
+default_span: Span { cols: 3, rows: 2 },   // 1/4 width, 240px tall — standard card
+default_span: Span { cols: 8, rows: 3 },   // 2/3 width, 360px tall — line chart
+default_span: Span { cols: 12, rows: 4 },  // full width, 480px tall — big table
+```
+
+A user override (via `Widget::with_span(cols, rows)`) wins over `default_span` at registration time:
+
+```rust
+umbra_admin::builtin_total_models_widget().with_span(8, 2)
+```
+
+## Sections — grouping widgets
+
+`WidgetSection` is a named group with a title + optional subtitle + its own widget grid:
+
+```rust
+.dashboard_section(
+    WidgetSection::new("Sales overview")
+        .subtitle("Daily KPIs across the storefront")
+        .widget(shop_total_sales_widget())
+        .widget(shop_orders_widget())
+        .widget(shop_customers_widget())
+        .widget(shop_avg_order_value_widget()),
+)
+.dashboard_section(
+    WidgetSection::new("Trends")
+        .subtitle("Daily sales + activity + status mix")
+        .widget(shop_daily_sales_chart())
+        .widget(shop_activity_chart())
+        .widget(shop_order_status_donut()),
+)
+```
+
+Sections render top-to-bottom in registration order with a heading band between each. Past ~3 widgets per section, sections beat a single mega-grid for visual scanability.
+
+## Card
+
+The everyday KPI tile — icon top-left, optional growth-vs-prior pill top-right, label, big humanized value, subtitle, optional sparkline trail.
+
+```rust
+data: WidgetDataFn::new(|_user| async move {
+    let now = chrono::Utc::now();
+    let month_ago = now - chrono::Duration::days(30);
+    let two_months_ago = now - chrono::Duration::days(60);
+
+    let current  = sales_between(month_ago, now).await;
+    let previous = sales_between(two_months_ago, month_ago).await;
+    let trail    = daily_sales_trail(30).await;
+
+    WidgetPayload::Card(
+        CardPayload::new(umbra_admin::humanize_number(current))
+            .unit("USD")
+            .icon("dollar-sign")             // lucide icon name
+            .subtitle("Last 30 days")
+            .growth(current, previous)       // computes delta_percent
+            .delta_label("vs prior 30d".to_string())
+            .sparkline(trail),               // Vec<f64> drawn as area chart
+    )
+}),
+```
+
+`humanize_number(12_438.0) → "12.4K"` — gives the headline value room when the column gets narrow. Use `format_thousands(12438.0) → "12,438"` for tiles where the precise figure matters (AOV, invoice totals).
+
+The sparkline goes through ApexCharts (NOT hand-rolled SVG) — pass any `Vec<f64>` of length ≥ 2 and the renderer mounts a smoothed area chart in the card's trail area. `Span { cols: 3, rows: 2 }` gives it 240px to fit icon row + body + 48px trail without clipping.
+
+## Line
+
+Two flavours: single-series (one metric over time, gradient area fill) and multi-series (2-5 metrics overlaid, solid colors). The same `LinePayload` shape covers both — the renderer picks the style based on how many series the payload carries.
+
+```rust
+data: WidgetDataFn::with_params(|_user, params| async move {
+    let days = params.period_days().unwrap_or(30);
+    let now  = chrono::Utc::now();
+    let trail = daily_sales_trail(days).await;
+    let points: Vec<ChartPoint> = trail
+        .into_iter()
+        .enumerate()
+        .map(|(i, y)| {
+            let back = (days - 1 - i as i64).max(0);
+            let day  = now - chrono::Duration::days(back);
+            ChartPoint { x: day.format("%b %-d").to_string(), y }
+        })
+        .collect();
+    WidgetPayload::Line(LinePayload {
+        series: vec![Series { name: "USD".to_string(), points }],
+        x_type: "date".to_string(),
+    })
+}),
+```
+
+Multi-series — pass two or more `Series` and the renderer drops the heavy gradient fill so overlaid lines stay readable, and surfaces a legend strip in the header:
+
+```rust
+WidgetPayload::Line(LinePayload {
+    series: vec![
+        Series { name: "Orders".into(),         points: orders_points },
+        Series { name: "Items sold".into(),     points: items_points },
+        Series { name: "New customers".into(),  points: customers_points },
+    ],
+    x_type: "date".to_string(),
+})
+```
+
+The default palette is primary + emerald + blue + amber + pink + violet + cyan — explicit accents, readable in both light and dark themes.
+
+### Period chips
+
+Line widgets carry a `[7d] [30d] [90d]` chip strip in the header. Clicking re-fetches the widget data with `?period=X`. The data closure reads via `params.period_days()`:
+
+```rust
+data: WidgetDataFn::with_params(|_user, params| async move {
+    let days = params.period_days().unwrap_or(30);   // "7d" → 7
+    ...
+}),
+```
+
+Pre-select the active chip on first load via `.with_default_period("7d")`:
+
+```rust
+.widget(shop_daily_sales_chart().with_default_period("7d"))
+```
+
+When the URL has no `?period=`, the handler stamps `params.period = Some("7d")` before calling the data fn — so the template renders the matching chip highlighted AND the data closure sees the same period. One source of truth: the URL.
+
+## Donut
+
+Categorical breakdown summing to 100%. Best for 3-6 slices; past that, switch to `Bar`.
+
+```rust
+data: WidgetDataFn::new(|_user| async move {
+    let orders = Order::objects().fetch().await.unwrap_or_default();
+    let mut counts: HashMap<String, f64> = HashMap::new();
+    for o in &orders {
+        *counts.entry(format!("{:?}", o.status).to_lowercase())
+            .or_insert(0.0) += 1.0;
+    }
+    // Canonical lifecycle order — donut reads as a flow,
+    // not random alphabetical buckets.
+    let order = ["pending", "paid", "shipped", "delivered", "cancelled"];
+    let mut pairs: Vec<(String, f64)> = Vec::new();
+    for k in order {
+        if let Some(v) = counts.remove(k) { pairs.push((k.to_string(), v)); }
+    }
+    WidgetPayload::Donut(DonutPayload::from_pairs(pairs))
+}),
+```
+
+`DonutPayload::from_pairs([(label, value), ...])` is the short constructor. For explicit colors per slice, build `DonutSlice { label, value, color: Some("#34d399") }` and pass to `DonutPayload::new(slices)`.
+
+The chart center shows the total automatically. Legend renders to the right (or below on narrow viewports).
+
+## Bar
+
+Same `Series` shape as Line, rendered as vertical bars. Use for low-cardinality categorical counts that exceed donut's 6-slice readability.
+
+```rust
+WidgetPayload::Bar(BarPayload {
+    series: vec![Series {
+        name: "Models".into(),
+        points: counts.into_iter()
+            .map(|(plugin, n)| ChartPoint { x: plugin, y: n as f64 })
+            .collect(),
+    }],
+    x_type: "category".to_string(),
+})
+```
+
+## Table
+
+Three to four columns, 5-10 rows, optional "View all →" link in the header.
+
+```rust
+data: WidgetDataFn::new(|_user| async move {
+    let columns = vec![
+        TableColumn { key: "number".into(),      label: "Order".into() },
+        TableColumn { key: "status".into(),      label: "Status".into() },
+        TableColumn { key: "grand_total".into(), label: "Total".into() },
+    ];
+    let rows: Vec<serde_json::Value> = Order::objects()
+        .order_by(order::PLACED_AT.desc())
+        .limit(5)
+        .fetch().await.unwrap_or_default()
+        .into_iter()
+        .map(|o| serde_json::json!({
+            "number":      o.number,
+            "status":      format!("{:?}", o.status).to_lowercase(),
+            "grand_total": format!("${}", o.grand_total),
+        }))
+        .collect();
+    WidgetPayload::Table(
+        TablePayload::new(columns, rows)
+            .view_all_for::<Order>(),       // ← auto-resolves to /admin/order/
+    )
+}),
+```
+
+The `view_all_for::<T>()` helper takes any `T: Model` and resolves to the admin changelist URL for that table (`/admin/<table>/`). No string-typing, rename-safe — a `#[umbra(table = "...")]` change to the model propagates without chasing strings in the widget code.
+
+The first column gets `<th scope="row">` treatment: `text-on-surface`, `font-medium`, no-wrap. The rest are softer (`text-on-surface-variant`) and tabular-nums for number alignment.
+
+## Feed
+
+Chronological activity stream — avatar + title + timestamp.
+
+```rust
+WidgetPayload::Feed(FeedPayload {
+    items: AuthUser::objects()
+        .order_by(auth_user::DATE_JOINED.desc())
+        .limit(5)
+        .fetch().await.unwrap_or_default()
+        .into_iter()
+        .map(|u| FeedItem {
+            title: u.username.clone(),
+            subtitle: u.email,
+            timestamp: u.date_joined.to_rfc3339(),
+            icon: Some("user-plus".into()),
+        })
+        .collect(),
+    view_all_url: Some("/admin/auth_user/".into()),
+})
+```
+
+Timestamps render through the `naturaltime` filter ("2 hours ago") with the absolute date in a hover tooltip.
+
+## WidgetDataFn — closure shapes
+
+Two constructors:
+
+```rust
+// Per-request params dropped — use for widgets that always render
+// the same shape (count tiles, registry-size cards, etc.)
+WidgetDataFn::new(|user| async move {
+    ...
+})
+
+// Per-request params passed in — use for widgets that read query
+// state like period chips, status filters, etc.
+WidgetDataFn::with_params(|user, params| async move {
+    let days = params.period_days().unwrap_or(30);
+    ...
+})
+```
+
+`WidgetParams` carries `period: Option<String>`, `start: Option<String>`, `end: Option<String>`, plus a catch-all `raw: HashMap<String, String>` for widget-specific query params.
+
+## Built-ins
+
+Two builtins ship with `umbra-admin`:
+
+- `umbra_admin::builtin_total_models_widget()` — bar chart of model counts grouped by plugin.
+- `umbra_admin::builtin_recent_users_widget()` — feed of the 5 most-recent signups.
+
+Both are regular `Widget` values you opt into via `.widget(...)` on a section — register them where you want, override `with_span(cols, rows)` if you want a non-default size, and skip them if your dashboard doesn't need them.
+
+```rust
+.dashboard_section(
+    WidgetSection::new("System")
+        .subtitle("Framework-wide health")
+        .widget(umbra_admin::builtin_total_models_widget().with_span(8, 2))
+        .widget(umbra_admin::builtin_recent_users_widget().with_span(4, 2)),
+)
+```
+
+## Model cards section
+
+Below the widget sections, the dashboard renders one card per registered model — quick access to every CRUD table. Configure via:
+
+```rust
+AdminPlugin::default()
+    .dashboard_models_title("Data")
+    .dashboard_models_subtitle("Jump straight to a managed table")
+    .dashboard_models_only(&umbra::models![     // ← type-safe table list
+        ecommerce::models::Product,
+        ecommerce::models::Order,
+        ecommerce::models::Customer,
+        content::models::Post,
+    ])
+```
+
+`umbra::models![T, U, V]` expands to `[T::TABLE, U::TABLE, V::TABLE]` — rename-safe (a `#[umbra(table = "...")]` change propagates) and type-checked at compile time.
+
+Three modes:
+
+- `.dashboard_models_only(&[...])` — show exactly these tables
+- `.dashboard_models_hidden()` — hide the section entirely
+- (default) — show every registered model card
+
+## How it wires together
+
+The runtime contract:
+
+1. `AdminPlugin::dashboard_section(...)` collects `WidgetSection` values during App build.
+2. The dashboard handler (`GET /admin/`) renders the section frame for each section + a placeholder skeleton per widget.
+3. Each skeleton kicks off an HTMX `hx-get="/admin/api/dashboard/widgets/<key>/data"` request.
+4. The widget-data handler calls the widget's `data: WidgetDataFn`, which returns a `WidgetPayload`.
+5. The handler renders the per-kind macro (`card.html` / `line.html` / `donut.html` / etc.) and HTMX swaps it into the placeholder.
+6. ApexCharts mounts on `[data-umbra-chart="<kind>"]` divs that the macros emit.
+
+The skeleton-first shape means the dashboard paints fast — every widget loads in parallel after the initial HTML lands.
+
+## Related
+
+- [Plugin trait](/v0.0.1/plugins/the-plugin-trait) — `AdminPlugin` IS a plugin; widgets are how it exposes a customisation surface
+- [Admin plugin](/v0.0.1/plugins/admin) — the broader admin features (CRUD, filters, search, permissions)
+- [user in templates](/v0.0.1/auth/user-in-templates) — widget headers can branch on `user.is_staff` for staff-only widgets

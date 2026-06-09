@@ -1,0 +1,153 @@
+---
+title: user in templates
+description: Inject the current user into every HTML template's context — `is_authenticated`, `is_staff`, and the full serialized AuthUser — via one builder method on AuthPlugin.
+sidebar_position: 3
+icon: user-check
+---
+
+Django's templates have `{% if user.is_authenticated %}` and `{% if user.is_staff %}` because Django's `auth` middleware injects `request.user` into every template context for free. Umbra ships the same shape — opt-in, one builder call.
+
+## The one-line opt-in
+
+```rust
+.plugin(
+    AuthPlugin::<AuthUser>::default()
+        .with_default_routes()
+        .with_user_in_templates()   // ← here
+)
+```
+
+That's it. Every `umbra::templates::render(...)` call in your app — including handler templates, plugin templates, error pages — now sees a `user` global in its render context. Anonymous requests get the sentinel; authenticated requests get the full row.
+
+## What `user` looks like in your template
+
+**Anonymous request** (no session cookie / expired session / `user_id IS NULL` on the session row):
+
+```jinja
+{% if user.is_authenticated %}
+  ...
+{% else %}
+  <a href="/login/">Sign in</a>     {# ← this branch fires #}
+{% endif %}
+```
+
+`user` is `{ "is_authenticated": false }` — that single key is the only shape an anonymous user carries.
+
+**Authenticated request** — `user` is the full serialized `AuthUser` (every field on the model) plus `"is_authenticated": true`:
+
+```jinja
+{% if user.is_authenticated %}
+  <span>Hi, {{ user.username }}</span>
+  {% if user.is_staff %}
+    <a href="/admin/">Admin</a>     {# ← gates the staff link #}
+  {% endif %}
+  {% if user.is_superuser %}
+    <a href="/internal/">Internal tools</a>
+  {% endif %}
+{% endif %}
+```
+
+Every column on `AuthUser` is accessible: `user.email`, `user.date_joined`, `user.last_login`, and so on. A custom `UserModel` (the `AuthPlugin::<MyUser>` form) needs its own template wiring; see [Custom user models](#custom-user-models) below.
+
+## Why opt-in
+
+Each request that touches a template pays one DB read (cookie → session → user row). A REST-only service has no templates and nothing to gain — leaving the middleware off keeps the per-request cost where it belongs. HTML-heavy apps turn it on once at boot and forget about it.
+
+## What's happening under the hood
+
+`.with_user_in_templates()` flips a flag on the plugin. At build time, `AuthPlugin::wrap_router` (a [`Plugin::wrap_router`](/v0.0.1/plugins/the-plugin-trait) override) wraps the whole merged router in `axum::middleware::from_fn(user_context_layer)`:
+
+```text
+Request → [user_context_layer]
+            ↓
+          current_user(&headers).await
+            ↓
+          serialize(user) merged with {is_authenticated: true}
+            ↓
+          umbra::templates::with_current_user(value, next.run(req)).await
+            ↓
+          [handler] → umbra::templates::render(...) → sees `user` in ctx
+```
+
+The middleware lives at `plugins/umbra-auth/src/session_user.rs:263`. It uses a tokio task-local (`CURRENT_USER`) scoped for the duration of the request so the rendered context is per-request, not global.
+
+<Callout type="warning">
+  Without `.with_user_in_templates()`, `user` is **undefined** in every template — minijinja's strict mode treats undefined access as a 500. Templates that reach into `user.is_staff` will crash with `"undefined value"`. Either opt in or skip the reference.
+</Callout>
+
+## Common patterns
+
+### Hide a link behind a staff check
+
+```jinja
+{% if user.is_staff %}
+  <a href="/admin/">Admin</a>
+{% endif %}
+```
+
+### Show a different greeting based on auth state
+
+```jinja
+{% if user.is_authenticated %}
+  Welcome back, {{ user.username }}.
+{% else %}
+  <a href="/login/">Sign in</a> to track your orders.
+{% endif %}
+```
+
+### Branch on any AuthUser column
+
+```jinja
+{% if user.is_authenticated and user.is_superuser %}
+  <div class="banner banner-warning">
+    You're signed in as a superuser. Anything you do here is logged.
+  </div>
+{% endif %}
+```
+
+### Use a custom display name from your own table
+
+The serialized shape carries every column on `AuthUser`. If you've added a `display_name` column via a custom user model, it's available the same way:
+
+```jinja
+<span>{{ user.display_name or user.username }}</span>
+```
+
+## Custom user models
+
+The default wiring is `AuthPlugin::<AuthUser>::default().with_user_in_templates()`. The middleware is hard-bound to `AuthUser` because the serialization step uses its concrete `Serialize` impl. Apps using a custom `UserModel` build their own middleware against the building blocks:
+
+- `umbra_sessions::current_session(&headers)` → `Option<SessionRow>`
+- `current_session.user_id` → your custom user's PK
+- Your own `MyUser::objects().filter(...).first().await`
+- `umbra::templates::with_current_user(my_user_value, next).await` to push it into the per-request task-local
+
+See the source of `user_context_layer` in `plugins/umbra-auth/src/session_user.rs` for a 30-line reference impl.
+
+## When to use this vs. extractors
+
+For handler-level user access, extractors are still the right shape:
+
+```rust
+async fn dashboard(user: LoggedIn<AuthUser>) -> Result<Html<String>, ...> {
+    let body = render("dashboard.html", &context!(username))
+        .map_err(internal_error)?;
+    Ok(Html(body))
+}
+```
+
+The extractor and the template global serve different purposes:
+
+| Use case | Tool |
+|---|---|
+| Handler logic needs the user (DB queries, branching) | `LoggedIn<AuthUser>` / `OptionalUser` extractors |
+| Template needs to render conditionally based on user | `.with_user_in_templates()` global |
+| Both | Both — they don't conflict. The extractor reads the user fresh from the session per-handler; the global is populated by the middleware that runs before any handler |
+
+Pages that include partials (the navbar in a wrapper, a sidebar everyone sees) are why the template global exists — every handler shouldn't have to thread `user` into every template's context for the wrapper to render correctly.
+
+## Related
+
+- [Login, logout, request.user](/v0.0.1/auth/login-and-request-user) — extractors for handler-level user access
+- [Users and passwords](/v0.0.1/auth/users-and-passwords) — the `AuthUser` model + password hashing
+- [Plugin trait](/v0.0.1/plugins/the-plugin-trait) — what `wrap_router` is and how middleware is contributed

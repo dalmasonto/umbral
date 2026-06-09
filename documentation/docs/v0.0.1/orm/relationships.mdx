@@ -259,6 +259,8 @@ Naming is `<child_snake>()`, with `<child_snake>_via_<field>()` disambiguating w
 
 This is the right shape for `request.user.profile.avatar`-style templating across crates: one method call, one `LIMIT 1` query, no need for the user to know the back-link convention.
 
+To reach the same shape from inside a template (`{{ user.profile.avatar }}`), turn on [user in templates](/v0.0.1/auth/user-in-templates) — `AuthPlugin::with_user_in_templates()` mounts a middleware that injects the AuthUser into every render context. The cross-crate accessor then composes naturally: the handler resolves `user.profile()`, stuffs it into the render context, and the template walks the relation.
+
 ### Unique-constraint violations in the admin
 
 Trying to create a second `Profile` for a user who already has one trips the UNIQUE constraint. The admin surfaces this as **"A record with this `user` already exists."** rather than a generic "database error" — the column name comes from the parser in `umbra-admin/src/util.rs::parse_unique_violation_column`, which handles both SQLite (`UNIQUE constraint failed: profile.user`) and Postgres (`Key (user)=(7) already exists.`) message formats.
