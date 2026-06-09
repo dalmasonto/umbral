@@ -2981,6 +2981,7 @@ name = "umbra"
 version = "0.0.1"
 dependencies = [
  "minijinja",
+ "serde",
  "serde_json",
  "sqlx",
  "umbra-core",

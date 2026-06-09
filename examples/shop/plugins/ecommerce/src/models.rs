@@ -186,7 +186,10 @@ pub struct Customer {
     #[umbra(default = "false")]
     pub accepts_marketing: bool,
     pub loyalty_points: i32,
+    #[umbra(auto_now_add)]
     pub created_at: DateTime<Utc>,
+    #[umbra(auto_now)]
+    pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
@@ -228,7 +231,9 @@ pub struct Order {
     pub billing_address: Option<ForeignKey<Address>>,
     pub notes: Option<String>,
     pub invoice: Option<String>,
+    #[umbra(auto_now_add)]
     pub placed_at: DateTime<Utc>,
+    #[umbra(auto_now)]
     pub updated_at: DateTime<Utc>,
 }
 
