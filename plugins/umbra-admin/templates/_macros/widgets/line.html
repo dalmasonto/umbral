@@ -53,22 +53,27 @@
   </div>
 
   {% if payload.series and payload.series | length > 0 %}
-    {%- set series = payload.series[0] -%}
-    {%- set points = series.points -%}
-    {%- set n = points | length -%}
-    {% if n > 1 %}
+    {%- set first_points = payload.series[0].points -%}
+    {% if first_points | length > 1 %}
+    {# Multi-series capable — emits one `[data-chart-point][data-series]`
+       sibling per (series, point) pair. The JS side groups them by
+       `data-series` so the chart renders N overlaid lines sharing
+       the same x-axis. Single-series widgets still work — they
+       just emit one series's worth of points. #}
     <div
       class="flex-1 min-h-0 relative"
       data-umbra-chart="line"
-      data-chart-series="{{ series.name }}"
     >
-      {% for pt in points %}
+      {% for s in payload.series %}
+      {% for pt in s.points %}
       <span
         data-chart-point
+        data-series="{{ s.name }}"
         data-x="{{ pt.x }}"
         data-y="{{ pt.y }}"
         hidden
       ></span>
+      {% endfor %}
       {% endfor %}
       <div data-chart-canvas class="absolute inset-0"></div>
       <div data-chart-unavailable class="absolute inset-0 hidden flex flex-col">

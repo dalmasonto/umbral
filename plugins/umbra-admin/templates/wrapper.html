@@ -835,20 +835,47 @@
 
     // Full-size line/area chart for dashboard widgets — like the
     // sparkline but with axes, grid, and tooltip x-labels.
-    // Reads (x, y) pairs from `[data-chart-point][data-x][data-y]`
-    // siblings; ApexCharts mounts on `[data-chart-canvas]`.
+    // Reads (x, y) pairs from `[data-chart-point][data-series][data-x][data-y]`
+    // siblings; ApexCharts mounts on `[data-chart-canvas]`. Points
+    // without `data-series` default to a single unnamed series, so
+    // single-series widgets stay backwards compatible.
     function lineChartOptions(el) {
       var labels = [];
-      var values = [];
+      var labelsSeen = Object.create(null);
+      // Preserve insertion order of series so colors/legend match
+      // the order the macro emitted them.
+      var seriesOrder = [];
+      var seriesMap = Object.create(null);
       el.querySelectorAll('[data-chart-point]').forEach(function(point) {
-        labels.push(point.getAttribute('data-x') || '');
-        var v = Number(point.getAttribute('data-y') || 0);
-        values.push(Number.isFinite(v) ? v : 0);
+        var name = point.getAttribute('data-series') || 'series';
+        var x = point.getAttribute('data-x') || '';
+        var y = Number(point.getAttribute('data-y') || 0);
+        var yClean = Number.isFinite(y) ? y : 0;
+        if (!seriesMap[name]) {
+          seriesMap[name] = [];
+          seriesOrder.push(name);
+        }
+        seriesMap[name].push(yClean);
+        // X labels — first series's x values define the axis;
+        // subsequent series share them in order.
+        if (!labelsSeen[x]) {
+          labelsSeen[x] = true;
+          labels.push(x);
+        }
       });
-      if (values.length === 0) return null;
+      if (seriesOrder.length === 0) return null;
+      var series = seriesOrder.map(function(name) {
+        return { name: name, data: seriesMap[name] };
+      });
       var primary = token('--primary', 'rgb(99 102 241)');
       var muted   = token('--outline', 'rgb(148 163 184)');
       var grid    = token('--outline-variant', 'rgb(51 65 85)');
+      // Default palette for multi-series — emerald / blue / amber /
+      // pink. Theme-stable accents (the framework only has
+      // `--primary` semantically; everything else uses Tailwind
+      // colors directly so it stays readable in light + dark).
+      var palette = [primary, '#34d399', '#60a5fa', '#fbbf24', '#f472b6'];
+      var isSingleSeries = series.length === 1;
       return {
         chart: {
           type: 'area',
@@ -867,22 +894,36 @@
             dynamicAnimation: { enabled: true, speed: 220 },
           },
         },
-        series: [{
-          name: el.getAttribute('data-chart-series') || 'series',
-          data: values,
-        }],
-        colors: [primary],
+        series: series,
+        colors: palette,
+        // Single-series stays as the gradient area we had before;
+        // multi-series drops the heavy fill so the lines don't
+        // overlap into mud (ApexCharts area mode with multi-series
+        // stacks fills by default — not what dashboard widgets
+        // want; we want overlaid trends).
         stroke: { curve: 'smooth', width: 2 },
-        fill: {
-          type: 'gradient',
-          gradient: {
-            shadeIntensity: 1,
-            opacityFrom: 0.30,
-            opacityTo: 0,
-            stops: [0, 100],
-          },
-        },
+        fill: isSingleSeries
+          ? {
+              type: 'gradient',
+              gradient: {
+                shadeIntensity: 1,
+                opacityFrom: 0.30,
+                opacityTo: 0,
+                stops: [0, 100],
+              },
+            }
+          : { type: 'solid', opacity: 0.06 },
         dataLabels: { enabled: false },
+        // Multi-series gets a legend strip; single-series doesn't
+        // need it (the widget title IS the series name).
+        legend: {
+          show: !isSingleSeries,
+          position: 'top',
+          horizontalAlign: 'right',
+          labels: { colors: muted },
+          markers: { width: 8, height: 8, radius: 4 },
+          itemMargin: { horizontal: 8 },
+        },
         grid: {
           borderColor: grid,
           strokeDashArray: 3,
