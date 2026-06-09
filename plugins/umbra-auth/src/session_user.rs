@@ -299,15 +299,23 @@ async fn serialize_authenticated_with_relations(user: &AuthUser) -> umbra::templ
     // hops, with `(table, pk)` cycle detection so
     // `user.customer.user.customer...` terminates.
     //
+    // PK lift Pass C: the visited set keys on `(table_name,
+    // pk_json_key(value))` so non-i64 user PKs (UUID-keyed
+    // AuthUser variants, codename-keyed permissions, etc.) ride
+    // through the same cycle detector. The pre-fix shape was
+    // `HashSet<(String, i64)>` which silently coerced everything
+    // to i64 and broke for any UserModel impl with a non-i64 PK.
+    //
     // The auth_user table must exist in the registry (AuthPlugin
     // registers it during App::build); if for some reason it's
     // missing we silently fall back to the un-expanded user JSON
     // rather than failing the request.
     let registered = umbra::migrate::registered_models();
     if let Some(meta) = registered.iter().find(|m| m.table == "auth_user") {
-        let mut visited: std::collections::HashSet<(String, i64)> =
+        let mut visited: std::collections::HashSet<(String, String)> =
             std::collections::HashSet::new();
-        visited.insert(("auth_user".to_string(), user.id));
+        let seed_pk = serde_json::Value::Number(user.id.into());
+        visited.insert(("auth_user".to_string(), pk_json_key(&seed_pk)));
         expand_relations(
             meta,
             &registered,
@@ -346,29 +354,39 @@ fn expand_relations<'a>(
     registered: &'a [umbra::migrate::ModelMeta],
     row: &'a mut serde_json::Map<String, serde_json::Value>,
     depth: usize,
-    visited: &'a mut std::collections::HashSet<(String, i64)>,
+    visited: &'a mut std::collections::HashSet<(String, String)>,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
     Box::pin(async move {
         if depth == 0 {
             return;
         }
 
-        // -- Forward FKs: replace integer ids with the full target
-        // row. Mirrors the dynamic `select_related_dyn` semantics
-        // (gap2 #15) but driven by the registry walk here so the
-        // user middleware doesn't need to know which columns to
-        // expand ahead of time.
-        let forward_fks: Vec<(String, String, i64)> = meta
+        // -- Forward FKs: replace integer / string / UUID ids with
+        // the full target row. Mirrors the dynamic
+        // `select_related_dyn` semantics (gap2 #15) but driven by
+        // the registry walk here so the user middleware doesn't
+        // need to know which columns to expand ahead of time.
+        //
+        // PK lift Pass C: read the FK value as `serde_json::Value`
+        // (not i64) so non-integer-PK targets (codename-keyed
+        // permissions, UUID-keyed custom user models, etc.) flow
+        // through. The cycle key uses `pk_json_key` so a numeric
+        // 42 and a string "42" stay in different buckets.
+        let forward_fks: Vec<(String, String, serde_json::Value)> = meta
             .fields
             .iter()
             .filter_map(|col| {
                 let target_table = col.fk_target.as_deref()?;
-                let fk_id = row.get(&col.name)?.as_i64()?;
-                Some((col.name.clone(), target_table.to_string(), fk_id))
+                let fk_val = row.get(&col.name)?.clone();
+                if fk_val.is_null() {
+                    return None;
+                }
+                Some((col.name.clone(), target_table.to_string(), fk_val))
             })
             .collect();
-        for (col_name, target_table, fk_id) in forward_fks {
-            if visited.contains(&(target_table.clone(), fk_id)) {
+        for (col_name, target_table, fk_val) in forward_fks {
+            let visit_key = (target_table.clone(), pk_json_key(&fk_val));
+            if visited.contains(&visit_key) {
                 continue;
             }
             let Some(target_meta) = registered.iter().find(|m| m.table == target_table) else {
@@ -378,13 +396,13 @@ fn expand_relations<'a>(
                 continue;
             };
             let fetched = umbra::orm::DynQuerySet::for_meta(target_meta)
-                .filter_eq_string(&target_pk.name, &fk_id.to_string())
+                .filter_eq_string(&target_pk.name, &json_value_to_pk_string(&fk_val))
                 .first_as_json()
                 .await;
             let Ok(Some(mut target_row)) = fetched else {
                 continue;
             };
-            visited.insert((target_table.clone(), fk_id));
+            visited.insert(visit_key);
             expand_relations(target_meta, registered, &mut target_row, depth - 1, visited).await;
             row.insert(col_name, serde_json::Value::Object(target_row));
         }
@@ -396,8 +414,10 @@ fn expand_relations<'a>(
         let Some(parent_pk_col) = meta.pk_column() else {
             return;
         };
-        let Some(parent_pk) = row.get(&parent_pk_col.name).and_then(|v| v.as_i64()) else {
-            return;
+        // PK lift Pass C: parent PK as `serde_json::Value`, not i64.
+        let parent_pk = match row.get(&parent_pk_col.name).cloned() {
+            Some(v) if !v.is_null() => v,
+            _ => return,
         };
         let candidates: Vec<(&umbra::migrate::ModelMeta, String)> = registered
             .iter()
@@ -426,7 +446,7 @@ fn expand_relations<'a>(
                 continue;
             }
             let fetched = umbra::orm::DynQuerySet::for_meta(child_meta)
-                .filter_eq_string(&fk_col_name, &parent_pk.to_string())
+                .filter_eq_string(&fk_col_name, &json_value_to_pk_string(&parent_pk))
                 .first_as_json()
                 .await;
             let Ok(Some(mut child_row)) = fetched else {
@@ -435,13 +455,18 @@ fn expand_relations<'a>(
             let Some(child_pk_col) = child_meta.pk_column() else {
                 continue;
             };
-            let Some(child_pk) = child_row.get(&child_pk_col.name).and_then(|v| v.as_i64()) else {
+            // PK lift Pass C: child PK as `serde_json::Value`.
+            let Some(child_pk) = child_row.get(&child_pk_col.name).cloned() else {
                 continue;
             };
-            if visited.contains(&(child_meta.table.clone(), child_pk)) {
+            if child_pk.is_null() {
                 continue;
             }
-            visited.insert((child_meta.table.clone(), child_pk));
+            let visit_key = (child_meta.table.clone(), pk_json_key(&child_pk));
+            if visited.contains(&visit_key) {
+                continue;
+            }
+            visited.insert(visit_key);
             expand_relations(child_meta, registered, &mut child_row, depth - 1, visited).await;
             row.insert(
                 child_meta.table.clone(),
@@ -449,6 +474,33 @@ fn expand_relations<'a>(
             );
         }
     })
+}
+
+/// PK lift Pass C: stable cycle-key for the `visited` HashSet in
+/// [`expand_relations`]. `serde_json::Value` isn't `Hash`, so we
+/// flatten to a namespaced `String` per shape. Mirrors the
+/// `pk_json_key` helper in `umbra-core::orm::dynamic` — kept local
+/// here to avoid widening `umbra-core`'s pub surface for one tiny
+/// helper. If a third call site needs the same namespacing, the
+/// two should converge into one canonical pub fn in the facade.
+fn pk_json_key(v: &serde_json::Value) -> String {
+    match v {
+        serde_json::Value::Number(n) => format!("n:{n}"),
+        serde_json::Value::String(s) => format!("s:{s}"),
+        other => format!("o:{other}"),
+    }
+}
+
+/// Render a PK JSON value as the string `DynQuerySet::filter_eq_string`
+/// expects to bind against. `filter_eq_string` already coerces per the
+/// column's `SqlType` so the right operand type lands on the wire —
+/// we just need to hand it the value's `Display` form.
+fn json_value_to_pk_string(v: &serde_json::Value) -> String {
+    match v {
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::String(s) => s.clone(),
+        other => other.to_string(),
+    }
 }
 
 fn anonymous_user_value() -> umbra::templates::Value {
