@@ -128,16 +128,29 @@ pub(crate) async fn fk_options(
         Err(e) => return AdminError::from(e).into_response(),
     };
 
+    // PK lift Pass B: render the PK in whatever shape it lives in
+    // the DB. Pre-fix, `let value: i64 = raw_pk.parse().unwrap_or(0)`
+    // silently rewrote every non-integer PK to 0 — so a String-PK
+    // model (e.g. `permissions_permission` keyed by codename) ended
+    // up with every row sharing `value: 0` and the picker becoming
+    // unusable. The JSON payload now emits the raw value (Number for
+    // integer PKs, String for codename / slug / UUID); the HTML
+    // template renders it via `Display`.
+    let pk_col_type = related_model
+        .fields
+        .iter()
+        .find(|c| c.name == pk_col_name)
+        .map(|c| c.ty);
     let items: Vec<serde_json::Value> = rows
         .iter()
         .map(|r| {
             let raw_pk = r.get(&pk_col_name).cloned().unwrap_or_default();
-            let value: i64 = raw_pk.parse().unwrap_or(0);
+            let value_json = pk_string_to_json(&raw_pk, pk_col_type);
             let label: String = r
                 .get(&label_col_owned)
                 .cloned()
-                .unwrap_or_else(|| format!("#{value}"));
-            serde_json::json!({ "value": value, "label": label })
+                .unwrap_or_else(|| format!("#{raw_pk}"));
+            serde_json::json!({ "value": value_json, "label": label })
         })
         .collect();
 
@@ -147,11 +160,19 @@ pub(crate) async fn fk_options(
         let mut html = String::new();
         html.push_str(r#"<div class="py-xs">"#);
         for item in &items {
-            let value = item["value"].as_i64().unwrap_or(0);
+            // `value` may be a Number or a String (PK lift Pass B).
+            // `data-fk-value` is a string attribute either way, so
+            // render via Display on the underlying JSON value.
+            let value_display = match &item["value"] {
+                serde_json::Value::Number(n) => n.to_string(),
+                serde_json::Value::String(s) => s.clone(),
+                other => other.to_string(),
+            };
             let label = item["label"].as_str().unwrap_or("");
+            let escaped_value = html_escape(&value_display);
             let escaped_label = html_escape(label);
             html.push_str(&format!(
-                r##"<button type="button" data-fk-value="{value}" data-fk-label="{escaped_label}" class="w-full text-left px-md py-sm hover:bg-surface-container-high font-body-md text-on-surface transition-colors"><span class="block truncate"><span class="font-medium tabular-nums">{value}</span><span class="text-outline">: </span>{escaped_label}</span></button>"##
+                r##"<button type="button" data-fk-value="{escaped_value}" data-fk-label="{escaped_label}" class="w-full text-left px-md py-sm hover:bg-surface-container-high font-body-md text-on-surface transition-colors"><span class="block truncate"><span class="font-medium tabular-nums">{escaped_value}</span><span class="text-outline">: </span>{escaped_label}</span></button>"##
             ));
         }
         if items.is_empty() {
@@ -224,10 +245,23 @@ pub(crate) async fn fk_options_resolve(
         return (StatusCode::FORBIDDEN, "related model not found").into_response();
     };
 
+    // PK lift Pass B: `?ids=` now carries raw PK strings (could be
+    // "1,2,3" for integer PKs OR "blog.publish_post,blog.edit_post"
+    // for String-PK models like `permissions_permission`). Bind via
+    // `filter_in_strings` which dispatches on the column's SqlType
+    // and coerces accordingly — so the same parser works for either
+    // shape without the caller having to know in advance.
     let ids_param = params.get("ids").cloned().unwrap_or_default();
-    let ids: Vec<i64> = ids_param
+    let ids: Vec<String> = ids_param
         .split(',')
-        .filter_map(|s| s.trim().parse().ok())
+        .filter_map(|s| {
+            let s = s.trim();
+            if s.is_empty() {
+                None
+            } else {
+                Some(s.to_string())
+            }
+        })
         .collect();
     if ids.is_empty() {
         return Json(serde_json::json!({ "items": [] })).into_response();
@@ -239,9 +273,12 @@ pub(crate) async fn fk_options_resolve(
         .find(|c| !c.primary_key && matches!(c.ty, SqlType::Text))
         .map(|c| c.name.clone())
         .unwrap_or_else(|| "id".to_string());
-    let pk_col_name = pk_column(&related_model)
+    let pk_col = pk_column(&related_model);
+    let pk_col_name = pk_col
+        .as_ref()
         .map(|c| c.name.clone())
         .unwrap_or_else(|| "id".to_string());
+    let pk_col_type = pk_col.as_ref().map(|c| c.ty);
 
     let select_cols = if pk_col_name == label_col_owned {
         vec![pk_col_name.clone()]
@@ -253,27 +290,57 @@ pub(crate) async fn fk_options_resolve(
 
     match DynQuerySet::for_meta(&related_model)
         .select_cols(&select_cols)
-        .filter_in_i64(&pk_col_name, &ids)
+        .filter_in_strings(&pk_col_name, &ids)
         .fetch_as_strings()
         .await
     {
         Ok(rows) => {
+            // Same `value` rendering rule as `fk_options`: emit the
+            // PK in whatever JSON shape matches its SqlType so the
+            // frontend's hidden input round-trips the right value.
             let items: Vec<serde_json::Value> = rows
                 .iter()
                 .map(|r| {
-                    let value: i64 = r
-                        .get(&pk_col_name)
-                        .and_then(|s| s.parse().ok())
-                        .unwrap_or(0);
+                    let raw_pk = r.get(&pk_col_name).cloned().unwrap_or_default();
+                    let value_json = pk_string_to_json(&raw_pk, pk_col_type);
                     let label: String = r
                         .get(&label_col_owned)
                         .cloned()
-                        .unwrap_or_else(|| format!("#{value}"));
-                    serde_json::json!({ "value": value, "label": label })
+                        .unwrap_or_else(|| format!("#{raw_pk}"));
+                    serde_json::json!({ "value": value_json, "label": label })
                 })
                 .collect();
             Json(serde_json::json!({ "items": items })).into_response()
         }
         Err(e) => AdminError::from(e).into_response(),
+    }
+}
+
+/// PK lift Pass B helper — turn a stringified PK (the shape
+/// `DynQuerySet::fetch_as_strings` produces) into the JSON value
+/// the FK picker emits. Integer / FK / float PKs round-trip as
+/// `serde_json::Value::Number`; Text / Uuid / unknown PKs land as
+/// `Value::String`. The `Display` form is preserved for both —
+/// HTMX consumers can read `data-fk-value` as a string verbatim,
+/// and the JSON consumer's hidden input gets the right type when
+/// submitted.
+fn pk_string_to_json(raw: &str, pk_ty: Option<umbra::orm::SqlType>) -> serde_json::Value {
+    use umbra::orm::SqlType;
+    match pk_ty {
+        Some(SqlType::SmallInt)
+        | Some(SqlType::Integer)
+        | Some(SqlType::BigInt)
+        | Some(SqlType::ForeignKey) => raw
+            .parse::<i64>()
+            .ok()
+            .map(serde_json::Value::from)
+            .unwrap_or_else(|| serde_json::Value::String(raw.to_string())),
+        Some(SqlType::Real) | Some(SqlType::Double) => raw
+            .parse::<f64>()
+            .ok()
+            .map(serde_json::Value::from)
+            .unwrap_or_else(|| serde_json::Value::String(raw.to_string())),
+        // Text / Uuid / anything else: keep as string.
+        _ => serde_json::Value::String(raw.to_string()),
     }
 }

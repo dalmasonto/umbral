@@ -340,15 +340,57 @@ impl<'a> DynQuerySet<'a> {
         let Some(pk_col) = self.meta.pk_column() else {
             return self;
         };
-        let parsed: Vec<i64> = child_ids.iter().filter_map(|s| s.parse().ok()).collect();
-        if parsed.is_empty() {
-            return self;
-        }
+        // PK lift Pass B: bind child ids per the M2M target's PK
+        // type, not always i64. Pre-fix, `permissions_permission`
+        // (whose PK is the `codename` String column) couldn't be
+        // filtered via this method because every string id parsed
+        // as `i64::Err` and got dropped. The junction table's
+        // `child_id` column type matches the target's PK type at
+        // DDL emission, so binding correctly here keeps SQLite +
+        // Postgres affinity happy.
+        let target_pk_ty = crate::migrate::registered_models()
+            .iter()
+            .find(|m| m.table == rel.target_table)
+            .and_then(|m| m.pk_column().map(|c| c.ty))
+            .unwrap_or(SqlType::BigInt);
         let junction_table = format!("{}_{}", self.meta.table, rel.field_name);
+        let child_id_expr = Expr::col(Alias::new("child_id"));
+        let in_clause: sea_query::SimpleExpr = match target_pk_ty {
+            SqlType::Text | SqlType::Uuid => {
+                // String / UUID PK: bind raw strings. Empty / all-
+                // whitespace tokens drop out (no realistic PK is
+                // blank); everything else goes in verbatim.
+                let bound: Vec<String> = child_ids
+                    .iter()
+                    .filter_map(|s| {
+                        let s = s.trim();
+                        if s.is_empty() {
+                            None
+                        } else {
+                            Some(s.to_string())
+                        }
+                    })
+                    .collect();
+                if bound.is_empty() {
+                    return self;
+                }
+                child_id_expr.is_in(bound)
+            }
+            _ => {
+                // Integer-PK target (default): parse to i64. Same
+                // behaviour as pre-fix; this arm matches the
+                // pre-existing semantics for every shipped model.
+                let parsed: Vec<i64> = child_ids.iter().filter_map(|s| s.parse().ok()).collect();
+                if parsed.is_empty() {
+                    return self;
+                }
+                child_id_expr.is_in(parsed)
+            }
+        };
         let subq = Query::select()
             .column(Alias::new("parent_id"))
             .from(Alias::new(junction_table))
-            .and_where(Expr::col(Alias::new("child_id")).is_in(parsed))
+            .and_where(in_clause)
             .to_owned();
         let cond =
             Condition::all().add(Expr::col(Alias::new(pk_col.name.clone())).in_subquery(subq));
