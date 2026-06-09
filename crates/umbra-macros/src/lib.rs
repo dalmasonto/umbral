@@ -3357,17 +3357,56 @@ fn expand_form(input: DeriveInput) -> syn::Result<TokenStream2> {
     let mut field_builders: Vec<TokenStream2> = Vec::new();
     let mut validate_body: Vec<TokenStream2> = Vec::new();
     let mut struct_inits: Vec<TokenStream2> = Vec::new();
+    // gaps2 #19 follow-up: when a field is skipped from the form
+    // (server-managed via Model attrs), we fill it via
+    // `Default::default()` in the struct constructor — which forces
+    // `..Default::default()` at the tail of the `Self { ... }`
+    // literal. `any_skipped` records whether we need that tail.
+    let mut any_skipped = false;
 
     for field in fields.iter() {
         let field_ident = field.ident.as_ref().unwrap();
         let field_name = field_ident.to_string();
         let attrs = parse_form_attrs(&field.attrs)?;
+
+        // gaps2 #19 follow-up: read the Model-level `#[umbra(...)]`
+        // attrs so a single struct can serve as BOTH the persisted
+        // Model AND the user-submittable Form. Fields the framework
+        // owns end-to-end (PK, auto_now, auto_now_add, noform) get
+        // excluded from the form's validation surface and filled
+        // via `Default::default()` when the macro constructs the
+        // value. This is what the gap meant by "reuse the Model
+        // struct": no parallel ContactForm, no copy-paste.
+        let model_attr = parse_umbra_field_attr(&field.attrs).unwrap_or_default();
+        let is_implicit_pk = field_name == "id";
+        let skip_for_form = model_attr.noform
+            || model_attr.primary_key
+            || model_attr.auto_now
+            || model_attr.auto_now_add
+            || is_implicit_pk;
+        if skip_for_form {
+            any_skipped = true;
+            // Leave the field out of struct_inits entirely; the
+            // `..Default::default()` tail fills it. Don't try to
+            // classify the type either — server-managed fields are
+            // often DateTime / choice enums / custom wrappers that
+            // the form macro doesn't otherwise understand, and
+            // requiring classification just to throw the result
+            // away would be silly.
+            continue;
+        }
+
         let Some((kind, is_option)) = classify_form_field_type(&field.ty) else {
             return Err(syn::Error::new_spanned(
                 &field.ty,
-                "umbra::Form derive: unsupported field type. v1 accepts \
-                 String, i8..i64 / u8..u64 / isize / usize, f32 / f64, bool, \
-                 and Option<T> of any of those.",
+                "umbra::Form derive: unsupported field type for a user-\
+                 submittable field. v1 accepts String, i8..i64 / u8..u64 \
+                 / isize / usize, f32 / f64, bool, and Option<T> of any of \
+                 those. For framework-managed fields (PKs, timestamps, \
+                 choice enums set server-side), mark with one of \
+                 `#[umbra(primary_key)]`, `#[umbra(auto_now_add)]`, \
+                 `#[umbra(auto_now)]`, or `#[umbra(noform)]` to skip \
+                 the form-validation pass.",
             ));
         };
         let is_optional = is_option || attrs.optional;
@@ -3495,10 +3534,39 @@ fn expand_form(input: DeriveInput) -> syn::Result<TokenStream2> {
 
     let field_builders_iter = field_builders.iter();
     let field_builders_iter2 = field_builders.iter();
+    // `fields()` returns only the user-submittable Field descriptors
+    // — same set the validator walks. Server-managed fields are
+    // intentionally absent; a `render_html` caller that wanted to
+    // render them would be looking at a Model + admin path, not a
+    // public form.
     let field_var_idents: Vec<syn::Ident> = fields
         .iter()
-        .map(|f| format_ident!("_{}_field", f.ident.as_ref().unwrap()))
+        .filter_map(|f| {
+            let attr = parse_umbra_field_attr(&f.attrs).unwrap_or_default();
+            let ident = f.ident.as_ref()?;
+            let is_implicit_pk = ident == "id";
+            if attr.noform
+                || attr.primary_key
+                || attr.auto_now
+                || attr.auto_now_add
+                || is_implicit_pk
+            {
+                None
+            } else {
+                Some(format_ident!("_{}_field", ident))
+            }
+        })
         .collect();
+
+    // gaps2 #19 follow-up: when ANY field was skipped (server-
+    // managed), the struct constructor needs `..Default::default()`
+    // to fill the gaps. Forms that explicitly enumerate every
+    // field (no Model attrs) avoid the `Default` requirement.
+    let default_tail = if any_skipped {
+        quote! { , ..::std::default::Default::default() }
+    } else {
+        quote! {}
+    };
 
     let output = quote! {
         impl ::umbra::forms::FormValidate for #struct_name {
@@ -3509,7 +3577,7 @@ fn expand_form(input: DeriveInput) -> syn::Result<TokenStream2> {
                 #(#field_builders_iter)*
                 #(#validate_body)*
                 errs.into_result()?;
-                Ok(Self { #(#struct_inits),* })
+                Ok(Self { #(#struct_inits),* #default_tail })
             }
 
             fn fields() -> ::std::vec::Vec<::umbra::forms::Field> {

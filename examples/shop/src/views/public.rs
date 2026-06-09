@@ -4,10 +4,9 @@
 //! handler hands a minijinja context to `umbra::templates::render`
 //! and wraps DB / template errors with `internal_error`.
 
-use chrono::Utc;
-use content::models::{ContactMessage, ContactStatus, Faq, Post, faq, post};
+use content::models::{ContactMessage, Faq, Post, faq, post};
 use ecommerce::models::{Brand, Product, Review, brand, product, review};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use umbra::forms::{Form, FormErrors};
 use umbra::templates::context;
 use umbra::web::{Html, IntoResponse, Path, Query, Redirect, Response, StatusCode};
@@ -19,32 +18,12 @@ pub struct ContactQuery {
     sent: Option<String>,
 }
 
-/// gaps2 #19: the contact form's validation is now declared via
-/// `#[derive(Form)]` attributes. The ~80 lines of bespoke
-/// `ContactErrors` / `validate_contact_form` / `normalize_contact_form`
-/// that used to live here are gone — the `Form<ContactForm>`
-/// extractor runs validation before the handler, the result lands
-/// in a `Result<ContactForm, FormErrors>`, and the template reads
-/// `errors.<field>` straight off `FormErrors::as_template_ctx`.
-#[derive(Debug, Deserialize, Serialize, Default, umbra::forms::Form)]
-#[serde(default)]
-#[form(normalize_strings)]
-pub struct ContactForm {
-    #[form(required, length(min = 1, max = 100))]
-    name: String,
-
-    #[form(required, email, max_length = 254)]
-    email: String,
-
-    #[form(optional, max_length = 30)]
-    phone: String,
-
-    #[form(required, length(min = 1, max = 200))]
-    subject: String,
-
-    #[form(required, length(min = 10, max = 5000))]
-    message: String,
-}
+// gaps2 #19 follow-up: ContactMessage now serves as BOTH the
+// persisted Model AND the public form. The `#[derive(Form)]` lives
+// on the Model declaration in `content::models`; this view just
+// imports it and writes `Form<ContactMessage>` in the handler
+// signature. No parallel ContactForm struct, no field-by-field
+// duplication.
 
 pub async fn home() -> Result<Html<String>, (StatusCode, String)> {
     let featured = Product::objects()
@@ -187,53 +166,41 @@ pub async fn contact(Query(query): Query<ContactQuery>) -> Result<Response, (Sta
     let sent = query.sent.as_deref() == Some("1");
     render_contact_page(
         sent,
-        &ContactForm::default(),
+        &ContactMessage::default(),
         serde_json::Map::new(),
         StatusCode::OK,
     )
 }
 
-pub async fn submit_contact(form: Form<ContactForm>) -> Result<Response, (StatusCode, String)> {
-    let now = Utc::now();
-    // gaps2 #19: the extractor already ran validation. On Err we
-    // re-render the form with the per-field error map AND the
-    // user's original input (axum's deserialize step ran first, so
-    // the parsed struct is still accessible via the inner Result —
-    // but on failure we don't have the typed T, so re-render with
-    // a default ContactForm and rely on the template's `value=""`
-    // fallback). For full input-preservation across re-renders the
-    // caller would extract `axum::Form` AND `Form<T>` together;
-    // the v1 trade-off is to keep the surface simple.
-    let valid = match form.into_result() {
+pub async fn submit_contact(
+    form: Form<ContactMessage>,
+) -> Result<Response, (StatusCode, String)> {
+    // gaps2 #19 follow-up: extractor returned a parsed-and-
+    // validated `ContactMessage` directly. On Err we re-render
+    // with a default ContactMessage and the per-field error map.
+    let mut msg = match form.into_result() {
         Ok(v) => v,
         Err(errs) => {
             return render_contact_page(
                 false,
-                &ContactForm::default(),
+                &ContactMessage::default(),
                 ctx_with_form_summary(&errs),
                 StatusCode::UNPROCESSABLE_ENTITY,
             );
         }
     };
 
-    let phone = if valid.phone.is_empty() {
-        None
-    } else {
-        Some(valid.phone.clone())
-    };
+    // Normalise the email post-validation (lowercase) — the form
+    // attr stack handles trim + length but `normalize_strings`
+    // intentionally doesn't lowercase (case matters for some
+    // String fields like usernames). The `auto_now_add` on
+    // `created_at` is filled by the ORM on insert; `status` and
+    // `ip_address` arrived as their `Default::default()` values
+    // (`New` and `None` respectively).
+    msg.email = msg.email.to_lowercase();
 
     ContactMessage::objects()
-        .create(ContactMessage {
-            id: 0,
-            name: valid.name.clone(),
-            email: valid.email.to_lowercase(),
-            phone,
-            subject: valid.subject.clone(),
-            message: valid.message.clone(),
-            status: ContactStatus::New,
-            ip_address: None,
-            created_at: now,
-        })
+        .create(msg)
         .await
         .map_err(internal_error)?;
 
@@ -242,7 +209,7 @@ pub async fn submit_contact(form: Form<ContactForm>) -> Result<Response, (Status
 
 fn render_contact_page(
     sent: bool,
-    form: &ContactForm,
+    form: &ContactMessage,
     errors: serde_json::Map<String, serde_json::Value>,
     status: StatusCode,
 ) -> Result<Response, (StatusCode, String)> {

@@ -21,10 +21,16 @@ pub enum PostStatus {
     Scheduled,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Choices)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Choices, Default)]
 #[choices(rename_all = "lowercase")]
 #[serde(rename_all = "lowercase")]
 pub enum ContactStatus {
+    /// gaps2 #19 follow-up: `New` is the default so `ContactMessage`
+    /// can `#[derive(Default)]` — which the Form derive relies on
+    /// to fill server-managed fields via `..Default::default()`.
+    /// Inbound submissions always land as `New`; the admin walks
+    /// them through the other states.
+    #[default]
     New,
     Read,
     Replied,
@@ -237,18 +243,44 @@ pub struct Testimonial {
 // Communication
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
+/// Single source of truth for the contact-message surface: the
+/// persisted Model AND the public form share this declaration.
+///
+/// The `#[derive(Form)]` (gaps2 #19) sees the existing Model attrs
+/// and skips the server-managed fields automatically:
+///   - `id`: implicit PK skip (the `id`-named field is always
+///     framework-managed)
+///   - `status`: `#[umbra(noform)]` — defaults to `ContactStatus::New`
+///   - `ip_address`: `#[umbra(noform)]` — handler stamps from the
+///     request (currently `None`; future middleware can fill it)
+///   - `created_at`: `#[umbra(auto_now_add)]` — ORM stamps on insert
+/// The remaining fields (`name`, `email`, `phone`, `subject`,
+/// `message`) carry `#[form(...)]` validation declarations.
+///
+/// `Default` is required for the Form macro to fill the skipped
+/// fields via `..Default::default()` in the constructor; the
+/// `Choices` derive on `ContactStatus` provides `Default` itself,
+/// so the struct-level `Default` derive falls out for free.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Default, Model, umbra::forms::Form)]
+#[form(normalize_strings)]
 pub struct ContactMessage {
     pub id: i64,
     #[umbra(string)]
+    #[form(required, length(min = 1, max = 100))]
     pub name: String,
+    #[form(required, email, max_length = 254)]
     pub email: String,
+    #[form(optional, max_length = 30)]
     pub phone: Option<String>,
+    #[form(required, length(min = 1, max = 200))]
     pub subject: String,
+    #[form(required, length(min = 10, max = 5000))]
     pub message: String,
-    #[umbra(choices)]
+    #[umbra(choices, noform)]
     pub status: ContactStatus,
+    #[umbra(noform)]
     pub ip_address: Option<String>,
+    #[umbra(auto_now_add)]
     pub created_at: DateTime<Utc>,
 }
 
