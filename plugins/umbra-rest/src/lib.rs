@@ -605,23 +605,92 @@ impl RestPlugin {
         }
     }
 
-    /// Sparse fieldset (gap #81). When the caller passes `?fields=a,b,c`,
-    /// retain only those keys in the response row. Applied *after*
-    /// `apply_overrides` so users can still combine `hide` / `transform`
-    /// / `compute` with sparse selection. Unknown field names are
-    /// silently ignored (no 400 — gives clients latitude to ask for
-    /// new fields without coordinating a server change first).
+    /// Sparse fieldset (gap #81 + dotted-nested extension). Filter
+    /// the response row down to a caller-named subset of keys.
+    ///
+    /// Two token shapes:
+    ///
+    /// - **Plain** (`id`, `phone`, `user`) — keeps the named TOP-LEVEL
+    ///   key. If the key holds a nested object (because it was
+    ///   `?include=`'d on the FK path), the full nested shape
+    ///   survives.
+    ///
+    /// - **Dotted** (`user.id`, `user.username`) — keeps the named
+    ///   key on the nested object under `user`. Auto-includes the
+    ///   parent at the top level so the nested object survives the
+    ///   root retain step. ANY dotted token under a parent triggers
+    ///   filtering on that nested object — so writing
+    ///   `?fields=user,user.id` collapses to "keep user, but only
+    ///   keep `id` inside it" (most-specific wins).
+    ///
+    /// Examples (with `?include=user`):
+    ///
+    /// | `?fields=` | Resulting row |
+    /// |---|---|
+    /// | `id,phone` | `{id, phone}` — user dropped |
+    /// | `id,user` | `{id, user: {full user obj}}` |
+    /// | `id,user.id,user.username` | `{id, user: {id, username}}` |
+    /// | `user.id` | `{user: {id}}` — root id NOT pulled |
+    ///
+    /// The last row is the value prop: a per-relation projection
+    /// that doesn't pollute the root with fields the caller didn't
+    /// ask for. Without dot-notation, asking for "the user's id"
+    /// forced you to also accept the root's id (single global
+    /// `id` token).
+    ///
+    /// Applied *after* `apply_overrides` so users can still combine
+    /// hide / transform / computed with sparse selection. Unknown
+    /// names are silently ignored at both levels — gives clients
+    /// latitude to ask for new fields without coordinating a server
+    /// change first.
+    ///
+    /// One-hop only — `a.b.c` treats `b.c` as a single key name on
+    /// the `a` object, which won't match anything. Deeper nesting
+    /// lands when the dynamic `select_related_dyn` learns
+    /// `__`-traversal.
     pub(crate) fn apply_sparse_fields(row: &mut Map<String, Value>, fields_param: Option<&str>) {
         let Some(raw) = fields_param else { return };
-        let allowed: std::collections::HashSet<&str> = raw
-            .split(',')
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-            .collect();
-        if allowed.is_empty() {
+
+        // Split tokens into top-level keys + per-parent nested keys.
+        // `user.id` adds `user` to top_level (so the parent isn't
+        // dropped) AND `id` to nested["user"] (so the nested object
+        // gets filtered to just that key).
+        let mut top_level: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut nested: std::collections::HashMap<String, std::collections::HashSet<String>> =
+            std::collections::HashMap::new();
+
+        for token in raw.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+            if let Some((parent, child)) = token.split_once('.') {
+                let parent = parent.to_string();
+                top_level.insert(parent.clone());
+                nested
+                    .entry(parent)
+                    .or_default()
+                    .insert(child.to_string());
+            } else {
+                top_level.insert(token.to_string());
+            }
+        }
+
+        if top_level.is_empty() {
             return;
         }
-        row.retain(|k, _| allowed.contains(k.as_str()));
+
+        // First pass: drop every top-level key the caller didn't ask
+        // for. Parents named only via a dotted token survive because
+        // we inserted them above.
+        row.retain(|k, _| top_level.contains(k));
+
+        // Second pass: for every parent that had at least one dotted
+        // token, filter the nested object's keys. The check tolerates
+        // the parent being absent / not an object — that just means
+        // the caller asked for `user.id` without `?include=user`, so
+        // the FK is still an integer and there's nothing to filter.
+        for (parent, allowed_children) in &nested {
+            if let Some(Value::Object(child_map)) = row.get_mut(parent) {
+                child_map.retain(|k, _| allowed_children.contains(k));
+            }
+        }
     }
 
     fn allow(&self, table: &str) -> bool {
@@ -1504,5 +1573,116 @@ mod allow_block_unit {
             !p.allow("auth_user"),
             "include_only's allow-list is exhaustive — expose can't punch through"
         );
+    }
+}
+
+#[cfg(test)]
+mod sparse_fields_unit {
+    use super::RestPlugin;
+    use serde_json::{Map, Value, json};
+
+    fn row() -> Map<String, Value> {
+        // Customer-shaped row AFTER include=user has run — user is
+        // an Object, not the integer FK it would otherwise be.
+        let mut m = Map::new();
+        m.insert("id".into(), json!(1));
+        m.insert("phone".into(), json!("+15555550100"));
+        m.insert("loyalty_points".into(), json!(50));
+        m.insert(
+            "user".into(),
+            json!({
+                "id": 7,
+                "username": "alice",
+                "email": "alice@example.com",
+                "is_staff": false
+            }),
+        );
+        m
+    }
+
+    #[test]
+    fn plain_tokens_filter_top_level_only() {
+        let mut r = row();
+        RestPlugin::apply_sparse_fields(&mut r, Some("id,phone"));
+        let mut keys: Vec<&str> = r.keys().map(|s| s.as_str()).collect();
+        keys.sort();
+        assert_eq!(keys, vec!["id", "phone"]);
+    }
+
+    #[test]
+    fn plain_user_token_keeps_full_nested_object() {
+        let mut r = row();
+        RestPlugin::apply_sparse_fields(&mut r, Some("id,user"));
+        let user = r.get("user").unwrap().as_object().unwrap();
+        assert_eq!(user.len(), 4, "full nested user object preserved");
+        assert!(user.contains_key("email"));
+    }
+
+    #[test]
+    fn dotted_tokens_filter_the_nested_object() {
+        let mut r = row();
+        RestPlugin::apply_sparse_fields(&mut r, Some("id,user.id,user.username"));
+        assert!(r.contains_key("id"));
+        let user = r.get("user").unwrap().as_object().unwrap();
+        let mut keys: Vec<&str> = user.keys().map(|s| s.as_str()).collect();
+        keys.sort();
+        assert_eq!(keys, vec!["id", "username"]);
+        // root has not pulled extra columns
+        assert!(!r.contains_key("phone"));
+        assert!(!r.contains_key("loyalty_points"));
+    }
+
+    #[test]
+    fn dotted_without_plain_implicitly_includes_parent() {
+        let mut r = row();
+        RestPlugin::apply_sparse_fields(&mut r, Some("user.id"));
+        // root.id NOT pulled — per-relation projection without
+        // polluting the root. This is the design goal of
+        // dot-notation: ask for user's id without forcing the
+        // root id along.
+        assert!(!r.contains_key("id"));
+        let user = r.get("user").unwrap().as_object().unwrap();
+        assert_eq!(
+            user.keys().cloned().collect::<Vec<_>>(),
+            vec!["id".to_string()],
+        );
+    }
+
+    #[test]
+    fn mixed_plain_and_dotted_for_same_parent_dotted_wins() {
+        // user appears as a plain token AND as user.id — most-
+        // specific wins, the nested object gets filtered.
+        let mut r = row();
+        RestPlugin::apply_sparse_fields(&mut r, Some("user,user.id"));
+        let user = r.get("user").unwrap().as_object().unwrap();
+        assert_eq!(
+            user.keys().cloned().collect::<Vec<_>>(),
+            vec!["id".to_string()],
+            "dotted token overrides plain — nested object filtered",
+        );
+    }
+
+    #[test]
+    fn dotted_against_integer_fk_silently_skips_nested_filter() {
+        // Caller wrote user.id but did not ?include=user, so user
+        // is still the integer FK. The nested filter step
+        // tolerates that — the integer survives unchanged.
+        let mut r = Map::new();
+        r.insert("id".into(), json!(1));
+        r.insert("user".into(), json!(7));
+        RestPlugin::apply_sparse_fields(&mut r, Some("id,user.id"));
+        assert_eq!(r.get("user"), Some(&json!(7)));
+    }
+
+    #[test]
+    fn unknown_tokens_silently_dropped() {
+        let mut r = row();
+        RestPlugin::apply_sparse_fields(&mut r, Some("id,nonsense,user.also_not_real"));
+        // id kept, user kept (parent of an unknown nested key
+        // still survives the root retain — the nested filter
+        // just removes every key on user since none matched).
+        assert!(r.contains_key("id"));
+        let user = r.get("user").unwrap().as_object().unwrap();
+        assert!(user.is_empty(), "nested object filtered down to nothing");
     }
 }
