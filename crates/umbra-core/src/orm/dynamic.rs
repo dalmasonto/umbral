@@ -1631,6 +1631,39 @@ pub fn decode_pg_to_json_aliased(
     decode_pg_to_json(row, &aliased)
 }
 
+/// PK lift Pass A — when `col` is an FK column (`SqlType::ForeignKey`)
+/// pointing at a model whose PK is a `String` / `Uuid` (not the
+/// default `i64`), the decoder needs to bind as `String` instead of
+/// `i64` or sqlx errors with "Rust type i64 not compatible with SQL
+/// type TEXT".
+///
+/// Looks the target table up in the model registry and reads its
+/// PK column's `SqlType`. Returns `None` when:
+///   - `col` isn't an FK (caller falls back to the normal arm),
+///   - the FK has no target (defensive — shouldn't happen in
+///     practice since the macro always sets `fk_target` on FK
+///     columns),
+///   - the target isn't in the registry (only possible when an
+///     internal call site fires before `App::build()` finishes
+///     wiring plugins).
+///
+/// Cheap on every call — `registered_models()` clones a small
+/// `Vec<ModelMeta>`. If this lookup ever shows up in a profile, the
+/// fix is to cache the resolved type onto `Column` itself at
+/// registration time (one slot per FK column). For v1 the
+/// per-decode lookup is acceptable.
+fn fk_target_pk_sql_type(col: &Column) -> Option<SqlType> {
+    if !matches!(col.ty, SqlType::ForeignKey) {
+        return None;
+    }
+    let target_table = col.fk_target.as_deref()?;
+    let registered = crate::migrate::registered_models();
+    registered
+        .iter()
+        .find(|m| m.table == target_table)
+        .and_then(|m| m.pk_column().map(|c| c.ty))
+}
+
 pub fn decode_to_json(
     row: &sqlx::sqlite::SqliteRow,
     col: &Column,
@@ -1679,9 +1712,21 @@ pub fn decode_to_json(
             SqlType::Inet | SqlType::Cidr | SqlType::MacAddr | SqlType::FullText => {
                 panic_pg_only_unsupported(&col.name)
             }
-            SqlType::ForeignKey => row
-                .try_get::<Option<i64>, _>(name)?
-                .map_or(Value::Null, Value::from),
+            // PK lift Pass A: FK columns that target a String /
+            // Uuid PK store their values as TEXT, not BIGINT. Probe
+            // the target meta to pick the right Rust type for the
+            // bind.
+            SqlType::ForeignKey => match fk_target_pk_sql_type(col) {
+                Some(SqlType::Text) => row
+                    .try_get::<Option<String>, _>(name)?
+                    .map_or(Value::Null, Value::from),
+                Some(SqlType::Uuid) => row
+                    .try_get::<Option<Uuid>, _>(name)?
+                    .map_or(Value::Null, |v| Value::from(v.to_string())),
+                _ => row
+                    .try_get::<Option<i64>, _>(name)?
+                    .map_or(Value::Null, Value::from),
+            },
             SqlType::Bytes => row
                 .try_get::<Option<Vec<u8>>, _>(name)?
                 .map_or(Value::Null, |b| bytes_to_json(&b)),
@@ -1704,7 +1749,13 @@ pub fn decode_to_json(
         SqlType::Inet | SqlType::Cidr | SqlType::MacAddr | SqlType::FullText => {
             panic_pg_only_unsupported(&col.name)
         }
-        SqlType::ForeignKey => Value::from(row.try_get::<i64, _>(name)?),
+        // PK lift Pass A: see the nullable arm above for the same
+        // String/Uuid target dispatch.
+        SqlType::ForeignKey => match fk_target_pk_sql_type(col) {
+            Some(SqlType::Text) => Value::from(row.try_get::<String, _>(name)?),
+            Some(SqlType::Uuid) => Value::from(row.try_get::<Uuid, _>(name)?.to_string()),
+            _ => Value::from(row.try_get::<i64, _>(name)?),
+        },
         SqlType::Bytes => bytes_to_json(&row.try_get::<Vec<u8>, _>(name)?),
         SqlType::Decimal => panic_pg_only_unsupported(&col.name),
     })
@@ -1769,9 +1820,19 @@ pub fn decode_pg_to_json(
                 .ok()
                 .flatten()
                 .map_or(Value::Null, Value::from),
-            SqlType::ForeignKey => row
-                .try_get::<Option<i64>, _>(name)?
-                .map_or(Value::Null, Value::from),
+            // PK lift Pass A: see the SQLite path for the same
+            // String/Uuid target dispatch.
+            SqlType::ForeignKey => match fk_target_pk_sql_type(col) {
+                Some(SqlType::Text) => row
+                    .try_get::<Option<String>, _>(name)?
+                    .map_or(Value::Null, Value::from),
+                Some(SqlType::Uuid) => row
+                    .try_get::<Option<Uuid>, _>(name)?
+                    .map_or(Value::Null, |v| Value::from(v.to_string())),
+                _ => row
+                    .try_get::<Option<i64>, _>(name)?
+                    .map_or(Value::Null, Value::from),
+            },
             SqlType::Bytes => row
                 .try_get::<Option<Vec<u8>>, _>(name)?
                 .map_or(Value::Null, |b| bytes_to_json(&b)),
@@ -1799,7 +1860,13 @@ pub fn decode_pg_to_json(
             .try_get::<String, _>(name)
             .map(Value::from)
             .unwrap_or(Value::Null),
-        SqlType::ForeignKey => Value::from(row.try_get::<i64, _>(name)?),
+        // PK lift Pass A: FK columns dispatch on their target's PK
+        // type (i64 / String / Uuid).
+        SqlType::ForeignKey => match fk_target_pk_sql_type(col) {
+            Some(SqlType::Text) => Value::from(row.try_get::<String, _>(name)?),
+            Some(SqlType::Uuid) => Value::from(row.try_get::<Uuid, _>(name)?.to_string()),
+            _ => Value::from(row.try_get::<i64, _>(name)?),
+        },
         SqlType::Bytes => bytes_to_json(&row.try_get::<Vec<u8>, _>(name)?),
         SqlType::Decimal => panic_pg_only_unsupported(&col.name),
     })
@@ -2000,36 +2067,70 @@ async fn hydrate_select_related_into(
             continue;
         };
 
+        // gaps #112 / PK lift Pass A: walk the chain in PK-shape-
+        // agnostic terms. Each hop's PK column name comes from the
+        // target meta (could be `"id"` for integer-PK models, but
+        // also `"codename"` for `permissions_permission`, etc.).
+        // FK ids and PK lookups round-trip as `serde_json::Value`
+        // so String / UUID / mixed-PK chains all hydrate without
+        // the pre-fix `.as_i64()` silently dropping non-integer
+        // links.
+        let registered = crate::migrate::registered_models();
+        let hop_target_pk_cols: Vec<String> = targets
+            .iter()
+            .filter_map(|t| {
+                registered
+                    .iter()
+                    .find(|m| &m.table == t)
+                    .and_then(|m| m.pk_column().map(|c| c.name.clone()))
+            })
+            .collect();
+        if hop_target_pk_cols.len() != hops.len() {
+            // A meta lookup failed mid-chain (only possible from
+            // an unregistered intermediate model — unreachable in
+            // practice). Skip the chain rather than crash.
+            continue;
+        }
+
         // Phase 1: per-hop fetch, top-down. levels[i] holds the
         // related-row JSON objects at depth i, BEFORE any nesting
         // is embedded.
         let first_field = hops[0];
-        let mut ids: Vec<i64> = Vec::with_capacity(rows.len());
+        let mut ids: Vec<serde_json::Value> = Vec::with_capacity(rows.len());
         for row in rows.iter() {
-            if let Some(serde_json::Value::Number(n)) = row.get(first_field) {
-                if let Some(id) = n.as_i64() {
-                    ids.push(id);
-                }
+            let Some(v) = row.get(first_field) else {
+                continue;
+            };
+            if v.is_null() {
+                continue;
             }
+            ids.push(v.clone());
         }
         if ids.is_empty() {
             continue;
         }
-        ids.sort_unstable();
-        ids.dedup();
+        dedup_by_pk_key(&mut ids);
         let mut levels: Vec<Vec<serde_json::Value>> = Vec::with_capacity(hops.len());
         levels.push(
-            crate::orm::queryset::hydration::fetch_related_as_json(&targets[0], &ids, &pool)
-                .await?,
+            crate::orm::queryset::hydration::fetch_related_as_json_by_pk(
+                &targets[0],
+                &hop_target_pk_cols[0],
+                &ids,
+                &pool,
+            )
+            .await?,
         );
 
         for hop_idx in 1..hops.len() {
             let hop_field = hops[hop_idx];
             let hop_target = &targets[hop_idx];
             let prev_lvl = &levels[hop_idx - 1];
-            let mut next_ids: Vec<i64> = prev_lvl
+            let mut next_ids: Vec<serde_json::Value> = prev_lvl
                 .iter()
-                .filter_map(|r| r.as_object()?.get(hop_field)?.as_i64())
+                .filter_map(|r| {
+                    let v = r.as_object()?.get(hop_field)?;
+                    if v.is_null() { None } else { Some(v.clone()) }
+                })
                 .collect();
             if next_ids.is_empty() {
                 // Chain bottoms out (every prior-level row has
@@ -2038,11 +2139,13 @@ async fn hydrate_select_related_into(
                 // below.
                 break;
             }
-            next_ids.sort_unstable();
-            next_ids.dedup();
+            dedup_by_pk_key(&mut next_ids);
             levels.push(
-                crate::orm::queryset::hydration::fetch_related_as_json(
-                    hop_target, &next_ids, &pool,
+                crate::orm::queryset::hydration::fetch_related_as_json_by_pk(
+                    hop_target,
+                    &hop_target_pk_cols[hop_idx],
+                    &next_ids,
+                    &pool,
                 )
                 .await?,
             );
@@ -2054,12 +2157,13 @@ async fn hydrate_select_related_into(
         // level 0 its rows carry the full nested chain.
         if levels.len() > 1 {
             for i in (0..levels.len() - 1).rev() {
-                let next_by_id: HashMap<i64, serde_json::Value> = levels[i + 1]
+                let next_pk_col = &hop_target_pk_cols[i + 1];
+                let next_by_pk: HashMap<String, serde_json::Value> = levels[i + 1]
                     .iter()
                     .filter_map(|obj| {
                         let map = obj.as_object()?;
-                        let id = map.get("id")?.as_i64()?;
-                        Some((id, obj.clone()))
+                        let pk_val = map.get(next_pk_col.as_str())?;
+                        Some((pk_json_key(pk_val), obj.clone()))
                     })
                     .collect();
                 let hop_field = hops[i + 1];
@@ -2067,11 +2171,14 @@ async fn hydrate_select_related_into(
                     let Some(map) = row.as_object_mut() else {
                         continue;
                     };
-                    let Some(serde_json::Value::Number(n)) = map.get(hop_field) else {
+                    let Some(fk_val) = map.get(hop_field) else {
                         continue;
                     };
-                    let Some(id) = n.as_i64() else { continue };
-                    if let Some(next_json) = next_by_id.get(&id) {
+                    if fk_val.is_null() {
+                        continue;
+                    }
+                    let key = pk_json_key(fk_val);
+                    if let Some(next_json) = next_by_pk.get(&key) {
                         map.insert(hop_field.to_string(), next_json.clone());
                     }
                 }
@@ -2081,31 +2188,44 @@ async fn hydrate_select_related_into(
         // Phase 3: splice level-0 rows (now fully nested) into
         // the root rows. Rows pointing at an id that didn't
         // resolve (target row deleted between the parent fetch
-        // and the IN-lookup — a race window) keep the integer;
-        // the alternative would be silently nulling the field
-        // which hides a real referential-integrity issue from
-        // the caller.
-        let first_by_id: HashMap<i64, serde_json::Value> = levels
+        // and the IN-lookup — a race window) keep the raw FK
+        // value; the alternative would be silently nulling the
+        // field which hides a real referential-integrity issue.
+        let first_pk_col = &hop_target_pk_cols[0];
+        let first_by_pk: HashMap<String, serde_json::Value> = levels
             .into_iter()
             .next()
             .unwrap_or_default()
             .into_iter()
             .filter_map(|obj| {
                 let map = obj.as_object()?;
-                let id = map.get("id")?.as_i64()?;
-                Some((id, obj.clone()))
+                let pk_val = map.get(first_pk_col.as_str())?;
+                Some((pk_json_key(pk_val), obj.clone()))
             })
             .collect();
         for row in rows.iter_mut() {
-            let id = row.get(first_field).and_then(|v| v.as_i64());
-            if let Some(id) = id {
-                if let Some(resolved) = first_by_id.get(&id) {
-                    row.insert(first_field.to_string(), resolved.clone());
-                }
+            let Some(fk_val) = row.get(first_field) else {
+                continue;
+            };
+            if fk_val.is_null() {
+                continue;
+            }
+            let key = pk_json_key(fk_val);
+            if let Some(resolved) = first_by_pk.get(&key) {
+                row.insert(first_field.to_string(), resolved.clone());
             }
         }
     }
     Ok(())
+}
+
+/// Dedup a `Vec<serde_json::Value>` of PK values by stable string
+/// key. `serde_json::Value` isn't `Hash`, so the standard
+/// sort+dedup doesn't apply; the `pk_json_key` namespacing makes
+/// every Number / String / other land in its own bucket.
+fn dedup_by_pk_key(ids: &mut Vec<serde_json::Value>) {
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    ids.retain(|v| seen.insert(pk_json_key(v)));
 }
 
 /// Batched M2M echo across every row returned by `fetch_as_json`.

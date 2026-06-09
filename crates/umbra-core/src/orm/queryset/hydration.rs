@@ -684,20 +684,85 @@ pub(crate) async fn fetch_related_as_json(
     ids: &[i64],
     pool: &DbPool,
 ) -> Result<Vec<JsonValue>, sqlx::Error> {
+    // gaps #112 / PK lift Pass A: delegate to the JSON-shape-aware
+    // helper so the typed call site and the dynamic call site share
+    // one SQL builder + bind path. Lifts i64 ids to JSON values at
+    // the boundary.
+    let json_ids: Vec<JsonValue> = ids.iter().map(|i| JsonValue::Number((*i).into())).collect();
+    fetch_related_as_json_by_pk(table, "id", &json_ids, pool).await
+}
+
+/// PK-shape-agnostic `SELECT * FROM "<table>" WHERE "<pk_col>" IN
+/// (...)` — used by the dynamic ORM's `hydrate_select_related_into`
+/// when the FK target's PK is a `String` / `Uuid` / arbitrary other
+/// shape (e.g. `permissions_permission.codename`).
+///
+/// Inspects the first non-null id in `ids` to pick the bind type:
+/// `Value::Number` → bind as `i64`, `Value::String` → bind as
+/// `String`. Mixed shapes produce a loud sqlx::Error::Protocol so a
+/// stale id list mixed with the new PK type surfaces immediately
+/// instead of partially binding then silently mis-fetching.
+///
+/// `pk_col` is the SQL column name (e.g. `"id"` for integer PKs,
+/// `"codename"` for the permissions table). The caller pulls it from
+/// `target_meta.pk_column().name` — the framework's source of truth
+/// for which column carries the PK.
+pub(crate) async fn fetch_related_as_json_by_pk(
+    table: &str,
+    pk_col: &str,
+    ids: &[JsonValue],
+    pool: &DbPool,
+) -> Result<Vec<JsonValue>, sqlx::Error> {
     if ids.is_empty() {
         return Ok(vec![]);
     }
+    // Decide the bind shape from the first non-null id. Mixed shapes
+    // are rejected because a heterogeneous bind list would silently
+    // truncate or coerce values on the way to the driver.
+    let first = ids
+        .iter()
+        .find(|v| !v.is_null())
+        .ok_or_else(|| sqlx::Error::Protocol("fetch_related_as_json_by_pk: all ids null".into()))?;
+    let bind_kind = match first {
+        JsonValue::Number(_) => BindKind::Int,
+        JsonValue::String(_) => BindKind::Str,
+        other => {
+            return Err(sqlx::Error::Protocol(format!(
+                "fetch_related_as_json_by_pk: unsupported id shape {other:?}"
+            )));
+        }
+    };
+    for v in ids {
+        let ok = match (bind_kind, v) {
+            (_, JsonValue::Null) => true,
+            (BindKind::Int, JsonValue::Number(_)) => true,
+            (BindKind::Str, JsonValue::String(_)) => true,
+            _ => false,
+        };
+        if !ok {
+            return Err(sqlx::Error::Protocol(format!(
+                "fetch_related_as_json_by_pk: mixed id shapes; expected {bind_kind:?}, got {v:?}"
+            )));
+        }
+    }
+
+    let table_quoted = table.replace('"', "\"\"");
+    let pk_quoted = pk_col.replace('"', "\"\"");
+
     match pool {
         DbPool::Sqlite(pool) => {
             let placeholders: Vec<String> = (0..ids.len()).map(|_| "?".to_string()).collect();
             let sql = format!(
-                "SELECT * FROM \"{}\" WHERE id IN ({})",
-                table.replace('"', "\"\""),
+                "SELECT * FROM \"{table_quoted}\" WHERE \"{pk_quoted}\" IN ({})",
                 placeholders.join(", ")
             );
             let mut query = sqlx::query(&sql);
             for id in ids {
-                query = query.bind(*id);
+                query = match (bind_kind, id) {
+                    (BindKind::Int, JsonValue::Number(n)) => query.bind(n.as_i64().unwrap_or(0)),
+                    (BindKind::Str, JsonValue::String(s)) => query.bind(s.clone()),
+                    _ => continue,
+                };
             }
             let rows = query.fetch_all(pool).await?;
             Ok(rows.iter().map(backend_sqlite::row_to_json).collect())
@@ -705,16 +770,25 @@ pub(crate) async fn fetch_related_as_json(
         DbPool::Postgres(pool) => {
             let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("${i}")).collect();
             let sql = format!(
-                "SELECT * FROM \"{}\" WHERE id IN ({})",
-                table.replace('"', "\"\""),
+                "SELECT * FROM \"{table_quoted}\" WHERE \"{pk_quoted}\" IN ({})",
                 placeholders.join(", ")
             );
             let mut query = sqlx::query(&sql);
             for id in ids {
-                query = query.bind(*id);
+                query = match (bind_kind, id) {
+                    (BindKind::Int, JsonValue::Number(n)) => query.bind(n.as_i64().unwrap_or(0)),
+                    (BindKind::Str, JsonValue::String(s)) => query.bind(s.clone()),
+                    _ => continue,
+                };
             }
             let rows = query.fetch_all(pool).await?;
             Ok(rows.iter().map(backend_pg::row_to_json).collect())
         }
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum BindKind {
+    Int,
+    Str,
 }
