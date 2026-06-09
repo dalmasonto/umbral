@@ -323,7 +323,12 @@
 
     **Estimate**: ~250 lines across `dynamic.rs` (recursive resolver + chained hydration) + `lib.rs::parse_include` (multi-hop validation) + `apply_sparse_fields` (recursive walk). Pre-existing typed helper covers the SQL pattern; the dynamic side is wiring + meta-graph traversal.
 
-17. [ ] **Playground: render `?include=` and `?fields=` as multi-select pickers, not free-text inputs.** Reported 2026-06-09. Screenshot: `/home/dalmas/Pictures/Screenshots/Screenshot from 2026-06-09 05-47-52.png` — the playground currently surfaces both params as plain `string` inputs where the user types `user, billing_address` (for include) or `user.email, user.username, id, loyalty_points` (for fields). Error-prone, no discoverability, no autocomplete, easy to typo a column name and get a 400.
+17. [x] **Playground multi-select pickers for `?include=` and `?fields=` — SHIPPED in commit `3ff8d22`.** New `plugins/umbra-playground/frontend/src/components/IncludeFieldsPicker.tsx` component renders a popover-anchored checkbox list driven by the OpenAPI spec data the SPA already has in memory (`fieldInfosFromSchema(listItem, spec)` for the resource columns + `f.fkTarget` for the FK badges + `components.schemas[fkTarget]` for nested sub-trees). Two variants:
+
+    - `?include=` — one checkbox per FK column with a `→ <target>` badge. Empty resource → "No FK columns on this resource" message instead of a broken-feeling empty popover.
+    - `?fields=` — top-level checkboxes for every column, plus a nested sub-tree per FK column with dotted notation (`user.email`, `user.username`). Cross-coupling: ticking `user.email` auto-enables `?include=user` so the response actually carries the nested keys.
+
+    Filter box, alphabetical-sort serialization for stable URLs, lossless round-trip with the legacy free-text input shape (a user with `user,billing_address` typed in pre-fix sees both pre-checked on first open). Wired into `RequestBuilder.tsx` via a 60-line dispatch: when `p.name === "include"` or `p.name === "fields"` AND a `listItem` schema is available, render the picker instead of the plain `<Input>`. Empty-schema fallback to the free-text input so an in-flight spec fetch doesn't yield a useless greyed-out button. Vite + tsc build clean; full umbra-playground tests (8) + full workspace sweep (1243) green. Live-verified: `/api/playground/assets/index-Bus4dlCi.js` HTTP 200, 912 KiB. Original symptom preserved below:
 
     **The spec already publishes the data the SPA needs:**
 
