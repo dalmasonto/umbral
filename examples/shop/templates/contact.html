@@ -55,7 +55,10 @@
           </label>
           <label class="block">
             <span class="text-sm font-semibold text-zinc-700">Phone</span>
-            <input name="phone" type="tel" autocomplete="tel" value="{{ form.phone }}" class="mt-2 w-full rounded-xl border border-zinc-200 bg-white px-4 py-3 text-base text-zinc-950 outline-none transition placeholder:text-zinc-400 focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100">
+            <input name="phone" type="tel" autocomplete="tel" placeholder="+14155551234" value="{{ form.phone }}" class="mt-2 w-full rounded-xl border {% if errors.phone %}border-rose-300 focus:border-rose-600 focus:ring-rose-100{% else %}border-zinc-200 focus:border-emerald-700 focus:ring-emerald-100{% endif %} bg-white px-4 py-3 text-base text-zinc-950 outline-none transition placeholder:text-zinc-400 focus:ring-4">
+            {% if errors.phone %}
+            <p class="mt-2 text-sm font-medium text-rose-700">{{ errors.phone }}</p>
+            {% endif %}
           </label>
           <label class="block">
             <span class="text-sm font-semibold text-zinc-700">Subject</span>

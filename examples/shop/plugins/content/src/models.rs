@@ -270,7 +270,13 @@ pub struct ContactMessage {
     pub name: String,
     #[form(required, email, max_length = 254)]
     pub email: String,
-    #[form(optional, max_length = 30)]
+    // E.164 international format (`+<country><subscriber>`) — the
+    // regex catches "07065" / "+1 (415) 555-1234" / "abc" and only
+    // accepts canonical `+14155551234`-shaped values. The shop
+    // demo uses E.164 because it round-trips across every SMS
+    // provider; a softer "any digits" check would reject good
+    // numbers and accept obviously-wrong ones.
+    #[form(optional, phone, max_length = 30)]
     pub phone: Option<String>,
     #[form(required, length(min = 1, max = 200))]
     pub subject: String,

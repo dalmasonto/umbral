@@ -2934,6 +2934,20 @@ struct FormFieldAttr {
     optional: bool,
     min_length: Option<usize>,
     max_length: Option<usize>,
+    /// gaps2 #19 follow-up — `#[form(phone)]` swaps the field
+    /// ctor to `Field::phone` (E.164 regex + `<input type="tel">`).
+    phone: bool,
+    /// `#[form(url)]` — same shape as `phone` but for http(s) URLs.
+    url: bool,
+    /// `#[form(regex = "...")]` — arbitrary user-supplied pattern.
+    /// Optionally paired with `#[form(message = "...")]` to
+    /// customise the error string; defaults to a generic "doesn't
+    /// match required format" otherwise. Composes with any of the
+    /// preset format checks above: a `#[form(phone, regex = "...")]`
+    /// declaration runs BOTH validators and reports BOTH errors
+    /// when both fail.
+    regex: Option<String>,
+    regex_message: Option<String>,
 }
 
 fn parse_form_attrs(attrs: &[syn::Attribute]) -> syn::Result<FormFieldAttr> {
@@ -2945,6 +2959,20 @@ fn parse_form_attrs(attrs: &[syn::Attribute]) -> syn::Result<FormFieldAttr> {
         attr.parse_nested_meta(|meta| {
             if meta.path.is_ident("email") {
                 out.email = true;
+                Ok(())
+            } else if meta.path.is_ident("phone") {
+                out.phone = true;
+                Ok(())
+            } else if meta.path.is_ident("url") {
+                out.url = true;
+                Ok(())
+            } else if meta.path.is_ident("regex") {
+                let lit: syn::LitStr = meta.value()?.parse()?;
+                out.regex = Some(lit.value());
+                Ok(())
+            } else if meta.path.is_ident("message") {
+                let lit: syn::LitStr = meta.value()?.parse()?;
+                out.regex_message = Some(lit.value());
                 Ok(())
             } else if meta.path.is_ident("password") {
                 out.password = true;
@@ -3415,14 +3443,24 @@ fn expand_form(input: DeriveInput) -> syn::Result<TokenStream2> {
 
         // Build the Field constructor chain. For each field the macro
         // emits a `let <ident>_field = ::umbra::forms::Field::<ctor>(name)
-        //     [.min_length(N)] [.max_length(N)] [.optional()];`.
-        let ctor = match (kind, attrs.email, attrs.password) {
-            (FormFieldKind::String, true, _) => quote!(email),
-            (FormFieldKind::String, _, true) => quote!(password),
-            (FormFieldKind::String, _, _) => quote!(text),
-            (FormFieldKind::Integer, _, _) => quote!(integer),
-            (FormFieldKind::Float, _, _) => quote!(float),
-            (FormFieldKind::Bool, _, _) => quote!(boolean),
+        //     [.min_length(N)] [.max_length(N)] [.regex(...)]
+        //     [.optional()];`.
+        //
+        // gaps2 #19 follow-up: ctor dispatch widened to cover
+        // `#[form(phone)]` / `#[form(url)]`. Order matters when
+        // multiple flags fire (rare but possible — e.g.
+        // `#[form(email, phone)]`): `email` wins because it's the
+        // more semantically narrow shape. `regex` is additive —
+        // pushed onto whichever ctor's validator stack.
+        let ctor = match (kind, attrs.email, attrs.phone, attrs.url, attrs.password) {
+            (FormFieldKind::String, true, _, _, _) => quote!(email),
+            (FormFieldKind::String, _, true, _, _) => quote!(phone),
+            (FormFieldKind::String, _, _, true, _) => quote!(url),
+            (FormFieldKind::String, _, _, _, true) => quote!(password),
+            (FormFieldKind::String, _, _, _, _) => quote!(text),
+            (FormFieldKind::Integer, _, _, _, _) => quote!(integer),
+            (FormFieldKind::Float, _, _, _, _) => quote!(float),
+            (FormFieldKind::Bool, _, _, _, _) => quote!(boolean),
         };
         let mut chain = quote! {
             ::umbra::forms::Field::#ctor(#field_name)
@@ -3432,6 +3470,13 @@ fn expand_form(input: DeriveInput) -> syn::Result<TokenStream2> {
         }
         if let Some(n) = attrs.max_length {
             chain = quote! { #chain.max_length(#n) };
+        }
+        if let Some(pattern) = &attrs.regex {
+            let message = attrs
+                .regex_message
+                .clone()
+                .unwrap_or_else(|| format!("{{field}} doesn't match the required format"));
+            chain = quote! { #chain.regex(#pattern, #message) };
         }
         if is_optional {
             chain = quote! { #chain.optional() };

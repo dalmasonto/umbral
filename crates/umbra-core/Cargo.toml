@@ -62,6 +62,11 @@ mac_address = { version = "1", features = ["serde"] }
 # per the outline at docs/specs/outlines/templates.md. Default features
 # only; we don't need debug rendering or speedups.
 minijinja = "2"
+# gaps2 #19 follow-up — `#[form(regex = "...")]` + `#[form(phone)]`
+# attribute validators. `regex` is already a transitive dep of the
+# tracing-subscriber / chrono-tz family; pinning it directly here
+# keeps the form Validator pipeline self-contained.
+regex = "1"
 # `toml::Value` is the storage type for `Settings.extra`. Figment
 # pulls toml in transitively but doesn't re-export it; the direct dep
 # keeps the public API of `Settings` stable when figment internals

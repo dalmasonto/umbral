@@ -242,6 +242,70 @@ impl Validator for EmailFormat {
     }
 }
 
+/// Regex-pattern validator — the catch-all shape for "value must
+/// match this format". Reject the field with a user-supplied message
+/// when the pattern doesn't match.
+///
+/// Used by `#[form(regex = "...")]` on derived form structs AND by
+/// the `Field::regex` / `Field::phone` / `Field::url` convenience
+/// constructors. The pattern is parsed once at construction time
+/// (panics if invalid — a hardcoded pattern can't go wrong in
+/// production; user-supplied patterns are validated at `cargo build`
+/// time through the macro's `Regex::new(...)` compile-time call).
+pub struct RegexFormat {
+    pattern: regex::Regex,
+    message: String,
+}
+
+impl RegexFormat {
+    /// Build a regex validator from a pattern + a human message. The
+    /// pattern is compiled eagerly — use `regex::Regex::new` shape
+    /// (no leading slash, no flags suffix). Panics on an invalid
+    /// pattern; the derive macro catches this at build time by
+    /// emitting the literal into the generated code.
+    pub fn new(pattern: &str, message: impl Into<String>) -> Self {
+        Self {
+            pattern: regex::Regex::new(pattern)
+                .unwrap_or_else(|e| panic!("RegexFormat: invalid pattern `{pattern}`: {e}")),
+            message: message.into(),
+        }
+    }
+}
+
+impl Validator for RegexFormat {
+    fn check(&self, field_name: &str, value: &str) -> Result<(), String> {
+        if self.pattern.is_match(value) {
+            Ok(())
+        } else {
+            // `{field}` placeholder in the message gets substituted
+            // with the actual field name — lets one message template
+            // be reused across forms ("{field} must start with `+`").
+            // Most callers won't use the placeholder; substitution is
+            // a no-op when it's absent.
+            Err(self.message.replace("{field}", field_name))
+        }
+    }
+}
+
+/// E.164 international phone-number format — the standard the
+/// telecoms industry uses. `+<country code><subscriber number>`
+/// where the country code is 1-3 digits and the subscriber number
+/// is up to 14 digits, no spaces or punctuation.
+///
+/// Catches the most common typo'd-phone cases ("07065" with no
+/// country code, "+0..." starting with zero, letters mixed in,
+/// dashes / spaces / parens that proper E.164 doesn't allow).
+/// Users who need a softer "accept anything that looks vaguely
+/// phone-ish" check can write their own regex via
+/// `#[form(regex = "...", message = "...")]`.
+pub const PHONE_E164_PATTERN: &str = r"^\+[1-9]\d{1,14}$";
+
+/// URL validator — http(s) only, requires a host, accepts an
+/// optional path/query/fragment. Conservative on purpose:
+/// `ftp://`, `mailto:`, etc. get rejected so a form that promises
+/// "URL" doesn't end up persisting a non-web scheme.
+pub const URL_PATTERN: &str = r"^https?://[A-Za-z0-9._~:%/?#\[\]@!$&'()*+,;=-]+$";
+
 // =========================================================================
 // Field types. Each owns its name, value (after parsing), and a list
 // of validators that fire in order. `render_html` emits the matching
@@ -256,6 +320,16 @@ pub enum InputKind {
     Text,
     Number,
     Email,
+    /// gaps2 #19 follow-up — `<input type="tel">` so mobile
+    /// browsers pop the number keypad. Phone fields don't get
+    /// browser-side validation (there's no canonical phone format
+    /// the browser knows about), so the server-side regex is what
+    /// catches typo'd input.
+    Tel,
+    /// `<input type="url">`. Browser does shallow validation
+    /// (requires a scheme + host) but the server-side regex is
+    /// stricter about which schemes are allowed.
+    Url,
     Password,
     Checkbox,
     Date,
@@ -270,6 +344,8 @@ impl InputKind {
             InputKind::Text | InputKind::Textarea => "text",
             InputKind::Number => "number",
             InputKind::Email => "email",
+            InputKind::Tel => "tel",
+            InputKind::Url => "url",
             InputKind::Password => "password",
             InputKind::Checkbox => "checkbox",
             InputKind::Date => "date",
@@ -305,6 +381,66 @@ impl Field {
         let mut f = Self::text(name);
         f.kind = InputKind::Email;
         f.validators.push(Box::new(EmailFormat));
+        f
+    }
+
+    /// Attach a regex-pattern validator to an existing field.
+    /// Composes with `Required`, `MinLength`, `MaxLength`, etc. —
+    /// the regex check fires after the others, so empty / missing
+    /// values surface the right "is required" error rather than
+    /// a confusing "doesn't match pattern" error.
+    ///
+    /// The pattern is compiled eagerly — an invalid regex panics at
+    /// construction time. The derive macro short-circuits this by
+    /// emitting the literal pattern, so a malformed
+    /// `#[form(regex = "...")]` surfaces as a panic in tests rather
+    /// than silently passing every input.
+    ///
+    /// Use `{field}` in the message to interpolate the field name.
+    ///
+    /// ```ignore
+    /// let f = Field::text("invoice_id")
+    ///     .regex(r"^INV-\d{6}$", "{field} must look like `INV-123456`");
+    /// ```
+    pub fn regex(mut self, pattern: &str, message: impl Into<String>) -> Self {
+        self.validators
+            .push(Box::new(RegexFormat::new(pattern, message)));
+        self
+    }
+
+    /// New phone field — E.164 international format
+    /// (`+<country><subscriber>`, e.g. `+14155551234`). Catches the
+    /// common typo'd-phone cases ("07065", "+0…", letters mixed in,
+    /// dashes / spaces / parens that proper E.164 doesn't allow).
+    /// Renders as `<input type="tel">` so mobile browsers pop the
+    /// number keypad.
+    ///
+    /// Soft-validation case ("accept anything phone-ish, even
+    /// without country code"): use `Field::text` + your own
+    /// `.regex(...)`. The strict E.164 pattern here is the right
+    /// default because every form that asks for a phone number
+    /// SHOULD be storing them in E.164 (the only shape that
+    /// round-trips across providers / SMS gateways / address books).
+    pub fn phone(name: impl Into<String>) -> Self {
+        let mut f = Self::text(name);
+        f.kind = InputKind::Tel;
+        f.validators.push(Box::new(RegexFormat::new(
+            PHONE_E164_PATTERN,
+            "{field} must be E.164 format — `+` then country code then number, no spaces",
+        )));
+        f
+    }
+
+    /// New URL field — http(s) only, requires a host. Conservative:
+    /// `ftp://` / `mailto:` / etc. get rejected so a form that
+    /// promises "URL" doesn't persist a non-web scheme.
+    pub fn url(name: impl Into<String>) -> Self {
+        let mut f = Self::text(name);
+        f.kind = InputKind::Url;
+        f.validators.push(Box::new(RegexFormat::new(
+            URL_PATTERN,
+            "{field} must be an http(s):// URL",
+        )));
         f
     }
 
@@ -946,6 +1082,107 @@ mod tests {
     // bug pre-fix.
     // =====================================================================
 
+    // =====================================================================
+    // gaps2 #19 follow-up — regex / phone / url validators
+    // =====================================================================
+
+    #[test]
+    fn phone_field_accepts_e164_format() {
+        let f = Field::phone("phone");
+        let mut errs = ValidationErrors::new();
+        f.validate("+14155551234", &mut errs);
+        assert!(errs.is_empty(), "valid E.164 should pass: {:?}", errs);
+    }
+
+    #[test]
+    fn phone_field_rejects_local_only_format() {
+        // The bug report case: "07065" got accepted because the
+        // field had only `optional + max_length`. With `Field::phone`
+        // (== `#[form(phone)]`) the E.164 regex rejects it.
+        let f = Field::phone("phone");
+        let mut errs = ValidationErrors::new();
+        f.validate("07065", &mut errs);
+        assert!(errs.fields.contains_key("phone"));
+        assert!(
+            errs.fields["phone"][0].contains("E.164"),
+            "error message names the format: {:?}",
+            errs.fields["phone"][0]
+        );
+    }
+
+    #[test]
+    fn phone_field_rejects_letters_and_punctuation() {
+        let f = Field::phone("phone");
+        for bad in &["+1-415-555-1234", "+1 (415) 555 1234", "+1abc", "+0123"] {
+            let mut errs = ValidationErrors::new();
+            f.validate(bad, &mut errs);
+            assert!(
+                errs.fields.contains_key("phone"),
+                "should reject `{bad}`: {:?}",
+                errs.fields
+            );
+        }
+    }
+
+    #[test]
+    fn url_field_accepts_http_and_https_only() {
+        let f = Field::url("homepage");
+        for good in &["https://example.com", "http://example.com/path?q=1"] {
+            let mut errs = ValidationErrors::new();
+            f.validate(good, &mut errs);
+            assert!(errs.is_empty(), "should accept `{good}`: {:?}", errs);
+        }
+        for bad in &["ftp://example.com", "mailto:a@b.c", "example.com"] {
+            let mut errs = ValidationErrors::new();
+            f.validate(bad, &mut errs);
+            assert!(
+                errs.fields.contains_key("homepage"),
+                "should reject `{bad}`: {:?}",
+                errs.fields
+            );
+        }
+    }
+
+    #[test]
+    fn regex_validator_substitutes_field_in_message() {
+        // {field} placeholder gets the actual field name — useful
+        // for reusable messages across multiple forms.
+        let f = Field::text("invoice_id")
+            .regex(r"^INV-\d{6}$", "{field} must match the invoice pattern");
+        let mut errs = ValidationErrors::new();
+        f.validate("not-an-invoice", &mut errs);
+        assert_eq!(
+            errs.fields["invoice_id"][0],
+            "invoice_id must match the invoice pattern"
+        );
+    }
+
+    #[test]
+    fn regex_validator_composes_with_required_and_max_length() {
+        // Order: Required runs FIRST (empty → "is required"),
+        // then max_length, then regex. An empty value should
+        // surface the "required" error, not "doesn't match pattern".
+        let f = Field::text("code")
+            .max_length(8)
+            .regex(r"^[A-Z]{3}$", "{field} must be 3 uppercase letters");
+
+        let mut errs = ValidationErrors::new();
+        f.validate("", &mut errs);
+        assert!(
+            errs.fields["code"][0].contains("required"),
+            "empty surfaces required error first: {:?}",
+            errs.fields["code"][0]
+        );
+
+        let mut errs = ValidationErrors::new();
+        f.validate("HELLO", &mut errs);
+        assert!(
+            errs.fields["code"][0].contains("3 uppercase"),
+            "regex error fires when value is present but malformed: {:?}",
+            errs.fields["code"][0]
+        );
+    }
+
     #[test]
     fn form_errors_with_raw_round_trips_the_submitted_pairs() {
         let mut raw = HashMap::new();
@@ -976,7 +1213,10 @@ mod tests {
         // `{{ form.name }}` repopulates.
         let json = errs.raw_as_json();
         let obj = json.as_object().expect("raw_as_json is an object");
-        assert_eq!(obj.get("name").and_then(|v| v.as_str()), Some("Bella Verifier"));
+        assert_eq!(
+            obj.get("name").and_then(|v| v.as_str()),
+            Some("Bella Verifier")
+        );
         assert_eq!(obj.get("phone").and_then(|v| v.as_str()), Some("none"));
     }
 
