@@ -113,6 +113,29 @@ The serialized shape carries every column on `AuthUser`. If you've added a `disp
 <span>{{ user.display_name or user.username }}</span>
 ```
 
+## What `user` does NOT carry — related objects
+
+<Callout type="warning">
+  **Reverse-OneToOne, reverse-FK, and forward-FK traversal in templates is not implemented yet.** `{{ user.profile.avatar }}`, `{{ user.customer.id }}`, `{{ user.order_set }}`, `{{ user.profile.address.city }}` — none of these work today, regardless of how the relations are declared on the Rust side.
+
+  Why: `user` in templates is the JSON-serialized AuthUser. Relation accessors are Rust async methods that aren't serialized into the value (they'd need DB access to resolve, and minijinja is sync — can't `.await`). The cross-crate reverse-OneToOne accessor (e.g. `user.customer().await?` from [orm/relationships](/v0.0.1/orm/relationships#parent-side-cross-crate)) is a Rust-only API.
+
+  **What to do today**: resolve the relations you need in the handler and pass them into the template context explicitly:
+
+  ```rust
+  let customer = user.0.customer().await?;
+  let customer_id = customer.as_ref().map(|c| c.id);
+  let loyalty = customer.as_ref().map(|c| c.loyalty_points).unwrap_or(0);
+  render("me.html", &context!(username, customer_id, loyalty))
+  ```
+
+  Then in the template: `{{ customer_id }}`, `{{ loyalty }}` — flat keys, pre-resolved.
+
+  **What's coming**: `bugs/gaps2.md` #14 captures the design space. The front-runner is an eager-prefetch declaration that mirrors Django's `select_related` / `prefetch_related` — the handler declares "this template will walk user.customer.address," the framework resolves those before rendering, and the template uses dot-notation against the pre-loaded values. No ETA; logged as a focused follow-on.
+</Callout>
+
+For now, `user.<column>` works only for **columns on the AuthUser table itself** — `is_authenticated`, `is_staff`, `is_superuser`, `username`, `email`, `date_joined`, etc. Anything that requires a SQL query to fetch (relations, computed fields, M2M sets) has to be resolved in the handler.
+
 ## Custom user models
 
 The default wiring is `AuthPlugin::<AuthUser>::default().with_user_in_templates()`. The middleware is hard-bound to `AuthUser` because the serialization step uses its concrete `Serialize` impl. Apps using a custom `UserModel` build their own middleware against the building blocks:

@@ -257,9 +257,21 @@ The macro emits both `pub trait ProfileUserOneToOneReverse { async fn profile(&s
 
 Naming is `<child_snake>()`, with `<child_snake>_via_<field>()` disambiguating when one child has multiple unique FKs to the same parent. The accessor is only emitted when the FK carries `#[umbra(unique)]` — a plain FK gets the `_set()` form but not the o2o form, since the cardinality is `0..N`.
 
-This is the right shape for `request.user.profile.avatar`-style templating across crates: one method call, one `LIMIT 1` query, no need for the user to know the back-link convention.
+This is the right shape for `request.user.profile.avatar`-style flows in **Rust**: one method call, one `LIMIT 1` query, no need for the user to know the back-link convention.
 
-To reach the same shape from inside a template (`{{ user.profile.avatar }}`), turn on [user in templates](/v0.0.1/auth/user-in-templates) — `AuthPlugin::with_user_in_templates()` mounts a middleware that injects the AuthUser into every render context. The cross-crate accessor then composes naturally: the handler resolves `user.profile()`, stuffs it into the render context, and the template walks the relation.
+<Callout type="warning">
+  **Template-side relation traversal is not implemented.** Writing `{{ user.profile.avatar }}` directly in a minijinja template does NOT work — neither for cross-crate reverse-OneToOne nor for reverse-FK collections nor for the plain FK forward direction. `user` in templates is the JSON-serialized AuthUser (via [user in templates](/v0.0.1/auth/user-in-templates)); relation accessors are Rust async methods that don't survive serialization, and minijinja is synchronous so it can't `.await` anyway.
+
+  **The workaround today**: resolve the relation in the handler and pass the value into the template context explicitly:
+
+  ```rust
+  let customer = user.0.customer().await?;          // ← resolve in Rust
+  let customer_id = customer.as_ref().map(|c| c.id);
+  render("me.html", &context!(customer_id))         // ← template uses `{{ customer_id }}`
+  ```
+
+  See `bugs/gaps2.md` #14 for the design space we're considering (eager-prefetch declaration is the front-runner; mirrors Django's `select_related` / `prefetch_related` pattern).
+</Callout>
 
 ### Unique-constraint violations in the admin
 
