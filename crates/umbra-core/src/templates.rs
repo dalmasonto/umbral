@@ -276,9 +276,22 @@ fn render_with<C: Serialize>(
 /// ctx is returned unchanged.
 fn merge_ambient_user<C: Serialize>(ctx: &C) -> minijinja::Value {
     let ctx_value = minijinja::Value::from_serialize(ctx);
-    let Ok(Some(user_value)) = CURRENT_USER.try_with(|u| u.clone()) else {
-        return ctx_value;
-    };
+    // Resolve which `user` value should land in the rendered ctx:
+    //   1. Task-local set by a middleware (AuthPlugin's
+    //      `user_context_layer`) — the live request shape.
+    //   2. Anonymous fallback `{ is_authenticated: false }` for
+    //      callers WITHOUT a layer mounted AND for renders that
+    //      happen outside the middleware's scope (notably the
+    //      `render_500_middleware` recovery path — the
+    //      user-context task-local has already dropped by the time
+    //      the error layer renders, but the 500 template still
+    //      needs `user.is_authenticated` to evaluate cleanly).
+    //
+    // The fallback is the same shape `serialize_anonymous` would
+    // produce, kept in core so umbra-auth isn't a dependency of
+    // the templates module.
+    let layer_user = CURRENT_USER.try_with(|u| u.clone()).ok().flatten();
+    let user_value = layer_user.unwrap_or_else(anonymous_user_value);
     // Only inject when the caller didn't supply `user` themselves.
     if ctx_value
         .get_attr("user")
@@ -302,6 +315,28 @@ fn merge_ambient_user<C: Serialize>(ctx: &C) -> minijinja::Value {
     }
     pairs.push(("user".to_string(), user_value));
     minijinja::Value::from_iter(pairs)
+}
+
+/// Anonymous-user sentinel — the value `user` resolves to in
+/// templates rendered outside an authenticated context (no auth
+/// middleware, anonymous request, or the 500-rendering path
+/// where the middleware's task-local has already dropped).
+/// Carries only `{ is_authenticated: false }` — enough for
+/// `{% if user.is_authenticated %}` / `{% if user.is_staff %}`
+/// to evaluate to false without `umbra templates: undefined
+/// value` errors that would otherwise mask the original failure.
+fn anonymous_user_value() -> minijinja::Value {
+    let mut map = serde_json::Map::new();
+    map.insert(
+        "is_authenticated".to_string(),
+        serde_json::Value::Bool(false),
+    );
+    // is_staff / is_superuser default to false too so a template
+    // gating on either doesn't accidentally render the privileged
+    // branch when `user` is the anonymous fallback.
+    map.insert("is_staff".to_string(), serde_json::Value::Bool(false));
+    map.insert("is_superuser".to_string(), serde_json::Value::Bool(false));
+    minijinja::Value::from_serialize(serde_json::Value::Object(map))
 }
 
 /// Walk a directory recursively and register every `.html` / `.htm` /

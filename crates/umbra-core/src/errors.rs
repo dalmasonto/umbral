@@ -288,6 +288,14 @@ fn build_500_context(
 ///
 /// Resolves the effective template name the same way `render_not_found`
 /// resolves the 404: user-supplied name → embedded default → plain text.
+/// If the chosen template itself errors during render (the
+/// recovery-path-failed case: usually a `{% extends "wrapper.html" %}`
+/// that breaks because wrapper.html shares the bug that fired the
+/// original 500), the secondary error gets `tracing::error!`'d AND
+/// — when dev mode is on — embedded in the plain-text fallback body
+/// so the developer sees the recovery failure inline instead of
+/// staring at a generic "Internal Server Error" while the real
+/// chain hides in the logs.
 fn render_500(template: Option<&str>, ctx: &minijinja::Value) -> (String, &'static str) {
     let effective = template.or_else(|| {
         if default_pages_enabled() {
@@ -297,15 +305,48 @@ fn render_500(template: Option<&str>, ctx: &minijinja::Value) -> (String, &'stat
         }
     });
 
-    effective
-        .and_then(|name| crate::templates::render(name, ctx).ok())
-        .map(|html| (html, "text/html; charset=utf-8"))
-        .unwrap_or_else(|| {
-            (
-                "Internal Server Error".to_string(),
-                "text/plain; charset=utf-8",
-            )
-        })
+    let Some(name) = effective else {
+        return (
+            "Internal Server Error".to_string(),
+            "text/plain; charset=utf-8",
+        );
+    };
+
+    match crate::templates::render(name, ctx) {
+        Ok(html) => (html, "text/html; charset=utf-8"),
+        Err(secondary) => {
+            // The secondary failure WAS being silently swallowed by
+            // `.ok()`. Loud-fail it instead — the operator needs to
+            // see both errors (the original handler 500 already
+            // logged in `render_500_middleware`, plus this one).
+            tracing::error!(
+                template = %name,
+                error = %secondary,
+                "render_500: secondary template render failed; the configured \
+                 server-error template can't render itself. Likely a broken \
+                 `{{% extends \"wrapper.html\" %}}` chain. Falling back to \
+                 plain text.",
+            );
+            if is_dev_mode() {
+                // In dev, include both errors in the body so the
+                // user doesn't have to grep server logs to see why
+                // their 500 page didn't render.
+                let body = format!(
+                    "Internal Server Error\n\n\
+                     (dev) The configured 500 template `{name}` itself failed \
+                     to render: {secondary}\n\n\
+                     Check the original handler error in the server logs \
+                     (line above this one) for the trigger."
+                );
+                (body, "text/plain; charset=utf-8")
+            } else {
+                (
+                    "Internal Server Error".to_string(),
+                    "text/plain; charset=utf-8",
+                )
+            }
+        }
+    }
 }
 
 /// Build the panic-handler closure for
