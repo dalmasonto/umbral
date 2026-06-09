@@ -347,3 +347,153 @@ These are the cross-cutting capabilities that turn a framework from a neat ORM d
     > Why: Register arbitrary handlers as admin pages: `/admin/reports/sales/`. Needed for dashboards, analytics, and one-off admin tools that don't map to a model.
     >
     > How: `AdminView` trait with `path()`, `template()`, `context()`, and `permission()`. `AdminPlugin::default().view(SalesReportView)` registers the route under `/admin/reports/sales/`. The existing route registration system already supports this; just expose it through the admin builder.
+
+77. [ ] **Admin alerts — unified routing across SSE bell, email, webhooks** 🔴 High
+    > Why: A framework that ships SSE notifications (#2), email (#39), and a task queue (#43) but no glue between them forces every app to re-build the same observability spine. "Email me when a Stripe webhook fails three times in an hour" is the canonical SaaS need; it touches every one of those plugins. Without a unified alerts surface, the developer wires `panic::catch_unwind` to `lettre::send` to a `tokio::spawn` retry loop, by hand, in every project. That's the gap.
+    >
+    > The same surface answers: error reporting (every handler 500 fires a `handler_5xx` alert), background-task failures (an apalis job that exceeds its retry budget fires `task_failed`), business-rule breaches (`umbra::alerts::warn("inventory_low", details)` from a save signal), and capacity thresholds (a metrics-driven `disk_full` alert from the health-check plugin). Different sources, one routing fabric.
+    >
+    > How — five layers:
+    >
+    > 1. **`Alert` value type**. A canonical struct in `umbra-alerts`:
+    >    ```rust
+    >    pub struct Alert {
+    >        pub key:      String,                   // "stripe_webhook_failed"
+    >        pub severity: Severity,                 // Info / Warning / Error / Critical
+    >        pub title:    String,
+    >        pub details:  serde_json::Value,        // freeform context
+    >        pub source:   Option<String>,           // plugin / module that emitted it
+    >        pub fired_at: DateTime<Utc>,
+    >    }
+    >    ```
+    >    `umbra::alerts::fire(Alert)` is the single emission entry point. Auto-sources (handler 500s, task failures) wire through the same call.
+    >
+    > 2. **Channels**. Each channel implements:
+    >    ```rust
+    >    #[async_trait]
+    >    pub trait AlertChannel: Send + Sync {
+    >        fn name(&self) -> &'static str;
+    >        async fn deliver(&self, alert: &Alert) -> Result<(), AlertError>;
+    >    }
+    >    ```
+    >    Built-ins: `SseChannel` (admin bell, depends on #2), `EmailChannel` (depends on #39, takes `to: Vec<String>` from settings), `WebhookChannel` (POST JSON to an arbitrary URL — fits PagerDuty / Slack), `LogChannel` (always-on, writes `tracing::error!`). Third parties bring `SmsChannel`, `PagerDutyChannel`, etc.
+    >
+    > 3. **Routing rules**. A declarative table (`AlertRoute { match_key: GlobOrRegex, min_severity: Severity, channels: Vec<&str>, throttle: Option<Throttle> }`) registered at builder time:
+    >    ```rust
+    >    AlertsPlugin::default()
+    >        .channel(SseChannel::default())
+    >        .channel(EmailChannel::to(&["ops@example.com"]))
+    >        .route(AlertRoute::all().min_severity(Warning).to("sse"))
+    >        .route(AlertRoute::matching("stripe_*").min_severity(Error).to(&["sse", "email"]))
+    >        .route(AlertRoute::matching("payment_failed").min_severity(Critical).to(&["email", "webhook:pagerduty"]))
+    >    ```
+    >    Settings-driven overrides (`UMBRA_ALERTS__STRIPE=email,sse`) trump the builder rules so ops can re-route without redeploys.
+    >
+    > 4. **Delivery via apalis** (depends on #43). `fire()` doesn't `await` the channel — it persists the alert to an `alert_log` table and enqueues a `DeliverAlert { alert_id, channel }` job per matched channel. Apalis workers pull jobs, call `channel.deliver(&alert)`, retry on failure with exponential backoff. The hot path (handler / signal / task) never blocks on SMTP / webhook latency. **This is the part that makes apalis a hard prerequisite** — sync delivery in the request handler would couple every email outage to user-visible 5xx.
+    >
+    > 5. **Admin UI**. `/admin/alerts/` lists every `alert_log` row with severity filters + a per-row "delivery history" expansion (which channels succeeded / failed, with retry counts). The dashboard's SSE bell (from #2) is just another consumer of the same `alert_log` — when `SseChannel::deliver` runs it pushes to the connected admin sessions AND inserts into a per-user `unread` table that the bell's badge counts. Closing the bell dropdown marks them read.
+    >
+    > **What this NOT** — a metrics system. Alerts are discrete events ("X failed, here are the details"); metrics are continuous series ("error rate is 3.2% over the last 5 minutes"). Prometheus / OpenTelemetry (#48, #49) is the right tool for thresholds and SLOs; an alert is what the metrics layer FIRES at when a threshold trips. The framework should make it easy to bridge the two (`MetricsAlertSource` adapter), but the alerts plugin doesn't own the time-series itself.
+    >
+    > **Settings shape worth pinning early**:
+    > ```toml
+    > # umbra.toml
+    > [alerts]
+    > # Hard ceiling — no alert above Critical ever fires more than 1×/min
+    > # regardless of route config (prevents pager storms during cascading failure).
+    > global_throttle_per_min = 60
+    >
+    > [alerts.routes.payment_failed]
+    > severity = "error"
+    > channels = ["email", "webhook:pagerduty"]
+    > throttle = { window = "5m", max = 3 }
+    >
+    > [alerts.channels.email]
+    > to = ["ops@example.com", "founders@example.com"]
+    > # Reuses [email] block from #39
+    >
+    > [alerts.channels.webhook.pagerduty]
+    > url = "https://events.pagerduty.com/..."
+    > headers = { Authorization = "Token ..." }
+    > ```
+    >
+    > **Triggering signals already in flight**: this entry depends on #2 (SSE), #39 (email), #43 (apalis-backed tasks). It pulls them into one coherent feature instead of three orphan pieces. When #43 ships, the alerts plugin is ~600 lines of glue + 1 model (`AlertLog`) + 1 admin view. Ship #43 first, then this becomes the demo that proves apalis is wired correctly end-to-end.
+    >
+    > **Stretch (post-v1)**: per-user alert preferences (`AdminUserPref::alert_subscriptions`) so each operator opts into the keys they care about; rule-based grouping (10 `stripe_webhook_failed` alerts in 5 minutes collapse to one "Stripe webhook degraded" digest); incident grouping (an alert with `incident_id: Some(...)` joins an open incident thread in the admin).
+
+78. [ ] **Visitor analytics plugin — first-party header-driven, zero external services** 🟡 Medium
+    > Why: Every web app eventually wants the same questions answered — "what browsers are my users on, where are they coming from, what % is mobile, how is traffic trending?" The Plausible / Fathom / Umami market exists because the easy answer (Google Analytics) is a privacy + compliance burden, but rolling your own means a tracking-pixel SPA, a separate ingest endpoint, and a separate dashboard. Umbra already has the request middleware surface, an ORM, an admin with widgets — the data the server SEES on every request is enough for a 90% solution. A plugin that captures headers + emits admin widgets is the lightest-weight "we have analytics" story a framework can ship.
+    >
+    > Critically: NO browser-side script, NO tracking pixel, NO third-party endpoint. The server already receives `user-agent`, `referer`, `accept-language`, `sec-ch-ua-platform`, `sec-ch-ua-mobile`, the request path + method + status code + duration. That's the entire feature surface. Privacy-respecting by construction — no fingerprinting, no cross-site tracking, no consent banner needed for the default config.
+    >
+    > How — three layers:
+    >
+    > 1. **Capture middleware** (`AnalyticsPlugin::default()` → `Plugin::wrap_router`). Records a `Visit` row per request:
+    >    ```rust
+    >    pub struct Visit {
+    >        pub id:           i64,
+    >        pub timestamp:    DateTime<Utc>,
+    >        pub path:         String,
+    >        pub method:       String,           // "GET" / "POST" / ...
+    >        pub status:       i32,              // response status code
+    >        pub duration_ms:  i32,
+    >        pub user_agent:   Option<String>,   // raw header — parsed below
+    >        pub browser:      Option<String>,   // "Chrome 149"
+    >        pub os:           Option<String>,   // "Linux" / "macOS 15" / "iOS 18"
+    >        pub device:       Option<String>,   // "desktop" / "mobile" / "tablet"
+    >        pub referer:      Option<String>,   // raw
+    >        pub referer_host: Option<String>,   // "google.com" — for aggregation
+    >        pub language:     Option<String>,   // accept-language primary tag
+    >        pub country:      Option<String>,   // when GeoIP feature is on
+    >        pub session_id:   Option<String>,   // umbra-sessions cookie when present
+    >    }
+    >    ```
+    >    User-agent parsing via the `woothee` crate (one dep, no regex compilation tax). `sec-ch-ua-platform` + `sec-ch-ua-mobile` headers (already structured, no parsing) win over UA parsing when both are present.
+    >
+    > 2. **Async write path** — DO NOT block the request thread on the INSERT. Push the row to the apalis task queue (feature #43); a worker drains it in batches. The hot path budget for the middleware is one HashMap lookup (for the session id) and one apalis enqueue. This is what makes "log every request" not a 2x latency tax.
+    >
+    > 3. **Admin widgets** — opt-in via `AdminPlugin::dashboard_section(visitor_widgets::all())`. Reuses the widget kinds from `documentation/docs/v0.0.1/admin/widgets.mdx`:
+    >    - **Daily visits** (Line, multi-series: total / unique sessions / mobile share).
+    >    - **Browser distribution** (Donut — Chrome / Safari / Firefox / Edge / Other).
+    >    - **OS distribution** (Donut / Bar).
+    >    - **Top referers** (Table — referer_host + count, with `?period=` chips).
+    >    - **Top paths** (Table — path + visits + avg duration).
+    >    - **Geographic spread** (Donut grouped by country when GeoIP is on; hidden otherwise).
+    >    - **Status-code mix** (Donut — 2xx / 3xx / 4xx / 5xx share; a 5xx spike is the on-call signal).
+    >    - **Live counter** (KPI — visits in the last 5 minutes; SSE-pushed via #2/#45 when those land).
+    >
+    > **Config knobs to pin early**:
+    > ```toml
+    > [analytics]
+    > # Default ON for path / method / status / duration — zero-PII.
+    > # OPT-IN for user_agent / referer / language — some jurisdictions
+    > # consider these PII. The plugin defaults to off; the operator
+    > # opts in explicitly per field so adding the plugin doesn't
+    > # silently log information they didn't intend to collect.
+    > capture_user_agent = false
+    > capture_referer    = false
+    > capture_language   = false
+    > capture_ip         = false      # always off by default; GDPR-sensitive
+    > capture_geoip      = false      # requires capture_ip + a GeoIP backend
+    >
+    > # Exclude admin / static / health paths from the visit log — no
+    > # point in cluttering the dashboard with operator traffic.
+    > exclude_path_prefixes = ["/admin/", "/api/", "/static/", "/healthz", "/ready"]
+    >
+    > # Retention — auto-delete visit rows older than N days. Defaults
+    > # to 90 days because most analytics windows are quarterly or
+    > # less; bounds the table size without manual housekeeping.
+    > retention_days = 90
+    > ```
+    >
+    > **What this is NOT** — a session-replay / heatmap / funnel-analysis tool. Those need browser-side instrumentation (every click, every scroll, every form field focus event) and a separate event pipeline. Posthog / FullStory / Mixpanel own that market and the plugin doesn't try to compete. The line is "what the server already sees" — that's a clean scope.
+    >
+    > **Dependencies**:
+    >   - **#43 (apalis-backed tasks)** — the async write path. Without it the middleware would either block on every INSERT or fire-and-forget with no retry semantics (lost data on a DB blip). HARD prerequisite.
+    >   - **#77 (alerts)** — natural pairing: an analytics-driven alert ("traffic spike", "5xx rate >5%") routes through the alerts plugin's channels. Optional dep; analytics ships value without it.
+    >   - **`woothee` crate** — UA parsing. One dep, ~50KB, zero compile-time tax.
+    >   - **Optional GeoIP** — separate `umbra-geoip` plugin that ingests a MaxMind DB once and exposes `country_for(ip)`. Feature-gated; not pulled by default.
+    >
+    > **Triggering signal**: a real app dropping a Google Analytics snippet because they "just need to know what browsers people use." That's the canonical wedge — the plugin gives them an answer with zero JavaScript and no Google ToS.
+    >
+    > **Stretch (post-v1)**: UTM-parameter capture (`?utm_source=...`) so campaign tracking works; A/B-test bucketing tied to the session cookie; export-to-CSV from the admin views (`Daily visits → Download CSV`); per-path conversion funnels (path-A then path-B within session = "conversion").
