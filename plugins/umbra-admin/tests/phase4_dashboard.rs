@@ -44,6 +44,7 @@ async fn boot() -> &'static axum::Router {
             kind: WidgetKind::Kpi,
             default_span: Span { cols: 3, rows: 1 },
             permission: None,
+        default_period: None,
             data: WidgetDataFn::new(|_user| async move {
                 WidgetPayload::Kpi(KpiPayload {
                     value: "99".to_string(),

@@ -31,6 +31,7 @@ pub fn builtin_total_models_widget() -> Widget {
         kind: WidgetKind::Bar,
         default_span: Span { cols: 4, rows: 2 },
         permission: None,
+        default_period: None,
         data: WidgetDataFn::new(|_user| async move {
             let points = models_by_plugin_points();
             WidgetPayload::Bar(BarPayload {
@@ -98,6 +99,7 @@ pub fn builtin_recent_users_widget() -> Widget {
         kind: WidgetKind::Feed,
         default_span: Span { cols: 4, rows: 2 },
         permission: None,
+        default_period: None,
         data: WidgetDataFn::new(|_user| async move {
             let items = match find_model("auth_user") {
                 Some((_, meta)) => {
@@ -241,7 +243,18 @@ pub(crate) async fn dashboard_widget_data(
     // Closures registered via `WidgetDataFn::with_params` read
     // these to vary the response (`?period=7d`, etc.); closures
     // registered via plain `::new` see them dropped.
-    let params = crate::widgets::WidgetParams::from_query(query.as_deref().unwrap_or(""));
+    let mut params = crate::widgets::WidgetParams::from_query(query.as_deref().unwrap_or(""));
+    // First-load default: if the URL has no `?period=` AND the
+    // widget declared a `default_period` at registration time,
+    // stamp it into the params before calling the data fn. The
+    // template then renders the matching chip highlighted AND
+    // the data fn computes the right window — one source of
+    // truth for "this is the period we're showing right now."
+    if params.period.is_none() {
+        if let Some(default) = widget.default_period {
+            params.period = Some(default.to_string());
+        }
+    }
     let data_fn = widget.data.0.clone();
     let payload = data_fn(user, params.clone()).await;
 

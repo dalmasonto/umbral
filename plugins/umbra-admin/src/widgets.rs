@@ -653,6 +653,15 @@ pub struct Widget {
     pub permission: Option<&'static str>,
     /// Async function that computes and returns the payload.
     pub data: WidgetDataFn,
+    /// Default period preset used by line/bar/etc. widgets that
+    /// carry a period-chip strip — `"7d"`, `"30d"`, `"90d"`. When
+    /// `Some`, the handler pre-fills `WidgetParams.period` from
+    /// this value on first load (no `?period=` in the URL), so
+    /// the matching chip renders highlighted AND the data
+    /// closure receives the same period via `params.period_days()`.
+    /// `None` falls back to whatever the template / data closure
+    /// chooses as its fallback.
+    pub default_period: Option<&'static str>,
 }
 
 impl Widget {
@@ -669,6 +678,24 @@ impl Widget {
     /// the dashboard's `auto-rows-[...]` accepts (1 = 120px).
     pub fn with_span(mut self, cols: u8, rows: u8) -> Self {
         self.default_span = Span { cols, rows };
+        self
+    }
+
+    /// Pre-select a period chip on the widget — `"7d"`, `"30d"`,
+    /// `"90d"`. On first load (no `?period=` in the URL), the
+    /// handler stamps this into `WidgetParams.period` before
+    /// calling the data closure, so the chip strip highlights
+    /// the right preset AND the data fn computes the right
+    /// window. Override on a per-request basis happens via the
+    /// chip clicks (which send their own `?period=` query).
+    ///
+    /// ```ignore
+    /// shop_daily_sales_chart().with_default_period("7d")
+    /// // → first paint shows 7d highlighted, 7 days of data;
+    /// //   clicking "30d" hands control to the URL state.
+    /// ```
+    pub fn with_default_period(mut self, period: &'static str) -> Self {
+        self.default_period = Some(period);
         self
     }
 }

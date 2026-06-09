@@ -1419,6 +1419,7 @@ fn shop_total_sales_widget() -> umbra_admin::Widget {
         // without clipping; 240px gives bottom padding too.
         default_span: Span { cols: 3, rows: 2 },
         permission: None,
+        default_period: None,
         data: WidgetDataFn::new(|_user| async move {
             let now = chrono::Utc::now();
             let month_ago = now - chrono::Duration::days(30);
@@ -1452,6 +1453,7 @@ fn shop_orders_widget() -> umbra_admin::Widget {
         // without clipping; 240px gives bottom padding too.
         default_span: Span { cols: 3, rows: 2 },
         permission: None,
+        default_period: None,
         data: WidgetDataFn::new(|_user| async move {
             let now = chrono::Utc::now();
             let month_ago = now - chrono::Duration::days(30);
@@ -1482,6 +1484,7 @@ fn shop_customers_widget() -> umbra_admin::Widget {
         kind: WidgetKind::Card,
         default_span: Span { cols: 3, rows: 2 },
         permission: None,
+        default_period: None,
         data: WidgetDataFn::new(|_user| async move {
             let total = Customer::objects().count().await.unwrap_or(0);
             WidgetPayload::Card(
@@ -1502,6 +1505,7 @@ fn shop_avg_order_value_widget() -> umbra_admin::Widget {
         kind: WidgetKind::Card,
         default_span: Span { cols: 3, rows: 2 },
         permission: None,
+        default_period: None,
         data: WidgetDataFn::new(|_user| async move {
             let now = chrono::Utc::now();
             let month_ago = now - chrono::Duration::days(30);
@@ -1549,6 +1553,7 @@ fn shop_daily_sales_chart() -> umbra_admin::Widget {
         kind: WidgetKind::Line,
         default_span: Span { cols: 8, rows: 3 },
         permission: None,
+        default_period: Some("30d"),
         // `with_params` swaps the closure signature from
         // `Fn(AuthUser)` to `Fn(AuthUser, WidgetParams)` so the
         // widget can honour the `?period=7d|30d|90d` chip clicks
@@ -1595,6 +1600,7 @@ fn shop_activity_chart() -> umbra_admin::Widget {
         kind: WidgetKind::Line,
         default_span: Span { cols: 8, rows: 3 },
         permission: None,
+        default_period: Some("30d"),
         data: WidgetDataFn::with_params(|_user, params| async move {
             let days = params.period_days().unwrap_or(30);
             let now = chrono::Utc::now();
@@ -1670,6 +1676,7 @@ fn shop_order_status_donut() -> umbra_admin::Widget {
         kind: WidgetKind::Donut,
         default_span: Span { cols: 4, rows: 3 },
         permission: None,
+        default_period: None,
         data: WidgetDataFn::new(|_user| async move {
             let orders = Order::objects().fetch().await.unwrap_or_default();
             let mut counts: HashMap<String, f64> = HashMap::new();
@@ -1715,6 +1722,7 @@ fn shop_recent_orders_table() -> umbra_admin::Widget {
         kind: WidgetKind::Table,
         default_span: Span { cols: 4, rows: 3 },
         permission: None,
+        default_period: None,
         data: WidgetDataFn::new(|_user| async move {
             let columns = vec![
                 TableColumn {
@@ -1772,6 +1780,7 @@ fn content_recent_posts_table() -> umbra_admin::Widget {
         kind: WidgetKind::Table,
         default_span: Span { cols: 6, rows: 3 },
         permission: None,
+        default_period: None,
         data: WidgetDataFn::new(|_user| async move {
             let columns = vec![
                 TableColumn {
@@ -1819,6 +1828,7 @@ fn content_post_status_donut() -> umbra_admin::Widget {
         kind: WidgetKind::Donut,
         default_span: Span { cols: 3, rows: 3 },
         permission: None,
+        default_period: None,
         data: WidgetDataFn::new(|_user| async move {
             let posts = Post::objects().fetch().await.unwrap_or_default();
             let mut counts: HashMap<String, f64> = HashMap::new();
@@ -1853,6 +1863,7 @@ fn content_subscribers_card() -> umbra_admin::Widget {
         kind: WidgetKind::Card,
         default_span: Span { cols: 3, rows: 2 },
         permission: None,
+        default_period: None,
         data: WidgetDataFn::new(|_user| async move {
             let total = Subscriber::objects().count().await.unwrap_or(0);
             let confirmed = Subscriber::objects()
