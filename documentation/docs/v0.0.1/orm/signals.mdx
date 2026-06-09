@@ -17,15 +17,21 @@ ORM signals use a `<event>:<table>` shape so the built-in set is namespaced away
 
 | Name | Fired by | Payload |
 |---|---|---|
-| `pre_save:<table>` | `Manager::save` (before INSERT or UPDATE) | `{ instance, created, actor }` |
-| `post_save:<table>` | `Manager::save` (after, with the DB read-back row) | `{ instance, created, actor }` |
+| `pre_save:<table>` | `Manager::save` (typed) **AND** `DynQuerySet::insert_json` (dynamic) — before INSERT or UPDATE | `{ instance, created, actor }` |
+| `post_save:<table>` | `Manager::save` (typed) **AND** `DynQuerySet::insert_json` (dynamic) — after, with the DB read-back row | `{ instance, created, actor }` |
 | `pre_delete:<table>` | `Manager::delete_instance` (before) | `{ instance, actor }` |
 | `post_delete:<table>` | `Manager::delete_instance` (after) | `{ instance, actor }` |
-| `bulk_post_save:<table>` | `bulk_create`, `update_values`, `update_expr` | `{ ids, created, actor }` |
-| `bulk_post_delete:<table>` | `QuerySet::delete` | `{ ids, actor }` |
+| `bulk_post_save:<table>` | `bulk_create`, `update_values`, `update_expr` (typed) **AND** `DynQuerySet::update_json` (dynamic) | `{ ids, created, actor }` |
+| `bulk_post_delete:<table>` | `QuerySet::delete` (typed) **AND** `DynQuerySet::delete` (dynamic) | `{ ids, actor }` |
 | `m2m_changed:<junction>` | `M2M::add`/`remove`/`set`/`clear` | `{ action, parent_id, added, removed, actor }` |
 
 User-defined signals keep their own namespace. The `<event>:<table>` prefix on ORM signals just exists so a plugin that subscribes to `post_save:user` doesn't accidentally collide with an app-level `user` event.
+
+### Typed and dynamic paths fire the same signals (gaps #77)
+
+`DynQuerySet` is the runtime-typed ORM surface that REST endpoints (`umbra-rest`) and admin form submits (`umbra-admin`) write through. Every signal in the table above fires from BOTH the typed `Manager` / `QuerySet` paths AND the dynamic `DynQuerySet::insert_json` / `update_json` / `delete` paths — so an audit-log subscriber on `post_save:order` sees writes from a typed handler, a REST `POST /api/order/`, and an admin form-create alike. The signal name + payload shape are identical across surfaces.
+
+PK shape: the `instance` JSON and `ids` array carry the row's primary key in whatever shape the model declares (`i64`, `String`, `Uuid`). Subscribers that index on PK should read the value as a `serde_json::Value` rather than assuming `i64` — the framework's planned `PrimaryKey` refactor will lift the rest of the i64-hardcoded surfaces, and signal subscribers should already be forward-compatible.
 
 ## Subscribing
 

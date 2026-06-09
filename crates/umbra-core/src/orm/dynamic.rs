@@ -526,25 +526,48 @@ impl<'a> DynQuerySet<'a> {
 
     /// Terminal: `DELETE FROM <table>` with the accumulated WHERE.
     /// Returns the number of rows affected.
+    ///
+    /// gaps #77: pre-collects the affected PKs (one extra SELECT per
+    /// call) before the DELETE so `bulk_post_delete:<table>` can fire
+    /// with the actual row ids. Subscribers that need to invalidate
+    /// caches / write audit-log rows / sync a search index get the
+    /// list of PKs that just left the table, not just a row count.
     pub async fn delete(self) -> Result<u64, DynError> {
+        // Pre-collect the affected PKs only when the model has a PK
+        // column (every Model does in practice; the guard handles
+        // the hypothetical PK-less ModelMeta).
+        let parent_pks: Vec<serde_json::Value> = match self.meta.pk_column() {
+            Some(pk_col) => collect_parent_pks(&self.meta, pk_col, &self.where_clauses)
+                .await
+                .unwrap_or_default(),
+            None => Vec::new(),
+        };
+
         let mut q = Query::delete();
         q.from_table(Alias::new(&self.meta.table));
         for cond in &self.where_clauses {
             q.cond_where(cond.clone());
         }
 
-        match pool_dispatched() {
+        let rows_affected = match pool_dispatched() {
             DbPool::Sqlite(pool) => {
                 let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
                 let res = sqlx::query_with(&sql, values).execute(pool).await?;
-                Ok(res.rows_affected())
+                res.rows_affected()
             }
             DbPool::Postgres(pool) => {
                 let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
                 let res = sqlx::query_with(&sql, values).execute(pool).await?;
-                Ok(res.rows_affected())
+                res.rows_affected()
             }
-        }
+        };
+
+        // gaps #77: emit `bulk_post_delete:<table>` with the PKs we
+        // captured pre-DELETE. Fires even when zero rows matched —
+        // matches the typed bulk-delete convention (subscribers that
+        // want to skip empty events filter in their handler).
+        crate::signals::emit_bulk_post_delete_by_table(&self.meta.table, parent_pks).await;
+        Ok(rows_affected)
     }
 
     /// Terminal: `UPDATE <table> SET <col> = <value>` with the
@@ -1097,6 +1120,18 @@ impl<'a> DynQuerySet<'a> {
         let exprs: Vec<sea_query::SimpleExpr> = values.into_iter().map(Into::into).collect();
         q.values_panic(exprs);
 
+        // gaps #77: fire `pre_save:<table>` for the dynamic-write
+        // path so REST endpoints and admin form submits surface in
+        // signal subscribers (audit logs, cache invalidation, search
+        // index sync). Payload mirrors the typed `Manager::create`
+        // shape — `{ "instance": <body JSON>, "created": true }`.
+        crate::signals::emit_pre_save_by_table(
+            &self.meta.table,
+            serde_json::Value::Object(body.clone()),
+            true,
+        )
+        .await;
+
         match pool_dispatched() {
             DbPool::Sqlite(pool) => {
                 let (sql, vals) = q.build_sqlx(SqliteQueryBuilder);
@@ -1147,6 +1182,13 @@ impl<'a> DynQuerySet<'a> {
                 // response so the caller sees `tags: [1, 2]`
                 // instead of an empty echo.
                 hydrate_m2m_into(&self.meta, pk_value.as_ref(), &mut out).await?;
+                // gaps #77: post_save with the fully-hydrated row.
+                crate::signals::emit_post_save_by_table(
+                    &self.meta.table,
+                    serde_json::Value::Object(out.clone()),
+                    true,
+                )
+                .await;
                 Ok(out)
             }
             DbPool::Postgres(pool) => {
@@ -1167,6 +1209,13 @@ impl<'a> DynQuerySet<'a> {
                 let pk_value = out.get(&pk_name).cloned();
                 write_m2m_junctions(&self.meta, pk_value.as_ref(), body).await?;
                 hydrate_m2m_into(&self.meta, pk_value.as_ref(), &mut out).await?;
+                // gaps #77: post_save on the Postgres branch.
+                crate::signals::emit_post_save_by_table(
+                    &self.meta.table,
+                    serde_json::Value::Object(out.clone()),
+                    true,
+                )
+                .await;
                 Ok(out)
             }
         }
@@ -1287,16 +1336,19 @@ impl<'a> DynQuerySet<'a> {
             q.cond_where(cond.clone());
         }
         // Find every parent_id matched by the filter so we can
-        // mirror the M2M arrays into each one's junction. Done
-        // BEFORE the UPDATE so a no-op (any = false, touches_m2m
-        // = true) still gets the M2M write.
-        let parent_pks: Vec<serde_json::Value> = if touches_m2m {
-            match self.meta.pk_column() {
-                Some(pk_col) => collect_parent_pks(&self.meta, pk_col, &self.where_clauses).await?,
-                None => Vec::new(),
-            }
-        } else {
-            Vec::new()
+        // mirror the M2M arrays into each one's junction AND fire
+        // `bulk_post_save:<table>` with the affected ids (gaps #77).
+        // Done BEFORE the UPDATE so:
+        //   - a no-op (`any = false`, `touches_m2m = true`) still
+        //     gets the M2M write, and
+        //   - the signal payload carries the exact PK set the WHERE
+        //     matched, even when the UPDATE itself is a no-op
+        //     (matches the typed `bulk_post_save` semantics: the
+        //     subscriber learns "these rows were targeted" rather
+        //     than guessing from `rows_affected`).
+        let parent_pks: Vec<serde_json::Value> = match self.meta.pk_column() {
+            Some(pk_col) => collect_parent_pks(&self.meta, pk_col, &self.where_clauses).await?,
+            None => Vec::new(),
         };
 
         match pool_dispatched() {
@@ -1311,6 +1363,17 @@ impl<'a> DynQuerySet<'a> {
                 for pk in &parent_pks {
                     write_m2m_junctions(&self.meta, Some(pk), body).await?;
                 }
+                // gaps #77: `bulk_post_save:<table>` fires after the
+                // UPDATE on the dynamic path. `created = false` because
+                // this is UPDATE (matches the typed bulk-save convention
+                // from gap #38). `ids` is whatever the WHERE matched —
+                // collect_parent_pks already ran above.
+                crate::signals::emit_bulk_post_save_by_table(
+                    &self.meta.table,
+                    parent_pks.clone(),
+                    false,
+                )
+                .await;
                 Ok(parent_pks.len().max(if any { 1 } else { 0 }) as u64)
             }
             DbPool::Postgres(pool) => {
@@ -1324,6 +1387,12 @@ impl<'a> DynQuerySet<'a> {
                 for pk in &parent_pks {
                     write_m2m_junctions(&self.meta, Some(pk), body).await?;
                 }
+                crate::signals::emit_bulk_post_save_by_table(
+                    &self.meta.table,
+                    parent_pks.clone(),
+                    false,
+                )
+                .await;
                 Ok(parent_pks.len().max(if any { 1 } else { 0 }) as u64)
             }
         }

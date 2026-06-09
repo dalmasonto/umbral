@@ -233,8 +233,7 @@ where
     let Ok(instance_json) = serde_json::to_value(instance) else {
         return;
     };
-    let payload = serde_json::json!({ "instance": instance_json, "created": created });
-    emit(&format!("pre_save:{}", M::TABLE), payload).await;
+    emit_pre_save_by_table(M::TABLE, instance_json, created).await;
 }
 
 /// Fire the ORM `post_save` signal for model `M`.
@@ -251,8 +250,7 @@ where
     let Ok(instance_json) = serde_json::to_value(instance) else {
         return;
     };
-    let payload = serde_json::json!({ "instance": instance_json, "created": created });
-    emit(&format!("post_save:{}", M::TABLE), payload).await;
+    emit_post_save_by_table(M::TABLE, instance_json, created).await;
 }
 
 /// Fire the ORM `pre_delete` signal for model `M`.
@@ -269,8 +267,7 @@ where
     let Ok(instance_json) = serde_json::to_value(instance) else {
         return;
     };
-    let payload = serde_json::json!({ "instance": instance_json });
-    emit(&format!("pre_delete:{}", M::TABLE), payload).await;
+    emit_pre_delete_by_table(M::TABLE, instance_json).await;
 }
 
 /// Fire the ORM `post_delete` signal for model `M`.
@@ -287,8 +284,70 @@ where
     let Ok(instance_json) = serde_json::to_value(instance) else {
         return;
     };
-    let payload = serde_json::json!({ "instance": instance_json });
-    emit(&format!("post_delete:{}", M::TABLE), payload).await;
+    emit_post_delete_by_table(M::TABLE, instance_json).await;
+}
+
+// =============================================================================
+// gaps #77 — `DynQuerySet` write paths fire the same signals as the typed
+// `Manager` / `QuerySet` paths. REST endpoints and admin form submits both
+// go through `DynQuerySet::insert_json` / `update_json` / `delete`; without
+// these emits, every write through those surfaces was invisible to audit
+// log / cache-invalidation / search-index subscribers.
+//
+// The typed M-generic functions above now delegate to these
+// `*_by_table` variants. Same signal name format (`pre_save:<table>`),
+// same payload shape (`{ "instance": <row>, "created": bool }`), same
+// subscribers — the typed and dynamic surfaces are observationally
+// identical from a handler's perspective.
+//
+// PK shape: the `instance` JSON carries the row's PK in whatever shape
+// the model declares (i64, String, UUID). Subscribers that index on PK
+// should treat the value as `serde_json::Value` rather than assuming
+// i64 — that keeps the contract forward-compatible with the planned
+// `PrimaryKey` refactor that lifts the framework off i64 hardcoding.
+// =============================================================================
+
+/// Table-keyed `pre_save` emit. Called by [`emit_pre_save`] (typed
+/// path) and by `DynQuerySet::insert_json` (dynamic path) directly
+/// with the row's serialized JSON form.
+pub async fn emit_pre_save_by_table(table: &str, instance: serde_json::Value, created: bool) {
+    let payload = serde_json::json!({ "instance": instance, "created": created });
+    emit(&format!("pre_save:{table}"), payload).await;
+}
+
+/// Table-keyed `post_save` emit. See [`emit_pre_save_by_table`].
+pub async fn emit_post_save_by_table(table: &str, instance: serde_json::Value, created: bool) {
+    let payload = serde_json::json!({ "instance": instance, "created": created });
+    emit(&format!("post_save:{table}"), payload).await;
+}
+
+/// Table-keyed `pre_delete` emit. See [`emit_pre_save_by_table`].
+pub async fn emit_pre_delete_by_table(table: &str, instance: serde_json::Value) {
+    let payload = serde_json::json!({ "instance": instance });
+    emit(&format!("pre_delete:{table}"), payload).await;
+}
+
+/// Table-keyed `post_delete` emit. See [`emit_pre_save_by_table`].
+pub async fn emit_post_delete_by_table(table: &str, instance: serde_json::Value) {
+    let payload = serde_json::json!({ "instance": instance });
+    emit(&format!("post_delete:{table}"), payload).await;
+}
+
+/// Table-keyed bulk-save emit for the dynamic-dispatch UPDATE path.
+/// Signal name: `bulk_post_save:<table>`. Payload:
+/// `{ "ids": [...], "created": bool }` — `created=false` for UPDATE
+/// terminals (the only consumer today; `bulk_create_dyn` would pass
+/// `created=true` if it ever lands).
+pub async fn emit_bulk_post_save_by_table(table: &str, ids: Vec<Value>, created: bool) {
+    let payload = serde_json::json!({ "ids": ids, "created": created });
+    emit(&format!("bulk_post_save:{table}"), payload).await;
+}
+
+/// Table-keyed bulk-delete emit. Signal name:
+/// `bulk_post_delete:<table>`. Payload: `{ "ids": [...] }`.
+pub async fn emit_bulk_post_delete_by_table(table: &str, ids: Vec<Value>) {
+    let payload = serde_json::json!({ "ids": ids });
+    emit(&format!("bulk_post_delete:{table}"), payload).await;
 }
 
 // =============================================================================
@@ -326,8 +385,7 @@ pub async fn emit_bulk_post_save<M>(ids: Vec<Value>, created: bool)
 where
     M: crate::orm::Model,
 {
-    let payload = serde_json::json!({ "ids": ids, "created": created });
-    emit(&format!("bulk_post_save:{}", M::TABLE), payload).await;
+    emit_bulk_post_save_by_table(M::TABLE, ids, created).await;
 }
 
 /// Fire the ORM `bulk_post_delete` signal for model `M`. `ids` is the
@@ -336,8 +394,7 @@ pub async fn emit_bulk_post_delete<M>(ids: Vec<Value>)
 where
     M: crate::orm::Model,
 {
-    let payload = serde_json::json!({ "ids": ids });
-    emit(&format!("bulk_post_delete:{}", M::TABLE), payload).await;
+    emit_bulk_post_delete_by_table(M::TABLE, ids).await;
 }
 
 /// Fire the ORM `m2m_changed` signal for a junction-table mutation.
