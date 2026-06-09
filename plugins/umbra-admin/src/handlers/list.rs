@@ -233,11 +233,34 @@ struct FilterFacet {
 
 /// `GET /admin` — the dashboard. One card per registered model with a
 /// row count, plus the user's widget grid.
-pub(crate) async fn index(State(state): State<AdminState>, headers: HeaderMap) -> Response {
+pub(crate) async fn index(
+    State(state): State<AdminState>,
+    headers: HeaderMap,
+    Query(params): Query<HashMap<String, String>>,
+) -> Response {
     let user = match require_staff(&headers, "/admin/").await {
         Ok(u) => u,
         Err(r) => return r,
     };
+    // gaps2 #11 round 2 — when the user lands on `/admin/` with no
+    // explicit "dashboard" intent, restore the last changelist they
+    // were working in. Two opt-outs:
+    //   - `?dashboard=1` — explicit "I want the dashboard, not the
+    //     restore." Useful from the sidebar's home link.
+    //   - HTMX requests — the dashboard's own widget hx-gets land
+    //     here through the same handler; redirecting them away from
+    //     the dashboard would break the dashboard render itself.
+    let wants_dashboard = params.contains_key("dashboard");
+    if !wants_dashboard && !is_htmx(&headers) {
+        if let Ok(Some(last)) = crate::models::get_last_path(user.id).await {
+            // Defensive: ignore a saved `last_path` that points back
+            // at the index itself (would create a redirect loop).
+            let admin_root = format!("{}/", crate::branding::current().base_path);
+            if last != admin_root && last != crate::branding::current().base_path {
+                return Redirect::to(&last).into_response();
+            }
+        }
+    }
     let apps = sidebar_apps(&state, &user);
 
     // Sectioned widget list — each entry carries its own title +
@@ -428,13 +451,24 @@ pub(crate) async fn list(
 
     let cfg = state.config_for(&table);
 
-    let display_cols: Vec<String> = if let Some(c) = cfg
+    let mut display_cols: Vec<String> = if let Some(c) = cfg
         && !c.list_display.is_empty()
     {
         c.list_display.clone()
     } else {
         default_list_display(&model)
     };
+    // gaps2 #11 round 2 — drop hidden columns from the render set.
+    // Reads from the same `preferences.tables.<table>.hidden_cols`
+    // the toggle endpoint writes to. The PK column is preserved
+    // even if listed in hidden_cols (the row machinery needs it to
+    // render edit/delete affordances); display logic in fetch_cols
+    // below ensures the PK is included regardless.
+    if let Ok(Some(saved)) = crate::models::get_table_pref(user.id, &table).await {
+        if !saved.hidden_cols.is_empty() {
+            display_cols.retain(|c| c == &pk.name || !saved.hidden_cols.contains(c));
+        }
+    }
 
     let (search_term, active_filters, sort_col, sort_order, page, page_size) =
         parse_list_params(&params, cfg, pk);
@@ -445,11 +479,21 @@ pub(crate) async fn list(
     // persisted: pagination state shouldn't survive across sessions
     // (the user wouldn't expect to land on page 5 after a logout),
     // but per_page IS persisted because it's a layout choice.
+    // Preserve `hidden_cols` from any existing pref — the render
+    // pipeline can mutate filters/search/sort/per_page each visit
+    // but column visibility only changes via the toggle endpoint.
+    let existing_hidden = crate::models::get_table_pref(user.id, &table)
+        .await
+        .ok()
+        .flatten()
+        .map(|p| p.hidden_cols)
+        .unwrap_or_default();
     let pref = crate::models::TablePref {
         filters: active_filters.iter().cloned().collect(),
         search: search_term.clone().unwrap_or_default(),
         sort: shape_sort_directive(&sort_col, &sort_order),
         per_page: Some(page_size as u32),
+        hidden_cols: existing_hidden,
     };
     if let Err(e) = crate::models::set_table_pref(user.id, &table, &pref).await {
         tracing::warn!(
@@ -457,6 +501,26 @@ pub(crate) async fn list(
             table = %table,
             error = %e,
             "gaps2 #11: failed to persist table prefs (continuing render)"
+        );
+    }
+    // gaps2 #11 round 2 — also persist this URL as `last_path` so a
+    // visit to `/admin/` redirects the user back to the changelist
+    // they were last working in. The path includes the current
+    // query string so the redirect's destination IS the same view
+    // they had before (then the `set_table_pref` write above keeps
+    // it warm for paramless visits too).
+    let qs = serialize_table_pref(&pref).unwrap_or_default();
+    let last_path = if qs.is_empty() {
+        format!("{}/{}/", crate::branding::current().base_path, table)
+    } else {
+        format!("{}/{}/?{qs}", crate::branding::current().base_path, table)
+    };
+    if let Err(e) = crate::models::set_last_path(user.id, &last_path).await {
+        tracing::warn!(
+            user = user.id,
+            table = %table,
+            error = %e,
+            "gaps2 #11: failed to persist last_path (continuing render)"
         );
     }
     let _ = page;
@@ -814,6 +878,54 @@ pub(crate) async fn filter_dialog_handler(
         Ok(html) => html.into_response(),
         Err(e) => e.into_response(),
     }
+}
+
+/// gaps2 #11 round 2 — `POST /admin/{table}/columns/{column}/toggle`.
+/// Flips the column's visibility on the persisted prefs. Returns
+/// 204 + an `HX-Trigger: refreshTable + showToast` so the existing
+/// changelist HTMX listeners do the rest (refetch rows, paint the
+/// new column set).
+pub(crate) async fn toggle_column_visibility(
+    State(state): State<AdminState>,
+    headers: HeaderMap,
+    Path((table, column)): Path<(String, String)>,
+) -> Response {
+    use axum::http::StatusCode;
+    let path = format!(
+        "{}/{table}/columns/{column}/toggle",
+        crate::branding::current().base_path
+    );
+    let user = match require_staff(&headers, &path).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let Some((plugin_name, _model)) = find_model(&table) else {
+        return AdminError::NotFound(format!("no model with table `{table}`")).into_response();
+    };
+    if let Err(r) =
+        crate::permcheck::require(&user, &plugin_name, &table, crate::permcheck::Action::View).await
+    {
+        return r;
+    }
+    let _ = &state;
+    let now_visible = match crate::models::toggle_table_col(user.id, &table, &column).await {
+        Ok(v) => v,
+        Err(e) => return AdminError::from(e).into_response(),
+    };
+    let message = if now_visible {
+        format!("Column `{column}` shown")
+    } else {
+        format!("Column `{column}` hidden")
+    };
+    let trigger = serde_json::json!({
+        "refreshTable": {},
+        "showToast": { "message": message, "level": "success" },
+    });
+    axum::response::Response::builder()
+        .status(StatusCode::NO_CONTENT)
+        .header("HX-Trigger", trigger.to_string())
+        .body(axum::body::Body::empty())
+        .unwrap_or_else(|_| StatusCode::NO_CONTENT.into_response())
 }
 
 // =========================================================================

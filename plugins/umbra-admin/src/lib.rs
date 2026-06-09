@@ -494,10 +494,8 @@ impl Plugin for AdminPlugin {
         // catch-all at the bottom.
         let mut sections: Vec<WidgetSection> = self.dashboard_sections.clone();
         if !self.widget_catalog.is_empty() {
-            sections.push(
-                WidgetSection::new("Widgets")
-                    .widgets(self.widget_catalog.iter().cloned()),
-            );
+            sections
+                .push(WidgetSection::new("Widgets").widgets(self.widget_catalog.iter().cloned()));
         }
         // Flat catalog — feeds the per-widget data API. Built by
         // flattening every section so a single lookup-by-key
@@ -550,6 +548,12 @@ impl Plugin for AdminPlugin {
             .route(
                 &route("/{table}/rows", &self.base_path),
                 axum::routing::get(handlers::list::rows_fragment),
+            )
+            // gaps2 #11 round 2: toggle a column's visibility on
+            // the persisted per-table prefs.
+            .route(
+                &route("/{table}/columns/{column}/toggle", &self.base_path),
+                post(handlers::list::toggle_column_visibility),
             )
             // Filter dialog fragment
             .route(

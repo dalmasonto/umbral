@@ -244,14 +244,32 @@ pub(crate) async fn dashboard_widget_data(
     // these to vary the response (`?period=7d`, etc.); closures
     // registered via plain `::new` see them dropped.
     let mut params = crate::widgets::WidgetParams::from_query(query.as_deref().unwrap_or(""));
-    // First-load default: if the URL has no `?period=` AND the
-    // widget declared a `default_period` at registration time,
-    // stamp it into the params before calling the data fn. The
-    // template then renders the matching chip highlighted AND
-    // the data fn computes the right window — one source of
-    // truth for "this is the period we're showing right now."
-    if params.period.is_none() {
-        if let Some(default) = widget.default_period {
+
+    // gaps2 #11 round 2 — period resolution priority:
+    //
+    //   1. URL `?period=` (explicit user click on a chip THIS visit).
+    //   2. User's saved override at
+    //      `preferences.dashboard.widget_periods.<key>`.
+    //   3. Widget's registration-time `default_period`.
+    //
+    // When the URL carries an explicit `?period=`, we ALSO persist
+    // it as the user's new preference — chip clicks become sticky
+    // across reloads / tabs / devices without any extra UI surface
+    // or HTMX wiring.
+    if let Some(explicit) = params.period.clone() {
+        if let Err(e) = models::set_widget_period(user.id, &key, &explicit).await {
+            tracing::warn!(
+                user = user.id,
+                widget = %key,
+                period = %explicit,
+                error = %e,
+                "gaps2 #11: failed to persist widget period (continuing render)"
+            );
+        }
+    } else {
+        if let Ok(Some(saved)) = models::get_widget_period(user.id, &key).await {
+            params.period = Some(saved);
+        } else if let Some(default) = widget.default_period {
             params.period = Some(default.to_string());
         }
     }

@@ -257,6 +257,7 @@ async fn table_pref_round_trips_filters_search_sort_per_page() {
         search: "widget".to_string(),
         sort: "-price".to_string(),
         per_page: Some(50),
+        hidden_cols: vec![],
     };
 
     umbra_admin::models::set_table_pref(uid, "product", &original)
@@ -366,4 +367,205 @@ async fn table_pref_malformed_json_in_db_reads_as_none() {
         pref.is_none(),
         "malformed JSON → None (not panic, not parse error)"
     );
+}
+
+// =========================================================================
+// gaps2 #11 round 2 — last_path + hidden_cols toggle
+// =========================================================================
+
+#[tokio::test]
+async fn last_path_round_trips_through_preferences_blob() {
+    let _guard = LOCK.lock().await;
+    let _router = boot().await;
+    let uid = fresh_test_user("pref_last_path").await;
+
+    assert!(
+        umbra_admin::models::get_last_path(uid)
+            .await
+            .unwrap()
+            .is_none(),
+        "no prefs yet → None"
+    );
+
+    umbra_admin::models::set_last_path(uid, "/admin/product/?search=foo")
+        .await
+        .expect("save");
+    assert_eq!(
+        umbra_admin::models::get_last_path(uid)
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("/admin/product/?search=foo"),
+    );
+
+    // Overwriting is fine — last write wins.
+    umbra_admin::models::set_last_path(uid, "/admin/order/")
+        .await
+        .expect("save");
+    assert_eq!(
+        umbra_admin::models::get_last_path(uid)
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("/admin/order/"),
+    );
+}
+
+#[tokio::test]
+async fn last_path_coexists_with_table_pref_writes() {
+    // Verify the JSON merge doesn't clobber sibling keys. Setting a
+    // table pref must preserve a prior last_path, and vice versa.
+    let _guard = LOCK.lock().await;
+    let _router = boot().await;
+    let uid = fresh_test_user("pref_last_path_coexist").await;
+
+    umbra_admin::models::set_last_path(uid, "/admin/product/")
+        .await
+        .unwrap();
+    umbra_admin::models::set_table_pref(
+        uid,
+        "order",
+        &umbra_admin::models::TablePref {
+            search: "shipped".to_string(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    // Both reads see the values they wrote.
+    assert_eq!(
+        umbra_admin::models::get_last_path(uid)
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("/admin/product/"),
+    );
+    let order = umbra_admin::models::get_table_pref(uid, "order")
+        .await
+        .unwrap()
+        .expect("order pref present");
+    assert_eq!(order.search, "shipped");
+}
+
+#[tokio::test]
+async fn toggle_table_col_flips_visibility_idempotently() {
+    let _guard = LOCK.lock().await;
+    let _router = boot().await;
+    let uid = fresh_test_user("pref_toggle_col").await;
+
+    // First toggle hides the column.
+    let visible = umbra_admin::models::toggle_table_col(uid, "product", "cost")
+        .await
+        .expect("toggle 1");
+    assert!(!visible, "first toggle hides (now_visible = false)");
+    let pref = umbra_admin::models::get_table_pref(uid, "product")
+        .await
+        .unwrap()
+        .expect("pref written");
+    assert_eq!(pref.hidden_cols, vec!["cost".to_string()]);
+
+    // Second toggle restores it.
+    let visible = umbra_admin::models::toggle_table_col(uid, "product", "cost")
+        .await
+        .expect("toggle 2");
+    assert!(visible, "second toggle shows (now_visible = true)");
+    let pref = umbra_admin::models::get_table_pref(uid, "product")
+        .await
+        .unwrap()
+        .expect("pref written");
+    assert!(
+        pref.hidden_cols.is_empty(),
+        "cost removed from hidden_cols: {:?}",
+        pref.hidden_cols,
+    );
+}
+
+#[tokio::test]
+async fn widget_period_round_trips_through_preferences_blob() {
+    let _guard = LOCK.lock().await;
+    let _router = boot().await;
+    let uid = fresh_test_user("pref_widget_period").await;
+
+    assert!(
+        umbra_admin::models::get_widget_period(uid, "shop_daily_sales_chart")
+            .await
+            .unwrap()
+            .is_none(),
+        "no override yet → None"
+    );
+
+    umbra_admin::models::set_widget_period(uid, "shop_daily_sales_chart", "7d")
+        .await
+        .expect("save 7d");
+    assert_eq!(
+        umbra_admin::models::get_widget_period(uid, "shop_daily_sales_chart")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("7d"),
+    );
+
+    // Two widgets coexist independently.
+    umbra_admin::models::set_widget_period(uid, "shop_activity_chart", "30d")
+        .await
+        .unwrap();
+    assert_eq!(
+        umbra_admin::models::get_widget_period(uid, "shop_daily_sales_chart")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("7d"),
+        "first widget unaffected by second widget's save"
+    );
+    assert_eq!(
+        umbra_admin::models::get_widget_period(uid, "shop_activity_chart")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("30d"),
+    );
+}
+
+#[tokio::test]
+async fn toggle_table_col_preserves_other_pref_fields() {
+    // Writing hidden_cols must not destroy filters/search/sort/
+    // per_page already set by the changelist render path.
+    let _guard = LOCK.lock().await;
+    let _router = boot().await;
+    let uid = fresh_test_user("pref_toggle_preserve").await;
+
+    let mut filters = std::collections::HashMap::new();
+    filters.insert("status".to_string(), "active".to_string());
+    umbra_admin::models::set_table_pref(
+        uid,
+        "product",
+        &umbra_admin::models::TablePref {
+            filters,
+            search: "widget".to_string(),
+            sort: "-price".to_string(),
+            per_page: Some(50),
+            hidden_cols: vec![],
+        },
+    )
+    .await
+    .unwrap();
+
+    umbra_admin::models::toggle_table_col(uid, "product", "cost")
+        .await
+        .unwrap();
+
+    let pref = umbra_admin::models::get_table_pref(uid, "product")
+        .await
+        .unwrap()
+        .expect("pref still there");
+    assert_eq!(pref.search, "widget", "search survived the toggle");
+    assert_eq!(pref.sort, "-price", "sort survived the toggle");
+    assert_eq!(pref.per_page, Some(50), "per_page survived the toggle");
+    assert_eq!(
+        pref.filters.get("status").map(|s| s.as_str()),
+        Some("active"),
+        "filters survived the toggle"
+    );
+    assert_eq!(pref.hidden_cols, vec!["cost".to_string()]);
 }

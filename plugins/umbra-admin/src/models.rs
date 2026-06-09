@@ -123,6 +123,14 @@ pub struct TablePref {
     /// `usize` and some to `i64`; `u32` round-trips through both.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub per_page: Option<u32>,
+    /// Hidden columns on this table. Round-2 follow-up to the
+    /// initial gaps2 #11 ship. Render path filters
+    /// `display_cols` against this list; the toggle endpoint
+    /// `POST /admin/{table}/columns/{column}/toggle` flips
+    /// membership and returns an HX-Trigger to refresh the table.
+    /// Empty vec = every column visible (the default).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden_cols: Vec<String>,
 }
 
 /// gaps2 #11 — read the persisted UI state for `(user_id, table)`.
@@ -181,6 +189,129 @@ pub async fn set_table_pref(
     next.preferences = Some(root.to_string());
     upsert(next).await?;
     Ok(())
+}
+
+/// gaps2 #11 round 2 — read the "last viewed admin URL" for
+/// `user_id`. Used by the admin index handler to redirect
+/// `/admin/` → the user's last working changelist.
+///
+/// Returns `None` when no prefs row yet, when `preferences.last_path`
+/// is missing, or when the value isn't a string.
+pub async fn get_last_path(user_id: i64) -> Result<Option<String>, sqlx::Error> {
+    let prefs = fetch_or_default(user_id).await?;
+    let Some(raw) = prefs.preferences.as_deref() else {
+        return Ok(None);
+    };
+    let Ok(root) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return Ok(None);
+    };
+    Ok(root
+        .get("last_path")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string()))
+}
+
+/// gaps2 #11 round 2 — write `last_path` to `preferences.last_path`.
+/// Read-modify-write through the JSON blob, same pattern as
+/// `set_table_pref`.
+pub async fn set_last_path(user_id: i64, path: &str) -> Result<(), sqlx::Error> {
+    let existing = fetch_or_default(user_id).await?;
+    let mut root: serde_json::Value = existing
+        .preferences
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    root.as_object_mut()
+        .expect("root is always an object")
+        .insert(
+            "last_path".to_string(),
+            serde_json::Value::String(path.to_string()),
+        );
+    let mut next = existing;
+    next.preferences = Some(root.to_string());
+    upsert(next).await?;
+    Ok(())
+}
+
+/// gaps2 #11 round 2 — read a saved widget-period override for
+/// `widget_key` on `preferences.dashboard.widget_periods.<key>`.
+///
+/// Returns `None` when no override is set. The dashboard's widget-
+/// data handler treats `None` as "fall through to the widget's
+/// registration-time `default_period`."
+pub async fn get_widget_period(
+    user_id: i64,
+    widget_key: &str,
+) -> Result<Option<String>, sqlx::Error> {
+    let prefs = fetch_or_default(user_id).await?;
+    let Some(raw) = prefs.preferences.as_deref() else {
+        return Ok(None);
+    };
+    let Ok(root) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return Ok(None);
+    };
+    Ok(root
+        .get("dashboard")
+        .and_then(|d| d.get("widget_periods"))
+        .and_then(|p| p.get(widget_key))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string()))
+}
+
+/// gaps2 #11 round 2 — persist a widget-period override at
+/// `preferences.dashboard.widget_periods.<widget_key>`. Same
+/// read-modify-write merge as `set_table_pref` / `set_last_path`.
+pub async fn set_widget_period(
+    user_id: i64,
+    widget_key: &str,
+    period: &str,
+) -> Result<(), sqlx::Error> {
+    let existing = fetch_or_default(user_id).await?;
+    let mut root: serde_json::Value = existing
+        .preferences
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    root.as_object_mut()
+        .expect("root is always an object")
+        .entry("dashboard")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .expect("dashboard is always an object")
+        .entry("widget_periods")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .expect("widget_periods is always an object")
+        .insert(
+            widget_key.to_string(),
+            serde_json::Value::String(period.to_string()),
+        );
+    let mut next = existing;
+    next.preferences = Some(root.to_string());
+    upsert(next).await?;
+    Ok(())
+}
+
+/// gaps2 #11 round 2 — flip a column's visibility on
+/// `preferences.tables.<table>.hidden_cols`. Idempotent toggle:
+/// already-hidden → visible, already-visible → hidden. Returns
+/// the new visibility (`true` = now visible, `false` = now hidden)
+/// so the caller can emit a precise HX-Trigger payload.
+pub async fn toggle_table_col(
+    user_id: i64,
+    table: &str,
+    column: &str,
+) -> Result<bool, sqlx::Error> {
+    let mut pref = get_table_pref(user_id, table).await?.unwrap_or_default();
+    let now_visible = if let Some(pos) = pref.hidden_cols.iter().position(|c| c == column) {
+        pref.hidden_cols.remove(pos);
+        true
+    } else {
+        pref.hidden_cols.push(column.to_string());
+        false
+    };
+    set_table_pref(user_id, table, &pref).await?;
+    Ok(now_visible)
 }
 
 /// Fetch the prefs row for `user_id`, or return a struct filled with
