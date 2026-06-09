@@ -93,22 +93,14 @@ pub(super) async fn hydrate_select_related<T: Model + HydrateRelated>(
         }
         dedup_by_pk_key(&mut ids);
 
-        // Look up the FK target's PK column name. Pre-fix this was
-        // hardcoded as `"id"`; now we route through the target's
-        // registered ModelMeta so codename- and slug-keyed targets
-        // bind against the right column. When the registry hasn't
-        // been initialised (low-level tests that drive the QuerySet
-        // without App::build), fall back to `"id"` — the legacy
-        // behaviour, byte-identical for every integer-PK target.
-        let target_pk_col = if crate::migrate::is_initialised() {
-            crate::migrate::registered_models()
-                .iter()
-                .find(|m| m.table == fk_target)
-                .and_then(|m| m.pk_column().map(|c| c.name.clone()))
-                .unwrap_or_else(|| "id".to_string())
-        } else {
-            "id".to_string()
-        };
+        // PK lift Pass E: O(1) lookup via the cached
+        // `pk_meta_for_table`. Falls back to `"id"` when the
+        // registry isn't initialised (low-level tests that drive
+        // the QuerySet without `App::build` — the legacy behaviour,
+        // byte-identical for every integer-PK target).
+        let target_pk_col = crate::migrate::pk_meta_for_table(fk_target)
+            .map(|(name, _ty)| name)
+            .unwrap_or_else(|| "id".to_string());
         let related_rows =
             fetch_related_as_json_by_pk(fk_target, &target_pk_col, &ids, pool).await?;
         let id_to_json: HashMap<String, JsonValue> = related_rows

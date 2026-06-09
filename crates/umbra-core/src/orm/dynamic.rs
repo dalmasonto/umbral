@@ -348,10 +348,10 @@ impl<'a> DynQuerySet<'a> {
         // `child_id` column type matches the target's PK type at
         // DDL emission, so binding correctly here keeps SQLite +
         // Postgres affinity happy.
-        let target_pk_ty = crate::migrate::registered_models()
-            .iter()
-            .find(|m| m.table == rel.target_table)
-            .and_then(|m| m.pk_column().map(|c| c.ty))
+        // PK lift Pass E: cached lookup. Previously cloned the full
+        // model registry per `filter_m2m_contains_any` call.
+        let target_pk_ty = crate::migrate::pk_meta_for_table(&rel.target_table)
+            .map(|(_, ty)| ty)
             .unwrap_or(SqlType::BigInt);
         let junction_table = format!("{}_{}", self.meta.table, rel.field_name);
         let child_id_expr = Expr::col(Alias::new("child_id"));
@@ -1689,21 +1689,19 @@ pub fn decode_pg_to_json_aliased(
 ///     internal call site fires before `App::build()` finishes
 ///     wiring plugins).
 ///
-/// Cheap on every call — `registered_models()` clones a small
-/// `Vec<ModelMeta>`. If this lookup ever shows up in a profile, the
-/// fix is to cache the resolved type onto `Column` itself at
-/// registration time (one slot per FK column). For v1 the
-/// per-decode lookup is acceptable.
+/// PK lift Pass E — O(1) lookup via the `pk_meta_for_table` cache
+/// (was O(n) `Vec<ModelMeta>` clone + linear scan per call). The
+/// cache initialises lazily on first post-`App::build` call and
+/// serves from a `HashMap` for every subsequent lookup. In a hot
+/// decode loop (e.g. 1000 rows × 50 columns × per-FK decode) this
+/// drops the per-row registry-walk cost from a few milliseconds
+/// to a single hashmap probe.
 fn fk_target_pk_sql_type(col: &Column) -> Option<SqlType> {
     if !matches!(col.ty, SqlType::ForeignKey) {
         return None;
     }
     let target_table = col.fk_target.as_deref()?;
-    let registered = crate::migrate::registered_models();
-    registered
-        .iter()
-        .find(|m| m.table == target_table)
-        .and_then(|m| m.pk_column().map(|c| c.ty))
+    crate::migrate::pk_meta_for_table(target_table).map(|(_, ty)| ty)
 }
 
 pub fn decode_to_json(

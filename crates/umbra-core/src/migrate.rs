@@ -101,6 +101,45 @@ pub fn is_initialised() -> bool {
     REGISTRY.get().is_some()
 }
 
+/// PK lift Pass E — cached `(pk_column_name, pk_sql_type)` lookup
+/// keyed by table name. Used by the FK decode path
+/// (`fk_target_pk_sql_type` in `orm/dynamic.rs`) and the
+/// select_related hydrators, both of which previously cloned the
+/// full `Vec<ModelMeta>` per call and linear-scanned for the
+/// target's PK column.
+///
+/// REGISTRY is a `OnceLock` set once during `App::build`; this cache
+/// reads from it the first time anyone asks for a PK lookup AFTER
+/// initialisation, then serves from a `HashMap` for every
+/// subsequent call. Eliminates the per-row `registered_models()`
+/// clone in hot decode loops.
+///
+/// Returns `None` when the registry isn't initialised (the cache
+/// stays uninstantiated so a follow-up call after `App::build`
+/// gets the real table set), OR when the named table isn't in the
+/// registry (orphan / system / typo).
+pub fn pk_meta_for_table(table: &str) -> Option<(String, crate::orm::SqlType)> {
+    if !is_initialised() {
+        // Defer cache init until App::build has populated REGISTRY.
+        // The cache MUST NOT memoize an empty map; otherwise
+        // post-init callers would see no PK metadata forever.
+        return None;
+    }
+    static CACHE: std::sync::OnceLock<
+        std::collections::HashMap<String, (String, crate::orm::SqlType)>,
+    > = std::sync::OnceLock::new();
+    let map = CACHE.get_or_init(|| {
+        let mut out = std::collections::HashMap::new();
+        for m in registered_models() {
+            if let Some(pk) = m.pk_column() {
+                out.insert(m.table.clone(), (pk.name.clone(), pk.ty));
+            }
+        }
+        out
+    });
+    map.get(table).cloned()
+}
+
 /// Return the registered plugin names that contributed at least one
 /// model. Sorted deterministically. Used as a fallback when no
 /// topological order is published; the M7 walk used this directly,
@@ -4231,10 +4270,9 @@ mod tests {
     ///     allows the non-constant default and backfills inline.
     #[test]
     fn auto_now_add_column_renders_safe_backfill_per_backend() {
-        for (label, auto_now, auto_now_add) in [
-            ("auto_now", true, false),
-            ("auto_now_add", false, true),
-        ] {
+        for (label, auto_now, auto_now_add) in
+            [("auto_now", true, false), ("auto_now_add", false, true)]
+        {
             let col = Column {
                 name: "updated_at".to_string(),
                 ty: SqlType::Timestamptz,
