@@ -43,28 +43,26 @@
   </div>
 
   {% if payload.columns and payload.rows and payload.rows | length > 0 %}
-  <div class="flex-1 overflow-auto">
-    <table class="w-full text-sm text-left text-on-surface-variant">
-      {# Header — slightly different surface from the card bg so
-         the band reads as a contrasting strip without needing a
-         bottom border. #}
-      <thead class="text-sm text-on-surface-variant bg-surface-container-low">
+  <div class="flex-1 min-h-0 px-md pb-md overflow-hidden">
+    <div class="h-full overflow-auto rounded-xl border border-outline-variant bg-surface-container-low shadow-sm">
+      <table class="w-full text-left border-collapse text-[15px] leading-snug text-on-surface-variant">
+        {# Header — sticky, denser, and visually joined to the rounded
+           table shell so the widget reads as an actual data table. #}
+        <thead class="sticky top-0 z-10 bg-surface-container-high border-b border-outline-variant">
         <tr>
           {% for col in payload.columns %}
           <th
             scope="col"
-            class="px-md py-sm font-medium text-on-surface-variant whitespace-nowrap"
+            class="px-md py-sm font-label-md text-label-md text-on-surface-variant uppercase tracking-wider whitespace-nowrap"
           >{{ col.label }}</th>
           {% endfor %}
         </tr>
       </thead>
-      <tbody>
+      <tbody class="divide-y divide-divider-soft dark:divide-gray-800/70">
         {% for row in payload.rows %}
-        {# Body row — bottom hairline on `surface-container-highest`
-           (the same token the divider, scrollbar, and other soft
-           rails use); `last:border-b-0` drops the trailing border
-           on the final row so the table doesn't end on a hairline. #}
-        <tr class="bg-surface-container border-b border-surface-container-highest last:border-b-0 hover:bg-surface-container-high transition-colors">
+        {# Alternating surface tokens give row rhythm without making the
+           compact dashboard table feel grid-heavy. #}
+        <tr class="{% if loop.index0 % 2 == 0 %}bg-surface-container{% else %}bg-surface-container-low{% endif %} hover:bg-surface-container-high transition-colors">
           {% for col in payload.columns %}
           {%- set v = row[col.key] -%}
           {%- set vstr = "" if v is none else (v | string) -%}
@@ -75,12 +73,12 @@
              the row is about). #}
           <th
             scope="row"
-            class="px-md py-md font-medium text-on-surface whitespace-nowrap truncate max-w-[220px]"
+            class="px-md py-sm font-medium text-on-surface whitespace-nowrap truncate max-w-[220px]"
             title="{{ vstr }}"
           >{{ vstr }}</th>
           {% else %}
           <td
-            class="px-md py-md truncate max-w-[200px] tabular-nums"
+            class="px-md py-sm truncate max-w-[200px] tabular-nums"
             title="{{ vstr }}"
           >{{ vstr }}</td>
           {% endif %}
@@ -89,6 +87,7 @@
         {% endfor %}
       </tbody>
     </table>
+    </div>
   </div>
   {% else %}
   <p class="text-label-sm text-outline italic px-md py-md mt-auto">No data</p>
