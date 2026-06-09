@@ -61,6 +61,14 @@ pub struct DynQuerySet<'a> {
     limit: Option<u64>,
     offset: Option<u64>,
     select_cols: Vec<String>,
+    /// FK column names to expand via a batched `IN (...)` lookup
+    /// after the main query — same one-hop semantics as the typed
+    /// `QuerySet::select_related`. Each entry must be a single-hop
+    /// FK column on `meta` (validated when added). When non-empty,
+    /// `fetch_as_json` / `first_as_json` swap the FK integer values
+    /// in the response for the full related-row JSON object.
+    /// Drives the REST plugin's `?include=fk1,fk2` query param.
+    select_related: Vec<String>,
 }
 
 impl<'a> DynQuerySet<'a> {
@@ -76,6 +84,7 @@ impl<'a> DynQuerySet<'a> {
             limit: None,
             offset: None,
             select_cols,
+            select_related: Vec::new(),
         }
     }
 
@@ -92,6 +101,46 @@ impl<'a> DynQuerySet<'a> {
             self.select_cols = valid;
         }
         self
+    }
+
+    /// Expand the named FK columns via a batched `IN (...)` lookup
+    /// after the main query — same one-hop semantics as the typed
+    /// `QuerySet::select_related`. After this call, the FK field in
+    /// the response JSON renders as the full related-row object
+    /// instead of the raw integer id. One query per FK regardless of
+    /// how many parent rows came back (no N+1).
+    ///
+    /// Names that don't exist on the model OR aren't FK columns are
+    /// silently dropped — the REST plugin's `?include=` handler does
+    /// its own up-front validation with a 400 on unknown names, so
+    /// stale dynamic includes (e.g. an internal call site that
+    /// hardcoded a name that was later renamed) just skip without
+    /// crashing the request.
+    ///
+    /// ```ignore
+    /// DynQuerySet::for_meta(&meta)
+    ///     .select_related_dyn(&["user".into(), "billing_address".into()])
+    ///     .fetch_as_json().await
+    /// ```
+    pub fn select_related_dyn(mut self, fields: &[String]) -> Self {
+        for name in fields {
+            let is_fk = self
+                .meta
+                .fields
+                .iter()
+                .any(|c| &c.name == name && c.fk_target.is_some());
+            if is_fk && !self.select_related.iter().any(|n| n == name) {
+                self.select_related.push(name.clone());
+            }
+        }
+        self
+    }
+
+    /// Read-side accessor for the resolved select_related list.
+    /// Used by tests + the REST handler's debug-logging path.
+    #[doc(hidden)]
+    pub fn select_related_fields(&self) -> &[String] {
+        &self.select_related
     }
 
     /// Add `WHERE (<predicate1> OR <predicate2> OR ...)` for a free-text
@@ -720,7 +769,7 @@ impl<'a> DynQuerySet<'a> {
             .pk_column()
             .map(|c| c.name.clone())
             .unwrap_or_default();
-        match pool_dispatched() {
+        let mut out: Vec<serde_json::Map<String, serde_json::Value>> = match pool_dispatched() {
             DbPool::Sqlite(pool) => {
                 let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
                 let rows = sqlx::query_with(&sql, values).fetch_all(pool).await?;
@@ -745,7 +794,7 @@ impl<'a> DynQuerySet<'a> {
                     }
                     out.push(entry);
                 }
-                Ok(out)
+                out
             }
             DbPool::Postgres(pool) => {
                 let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
@@ -767,9 +816,22 @@ impl<'a> DynQuerySet<'a> {
                     }
                     out.push(entry);
                 }
-                Ok(out)
+                out
             }
+        };
+
+        // FK expansion via select_related — one batched
+        // `IN (...)` per requested FK after the main query, then
+        // splice the resolved row's JSON in where the integer id
+        // was. No N+1: each FK costs one round-trip regardless of
+        // how many parent rows came back. Reuses the same
+        // `fetch_related_as_json` helper that powers the typed
+        // `QuerySet::select_related` path so SQLite + Postgres
+        // dispatch stays in one place.
+        if !self.select_related.is_empty() && !out.is_empty() {
+            hydrate_select_related_into(&self.meta, &self.select_related, &mut out).await?;
         }
+        Ok(out)
     }
 
     /// Terminal: fetch the first row (LIMIT 1) as a JSON object.
@@ -1693,6 +1755,87 @@ fn json_pk_to_sea(v: &serde_json::Value) -> Option<sea_query::Value> {
 /// caller just wrote (otherwise the `tags: [1, 2]` they POSTed
 /// would never appear in the response, since `M2M<T>` is
 /// `#[serde(skip)]` on the parent struct).
+/// FK expansion for the dynamic-dispatch read path. For each FK
+/// name in `sr_fields`, collect the integer ids across `rows`,
+/// run one batched `SELECT * FROM <target> WHERE id IN (...)`,
+/// and splice the resolved row's JSON object in where the
+/// integer id was. Mirrors the typed
+/// `queryset::hydration::hydrate_select_related` semantics —
+/// one round-trip per FK regardless of how many parent rows came
+/// back. No N+1.
+///
+/// Caller has already validated that every name in `sr_fields`
+/// is a single-hop FK on `meta` (via `select_related_dyn`).
+async fn hydrate_select_related_into(
+    meta: &crate::migrate::ModelMeta,
+    sr_fields: &[String],
+    rows: &mut [serde_json::Map<String, serde_json::Value>],
+) -> Result<(), sqlx::Error> {
+    use std::collections::HashMap;
+    let pool = pool_dispatched();
+    for field_name in sr_fields {
+        // Find the FK column's target table. select_related_dyn
+        // already filtered to FK columns, but re-verify here
+        // because we need fk_target anyway.
+        let Some(target_table) = meta
+            .fields
+            .iter()
+            .find(|c| &c.name == field_name)
+            .and_then(|c| c.fk_target.clone())
+        else {
+            continue;
+        };
+
+        // Collect the FK ids across every row, dedup so the
+        // IN(...) list is minimal.
+        let mut ids: Vec<i64> = Vec::with_capacity(rows.len());
+        for row in rows.iter() {
+            if let Some(serde_json::Value::Number(n)) = row.get(field_name) {
+                if let Some(id) = n.as_i64() {
+                    ids.push(id);
+                }
+            }
+        }
+        if ids.is_empty() {
+            continue;
+        }
+        ids.sort_unstable();
+        ids.dedup();
+
+        // One batched query through the shared helper that powers
+        // the typed select_related path.
+        let related =
+            crate::orm::queryset::hydration::fetch_related_as_json(&target_table, &ids, &pool)
+                .await?;
+        let mut id_to_obj: HashMap<i64, serde_json::Value> = HashMap::new();
+        for obj in related {
+            if let serde_json::Value::Object(ref map) = obj {
+                if let Some(serde_json::Value::Number(n)) = map.get("id") {
+                    if let Some(id) = n.as_i64() {
+                        id_to_obj.insert(id, obj.clone());
+                    }
+                }
+            }
+        }
+
+        // Splice the resolved object in place of the integer id.
+        // Rows pointing at an id that didn't resolve (target row
+        // deleted between the parent fetch and the IN-lookup —
+        // a race window) keep the integer; the alternative would
+        // be silently nulling the field which hides a real
+        // referential-integrity issue from the caller.
+        for row in rows.iter_mut() {
+            let id = row.get(field_name).and_then(|v| v.as_i64());
+            if let Some(id) = id {
+                if let Some(resolved) = id_to_obj.get(&id) {
+                    row.insert(field_name.clone(), resolved.clone());
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 async fn hydrate_m2m_into(
     meta: &crate::migrate::ModelMeta,
     parent_pk_json: Option<&serde_json::Value>,

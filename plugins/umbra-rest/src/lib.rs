@@ -1122,7 +1122,13 @@ async fn list(
     }
 
     let page_req = cfg.pagination.extract_request(&params);
-    let mut rows = fetch_rows(&model, None, Some(page_req), &filter).await?;
+    // `?include=fk1,fk2` — expand the named FK columns into their
+    // full related-row objects via one batched IN(...) per FK. The
+    // parser rejects unknown / non-FK names with a 400 so clients
+    // get loud feedback on typos instead of a silently-unexpanded
+    // response that looks fine until they check it.
+    let include = parse_include(params.get("include").map(|s| s.as_str()), &model)?;
+    let mut rows = fetch_rows(&model, None, Some(page_req), &filter, &include).await?;
     let fields_param = params.get("fields").map(|s| s.as_str());
     for row in &mut rows {
         cfg.apply_overrides(&table, row);
@@ -1151,7 +1157,13 @@ async fn retrieve(
     cfg.gate(&table, &Action::Retrieve, identity.as_ref())?;
     let pk = pk_column(&model)?;
     let no_filter = FilterClause::default();
-    let mut rows = fetch_rows(&model, Some((&pk.name, &id)), None, &no_filter).await?;
+    // `?include=` works the same on the retrieve path — `GET
+    // /api/customer/123/?include=user` returns the customer with
+    // its `user` FK expanded to the full AuthUser object. Same
+    // parser, same 400-on-bad-name semantics.
+    let include = parse_include(params.get("include").map(|s| s.as_str()), &model)?;
+    let mut rows =
+        fetch_rows(&model, Some((&pk.name, &id)), None, &no_filter, &include).await?;
     let Some(mut row) = rows.pop() else {
         return Err(ApiError::NotFound(format!(
             "no row with {} = {} in {}",
@@ -1200,7 +1212,8 @@ async fn update(
 
     // 404 if the target row doesn't exist before we attempt the UPDATE.
     let no_filter = FilterClause::default();
-    let existing = fetch_rows(&model, Some((&pk.name, &id)), None, &no_filter).await?;
+    let existing =
+        fetch_rows(&model, Some((&pk.name, &id)), None, &no_filter, &[]).await?;
     if existing.is_empty() {
         return Err(ApiError::NotFound(format!(
             "no row with {} = {} in {}",
@@ -1216,7 +1229,7 @@ async fn update(
         .filter_eq_string(&pk.name, &id)
         .update_json(&body)
         .await?;
-    let mut rows = fetch_rows(&model, Some((&pk.name, &id)), None, &no_filter).await?;
+    let mut rows = fetch_rows(&model, Some((&pk.name, &id)), None, &no_filter, &[]).await?;
     let Some(mut row) = rows.pop() else {
         return Err(ApiError::BadInput(
             "row updated but disappeared on read-back".into(),
@@ -1353,6 +1366,7 @@ async fn fetch_rows(
     where_clause: Option<(&str, &str)>,
     page: Option<PageRequest>,
     filter: &FilterClause,
+    include: &[String],
 ) -> Result<Vec<Map<String, Value>>, ApiError> {
     let mut qs = umbra::orm::DynQuerySet::for_meta(model);
 
@@ -1375,8 +1389,53 @@ async fn fetch_rows(
         }
     }
 
+    // `?include=fk1,fk2` → expand those FK columns into their full
+    // related-row objects via one batched IN(...) per FK. Names
+    // here have already been validated against the model's FK
+    // columns by `parse_include` upstream; passing an empty slice
+    // is a no-op.
+    if !include.is_empty() {
+        qs = qs.select_related_dyn(include);
+    }
+
     let rows = qs.fetch_as_json().await?;
     Ok(rows)
+}
+
+/// Parse `?include=fk1,fk2,fk3` against the model's FK columns.
+/// Returns `Ok(Vec)` of validated FK names on success, `Err(ApiError)`
+/// with a 400 + per-name reason on the first unknown / non-FK name.
+/// Unknown names fail loudly (unlike the silent-drop on `?fields=`)
+/// because an unknown include is almost always a typo or a stale
+/// client expectation — silently ignoring it would let the caller
+/// think the field was expanded when it wasn't.
+fn parse_include(raw: Option<&str>, model: &ModelMeta) -> Result<Vec<String>, ApiError> {
+    let Some(raw) = raw else {
+        return Ok(Vec::new());
+    };
+    let mut out: Vec<String> = Vec::new();
+    for token in raw.split(',') {
+        let name = token.trim();
+        if name.is_empty() {
+            continue;
+        }
+        let Some(col) = model.fields.iter().find(|c| c.name == name) else {
+            return Err(ApiError::BadInput(format!(
+                "?include=: unknown field `{name}` on `{}`",
+                model.table
+            )));
+        };
+        if col.fk_target.is_none() {
+            return Err(ApiError::BadInput(format!(
+                "?include=: field `{name}` on `{}` is not a foreign key",
+                model.table
+            )));
+        }
+        if !out.iter().any(|n| n == name) {
+            out.push(name.to_string());
+        }
+    }
+    Ok(out)
 }
 
 /// `SELECT COUNT(*)` for the given model, respecting any active

@@ -679,7 +679,7 @@ pub(super) async fn hydrate_prefetch_related<T: Model + HydrateRelated>(
 /// `row_to_json` decoders so we don't need a `FromRow` bound on the
 /// target model type. Used by both single-hop and nested
 /// `select_related` paths.
-pub(super) async fn fetch_related_as_json(
+pub(crate) async fn fetch_related_as_json(
     table: &str,
     ids: &[i64],
     pool: &DbPool,

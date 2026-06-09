@@ -268,6 +268,13 @@ fn build_spec(cfg: &OpenApiPlugin) -> Value {
             // `?fields=` sparse fieldset (BUG-81) is always
             // available — independent of search / filter opt-out.
             list_params.push(fields_parameter(&model));
+            // `?include=fk1,fk2` — only emit when the model actually
+            // has FK columns; otherwise the param has nothing to
+            // expand and the playground multi-select would render
+            // empty.
+            if model.fields.iter().any(|c| c.fk_target.is_some()) {
+                list_params.push(include_parameter(&model));
+            }
             if umbra_rest::filters_enabled_for(&model.table) {
                 list_params.extend(filter_parameters(&model));
             }
@@ -275,12 +282,16 @@ fn build_spec(cfg: &OpenApiPlugin) -> Value {
                 format!("/api/{}/", model.table),
                 collection_paths(&model.table, &schema_name, &list_params),
             );
-            // Retrieve also respects `?fields=`, so document it
-            // there too — the playground reads the GET op's params
-            // off the spec and renders one input per entry.
+            // Retrieve respects both `?fields=` and `?include=` — same
+            // shape as list. Build the params slice dynamically so the
+            // FK-less models don't get a vestigial `?include=` entry.
+            let mut item_params = vec![fields_parameter(&model)];
+            if model.fields.iter().any(|c| c.fk_target.is_some()) {
+                item_params.push(include_parameter(&model));
+            }
             paths.insert(
                 format!("/api/{}/{{id}}", model.table),
-                item_paths(&model.table, &schema_name, &[fields_parameter(&model)]),
+                item_paths(&model.table, &schema_name, &item_params),
             );
         }
     }
@@ -697,6 +708,34 @@ fn fields_parameter(model: &ModelMeta) -> Value {
         "schema": { "type": "string" },
         "x-umbra-fields": true,
         "x-umbra-fields-columns": Value::Array(columns),
+    })
+}
+
+/// `?include=fk1,fk2` — expand the named FK columns into their full
+/// related-row objects via the REST plugin's select_related-backed
+/// path. Only FK columns are valid (anything else 400s); the
+/// playground reads `x-umbra-include-fks` to render a multi-select
+/// of the candidate FK names. Mirrors the `fields_parameter` shape
+/// so the same UI machinery can drive both.
+fn include_parameter(model: &ModelMeta) -> Value {
+    let fks: Vec<Value> = model
+        .fields
+        .iter()
+        .filter(|c| c.fk_target.is_some())
+        .map(|c| Value::String(c.name.clone()))
+        .collect();
+    json!({
+        "name": "include",
+        "in": "query",
+        "required": false,
+        "description": "Comma-separated list of foreign-key columns to expand \
+                        in the response. Each named FK gets replaced with the \
+                        full related-row JSON object (one batched IN(...) query \
+                        per FK — no N+1). Unknown or non-FK names return a 400. \
+                        Example: `?include=user,billing_address`.",
+        "schema": { "type": "string" },
+        "x-umbra-include": true,
+        "x-umbra-include-fks": Value::Array(fks),
     })
 }
 

@@ -36,7 +36,7 @@
 mod backend_pg;
 mod backend_sqlite;
 mod errors;
-mod hydration;
+pub(crate) mod hydration;
 mod tx;
 mod write_helpers;
 
