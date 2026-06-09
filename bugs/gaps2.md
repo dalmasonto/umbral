@@ -48,7 +48,11 @@
 
     **One-hop only on day one** (matching the typed `select_related`'s current scope; nested `?include=author.manager` lands when typed `select_related("author__manager")` does).
 
-21. [ ] **Template-side image optimization — auto lazy-loading + responsive srcset + on-the-fly resize.** Today templates write raw `<img src="...">` tags: no `loading="lazy"`, no `decoding="async"`, no `srcset`, no modern format (`webp` / `avif`), no resize. Every visitor downloads the original asset at full size. For a product-image-heavy app like the shop this is the biggest LCP / bandwidth lever after the Tailwind/font fix from gap #20.
+21. [~] **Template-side image optimization — Option A (img filter) SHIPPED, Options B (post-render rewriter) + C (resize handler) deferred.** Commit `03f8725` ships the `img` MiniJinja filter with the perf-hat-trick attributes the gap called out as the primary ask: `loading="lazy"`, `decoding="async"`, explicit `width`/`height` when provided (no CLS), empty-`alt=""` default for decorative images, attribute-value escape against quote-breakout. Call shape: `{{ url | img(alt="…", width=N, height=N, class="…") }}`. Wrapper output marked `from_safe_string` so autoescape doesn't double-escape angle brackets; attribute values themselves go through a local `html_escape_into` for security.
+
+    3 regression pins in `crates/umbra-core/tests/template_discovery.rs`: minimal call shape, full-kwargs flow-through, hostile-alt escape (the test forms a payload `" onerror="alert(1)` and asserts exactly one `>` lands in the output, confirming the tag stays well-formed). 4 shop templates retrofitted: `home.html` (2 sites), `product_list.html`, `product_detail.html`. The `{% else %}` placeholder branches are unaffected.
+
+    Options C (on-the-fly resize) + B (lol_html post-render rewriter) deferred — `srcset` and `<picture>` fallbacks need C's resize endpoint to know real asset dimensions, and B's streaming-parse-every-response CPU cost isn't worth paying for a hypothetical regression yet. The filter's design is forward-compatible with C: once the endpoint exists, `img` rewrites src to `{handler}?w=...&format=...`. Original rationale + decision matrix preserved below:
 
     Scope: HTML templates only. REST responses ship raw URLs as before — the API consumer picks how to handle images.
 
