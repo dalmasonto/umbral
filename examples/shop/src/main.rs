@@ -21,6 +21,7 @@
 
 mod auth;
 mod seed;
+mod views;
 mod widgets;
 
 use std::sync::Arc;
@@ -29,10 +30,9 @@ use content::ContentPlugin;
 use ecommerce::EcommercePlugin;
 use umbra::migrate::MigrateError;
 use umbra::prelude::*;
-use umbra::templates::context;
-use umbra::web::{Html, Path, SlashRedirect, StatusCode};
+use umbra::web::SlashRedirect;
 use umbra_admin::{AdminModel, AdminPlugin};
-use umbra_auth::{AuthPlugin, AuthUser, BearerAuthentication, UserModel, login_required_html};
+use umbra_auth::{AuthPlugin, AuthUser, BearerAuthentication, login_required_html};
 use umbra_openapi::OpenApiPlugin;
 use umbra_permissions::{PermissionsPlugin, permission_required_html};
 use umbra_playground::PlaygroundPlugin;
@@ -44,13 +44,10 @@ use umbra_sessions::SessionsPlugin;
 
 use crate::auth::{TokenSchemeAuthentication, session_authentication};
 
-// Only the models the HTTP handlers below actually touch — seed
-// data + widgets pull their model imports from their own modules.
-use ecommerce::models::{Brand, Product, brand, product};
-// Cross-crate reverse-OneToOne accessor trait — gives AuthUser
-// the `customer().await?` method. The `/me` handler below calls
-// it; importing the trait is what brings the method into scope.
-use ecommerce::models::CustomerUserOneToOneReverse;
+// Handlers live in `src/views/`; the route table references
+// them as `views::home`, `views::dashboard`, etc. The
+// `mod views;` declaration above already brings the name into
+// scope, so no `use` line is needed.
 
 // ---------------------------------------------------------------------------
 // App wiring
@@ -186,21 +183,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // --- Routes ----------------------------------------------------------
         .routes(
             Routes::new()
-                .get("/", home)
-                .get("/products", product_list)
-                .get("/products/{id}", product_detail)
+                .get("/", views::home)
+                .get("/products", views::product_list)
+                .get("/products/{id}", views::product_detail)
                 .layered(
                     "GET",
                     "/dashboard",
-                    get(dashboard).layer(login_required_html("/login")),
+                    get(views::dashboard).layer(login_required_html("/login")),
                 )
                 .layered(
                     "GET",
                     "/staff-only",
-                    get(staff_only)
+                    get(views::staff_only)
                         .layer(permission_required_html("ecommerce.view_product", "/login")),
                 )
-                .layered("GET", "/me", get(me).layer(login_required_html("/login"))),
+                .layered(
+                    "GET",
+                    "/me",
+                    get(views::me).layer(login_required_html("/login")),
+                ),
         )
         .build()?;
 
@@ -217,110 +218,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 }
 
 // ---------------------------------------------------------------------------
-// Handlers
+// Boot helpers
 // ---------------------------------------------------------------------------
-
-async fn home() -> Result<Html<String>, (StatusCode, String)> {
-    let featured = Product::objects()
-        .filter(product::IS_FEATURED.eq(true))
-        .filter(product::STATUS.eq("active"))
-        .order_by(product::CREATED_AT.desc())
-        .limit(4)
-        .fetch()
-        .await
-        .map_err(internal_error)?;
-
-    let brands = Brand::objects()
-        .order_by(brand::NAME.asc())
-        .fetch()
-        .await
-        .map_err(internal_error)?;
-
-    let body = umbra::templates::render("home.html", &context!(featured, brands))
-        .map_err(internal_error)?;
-    Ok(Html(body))
-}
-
-async fn product_list() -> Result<Html<String>, (StatusCode, String)> {
-    let products = Product::objects()
-        .filter(product::STATUS.eq("active"))
-        .order_by(product::NAME.asc())
-        .fetch()
-        .await
-        .map_err(internal_error)?;
-
-    let body = umbra::templates::render("product_list.html", &context!(products))
-        .map_err(internal_error)?;
-    Ok(Html(body))
-}
-
-async fn product_detail(Path(id): Path<i64>) -> Result<Html<String>, (StatusCode, String)> {
-    let product = Product::objects()
-        .filter(product::ID.eq(id))
-        .first()
-        .await
-        .map_err(internal_error)?
-        .ok_or_else(|| (StatusCode::NOT_FOUND, format!("Product {id} not found")))?;
-
-    let body = umbra::templates::render("product_detail.html", &context!(product))
-        .map_err(internal_error)?;
-    Ok(Html(body))
-}
-
-async fn dashboard(
-    user: umbra_auth::LoggedIn<AuthUser>,
-) -> Result<Html<String>, (StatusCode, String)> {
-    let username = user.0.username().to_string();
-    let body =
-        umbra::templates::render("dashboard.html", &context!(username)).map_err(internal_error)?;
-    Ok(Html(body))
-}
-
-async fn staff_only() -> Result<Html<String>, (StatusCode, String)> {
-    let body = umbra::templates::render("staff_only.html", &context!()).map_err(internal_error)?;
-    Ok(Html(body))
-}
-
-/// Exercises the cross-crate reverse-OneToOne accessor end-to-end.
-/// `user.customer().await?` is the trait method emitted by
-/// `#[derive(Model)]` on Customer because of the `OneToOne<AuthUser>`
-/// field — AuthUser lives in `umbra-auth`, Customer lives in
-/// `examples/shop/plugins/ecommerce`, the accessor still resolves
-/// thanks to the trait-on-foreign-type emission.
-async fn me(user: umbra_auth::LoggedIn<AuthUser>) -> Result<Html<String>, (StatusCode, String)> {
-    let username = user.0.username().to_string();
-    let user_id = user.0.id;
-
-    let customer = user.0.customer().await.map_err(internal_error)?;
-
-    let body = match customer {
-        Some(c) => format!(
-            "<!doctype html><h1>{username}</h1>\
-             <p><strong>AuthUser id</strong>: {user_id} (umbra-auth crate)</p>\
-             <p><strong>Customer id</strong>: {} (ecommerce crate)</p>\
-             <p><strong>Loyalty points</strong>: {}</p>\
-             <p>Loaded via <code>user.customer().await?</code> — the cross-crate \
-             reverse-O2O accessor.</p>\
-             <p><a href='/admin'>Admin</a></p>",
-            c.id, c.loyalty_points,
-        ),
-        None => format!(
-            "<!doctype html><h1>{username}</h1>\
-             <p>AuthUser id {user_id} has no Customer row — \
-             <code>user.customer().await?</code> returned <code>None</code>.</p>\
-             <p><a href='/admin'>Admin</a></p>"
-        ),
-    };
-    Ok(Html(body))
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-fn internal_error<E: std::fmt::Display>(err: E) -> (StatusCode, String) {
-    (StatusCode::INTERNAL_SERVER_ERROR, err.to_string())
-}
 
 fn is_serve_invocation() -> bool {
     matches!(std::env::args().nth(1).as_deref(), None | Some("serve"))
