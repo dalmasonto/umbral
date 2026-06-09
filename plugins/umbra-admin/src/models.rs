@@ -58,6 +58,29 @@ pub struct AdminUserPref {
     /// Serialized `Vec<WidgetInstance>` JSON blob.
     #[umbra(noedit)]
     pub dashboard_layout: String,
+    /// gaps2 #11 — free-form JSON map of per-table UI state. Shape:
+    ///
+    /// ```jsonc
+    /// {
+    ///   "tables": {
+    ///     "product": {
+    ///       "filters":  { "status": "active" },
+    ///       "search":   "widget",
+    ///       "sort":     "-price",
+    ///       "per_page": 50
+    ///     }
+    ///   }
+    /// }
+    /// ```
+    ///
+    /// `Option<String>` so existing rows (NULL after the migration's
+    /// ADD COLUMN) read as "no prefs yet" without a backfill pass.
+    /// The first time a user visits a changelist, their current
+    /// query string gets persisted; on a subsequent paramless visit,
+    /// the changelist handler 303-redirects to the saved URL shape.
+    /// Cross-tab / cross-device continuity for free.
+    #[umbra(noedit)]
+    pub preferences: Option<String>,
     #[umbra(noedit)]
     pub updated_at: DateTime<Utc>,
 }
@@ -73,9 +96,91 @@ impl AdminUserPref {
             density: "comfortable".to_string(),
             sidebar_collapsed: false,
             dashboard_layout: "[]".to_string(),
+            preferences: None,
             updated_at: Utc::now(),
         }
     }
+}
+
+/// gaps2 #11 — per-table changelist UI state. Persisted as a nested
+/// entry under `preferences.tables.<table>` in the JSON blob.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TablePref {
+    /// Map of `field_name → string-value` for active facet filters.
+    /// Empty map omits the `?filter_*=...` params on redirect.
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub filters: std::collections::HashMap<String, String>,
+    /// Current search term (becomes `?search=...`). Empty string is
+    /// dropped from the URL.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub search: String,
+    /// Sort directive in `[-]col_name` shape — empty = no override
+    /// (falls through to the model's default ordering).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub sort: String,
+    /// Page size override. `None` falls through to the configured
+    /// admin default. Stored as `u32` because some callers cast to
+    /// `usize` and some to `i64`; `u32` round-trips through both.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub per_page: Option<u32>,
+}
+
+/// gaps2 #11 — read the persisted UI state for `(user_id, table)`.
+///
+/// Returns `None` when:
+/// - the user has no prefs row yet (NULL `preferences` column);
+/// - the JSON blob is present but missing `tables.<table>`;
+/// - the JSON blob is malformed (treated as "no prefs" rather than
+///   surfacing a parse error — the next write overwrites with a
+///   valid shape).
+pub async fn get_table_pref(user_id: i64, table: &str) -> Result<Option<TablePref>, sqlx::Error> {
+    let prefs = fetch_or_default(user_id).await?;
+    let Some(raw) = prefs.preferences.as_deref() else {
+        return Ok(None);
+    };
+    let Ok(root) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return Ok(None);
+    };
+    let Some(table_obj) = root.get("tables").and_then(|t| t.get(table)) else {
+        return Ok(None);
+    };
+    let Ok(pref) = serde_json::from_value::<TablePref>(table_obj.clone()) else {
+        return Ok(None);
+    };
+    Ok(Some(pref))
+}
+
+/// gaps2 #11 — merge a new `TablePref` into `preferences.tables.<table>`.
+///
+/// Read-modify-write rather than a JSON_SET / json_replace SQL pass:
+/// the shape lives in user code, and the v1 single-tab usage doesn't
+/// race. When two tabs CAN race (the gap's `hx-trigger="change
+/// delay:500ms"` follow-up), the merge moves to the SQL layer; the
+/// in-memory merge here is forward-compatible because the JSON
+/// structure is the same either way.
+pub async fn set_table_pref(
+    user_id: i64,
+    table: &str,
+    pref: &TablePref,
+) -> Result<(), sqlx::Error> {
+    let existing = fetch_or_default(user_id).await?;
+    let mut root: serde_json::Value = existing
+        .preferences
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    let pref_value = serde_json::to_value(pref).unwrap_or(serde_json::Value::Null);
+    root.as_object_mut()
+        .expect("root is always an object")
+        .entry("tables")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .expect("tables is always an object")
+        .insert(table.to_string(), pref_value);
+    let mut next = existing;
+    next.preferences = Some(root.to_string());
+    upsert(next).await?;
+    Ok(())
 }
 
 /// Fetch the prefs row for `user_id`, or return a struct filled with
@@ -233,6 +338,7 @@ pub async fn ensure_tables_for_tests(pool: &sqlx::SqlitePool) -> Result<(), sqlx
             density           TEXT    NOT NULL DEFAULT 'comfortable',
             sidebar_collapsed INTEGER NOT NULL DEFAULT 0,
             dashboard_layout  TEXT    NOT NULL DEFAULT '[]',
+            preferences       TEXT,
             updated_at        TEXT    NOT NULL
         )",
     )

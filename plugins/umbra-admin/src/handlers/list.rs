@@ -407,6 +407,25 @@ pub(crate) async fn list(
     }
     let perms = crate::permcheck::AdminPerms::load(&user, &plugin_name, &table).await;
 
+    // gaps2 #11: paramless visit + saved per-table prefs → 303 redirect
+    // to the URL with persisted query string. Cross-tab / cross-device
+    // continuity: the user filters Products on their laptop, opens the
+    // same URL on their phone, lands on the same view.
+    //
+    // The redirect runs only when the request carries NO query params at
+    // all — any explicit param (including `?reset=1` if the gap's
+    // follow-up adds a "clear filters" affordance) bypasses the
+    // restore and the saved state gets overwritten by the write
+    // below.
+    if params.is_empty() {
+        if let Ok(Some(pref)) = crate::models::get_table_pref(user.id, &table).await {
+            if let Some(qs) = serialize_table_pref(&pref) {
+                let path = crate::branding::current().base_path.clone();
+                return Redirect::to(&format!("{path}/{table}/?{qs}")).into_response();
+            }
+        }
+    }
+
     let cfg = state.config_for(&table);
 
     let display_cols: Vec<String> = if let Some(c) = cfg
@@ -419,6 +438,28 @@ pub(crate) async fn list(
 
     let (search_term, active_filters, sort_col, sort_order, page, page_size) =
         parse_list_params(&params, cfg, pk);
+
+    // gaps2 #11: persist the current shape so the next paramless
+    // visit restores it. Fire-and-forget — a write error logs but
+    // doesn't fail the page render. `page` is deliberately NOT
+    // persisted: pagination state shouldn't survive across sessions
+    // (the user wouldn't expect to land on page 5 after a logout),
+    // but per_page IS persisted because it's a layout choice.
+    let pref = crate::models::TablePref {
+        filters: active_filters.iter().cloned().collect(),
+        search: search_term.clone().unwrap_or_default(),
+        sort: shape_sort_directive(&sort_col, &sort_order),
+        per_page: Some(page_size as u32),
+    };
+    if let Err(e) = crate::models::set_table_pref(user.id, &table, &pref).await {
+        tracing::warn!(
+            user = user.id,
+            table = %table,
+            error = %e,
+            "gaps2 #11: failed to persist table prefs (continuing render)"
+        );
+    }
+    let _ = page;
 
     let fetch_cols: Vec<String> = {
         let mut cols = display_cols.clone();
@@ -772,5 +813,64 @@ pub(crate) async fn filter_dialog_handler(
     ) {
         Ok(html) => html.into_response(),
         Err(e) => e.into_response(),
+    }
+}
+
+// =========================================================================
+// gaps2 #11 — per-table preference round-trip helpers
+// =========================================================================
+
+/// Turn a saved [`crate::models::TablePref`] into the query string the
+/// changelist URL expects — `search=foo&filter_status=active&sort=-price
+/// &page_size=50`. Returns `None` when the pref is fully empty (no
+/// filters, no search, no sort, no per_page override): in that case
+/// the redirect is a no-op and we'd just paint the default
+/// changelist anyway.
+fn serialize_table_pref(pref: &crate::models::TablePref) -> Option<String> {
+    let mut parts: Vec<(String, String)> = Vec::new();
+    if !pref.search.is_empty() {
+        parts.push(("search".to_string(), pref.search.clone()));
+    }
+    // Filters key-sorted for a stable URL so two browser tabs showing
+    // the same prefs hit the same cache / proxy entry.
+    let mut filter_keys: Vec<&String> = pref.filters.keys().collect();
+    filter_keys.sort();
+    for k in filter_keys {
+        if let Some(v) = pref.filters.get(k) {
+            if !v.is_empty() {
+                parts.push((format!("filter_{k}"), v.clone()));
+            }
+        }
+    }
+    if !pref.sort.is_empty() {
+        // Round-trip the `-col` / `col` shape to the changelist's
+        // `?sort=col&order=desc` URL form.
+        if let Some(col) = pref.sort.strip_prefix('-') {
+            parts.push(("sort".to_string(), col.to_string()));
+            parts.push(("order".to_string(), "desc".to_string()));
+        } else {
+            parts.push(("sort".to_string(), pref.sort.clone()));
+        }
+    }
+    if let Some(ps) = pref.per_page {
+        parts.push(("page_size".to_string(), ps.to_string()));
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    serde_urlencoded::to_string(&parts).ok()
+}
+
+/// Collapse parsed `sort_col` + `sort_order` into the `-col` / `col`
+/// directive shape that the persisted [`crate::models::TablePref::sort`]
+/// field uses. Empty `sort_col` → empty string (no override).
+fn shape_sort_directive(sort_col: &str, sort_order: &str) -> String {
+    if sort_col.is_empty() {
+        return String::new();
+    }
+    if sort_order.eq_ignore_ascii_case("desc") {
+        format!("-{sort_col}")
+    } else {
+        sort_col.to_string()
     }
 }

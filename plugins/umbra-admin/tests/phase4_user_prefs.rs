@@ -199,3 +199,171 @@ async fn prefs_put_ignores_invalid_theme_value() {
     let resp = router.clone().oneshot(put_req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 }
+
+// =========================================================================
+// gaps2 #11 — per-table preference round-trip via the JSON blob column
+// =========================================================================
+
+async fn fresh_test_user(username: &str) -> i64 {
+    let pool = umbra::db::pool();
+    // Lazily create; reuse if a prior test in this run already made it.
+    if let Ok(row) = sqlx::query_as::<_, umbra_auth::AuthUser>(
+        "SELECT id, username, email, password_hash, is_active, is_staff, \
+         is_superuser, date_joined, last_login FROM auth_user WHERE username = ?",
+    )
+    .bind(username)
+    .fetch_one(&pool)
+    .await
+    {
+        return row.id;
+    }
+    create_user_with_flags(
+        username,
+        &format!("{username}@example.com"),
+        "pw",
+        true,
+        false,
+    )
+    .await
+    .expect("create user")
+    .id
+}
+
+#[tokio::test]
+async fn table_pref_returns_none_for_user_with_no_prefs_row() {
+    let _guard = LOCK.lock().await;
+    let _router = boot().await;
+    let uid = fresh_test_user("pref_none").await;
+
+    // No prefs row yet — read should be `None` (not a panic, not a
+    // parse error, not an empty TablePref).
+    let pref = umbra_admin::models::get_table_pref(uid, "product")
+        .await
+        .expect("read");
+    assert!(pref.is_none(), "no row yet → None: got {pref:?}");
+}
+
+#[tokio::test]
+async fn table_pref_round_trips_filters_search_sort_per_page() {
+    let _guard = LOCK.lock().await;
+    let _router = boot().await;
+    let uid = fresh_test_user("pref_round_trip").await;
+
+    let mut filters = std::collections::HashMap::new();
+    filters.insert("status".to_string(), "active".to_string());
+    filters.insert("brand".to_string(), "acme".to_string());
+    let original = umbra_admin::models::TablePref {
+        filters,
+        search: "widget".to_string(),
+        sort: "-price".to_string(),
+        per_page: Some(50),
+    };
+
+    umbra_admin::models::set_table_pref(uid, "product", &original)
+        .await
+        .expect("save");
+
+    let loaded = umbra_admin::models::get_table_pref(uid, "product")
+        .await
+        .expect("read")
+        .expect("pref present after save");
+
+    assert_eq!(loaded.search, "widget");
+    assert_eq!(loaded.sort, "-price");
+    assert_eq!(loaded.per_page, Some(50));
+    assert_eq!(
+        loaded.filters.get("status").map(|s| s.as_str()),
+        Some("active")
+    );
+    assert_eq!(
+        loaded.filters.get("brand").map(|s| s.as_str()),
+        Some("acme")
+    );
+}
+
+#[tokio::test]
+async fn table_pref_per_table_namespaces_dont_collide() {
+    // Setting prefs on `product` must NOT affect `order`. The JSON
+    // blob nests by table key; the read for a different table
+    // returns `None`.
+    let _guard = LOCK.lock().await;
+    let _router = boot().await;
+    let uid = fresh_test_user("pref_namespace").await;
+
+    let pref_a = umbra_admin::models::TablePref {
+        search: "table_a_search".to_string(),
+        ..Default::default()
+    };
+    umbra_admin::models::set_table_pref(uid, "product", &pref_a)
+        .await
+        .expect("save product");
+
+    let product = umbra_admin::models::get_table_pref(uid, "product")
+        .await
+        .unwrap()
+        .expect("product pref present");
+    assert_eq!(product.search, "table_a_search");
+
+    let order = umbra_admin::models::get_table_pref(uid, "order")
+        .await
+        .unwrap();
+    assert!(
+        order.is_none(),
+        "order pref must be None (prefs not set for that table)"
+    );
+
+    // Now write a different pref for `order`; product survives.
+    let pref_b = umbra_admin::models::TablePref {
+        search: "table_b_search".to_string(),
+        ..Default::default()
+    };
+    umbra_admin::models::set_table_pref(uid, "order", &pref_b)
+        .await
+        .expect("save order");
+
+    let product_again = umbra_admin::models::get_table_pref(uid, "product")
+        .await
+        .unwrap()
+        .expect("product still set");
+    assert_eq!(
+        product_again.search, "table_a_search",
+        "writing `order` must not clobber `product`"
+    );
+    let order_loaded = umbra_admin::models::get_table_pref(uid, "order")
+        .await
+        .unwrap()
+        .expect("order now present");
+    assert_eq!(order_loaded.search, "table_b_search");
+}
+
+#[tokio::test]
+async fn table_pref_malformed_json_in_db_reads_as_none() {
+    // Pre-existing rows might carry stale or hand-edited JSON. The
+    // read path must treat malformed payload as "no prefs" (None) so
+    // the next write overwrites with a valid shape — not crash the
+    // handler.
+    let _guard = LOCK.lock().await;
+    let _router = boot().await;
+    let uid = fresh_test_user("pref_malformed").await;
+
+    // Manually insert a row with garbage in `preferences` (the upsert
+    // path can't produce this; this models a stale row).
+    let pool = umbra::db::pool();
+    sqlx::query(
+        "INSERT INTO admin_user_pref \
+         (user_id, theme, density, sidebar_collapsed, dashboard_layout, preferences, updated_at) \
+         VALUES (?, 'dark', 'comfortable', 0, '[]', 'not json at all {', datetime('now'))",
+    )
+    .bind(uid)
+    .execute(&pool)
+    .await
+    .expect("seed malformed row");
+
+    let pref = umbra_admin::models::get_table_pref(uid, "product")
+        .await
+        .expect("read should not error on garbage");
+    assert!(
+        pref.is_none(),
+        "malformed JSON → None (not panic, not parse error)"
+    );
+}
