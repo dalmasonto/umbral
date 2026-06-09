@@ -231,6 +231,77 @@ async fn dashboard_page_renders_widget_placeholders() {
     );
 }
 
+/// gaps2 #4 — the admin runtime JS is served as a single external
+/// asset (`/admin/static/admin.js`) rather than ~1080 lines of
+/// inline `<script>` blocks in wrapper.html. Three pins:
+///
+/// 1. The external endpoint serves a valid `application/javascript`
+///    response with non-empty body.
+/// 2. wrapper.html references the external file + sets the
+///    `umbraAdminBase` bootstrap.
+/// 3. The pre-fix inline IIFE marker (`// Sheet stack state machine.`,
+///    the comment at the top of old Block 5) no longer appears in
+///    the served wrapper HTML — would catch a revert that re-inlines
+///    the JS without updating the gap status.
+#[tokio::test]
+async fn admin_js_served_as_external_asset_not_inline() {
+    let _guard = LOCK.lock().await;
+    let router = boot().await;
+    let cookie = staff_cookie().await;
+
+    // 1. External asset endpoint
+    let asset_req = Request::builder()
+        .uri("/admin/static/admin.js")
+        .body(Body::empty())
+        .unwrap();
+    let asset_resp = router.clone().oneshot(asset_req).await.unwrap();
+    assert_eq!(asset_resp.status(), StatusCode::OK);
+    let ct = asset_resp
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(
+        ct.starts_with("application/javascript"),
+        "admin.js Content-Type should be application/javascript, got `{ct}`"
+    );
+    let body = asset_resp.into_body().collect().await.unwrap().to_bytes();
+    assert!(
+        body.len() > 1000,
+        "admin.js body should be non-trivial, got {} bytes",
+        body.len()
+    );
+
+    // 2. wrapper.html references the external file
+    let page_req = Request::builder()
+        .uri("/admin/?dashboard=1")
+        .header(header::COOKIE, cookie)
+        .body(Body::empty())
+        .unwrap();
+    let page_resp = router.clone().oneshot(page_req).await.unwrap();
+    let html = String::from_utf8_lossy(&page_resp.into_body().collect().await.unwrap().to_bytes())
+        .into_owned();
+    assert!(
+        html.contains("var umbraAdminBase = '/admin'"),
+        "umbraAdminBase bootstrap should be inline (read by admin.js)"
+    );
+    assert!(
+        html.contains("/admin/static/admin.js"),
+        "wrapper.html should reference the external admin.js"
+    );
+
+    // 3. The old inline IIFE comments must be gone — if they reappear
+    //    in wrapper.html, the gap got reverted without updating tests.
+    assert!(
+        !html.contains("// Sheet stack state machine."),
+        "old inline block-5 IIFE comment should be gone from wrapper.html"
+    );
+    assert!(
+        !html.contains("// Extend the early-declared window.umbra stub"),
+        "old inline block-3 IIFE comment should be gone from wrapper.html"
+    );
+}
+
 /// gaps2 #3 — change-password dialog lives as an HTML `<template>`
 /// in wrapper.html rather than JS-string concatenation. The opener
 /// (`umbra._openChangePasswordDialog`) clones the template and
