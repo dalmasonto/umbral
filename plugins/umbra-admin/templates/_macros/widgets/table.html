@@ -1,22 +1,23 @@
 {#
   table.html
   ==========
-  "Recent Orders / Recent Comments" style table widget — modeled
-  on the user-supplied reference. The widget card itself (card
-  bg, border, rounded corners) is already provided by the
-  dashboard grid's per-widget wrapper. This macro fills that
-  card with:
+  Table widget — the CARD holds the title + "View all →" link
+  at the top; BELOW it sits a separate bordered table with its
+  own rounded corners and hairline outline. The two pieces are
+  visually distinct (card chrome ≠ table chrome) so a long table
+  reads as a panel inside the card, not as the card itself.
 
-    • Compact title row + optional "View all →" link
-    • Distinct header band (one notch darker than the card bg)
-    • Row body in `bg-surface-container` (the card bg) — no
-      zebra; visual rhythm comes from hairline dividers on
-      `surface-container-highest`
-    • First column heavier (`text-on-surface`, `font-medium`,
-      `whitespace-nowrap`) — that's the row's "anchor" cell,
-      matches the `<th scope="row">` pattern in the reference
-    • Other columns softer (`text-on-surface-variant`)
-    • Last row drops its bottom border
+    ┌── Card (from the dashboard grid wrapper) ───────────────────┐
+    │  RECENT ORDERS                                  View all →  │
+    │                                                              │
+    │  ┌──── Bordered table panel ─────────────────────────────┐  │
+    │  │ Order         Status        Total                      │  │  ← header band
+    │  ├────────────────────────────────────────────────────────┤
+    │  │ CANCEL-005    cancelled     $326.84                    │  │
+    │  │ DLV-004       delivered     $37.39                     │  │
+    │  │ SHIP-003      shipped       $82.76                     │  │
+    │  └────────────────────────────────────────────────────────┘  │
+    └──────────────────────────────────────────────────────────────┘
 
   Expects payload:
     {
@@ -28,8 +29,8 @@
 
 {% macro table_widget(title, payload) %}
 <div class="table-widget h-full flex flex-col">
-  {# Header: title (left) + View all link (right) ============== #}
-  <div class="px-md pt-md pb-sm flex-shrink-0 flex items-center justify-between gap-sm">
+  {# Card-level header: title (left) + View all link (right) === #}
+  <div class="px-md pt-md pb-md flex-shrink-0 flex items-center justify-between gap-sm">
     <p class="text-label-sm text-outline uppercase tracking-wider truncate">{{ title }}</p>
     {% if payload.view_all_url %}
     <a
@@ -43,52 +44,49 @@
   </div>
 
   {% if payload.columns and payload.rows and payload.rows | length > 0 %}
-  <div class="flex-1 overflow-auto">
-    <table class="w-full text-sm text-left text-on-surface-variant">
-      {# Header — slightly different surface from the card bg so
-         the band reads as a contrasting strip without needing a
-         bottom border. #}
-      <thead class="text-sm text-on-surface-variant bg-surface-container-low">
-        <tr>
-          {% for col in payload.columns %}
-          <th
-            scope="col"
-            class="px-md py-sm font-medium text-on-surface-variant whitespace-nowrap"
-          >{{ col.label }}</th>
+  {# Bordered table panel — separate chrome from the card. The
+     border uses `surface-container-highest` (the soft-rail
+     token; same as scrollbar + feed divider) so the panel
+     edge reads as a hairline against the card bg, not the
+     bright `outline-variant`. `overflow-hidden` clips the
+     scrollbar + first/last row corners against the radius. #}
+  <div class="mx-md mb-md flex-1 min-h-0 overflow-hidden rounded-lg border border-surface-container-highest">
+    <div class="h-full overflow-auto">
+      <table class="w-full text-sm text-left text-on-surface-variant">
+        <thead class="text-sm text-on-surface-variant bg-surface-container-low">
+          <tr>
+            {% for col in payload.columns %}
+            <th
+              scope="col"
+              class="px-md py-sm font-medium whitespace-nowrap"
+            >{{ col.label }}</th>
+            {% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in payload.rows %}
+          <tr class="bg-surface-container border-t border-surface-container-highest/60 hover:bg-surface-container-high transition-colors">
+            {% for col in payload.columns %}
+            {%- set v = row[col.key] -%}
+            {%- set vstr = "" if v is none else (v | string) -%}
+            {% if loop.first %}
+            <th
+              scope="row"
+              class="px-md py-md font-medium text-on-surface whitespace-nowrap truncate max-w-[220px]"
+              title="{{ vstr }}"
+            >{{ vstr }}</th>
+            {% else %}
+            <td
+              class="px-md py-md truncate max-w-[200px] tabular-nums"
+              title="{{ vstr }}"
+            >{{ vstr }}</td>
+            {% endif %}
+            {% endfor %}
+          </tr>
           {% endfor %}
-        </tr>
-      </thead>
-      <tbody>
-        {% for row in payload.rows %}
-        {# Body row — bottom hairline on `surface-container-highest`
-           (the same token the divider, scrollbar, and other soft
-           rails use); `last:border-b-0` drops the trailing border
-           on the final row so the table doesn't end on a hairline. #}
-        <tr class="bg-surface-container border-b border-surface-container-highest last:border-b-0 hover:bg-surface-container-high transition-colors">
-          {% for col in payload.columns %}
-          {%- set v = row[col.key] -%}
-          {%- set vstr = "" if v is none else (v | string) -%}
-          {% if loop.first %}
-          {# Row anchor cell — heavier weight, stronger color, no
-             wrap. Matches the reference's `<th scope="row">`
-             pattern (the leftmost column tells you which entity
-             the row is about). #}
-          <th
-            scope="row"
-            class="px-md py-md font-medium text-on-surface whitespace-nowrap truncate max-w-[220px]"
-            title="{{ vstr }}"
-          >{{ vstr }}</th>
-          {% else %}
-          <td
-            class="px-md py-md truncate max-w-[200px] tabular-nums"
-            title="{{ vstr }}"
-          >{{ vstr }}</td>
-          {% endif %}
-          {% endfor %}
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+        </tbody>
+      </table>
+    </div>
   </div>
   {% else %}
   <p class="text-label-sm text-outline italic px-md py-md mt-auto">No data</p>
