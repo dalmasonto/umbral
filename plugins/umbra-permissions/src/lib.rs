@@ -65,6 +65,7 @@
 //! - RLS predicate injection wired through `umbra-rls`.
 //! - ContentType auto-population for plugins not yet loaded at boot.
 
+pub mod membership;
 pub mod middleware;
 pub mod models;
 pub mod perm;
@@ -81,6 +82,18 @@ pub use middleware::{
 };
 pub use models::{ContentType, Group, Permission, UserGroup, UserPermission};
 pub use perm::{PermError, has_perm, has_perm_for_superuser, has_perm_scoped, user_perms};
+
+/// gap #61 part 2: typed M2M-shape membership helpers
+/// (`add_user_to_group`, `set_user_groups`, `grant_user_permission`,
+/// `groups_for_user`, etc.). Sit on top of the explicit `UserGroup`
+/// / `UserPermission` junction models — see `membership.rs`'s
+/// module docstring for the cross-crate dep-arrow reasoning that
+/// keeps those models user-facing.
+pub use membership::{
+    add_user_to_group, direct_permissions_for_user, grant_user_permission, group_ids_for_user,
+    groups_for_user, has_direct_user_permission, is_in_group, remove_user_from_group,
+    revoke_user_permission, set_user_groups,
+};
 
 use umbra::plugin::{AppContext, Plugin, PluginError};
 use umbra::web::Router;

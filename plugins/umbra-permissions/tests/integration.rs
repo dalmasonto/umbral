@@ -418,3 +418,164 @@ async fn has_perm_scoped_api_works() {
 
     assert!(!result, "user with no perms should fail has_perm_scoped");
 }
+
+// =========================================================================
+// gap #61 part 2 — M2M-shape membership helpers
+//
+// add_user_to_group / remove_user_from_group / set_user_groups /
+// grant_user_permission / revoke_user_permission etc. give callers an
+// "AuthUser { groups: M2M<Group> }"-feel API on top of the explicit
+// junction models that have to stay user-facing (cross-crate dep
+// arrow blocks moving the M2M field onto AuthUser itself).
+// =========================================================================
+
+use umbra_permissions::membership;
+use umbra_permissions::models::{Group, Permission};
+
+async fn fetch_or_create_group(name: &str) -> Group {
+    let pool = pool();
+    sqlx::query(&format!(
+        "INSERT OR IGNORE INTO permissions_group (name) VALUES ('{name}')"
+    ))
+    .execute(&pool)
+    .await
+    .expect("seed group");
+    let id: i64 = sqlx::query_scalar(&format!(
+        "SELECT id FROM permissions_group WHERE name = '{name}'"
+    ))
+    .fetch_one(&pool)
+    .await
+    .expect("group id");
+    Group::objects()
+        .filter(umbra::orm::Predicate::<Group>::col_eq("id", id))
+        .first()
+        .await
+        .expect("fetch group")
+        .expect("group present")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn add_and_remove_user_to_group_round_trips() {
+    boot().await;
+    let group = fetch_or_create_group("membership_test_editors").await;
+    let user = "8001";
+
+    // Pre-state: not a member.
+    assert!(!membership::is_in_group(user, group.id).await.unwrap());
+
+    membership::add_user_to_group(user, &group).await.expect("add");
+    assert!(membership::is_in_group(user, group.id).await.unwrap());
+
+    // Idempotent re-add — no error, still a member, no duplicate row.
+    membership::add_user_to_group(user, &group).await.expect("idempotent add");
+    let groups = membership::groups_for_user(user).await.expect("fetch");
+    let count = groups.iter().filter(|g| g.id == group.id).count();
+    assert_eq!(count, 1, "re-adding must not insert a duplicate row");
+
+    membership::remove_user_from_group(user, &group).await.expect("remove");
+    assert!(!membership::is_in_group(user, group.id).await.unwrap());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn set_user_groups_replaces_full_set() {
+    boot().await;
+    let g_a = fetch_or_create_group("set_users_test_a").await;
+    let g_b = fetch_or_create_group("set_users_test_b").await;
+    let g_c = fetch_or_create_group("set_users_test_c").await;
+    let user = "8002";
+
+    // Start with two groups.
+    membership::set_user_groups(user, &[g_a.id, g_b.id]).await.unwrap();
+    let ids: Vec<i64> = membership::groups_for_user(user)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|g| g.id)
+        .collect();
+    assert!(ids.contains(&g_a.id));
+    assert!(ids.contains(&g_b.id));
+    assert!(!ids.contains(&g_c.id));
+
+    // Replace with a different set — A goes, C arrives.
+    membership::set_user_groups(user, &[g_b.id, g_c.id]).await.unwrap();
+    let ids: Vec<i64> = membership::groups_for_user(user)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|g| g.id)
+        .collect();
+    assert!(!ids.contains(&g_a.id), "set must drop A");
+    assert!(ids.contains(&g_b.id), "B was in both sets, keeps");
+    assert!(ids.contains(&g_c.id), "C is new");
+
+    // Empty set wipes all memberships.
+    membership::set_user_groups(user, &[]).await.unwrap();
+    let groups = membership::groups_for_user(user).await.unwrap();
+    assert!(groups.is_empty(), "empty set clears every membership");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn grant_and_revoke_user_permission_round_trips() {
+    boot().await;
+    let user = "8003";
+    let perm = Permission::objects()
+        .filter(umbra::orm::Predicate::<Permission>::col_eq(
+            "codename",
+            "blog.view_blogpost".to_string(),
+        ))
+        .first()
+        .await
+        .expect("fetch perm")
+        .expect("standard permission seeded");
+
+    assert!(
+        !membership::has_direct_user_permission(user, &perm.codename)
+            .await
+            .unwrap()
+    );
+    membership::grant_user_permission(user, &perm).await.expect("grant");
+    assert!(
+        membership::has_direct_user_permission(user, &perm.codename)
+            .await
+            .unwrap()
+    );
+
+    // grant_user_permission is idempotent.
+    membership::grant_user_permission(user, &perm).await.expect("re-grant ok");
+    let direct = membership::direct_permissions_for_user(user).await.unwrap();
+    let count = direct.iter().filter(|p| p.codename == perm.codename).count();
+    assert_eq!(count, 1, "re-grant must not duplicate the junction row");
+
+    membership::revoke_user_permission(user, &perm).await.expect("revoke");
+    assert!(
+        !membership::has_direct_user_permission(user, &perm.codename)
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn has_perm_uses_membership_helpers_after_refactor() {
+    // Regression on the `has_perm_scoped` refactor: the body now uses
+    // `membership::group_ids_for_user` for the group lookup. The
+    // group-mediated path must still return `true` end-to-end.
+    boot().await;
+    let user = "8004";
+    let group = fetch_or_create_group("has_perm_refactor_group").await;
+    membership::add_user_to_group(user, &group).await.unwrap();
+
+    // Grant the permission to the group via the auto-junction.
+    sqlx::query(
+        "INSERT OR IGNORE INTO permissions_group_permissions (parent_id, child_id) VALUES (?, ?)",
+    )
+    .bind(group.id)
+    .bind("blog.delete_blogpost")
+    .execute(&pool())
+    .await
+    .expect("seed group permission");
+
+    assert!(
+        has_perm(user, "blog.delete_blogpost").await.unwrap(),
+        "user → group → permission path must survive the refactor"
+    );
+}

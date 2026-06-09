@@ -404,10 +404,18 @@ pub fn json_to_sea_value(
         SqlType::SmallInt | SqlType::Integer => {
             coerce_i32(value, field_name).map(|v| SeaValue::Int(Some(v)))
         }
-        // ForeignKey columns store i64 — same path as BigInt.
-        SqlType::BigInt | SqlType::ForeignKey => {
-            coerce_i64(value, field_name).map(|v| SeaValue::BigInt(Some(v)))
-        }
+        SqlType::BigInt => coerce_i64(value, field_name).map(|v| SeaValue::BigInt(Some(v))),
+        // PK lift Pass A follow-up: `ForeignKey` columns whose target
+        // has a String / UUID PK arrive here as `JsonValue::String`
+        // (the typed `ForeignKey<T>` macro emits `to_value(self.id())`
+        // which produces a JSON string for String-PK targets — see
+        // PK lift Pass D). Bind as text in that case; integer-PK
+        // targets stay on the BigInt path. This is the write-side
+        // counterpart to `fk_target_pk_sql_type` in `orm/dynamic.rs`.
+        SqlType::ForeignKey => match value {
+            JsonValue::String(s) => Ok(SeaValue::String(Some(Box::new(s.clone())))),
+            _ => coerce_i64(value, field_name).map(|v| SeaValue::BigInt(Some(v))),
+        },
         SqlType::Real => coerce_f32(value, field_name).map(|v| SeaValue::Float(Some(v))),
         SqlType::Double => coerce_f64(value, field_name).map(|v| SeaValue::Double(Some(v))),
         SqlType::Text => {

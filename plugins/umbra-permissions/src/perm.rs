@@ -50,12 +50,20 @@ use crate::models::{Group, UserGroup, UserPermission, user_group, user_permissio
 pub enum PermError {
     /// A sqlx-level error (connection failure, bad SQL, etc.).
     Sqlx(sqlx::Error),
+    /// A structured umbra ORM write-validator error (UNIQUE violation
+    /// on the junction, FK target missing, etc.). Surfaced when the
+    /// membership helpers (`add_user_to_group`, `grant_user_permission`,
+    /// `set_user_groups`, ...) call `.create()` / `.bulk_create()` —
+    /// the typed terminals return `WriteError` directly so the caller
+    /// gets the structured field map without a Display round-trip.
+    Write(umbra::orm::write::WriteError),
 }
 
 impl std::fmt::Display for PermError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             PermError::Sqlx(e) => write!(f, "umbra-permissions: sqlx: {e}"),
+            PermError::Write(e) => write!(f, "umbra-permissions: write: {e}"),
         }
     }
 }
@@ -65,6 +73,12 @@ impl std::error::Error for PermError {}
 impl From<sqlx::Error> for PermError {
     fn from(e: sqlx::Error) -> Self {
         Self::Sqlx(e)
+    }
+}
+
+impl From<umbra::orm::write::WriteError> for PermError {
+    fn from(e: umbra::orm::write::WriteError) -> Self {
+        Self::Write(e)
     }
 }
 
@@ -128,13 +142,7 @@ pub async fn has_perm_scoped(
     //    parent_id IN (?,?,?) AND child_id = ? LIMIT 1` — one
     //    round-trip regardless of group count, and we never have to
     //    spell the junction-table name ourselves.
-    let group_ids: Vec<i64> = UserGroup::objects()
-        .filter(user_group::USER_ID.eq(user_id_owned))
-        .fetch()
-        .await?
-        .into_iter()
-        .map(|ug| ug.group_id.id())
-        .collect();
+    let group_ids = crate::membership::group_ids_for_user(&user_id_owned).await?;
     if group_ids.is_empty() {
         return Ok(false);
     }
