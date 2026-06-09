@@ -176,14 +176,17 @@ pub async fn submit_contact(
     form: Form<ContactMessage>,
 ) -> Result<Response, (StatusCode, String)> {
     // gaps2 #19 follow-up: extractor returned a parsed-and-
-    // validated `ContactMessage` directly. On Err we re-render
-    // with a default ContactMessage and the per-field error map.
+    // validated `ContactMessage` directly. On Err the framework
+    // now hands back the raw form pairs alongside the errors —
+    // we re-render with those instead of an empty struct so the
+    // user keeps every keystroke (screenshot 2026-06-10 01-03-09
+    // reported the data-loss bug pre-fix).
     let mut msg = match form.into_result() {
         Ok(v) => v,
         Err(errs) => {
-            return render_contact_page(
+            return render_contact_page_raw(
                 false,
-                &ContactMessage::default(),
+                errs.raw_as_json(),
                 ctx_with_form_summary(&errs),
                 StatusCode::UNPROCESSABLE_ENTITY,
             );
@@ -210,6 +213,24 @@ pub async fn submit_contact(
 fn render_contact_page(
     sent: bool,
     form: &ContactMessage,
+    errors: serde_json::Map<String, serde_json::Value>,
+    status: StatusCode,
+) -> Result<Response, (StatusCode, String)> {
+    let body = umbra::templates::render("contact.html", &context!(sent, form, errors))
+        .map_err(internal_error)?;
+    Ok((status, Html(body)).into_response())
+}
+
+/// Variant for the validation-failure path. Renders the same
+/// template but with `form` populated from the raw `String → String`
+/// pairs the user submitted (typed via `serde_json::Value::Object`)
+/// instead of from a parsed `ContactMessage`. The template's
+/// `{{ form.<field> }}` references render the user's literal input
+/// in both cases — MiniJinja's duck-typing makes the two shapes
+/// interchangeable at the template level.
+fn render_contact_page_raw(
+    sent: bool,
+    form: serde_json::Value,
     errors: serde_json::Map<String, serde_json::Value>,
     status: StatusCode,
 ) -> Result<Response, (StatusCode, String)> {

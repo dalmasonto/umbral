@@ -500,13 +500,61 @@ use crate::orm::write::WriteError;
 #[derive(Debug)]
 pub struct FormErrors {
     inner: WriteError,
+    /// The raw form pairs the user submitted, captured before
+    /// validation ran. Lets the handler re-render the form template
+    /// pre-filled with what the user typed — see
+    /// [`Self::raw_values`] and [`Self::raw_as_json`]. The
+    /// extractor (`Form::from_request`) carries this through
+    /// automatically; the `From<ValidationErrors>` path leaves it
+    /// empty (no raw input was ever in scope), which is the right
+    /// default for handlers that build a `FormErrors` from scratch
+    /// for ad-hoc errors.
+    raw: HashMap<String, String>,
 }
 
 impl FormErrors {
     /// Wrap any [`WriteError`]. Use [`From`] for free conversion in
-    /// `?` chains.
+    /// `?` chains. The raw values default to empty — call
+    /// [`Self::with_raw`] when you have the submitted pairs in
+    /// scope (typically only inside an axum extractor).
     pub fn new(err: WriteError) -> Self {
-        Self { inner: err }
+        Self {
+            inner: err,
+            raw: HashMap::new(),
+        }
+    }
+
+    /// Construct a `FormErrors` carrying both the validation
+    /// failure AND the raw form pairs the user submitted. The raw
+    /// pairs let the handler re-render the form pre-filled with
+    /// what the user typed instead of falling back to
+    /// `T::default()` (which loses every keystroke).
+    pub fn with_raw(err: WriteError, raw: HashMap<String, String>) -> Self {
+        Self { inner: err, raw }
+    }
+
+    /// Borrow the raw form pairs the user submitted, if the
+    /// extractor captured them. Empty when the [`FormErrors`] was
+    /// constructed via [`Self::new`] or any `From` impl that
+    /// doesn't see the request body.
+    pub fn raw_values(&self) -> &HashMap<String, String> {
+        &self.raw
+    }
+
+    /// JSON-shaped view of the raw values, ready to drop straight
+    /// into a template context as the `form` key so existing
+    /// `{{ form.<field> }}` references repopulate the user's
+    /// input. The map is `String → String` so every value
+    /// serialises to a JSON string — templates that need typed
+    /// access should call [`Self::raw_values`] and convert per
+    /// field.
+    pub fn raw_as_json(&self) -> serde_json::Value {
+        serde_json::Value::Object(
+            self.raw
+                .iter()
+                .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+                .collect(),
+        )
     }
 
     /// Borrow the underlying [`WriteError`] — keeps every accessor
@@ -693,12 +741,18 @@ where
 
         // Run validation. On success, we've already proven the data
         // fits T's shape — return Ok(T). On failure, lift the
-        // ValidationErrors to a FormErrors and hand back as a
-        // Form::invalid so the handler can render the template with
-        // the original input still in the map.
+        // ValidationErrors to a FormErrors AND attach the raw
+        // pairs so the handler can render the template pre-filled
+        // with what the user typed. Without this the user loses
+        // every keystroke on validation failure — see gaps2 #19
+        // follow-up commit for the bug screenshot that prompted
+        // this change.
         match T::validate(&pairs) {
             Ok(value) => Ok(Self::valid(value)),
-            Err(errs) => Ok(Self::invalid(FormErrors::from(errs))),
+            Err(errs) => {
+                let write_err: WriteError = errs.into();
+                Ok(Self::invalid(FormErrors::with_raw(write_err, pairs)))
+            }
         }
     }
 }
@@ -882,5 +936,63 @@ mod tests {
         assert!(err.fields.contains_key("password"));
         assert!(err.fields["username"][0].contains("at least 3"));
         assert!(err.fields["password"][0].contains("at least 8"));
+    }
+
+    // =====================================================================
+    // gaps2 #19 follow-up — FormErrors carries the raw form pairs so the
+    // handler can re-render the template pre-filled with what the user
+    // typed instead of falling back to `T::default()` (which loses every
+    // keystroke). Screenshot 2026-06-10 01-03-09 reported the data-loss
+    // bug pre-fix.
+    // =====================================================================
+
+    #[test]
+    fn form_errors_with_raw_round_trips_the_submitted_pairs() {
+        let mut raw = HashMap::new();
+        raw.insert("name".to_string(), "Bella Verifier".to_string());
+        raw.insert("email".to_string(), "bella@invalid".to_string());
+        raw.insert("phone".to_string(), "none".to_string());
+
+        let errs = FormErrors::with_raw(
+            WriteError::Validator {
+                field: "email".to_string(),
+                message: "email's domain must contain at least one `.`".to_string(),
+            },
+            raw.clone(),
+        );
+
+        // Raw values survive untouched.
+        assert_eq!(
+            errs.raw_values().get("name").map(|s| s.as_str()),
+            Some("Bella Verifier"),
+        );
+        assert_eq!(
+            errs.raw_values().get("phone").map(|s| s.as_str()),
+            Some("none"),
+        );
+
+        // JSON shape is a flat `{ field: "literal user input" }` map,
+        // ready to drop straight into a template ctx as `form` so
+        // `{{ form.name }}` repopulates.
+        let json = errs.raw_as_json();
+        let obj = json.as_object().expect("raw_as_json is an object");
+        assert_eq!(obj.get("name").and_then(|v| v.as_str()), Some("Bella Verifier"));
+        assert_eq!(obj.get("phone").and_then(|v| v.as_str()), Some("none"));
+    }
+
+    #[test]
+    fn form_errors_new_defaults_raw_to_empty_for_ad_hoc_construction() {
+        // FormErrors::new doesn't see the request body — common shape
+        // for handlers that construct an ad-hoc error after the
+        // extractor ran. Raw map MUST default to empty, not panic.
+        let errs = FormErrors::new(WriteError::Validator {
+            field: "form".to_string(),
+            message: "rate limited".to_string(),
+        });
+        assert!(errs.raw_values().is_empty());
+        // JSON shape stays a valid empty object — template ctx
+        // doesn't crash when nothing was submitted.
+        let json = errs.raw_as_json();
+        assert!(json.as_object().expect("object").is_empty());
     }
 }
