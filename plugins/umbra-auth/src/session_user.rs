@@ -265,13 +265,26 @@ pub async fn user_context_layer(
     next: axum::middleware::Next,
 ) -> axum::response::Response {
     let user_value = match current_user(req.headers()).await {
-        Ok(Some(u)) => serialize_authenticated(&u),
+        Ok(Some(u)) => serialize_authenticated_with_relations(&u).await,
         _ => anonymous_user_value(),
     };
     umbra::templates::with_current_user(Some(user_value), next.run(req)).await
 }
 
-fn serialize_authenticated(user: &AuthUser) -> umbra::templates::Value {
+/// Depth cap for the recursive relation expansion in
+/// [`serialize_authenticated_with_relations`]. Closes gap2 #14:
+/// templates can write `user.customer.loyalty_points` and get the
+/// resolved value without the handler having to declare the prefetch.
+///
+/// Why 2: covers the common case `user.<one_to_one>.<scalar>` (1 hop
+/// to load the child, scalars are free) AND `user.<one_to_one>.<fk>`
+/// (2 hops if the template wants to walk back into another object).
+/// Beyond 2 the query budget grows with the graph fan-out and the
+/// "templates pay for every relation, every request" trade-off
+/// stops being honest.
+const USER_RELATION_DEPTH: usize = 2;
+
+async fn serialize_authenticated_with_relations(user: &AuthUser) -> umbra::templates::Value {
     let mut json = match serde_json::to_value(user) {
         Ok(serde_json::Value::Object(map)) => map,
         _ => serde_json::Map::new(),
@@ -280,7 +293,162 @@ fn serialize_authenticated(user: &AuthUser) -> umbra::templates::Value {
         "is_authenticated".to_string(),
         serde_json::Value::Bool(true),
     );
+
+    // gap2 #14: recursively expand reverse-O2O and forward-FK
+    // relations on the serialized user, up to `USER_RELATION_DEPTH`
+    // hops, with `(table, pk)` cycle detection so
+    // `user.customer.user.customer...` terminates.
+    //
+    // The auth_user table must exist in the registry (AuthPlugin
+    // registers it during App::build); if for some reason it's
+    // missing we silently fall back to the un-expanded user JSON
+    // rather than failing the request.
+    let registered = umbra::migrate::registered_models();
+    if let Some(meta) = registered.iter().find(|m| m.table == "auth_user") {
+        let mut visited: std::collections::HashSet<(String, i64)> =
+            std::collections::HashSet::new();
+        visited.insert(("auth_user".to_string(), user.id));
+        expand_relations(
+            meta,
+            &registered,
+            &mut json,
+            USER_RELATION_DEPTH,
+            &mut visited,
+        )
+        .await;
+    }
+
     umbra::templates::Value::from_serialize(serde_json::Value::Object(json))
+}
+
+/// Recursive depth-bounded expansion of a row's FK relations
+/// (gap2 #14). Mutates `row` in place to:
+///
+/// - Replace every forward-FK integer id with the resolved target
+///   row (when known to the model registry).
+/// - Inject every reverse-OneToOne candidate (child models with a
+///   UNIQUE FK pointing at `meta`) under the child table's name as
+///   the key — so `Customer { user: ForeignKey<AuthUser> (unique) }`
+///   surfaces as `user.customer` on the parent.
+///
+/// `visited` carries `(table, pk)` pairs already loaded in this
+/// expansion. New rows are checked against it before recursion and
+/// inserted before descending, so any cycle in the FK graph
+/// terminates at the first revisit.
+///
+/// One query per loaded relation per request — the middleware's
+/// query budget grows by `count(relations within depth)`, not by
+/// the fan-out of subsequent template renders. Sparse relation
+/// graphs (the common case) add 1-3 queries; pathological graphs
+/// hit the depth cap and stop.
+fn expand_relations<'a>(
+    meta: &'a umbra::migrate::ModelMeta,
+    registered: &'a [umbra::migrate::ModelMeta],
+    row: &'a mut serde_json::Map<String, serde_json::Value>,
+    depth: usize,
+    visited: &'a mut std::collections::HashSet<(String, i64)>,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+    Box::pin(async move {
+        if depth == 0 {
+            return;
+        }
+
+        // -- Forward FKs: replace integer ids with the full target
+        // row. Mirrors the dynamic `select_related_dyn` semantics
+        // (gap2 #15) but driven by the registry walk here so the
+        // user middleware doesn't need to know which columns to
+        // expand ahead of time.
+        let forward_fks: Vec<(String, String, i64)> = meta
+            .fields
+            .iter()
+            .filter_map(|col| {
+                let target_table = col.fk_target.as_deref()?;
+                let fk_id = row.get(&col.name)?.as_i64()?;
+                Some((col.name.clone(), target_table.to_string(), fk_id))
+            })
+            .collect();
+        for (col_name, target_table, fk_id) in forward_fks {
+            if visited.contains(&(target_table.clone(), fk_id)) {
+                continue;
+            }
+            let Some(target_meta) = registered.iter().find(|m| m.table == target_table) else {
+                continue;
+            };
+            let Some(target_pk) = target_meta.pk_column() else {
+                continue;
+            };
+            let fetched = umbra::orm::DynQuerySet::for_meta(target_meta)
+                .filter_eq_string(&target_pk.name, &fk_id.to_string())
+                .first_as_json()
+                .await;
+            let Ok(Some(mut target_row)) = fetched else {
+                continue;
+            };
+            visited.insert((target_table.clone(), fk_id));
+            expand_relations(target_meta, registered, &mut target_row, depth - 1, visited).await;
+            row.insert(col_name, serde_json::Value::Object(target_row));
+        }
+
+        // -- Reverse-O2O: child models with a UNIQUE FK to this
+        // table get injected under the child's table name. Naming
+        // convention matches Django's lower-case-model-name idiom
+        // (`Customer { user: FK<User> (unique) }` → `user.customer`).
+        let Some(parent_pk_col) = meta.pk_column() else {
+            return;
+        };
+        let Some(parent_pk) = row.get(&parent_pk_col.name).and_then(|v| v.as_i64()) else {
+            return;
+        };
+        let candidates: Vec<(&umbra::migrate::ModelMeta, String)> = registered
+            .iter()
+            .filter_map(|child| {
+                // Need exactly one UNIQUE FK pointing at this
+                // table; ambiguous matches (e.g. `primary_user` +
+                // `backup_user` both UNIQUE FKs to auth_user) are
+                // skipped — there's no single right answer for
+                // which one becomes `user.customer`.
+                let mut matches = child
+                    .fields
+                    .iter()
+                    .filter(|c| c.fk_target.as_deref() == Some(&meta.table) && c.unique);
+                let first = matches.next()?;
+                if matches.next().is_some() {
+                    return None;
+                }
+                Some((child, first.name.clone()))
+            })
+            .collect();
+        for (child_meta, fk_col_name) in candidates {
+            // Don't clobber a same-named scalar on the parent — if
+            // a model genuinely names a column the same as its
+            // child table (rare), the existing column wins.
+            if row.contains_key(&child_meta.table) {
+                continue;
+            }
+            let fetched = umbra::orm::DynQuerySet::for_meta(child_meta)
+                .filter_eq_string(&fk_col_name, &parent_pk.to_string())
+                .first_as_json()
+                .await;
+            let Ok(Some(mut child_row)) = fetched else {
+                continue;
+            };
+            let Some(child_pk_col) = child_meta.pk_column() else {
+                continue;
+            };
+            let Some(child_pk) = child_row.get(&child_pk_col.name).and_then(|v| v.as_i64()) else {
+                continue;
+            };
+            if visited.contains(&(child_meta.table.clone(), child_pk)) {
+                continue;
+            }
+            visited.insert((child_meta.table.clone(), child_pk));
+            expand_relations(child_meta, registered, &mut child_row, depth - 1, visited).await;
+            row.insert(
+                child_meta.table.clone(),
+                serde_json::Value::Object(child_row),
+            );
+        }
+    })
 }
 
 fn anonymous_user_value() -> umbra::templates::Value {

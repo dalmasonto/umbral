@@ -317,7 +317,37 @@
 
     **Triggering case to fix**: `GET /api/post/?fields=id,title,tags` on a 20-post page currently issues 21 queries (1 + 20). Should be 2 (1 + 1).
 
-14. [ ] **No reverse-OneToOne / reverse-FK / FK traversal from templates.** A user wrote `{{ user.customer.id }}` in a template, expecting the Django shape `{{ request.user.profile.email }}` — where you walk the related object directly in the template. It failed because:
+14. [x] **Template-side reverse-O2O / forward-FK traversal on `user` — Shipped.**
+
+    `user_context_layer` in `plugins/umbra-auth/src/session_user.rs` now expands relations on the serialized user up to depth 2, recursively, with `(table, pk)` cycle detection. Templates can write `{{ user.customer.loyalty_points }}` directly and get the resolved value — no handler-side prefetch declaration, no `tokio::Handle::block_on` ceremony, no template-level `.await`.
+
+    What's expanded at each hop:
+      - **Forward FKs**: every FK column on the current row is replaced with the full target row (mirrors the dynamic `select_related_dyn` semantics from gap2 #15).
+      - **Reverse-O2O**: every other registered model with a UNIQUE FK pointing at the current table gets injected under the child's table name as the key (`Customer { user: FK<AuthUser> (unique) }` → `user.customer`). Naming follows Django's lowercase-model convention.
+      - **Skipped**: M2M arrays (different shape; pre-resolving every parent's tag set on every request was the wrong trade-off), reverse-FK arrays without UNIQUE (one-to-many; same reason).
+
+    Query budget per authenticated request: `1 (user) + count(relations within depth 2)`. For the shop's `AuthUser`, that's `1 + 1 (customer)` = 2 queries — the second hop walks back into `auth_user` from `customer.user` and hits the cycle guard, so no extra query.
+
+    Always-on once `.with_user_in_templates()` is set; the depth is fixed at 2 via `USER_RELATION_DEPTH` constant. Anonymous requests stay on the cheap path (no expansion, just the `{ is_authenticated: false }` sentinel).
+
+    Verified live (shop, shopadmin session):
+    ```
+    user.username = shopadmin
+    user.customer is defined = true
+    user.customer.id = 1
+    user.customer.loyalty_points = 0
+    user.customer.phone = +15555550100
+    user.customer.user.username = (stopped — cycle detected)
+    ```
+
+    **What's still not shipped** (intentional out-of-scope for this turn):
+      - `request` namespace (Django's `request.user.X`) — umbra exposes `user` directly; adding `request` would mean materializing a per-request context object in templates. Worth a separate gap entry if anyone needs Django-shape compatibility.
+      - Reverse-FK arrays (`user.orders` returning all of a user's orders). Different cardinality, different cost model — the M2M-style fan-out cost would be wrong for the "every authenticated request" budget. Keep this opt-in via handler-side prefetch.
+      - Custom `UserModel` impls (non-AuthUser): the expansion currently hard-binds to the `auth_user` table lookup in `serialize_authenticated_with_relations`. A custom user would need its own middleware variant or a generalised hook. Backlog if a custom-user app surfaces.
+
+14. ~~ (the originally-open description below kept for archive trail)
+
+    A user wrote `{{ user.customer.id }}` in a template, expecting the Django shape `{{ request.user.profile.email }}` — where you walk the related object directly in the template. It failed because:
 
     1. **`user` in templates is the JSON-serialized AuthUser** (commit `bd48bf8` shipped this — see [auth/user-in-templates.mdx](/v0.0.1/auth/user-in-templates)). Reverse-OneToOne accessors like `user.customer().await` are Rust async methods; they don't survive serialization to `serde_json::Value`.
     2. **Templates can't `.await`** — minijinja is sync. So even if we exposed a method, the template couldn't drive the DB read.
