@@ -1,0 +1,80 @@
+---
+title: Model exposure
+description: Which models become API endpoints, the built-in block-list (auth_user, session, umbra_migrations), and the include_only / exclude / expose controls.
+sidebar_position: 4
+icon: list-checks
+tags: [rest, security, exposure, api]
+---
+
+`umbra-rest` walks the model registry and mounts `/api/<table>/` for **every registered model** — exposure is opt-*out*, not opt-in. Add `RestPlugin::default()` and every model you've registered gets List + Retrieve + Create + Update + Delete, *except* a small set of framework-internal tables that are blocked by default.
+
+```rust
+App::builder()
+    .model::<Article>()
+    .model::<Order>()
+    .plugin(umbra_rest::RestPlugin::default())
+    .build()?;
+// → /api/article/ and /api/order/ are live. auth_user / session are NOT.
+```
+
+## The default block-list
+
+Three tables are refused even though every other model is served:
+
+| Table | Why it's blocked |
+|---|---|
+| `auth_user` | Serving it would leak **password hashes** and let `PATCH /api/auth_user/1` flip `is_staff` / `is_superuser`. |
+| `session` | Serving it would leak **session identifiers** — anyone reading the table could hijack a live session. |
+| `umbra_migrations` | The migration ledger — internal bookkeeping, never a public resource. |
+
+A request to a blocked table 404s; the route is never mounted. This is the backstop that keeps the credential store off the API even though the plugin auto-exposes everything else.
+
+## Controlling what's exposed
+
+Four builder methods, applied in a strict precedence order.
+
+<CardGrid cols={2}>
+  <Card icon="filter" title="include_only([...])" description="Allowlist. ONLY the named tables are served; every other model — blocked or not — is denied. The tightest control." />
+  <Card icon="eye-off" title="exclude([...])" description="Blocklist. Adds your own tables to the default block-list. Use for a business model you don't want on the API." />
+  <Card icon="unlock" title="expose([...])" description="Opt INTO a default-blocked table (auth_user / session). The escape hatch — you're saying 'I know what I'm doing.'" />
+  <Card icon="columns" title="ResourceConfig::hide(col)" description="Strips a single column from responses. Pair with expose to serve auth_user without the password_hash column." />
+</CardGrid>
+
+```rust
+// Tighten to a fixed allowlist — nothing else is reachable.
+RestPlugin::new().include_only(["article", "order"]);
+
+// Block one of your own models that would otherwise be served.
+RestPlugin::default().exclude(["internal_audit_log"]);
+
+// Deliberately serve the user list, minus the password hash.
+RestPlugin::default()
+    .expose(["auth_user"])
+    .resource(ResourceConfig::new("auth_user").hide("password_hash"));
+```
+
+### Precedence
+
+`allow(table)` decides exposure top-down — the first matching rule wins:
+
+1. **`include_only`** — if set, only listed tables pass; everything else is denied outright.
+2. **`expose`** — a default-blocked table you've opted into (still subject to `exclude`).
+3. **default block-list** — `auth_user` / `session` / `umbra_migrations` → denied.
+4. **`exclude`** — your own additions → denied.
+5. otherwise → served.
+
+So an `auth_user` that's on `expose` but also on `exclude` stays blocked: an explicit "no" beats an explicit "yes".
+
+<Callout type="warning">
+The block-list matches by **table name**, not by type — `umbra-rest` discovers models dynamically and never names the `AuthUser` Rust type (it can't depend on `umbra-auth`). If you swap in a **custom user / credential model under a different table name**, it is **not** auto-protected: its name isn't `auth_user`, so it's served like any other model. Add it yourself with `.exclude(["your_user_table"])`.
+</Callout>
+
+<Callout type="danger">
+Auto-exposure means a business model — `customer`, `payment`, `invoice` — is **open the moment you add `RestPlugin::default()`**, with `NoAuthentication` + `AllowAny` by default. The block-list only protects the framework's own internal tables, not yours. Lock down write access with a [permission class](/docs/v0.0.1/rest/permissions) (e.g. `ReadOnly` or `IsAuthenticated`) per resource, and reach for `include_only` when you want exposure to be an explicit allowlist rather than opt-out.
+</Callout>
+
+## See also
+
+- [Permissions](/docs/v0.0.1/rest/permissions) — gate *who* can perform each action once a table is exposed.
+- [Authentication](/docs/v0.0.1/rest/authentication) — resolve the caller's identity.
+- The plugin contract and the full exposure rules live in `arch.md` and `docs/specs/`.

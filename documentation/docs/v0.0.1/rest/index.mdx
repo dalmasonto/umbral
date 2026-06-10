@@ -34,6 +34,7 @@ Both default to "open" - `NoAuthentication` (every request anonymous) paired wit
 
 ## Other surfaces
 
+- **Model exposure.** Every registered model is auto-served at `/api/<table>/` (opt-out, not opt-in); `auth_user`, `session`, and `umbra_migrations` are blocked by default. Tighten with `include_only` / `exclude`, or deliberately opt in with `expose`. See [Model exposure](/docs/v0.0.1/rest/exposure).
 - **Filtering, ordering, search, pagination.** Spec-driven - every list endpoint exposes `?field__op=value`, `?ordering=field`, `?search=term`, `?page=2&page_size=50`. See `arch.md` and `docs/specs/` for the wire shape.
 - **Custom actions.** `ResourceConfig::action("publish", ...)` adds a non-CRUD endpoint that runs under the same auth + permission gate.
 - **Field scoping.** `ResourceConfig::hide("password_hash")` strips a column from responses; `noform` / `noedit` field attributes control write-side behaviour.
