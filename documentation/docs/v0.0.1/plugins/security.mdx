@@ -1,0 +1,48 @@
+---
+title: Security plugin
+description: Automatic CSRF protection and a hardening-headers bundle — mount it and you're done.
+sidebar_position: 13
+icon: shield
+---
+
+`umbra-security` gives every non-safe request automatic CSRF validation (signed double-submit, the equivalent of Django's `CsrfViewMiddleware`) plus a modern security-header bundle. Mount it and you're done: the middleware mints the token before your handler runs, your templates receive it ambiently, and a missing or forged token on any POST / PUT / PATCH / DELETE returns 403. Your view code never touches CSRF.
+
+```rust
+App::builder()
+    .plugin(AuthPlugin::new())
+    .plugin(SecurityPlugin::new())
+    .build()
+    .await?;
+```
+
+In an HTML form, emit the hidden input with `{{ csrf_input }}` — the `{% csrf_token %}` of umbra:
+
+```html
+<form method="post" action="/contact">
+  {{ csrf_input }}
+  <!-- fields... -->
+</form>
+```
+
+For JavaScript or htmx writes, send the raw token as a header instead. One attribute on `<body>` covers every htmx request on the page:
+
+```html
+<body hx-headers='{"X-CSRF-Token": "{{ csrf_token }}"}'>
+```
+
+<Callout type="info">
+Token-authenticated APIs carry no session cookie, so their writes would 403 — exempt them with `csrf_exempt_paths: vec!["/api".into()]` on `SecurityConfig`.
+</Callout>
+
+Tokens are HMAC-signed with your app's `secret_key` by default (`signed_csrf: true`); a cookie planted by a sibling subdomain can't forge a valid signature. Stale or unsigned cookies rotate automatically on the next safe request. Configuration is a struct, not a builder chain — flip exactly what you need:
+
+```rust
+SecurityPlugin::with_config(SecurityConfig {
+    hsts: true,
+    content_security_policy: Some("default-src 'self'".into()),
+    csrf_exempt_paths: vec!["/api".into()],
+    ..Default::default()
+})
+```
+
+Design rationale: `docs/decisions/2026-06-10-automatic-csrf.md` in the repository.
