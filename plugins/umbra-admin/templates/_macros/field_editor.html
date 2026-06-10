@@ -31,9 +31,6 @@
     <label for="f_{{ field.name }}" class="font-label-md text-label-md text-on-surface-variant select-none">
       {{ field.name | replace("_", " ") | title }}
     </label>
-    {# DEBUG (temporary): surface the runtime field.kind so we can see
-       what the live server resolves for each field. Remove after diagnosis. #}
-    <span class="text-[10px] text-primary bg-primary-container/20 px-1.5 py-0.5 rounded font-mono">kind={{ field.kind }} widget={{ field.widget }}</span>
     {% if not field.nullable and not is_readonly %}
     <span class="text-error font-label-sm text-label-sm" aria-label="required">*</span>
     {% endif %}
