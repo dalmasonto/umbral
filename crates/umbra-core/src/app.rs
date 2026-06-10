@@ -83,6 +83,10 @@ pub struct AppBuilder {
     /// When `true` (the default), the embedded default 404/500 templates
     /// are used as fallbacks when the user hasn't supplied their own.
     default_error_pages: bool,
+    /// Path-scoped cross-origin policies (prefix → config), applied via
+    /// [`AppBuilder::cors_for`]. Each is layered only onto requests whose
+    /// path starts with the prefix (e.g. `"/api"`).
+    cors_scoped: Vec<(String, crate::cors::CorsConfig)>,
     /// Optional cross-origin policy. `None` means no `CorsLayer`
     /// is installed at all and browsers apply the same-origin
     /// default. Configure via [`AppBuilder::cors`].
@@ -111,6 +115,7 @@ impl Default for AppBuilder {
             server_error_hook: None,
             default_error_pages: true,
             cors: None,
+            cors_scoped: Vec::new(),
             atomic_transactions: None,
         }
     }
@@ -359,6 +364,27 @@ impl AppBuilder {
     /// regardless of which downstream layer produced the body.
     pub fn cors(mut self, config: crate::cors::CorsConfig) -> Self {
         self.cors = Some(config);
+        self
+    }
+
+    /// Apply a CORS policy scoped to requests whose path starts with `prefix`
+    /// (e.g. `"/api"`), leaving every other route's responses untouched. The
+    /// path-scoped counterpart to [`cors`](Self::cors) — the shape you want for
+    /// "CORS on the REST API, not the HTML pages." Call repeatedly for several
+    /// prefixes. Scoped policies are applied after (outside) the global one.
+    ///
+    /// ```ignore
+    /// use umbra::cors::CorsConfig;
+    ///
+    /// App::builder()
+    ///     .cors_for("/api", CorsConfig::strict()
+    ///         .allow_origins(vec!["https://app.example.com"])
+    ///         .allow_credentials(true))
+    ///     .build()
+    ///     .await?
+    /// ```
+    pub fn cors_for(mut self, prefix: impl Into<String>, config: crate::cors::CorsConfig) -> Self {
+        self.cors_scoped.push((prefix.into(), config));
         self
     }
 
@@ -774,6 +800,28 @@ impl AppBuilder {
         if let Some(cors) = self.cors.take() {
             router = router.layer(cors.into_layer());
         }
+        // Path-scoped CORS (e.g. `/api`) — layered after the global one so each
+        // only touches responses for requests under its prefix.
+        for (prefix, config) in std::mem::take(&mut self.cors_scoped) {
+            router = router.layer(crate::cors::ScopedCorsLayer::new(
+                prefix,
+                config.into_layer(),
+            ));
+        }
+
+        // Phase 5.95 — Host-header validation (Django ALLOWED_HOSTS). Applied
+        // outermost so a forged `Host` is rejected with a 400 before any
+        // handler, plugin, or CORS logic runs. Enforced only in
+        // `Environment::Prod`; dev passes through. Allowlist is
+        // `settings.allowed_hosts` (`"*"` disables; `.example.com` = subdomain).
+        let host_policy = crate::hosts::HostPolicy::new(
+            &settings.allowed_hosts,
+            matches!(settings.environment, crate::settings::Environment::Prod),
+        );
+        router = router.layer(axum::middleware::from_fn_with_state(
+            host_policy,
+            crate::hosts::host_guard,
+        ));
 
         // Phase 6 — fire each plugin's `on_ready` in topological order.
         // Runs after the system check passes and after the router is

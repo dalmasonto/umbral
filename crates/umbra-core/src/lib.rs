@@ -14,6 +14,7 @@ pub mod db;
 pub mod errors;
 pub mod fixtures;
 pub mod forms;
+pub(crate) mod hosts;
 pub mod inspect;
 pub mod migrate;
 pub mod orm;

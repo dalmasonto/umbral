@@ -34,10 +34,18 @@
 //!     .await?;
 //! ```
 
+use std::convert::Infallible;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::Duration;
 
+use axum::extract::Request;
 use axum::http::{HeaderName, HeaderValue, Method, header};
-use tower_http::cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer};
+use axum::response::Response;
+use tower::{Layer, Service};
+use tower_http::cors::{AllowHeaders, AllowMethods, AllowOrigin, Cors, CorsLayer};
 
 /// CORS policy for an `AppBuilder`. Defaults to *strict*: nothing
 /// is allowed until you opt in. Use [`Self::permissive`] for dev.
@@ -126,6 +134,24 @@ impl CorsConfig {
             }
             OriginPolicy::Any => OriginPolicy::List(vec![entry]),
         };
+        self
+    }
+
+    /// Append several origins at once — the batch form of
+    /// [`allow_origin`](Self::allow_origin). Accepts anything iterable
+    /// of string-likes, so `vec!["https://a", "https://b"]`, an array,
+    /// or a `Vec<String>` all work. Switches off `Any` if it was set.
+    pub fn allow_origins<I, S>(mut self, origins: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let mut list = match self.origins {
+            OriginPolicy::List(v) => v,
+            OriginPolicy::Any => Vec::new(),
+        };
+        list.extend(origins.into_iter().map(Into::into));
+        self.origins = OriginPolicy::List(list);
         self
     }
 
@@ -263,6 +289,78 @@ impl CorsConfig {
     }
 }
 
+/// A [`tower::Layer`] that applies an inner [`CorsLayer`] only to requests whose
+/// path starts with `prefix` (e.g. `"/api"`); every other request passes through
+/// untouched. The path-scoped counterpart to a global [`CorsConfig::into_layer`]
+/// — "CORS on the REST API, not the HTML pages." Built by
+/// [`AppBuilder::cors_for`](crate::app::AppBuilder::cors_for).
+#[derive(Clone)]
+pub(crate) struct ScopedCorsLayer {
+    prefix: Arc<str>,
+    cors: CorsLayer,
+}
+
+impl ScopedCorsLayer {
+    pub(crate) fn new(prefix: impl Into<String>, cors: CorsLayer) -> Self {
+        Self {
+            prefix: Arc::from(prefix.into()),
+            cors,
+        }
+    }
+}
+
+impl<S: Clone> Layer<S> for ScopedCorsLayer {
+    type Service = ScopedCors<S>;
+
+    fn layer(&self, inner: S) -> ScopedCors<S> {
+        ScopedCors {
+            prefix: self.prefix.clone(),
+            with_cors: self.cors.layer(inner.clone()),
+            without: inner,
+        }
+    }
+}
+
+/// Service produced by [`ScopedCorsLayer`]. Holds both the CORS-wrapped and the
+/// bare inner service and dispatches per request path.
+#[derive(Clone)]
+pub(crate) struct ScopedCors<S> {
+    prefix: Arc<str>,
+    with_cors: Cors<S>,
+    without: S,
+}
+
+impl<S> Service<Request> for ScopedCors<S>
+where
+    S: Service<Request, Response = Response, Error = Infallible> + Clone,
+    S::Future: Send + 'static,
+    Cors<S>: Service<Request, Response = Response, Error = Infallible>,
+    <Cors<S> as Service<Request>>::Future: Send + 'static,
+{
+    type Response = Response;
+    type Error = Infallible;
+    type Future = Pin<Box<dyn Future<Output = Result<Response, Infallible>> + Send>>;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Infallible>> {
+        // Either branch may serve the next request, so both must be ready.
+        let ready =
+            self.with_cors.poll_ready(cx).is_ready() && self.without.poll_ready(cx).is_ready();
+        if ready {
+            Poll::Ready(Ok(()))
+        } else {
+            Poll::Pending
+        }
+    }
+
+    fn call(&mut self, req: Request) -> Self::Future {
+        if req.uri().path().starts_with(&*self.prefix) {
+            Box::pin(self.with_cors.call(req))
+        } else {
+            Box::pin(self.without.call(req))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -283,10 +381,78 @@ mod tests {
         let _ = CorsConfig::permissive().into_layer();
     }
 
+    #[tokio::test]
+    async fn scoped_cors_only_affects_matching_prefix() {
+        use axum::Router;
+        use axum::routing::get;
+        use tower::ServiceExt;
+
+        let app = Router::new()
+            .route("/api/ping", get(|| async { "api" }))
+            .route("/page", get(|| async { "html" }))
+            .layer(ScopedCorsLayer::new(
+                "/api",
+                CorsConfig::strict()
+                    .allow_origin("https://app.example.com")
+                    .into_layer(),
+            ));
+
+        // A cross-origin request under `/api` gets the CORS allow-origin header.
+        let res = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/ping")
+                    .header("origin", "https://app.example.com")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            res.headers()
+                .get("access-control-allow-origin")
+                .and_then(|v| v.to_str().ok()),
+            Some("https://app.example.com"),
+            "/api should carry CORS headers"
+        );
+
+        // The same cross-origin request to a non-`/api` path gets none.
+        let res = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/page")
+                    .header("origin", "https://app.example.com")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            res.headers().get("access-control-allow-origin").is_none(),
+            "non-/api routes must not be CORS-scoped"
+        );
+    }
+
+    #[test]
+    fn allow_origins_batches_and_appends() {
+        let cfg = CorsConfig::strict()
+            .allow_origin("https://a.example.com")
+            .allow_origins(vec!["https://b.example.com", "https://c.example.com"]);
+        match cfg.origins {
+            OriginPolicy::List(v) => assert_eq!(v.len(), 3, "single + batch of two = three"),
+            OriginPolicy::Any => panic!("should be a list"),
+        }
+        // Batch onto a fresh strict config materialises without panic.
+        let _ = CorsConfig::strict()
+            .allow_origins(["https://x.example.com".to_string()])
+            .into_layer();
+    }
+
     #[test]
     #[should_panic(expected = "allow_any_origin() is incompatible with allow_credentials(true)")]
     fn any_origin_plus_credentials_panics() {
-        CorsConfig::permissive()
+        let _ = CorsConfig::permissive()
             .allow_credentials(true)
             .into_layer();
     }
