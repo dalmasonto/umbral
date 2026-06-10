@@ -206,6 +206,58 @@ fn register_img_filter(env: &mut Environment<'static>) {
     );
 }
 
+/// features.md #4 — register the `markdown` filter that turns a
+/// CommonMark + GFM string into sanitized HTML.
+///
+/// Filter signature: `{{ body | markdown }}`.
+///
+/// Pipeline:
+/// 1. `pulldown-cmark` parses the input with GFM extensions on
+///    (tables, strikethrough, task lists, footnotes) and renders to
+///    HTML.
+/// 2. `ammonia` sanitizes that HTML — strips `<script>`, inline event
+///    handlers (`onerror=`, `onclick=`), `javascript:` URLs, and any
+///    tag/attribute outside its safe allowlist. This is the security
+///    boundary: user-supplied markdown (plugin bodies, usage docs,
+///    reviews) is rendered, never trusted.
+/// 3. The result is wrapped in `Value::from_safe_string` so MiniJinja's
+///    autoescape emits the generated tags as markup instead of
+///    re-escaping them into `&lt;...&gt;`.
+///
+/// Why sanitize after rendering rather than trusting the parser: raw
+/// HTML embedded in a markdown source (`<script>...`) passes straight
+/// through pulldown-cmark by design. ammonia is the layer that makes
+/// "render whatever the user typed" safe.
+///
+/// Deferred (separate slices): syntax highlighting on fenced code
+/// blocks (ammonia strips the `language-*` class today) and a
+/// configurable allowlist for embeds — see the gap entries.
+fn register_markdown_filter(env: &mut Environment<'static>) {
+    env.add_filter("markdown", |input: String| -> minijinja::Value {
+        minijinja::Value::from_safe_string(render_markdown(&input))
+    });
+}
+
+/// Render CommonMark + GFM `input` to sanitized HTML. Pulled out of the
+/// filter closure so it's unit-testable and reusable by any future
+/// Rust-side caller (e.g. a REST endpoint that returns pre-rendered
+/// HTML).
+pub fn render_markdown(input: &str) -> String {
+    use pulldown_cmark::{Options, Parser, html};
+
+    let mut options = Options::empty();
+    options.insert(Options::ENABLE_TABLES);
+    options.insert(Options::ENABLE_STRIKETHROUGH);
+    options.insert(Options::ENABLE_TASKLISTS);
+    options.insert(Options::ENABLE_FOOTNOTES);
+
+    let parser = Parser::new_ext(input, options);
+    let mut rendered = String::new();
+    html::push_html(&mut rendered, parser);
+
+    ammonia::clean(&rendered)
+}
+
 /// Tiny HTML attribute-value escape — covers the four characters
 /// that can break out of a double-quoted attribute context.
 /// Centralised here because the framework doesn't otherwise need
@@ -318,6 +370,13 @@ fn build_env(dirs: &[PathBuf]) -> Result<(Environment<'static>, Vec<String>), Te
     // friendly default for purely decorative images). Optional
     // `class="..."` flows through for Tailwind / scoped styling.
     register_img_filter(&mut env);
+
+    // features.md #4 — `{{ body | markdown }}` renders user-supplied
+    // CommonMark/GFM to sanitized HTML. The reusable "safely show a
+    // body/usage field" surface shared by the admin and end-user
+    // templates; pairs with `#[umbra(widget = "markdown")]` on the
+    // model field that captures the source.
+    register_markdown_filter(&mut env);
 
     // gaps2 #19 follow-up — render `None` / `Undefined` as the
     // empty string instead of the literal "none" / "undefined" tokens
