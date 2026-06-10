@@ -58,6 +58,70 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
 
   <!--
+    Theme bridge for the rich field-editor widgets (features.md #4).
+    EasyMDE (markdown) and Quill (rte) are lazy-loaded from CDN by
+    admin.js and ship LIGHT default themes; these rules re-skin them
+    with the admin's design tokens (`var(--surface-...)` etc.) so they
+    track the light/dark toggle like every other surface. Scoped to the
+    editor classes only — no effect on any other element, and a no-op
+    until an editor actually mounts.
+  -->
+  <style id="umbra-editor-theme">
+    /* EasyMDE — markdown */
+    .EasyMDEContainer .CodeMirror {
+      background: var(--surface-container-low);
+      color: var(--on-surface);
+      border-color: var(--outline-variant);
+      border-bottom-left-radius: 0.75rem;
+      border-bottom-right-radius: 0.75rem;
+    }
+    .EasyMDEContainer .CodeMirror-cursor { border-left-color: var(--on-surface); }
+    .EasyMDEContainer .editor-toolbar {
+      background: var(--surface-container);
+      border-color: var(--outline-variant);
+      border-top-left-radius: 0.75rem;
+      border-top-right-radius: 0.75rem;
+    }
+    .EasyMDEContainer .editor-toolbar button { color: var(--on-surface-variant) !important; }
+    .EasyMDEContainer .editor-toolbar button:hover,
+    .EasyMDEContainer .editor-toolbar button.active {
+      background: var(--surface-container-high);
+      border-color: var(--outline-variant);
+    }
+    .EasyMDEContainer .editor-preview,
+    .EasyMDEContainer .editor-preview-side {
+      background: var(--surface-container-lowest);
+      color: var(--on-surface);
+      border-color: var(--outline-variant);
+    }
+    .EasyMDEContainer .editor-statusbar { color: var(--on-surface-variant); }
+
+    /* Quill — rte */
+    .umbra-rte .ql-toolbar.ql-snow {
+      background: var(--surface-container);
+      border-color: var(--outline-variant);
+      border-top-left-radius: 0.75rem;
+      border-top-right-radius: 0.75rem;
+    }
+    .umbra-rte .ql-container.ql-snow {
+      background: var(--surface-container-low);
+      color: var(--on-surface);
+      border-color: var(--outline-variant);
+      border-bottom-left-radius: 0.75rem;
+      border-bottom-right-radius: 0.75rem;
+      min-height: 200px;
+    }
+    .umbra-rte .ql-editor.ql-blank::before { color: var(--on-surface-variant); }
+    .umbra-rte .ql-snow .ql-stroke { stroke: var(--on-surface-variant); }
+    .umbra-rte .ql-snow .ql-fill { fill: var(--on-surface-variant); }
+    .umbra-rte .ql-snow .ql-picker { color: var(--on-surface-variant); }
+    .umbra-rte .ql-snow.ql-toolbar button:hover .ql-stroke,
+    .umbra-rte .ql-snow.ql-toolbar button.ql-active .ql-stroke { stroke: var(--primary); }
+    .umbra-rte .ql-snow.ql-toolbar button:hover .ql-fill,
+    .umbra-rte .ql-snow.ql-toolbar button.ql-active .ql-fill { fill: var(--primary); }
+  </style>
+
+  <!--
     Theme tokens as CSS variables.
 
     `:root` carries the LIGHT palette; `.dark` overrides with DARK

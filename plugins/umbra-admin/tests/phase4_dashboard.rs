@@ -417,3 +417,57 @@ fn admin_js_fetches_send_csrf_header() {
         "every write fetch must spread csrfHeaders(): {wired} uses for {writes} writes"
     );
 }
+
+/// features.md #4: the admin lazy-mounts a markdown editor (EasyMDE)
+/// and an RTE (Quill) onto the `data-widget` textareas the field
+/// editor renders, on every form-render path (page load, htmx swap,
+/// sheet open).
+#[test]
+fn admin_js_mounts_widget_editors() {
+    let js = include_str!("../src/assets/admin.js");
+    assert!(js.contains("initWidgetEditors"), "no widget-editor init");
+    assert!(
+        js.contains("new EasyMDE"),
+        "markdown editor (EasyMDE) not mounted"
+    );
+    assert!(js.contains("new Quill"), "rte editor (Quill) not mounted");
+    // Claims the textareas the field editor emits for each widget
+    // (the selector is built dynamically from these names).
+    assert!(
+        js.contains("claim(root, 'markdown')"),
+        "markdown widget not claimed"
+    );
+    assert!(js.contains("claim(root, 'rte')"), "rte widget not claimed");
+    assert!(
+        js.contains(r#"data-widget="' + selector + '"#),
+        "dynamic widget selector missing"
+    );
+    // Lazy-loaded, not eagerly bundled, and idempotent across re-scans.
+    assert!(
+        js.contains("loadScript"),
+        "editors should be lazy-loaded from CDN"
+    );
+    assert!(js.contains("data-widget-mounted"), "no idempotency marker");
+    // Mounted on the sheet's innerHTML path too (not just htmx swaps).
+    assert!(
+        js.matches("umbra.initWidgetEditors").count() >= 3,
+        "must mount on DOMContentLoaded, htmx:afterSwap, AND the sheet path"
+    );
+}
+
+/// The editor libraries ship light themes; the wrapper re-skins them
+/// with the admin design tokens so they track the dark/light toggle.
+#[test]
+fn wrapper_themes_the_editors() {
+    let wrapper = include_str!("../templates/wrapper.html");
+    assert!(
+        wrapper.contains("umbra-editor-theme"),
+        "no editor theme block"
+    );
+    assert!(wrapper.contains(".EasyMDEContainer"), "EasyMDE not themed");
+    assert!(wrapper.contains(".umbra-rte .ql-"), "Quill not themed");
+    assert!(
+        wrapper.contains("var(--surface-container-low)"),
+        "editor theme must use admin design tokens, not hardcoded colors"
+    );
+}

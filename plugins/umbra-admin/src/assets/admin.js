@@ -964,6 +964,150 @@
   document.body.addEventListener('htmx:afterSwap', function() { initM2MPickers(); });
 })();
 (function() {
+  // ----- Rich field-editor widgets (features.md #4) -----
+  // #[umbra(widget = "markdown")] / "rte" render a <textarea data-widget>
+  // in the form (see _macros/field_editor.html). Here we progressively
+  // enhance them into real editors:
+  //   - "markdown" -> EasyMDE (toolbar + live side-by-side preview).
+  //   - "rte"      -> Quill (snow theme); the editor edits a div, we
+  //                   sync its HTML back into the hidden <textarea> so
+  //                   the form posts it. Render that HTML safely with
+  //                   the `{{ value | sanitize }}` template filter.
+  // The libraries are LAZY-loaded from CDN only when a matching
+  // textarea is actually on the page, so list/dashboard pages stay
+  // light. With no JS (or a CDN failure) the field degrades to a plain,
+  // fully-usable textarea — the stored value is markdown / HTML either
+  // way.
+  window.umbra = window.umbra || {};
+
+  var MD_CSS = 'https://unpkg.com/easymde@2.18.0/dist/easymde.min.css';
+  var MD_JS  = 'https://unpkg.com/easymde@2.18.0/dist/easymde.min.js';
+  var RTE_CSS = 'https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.snow.css';
+  var RTE_JS  = 'https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.js';
+
+  // CDN loader — inject each asset once; resolve the script's promise
+  // when it's ready so multiple textareas share one load.
+  var assets = {};
+  function loadCss(url) {
+    if (assets[url]) return;
+    assets[url] = true;
+    var l = document.createElement('link');
+    l.rel = 'stylesheet';
+    l.href = url;
+    document.head.appendChild(l);
+  }
+  function loadScript(url) {
+    if (assets[url]) return assets[url];
+    assets[url] = new Promise(function(resolve, reject) {
+      var s = document.createElement('script');
+      s.src = url;
+      s.async = true;
+      s.onload = function() { resolve(); };
+      s.onerror = function() { reject(new Error('umbra: failed to load ' + url)); };
+      document.head.appendChild(s);
+    });
+    return assets[url];
+  }
+
+  // Claim every not-yet-mounted textarea for `selector` synchronously
+  // (mark before the async load) so overlapping scans can't double-mount.
+  function claim(root, selector) {
+    var out = [];
+    var nodes = root.querySelectorAll('textarea[data-widget="' + selector + '"]:not([data-widget-mounted])');
+    for (var i = 0; i < nodes.length; i++) {
+      nodes[i].setAttribute('data-widget-mounted', '1');
+      out.push(nodes[i]);
+    }
+    return out;
+  }
+
+  function mountMarkdown(ta) {
+    var mde = new EasyMDE({
+      element: ta,
+      spellChecker: false,
+      status: false,
+      minHeight: '220px',
+      autoDownloadFontAwesome: true,
+      toolbar: ['bold', 'italic', 'heading', '|', 'quote', 'unordered-list',
+                'ordered-list', '|', 'link', 'code', 'table', '|',
+                'preview', 'side-by-side', 'guide']
+    });
+    // EasyMDE keeps the underlying textarea in sync; force a final flush
+    // on submit so the posted value can't lag the last keystroke.
+    var form = ta.closest('form');
+    if (form) form.addEventListener('submit', function() { mde.codemirror.save(); });
+  }
+
+  function mountRte(ta) {
+    ta.style.display = 'none';
+    var wrap = document.createElement('div');
+    wrap.className = 'umbra-rte';
+    var host = document.createElement('div');
+    wrap.appendChild(host);
+    ta.parentNode.insertBefore(wrap, ta.nextSibling);
+
+    var quill = new Quill(host, {
+      theme: 'snow',
+      modules: {
+        toolbar: [
+          ['bold', 'italic', 'underline', 'strike'],
+          ['blockquote', 'code-block'],
+          [{ header: [1, 2, 3, false] }],
+          [{ list: 'ordered' }, { list: 'bullet' }],
+          ['link'],
+          ['clean']
+        ]
+      }
+    });
+    if (ta.value) quill.clipboard.dangerouslyPasteHTML(ta.value);
+    function sync() {
+      // Quill's "empty" sentinel is <p><br></p>; store '' so a blank
+      // RTE doesn't trip a NOT-NULL / required check with junk markup.
+      var html = quill.root.innerHTML;
+      ta.value = (html === '<p><br></p>') ? '' : html;
+    }
+    quill.on('text-change', sync);
+    var form = ta.closest('form');
+    if (form) form.addEventListener('submit', sync);
+  }
+
+  function mountAll(list, fn, label) {
+    list.forEach(function(ta) {
+      try {
+        fn(ta);
+      } catch (e) {
+        // Editor mount failed — un-hide the textarea so the field is
+        // still editable, and log loudly. Never leave a dead input.
+        ta.style.display = '';
+        if (window.console) console.error('umbra: ' + label + ' editor mount failed', e);
+      }
+    });
+  }
+
+  function initWidgetEditors(root) {
+    root = root || document;
+    var mds = claim(root, 'markdown');
+    var rtes = claim(root, 'rte');
+    if (mds.length) {
+      loadCss(MD_CSS);
+      loadScript(MD_JS).then(function() { mountAll(mds, mountMarkdown, 'markdown'); })
+        .catch(function(e) { mds.forEach(function(t) { t.style.display = ''; }); if (window.console) console.error(e); });
+    }
+    if (rtes.length) {
+      loadCss(RTE_CSS);
+      loadScript(RTE_JS).then(function() { mountAll(rtes, mountRte, 'rte'); })
+        .catch(function(e) { rtes.forEach(function(t) { t.style.display = ''; }); if (window.console) console.error(e); });
+    }
+  }
+
+  umbra.initWidgetEditors = initWidgetEditors;
+  document.addEventListener('DOMContentLoaded', function() { initWidgetEditors(document); });
+  // Forms arrive via htmx (changelist actions, inline edit) and via the
+  // sheet stack's innerHTML injection — cover both. The mounted-marker
+  // makes re-scans idempotent.
+  document.body.addEventListener('htmx:afterSwap', function(e) { initWidgetEditors(e.target); });
+})();
+(function() {
   // Sheet stack state machine.
   window.umbra = window.umbra || {};
   var stack = [];
@@ -975,6 +1119,9 @@
     slot.innerHTML = html;
     document.body.classList.add('overflow-hidden');
     if (window.lucide) lucide.createIcons({ el: slot });
+    // The sheet form is injected via innerHTML (not an htmx swap), so
+    // mount the markdown / RTE editors on it explicitly.
+    if (umbra.initWidgetEditors) umbra.initWidgetEditors(slot);
     umbra._applyStackOffsets();
   };
 
@@ -984,6 +1131,7 @@
     if (stack.length > 0) {
       slot.innerHTML = stack.pop();
       if (window.lucide) lucide.createIcons({ el: slot });
+      if (umbra.initWidgetEditors) umbra.initWidgetEditors(slot);
       umbra._applyStackOffsets();
     } else {
       umbra.closeSheet();
