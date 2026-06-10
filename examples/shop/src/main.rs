@@ -66,6 +66,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .init();
 
     let settings = Settings::from_env()?;
+    eprintln!(
+        "loaded host config: allowed_hosts={:?} env={:?}\n  unmapped UMBRA_ keys (extra) = {:?}",
+        settings.allowed_hosts,
+        settings.environment,
+        settings.extra.keys().collect::<Vec<_>>()
+    );
     let pool = umbra::db::connect(&settings.database_url).await?;
 
     let app = App::builder()
