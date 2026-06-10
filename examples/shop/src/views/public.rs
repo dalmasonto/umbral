@@ -7,7 +7,7 @@
 use content::models::{ContactMessage, Faq, Post, faq, post};
 use ecommerce::models::{Brand, Product, Review, brand, product, review};
 use serde::Deserialize;
-use umbra::forms::{Form, FormErrors};
+use umbra::forms::Form;
 use umbra::templates::context;
 use umbra::web::{Html, IntoResponse, Path, Query, Redirect, Response, StatusCode};
 
@@ -162,45 +162,31 @@ pub async fn faqs() -> Result<Html<String>, (StatusCode, String)> {
     Ok(Html(body))
 }
 
-pub async fn contact(Query(query): Query<ContactQuery>) -> Result<Response, (StatusCode, String)> {
+/// `GET /contact` — render the empty form. The Django shape:
+/// CSRF is ambient (`{{ csrf_input }}` in the template), `errors`
+/// is simply absent, and `?sent=1` after a successful redirect
+/// shows the thank-you banner.
+pub async fn contact(Query(query): Query<ContactQuery>) -> Result<Html<String>, (StatusCode, String)> {
     let sent = query.sent.as_deref() == Some("1");
-    // CSRF is fully ambient: SecurityPlugin's middleware minted the token
-    // before this handler ran and `templates::render` injects
-    // `{{ csrf_input }}` into contact.html. No view code involved.
-    render_contact_page(
-        sent,
-        &ContactMessage::default(),
-        serde_json::Map::new(),
-        StatusCode::OK,
-    )
+    let form = ContactMessage::default();
+    let body = umbra::templates::render("contact.html", &context!(sent, form))
+        .map_err(internal_error)?;
+    Ok(Html(body))
 }
 
+/// `POST /contact` — validate, save, redirect; on validation failure
+/// re-render the same template with the user's input and the errors.
+/// `errs.render("contact.html")` is the whole failure path: it binds
+/// `form` (every keystroke kept) + `errors` (per-field + summary
+/// banner) and returns 422.
 pub async fn submit_contact(form: Form<ContactMessage>) -> Result<Response, (StatusCode, String)> {
-    // gaps2 #19 follow-up: extractor returned a parsed-and-
-    // validated `ContactMessage` directly. On Err the framework
-    // now hands back the raw form pairs alongside the errors —
-    // we re-render with those instead of an empty struct so the
-    // user keeps every keystroke (screenshot 2026-06-10 01-03-09
-    // reported the data-loss bug pre-fix).
     let mut msg = match form.into_result() {
         Ok(v) => v,
-        Err(errs) => {
-            return render_contact_page_raw(
-                false,
-                errs.raw_as_json(),
-                ctx_with_form_summary(&errs),
-                StatusCode::UNPROCESSABLE_ENTITY,
-            );
-        }
+        Err(errs) => return Ok(errs.render("contact.html")),
     };
 
-    // Normalise the email post-validation (lowercase) — the form
-    // attr stack handles trim + length but `normalize_strings`
-    // intentionally doesn't lowercase (case matters for some
-    // String fields like usernames). The `auto_now_add` on
-    // `created_at` is filled by the ORM on insert; `status` and
-    // `ip_address` arrived as their `Default::default()` values
-    // (`New` and `None` respectively).
+    // Lowercase post-validation — `normalize_strings` trims but
+    // deliberately doesn't change case (it matters for usernames).
     msg.email = msg.email.to_lowercase();
 
     ContactMessage::objects()
@@ -209,54 +195,4 @@ pub async fn submit_contact(form: Form<ContactMessage>) -> Result<Response, (Sta
         .map_err(internal_error)?;
 
     Ok(Redirect::to("/contact?sent=1").into_response())
-}
-
-fn render_contact_page(
-    sent: bool,
-    form: &ContactMessage,
-    errors: serde_json::Map<String, serde_json::Value>,
-    status: StatusCode,
-) -> Result<Response, (StatusCode, String)> {
-    let body = umbra::templates::render("contact.html", &context!(sent, form, errors))
-        .map_err(internal_error)?;
-    Ok((status, Html(body)).into_response())
-}
-
-/// Variant for the validation-failure path. Renders the same
-/// template but with `form` populated from the raw `String → String`
-/// pairs the user submitted (typed via `serde_json::Value::Object`)
-/// instead of from a parsed `ContactMessage`. The template's
-/// `{{ form.<field> }}` references render the user's literal input
-/// in both cases — MiniJinja's duck-typing makes the two shapes
-/// interchangeable at the template level.
-fn render_contact_page_raw(
-    sent: bool,
-    form: serde_json::Value,
-    errors: serde_json::Map<String, serde_json::Value>,
-    status: StatusCode,
-) -> Result<Response, (StatusCode, String)> {
-    let body = umbra::templates::render("contact.html", &context!(sent, form, errors))
-        .map_err(internal_error)?;
-    Ok((status, Html(body)).into_response())
-}
-
-/// Lift `FormErrors` into the flat template ctx the
-/// `contact.html` partial expects (`errors.name`, `errors.email`,
-/// ..., `errors.form`), AND add the "Please fix the highlighted
-/// fields..." form-level banner the legacy hand-rolled validator
-/// used to write. `FormErrors::as_template_ctx` only emits a
-/// `form` key when there's a non-field error; per-field-only
-/// failures need an explicit banner so the user sees ONE summary
-/// at the top of the form.
-fn ctx_with_form_summary(errs: &FormErrors) -> serde_json::Map<String, serde_json::Value> {
-    let mut ctx = errs.as_template_ctx();
-    if !ctx.contains_key("form") {
-        ctx.insert(
-            "form".to_string(),
-            serde_json::Value::String(
-                "Please fix the highlighted fields and send again.".to_string(),
-            ),
-        );
-    }
-    ctx
 }
