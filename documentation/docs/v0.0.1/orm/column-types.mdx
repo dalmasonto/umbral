@@ -163,7 +163,8 @@ The macro reads each field-level attribute straight off the struct field. Empty 
 | `#[umbra(index)]` | Single-column index in the DDL. The migration engine emits `CREATE INDEX` on both backends. |
 | `#[umbra(unique)]` | UNIQUE constraint in the DDL. UNIQUE violations on insert / update surface as `WriteError::UniqueViolation { field, value }` - REST renders them as `{ "slug": ["A row with slug='widget' already exists."] }`. |
 | `#[umbra(default = "...")]` | DDL default for the column - the string lands verbatim in the `DEFAULT` clause (booleans are translated to `1`/`0` on SQLite). For a `choices` field use the DB literal (`"draft"`), **not** the Rust path (`"PostStatus::Draft"`); see [Defaults: two mechanisms](#defaults-two-mechanisms-two-layers). Required when adding a NOT NULL column to a populated table - Postgres / SQLite reject the ALTER otherwise. Also the value the DB uses when an INSERT omits the column. |
-| `#[umbra(help = "...")]` | OpenAPI `description` + admin form help text. Carries the column's intent into both surfaces without a second source of documentation. |
+| `#[umbra(help = "...")]` | OpenAPI `description` + a hint line under the admin form input. One place to say "use Markdown here" or "ISO-8601 date" — it reaches both the API docs and the editor. |
+| `#[umbra(widget = "markdown" \| "rte" \| "textarea")]` | Presentation hint for form renderers (features.md #4). Metadata only — the column stays `TEXT`, no DDL change. `markdown` / `rte` render a tall editor textarea (carrying `data-widget` for progressive enhancement); pair with the [`\| markdown` filter](#rendering-markdown-safely) on the display side. An unrecognised widget name falls back to the type-derived input, so plugin-defined widgets never break the form. |
 | `#[umbra(example = "...")]` | OpenAPI `example` value. Generated clients show it as a placeholder; the playground uses it to seed the request body. |
 | `#[umbra(on_delete = "cascade" \| "restrict" \| "set_null" \| "no_action")]` | FK `ON DELETE` clause. Default `no_action` (SQL standard's default - no extra clause emitted). Applies only to `ForeignKey<T>` columns; a typed error fires at derive time if you set it on a non-FK field. |
 | `#[umbra(on_update = "...")]` | FK `ON UPDATE` clause. Same vocabulary as `on_delete`. |
@@ -569,6 +570,31 @@ The admin renders a `(read-only)` badge next to the label and disables the input
 3. If `AdminModel::readonly_fields(&["..."])` also lists the column, it is always read-only regardless of `noedit`.
 
 See the [admin reference](../plugins/admin) for the `password_field(...)` builder that combines `noform` with a dedicated password-change flow.
+
+## Rendering markdown safely
+
+Text/body fields — plugin descriptions, usage docs, reviews — are usually authored in Markdown. Capture the source in a plain `String` column, hint the editor with `#[umbra(widget = "markdown")]` + `#[umbra(help = "...")]`, and render it on the display side with the built-in `| markdown` filter:
+
+```rust
+#[derive(Debug, Clone, sqlx::FromRow, Model)]
+pub struct Plugin {
+    pub id: i64,
+    pub name: String,
+    #[umbra(widget = "markdown", help = "Markdown supported — headings, lists, tables, code.")]
+    pub body: String,
+}
+```
+
+```html
+{# detail template — render the stored Markdown to HTML #}
+<article class="prose">{{ plugin.body | markdown }}</article>
+```
+
+The filter renders CommonMark + GitHub-flavored extensions (tables, strikethrough, task lists, footnotes), then **sanitizes** the output: `<script>`, inline event handlers (`onerror=`, `onclick=`), and `javascript:` URLs are stripped, so user-submitted Markdown can't smuggle XSS into a page. The result is a safe string, so template autoescaping leaves the generated tags intact. It's a plain template filter — reusable everywhere, in the admin and your own end-user templates alike; nothing is admin-specific.
+
+<Callout type="info">
+The column stays plain `TEXT` — `widget` is a rendering hint, not a data type. With no enhancement JavaScript the admin editor degrades to a tall textarea, which is fully usable; the `data-widget="markdown"` attribute is the hook a future split-pane editor mounts on. Syntax-highlighted code blocks and a live preview pane are tracked as follow-ups.
+</Callout>
 
 ## See also
 
