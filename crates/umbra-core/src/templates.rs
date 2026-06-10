@@ -65,6 +65,14 @@ tokio::task_local! {
     /// and `render` skips the merge — explicit ctx behaviour is
     /// preserved when no layer is installed.
     pub static CURRENT_USER: Option<minijinja::Value>;
+
+    /// Per-request CSRF token, set by `umbra-security`'s middleware and
+    /// read by [`render`] to inject `csrf_token` / `csrf_input` into
+    /// every template — Django's `{% csrf_token %}` ergonomic. Outside
+    /// the middleware's scope nothing is injected (a template that
+    /// references `{{ csrf_token }}` then renders it empty under the
+    /// engine's lenient-undefined behaviour).
+    pub static CURRENT_CSRF: Option<String>;
 }
 
 /// Run `fut` with the ambient template user value scoped to `user`
@@ -76,6 +84,22 @@ pub async fn with_current_user<F: std::future::Future>(
     fut: F,
 ) -> F::Output {
     CURRENT_USER.scope(user, fut).await
+}
+
+/// Run `fut` with the ambient CSRF token scoped for its duration.
+/// Intended for the CSRF middleware in `umbra-security`; downstream
+/// handler code reads the value transparently through [`render`]
+/// (as `{{ csrf_token }}` / `{{ csrf_input }}`) or [`current_csrf`].
+pub async fn with_current_csrf<F: std::future::Future>(token: Option<String>, fut: F) -> F::Output {
+    CURRENT_CSRF.scope(token, fut).await
+}
+
+/// Read the ambient CSRF token, if a middleware has scoped one for
+/// this request. Non-template consumers (e.g. the admin's login form
+/// builder) use this to embed the same token the middleware minted,
+/// instead of minting their own.
+pub fn current_csrf() -> Option<String> {
+    CURRENT_CSRF.try_with(|t| t.clone()).ok().flatten()
 }
 
 /// Watched template directories captured at `init` time. Stored
@@ -395,46 +419,40 @@ fn render_with<C: Serialize>(
         minijinja::ErrorKind::TemplateNotFound => TemplateError::Missing(name.to_string()),
         _ => TemplateError::Render(e),
     })?;
-    let merged = merge_ambient_user(ctx);
+    let merged = merge_ambient(ctx);
     tmpl.render(&merged).map_err(TemplateError::Render)
 }
 
-/// Merge any ambient `CURRENT_USER` task-local value into the caller's
-/// ctx under key `user`. The handler's own `user` (if it supplied one)
-/// always wins — the layer's injection is the default, not an override.
+/// Merge the ambient task-locals into the caller's ctx: `user` (from
+/// `CURRENT_USER`) and the CSRF pair `csrf_token` / `csrf_input` (from
+/// `CURRENT_CSRF`). The handler's own keys always win — the ambient
+/// injection is the default, not an override.
 ///
-/// When no layer is installed (`try_with` returns `Err`), the original
-/// ctx is returned unchanged.
-fn merge_ambient_user<C: Serialize>(ctx: &C) -> minijinja::Value {
+/// `user` is injected unconditionally (anonymous fallback below);
+/// the CSRF pair only when a middleware actually scoped a token —
+/// there is no meaningful fallback token, and rendering an empty
+/// hidden input would make a form post a guaranteed-403 silently.
+fn merge_ambient<C: Serialize>(ctx: &C) -> minijinja::Value {
     let ctx_value = minijinja::Value::from_serialize(ctx);
-    // Resolve which `user` value should land in the rendered ctx:
-    //   1. Task-local set by a middleware (AuthPlugin's
-    //      `user_context_layer`) — the live request shape.
-    //   2. Anonymous fallback `{ is_authenticated: false }` for
-    //      callers WITHOUT a layer mounted AND for renders that
-    //      happen outside the middleware's scope (notably the
-    //      `render_500_middleware` recovery path — the
-    //      user-context task-local has already dropped by the time
-    //      the error layer renders, but the 500 template still
-    //      needs `user.is_authenticated` to evaluate cleanly).
-    //
-    // The fallback is the same shape `serialize_anonymous` would
-    // produce, kept in core so umbra-auth isn't a dependency of
-    // the templates module.
-    let layer_user = CURRENT_USER.try_with(|u| u.clone()).ok().flatten();
-    let user_value = layer_user.unwrap_or_else(anonymous_user_value);
-    // Only inject when the caller didn't supply `user` themselves.
-    if ctx_value
-        .get_attr("user")
-        .map(|v| !v.is_undefined())
-        .unwrap_or(false)
-    {
+    let has = |key: &str| {
+        ctx_value
+            .get_attr(key)
+            .map(|v| !v.is_undefined())
+            .unwrap_or(false)
+    };
+
+    let need_user = !has("user");
+    let csrf = current_csrf();
+    let need_csrf = csrf.is_some() && !(has("csrf_token") && has("csrf_input"));
+
+    if !need_user && !need_csrf {
         return ctx_value;
     }
-    // Build a fresh object that contains every original key plus
-    // `user`. minijinja's `Value::from_iter` over (key, value) pairs
-    // produces a Map value; we walk the original keys and add ours
-    // last.
+
+    // Build a fresh object that contains every original key plus the
+    // ambient ones. minijinja's `Value::from_iter` over (key, value)
+    // pairs produces a Map value; we walk the original keys and add
+    // ours last.
     let mut pairs: Vec<(String, minijinja::Value)> = Vec::new();
     if let Ok(keys) = ctx_value.try_iter() {
         for key in keys {
@@ -444,7 +462,54 @@ fn merge_ambient_user<C: Serialize>(ctx: &C) -> minijinja::Value {
             }
         }
     }
-    pairs.push(("user".to_string(), user_value));
+
+    if need_user {
+        // Resolve which `user` value should land in the rendered ctx:
+        //   1. Task-local set by a middleware (AuthPlugin's
+        //      `user_context_layer`) — the live request shape.
+        //   2. Anonymous fallback `{ is_authenticated: false }` for
+        //      callers WITHOUT a layer mounted AND for renders that
+        //      happen outside the middleware's scope (notably the
+        //      `render_500_middleware` recovery path — the
+        //      user-context task-local has already dropped by the time
+        //      the error layer renders, but the 500 template still
+        //      needs `user.is_authenticated` to evaluate cleanly).
+        //
+        // The fallback is the same shape `serialize_anonymous` would
+        // produce, kept in core so umbra-auth isn't a dependency of
+        // the templates module.
+        let layer_user = CURRENT_USER.try_with(|u| u.clone()).ok().flatten();
+        pairs.push((
+            "user".to_string(),
+            layer_user.unwrap_or_else(anonymous_user_value),
+        ));
+    }
+
+    if let Some(token) = csrf {
+        if !has("csrf_token") {
+            pairs.push((
+                "csrf_token".to_string(),
+                minijinja::Value::from(token.clone()),
+            ));
+        }
+        if !has("csrf_input") {
+            // Today's tokens are hex (signed mode adds `.` + hex sig),
+            // so the escape is belt-and-braces against a future
+            // token-shape change — not a live attack surface.
+            let escaped = token
+                .replace('&', "&amp;")
+                .replace('"', "&quot;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;");
+            pairs.push((
+                "csrf_input".to_string(),
+                minijinja::Value::from_safe_string(format!(
+                    r#"<input type="hidden" name="csrf_token" value="{escaped}">"#
+                )),
+            ));
+        }
+    }
+
     minijinja::Value::from_iter(pairs)
 }
 
