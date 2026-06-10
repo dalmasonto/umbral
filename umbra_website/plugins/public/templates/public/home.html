@@ -1,0 +1,207 @@
+{% extends "base.html" %}
+
+{% block title %}Umbra, plugin-first Rust web framework{% endblock %}
+{% block meta_description %}Umbra is a plugin-first Rust web framework for complete applications: models, migrations, admin, forms, REST, templates, and swappable batteries behind one plugin contract.{% endblock %}
+
+{% block content %}
+<section class="border-b border-[oklch(0.82_0.02_235)] bg-[oklch(0.972_0.009_230)]">
+  <div class="mx-auto grid max-w-7xl gap-7 px-4 py-8 sm:px-6 lg:grid-cols-[0.72fr_1.28fr] lg:px-8 lg:py-10">
+    <div>
+      <p class="inline-flex rounded border border-[oklch(0.74_0.03_235)] bg-[oklch(0.99_0.006_230)] px-2 py-1 text-xs font-black text-[oklch(0.48_0.12_35)]">framework dossier</p>
+      <h1 class="mt-4 max-w-2xl text-2xl font-black leading-tight text-[oklch(0.18_0.03_245)] sm:text-3xl">
+        Umbra is a Rust framework for building whole web applications.
+      </h1>
+      <p class="mt-4 max-w-2xl text-sm leading-6 text-[oklch(0.4_0.03_245)] sm:text-base sm:leading-7">
+        It gives Rust projects an app shape: models, migrations, templates, forms, admin, REST, OpenAPI, security defaults, and project-owned plugins. The important part is that the batteries are still plugins, not hidden framework magic.
+      </p>
+      <div class="mt-5 flex flex-wrap gap-2 text-sm font-bold">
+        <a href="#workflow" class="rounded bg-[oklch(0.48_0.12_35)] px-3 py-1.5 text-[oklch(0.98_0.01_35)] hover:bg-[oklch(0.42_0.13_35)]">Read workflow</a>
+        <a href="#plugins" class="rounded border border-[oklch(0.72_0.03_235)] bg-[oklch(0.99_0.006_230)] px-3 py-1.5 text-[oklch(0.24_0.035_245)] hover:border-[oklch(0.56_0.06_220)]">Inspect plugins</a>
+      </div>
+    </div>
+
+    <div class="grid content-start gap-3">
+      <div class="grid border border-[oklch(0.76_0.026_235)] bg-[oklch(0.99_0.006_230)] md:grid-cols-[0.9fr_1.1fr]">
+        <div class="border-b border-[oklch(0.84_0.018_235)] p-3 md:border-b-0 md:border-r">
+          <p class="text-xs font-black text-[oklch(0.48_0.12_35)]">positioning</p>
+          <p class="mt-1.5 text-base font-black leading-snug">Complete app framework, plugin-first architecture.</p>
+        </div>
+        <div class="p-3">
+          <p class="text-xs font-black text-[oklch(0.2_0.025_245)]">current proof</p>
+          <p class="mt-1.5 text-sm leading-6 text-[oklch(0.42_0.03_245)]">This homepage is served by `plugins/public`, extends the project wrapper, and uses compiled Tailwind through `umbra-static`.</p>
+        </div>
+      </div>
+
+      <div class="grid items-start gap-3 md:grid-cols-3">
+        <div class="border border-[oklch(0.78_0.026_235)] bg-[oklch(0.94_0.012_230)] p-3">
+          <p class="text-xs font-black text-[oklch(0.5_0.11_155)]">1</p>
+          <p class="mt-1.5 text-sm font-black">Create a project</p>
+          <p class="mt-1 text-sm leading-6 text-[oklch(0.43_0.03_245)]">Start with settings, routes, templates, and dispatch.</p>
+        </div>
+        <div class="border border-[oklch(0.78_0.026_235)] bg-[oklch(0.94_0.012_230)] p-3">
+          <p class="text-xs font-black text-[oklch(0.5_0.11_155)]">2</p>
+          <p class="mt-1.5 text-sm font-black">Add apps</p>
+          <p class="mt-1 text-sm leading-6 text-[oklch(0.43_0.03_245)]">Each feature area gets a plugin crate and owned models.</p>
+        </div>
+        <div class="border border-[oklch(0.78_0.026_235)] bg-[oklch(0.94_0.012_230)] p-3">
+          <p class="text-xs font-black text-[oklch(0.5_0.11_155)]">3</p>
+          <p class="mt-1.5 text-sm font-black">Ship surfaces</p>
+          <p class="mt-1 text-sm leading-6 text-[oklch(0.43_0.03_245)]">Use HTML, admin, forms, REST, and OpenAPI from the same registry.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="framework" class="px-4 py-10 sm:px-6 lg:px-8">
+  <div class="mx-auto grid max-w-7xl gap-8 lg:grid-cols-[280px_1fr]">
+    <aside class="text-sm leading-6 text-[oklch(0.43_0.03_245)]">
+      <p class="font-black text-[oklch(0.18_0.03_245)]">Framework scope</p>
+      <p class="mt-2">Not a router showcase. Not a static marketing promise. Umbra's public story is the application shape plus the plugin boundary.</p>
+    </aside>
+
+    <div class="overflow-hidden border border-[oklch(0.76_0.026_235)] bg-[oklch(0.99_0.006_230)]">
+      <div class="grid border-b border-[oklch(0.82_0.02_235)] bg-[oklch(0.93_0.014_230)] px-4 py-2 text-xs font-black text-[oklch(0.43_0.03_245)] md:grid-cols-[0.8fr_1.1fr_0.8fr]">
+        <p>surface</p>
+        <p class="hidden md:block">what it should answer</p>
+        <p class="hidden md:block">where it lives</p>
+      </div>
+      <div class="divide-y divide-[oklch(0.86_0.018_235)] text-sm">
+        <div class="grid gap-2 px-4 py-3 md:grid-cols-[0.8fr_1.1fr_0.8fr]">
+          <p class="font-black">models and migrations</p>
+          <p class="leading-6 text-[oklch(0.43_0.03_245)]">How do I declare data, review changes, and migrate deliberately?</p>
+          <p class="font-mono text-xs text-[oklch(0.36_0.05_220)]">plugins/*/src/models.rs</p>
+        </div>
+        <div class="grid gap-2 px-4 py-3 md:grid-cols-[0.8fr_1.1fr_0.8fr]">
+          <p class="font-black">templates and forms</p>
+          <p class="leading-6 text-[oklch(0.43_0.03_245)]">How do server-rendered pages and public submissions work without a SPA requirement?</p>
+          <p class="font-mono text-xs text-[oklch(0.36_0.05_220)]">templates + Umbra Forms</p>
+        </div>
+        <div class="grid gap-2 px-4 py-3 md:grid-cols-[0.8fr_1.1fr_0.8fr]">
+          <p class="font-black">admin and moderation</p>
+          <p class="leading-6 text-[oklch(0.43_0.03_245)]">How do maintainers edit features, plugins, reviews, showcase entries, and reports?</p>
+          <p class="font-mono text-xs text-[oklch(0.36_0.05_220)]">umbra-admin</p>
+        </div>
+        <div class="grid gap-2 px-4 py-3 md:grid-cols-[0.8fr_1.1fr_0.8fr]">
+          <p class="font-black">REST and OpenAPI</p>
+          <p class="leading-6 text-[oklch(0.43_0.03_245)]">How do app models become API resources when the project needs them?</p>
+          <p class="font-mono text-xs text-[oklch(0.36_0.05_220)]">umbra-rest + umbra-openapi</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="plugins" class="border-y border-[oklch(0.82_0.02_235)] bg-[oklch(0.94_0.012_230)] px-4 py-10 sm:px-6 lg:px-8">
+  <div class="mx-auto grid max-w-7xl gap-8 lg:grid-cols-[280px_1fr]">
+    <aside>
+      <p class="text-sm font-black text-[oklch(0.18_0.03_245)]">Plugin map</p>
+      <p class="mt-2 text-sm leading-6 text-[oklch(0.43_0.03_245)]">The website should make every battery legible: official, replaceable, extendable, and honest about maturity.</p>
+    </aside>
+
+    <div class="grid gap-3 md:grid-cols-2">
+      <div class="border border-[oklch(0.76_0.026_235)] bg-[oklch(0.99_0.006_230)] p-4">
+        <div class="flex items-start justify-between gap-4">
+          <p class="font-black">Official batteries</p>
+          <span class="rounded bg-[oklch(0.9_0.055_155)] px-2 py-1 text-xs font-black text-[oklch(0.32_0.09_155)]">first party</span>
+        </div>
+        <p class="mt-3 text-sm leading-6 text-[oklch(0.43_0.03_245)]">Admin, auth, sessions, REST, OpenAPI, security, static assets, and future plugins should be visible as independent pieces.</p>
+      </div>
+
+      <div class="border border-[oklch(0.76_0.026_235)] bg-[oklch(0.99_0.006_230)] p-4">
+        <div class="flex items-start justify-between gap-4">
+          <p class="font-black">Community directory</p>
+          <span class="rounded bg-[oklch(0.92_0.055_72)] px-2 py-1 text-xs font-black text-[oklch(0.43_0.1_72)]">planned</span>
+        </div>
+        <p class="mt-3 text-sm leading-6 text-[oklch(0.43_0.03_245)]">Listings need install notes, compatibility, audit status, comments, maintainer notes, and security reports.</p>
+      </div>
+
+      <div class="border border-[oklch(0.76_0.026_235)] bg-[oklch(0.99_0.006_230)] p-4">
+        <div class="flex items-start justify-between gap-4">
+          <p class="font-black">Project apps</p>
+          <span class="rounded bg-[oklch(0.9_0.05_220)] px-2 py-1 text-xs font-black text-[oklch(0.34_0.09_220)]">same API</span>
+        </div>
+        <p class="mt-3 text-sm leading-6 text-[oklch(0.43_0.03_245)]">The website's `public`, `features`, `reviews`, `showcase`, and `community` areas are ordinary Umbra apps.</p>
+      </div>
+
+      <div class="border border-[oklch(0.76_0.026_235)] bg-[oklch(0.99_0.006_230)] p-4">
+        <div class="flex items-start justify-between gap-4">
+          <p class="font-black">Security workflow</p>
+          <span class="rounded bg-[oklch(0.93_0.055_30)] px-2 py-1 text-xs font-black text-[oklch(0.5_0.12_30)]">serious</span>
+        </div>
+        <p class="mt-3 text-sm leading-6 text-[oklch(0.43_0.03_245)]">Plugin reports, warnings, advisories, and auditor queues are part of the ecosystem story, not an afterthought.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="workflow" class="px-4 py-10 sm:px-6 lg:px-8">
+  <div class="mx-auto grid max-w-7xl gap-8 lg:grid-cols-[280px_1fr]">
+    <aside>
+      <p class="text-sm font-black text-[oklch(0.18_0.03_245)]">Build loop</p>
+      <p class="mt-2 text-sm leading-6 text-[oklch(0.43_0.03_245)]">The homepage should teach the first useful loop without pretending every deeper page already exists.</p>
+    </aside>
+
+    <div class="grid gap-4 lg:grid-cols-[1fr_0.9fr]">
+      <div class="border border-[oklch(0.76_0.026_235)] bg-[oklch(0.2_0.035_245)] p-4 text-[oklch(0.93_0.014_230)]">
+        <div class="flex items-center justify-between border-b border-[oklch(0.36_0.04_245)] pb-3">
+          <p class="text-sm font-black">commands</p>
+          <p class="text-xs font-bold text-[oklch(0.74_0.06_92)]">normal production flow</p>
+        </div>
+        <pre class="mt-4 overflow-x-auto text-sm leading-7"><code>umbra startproject site
+umbra startapp public
+umbra startapp features
+
+cargo run -- makemigrations
+cargo run -- migrate
+cargo run -- serve</code></pre>
+      </div>
+
+      <div class="grid content-start gap-3">
+        <div class="border border-[oklch(0.76_0.026_235)] bg-[oklch(0.99_0.006_230)] p-4">
+          <p class="font-black">No auto-migrate in `main.rs`</p>
+          <p class="mt-2 text-sm leading-6 text-[oklch(0.43_0.03_245)]">The website should dogfood explicit migration review.</p>
+        </div>
+        <div class="border border-[oklch(0.76_0.026_235)] bg-[oklch(0.99_0.006_230)] p-4">
+          <p class="font-black">Templates stay near owners</p>
+          <p class="mt-2 text-sm leading-6 text-[oklch(0.43_0.03_245)]">The wrapper can be global, but page templates live in their plugin.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="site" class="border-t border-[oklch(0.82_0.02_235)] bg-[oklch(0.99_0.006_230)] px-4 py-10 sm:px-6 lg:px-8">
+  <div class="mx-auto grid max-w-7xl gap-8 lg:grid-cols-[280px_1fr]">
+    <aside>
+      <p class="text-sm font-black text-[oklch(0.18_0.03_245)]">This page</p>
+      <p class="mt-2 text-sm leading-6 text-[oklch(0.43_0.03_245)]">The landing page is deliberately static for now. The rest of the site should become database-backed as the app models mature.</p>
+    </aside>
+
+    <div class="overflow-hidden border border-[oklch(0.76_0.026_235)]">
+      <div class="grid bg-[oklch(0.93_0.014_230)] px-4 py-2 text-xs font-black text-[oklch(0.43_0.03_245)] md:grid-cols-[0.8fr_1.2fr_0.7fr]">
+        <p>file</p>
+        <p class="hidden md:block">job</p>
+        <p class="hidden md:block">status</p>
+      </div>
+      <div class="divide-y divide-[oklch(0.86_0.018_235)] bg-[oklch(0.99_0.006_230)] text-sm">
+        <div class="grid gap-2 px-4 py-3 md:grid-cols-[0.8fr_1.2fr_0.7fr]">
+          <p class="font-mono text-xs text-[oklch(0.36_0.05_220)]">templates/base.html</p>
+          <p class="text-[oklch(0.43_0.03_245)]">Global navigation, CSS, footer, shared blocks.</p>
+          <p class="font-bold text-[oklch(0.5_0.11_155)]">global</p>
+        </div>
+        <div class="grid gap-2 px-4 py-3 md:grid-cols-[0.8fr_1.2fr_0.7fr]">
+          <p class="font-mono text-xs text-[oklch(0.36_0.05_220)]">plugins/public/templates</p>
+          <p class="text-[oklch(0.43_0.03_245)]">Homepage content owned by the public plugin.</p>
+          <p class="font-bold text-[oklch(0.5_0.11_155)]">plugin</p>
+        </div>
+        <div class="grid gap-2 px-4 py-3 md:grid-cols-[0.8fr_1.2fr_0.7fr]">
+          <p class="font-mono text-xs text-[oklch(0.36_0.05_220)]">static/css/umbra.css</p>
+          <p class="text-[oklch(0.43_0.03_245)]">Compiled Tailwind served by `umbra-static`.</p>
+          <p class="font-bold text-[oklch(0.5_0.11_155)]">served</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+{% endblock %}

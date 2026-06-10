@@ -1,0 +1,13 @@
+{
+  "name": "umbra-website-css",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Tailwind CSS build for the Umbra website",
+  "scripts": {
+    "build": "tailwindcss -c tailwind.config.js -i input.css -o ../static/css/umbra.css --minify",
+    "watch": "tailwindcss -c tailwind.config.js -i input.css -o ../static/css/umbra.css --watch"
+  },
+  "devDependencies": {
+    "tailwindcss": "^3.4.0"
+  }
+}

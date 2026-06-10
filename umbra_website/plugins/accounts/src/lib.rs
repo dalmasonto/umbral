@@ -19,6 +19,7 @@ pub use models::{
 
 use umbra::migrate::ModelMeta;
 use umbra::plugin::{AppContext, Plugin, PluginError};
+use umbra::routes::Routes;
 use umbra::web::Router;
 
 #[derive(Debug, Default, Clone)]

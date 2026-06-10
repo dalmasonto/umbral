@@ -8,6 +8,7 @@ use accounts::AccountsPlugin;
 use community::CommunityPlugin;
 use features::FeaturesPlugin;
 use plugin_directory::PluginDirectoryPlugin;
+use public::PublicPlugin;
 use reviews::ReviewsPlugin;
 use security_reports::SecurityReportsPlugin;
 use showcase::ShowcasePlugin;
@@ -21,6 +22,7 @@ use umbra_openapi::OpenApiPlugin;
 use umbra_rest::RestPlugin;
 use umbra_security::{SecurityConfig, SecurityPlugin};
 use umbra_sessions::SessionsPlugin;
+use umbra_static::StaticPlugin;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -53,10 +55,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .plugin(SecurityReportsPlugin::default())
         .plugin(AccountsPlugin::default())
         .plugin(CommunityPlugin::default())
+        .plugin(PublicPlugin::default())
         // --- Admin/API/security --------------------------------------------
         .plugin(AdminPlugin::default().site_title("Umbra".to_string()))
         .plugin(RestPlugin::default())
         .plugin(OpenApiPlugin::new())
+        .plugin(StaticPlugin::new("/static", "./static"))
         .plugin(SecurityPlugin::with_config(SecurityConfig {
             csrf_exempt_paths: vec!["/api".to_string()],
             ..Default::default()
@@ -67,7 +71,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .server_error_template("500.html")
         .slash_redirect(SlashRedirect::Append)
         // --- Routes ---------------------------------------------------------
-        .routes(Routes::new().get("/", home).layered(
+        .routes(Routes::new().layered(
             "GET",
             "/dashboard",
             get(dashboard).layer(login_required_html("/login")),
@@ -75,22 +79,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .build()?;
 
     umbra_cli::dispatch(app).await
-}
-
-async fn home() -> Result<Html<String>, (StatusCode, String)> {
-    let backend_apps = [
-        "site_content",
-        "features",
-        "plugin_directory",
-        "reviews",
-        "showcase",
-        "security_reports",
-        "accounts",
-        "community",
-    ];
-    let body =
-        umbra::templates::render("home.html", &context!(backend_apps)).map_err(internal_error)?;
-    Ok(Html(body))
 }
 
 async fn dashboard(
