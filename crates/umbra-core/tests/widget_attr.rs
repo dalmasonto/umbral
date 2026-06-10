@@ -16,6 +16,10 @@ pub struct Doc {
     )]
     pub body: String,
     pub plain: String,
+    // Exactly the shape ShowcaseEntry.long_content uses: an
+    // Option<String> with widget in its own #[umbra(...)] attribute.
+    #[umbra(widget = "markdown")]
+    pub long_content: Option<String>,
 }
 
 #[test]
@@ -31,4 +35,21 @@ fn widget_attr_flows_into_field_spec() {
 
     let plain = by_name.get("plain").expect("plain field");
     assert_eq!(plain.widget, None, "no attr means no widget");
+
+    // The Option<String> + standalone-#[umbra(widget)] case (the exact
+    // ShowcaseEntry.long_content shape) must carry widget too.
+    let lc = by_name.get("long_content").expect("long_content field");
+    assert_eq!(lc.widget, Some("markdown"), "widget lost on Option<String>");
+    assert!(lc.nullable, "Option<String> is nullable");
+
+    // And it must survive the FieldSpec -> migrate::Column conversion
+    // that ModelMeta::for_ uses (what the admin actually reads).
+    let cols: Vec<umbra_core::migrate::Column> =
+        <Doc as Model>::FIELDS.iter().map(Into::into).collect();
+    let lc_col = cols.iter().find(|c| c.name == "long_content").unwrap();
+    assert_eq!(
+        lc_col.widget.as_deref(),
+        Some("markdown"),
+        "widget dropped in Column::from(FieldSpec)"
+    );
 }
