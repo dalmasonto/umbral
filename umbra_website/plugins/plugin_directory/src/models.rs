@@ -213,6 +213,18 @@ pub struct Plugin {
     #[umbra(noform, default = "0")]
     pub display_order: i32,
 
+    /// GitHub star count, synced by a maintainer / future sync task.
+    /// `None` renders as no segment on the public cards — never a
+    /// fabricated number.
+    #[umbra(noform, help = "GitHub stars — maintainer-synced; leave empty if unknown.")]
+    pub github_stars: Option<i64>,
+
+    /// crates.io download count (see planning/umbra-site.md §Good
+    /// features — crates.io exposes per-crate downloads). Same
+    /// None-means-hidden rule as `github_stars`.
+    #[umbra(noform, help = "crates.io downloads — maintainer-synced; leave empty if unknown.")]
+    pub downloads: Option<i64>,
+
     #[umbra(noform)]
     pub metadata: Option<serde_json::Value>,
 

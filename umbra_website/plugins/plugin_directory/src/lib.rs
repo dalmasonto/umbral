@@ -11,6 +11,7 @@
 //! what each method does.
 
 pub mod models;
+pub mod seed;
 
 pub use models::{
     AuditStatus, CommentKind, CommentModeration, PluginCompatibility, PluginFeature,
@@ -45,6 +46,31 @@ impl Plugin for PluginDirectoryPlugin {
     }
 
     fn on_ready(&self, _ctx: &AppContext) -> Result<(), PluginError> {
+        // Seed the first-party plugin rows the first time the
+        // server starts. The seed is idempotent (short-circuits
+        // when the table is non-empty), so this is safe on every
+        // boot. Failures log a warning but do not crash startup —
+        // the home page falls back to its static table when the
+        // DB is empty.
+        let plugin_name = self.name();
+        tokio::spawn(async move {
+            match seed::seed_official_plugins().await {
+                Ok(0) => tracing::debug!(
+                    "{}: official plugin table already populated, seed skipped",
+                    plugin_name
+                ),
+                Ok(n) => tracing::info!(
+                    "{}: seeded {} official plugin rows",
+                    plugin_name,
+                    n
+                ),
+                Err(e) => tracing::warn!(
+                    "{}: official plugin seed failed: {e}. \
+                     Home page will fall back to the static plugin table.",
+                    plugin_name
+                ),
+            }
+        });
         Ok(())
     }
 }

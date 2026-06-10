@@ -131,12 +131,13 @@
       </a>
     </div>
 
-    {# Search + filter bar (visual preview of the directory page). #}
+    {# Search + filter bar. The input is live — submits to the
+       directory page as ?search=… #}
     <div class="mb-[18px] flex flex-wrap items-center gap-2.5">
-      <div class="flex min-w-[280px] flex-1 items-center gap-[9px] rounded-[11px] border border-hairline-2 bg-paper px-[15px] py-3 text-[14.5px] text-faint">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
-        Try “rest”, “multitenancy”, “oauth”…
-      </div>
+      <form action="/plugins" method="get" class="flex min-w-[280px] flex-1 items-center gap-[9px] rounded-[11px] border border-hairline-2 bg-paper px-[15px] py-3 text-[14.5px] text-faint transition-colors focus-within:border-accent-line">
+        <svg class="shrink-0" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
+        <input type="search" name="search" placeholder="Try “rest”, “multitenancy”, “oauth”…" aria-label="Search plugins" class="w-full bg-transparent text-ink outline-none placeholder:text-faint" style="outline:none;">
+      </form>
       <div class="flex flex-wrap gap-[7px]">
         <span class="rounded-[9px] bg-shade px-3.5 py-[9px] text-[13.5px] font-semibold text-white">All</span>
         <span class="rounded-[9px] border border-hairline-2 bg-surface px-3.5 py-[9px] text-[13.5px] font-medium text-body">Official</span>
@@ -154,7 +155,25 @@
           <span class="pill-official ml-auto">{{ p.status }}</span>
         </div>
         <p class="mb-3 min-h-[40px] text-[13.5px] leading-[1.5] text-muted">{{ p.short_description }}</p>
-        <code class="block overflow-hidden text-ellipsis whitespace-nowrap rounded-[7px] border border-hairline bg-surface-2 px-[9px] py-1.5 font-mono text-[12px] text-ink-2">umbra add {{ p.crate_name }}</code>
+        {# Metrics — each segment renders only when the data exists;
+           the [&>span+span] variant draws the · separators. #}
+        <div class="mb-3 flex items-center gap-2.5 text-[12px] text-faint [&>span+span]:before:mr-2.5 [&>span+span]:before:content-['·']">
+          {% if p.stars %}<span><span class="font-semibold text-ink">★ {{ p.stars }}</span></span>{% endif %}
+          {% if p.downloads %}<span>{{ p.downloads }} downloads</span>{% endif %}
+          {% if p.notes > 0 %}<span>{{ p.notes }} notes</span>{% endif %}
+        </div>
+        <div class="flex items-center gap-2">
+          <code class="flex-1 overflow-hidden text-ellipsis whitespace-nowrap rounded-[7px] border border-hairline bg-surface-2 px-[9px] py-1.5 font-mono text-[12px] text-ink-2">{{ p.install }}</code>
+          <button type="button" class="copy-btn" data-cmd="{{ p.install }}" onclick="umbraCopy(this, event)" title="Copy install command" aria-label="Copy install command">
+            <svg class="icon-copy" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            <svg class="icon-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--ok)" stroke-width="2.4"><path d="M20 6L9 17l-5-5"/></svg>
+          </button>
+          {% if p.audited %}
+          <span class="inline-flex items-center gap-1 text-[11.5px] font-semibold text-ok"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6L9 17l-5-5"/></svg>Audited</span>
+          {% else %}
+          <span class="inline-flex items-center gap-1 text-[11.5px] font-semibold text-warn"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 9v4M12 17h.01"/><circle cx="12" cy="12" r="9"/></svg>Unverified</span>
+          {% endif %}
+        </div>
       </a>
       {% endif %}{% else %}
       {# Static fallback — rendered until the directory table has rows. #}
@@ -170,6 +189,10 @@
         </div>
         <div class="flex items-center gap-2">
           <code class="flex-1 overflow-hidden text-ellipsis whitespace-nowrap rounded-[7px] border border-hairline bg-surface-2 px-[9px] py-1.5 font-mono text-[12px] text-ink-2">umbra add umbra-rest</code>
+          <button type="button" class="copy-btn" data-cmd="umbra add umbra-rest" onclick="umbraCopy(this, event)" title="Copy install command" aria-label="Copy install command">
+            <svg class="icon-copy" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            <svg class="icon-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--ok)" stroke-width="2.4"><path d="M20 6L9 17l-5-5"/></svg>
+          </button>
           <span class="inline-flex items-center gap-1 text-[11.5px] font-semibold text-ok"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6L9 17l-5-5"/></svg>Audited</span>
         </div>
       </a>
@@ -185,6 +208,10 @@
         </div>
         <div class="flex items-center gap-2">
           <code class="flex-1 overflow-hidden text-ellipsis whitespace-nowrap rounded-[7px] border border-hairline bg-surface-2 px-[9px] py-1.5 font-mono text-[12px] text-ink-2">umbra add umbra-admin</code>
+          <button type="button" class="copy-btn" data-cmd="umbra add umbra-admin" onclick="umbraCopy(this, event)" title="Copy install command" aria-label="Copy install command">
+            <svg class="icon-copy" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            <svg class="icon-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--ok)" stroke-width="2.4"><path d="M20 6L9 17l-5-5"/></svg>
+          </button>
           <span class="inline-flex items-center gap-1 text-[11.5px] font-semibold text-ok"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6L9 17l-5-5"/></svg>Audited</span>
         </div>
       </a>
@@ -200,6 +227,10 @@
         </div>
         <div class="flex items-center gap-2">
           <code class="flex-1 overflow-hidden text-ellipsis whitespace-nowrap rounded-[7px] border border-hairline bg-surface-2 px-[9px] py-1.5 font-mono text-[12px] text-ink-2">umbra add umbra-multitenancy</code>
+          <button type="button" class="copy-btn" data-cmd="umbra add umbra-multitenancy" onclick="umbraCopy(this, event)" title="Copy install command" aria-label="Copy install command">
+            <svg class="icon-copy" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            <svg class="icon-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--ok)" stroke-width="2.4"><path d="M20 6L9 17l-5-5"/></svg>
+          </button>
           <span class="inline-flex items-center gap-1 text-[11.5px] font-semibold text-warn"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 9v4M12 17h.01"/><circle cx="12" cy="12" r="9"/></svg>Unverified</span>
         </div>
       </a>
@@ -359,4 +390,19 @@
   </div>
 </section>
 
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+  // Copy-install-command buttons on the directory preview cards. The
+  // button lives inside the card's <a>, so swallow the navigation.
+  function umbraCopy(btn, ev) {
+    ev.preventDefault();
+    ev.stopPropagation();
+    navigator.clipboard.writeText(btn.dataset.cmd).then(function () {
+      btn.classList.add('copied');
+      setTimeout(function () { btn.classList.remove('copied'); }, 1200);
+    });
+  }
+</script>
 {% endblock %}

@@ -214,6 +214,29 @@
     white-space: nowrap;
   }
 
+  /* Copy-to-clipboard icon button (install commands). Shows the
+     clipboard icon normally, the green check for ~1.2s after a copy
+     (admin.js-style class toggle from the inline umbraCopy helper). */
+  .copy-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    flex-shrink: 0;
+    border: 1px solid var(--hairline);
+    border-radius: 7px;
+    background: var(--surface);
+    color: var(--faint);
+    cursor: pointer;
+    transition: color 120ms ease, border-color 120ms ease;
+  }
+  .copy-btn:hover { color: var(--ink-2); border-color: var(--ghost); }
+  .copy-btn .icon-check { display: none; }
+  .copy-btn.copied .icon-copy { display: none; }
+  .copy-btn.copied .icon-check { display: block; }
+  .copy-btn.copied { border-color: var(--ok); }
+
   /* Uppercase section kicker. */
   .kicker {
     display: inline-flex;
