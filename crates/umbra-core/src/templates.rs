@@ -641,3 +641,42 @@ impl From<std::io::Error> for TemplateError {
         Self::Io(e)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn nested_template_names_are_relative_to_templates_root() {
+        let tmp = tempfile::tempdir().expect("create temp dir");
+        let templates = tmp.path().join("templates");
+        std::fs::create_dir_all(templates.join("base")).expect("create base template dir");
+        std::fs::create_dir_all(templates.join("content")).expect("create content template dir");
+
+        std::fs::write(
+            templates.join("base").join("site.html"),
+            "<main>{% block content %}{% endblock %}</main>",
+        )
+        .expect("write nested base template");
+        std::fs::write(
+            templates.join("content").join("contact.html"),
+            r#"{% extends "base/site.html" %}{% block content %}<h1>{{ title }}</h1><p>Contact from nested content.</p>{% endblock %}"#,
+        )
+        .expect("write nested content template");
+
+        let (env, collisions) = build_env(&[templates]).expect("build template env");
+        assert!(collisions.is_empty());
+
+        let rendered = render_with(
+            &env,
+            "content/contact.html",
+            &json!({ "title": "Nested contact" }),
+        )
+        .expect("render nested template by relative name");
+
+        assert!(rendered.contains("<main>"));
+        assert!(rendered.contains("<h1>Nested contact</h1>"));
+        assert!(rendered.contains("Contact from nested content."));
+    }
+}
