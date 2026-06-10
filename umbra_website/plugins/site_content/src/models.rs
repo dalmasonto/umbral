@@ -109,6 +109,7 @@ pub struct BlogPost {
     #[umbra(string, max_length = 180)]
     pub title: String,
     pub excerpt: Option<String>,
+    #[umbra(widget = "markdown", help = "Markdown — the page body. Rendered with `| markdown`.")]
     pub body: String,
     #[umbra(choices, index)]
     pub status: PublishStatus,
@@ -148,6 +149,7 @@ pub struct ContentPage {
     pub slug: String,
     #[umbra(string, max_length = 180)]
     pub title: String,
+    #[umbra(widget = "markdown", help = "Markdown — the post body. Rendered with `| markdown`.")]
     pub body: String,
     #[umbra(choices)]
     pub template: PageTemplate,

@@ -247,6 +247,7 @@ pub struct PluginFeature {
     pub name: String,
     #[umbra(unique, max_length = 180)]
     pub slug: String,
+    #[umbra(widget = "markdown", help = "Markdown — headings, lists, tables, fenced code. Rendered with `| markdown` on the public page.")]
     pub description: String,
     #[umbra(choices, index)]
     pub status: PluginStatus,
@@ -321,6 +322,7 @@ pub struct PluginComment {
     pub author: Option<ForeignKey<AuthUser>>,
 
     #[form(required, length(min = 5, max = 5_000))]
+    #[umbra(widget = "markdown", help = "Markdown supported.")]
     pub body: String,
 
     // SQL DEFAULT takes the DB literal, not the Rust path (see the

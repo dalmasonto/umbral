@@ -61,6 +61,7 @@ pub struct Review {
     pub title: String,
 
     #[form(required, length(min = 50, max = 5_000))]
+    #[umbra(widget = "markdown", help = "Markdown supported.")]
     pub body: String,
 
     /// The reviewer's role / title (e.g. "Staff Engineer",
