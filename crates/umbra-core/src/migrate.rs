@@ -674,6 +674,14 @@ pub struct Column {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub example: String,
 
+    /// Carries `FieldSpec::widget` into the migration snapshot — the
+    /// form-renderer presentation hint (features.md #4). Presentation
+    /// only, no DB effect, so it's excluded from the schema diff the
+    /// same way `help` / `example` are. `None` is omitted from JSON so
+    /// existing migration files round-trip unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub widget: Option<String>,
+
     /// Carries `FieldSpec::supported_backends` into the migration
     /// snapshot. When non-empty, the boot system check rejects the
     /// model on any backend not listed. Closes IMP-5 from
@@ -847,6 +855,7 @@ impl From<&FieldSpec> for Column {
             auto_now: f.auto_now,
             help: f.help.to_string(),
             example: f.example.to_string(),
+            widget: f.widget.map(|s| s.to_string()),
             supported_backends: f.supported_backends.iter().map(|s| s.to_string()).collect(),
             min: f.min,
             max: f.max,
@@ -3662,6 +3671,7 @@ mod tests {
             auto_now: false,
             help: String::new(),
             example: String::new(),
+            widget: None,
             supported_backends: Vec::new(),
             min: None,
             max: None,
@@ -3690,6 +3700,7 @@ mod tests {
             auto_now: false,
             help: String::new(),
             example: String::new(),
+            widget: None,
             supported_backends: Vec::new(),
             min: None,
             max: None,
@@ -3718,6 +3729,7 @@ mod tests {
             auto_now: false,
             help: String::new(),
             example: String::new(),
+            widget: None,
             supported_backends: Vec::new(),
             min: None,
             max: None,
@@ -3816,6 +3828,7 @@ mod tests {
             auto_now: false,
             help: String::new(),
             example: String::new(),
+            widget: None,
             supported_backends: Vec::new(),
             min: None,
             max: None,
@@ -3830,6 +3843,7 @@ mod tests {
             auto_now: false,
             help: String::new(),
             example: String::new(),
+            widget: None,
             supported_backends: Vec::new(),
             ..plain_fk.clone()
         };
@@ -3929,6 +3943,7 @@ mod tests {
                 auto_now: false,
                 help: String::new(),
                 example: String::new(),
+                widget: None,
                 supported_backends: Vec::new(),
                 min: None,
                 max: None,
@@ -4007,6 +4022,7 @@ mod tests {
             auto_now: false,
             help: String::new(),
             example: String::new(),
+            widget: None,
             supported_backends: Vec::new(),
             min: None,
             max: None,
@@ -4111,6 +4127,7 @@ mod tests {
             auto_now: false,
             help: String::new(),
             example: String::new(),
+            widget: None,
             supported_backends: Vec::new(),
             min: None,
             max: None,
@@ -4191,6 +4208,7 @@ mod tests {
             auto_now: false,
             help: String::new(),
             example: String::new(),
+            widget: None,
             supported_backends: Vec::new(),
             min: None,
             max: None,
@@ -4207,6 +4225,7 @@ mod tests {
             auto_now: false,
             help: String::new(),
             example: String::new(),
+            widget: None,
             supported_backends: Vec::new(),
             ..id.clone()
         };
@@ -4220,6 +4239,7 @@ mod tests {
             auto_now: false,
             help: String::new(),
             example: String::new(),
+            widget: None,
             supported_backends: Vec::new(),
             ..id.clone()
         };
@@ -4295,6 +4315,7 @@ mod tests {
                 auto_now,
                 help: String::new(),
                 example: String::new(),
+                widget: None,
                 supported_backends: Vec::new(),
                 min: None,
                 max: None,

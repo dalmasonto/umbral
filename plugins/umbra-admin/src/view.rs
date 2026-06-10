@@ -599,6 +599,7 @@ mod tests {
             auto_now,
             help: String::new(),
             example: String::new(),
+            widget: None,
             supported_backends: Vec::new(),
             min: None,
             max: None,

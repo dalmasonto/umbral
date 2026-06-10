@@ -237,6 +237,10 @@ struct UmbraFieldAttr {
     /// `#[umbra(example = "...")]` — sample value rendered as
     /// OpenAPI `example`. Closes playground-openapi-gaps item 6.
     example: Option<String>,
+    /// `#[umbra(widget = "markdown" | "rte" | "textarea" | ...)]` —
+    /// presentation hint for form renderers (admin + plugins).
+    /// Metadata only; no DB effect. features.md #4.
+    widget: Option<String>,
     /// `#[umbra(backend = "postgres")]` — restrict this field to a
     /// specific backend (or several). The boot system check fails
     /// when the active backend isn't in the list. Closes IMP-5
@@ -308,6 +312,7 @@ fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAtt
         auto_now: false,
         help: None,
         example: None,
+        widget: None,
         backends: Vec::new(),
         min: None,
         max: None,
@@ -408,6 +413,13 @@ fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAtt
                 let lit: syn::LitStr = value.parse()?;
                 parsed.example = Some(lit.value());
                 Ok(())
+            } else if meta.path.is_ident("widget") {
+                // `#[umbra(widget = "markdown")]` — form-renderer
+                // presentation hint. Metadata only; no DB effect.
+                let value = meta.value()?;
+                let lit: syn::LitStr = value.parse()?;
+                parsed.widget = Some(lit.value());
+                Ok(())
             } else if meta.path.is_ident("backend") {
                 // `#[umbra(backend = "postgres")]` — restrict to
                 // one backend. Repeat the attribute to add more.
@@ -470,7 +482,8 @@ fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAtt
                      `unique`, `on_delete = \"...\"`, \
                      `on_update = \"...\"`, `index`, `auto_now`, \
                      `auto_now_add`, `help = \"...\"`, \
-                     `example = \"...\"`, `backend = \"...\"`, \
+                     `example = \"...\"`, `widget = \"...\"`, \
+                     `backend = \"...\"`, \
                      `min = N`, `max = N`, `slug_from = \"...\"`, \
                      and `reverse_fk = \"...\"`"
                 )))
@@ -1182,6 +1195,10 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             Some(s) => quote! { #s },
             None => quote! { "" },
         };
+        let widget_tokens = match &field_attr.widget {
+            Some(s) => quote! { ::core::option::Option::Some(#s) },
+            None => quote! { ::core::option::Option::None },
+        };
         let backends_tokens = if field_attr.backends.is_empty() {
             quote! { &[] }
         } else {
@@ -1279,6 +1296,7 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                 auto_now: #auto_now_lit,
                 help: #help_tokens,
                 example: #example_tokens,
+                widget: #widget_tokens,
                 min: #min_tokens,
                 max: #max_tokens,
                 text_format: #text_format_tokens,

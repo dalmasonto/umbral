@@ -613,6 +613,25 @@ pub struct FieldSpec {
     /// when this is unset.
     pub help: &'static str,
 
+    /// Presentation hint for form-rendering surfaces. Set via
+    /// `#[umbra(widget = "markdown" | "rte" | "textarea" | ...)]`;
+    /// `None` (the default) means "let the renderer pick by
+    /// `SqlType`". features.md #4.
+    ///
+    /// It is **metadata only** — the column's `SqlType`, DDL, and
+    /// stored value are unchanged. A `widget = "markdown"` field is
+    /// still `TEXT`; the widget only tells the admin (or any plugin
+    /// form) to render a markdown editor instead of a bare
+    /// `<textarea>`, and pairs with the `{{ value | markdown }}`
+    /// filter on the display side. Excluded from the migration diff
+    /// for the same reason `help` / `example` are: no DB effect.
+    ///
+    /// Renderers fall back to the `SqlType`-derived input for any
+    /// widget name they don't recognise, so an unknown widget is a
+    /// soft no-op rather than an error — third-party plugins can ship
+    /// new widget names without the core knowing them.
+    pub widget: Option<&'static str>,
+
     /// Sample value rendered as OpenAPI `example` on the property
     /// schema. Set via `#[umbra(example = "...")]`. Closes
     /// playground-openapi-gaps item 6.

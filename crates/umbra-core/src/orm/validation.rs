@@ -564,6 +564,7 @@ mod tests {
             auto_now_add: false,
             help: String::new(),
             example: String::new(),
+            widget: None,
             index: false,
             supported_backends: Vec::new(),
         }

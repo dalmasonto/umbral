@@ -865,6 +865,7 @@ impl From<&IntrospectedColumn> for Column {
             auto_now: false,
             help: String::new(),
             example: String::new(),
+            widget: None,
             supported_backends: Vec::new(),
             min: None,
             max: None,
