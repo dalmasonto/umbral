@@ -162,7 +162,7 @@ The macro reads each field-level attribute straight off the struct field. Empty 
 | `#[umbra(noedit)]` | Admin edit form shows the field read-only (UX hint, not an API contract). REST writes still accept the value. |
 | `#[umbra(index)]` | Single-column index in the DDL. The migration engine emits `CREATE INDEX` on both backends. |
 | `#[umbra(unique)]` | UNIQUE constraint in the DDL. UNIQUE violations on insert / update surface as `WriteError::UniqueViolation { field, value }` - REST renders them as `{ "slug": ["A row with slug='widget' already exists."] }`. |
-| `#[umbra(default = "...")]` | DDL default for the column. Required when adding a NOT NULL column to a populated table - Postgres / SQLite reject the ALTER otherwise. Also the value the DB uses when an INSERT omits the column. |
+| `#[umbra(default = "...")]` | DDL default for the column - the string lands verbatim in the `DEFAULT` clause (booleans are translated to `1`/`0` on SQLite). For a `choices` field use the DB literal (`"draft"`), **not** the Rust path (`"PostStatus::Draft"`); see [Defaults: two mechanisms](#defaults-two-mechanisms-two-layers). Required when adding a NOT NULL column to a populated table - Postgres / SQLite reject the ALTER otherwise. Also the value the DB uses when an INSERT omits the column. |
 | `#[umbra(help = "...")]` | OpenAPI `description` + admin form help text. Carries the column's intent into both surfaces without a second source of documentation. |
 | `#[umbra(example = "...")]` | OpenAPI `example` value. Generated clients show it as a placeholder; the playground uses it to seed the request body. |
 | `#[umbra(on_delete = "cascade" \| "restrict" \| "set_null" \| "no_action")]` | FK `ON DELETE` clause. Default `no_action` (SQL standard's default - no extra clause emitted). Applies only to `ForeignKey<T>` columns; a typed error fires at derive time if you set it on a non-FK field. |
@@ -345,6 +345,21 @@ pub struct Post {
 That's the whole setup. `Post { status: PostStatus::Draft, .. }` round-trips through `INSERT` / `SELECT` as `'draft'`. The admin's create / edit sheet shows a `<select>` with the four variants. The migration engine emits `status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'review', 'published', 'archived'))` on Postgres; SQLite gets plain `TEXT DEFAULT 'draft'` (SQLite's CHECK syntax differs and `CHECK` adds friction more than safety on a column the Rust enum already constrains).
 
 The `default = "..."` is required when you add the `status` column to an existing populated table - both Postgres and SQLite reject `ALTER TABLE ADD COLUMN` for a NOT NULL column without a default. It also doubles as the value the DB uses on any future `INSERT` that omits the column.
+
+#### Defaults: two mechanisms, two layers
+
+A choices field can carry two *different* defaults, and they live at different layers:
+
+| Mechanism | Layer | Who reads it |
+|---|---|---|
+| `#[umbra(default = "draft")]` on the **field** | Schema. The string lands **verbatim** in the migration's `DEFAULT` clause. | The database, whenever an INSERT omits the column. |
+| `#[default]` on a **variant** + `#[derive(Default)]` on the enum | Rust. Standard-library attribute; the ORM never reads it. | Anything that constructs the struct via `Default` - `T::default()` in a GET handler, the `..Default::default()` fill the Form derive uses for `noform` fields. |
+
+<Callout type="warning">
+`#[umbra(default = "...")]` takes the **DB literal** - the `rename_all`'d variant string (`"draft"`), never the Rust path. `default = "PostStatus::Draft"` emits `DEFAULT 'PostStatus::Draft'` into the DDL: on Postgres the CHECK constraint rejects it at insert time; on SQLite it stores text the enum can't decode, and the row errors on the next SELECT.
+</Callout>
+
+The two usually agree (`#[default] Draft` + `default = "draft"`), but they may differ deliberately: a public-submission form fills `source` from `Default::default()` (say `community`) while rows inserted without the column at the SQL level get the schema default (say `official`). Just be aware which path creates each row.
 
 #### What `#[derive(Choices)]` emits
 
