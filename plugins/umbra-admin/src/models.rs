@@ -79,7 +79,7 @@ pub struct AdminUserPref {
     /// query string gets persisted; on a subsequent paramless visit,
     /// the changelist handler 303-redirects to the saved URL shape.
     /// Cross-tab / cross-device continuity for free.
-    #[umbra(noedit)]
+    #[umbra(noedit, widget = "code")]
     pub preferences: Option<String>,
     #[umbra(noedit)]
     pub updated_at: DateTime<Utc>,

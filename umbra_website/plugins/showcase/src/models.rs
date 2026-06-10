@@ -67,7 +67,12 @@ pub enum ShowcaseDeployment {
 /// site owners submit their project; admin moderation drives the
 /// `status` enum.
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model, umbra::forms::Form)]
-#[umbra(soft_delete, plugin = "showcase", display = "Showcase", icon = "gallery-horizontal")]
+#[umbra(
+    soft_delete,
+    plugin = "showcase",
+    display = "Showcase",
+    icon = "gallery-horizontal"
+)]
 pub struct ShowcaseEntry {
     pub id: i64,
 
@@ -87,6 +92,7 @@ pub struct ShowcaseEntry {
     pub short_description: String,
 
     #[form(optional, length(max = 20_000))]
+    #[umbra(widget = "markdown")]
     pub long_content: Option<String>,
 
     #[form(optional, url, length(max = 400))]
@@ -102,6 +108,7 @@ pub struct ShowcaseEntry {
     /// admin, rest"). Free-text for now; an admin-curated picker
     /// is a future round.
     #[form(optional, length(max = 400))]
+    #[umbra(help = "A comma-separated list of Umbra plugins used (e.g. \"auth, admin, rest\")")]
     pub plugins_used: Option<String>,
 
     #[umbra(noform, choices, default = "sqlite")]
