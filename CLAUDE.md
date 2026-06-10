@@ -297,6 +297,15 @@ documentation/docs/v0.0.1/<area>/<feature>.mdx
 
 Don't translate internal specs into user-facing docs. The spec is the spec. The user page is the smallest useful slice for someone using the feature. If you find yourself rewriting `arch.md` in MDX, stop and link to it instead.
 
+## Gap trackers: numbers are identifiers, order is ascending
+
+The trackers under `planning/` (`gaps.md`, `gaps2.md`, `features.md`, plus `planning/archive/*-done.md`) use entry numbers as stable identifiers — commits, code comments, and memories cite them as `gaps2 #N`. Rules, all of them hard:
+
+- **New entry = max + 1, appended at the END of the file.** The max is taken across the active file AND its archive (a closed entry's number stays taken forever). Never insert an entry mid-file; the file reads top-to-bottom in ascending numeric order.
+- **Never renumber or reuse a number that has been committed or cited.** If two parallel writers collide on a number, the committed/cited entry keeps it and the uncommitted one takes the next free number.
+- **Never reorder existing entries** except to repair an ordering violation — and a repair moves blocks verbatim, changing zero content.
+- **Closing an entry**: the full shipped write-up goes verbatim to `planning/archive/<file>-done.md` under the same number; the active entry shrinks to a one-line `[x] <title> — archived` stub in place (it does NOT move).
+
 ## Skills: capture what you learn, as you learn it
 
 As you work on umbra, write skills. A skill is a small instruction file the next agent (or you, weeks later) can load to skip the re-discovery you just did. The goal is an incremental library that grows with the codebase.
