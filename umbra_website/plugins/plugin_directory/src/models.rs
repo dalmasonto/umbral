@@ -134,7 +134,7 @@ pub enum CommentModeration {
 #[derive(
     Debug, Clone, Default, sqlx::FromRow, Serialize, Deserialize, Model, umbra::forms::Form,
 )]
-#[umbra(plugin = "plugin_directory", display = "Plugins", icon = "package")]
+#[umbra(soft_delete, plugin = "plugin_directory", display = "Plugins", icon = "package")]
 pub struct Plugin {
     pub id: i64,
     #[umbra(noform)]
@@ -234,6 +234,7 @@ pub struct Plugin {
 /// "Admin: filters"). Admin-managed only — no public form.
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
 #[umbra(
+    soft_delete,
     plugin = "plugin_directory",
     display = "Plugin features",
     icon = "list-checks"
@@ -270,6 +271,7 @@ pub struct PluginFeature {
 /// backend). Admin-managed only — no public form.
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
 #[umbra(
+    soft_delete,
     plugin = "plugin_directory",
     display = "Plugin compatibility",
     icon = "badge-check"
@@ -304,6 +306,7 @@ pub struct PluginCompatibility {
     Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model, umbra::forms::Form,
 )]
 #[umbra(
+    soft_delete,
     plugin = "plugin_directory",
     display = "Plugin comments",
     icon = "message-square"

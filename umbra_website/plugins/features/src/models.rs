@@ -30,6 +30,7 @@ pub enum FeatureMaturity {
 
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
 #[umbra(
+    soft_delete,
     plugin = "features",
     display = "Feature categories",
     icon = "folder-kanban"
@@ -54,7 +55,7 @@ pub struct FeatureCategory {
 }
 
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
-#[umbra(plugin = "features", display = "Framework features", icon = "sparkles")]
+#[umbra(soft_delete, plugin = "features", display = "Framework features", icon = "sparkles")]
 pub struct FrameworkFeature {
     pub id: i64,
     #[umbra(on_delete = "cascade")]
@@ -88,6 +89,7 @@ pub struct FrameworkFeature {
 
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
 #[umbra(
+    soft_delete,
     plugin = "features",
     display = "Feature status events",
     icon = "history"

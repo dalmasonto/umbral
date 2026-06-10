@@ -42,7 +42,7 @@ pub enum ReviewUsageContext {
 /// umbra_version, usage_context. Everything else is
 /// `#[umbra(noform)]` and stamped by the admin / framework.
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model, umbra::forms::Form)]
-#[umbra(plugin = "reviews", display = "Reviews", icon = "star")]
+#[umbra(soft_delete, plugin = "reviews", display = "Reviews", icon = "star")]
 pub struct Review {
     pub id: i64,
 

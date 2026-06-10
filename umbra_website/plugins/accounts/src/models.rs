@@ -42,7 +42,7 @@ pub enum TrustGateStatus {
 }
 
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
-#[umbra(plugin = "accounts", display = "Website profiles", icon = "user")]
+#[umbra(soft_delete, plugin = "accounts", display = "Website profiles", icon = "user")]
 pub struct WebsiteProfile {
     pub id: i64,
     pub user: OneToOne<AuthUser>,
@@ -63,7 +63,7 @@ pub struct WebsiteProfile {
 }
 
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
-#[umbra(plugin = "accounts", display = "GitHub accounts", icon = "github")]
+#[umbra(soft_delete, plugin = "accounts", display = "GitHub accounts", icon = "github")]
 pub struct GitHubAccount {
     pub id: i64,
     #[umbra(on_delete = "set_null")]
@@ -88,7 +88,7 @@ pub struct GitHubAccount {
 }
 
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
-#[umbra(plugin = "accounts", display = "Trust gate checks", icon = "shield-check")]
+#[umbra(soft_delete, plugin = "accounts", display = "Trust gate checks", icon = "shield-check")]
 pub struct TrustGateCheck {
     pub id: i64,
     #[umbra(on_delete = "cascade")]

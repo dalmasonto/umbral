@@ -60,7 +60,7 @@ pub enum NavigationPlacement {
 }
 
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
-#[umbra(plugin = "site_content", display = "Content categories", icon = "folder")]
+#[umbra(soft_delete, plugin = "site_content", display = "Content categories", icon = "folder")]
 pub struct ContentCategory {
     pub id: i64,
     #[umbra(unique, string, max_length = 100)]
@@ -83,7 +83,7 @@ pub struct ContentCategory {
 }
 
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
-#[umbra(plugin = "site_content", display = "Content tags", icon = "tag")]
+#[umbra(soft_delete, plugin = "site_content", display = "Content tags", icon = "tag")]
 pub struct ContentTag {
     pub id: i64,
     #[umbra(unique, string, max_length = 80)]
@@ -100,7 +100,7 @@ pub struct ContentTag {
 }
 
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
-#[umbra(plugin = "site_content", display = "Blog posts", icon = "newspaper")]
+#[umbra(soft_delete, plugin = "site_content", display = "Blog posts", icon = "newspaper")]
 pub struct BlogPost {
     pub id: i64,
     pub public_id: Uuid,
@@ -141,7 +141,7 @@ pub struct BlogPost {
 }
 
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
-#[umbra(plugin = "site_content", display = "Pages", icon = "file-text")]
+#[umbra(soft_delete, plugin = "site_content", display = "Pages", icon = "file-text")]
 pub struct ContentPage {
     pub id: i64,
     #[umbra(unique, max_length = 160)]
@@ -169,7 +169,7 @@ pub struct ContentPage {
 }
 
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
-#[umbra(plugin = "site_content", display = "Navigation items", icon = "navigation")]
+#[umbra(soft_delete, plugin = "site_content", display = "Navigation items", icon = "navigation")]
 pub struct NavigationItem {
     pub id: i64,
     #[umbra(choices, index)]
@@ -195,7 +195,7 @@ pub struct NavigationItem {
 }
 
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
-#[umbra(plugin = "site_content", display = "Media assets", icon = "image")]
+#[umbra(soft_delete, plugin = "site_content", display = "Media assets", icon = "image")]
 pub struct MediaAsset {
     pub id: i64,
     #[umbra(unique, string, max_length = 180)]
@@ -218,7 +218,7 @@ pub struct MediaAsset {
 }
 
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model, umbra::forms::Form)]
-#[umbra(plugin = "site_content", display = "Contact messages", icon = "inbox")]
+#[umbra(soft_delete, plugin = "site_content", display = "Contact messages", icon = "inbox")]
 pub struct ContactMessage {
     pub id: i64,
 
@@ -278,7 +278,7 @@ impl Default for ContactMessage {
 }
 
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
-#[umbra(plugin = "site_content", display = "Site settings", icon = "settings")]
+#[umbra(soft_delete, plugin = "site_content", display = "Site settings", icon = "settings")]
 pub struct SiteSetting {
     pub id: i64,
     #[umbra(unique, string, max_length = 120)]

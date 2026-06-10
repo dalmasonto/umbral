@@ -67,7 +67,7 @@ pub enum ShowcaseDeployment {
 /// site owners submit their project; admin moderation drives the
 /// `status` enum.
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model, umbra::forms::Form)]
-#[umbra(plugin = "showcase", display = "Showcase", icon = "gallery-horizontal")]
+#[umbra(soft_delete, plugin = "showcase", display = "Showcase", icon = "gallery-horizontal")]
 pub struct ShowcaseEntry {
     pub id: i64,
 

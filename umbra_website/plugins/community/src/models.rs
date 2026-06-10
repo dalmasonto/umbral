@@ -45,7 +45,7 @@ pub enum NewsletterProvider {
 }
 
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
-#[umbra(plugin = "community", display = "Social links", icon = "share-2")]
+#[umbra(soft_delete, plugin = "community", display = "Social links", icon = "share-2")]
 pub struct SocialLink {
     pub id: i64,
     #[umbra(string, max_length = 80)]
@@ -70,7 +70,7 @@ pub struct SocialLink {
 }
 
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
-#[umbra(plugin = "community", display = "Community resources", icon = "network")]
+#[umbra(soft_delete, plugin = "community", display = "Community resources", icon = "network")]
 pub struct CommunityResource {
     pub id: i64,
     #[umbra(string, max_length = 120)]
@@ -95,7 +95,7 @@ pub struct CommunityResource {
 }
 
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
-#[umbra(plugin = "community", display = "Newsletter config", icon = "mail")]
+#[umbra(soft_delete, plugin = "community", display = "Newsletter config", icon = "mail")]
 pub struct NewsletterConfig {
     pub id: i64,
     #[umbra(string, unique, max_length = 120)]
