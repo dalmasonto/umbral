@@ -102,7 +102,7 @@
       data-widget="{{ field.kind }}"
       rows="10"
       {% if not field.nullable and not is_readonly %}required{% endif %}
-      {% if is_readonly %}readonly{% endif %}
+      {% if is_readonly %}disabled{% endif %}
       class="w-full bg-surface-container-low border {% if error %}border-error{% else %}border-outline-variant{% endif %} rounded-xl px-md py-sm text-on-surface text-body-md font-mono focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all resize-y placeholder:text-outline/50 {% if is_readonly %}opacity-70 cursor-default{% endif %}"
     >{{ value }}</textarea>
 
@@ -117,7 +117,7 @@
       data-widget="code"
       rows="10"
       {% if not field.nullable and not is_readonly %}required{% endif %}
-      {% if is_readonly %}readonly{% endif %}
+      {% if is_readonly %}disabled{% endif %}
       class="w-full bg-surface-container-low border {% if error %}border-error{% else %}border-outline-variant{% endif %} rounded-xl px-md py-sm text-on-surface text-body-md font-mono focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all resize-y placeholder:text-outline/50 {% if is_readonly %}opacity-70 cursor-default{% endif %}"
     >{{ value }}</textarea>
 
@@ -128,7 +128,7 @@
       name="{{ field.name }}"
       rows="4"
       {% if not field.nullable and not is_readonly %}required{% endif %}
-      {% if is_readonly %}readonly{% endif %}
+      {% if is_readonly %}disabled{% endif %}
       class="w-full bg-surface-container-low border {% if error %}border-error{% else %}border-outline-variant{% endif %} rounded-xl px-md py-sm text-on-surface text-body-md focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all resize-y placeholder:text-outline/50 {% if is_readonly %}opacity-70 cursor-default{% endif %}"
     >{{ value }}</textarea>
 
@@ -140,7 +140,7 @@
         name="{{ field.name }}"
         rows="5"
         {% if not field.nullable and not is_readonly %}required{% endif %}
-        {% if is_readonly %}readonly{% endif %}
+        {% if is_readonly %}disabled{% endif %}
         class="w-full bg-surface-container-low border {% if error %}border-error{% else %}border-outline-variant{% endif %} rounded-xl px-md py-sm text-on-surface text-body-md font-mono focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all resize-y placeholder:text-outline/50 {% if is_readonly %}opacity-70 cursor-default{% endif %}"
       >{{ value }}</textarea>
       {% if not is_readonly %}
@@ -204,7 +204,7 @@
         placeholder="{% if value %}Search to replace {{ field.name | replace('_id', '') | replace('_', ' ') | title }}{% else %}Search {{ field.name | replace('_id', '') | replace('_', ' ') | title }}{% endif %}"
         autocomplete="off"
         class="w-full bg-surface-container-low border {% if error %}border-error{% else %}border-outline-variant{% endif %} rounded-xl px-md py-sm text-on-surface text-body-md focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all placeholder:text-outline/50 {% if is_readonly %}opacity-70 cursor-default{% endif %}"
-        {% if is_readonly %}readonly{% endif %}
+        {% if is_readonly %}disabled{% endif %}
         hx-get="{{ admin_base }}/api/{{ parent_table }}/{{ field.name }}/options"
         hx-trigger="input changed delay:250ms, focus"
         hx-target="#fk_options_{{ field.name }}"
@@ -264,7 +264,7 @@
         placeholder="Add {{ field.name | replace('_', ' ') | title }}..."
         autocomplete="off"
         class="w-full bg-surface-container-low border border-outline-variant rounded-xl px-md py-sm text-on-surface text-body-md focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20"
-        {% if is_readonly %}readonly{% endif %}
+        {% if is_readonly %}disabled{% endif %}
       />
       <div class="fk-options hidden absolute left-0 right-0 top-full mt-xs z-30 bg-surface-container border border-outline-variant rounded-xl shadow-lg max-h-48 overflow-y-auto"></div>
     </div>
@@ -278,7 +278,7 @@
       value="{{ value }}"
       step="any"
       {% if not field.nullable and not is_readonly %}required{% endif %}
-      {% if is_readonly %}readonly{% endif %}
+      {% if is_readonly %}disabled{% endif %}
       class="w-full bg-surface-container-low border {% if error %}border-error{% else %}border-outline-variant{% endif %} rounded-xl px-md py-sm text-on-surface text-data-mono focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all tabular-nums placeholder:text-outline/50 {% if is_readonly %}opacity-70 cursor-default{% endif %}"
     />
 
@@ -289,7 +289,7 @@
       name="{{ field.name }}"
       value="{{ value }}"
       {% if not field.nullable and not is_readonly %}required{% endif %}
-      {% if is_readonly %}readonly{% endif %}
+      {% if is_readonly %}disabled{% endif %}
       class="w-full bg-surface-container-low border {% if error %}border-error{% else %}border-outline-variant{% endif %} rounded-xl px-md py-sm text-on-surface text-body-md focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all {% if is_readonly %}opacity-70 cursor-default{% endif %}"
     />
 
@@ -300,7 +300,7 @@
       name="{{ field.name }}"
       value="{{ value }}"
       {% if not field.nullable and not is_readonly %}required{% endif %}
-      {% if is_readonly %}readonly{% endif %}
+      {% if is_readonly %}disabled{% endif %}
       class="w-full bg-surface-container-low border {% if error %}border-error{% else %}border-outline-variant{% endif %} rounded-xl px-md py-sm text-on-surface text-body-md focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all {% if is_readonly %}opacity-70 cursor-default{% endif %}"
     />
 
@@ -311,7 +311,7 @@
       name="{{ field.name }}"
       value="{{ value }}"
       {% if not field.nullable and not is_readonly %}required{% endif %}
-      {% if is_readonly %}readonly{% endif %}
+      {% if is_readonly %}disabled{% endif %}
       class="w-full bg-surface-container-low border {% if error %}border-error{% else %}border-outline-variant{% endif %} rounded-xl px-md py-sm text-on-surface text-body-md focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all {% if is_readonly %}opacity-70 cursor-default{% endif %}"
     />
 
@@ -323,7 +323,7 @@
       name="{{ field.name }}"
       value="{{ value }}"
       {% if not field.nullable and not is_readonly %}required{% endif %}
-      {% if is_readonly %}readonly{% endif %}
+      {% if is_readonly %}disabled{% endif %}
       class="w-full bg-surface-container-low border {% if error %}border-error{% else %}border-outline-variant{% endif %} rounded-xl px-md py-sm text-on-surface text-body-md focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all placeholder:text-outline/50 {% if is_readonly %}opacity-70 cursor-default{% endif %}"
     />
   {% endif %}
