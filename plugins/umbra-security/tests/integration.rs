@@ -11,7 +11,7 @@ use http::{Method, Request, StatusCode};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 use umbra::prelude::Plugin;
-use umbra_security::{SecurityPlugin, generate_token};
+use umbra_security::{SecurityConfig, SecurityPlugin, generate_token};
 
 fn app() -> Router {
     let inner = Router::new()
@@ -156,6 +156,173 @@ async fn hsts_header_appears_when_opted_in() {
         .unwrap();
     let (_, headers, _) = body_string(router.oneshot(req).await.unwrap()).await;
     assert!(headers.get("strict-transport-security").is_some());
+}
+
+#[tokio::test]
+async fn xss_protection_default_is_disabled() {
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri("/")
+        .body(Body::empty())
+        .unwrap();
+    let (_, headers, _) = body_string(app().oneshot(req).await.unwrap()).await;
+    assert_eq!(
+        headers.get("x-xss-protection"),
+        Some(&HeaderValue::from_static("0")),
+        "modern guidance disables the legacy XSS auditor"
+    );
+}
+
+#[tokio::test]
+async fn opt_in_headers_appear_when_configured() {
+    let inner = Router::new().route("/", get(|| async { "ok" }));
+    let router = SecurityPlugin::with_config(SecurityConfig {
+        content_security_policy: Some("default-src 'self'".into()),
+        permissions_policy: Some("geolocation=()".into()),
+        server_header: Some("umbra".into()),
+        ..Default::default()
+    })
+    .wrap_router(inner);
+
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri("/")
+        .body(Body::empty())
+        .unwrap();
+    let (_, headers, _) = body_string(router.oneshot(req).await.unwrap()).await;
+    assert_eq!(
+        headers.get("content-security-policy"),
+        Some(&HeaderValue::from_static("default-src 'self'"))
+    );
+    assert_eq!(
+        headers.get("permissions-policy"),
+        Some(&HeaderValue::from_static("geolocation=()"))
+    );
+    assert_eq!(
+        headers.get("server"),
+        Some(&HeaderValue::from_static("umbra"))
+    );
+}
+
+#[tokio::test]
+async fn server_header_can_be_stripped() {
+    let inner = Router::new().route(
+        "/",
+        get(|| async { ([(http::header::SERVER, "leaky/1.2.3")], "ok") }),
+    );
+    let router = SecurityPlugin::with_config(SecurityConfig {
+        // Default sets `Server: umbra`; to strip, clear it and ask to hide.
+        server_header: None,
+        hide_server_header: true,
+        ..Default::default()
+    })
+    .wrap_router(inner);
+
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri("/")
+        .body(Body::empty())
+        .unwrap();
+    let (_, headers, _) = body_string(router.oneshot(req).await.unwrap()).await;
+    assert!(
+        headers.get("server").is_none(),
+        "Server header should be stripped"
+    );
+}
+
+#[tokio::test]
+async fn server_and_coop_headers_are_on_by_default() {
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri("/")
+        .body(Body::empty())
+        .unwrap();
+    let (_, headers, _) = body_string(app().oneshot(req).await.unwrap()).await;
+    assert_eq!(
+        headers.get("server"),
+        Some(&HeaderValue::from_static("umbra")),
+        "umbra advertises a Server header by default (like Django's daphne)"
+    );
+    assert_eq!(
+        headers.get("cross-origin-opener-policy"),
+        Some(&HeaderValue::from_static("same-origin")),
+        "COOP on by default, matching Django 4.0+"
+    );
+}
+
+#[tokio::test]
+async fn exempt_path_skips_csrf_on_writes() {
+    let inner = Router::new().route("/api/save", post(|| async { "ok-api" }));
+    let router = SecurityPlugin::with_config(SecurityConfig {
+        csrf_exempt_paths: vec!["/api".into()],
+        ..Default::default()
+    })
+    .wrap_router(inner);
+
+    // A cookieless write (bearer-auth API client) that would 403 under CSRF
+    // passes because /api is exempt.
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/save")
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, body) = body_string(router.oneshot(req).await.unwrap()).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, "ok-api");
+}
+
+#[tokio::test]
+async fn middleware_does_not_clobber_handler_set_csrf_cookie() {
+    // A handler that mints its own CSRF cookie (the `ensure_csrf_cookie`
+    // pattern) must win — the middleware should not overwrite it, or the
+    // token rendered into the form wouldn't match the cookie.
+    let inner = Router::new().route(
+        "/form",
+        get(|| async {
+            (
+                [(
+                    SET_COOKIE,
+                    "umbra_csrf_token=handler-minted; Path=/; SameSite=Lax",
+                )],
+                "form",
+            )
+        }),
+    );
+    let router = SecurityPlugin::new().wrap_router(inner);
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri("/form")
+        .body(Body::empty())
+        .unwrap();
+    let (_, headers, _) = body_string(router.oneshot(req).await.unwrap()).await;
+    let set_cookie = headers.get(SET_COOKIE).unwrap().to_str().unwrap();
+    assert!(
+        set_cookie.contains("handler-minted"),
+        "handler's cookie should survive, got: {set_cookie}"
+    );
+}
+
+#[tokio::test]
+async fn request_body_limit_rejects_oversize_body() {
+    let inner = Router::new().route("/save", post(|| async { "ok" }));
+    let router = SecurityPlugin::with_config(SecurityConfig {
+        csrf: false, // isolate the body-limit behaviour from CSRF
+        request_body_limit: Some(8),
+        ..Default::default()
+    })
+    .wrap_router(inner);
+
+    let body = "this body is definitely longer than eight bytes";
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri("/save")
+        // A declared Content-Length over the cap trips the layer's immediate
+        // 413 short-circuit (the realistic path; clients send Content-Length).
+        .header(http::header::CONTENT_LENGTH, body.len())
+        .body(Body::from(body))
+        .unwrap();
+    let (status, _, _) = body_string(router.oneshot(req).await.unwrap()).await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
 }
 
 #[tokio::test]

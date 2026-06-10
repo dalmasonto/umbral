@@ -1,98 +1,271 @@
-//! umbra-security — CSRF protection and security headers.
+//! umbra-security — CSRF protection and a configurable security-header bundle.
 //!
-//! Django's `CsrfViewMiddleware` plus the `SecurityMiddleware`
-//! header bundle, the small slice that matters for v0. Plug it
-//! into the app and every non-safe request must carry a matching
-//! CSRF token; every response gets a standard set of hardening
-//! headers.
+//! Django's `CsrfViewMiddleware` plus the `SecurityMiddleware` header bundle,
+//! widened to the modern header set. Plug it into the app and every non-safe
+//! request must carry a matching CSRF token; every response gets the hardening
+//! headers you've enabled.
 //!
 //! ```ignore
 //! App::builder()
 //!     .plugin(AuthPlugin::new())
-//!     .plugin(SecurityPlugin::new())   // wraps the auth-augmented router
+//!     .plugin(SecurityPlugin::new())   // secure-but-dev-safe defaults
 //!     .build()
 //!     .await?;
 //! ```
+//!
+//! ## Configuration is a struct, not a builder chain
+//!
+//! Construct a [`SecurityConfig`] (every field has a secure, dev-safe default)
+//! and flip exactly what you need — no long `.with_x().with_y()` chain:
+//!
+//! ```ignore
+//! SecurityPlugin::with_config(SecurityConfig {
+//!     hsts: true,
+//!     content_security_policy: Some("default-src 'self'".into()),
+//!     server_header: Some("umbra".into()),
+//!     request_body_limit: Some(2 * 1024 * 1024),
+//!     ..Default::default()
+//! })
+//! ```
+//!
+//! `SecurityPlugin::new()` keeps the defaults; `SecurityPlugin::with_hsts(true)`
+//! stays as a one-flag convenience.
 //!
 //! ## CSRF
 //!
 //! Double-submit cookie pattern:
 //!
-//! 1. Every GET / HEAD / OPTIONS without the `umbra_csrf_token`
-//!    cookie gets one set on the response. The cookie is NOT
-//!    HttpOnly: the page's JS reads it and copies it into a header
-//!    on later writes.
-//! 2. Every POST / PUT / PATCH / DELETE must include the cookie
-//!    AND a `X-CSRF-Token` header whose value matches it. A
-//!    mismatch returns 403.
+//! 1. Every GET / HEAD / OPTIONS without the `umbra_csrf_token` cookie gets one
+//!    set on the response. The cookie is NOT HttpOnly: the page's JS reads it
+//!    and copies it into a header on later writes.
+//! 2. Every POST / PUT / PATCH / DELETE must include the cookie AND a matching
+//!    `X-CSRF-Token` header (JS path) or `csrf_token` / `__csrf` form field
+//!    (HTML-form path). A mismatch returns 403.
 //!
-//! The token is a 32-byte cryptographically-random value, hex-
-//! encoded. Per-session rotation is deferred until umbra-sessions
-//! grows the hook for it.
+//! The token is a 32-byte CSPRNG value, hex-encoded. The CSRF cookie gains
+//! `Secure` automatically under `Environment::Prod` (or force it with
+//! [`SecurityConfig::csrf_cookie_secure`]).
+//!
+//! ### Signed / session-bound CSRF ([`SecurityConfig::signed_csrf`])
+//!
+//! Naive double-submit trusts the cookie: an attacker who can plant a cookie on
+//! a sibling subdomain can forge a matching token. Enabling `signed_csrf` makes
+//! the token `<random>.<HMAC-SHA256(secret_key, random[.session])>` — a forged
+//! cookie can't carry a valid signature without the app `secret_key`. Set
+//! [`SecurityConfig::session_bind_cookie`] to also fold the session cookie's
+//! value into the signature so a token minted under one session can't be
+//! replayed under another.
+//!
+//! **Default off**, because every path that mints a token must mint a *signed*
+//! one or writes 403. Today the admin mints via [`generate_token`] (raw); until
+//! that's routed through the signed mint (tracked in `bugs/gaps2.md`), turning
+//! this on app-wide would 403 admin logins. Safe to enable for an app whose
+//! only token source is this middleware.
 //!
 //! ## Headers
 //!
-//! The default header set:
+//! Enabled by default: `X-Content-Type-Options: nosniff`, `X-Frame-Options:
+//! DENY`, `Referrer-Policy: strict-origin-when-cross-origin`, `X-XSS-Protection:
+//! 0` (modern guidance disables the legacy auditor), `Cross-Origin-Opener-Policy:
+//! same-origin` (matches Django 4.0+), and a `Server: umbra` header. Opt-in
+//! (default off, each a field on [`SecurityConfig`]): `Strict-Transport-Security`,
+//! `Content-Security-Policy`, `Permissions-Policy`, `Cross-Origin-Resource-Policy`,
+//! `Cross-Origin-Embedder-Policy`. CSP and HSTS are off by default because a wrong
+//! value breaks apps (HSTS bricks `http://` dev; a strict CSP breaks the CDN-using
+//! admin).
 //!
-//! - `X-Content-Type-Options: nosniff`
-//! - `X-Frame-Options: DENY`
-//! - `Referrer-Policy: strict-origin-when-cross-origin`
+//! ## Server identity & tower-http knobs
 //!
-//! `Strict-Transport-Security` is opt-in via
-//! [`SecurityPlugin::with_hsts`]: it can break local development on
-//! `http://` if accidentally enabled in dev.
+//! [`SecurityConfig::server_header`] sets the `Server` header (prefer a bare
+//! product name — a version is an information-disclosure tradeoff);
+//! [`SecurityConfig::hide_server_header`] strips whatever the stack added.
+//! [`SecurityConfig::request_body_limit`] caps the request body via tower-http's
+//! `RequestBodyLimitLayer` (DoS hardening); [`SecurityConfig::redact_sensitive_headers`]
+//! (default on) marks `authorization` / `cookie` / `set-cookie` sensitive so
+//! they're redacted in tracing output.
 //!
 //! ## Why this lives in Plugin::wrap_router
 //!
-//! Layering middleware needs a `tower::Layer` value, which is
-//! generic and erasing it into a `Box<dyn ...>` clashes with axum's
-//! handler trait. The Plugin trait's `wrap_router(Router) -> Router`
-//! method sidesteps that: each plugin layers its own middleware on
-//! the router with the full axum / tower API and returns the
-//! wrapped router. The app builder calls it in topological order so
+//! Layering middleware needs a `tower::Layer` value; the Plugin trait's
+//! `wrap_router(Router) -> Router` lets each plugin layer its middleware with
+//! the full axum / tower API. The app builder calls it in topological order so
 //! security wraps everything declared before it.
 
 use std::convert::Infallible;
 
 use axum::body::Body;
-use axum::extract::Request;
+use axum::extract::{Request, State};
 use axum::middleware::{self, Next};
 use axum::response::Response;
-use http::header::{COOKIE, HeaderName, HeaderValue, SET_COOKIE};
+use http::header::{AUTHORIZATION, COOKIE, HeaderName, HeaderValue, SERVER, SET_COOKIE};
 use http::{Method, StatusCode};
+use tower_http::limit::RequestBodyLimitLayer;
+use tower_http::sensitive_headers::SetSensitiveHeadersLayer;
 use tower_http::set_header::SetResponseHeaderLayer;
 use umbra::prelude::*;
 
 const CSRF_COOKIE: &str = "umbra_csrf_token";
 const CSRF_HEADER: &str = "x-csrf-token";
-/// Form field name that carries the CSRF token for HTML `<form>`
-/// submissions. Two shapes are accepted — `csrf_token` and `__csrf`
-/// — so existing form code on either convention works without
-/// migration. The header path stays the canonical one for JS clients.
+/// Form field name that carries the CSRF token for HTML `<form>` submissions.
+/// Two shapes are accepted — `csrf_token` and `__csrf` — so existing form code
+/// on either convention works without migration. The header path stays the
+/// canonical one for JS clients.
 const CSRF_FORM_FIELDS: &[&str] = &["csrf_token", "__csrf"];
-/// Hard cap on the buffered body size when we peek at form data to
-/// extract the CSRF field. 1 MiB is well above any realistic
-/// urlencoded form (the login page is < 1 KiB) and well below
-/// anything that would justify a memory pressure concern.
+/// Hard cap on the buffered body size when we peek at form data to extract the
+/// CSRF field. 1 MiB is well above any realistic urlencoded form.
 const MAX_FORM_BODY: usize = 1024 * 1024;
 
-/// CSRF + security-headers plugin. Configure via [`Self::with_hsts`]
-/// (off by default).
-#[derive(Debug, Default, Clone)]
+/// Declarative security configuration. Build from [`Default`] (secure,
+/// dev-safe) and override the fields you need — see the crate docs for the
+/// rationale behind each default.
+#[derive(Debug, Clone)]
+pub struct SecurityConfig {
+    // ---- CSRF ----
+    /// Run the CSRF middleware. Default `true`.
+    pub csrf: bool,
+    /// Force the `Secure` flag on the CSRF cookie. Default `false`; `Secure` is
+    /// added automatically under `Environment::Prod` regardless, so this only
+    /// matters for forcing it on in a non-prod HTTPS setup.
+    pub csrf_cookie_secure: bool,
+    /// Sign the CSRF token with the app `secret_key` (HMAC-SHA256). Default
+    /// `false` — see the crate docs for why enabling it requires every
+    /// token-minting path (including the admin's) to use the signed mint.
+    pub signed_csrf: bool,
+    /// When `signed_csrf` is on, also bind the token to this cookie's value
+    /// (typically the session cookie). Default `None`.
+    pub session_bind_cookie: Option<String>,
+    /// Request-path prefixes exempt from CSRF (Django's `@csrf_exempt`).
+    /// A token-authenticated REST API carries no session cookie, so a
+    /// bearer-auth `POST /api/...` would otherwise 403; exempt `"/api"` to
+    /// keep it working. Matched as a path prefix. Default empty.
+    pub csrf_exempt_paths: Vec<String>,
+
+    // ---- Response headers (None / false = header omitted) ----
+    /// `X-Content-Type-Options: nosniff`. Default `true`.
+    pub content_type_options: bool,
+    /// `X-Frame-Options`. Default `Some("DENY")`.
+    pub frame_options: Option<String>,
+    /// `Referrer-Policy`. Default `Some("strict-origin-when-cross-origin")`.
+    pub referrer_policy: Option<String>,
+    /// `X-XSS-Protection`. Default `Some("0")` — disables the buggy legacy
+    /// filter rather than enabling it (current OWASP guidance).
+    pub xss_protection: Option<String>,
+    /// Emit `Strict-Transport-Security`. Default `false` (dev-safe). Value is
+    /// built from the `hsts_*` fields.
+    pub hsts: bool,
+    /// HSTS `max-age` in seconds. Default one year.
+    pub hsts_max_age: u64,
+    /// Add `; includeSubDomains` to HSTS. Default `true`.
+    pub hsts_include_subdomains: bool,
+    /// Add `; preload` to HSTS. Default `false`.
+    pub hsts_preload: bool,
+    /// `Content-Security-Policy`. Default `None` — a wrong CSP breaks apps, so
+    /// it's opt-in.
+    pub content_security_policy: Option<String>,
+    /// `Permissions-Policy`. Default `None`.
+    pub permissions_policy: Option<String>,
+    /// `Cross-Origin-Opener-Policy`. Default `Some("same-origin")` (matches
+    /// Django 4.0+). Set `None` to omit — e.g. apps relying on cross-origin
+    /// popups (some OAuth flows).
+    pub cross_origin_opener_policy: Option<String>,
+    /// `Cross-Origin-Resource-Policy` (e.g. `"same-origin"`). Default `None`.
+    pub cross_origin_resource_policy: Option<String>,
+    /// `Cross-Origin-Embedder-Policy` (e.g. `"require-corp"`). Default `None`.
+    pub cross_origin_embedder_policy: Option<String>,
+
+    // ---- Server identity ----
+    /// Set the `Server` response header. Default `Some("umbra")` — a bare
+    /// product name (no version, so no info disclosure), the way Django's
+    /// daphne/gunicorn advertise one. Set `None` to omit. Prefer no version.
+    pub server_header: Option<String>,
+    /// Strip any `Server` header the stack set. Default `false`. Ignored when
+    /// `server_header` is `Some` (the set wins) — to strip, also set
+    /// `server_header: None`.
+    pub hide_server_header: bool,
+
+    // ---- axum / tower-http knobs ----
+    /// Cap request body size in bytes (tower-http `RequestBodyLimitLayer`).
+    /// Default `None` (axum's own default applies).
+    pub request_body_limit: Option<usize>,
+    /// Mark `authorization` / `cookie` / `set-cookie` sensitive so tracing
+    /// redacts them. Default `true`.
+    pub redact_sensitive_headers: bool,
+}
+
+impl Default for SecurityConfig {
+    fn default() -> Self {
+        Self {
+            csrf: true,
+            csrf_cookie_secure: false,
+            signed_csrf: false,
+            session_bind_cookie: None,
+            csrf_exempt_paths: Vec::new(),
+            content_type_options: true,
+            frame_options: Some("DENY".to_string()),
+            referrer_policy: Some("strict-origin-when-cross-origin".to_string()),
+            xss_protection: Some("0".to_string()),
+            hsts: false,
+            hsts_max_age: 31_536_000,
+            hsts_include_subdomains: true,
+            hsts_preload: false,
+            content_security_policy: None,
+            permissions_policy: None,
+            // On by default, matching Django's `SECURE_CROSS_ORIGIN_OPENER_POLICY`
+            // (default `same-origin` since Django 4.0). Isolates the browsing
+            // context group; only affects apps that rely on cross-origin popups.
+            cross_origin_opener_policy: Some("same-origin".to_string()),
+            cross_origin_resource_policy: None,
+            cross_origin_embedder_policy: None,
+            // Advertise the framework (no version — no info disclosure), the way
+            // Django's daphne/gunicorn emit a `Server` header. Set `None` to omit
+            // or pair `None` + `hide_server_header` to strip an upstream one.
+            server_header: Some("umbra".to_string()),
+            hide_server_header: false,
+            request_body_limit: None,
+            redact_sensitive_headers: true,
+        }
+    }
+}
+
+impl SecurityConfig {
+    fn hsts_value(&self) -> String {
+        let mut v = format!("max-age={}", self.hsts_max_age);
+        if self.hsts_include_subdomains {
+            v.push_str("; includeSubDomains");
+        }
+        if self.hsts_preload {
+            v.push_str("; preload");
+        }
+        v
+    }
+}
+
+/// CSRF + security-headers plugin. Configure via [`SecurityConfig`].
+#[derive(Debug, Clone, Default)]
 pub struct SecurityPlugin {
-    hsts: bool,
+    config: SecurityConfig,
 }
 
 impl SecurityPlugin {
+    /// Secure, dev-safe defaults (see [`SecurityConfig`]).
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Enable `Strict-Transport-Security: max-age=31536000; includeSubDomains`.
-    /// Leave off for local dev; turn on once the production deploy
-    /// is HTTPS-only.
+    /// Construct from an explicit config — the preferred entry point.
+    pub fn with_config(config: SecurityConfig) -> Self {
+        Self { config }
+    }
+
+    /// Borrow the active config.
+    pub fn config(&self) -> &SecurityConfig {
+        &self.config
+    }
+
+    /// One-flag convenience for `SecurityConfig::hsts`. Equivalent to
+    /// `with_config(SecurityConfig { hsts, ..Default::default() })`.
     pub fn with_hsts(mut self, hsts: bool) -> Self {
-        self.hsts = hsts;
+        self.config.hsts = hsts;
         self
     }
 }
@@ -103,42 +276,205 @@ impl Plugin for SecurityPlugin {
     }
 
     fn wrap_router(&self, router: Router) -> Router {
-        let mut router = router.layer(middleware::from_fn(csrf_middleware));
+        let cfg = &self.config;
+        let mut router = router;
 
-        router = router.layer(SetResponseHeaderLayer::if_not_present(
-            HeaderName::from_static("x-content-type-options"),
-            HeaderValue::from_static("nosniff"),
-        ));
-        router = router.layer(SetResponseHeaderLayer::if_not_present(
-            HeaderName::from_static("x-frame-options"),
-            HeaderValue::from_static("DENY"),
-        ));
-        router = router.layer(SetResponseHeaderLayer::if_not_present(
-            HeaderName::from_static("referrer-policy"),
-            HeaderValue::from_static("strict-origin-when-cross-origin"),
-        ));
-        if self.hsts {
-            router = router.layer(SetResponseHeaderLayer::if_not_present(
-                HeaderName::from_static("strict-transport-security"),
-                HeaderValue::from_static("max-age=31536000; includeSubDomains"),
-            ));
+        // CSRF middleware (innermost of our additions).
+        if cfg.csrf {
+            let state = CsrfState::from_config(cfg);
+            router = router.layer(middleware::from_fn_with_state(state, csrf_middleware));
         }
+
+        // Response-header setters. Order among them is irrelevant.
+        if cfg.content_type_options {
+            router = set_header(
+                router,
+                "x-content-type-options",
+                Some("nosniff".to_string()),
+            );
+        }
+        router = set_header(router, "x-frame-options", cfg.frame_options.clone());
+        router = set_header(router, "referrer-policy", cfg.referrer_policy.clone());
+        router = set_header(router, "x-xss-protection", cfg.xss_protection.clone());
+        if cfg.hsts {
+            router = set_header(router, "strict-transport-security", Some(cfg.hsts_value()));
+        }
+        router = set_header(
+            router,
+            "content-security-policy",
+            cfg.content_security_policy.clone(),
+        );
+        router = set_header(router, "permissions-policy", cfg.permissions_policy.clone());
+        router = set_header(
+            router,
+            "cross-origin-opener-policy",
+            cfg.cross_origin_opener_policy.clone(),
+        );
+        router = set_header(
+            router,
+            "cross-origin-resource-policy",
+            cfg.cross_origin_resource_policy.clone(),
+        );
+        router = set_header(
+            router,
+            "cross-origin-embedder-policy",
+            cfg.cross_origin_embedder_policy.clone(),
+        );
+
+        // Server identity: an explicit value overrides; otherwise optionally strip.
+        if let Some(v) = cfg.server_header.as_deref() {
+            if let Ok(hv) = HeaderValue::from_str(v) {
+                router = router.layer(SetResponseHeaderLayer::overriding(SERVER, hv));
+            }
+        } else if cfg.hide_server_header {
+            router = router.layer(middleware::from_fn(strip_server_header));
+        }
+
+        // tower-http knobs (outermost so they wrap everything above).
+        if cfg.redact_sensitive_headers {
+            router = router.layer(SetSensitiveHeadersLayer::new([
+                AUTHORIZATION,
+                COOKIE,
+                SET_COOKIE,
+            ]));
+        }
+        if let Some(limit) = cfg.request_body_limit {
+            router = router.layer(RequestBodyLimitLayer::new(limit));
+        }
+
         router
     }
 }
 
-/// Generate a fresh 32-byte token, hex-encoded. Public so tests
-/// and downstream code that mints tokens directly (e.g. server-
-/// rendered forms) can share the same shape.
+/// Add a `SetResponseHeaderLayer::if_not_present` for `name` when `value` is a
+/// valid header value; otherwise return the router untouched.
+fn set_header(router: Router, name: &'static str, value: Option<String>) -> Router {
+    match value.as_deref().and_then(|v| HeaderValue::from_str(v).ok()) {
+        Some(hv) => router.layer(SetResponseHeaderLayer::if_not_present(
+            HeaderName::from_static(name),
+            hv,
+        )),
+        None => router,
+    }
+}
+
+/// Per-request CSRF state captured at `wrap_router` time. The `secret` is read
+/// once from settings (absent in tests / before `App::build()` — signing then
+/// degrades to plain double-submit rather than panicking).
+#[derive(Clone)]
+struct CsrfState {
+    secure: bool,
+    signed: bool,
+    secret: Option<String>,
+    session_cookie: Option<String>,
+    exempt_paths: Vec<String>,
+}
+
+impl CsrfState {
+    fn from_config(cfg: &SecurityConfig) -> Self {
+        let settings = umbra::settings::get_opt();
+        let is_prod = settings
+            .map(|s| matches!(s.environment, Environment::Prod))
+            .unwrap_or(false);
+        let secret = if cfg.signed_csrf {
+            settings.map(|s| s.secret_key.clone())
+        } else {
+            None
+        };
+        Self {
+            secure: cfg.csrf_cookie_secure || is_prod,
+            signed: cfg.signed_csrf,
+            secret,
+            session_cookie: cfg.session_bind_cookie.clone(),
+            exempt_paths: cfg.csrf_exempt_paths.clone(),
+        }
+    }
+
+    /// True when `path` falls under a configured CSRF-exempt prefix.
+    fn is_exempt(&self, path: &str) -> bool {
+        self.exempt_paths
+            .iter()
+            .any(|p| path.starts_with(p.as_str()))
+    }
+
+    /// The session value to fold into the signature, or `None` when session
+    /// binding isn't configured.
+    fn session_bind<'a>(&self, session_value: Option<&'a str>) -> Option<&'a str> {
+        if self.session_cookie.is_some() {
+            session_value
+        } else {
+            None
+        }
+    }
+}
+
+/// Generate a fresh 32-byte token, hex-encoded. Public so tests and downstream
+/// code that mints tokens directly (e.g. server-rendered forms) share the same
+/// shape. Raw (unsigned) — the signed wrapper is applied by the middleware.
 pub fn generate_token() -> String {
     let mut bytes = [0u8; 32];
     getrandom::getrandom(&mut bytes).expect("getrandom failed");
     hex::encode(bytes)
 }
 
-/// Pull the value of a named cookie out of a `Cookie` header. v0
-/// shape: linear scan, no quoting. The full RFC 6265 grammar lives
-/// in tower-cookies, which we deliberately don't depend on yet.
+/// HMAC-SHA256 over `raw` (and the session value, when bound), keyed by the app
+/// secret, hex-encoded.
+fn sign(secret: &str, raw: &str, session: Option<&str>) -> String {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+    let mut mac =
+        <Hmac<Sha256>>::new_from_slice(secret.as_bytes()).expect("HMAC accepts any key length");
+    mac.update(raw.as_bytes());
+    if let Some(s) = session {
+        mac.update(b".");
+        mac.update(s.as_bytes());
+    }
+    hex::encode(mac.finalize().into_bytes())
+}
+
+/// Mint a token for the response cookie — signed when configured and a secret
+/// is available, raw otherwise.
+fn mint_token(state: &CsrfState, session_value: Option<&str>) -> String {
+    let raw = generate_token();
+    if state.signed {
+        if let Some(secret) = state.secret.as_deref() {
+            let sig = sign(secret, &raw, state.session_bind(session_value));
+            return format!("{raw}.{sig}");
+        }
+    }
+    raw
+}
+
+/// Validate a submitted token against the cookie token. Always requires the
+/// double-submit equality; additionally verifies the HMAC signature when
+/// `signed` is on and a secret is available.
+fn csrf_valid(
+    state: &CsrfState,
+    cookie_token: &str,
+    submitted: &str,
+    session_value: Option<&str>,
+) -> bool {
+    if !tokens_match(cookie_token, submitted) {
+        return false;
+    }
+    if !state.signed {
+        return true;
+    }
+    let Some(secret) = state.secret.as_deref() else {
+        // Signing requested but no secret resolved (e.g. before App::build()):
+        // fall back to plain double-submit rather than locking writes out.
+        return true;
+    };
+    let Some((raw, sig)) = cookie_token.rsplit_once('.') else {
+        // Signed mode requires a signature; an unsigned token can't be trusted.
+        return false;
+    };
+    let expected = sign(secret, raw, state.session_bind(session_value));
+    tokens_match(sig, &expected)
+}
+
+/// Pull the value of a named cookie out of a `Cookie` header. v0 shape: linear
+/// scan, no quoting.
 fn cookie_value<'a>(header: &'a str, name: &str) -> Option<&'a str> {
     for part in header.split(';') {
         let part = part.trim();
@@ -155,21 +491,45 @@ fn is_safe_method(method: &Method) -> bool {
     matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS)
 }
 
-async fn csrf_middleware(req: Request, next: Next) -> Result<Response, Infallible> {
+async fn csrf_middleware(
+    State(state): State<CsrfState>,
+    req: Request,
+    next: Next,
+) -> Result<Response, Infallible> {
     let method = req.method().clone();
-    let cookie_token = req
+
+    // Exempt paths (e.g. a token-authenticated `/api`) bypass CSRF entirely —
+    // they carry no session cookie, so the double-submit check doesn't apply.
+    if state.is_exempt(req.uri().path()) {
+        return Ok(next.run(req).await);
+    }
+
+    let cookie_header = req
         .headers()
         .get(COOKIE)
         .and_then(|h| h.to_str().ok())
+        .map(str::to_string);
+    let cookie_token = cookie_header
+        .as_deref()
         .and_then(|h| cookie_value(h, CSRF_COOKIE).map(str::to_string));
+    let session_value = state.session_cookie.as_deref().and_then(|name| {
+        cookie_header
+            .as_deref()
+            .and_then(|h| cookie_value(h, name).map(str::to_string))
+    });
 
     if is_safe_method(&method) {
-        // Pass through, but mint and attach a token if the client
-        // doesn't have one yet so the next write request can succeed.
+        // Pass through, minting and attaching a token if the client lacks one.
         let mut response = next.run(req).await;
-        if cookie_token.is_none() {
-            let token = generate_token();
-            let cookie = format!("{CSRF_COOKIE}={token}; Path=/; SameSite=Lax");
+        if cookie_token.is_none() && !response_sets_csrf_cookie(&response) {
+            // Skip minting when a handler already set its own CSRF cookie on
+            // this response (e.g. a form view using `ensure_csrf_cookie`) —
+            // overwriting it would mismatch the token rendered into the form.
+            let token = mint_token(&state, session_value.as_deref());
+            let mut cookie = format!("{CSRF_COOKIE}={token}; Path=/; SameSite=Lax");
+            if state.secure {
+                cookie.push_str("; Secure");
+            }
             if let Ok(v) = HeaderValue::from_str(&cookie) {
                 response.headers_mut().insert(SET_COOKIE, v);
             }
@@ -177,13 +537,7 @@ async fn csrf_middleware(req: Request, next: Next) -> Result<Response, Infallibl
         return Ok(response);
     }
 
-    // Write methods: cookie and (header OR form field) must match.
-    //
-    // Header is the canonical path for JS clients that can set custom
-    // headers. HTML forms can't set those, so we also peek into a
-    // urlencoded body for `csrf_token` (or `__csrf`). The peek
-    // buffers the entire body up to MAX_FORM_BODY then rebuilds the
-    // request so the downstream handler still sees a complete body.
+    // Write methods: cookie and (header OR form field) must validate.
     let header_token = req
         .headers()
         .get(CSRF_HEADER)
@@ -192,11 +546,11 @@ async fn csrf_middleware(req: Request, next: Next) -> Result<Response, Infallibl
 
     if let Some(c) = cookie_token.as_ref() {
         if let Some(h) = header_token.as_ref() {
-            if tokens_match(c, h) {
+            if csrf_valid(&state, c, h, session_value.as_deref()) {
                 return Ok(next.run(req).await);
             }
         }
-        // Try the form-field path.
+        // Form-field path: peek the urlencoded body, then rebuild the request.
         let content_type = req
             .headers()
             .get(http::header::CONTENT_TYPE)
@@ -210,9 +564,8 @@ async fn csrf_middleware(req: Request, next: Next) -> Result<Response, Infallibl
                 Ok(b) => b,
                 Err(_) => return Ok(forbidden()),
             };
-            let submitted = form_field_token(&bytes);
-            if let Some(s) = submitted {
-                if tokens_match(&cookie_owned, &s) {
+            if let Some(s) = form_field_token(&bytes) {
+                if csrf_valid(&state, &cookie_owned, &s, session_value.as_deref()) {
                     let req = Request::from_parts(parts, Body::from(bytes));
                     return Ok(next.run(req).await);
                 }
@@ -223,6 +576,14 @@ async fn csrf_middleware(req: Request, next: Next) -> Result<Response, Infallibl
     Ok(forbidden())
 }
 
+/// Strip the `Server` response header (used when `hide_server_header` is set
+/// and no explicit value was given).
+async fn strip_server_header(req: Request, next: Next) -> Result<Response, Infallible> {
+    let mut response = next.run(req).await;
+    response.headers_mut().remove(SERVER);
+    Ok(response)
+}
+
 fn forbidden() -> Response {
     let body = Body::from("CSRF verification failed");
     Response::builder()
@@ -231,9 +592,7 @@ fn forbidden() -> Response {
         .expect("static response")
 }
 
-/// Scan a urlencoded form body for any of the accepted CSRF field
-/// names. Plain string scan — we avoid pulling in a full
-/// query-string parser for one field.
+/// Scan a urlencoded form body for any of the accepted CSRF field names.
 fn form_field_token(body: &[u8]) -> Option<String> {
     let s = std::str::from_utf8(body).ok()?;
     for part in s.split('&') {
@@ -241,25 +600,17 @@ fn form_field_token(body: &[u8]) -> Option<String> {
         let key = iter.next()?;
         let val = iter.next().unwrap_or("");
         if CSRF_FORM_FIELDS.contains(&key) {
-            // urlencoded forms percent-encode + use `+` for spaces.
-            // The token is hex though, so neither character appears
-            // and a no-op decode is fine for the common case. Fall
-            // back to identity if `urlencoding` isn't available.
-            let decoded = val.replace('+', " ");
-            // No real percent-decoding library used here on purpose;
-            // tokens are hex (no special chars) so the raw value
-            // matches the cookie. Future-proof when token format
-            // changes by routing through a proper decoder.
-            return Some(decoded);
+            // Tokens are hex (signed tokens add a `.` + hex sig — still no
+            // urlencoded-special chars), so `+`→space is the only decode
+            // needed for the common case.
+            return Some(val.replace('+', " "));
         }
     }
     None
 }
 
-/// Read the current CSRF token from the request's cookie header.
-/// Public so handlers that render HTML forms can embed it as a
-/// hidden `csrf_token` input — the form POST is then validated by
-/// the same middleware path JS clients hit with the header.
+/// Read the current CSRF token from the request's cookie header. Public so
+/// handlers that render HTML forms can embed it as a hidden `csrf_token` input.
 pub fn current_csrf_token(headers: &http::HeaderMap) -> Option<String> {
     headers
         .get(COOKIE)
@@ -267,22 +618,134 @@ pub fn current_csrf_token(headers: &http::HeaderMap) -> Option<String> {
         .and_then(|h| cookie_value(h, CSRF_COOKIE).map(str::to_string))
 }
 
-/// Constant-time string equality. Short-circuit `==` on `String` is
-/// a timing side-channel — successive equal-prefix bytes take longer
-/// to fail than mismatched-first-byte comparisons, leaking
-/// prefix-match progress to an attacker who can measure latency.
+/// Read the CSRF token off the request cookie, or mint a fresh one. Returns the
+/// token to embed in a form and, when freshly minted, the `Set-Cookie` value the
+/// handler must attach to its response so the next request carries it.
 ///
-/// CSRF tokens aren't credentials so the exploitability bar is high
-/// (you'd need a chosen-token timing oracle, which is rare in real
-/// deployments), but constant-time comparison costs nothing and
-/// closes the gap unconditionally. Per OWASP's "Use Constant-Time
-/// String Comparison" rule applied to all security tokens.
+/// For server-rendered form views that need a token *before* the middleware has
+/// minted one (first visit). The middleware defers to a cookie set this way, so
+/// the rendered token and the cookie stay in sync. Mints a raw (unsigned)
+/// token, matching the default; signed-mode coordination is tracked in
+/// `bugs/gaps2.md` #26.
+pub fn ensure_csrf_cookie(headers: &http::HeaderMap) -> (String, Option<String>) {
+    if let Some(token) = current_csrf_token(headers) {
+        return (token, None);
+    }
+    let token = generate_token();
+    let cookie = format!("{CSRF_COOKIE}={token}; Path=/; SameSite=Lax");
+    (token, Some(cookie))
+}
+
+/// True when `response` already carries a `Set-Cookie` for the CSRF cookie.
+fn response_sets_csrf_cookie(response: &Response) -> bool {
+    let needle = format!("{CSRF_COOKIE}=");
+    response
+        .headers()
+        .get_all(SET_COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .any(|v| v.starts_with(&needle))
+}
+
+/// Constant-time string equality. Short-circuit `==` on `String` is a timing
+/// side-channel; `ct_eq` closes it. Per OWASP's "Use Constant-Time String
+/// Comparison" rule for security tokens.
 fn tokens_match(a: &str, b: &str) -> bool {
     use subtle::ConstantTimeEq;
-    // Length mismatch fails in constant time too — `ct_eq` on
-    // different-length slices short-circuits to a 0 mask before
-    // doing the byte loop, so the timing leak is bounded to "the
-    // lengths differ" which is information an attacker already has
-    // (they pick the header value).
     a.as_bytes().ct_eq(b.as_bytes()).into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn signed_state(secret: &str, session_cookie: Option<&str>) -> CsrfState {
+        CsrfState {
+            secure: false,
+            signed: true,
+            secret: Some(secret.to_string()),
+            session_cookie: session_cookie.map(str::to_string),
+            exempt_paths: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn signing_is_deterministic_and_key_dependent() {
+        assert_eq!(sign("k", "abc", None), sign("k", "abc", None));
+        assert_ne!(sign("k1", "abc", None), sign("k2", "abc", None));
+        assert_ne!(sign("k", "abc", None), sign("k", "abc", Some("sess")));
+    }
+
+    #[test]
+    fn signed_token_round_trips_and_rejects_forgery() {
+        let st = signed_state("app-secret", None);
+        let token = mint_token(&st, None);
+        // Minted token is `<raw>.<sig>` and validates as a double-submit pair.
+        assert!(token.contains('.'));
+        assert!(csrf_valid(&st, &token, &token, None));
+        // An unsigned token (attacker-planted, no valid signature) is rejected
+        // even though it double-submits against itself.
+        let forged = generate_token();
+        assert!(!csrf_valid(&st, &forged, &forged, None));
+        // A token signed under a different key is rejected.
+        let other = signed_state("different-secret", None);
+        let other_token = mint_token(&other, None);
+        assert!(!csrf_valid(&st, &other_token, &other_token, None));
+    }
+
+    #[test]
+    fn session_binding_ties_token_to_session_value() {
+        let st = signed_state("app-secret", Some("umbra_session"));
+        let token = mint_token(&st, Some("sess-A"));
+        assert!(csrf_valid(&st, &token, &token, Some("sess-A")));
+        // Same token under a different session value no longer validates.
+        assert!(!csrf_valid(&st, &token, &token, Some("sess-B")));
+    }
+
+    #[test]
+    fn unsigned_mode_is_plain_double_submit() {
+        let st = CsrfState {
+            secure: false,
+            signed: false,
+            secret: None,
+            session_cookie: None,
+            exempt_paths: Vec::new(),
+        };
+        let tok = generate_token();
+        assert!(csrf_valid(&st, &tok, &tok, None));
+        assert!(!csrf_valid(&st, &tok, "different", None));
+    }
+
+    #[test]
+    fn exempt_path_matching_is_prefix_based() {
+        let st = CsrfState {
+            secure: false,
+            signed: false,
+            secret: None,
+            session_cookie: None,
+            exempt_paths: vec!["/api".to_string()],
+        };
+        assert!(st.is_exempt("/api"));
+        assert!(st.is_exempt("/api/customer/1"));
+        assert!(!st.is_exempt("/admin"));
+        assert!(!st.is_exempt("/contact"));
+    }
+
+    #[test]
+    fn hsts_value_reflects_flags() {
+        let cfg = SecurityConfig {
+            hsts_max_age: 100,
+            hsts_include_subdomains: true,
+            hsts_preload: true,
+            ..Default::default()
+        };
+        assert_eq!(cfg.hsts_value(), "max-age=100; includeSubDomains; preload");
+        let bare = SecurityConfig {
+            hsts_max_age: 100,
+            hsts_include_subdomains: false,
+            hsts_preload: false,
+            ..Default::default()
+        };
+        assert_eq!(bare.hsts_value(), "max-age=100");
+    }
 }
