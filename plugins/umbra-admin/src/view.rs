@@ -722,6 +722,18 @@ mod tests {
         assert_eq!(input_kind(&c), "textarea");
     }
 
+    /// A nullable `Option<String>` (nullable Text) with a widget hint
+    /// still resolves to the editor kind — nullability is not part of
+    /// the widget gate. Mirrors `ShowcaseEntry.long_content`.
+    #[test]
+    fn widget_applies_to_nullable_text_field() {
+        let mut c = col("long_content", false, false, false);
+        c.ty = SqlType::Text;
+        c.nullable = true;
+        c.widget = Some("markdown".to_string());
+        assert_eq!(input_kind(&c), "markdown");
+    }
+
     /// `widget = "code"` selects the CodeMirror editor kind — on a JSON
     /// column (the prime case) and on a plain String column alike.
     #[test]
