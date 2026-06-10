@@ -592,9 +592,26 @@ pub struct Plugin {
 
 The filter renders CommonMark + GitHub-flavored extensions (tables, strikethrough, task lists, footnotes), then **sanitizes** the output: `<script>`, inline event handlers (`onerror=`, `onclick=`), and `javascript:` URLs are stripped, so user-submitted Markdown can't smuggle XSS into a page. The result is a safe string, so template autoescaping leaves the generated tags intact. It's a plain template filter — reusable everywhere, in the admin and your own end-user templates alike; nothing is admin-specific.
 
+In the admin, a `markdown` field mounts a full editor inline on the create / edit form — [EasyMDE](https://github.com/Ionaru/easy-markdown-editor) with a toolbar and live side-by-side preview. The editor is lazy-loaded (the library only downloads on a page that actually has a markdown field) and degrades to a plain, usable textarea if JavaScript is off — the stored value is Markdown either way.
+
 <Callout type="info">
-The column stays plain `TEXT` — `widget` is a rendering hint, not a data type. With no enhancement JavaScript the admin editor degrades to a tall textarea, which is fully usable; the `data-widget="markdown"` attribute is the hook a future split-pane editor mounts on. Syntax-highlighted code blocks and a live preview pane are tracked as follow-ups.
+The column stays plain `TEXT` — `widget` is a rendering hint, not a data type. Syntax-highlighted code blocks in the rendered output are a tracked follow-up.
 </Callout>
+
+### The `rte` widget — rich text → HTML
+
+`#[umbra(widget = "rte")]` mounts a [Quill](https://quilljs.com) rich-text editor instead. Unlike `markdown`, the `rte` field **stores HTML**, so render it with the `| sanitize` filter (Quill's HTML, cleaned to a safe allowlist — the display companion to `| markdown`):
+
+```rust
+#[umbra(widget = "rte", help = "Rich text.")]
+pub announcement: String,   // stores HTML
+```
+
+```html
+<div class="prose">{{ row.announcement | sanitize }}</div>
+```
+
+Always render stored HTML through `| sanitize` (never `| safe`): a value written via the REST API bypasses the editor, so the page is only safe if the display path cleans it. Prefer `markdown` when you can — Markdown source is smaller, diffable, and portable; reach for `rte` when non-technical editors need a Word-like surface.
 
 ## See also
 
