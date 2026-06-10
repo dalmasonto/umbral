@@ -95,6 +95,25 @@ let summary = Post::objects()
 
 ORDER BY / LIMIT / OFFSET are intentionally dropped on the aggregate paths.
 
+## Related counts: `.annotate_count("relation")`
+
+Django's `Post.objects.filter(...).annotate(n=Count("comments"))` — fetch every matching row together with the count of a reverse-FK relation, in **one query**. The relation is the same `ReverseSet` name `prefetch_related` accepts (`#[umbra(reverse_fk = "...")]` on the model):
+
+```rust
+let rows: Vec<(Plugin, i64)> = Plugin::objects()
+    .filter(plugin::MODERATION.eq("approved"))
+    .annotate_count("comment_set")
+    .await?;
+
+for (plugin, comment_count) in rows {
+    println!("{} has {comment_count} notes", plugin.crate_name);
+}
+```
+
+The ORM renders a correlated `(SELECT COUNT(*) FROM child WHERE child.fk = parent.pk)` subquery aliased onto the parent SELECT — the typed row decode is untouched and the counts arrive with the rows. Never write a `count()` per fetched row; that's the N+1 this terminal exists to forbid. Parents with zero children report `0`. Composes with `.filter` / `.order_by` / `.limit` and the parent's soft-delete auto-filter.
+
+v1 caveats: child rows are counted unconditionally — a child-side predicate (Django's `Count(..., filter=Q(...))`) and child soft-delete awareness are tracked follow-ups.
+
 ## Pitfalls
 
 **Empty-set SUM is NULL, not 0.** Dashboards that display `summary["total"]` should treat the JSON `null` as zero explicitly. `COUNT(*)` is always an integer, never NULL — use it when you need an unconditional integer return.

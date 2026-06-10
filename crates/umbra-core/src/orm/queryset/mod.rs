@@ -1988,6 +1988,110 @@ impl<T: Model> QuerySet<T> {
         }
     }
 
+    /// Django's `annotate(n=Count("relation"))` — fetch every matching
+    /// row together with the COUNT of a reverse-FK relation, in ONE
+    /// query. Each parent row carries a correlated
+    /// `(SELECT COUNT(*) FROM <child> WHERE <child>.<fk> = <parent>.<pk>)`
+    /// subquery, so the per-row counts arrive with the rows — never a
+    /// count query per row (the N+1 this method exists to forbid).
+    ///
+    /// `field` names a `ReverseSet` relation declared on the model
+    /// (`#[umbra(reverse_fk = "...")]`), the same name
+    /// `prefetch_related` accepts:
+    ///
+    /// ```rust,ignore
+    /// let rows: Vec<(Plugin, i64)> = Plugin::objects()
+    ///     .filter(plugin::MODERATION.eq("approved"))
+    ///     .annotate_count("comment_set")
+    ///     .await?;
+    /// ```
+    ///
+    /// Composes with `.filter` / `.order_by` / `.limit` and the
+    /// parent's soft-delete auto-filter. Parents with zero children
+    /// report `0` (LEFT-JOIN-miss semantics). v1 caveats: the child
+    /// rows are counted unconditionally — a child-side predicate
+    /// (Django's `Count(..., filter=Q(...))`) and child soft-delete
+    /// awareness (blocked on ModelMeta carrying the flag, gaps2 #35)
+    /// are follow-ups.
+    pub async fn annotate_count(self, field: &str) -> Result<Vec<(T, i64)>, sqlx::Error>
+    where
+        T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
+            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
+    {
+        const COUNT_ALIAS: &str = "__umbra_annotate_count";
+        let spec = T::REVERSE_FK_RELATIONS
+            .iter()
+            .find(|r| r.field_name == field)
+            .ok_or_else(|| {
+                sqlx::Error::Protocol(format!(
+                    "umbra::orm::annotate_count: `{field}` is not a reverse-FK relation on `{}` — declared relations: [{}]",
+                    T::NAME,
+                    T::REVERSE_FK_RELATIONS
+                        .iter()
+                        .map(|r| r.field_name)
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                ))
+            })?;
+        let pk = T::FIELDS.iter().find(|f| f.primary_key).ok_or_else(|| {
+            sqlx::Error::Protocol(format!(
+                "umbra::orm::annotate_count: model `{}` has no primary key",
+                T::NAME
+            ))
+        })?;
+
+        // Correlated scalar subquery against the child table. The
+        // outer query's column list stays exactly `T::FIELDS`, so the
+        // typed FromRow decode is untouched; the count rides along as
+        // one extra aliased column.
+        let count_sub = sea_query::Query::select()
+            .expr(sea_query::Expr::col(sea_query::Asterisk).count())
+            .from(Alias::new(spec.target_table))
+            .and_where(
+                sea_query::Expr::col((Alias::new(spec.target_table), Alias::new(spec.fk_column)))
+                    .equals((Alias::new(T::TABLE), Alias::new(pk.name))),
+            )
+            .to_owned();
+        let count_expr = sea_query::SimpleExpr::SubQuery(
+            None,
+            Box::new(sea_query::SubQueryStatement::SelectStatement(count_sub)),
+        );
+
+        let pool = resolve_pool::<T>(self.explicit_pool.clone());
+        let backend = pool.backend_name();
+        let mut q = self.build_query_for(backend);
+        q.expr_as(count_expr, Alias::new(COUNT_ALIAS));
+
+        match pool {
+            DbPool::Sqlite(pool) => {
+                let (sql, vals) = q.build_sqlx(SqliteQueryBuilder);
+                let rows = sqlx::query_with::<sqlx::Sqlite, _>(&sql, vals)
+                    .fetch_all(&pool)
+                    .await?;
+                let mut out = Vec::with_capacity(rows.len());
+                for row in &rows {
+                    let t = <T as sqlx::FromRow<_>>::from_row(row)?;
+                    let n: i64 = sqlx::Row::try_get(row, COUNT_ALIAS)?;
+                    out.push((t, n));
+                }
+                Ok(out)
+            }
+            DbPool::Postgres(pool) => {
+                let (sql, vals) = q.build_sqlx(PostgresQueryBuilder);
+                let rows = sqlx::query_with::<sqlx::Postgres, _>(&sql, vals)
+                    .fetch_all(&pool)
+                    .await?;
+                let mut out = Vec::with_capacity(rows.len());
+                for row in &rows {
+                    let t = <T as sqlx::FromRow<_>>::from_row(row)?;
+                    let n: i64 = sqlx::Row::try_get(row, COUNT_ALIAS)?;
+                    out.push((t, n));
+                }
+                Ok(out)
+            }
+        }
+    }
+
     /// `DELETE FROM table WHERE <predicates>`. Returns the number of
     /// rows deleted. With no `.filter` calls, deletes every row.
     ///
@@ -2648,6 +2752,15 @@ impl<T: Model> Manager<T> {
     /// See `QuerySet::count`.
     pub async fn count(&self) -> Result<i64, sqlx::Error> {
         self.queryset().count().await
+    }
+
+    /// See [`QuerySet::annotate_count`].
+    pub async fn annotate_count(&self, field: &str) -> Result<Vec<(T, i64)>, sqlx::Error>
+    where
+        T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
+            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
+    {
+        self.queryset().annotate_count(field).await
     }
 
     /// See [`QuerySet::values`].
