@@ -236,31 +236,29 @@ struct FilterFacet {
 pub(crate) async fn index(
     State(state): State<AdminState>,
     headers: HeaderMap,
-    Query(params): Query<HashMap<String, String>>,
+    // `params` is unused now that the `?dashboard=1` opt-out is gone
+    // (gaps2 #33) — we always render the dashboard from `/admin/`.
+    // Keep the extractor so the route still accepts the query string;
+    // the underscore is the framework convention for "intentionally
+    // unused".
+    Query(_params): Query<HashMap<String, String>>,
 ) -> Response {
     let user = match require_staff(&headers, "/admin/").await {
         Ok(u) => u,
         Err(r) => return r,
     };
-    // gaps2 #11 round 2 — when the user lands on `/admin/` with no
-    // explicit "dashboard" intent, restore the last changelist they
-    // were working in. Two opt-outs:
-    //   - `?dashboard=1` — explicit "I want the dashboard, not the
-    //     restore." Useful from the sidebar's home link.
-    //   - HTMX requests — the dashboard's own widget hx-gets land
-    //     here through the same handler; redirecting them away from
-    //     the dashboard would break the dashboard render itself.
-    let wants_dashboard = params.contains_key("dashboard");
-    if !wants_dashboard && !is_htmx(&headers) {
-        if let Ok(Some(last)) = crate::models::get_last_path(user.id).await {
-            // Defensive: ignore a saved `last_path` that points back
-            // at the index itself (would create a redirect loop).
-            let admin_root = format!("{}/", crate::branding::current().base_path);
-            if last != admin_root && last != crate::branding::current().base_path {
-                return Redirect::to(&last).into_response();
-            }
-        }
-    }
+    // The admin index handler used to redirect `/admin/` to the
+    // user's `last_path` (gaps2 #11 round 2) — a "where I left
+    // off" affordance. That was a footgun: once `last_path` was
+    // set to a changelist, there was no UI way to get back to
+    // the dashboard short of `?dashboard=1` or a direct SQL
+    // UPDATE against `admin_user_pref.preferences.last_path`.
+    // The `last_path` writer is still in the changelist handler
+    // (it's a cheap upsert with no behavioural cost), but the
+    // index handler no longer reads it. Always render the
+    // dashboard. Tracked as gaps2 #33; the proper fix lives in
+    // a config flag on `AdminPlugin` (default ON, opt out for
+    // power users who want the restore).
     let apps = sidebar_apps(&state, &user);
 
     // Sectioned widget list — each entry carries its own title +
