@@ -53,6 +53,8 @@ fn scaffold_project_cargo_toml_references_all_plugins() {
         "umbra-admin",
         "umbra-rest",
         "umbra-openapi",
+        "umbra-security",
+        "sqlx",
     ] {
         assert!(
             cargo.contains(dep),
@@ -88,8 +90,8 @@ fn scaffold_project_cargo_toml_lists_every_builtin_plugin_at_least_commented() {
         );
     }
 
-    // All ten should appear as commented-out lines (each on its own
-    // line starting with `# umbra-…`). Pick three at random as
+    // Optional built-ins should appear as commented-out lines (each on
+    // its own line starting with `# umbra-…`). Pick three at random as
     // sentinels — full coverage is the loop above.
     for plugin in &["umbra-tasks", "umbra-playground", "umbra-cache"] {
         assert!(
@@ -114,12 +116,15 @@ fn scaffold_project_main_rs_references_all_plugins() {
         "AdminPlugin",
         "RestPlugin",
         "OpenApiPlugin",
+        "SecurityPlugin",
+        "SecurityConfig",
+        "csrf_exempt_paths",
         "login_required_html",
         "LoggedIn",
         "ForeignKey",
         "umbra::transaction",
         "ResourceConfig",
-        "enable_filters",
+        "ResourceConfig::new(\"post\")",
         "umbra_cli::dispatch(app).await",
         "#[tokio::main]",
         "auto_migrate",

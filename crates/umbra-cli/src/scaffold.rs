@@ -284,6 +284,7 @@ umbra-sessions = {{ git = "https://github.com/dalmasonto/umbra" }}
 umbra-admin    = {{ git = "https://github.com/dalmasonto/umbra" }}
 umbra-rest     = {{ git = "https://github.com/dalmasonto/umbra" }}
 umbra-openapi  = {{ git = "https://github.com/dalmasonto/umbra" }}
+umbra-security = {{ git = "https://github.com/dalmasonto/umbra" }}
 
 # ----- Available built-ins (uncomment + register in main.rs to enable) -----
 # umbra-playground   = {{ git = "https://github.com/dalmasonto/umbra" }}  # Interactive API playground UI (think mini-Postman) at /playground/.
@@ -295,13 +296,13 @@ umbra-openapi  = {{ git = "https://github.com/dalmasonto/umbra" }}
 # umbra-media        = {{ git = "https://github.com/dalmasonto/umbra" }}  # Uploaded-file storage abstraction (local FS + S3).
 # umbra-signals      = {{ git = "https://github.com/dalmasonto/umbra" }}  # Pre/post save/delete signal dispatch.
 # umbra-static       = {{ git = "https://github.com/dalmasonto/umbra" }}  # Static-file serving for prod (whitenoise-equivalent).
-# umbra-security     = {{ git = "https://github.com/dalmasonto/umbra" }}  # CSRF + clickjacking + HSTS + security headers middleware.
 
 # ----- Third-party + framework runtime deps --------------------------------
 tokio = {{ version = "1", features = ["macros", "rt-multi-thread"] }}
 tracing-subscriber = {{ version = "0.3", features = ["env-filter"] }}
 serde = {{ version = "1", features = ["derive"] }}
 chrono = {{ version = "0.4", features = ["serde"] }}
+sqlx = {{ version = "0.8", features = ["macros", "sqlite", "postgres", "chrono", "runtime-tokio"] }}
 
 # Once you `umbra startapp <plugin>` or `umbra startplugin <plugin>`, add
 # the plugin crate here:
@@ -328,7 +329,7 @@ chrono = {{ version = "0.4", features = ["serde"] }}
 //!
 //! This file is a walking tour of the umbra framework. Every surface is
 //! wired in here: models + FK, migrations, auth, sessions, login_required,
-//! REST with filters, admin, transactions, and custom error pages.
+//! REST with filters, admin, security, transactions, and custom error pages.
 //!
 //! Run with:
 //!   cargo run -- migrate   # apply pending migrations (run once after checkout)
@@ -343,11 +344,12 @@ use umbra::prelude::*;
 use umbra::web::{{Html, Json, StatusCode, SlashRedirect}};
 use umbra::templates::context;
 use umbra::migrate::MigrateError;
-use umbra_auth::{{AuthPlugin, AuthUser, login_required_html, login_required}};
+use umbra_auth::{{AuthPlugin, AuthUser, login_required_html}};
 use umbra_sessions::SessionsPlugin;
 use umbra_admin::AdminPlugin;
 use umbra_rest::{{RestPlugin, ResourceConfig}};
 use umbra_openapi::OpenApiPlugin;
+use umbra_security::{{SecurityConfig, SecurityPlugin}};
 
 // ---------------------------------------------------------------------------
 // Models
@@ -370,7 +372,7 @@ pub struct Post {{
 // ---------------------------------------------------------------------------
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {{
+async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {{
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -402,14 +404,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {{
         // GET /api/post/?published=true works out of the box.
         .plugin(
             RestPlugin::default()
-                .resource(
-                    ResourceConfig::new("post")
-                        .enable_filters(),
-                ),
+                .resource(ResourceConfig::new("post")),
         )
         // OpenAPI: Swagger UI at /openapi/ (override with
         // `.at("/api/docs")` if you prefer a different mount).
         .plugin(OpenApiPlugin::new())
+        // Security: CSRF + hardening headers across the app. `/api`
+        // is exempt so token-authenticated JSON clients can POST
+        // without a browser form CSRF cookie.
+        .plugin(SecurityPlugin::with_config(SecurityConfig {{
+            csrf_exempt_paths: vec!["/api".to_string()],
+            ..Default::default()
+        }}))
 
         // --- Templates -------------------------------------------------------
         .templates_dir("templates")
@@ -503,9 +509,10 @@ async fn dashboard(
 ) -> Result<Html<String>, (StatusCode, String)> {{
     // Demonstrates a transaction: atomically bump a hypothetical view
     // counter and fetch the user's post list in the same transaction.
+    let user_id = user.id;
     let my_posts = umbra::transaction(|tx| Box::pin(async move {{
         Post::objects()
-            .filter(post::AUTHOR.eq(user.id()))
+            .filter(post::AUTHOR.eq(user_id))
             .on_tx(tx)
             .fetch()
             .await
@@ -530,7 +537,7 @@ fn internal_error<E: std::fmt::Display>(err: E) -> (StatusCode, String) {{
 }}
 
 /// Run `makemigrations` + `migrate` on boot. Demo-only convenience.
-async fn auto_migrate() -> Result<(), Box<dyn std::error::Error>> {{
+async fn auto_migrate() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {{
     match umbra::migrate::make().await {{
         Ok(paths) => {{
             for path in paths {{
@@ -627,6 +634,7 @@ A blog-style demo generated by `umbra startproject {name}`.
 | `RestPlugin` | JSON CRUD at `/api/post/` with query-string filtering (`?published=true`) |
 | `AdminPlugin` | Auto CRUD UI at `/admin/` |
 | `OpenApiPlugin` | Swagger UI at `/openapi/` |
+| `SecurityPlugin` | CSRF middleware + hardening headers, with `/api` exempt for token clients |
 
 ## Running
 
