@@ -138,7 +138,9 @@ static ENGINE: OnceLock<Environment<'static>> = OnceLock::new();
 fn register_img_filter(env: &mut Environment<'static>) {
     env.add_filter(
         "img",
-        |url: String, kwargs: minijinja::value::Kwargs| -> Result<minijinja::Value, minijinja::Error> {
+        |url: String,
+         kwargs: minijinja::value::Kwargs|
+         -> Result<minijinja::Value, minijinja::Error> {
             let alt: String = kwargs.get::<Option<String>>("alt")?.unwrap_or_default();
             let width: Option<i64> = kwargs.get("width")?;
             let height: Option<i64> = kwargs.get("height")?;

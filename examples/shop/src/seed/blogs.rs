@@ -12,14 +12,46 @@ pub async fn blogs() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if Tag::objects().count().await? == 0 {
         Tag::objects()
             .bulk_create(vec![
-                Tag { id: 0, name: "Rust".into(), slug: "rust".into() },
-                Tag { id: 0, name: "Web Development".into(), slug: "web-development".into() },
-                Tag { id: 0, name: "Database".into(), slug: "database".into() },
-                Tag { id: 0, name: "Performance".into(), slug: "performance".into() },
-                Tag { id: 0, name: "Architecture".into(), slug: "architecture".into() },
-                Tag { id: 0, name: "API Design".into(), slug: "api-design".into() },
-                Tag { id: 0, name: "Security".into(), slug: "security".into() },
-                Tag { id: 0, name: "DevOps".into(), slug: "devops".into() },
+                Tag {
+                    id: 0,
+                    name: "Rust".into(),
+                    slug: "rust".into(),
+                },
+                Tag {
+                    id: 0,
+                    name: "Web Development".into(),
+                    slug: "web-development".into(),
+                },
+                Tag {
+                    id: 0,
+                    name: "Database".into(),
+                    slug: "database".into(),
+                },
+                Tag {
+                    id: 0,
+                    name: "Performance".into(),
+                    slug: "performance".into(),
+                },
+                Tag {
+                    id: 0,
+                    name: "Architecture".into(),
+                    slug: "architecture".into(),
+                },
+                Tag {
+                    id: 0,
+                    name: "API Design".into(),
+                    slug: "api-design".into(),
+                },
+                Tag {
+                    id: 0,
+                    name: "Security".into(),
+                    slug: "security".into(),
+                },
+                Tag {
+                    id: 0,
+                    name: "DevOps".into(),
+                    slug: "devops".into(),
+                },
             ])
             .await?;
     }
@@ -30,26 +62,106 @@ pub async fn blogs() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let category = ForeignKey::new(1); // gadgets
 
         let posts: Vec<Post> = [
-            (1, "building-high-performance-apis-in-rust", "Building High-Performance APIs in Rust"),
-            (2, "understanding-database-indexes", "Understanding Database Indexes: A Deep Dive"),
-            (3, "async-rust-patterns", "Async Rust Patterns for Production Systems"),
-            (4, "zero-copy-serialization", "Zero-Copy Serialization Techniques"),
-            (5, "web-framework-design-principles", "Web Framework Design Principles"),
-            (6, "memory-management-in-systems-programming", "Memory Management in Systems Programming"),
-            (7, "scaling-sqlite-to-millions-of-rows", "Scaling SQLite to Millions of Rows"),
-            (8, "postgres-query-optimization", "PostgreSQL Query Optimization Strategies"),
-            (9, "rust-ownership-model-explained", "The Rust Ownership Model Explained"),
-            (10, "building-django-like-frameworks", "Building Django-Like Frameworks in Rust"),
-            (11, "concurrency-patterns-in-modern-web-servers", "Concurrency Patterns in Modern Web Servers"),
-            (12, "type-safe-database-migrations", "Type-Safe Database Migrations"),
-            (13, "rest-api-versioning-strategies", "REST API Versioning Strategies"),
-            (14, "caching-strategies-for-web-applications", "Caching Strategies for Web Applications"),
-            (15, "securing-web-applications-owasp-top-ten", "Securing Web Applications: OWASP Top Ten"),
-            (16, "microservices-vs-monoliths", "Microservices vs Monoliths: A Practical Guide"),
-            (17, "real-time-data-processing", "Real-Time Data Processing with Rust"),
-            (18, "error-handling-in-distributed-systems", "Error Handling in Distributed Systems"),
-            (19, "load-testing-and-benchmarking", "Load Testing and Benchmarking Web APIs"),
-            (20, "future-of-web-development", "The Future of Web Development: 2026 and Beyond"),
+            (
+                1,
+                "building-high-performance-apis-in-rust",
+                "Building High-Performance APIs in Rust",
+            ),
+            (
+                2,
+                "understanding-database-indexes",
+                "Understanding Database Indexes: A Deep Dive",
+            ),
+            (
+                3,
+                "async-rust-patterns",
+                "Async Rust Patterns for Production Systems",
+            ),
+            (
+                4,
+                "zero-copy-serialization",
+                "Zero-Copy Serialization Techniques",
+            ),
+            (
+                5,
+                "web-framework-design-principles",
+                "Web Framework Design Principles",
+            ),
+            (
+                6,
+                "memory-management-in-systems-programming",
+                "Memory Management in Systems Programming",
+            ),
+            (
+                7,
+                "scaling-sqlite-to-millions-of-rows",
+                "Scaling SQLite to Millions of Rows",
+            ),
+            (
+                8,
+                "postgres-query-optimization",
+                "PostgreSQL Query Optimization Strategies",
+            ),
+            (
+                9,
+                "rust-ownership-model-explained",
+                "The Rust Ownership Model Explained",
+            ),
+            (
+                10,
+                "building-django-like-frameworks",
+                "Building Django-Like Frameworks in Rust",
+            ),
+            (
+                11,
+                "concurrency-patterns-in-modern-web-servers",
+                "Concurrency Patterns in Modern Web Servers",
+            ),
+            (
+                12,
+                "type-safe-database-migrations",
+                "Type-Safe Database Migrations",
+            ),
+            (
+                13,
+                "rest-api-versioning-strategies",
+                "REST API Versioning Strategies",
+            ),
+            (
+                14,
+                "caching-strategies-for-web-applications",
+                "Caching Strategies for Web Applications",
+            ),
+            (
+                15,
+                "securing-web-applications-owasp-top-ten",
+                "Securing Web Applications: OWASP Top Ten",
+            ),
+            (
+                16,
+                "microservices-vs-monoliths",
+                "Microservices vs Monoliths: A Practical Guide",
+            ),
+            (
+                17,
+                "real-time-data-processing",
+                "Real-Time Data Processing with Rust",
+            ),
+            (
+                18,
+                "error-handling-in-distributed-systems",
+                "Error Handling in Distributed Systems",
+            ),
+            (
+                19,
+                "load-testing-and-benchmarking",
+                "Load Testing and Benchmarking Web APIs",
+            ),
+            (
+                20,
+                "future-of-web-development",
+                "The Future of Web Development: 2026 and Beyond",
+            ),
         ]
         .iter()
         .map(|(idx, slug, title)| heavy_post(*idx, slug, title, &author, &category, &now))

@@ -130,7 +130,15 @@ pub fn shop_order_status_donut() -> Widget {
                 let label = format!("{:?}", o.status).to_lowercase();
                 *counts.entry(label).or_insert(0.0) += 1.0;
             }
-            let order = ["pending", "paid", "fulfilled", "shipped", "delivered", "cancelled", "refunded"];
+            let order = [
+                "pending",
+                "paid",
+                "fulfilled",
+                "shipped",
+                "delivered",
+                "cancelled",
+                "refunded",
+            ];
             let mut pairs: Vec<(String, f64)> = Vec::new();
             for k in order {
                 if let Some(v) = counts.remove(k) {

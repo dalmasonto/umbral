@@ -14,8 +14,8 @@
 use chrono::Utc;
 use content::models::{Faq, Testimonial};
 use ecommerce::models::{
-    Address, AddressType, Coupon, Currency, Customer, DiscountType, Order, OrderItem,
-    OrderStatus, Payment, PaymentMethod, PaymentStatus, Product, Review, Shipment,
+    Address, AddressType, Coupon, Currency, Customer, DiscountType, Order, OrderItem, OrderStatus,
+    Payment, PaymentMethod, PaymentStatus, Product, Review, Shipment,
 };
 use umbra::prelude::*;
 use umbra_auth::AuthUser;
@@ -146,11 +146,41 @@ pub async fn demo_data() -> Result<(), Box<dyn std::error::Error + Send + Sync>>
         }
 
         let orders_data = [
-            (0_usize, OrderStatus::Pending, PaymentStatus::Pending, PaymentMethod::Card, "PEN-001"),
-            (0, OrderStatus::Paid, PaymentStatus::Captured, PaymentMethod::Mpesa, "PAID-002"),
-            (1, OrderStatus::Shipped, PaymentStatus::Captured, PaymentMethod::Card, "SHIP-003"),
-            (1, OrderStatus::Delivered, PaymentStatus::Captured, PaymentMethod::Paypal, "DLV-004"),
-            (2, OrderStatus::Cancelled, PaymentStatus::Refunded, PaymentMethod::Card, "CANCEL-005"),
+            (
+                0_usize,
+                OrderStatus::Pending,
+                PaymentStatus::Pending,
+                PaymentMethod::Card,
+                "PEN-001",
+            ),
+            (
+                0,
+                OrderStatus::Paid,
+                PaymentStatus::Captured,
+                PaymentMethod::Mpesa,
+                "PAID-002",
+            ),
+            (
+                1,
+                OrderStatus::Shipped,
+                PaymentStatus::Captured,
+                PaymentMethod::Card,
+                "SHIP-003",
+            ),
+            (
+                1,
+                OrderStatus::Delivered,
+                PaymentStatus::Captured,
+                PaymentMethod::Paypal,
+                "DLV-004",
+            ),
+            (
+                2,
+                OrderStatus::Cancelled,
+                PaymentStatus::Refunded,
+                PaymentMethod::Card,
+                "CANCEL-005",
+            ),
         ];
         for (i, (cust_idx, status, pay_status, method, number)) in orders_data.iter().enumerate() {
             let cust = &customers[*cust_idx % customers.len()];

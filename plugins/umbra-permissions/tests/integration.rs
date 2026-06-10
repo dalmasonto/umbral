@@ -463,16 +463,22 @@ async fn add_and_remove_user_to_group_round_trips() {
     // Pre-state: not a member.
     assert!(!membership::is_in_group(user, group.id).await.unwrap());
 
-    membership::add_user_to_group(user, &group).await.expect("add");
+    membership::add_user_to_group(user, &group)
+        .await
+        .expect("add");
     assert!(membership::is_in_group(user, group.id).await.unwrap());
 
     // Idempotent re-add — no error, still a member, no duplicate row.
-    membership::add_user_to_group(user, &group).await.expect("idempotent add");
+    membership::add_user_to_group(user, &group)
+        .await
+        .expect("idempotent add");
     let groups = membership::groups_for_user(user).await.expect("fetch");
     let count = groups.iter().filter(|g| g.id == group.id).count();
     assert_eq!(count, 1, "re-adding must not insert a duplicate row");
 
-    membership::remove_user_from_group(user, &group).await.expect("remove");
+    membership::remove_user_from_group(user, &group)
+        .await
+        .expect("remove");
     assert!(!membership::is_in_group(user, group.id).await.unwrap());
 }
 
@@ -485,7 +491,9 @@ async fn set_user_groups_replaces_full_set() {
     let user = "8002";
 
     // Start with two groups.
-    membership::set_user_groups(user, &[g_a.id, g_b.id]).await.unwrap();
+    membership::set_user_groups(user, &[g_a.id, g_b.id])
+        .await
+        .unwrap();
     let ids: Vec<i64> = membership::groups_for_user(user)
         .await
         .unwrap()
@@ -497,7 +505,9 @@ async fn set_user_groups_replaces_full_set() {
     assert!(!ids.contains(&g_c.id));
 
     // Replace with a different set — A goes, C arrives.
-    membership::set_user_groups(user, &[g_b.id, g_c.id]).await.unwrap();
+    membership::set_user_groups(user, &[g_b.id, g_c.id])
+        .await
+        .unwrap();
     let ids: Vec<i64> = membership::groups_for_user(user)
         .await
         .unwrap()
@@ -533,7 +543,9 @@ async fn grant_and_revoke_user_permission_round_trips() {
             .await
             .unwrap()
     );
-    membership::grant_user_permission(user, &perm).await.expect("grant");
+    membership::grant_user_permission(user, &perm)
+        .await
+        .expect("grant");
     assert!(
         membership::has_direct_user_permission(user, &perm.codename)
             .await
@@ -541,12 +553,19 @@ async fn grant_and_revoke_user_permission_round_trips() {
     );
 
     // grant_user_permission is idempotent.
-    membership::grant_user_permission(user, &perm).await.expect("re-grant ok");
+    membership::grant_user_permission(user, &perm)
+        .await
+        .expect("re-grant ok");
     let direct = membership::direct_permissions_for_user(user).await.unwrap();
-    let count = direct.iter().filter(|p| p.codename == perm.codename).count();
+    let count = direct
+        .iter()
+        .filter(|p| p.codename == perm.codename)
+        .count();
     assert_eq!(count, 1, "re-grant must not duplicate the junction row");
 
-    membership::revoke_user_permission(user, &perm).await.expect("revoke");
+    membership::revoke_user_permission(user, &perm)
+        .await
+        .expect("revoke");
     assert!(
         !membership::has_direct_user_permission(user, &perm.codename)
             .await

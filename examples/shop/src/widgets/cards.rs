@@ -11,9 +11,7 @@
 use ecommerce::models::Customer;
 use umbra_admin::{CardPayload, Span, Widget, WidgetDataFn, WidgetKind, WidgetPayload};
 
-use super::aggregates::{
-    daily_orders_trail, daily_sales_trail, orders_between, sales_between,
-};
+use super::aggregates::{daily_orders_trail, daily_sales_trail, orders_between, sales_between};
 
 pub fn shop_total_sales_widget() -> Widget {
     Widget {

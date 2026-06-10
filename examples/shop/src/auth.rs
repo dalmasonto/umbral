@@ -53,7 +53,11 @@ fn parse_token_header(headers: &HeaderMap) -> Option<&str> {
         .strip_prefix("Token ")
         .or_else(|| raw.strip_prefix("token "))?;
     let trimmed = rest.trim();
-    if trimmed.is_empty() { None } else { Some(trimmed) }
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
 }
 
 #[async_trait]

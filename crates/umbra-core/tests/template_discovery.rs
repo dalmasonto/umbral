@@ -284,8 +284,7 @@ fn none_value_renders_as_empty_string_in_attribute_context() {
     // Optional field set to None — pre-fix this rendered `value="none"`,
     // which the user then had to manually clear before typing.
     let ctx = minijinja::context! { phone => Option::<String>::None };
-    let html =
-        templates::render("none_renders_empty.html", &ctx).expect("render");
+    let html = templates::render("none_renders_empty.html", &ctx).expect("render");
     assert_eq!(
         html, r#"<input value="" type="tel">"#,
         "None should render as empty string, not the literal `none`: {html}",
@@ -297,8 +296,8 @@ fn undefined_value_renders_as_empty_string_in_attribute_context() {
     boot();
     // No `phone` key in the context at all — pre-fix this rendered
     // `value="undefined"` (or crashed depending on strict-undefined).
-    let html = templates::render("none_renders_empty.html", &minijinja::context! {})
-        .expect("render");
+    let html =
+        templates::render("none_renders_empty.html", &minijinja::context! {}).expect("render");
     assert_eq!(
         html, r#"<input value="" type="tel">"#,
         "Undefined should render as empty, not the literal `undefined`: {html}",
@@ -311,8 +310,7 @@ fn explicit_string_values_still_render_unchanged() {
     // Make sure the formatter override didn't break the happy path:
     // an actual `Some("555-1234")` still renders verbatim.
     let ctx = minijinja::context! { phone => "555-1234" };
-    let html =
-        templates::render("none_renders_empty.html", &ctx).expect("render");
+    let html = templates::render("none_renders_empty.html", &ctx).expect("render");
     assert_eq!(html, r#"<input value="555-1234" type="tel">"#);
 }
 
@@ -332,7 +330,10 @@ fn img_filter_minimal_call_emits_perf_attributes_with_empty_alt() {
     // Empty alt is intentional — screen readers treat it as
     // decorative-image; better than the markup not having alt at all
     // (which would cause some readers to read the URL).
-    assert!(html.contains(r#"alt="""#), "minimal call sets alt=\"\": {html}");
+    assert!(
+        html.contains(r#"alt="""#),
+        "minimal call sets alt=\"\": {html}"
+    );
     assert!(
         html.contains(r#"loading="lazy""#),
         "loading=lazy must be on every img: {html}"
@@ -355,8 +356,14 @@ fn img_filter_full_kwargs_flow_through() {
 
     assert!(html.contains(r#"src="/static/p/hero.jpg""#));
     assert!(html.contains(r#"alt="A product""#));
-    assert!(html.contains(r#"width="400""#), "width passed through: {html}");
-    assert!(html.contains(r#"height="300""#), "height passed through: {html}");
+    assert!(
+        html.contains(r#"width="400""#),
+        "width passed through: {html}"
+    );
+    assert!(
+        html.contains(r#"height="300""#),
+        "height passed through: {html}"
+    );
     assert!(
         html.contains(r#"class="rounded-md""#),
         "class passed through: {html}"

@@ -67,8 +67,7 @@ fn render_shell(state: &PlaygroundState) -> String {
     // Plugin::routes() runs in dependency order and the
     // playground depends on the rest plugin which depends on
     // openapi being mounted alongside).
-    let spec_url = umbra::routes::registered_openapi_spec_url()
-        .unwrap_or("/openapi/openapi.json");
+    let spec_url = umbra::routes::registered_openapi_spec_url().unwrap_or("/openapi/openapi.json");
     let spec_url_json = json_escape(spec_url);
     SHELL_HTML
         .replace("__CSS_PATH__", &css)

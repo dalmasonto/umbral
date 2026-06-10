@@ -127,10 +127,7 @@ pub async fn is_in_group(user_id: &str, group_id: i64) -> Result<bool, PermError
 /// Grant `perm` directly to `user_id`. Idempotent (re-granting is a
 /// no-op). For group-mediated grants, add the user to a group whose
 /// `permissions` set carries the perm instead.
-pub async fn grant_user_permission(
-    user_id: &str,
-    perm: &Permission,
-) -> Result<(), PermError> {
+pub async fn grant_user_permission(user_id: &str, perm: &Permission) -> Result<(), PermError> {
     if has_direct_user_permission(user_id, &perm.codename).await? {
         return Ok(());
     }
@@ -148,10 +145,7 @@ pub async fn grant_user_permission(
 /// directly. Group-mediated grants are unaffected — remove the user
 /// from the group OR remove the perm from the group's `permissions`
 /// M2M to revoke those.
-pub async fn revoke_user_permission(
-    user_id: &str,
-    perm: &Permission,
-) -> Result<(), PermError> {
+pub async fn revoke_user_permission(user_id: &str, perm: &Permission) -> Result<(), PermError> {
     UserPermission::objects()
         .filter(
             user_permission::USER_ID.eq(user_id.to_string())
@@ -169,9 +163,7 @@ pub async fn revoke_user_permission(
 /// the full effective set, call [`crate::perm::user_perms`] which
 /// unions direct + group-mediated. One query + one IN-list via
 /// `select_related`.
-pub async fn direct_permissions_for_user(
-    user_id: &str,
-) -> Result<Vec<Permission>, PermError> {
+pub async fn direct_permissions_for_user(user_id: &str) -> Result<Vec<Permission>, PermError> {
     let grants = UserPermission::objects()
         .filter(user_permission::USER_ID.eq(user_id.to_string()))
         .select_related("permission_id")
@@ -186,10 +178,7 @@ pub async fn direct_permissions_for_user(
 /// Lightweight check: does `user_id` hold `codename` as a direct
 /// grant? One query. For "any path" (direct OR via group), use
 /// [`crate::perm::has_perm`].
-pub async fn has_direct_user_permission(
-    user_id: &str,
-    codename: &str,
-) -> Result<bool, PermError> {
+pub async fn has_direct_user_permission(user_id: &str, codename: &str) -> Result<bool, PermError> {
     Ok(UserPermission::objects()
         .filter(
             user_permission::USER_ID.eq(user_id.to_string())
