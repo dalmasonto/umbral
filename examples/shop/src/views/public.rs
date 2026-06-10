@@ -9,7 +9,7 @@ use ecommerce::models::{Brand, Product, Review, brand, product, review};
 use serde::Deserialize;
 use umbra::forms::{Form, FormErrors};
 use umbra::templates::context;
-use umbra::web::{Html, IntoResponse, Path, Query, Redirect, Response, StatusCode};
+use umbra::web::{HeaderMap, Html, IntoResponse, Path, Query, Redirect, Response, StatusCode};
 
 use super::internal_error;
 
@@ -162,19 +162,38 @@ pub async fn faqs() -> Result<Html<String>, (StatusCode, String)> {
     Ok(Html(body))
 }
 
-pub async fn contact(Query(query): Query<ContactQuery>) -> Result<Response, (StatusCode, String)> {
+pub async fn contact(
+    headers: HeaderMap,
+    Query(query): Query<ContactQuery>,
+) -> Result<Response, (StatusCode, String)> {
     let sent = query.sent.as_deref() == Some("1");
-    render_contact_page(
+    // Read the CSRF token (or mint one on first visit) so the form carries it;
+    // the SecurityPlugin middleware validates the matching cookie on POST.
+    let (csrf_token, set_cookie) = umbra_security::ensure_csrf_cookie(&headers);
+    let mut response = render_contact_page(
         sent,
         &ContactMessage::default(),
         serde_json::Map::new(),
         StatusCode::OK,
-    )
+        &csrf_token,
+    )?;
+    if let Some(cookie) = set_cookie {
+        if let Ok(v) = umbra::web::header::HeaderValue::from_str(&cookie) {
+            response
+                .headers_mut()
+                .insert(umbra::web::header::SET_COOKIE, v);
+        }
+    }
+    Ok(response)
 }
 
 pub async fn submit_contact(
+    headers: HeaderMap,
     form: Form<ContactMessage>,
 ) -> Result<Response, (StatusCode, String)> {
+    // The cookie already exists (the GET that rendered this form set it), so a
+    // re-render after a validation error can read the token straight back.
+    let csrf_token = umbra_security::current_csrf_token(&headers).unwrap_or_default();
     // gaps2 #19 follow-up: extractor returned a parsed-and-
     // validated `ContactMessage` directly. On Err the framework
     // now hands back the raw form pairs alongside the errors —
@@ -189,6 +208,7 @@ pub async fn submit_contact(
                 errs.raw_as_json(),
                 ctx_with_form_summary(&errs),
                 StatusCode::UNPROCESSABLE_ENTITY,
+                &csrf_token,
             );
         }
     };
@@ -215,8 +235,9 @@ fn render_contact_page(
     form: &ContactMessage,
     errors: serde_json::Map<String, serde_json::Value>,
     status: StatusCode,
+    csrf_token: &str,
 ) -> Result<Response, (StatusCode, String)> {
-    let body = umbra::templates::render("contact.html", &context!(sent, form, errors))
+    let body = umbra::templates::render("contact.html", &context!(sent, form, errors, csrf_token))
         .map_err(internal_error)?;
     Ok((status, Html(body)).into_response())
 }
@@ -233,8 +254,9 @@ fn render_contact_page_raw(
     form: serde_json::Value,
     errors: serde_json::Map<String, serde_json::Value>,
     status: StatusCode,
+    csrf_token: &str,
 ) -> Result<Response, (StatusCode, String)> {
-    let body = umbra::templates::render("contact.html", &context!(sent, form, errors))
+    let body = umbra::templates::render("contact.html", &context!(sent, form, errors, csrf_token))
         .map_err(internal_error)?;
     Ok((status, Html(body)).into_response())
 }

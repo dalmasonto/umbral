@@ -26,7 +26,7 @@ umbra-permissions  = { path = "../../plugins/umbra-permissions" }
 # umbra-media        = { path = "../../plugins/umbra-media" }
 # umbra-signals      = { path = "../../plugins/umbra-signals" }
 umbra-static       = { path = "../../plugins/umbra-static" }
-# umbra-security     = { path = "../../plugins/umbra-security" }
+umbra-security     = { path = "../../plugins/umbra-security" }
 
 # ----- Third-party + framework runtime deps --------------------------------
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

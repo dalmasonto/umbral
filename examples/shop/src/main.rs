@@ -28,6 +28,7 @@ use std::sync::Arc;
 
 use content::ContentPlugin;
 use ecommerce::EcommercePlugin;
+use umbra::cors::CorsConfig;
 use umbra::migrate::MigrateError;
 use umbra::prelude::*;
 use umbra::web::SlashRedirect;
@@ -40,6 +41,7 @@ use umbra_rest::{
     Authentication, ChainAuthentication, IsAuthenticated, IsStaff, OrPermission,
     PageNumberPagination, ReadOnly, ResourceConfig, RestPlugin,
 };
+use umbra_security::{SecurityConfig, SecurityPlugin};
 use umbra_sessions::SessionsPlugin;
 use umbra_static::StaticPlugin;
 
@@ -190,6 +192,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // wrapper.html template references /static/css/shop.css.
         // Self-hosted Inter woff2 files live alongside the CSS.
         .plugin(StaticPlugin::new("/static", "./static"))
+        // CSRF + hardening headers across the whole app. `/api` is exempt
+        // because the REST surface authenticates by bearer token (no session
+        // cookie), so the double-submit check doesn't apply there. HSTS stays
+        // off for local http dev (flip it on behind a prod profile).
+        .plugin(SecurityPlugin::with_config(SecurityConfig {
+            csrf_exempt_paths: vec!["/api".to_string()],
+            ..Default::default()
+        }))
+        // CORS scoped to the REST API only (`/api`) — the HTML pages stay
+        // same-origin. Strict by default (deny all cross-origin); opt in to the
+        // origins a browser frontend on another host uses to call the API.
+        // Batch form via `allow_origins(vec![...])`. Swap these for your real
+        // frontend origins.
+        .cors_for(
+            "/api",
+            CorsConfig::strict()
+                .allow_origins(vec!["http://localhost:3000", "http://localhost:5173"])
+                .allow_credentials(true),
+        )
         // --- Templates -------------------------------------------------------
         .templates_dir("templates")
         .not_found_template("404.html")
