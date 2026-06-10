@@ -236,7 +236,7 @@ pub struct ContactMessage {
     #[form(required, length(min = 10, max = 5_000))]
     pub message: String,
 
-    #[umbra(noform, choices, index, default = "ContactStatus::New")]
+    #[umbra(noform, choices, index, default = "new")]
     pub status: ContactStatus,
 
     #[umbra(noform)]

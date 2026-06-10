@@ -95,7 +95,7 @@ pub struct ShowcaseEntry {
     #[form(optional, url, length(max = 400))]
     pub logo_url: Option<String>,
 
-    #[umbra(noform, choices, index, default = "ShowcaseProjectType::Website")]
+    #[umbra(noform, choices, index, default = "website")]
     pub project_type: ShowcaseProjectType,
 
     /// Comma-separated list of Umbra plugins used (e.g. "auth,
@@ -104,10 +104,10 @@ pub struct ShowcaseEntry {
     #[form(optional, length(max = 400))]
     pub plugins_used: Option<String>,
 
-    #[umbra(noform, choices, default = "ShowcaseDatabase::Sqlite")]
+    #[umbra(noform, choices, default = "sqlite")]
     pub database_backend: ShowcaseDatabase,
 
-    #[umbra(noform, choices, default = "ShowcaseDeployment::SelfHosted")]
+    #[umbra(noform, choices, default = "self_hosted")]
     pub deployment_platform: ShowcaseDeployment,
 
     /// When the project launched. Optional because early-stage
@@ -129,7 +129,7 @@ pub struct ShowcaseEntry {
     #[umbra(noform, default = "false", index)]
     pub featured: bool,
 
-    #[umbra(noform, choices, index, default = "ShowcaseStatus::Submitted")]
+    #[umbra(noform, choices, index, default = "submitted")]
     pub status: ShowcaseStatus,
 
     #[umbra(auto_now_add)]

@@ -78,7 +78,7 @@ pub struct Review {
     #[form(optional, length(max = 60))]
     pub umbra_version: Option<String>,
 
-    #[umbra(noform, choices, default = "ReviewUsageContext::SideProject")]
+    #[umbra(noform, choices, default = "side_project")]
     pub usage_context: ReviewUsageContext,
 
     /// Set to true when the author has connected a GitHub account
@@ -88,7 +88,7 @@ pub struct Review {
     #[umbra(noform, default = "false")]
     pub verified_developer: bool,
 
-    #[umbra(noform, choices, index, default = "ReviewModeration::Pending")]
+    #[umbra(noform, choices, index, default = "pending")]
     pub moderation: ReviewModeration,
 
     /// Admin-only flag: highlight on the homepage.
