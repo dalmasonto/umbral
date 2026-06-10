@@ -19,6 +19,15 @@
   // Extend the early-declared window.umbra stub with the full IIFE exports.
   // The stub was declared in <head> so child-template inline scripts are safe.
   (function() {
+    // ----- Ambient CSRF -----
+    // htmx requests inherit the X-CSRF-Token header from <body hx-headers>
+    // (rendered from the ambient {{ csrf_token }}); raw fetch() writes
+    // bypass that inheritance, so they read the (deliberately
+    // non-HttpOnly) cookie here instead.
+    function csrfHeaders() {
+      var m = document.cookie.match(/(?:^|;\s*)umbra_csrf_token=([^;]*)/);
+      return m ? { 'X-CSRF-Token': decodeURIComponent(m[1]) } : {};
+    }
     // ----- Theme toggle (Bug 4) -----
     // Source of truth: server prefs (data-theme attr set at render time).
     // localStorage mirrors for instant FOUC-free apply on next load.
@@ -57,7 +66,7 @@
       // Persist to server so the next hard refresh renders the correct class.
       fetch(umbraAdminBase + '/api/prefs', {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: Object.assign({ 'Content-Type': 'application/json' }, csrfHeaders()),
         body: JSON.stringify({ theme: themeName })
       }).catch(function() { /* ignore; localStorage mirror is sufficient */ });
     }
@@ -90,7 +99,7 @@
     function persistSidebarCollapsed() {
       fetch(umbraAdminBase + '/api/prefs', {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: Object.assign({ 'Content-Type': 'application/json' }, csrfHeaders()),
         body: JSON.stringify({ sidebar_collapsed: sidebarCollapsed })
       }).catch(function() { /* localStorage is enough for instant UX */ });
     }

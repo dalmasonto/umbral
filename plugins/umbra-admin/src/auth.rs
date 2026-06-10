@@ -58,15 +58,12 @@ pub(crate) async fn require_staff(
 
 /// `GET /admin/login` — render the login form.
 ///
-/// Reads the shared `umbra_csrf_token` cookie via
-/// [`umbra_security::current_csrf_token`] and embeds it in the form
-/// as the `csrf_token` hidden input. If no cookie is set yet (first
-/// request to the admin), the response carries no token and the
-/// middleware mints one on the *next* GET — the user will see the
-/// rendered page either way; the POST simply uses whatever cookie
-/// the browser then carries back. If `SecurityPlugin` is not
-/// installed, the form still posts and the admin's own validation
-/// fall-back rejects empty tokens.
+/// Embeds the shared CSRF token in the form as the `csrf_token`
+/// hidden input, resolved by [`ensure_csrf_token`]: with
+/// `SecurityPlugin` mounted the middleware minted it *before* this
+/// handler ran (first visit included) and the ambient value is used;
+/// without the plugin the admin reads the cookie or self-mints, and
+/// its own validation in [`login_post`] is what rejects bad tokens.
 pub(crate) async fn login_get(
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
@@ -88,9 +85,9 @@ pub(crate) async fn login_get(
         .map(|n| sanitise_next(n))
         .unwrap_or_default();
 
-    // Same CSRF token as everything else in the app. If the cookie
-    // doesn't exist yet, mint one and attach it to the response so
-    // the POST can succeed on the very next click.
+    // Same CSRF token as everything else in the app — ambient when
+    // SecurityPlugin is mounted; self-minted (with the Set-Cookie
+    // attach below) only when it isn't.
     let (csrf_token, new_cookie) = ensure_csrf_token(&headers);
 
     let html = match render(
@@ -139,8 +136,11 @@ pub(crate) async fn login_post(headers: HeaderMap, body: String) -> Response {
     let submitted_csrf = form.get("csrf_token").map(|s| s.as_str()).unwrap_or("");
 
     let cookie_csrf = umbra_security::current_csrf_token(&headers).unwrap_or_default();
-    let csrf_ok =
-        !submitted_csrf.is_empty() && !cookie_csrf.is_empty() && submitted_csrf == cookie_csrf;
+    // Constant-time comparison — short-circuit `==` leaks token-prefix
+    // matches over time (same rule the middleware follows).
+    let csrf_ok = !submitted_csrf.is_empty()
+        && !cookie_csrf.is_empty()
+        && umbra_security::tokens_match(submitted_csrf, &cookie_csrf);
     if !csrf_ok {
         return bad_login_response_with_csrf(
             "Your session expired. Please try again.",
@@ -187,13 +187,20 @@ pub(crate) async fn login_post(headers: HeaderMap, body: String) -> Response {
     response
 }
 
-/// Read the CSRF token off the incoming cookie, or mint a fresh one
-/// and return a Set-Cookie string the caller should attach to the
-/// response so the next request carries it. Mirrors what the
-/// `SecurityPlugin` middleware does on safe-method requests — handlers
-/// rendering forms before the middleware has minted a token need the
-/// same behaviour.
+/// Resolve the CSRF token for an admin-rendered form.
+///
+/// 1. Ambient (`umbra::templates::current_csrf()`): `SecurityPlugin`
+///    is mounted — its middleware already minted (and, on first visit,
+///    set) the token before this handler ran. The middleware owns the
+///    cookie; the admin sets nothing.
+/// 2. Cookie fallback, then self-mint: no `SecurityPlugin`. The admin
+///    stays self-protecting — `login_post`'s own comparison is the
+///    only validator in this mode, so the mint here is what makes the
+///    login form work at all.
 fn ensure_csrf_token(headers: &HeaderMap) -> (String, Option<String>) {
+    if let Some(tok) = umbra::templates::current_csrf() {
+        return (tok, None);
+    }
     if let Some(tok) = umbra_security::current_csrf_token(headers) {
         return (tok, None);
     }
@@ -287,5 +294,36 @@ mod tests {
     fn empty_stays_empty() {
         assert_eq!(sanitise_next(""), "");
         assert_eq!(sanitise_next("   "), "");
+    }
+}
+
+#[cfg(test)]
+mod csrf_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn ensure_csrf_token_prefers_the_ambient_token() {
+        let headers = HeaderMap::new();
+        let (tok, cookie) =
+            umbra::templates::with_current_csrf(Some("ambient-token".to_string()), async {
+                ensure_csrf_token(&headers)
+            })
+            .await;
+        assert_eq!(tok, "ambient-token");
+        assert!(
+            cookie.is_none(),
+            "middleware owns the cookie; admin must not set one"
+        );
+    }
+
+    #[tokio::test]
+    async fn ensure_csrf_token_self_mints_without_middleware() {
+        let headers = HeaderMap::new();
+        let (tok, cookie) = ensure_csrf_token(&headers);
+        assert!(!tok.is_empty());
+        assert!(
+            cookie.is_some(),
+            "no middleware, no cookie: admin must self-mint"
+        );
     }
 }

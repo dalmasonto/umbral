@@ -490,7 +490,7 @@
 
   {% block extra_head %}{% endblock %}
 </head>
-<body {% block body_attrs %}class="bg-background text-on-surface antialiased"{% endblock %}>
+<body hx-headers='{"X-CSRF-Token": "{{ csrf_token }}"}' {% block body_attrs %}class="bg-background text-on-surface antialiased"{% endblock %}>
 
 {% block body %}{% endblock %}
 

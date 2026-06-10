@@ -374,3 +374,46 @@ async fn dashboard_layout_round_trips() {
     let body_str = String::from_utf8_lossy(&body);
     assert!(body_str.contains("test_kpi"), "layout not saved/returned");
 }
+
+/// docs/decisions/2026-06-10-automatic-csrf.md: every htmx request the
+/// admin makes must carry the ambient CSRF token. `hx-headers` on
+/// `<body>` is inherited by all descendant hx-* requests, so one
+/// attribute covers sheet create/edit, inline edit, delete, and actions.
+#[test]
+fn wrapper_body_carries_csrf_hx_headers() {
+    let wrapper = include_str!("../templates/wrapper.html");
+    let body_line = wrapper
+        .lines()
+        .find(|l| l.trim_start().starts_with("<body"))
+        .expect("wrapper.html must have a <body> tag");
+    assert!(
+        body_line.contains("hx-headers"),
+        "missing hx-headers: {body_line}"
+    );
+    assert!(
+        body_line.contains("X-CSRF-Token"),
+        "missing X-CSRF-Token: {body_line}"
+    );
+    assert!(
+        body_line.contains("{{ csrf_token }}"),
+        "must use the ambient token: {body_line}"
+    );
+}
+
+/// Raw fetch() writes in admin.js (the PUT /api/prefs persistence calls)
+/// bypass htmx's hx-headers inheritance, so each one must spread the
+/// csrfHeaders() helper that reads the (deliberately non-HttpOnly) cookie.
+#[test]
+fn admin_js_fetches_send_csrf_header() {
+    let js = include_str!("../src/assets/admin.js");
+    assert!(
+        js.contains("function csrfHeaders()"),
+        "admin.js needs the csrfHeaders helper"
+    );
+    let writes = js.matches("method: 'PUT'").count() + js.matches("method: 'POST'").count();
+    let wired = js.matches("csrfHeaders()").count();
+    assert!(
+        writes > 0 && wired >= writes,
+        "every write fetch must spread csrfHeaders(): {wired} uses for {writes} writes"
+    );
+}
