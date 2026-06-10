@@ -93,6 +93,16 @@ pub(crate) struct FormField {
     /// `<select>` widget renders as `<option>`s. Empty for every
     /// non-choices field.
     pub choices: Vec<ChoiceOption>,
+    /// `#[umbra(help = "...")]` text. Rendered as a hint line under
+    /// the input. Empty string = no hint (the template skips the
+    /// markup). Honors the `FieldSpec::help` doc-comment's long-
+    /// standing claim that help reaches the admin form.
+    pub help: String,
+    /// `#[umbra(widget = "...")]` presentation hint (features.md #4),
+    /// already folded into `kind` by `input_kind`. Kept on the struct
+    /// too so the template / future client JS can branch on the raw
+    /// widget name (e.g. load a markdown editor module). Empty = none.
+    pub widget: String,
 }
 
 /// One `<option>` entry on a choices-field `<select>`.
@@ -196,6 +206,8 @@ pub(crate) fn form_fields_for(
                 fk_table,
                 is_password: false,
                 choices,
+                help: c.help.clone(),
+                widget: c.widget.clone().unwrap_or_default(),
             }
         })
         .collect();
@@ -212,6 +224,8 @@ pub(crate) fn form_fields_for(
                     fk_table: String::new(),
                     is_password: true,
                     choices: Vec::new(),
+                    help: String::new(),
+                    widget: String::new(),
                 });
             }
         }
@@ -427,6 +441,20 @@ pub(crate) fn format_for_input(raw: &str, ty: SqlType) -> String {
 /// VARCHAR. An unbounded `Text` field gets a textarea — the column
 /// is built for prose.
 pub(crate) fn input_kind(col: &umbra::migrate::Column) -> &'static str {
+    // An explicit `#[umbra(widget = "...")]` hint wins for the editor
+    // kinds the field editor knows how to render (features.md #4).
+    // An unrecognised widget name falls through to the SqlType-derived
+    // kind — a soft no-op, so third-party widget names don't break the
+    // form. Choices/multichoice/FK still win over a widget hint because
+    // those are structural (closed set / relation), not presentation.
+    if !col.is_multichoice && col.choices.is_empty() && !matches!(col.ty, SqlType::ForeignKey) {
+        match col.widget.as_deref() {
+            Some("markdown") => return "markdown",
+            Some("rte") => return "rte",
+            Some("textarea") => return "textarea",
+            _ => {}
+        }
+    }
     // MultiChoice columns (CSV-encoded TEXT carrying multiple
     // ChoiceField variants) take precedence: the value is closed-set
     // but multi-valued, so the `<select>` widget can't represent it.
@@ -566,7 +594,7 @@ pub(crate) fn model_for_template_cols(model: &ModelMeta, display_cols: &[String]
 
 #[cfg(test)]
 mod tests {
-    use super::{form_fields_for, format_for_input};
+    use super::{form_fields_for, format_for_input, input_kind};
     use umbra::migrate::{Column, ModelMeta};
     use umbra::orm::{FkAction, SqlType};
 
@@ -659,6 +687,38 @@ mod tests {
             "auto_now column hidden from form; got {names:?}"
         );
         assert!(!names.contains(&"id"), "PK already excluded (sanity)");
+    }
+
+    /// features.md #4: `#[umbra(widget = "markdown")]` drives the form
+    /// input kind, and `#[umbra(help = "...")]` reaches the form field
+    /// (the FieldSpec::help doc-comment has long claimed it does).
+    #[test]
+    fn widget_and_help_reach_the_form_field() {
+        let mut body = col("body", false, false, false);
+        body.ty = SqlType::Text;
+        body.widget = Some("markdown".to_string());
+        body.help = "Markdown supported — headings, lists, code.".to_string();
+
+        let model = meta("post", vec![col("id", false, false, true), body]);
+        let fields = form_fields_for(&model, None, None);
+        let f = fields
+            .iter()
+            .find(|f| f.name == "body")
+            .expect("body field present");
+        assert_eq!(f.kind, "markdown", "widget drives the input kind");
+        assert_eq!(f.widget, "markdown", "raw widget name carried for JS");
+        assert_eq!(f.help, "Markdown supported — headings, lists, code.");
+    }
+
+    /// An unrecognised widget name is a soft no-op — the field falls
+    /// back to its SqlType-derived kind so a third-party widget name
+    /// never breaks the form.
+    #[test]
+    fn unknown_widget_falls_back_to_type_kind() {
+        let mut c = col("blob", false, false, false);
+        c.ty = SqlType::Text; // no max_length => textarea by type
+        c.widget = Some("some-future-editor".to_string());
+        assert_eq!(input_kind(&c), "textarea");
     }
 
     #[test]

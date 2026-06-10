@@ -84,6 +84,25 @@
       <span class="text-body-sm text-on-surface-variant">{{ field.name | replace("_", " ") | title }}</span>
     </label>
 
+  {% elif field.kind == "markdown" or field.kind == "rte" %}
+    {# #[umbra(widget = "markdown" | "rte")] — features.md #4.
+       A tall textarea carrying data-widget so a progressive-
+       enhancement script can later mount a split-pane markdown editor
+       or an RTE without changing this markup. With no JS it degrades
+       to a usable textarea — the stored value is rendered on the
+       display side via the `{{ value | markdown }}` filter. The help
+       hint below (from #[umbra(help = "...")]) tells the editor what
+       syntax to type. #}
+    <textarea
+      id="f_{{ field.name }}"
+      name="{{ field.name }}"
+      data-widget="{{ field.kind }}"
+      rows="10"
+      {% if not field.nullable and not is_readonly %}required{% endif %}
+      {% if is_readonly %}readonly{% endif %}
+      class="w-full bg-surface-container-low border {% if error %}border-error{% else %}border-outline-variant{% endif %} rounded-xl px-md py-sm text-on-surface text-body-md font-mono focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all resize-y placeholder:text-outline/50 {% if is_readonly %}opacity-70 cursor-default{% endif %}"
+    >{{ value }}</textarea>
+
   {% elif field.kind == "textarea" or is_long %}
     {# Prose / unbounded TEXT / FullText. Body font, no Format button. #}
     <textarea
@@ -289,6 +308,11 @@
       {% if is_readonly %}readonly{% endif %}
       class="w-full bg-surface-container-low border {% if error %}border-error{% else %}border-outline-variant{% endif %} rounded-xl px-md py-sm text-on-surface text-body-md focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all placeholder:text-outline/50 {% if is_readonly %}opacity-70 cursor-default{% endif %}"
     />
+  {% endif %}
+
+  {# --- Help text (#[umbra(help = "...")]) --- #}
+  {% if field.help %}
+  <p class="text-body-sm text-on-surface-variant mt-0.5">{{ field.help }}</p>
   {% endif %}
 
   {# --- Inline validation error --- #}
