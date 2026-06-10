@@ -1,0 +1,4 @@
+/target
+/umbra_website.db*
+.env
+Cargo.lock

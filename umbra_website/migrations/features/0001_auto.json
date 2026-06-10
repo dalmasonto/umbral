@@ -1,0 +1,973 @@
+{
+  "id": "0001_auto",
+  "plugin": "features",
+  "depends_on": [],
+  "operations": [
+    {
+      "kind": "CreateTable",
+      "table": "features_feature_category",
+      "columns": [
+        {
+          "name": "id",
+          "ty": "BigInt",
+          "primary_key": true,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "name",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": true,
+          "max_length": 100,
+          "unique": true
+        },
+        {
+          "name": "slug",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 120,
+          "unique": true
+        },
+        {
+          "name": "description",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": true,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "display_order",
+          "ty": "Integer",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0,
+          "default": "0",
+          "index": true
+        },
+        {
+          "name": "visible",
+          "ty": "Boolean",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0,
+          "default": "true",
+          "index": true
+        },
+        {
+          "name": "created_at",
+          "ty": "Timestamptz",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0,
+          "auto_now_add": true
+        },
+        {
+          "name": "updated_at",
+          "ty": "Timestamptz",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0,
+          "auto_now": true
+        },
+        {
+          "name": "deleted_at",
+          "ty": "Timestamptz",
+          "primary_key": false,
+          "nullable": true,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0,
+          "index": true
+        }
+      ]
+    },
+    {
+      "kind": "CreateTable",
+      "table": "features_framework_feature",
+      "columns": [
+        {
+          "name": "id",
+          "ty": "BigInt",
+          "primary_key": true,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "category",
+          "ty": "ForeignKey",
+          "primary_key": false,
+          "nullable": false,
+          "fk_target": "features_feature_category",
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0,
+          "on_delete": "Cascade"
+        },
+        {
+          "name": "name",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": true,
+          "max_length": 140
+        },
+        {
+          "name": "slug",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 160,
+          "unique": true
+        },
+        {
+          "name": "short_summary",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "full_description",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "status",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0,
+          "choices": [
+            "none",
+            "shipped",
+            "usable",
+            "experimental",
+            "in_progress",
+            "planned",
+            "deferred",
+            "deprecated"
+          ],
+          "choice_labels": [
+            "None",
+            "Shipped",
+            "Usable",
+            "Experimental",
+            "InProgress",
+            "Planned",
+            "Deferred",
+            "Deprecated"
+          ],
+          "index": true
+        },
+        {
+          "name": "maturity",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0,
+          "choices": [
+            "stable",
+            "beta",
+            "alpha",
+            "design"
+          ],
+          "choice_labels": [
+            "Stable",
+            "Beta",
+            "Alpha",
+            "Design"
+          ],
+          "index": true
+        },
+        {
+          "name": "docs_url",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": true,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "example_url",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": true,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "related_plugin_slug",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": true,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "release_target",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": true,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "display_order",
+          "ty": "Integer",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0,
+          "default": "0",
+          "index": true
+        },
+        {
+          "name": "visible",
+          "ty": "Boolean",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0,
+          "default": "true",
+          "index": true
+        },
+        {
+          "name": "metadata",
+          "ty": "Json",
+          "primary_key": false,
+          "nullable": true,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "created_at",
+          "ty": "Timestamptz",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0,
+          "auto_now_add": true
+        },
+        {
+          "name": "updated_at",
+          "ty": "Timestamptz",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0,
+          "auto_now": true
+        },
+        {
+          "name": "deleted_at",
+          "ty": "Timestamptz",
+          "primary_key": false,
+          "nullable": true,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0,
+          "index": true
+        }
+      ]
+    },
+    {
+      "kind": "CreateTable",
+      "table": "features_feature_status_event",
+      "columns": [
+        {
+          "name": "id",
+          "ty": "BigInt",
+          "primary_key": true,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "feature",
+          "ty": "ForeignKey",
+          "primary_key": false,
+          "nullable": false,
+          "fk_target": "features_framework_feature",
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0,
+          "on_delete": "Cascade"
+        },
+        {
+          "name": "previous_status",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0,
+          "choices": [
+            "none",
+            "shipped",
+            "usable",
+            "experimental",
+            "in_progress",
+            "planned",
+            "deferred",
+            "deprecated"
+          ],
+          "choice_labels": [
+            "None",
+            "Shipped",
+            "Usable",
+            "Experimental",
+            "InProgress",
+            "Planned",
+            "Deferred",
+            "Deprecated"
+          ],
+          "default": "none"
+        },
+        {
+          "name": "new_status",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0,
+          "choices": [
+            "none",
+            "shipped",
+            "usable",
+            "experimental",
+            "in_progress",
+            "planned",
+            "deferred",
+            "deprecated"
+          ],
+          "choice_labels": [
+            "None",
+            "Shipped",
+            "Usable",
+            "Experimental",
+            "InProgress",
+            "Planned",
+            "Deferred",
+            "Deprecated"
+          ],
+          "index": true
+        },
+        {
+          "name": "note",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": true,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "changed_by",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": true,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "created_at",
+          "ty": "Timestamptz",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0,
+          "auto_now_add": true
+        },
+        {
+          "name": "updated_at",
+          "ty": "Timestamptz",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0,
+          "auto_now": true
+        },
+        {
+          "name": "deleted_at",
+          "ty": "Timestamptz",
+          "primary_key": false,
+          "nullable": true,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0,
+          "index": true
+        }
+      ]
+    }
+  ],
+  "snapshot_after": {
+    "models": [
+      {
+        "name": "FeatureCategory",
+        "table": "features_feature_category",
+        "fields": [
+          {
+            "name": "id",
+            "ty": "BigInt",
+            "primary_key": true,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "name",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": true,
+            "max_length": 100,
+            "unique": true
+          },
+          {
+            "name": "slug",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 120,
+            "unique": true
+          },
+          {
+            "name": "description",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": true,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "display_order",
+            "ty": "Integer",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0,
+            "default": "0",
+            "index": true
+          },
+          {
+            "name": "visible",
+            "ty": "Boolean",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0,
+            "default": "true",
+            "index": true
+          },
+          {
+            "name": "created_at",
+            "ty": "Timestamptz",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0,
+            "auto_now_add": true
+          },
+          {
+            "name": "updated_at",
+            "ty": "Timestamptz",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0,
+            "auto_now": true
+          },
+          {
+            "name": "deleted_at",
+            "ty": "Timestamptz",
+            "primary_key": false,
+            "nullable": true,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0,
+            "index": true
+          }
+        ],
+        "display": "Feature categories",
+        "icon": "folder-kanban"
+      },
+      {
+        "name": "FeatureStatusEvent",
+        "table": "features_feature_status_event",
+        "fields": [
+          {
+            "name": "id",
+            "ty": "BigInt",
+            "primary_key": true,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "feature",
+            "ty": "ForeignKey",
+            "primary_key": false,
+            "nullable": false,
+            "fk_target": "features_framework_feature",
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0,
+            "on_delete": "Cascade"
+          },
+          {
+            "name": "previous_status",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0,
+            "choices": [
+              "none",
+              "shipped",
+              "usable",
+              "experimental",
+              "in_progress",
+              "planned",
+              "deferred",
+              "deprecated"
+            ],
+            "choice_labels": [
+              "None",
+              "Shipped",
+              "Usable",
+              "Experimental",
+              "InProgress",
+              "Planned",
+              "Deferred",
+              "Deprecated"
+            ],
+            "default": "none"
+          },
+          {
+            "name": "new_status",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0,
+            "choices": [
+              "none",
+              "shipped",
+              "usable",
+              "experimental",
+              "in_progress",
+              "planned",
+              "deferred",
+              "deprecated"
+            ],
+            "choice_labels": [
+              "None",
+              "Shipped",
+              "Usable",
+              "Experimental",
+              "InProgress",
+              "Planned",
+              "Deferred",
+              "Deprecated"
+            ],
+            "index": true
+          },
+          {
+            "name": "note",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": true,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "changed_by",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": true,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "created_at",
+            "ty": "Timestamptz",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0,
+            "auto_now_add": true
+          },
+          {
+            "name": "updated_at",
+            "ty": "Timestamptz",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0,
+            "auto_now": true
+          },
+          {
+            "name": "deleted_at",
+            "ty": "Timestamptz",
+            "primary_key": false,
+            "nullable": true,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0,
+            "index": true
+          }
+        ],
+        "display": "Feature status events",
+        "icon": "history"
+      },
+      {
+        "name": "FrameworkFeature",
+        "table": "features_framework_feature",
+        "fields": [
+          {
+            "name": "id",
+            "ty": "BigInt",
+            "primary_key": true,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "category",
+            "ty": "ForeignKey",
+            "primary_key": false,
+            "nullable": false,
+            "fk_target": "features_feature_category",
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0,
+            "on_delete": "Cascade"
+          },
+          {
+            "name": "name",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": true,
+            "max_length": 140
+          },
+          {
+            "name": "slug",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 160,
+            "unique": true
+          },
+          {
+            "name": "short_summary",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "full_description",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "status",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0,
+            "choices": [
+              "none",
+              "shipped",
+              "usable",
+              "experimental",
+              "in_progress",
+              "planned",
+              "deferred",
+              "deprecated"
+            ],
+            "choice_labels": [
+              "None",
+              "Shipped",
+              "Usable",
+              "Experimental",
+              "InProgress",
+              "Planned",
+              "Deferred",
+              "Deprecated"
+            ],
+            "index": true
+          },
+          {
+            "name": "maturity",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0,
+            "choices": [
+              "stable",
+              "beta",
+              "alpha",
+              "design"
+            ],
+            "choice_labels": [
+              "Stable",
+              "Beta",
+              "Alpha",
+              "Design"
+            ],
+            "index": true
+          },
+          {
+            "name": "docs_url",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": true,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "example_url",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": true,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "related_plugin_slug",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": true,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "release_target",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": true,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "display_order",
+            "ty": "Integer",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0,
+            "default": "0",
+            "index": true
+          },
+          {
+            "name": "visible",
+            "ty": "Boolean",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0,
+            "default": "true",
+            "index": true
+          },
+          {
+            "name": "metadata",
+            "ty": "Json",
+            "primary_key": false,
+            "nullable": true,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "created_at",
+            "ty": "Timestamptz",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0,
+            "auto_now_add": true
+          },
+          {
+            "name": "updated_at",
+            "ty": "Timestamptz",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0,
+            "auto_now": true
+          },
+          {
+            "name": "deleted_at",
+            "ty": "Timestamptz",
+            "primary_key": false,
+            "nullable": true,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0,
+            "index": true
+          }
+        ],
+        "display": "Framework features",
+        "icon": "sparkles"
+      }
+    ]
+  }
+}

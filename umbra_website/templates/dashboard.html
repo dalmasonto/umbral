@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+  <h1 class="text-3xl font-bold mb-2">Website dashboard</h1>
+  <p class="text-gray-500 mb-6">Logged in as <strong>{{ user.username }}</strong></p>
+
+  <div class="rounded border border-gray-200 bg-white p-4">
+    <h2 class="text-lg font-semibold">Backend scaffold ready</h2>
+    <p class="mt-2 text-gray-600">
+      Content, features, plugin registry, reviews, showcase, security reports,
+      accounts, and community data will be modeled in their app crates.
+    </p>
+  </div>
+{% endblock %}

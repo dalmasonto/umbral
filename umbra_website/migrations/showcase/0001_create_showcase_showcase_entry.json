@@ -1,0 +1,611 @@
+{
+  "id": "0001_create_showcase_showcase_entry",
+  "plugin": "showcase",
+  "depends_on": [],
+  "operations": [
+    {
+      "kind": "CreateTable",
+      "table": "showcase_showcase_entry",
+      "columns": [
+        {
+          "name": "id",
+          "ty": "BigInt",
+          "primary_key": true,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "submitted_by",
+          "ty": "ForeignKey",
+          "primary_key": false,
+          "nullable": true,
+          "fk_target": "auth_user",
+          "noform": true,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0,
+          "on_delete": "SetNull"
+        },
+        {
+          "name": "project_name",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "url",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "owner",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "short_description",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "long_content",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": true,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "screenshot_url",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": true,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "logo_url",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": true,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "project_type",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": false,
+          "noform": true,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0,
+          "choices": [
+            "website",
+            "dashboard",
+            "api_service",
+            "internal_tool",
+            "mobile_backend",
+            "demo",
+            "other"
+          ],
+          "choice_labels": [
+            "Website",
+            "Dashboard",
+            "ApiService",
+            "InternalTool",
+            "MobileBackend",
+            "Demo",
+            "Other"
+          ],
+          "default": "ShowcaseProjectType::Website",
+          "index": true
+        },
+        {
+          "name": "plugins_used",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": true,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "database_backend",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": false,
+          "noform": true,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0,
+          "choices": [
+            "sqlite",
+            "postgres",
+            "mysql",
+            "other"
+          ],
+          "choice_labels": [
+            "Sqlite",
+            "Postgres",
+            "Mysql",
+            "Other"
+          ],
+          "default": "ShowcaseDatabase::Sqlite"
+        },
+        {
+          "name": "deployment_platform",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": false,
+          "noform": true,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0,
+          "choices": [
+            "self_hosted",
+            "fly_io",
+            "railway",
+            "render",
+            "aws",
+            "gcp",
+            "azure",
+            "vercel",
+            "other"
+          ],
+          "choice_labels": [
+            "SelfHosted",
+            "FlyIo",
+            "Railway",
+            "Render",
+            "Aws",
+            "Gcp",
+            "Azure",
+            "Vercel",
+            "Other"
+          ],
+          "default": "ShowcaseDeployment::SelfHosted"
+        },
+        {
+          "name": "launch_date",
+          "ty": "Date",
+          "primary_key": false,
+          "nullable": true,
+          "noform": true,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "source_url",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": true,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0
+        },
+        {
+          "name": "verified",
+          "ty": "Boolean",
+          "primary_key": false,
+          "nullable": false,
+          "noform": true,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0,
+          "default": "false",
+          "index": true
+        },
+        {
+          "name": "featured",
+          "ty": "Boolean",
+          "primary_key": false,
+          "nullable": false,
+          "noform": true,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0,
+          "default": "false",
+          "index": true
+        },
+        {
+          "name": "status",
+          "ty": "Text",
+          "primary_key": false,
+          "nullable": false,
+          "noform": true,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0,
+          "choices": [
+            "draft",
+            "submitted",
+            "verified",
+            "featured",
+            "archived",
+            "rejected"
+          ],
+          "choice_labels": [
+            "Draft",
+            "Submitted",
+            "Verified",
+            "Featured",
+            "Archived",
+            "Rejected"
+          ],
+          "default": "ShowcaseStatus::Submitted",
+          "index": true
+        },
+        {
+          "name": "created_at",
+          "ty": "Timestamptz",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0,
+          "auto_now_add": true
+        },
+        {
+          "name": "updated_at",
+          "ty": "Timestamptz",
+          "primary_key": false,
+          "nullable": false,
+          "noform": false,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0,
+          "auto_now": true
+        },
+        {
+          "name": "deleted_at",
+          "ty": "Timestamptz",
+          "primary_key": false,
+          "nullable": true,
+          "noform": true,
+          "noedit": false,
+          "is_string_repr": false,
+          "max_length": 0,
+          "index": true
+        }
+      ]
+    }
+  ],
+  "snapshot_after": {
+    "models": [
+      {
+        "name": "ShowcaseEntry",
+        "table": "showcase_showcase_entry",
+        "fields": [
+          {
+            "name": "id",
+            "ty": "BigInt",
+            "primary_key": true,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "submitted_by",
+            "ty": "ForeignKey",
+            "primary_key": false,
+            "nullable": true,
+            "fk_target": "auth_user",
+            "noform": true,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0,
+            "on_delete": "SetNull"
+          },
+          {
+            "name": "project_name",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "url",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "owner",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "short_description",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "long_content",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": true,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "screenshot_url",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": true,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "logo_url",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": true,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "project_type",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": false,
+            "noform": true,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0,
+            "choices": [
+              "website",
+              "dashboard",
+              "api_service",
+              "internal_tool",
+              "mobile_backend",
+              "demo",
+              "other"
+            ],
+            "choice_labels": [
+              "Website",
+              "Dashboard",
+              "ApiService",
+              "InternalTool",
+              "MobileBackend",
+              "Demo",
+              "Other"
+            ],
+            "default": "ShowcaseProjectType::Website",
+            "index": true
+          },
+          {
+            "name": "plugins_used",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": true,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "database_backend",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": false,
+            "noform": true,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0,
+            "choices": [
+              "sqlite",
+              "postgres",
+              "mysql",
+              "other"
+            ],
+            "choice_labels": [
+              "Sqlite",
+              "Postgres",
+              "Mysql",
+              "Other"
+            ],
+            "default": "ShowcaseDatabase::Sqlite"
+          },
+          {
+            "name": "deployment_platform",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": false,
+            "noform": true,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0,
+            "choices": [
+              "self_hosted",
+              "fly_io",
+              "railway",
+              "render",
+              "aws",
+              "gcp",
+              "azure",
+              "vercel",
+              "other"
+            ],
+            "choice_labels": [
+              "SelfHosted",
+              "FlyIo",
+              "Railway",
+              "Render",
+              "Aws",
+              "Gcp",
+              "Azure",
+              "Vercel",
+              "Other"
+            ],
+            "default": "ShowcaseDeployment::SelfHosted"
+          },
+          {
+            "name": "launch_date",
+            "ty": "Date",
+            "primary_key": false,
+            "nullable": true,
+            "noform": true,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "source_url",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": true,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0
+          },
+          {
+            "name": "verified",
+            "ty": "Boolean",
+            "primary_key": false,
+            "nullable": false,
+            "noform": true,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0,
+            "default": "false",
+            "index": true
+          },
+          {
+            "name": "featured",
+            "ty": "Boolean",
+            "primary_key": false,
+            "nullable": false,
+            "noform": true,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0,
+            "default": "false",
+            "index": true
+          },
+          {
+            "name": "status",
+            "ty": "Text",
+            "primary_key": false,
+            "nullable": false,
+            "noform": true,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0,
+            "choices": [
+              "draft",
+              "submitted",
+              "verified",
+              "featured",
+              "archived",
+              "rejected"
+            ],
+            "choice_labels": [
+              "Draft",
+              "Submitted",
+              "Verified",
+              "Featured",
+              "Archived",
+              "Rejected"
+            ],
+            "default": "ShowcaseStatus::Submitted",
+            "index": true
+          },
+          {
+            "name": "created_at",
+            "ty": "Timestamptz",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0,
+            "auto_now_add": true
+          },
+          {
+            "name": "updated_at",
+            "ty": "Timestamptz",
+            "primary_key": false,
+            "nullable": false,
+            "noform": false,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0,
+            "auto_now": true
+          },
+          {
+            "name": "deleted_at",
+            "ty": "Timestamptz",
+            "primary_key": false,
+            "nullable": true,
+            "noform": true,
+            "noedit": false,
+            "is_string_repr": false,
+            "max_length": 0,
+            "index": true
+          }
+        ],
+        "display": "Showcase",
+        "icon": "gallery-horizontal"
+      }
+    ]
+  }
+}

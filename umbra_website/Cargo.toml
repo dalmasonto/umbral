@@ -1,0 +1,49 @@
+[package]
+name = "umbra_website"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+
+# ----- Framework core (always required) ------------------------------------
+umbra         = { path = "/home/dalmas/E/projects/umbra/crates/umbra" }
+umbra-cli     = { path = "/home/dalmas/E/projects/umbra/crates/umbra-cli" }
+
+# ----- Active by default ---------------------------------------------------
+# What the generated `src/main.rs` wires in. Comment any of these out only
+# if you also remove the matching `.plugin(...)` line.
+umbra-auth     = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-auth" }
+umbra-sessions = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-sessions" }
+umbra-admin    = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-admin" }
+umbra-rest     = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-rest" }
+umbra-openapi  = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-openapi" }
+umbra-security = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-security" }
+
+# ----- Available built-ins (uncomment + register in main.rs to enable) -----
+# umbra-playground   = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-playground" }  # Interactive API playground UI (think mini-Postman) at /playground/.
+# umbra-tasks        = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-tasks" }  # DB-backed background task queue (Celery-equivalent).
+# umbra-permissions  = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-permissions" }  # Django-style ContentType + Group + Permission model.
+# umbra-rls          = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-rls" }  # Postgres row-level security policy registration.
+# umbra-cache        = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-cache" }  # Per-request caching helper.
+# umbra-email        = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-email" }  # SMTP + MIME email composer + sender.
+# umbra-media        = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-media" }  # Uploaded-file storage abstraction (local FS + S3).
+# umbra-signals      = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-signals" }  # Pre/post save/delete signal dispatch.
+# umbra-static       = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-static" }  # Static-file serving for prod (whitenoise-equivalent).
+
+# ----- Third-party + framework runtime deps --------------------------------
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+serde = { version = "1", features = ["derive"] }
+chrono = { version = "0.4", features = ["serde"] }
+sqlx = { version = "0.8", features = ["macros", "sqlite", "postgres", "chrono", "runtime-tokio"] }
+
+# Once you `umbra startapp <plugin>` or `umbra startplugin <plugin>`, add
+# the plugin crate here:
+site_content = { path = "plugins/site_content" }
+features = { path = "plugins/features" }
+plugin_directory = { path = "plugins/plugin_directory" }
+reviews = { path = "plugins/reviews" }
+showcase = { path = "plugins/showcase" }
+security_reports = { path = "plugins/security_reports" }
+accounts = { path = "plugins/accounts" }
+community = { path = "plugins/community" }
