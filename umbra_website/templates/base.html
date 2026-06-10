@@ -1,54 +1,115 @@
 <!doctype html>
+{# Site wrapper — header + footer extracted from design/Home.dc.html.
+   Theme is variable-driven (see styles/input.css): light values on
+   :root today; dark mode arrives as a `.dark` override block + the
+   `dark` class on <html>, no template changes. #}
 <html lang="en" class="scroll-smooth">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}Umbra{% endblock %}</title>
-  <meta name="description" content="{% block meta_description %}Umbra is a plugin-first Rust web framework for complete applications, admin-managed content, forms, migrations, REST APIs, and swappable batteries.{% endblock %}">
+  <title>{% block title %}Umbra — the batteries are real plugins{% endblock %}</title>
+  <meta name="description" content="{% block meta_description %}Umbra is a modular Rust web framework for complete applications: models, migrations, admin, forms, REST, OpenAPI — every battery delivered as a plugin you can enable, replace, or extend.{% endblock %}">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/css/umbra.css">
   {% block extra_head %}{% endblock %}
 </head>
-<body class="min-h-screen bg-[oklch(0.972_0.009_230)] text-[oklch(0.2_0.025_245)] antialiased">
-  <div class="min-h-screen">
-    <header class="sticky top-0 z-50 border-b border-[oklch(0.82_0.02_235)] bg-[oklch(0.972_0.009_230)]">
-      <nav class="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-3 sm:px-6 lg:px-8" aria-label="Main navigation">
-        <a href="/" class="inline-flex min-w-0 items-center gap-3 no-underline">
-          <span class="grid h-8 w-8 shrink-0 place-items-center rounded bg-[oklch(0.22_0.04_245)] text-sm font-black text-[oklch(0.94_0.06_92)]">U</span>
-          <span class="min-w-0 leading-tight">
-            <span class="block text-sm font-black">Umbra</span>
-            <span class="block text-xs font-semibold text-[oklch(0.45_0.03_245)]">Rust web framework</span>
-          </span>
-        </a>
+<body class="min-h-screen bg-paper text-ink antialiased">
 
-        <div class="hidden items-center gap-1 md:flex">
-          <a href="#framework" class="rounded px-2.5 py-2 text-sm font-semibold text-[oklch(0.38_0.03_245)] hover:bg-[oklch(0.93_0.014_230)] hover:text-[oklch(0.18_0.03_245)]">Framework</a>
-          <a href="#plugins" class="rounded px-2.5 py-2 text-sm font-semibold text-[oklch(0.38_0.03_245)] hover:bg-[oklch(0.93_0.014_230)] hover:text-[oklch(0.18_0.03_245)]">Plugins</a>
-          <a href="#workflow" class="rounded px-2.5 py-2 text-sm font-semibold text-[oklch(0.38_0.03_245)] hover:bg-[oklch(0.93_0.014_230)] hover:text-[oklch(0.18_0.03_245)]">Workflow</a>
-          <a href="#site" class="rounded px-2.5 py-2 text-sm font-semibold text-[oklch(0.38_0.03_245)] hover:bg-[oklch(0.93_0.014_230)] hover:text-[oklch(0.18_0.03_245)]">This site</a>
-          <a href="/admin/" class="rounded px-2.5 py-2 text-sm font-semibold text-[oklch(0.38_0.03_245)] hover:bg-[oklch(0.93_0.014_230)] hover:text-[oklch(0.18_0.03_245)]">Admin</a>
-        </div>
-
-        <a href="/openapi/" class="inline-flex shrink-0 rounded border border-[oklch(0.74_0.03_235)] bg-[oklch(0.99_0.006_230)] px-3 py-2 text-sm font-black text-[oklch(0.23_0.035_245)] shadow-sm hover:border-[oklch(0.58_0.06_220)]">
-          OpenAPI
-        </a>
+  {# ===== NAV ===== #}
+  <header class="sticky top-0 z-50 border-b border-hairline bg-paper/80 backdrop-blur-md">
+    <div class="mx-auto flex max-w-[1200px] items-center gap-8 px-7 py-3.5">
+      <a href="/" class="flex shrink-0 items-center gap-[11px]">
+        <span class="logo-mark" aria-hidden="true"></span>
+        <span class="text-[18px] font-bold tracking-tight">Umbra</span>
+      </a>
+      <nav class="hidden items-center gap-[26px] text-[14.5px] font-medium text-body lg:flex" aria-label="Main navigation">
+        <a href="/features" class="hover:text-ink">Features</a>
+        <a href="/prebuilt" class="hover:text-ink">Prebuilt Plugins</a>
+        <a href="/plugins" class="hover:text-ink">Plugin Directory</a>
+        <a href="/docs" class="hover:text-ink">Docs</a>
+        <a href="/blog" class="hover:text-ink">Blog</a>
+        <a href="/showcase" class="hover:text-ink">Showcase</a>
       </nav>
-    </header>
+      <div class="ml-auto flex items-center gap-3">
+        <div class="hidden w-[184px] items-center gap-2 rounded-[9px] border border-hairline-2 bg-surface px-3 py-2 text-[13.5px] text-faint xl:flex">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
+          <span>Search plugins, docs…</span>
+          <span class="ml-auto rounded-[5px] border border-hairline-2 px-[5px] py-px font-mono text-[11px] text-ghost">/</span>
+        </div>
+        <a href="https://github.com/dalmasonto/umbra" class="hidden items-center gap-[7px] rounded-[9px] border border-hairline-2 bg-surface px-3 py-2 text-[13.5px] font-semibold text-ink-2 sm:flex">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.58 2 12.25c0 4.53 2.87 8.37 6.84 9.73.5.1.68-.22.68-.49v-1.7c-2.78.62-3.37-1.37-3.37-1.37-.46-1.18-1.11-1.49-1.11-1.49-.91-.64.07-.62.07-.62 1 .07 1.53 1.06 1.53 1.06.89 1.56 2.34 1.11 2.91.85.09-.66.35-1.11.63-1.37-2.22-.26-4.56-1.14-4.56-5.07 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.27 2.75 1.05a9.36 9.36 0 0 1 5 0c1.91-1.32 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.94-2.34 4.81-4.57 5.06.36.32.68.94.68 1.9v2.82c0 .27.18.6.69.49A10.26 10.26 0 0 0 22 12.25C22 6.58 17.52 2 12 2Z"/></svg>
+          <span>GitHub</span>
+        </a>
+        <a href="/docs" class="rounded-[9px] bg-accent px-4 py-[9px] text-[14px] font-semibold text-white transition-colors hover:bg-accent-2">Get started</a>
+      </div>
+    </div>
+  </header>
 
-    <main>
-      {% block content %}{% endblock %}
-    </main>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
 
-    <footer class="border-t border-[oklch(0.82_0.02_235)] bg-[oklch(0.94_0.012_230)]">
-      <div class="mx-auto flex max-w-7xl flex-col gap-4 px-4 py-7 text-sm text-[oklch(0.43_0.03_245)] sm:flex-row sm:items-center sm:justify-between sm:px-6 lg:px-8">
-        <p><strong class="text-[oklch(0.2_0.025_245)]">Umbra</strong> is being documented by a site built with Umbra.</p>
-        <div class="flex flex-wrap gap-4 font-semibold">
-          <a href="#plugins" class="hover:text-[oklch(0.22_0.04_245)]">Plugins</a>
-          <a href="#workflow" class="hover:text-[oklch(0.22_0.04_245)]">Workflow</a>
-          <a href="/dashboard" class="hover:text-[oklch(0.22_0.04_245)]">Dashboard</a>
-          <a href="/admin/" class="hover:text-[oklch(0.22_0.04_245)]">Admin</a>
+  {# ===== FOOTER ===== #}
+  <footer class="mt-14 border-t border-hairline bg-surface-3">
+    <div class="mx-auto max-w-[1200px] px-7 pb-7 pt-12">
+      <div class="grid gap-7 sm:grid-cols-2 lg:grid-cols-[1.6fr_1fr_1fr_1fr_1fr]">
+        <div>
+          <a href="/" class="mb-3.5 flex items-center gap-2.5">
+            <span class="logo-mark [--logo-bite:var(--surface-3)]" style="width:22px;height:22px;" aria-hidden="true"></span>
+            <span class="text-[17px] font-bold">Umbra</span>
+          </a>
+          <p class="mb-3.5 max-w-[260px] text-[13.5px] leading-[1.55] text-muted">A modular Rust web framework where the batteries are real plugins.</p>
+          <div class="inline-flex items-center gap-2 rounded-full border border-tan-line bg-surface px-[11px] py-1.5 text-[12px] text-muted">
+            <span class="logo-mark logo-mark--sm [--logo-bite:var(--surface)]" aria-hidden="true"></span>
+            Built with Umbra · open source
+          </div>
+        </div>
+        <div>
+          <div class="mb-3.5 text-[12px] font-bold uppercase tracking-[0.04em] text-faint">Product</div>
+          <div class="flex flex-col gap-2.5 text-[13.5px] text-body">
+            <a href="/features" class="hover:text-ink">Features</a>
+            <a href="/prebuilt" class="hover:text-ink">Prebuilt Plugins</a>
+            <a href="/plugins" class="hover:text-ink">Plugin Directory</a>
+            <a href="/changelog" class="hover:text-ink">Changelog</a>
+          </div>
+        </div>
+        <div>
+          <div class="mb-3.5 text-[12px] font-bold uppercase tracking-[0.04em] text-faint">Learn</div>
+          <div class="flex flex-col gap-2.5 text-[13.5px] text-body">
+            <a href="/docs" class="hover:text-ink">Docs</a>
+            <a href="/blog" class="hover:text-ink">Blog</a>
+            <a href="/showcase" class="hover:text-ink">Showcase</a>
+            <a href="/docs" class="hover:text-ink">Quick start</a>
+          </div>
+        </div>
+        <div>
+          <div class="mb-3.5 text-[12px] font-bold uppercase tracking-[0.04em] text-faint">Trust</div>
+          <div class="flex flex-col gap-2.5 text-[13.5px] text-body">
+            <a href="/reviews" class="hover:text-ink">Reviews</a>
+            <a href="/security" class="hover:text-ink">Security</a>
+            <a href="/security" class="hover:text-ink">Report a plugin</a>
+            <a href="/security" class="hover:text-ink">Advisories</a>
+          </div>
+        </div>
+        <div>
+          <div class="mb-3.5 text-[12px] font-bold uppercase tracking-[0.04em] text-faint">Community</div>
+          <div class="flex flex-col gap-2.5 text-[13.5px] text-body">
+            <a href="https://github.com/dalmasonto/umbra" class="hover:text-ink">GitHub</a>
+            <a href="/community" class="hover:text-ink">Discord</a>
+            <a href="/community" class="hover:text-ink">Reddit</a>
+            <a href="/community" class="hover:text-ink">Newsletter</a>
+          </div>
         </div>
       </div>
-    </footer>
-  </div>
+      <div class="mt-9 flex flex-wrap items-center justify-between gap-3 border-t border-tan-line pt-5 text-[12.5px] text-faint">
+        <span>© 2026 Umbra. MIT licensed.</span>
+        <span class="font-mono">umbra-cli v0.1.0</span>
+      </div>
+    </div>
+  </footer>
+
+  {% block extra_scripts %}{% endblock %}
 </body>
 </html>

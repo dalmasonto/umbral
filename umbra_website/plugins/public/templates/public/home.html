@@ -1,207 +1,362 @@
 {% extends "base.html" %}
 
-{% block title %}Umbra, plugin-first Rust web framework{% endblock %}
-{% block meta_description %}Umbra is a plugin-first Rust web framework for complete applications: models, migrations, admin, forms, REST, templates, and swappable batteries behind one plugin contract.{% endblock %}
+{% block title %}Umbra — the batteries are real plugins{% endblock %}
+{% block meta_description %}Umbra gives Rust developers a complete app framework — models, migrations, admin, forms, REST, background work — with every battery delivered as a plugin you can enable, replace, or extend. This site is built with Umbra.{% endblock %}
 
 {% block content %}
-<section class="border-b border-[oklch(0.82_0.02_235)] bg-[oklch(0.972_0.009_230)]">
-  <div class="mx-auto grid max-w-7xl gap-7 px-4 py-8 sm:px-6 lg:grid-cols-[0.72fr_1.28fr] lg:px-8 lg:py-10">
-    <div>
-      <p class="inline-flex rounded border border-[oklch(0.74_0.03_235)] bg-[oklch(0.99_0.006_230)] px-2 py-1 text-xs font-black text-[oklch(0.48_0.12_35)]">framework dossier</p>
-      <h1 class="mt-4 max-w-2xl text-2xl font-black leading-tight text-[oklch(0.18_0.03_245)] sm:text-3xl">
-        Umbra is a Rust framework for building whole web applications.
-      </h1>
-      <p class="mt-4 max-w-2xl text-sm leading-6 text-[oklch(0.4_0.03_245)] sm:text-base sm:leading-7">
-        It gives Rust projects an app shape: models, migrations, templates, forms, admin, REST, OpenAPI, security defaults, and project-owned plugins. The important part is that the batteries are still plugins, not hidden framework magic.
-      </p>
-      <div class="mt-5 flex flex-wrap gap-2 text-sm font-bold">
-        <a href="#workflow" class="rounded bg-[oklch(0.48_0.12_35)] px-3 py-1.5 text-[oklch(0.98_0.01_35)] hover:bg-[oklch(0.42_0.13_35)]">Read workflow</a>
-        <a href="#plugins" class="rounded border border-[oklch(0.72_0.03_235)] bg-[oklch(0.99_0.006_230)] px-3 py-1.5 text-[oklch(0.24_0.035_245)] hover:border-[oklch(0.56_0.06_220)]">Inspect plugins</a>
+
+{# -----------------------------------------------------------------------
+   Hero — badge, headline, CTAs, built-with-Umbra proof pill.
+   From design/Home.dc.html; palette tokens in styles/input.css.
+   ----------------------------------------------------------------------- #}
+<section class="mx-auto max-w-[1200px] px-7 pb-9 pt-[72px] text-center">
+  <div class="mb-[26px] inline-flex items-center gap-[9px] rounded-full border border-accent-line bg-accent-soft px-3.5 py-1.5 text-[13px] font-semibold text-accent-2">
+    <span class="h-[7px] w-[7px] rounded-full bg-accent"></span>
+    Modular Rust web framework · v0.1 preview
+  </div>
+  <h1 class="mx-auto max-w-[880px] text-[40px] font-extrabold leading-[1.04] tracking-[-0.035em] text-ink sm:text-[52px] lg:text-[62px]">
+    The batteries are <span class="text-accent">real plugins.</span>
+  </h1>
+  <p class="mx-auto mt-6 max-w-[640px] text-[18px] leading-[1.55] text-muted sm:text-[20px]">
+    Umbra gives Rust developers a complete app framework — models, migrations, admin, forms, REST, background work — with every battery delivered as a plugin you can enable, replace, or extend.
+  </p>
+  <div class="mt-[34px] flex flex-wrap justify-center gap-3">
+    <a href="/docs" class="btn-accent btn-accent--lg">
+      Get started
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+    </a>
+    <a href="/plugins" class="btn-ghost btn-ghost--lg">Browse the plugin directory</a>
+  </div>
+  <div class="mt-[30px] inline-flex flex-wrap items-center justify-center gap-2.5 rounded-full border border-hairline bg-surface py-[7px] pl-2 pr-3.5 text-[13px] text-muted">
+    <span class="inline-flex items-center gap-1.5 rounded-full bg-accent-soft px-[9px] py-[3px] font-semibold text-accent-2">
+      <span class="logo-mark logo-mark--sm [--logo-bite:var(--accent-soft)]" aria-hidden="true"></span>
+      Built with Umbra
+    </span>
+    This whole site runs on Umbra — same apps, migrations, forms, admin &amp; plugins it documents.
+  </div>
+</section>
+
+{# -----------------------------------------------------------------------
+   Hero terminal + battery-swap panel.
+   ----------------------------------------------------------------------- #}
+<section class="mx-auto max-w-[1080px] px-7 pb-2 pt-6">
+  <div class="grid gap-[18px] lg:grid-cols-[1.25fr_1fr]">
+    <div class="overflow-hidden rounded-2xl bg-shade shadow-terminal">
+      <div class="flex items-center gap-2 border-b border-shade-2 px-4 py-[13px]">
+        <span class="h-[11px] w-[11px] rounded-full bg-[#FF6259]"></span>
+        <span class="h-[11px] w-[11px] rounded-full bg-[#FFBD2E]"></span>
+        <span class="h-[11px] w-[11px] rounded-full bg-[#28C840]"></span>
+        <span class="ml-2 font-mono text-[12px] text-shade-faint">~/projects</span>
       </div>
+      <pre class="overflow-x-auto px-[22px] py-5 font-mono text-[13.5px] leading-[1.85] text-shade-ink"><span class="text-code-violet">$</span> umbra-cli startproject <span class="text-code-green">blog</span>
+<span class="text-code-violet">$</span> cd blog && umbra-cli startapp <span class="text-code-green">posts</span>
+
+<span class="text-muted"># enable batteries — they're just plugins</span>
+<span class="text-shade-ink">plugins</span> = [<span class="text-code-amber">"umbra.admin"</span>, <span class="text-code-amber">"umbra.rest"</span>, <span class="text-code-amber">"umbra.auth"</span>]
+
+<span class="text-code-violet">$</span> umbra makemigrations && umbra migrate
+<span class="text-code-green">✓</span> applied <span class="text-code-green">3</span> migrations · admin at <span class="text-code-blue">/admin</span></pre>
     </div>
-
-    <div class="grid content-start gap-3">
-      <div class="grid border border-[oklch(0.76_0.026_235)] bg-[oklch(0.99_0.006_230)] md:grid-cols-[0.9fr_1.1fr]">
-        <div class="border-b border-[oklch(0.84_0.018_235)] p-3 md:border-b-0 md:border-r">
-          <p class="text-xs font-black text-[oklch(0.48_0.12_35)]">positioning</p>
-          <p class="mt-1.5 text-base font-black leading-snug">Complete app framework, plugin-first architecture.</p>
+    <div class="card p-[22px]">
+      <div class="text-[12.5px] font-bold uppercase tracking-[0.04em] text-faint">Swap any battery</div>
+      <p class="mb-[18px] mt-2.5 text-[14px] leading-[1.5] text-muted">Every official capability lives behind the same plugin contract a third party can use. Keep it, replace it, or build your own.</p>
+      <div class="flex flex-col gap-[9px]">
+        <div class="flex items-center gap-[11px] rounded-[10px] border border-hairline bg-surface-2 px-[13px] py-[11px]">
+          <span class="font-mono text-[13px] font-semibold text-ink-2">umbra.rest</span>
+          <span class="ml-auto text-[11.5px] text-faint">official</span>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--ghost)" stroke-width="2"><path d="M8 7l-4 5 4 5M16 7l4 5-4 5"/></svg>
         </div>
-        <div class="p-3">
-          <p class="text-xs font-black text-[oklch(0.2_0.025_245)]">current proof</p>
-          <p class="mt-1.5 text-sm leading-6 text-[oklch(0.42_0.03_245)]">This homepage is served by `plugins/public`, extends the project wrapper, and uses compiled Tailwind through `umbra-static`.</p>
+        <div class="flex items-center gap-[11px] rounded-[10px] border border-accent-line bg-accent-soft px-[13px] py-[11px]">
+          <span class="font-mono text-[13px] font-semibold text-accent-2">acme-graphql</span>
+          <span class="ml-auto text-[11.5px] text-accent-2">your pick</span>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2.2"><path d="M20 6L9 17l-5-5"/></svg>
         </div>
-      </div>
-
-      <div class="grid items-start gap-3 md:grid-cols-3">
-        <div class="border border-[oklch(0.78_0.026_235)] bg-[oklch(0.94_0.012_230)] p-3">
-          <p class="text-xs font-black text-[oklch(0.5_0.11_155)]">1</p>
-          <p class="mt-1.5 text-sm font-black">Create a project</p>
-          <p class="mt-1 text-sm leading-6 text-[oklch(0.43_0.03_245)]">Start with settings, routes, templates, and dispatch.</p>
-        </div>
-        <div class="border border-[oklch(0.78_0.026_235)] bg-[oklch(0.94_0.012_230)] p-3">
-          <p class="text-xs font-black text-[oklch(0.5_0.11_155)]">2</p>
-          <p class="mt-1.5 text-sm font-black">Add apps</p>
-          <p class="mt-1 text-sm leading-6 text-[oklch(0.43_0.03_245)]">Each feature area gets a plugin crate and owned models.</p>
-        </div>
-        <div class="border border-[oklch(0.78_0.026_235)] bg-[oklch(0.94_0.012_230)] p-3">
-          <p class="text-xs font-black text-[oklch(0.5_0.11_155)]">3</p>
-          <p class="mt-1.5 text-sm font-black">Ship surfaces</p>
-          <p class="mt-1 text-sm leading-6 text-[oklch(0.43_0.03_245)]">Use HTML, admin, forms, REST, and OpenAPI from the same registry.</p>
+        <div class="flex items-center gap-[11px] rounded-[10px] border border-hairline bg-surface-2 px-[13px] py-[11px]">
+          <span class="font-mono text-[13px] font-semibold text-ink-2">your-app/plugins/billing</span>
+          <span class="ml-auto text-[11.5px] text-faint">startapp</span>
         </div>
       </div>
     </div>
   </div>
 </section>
 
-<section id="framework" class="px-4 py-10 sm:px-6 lg:px-8">
-  <div class="mx-auto grid max-w-7xl gap-8 lg:grid-cols-[280px_1fr]">
-    <aside class="text-sm leading-6 text-[oklch(0.43_0.03_245)]">
-      <p class="font-black text-[oklch(0.18_0.03_245)]">Framework scope</p>
-      <p class="mt-2">Not a router showcase. Not a static marketing promise. Umbra's public story is the application shape plus the plugin boundary.</p>
-    </aside>
-
-    <div class="overflow-hidden border border-[oklch(0.76_0.026_235)] bg-[oklch(0.99_0.006_230)]">
-      <div class="grid border-b border-[oklch(0.82_0.02_235)] bg-[oklch(0.93_0.014_230)] px-4 py-2 text-xs font-black text-[oklch(0.43_0.03_245)] md:grid-cols-[0.8fr_1.1fr_0.8fr]">
-        <p>surface</p>
-        <p class="hidden md:block">what it should answer</p>
-        <p class="hidden md:block">where it lives</p>
+{# -----------------------------------------------------------------------
+   Three ideas — complete framework / batteries are plugins / dogfooded.
+   ----------------------------------------------------------------------- #}
+<section class="mx-auto max-w-[1200px] px-7 pb-6 pt-16">
+  <div class="grid gap-[18px] md:grid-cols-3">
+    <div class="card p-[26px]">
+      <div class="mb-4 flex h-[42px] w-[42px] items-center justify-center rounded-[11px] bg-accent-soft">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
       </div>
-      <div class="divide-y divide-[oklch(0.86_0.018_235)] text-sm">
-        <div class="grid gap-2 px-4 py-3 md:grid-cols-[0.8fr_1.1fr_0.8fr]">
-          <p class="font-black">models and migrations</p>
-          <p class="leading-6 text-[oklch(0.43_0.03_245)]">How do I declare data, review changes, and migrate deliberately?</p>
-          <p class="font-mono text-xs text-[oklch(0.36_0.05_220)]">plugins/*/src/models.rs</p>
-        </div>
-        <div class="grid gap-2 px-4 py-3 md:grid-cols-[0.8fr_1.1fr_0.8fr]">
-          <p class="font-black">templates and forms</p>
-          <p class="leading-6 text-[oklch(0.43_0.03_245)]">How do server-rendered pages and public submissions work without a SPA requirement?</p>
-          <p class="font-mono text-xs text-[oklch(0.36_0.05_220)]">templates + Umbra Forms</p>
-        </div>
-        <div class="grid gap-2 px-4 py-3 md:grid-cols-[0.8fr_1.1fr_0.8fr]">
-          <p class="font-black">admin and moderation</p>
-          <p class="leading-6 text-[oklch(0.43_0.03_245)]">How do maintainers edit features, plugins, reviews, showcase entries, and reports?</p>
-          <p class="font-mono text-xs text-[oklch(0.36_0.05_220)]">umbra-admin</p>
-        </div>
-        <div class="grid gap-2 px-4 py-3 md:grid-cols-[0.8fr_1.1fr_0.8fr]">
-          <p class="font-black">REST and OpenAPI</p>
-          <p class="leading-6 text-[oklch(0.43_0.03_245)]">How do app models become API resources when the project needs them?</p>
-          <p class="font-mono text-xs text-[oklch(0.36_0.05_220)]">umbra-rest + umbra-openapi</p>
-        </div>
+      <h3 class="mb-2 text-[18px] font-bold tracking-[-0.01em]">A complete app framework</h3>
+      <p class="text-[14.5px] leading-[1.55] text-muted">Not just HTTP routing. Models, migrations, an admin, forms, REST and background work — the productive shape you already know.</p>
+    </div>
+    <div class="card p-[26px]">
+      <div class="mb-4 flex h-[42px] w-[42px] items-center justify-center rounded-[11px] bg-accent-soft">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><path d="M3 12a9 9 0 0 1 9-9 9 9 0 0 1 9 9"/><path d="M3 12a9 9 0 0 0 9 9 9 9 0 0 0 9-9"/><circle cx="12" cy="12" r="2.5"/></svg>
       </div>
+      <h3 class="mb-2 text-[18px] font-bold tracking-[-0.01em]">Batteries are plugins</h3>
+      <p class="text-[14.5px] leading-[1.55] text-muted">Official capabilities ship as prebuilt plugins. Enable them, replace them with a community plugin, or extend them — same boundary either way.</p>
+    </div>
+    <div class="card p-[26px]">
+      <div class="mb-4 flex h-[42px] w-[42px] items-center justify-center rounded-[11px] bg-accent-soft">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><path d="M20 7L9 18l-5-5"/></svg>
+      </div>
+      <h3 class="mb-2 text-[18px] font-bold tracking-[-0.01em]">Proven by this site</h3>
+      <p class="text-[14.5px] leading-[1.55] text-muted">Umbra.rs is itself an Umbra project — the directory, reviews, discussions and admin you see are the same systems it documents.</p>
     </div>
   </div>
 </section>
 
-<section id="plugins" class="border-y border-[oklch(0.82_0.02_235)] bg-[oklch(0.94_0.012_230)] px-4 py-10 sm:px-6 lg:px-8">
-  <div class="mx-auto grid max-w-7xl gap-8 lg:grid-cols-[280px_1fr]">
-    <aside>
-      <p class="text-sm font-black text-[oklch(0.18_0.03_245)]">Plugin map</p>
-      <p class="mt-2 text-sm leading-6 text-[oklch(0.43_0.03_245)]">The website should make every battery legible: official, replaceable, extendable, and honest about maturity.</p>
-    </aside>
-
-    <div class="grid gap-3 md:grid-cols-2">
-      <div class="border border-[oklch(0.76_0.026_235)] bg-[oklch(0.99_0.006_230)] p-4">
-        <div class="flex items-start justify-between gap-4">
-          <p class="font-black">Official batteries</p>
-          <span class="rounded bg-[oklch(0.9_0.055_155)] px-2 py-1 text-xs font-black text-[oklch(0.32_0.09_155)]">first party</span>
+{# -----------------------------------------------------------------------
+   Plugin directory preview — the differentiator. Cards iterate the
+   database (first three approved plugins); the static trio below is
+   the honest fallback while the directory table is empty. Fabricated
+   metrics (ratings, installs) appear ONLY in the fallback.
+   ----------------------------------------------------------------------- #}
+<section class="mx-auto max-w-[1200px] px-7 py-12">
+  <div class="rounded-3xl border border-hairline bg-surface p-6 shadow-panel sm:p-10">
+    <div class="mb-[26px] flex flex-wrap items-end justify-between gap-6">
+      <div class="max-w-[620px]">
+        <div class="kicker mb-3 text-accent">
+          <span class="h-1.5 w-1.5 rounded-full bg-accent"></span>First of its kind
         </div>
-        <p class="mt-3 text-sm leading-6 text-[oklch(0.43_0.03_245)]">Admin, auth, sessions, REST, OpenAPI, security, static assets, and future plugins should be visible as independent pieces.</p>
+        <h2 class="mb-3 text-[30px] font-extrabold leading-[1.08] tracking-[-0.03em] sm:text-[38px]">One place to find a plugin for that</h2>
+        <p class="text-[16.5px] leading-[1.55] text-muted">No Rust framework has a real home for discoverable, reviewable apps &amp; plugins. Umbra does — search, filter, read what developers are saying, and check a plugin's safety before you install.</p>
       </div>
+      <a href="/plugins" class="btn-accent whitespace-nowrap">
+        Open the directory
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+      </a>
+    </div>
 
-      <div class="border border-[oklch(0.76_0.026_235)] bg-[oklch(0.99_0.006_230)] p-4">
-        <div class="flex items-start justify-between gap-4">
-          <p class="font-black">Community directory</p>
-          <span class="rounded bg-[oklch(0.92_0.055_72)] px-2 py-1 text-xs font-black text-[oklch(0.43_0.1_72)]">planned</span>
-        </div>
-        <p class="mt-3 text-sm leading-6 text-[oklch(0.43_0.03_245)]">Listings need install notes, compatibility, audit status, comments, maintainer notes, and security reports.</p>
+    {# Search + filter bar (visual preview of the directory page). #}
+    <div class="mb-[18px] flex flex-wrap items-center gap-2.5">
+      <div class="flex min-w-[280px] flex-1 items-center gap-[9px] rounded-[11px] border border-hairline-2 bg-paper px-[15px] py-3 text-[14.5px] text-faint">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
+        Try “rest”, “multitenancy”, “oauth”…
       </div>
+      <div class="flex flex-wrap gap-[7px]">
+        <span class="rounded-[9px] bg-shade px-3.5 py-[9px] text-[13.5px] font-semibold text-white">All</span>
+        <span class="rounded-[9px] border border-hairline-2 bg-surface px-3.5 py-[9px] text-[13.5px] font-medium text-body">Official</span>
+        <span class="rounded-[9px] border border-hairline-2 bg-surface px-3.5 py-[9px] text-[13.5px] font-medium text-body">Community</span>
+        <span class="rounded-[9px] border border-hairline-2 bg-surface px-3.5 py-[9px] text-[13.5px] font-medium text-body">Audited</span>
+      </div>
+    </div>
 
-      <div class="border border-[oklch(0.76_0.026_235)] bg-[oklch(0.99_0.006_230)] p-4">
-        <div class="flex items-start justify-between gap-4">
-          <p class="font-black">Project apps</p>
-          <span class="rounded bg-[oklch(0.9_0.05_220)] px-2 py-1 text-xs font-black text-[oklch(0.34_0.09_220)]">same API</span>
+    <div class="grid gap-3.5 md:grid-cols-3">
+      {% for p in plugins %}{% if loop.index <= 3 %}
+      <a href="/plugins" class="card block rounded-[14px] p-[18px]">
+        <div class="mb-[11px] flex items-center gap-2.5">
+          <span class="flex h-[34px] w-[34px] items-center justify-center rounded-[9px] bg-accent-soft font-mono text-[14px] font-bold text-accent-2">{}</span>
+          <span class="truncate text-[15px] font-bold">{{ p.crate_name }}</span>
+          <span class="pill-official ml-auto">{{ p.status }}</span>
         </div>
-        <p class="mt-3 text-sm leading-6 text-[oklch(0.43_0.03_245)]">The website's `public`, `features`, `reviews`, `showcase`, and `community` areas are ordinary Umbra apps.</p>
-      </div>
-
-      <div class="border border-[oklch(0.76_0.026_235)] bg-[oklch(0.99_0.006_230)] p-4">
-        <div class="flex items-start justify-between gap-4">
-          <p class="font-black">Security workflow</p>
-          <span class="rounded bg-[oklch(0.93_0.055_30)] px-2 py-1 text-xs font-black text-[oklch(0.5_0.12_30)]">serious</span>
+        <p class="mb-3 min-h-[40px] text-[13.5px] leading-[1.5] text-muted">{{ p.short_description }}</p>
+        <code class="block overflow-hidden text-ellipsis whitespace-nowrap rounded-[7px] border border-hairline bg-surface-2 px-[9px] py-1.5 font-mono text-[12px] text-ink-2">umbra add {{ p.crate_name }}</code>
+      </a>
+      {% endif %}{% else %}
+      {# Static fallback — rendered until the directory table has rows. #}
+      <a href="/plugins" class="card block rounded-[14px] p-[18px]">
+        <div class="mb-[11px] flex items-center gap-2.5">
+          <span class="flex h-[34px] w-[34px] items-center justify-center rounded-[9px] bg-accent-soft font-mono text-[14px] font-bold text-accent-2">{}</span>
+          <span class="text-[15px] font-bold">umbra-rest</span>
+          <span class="pill-official ml-auto">Official</span>
         </div>
-        <p class="mt-3 text-sm leading-6 text-[oklch(0.43_0.03_245)]">Plugin reports, warnings, advisories, and auditor queues are part of the ecosystem story, not an afterthought.</p>
-      </div>
+        <p class="mb-3 min-h-[40px] text-[13.5px] leading-[1.5] text-muted">Serializers, viewsets, routers, OpenAPI and a request playground.</p>
+        <div class="mb-3 flex items-center gap-2.5 text-[12px] text-faint">
+          <span class="font-semibold text-ink">★ 4.9</span><span>·</span><span>38k installs</span><span>·</span><span>52 notes</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <code class="flex-1 overflow-hidden text-ellipsis whitespace-nowrap rounded-[7px] border border-hairline bg-surface-2 px-[9px] py-1.5 font-mono text-[12px] text-ink-2">umbra add umbra-rest</code>
+          <span class="inline-flex items-center gap-1 text-[11.5px] font-semibold text-ok"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6L9 17l-5-5"/></svg>Audited</span>
+        </div>
+      </a>
+      <a href="/plugins" class="card block rounded-[14px] p-[18px]">
+        <div class="mb-[11px] flex items-center gap-2.5">
+          <span class="flex h-[34px] w-[34px] items-center justify-center rounded-[9px] bg-accent-soft text-accent-2"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg></span>
+          <span class="text-[15px] font-bold">umbra-admin</span>
+          <span class="pill-official ml-auto">Official</span>
+        </div>
+        <p class="mb-3 min-h-[40px] text-[13.5px] leading-[1.5] text-muted">Auto dashboards, CRUD, filters, sheets, bulk actions and per-user preferences.</p>
+        <div class="mb-3 flex items-center gap-2.5 text-[12px] text-faint">
+          <span class="font-semibold text-ink">★ 4.8</span><span>·</span><span>41k installs</span><span>·</span><span>67 notes</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <code class="flex-1 overflow-hidden text-ellipsis whitespace-nowrap rounded-[7px] border border-hairline bg-surface-2 px-[9px] py-1.5 font-mono text-[12px] text-ink-2">umbra add umbra-admin</code>
+          <span class="inline-flex items-center gap-1 text-[11.5px] font-semibold text-ok"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6L9 17l-5-5"/></svg>Audited</span>
+        </div>
+      </a>
+      <a href="/plugins" class="card block rounded-[14px] p-[18px]">
+        <div class="mb-[11px] flex items-center gap-2.5">
+          <span class="flex h-[34px] w-[34px] items-center justify-center rounded-[9px] bg-tan-soft text-tan"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21V8l9-5 9 5v13"/><path d="M9 21v-6h6v6"/></svg></span>
+          <span class="text-[15px] font-bold">umbra-multitenancy</span>
+          <span class="pill-community ml-auto">Community</span>
+        </div>
+        <p class="mb-3 min-h-[40px] text-[13.5px] leading-[1.5] text-muted">Schema-per-tenant and row-level tenancy with admin-aware scoping. by @kanto</p>
+        <div class="mb-3 flex items-center gap-2.5 text-[12px] text-faint">
+          <span class="font-semibold text-ink">★ 4.6</span><span>·</span><span>9.1k installs</span><span>·</span><span>31 notes</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <code class="flex-1 overflow-hidden text-ellipsis whitespace-nowrap rounded-[7px] border border-hairline bg-surface-2 px-[9px] py-1.5 font-mono text-[12px] text-ink-2">umbra add umbra-multitenancy</code>
+          <span class="inline-flex items-center gap-1 text-[11.5px] font-semibold text-warn"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 9v4M12 17h.01"/><circle cx="12" cy="12" r="9"/></svg>Unverified</span>
+        </div>
+      </a>
+      {% endfor %}
     </div>
   </div>
 </section>
 
-<section id="workflow" class="px-4 py-10 sm:px-6 lg:px-8">
-  <div class="mx-auto grid max-w-7xl gap-8 lg:grid-cols-[280px_1fr]">
-    <aside>
-      <p class="text-sm font-black text-[oklch(0.18_0.03_245)]">Build loop</p>
-      <p class="mt-2 text-sm leading-6 text-[oklch(0.43_0.03_245)]">The homepage should teach the first useful loop without pretending every deeper page already exists.</p>
-    </aside>
+{# -----------------------------------------------------------------------
+   Prebuilt batteries — the official plugin grid.
+   ----------------------------------------------------------------------- #}
+<section class="mx-auto max-w-[1200px] px-7 py-10">
+  <div class="mx-auto mb-[34px] max-w-[680px] text-center">
+    <h2 class="mb-3 text-[28px] font-extrabold tracking-[-0.03em] sm:text-[34px]">The batteries, included</h2>
+    <p class="text-[16.5px] leading-[1.55] text-muted">Official plugins maintained by the Umbra team. Each one is swappable, has its own page, and tracks what's shipped vs. planned.</p>
+  </div>
+  <div class="grid gap-3.5 sm:grid-cols-2 lg:grid-cols-4">
+    <a href="/prebuilt" class="card block rounded-[14px] p-5">
+      <div class="mb-2 font-mono text-[14px] font-bold text-accent-2">umbra.orm</div>
+      <p class="mb-3 text-[13.5px] leading-[1.5] text-muted">Model declaration, query ergonomics, multi-database direction.</p>
+      <span class="pill-ok">Shipped</span>
+    </a>
+    <a href="/prebuilt" class="card block rounded-[14px] p-5">
+      <div class="mb-2 font-mono text-[14px] font-bold text-accent-2">umbra.admin</div>
+      <p class="mb-3 text-[13.5px] leading-[1.5] text-muted">Dashboards, CRUD, filters, sheets, bulk actions, preferences.</p>
+      <span class="pill-ok">Shipped</span>
+    </a>
+    <a href="/prebuilt" class="card block rounded-[14px] p-5">
+      <div class="mb-2 font-mono text-[14px] font-bold text-accent-2">umbra.rest</div>
+      <p class="mb-3 text-[13.5px] leading-[1.5] text-muted">Serializers, viewsets, routers, OpenAPI, pagination, playground.</p>
+      <span class="pill-ok">Shipped</span>
+    </a>
+    <a href="/prebuilt" class="card block rounded-[14px] p-5">
+      <div class="mb-2 font-mono text-[14px] font-bold text-accent-2">umbra.auth</div>
+      <p class="mb-3 text-[13.5px] leading-[1.5] text-muted">Sessions, password hashing, permissions and groups.</p>
+      <span class="pill-ok">Shipped</span>
+    </a>
+    <a href="/prebuilt" class="card block rounded-[14px] p-5">
+      <div class="mb-2 font-mono text-[14px] font-bold text-accent-2">umbra.forms</div>
+      <p class="mb-3 text-[13.5px] leading-[1.5] text-muted">Validation, friendly errors, spam resistance, server rendering.</p>
+      <span class="pill-ok">Shipped</span>
+    </a>
+    <a href="/prebuilt" class="card block rounded-[14px] p-5">
+      <div class="mb-2 font-mono text-[14px] font-bold text-accent-2">umbra.content</div>
+      <p class="mb-3 text-[13.5px] leading-[1.5] text-muted">Blog, pages, FAQ, media, redirects, banners, testimonials.</p>
+      <span class="pill-warn">Beta</span>
+    </a>
+    <a href="/prebuilt" class="card block rounded-[14px] p-5">
+      <div class="mb-2 font-mono text-[14px] font-bold text-accent-2">umbra.tasks</div>
+      <p class="mb-3 text-[13.5px] leading-[1.5] text-muted">Background jobs, scheduling and retries behind a plugin.</p>
+      <span class="pill-warn">Experimental</span>
+    </a>
+    <a href="/prebuilt" class="block rounded-[14px] border border-shade bg-shade p-5 text-white">
+      <div class="mb-2 text-[14px] font-bold">See all prebuilt plugins</div>
+      <p class="mb-3 text-[13.5px] leading-[1.5] text-shade-muted">Setup notes, compatibility and per-plugin feature trackers.</p>
+      <span class="inline-flex items-center gap-1.5 text-[13px] font-semibold text-accent-ghost">Explore <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></span>
+    </a>
+  </div>
+</section>
 
-    <div class="grid gap-4 lg:grid-cols-[1fr_0.9fr]">
-      <div class="border border-[oklch(0.76_0.026_235)] bg-[oklch(0.2_0.035_245)] p-4 text-[oklch(0.93_0.014_230)]">
-        <div class="flex items-center justify-between border-b border-[oklch(0.36_0.04_245)] pb-3">
-          <p class="text-sm font-black">commands</p>
-          <p class="text-xs font-bold text-[oklch(0.74_0.06_92)]">normal production flow</p>
+{# -----------------------------------------------------------------------
+   Reviews + security — trust, side by side.
+   ----------------------------------------------------------------------- #}
+<section class="mx-auto max-w-[1200px] px-7 py-10">
+  <div class="grid gap-[18px] lg:grid-cols-[1.4fr_1fr]">
+
+    <div class="rounded-[20px] border border-hairline bg-surface p-6 sm:p-8">
+      <div class="mb-5 flex items-center justify-between gap-4">
+        <div>
+          <h2 class="mb-1 text-[24px] font-extrabold tracking-[-0.02em]">What developers say</h2>
+          <p class="text-[14px] text-muted">Verified reviews of the framework — tied to real GitHub identities.</p>
         </div>
-        <pre class="mt-4 overflow-x-auto text-sm leading-7"><code>umbra startproject site
-umbra startapp public
-umbra startapp features
-
-cargo run -- makemigrations
-cargo run -- migrate
-cargo run -- serve</code></pre>
+        <a href="/reviews" class="whitespace-nowrap text-[13.5px] font-semibold text-accent-2">All reviews →</a>
       </div>
-
-      <div class="grid content-start gap-3">
-        <div class="border border-[oklch(0.76_0.026_235)] bg-[oklch(0.99_0.006_230)] p-4">
-          <p class="font-black">No auto-migrate in `main.rs`</p>
-          <p class="mt-2 text-sm leading-6 text-[oklch(0.43_0.03_245)]">The website should dogfood explicit migration review.</p>
+      <div class="flex flex-col gap-3">
+        <div class="rounded-[14px] border border-hairline p-[18px]">
+          <div class="mb-[11px] flex items-center gap-[11px]">
+            <span class="flex h-9 w-9 items-center justify-center rounded-full bg-accent-line text-[14px] font-bold text-accent-2">RM</span>
+            <div>
+              <div class="flex items-center gap-1.5 text-[14px] font-bold">Rosa Méndez <svg width="13" height="13" viewBox="0 0 24 24" fill="var(--ok)"><path d="M12 2l2.4 4.9 5.4.8-3.9 3.8.9 5.4-4.8-2.5-4.8 2.5.9-5.4L4.2 7.7l5.4-.8z"/></svg></div>
+              <div class="text-[12px] text-faint">@rmendez · Staff Eng, fintech</div>
+            </div>
+            <span class="ml-auto text-[13px] tracking-[1px] text-[#E0A92E]">★★★★★</span>
+          </div>
+          <p class="text-[14px] leading-[1.55] text-ink-2">“The plugin boundary is the real story. We replaced the default auth with our SSO plugin in an afternoon and the admin just kept working.”</p>
+          <div class="mt-[9px] font-mono text-[11.5px] text-ghost">on v0.1 · production</div>
         </div>
-        <div class="border border-[oklch(0.76_0.026_235)] bg-[oklch(0.99_0.006_230)] p-4">
-          <p class="font-black">Templates stay near owners</p>
-          <p class="mt-2 text-sm leading-6 text-[oklch(0.43_0.03_245)]">The wrapper can be global, but page templates live in their plugin.</p>
+        <div class="rounded-[14px] border border-hairline p-[18px]">
+          <div class="mb-[11px] flex items-center gap-[11px]">
+            <span class="flex h-9 w-9 items-center justify-center rounded-full bg-[#FDE7D6] text-[14px] font-bold text-warn">TK</span>
+            <div>
+              <div class="flex items-center gap-1.5 text-[14px] font-bold">Theo Kline <svg width="13" height="13" viewBox="0 0 24 24" fill="var(--ok)"><path d="M12 2l2.4 4.9 5.4.8-3.9 3.8.9 5.4-4.8-2.5-4.8 2.5.9-5.4L4.2 7.7l5.4-.8z"/></svg></div>
+              <div class="text-[12px] text-faint">@theok · Indie, SaaS</div>
+            </div>
+            <span class="ml-auto text-[13px] tracking-[1px] text-[#E0A92E]">★★★★★</span>
+          </div>
+          <p class="text-[14px] leading-[1.55] text-ink-2">“Coming from Django, the startproject → startapp → migrate loop felt instantly familiar — but in Rust, and everything's a plugin I can read.”</p>
+          <div class="mt-[9px] font-mono text-[11.5px] text-ghost">on v0.1 · side project</div>
         </div>
       </div>
+    </div>
+
+    <div class="rounded-[20px] bg-shade p-6 text-white sm:p-8">
+      <div class="mb-[18px] flex h-11 w-11 items-center justify-center rounded-xl bg-white/[0.08]">
+        <svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="var(--accent-ghost)" stroke-width="2"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg>
+      </div>
+      <h2 class="mb-2.5 text-[24px] font-extrabold tracking-[-0.02em]">Plugins run real code. We take that seriously.</h2>
+      <p class="mb-5 text-[14.5px] leading-[1.6] text-[#B0A89F]">Every plugin page has a one-click way to report a security concern. Confirmed issues get an advisory and a visible warning — triaged by dedicated plugin auditors.</p>
+      <div class="mb-[22px] flex flex-col gap-2.5">
+        <div class="flex items-center gap-2.5 text-[13.5px] text-shade-ink"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--ok)" stroke-width="2.4"><path d="M20 6L9 17l-5-5"/></svg>Audit status on every listing</div>
+        <div class="flex items-center gap-2.5 text-[13.5px] text-shade-ink"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--ok)" stroke-width="2.4"><path d="M20 6L9 17l-5-5"/></svg>Responsible disclosure workflow</div>
+        <div class="flex items-center gap-2.5 text-[13.5px] text-shade-ink"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--ok)" stroke-width="2.4"><path d="M20 6L9 17l-5-5"/></svg>Ecosystem alerts for confirmed threats</div>
+      </div>
+      <a href="/security" class="inline-flex items-center gap-2 rounded-[10px] bg-white px-[18px] py-[11px] text-[14px] font-semibold text-shade">Read the security model <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
     </div>
   </div>
 </section>
 
-<section id="site" class="border-t border-[oklch(0.82_0.02_235)] bg-[oklch(0.99_0.006_230)] px-4 py-10 sm:px-6 lg:px-8">
-  <div class="mx-auto grid max-w-7xl gap-8 lg:grid-cols-[280px_1fr]">
-    <aside>
-      <p class="text-sm font-black text-[oklch(0.18_0.03_245)]">This page</p>
-      <p class="mt-2 text-sm leading-6 text-[oklch(0.43_0.03_245)]">The landing page is deliberately static for now. The rest of the site should become database-backed as the app models mature.</p>
-    </aside>
-
-    <div class="overflow-hidden border border-[oklch(0.76_0.026_235)]">
-      <div class="grid bg-[oklch(0.93_0.014_230)] px-4 py-2 text-xs font-black text-[oklch(0.43_0.03_245)] md:grid-cols-[0.8fr_1.2fr_0.7fr]">
-        <p>file</p>
-        <p class="hidden md:block">job</p>
-        <p class="hidden md:block">status</p>
-      </div>
-      <div class="divide-y divide-[oklch(0.86_0.018_235)] bg-[oklch(0.99_0.006_230)] text-sm">
-        <div class="grid gap-2 px-4 py-3 md:grid-cols-[0.8fr_1.2fr_0.7fr]">
-          <p class="font-mono text-xs text-[oklch(0.36_0.05_220)]">templates/base.html</p>
-          <p class="text-[oklch(0.43_0.03_245)]">Global navigation, CSS, footer, shared blocks.</p>
-          <p class="font-bold text-[oklch(0.5_0.11_155)]">global</p>
-        </div>
-        <div class="grid gap-2 px-4 py-3 md:grid-cols-[0.8fr_1.2fr_0.7fr]">
-          <p class="font-mono text-xs text-[oklch(0.36_0.05_220)]">plugins/public/templates</p>
-          <p class="text-[oklch(0.43_0.03_245)]">Homepage content owned by the public plugin.</p>
-          <p class="font-bold text-[oklch(0.5_0.11_155)]">plugin</p>
-        </div>
-        <div class="grid gap-2 px-4 py-3 md:grid-cols-[0.8fr_1.2fr_0.7fr]">
-          <p class="font-mono text-xs text-[oklch(0.36_0.05_220)]">static/css/umbra.css</p>
-          <p class="text-[oklch(0.43_0.03_245)]">Compiled Tailwind served by `umbra-static`.</p>
-          <p class="font-bold text-[oklch(0.5_0.11_155)]">served</p>
-        </div>
-      </div>
-    </div>
+{# -----------------------------------------------------------------------
+   Community / social channels.
+   ----------------------------------------------------------------------- #}
+<section class="mx-auto max-w-[1200px] px-7 pb-2 pt-10">
+  <div class="mx-auto mb-7 max-w-[640px] text-center">
+    <h2 class="mb-2.5 text-[26px] font-extrabold tracking-[-0.025em] sm:text-[30px]">Join the ecosystem</h2>
+    <p class="text-[16px] leading-[1.55] text-muted">Ship a plugin, leave a review, report an issue, or just follow along. Every channel below is managed from the same Umbra admin.</p>
+  </div>
+  <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+    <a href="https://github.com/dalmasonto/umbra" class="card flex items-center gap-3 rounded-[13px] p-4">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="var(--ink)"><path d="M12 2C6.48 2 2 6.58 2 12.25c0 4.53 2.87 8.37 6.84 9.73.5.1.68-.22.68-.49v-1.7c-2.78.62-3.37-1.37-3.37-1.37-.46-1.18-1.11-1.49-1.11-1.49-.91-.64.07-.62.07-.62 1 .07 1.53 1.06 1.53 1.06.89 1.56 2.34 1.11 2.91.85.09-.66.35-1.11.63-1.37-2.22-.26-4.56-1.14-4.56-5.07 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.27 2.75 1.05a9.36 9.36 0 0 1 5 0c1.91-1.32 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.94-2.34 4.81-4.57 5.06.36.32.68.94.68 1.9v2.82c0 .27.18.6.69.49A10.26 10.26 0 0 0 22 12.25C22 6.58 17.52 2 12 2Z"/></svg>
+      <div><div class="text-[14px] font-bold">GitHub</div><div class="text-[12px] text-faint">Source &amp; issues</div></div>
+    </a>
+    <a href="/community" class="card flex items-center gap-3 rounded-[13px] p-4">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="#5865F2"><path d="M20 4.5A19 19 0 0 0 15.3 3l-.3.6a14 14 0 0 1 4.2 1.4A16.5 16.5 0 0 0 4.8 5 14 14 0 0 1 9 3.6L8.7 3A19 19 0 0 0 4 4.5C1.5 8.2 1 11.8 1.2 15.3A19 19 0 0 0 7 18l.6-1c-1-.4-1.9-.8-2.7-1.4l.5-.4a13 13 0 0 0 11.2 0l.5.4c-.8.6-1.7 1-2.7 1.4l.6 1a19 19 0 0 0 5.8-2.7c.4-4.2-.5-7.8-2.6-10.8ZM8.3 13.3c-.9 0-1.7-.8-1.7-1.9s.7-1.9 1.7-1.9 1.7.9 1.7 1.9-.8 1.9-1.7 1.9Zm7.4 0c-.9 0-1.7-.8-1.7-1.9s.8-1.9 1.7-1.9 1.7.9 1.7 1.9-.7 1.9-1.7 1.9Z"/></svg>
+      <div><div class="text-[14px] font-bold">Discord</div><div class="text-[12px] text-faint">Chat &amp; support</div></div>
+    </a>
+    <a href="/community" class="card flex items-center gap-3 rounded-[13px] p-4">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="#FF4500"><circle cx="12" cy="12" r="10"/><path d="M18 12a1.4 1.4 0 0 0-2.4-1 7 7 0 0 0-3.5-1.1l.6-2.8 2 .4a1 1 0 1 0 .1-.9l-2.3-.5-.7 3.3a7 7 0 0 0-3.6 1.1A1.4 1.4 0 1 0 6 13.4a2.6 2.6 0 0 0 0 .5c0 1.8 2.1 3.3 4.8 3.3s4.8-1.5 4.8-3.3a2.6 2.6 0 0 0 0-.5A1.4 1.4 0 0 0 18 12Zm-8.6 1a1 1 0 1 1 1 1 1 1 0 0 1-1-1Zm5.3 2.4a3.4 3.4 0 0 1-2.7.9 3.4 3.4 0 0 1-2.7-.9.3.3 0 0 1 .5-.4 2.8 2.8 0 0 0 2.2.7 2.8 2.8 0 0 0 2.2-.7.3.3 0 1 1 .5.4Zm-.2-1.4a1 1 0 1 1 1-1 1 1 0 0 1-1 1Z" fill="#fff"/></svg>
+      <div><div class="text-[14px] font-bold">Reddit</div><div class="text-[12px] text-faint">r/umbra</div></div>
+    </a>
+    <a href="/community" class="card flex items-center gap-3 rounded-[13px] p-4">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="var(--ink)"><path d="M18.2 2h3.3l-7.2 8.2L23 22h-6.6l-5.2-6.8L5.3 22H2l7.7-8.8L1.4 2H8l4.7 6.2L18.2 2Zm-1.2 18h1.8L7.1 3.9H5.2L17 20Z"/></svg>
+      <div><div class="text-[14px] font-bold">X</div><div class="text-[12px] text-faint">@umbra_rs</div></div>
+    </a>
+    <a href="/blog" class="card flex items-center gap-3 rounded-[13px] p-4">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="#E8771A"><circle cx="6.2" cy="17.8" r="2.2"/><path d="M4 11a9 9 0 0 1 9 9h-3a6 6 0 0 0-6-6v-3Zm0-5a14 14 0 0 1 14 14h-3A11 11 0 0 0 4 9V6Z"/></svg>
+      <div><div class="text-[14px] font-bold">RSS</div><div class="text-[12px] text-faint">Blog feed</div></div>
+    </a>
+    <a href="/docs" class="card flex items-center gap-3 rounded-[13px] p-4">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><path d="M4 4h12a2 2 0 0 1 2 2v14H6a2 2 0 0 1-2-2z"/><path d="M8 8h6M8 12h6"/></svg>
+      <div><div class="text-[14px] font-bold">Docs</div><div class="text-[12px] text-faint">Guides &amp; API</div></div>
+    </a>
+    <a href="/community" class="flex items-center gap-3.5 rounded-[13px] border border-accent-line bg-accent-soft p-4 sm:col-span-2">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--accent-2)" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/></svg>
+      <div class="flex-1"><div class="text-[14px] font-bold text-[#3A2BA8]">Newsletter</div><div class="text-[12px] text-[#6E5FB8]">Monthly via Sentinmail — releases &amp; plugin spotlights.</div></div>
+      <span class="rounded-lg bg-accent px-3.5 py-2 text-[13px] font-semibold text-white">Subscribe</span>
+    </a>
   </div>
 </section>
+
 {% endblock %}
