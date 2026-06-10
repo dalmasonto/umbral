@@ -164,7 +164,7 @@ The macro reads each field-level attribute straight off the struct field. Empty 
 | `#[umbra(unique)]` | UNIQUE constraint in the DDL. UNIQUE violations on insert / update surface as `WriteError::UniqueViolation { field, value }` - REST renders them as `{ "slug": ["A row with slug='widget' already exists."] }`. |
 | `#[umbra(default = "...")]` | DDL default for the column - the string lands verbatim in the `DEFAULT` clause (booleans are translated to `1`/`0` on SQLite). For a `choices` field use the DB literal (`"draft"`), **not** the Rust path (`"PostStatus::Draft"`); see [Defaults: two mechanisms](#defaults-two-mechanisms-two-layers). Required when adding a NOT NULL column to a populated table - Postgres / SQLite reject the ALTER otherwise. Also the value the DB uses when an INSERT omits the column. |
 | `#[umbra(help = "...")]` | OpenAPI `description` + a hint line under the admin form input. One place to say "use Markdown here" or "ISO-8601 date" — it reaches both the API docs and the editor. |
-| `#[umbra(widget = "markdown" \| "rte" \| "textarea")]` | Presentation hint for form renderers (features.md #4). Metadata only — the column stays `TEXT`, no DDL change. `markdown` / `rte` render a tall editor textarea (carrying `data-widget` for progressive enhancement); pair with the [`\| markdown` filter](#rendering-markdown-safely) on the display side. An unrecognised widget name falls back to the type-derived input, so plugin-defined widgets never break the form. |
+| `#[umbra(widget = "markdown" \| "rte" \| "code" \| "textarea")]` | Presentation hint for form renderers (features.md #4). Metadata only — no DDL change. In the admin: `markdown` mounts an EasyMDE editor (toolbar + sandboxed live preview), `rte` a Quill rich-text editor (stores HTML — render with `\| sanitize`), `code` a CodeMirror editor (JSON syntax + line numbers) for JSON/structured text. Pair `markdown` with the [`\| markdown` filter](#rendering-markdown-safely) on the display side. An unrecognised widget name falls back to the type-derived input, so plugin-defined widgets never break the form. |
 | `#[umbra(example = "...")]` | OpenAPI `example` value. Generated clients show it as a placeholder; the playground uses it to seed the request body. |
 | `#[umbra(on_delete = "cascade" \| "restrict" \| "set_null" \| "no_action")]` | FK `ON DELETE` clause. Default `no_action` (SQL standard's default - no extra clause emitted). Applies only to `ForeignKey<T>` columns; a typed error fires at derive time if you set it on a non-FK field. |
 | `#[umbra(on_update = "...")]` | FK `ON UPDATE` clause. Same vocabulary as `on_delete`. |
@@ -612,6 +612,21 @@ pub announcement: String,   // stores HTML
 ```
 
 Always render stored HTML through `| sanitize` (never `| safe`): a value written via the REST API bypasses the editor, so the page is only safe if the display path cleans it. Prefer `markdown` when you can — Markdown source is smaller, diffable, and portable; reach for `rte` when non-technical editors need a Word-like surface.
+
+<Callout type="warning">
+The admin editor previews are sandboxed (rendered HTML is run through DOMPurify before it reaches the preview pane), so previewing authored content can't execute script. That's defense-in-depth on top of the server-side filters — it does not replace them. Stored values must still be rendered through `| markdown` / `| sanitize` on every display path.
+</Callout>
+
+### The `code` widget — JSON / structured text
+
+`#[umbra(widget = "code")]` mounts a [CodeMirror](https://codemirror.net) editor with JSON syntax highlighting and line numbers — the comfortable way to edit a `Json` column or any `String` holding structured text:
+
+```rust
+#[umbra(widget = "code", help = "JSON object — see the schema docs.")]
+pub config: serde_json::Value,
+```
+
+It's opt-in: a plain `Json` column without the widget keeps the default textarea-plus-Format-button editor, which already validates on save. Add `widget = "code"` when you want the richer editing surface. No display filter is needed — JSON is data, not markup; render individual values from the parsed object as usual.
 
 ## See also
 
