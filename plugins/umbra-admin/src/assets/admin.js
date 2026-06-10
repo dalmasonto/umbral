@@ -965,25 +965,53 @@
 })();
 (function() {
   // ----- Rich field-editor widgets (features.md #4) -----
-  // #[umbra(widget = "markdown")] / "rte" render a <textarea data-widget>
-  // in the form (see _macros/field_editor.html). Here we progressively
-  // enhance them into real editors:
+  // #[umbra(widget = "...")] renders a <textarea data-widget> in the
+  // form (see _macros/field_editor.html). Here we progressively enhance
+  // each into a real editor:
   //   - "markdown" -> EasyMDE (toolbar + live side-by-side preview).
+  //                   Render the stored value with `{{ value | markdown }}`.
   //   - "rte"      -> Quill (snow theme); the editor edits a div, we
   //                   sync its HTML back into the hidden <textarea> so
-  //                   the form posts it. Render that HTML safely with
-  //                   the `{{ value | sanitize }}` template filter.
-  // The libraries are LAZY-loaded from CDN only when a matching
-  // textarea is actually on the page, so list/dashboard pages stay
-  // light. With no JS (or a CDN failure) the field degrades to a plain,
-  // fully-usable textarea — the stored value is markdown / HTML either
-  // way.
+  //                   the form posts it. Render with `{{ value | sanitize }}`.
+  //   - "code"     -> CodeMirror (JSON syntax + line numbers) for JSON /
+  //                   structured text on a String / Json column.
+  // Previews/loads are SANDBOXED: anything rendered into EasyMDE's
+  // preview pane, or loaded into Quill, passes through DOMPurify first,
+  // so authored content can't execute script in the admin origin.
+  // Libraries LAZY-load from CDN only when a matching textarea is on the
+  // page, so list/dashboard pages stay light. With no JS (or a CDN
+  // failure) every field degrades to a plain, usable textarea — the
+  // stored value is markdown / HTML / JSON text either way.
   window.umbra = window.umbra || {};
 
   var MD_CSS = 'https://unpkg.com/easymde@2.18.0/dist/easymde.min.css';
   var MD_JS  = 'https://unpkg.com/easymde@2.18.0/dist/easymde.min.js';
   var RTE_CSS = 'https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.snow.css';
   var RTE_JS  = 'https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.js';
+  // DOMPurify sandboxes the editor previews: EasyMDE renders markdown
+  // with `marked` (no sanitize) and Quill loads existing content via
+  // `dangerouslyPasteHTML` — both would otherwise let authored content
+  // execute <script>/onerror in the admin's own origin (real risk when
+  // an admin previews a moderation-queue submission). Loaded alongside
+  // each editor; the server-side `| markdown` / `| sanitize` filters are
+  // the matching display-side layer (defense in depth).
+  var PURIFY_JS = 'https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js';
+  // CodeMirror powers the `code` widget (JSON + structured text):
+  // highlighting + line numbers. The JSON `mode` script depends on the
+  // core being loaded first (see the load sequence in initWidgetEditors).
+  var CM_CSS  = 'https://cdn.jsdelivr.net/npm/codemirror@5.65.16/lib/codemirror.min.css';
+  var CM_JS   = 'https://cdn.jsdelivr.net/npm/codemirror@5.65.16/lib/codemirror.min.js';
+  var CM_MODE = 'https://cdn.jsdelivr.net/npm/codemirror@5.65.16/mode/javascript/javascript.min.js';
+
+  // Sanitize HTML before it lands in a preview pane. Uses DOMPurify when
+  // present; if it somehow isn't loaded yet, fail CLOSED (drop all tags)
+  // rather than render untrusted HTML.
+  function previewClean(html) {
+    if (window.DOMPurify) return window.DOMPurify.sanitize(html);
+    var d = document.createElement('div');
+    d.textContent = html;
+    return d.innerHTML;
+  }
 
   // CDN loader — inject each asset once; resolve the script's promise
   // when it's ready so multiple textareas share one load.
@@ -1028,6 +1056,9 @@
       status: false,
       minHeight: '220px',
       autoDownloadFontAwesome: true,
+      // Sandbox the live preview: every rendered-HTML chunk EasyMDE is
+      // about to inject goes through DOMPurify first.
+      renderingConfig: { sanitizerFunction: previewClean },
       toolbar: ['bold', 'italic', 'heading', '|', 'quote', 'unordered-list',
                 'ordered-list', '|', 'link', 'code', 'table', '|',
                 'preview', 'side-by-side', 'guide']
@@ -1059,7 +1090,9 @@
         ]
       }
     });
-    if (ta.value) quill.clipboard.dangerouslyPasteHTML(ta.value);
+    // Sanitize the stored HTML before loading it into the editor —
+    // `dangerouslyPasteHTML` would otherwise run any injected markup.
+    if (ta.value) quill.clipboard.dangerouslyPasteHTML(previewClean(ta.value));
     function sync() {
       // Quill's "empty" sentinel is <p><br></p>; store '' so a blank
       // RTE doesn't trip a NOT-NULL / required check with junk markup.
@@ -1069,6 +1102,20 @@
     quill.on('text-change', sync);
     var form = ta.closest('form');
     if (form) form.addEventListener('submit', sync);
+  }
+
+  function mountCode(ta) {
+    var cm = CodeMirror.fromTextArea(ta, {
+      mode: { name: 'javascript', json: true },
+      lineNumbers: true,
+      tabSize: 2,
+      lineWrapping: true,
+      viewportMargin: Infinity
+    });
+    cm.getWrapperElement().classList.add('umbra-code');
+    // CodeMirror writes back to the textarea on save(); flush on submit.
+    var form = ta.closest('form');
+    if (form) form.addEventListener('submit', function() { cm.save(); });
   }
 
   function mountAll(list, fn, label) {
@@ -1084,19 +1131,36 @@
     });
   }
 
+  function unhide(list) {
+    list.forEach(function(t) { t.style.display = ''; });
+  }
+
   function initWidgetEditors(root) {
     root = root || document;
     var mds = claim(root, 'markdown');
     var rtes = claim(root, 'rte');
+    var codes = claim(root, 'code');
     if (mds.length) {
       loadCss(MD_CSS);
-      loadScript(MD_JS).then(function() { mountAll(mds, mountMarkdown, 'markdown'); })
-        .catch(function(e) { mds.forEach(function(t) { t.style.display = ''; }); if (window.console) console.error(e); });
+      // DOMPurify must be present before the preview renders.
+      Promise.all([loadScript(PURIFY_JS), loadScript(MD_JS)])
+        .then(function() { mountAll(mds, mountMarkdown, 'markdown'); })
+        .catch(function(e) { unhide(mds); if (window.console) console.error(e); });
     }
     if (rtes.length) {
       loadCss(RTE_CSS);
-      loadScript(RTE_JS).then(function() { mountAll(rtes, mountRte, 'rte'); })
-        .catch(function(e) { rtes.forEach(function(t) { t.style.display = ''; }); if (window.console) console.error(e); });
+      Promise.all([loadScript(PURIFY_JS), loadScript(RTE_JS)])
+        .then(function() { mountAll(rtes, mountRte, 'rte'); })
+        .catch(function(e) { unhide(rtes); if (window.console) console.error(e); });
+    }
+    if (codes.length) {
+      loadCss(CM_CSS);
+      // The JSON mode script extends the already-loaded core, so load
+      // core first, then the mode, then mount.
+      loadScript(CM_JS)
+        .then(function() { return loadScript(CM_MODE); })
+        .then(function() { mountAll(codes, mountCode, 'code'); })
+        .catch(function(e) { unhide(codes); if (window.console) console.error(e); });
     }
   }
 

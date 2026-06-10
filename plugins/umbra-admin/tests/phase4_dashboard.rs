@@ -431,6 +431,10 @@ fn admin_js_mounts_widget_editors() {
         "markdown editor (EasyMDE) not mounted"
     );
     assert!(js.contains("new Quill"), "rte editor (Quill) not mounted");
+    assert!(
+        js.contains("CodeMirror.fromTextArea"),
+        "code editor (CodeMirror) not mounted"
+    );
     // Claims the textareas the field editor emits for each widget
     // (the selector is built dynamically from these names).
     assert!(
@@ -438,6 +442,20 @@ fn admin_js_mounts_widget_editors() {
         "markdown widget not claimed"
     );
     assert!(js.contains("claim(root, 'rte')"), "rte widget not claimed");
+    assert!(
+        js.contains("claim(root, 'code')"),
+        "code widget not claimed"
+    );
+    // Previews are sandboxed through DOMPurify (EasyMDE preview render +
+    // Quill initial load), never rendering authored HTML raw.
+    assert!(
+        js.contains("DOMPurify"),
+        "previews not sandboxed via DOMPurify"
+    );
+    assert!(
+        js.contains("sanitizerFunction"),
+        "EasyMDE preview not routed through the sanitizer"
+    );
     assert!(
         js.contains(r#"data-widget="' + selector + '"#),
         "dynamic widget selector missing"

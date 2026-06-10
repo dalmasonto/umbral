@@ -119,6 +119,23 @@
     .umbra-rte .ql-snow.ql-toolbar button.ql-active .ql-stroke { stroke: var(--primary); }
     .umbra-rte .ql-snow.ql-toolbar button:hover .ql-fill,
     .umbra-rte .ql-snow.ql-toolbar button.ql-active .ql-fill { fill: var(--primary); }
+
+    /* CodeMirror — code / JSON widget */
+    .CodeMirror.umbra-code {
+      background: var(--surface-container-low);
+      color: var(--on-surface);
+      border: 1px solid var(--outline-variant);
+      border-radius: 0.75rem;
+      height: auto;
+      min-height: 220px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    .CodeMirror.umbra-code .CodeMirror-gutters {
+      background: var(--surface-container);
+      border-right-color: var(--outline-variant);
+    }
+    .CodeMirror.umbra-code .CodeMirror-linenumber { color: var(--on-surface-variant); }
+    .CodeMirror.umbra-code .CodeMirror-cursor { border-left-color: var(--on-surface); }
   </style>
 
   <!--

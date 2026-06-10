@@ -451,6 +451,7 @@ pub(crate) fn input_kind(col: &umbra::migrate::Column) -> &'static str {
         match col.widget.as_deref() {
             Some("markdown") => return "markdown",
             Some("rte") => return "rte",
+            Some("code") => return "code",
             Some("textarea") => return "textarea",
             _ => {}
         }
@@ -719,6 +720,26 @@ mod tests {
         c.ty = SqlType::Text; // no max_length => textarea by type
         c.widget = Some("some-future-editor".to_string());
         assert_eq!(input_kind(&c), "textarea");
+    }
+
+    /// `widget = "code"` selects the CodeMirror editor kind — on a JSON
+    /// column (the prime case) and on a plain String column alike.
+    #[test]
+    fn code_widget_selects_code_kind() {
+        let mut j = col("payload", false, false, false);
+        j.ty = SqlType::Json;
+        j.widget = Some("code".to_string());
+        assert_eq!(input_kind(&j), "code");
+
+        let mut s = col("config", false, false, false);
+        s.ty = SqlType::Text;
+        s.widget = Some("code".to_string());
+        assert_eq!(input_kind(&s), "code");
+
+        // Without the widget, a JSON column keeps its default editor.
+        let mut plain = col("payload2", false, false, false);
+        plain.ty = SqlType::Json;
+        assert_eq!(input_kind(&plain), "json");
     }
 
     #[test]
