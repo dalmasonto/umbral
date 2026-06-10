@@ -33,14 +33,23 @@
 //!
 //! ## CSRF
 //!
-//! Double-submit cookie pattern:
+//! Signed double-submit cookie pattern, fully automatic (the Django
+//! `CsrfViewMiddleware` + `{% csrf_token %}` split — see
+//! `docs/decisions/2026-06-10-automatic-csrf.md`):
 //!
-//! 1. Every GET / HEAD / OPTIONS without the `umbra_csrf_token` cookie gets one
-//!    set on the response. The cookie is NOT HttpOnly: the page's JS reads it
-//!    and copies it into a header on later writes.
-//! 2. Every POST / PUT / PATCH / DELETE must include the cookie AND a matching
+//! 1. **The middleware is the only mint.** On GET / HEAD / OPTIONS it mints a
+//!    token *before* the handler runs (first visit covered) and appends the
+//!    `umbra_csrf_token` cookie to the response. The cookie is NOT HttpOnly:
+//!    the page's JS reads it and copies it into a header on later writes.
+//! 2. **Templates get the token for free.** The token is scoped into
+//!    `umbra::templates::CURRENT_CSRF` around every non-exempt request, so
+//!    any rendered template can write `{{ csrf_input }}` (the full hidden
+//!    input) or `{{ csrf_token }}` (raw value, for `X-CSRF-Token` headers /
+//!    htmx `hx-headers`). View code never touches CSRF.
+//! 3. Every POST / PUT / PATCH / DELETE must include the cookie AND a matching
 //!    `X-CSRF-Token` header (JS path) or `csrf_token` / `__csrf` form field
-//!    (HTML-form path). A mismatch returns 403.
+//!    (HTML-form path). A mismatch returns 403. On success the token stays in
+//!    scope so a validation-error re-render still carries it into the form.
 //!
 //! The token is a 32-byte CSPRNG value, hex-encoded. The CSRF cookie gains
 //! `Secure` automatically under `Environment::Prod` (or force it with
@@ -49,18 +58,21 @@
 //! ### Signed / session-bound CSRF ([`SecurityConfig::signed_csrf`])
 //!
 //! Naive double-submit trusts the cookie: an attacker who can plant a cookie on
-//! a sibling subdomain can forge a matching token. Enabling `signed_csrf` makes
-//! the token `<random>.<HMAC-SHA256(secret_key, random[.session])>` — a forged
-//! cookie can't carry a valid signature without the app `secret_key`. Set
-//! [`SecurityConfig::session_bind_cookie`] to also fold the session cookie's
-//! value into the signature so a token minted under one session can't be
-//! replayed under another.
+//! a sibling subdomain can forge a matching token. `signed_csrf` (**default
+//! on**) makes the token `<random>.<HMAC-SHA256(secret_key, random[.session])>`
+//! — a forged cookie can't carry a valid signature without the app
+//! `secret_key`. Set [`SecurityConfig::session_bind_cookie`] to also fold the
+//! session cookie's value into the signature so a token minted under one
+//! session can't be replayed under another.
 //!
-//! **Default off**, because every path that mints a token must mint a *signed*
-//! one or writes 403. Today the admin mints via [`generate_token`] (raw); until
-//! that's routed through the signed mint (tracked in `bugs/gaps2.md`), turning
-//! this on app-wide would 403 admin logins. Safe to enable for an app whose
-//! only token source is this middleware.
+//! The flip to default-on is deploy-safe because the middleware **rotates**
+//! any cookie token that can't pass signed-mode validation on the next safe
+//! request (browsers holding pre-upgrade unsigned cookies converge instead of
+//! 403ing), and because no other mint exists: the admin prefers the ambient
+//! middleware token and only self-mints when this plugin isn't mounted. With
+//! no resolvable `secret_key` (tests, pre-`App::build()` renders) minting and
+//! validation degrade to plain double-submit instead of locking writes out.
+//! Opt back into plain double-submit with `signed_csrf: false`.
 //!
 //! ## Headers
 //!
@@ -128,8 +140,9 @@ pub struct SecurityConfig {
     /// matters for forcing it on in a non-prod HTTPS setup.
     pub csrf_cookie_secure: bool,
     /// Sign the CSRF token with the app `secret_key` (HMAC-SHA256). Default
-    /// `false` — see the crate docs for why enabling it requires every
-    /// token-minting path (including the admin's) to use the signed mint.
+    /// `true` — the middleware is the only mint, so every token carries a
+    /// signature; stale unsigned cookies rotate automatically on the next
+    /// safe request. Set `false` for plain double-submit.
     pub signed_csrf: bool,
     /// When `signed_csrf` is on, also bind the token to this cookie's value
     /// (typically the session cookie). Default `None`.
@@ -197,7 +210,7 @@ impl Default for SecurityConfig {
         Self {
             csrf: true,
             csrf_cookie_secure: false,
-            signed_csrf: false,
+            signed_csrf: true,
             session_bind_cookie: None,
             csrf_exempt_paths: Vec::new(),
             content_type_options: true,
@@ -406,6 +419,27 @@ impl CsrfState {
             None
         }
     }
+
+    /// True when `token` may keep serving as this browser's CSRF cookie.
+    /// Plain mode accepts any non-empty token. Signed mode (with a
+    /// resolvable secret) requires a structurally valid `<raw>.<sig>` —
+    /// anything else (typically a cookie minted before `signed_csrf`
+    /// was enabled) triggers a rotation re-mint by the caller.
+    fn token_acceptable(&self, token: &str, session_value: Option<&str>) -> bool {
+        if token.is_empty() {
+            return false;
+        }
+        if !self.signed {
+            return true;
+        }
+        let Some(secret) = self.secret.as_deref() else {
+            return true; // signing requested but no secret resolved: degrade
+        };
+        let Some((raw, sig)) = token.rsplit_once('.') else {
+            return false;
+        };
+        tokens_match(sig, &sign(secret, raw, self.session_bind(session_value)))
+    }
 }
 
 /// Generate a fresh 32-byte token, hex-encoded. Public so tests and downstream
@@ -519,25 +553,34 @@ async fn csrf_middleware(
     });
 
     if is_safe_method(&method) {
-        // Pass through, minting and attaching a token if the client lacks one.
-        let mut response = next.run(req).await;
-        if cookie_token.is_none() && !response_sets_csrf_cookie(&response) {
-            // Skip minting when a handler already set its own CSRF cookie on
-            // this response (e.g. a form view using `ensure_csrf_cookie`) —
-            // overwriting it would mismatch the token rendered into the form.
-            let token = mint_token(&state, session_value.as_deref());
+        // The middleware is the only mint (docs/decisions/
+        // 2026-06-10-automatic-csrf.md): mint BEFORE the handler runs so
+        // first-visit renders already have a token in scope, and rotate a
+        // cookie token that can't pass signed-mode validation so flipping
+        // `signed_csrf` on doesn't 403 browsers holding old cookies.
+        let (token, minted) = match cookie_token {
+            Some(t) if state.token_acceptable(&t, session_value.as_deref()) => (t, false),
+            _ => (mint_token(&state, session_value.as_deref()), true),
+        };
+        let mut response =
+            umbra::templates::with_current_csrf(Some(token.clone()), next.run(req)).await;
+        if minted {
             let mut cookie = format!("{CSRF_COOKIE}={token}; Path=/; SameSite=Lax");
             if state.secure {
                 cookie.push_str("; Secure");
             }
             if let Ok(v) = HeaderValue::from_str(&cookie) {
-                response.headers_mut().insert(SET_COOKIE, v);
+                // `append`, not `insert` — `insert` would wipe any cookie
+                // the handler set on this response (e.g. the session).
+                response.headers_mut().append(SET_COOKIE, v);
             }
         }
         return Ok(response);
     }
 
     // Write methods: cookie and (header OR form field) must validate.
+    // On success the token is scoped around the handler so a
+    // validation-error re-render still carries it into the form.
     let header_token = req
         .headers()
         .get(CSRF_HEADER)
@@ -547,7 +590,8 @@ async fn csrf_middleware(
     if let Some(c) = cookie_token.as_ref() {
         if let Some(h) = header_token.as_ref() {
             if csrf_valid(&state, c, h, session_value.as_deref()) {
-                return Ok(next.run(req).await);
+                let token = c.clone();
+                return Ok(umbra::templates::with_current_csrf(Some(token), next.run(req)).await);
             }
         }
         // Form-field path: peek the urlencoded body, then rebuild the request.
@@ -567,7 +611,11 @@ async fn csrf_middleware(
             if let Some(s) = form_field_token(&bytes) {
                 if csrf_valid(&state, &cookie_owned, &s, session_value.as_deref()) {
                     let req = Request::from_parts(parts, Body::from(bytes));
-                    return Ok(next.run(req).await);
+                    return Ok(umbra::templates::with_current_csrf(
+                        Some(cookie_owned),
+                        next.run(req),
+                    )
+                    .await);
                 }
             }
         }
@@ -618,41 +666,37 @@ pub fn current_csrf_token(headers: &http::HeaderMap) -> Option<String> {
         .and_then(|h| cookie_value(h, CSRF_COOKIE).map(str::to_string))
 }
 
-/// Read the CSRF token off the request cookie, or mint a fresh one. Returns the
-/// token to embed in a form and, when freshly minted, the `Set-Cookie` value the
-/// handler must attach to its response so the next request carries it.
-///
-/// For server-rendered form views that need a token *before* the middleware has
-/// minted one (first visit). The middleware defers to a cookie set this way, so
-/// the rendered token and the cookie stay in sync. Mints a raw (unsigned)
-/// token, matching the default; signed-mode coordination is tracked in
-/// `bugs/gaps2.md` #26.
-pub fn ensure_csrf_cookie(headers: &http::HeaderMap) -> (String, Option<String>) {
-    if let Some(token) = current_csrf_token(headers) {
-        return (token, None);
-    }
-    let token = generate_token();
-    let cookie = format!("{CSRF_COOKIE}={token}; Path=/; SameSite=Lax");
-    (token, Some(cookie))
-}
-
-/// True when `response` already carries a `Set-Cookie` for the CSRF cookie.
-fn response_sets_csrf_cookie(response: &Response) -> bool {
-    let needle = format!("{CSRF_COOKIE}=");
-    response
-        .headers()
-        .get_all(SET_COOKIE)
-        .iter()
-        .filter_map(|v| v.to_str().ok())
-        .any(|v| v.starts_with(&needle))
-}
-
 /// Constant-time string equality. Short-circuit `==` on `String` is a timing
 /// side-channel; `ct_eq` closes it. Per OWASP's "Use Constant-Time String
-/// Comparison" rule for security tokens.
-fn tokens_match(a: &str, b: &str) -> bool {
+/// Comparison" rule for security tokens. Public so other token consumers
+/// (e.g. the admin's SecurityPlugin-less login fallback) compare the same way.
+pub fn tokens_match(a: &str, b: &str) -> bool {
     use subtle::ConstantTimeEq;
     a.as_bytes().ct_eq(b.as_bytes()).into()
+}
+
+/// Test-only constructors. `#[doc(hidden)]` — NOT a stable API; integration
+/// tests need a CSRF-wrapped router without `App::build()`-resolved settings.
+#[doc(hidden)]
+pub mod test_support {
+    use super::*;
+
+    /// Wrap `router` with the CSRF middleware using an explicit state,
+    /// bypassing settings resolution.
+    pub fn wrap_with_csrf(
+        router: axum::Router,
+        signed: bool,
+        secret: Option<String>,
+    ) -> axum::Router {
+        let state = CsrfState {
+            secure: false,
+            signed,
+            secret,
+            session_cookie: None,
+            exempt_paths: Vec::new(),
+        };
+        router.layer(middleware::from_fn_with_state(state, csrf_middleware))
+    }
 }
 
 #[cfg(test)]

@@ -272,10 +272,15 @@ async fn exempt_path_skips_csrf_on_writes() {
 }
 
 #[tokio::test]
-async fn middleware_does_not_clobber_handler_set_csrf_cookie() {
-    // A handler that mints its own CSRF cookie (the `ensure_csrf_cookie`
-    // pattern) must win — the middleware should not overwrite it, or the
-    // token rendered into the form wouldn't match the cookie.
+async fn middleware_token_wins_over_handler_minted_cookie() {
+    // The middleware is the only mint (docs/decisions/
+    // 2026-06-10-automatic-csrf.md): `ensure_csrf_cookie` is gone and a
+    // handler that still sets its own CSRF cookie no longer wins. The
+    // middleware APPENDS its cookie after the handler's, so the browser
+    // (last-wins for same-name cookies) keeps the middleware's token —
+    // which is also the ambient token templates render. The two stay
+    // consistent without any deference logic; the handler's cookie is
+    // appended-around, not clobbered.
     let inner = Router::new().route(
         "/form",
         get(|| async {
@@ -284,7 +289,8 @@ async fn middleware_does_not_clobber_handler_set_csrf_cookie() {
                     SET_COOKIE,
                     "umbra_csrf_token=handler-minted; Path=/; SameSite=Lax",
                 )],
-                "form",
+                // What `{{ csrf_token }}` would render into the form.
+                umbra::templates::current_csrf().unwrap_or_default(),
             )
         }),
     );
@@ -294,11 +300,32 @@ async fn middleware_does_not_clobber_handler_set_csrf_cookie() {
         .uri("/form")
         .body(Body::empty())
         .unwrap();
-    let (_, headers, _) = body_string(router.oneshot(req).await.unwrap()).await;
-    let set_cookie = headers.get(SET_COOKIE).unwrap().to_str().unwrap();
+    let (_, headers, body) = body_string(router.oneshot(req).await.unwrap()).await;
+    let cookies: Vec<&str> = headers
+        .get_all(SET_COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .collect();
+    let last_csrf = cookies
+        .iter()
+        .filter(|c| c.starts_with("umbra_csrf_token="))
+        .last()
+        .expect("middleware must append its cookie")
+        .split(';')
+        .next()
+        .unwrap()
+        .trim_start_matches("umbra_csrf_token=");
+    assert_ne!(
+        last_csrf, "handler-minted",
+        "middleware's token must be the browser-effective (last) cookie"
+    );
+    assert_eq!(
+        body, last_csrf,
+        "ambient token rendered into forms must match the effective cookie"
+    );
     assert!(
-        set_cookie.contains("handler-minted"),
-        "handler's cookie should survive, got: {set_cookie}"
+        cookies.iter().any(|c| c.contains("handler-minted")),
+        "append must not destroy the handler's header, got: {cookies:?}"
     );
 }
 
