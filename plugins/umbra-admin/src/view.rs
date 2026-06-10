@@ -599,6 +599,57 @@ mod tests {
     use umbra::migrate::{Column, ModelMeta};
     use umbra::orm::{FkAction, SqlType};
 
+    /// Reproduce ShowcaseEntry's `long_content` EXACTLY — Model + Form
+    /// derives, `#[form(...)]` before `#[umbra(widget)]`, on an
+    /// `Option<String>` — through the real macro → `ModelMeta::for_`
+    /// → `form_fields_for`, and assert the rendered `field.kind` is
+    /// `markdown` (not a bare `text` input). This is the end-to-end
+    /// answer to "what is field.kind?" using the actually-compiled code.
+    #[derive(Debug, Clone, Default, sqlx::FromRow, umbra::orm::Model, umbra::forms::Form)]
+    #[umbra(table = "repro_showcase")]
+    #[allow(dead_code, private_interfaces)]
+    struct Repro {
+        pub id: i64,
+        #[form(required, length(min = 2, max = 120))]
+        pub project_name: String,
+        #[form(optional, length(max = 20_000))]
+        #[umbra(widget = "markdown")]
+        pub long_content: Option<String>,
+    }
+
+    #[test]
+    fn showcase_long_content_renders_as_markdown_not_input() {
+        let meta = ModelMeta::for_::<Repro>();
+
+        // The column the admin reads must carry the widget.
+        let col = meta
+            .fields
+            .iter()
+            .find(|c| c.name == "long_content")
+            .expect("long_content column");
+        assert_eq!(
+            col.widget.as_deref(),
+            Some("markdown"),
+            "widget lost through Model+Form derive / for_()"
+        );
+        assert_eq!(
+            col.max_length, 0,
+            "form length must NOT leak into max_length"
+        );
+
+        // input_kind — the exact function the form renderer calls.
+        assert_eq!(input_kind(col), "markdown", "field.kind should be markdown");
+
+        // And the full form-field build the template iterates.
+        let fields = form_fields_for(&meta, None, None);
+        let f = fields
+            .iter()
+            .find(|f| f.name == "long_content")
+            .expect("long_content field");
+        assert_eq!(f.kind, "markdown", "rendered field.kind must be markdown");
+        assert_eq!(f.widget, "markdown");
+    }
+
     /// Helper: build a `Column` carrying only the flags the
     /// form-field filter cares about. Every other field gets a
     /// neutral default. Inlined here instead of derived because
