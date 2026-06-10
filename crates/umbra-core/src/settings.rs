@@ -53,6 +53,34 @@ fn default_allowed_hosts() -> Vec<String> {
     vec!["localhost".into(), "127.0.0.1".into()]
 }
 
+/// Deserialize a `Vec<String>` from either a real sequence (a TOML array, or a
+/// bracketed env value like `["a.com","b.com"]`) OR a single comma-separated
+/// string (`UMBRA_ALLOWED_HOSTS=a.com,b.com`). Env vars are scalar strings, so
+/// without this a list-valued setting can only be set with the non-obvious
+/// bracketed form — the natural `HOST1,HOST2` (Django's convention) would error
+/// with "expected a sequence". Whitespace is trimmed and empty entries dropped.
+fn deserialize_string_list<'de, D>(de: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany {
+        One(String),
+        Many(Vec<String>),
+    }
+    Ok(match OneOrMany::deserialize(de)? {
+        OneOrMany::One(s) => s
+            .split(',')
+            .map(str::trim)
+            .filter(|h| !h.is_empty())
+            .map(str::to_string)
+            .collect(),
+        OneOrMany::Many(v) => v,
+    })
+}
+
 fn default_log_level() -> String {
     "info".into()
 }
@@ -116,7 +144,10 @@ pub struct Settings {
     #[serde(default)]
     pub environment: Environment,
 
-    #[serde(default = "default_allowed_hosts")]
+    #[serde(
+        default = "default_allowed_hosts",
+        deserialize_with = "deserialize_string_list"
+    )]
     pub allowed_hosts: Vec<String>,
 
     #[serde(default = "default_log_level")]
@@ -232,6 +263,47 @@ mod tests {
             assert_eq!(s.log_level, "info");
             assert!(matches!(s.environment, Environment::Dev));
             assert!(s.databases.is_empty());
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn allowed_hosts_accepts_comma_separated_env() {
+        // The Django-style natural form: `UMBRA_ALLOWED_HOSTS=a.com,b.com`.
+        Jail::expect_with(|jail| {
+            jail.set_env("UMBRA_ALLOWED_HOSTS", "example.com, www.example.com");
+            let s = Settings::from_env().unwrap();
+            assert_eq!(s.allowed_hosts, vec!["example.com", "www.example.com"]);
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn allowed_hosts_accepts_single_env_value() {
+        Jail::expect_with(|jail| {
+            jail.set_env("UMBRA_ALLOWED_HOSTS", "example.com");
+            let s = Settings::from_env().unwrap();
+            assert_eq!(s.allowed_hosts, vec!["example.com"]);
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn allowed_hosts_accepts_bracketed_env_and_toml_array() {
+        Jail::expect_with(|jail| {
+            jail.set_env("UMBRA_ALLOWED_HOSTS", r#"["a.com","b.com"]"#);
+            assert_eq!(
+                Settings::from_env().unwrap().allowed_hosts,
+                vec!["a.com", "b.com"]
+            );
+            Ok(())
+        });
+        Jail::expect_with(|jail| {
+            jail.create_file("umbra.toml", r#"allowed_hosts = ["a.com", "b.com"]"#)?;
+            assert_eq!(
+                Settings::from_env().unwrap().allowed_hosts,
+                vec!["a.com", "b.com"]
+            );
             Ok(())
         });
     }
