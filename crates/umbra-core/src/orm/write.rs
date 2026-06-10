@@ -182,7 +182,15 @@ impl WriteError {
                     .push(format!("Expected `{expected:?}`, got `{got}`."));
             }
             Validator { field, message } => {
-                out.entry(field.clone()).or_default().push(message.clone());
+                // An empty field name marks a non-field (whole-form)
+                // validator error — the `From<ValidationErrors>` lift
+                // produces these for cross-field failures. Filing it
+                // under the literal key "" would make it invisible to
+                // every by-field-name consumer (admin inputs, error
+                // spans); `collect_non_field_errors` owns it instead.
+                if !field.is_empty() {
+                    out.entry(field.clone()).or_default().push(message.clone());
+                }
             }
             UnknownColumn { field } => {
                 out.entry(field.clone())
@@ -230,6 +238,11 @@ impl WriteError {
                     None => "A check constraint failed.".to_string(),
                 };
                 out.push(msg);
+            }
+            // Empty field name = whole-form validator error (see the
+            // matching skip in `collect_field_errors`).
+            Validator { field, message } if field.is_empty() => {
+                out.push(message.clone());
             }
             Multiple { errors } => {
                 for e in errors {

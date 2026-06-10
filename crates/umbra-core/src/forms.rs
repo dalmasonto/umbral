@@ -738,6 +738,74 @@ impl FormErrors {
         }
         out
     }
+
+    /// Render `template` with this failed submission bound Django-style
+    /// and return the complete HTTP response. The one-liner for a form
+    /// handler's `Err` arm:
+    ///
+    /// ```ignore
+    /// let msg = match form.into_result() {
+    ///     Ok(v) => v,
+    ///     Err(errs) => return Ok(errs.render("contact.html")),
+    /// };
+    /// ```
+    ///
+    /// What the template sees:
+    ///
+    /// - `form` — the raw pairs the user submitted, so
+    ///   `{{ form.<field> }}` repopulates every keystroke.
+    /// - `errors` — the flat per-field view from
+    ///   [`Self::as_template_ctx`], plus a default form-level summary
+    ///   under `errors.form` ("Please fix the highlighted fields and
+    ///   try again.") when no non-field error supplied one — every
+    ///   form page wants the banner, so the framework defaults it.
+    /// - Anything ambient (`csrf_token` / `csrf_input` / `user`) via
+    ///   the normal render merge.
+    ///
+    /// Status is `422 Unprocessable Entity`. A template failure
+    /// returns a plain 500 carrying the render error. Extra context
+    /// keys (page flags, chrome): [`Self::render_with`].
+    pub fn render(&self, template: &str) -> axum::response::Response {
+        self.render_with(template, serde_json::Map::new())
+    }
+
+    /// [`Self::render`] plus caller-supplied top-level context keys.
+    /// `extra` wins over the `form` / `errors` bindings on key
+    /// collision — the caller is more specific than the default.
+    pub fn render_with(
+        &self,
+        template: &str,
+        extra: serde_json::Map<String, serde_json::Value>,
+    ) -> axum::response::Response {
+        use axum::response::IntoResponse;
+
+        let mut errors = self.as_template_ctx();
+        errors.entry("form".to_string()).or_insert_with(|| {
+            serde_json::Value::String(
+                "Please fix the highlighted fields and try again.".to_string(),
+            )
+        });
+
+        let mut ctx = serde_json::Map::new();
+        ctx.insert("form".to_string(), self.raw_as_json());
+        ctx.insert("errors".to_string(), serde_json::Value::Object(errors));
+        for (k, v) in extra {
+            ctx.insert(k, v);
+        }
+
+        match crate::templates::render(template, &serde_json::Value::Object(ctx)) {
+            Ok(html) => (
+                axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+                axum::response::Html(html),
+            )
+                .into_response(),
+            Err(e) => (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("form re-render failed for `{template}`: {e}"),
+            )
+                .into_response(),
+        }
+    }
 }
 
 impl std::fmt::Display for FormErrors {

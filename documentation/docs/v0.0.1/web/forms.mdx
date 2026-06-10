@@ -136,7 +136,7 @@ pub struct ContactMessage {
 pub async fn submit_contact(form: Form<ContactMessage>) -> impl IntoResponse {
     let msg = match form.into_result() {
         Ok(m)     => m,
-        Err(errs) => return render_form_with_errors(errs),
+        Err(errs) => return errs.render("contact.html"),
     };
     // msg.status = ContactStatus::New, msg.ip_address = None,
     // msg.created_at = epoch (the ORM overwrites with Utc::now() on INSERT).
@@ -164,27 +164,13 @@ The user's submission AND the persisted Model are now one declaration. No `Conta
 {% endif %}
 ```
 
-Handler-side:
+Handler-side, the whole failure path is one call — `FormErrors::render` binds `form` to the raw pairs the user submitted (every keystroke kept), `errors` to the flat view above (with the summary banner defaulted when no non-field error supplied one), and returns 422:
 
 ```rust
-fn render_form_with_errors(errs: FormErrors) -> Response {
-    let mut ctx = errs.as_template_ctx();
-    // Synthesise a form-level banner when no non-field error exists
-    // but per-field errors did fire (the common case).
-    if !ctx.contains_key("form") {
-        ctx.insert("form".into(), serde_json::json!(
-            "Please fix the highlighted fields and send again."
-        ));
-    }
-    let body = umbra::templates::render(
-        "contact.html",
-        &context!(form = ContactMessage::default(), errors = ctx),
-    ).unwrap();
-    (StatusCode::UNPROCESSABLE_ENTITY, Html(body)).into_response()
-}
+Err(errs) => return errs.render("contact.html"),
 ```
 
-For templates that need to render **every** error per field (multiple validators firing on one input), call `errs.field_errors()` and pass the `HashMap<String, Vec<String>>` directly.
+Need extra context keys on the re-render (page flags, chrome)? `errs.render_with("contact.html", extra_map)` — your keys win on collision. For templates that need to render **every** error per field (multiple validators firing on one input), call `errs.field_errors()` and pass the `HashMap<String, Vec<String>>` directly.
 
 ## How errors flow
 
