@@ -1,0 +1,64 @@
+---
+title: Soft delete
+description: Tag a model with soft_delete and deletes become reversible — rows hide instead of dying.
+sidebar_position: 8
+tags: [orm, soft-delete, trash]
+---
+
+# Soft delete
+
+Tag a model `#[umbra(soft_delete)]` and the framework stops destroying its rows: `delete()` becomes an `UPDATE ... SET deleted_at = NOW()`, and every normal query automatically excludes rows where `deleted_at` is set. You get a trash can instead of a shredder — undo, audits, and "restore this account" flows all stay possible.
+
+You declare the timestamp column yourself (the marker doesn't synthesize it):
+
+```rust
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
+#[umbra(soft_delete)]
+pub struct Post {
+    pub id: i64,
+    pub title: String,
+    pub deleted_at: Option<DateTime<Utc>>,
+}
+```
+
+That's the whole setup. From here:
+
+```rust
+// Soft-deletes: UPDATE post SET deleted_at = NOW() WHERE title = 'a'
+Post::objects().filter(post::TITLE.eq("a")).delete().await?;
+
+// Normal reads never see the row again — WHERE deleted_at IS NULL
+// is injected on every terminal (fetch / first / get / count / exists).
+let visible = Post::objects().fetch().await?;
+
+// Opt back in:
+let everything = Post::objects().with_deleted().fetch().await?;   // live + trashed
+let trash      = Post::objects().only_deleted().fetch().await?;   // trashed only
+
+// Restore: clear the timestamp on the trashed row. Updates are not
+// auto-filtered (only reads and delete() are), so the predicate alone
+// identifies the row.
+let mut patch = serde_json::Map::new();
+patch.insert("deleted_at".into(), serde_json::Value::Null);
+Post::objects().filter(post::ID.eq(id)).update_values(patch).await?;
+
+// True purge ("empty the trash") — opt-in, two explicit steps:
+Post::objects()
+    .filter(post::ID.eq(id))
+    .with_deleted()
+    .hard_delete()
+    .delete()
+    .await?;
+```
+
+Models **without** the marker keep the classic behaviour: `delete()` is a real `DELETE FROM`, no filter injection.
+
+<Callout type="info">
+Adding soft delete to an existing model is the normal migration loop: add the attribute and the nullable `deleted_at` field, run `makemigrations` (autodetects a nullable `AddColumn` — no default needed), then `migrate`. Existing rows are untouched and stay visible, since their `deleted_at` starts NULL.
+</Callout>
+
+<Callout type="warning">
+Soft-deleted rows still exist: they count toward UNIQUE constraints, foreign keys keep pointing at them, and they occupy the table. If a unique column (say `email`) must be reusable after deletion, that's a schema design decision soft delete doesn't make for you.
+</Callout>
+
+Pinned by `crates/umbra-core/tests/soft_delete.rs` (feature #72); behaviour reference in the `Model::SOFT_DELETE` docs in `crates/umbra-core/src/orm/model.rs`.
