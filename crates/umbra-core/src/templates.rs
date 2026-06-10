@@ -238,6 +238,30 @@ fn register_markdown_filter(env: &mut Environment<'static>) {
     });
 }
 
+/// features.md #4 — register the `sanitize` filter: clean a string of
+/// HTML (e.g. the output of the admin's RTE widget, which stores
+/// HTML rather than markdown) down to ammonia's safe allowlist and
+/// hand it to the template as a safe string.
+///
+/// `{{ body | sanitize }}` is the display companion to the `rte`
+/// widget the way `{{ body | markdown }}` is to the `markdown` widget:
+/// the stored value is HTML, so it's sanitized — never trusted — before
+/// it reaches the page. A value tampered with via the REST write path
+/// (which doesn't go through the editor) is made safe here.
+fn register_sanitize_filter(env: &mut Environment<'static>) {
+    env.add_filter("sanitize", |input: String| -> minijinja::Value {
+        minijinja::Value::from_safe_string(sanitize_html(&input))
+    });
+}
+
+/// Clean `input` HTML down to ammonia's safe allowlist (strips
+/// `<script>`, event handlers, `javascript:` URLs, etc.). The
+/// non-markdown sibling of [`render_markdown`] — use it on stored HTML
+/// (the RTE widget's output).
+pub fn sanitize_html(input: &str) -> String {
+    ammonia::clean(input)
+}
+
 /// Render CommonMark + GFM `input` to sanitized HTML. Pulled out of the
 /// filter closure so it's unit-testable and reusable by any future
 /// Rust-side caller (e.g. a REST endpoint that returns pre-rendered
@@ -377,6 +401,11 @@ fn build_env(dirs: &[PathBuf]) -> Result<(Environment<'static>, Vec<String>), Te
     // templates; pairs with `#[umbra(widget = "markdown")]` on the
     // model field that captures the source.
     register_markdown_filter(&mut env);
+
+    // features.md #4 — `{{ html | sanitize }}` cleans stored HTML (the
+    // `rte` admin widget's output) to a safe allowlist. The HTML-side
+    // companion to the markdown filter.
+    register_sanitize_filter(&mut env);
 
     // gaps2 #19 follow-up — render `None` / `Undefined` as the
     // empty string instead of the literal "none" / "undefined" tokens

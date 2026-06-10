@@ -16,6 +16,7 @@ fn boot() {
     DIR.get_or_init(|| {
         let dir = TempDir::new().unwrap();
         fs::write(dir.path().join("md.html"), "{{ body | markdown }}").unwrap();
+        fs::write(dir.path().join("san.html"), "{{ body | sanitize }}").unwrap();
         let _ = templates::init(&[dir.path().to_path_buf()]);
         dir
     });
@@ -74,4 +75,22 @@ fn output_is_not_double_escaped_by_autoescape() {
 fn empty_input_renders_empty() {
     boot();
     assert_eq!(render("").trim(), "");
+}
+
+#[test]
+fn sanitize_filter_keeps_safe_html_strips_scripts() {
+    boot();
+    // The RTE widget stores HTML; `| sanitize` is its safe-display
+    // companion — keep formatting tags, drop script/event handlers.
+    let out = templates::render(
+        "san.html",
+        &serde_json::json!({ "body": "<p>Hi <b>there</b></p><script>alert(1)</script><a href=\"javascript:alert(1)\">x</a>" }),
+    )
+    .unwrap();
+    assert!(
+        out.contains("<p>Hi <b>there</b></p>"),
+        "safe html dropped: {out}"
+    );
+    assert!(!out.contains("<script"), "script survived: {out}");
+    assert!(!out.contains("javascript:"), "js url survived: {out}");
 }
