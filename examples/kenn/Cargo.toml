@@ -17,6 +17,7 @@ umbra-sessions = { git = "https://github.com/dalmasonto/umbra" }
 umbra-admin    = { git = "https://github.com/dalmasonto/umbra" }
 umbra-rest     = { git = "https://github.com/dalmasonto/umbra" }
 umbra-openapi  = { git = "https://github.com/dalmasonto/umbra" }
+umbra-security = { git = "https://github.com/dalmasonto/umbra" }
 
 # ----- Available built-ins (uncomment + register in main.rs to enable) -----
 # umbra-playground   = { git = "https://github.com/dalmasonto/umbra" }  # Interactive API playground UI (think mini-Postman) at /playground/.
@@ -28,13 +29,13 @@ umbra-openapi  = { git = "https://github.com/dalmasonto/umbra" }
 # umbra-media        = { git = "https://github.com/dalmasonto/umbra" }  # Uploaded-file storage abstraction (local FS + S3).
 # umbra-signals      = { git = "https://github.com/dalmasonto/umbra" }  # Pre/post save/delete signal dispatch.
 # umbra-static       = { git = "https://github.com/dalmasonto/umbra" }  # Static-file serving for prod (whitenoise-equivalent).
-# umbra-security     = { git = "https://github.com/dalmasonto/umbra" }  # CSRF + clickjacking + HSTS + security headers middleware.
 
 # ----- Third-party + framework runtime deps --------------------------------
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 serde = { version = "1", features = ["derive"] }
 chrono = { version = "0.4", features = ["serde"] }
+sqlx = { version = "0.8", features = ["macros", "sqlite", "postgres", "chrono", "runtime-tokio"] }
 
 # Once you `umbra startapp <plugin>` or `umbra startplugin <plugin>`, add
 # the plugin crate here:
