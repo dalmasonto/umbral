@@ -148,19 +148,22 @@
 
     <div class="grid gap-3.5 md:grid-cols-3">
       {% for p in plugins %}{% if loop.index <= 3 %}
-      <a href="/plugins" class="card block rounded-[14px] p-[18px]">
+      {# Card is NOT a link — only the title navigates, so the rest of
+         the card (description, metrics, install command) can be
+         selected and copied without fear of navigation. #}
+      <div class="card rounded-[14px] p-[18px]">
         <div class="mb-[11px] flex items-center gap-2.5">
           <span class="flex h-[34px] w-[34px] items-center justify-center rounded-[9px] bg-accent-soft font-mono text-[14px] font-bold text-accent-2">{}</span>
-          <span class="truncate text-[15px] font-bold">{{ p.crate_name }}</span>
+          <a href="/plugins" class="truncate text-[15px] font-bold transition-colors hover:text-accent-2">{{ p.crate_name }}</a>
           <span class="pill-official ml-auto">{{ p.status }}</span>
         </div>
         <p class="mb-3 min-h-[40px] text-[13.5px] leading-[1.5] text-muted">{{ p.short_description }}</p>
-        {# Metrics — each segment renders only when the data exists;
-           the [&>span+span] variant draws the · separators. #}
+        {# Metrics — the design's row, always visible. Unsynced values
+           render the honest "—" (set in the view); the count is live. #}
         <div class="mb-3 flex items-center gap-2.5 text-[12px] text-faint [&>span+span]:before:mr-2.5 [&>span+span]:before:content-['·']">
-          {% if p.stars %}<span><span class="font-semibold text-ink">★ {{ p.stars }}</span></span>{% endif %}
-          {% if p.downloads %}<span>{{ p.downloads }} downloads</span>{% endif %}
-          {% if p.notes > 0 %}<span>{{ p.notes }} notes</span>{% endif %}
+          <span><span class="font-semibold text-ink">★ {{ p.stars }}</span></span>
+          <span>{{ p.downloads }} downloads</span>
+          <span>{{ p.notes }} notes</span>
         </div>
         <div class="flex items-center gap-2">
           <code class="flex-1 overflow-hidden text-ellipsis whitespace-nowrap rounded-[7px] border border-hairline bg-surface-2 px-[9px] py-1.5 font-mono text-[12px] text-ink-2">{{ p.install }}</code>
@@ -174,13 +177,13 @@
           <span class="inline-flex items-center gap-1 text-[11.5px] font-semibold text-warn"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 9v4M12 17h.01"/><circle cx="12" cy="12" r="9"/></svg>Unverified</span>
           {% endif %}
         </div>
-      </a>
+      </div>
       {% endif %}{% else %}
       {# Static fallback — rendered until the directory table has rows. #}
-      <a href="/plugins" class="card block rounded-[14px] p-[18px]">
+      <div class="card rounded-[14px] p-[18px]">
         <div class="mb-[11px] flex items-center gap-2.5">
           <span class="flex h-[34px] w-[34px] items-center justify-center rounded-[9px] bg-accent-soft font-mono text-[14px] font-bold text-accent-2">{}</span>
-          <span class="text-[15px] font-bold">umbra-rest</span>
+          <a href="/plugins" class="text-[15px] font-bold transition-colors hover:text-accent-2">umbra-rest</a>
           <span class="pill-official ml-auto">Official</span>
         </div>
         <p class="mb-3 min-h-[40px] text-[13.5px] leading-[1.5] text-muted">Serializers, viewsets, routers, OpenAPI and a request playground.</p>
@@ -195,11 +198,11 @@
           </button>
           <span class="inline-flex items-center gap-1 text-[11.5px] font-semibold text-ok"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6L9 17l-5-5"/></svg>Audited</span>
         </div>
-      </a>
-      <a href="/plugins" class="card block rounded-[14px] p-[18px]">
+      </div>
+      <div class="card rounded-[14px] p-[18px]">
         <div class="mb-[11px] flex items-center gap-2.5">
           <span class="flex h-[34px] w-[34px] items-center justify-center rounded-[9px] bg-accent-soft text-accent-2"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg></span>
-          <span class="text-[15px] font-bold">umbra-admin</span>
+          <a href="/plugins" class="text-[15px] font-bold transition-colors hover:text-accent-2">umbra-admin</a>
           <span class="pill-official ml-auto">Official</span>
         </div>
         <p class="mb-3 min-h-[40px] text-[13.5px] leading-[1.5] text-muted">Auto dashboards, CRUD, filters, sheets, bulk actions and per-user preferences.</p>
@@ -214,11 +217,11 @@
           </button>
           <span class="inline-flex items-center gap-1 text-[11.5px] font-semibold text-ok"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6L9 17l-5-5"/></svg>Audited</span>
         </div>
-      </a>
-      <a href="/plugins" class="card block rounded-[14px] p-[18px]">
+      </div>
+      <div class="card rounded-[14px] p-[18px]">
         <div class="mb-[11px] flex items-center gap-2.5">
           <span class="flex h-[34px] w-[34px] items-center justify-center rounded-[9px] bg-tan-soft text-tan"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21V8l9-5 9 5v13"/><path d="M9 21v-6h6v6"/></svg></span>
-          <span class="text-[15px] font-bold">umbra-multitenancy</span>
+          <a href="/plugins" class="text-[15px] font-bold transition-colors hover:text-accent-2">umbra-multitenancy</a>
           <span class="pill-community ml-auto">Community</span>
         </div>
         <p class="mb-3 min-h-[40px] text-[13.5px] leading-[1.5] text-muted">Schema-per-tenant and row-level tenancy with admin-aware scoping. by @kanto</p>
@@ -233,7 +236,7 @@
           </button>
           <span class="inline-flex items-center gap-1 text-[11.5px] font-semibold text-warn"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 9v4M12 17h.01"/><circle cx="12" cy="12" r="9"/></svg>Unverified</span>
         </div>
-      </a>
+      </div>
       {% endfor %}
     </div>
   </div>

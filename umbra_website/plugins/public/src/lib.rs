@@ -14,7 +14,7 @@ pub mod models;
 use std::path::PathBuf;
 
 use chrono::{Duration, Utc};
-use plugin_directory::models::{self as pd, plugin_comment};
+use plugin_directory::models::{self as pd, plugin};
 use site_content::models::{self as sc, contact_message};
 use umbra::plugin::{AppContext, Plugin, PluginError};
 use umbra::routes::RouteSpec;
@@ -53,29 +53,25 @@ impl Plugin for PublicPlugin {
 async fn home() -> Result<Html<String>, (StatusCode, String)> {
     // Plugin list (filtered to first-party + approved community).
     // An empty result renders the static fallback in the template.
-    let mut plugins: Vec<PluginRow> = pd::Plugin::objects()
-        .fetch()
+    // The Django story, one query: filter DB-side, count the related
+    // comments via a correlated subquery the ORM renders —
+    // `Plugin.objects.filter(...).annotate(n=Count("comments"))`.
+    // (The DB-side filter is "approved + not deprecated", which widens
+    // the old in-memory OR by also admitting approved experimental
+    // sources — fine for a preview capped at three cards.)
+    let plugins: Vec<PluginRow> = pd::Plugin::objects()
+        .filter(plugin::SOURCE.ne("deprecated"))
+        .filter(plugin::MODERATION.eq("approved"))
+        .annotate_count("comment_set")
         .await
         .map_err(internal_error)?
         .into_iter()
-        .filter(|p| {
-            matches!(p.source, pd::PluginSource::Official)
-                || (matches!(p.source, pd::PluginSource::Community)
-                    && matches!(p.moderation, pd::PluginModeration::Approved))
+        .map(|(p, notes)| {
+            let mut row = PluginRow::from(p);
+            row.notes = notes;
+            row
         })
-        .map(PluginRow::from)
         .collect();
-
-    // Visible-note counts for the three cards the home page renders.
-    // (Soft-deleted comments are auto-filtered by the ORM.)
-    for row in plugins.iter_mut().take(3) {
-        row.notes = pd::PluginComment::objects()
-            .filter(plugin_comment::PLUGIN.eq(row.id))
-            .filter(plugin_comment::MODERATION.eq("visible"))
-            .count()
-            .await
-            .unwrap_or(0);
-    }
 
     let plugin_count = if plugins.is_empty() {
         None
@@ -83,15 +79,23 @@ async fn home() -> Result<Html<String>, (StatusCode, String)> {
         Some(plugins.len() as i64)
     };
 
-    // Status counts come from the full set, not the filtered list, so
-    // the "experimental (3)" pill reflects reality.
-    let community_count = count_where(|p| {
-        matches!(p.source, pd::PluginSource::Community)
-            && matches!(p.moderation, pd::PluginModeration::Approved)
-    })
-    .await?;
-    let deprecated_count =
-        count_where(|p| matches!(p.source, pd::PluginSource::Deprecated)).await?;
+    // Status counts — DB-side `SELECT COUNT(*)`, never a fetch-all
+    // filtered in memory.
+    let community_count = Some(
+        pd::Plugin::objects()
+            .filter(plugin::SOURCE.eq("community"))
+            .filter(plugin::MODERATION.eq("approved"))
+            .count()
+            .await
+            .map_err(internal_error)?,
+    );
+    let deprecated_count = Some(
+        pd::Plugin::objects()
+            .filter(plugin::SOURCE.eq("deprecated"))
+            .count()
+            .await
+            .map_err(internal_error)?,
+    );
 
     // Model count: every model that the autodetector has ever
     // recorded a migration for. This reads from the
@@ -132,17 +136,6 @@ async fn home() -> Result<Html<String>, (StatusCode, String)> {
     Ok(Html(body))
 }
 
-async fn count_where<F>(predicate: F) -> Result<Option<i64>, (StatusCode, String)>
-where
-    F: Fn(&pd::Plugin) -> bool,
-{
-    let rows = pd::Plugin::objects()
-        .fetch()
-        .await
-        .map_err(internal_error)?;
-    Ok(Some(rows.iter().filter(|p| predicate(p)).count() as i64))
-}
-
 /// Count the number of models that have a recorded migration.
 ///
 /// The framework tracks applied migrations in a table that ships
@@ -174,11 +167,12 @@ pub struct PluginRow {
     pub crate_name: String,
     pub status: String,
     pub short_description: String,
-    /// Humanized GitHub star count ("2.1k"). `None` (unsynced) hides
-    /// the segment on the card — never a fabricated number.
-    pub stars: Option<String>,
-    /// Humanized crates.io download count. Same None-hides rule.
-    pub downloads: Option<String>,
+    /// Humanized GitHub star count ("2.1k"). Unsynced renders the
+    /// honest "—" placeholder — the design's row always shows, the
+    /// number is never fabricated.
+    pub stars: String,
+    /// Humanized crates.io download count. Same "—" placeholder rule.
+    pub downloads: String,
     /// Visible discussion notes on this plugin. Filled by the view
     /// (needs an async count); the template hides a zero.
     pub notes: i64,
@@ -210,8 +204,14 @@ impl From<pd::Plugin> for PluginRow {
         Self {
             id: p.id,
             status,
-            stars: p.github_stars.map(humanize_count),
-            downloads: p.downloads.map(humanize_count),
+            stars: p
+                .github_stars
+                .map(humanize_count)
+                .unwrap_or_else(|| "—".to_string()),
+            downloads: p
+                .downloads
+                .map(humanize_count)
+                .unwrap_or_else(|| "—".to_string()),
             notes: 0,
             audited: matches!(
                 p.audit_status,
