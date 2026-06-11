@@ -19,7 +19,7 @@ spans the user's whole visit:
 | State | `user_id` column | When |
 |-------|------------------|------|
 | Anonymous | `NULL` | From the first page load. Backs flash messages, cart contents, CSRF tokens, anything that has to survive a single redirect. |
-| Authenticated | `Some(user.id)` | After `umbra_sessions::login(...)`. Fresh token (session-fixation defense); the row's `data` survives the transition. |
+| Authenticated | `Some(user.id)` | After `umbra_auth::login(...)`. Fresh token (session-fixation defense); the row's `data` survives the transition. |
 
 `SessionsPlugin::default()` auto-applies a tower middleware
 (`session_layer`) on the router so every request lands with a
@@ -56,26 +56,30 @@ struct LoginForm {
 }
 
 async fn login(Form(form): Form<LoginForm>) -> Result<Response, StatusCode> {
-    let user = umbra_auth::authenticate(&form.username, &form.password)
+    let user: AuthUser = umbra_auth::authenticate(&form.username, &form.password)
         .await
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
     let mut response = Redirect::to("/").into_response();
-    umbra_sessions::login(response.headers_mut(), &user)
+    umbra_auth::login(response.headers_mut(), &user)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(response)
 }
 ```
 
-`umbra_sessions::login(headers, &user)` does three things in one call:
+`umbra_auth::login(response_headers, &user)` does three things in one call:
 
-1. Creates a session row for the user (`create_session`).
+1. Creates a session row for the user (via `umbra_sessions::login_user_id`).
 2. Sets the `Set-Cookie` header on the response (`HttpOnly`,
    `Secure`, `SameSite=Lax`, `Max-Age=14 days` by default).
-3. Updates `auth_user.last_login` to `Utc::now()`.
+3. Updates `auth_user.last_login` to `Utc::now()` (best-effort).
 
 It returns the raw session token so tests or instrumentation can
 read it. Production code ignores the return value.
+
+`login` is the convenience form. To preserve an anonymous session's
+`data` (flash messages, cart) across login, pass the request headers
+too: `umbra_auth::login_with_request(&request_headers, response.headers_mut(), &user)`.
 
 ## Logging out
 
@@ -103,7 +107,7 @@ axum extractors give you Django's `request.user` ergonomics.
 ```rust
 use umbra::prelude::*;
 use umbra::web::{Html, IntoResponse, StatusCode};
-use umbra_sessions::{User, OptionalUser};
+use umbra_auth::{User, OptionalUser};
 
 // Required - 401 if the request isn't authenticated. The handler
 // literally cannot run without a logged-in user.
@@ -121,9 +125,13 @@ async fn home(OptionalUser(maybe): OptionalUser) -> Html<String> {
 ```
 
 Behind the scenes both extractors call
-`umbra_sessions::current_user(&headers)`. The difference is the
+`umbra_auth::current_user(&headers)`. The difference is the
 rejection: `User` returns 401, `OptionalUser` is `Infallible` and
 just wraps `Option<AuthUser>`.
+
+`User` / `OptionalUser` are the `AuthUser`-specific extractors. For a
+custom user model, reach for the generic `LoggedIn<U>` extractor (see
+[Auth gating](/docs/v0.0.1/web/auth-gating)) instead.
 
 <Callout type="info">
 **Why not a middleware that injects on every request?** That's what

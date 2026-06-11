@@ -17,7 +17,7 @@ Django's templates have `{% if user.is_authenticated %}` and `{% if user.is_staf
 )
 ```
 
-That's it. Every `umbra::templates::render(...)` call in your app — including handler templates, plugin templates, error pages — now sees a `user` global in its render context. Anonymous requests get the sentinel; authenticated requests get the full row.
+That's it. The `user` global is *always* present in every `umbra::templates::render(...)` call — handler templates, plugin templates, error pages — because umbra-core injects it unconditionally. What `.with_user_in_templates()` changes is what authenticated requests see: with the opt-in, a logged-in request gets the full serialized user row; without it, every request (logged-in or not) gets the anonymous sentinel.
 
 ## What `user` looks like in your template
 
@@ -31,7 +31,7 @@ That's it. Every `umbra::templates::render(...)` call in your app — including 
 {% endif %}
 ```
 
-`user` is `{ "is_authenticated": false }` — that single key is the only shape an anonymous user carries.
+`user` is `{ "is_authenticated": false, "is_staff": false, "is_superuser": false }` — these three boolean keys are the only shape an anonymous user carries, so any `{% if user.is_staff %}` / `{% if user.is_superuser %}` gate evaluates to `false` instead of throwing.
 
 **Authenticated request** — `user` is the full serialized `AuthUser` (every field on the model) plus `"is_authenticated": true`:
 
@@ -71,8 +71,8 @@ Request → [user_context_layer]
 
 The middleware lives at `plugins/umbra-auth/src/session_user.rs:263`. It uses a tokio task-local (`CURRENT_USER`) scoped for the duration of the request so the rendered context is per-request, not global.
 
-<Callout type="warning">
-  Without `.with_user_in_templates()`, `user` is **undefined** in every template — minijinja's strict mode treats undefined access as a 500. Templates that reach into `user.is_staff` will crash with `"undefined value"`. Either opt in or skip the reference.
+<Callout type="info">
+  `user` is **always defined** in templates — umbra-core's renderer injects it unconditionally. Without `.with_user_in_templates()`, it's the anonymous sentinel `{ is_authenticated: false, is_staff: false, is_superuser: false }` for *every* request, even authenticated ones, because no middleware populates the per-request user. So `{% if user.is_staff %}` evaluates cleanly (to `false`) rather than throwing an "undefined value" 500. What `.with_user_in_templates()` adds is the live, *authenticated* shape: it mounts the middleware that replaces the sentinel with the real serialized user for logged-in requests.
 </Callout>
 
 ## Common patterns
