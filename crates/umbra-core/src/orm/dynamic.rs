@@ -1951,6 +1951,26 @@ fn form_str_to_sea_value(col: &Column, raw: &str) -> Result<SeaValue, WriteError
             })?;
         return json_to_sea_value(col.ty, &parsed, col.nullable, &col.name);
     }
+    if matches!(col.ty, SqlType::ForeignKey) {
+        return match fk_target_pk_sql_type(col) {
+            Some(SqlType::Text) => Ok(SeaValue::String(Some(Box::new(raw.to_string())))),
+            Some(SqlType::Uuid) => uuid::Uuid::parse_str(raw)
+                .map(|v| SeaValue::Uuid(Some(Box::new(v))))
+                .map_err(|_| WriteError::TypeMismatch {
+                    field: col.name.clone(),
+                    expected: SqlType::Uuid,
+                    got: raw.to_string(),
+                }),
+            _ => raw
+                .parse::<i64>()
+                .map(|v| SeaValue::BigInt(Some(v)))
+                .map_err(|_| WriteError::TypeMismatch {
+                    field: col.name.clone(),
+                    expected: SqlType::BigInt,
+                    got: raw.to_string(),
+                }),
+        };
+    }
     let json = serde_json::Value::String(raw.to_string());
     json_to_sea_value(col.ty, &json, col.nullable, &col.name)
 }
@@ -2541,4 +2561,72 @@ async fn write_m2m_junctions(
             .map_err(crate::orm::write::WriteError::Sqlx)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::form_str_to_sea_value;
+    use crate::migrate::Column;
+    use crate::orm::{FkAction, SqlType};
+    use sea_query::Value as SeaValue;
+
+    fn col(name: &str, ty: SqlType, nullable: bool) -> Column {
+        Column {
+            name: name.to_string(),
+            ty,
+            primary_key: false,
+            nullable,
+            fk_target: None,
+            noform: false,
+            noedit: false,
+            is_string_repr: false,
+            max_length: 0,
+            choices: Vec::new(),
+            choice_labels: Vec::new(),
+            default: String::new(),
+            is_multichoice: false,
+            unique: false,
+            on_delete: FkAction::NoAction,
+            on_update: FkAction::NoAction,
+            index: false,
+            auto_now_add: false,
+            auto_now: false,
+            help: String::new(),
+            example: String::new(),
+            widget: None,
+            supported_backends: Vec::new(),
+            min: None,
+            max: None,
+            text_format: None,
+            slug_from: None,
+        }
+    }
+
+    #[test]
+    fn form_fk_numeric_string_binds_as_bigint() {
+        let mut plugin = col("plugin", SqlType::ForeignKey, false);
+        plugin.fk_target = Some("plugin".to_string());
+
+        let value = form_str_to_sea_value(&plugin, "1").expect("coerce FK id");
+
+        assert_eq!(
+            value,
+            SeaValue::BigInt(Some(1)),
+            "integer-backed FK form values must bind as bigint, not text"
+        );
+    }
+
+    #[test]
+    fn nullable_form_fk_blank_binds_as_null_bigint() {
+        let mut parent = col("parent", SqlType::ForeignKey, true);
+        parent.fk_target = Some("plugin_comment".to_string());
+
+        let value = form_str_to_sea_value(&parent, "").expect("blank nullable FK");
+
+        assert_eq!(
+            value,
+            SeaValue::BigInt(None),
+            "blank nullable integer-backed FK should bind SQL NULL"
+        );
+    }
 }

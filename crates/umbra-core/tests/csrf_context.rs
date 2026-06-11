@@ -71,3 +71,50 @@ async fn current_csrf_reads_the_scoped_value() {
     assert_eq!(got.as_deref(), Some("xyz"));
     assert_eq!(templates::current_csrf(), None);
 }
+
+#[tokio::test]
+async fn private_engines_can_merge_ambient_context() {
+    let out = templates::with_current_csrf(Some("private-token".to_string()), async {
+        let mut env = minijinja::Environment::new();
+        env.set_auto_escape_callback(|_| minijinja::AutoEscape::Html);
+        env.add_template(
+            "private.html",
+            "name=[{{ name }}] tok=[{{ csrf_token }}] input=[{{ csrf_input }}]",
+        )
+        .unwrap();
+        let tmpl = env.get_template("private.html").unwrap();
+        tmpl.render(templates::merge_ambient_context(
+            &serde_json::json!({"name": "plugin"}),
+        ))
+        .unwrap()
+    })
+    .await;
+
+    assert!(out.contains("name=[plugin]"), "ctx value missing: {out}");
+    assert!(
+        out.contains("tok=[private-token]"),
+        "ambient csrf token missing: {out}"
+    );
+    assert!(
+        out.contains(r#"<input type="hidden" name="csrf_token" value="private-token">"#),
+        "ambient csrf input missing or escaped: {out}"
+    );
+}
+
+#[tokio::test]
+async fn private_engines_can_merge_ambient_value() {
+    let out = templates::with_current_csrf(Some("value-token".to_string()), async {
+        let mut env = minijinja::Environment::new();
+        env.add_template("private.html", "tok=[{{ csrf_token }}]")
+            .unwrap();
+        let tmpl = env.get_template("private.html").unwrap();
+        tmpl.render(templates::merge_ambient_value(minijinja::context!()))
+            .unwrap()
+    })
+    .await;
+
+    assert!(
+        out.contains("tok=[value-token]"),
+        "ambient csrf token missing for Value ctx: {out}"
+    );
+}

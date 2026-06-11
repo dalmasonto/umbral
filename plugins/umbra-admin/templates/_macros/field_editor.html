@@ -92,13 +92,16 @@
        to a usable textarea — the stored value is rendered on the
        display side via the `{{ value | markdown }}` filter. The help
        hint below (from #[umbra(help = "...")]) tells the editor what
-       syntax to type. #}
+       syntax to type.
+       Do not emit native required: EasyMDE/Quill hide this textarea,
+       and browser validation cannot focus hidden controls. The server
+       still validates the field and re-renders sheet errors. #}
     <textarea
       id="f_{{ field.name }}"
       name="{{ field.name }}"
-      data-widget="{{ field.kind }}"
+      {# data-widget="{{ field.kind }}" #}
       rows="10"
-      {% if not field.nullable and not is_readonly %}required{% endif %}
+      {% if not field.nullable and not is_readonly %}aria-required="true" data-required="true"{% endif %}
       {% if is_readonly %}disabled{% endif %}
       class="w-full bg-surface-container-low border {% if error %}border-error{% else %}border-outline-variant{% endif %} rounded-xl px-md py-sm text-on-surface text-body-md font-mono focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all resize-y placeholder:text-outline/50 {% if is_readonly %}opacity-70 cursor-default{% endif %}"
     >{{ value }}</textarea>
@@ -107,13 +110,16 @@
     {# #[umbra(widget = "code")] — features.md #4. A textarea that
        admin.js enhances into a CodeMirror editor (JSON syntax + line
        numbers); degrades to a mono textarea with no JS. For JSON /
-       structured text on any String / Json column. #}
+       structured text on any String / Json column.
+       CodeMirror hides the original textarea, so required validation
+       belongs to the server response path for the same reason as the
+       markdown/RTE widgets above. #}
     <textarea
       id="f_{{ field.name }}"
       name="{{ field.name }}"
       data-widget="code"
       rows="10"
-      {% if not field.nullable and not is_readonly %}required{% endif %}
+      {% if not field.nullable and not is_readonly %}aria-required="true" data-required="true"{% endif %}
       {% if is_readonly %}disabled{% endif %}
       class="w-full bg-surface-container-low border {% if error %}border-error{% else %}border-outline-variant{% endif %} rounded-xl px-md py-sm text-on-surface text-body-md font-mono focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/20 transition-all resize-y placeholder:text-outline/50 {% if is_readonly %}opacity-70 cursor-default{% endif %}"
     >{{ value }}</textarea>

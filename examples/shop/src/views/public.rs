@@ -4,6 +4,8 @@
 //! handler hands a minijinja context to `umbra::templates::render`
 //! and wraps DB / template errors with `internal_error`.
 
+use std::collections::HashMap;
+
 use content::models::{ContactMessage, Faq, Post, faq, post};
 use ecommerce::models::{Brand, Product, Review, brand, product, review};
 use serde::Deserialize;
@@ -166,10 +168,13 @@ pub async fn faqs() -> Result<Html<String>, (StatusCode, String)> {
 /// CSRF is ambient (`{{ csrf_input }}` in the template), `errors`
 /// is simply absent, and `?sent=1` after a successful redirect
 /// shows the thank-you banner.
-pub async fn contact(Query(query): Query<ContactQuery>) -> Result<Html<String>, (StatusCode, String)> {
+pub async fn contact(
+    Query(query): Query<ContactQuery>,
+) -> Result<Html<String>, (StatusCode, String)> {
     let sent = query.sent.as_deref() == Some("1");
     let form = ContactMessage::default();
-    let body = umbra::templates::render("contact.html", &context!(sent, form))
+    let errors: HashMap<String, Vec<String>> = HashMap::new();
+    let body = umbra::templates::render("contact.html", &context!(sent, form, errors))
         .map_err(internal_error)?;
     Ok(Html(body))
 }

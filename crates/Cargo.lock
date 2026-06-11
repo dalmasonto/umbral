@@ -3347,6 +3347,7 @@ dependencies = [
  "tower",
  "tower-http",
  "tracing",
+ "tracing-subscriber",
  "umbra",
  "uuid",
 ]

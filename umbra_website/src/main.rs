@@ -57,7 +57,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .plugin(CommunityPlugin::default())
         .plugin(PublicPlugin::default())
         // --- Admin/API/security --------------------------------------------
-        .plugin(AdminPlugin::default().site_title("Umbra".to_string()))
         .plugin(RestPlugin::default())
         .plugin(OpenApiPlugin::new())
         .plugin(StaticPlugin::new("/static", "./static"))
@@ -65,6 +64,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             csrf_exempt_paths: vec!["/api".to_string()],
             ..Default::default()
         }))
+        .plugin(AdminPlugin::default().site_title("Umbra".to_string()))
         // --- Templates ------------------------------------------------------
         .templates_dir("templates")
         .not_found_template("404.html")

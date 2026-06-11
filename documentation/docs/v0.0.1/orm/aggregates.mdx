@@ -95,24 +95,41 @@ let summary = Post::objects()
 
 ORDER BY / LIMIT / OFFSET are intentionally dropped on the aggregate paths.
 
-## Related counts: `.annotate_count("relation")`
+## Related aggregates: `.annotate_related(...)` / `.annotate_count(...)`
 
-Django's `Post.objects.filter(...).annotate(n=Count("comments"))` — fetch every matching row together with the count of a reverse-FK relation, in **one query**. The relation is the same `ReverseSet` name `prefetch_related` accepts (`#[umbra(reverse_fk = "...")]` on the model):
+Django's chainable `annotate()` over a relation — `Post.objects.filter(...).annotate(comments=Count("comments"), rating=Avg("reviews__rating"))`. The annotation is **query-builder state**: it renders as a correlated scalar subquery inside the one SELECT every terminal builds, so it stacks, composes with `.filter` / `.order_by` / `.limit`, and shows up in `.to_sql()` and `.explain()` out of the box. One query, no N+1, ever.
+
+The relation is the same `ReverseSet` name `prefetch_related` accepts (`#[umbra(reverse_fk = "...")]` on the model); any `Aggregate` works, with non-count aggregates naming a column on the **child** model:
 
 ```rust
-let rows: Vec<(Plugin, i64)> = Plugin::objects()
+let rows = Plugin::objects()
     .filter(plugin::MODERATION.eq("approved"))
-    .annotate_count("comment_set")
-    .await?;
+    .annotate_count("comment_set")                                       // COUNT(*) → "comment_set_count"
+    .annotate_related("rating_avg", "review_set", Aggregate::avg("rating"))
+    .fetch_annotated()
+    .await?;                                  // Vec<(Plugin, Map<alias, value>)>
 
-for (plugin, comment_count) in rows {
-    println!("{} has {comment_count} notes", plugin.crate_name);
+for (plugin, anns) in rows {
+    let notes = anns["comment_set_count"].as_i64().unwrap_or(0);
+    let rating = anns["rating_avg"].as_f64();   // None when no reviews — never fabricated
 }
 ```
 
-The ORM renders a correlated `(SELECT COUNT(*) FROM child WHERE child.fk = parent.pk)` subquery aliased onto the parent SELECT — the typed row decode is untouched and the counts arrive with the rows. Never write a `count()` per fetched row; that's the N+1 this terminal exists to forbid. Parents with zero children report `0`. Composes with `.filter` / `.order_by` / `.limit` and the parent's soft-delete auto-filter.
+What the database runs (see it yourself with `.to_sql()` / `.explain()`):
 
-v1 caveats: child rows are counted unconditionally — a child-side predicate (Django's `Count(..., filter=Q(...))`) and child soft-delete awareness are tracked follow-ups.
+```sql
+SELECT "plugin".*,
+  (SELECT COUNT(*) FROM "plugin_comment"
+    WHERE "plugin_comment"."plugin" = "plugin"."id") AS "comment_set_count",
+  (SELECT AVG("rating") FROM "review"
+    WHERE "review"."plugin" = "plugin"."id") AS "rating_avg"
+FROM "plugin"
+WHERE "moderation" = 'approved' AND "deleted_at" IS NULL
+```
+
+Parents with zero children report `0` for counts and `NULL` for the other aggregates. An unknown relation name fails loudly (listing the valid names) on `fetch_annotated` and `explain`. Plain `fetch()` on an annotated queryset still returns typed rows and simply doesn't surface the extra columns — use `fetch_annotated` to read them.
+
+v1 caveats: child rows aggregate unconditionally — a child-side predicate (Django's `Count(..., filter=Q(...))`) and child soft-delete awareness are tracked follow-ups.
 
 ## Pitfalls
 

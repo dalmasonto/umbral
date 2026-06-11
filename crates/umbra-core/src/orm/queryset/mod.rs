@@ -182,7 +182,30 @@ pub struct QuerySet<T> {
     /// shape — both are valid; this one wins when round-trip count
     /// matters more than the per-row column overhead.
     pub(crate) join_related: Vec<String>,
+    /// Related-aggregate annotations added via
+    /// [`Self::annotate_related`] / [`Self::annotate_count`]. Applied
+    /// inside `build_query_for`, so EVERY terminal and introspection
+    /// path — `fetch_annotated`, `explain`, `to_sql`, `to_sql_pg` —
+    /// sees the same correlated subqueries. That's the Django
+    /// `annotate()` contract: an annotation is query-builder state,
+    /// not a side query.
+    pub(crate) annotations: Vec<RelatedAnnotation>,
     _phantom: PhantomData<T>,
+}
+
+/// One related-aggregate annotation on a [`QuerySet`] —
+/// `(alias, relation, aggregate)` resolved against the model's
+/// `REVERSE_FK_RELATIONS` at builder time. A name that fails to
+/// resolve is stored poisoned (`resolved: Err`) so the infallible
+/// builder stays chainable while every fallible consumer
+/// (`fetch_annotated`, `explain`) reports it loudly.
+#[derive(Debug, Clone)]
+pub(crate) struct RelatedAnnotation {
+    pub(crate) alias: String,
+    pub(crate) agg: crate::orm::Aggregate,
+    /// `Ok((child_table, fk_column, parent_table, parent_pk))` or the
+    /// loud error message for an unknown relation.
+    pub(crate) resolved: Result<(String, String, String, String), String>,
 }
 
 impl<T> QuerySet<T> {
@@ -202,6 +225,7 @@ impl<T> QuerySet<T> {
             hard_delete: false,
             only_cols: None,
             join_related: Vec::new(),
+            annotations: Vec::new(),
             _phantom: PhantomData,
         }
     }
@@ -318,6 +342,38 @@ impl<T> QuerySet<T> {
                 q.and_where(Expr::col(Alias::new("deleted_at")).is_not_null());
             } else if !self.with_deleted {
                 q.and_where(Expr::col(Alias::new("deleted_at")).is_null());
+            }
+        }
+        // Related-aggregate annotations: one correlated scalar
+        // subquery per entry, aliased onto the SELECT list. Living
+        // HERE is what makes `.annotate_*` compose with everything —
+        // explain(), to_sql(), fetch_annotated() all see the same
+        // query. Poisoned entries (unknown relation) are skipped in
+        // this infallible path; the fallible consumers call
+        // `check_annotations()` first and fail loudly instead.
+        for ann in &self.annotations {
+            if let Ok((child_table, fk_col, parent_table, parent_pk)) = &ann.resolved {
+                let sub = sea_query::Query::select()
+                    .expr(ann.agg.to_simple_expr())
+                    .from(Alias::new(child_table.as_str()))
+                    .and_where(
+                        sea_query::Expr::col((
+                            Alias::new(child_table.as_str()),
+                            Alias::new(fk_col.as_str()),
+                        ))
+                        .equals((
+                            Alias::new(parent_table.as_str()),
+                            Alias::new(parent_pk.as_str()),
+                        )),
+                    )
+                    .to_owned();
+                q.expr_as(
+                    sea_query::SimpleExpr::SubQuery(
+                        None,
+                        Box::new(sea_query::SubQueryStatement::SelectStatement(sub)),
+                    ),
+                    Alias::new(ann.alias.as_str()),
+                );
             }
         }
         // BUG-8: default ORDER BY applies only when the caller didn't
@@ -1257,6 +1313,11 @@ impl<T: Model> QuerySet<T> {
     /// Lines are joined with newlines. The returned string is what a
     /// developer would paste into a debugger or a perf-review issue.
     pub async fn explain(self) -> Result<String, sqlx::Error> {
+        // Annotations are part of the built query (they render inside
+        // build_query_for), so the plan below includes them — but a
+        // poisoned annotation (unknown relation) must fail loudly
+        // here, not silently vanish from the plan.
+        self.check_annotations()?;
         let pool = resolve_pool::<T>(self.explicit_pool.clone());
         let backend = pool.backend_name();
         let q = self.build_query_for(backend);
@@ -1988,82 +2049,139 @@ impl<T: Model> QuerySet<T> {
         }
     }
 
-    /// Django's `annotate(n=Count("relation"))` — fetch every matching
-    /// row together with the COUNT of a reverse-FK relation, in ONE
-    /// query. Each parent row carries a correlated
-    /// `(SELECT COUNT(*) FROM <child> WHERE <child>.<fk> = <parent>.<pk>)`
-    /// subquery, so the per-row counts arrive with the rows — never a
-    /// count query per row (the N+1 this method exists to forbid).
+    /// Django's chainable `annotate(alias=Agg("relation"))`: attach a
+    /// related-aggregate annotation to this QuerySet. The annotation
+    /// is **query-builder state** — it renders as a correlated scalar
+    /// subquery inside the one SELECT every terminal builds, so it
+    /// composes with `.filter` / `.order_by` / `.limit`, stacks with
+    /// further annotations, and shows up in [`Self::explain`] /
+    /// [`Self::to_sql`] out of the box. Never a side query, never an
+    /// N+1.
     ///
-    /// `field` names a `ReverseSet` relation declared on the model
-    /// (`#[umbra(reverse_fk = "...")]`), the same name
-    /// `prefetch_related` accepts:
+    /// `relation` names a `ReverseSet` relation on the model
+    /// (`#[umbra(reverse_fk = "...")]`), the same names
+    /// `prefetch_related` accepts. Any [`crate::orm::Aggregate`]
+    /// works; non-count aggregates name a column on the CHILD model:
     ///
     /// ```rust,ignore
-    /// let rows: Vec<(Plugin, i64)> = Plugin::objects()
+    /// let rows = Plugin::objects()
     ///     .filter(plugin::MODERATION.eq("approved"))
-    ///     .annotate_count("comment_set")
-    ///     .await?;
+    ///     .annotate_count("comment_set")                                // COUNT(*)
+    ///     .annotate_related("rating_avg", "review_set", Aggregate::avg("rating"))
+    ///     .fetch_annotated()
+    ///     .await?;                       // Vec<(Plugin, Map<alias, value>)>
     /// ```
     ///
-    /// Composes with `.filter` / `.order_by` / `.limit` and the
-    /// parent's soft-delete auto-filter. Parents with zero children
-    /// report `0` (LEFT-JOIN-miss semantics). v1 caveats: the child
-    /// rows are counted unconditionally — a child-side predicate
-    /// (Django's `Count(..., filter=Q(...))`) and child soft-delete
-    /// awareness (blocked on ModelMeta carrying the flag, gaps2 #35)
-    /// are follow-ups.
-    pub async fn annotate_count(self, field: &str) -> Result<Vec<(T, i64)>, sqlx::Error>
-    where
-        T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
-            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
-    {
-        const COUNT_ALIAS: &str = "__umbra_annotate_count";
-        let spec = T::REVERSE_FK_RELATIONS
+    /// An unknown relation name doesn't panic the (infallible)
+    /// builder — it poisons the annotation, and every fallible
+    /// consumer (`fetch_annotated`, `explain`) reports it loudly.
+    /// v1 caveats: child rows aggregate unconditionally — a
+    /// child-side predicate (Django's `Count(..., filter=Q(...))`)
+    /// and child soft-delete awareness are tracked follow-ups
+    /// (gaps2 #39).
+    pub fn annotate_related(
+        mut self,
+        alias: &str,
+        relation: &str,
+        agg: crate::orm::Aggregate,
+    ) -> Self {
+        let resolved = T::REVERSE_FK_RELATIONS
             .iter()
-            .find(|r| r.field_name == field)
+            .find(|r| r.field_name == relation)
+            .map(|spec| {
+                let pk = T::FIELDS
+                    .iter()
+                    .find(|f| f.primary_key)
+                    .map(|f| f.name)
+                    .unwrap_or("id");
+                (
+                    spec.target_table.to_string(),
+                    spec.fk_column.to_string(),
+                    T::TABLE.to_string(),
+                    pk.to_string(),
+                )
+            })
             .ok_or_else(|| {
-                sqlx::Error::Protocol(format!(
-                    "umbra::orm::annotate_count: `{field}` is not a reverse-FK relation on `{}` — declared relations: [{}]",
+                format!(
+                    "umbra::orm::annotate_related: `{relation}` is not a reverse-FK relation on `{}` — declared relations: [{}]",
                     T::NAME,
                     T::REVERSE_FK_RELATIONS
                         .iter()
                         .map(|r| r.field_name)
                         .collect::<Vec<_>>()
                         .join(", "),
-                ))
-            })?;
-        let pk = T::FIELDS.iter().find(|f| f.primary_key).ok_or_else(|| {
-            sqlx::Error::Protocol(format!(
-                "umbra::orm::annotate_count: model `{}` has no primary key",
-                T::NAME
-            ))
-        })?;
+                )
+            });
+        self.annotations.push(RelatedAnnotation {
+            alias: alias.to_string(),
+            agg,
+            resolved,
+        });
+        self
+    }
 
-        // Correlated scalar subquery against the child table. The
-        // outer query's column list stays exactly `T::FIELDS`, so the
-        // typed FromRow decode is untouched; the count rides along as
-        // one extra aliased column.
-        let count_sub = sea_query::Query::select()
-            .expr(sea_query::Expr::col(sea_query::Asterisk).count())
-            .from(Alias::new(spec.target_table))
-            .and_where(
-                sea_query::Expr::col((Alias::new(spec.target_table), Alias::new(spec.fk_column)))
-                    .equals((Alias::new(T::TABLE), Alias::new(pk.name))),
-            )
-            .to_owned();
-        let count_expr = sea_query::SimpleExpr::SubQuery(
-            None,
-            Box::new(sea_query::SubQueryStatement::SelectStatement(count_sub)),
-        );
+    /// Sugar for the overwhelmingly common annotation:
+    /// `annotate_related("<relation>_count", relation, Aggregate::count())`.
+    /// `.annotate_count("comment_set")` exposes the value under the
+    /// `comment_set_count` alias in [`Self::fetch_annotated`].
+    pub fn annotate_count(self, relation: &str) -> Self {
+        let alias = format!("{relation}_count");
+        self.annotate_related(&alias, relation, crate::orm::Aggregate::count())
+    }
+
+    /// Loud-failure check for poisoned annotations (unknown relation
+    /// names recorded by the infallible builder). Called by every
+    /// fallible consumer before SQL runs.
+    fn check_annotations(&self) -> Result<(), sqlx::Error> {
+        for ann in &self.annotations {
+            if let Err(msg) = &ann.resolved {
+                return Err(sqlx::Error::Protocol(msg.clone()));
+            }
+        }
+        Ok(())
+    }
+
+    /// Run the SELECT and return every matching row **with its
+    /// annotation values** — the execution terminal for
+    /// [`Self::annotate_related`] / [`Self::annotate_count`]. One
+    /// query; each row's annotations arrive as an `alias → JSON
+    /// value` map (count → integer, AVG → float/null, SUM/MAX/MIN →
+    /// typed per the child column, NULL on empty sets for the
+    /// non-count aggregates).
+    pub async fn fetch_annotated(
+        self,
+    ) -> Result<Vec<(T, serde_json::Map<String, JsonValue>)>, sqlx::Error>
+    where
+        T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
+            + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
+    {
+        self.check_annotations()?;
+        // Child-column types for SUM/MAX/MIN decoding, resolved from
+        // the runtime registry (the child model is known by table
+        // name only). `None` falls back to decode_agg's string path.
+        let source_types: Vec<(String, crate::orm::Aggregate, Option<crate::orm::SqlType>)> = {
+            let registry_up = crate::migrate::is_initialised();
+            self.annotations
+                .iter()
+                .map(|ann| {
+                    let ty = match (&ann.resolved, registry_up, ann.agg.source_column()) {
+                        (Ok((child_table, ..)), true, Some(col)) => {
+                            crate::migrate::registered_models()
+                                .into_iter()
+                                .find(|m| m.table == *child_table)
+                                .and_then(|m| m.fields.iter().find(|f| f.name == col).map(|f| f.ty))
+                        }
+                        _ => None,
+                    };
+                    (ann.alias.clone(), ann.agg.clone(), ty)
+                })
+                .collect()
+        };
 
         let pool = resolve_pool::<T>(self.explicit_pool.clone());
-        let backend = pool.backend_name();
-        let mut q = self.build_query_for(backend);
-        q.expr_as(count_expr, Alias::new(COUNT_ALIAS));
-
         match pool {
             DbPool::Sqlite(pool) => {
+                let q = self.build_query_for("sqlite");
                 let (sql, vals) = q.build_sqlx(SqliteQueryBuilder);
                 let rows = sqlx::query_with::<sqlx::Sqlite, _>(&sql, vals)
                     .fetch_all(&pool)
@@ -2071,12 +2189,19 @@ impl<T: Model> QuerySet<T> {
                 let mut out = Vec::with_capacity(rows.len());
                 for row in &rows {
                     let t = <T as sqlx::FromRow<_>>::from_row(row)?;
-                    let n: i64 = sqlx::Row::try_get(row, COUNT_ALIAS)?;
-                    out.push((t, n));
+                    let mut anns = serde_json::Map::with_capacity(source_types.len());
+                    for (alias, agg, ty) in &source_types {
+                        anns.insert(
+                            alias.clone(),
+                            backend_sqlite::decode_agg(row, alias, agg, *ty)?,
+                        );
+                    }
+                    out.push((t, anns));
                 }
                 Ok(out)
             }
             DbPool::Postgres(pool) => {
+                let q = self.build_query_for("postgres");
                 let (sql, vals) = q.build_sqlx(PostgresQueryBuilder);
                 let rows = sqlx::query_with::<sqlx::Postgres, _>(&sql, vals)
                     .fetch_all(&pool)
@@ -2084,8 +2209,11 @@ impl<T: Model> QuerySet<T> {
                 let mut out = Vec::with_capacity(rows.len());
                 for row in &rows {
                     let t = <T as sqlx::FromRow<_>>::from_row(row)?;
-                    let n: i64 = sqlx::Row::try_get(row, COUNT_ALIAS)?;
-                    out.push((t, n));
+                    let mut anns = serde_json::Map::with_capacity(source_types.len());
+                    for (alias, agg, ty) in &source_types {
+                        anns.insert(alias.clone(), backend_pg::decode_agg(row, alias, agg, *ty)?);
+                    }
+                    out.push((t, anns));
                 }
                 Ok(out)
             }
@@ -2754,13 +2882,31 @@ impl<T: Model> Manager<T> {
         self.queryset().count().await
     }
 
+    /// See [`QuerySet::annotate_related`] — starts an annotated chain
+    /// from the manager, like `filter` does.
+    pub fn annotate_related(
+        &self,
+        alias: &str,
+        relation: &str,
+        agg: crate::orm::Aggregate,
+    ) -> QuerySet<T> {
+        self.queryset().annotate_related(alias, relation, agg)
+    }
+
     /// See [`QuerySet::annotate_count`].
-    pub async fn annotate_count(&self, field: &str) -> Result<Vec<(T, i64)>, sqlx::Error>
+    pub fn annotate_count(&self, relation: &str) -> QuerySet<T> {
+        self.queryset().annotate_count(relation)
+    }
+
+    /// See [`QuerySet::fetch_annotated`].
+    pub async fn fetch_annotated(
+        &self,
+    ) -> Result<Vec<(T, serde_json::Map<String, JsonValue>)>, sqlx::Error>
     where
         T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
             + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
     {
-        self.queryset().annotate_count(field).await
+        self.queryset().fetch_annotated().await
     }
 
     /// See [`QuerySet::values`].

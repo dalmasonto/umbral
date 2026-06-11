@@ -87,6 +87,7 @@ Drag-resize: ~50 LOC vanilla JS at the bottom; width in localStorage.
       hx-target="#umbra-sheet-slot" hx-swap="innerHTML" hx-push-url="false"
       class="space-y-xs"
     >
+      {{ csrf_input }}
       {% for field in fields %}
       {# Single field renderer — every form field (admin sheet AND the
          full-page form) goes through the one field_editor macro so the

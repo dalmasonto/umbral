@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { background: #FAF8F5; color: #1B1714; font-family: 'Inter', system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+  a { text-decoration: none; color: inherit; }
+  ::selection { background: #DDD3FF; }
+</style>
+</helmet>
+
+<div style="min-height:100%; background:#FAF8F5;">
+
+  <!-- ===== NAV ===== -->
+  <header style="position:sticky; top:0; z-index:50; background:rgba(250,248,245,0.82); backdrop-filter:blur(12px); border-bottom:1px solid #ECE6DE;">
+    <div style="max-width:1200px; margin:0 auto; padding:14px 28px; display:flex; align-items:center; gap:32px;">
+      <a href="Home.dc.html" style="display:flex; align-items:center; gap:11px; flex-shrink:0;">
+        <span style="position:relative; width:24px; height:24px; display:inline-block;">
+          <span style="position:absolute; inset:0; border-radius:50%; background:#6B4DFF;"></span>
+          <span style="position:absolute; top:-4px; right:-5px; width:20px; height:20px; border-radius:50%; background:#FAF8F5;"></span>
+        </span>
+        <span style="font-size:18px; font-weight:700; letter-spacing:-0.02em;">Umbra</span>
+      </a>
+      <nav style="display:flex; align-items:center; gap:26px; font-size:14.5px; font-weight:500; color:#4A423B; white-space:nowrap;">
+        <a href="#">Features</a>
+        <a href="Prebuilt.dc.html">Prebuilt Plugins</a>
+        <a href="Plugins.dc.html" style="color:#1B1714; font-weight:600;">Plugin Directory</a>
+        <a href="#">Docs</a>
+        <a href="#">Blog</a>
+        <a href="#">Showcase</a>
+      </nav>
+      <div style="margin-left:auto; display:flex; align-items:center; gap:12px;">
+        <a href="#" style="display:flex; align-items:center; gap:7px; padding:8px 12px; background:#FFFFFF; border:1px solid #E9E3DB; border-radius:9px; font-size:13.5px; font-weight:600; color:#3A332D;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="#3A332D"><path d="M12 2C6.48 2 2 6.58 2 12.25c0 4.53 2.87 8.37 6.84 9.73.5.1.68-.22.68-.49v-1.7c-2.78.62-3.37-1.37-3.37-1.37-.46-1.18-1.11-1.49-1.11-1.49-.91-.64.07-.62.07-.62 1 .07 1.53 1.06 1.53 1.06.89 1.56 2.34 1.11 2.91.85.09-.66.35-1.11.63-1.37-2.22-.26-4.56-1.14-4.56-5.07 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.27 2.75 1.05a9.36 9.36 0 0 1 5 0c1.91-1.32 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.94-2.34 4.81-4.57 5.06.36.32.68.94.68 1.9v2.82c0 .27.18.6.69.49A10.26 10.26 0 0 0 22 12.25C22 6.58 17.52 2 12 2Z"/></svg>
+          <span>4.2k</span>
+        </a>
+        <a href="#" style="padding:9px 16px; background:#6B4DFF; color:#fff; border-radius:9px; font-size:14px; font-weight:600;">Get started</a>
+      </div>
+    </div>
+  </header>
+
+  <!-- ===== PAGE HEADER ===== -->
+  <section style="max-width:1200px; margin:0 auto; padding:48px 28px 0;">
+    <div style="display:flex; align-items:flex-end; justify-content:space-between; gap:24px; flex-wrap:wrap;">
+      <div style="max-width:640px;">
+        <div style="display:inline-flex; align-items:center; gap:7px; font-size:13px; font-weight:700; letter-spacing:0.04em; text-transform:uppercase; color:#6B4DFF; margin-bottom:12px;">
+          <span style="width:6px; height:6px; border-radius:50%; background:#6B4DFF;"></span>Plugin Directory
+        </div>
+        <h1 style="font-size:44px; line-height:1.06; font-weight:800; letter-spacing:-0.03em; margin:0 0 12px;">Find a plugin for that</h1>
+        <p style="font-size:17px; line-height:1.55; color:#6E655C; margin:0;">Official batteries, community packages and experiments — searchable, reviewable, and checked for safety before you install.</p>
+      </div>
+      <a href="#" style="display:flex; align-items:center; gap:9px; padding:12px 18px; background:#FFFFFF; border:1px solid #E2DBD2; border-radius:11px; font-size:14.5px; font-weight:600; color:#2A241E; white-space:nowrap;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#6B4DFF" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg>
+        Submit a plugin
+      </a>
+    </div>
+
+    <!-- search + sort -->
+    <div style="display:flex; gap:12px; align-items:center; margin-top:28px;">
+      <div style="flex:1; display:flex; align-items:center; gap:11px; padding:14px 17px; background:#FFFFFF; border:1px solid #E9E3DB; border-radius:13px; color:#978C81; font-size:15px;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#978C81" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
+        Search 248 plugins — try “rest”, “multitenancy”, “oauth”, “storage”…
+        <span style="margin-left:auto; font-family:'JetBrains Mono',monospace; font-size:12px; color:#B6ABA0; border:1px solid #E9E3DB; border-radius:6px; padding:2px 7px;">/</span>
+      </div>
+      <div style="display:flex; align-items:center; gap:8px; padding:14px 16px; background:#FFFFFF; border:1px solid #E9E3DB; border-radius:13px; font-size:14px; font-weight:600; color:#3A332D; white-space:nowrap;">
+        Sort: Most installed
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#978C81" stroke-width="2.2"><path d="M6 9l6 6 6-6"/></svg>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== BODY: SIDEBAR + LIST ===== -->
+  <section style="max-width:1200px; margin:0 auto; padding:24px 28px 8px;">
+    <div style="display:grid; grid-template-columns:248px 1fr; gap:28px; align-items:start;">
+
+      <!-- SIDEBAR FILTERS -->
+      <aside style="position:sticky; top:84px; display:flex; flex-direction:column; gap:22px;">
+        <div style="background:#FFFFFF; border:1px solid #ECE6DE; border-radius:16px; padding:18px;">
+          <div style="font-size:12px; font-weight:700; letter-spacing:0.04em; text-transform:uppercase; color:#978C81; margin-bottom:13px;">Type</div>
+          <div style="display:flex; flex-direction:column; gap:3px;">
+            <label style="display:flex; align-items:center; gap:9px; padding:7px 8px; border-radius:8px; font-size:14px; color:#2A241E; background:#F0ECFF;"><span style="width:16px; height:16px; border-radius:5px; border:2px solid #6B4DFF; background:#6B4DFF; display:flex; align-items:center; justify-content:center;"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.5"><path d="M20 6L9 17l-5-5"/></svg></span>Official <span style="margin-left:auto; font-size:12px; color:#978C81;">14</span></label>
+            <label style="display:flex; align-items:center; gap:9px; padding:7px 8px; border-radius:8px; font-size:14px; color:#2A241E;"><span style="width:16px; height:16px; border-radius:5px; border:2px solid #6B4DFF; background:#6B4DFF; display:flex; align-items:center; justify-content:center;"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.5"><path d="M20 6L9 17l-5-5"/></svg></span>Community <span style="margin-left:auto; font-size:12px; color:#978C81;">201</span></label>
+            <label style="display:flex; align-items:center; gap:9px; padding:7px 8px; border-radius:8px; font-size:14px; color:#4A423B;"><span style="width:16px; height:16px; border-radius:5px; border:1.5px solid #D8D0C6;"></span>Experimental <span style="margin-left:auto; font-size:12px; color:#978C81;">26</span></label>
+            <label style="display:flex; align-items:center; gap:9px; padding:7px 8px; border-radius:8px; font-size:14px; color:#4A423B;"><span style="width:16px; height:16px; border-radius:5px; border:1.5px solid #D8D0C6;"></span>Deprecated <span style="margin-left:auto; font-size:12px; color:#978C81;">5</span></label>
+            <label style="display:flex; align-items:center; gap:9px; padding:7px 8px; border-radius:8px; font-size:14px; color:#4A423B;"><span style="width:16px; height:16px; border-radius:5px; border:1.5px solid #D8D0C6;"></span>Flagged <span style="margin-left:auto; font-size:12px; color:#C23B3B;">2</span></label>
+          </div>
+        </div>
+
+        <div style="background:#FFFFFF; border:1px solid #ECE6DE; border-radius:16px; padding:18px;">
+          <div style="font-size:12px; font-weight:700; letter-spacing:0.04em; text-transform:uppercase; color:#978C81; margin-bottom:13px;">Category</div>
+          <div style="display:flex; flex-wrap:wrap; gap:7px;">
+            <span style="font-size:12.5px; padding:5px 11px; background:#1B1714; color:#fff; border-radius:999px;">All</span>
+            <span style="font-size:12.5px; padding:5px 11px; background:#F7F4F0; color:#4A423B; border:1px solid #ECE6DE; border-radius:999px;">Auth</span>
+            <span style="font-size:12.5px; padding:5px 11px; background:#F7F4F0; color:#4A423B; border:1px solid #ECE6DE; border-radius:999px;">API</span>
+            <span style="font-size:12.5px; padding:5px 11px; background:#F7F4F0; color:#4A423B; border:1px solid #ECE6DE; border-radius:999px;">Admin</span>
+            <span style="font-size:12.5px; padding:5px 11px; background:#F7F4F0; color:#4A423B; border:1px solid #ECE6DE; border-radius:999px;">Storage</span>
+            <span style="font-size:12.5px; padding:5px 11px; background:#F7F4F0; color:#4A423B; border:1px solid #ECE6DE; border-radius:999px;">Tasks</span>
+            <span style="font-size:12.5px; padding:5px 11px; background:#F7F4F0; color:#4A423B; border:1px solid #ECE6DE; border-radius:999px;">Tenancy</span>
+            <span style="font-size:12.5px; padding:5px 11px; background:#F7F4F0; color:#4A423B; border:1px solid #ECE6DE; border-radius:999px;">Frontend</span>
+          </div>
+        </div>
+
+        <div style="background:#FFFFFF; border:1px solid #ECE6DE; border-radius:16px; padding:18px;">
+          <div style="font-size:12px; font-weight:700; letter-spacing:0.04em; text-transform:uppercase; color:#978C81; margin-bottom:13px;">Audit status</div>
+          <div style="display:flex; flex-direction:column; gap:3px;">
+            <label style="display:flex; align-items:center; gap:9px; padding:7px 8px; border-radius:8px; font-size:14px; color:#4A423B;"><span style="width:16px; height:16px; border-radius:5px; border:1.5px solid #D8D0C6;"></span><span style="display:inline-flex; align-items:center; gap:6px;"><span style="width:7px;height:7px;border-radius:50%;background:#1F9D57;"></span>Audited</span></label>
+            <label style="display:flex; align-items:center; gap:9px; padding:7px 8px; border-radius:8px; font-size:14px; color:#4A423B;"><span style="width:16px; height:16px; border-radius:5px; border:1.5px solid #D8D0C6;"></span><span style="display:inline-flex; align-items:center; gap:6px;"><span style="width:7px;height:7px;border-radius:50%;background:#B5730F;"></span>Unverified</span></label>
+            <label style="display:flex; align-items:center; gap:9px; padding:7px 8px; border-radius:8px; font-size:14px; color:#4A423B;"><span style="width:16px; height:16px; border-radius:5px; border:1.5px solid #D8D0C6;"></span><span style="display:inline-flex; align-items:center; gap:6px;"><span style="width:7px;height:7px;border-radius:50%;background:#C23B3B;"></span>Flagged</span></label>
+          </div>
+        </div>
+
+        <div style="background:#FFFFFF; border:1px solid #ECE6DE; border-radius:16px; padding:18px;">
+          <div style="font-size:12px; font-weight:700; letter-spacing:0.04em; text-transform:uppercase; color:#978C81; margin-bottom:13px;">Database backend</div>
+          <div style="display:flex; flex-direction:column; gap:3px;">
+            <label style="display:flex; align-items:center; gap:9px; padding:7px 8px; border-radius:8px; font-size:14px; color:#4A423B;"><span style="width:16px; height:16px; border-radius:5px; border:1.5px solid #D8D0C6;"></span>PostgreSQL</label>
+            <label style="display:flex; align-items:center; gap:9px; padding:7px 8px; border-radius:8px; font-size:14px; color:#4A423B;"><span style="width:16px; height:16px; border-radius:5px; border:1.5px solid #D8D0C6;"></span>SQLite</label>
+            <label style="display:flex; align-items:center; gap:9px; padding:7px 8px; border-radius:8px; font-size:14px; color:#4A423B;"><span style="width:16px; height:16px; border-radius:5px; border:1.5px solid #D8D0C6;"></span>MySQL</label>
+          </div>
+        </div>
+      </aside>
+
+      <!-- LIST -->
+      <div style="display:flex; flex-direction:column; gap:14px;">
+        <div style="font-size:13.5px; color:#6E655C;">Showing <span style="color:#1B1714; font-weight:600;">8</span> of 248 plugins</div>
+
+        <!-- ROW: rest (official, audited, featured) -->
+        <a href="#" style="display:block; background:#FFFFFF; border:1px solid #ECE6DE; border-radius:16px; padding:22px;">
+          <div style="display:flex; gap:16px;">
+            <span style="flex-shrink:0; width:48px; height:48px; border-radius:12px; background:#F0ECFF; display:flex; align-items:center; justify-content:center; font-family:'JetBrains Mono',monospace; font-weight:700; color:#5938E8; font-size:18px;">{}</span>
+            <div style="flex:1; min-width:0;">
+              <div style="display:flex; align-items:center; gap:9px; flex-wrap:wrap; margin-bottom:5px;">
+                <span style="font-size:17px; font-weight:700;">umbra-rest</span>
+                <span style="font-size:11px; font-weight:700; color:#5938E8; background:#F0ECFF; border:1px solid #DDD3FF; padding:2px 8px; border-radius:999px;">Official</span>
+                <span style="font-size:11px; font-weight:600; color:#B5730F; background:#FBF1DE; padding:2px 8px; border-radius:999px;">Featured</span>
+                <span style="font-size:12.5px; color:#978C81;">by Umbra team</span>
+              </div>
+              <p style="font-size:14px; line-height:1.5; color:#6E655C; margin:0 0 11px;">Build REST APIs the familiar way — serializers, viewsets, routers, pagination, filtering, OpenAPI schemas and an in-browser request playground.</p>
+              <div style="display:flex; flex-wrap:wrap; gap:6px;">
+                <span style="font-size:12px; padding:3px 9px; background:#F7F4F0; border:1px solid #ECE6DE; border-radius:7px; color:#4A423B;">api</span>
+                <span style="font-size:12px; padding:3px 9px; background:#F7F4F0; border:1px solid #ECE6DE; border-radius:7px; color:#4A423B;">openapi</span>
+                <span style="font-size:12px; padding:3px 9px; background:#F7F4F0; border:1px solid #ECE6DE; border-radius:7px; color:#4A423B;">serializers</span>
+              </div>
+            </div>
+            <div style="flex-shrink:0; width:188px; display:flex; flex-direction:column; gap:9px; align-items:flex-end; text-align:right;">
+              <span style="display:inline-flex; align-items:center; gap:5px; font-size:12px; font-weight:600; color:#1F9D57; background:#E7F4EC; padding:4px 10px; border-radius:999px;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#1F9D57" stroke-width="2.6"><path d="M20 6L9 17l-5-5"/></svg>Audited · Aug 2026</span>
+              <div style="font-size:12.5px; color:#978C81;"><span style="color:#1B1714; font-weight:700;">★ 4.9</span> · 38k installs</div>
+              <div style="font-size:12.5px; color:#978C81; display:flex; align-items:center; gap:5px; justify-content:flex-end;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#978C81" stroke-width="2"><path d="M21 11.5a8.4 8.4 0 0 1-11.3 7.9L3 21l1.6-6.7A8.4 8.4 0 1 1 21 11.5z"/></svg>52 notes</div>
+              <code style="font-family:'JetBrains Mono',monospace; font-size:12px; color:#3A332D; background:#F7F4F0; border:1px solid #ECE6DE; border-radius:7px; padding:5px 9px;">umbra add umbra-rest</code>
+            </div>
+          </div>
+        </a>
+
+        <!-- ROW: multitenancy (community, unverified) -->
+        <a href="#" style="display:block; background:#FFFFFF; border:1px solid #ECE6DE; border-radius:16px; padding:22px;">
+          <div style="display:flex; gap:16px;">
+            <span style="flex-shrink:0; width:48px; height:48px; border-radius:12px; background:#F3EEE7; display:flex; align-items:center; justify-content:center; color:#9A7B43;"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#9A7B43" stroke-width="2"><path d="M3 21V8l9-5 9 5v13"/><path d="M9 21v-6h6v6"/></svg></span>
+            <div style="flex:1; min-width:0;">
+              <div style="display:flex; align-items:center; gap:9px; flex-wrap:wrap; margin-bottom:5px;">
+                <span style="font-size:17px; font-weight:700;">umbra-multitenancy</span>
+                <span style="font-size:11px; font-weight:700; color:#6E655C; background:#F3EEE7; border:1px solid #E5DCD0; padding:2px 8px; border-radius:999px;">Community</span>
+                <span style="font-size:12.5px; color:#978C81;">by @kanto</span>
+              </div>
+              <p style="font-size:14px; line-height:1.5; color:#6E655C; margin:0 0 11px;">Schema-per-tenant and row-level tenancy with admin-aware scoping, tenant-aware migrations and middleware for request routing.</p>
+              <div style="display:flex; flex-wrap:wrap; gap:6px;">
+                <span style="font-size:12px; padding:3px 9px; background:#F7F4F0; border:1px solid #ECE6DE; border-radius:7px; color:#4A423B;">tenancy</span>
+                <span style="font-size:12px; padding:3px 9px; background:#F7F4F0; border:1px solid #ECE6DE; border-radius:7px; color:#4A423B;">postgres</span>
+                <span style="font-size:12px; padding:3px 9px; background:#F7F4F0; border:1px solid #ECE6DE; border-radius:7px; color:#4A423B;">middleware</span>
+              </div>
+            </div>
+            <div style="flex-shrink:0; width:188px; display:flex; flex-direction:column; gap:9px; align-items:flex-end; text-align:right;">
+              <span style="display:inline-flex; align-items:center; gap:5px; font-size:12px; font-weight:600; color:#B5730F; background:#FBF1DE; padding:4px 10px; border-radius:999px;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#B5730F" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/></svg>Unverified</span>
+              <div style="font-size:12.5px; color:#978C81;"><span style="color:#1B1714; font-weight:700;">★ 4.6</span> · 9.1k installs</div>
+              <div style="font-size:12.5px; color:#978C81; display:flex; align-items:center; gap:5px; justify-content:flex-end;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#978C81" stroke-width="2"><path d="M21 11.5a8.4 8.4 0 0 1-11.3 7.9L3 21l1.6-6.7A8.4 8.4 0 1 1 21 11.5z"/></svg>31 notes</div>
+              <code style="font-family:'JetBrains Mono',monospace; font-size:11.5px; color:#3A332D; background:#F7F4F0; border:1px solid #ECE6DE; border-radius:7px; padding:5px 9px;">umbra add umbra-multitenancy</code>
+            </div>
+          </div>
+        </a>
+
+        <!-- ROW: oauth-github (community, experimental) -->
+        <a href="#" style="display:block; background:#FFFFFF; border:1px solid #ECE6DE; border-radius:16px; padding:22px;">
+          <div style="display:flex; gap:16px;">
+            <span style="flex-shrink:0; width:48px; height:48px; border-radius:12px; background:#F3EEE7; display:flex; align-items:center; justify-content:center; color:#3A332D;"><svg width="22" height="22" viewBox="0 0 24 24" fill="#3A332D"><path d="M12 2C6.48 2 2 6.58 2 12.25c0 4.53 2.87 8.37 6.84 9.73.5.1.68-.22.68-.49v-1.7c-2.78.62-3.37-1.37-3.37-1.37-.46-1.18-1.11-1.49-1.11-1.49-.91-.64.07-.62.07-.62 1 .07 1.53 1.06 1.53 1.06.89 1.56 2.34 1.11 2.91.85.09-.66.35-1.11.63-1.37-2.22-.26-4.56-1.14-4.56-5.07 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.27 2.75 1.05a9.36 9.36 0 0 1 5 0c1.91-1.32 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.94-2.34 4.81-4.57 5.06.36.32.68.94.68 1.9v2.82c0 .27.18.6.69.49A10.26 10.26 0 0 0 22 12.25C22 6.58 17.52 2 12 2Z"/></svg></span>
+            <div style="flex:1; min-width:0;">
+              <div style="display:flex; align-items:center; gap:9px; flex-wrap:wrap; margin-bottom:5px;">
+                <span style="font-size:17px; font-weight:700;">umbra-oauth-github</span>
+                <span style="font-size:11px; font-weight:700; color:#6E655C; background:#F3EEE7; border:1px solid #E5DCD0; padding:2px 8px; border-radius:999px;">Community</span>
+                <span style="font-size:11px; font-weight:600; color:#5938E8; background:#F0ECFF; padding:2px 8px; border-radius:999px;">Experimental</span>
+                <span style="font-size:12.5px; color:#978C81;">by @devlin</span>
+              </div>
+              <p style="font-size:14px; line-height:1.5; color:#6E655C; margin:0 0 11px;">GitHub OAuth, avatar import and account-age gates — the connection layer reviews, submissions and malicious-plugin voting are waiting on.</p>
+              <div style="display:flex; flex-wrap:wrap; gap:6px;">
+                <span style="font-size:12px; padding:3px 9px; background:#F7F4F0; border:1px solid #ECE6DE; border-radius:7px; color:#4A423B;">auth</span>
+                <span style="font-size:12px; padding:3px 9px; background:#F7F4F0; border:1px solid #ECE6DE; border-radius:7px; color:#4A423B;">oauth</span>
+                <span style="font-size:12px; padding:3px 9px; background:#F7F4F0; border:1px solid #ECE6DE; border-radius:7px; color:#4A423B;">identity</span>
+              </div>
+            </div>
+            <div style="flex-shrink:0; width:188px; display:flex; flex-direction:column; gap:9px; align-items:flex-end; text-align:right;">
+              <span style="display:inline-flex; align-items:center; gap:5px; font-size:12px; font-weight:600; color:#B5730F; background:#FBF1DE; padding:4px 10px; border-radius:999px;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#B5730F" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/></svg>Unverified</span>
+              <div style="font-size:12.5px; color:#978C81;"><span style="color:#1B1714; font-weight:700;">★ 4.3</span> · 2.7k installs</div>
+              <div style="font-size:12.5px; color:#978C81; display:flex; align-items:center; gap:5px; justify-content:flex-end;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#978C81" stroke-width="2"><path d="M21 11.5a8.4 8.4 0 0 1-11.3 7.9L3 21l1.6-6.7A8.4 8.4 0 1 1 21 11.5z"/></svg>44 notes</div>
+              <code style="font-family:'JetBrains Mono',monospace; font-size:11.5px; color:#3A332D; background:#F7F4F0; border:1px solid #ECE6DE; border-radius:7px; padding:5px 9px;">umbra add umbra-oauth-github</code>
+            </div>
+          </div>
+        </a>
+
+        <!-- ROW: flagged (security warning) -->
+        <a href="#" style="display:block; background:#FFFFFF; border:1px solid #F1C9C9; border-radius:16px; padding:22px;">
+          <div style="display:flex; align-items:center; gap:9px; padding:9px 13px; background:#FBEDEC; border:1px solid #F1C9C9; border-radius:10px; margin-bottom:16px;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#C23B3B" stroke-width="2.2"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>
+            <span style="font-size:13px; font-weight:700; color:#A82E2E;">Security advisory — confirmed malicious behavior in v0.2.x.</span>
+            <a href="#" style="margin-left:auto; font-size:12.5px; font-weight:600; color:#A82E2E; text-decoration:underline;">Read advisory</a>
+          </div>
+          <div style="display:flex; gap:16px;">
+            <span style="flex-shrink:0; width:48px; height:48px; border-radius:12px; background:#FBEDEC; display:flex; align-items:center; justify-content:center; color:#C23B3B;"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#C23B3B" stroke-width="2"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9.5 9.5l5 5M14.5 9.5l-5 5"/></svg></span>
+            <div style="flex:1; min-width:0;">
+              <div style="display:flex; align-items:center; gap:9px; flex-wrap:wrap; margin-bottom:5px;">
+                <span style="font-size:17px; font-weight:700; color:#7A2222;">fast-secrets-vault</span>
+                <span style="font-size:11px; font-weight:700; color:#fff; background:#C23B3B; padding:2px 8px; border-radius:999px;">Flagged</span>
+                <span style="font-size:12.5px; color:#B08A8A;">by @anon-9931</span>
+              </div>
+              <p style="font-size:14px; line-height:1.5; color:#9A7676; margin:0 0 11px;">Claims to manage app secrets. Auditors confirmed it exfiltrates environment variables during migration. Do not install. Listing kept visible for transparency.</p>
+              <div style="display:flex; flex-wrap:wrap; gap:6px;">
+                <span style="font-size:12px; padding:3px 9px; background:#FBEDEC; border:1px solid #F1C9C9; border-radius:7px; color:#A82E2E;">secrets</span>
+                <span style="font-size:12px; padding:3px 9px; background:#FBEDEC; border:1px solid #F1C9C9; border-radius:7px; color:#A82E2E;">do-not-install</span>
+              </div>
+            </div>
+            <div style="flex-shrink:0; width:188px; display:flex; flex-direction:column; gap:9px; align-items:flex-end; text-align:right;">
+              <span style="display:inline-flex; align-items:center; gap:5px; font-size:12px; font-weight:700; color:#fff; background:#C23B3B; padding:4px 10px; border-radius:999px;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.6"><path d="M18 6L6 18M6 6l12 12"/></svg>Malicious</span>
+              <div style="font-size:12.5px; color:#B08A8A;">delisted from install</div>
+              <div style="font-size:12.5px; color:#B08A8A; display:flex; align-items:center; gap:5px; justify-content:flex-end;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#B08A8A" stroke-width="2"><path d="M21 11.5a8.4 8.4 0 0 1-11.3 7.9L3 21l1.6-6.7A8.4 8.4 0 1 1 21 11.5z"/></svg>87 reports</div>
+            </div>
+          </div>
+        </a>
+
+        <!-- ROW: storage-s3 (community, audited) -->
+        <a href="#" style="display:block; background:#FFFFFF; border:1px solid #ECE6DE; border-radius:16px; padding:22px;">
+          <div style="display:flex; gap:16px;">
+            <span style="flex-shrink:0; width:48px; height:48px; border-radius:12px; background:#F3EEE7; display:flex; align-items:center; justify-content:center; color:#9A7B43;"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#9A7B43" stroke-width="2"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg></span>
+            <div style="flex:1; min-width:0;">
+              <div style="display:flex; align-items:center; gap:9px; flex-wrap:wrap; margin-bottom:5px;">
+                <span style="font-size:17px; font-weight:700;">umbra-storage-s3</span>
+                <span style="font-size:11px; font-weight:700; color:#6E655C; background:#F3EEE7; border:1px solid #E5DCD0; padding:2px 8px; border-radius:999px;">Community</span>
+                <span style="font-size:12.5px; color:#978C81;">by @lumen-labs</span>
+              </div>
+              <p style="font-size:14px; line-height:1.5; color:#6E655C; margin:0 0 11px;">Drop-in S3 and S3-compatible media backend for the content plugin — signed URLs, lifecycle rules and streaming uploads.</p>
+              <div style="display:flex; flex-wrap:wrap; gap:6px;">
+                <span style="font-size:12px; padding:3px 9px; background:#F7F4F0; border:1px solid #ECE6DE; border-radius:7px; color:#4A423B;">storage</span>
+                <span style="font-size:12px; padding:3px 9px; background:#F7F4F0; border:1px solid #ECE6DE; border-radius:7px; color:#4A423B;">s3</span>
+                <span style="font-size:12px; padding:3px 9px; background:#F7F4F0; border:1px solid #ECE6DE; border-radius:7px; color:#4A423B;">media</span>
+              </div>
+            </div>
+            <div style="flex-shrink:0; width:188px; display:flex; flex-direction:column; gap:9px; align-items:flex-end; text-align:right;">
+              <span style="display:inline-flex; align-items:center; gap:5px; font-size:12px; font-weight:600; color:#1F9D57; background:#E7F4EC; padding:4px 10px; border-radius:999px;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#1F9D57" stroke-width="2.6"><path d="M20 6L9 17l-5-5"/></svg>Audited · Jun 2026</span>
+              <div style="font-size:12.5px; color:#978C81;"><span style="color:#1B1714; font-weight:700;">★ 4.7</span> · 12k installs</div>
+              <div style="font-size:12.5px; color:#978C81; display:flex; align-items:center; gap:5px; justify-content:flex-end;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#978C81" stroke-width="2"><path d="M21 11.5a8.4 8.4 0 0 1-11.3 7.9L3 21l1.6-6.7A8.4 8.4 0 1 1 21 11.5z"/></svg>18 notes</div>
+              <code style="font-family:'JetBrains Mono',monospace; font-size:11.5px; color:#3A332D; background:#F7F4F0; border:1px solid #ECE6DE; border-radius:7px; padding:5px 9px;">umbra add umbra-storage-s3</code>
+            </div>
+          </div>
+        </a>
+
+        <!-- load more -->
+        <div style="display:flex; justify-content:center; padding:14px 0 8px;">
+          <a href="#" style="padding:11px 22px; background:#FFFFFF; border:1px solid #E2DBD2; border-radius:11px; font-size:14px; font-weight:600; color:#3A332D;">Load 240 more plugins</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== SUBMIT CTA ===== -->
+  <section style="max-width:1200px; margin:0 auto; padding:24px 28px 8px;">
+    <div style="display:flex; align-items:center; gap:24px; background:#1B1714; border-radius:20px; padding:32px 36px; color:#fff; flex-wrap:wrap;">
+      <div style="flex:1; min-width:280px;">
+        <h2 style="font-size:24px; font-weight:800; letter-spacing:-0.02em; margin:0 0 8px;">Built something? List it here.</h2>
+        <p style="font-size:14.5px; line-height:1.55; color:#B0A89F; margin:0;">Plugin submissions go through moderation before publishing. Submitting will require a connected GitHub account at least 3 years old — <span style="color:#C9BEF6;">coming with the OAuth plugin</span>; until then, submit for manual review.</p>
+      </div>
+      <a href="#" style="display:inline-flex; align-items:center; gap:9px; padding:13px 22px; background:#fff; color:#1B1714; border-radius:11px; font-size:15px; font-weight:600; white-space:nowrap;">Submit a plugin <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#1B1714" stroke-width="2.2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
+    </div>
+  </section>
+
+  <!-- ===== FOOTER ===== -->
+  <footer style="border-top:1px solid #ECE6DE; margin-top:48px; background:#F6F2ED;">
+    <div style="max-width:1200px; margin:0 auto; padding:40px 28px 28px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:16px;">
+      <a href="Home.dc.html" style="display:flex; align-items:center; gap:10px;">
+        <span style="position:relative; width:22px; height:22px; display:inline-block;"><span style="position:absolute; inset:0; border-radius:50%; background:#6B4DFF;"></span><span style="position:absolute; top:-4px; right:-4px; width:18px; height:18px; border-radius:50%; background:#F6F2ED;"></span></span>
+        <span style="font-size:17px; font-weight:700;">Umbra</span>
+      </a>
+      <div style="display:flex; align-items:center; gap:8px; font-size:12.5px; color:#6E655C;">
+        <span style="position:relative; width:11px; height:11px; display:inline-block;"><span style="position:absolute; inset:0; border-radius:50%; background:#6B4DFF;"></span><span style="position:absolute; top:-2px; right:-2px; width:9px; height:9px; border-radius:50%; background:#F6F2ED;"></span></span>
+        Built with Umbra · the directory you're reading is database-backed
+      </div>
+      <span style="font-size:12.5px; color:#978C81; font-family:'JetBrains Mono',monospace;">© 2026 Umbra · MIT</span>
+    </div>
+  </footer>
+
+</div>
+</x-dc>
+</body>
+</html>

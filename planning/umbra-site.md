@@ -391,3 +391,7 @@ Run `makemigrations`, review the generated migrations, and run `migrate`.
 Build the Tailwind styling, templates, forms, plugin comments, admin configuration, moderation workflows, seed data, and Sentinmail newsletter integration.
 
 Use the website itself as the first public proof that Umbra can build a real content-heavy framework site.
+
+## Good features
+
+1. Plugin ordering - since it might be hard to track installs as they happen through cargo add, it might be useful to use plugin reviews, rating, to order plugins by popularity or relevance. Actually to track plugin installs, we can provide an installation command like `umbra install <plugin>` that adds the plugin to the project using cargo add but sends a tracking event to the umbra backend. This means, whenever umbra cli is used to install a plugin, we instantiate like a config in the user root that is saved and signed by our server, its like an auth key but in this it will be specifically an identification key to track plugin installs from different devices. We can make this opt in only but this means we don't use installs as a metric. When we have a given device id which is only known to our server means that regardless the user installing the plugin 10x, it can only be recorded once till that code changes! Actually we can also use crates.io site `https://crates.io{crate_name}/{version}/downloads`

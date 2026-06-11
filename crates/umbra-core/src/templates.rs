@@ -507,21 +507,33 @@ fn render_with<C: Serialize>(
         minijinja::ErrorKind::TemplateNotFound => TemplateError::Missing(name.to_string()),
         _ => TemplateError::Render(e),
     })?;
-    let merged = merge_ambient(ctx);
+    let merged = merge_ambient_context(ctx);
     tmpl.render(&merged).map_err(TemplateError::Render)
 }
 
-/// Merge the ambient task-locals into the caller's ctx: `user` (from
-/// `CURRENT_USER`) and the CSRF pair `csrf_token` / `csrf_input` (from
-/// `CURRENT_CSRF`). The handler's own keys always win — the ambient
-/// injection is the default, not an override.
+/// Merge the ambient task-locals into a serializable template context:
+/// `user` (from `CURRENT_USER`) and the CSRF pair `csrf_token` /
+/// `csrf_input` (from `CURRENT_CSRF`). The handler's own keys always
+/// win — the ambient injection is the default, not an override.
 ///
 /// `user` is injected unconditionally (anonymous fallback below);
 /// the CSRF pair only when a middleware actually scoped a token —
 /// there is no meaningful fallback token, and rendering an empty
 /// hidden input would make a form post a guaranteed-403 silently.
-fn merge_ambient<C: Serialize>(ctx: &C) -> minijinja::Value {
+///
+/// Most code should use [`render`], which calls this automatically.
+/// Plugins that own a private MiniJinja environment can call this before
+/// `Template::render` to get the same `{{ user }}`, `{{ csrf_token }}`,
+/// and `{{ csrf_input }}` semantics as the framework renderer.
+pub fn merge_ambient_context<C: Serialize>(ctx: &C) -> minijinja::Value {
     let ctx_value = minijinja::Value::from_serialize(ctx);
+    merge_ambient_value(ctx_value)
+}
+
+/// Same as [`merge_ambient_context`], but accepts an already-built
+/// MiniJinja [`Value`](minijinja::Value). This is useful for private
+/// plugin renderers that build context with `minijinja::context!`.
+pub fn merge_ambient_value(ctx_value: minijinja::Value) -> minijinja::Value {
     let has = |key: &str| {
         ctx_value
             .get_attr(key)

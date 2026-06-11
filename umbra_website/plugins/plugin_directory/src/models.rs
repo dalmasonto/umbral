@@ -134,8 +134,14 @@ pub enum CommentModeration {
 #[derive(
     Debug, Clone, Default, sqlx::FromRow, Serialize, Deserialize, Model, umbra::forms::Form,
 )]
-#[umbra(soft_delete, plugin = "plugin_directory", display = "Plugins", icon = "package")]
+#[umbra(
+    soft_delete,
+    plugin = "plugin_directory",
+    display = "Plugins",
+    icon = "package"
+)]
 pub struct Plugin {
+    #[umbra(primary_key)]
     pub id: i64,
     #[umbra(noform)]
     pub public_id: Uuid,
@@ -147,6 +153,9 @@ pub struct Plugin {
     #[umbra(unique, max_length = 140)]
     #[form(required, length(min = 2, max = 140))]
     pub slug: String,
+
+    #[form(optional, length(max = 4_000))]
+    pub logo: Option<String>,
 
     #[umbra(unique, max_length = 140)]
     #[form(required, length(min = 2, max = 140))]
@@ -207,22 +216,28 @@ pub struct Plugin {
     #[umbra(noform, choices, index, default = "approved")]
     pub moderation: PluginModeration,
 
-    #[umbra(noform, default = "false", index)]
+    #[umbra(default = "false", index)]
     pub featured: bool,
 
-    #[umbra(noform, default = "0")]
+    #[umbra(default = "0")]
     pub display_order: i32,
 
     /// GitHub star count, synced by a maintainer / future sync task.
     /// `None` renders as no segment on the public cards — never a
     /// fabricated number.
-    #[umbra(noform, help = "GitHub stars — maintainer-synced; leave empty if unknown.")]
+    #[umbra(
+        noform,
+        help = "GitHub stars — maintainer-synced; leave empty if unknown."
+    )]
     pub github_stars: Option<i64>,
 
     /// crates.io download count (see planning/umbra-site.md §Good
     /// features — crates.io exposes per-crate downloads). Same
     /// None-means-hidden rule as `github_stars`.
-    #[umbra(noform, help = "crates.io downloads — maintainer-synced; leave empty if unknown.")]
+    #[umbra(
+        noform,
+        help = "crates.io downloads — maintainer-synced; leave empty if unknown."
+    )]
     pub downloads: Option<i64>,
 
     #[umbra(noform)]
@@ -269,7 +284,10 @@ pub struct PluginFeature {
     pub name: String,
     #[umbra(unique, max_length = 180)]
     pub slug: String,
-    #[umbra(widget = "markdown", help = "Markdown — headings, lists, tables, fenced code. Rendered with `| markdown` on the public page.")]
+    #[umbra(
+        widget = "markdown",
+        help = "Markdown — headings, lists, tables, fenced code. Rendered with `| markdown` on the public page."
+    )]
     pub description: String,
     #[umbra(choices, index)]
     pub status: PluginStatus,
@@ -325,9 +343,9 @@ pub struct PluginCompatibility {
 /// tags the plugin / Umbra / DB / OS version their note applies to.
 /// Moderation status starts at [`CommentModeration::Pending`] and
 /// the public site only shows [`CommentModeration::Visible`] rows.
-#[derive(
-    Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model, umbra::forms::Form,
-)]
+/// TODO: ENABLE FORM HERE AND ENABLE FOREIGN KEYS, O2O, choice fields, and other foreign key fields then enable the commented out code. This is a work around for the admin to work well.
+// #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model, umbra::forms::Form)]
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
 #[umbra(
     soft_delete,
     plugin = "plugin_directory",
@@ -337,56 +355,58 @@ pub struct PluginCompatibility {
 pub struct PluginComment {
     pub id: i64,
 
-    #[umbra(noform, on_delete = "cascade")]
+    #[umbra(on_delete = "cascade")]
     pub plugin: ForeignKey<Plugin>,
 
     #[umbra(noform, on_delete = "set_null")]
     pub author: Option<ForeignKey<AuthUser>>,
 
-    #[form(required, length(min = 5, max = 5_000))]
+    // #[form(required, length(min = 5, max = 5_000))]
     #[umbra(widget = "markdown", help = "Markdown supported.")]
     pub body: String,
 
     // SQL DEFAULT takes the DB literal, not the Rust path (see the
     // matching note on Plugin.source).
-    #[umbra(noform, choices, default = "general")]
+    // #[umbra(noform, choices, default = "general")]
+    #[umbra(choices, default = "general")]
     pub kind: CommentKind,
 
-    #[umbra(noform, choices, default = "pending")]
+    // #[umbra(noform, choices, default = "pending")]
+    #[umbra(choices, default = "pending")]
     pub moderation: CommentModeration,
 
     /// Set to true by an Umbra maintainer or the plugin's author to
     /// pin the comment to the top of the thread. Admin-only.
-    #[umbra(noform, default = "false")]
+    #[umbra(default = "false")]
     pub pinned: bool,
 
     /// Optional self-identification ("maintainer of plugin X" / etc.).
     /// Admin-curated; we don't want random visitors claiming it.
-    #[umbra(noform, max_length = 120)]
+    #[umbra(max_length = 120)]
     pub author_label: Option<String>,
 
     /// Reply-to pointer for nested comments. Top-level comments have
     /// `parent = None`. Admin-managed once visible — the form layer
     /// leaves it null.
-    #[umbra(noform, on_delete = "set_null")]
+    #[umbra(on_delete = "set_null")]
     pub parent: Option<ForeignKey<PluginComment>>,
 
     /// The plugin version the comment is tagged with (e.g. "1.4.2").
-    #[form(optional, length(max = 40))]
+    // #[form(optional, length(max = 40))]
     pub plugin_version: Option<String>,
 
     /// The Umbra version the comment is tagged with (e.g. "0.0.1").
-    #[form(optional, length(max = 40))]
+    // #[form(optional, length(max = 40))]
     pub umbra_version: Option<String>,
 
     /// The database backend the comment is tagged with
     /// ("postgres" / "sqlite"). Free-text; moderation can clean.
-    #[form(optional, length(max = 40))]
+    // #[form(optional, length(max = 40))]
     pub database_backend: Option<String>,
 
     /// The operating system the comment is tagged with
     /// ("linux" / "macos" / "windows").
-    #[form(optional, length(max = 40))]
+    // #[form(optional, length(max = 40))]
     pub operating_system: Option<String>,
 
     #[umbra(auto_now_add)]

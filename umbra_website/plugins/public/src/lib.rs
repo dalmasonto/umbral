@@ -63,15 +63,29 @@ async fn home() -> Result<Html<String>, (StatusCode, String)> {
         .filter(plugin::SOURCE.ne("deprecated"))
         .filter(plugin::MODERATION.eq("approved"))
         .annotate_count("comment_set")
+        .fetch_annotated()
         .await
         .map_err(internal_error)?
         .into_iter()
-        .map(|(p, notes)| {
+        .map(|(p, anns)| {
+            // println!("{:#?}", p);
             let mut row = PluginRow::from(p);
-            row.notes = notes;
+            row.notes = anns
+                .get("comment_set_count")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
             row
         })
         .collect();
+
+    let explanation = pd::Plugin::objects()
+        .only(&["id", "name", "short_description"])
+        .filter(plugin::SOURCE.ne("deprecated"))
+        .filter(plugin::MODERATION.eq("approved"))
+        .annotate_count("comment_set")
+        .to_sql();
+    // .fetch_annotated();
+    println!("Plugins: {}", explanation);
 
     let plugin_count = if plugins.is_empty() {
         None
@@ -207,11 +221,11 @@ impl From<pd::Plugin> for PluginRow {
             stars: p
                 .github_stars
                 .map(humanize_count)
-                .unwrap_or_else(|| "—".to_string()),
+                .unwrap_or_else(|| "0".to_string()),
             downloads: p
                 .downloads
                 .map(humanize_count)
-                .unwrap_or_else(|| "—".to_string()),
+                .unwrap_or_else(|| "0".to_string()),
             notes: 0,
             audited: matches!(
                 p.audit_status,

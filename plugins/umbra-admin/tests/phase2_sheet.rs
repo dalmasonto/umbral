@@ -25,6 +25,7 @@ use umbra_sessions::SessionsPlugin;
 struct Note {
     id: i64,
     title: String,
+    #[umbra(widget = "markdown")]
     body: String,
     published: bool,
 }
@@ -175,6 +176,30 @@ fn extract_cookie_value(set_cookie: &str) -> String {
         .unwrap_or_default()
 }
 
+fn opening_tag_for<'a>(html: &'a str, tag_name: &str, needle: &str) -> &'a str {
+    let needle_pos = html.find(needle).unwrap_or_else(|| {
+        panic!(
+            "expected rendered HTML to contain `{needle}`; snippet={}",
+            &html[..html.len().min(1200)]
+        )
+    });
+    let tag_start = html[..needle_pos]
+        .rfind(&format!("<{tag_name}"))
+        .unwrap_or_else(|| panic!("expected `{needle}` to be inside a <{tag_name}> tag"));
+    let tag_end = html[needle_pos..]
+        .find('>')
+        .map(|offset| needle_pos + offset + 1)
+        .unwrap_or_else(|| panic!("unterminated <{tag_name}> tag around `{needle}`"));
+    &html[tag_start..tag_end]
+}
+
+fn rendered_tag_has_attr(tag: &str, attr_name: &str) -> bool {
+    tag.trim_matches(|c| c == '<' || c == '>')
+        .split_whitespace()
+        .skip(1)
+        .any(|part| part.split_once('=').map_or(part, |(name, _)| name) == attr_name)
+}
+
 async fn login_session(router: axum::Router, username: &str, password: &str) -> String {
     let resp = router
         .clone()
@@ -282,6 +307,70 @@ async fn test_edit_sheet_htmx_returns_form_with_editors() {
     assert!(body.contains("title"), "title field present: {body}");
     // Should not be a full HTML page
     assert!(!body.contains("<!doctype html>"), "not a full page: {body}");
+}
+
+#[tokio::test]
+async fn test_edit_sheet_renders_markdown_body_without_native_required() {
+    let _g = NOTE_LOCK.lock().await;
+    let router = boot().await.clone();
+    let session = login_session(router.clone(), "sheet_admin", "password123").await;
+
+    let req = Request::builder()
+        .uri("/admin/note/1/edit-sheet")
+        .header(header::COOKIE, format!("umbra_session={session}"))
+        .header("hx-request", "true")
+        .body(Body::empty())
+        .unwrap();
+    let (status, _headers, body) = send(router, req).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let tag = opening_tag_for(&body, "textarea", r#"name="body""#);
+    assert!(
+        tag.contains(r#"data-widget="markdown""#),
+        "body textarea should render as markdown widget: {tag}"
+    );
+    assert!(
+        tag.contains(r#"aria-required="true""#),
+        "required markdown body should keep aria-required hint: {tag}"
+    );
+    assert!(
+        tag.contains(r#"data-required="true""#),
+        "required markdown body should keep non-native data-required hint: {tag}"
+    );
+    assert!(
+        !rendered_tag_has_attr(tag, "required"),
+        "enhanced markdown textarea must not render native required because the editor hides it: {tag}"
+    );
+}
+
+#[tokio::test]
+async fn test_edit_sheet_renders_ambient_csrf_input() {
+    let _g = NOTE_LOCK.lock().await;
+    let router = boot().await.clone();
+    let session = login_session(router.clone(), "sheet_admin", "password123").await;
+
+    let req = Request::builder()
+        .uri("/admin/note/1/edit-sheet")
+        .header(header::COOKIE, format!("umbra_session={session}"))
+        .header("hx-request", "true")
+        .body(Body::empty())
+        .unwrap();
+    let (status, _headers, body) = umbra::templates::with_current_csrf(
+        Some("sheet-csrf-token".to_string()),
+        send(router, req),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let tag = opening_tag_for(&body, "input", r#"name="csrf_token""#);
+    assert!(
+        tag.contains(r#"type="hidden""#),
+        "csrf input should render as a hidden input: {tag}"
+    );
+    assert!(
+        tag.contains(r#"value="sheet-csrf-token""#),
+        "csrf input should use the ambient token from SecurityPlugin scope: {tag}"
+    );
 }
 
 #[tokio::test]

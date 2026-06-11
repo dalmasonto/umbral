@@ -286,7 +286,7 @@ pub(crate) fn render(name: &str, ctx: minijinja::Value) -> Result<Html<String>, 
         .get_template(name)
         .map_err(|e| AdminError::Render(e.to_string()))?;
     let body = tmpl
-        .render(ctx)
+        .render(umbra::templates::merge_ambient_value(ctx))
         .map_err(|e| AdminError::Render(e.to_string()))?;
     Ok(Html(body))
 }
