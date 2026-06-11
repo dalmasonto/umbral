@@ -528,32 +528,45 @@ async fn create_session_with_none_produces_anonymous_row() {
 }
 
 /// Drive a full request through an axum Router wrapped by
-/// `SessionsPlugin`. The first visit (no cookie) gets a Set-Cookie
-/// header in the response; the second visit reuses the same session.
+/// `SessionsPlugin`. Lazy semantics (gaps2 #46): a handler that WRITES
+/// the session on the first (cookie-less) visit materialises an
+/// anonymous row and gets a Set-Cookie; the second visit reuses the
+/// same session. (A non-writing first visit leaves no row / no cookie
+/// — that's covered in `tests/lazy_session.rs`.)
 #[tokio::test]
-async fn router_through_sessions_plugin_creates_anon_session_on_first_visit() {
+async fn router_through_sessions_plugin_creates_anon_session_on_first_write() {
     use axum::body::Body;
     use axum::http::Request;
     use axum::routing::get;
+    use axum::{Extension, response::IntoResponse};
     use http_body_util::BodyExt;
     use tower::ServiceExt;
+    use umbra_sessions::SessionToken;
 
     let _ = boot().await;
 
+    // Handler writes the session using the middleware-injected token,
+    // so the row materialises lazily on first write.
+    async fn writer(Extension(SessionToken(token)): Extension<SessionToken>) -> impl IntoResponse {
+        set_data(&token, "visited", &true).await.expect("set_data");
+        "ok"
+    }
+
     // Build a tiny router and let the plugin wrap it (auto layer = on).
-    let inner = axum::Router::new().route("/", get(|| async { "ok" }));
+    let inner = axum::Router::new().route("/", get(writer));
     let plugin = SessionsPlugin::default();
     use umbra::plugin::Plugin;
     let router = plugin.wrap_router(inner);
 
-    // First request: no cookie. Expect a Set-Cookie in the response.
+    // First request: no cookie. The handler writes the session, so a
+    // Set-Cookie is expected in the response.
     let req = Request::builder().uri("/").body(Body::empty()).unwrap();
     let resp = router.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), http::StatusCode::OK);
     let set_cookie = resp
         .headers()
         .get(header::SET_COOKIE)
-        .expect("anonymous session cookie should be set")
+        .expect("a written session should set its cookie")
         .to_str()
         .unwrap()
         .to_string();
@@ -573,7 +586,8 @@ async fn router_through_sessions_plugin_creates_anon_session_on_first_visit() {
     assert!(session.user_id.is_none(), "should be anonymous");
 
     // Second request: send the cookie back. No new Set-Cookie
-    // expected (session already exists).
+    // expected (session already exists, the cookie's already with the
+    // client).
     let req2 = Request::builder()
         .uri("/")
         .header(header::COOKIE, format!("{COOKIE_NAME}={token}"))

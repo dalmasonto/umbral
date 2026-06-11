@@ -9,9 +9,12 @@
 //!
 //! - `Session` model (id, user_id, data, created_at, expires_at)
 //! - `SessionsPlugin` registers the model AND auto-applies
-//!   `session_layer` so every browser gets a session on first visit
-//!   (anonymous or authed — same row, same cookie). Opt out via
-//!   `SessionsPlugin::default().without_auto_layer()`.
+//!   `session_layer`. A session row is created **lazily on first
+//!   write** (Django-style): a cookie-less request that never writes
+//!   the session (favicon, CSS, an anonymous read-only page) leaves no
+//!   row and no cookie. The first write — anonymous or authed —
+//!   materialises exactly one row and emits the `Set-Cookie`. Opt out
+//!   of the auto-layer via `SessionsPlugin::default().without_auto_layer()`.
 //! - `create_session(user_id, ttl)` -> new id (write to Set-Cookie).
 //!   `user_id` is `Option<i64>`: `None` is anonymous, `Some(id)` is
 //!   authenticated.
@@ -84,9 +87,10 @@ pub struct Session {
 }
 
 /// The plugin. Registers the `Session` model and (by default)
-/// auto-applies [`session_layer`] so every browser gets a session
-/// on first visit. Opt out with [`Self::without_auto_layer`] if
-/// you want to control session creation by hand (rare).
+/// auto-applies [`session_layer`], which creates a session row
+/// lazily on the first write (Django-style — see `session_layer`).
+/// Opt out with [`Self::without_auto_layer`] if you want to control
+/// session creation by hand (rare).
 #[derive(Debug, Clone)]
 pub struct SessionsPlugin {
     auto_layer: bool,
@@ -383,11 +387,40 @@ pub async fn set_data<T: Serialize>(
         .filter(session::ID.eq(&stored_id))
         .first()
         .await?;
-    let Some(current) = row else {
-        // Session was destroyed between get_session and set_data.
-        // Treat as success silently rather than erroring; the data
-        // would have been lost when the session expired anyway.
-        return Ok(());
+    let current = match row {
+        Some(current) => current,
+        None => {
+            // Lazy materialisation (gaps2 #46): the session hasn't been
+            // persisted yet (the middleware mints the token in memory
+            // and only the first WRITE creates the row). CREATE an
+            // anonymous row now, then apply the write below.
+            let now = Utc::now();
+            let fresh = Session {
+                id: stored_id.clone(),
+                user_id: None,
+                data: "{}".to_string(),
+                created_at: now,
+                expires_at: now + Duration::seconds(DEFAULT_TTL_SECONDS),
+            };
+            match Session::objects().create(fresh).await {
+                Ok(created) => created,
+                // Race tolerance: a concurrent write on the same token
+                // already created the row. Treat the PK collision as
+                // "already exists" and re-read so we modify the live
+                // row rather than erroring. The net effect is exactly
+                // one row for the first write to materialise a session.
+                Err(umbra::orm::write::WriteError::UniqueViolation { .. }) => Session::objects()
+                    .filter(session::ID.eq(&stored_id))
+                    .first()
+                    .await?
+                    .ok_or_else(|| {
+                        SessionError::Sqlx(sqlx::Error::Protocol(
+                            "set_data: row vanished after a concurrent create".to_string(),
+                        ))
+                    })?,
+                Err(e) => return Err(e.into()),
+            }
+        }
     };
     let mut map: serde_json::Map<String, serde_json::Value> =
         serde_json::from_str(&current.data).unwrap_or_default();
@@ -705,14 +738,20 @@ pub mod messages {
 pub use messages::{Message, MessageLevel, Messages};
 
 // =========================================================================
-// SessionLayer middleware — auto-creates anonymous sessions.
+// SessionLayer middleware — lazy session creation (gaps2 #46).
 //
 // The architectural principle:
 // - A SESSION identifies the BROWSER. Anonymous (user_id = NULL) or
 //   authenticated (user_id = Some(id)) — same row, same cookie, just a
 //   different value in one column.
-// - Every browser gets a session on first visit. Cart contents, flash
-//   messages, CSRF tokens — they all live somewhere now.
+// - A session ROW is created LAZILY, on the first WRITE — never on bare
+//   request entry. The layer mints a candidate token in memory and
+//   injects it; the row only materialises when a handler writes the
+//   session (via `set_data`, `Messages`, login, etc.). A cookie-less
+//   request that never writes (favicon, CSS, an anonymous read page)
+//   leaves zero rows and sets no cookie. This is Django's behaviour and
+//   it kills the "fresh browser load randomly leaves 3 anonymous rows"
+//   bug that eager per-request INSERTs caused.
 // - Login transforms an anonymous session into an authenticated one
 //   (with a fresh token, see the session-fixation defense in `login`).
 // =========================================================================
@@ -733,20 +772,23 @@ pub struct SessionToken(pub String);
 #[derive(Debug, Clone, Copy)]
 struct SessionFresh;
 
-/// axum middleware that ensures every request has a session.
+/// axum middleware that gives every request a session TOKEN, and lets
+/// the session ROW be created lazily on first write (Django-style).
 ///
 /// On entry:
 /// 1. Read the session cookie from the request.
-/// 2. If absent OR the cookie value doesn't resolve to a live
-///    session row (stale / expired / destroyed), create a fresh
-///    **anonymous** session (`user_id = NULL`) and flag the
-///    response.
-/// 3. Inject the resolved [`SessionToken`] into request extensions
-///    so extractors find it.
+/// 2. If it resolves to a live row, reuse it (`fresh = false`). If it's
+///    absent OR stale/expired/destroyed, mint a candidate token IN
+///    MEMORY only (`fresh = true`) — **no DB row is inserted here**.
+/// 3. Inject the resolved [`SessionToken`] into request extensions so
+///    extractors and handlers find it. The first write through that
+///    token (`set_data`, `Messages`, login) materialises the row.
 ///
 /// On exit:
-/// 4. If the session was newly created, set the `Set-Cookie`
-///    header on the response.
+/// 4. For a `fresh` request that didn't set its own cookie, emit
+///    `Set-Cookie` **only if a row now exists** for the token (a write
+///    during the request materialised it). If nothing wrote the
+///    session, no cookie is set and no row is left behind.
 ///
 /// Apply to your router with `axum::middleware::from_fn`:
 ///
@@ -768,21 +810,19 @@ pub async fn session_layer(
 
     let (token, fresh) = match cookie_token {
         Some(t) => match read_session(&t).await {
+            // A live row exists and the client already holds the
+            // cookie — reuse it, nothing to persist or set.
             Ok(Some(_)) => (t, false),
-            _ => {
-                // Cookie present but session is gone (expired or
-                // destroyed). Create a fresh anonymous session so the
-                // browser doesn't go without one for the entire request.
-                match create_session(None, None).await {
-                    Ok(new) => (new, true),
-                    Err(_) => return next.run(req).await, // best-effort
-                }
-            }
+            // Cookie present but stale/expired/destroyed. Mint a
+            // candidate token IN MEMORY only — no DB row yet. A row
+            // materialises lazily iff the handler writes the session
+            // (Django-style). Until then this request leaves no trace.
+            _ => (Uuid::new_v4().to_string(), true),
         },
-        None => match create_session(None, None).await {
-            Ok(new) => (new, true),
-            Err(_) => return next.run(req).await, // best-effort
-        },
+        // No cookie. Same lazy treatment: candidate token in memory,
+        // no INSERT on entry. Favicon / asset / anonymous-read requests
+        // that never write the session leave zero rows behind.
+        None => (Uuid::new_v4().to_string(), true),
     };
 
     req.extensions_mut().insert(SessionToken(token.clone()));
@@ -792,13 +832,23 @@ pub async fn session_layer(
 
     let mut response = next.run(req).await;
 
-    // Set-Cookie on the way out for newly-created sessions. Skip if
-    // the handler already set its own Set-Cookie — `login_with_request`
-    // does exactly that to rotate the token after credential check
-    // (session-fixation defense). Without this guard the middleware
-    // overwrites the authenticated cookie with the anonymous one it
-    // minted at request entry, breaking every cookie-based login.
-    if fresh && !response.headers().contains_key(header::SET_COOKIE) {
+    // Set-Cookie on the way out only for FRESH sessions that the
+    // handler actually wrote (i.e. a row now exists for this token).
+    //
+    // The handler-set-cookie guard stays: `login_with_request` sets
+    // its own Set-Cookie to rotate the token after the credential
+    // check (session-fixation defense). Without this guard the layer
+    // would clobber the authenticated cookie with the anonymous one,
+    // breaking every cookie-based login.
+    //
+    // The `read_session` here runs only for fresh requests that didn't
+    // set their own cookie — minimal overhead. If no row materialised
+    // (favicon / asset / anonymous page with no session write), we set
+    // NO cookie and leave NO row.
+    if fresh
+        && !response.headers().contains_key(header::SET_COOKIE)
+        && matches!(read_session(&token).await, Ok(Some(_)))
+    {
         let cookie = set_cookie_header(&token, None);
         if let Ok(value) = cookie.parse() {
             response.headers_mut().insert(header::SET_COOKIE, value);
