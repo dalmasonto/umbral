@@ -271,14 +271,21 @@ async fn boot_and_seed(n: i64) {
         // Build the pool DIRECTLY rather than via `umbra::db::connect_sqlite`:
         // production `connect_sqlite` sets `log_statements(Off)` for runtime
         // performance, which suppresses the very `sqlx::query` tracing events
-        // this harness counts. A query-count proof needs them ON. We also pin
-        // `max_connections(1)` so the in-memory DB (which is per-connection)
-        // persists across every query the proofs issue.
+        // this harness counts. A query-count proof needs them ON.
+        //
+        // A bare `sqlite::memory:` database is per-CONNECTION — every fresh
+        // pool connection sees an empty schema, so the tables created during
+        // boot vanish the moment sqlx hands out a different connection (the
+        // "no such table" race under parallel tests). `shared_cache(true)`
+        // makes all connections in this process share ONE in-memory database;
+        // `min_connections(1)` keeps it alive so the shared cache is never
+        // dropped between queries.
         let opts = SqliteConnectOptions::from_str("sqlite::memory:")
             .expect("sqlite opts")
+            .shared_cache(true)
             .foreign_keys(true);
         let pool = SqlitePoolOptions::new()
-            .max_connections(1)
+            .min_connections(1)
             .connect_with(opts)
             .await
             .expect("in-memory sqlite");
@@ -308,36 +315,62 @@ async fn boot_and_seed(n: i64) {
     })
     .await;
 
-    // Top up to `n` comments (+ one reaction + two tag links each) in a
-    // single transaction so the 10k seed stays fast and never bloats the
-    // measured count (the caller resets right after this returns).
+    // Set the comment population to EXACTLY `n` (+ one reaction + two tag
+    // links each), all in a single transaction so the seed stays fast and
+    // never bloats the measured count (the caller resets right after this
+    // returns). "Set to exactly n" rather than "top up to n" because the
+    // process-global ambient pool means EVERY proof shares this one
+    // in-memory DB (only one `App::build` per process is permitted), and
+    // tests run in parallel: a prior proof may have left 10,000 rows. To
+    // keep each proof a genuine 10 → 10,000 span we trim back down to the
+    // size THIS call wants. The lock the caller holds serialises this, so
+    // no two proofs ever see each other's resize mid-flight. (Trimming a
+    // throwaway in-memory fixture the test itself created is test hygiene,
+    // not the "never wipe the DB" rule — that rule guards the user's real
+    // data, never an `:memory:` table booted seconds ago.)
     let pool = umbra::db::pool_for("default");
     let have: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM comment")
         .fetch_one(&pool)
         .await
         .unwrap();
-    if have >= n {
+    if have == n {
         return;
     }
     let mut tx = pool.begin().await.unwrap();
-    for id in (have + 1)..=n {
-        sqlx::query("INSERT INTO comment (id, body, plugin) VALUES (?, ?, 1)")
-            .bind(id)
-            .bind(format!("c{id}"))
-            .execute(&mut *tx)
-            .await
-            .unwrap();
-        sqlx::query("INSERT INTO reaction (kind, comment) VALUES ('up', ?)")
-            .bind(id)
-            .execute(&mut *tx)
-            .await
-            .unwrap();
-        sqlx::query("INSERT INTO comment_tags (parent_id, child_id) VALUES (?, 1), (?, 2)")
-            .bind(id)
-            .bind(id)
-            .execute(&mut *tx)
-            .await
-            .unwrap();
+    if have > n {
+        // Trim down: drop the comments above `n` and their dependents.
+        for (table, col) in [
+            ("comment_tags", "parent_id"),
+            ("reaction", "comment"),
+            ("comment", "id"),
+        ] {
+            sqlx::query(&format!("DELETE FROM {table} WHERE {col} > ?"))
+                .bind(n)
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+        }
+    } else {
+        // Top up to `n`.
+        for id in (have + 1)..=n {
+            sqlx::query("INSERT INTO comment (id, body, plugin) VALUES (?, ?, 1)")
+                .bind(id)
+                .bind(format!("c{id}"))
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            sqlx::query("INSERT INTO reaction (kind, comment) VALUES ('up', ?)")
+                .bind(id)
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            sqlx::query("INSERT INTO comment_tags (parent_id, child_id) VALUES (?, 1), (?, 2)")
+                .bind(id)
+                .bind(id)
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+        }
     }
     tx.commit().await.unwrap();
 }
