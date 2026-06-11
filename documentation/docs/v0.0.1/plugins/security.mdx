@@ -9,10 +9,9 @@ icon: shield
 
 ```rust
 App::builder()
-    .plugin(AuthPlugin::new())
+    .plugin(AuthPlugin::default())
     .plugin(SecurityPlugin::new())
-    .build()
-    .await?;
+    .build()?;
 ```
 
 In an HTML form, emit the hidden input with `{{ csrf_input }}` — the `{% csrf_token %}` of umbra:

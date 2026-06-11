@@ -166,7 +166,7 @@ In practice the single-layer form `permission_required_html(perm, login_url)` is
 
 ## What's not shipped at v0.0.1
 
-- Built-in admin UI for editing group → permission and user → group assignments. The six RBAC tables (`auth_group`, `auth_permission`, `auth_contenttype`, `auth_grouppermission`, `auth_usergroup`, `auth_userpermission`) are visible to the admin as standard models; an assignment-matrix UI (Django's "permission widget") lands in a follow-up.
+- Built-in admin UI for editing group → permission and user → group assignments. The RBAC tables (`permissions_contenttype`, `permissions_permission`, `permissions_group`, `permissions_usergroup`, `permissions_userpermission`, plus the framework-managed `permissions_group_permissions` M2M junction) are visible to the admin as standard models; an assignment-matrix UI (Django's "permission widget") lands in a follow-up.
 - `Meta.permissions = [...]` syntax for declaring custom perms on a model - custom perms ship via direct INSERT in a data migration today.
 - RLS predicate injection from permissions - that's `umbra-rls`'s responsibility.
 - Object-level permissions (per-row grants) - Django needs `django-guardian` for this; same shape would land as a follow-up crate.

@@ -66,10 +66,12 @@ The trait above is the current shape. Shipped:
 
 - `commands()` - `Plugin::commands()` returns `Vec<Box<dyn PluginCommand>>`. `umbra-auth` ships `createsuperuser` and `umbra-tasks` ships `tasks-worker` through this hook. See [Management commands](/docs/v0.0.1/cli/management-commands#plugin-contributed-subcommands) for the full example.
 - `templates_dirs()` - plugins contribute their own template directories. See [Rendering HTML](/docs/v0.0.1/templates/rendering-html#cross-plugin-templates).
+- `wrap_router(Router) -> Router` - **the middleware seam.** Each plugin wraps the merged router with its own tower / axum layers; `App::build` calls it in topological order, so a plugin's layers wrap everything declared before it. `umbra-security` (CSRF + hardening headers) and `umbra-sessions` (the session layer) both ride this hook. Returning the router shape - rather than a `Vec<Layer>` - sidesteps the trait-object lifetime problem `Layer`'s generics produce, so plugins keep the full axum/tower API at the call site.
+- `static_files() -> Vec<StaticFile>` - embedded assets baked into the binary. Each entry becomes one `GET <url_path>` route serving a `&'static [u8]` body (typically `include_bytes!`) with a fixed `Content-Type` / `Cache-Control`. `umbra-admin` ships its precompiled CSS this way.
 
 Deferred to later milestones:
 
-- `middleware()` - the cross-plugin layer-ordering open question is still open.
+- A declarative `middleware()` returning ordered `Layer`s. The shipped seam is `wrap_router` above; the open question is only the cross-plugin layer-ordering contract a declarative form would need.
 - inventory / linkme auto-registration. Explicit `.plugin(...)` is the default recommendation; auto lands when a built-in opts in.
 
 ## The proof

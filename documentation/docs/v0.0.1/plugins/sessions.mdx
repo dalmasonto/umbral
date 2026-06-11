@@ -11,12 +11,9 @@ without any additional infrastructure.
 
 ## What you get from `SessionsPlugin::default()`
 
-Registering the plugin creates one migration: a `session` table with columns `id`
-(UUID string, the cookie value), `user_id` (nullable FK to `auth_user`), `data`
-(JSON string), `created_at`, and `expires_at`. The plugin has no hard dependency
-on `umbra-auth`; anonymous sessions are valid. The `umbra_session` cookie is set
-with `Secure`, `HttpOnly`, `SameSite=Lax`, and `Max-Age=1209600` (14 days,
-matching Django's `SESSION_COOKIE_AGE` default).
+Registering the plugin creates one migration: a `session` table with columns `id` (the SHA-256 digest of the raw cookie token - the raw token only ever lives in the cookie, so a DB leak can't replay sessions), `user_id` (nullable, the user PK stringified - `TEXT`, not a typed FK, so any PK type round-trips), `data` (JSON string), `created_at`, and `expires_at`. The plugin has no hard dependency on `umbra-auth`; anonymous sessions are valid. The `umbra_session` cookie is set with `Secure`, `HttpOnly`, `SameSite=Lax`, and `Max-Age=1209600` (14 days, matching Django's `SESSION_COOKIE_AGE` default).
+
+By default `SessionsPlugin` auto-applies its `session_layer` middleware through `Plugin::wrap_router`. Call `.without_auto_layer()` to skip it and apply the layer only to a sub-router (e.g. so unauthenticated REST/health routes don't write a session row on every request).
 
 ```rust
 App::builder()
@@ -27,12 +24,10 @@ App::builder()
 
 ## Reading the current user in a handler
 
-The one-call helper `current_user` parses the cookie header, queries the session
-table (deleting the row lazily if expired), and hydrates the `AuthUser`. Use it
-as a guard at the top of any authenticated handler:
+The one-call helper `current_user` parses the cookie header, queries the session table (deleting the row lazily if expired), and hydrates the `AuthUser`. It lives in `umbra-auth` (it has to name `AuthUser`, which `umbra-sessions` is deliberately decoupled from). Use it as a guard at the top of any authenticated handler:
 
 ```rust
-use umbra_sessions::current_user;
+use umbra_auth::current_user;
 use umbra::web::{HeaderMap, Html, StatusCode};
 
 async fn dashboard(headers: HeaderMap) -> Result<Html<String>, StatusCode> {
@@ -45,12 +40,12 @@ async fn dashboard(headers: HeaderMap) -> Result<Html<String>, StatusCode> {
 
 ## Expose the current user in every template (Django-style)
 
-Opt in with `.with_user_in_templates()` on the plugin builder and every template render in the app gets `{{ user }}` for free - Django's `request.user` shape, no per-handler ctx threading:
+Opt in with `.with_user_in_templates()` and every template render in the app gets `{{ user }}` for free - Django's `request.user` shape, no per-handler ctx threading. The method lives on `AuthPlugin`, not `SessionsPlugin`: the layer needs to name the concrete user model to hydrate it, which is `umbra-auth`'s job. `SessionsPlugin` still has to be registered for the underlying session lookup to work:
 
 ```rust
 App::builder()
-    .plugin(AuthPlugin::default())
-    .plugin(SessionsPlugin::default().with_user_in_templates())
+    .plugin(AuthPlugin::<AuthUser>::default().with_user_in_templates())
+    .plugin(SessionsPlugin::default())
     .build()?;
 ```
 
@@ -79,12 +74,15 @@ storage that doesn't need its own table:
 
 ```rust
 // On login: create session, persist data, write the Set-Cookie header.
-let session_id = umbra_sessions::create_session(user.id, None).await?;
-umbra_sessions::set_data(&session_id, "cart_count", &0_u32).await?;
-let cookie = umbra_sessions::set_cookie_header(&session_id, None);
+// create_session takes the user PK stringified (Option<String>) and an
+// optional ttl (Option<Duration>); pass None to default to 14 days. It
+// returns the raw token to put in the cookie.
+let token = umbra_sessions::create_session(Some(user.id.to_string()), None).await?;
+umbra_sessions::set_data(&token, "cart_count", &0_u32).await?;
+let cookie = umbra_sessions::set_cookie_header(&token, None);
 
 // On a later request: read the data back.
-let session = umbra_sessions::read_session(&session_id).await?.unwrap();
+let session = umbra_sessions::read_session(&token).await?.unwrap();
 let count: Option<u32> = umbra_sessions::get_data(&session, "cart_count")?;
 ```
 
@@ -92,10 +90,6 @@ let count: Option<u32> = umbra_sessions::get_data(&session, "cart_count")?;
 
 - **Cookie-only signed store.** All sessions are DB rows. A stateless signed-cookie
   alternative is deferred until a real low-traffic use case asks for it.
-- **Session middleware.** Handlers call `current_user(&headers)` explicitly.
-  `Plugin::middleware()` is the M7 deferral; the explicit extractor pattern is
-  intentional - auth checks are visible in the handler signature rather than
-  implicit.
 - **Automatic cleanup.** Expired rows are deleted lazily on read. A `clearsessions`
   management command or a `umbra-tasks` periodic job lands in a later milestone.
 

@@ -90,10 +90,17 @@ Every admin route requires a valid session cookie carrying an `is_staff = true` 
 
 ```rust
 // Create a staff user (e.g. in a management command or seed script).
-let user = umbra_auth::create_user("admin", "admin@example.com", "secret").await?;
-sqlx::query("UPDATE auth_user SET is_staff = 1 WHERE id = ?")
-    .bind(user.id).execute(&pool).await?;
+// create_superuser sets is_staff = is_superuser = true; create_user_with_flags
+// lets you pick a staff-but-not-superuser shape. Both go through the ORM.
+let admin = umbra_auth::create_superuser("admin", "admin@example.com", "secret").await?;
+
+// Staff-only (no superuser) editor account:
+let editor = umbra_auth::create_user_with_flags(
+    "editor", "editor@example.com", "secret", /* is_staff */ true, /* is_superuser */ false,
+).await?;
 ```
+
+The simplest path is the [`createsuperuser`](/docs/v0.0.1/plugins/auth#the-createsuperuser-management-command) CLI command, which calls `create_superuser` for you.
 
 ## Form widgets
 
@@ -128,7 +135,7 @@ Any valid [Lucide icon name](https://lucide.dev/icons/) works. Unknown names are
 `AdminModel` (renamed from `AdminConfig` in phase 1 - the old name is kept as a type alias) is the admin equivalent of REST's `ResourceConfig` - one config per model, registered on the plugin before it is passed to `App::builder()`.
 
 ```rust
-use umbra_admin::{Action, AdminModel, AdminPlugin};
+use umbra_admin::{Action, ActionInvocation, ActionResult, AdminModel, AdminPlugin, ToastLevel};
 
 let admin = AdminPlugin::default()
     .register(
@@ -140,8 +147,11 @@ let admin = AdminPlugin::default()
             .readonly_fields(&["created_at"])
             .actions(vec![
                 Action::delete_selected(),
-                Action::new("publish", "Publish selected", |ids, _ctx| async move {
-                    Ok(format!("Published {} post(s).", ids.len()))
+                Action::new("publish", "Publish", "send", |inv: ActionInvocation| async move {
+                    Ok(ActionResult::Toast {
+                        message: format!("Published {} post(s).", inv.ids.len()),
+                        level: ToastLevel::Success,
+                    })
                 }),
             ]),
     );
@@ -189,15 +199,18 @@ Default sort order for the list view. Each entry is a column name optionally pre
 ```rust
 .actions(vec![
     Action::delete_selected(),
-    Action::new("publish", "Publish selected", |ids, _ctx| async move {
-        // ids: Vec<i64> - the selected primary keys
-        // _ctx: AdminContext { username, table }
-        Ok(format!("Published {} post(s).", ids.len()))
+    Action::new("publish", "Publish", "send", |inv: ActionInvocation| async move {
+        // inv.ids: Vec<i64> - the selected primary keys
+        // inv.username, inv.table, inv.pool - context
+        Ok(ActionResult::Toast {
+            message: format!("Published {} post(s).", inv.ids.len()),
+            level: ToastLevel::Success,
+        })
     }),
 ])
 ```
 
-Registers bulk actions that appear in the action dropdown on the list view. Each selected row supplies its PK via a hidden checkbox; the handler receives `Vec<i64>` of selected PKs and an `AdminContext` with the logged-in username and table name. Returns a flash message on success or an error string on failure. `Action::delete_selected()` is the built-in bulk delete equivalent to Django's default.
+Registers bulk actions. `Action::new(key, label, icon, handler)` takes a Lucide icon name and an async handler receiving an `ActionInvocation` (selected `ids`, plus `username` / `table` / `pool` context) and returning a `Result<ActionResult, String>`. `Action::delete_selected()` is the built-in bulk delete equivalent to Django's default. The full descriptor surface (`.scope(...)`, `.danger()`, `.confirm(...)`, and the `ActionResult` variants) is documented under [Phase 3](#phase-3-actions-async-fk-pickers-sheet-stacking-inline-cell-edit) below.
 
 ### `readonly_fields`
 

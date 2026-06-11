@@ -16,8 +16,7 @@ tags: [static, assets, cache, middleware]
 ```rust
 App::builder()
     .plugin(StaticPlugin::new("/static", "./assets"))
-    .build()
-    .await?;
+    .build()?;
 ```
 
 `ServeDir` handles MIME sniffing, range requests, `If-Modified-Since`, and ETags out of the box.
@@ -34,8 +33,7 @@ static ASSETS: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/dist");
 
 App::builder()
     .plugin(StaticPlugin::embedded("/widget/assets", &ASSETS))
-    .build()
-    .await?;
+    .build()?;
 ```
 
 This is what an *embeddable plugin* should use: the plugin's UI travels with the plugin's crate, so when a user drops the plugin into their app, the assets come along. No "remember to deploy a `dist/` directory next to the binary" footgun. (`umbra-playground` itself uses this - its React bundle is embedded into the plugin and served via `StaticPlugin::embedded`.)

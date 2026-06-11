@@ -83,12 +83,12 @@ set_password(&mut user, "new-s3cret").await?;
 
 ## Sessions integration
 
-`umbra-sessions` provides the login / logout bundle:
+`umbra-auth` provides the `AuthUser`-aware login / logout bundle (it builds on `umbra-sessions`' user-agnostic primitives but lives in `umbra-auth` so it can name `AuthUser`):
 
 ```rust
 use umbra_auth::authenticate;
 use umbra_auth::AuthUser;
-use umbra_sessions::login;
+use umbra_auth::login;
 
 async fn login_handler(Form(form): Form<LoginForm>) -> Result<Response, StatusCode> {
     let user = authenticate::<AuthUser>(&form.username, &form.password)
@@ -102,7 +102,7 @@ async fn login_handler(Form(form): Form<LoginForm>) -> Result<Response, StatusCo
 }
 ```
 
-`current_user(&headers)` and the `User` / `OptionalUser` extractors from `umbra-sessions` resolve the session cookie back to an `AuthUser`. See the [Sessions page](./sessions) for details.
+`umbra_auth::current_user(&headers)` and the `umbra_auth::{User, OptionalUser}` extractors resolve the session cookie back to an `AuthUser`. (`login_with_request` is the variant that also preserves an anonymous session's `data` across the login and bumps `last_login`.) See the [Sessions page](./sessions) for the session-row mechanics.
 
 ## The `createsuperuser` management command
 
@@ -318,7 +318,7 @@ The framework never assumes your handle column is called `username`. The only re
 
 ### User-id type and the permissions plugin
 
-`UserModel::id()` returns `i64` today. The framework's stored-id surfaces match: `umbra-sessions` writes `Option<i64>`, `Identity` from `umbra-rest` carries `user_id: i64`. A custom user model with a `uuid::Uuid` PK isn't fully supported through this trait yet; a follow-up generalises `id()` to an associated `Pk` type.
+`UserModel::id()` returns `i64` today. The framework's stored-id surfaces are PK-agnostic at the storage layer: `umbra-sessions` stores `user_id` as `Option<String>` (the PK stringified, so a UUID or i64 both round-trip), and `Identity` from `umbra-rest` carries `user_id: String`. A custom user model with a `uuid::Uuid` PK isn't fully supported through the `UserModel` trait's `id()` return yet; a follow-up generalises `id()` to an associated `Pk` type.
 
 In the meantime, `umbra-permissions` is PK-agnostic - its `user_id` columns are `TEXT`, and `has_perm` / `user_perms` take `&str`. Callers stringify whatever their user PK is at the perm-call boundary:
 
@@ -411,21 +411,20 @@ After swapping the user model:
 
 ### What requires manual adjustment
 
-`umbra-sessions` and `umbra-admin` reference `umbra_auth::AuthUser` concretely:
+The `AuthUser`-aware helpers in `umbra-auth` and `umbra-admin` reference `AuthUser` concretely:
 
-- `umbra_sessions::current_user(&headers) -> Option<AuthUser>` - queries `auth_user` by id. With a custom user model you replace this call with your own lookup against `tenant_user`.
-- `umbra_sessions::login(headers, &user)` - takes `&AuthUser`. Call `create_session(Some(user.id()), None)` and `set_cookie_header(...)` directly instead.
-- `umbra_sessions::extractors::User(pub AuthUser)` and `OptionalUser` - resolve `AuthUser` from the session. Replace with your own extractor that queries `tenant_user`.
+- `umbra_auth::current_user(&headers) -> Option<AuthUser>` - queries `auth_user` by id. With a custom user model you replace this call with your own lookup against `tenant_user`.
+- `umbra_auth::login(headers, &user)` - takes `&AuthUser`. Call `umbra_sessions::create_session(Some(user.id().to_string()), None)` and `umbra_sessions::set_cookie_header(...)` directly instead.
+- `umbra_auth::{User, OptionalUser}` extractors (in `umbra_auth::session_user`) resolve `AuthUser` from the session. Replace with your own extractor that queries `tenant_user`.
 - `umbra_admin` - its `require_staff` check calls `umbra_auth::authenticate` which returns `AuthUser`. The admin plugin is not yet generic over the user model; this is a known limitation and a follow-up item.
 
-The `Identity` concept from `umbra-rest` carries only `user_id: i64` (extracted from the session), so REST permission checks continue to work without changes. Only code that explicitly hydrates an `AuthUser` struct needs updating.
+The `Identity` concept from `umbra-rest` carries `user_id: String` (the session user PK stringified), so REST permission checks continue to work without changes. Only code that explicitly hydrates an `AuthUser` struct needs updating.
 
 ## Security notes
 
 - `authenticate` returns the same error (`InvalidCredentials`) for both "no such user" and "wrong password". A caller cannot enumerate accounts from the error alone.
 - Inactive users (`is_active = false` or `is_active() -> false`) cannot authenticate. The SQL filter and the trait method both apply.
 - Passwords are never stored or logged. Only the argon2 PHC hash reaches the database.
-- See the [security audit summary](https://github.com) for the full audit findings.
 
 ## See also
 
