@@ -192,3 +192,43 @@ async fn nested_inner_join_hydrates_three_level_graph_in_one_query() {
         "comment.plugin.author.name round-trips from ONE query"
     );
 }
+
+#[tokio::test]
+async fn plain_join_infers_inner_for_not_null_fk() {
+    boot().await;
+    // Plugin.author is NOT NULL -> plain join_related auto-INNER.
+    let sql = Plugin::objects().join_related("author").to_sql();
+    assert!(sql.contains("INNER JOIN"), "NOT NULL FK -> INNER: {sql}");
+    assert!(!sql.contains("LEFT JOIN"), "no LEFT for NOT NULL FK: {sql}");
+
+    let plugins = Plugin::objects()
+        .join_related("author")
+        .fetch()
+        .await
+        .expect("fetch");
+    let names: Vec<&str> = plugins.iter().map(|p| p.name.as_str()).collect();
+    assert!(names.contains(&"Cache"), "matched plugin survives");
+    assert!(
+        !names.contains(&"Orphaned"),
+        "dangling-FK plugin dropped by inferred INNER, got {names:?}"
+    );
+}
+
+#[tokio::test]
+async fn plain_join_infers_left_for_nullable_fk() {
+    boot().await;
+    // Comment.plugin is nullable -> plain join_related auto-LEFT.
+    let sql = Comment::objects().join_related("plugin").to_sql();
+    assert!(sql.contains("LEFT JOIN"), "nullable FK -> LEFT: {sql}");
+
+    let comments = Comment::objects()
+        .join_related("plugin")
+        .fetch()
+        .await
+        .expect("fetch");
+    let bodies: Vec<&str> = comments.iter().map(|c| c.body.as_str()).collect();
+    assert!(
+        bodies.contains(&"orphan"),
+        "nullable orphan kept by inferred LEFT: {bodies:?}"
+    );
+}
