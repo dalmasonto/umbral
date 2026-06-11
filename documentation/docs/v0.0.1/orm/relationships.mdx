@@ -270,7 +270,7 @@ This is the right shape for `request.user.profile.avatar`-style flows in **Rust*
   render("me.html", &context!(customer_id))         // ← template uses `{{ customer_id }}`
   ```
 
-  See `bugs/gaps2.md` #14 for the design space we're considering (eager-prefetch declaration is the front-runner; mirrors Django's `select_related` / `prefetch_related` pattern).
+  The eager-prefetch approach is shipped: resolve the relation with [`select_related`](#eager-loading-with-select_related) (forward FK, including nested `__` chains) or [`prefetch_related`](#prefetch_related-for-m2m-batching) (reverse FK / M2M / reverse-O2O), then serialise the parent — the resolved child rides into the template context as a nested object, so `{{ post.author.username }}` works *when the post was fetched with `select_related("author")`*. What still doesn't work is a *bare* relation accessor (`user.profile`) on an unprefetched row, since that would need an async DB call mid-render.
 </Callout>
 
 ### Unique-constraint violations in the admin
@@ -371,53 +371,97 @@ Each named FK generates one batch query. Two FKs = two batch queries + the main 
 
 This means `{{ post.author.username }}` in a minijinja template renders correctly when the template context was built from a post fetched with `select_related("author")`.
 
-### What is deferred
+### Nested traversal — `select_related("author__manager")`
 
-- **`prefetch_related`** - for reverse FKs (all posts by a user) and M2M. Requires a separate query per related set and a reverse-accessor mechanism that doesn't exist yet. Tracked in `docs/specs/relationships.md`.
-- **Nested traversal** (`select_related("author__manager")`) - single-hop only at v1. Chains require calling `select_related` on the resolved row after the first fetch.
-- **Reverse accessors** (`User::posts`) - tracked in `docs/specs/relationships.md`.
-- **`ON DELETE` behaviour beyond the default RESTRICT.**
-- **FK columns referencing a non-`i64` primary key.**
+Chain FK hops with `__`. Each hop is one batched `IN (...)` query, so the budget is `1 + len(hops)` regardless of row count — never N+1. The full chain unpacks into `resolved()` slots at every depth:
 
-For the design rationale see [`arch.md`](../../../../arch.md) §M9 and `docs/specs/relationships.md`.
+```rust
+// post.author.manager.manager — three hops in 4 queries total
+// (1 posts + 1 per hop), for any number of posts.
+let posts = Post::objects()
+    .filter(post::TITLE.eq("third"))
+    .select_related("author__manager__manager")
+    .fetch()
+    .await?;
+
+let author  = posts[0].author.resolved().expect("hop 1");
+let manager = author.manager.as_ref().unwrap().resolved().expect("hop 2");
+let grandmgr = manager.manager.as_ref().unwrap().resolved().expect("hop 3");
+```
+
+A `NULL` column anywhere in the chain bottoms out cleanly (the deeper hops simply don't load) — no panic. An unknown hop name fails loudly, naming the bad field and the table it was looked up on.
+
+`select_related` loads the chain in `1 + len(hops)` **batched** queries. For the SAME relations resolved in a **single** query via a SQL `JOIN` — with INNER/LEFT/RIGHT control, nested `__` paths, and an M2M hop — reach for [`join_related`](/docs/v0.0.1/orm/joins) instead.
+
+### Still deferred
+
+- **`ON DELETE` behaviour** — supported (see [`on_delete` / `on_update`](#referential-actions-on_delete--on_update)); only *changing* the action on an already-created table needs a hand-written migration.
+- **FK columns referencing a non-`i64` primary key** — the relation machinery (`select_related`, `prefetch_related`, `reverse::<C>()`) is i64-PK only at v1; a non-i64 PK returns a clean error rather than mis-binding.
+
+For the design rationale see [`arch.md`](../../../../arch.md) §M9 and the design spec `docs/superpowers/specs/2026-06-11-orm-relations-forms-and-joins-design.md`.
 
 ## Many-to-many relationships
 
-<Callout type="warning">
-Many-to-many is **not shipped at v0.0.1**. There is no `ManyToMany<T>` field type and no join-table helper.
-</Callout>
-
-The recommended workaround is a manual through-table: declare an explicit join model with two `ForeignKey` fields and query it directly.
+Declare a many-to-many with the `M2M<T>` field type. The framework auto-creates a junction table named `<parent_table>_<field>` with `(parent_id, child_id)` columns at migration time — no through-model to write by hand.
 
 ```rust
-// Manual through-table pattern for Post ↔ Tag M2M
+use umbra::orm::M2M;
+
 #[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbra::orm::Model)]
-pub struct PostTag {
+#[umbra(table = "tag")]
+pub struct Tag { pub id: i64, pub name: String }
+
+#[derive(Debug, Clone, Default, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbra::orm::Model)]
+#[umbra(table = "post")]
+pub struct Post {
     pub id: i64,
-    pub post_id: ForeignKey<Post>,
-    pub tag_id: ForeignKey<Tag>,
+    pub title: String,
+    // The M2M field carries no column on the post table — it's the
+    // junction `post_tags(parent_id, child_id)`. `#[sqlx(skip)]` +
+    // `#[serde(skip)]` keep it out of the row decode / default serialise.
+    #[sqlx(skip)]
+    #[serde(skip)]
+    pub tags: M2M<Tag>,
 }
-
-// Fetch all tags for a post:
-let links = PostTag::objects()
-    .filter(post_tag::POST_ID.eq(post.id))
-    .fetch()
-    .await?;
-let tag_ids: Vec<i64> = links.iter().map(|l| l.tag_id.id()).collect();
-let tags = Tag::objects()
-    .filter(tag::ID.in_(&tag_ids))
-    .fetch()
-    .await?;
-
-// Add a tag:
-PostTag::objects().create(PostTag {
-    id: 0,
-    post_id: post.id.into(),
-    tag_id: tag.id.into(),
-}).await?;
 ```
 
-The `umbra-permissions` plugin uses this exact pattern for its `GroupPermission`, `UserGroup`, and `UserPermission` join tables - they are good reference implementations. M2M first-class support (a `ManyToMany<T>` field type, reverse accessors, `prefetch_related`) is tracked in `docs/specs/relationships.md`.
+The `M2M<T>` type is detected from the Rust type alone — no `#[umbra(m2m)]` marker is required. Add `#[umbra(m2m = "<child_table>")]` only when the child's table name isn't the snake_case default of `T` (e.g. the field's `T` is `Tag2` but the table is `tag`).
+
+<Callout type="info">
+First-class M2M (the `M2M<T>` field, `prefetch_related`, `join_related`, the form `ModelMultiChoice`, and `annotate_count`) is the shipped path. `examples/shop/plugins/content/src/models.rs` (`Post.tags: M2M<Tag>`) and `umbra_website/plugins/site_content/src/models.rs` (`BlogPost.tags: M2M<ContentTag>`) are real reference uses.
+</Callout>
+
+### Loading the related set — `prefetch_related("tags")`
+
+After the main query returns N parents, `prefetch_related("tags")` issues **one** batched join through the junction for all parents and populates each parent's `M2M.resolved` slot. See [prefetch_related for M2M batching](#prefetch_related-for-m2m-batching) below for the full shape and the `join_related` single-query alternative.
+
+```rust
+let posts = Post::objects()
+    .prefetch_related("tags")
+    .fetch()
+    .await?;
+
+for p in &posts {
+    for tag in p.tags.resolved().unwrap_or_default() {
+        println!("{}: {}", p.title, tag.name);
+    }
+}
+```
+
+### Counting the related set — `annotate_count("tags")`
+
+To get the size of each parent's M2M set in the *same* query (no second round-trip), use `annotate_count` — it counts junction rows per parent via a correlated subquery. See [Aggregates › Counting an M2M relation](/docs/v0.0.1/orm/aggregates#counting-an-m2m-relation):
+
+```rust
+let rows = Post::objects()
+    .annotate_count("tags")   // COUNT(*) over post_tags → "tags_count"
+    .fetch_annotated()
+    .await?;
+```
+
+### M2M in a form — `ModelMultiChoice`
+
+`#[derive(umbra::forms::Form)]` on a model with an `M2M<T>` field renders a multi-`<select>` and writes the selected ids to the junction after the parent insert, atomically. See [Forms learn relations › M2M](/docs/v0.0.1/orm/forms-relations#m2m--modelmultichoice).
 
 ## Reverse FK accessors
 
@@ -452,6 +496,52 @@ let recent = alice
 The accessor name is `<snake_case(Child)>_set`. When one Child has **multiple** FKs to the same Parent (e.g. `author: FK<User>` AND `reviewer: FK<User>`), the accessor names disambiguate to `<child>_via_<field>_set` (`user.post_via_author_set()`, `user.post_via_reviewer_set()`).
 
 Limitations: parent type must be local (Rust's orphan rule on inherent impls); parent's primary-key type must implement `Into<sea_query::Value>` (every built-in PK type does).
+
+### Declared `ReverseSet<Child>` + batched `prefetch_related`
+
+The `_set()` accessor above fetches one parent's children on demand. When you have **N parents** and want their children without an N+1 fetch loop, declare a typed `ReverseSet<Child>` field on the Parent and batch-load it with `prefetch_related` — Django's `Author.objects.prefetch_related("books")`:
+
+```rust
+use umbra::orm::{ForeignKey, ReverseSet};
+
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbra::orm::Model)]
+#[umbra(table = "parent")]
+pub struct Parent {
+    pub id: i64,
+    pub name: String,
+    // The reverse collection. `reverse_fk = "parent"` names the FK
+    // column on Child that points back here. It carries no column on
+    // the parent table, so skip it from the row decode + serialise.
+    #[sqlx(skip)]
+    #[serde(skip)]
+    #[umbra(reverse_fk = "parent")]
+    pub child_set: ReverseSet<Child>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbra::orm::Model)]
+#[umbra(table = "child")]
+pub struct Child {
+    pub id: i64,
+    pub label: String,
+    pub parent: ForeignKey<Parent>,   // ← the FK named by reverse_fk
+}
+
+// One query for the parents, ONE batched query for ALL their children.
+let parents = Parent::objects()
+    .prefetch_related("child_set")
+    .fetch()
+    .await?;
+
+for p in &parents {
+    // .resolved() is Some(&[Child]) after prefetch — an empty slice
+    // for a childless parent, never None.
+    for child in p.child_set.resolved().unwrap_or_default() {
+        println!("{}: {}", p.name, child.label);
+    }
+}
+```
+
+`prefetch_related` flows reverse-FK (`ReverseSet`), M2M, and reverse-O2O (`OneToOne<C>`) through the same dispatch — see [prefetch_related for M2M batching](#prefetch_related-for-m2m-batching).
 
 ### Generic instance accessor — `instance.reverse::<Child>()`
 
@@ -552,3 +642,11 @@ Post::objects()
 | Multi-M2M | Independent — each is one query | Cartesian (m2m_a × m2m_b) — measurable cost |
 
 For most list views `prefetch_related` is the right default. Reach for `join_related` when the second round-trip dominates AND the M2M cardinality is small + bounded.
+
+## See also
+
+- [Deep joins](/docs/v0.0.1/orm/joins) — the full `join_related` / `inner_join_related` / `left_join_related` / `right_join_related` surface, INNER/LEFT auto-inference, nested `__` paths, and the M2M-hop chain.
+- [Aggregates and annotate](/docs/v0.0.1/orm/aggregates) — `annotate_count("rel")` / `annotate_count_where` / M2M counts in one query, including auto-discovery of an undeclared relation.
+- [Forms learn relations](/docs/v0.0.1/orm/forms-relations) — `#[derive(Form)]` turns `ForeignKey`/`OneToOne` into a `ModelChoice`, `M2M` into a `ModelMultiChoice`, and a `#[umbra(choices)]` enum into a `Select`.
+- [Forms (Form&lt;T&gt;)](/docs/v0.0.1/web/forms) — the general form derive, async `validate`, `ValidationErrors`, and the `Form<T>` extractor.
+- [Column types](/docs/v0.0.1/orm/column-types) — `ForeignKey<T>` DDL, `#[umbra(choices)]` enums, and the `default` literal rule.
