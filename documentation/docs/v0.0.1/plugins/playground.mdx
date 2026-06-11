@@ -16,9 +16,11 @@ use umbra_openapi::OpenApiPlugin;
 let app = App::builder()
     .plugin(RestPlugin::default())
     .plugin(OpenApiPlugin::new())
-    .plugin(PlaygroundPlugin::new())
+    .plugin(PlaygroundPlugin::new("my_app"))
     .build();
 ```
+
+`PlaygroundPlugin::new(app_name)` takes an application name — the playground namespaces its browser-side storage (Dexie/IndexedDB, `localStorage`) per app so two umbra apps served to the same browser don't collide. `PlaygroundPlugin::default()` warns and falls back to `"default"`. Move the mount with `.at("/some/path")`.
 
 Open `http://localhost:8000/api/playground/` in a browser.
 
@@ -60,7 +62,7 @@ The Params table reads `pathItem.parameters` *and* `operation.parameters` from t
 
 ### Filter discovery
 
-When the OpenAPI spec advertises filter parameters (umbra-openapi emits them when `ResourceConfig::enable_filters()` is on), the Params table shows them with proper types and lookups. When it doesn't, the playground falls back to chip suggestions inferred from the response item schema - `[+ eq]` / `[+ contains]` / `[+ gte]` / `[+ in]` etc. per field, scoped by type.
+When the OpenAPI spec advertises filter parameters (umbra-openapi emits them for every filterable resource — filtering is on by default unless you call `ResourceConfig::disable_filters()`), the Params table shows them with proper types and lookups. When it doesn't, the playground falls back to chip suggestions inferred from the response item schema - `[+ eq]` / `[+ contains]` / `[+ gte]` / `[+ in]` etc. per field, scoped by type.
 
 ### Per-endpoint stats
 

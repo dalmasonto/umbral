@@ -54,11 +54,13 @@ CachePlugin::init(Cache::redis("redis://localhost:6379/0").await?); // productio
 
 ## Using the cache in handlers
 
+Reach the process-wide handle from any handler with `umbra_cache::ambient()` (it returns `Option<&'static Cache>`, `None` until `CachePlugin::init` has run):
+
 ```rust
-use umbra_cache::Cache;
 use std::time::Duration;
 
-async fn home(cache: Extension<Cache>) -> impl IntoResponse {
+async fn home() -> impl IntoResponse {
+    let cache = umbra_cache::ambient().expect("cache initialised at boot");
     if let Some(html) = cache.get::<String>("homepage:html").await {
         return Html(html);
     }
@@ -68,7 +70,7 @@ async fn home(cache: Extension<Cache>) -> impl IntoResponse {
 }
 ```
 
-`set` serialises with `serde_json`. `get` deserialises; a decode error is silently treated as a miss.
+`set` serialises with `serde_json` (returning `Result<(), serde_json::Error>`). `get` deserialises; a decode error is silently treated as a miss. (If you prefer dependency injection over the ambient handle, add your own `Extension(cache)` layer in `App::builder()` and take `Extension<Cache>` in the handler.)
 
 ## View-level caching (cache_page)
 

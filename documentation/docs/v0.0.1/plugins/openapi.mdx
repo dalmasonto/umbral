@@ -7,7 +7,7 @@ icon: book-open
 
 `umbra-openapi` walks the model registry and serves a live Swagger UI and a
 machine-readable JSON spec. Add it to any app that already uses
-[`umbra-rest`](/docs/v0.0.1/rest/overview) - the OpenAPI plugin depends on REST's
+[`umbra-rest`](/docs/v0.0.1/rest) - the OpenAPI plugin depends on REST's
 routes and will not compile without it.
 
 ## Quickstart
@@ -91,7 +91,7 @@ OpenAPI 3.0 reserves `x-*` keys for tool-specific data. The plugin emits these f
 
 ## Filter parameters
 
-When a resource opts into Django-style filtering via `ResourceConfig::enable_filters()`, the plugin emits one OpenAPI `parameters` entry per `(column, lookup)` pair on the list operation. Generated clients, Swagger UI, and the playground all see what's filterable without re-implementing the lookup grammar.
+Django-style filtering is on by default for every resource (opt out per resource with `ResourceConfig::disable_filters()`). For each filterable resource the plugin emits one OpenAPI `parameters` entry per `(column, lookup)` pair on the list operation. Generated clients, Swagger UI, and the playground all see what's filterable without re-implementing the lookup grammar.
 
 Parameter naming follows the runtime parser:
 
@@ -106,7 +106,7 @@ Types follow the column (`eq`, `ne`, `gt`, `lt`, `gte`, `lte`); `__in` is a CSV 
 use umbra_rest::{RestPlugin, ResourceConfig};
 
 RestPlugin::default()
-    .resource(ResourceConfig::new("article").enable_filters())
+    .resource(ResourceConfig::new("article"))  // filtering is on by default
 ```
 
 Now the GET `/api/article/` operation in the emitted spec carries `title`, `title__contains`, `status`, `status__in`, `id__gte`, etc. as discoverable query parameters.
@@ -131,12 +131,15 @@ App::builder()
 
 See [Trailing-slash redirect policy](../web/trailing-slash) for details.
 
+## Security schemes
+
+When the configured `RestPlugin` auth chain contributes a `securitySchemes` entry (for example `BearerAuthentication`), the plugin emits a `components.securitySchemes` block plus a global `security` array referencing each scheme. The global security is an OR — any one scheme satisfies the request, matching how `ChainAuthentication([Session, Bearer])` actually behaves at runtime. If the wired auth class contributes no scheme (the default `NoAuthentication`), the spec carries no `securitySchemes` block.
+
 ## What's not in v1
 
 <Callout type="info">
 The following are deferred to a later release:
 
-- **No `securitySchemes`** - the spec is unauthenticated. Bearer / API-key security definitions are not emitted yet.
 - **No per-operation tagging** - all operations appear in the default tag group.
 - **No response examples** - `200` responses describe the schema shape only; no inline example payloads.
 </Callout>
