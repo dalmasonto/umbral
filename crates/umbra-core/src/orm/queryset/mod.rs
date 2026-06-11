@@ -1012,8 +1012,18 @@ impl<T: Model> QuerySet<T> {
                 // this SQLite raises "ambiguous column name" on the
                 // second JOIN.
                 let join_alias = Alias::new(format!("__j_{field_name}"));
+                // Resolve the join flavor: an explicit
+                // left_/inner_/right_join_related pins `Some(kind)`;
+                // plain `join_related` infers from FK nullability —
+                // INNER for a NOT NULL FK, LEFT for a nullable one
+                // (Django's default).
+                let kind = jr.kind.unwrap_or(if fk_field.nullable {
+                    JoinKind::Left
+                } else {
+                    JoinKind::Inner
+                });
                 outer.join_as(
-                    sea_query::JoinType::LeftJoin,
+                    kind.sea(),
                     Alias::new(related_table),
                     join_alias.clone(),
                     Expr::col((parent_alias.clone(), Alias::new(field_name.as_str())))
@@ -1052,6 +1062,18 @@ impl<T: Model> QuerySet<T> {
                 let junction_table = format!("{}_{}", T::TABLE, field_name);
                 let junction_alias = Alias::new(format!("__jm_{field_name}"));
                 let child_alias = Alias::new(format!("__j_{field_name}"));
+                // The junction hop stays LEFT so a parent with zero
+                // junction rows isn't dropped by the join to the
+                // junction table itself — the CHILD hop's kind is what
+                // decides drop/keep. Plain `join_related` (kind None)
+                // leaves the child LEFT too, preserving the shipped
+                // double-LEFT-JOIN M2M behavior (a tag-less parent
+                // survives with an empty M2M slot). An explicit
+                // inner_join_related drops parents whose relation is
+                // absent: the junction-LEFT miss yields a NULL child_id,
+                // then the child INNER on NULL has no match -> the parent
+                // is dropped, which is the INNER contract.
+                let child_kind = jr.kind.unwrap_or(JoinKind::Left);
                 outer.join_as(
                     sea_query::JoinType::LeftJoin,
                     Alias::new(junction_table),
@@ -1060,7 +1082,7 @@ impl<T: Model> QuerySet<T> {
                         .equals((junction_alias.clone(), Alias::new("parent_id"))),
                 );
                 outer.join_as(
-                    sea_query::JoinType::LeftJoin,
+                    child_kind.sea(),
                     Alias::new(m2m_rel.target_table),
                     child_alias.clone(),
                     Expr::col((junction_alias.clone(), Alias::new("child_id")))

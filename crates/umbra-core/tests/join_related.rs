@@ -104,14 +104,19 @@ async fn boot() {
 }
 
 #[tokio::test]
-async fn to_sql_emits_left_join_with_aliased_child_columns() {
+async fn to_sql_emits_inner_join_with_aliased_child_columns() {
     boot().await;
     let sql = Product::objects()
         .filter(product::ID.eq(1))
         .join_related("category")
         .to_sql();
-    // The JOIN itself must be present.
-    assert!(sql.contains("LEFT JOIN"), "expected LEFT JOIN in: {sql}");
+    // The JOIN itself must be present. `Product.category` is a NOT NULL
+    // FK, so plain `join_related` now auto-infers INNER (gap 4c —
+    // Django-parity: a NOT NULL FK can't be a LEFT-JOIN miss, so INNER
+    // is correct and lets the planner drop the outer-join bookkeeping).
+    // The nullable `brand` FK still LEFT-joins — see
+    // `left_join_miss_for_null_fk_leaves_field_as_none`.
+    assert!(sql.contains("INNER JOIN"), "expected INNER JOIN in: {sql}");
     assert!(
         sql.contains("\"jr_category\""),
         "expected related table in JOIN: {sql}"
@@ -205,7 +210,9 @@ async fn join_related_many_hydrates_two_fks_in_one_query() {
 async fn manager_join_related_forwards_to_queryset() {
     boot().await;
     let sql = Product::objects().join_related("category").to_sql();
-    assert!(sql.contains("LEFT JOIN"));
+    // NOT NULL FK -> inferred INNER (gap 4c), same as
+    // `to_sql_emits_inner_join_with_aliased_child_columns`.
+    assert!(sql.contains("INNER JOIN"));
     assert!(sql.contains("\"category__name\""));
 }
 
