@@ -19,7 +19,8 @@ use umbra::web::{Html, SlashRedirect, StatusCode};
 use umbra_admin::AdminPlugin;
 use umbra_auth::{AuthPlugin, AuthUser, login_required_html};
 use umbra_openapi::OpenApiPlugin;
-use umbra_rest::RestPlugin;
+use umbra_playground::PlaygroundPlugin;
+use umbra_rest::{ResourceConfig, RestPlugin};
 use umbra_security::{SecurityConfig, SecurityPlugin};
 use umbra_sessions::SessionsPlugin;
 use umbra_static::StaticPlugin;
@@ -57,8 +58,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .plugin(CommunityPlugin::default())
         .plugin(PublicPlugin::default())
         // --- Admin/API/security --------------------------------------------
-        .plugin(RestPlugin::default())
+        .plugin(
+            RestPlugin::default()
+                .resource(ResourceConfig::for_::<AuthUser>().hide(["password_hash"])),
+        )
         .plugin(OpenApiPlugin::new())
+        .plugin(PlaygroundPlugin::new("Umbra").at("/api/playground/"))
         .plugin(StaticPlugin::new("/static", "./static"))
         .plugin(SecurityPlugin::with_config(SecurityConfig {
             csrf_exempt_paths: vec!["/api".to_string()],

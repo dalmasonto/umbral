@@ -146,6 +146,8 @@ pub struct Plugin {
     #[umbra(noform)]
     pub public_id: Uuid,
 
+    pub created_by: Option<ForeignKey<AuthUser>>,
+
     #[umbra(unique, string, max_length = 120)]
     #[form(required, length(min = 2, max = 120))]
     pub name: String,
@@ -350,7 +352,9 @@ pub struct PluginCompatibility {
 /// server-managed via `#[umbra(noform)]`. Every remaining field is
 /// `Default`-derivable (`ForeignKey<T>: Default` lands the id-0
 /// placeholder), so the hand-rolled `Default` is gone.
-#[derive(Debug, Clone, Default, sqlx::FromRow, Serialize, Deserialize, Model, umbra::forms::Form)]
+#[derive(
+    Debug, Clone, Default, sqlx::FromRow, Serialize, Deserialize, Model, umbra::forms::Form,
+)]
 #[umbra(
     soft_delete,
     plugin = "plugin_directory",
@@ -469,7 +473,10 @@ mod form_tests {
                 t = Plugin::TABLE
             );
             sqlx::query(&create).execute(&pool).await.unwrap();
-            let insert = format!("INSERT INTO {t} (id, name) VALUES (1, 'demo')", t = Plugin::TABLE);
+            let insert = format!(
+                "INSERT INTO {t} (id, name) VALUES (1, 'demo')",
+                t = Plugin::TABLE
+            );
             sqlx::query(&insert).execute(&pool).await.unwrap();
         })
         .await;
@@ -519,4 +526,3 @@ mod form_tests {
         );
     }
 }
-
