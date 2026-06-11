@@ -347,6 +347,24 @@ That's the whole setup. `Post { status: PostStatus::Draft, .. }` round-trips thr
 
 The `default = "..."` is required when you add the `status` column to an existing populated table - both Postgres and SQLite reject `ALTER TABLE ADD COLUMN` for a NOT NULL column without a default. It also doubles as the value the DB uses on any future `INSERT` that omits the column.
 
+**Filtering by a choice value.** The column constant filters on the **stored string** — the `rename_all`'d variant text, not the Rust path:
+
+```rust
+// All published posts. `"published"` is the DB literal for
+// PostStatus::Published under `rename_all = "lowercase"`.
+let live = Post::objects()
+    .filter(post::STATUS.eq("published"))
+    .fetch()
+    .await?;
+
+// Membership across several states — OR the equalities with a Q object:
+use umbra::orm::Q;
+let active = Post::objects()
+    .filter(Q::or(post::STATUS.eq("review"), post::STATUS.eq("published")))
+    .fetch()
+    .await?;
+```
+
 #### Defaults: two mechanisms, two layers
 
 A choices field can carry two *different* defaults, and they live at different layers:
