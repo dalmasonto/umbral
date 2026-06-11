@@ -379,3 +379,36 @@ async fn select_related_nested_is_constant_queries_not_n_plus_1() {
         statements()
     );
 }
+
+#[tokio::test]
+async fn prefetch_related_is_constant_queries_not_n_plus_1() {
+    let _g = query_lock().await;
+    let mut counts = Vec::new();
+    for n in [10_i64, 10_000] {
+        boot_and_seed(n).await;
+        reset();
+        let rows = Comment::objects()
+            .prefetch_related("reaction_set")
+            .prefetch_related("tags")
+            .fetch()
+            .await
+            .expect("fetch");
+        assert_eq!(rows.len() as i64, n);
+        assert_eq!(rows[0].reaction_set.resolved().map(|r| r.len()), Some(1));
+        assert_eq!(rows[0].tags.resolved().map(|t| t.len()), Some(2));
+        counts.push(count());
+    }
+    assert_eq!(
+        counts[0],
+        counts[1],
+        "prefetch query count must not grow with parent count (saw {counts:?}; {:?})",
+        statements()
+    );
+    // 1 main + 1 reverse-fk batch + 1 m2m batch = 3.
+    assert_eq!(
+        counts[0],
+        3,
+        "expected main + 2 prefetch batches; saw {:?}",
+        statements()
+    );
+}
