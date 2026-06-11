@@ -2467,42 +2467,65 @@ impl<T: Model> QuerySet<T> {
         relation: &str,
         agg: crate::orm::Aggregate,
     ) -> Self {
-        let spec = T::REVERSE_FK_RELATIONS
+        let rev_spec = T::REVERSE_FK_RELATIONS
             .iter()
             .find(|r| r.field_name == relation);
-        let child_soft_delete = spec.map(|s| s.soft_delete).unwrap_or(false);
-        let resolved = spec
-            .map(|spec| {
-                let pk = T::FIELDS
+        let m2m_spec = T::M2M_RELATIONS.iter().find(|r| r.field_name == relation);
+
+        let pk = T::FIELDS
+            .iter()
+            .find(|f| f.primary_key)
+            .map(|f| f.name)
+            .unwrap_or("id");
+
+        let mut child_soft_delete = false;
+        let mut m2m_junction: Option<String> = None;
+
+        let resolved = if let Some(spec) = rev_spec {
+            child_soft_delete = spec.soft_delete;
+            Ok((
+                spec.target_table.to_string(),
+                spec.fk_column.to_string(),
+                T::TABLE.to_string(),
+                pk.to_string(),
+            ))
+        } else if let Some(spec) = m2m_spec {
+            // M2M count: junction table = "<parent>_<field>", columns
+            // parent_id / child_id. The subquery counts junction rows.
+            m2m_junction = Some(format!("{}_{}", T::TABLE, spec.field_name));
+            // child_table / fk_column are unused for the M2M shape, but
+            // the tuple still carries parent_table + parent_pk for the
+            // correlation in build_query_for.
+            Ok((
+                spec.target_table.to_string(),
+                "child_id".to_string(),
+                T::TABLE.to_string(),
+                pk.to_string(),
+            ))
+        } else {
+            Err(format!(
+                "umbra::orm::annotate_related: `{relation}` is not a reverse-FK or M2M relation on `{}` — reverse-FK relations: [{}], M2M relations: [{}]",
+                T::NAME,
+                T::REVERSE_FK_RELATIONS
                     .iter()
-                    .find(|f| f.primary_key)
-                    .map(|f| f.name)
-                    .unwrap_or("id");
-                (
-                    spec.target_table.to_string(),
-                    spec.fk_column.to_string(),
-                    T::TABLE.to_string(),
-                    pk.to_string(),
-                )
-            })
-            .ok_or_else(|| {
-                format!(
-                    "umbra::orm::annotate_related: `{relation}` is not a reverse-FK relation on `{}` — declared relations: [{}]",
-                    T::NAME,
-                    T::REVERSE_FK_RELATIONS
-                        .iter()
-                        .map(|r| r.field_name)
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                )
-            });
+                    .map(|r| r.field_name)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                T::M2M_RELATIONS
+                    .iter()
+                    .map(|r| r.field_name)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            ))
+        };
+
         self.annotations.push(RelatedAnnotation {
             alias: alias.to_string(),
             agg,
             resolved,
             child_soft_delete,
             child_filter: None,
-            m2m_junction: None,
+            m2m_junction,
         });
         self
     }

@@ -423,3 +423,19 @@ async fn annotate_count_where_filters_children() {
         "only the two visible notes count; the hidden one is excluded"
     );
 }
+
+#[tokio::test]
+async fn annotate_count_over_m2m_counts_junction_rows() {
+    boot().await;
+    let rows = Post::objects()
+        .annotate_count("tags")
+        .fetch_annotated()
+        .await
+        .expect("fetch_annotated over m2m");
+    let by_title: std::collections::HashMap<String, i64> = rows
+        .into_iter()
+        .map(|(p, a)| (p.title, a["tags_count"].as_i64().unwrap()))
+        .collect();
+    assert_eq!(by_title["alpha"], 2, "two junction rows attach to alpha");
+    assert_eq!(by_title["beta"], 0, "beta has no tags");
+}
