@@ -4,7 +4,8 @@
 //! existing `umbra-openapi` JSON spec at runtime. See the design spec
 //! at `docs/superpowers/specs/2026-06-02-rest-playground-design.md`.
 
-use include_dir::{Dir, include_dir};
+use std::path::PathBuf;
+
 use umbra::prelude::*;
 
 pub mod routes;
@@ -14,20 +15,6 @@ mod generated_assets {
 }
 
 pub(crate) use generated_assets::{CSS, JS};
-
-/// The compile-time-embedded vite asset tree.
-///
-/// `include_dir!` walks `<crate>/dist/assets/` at macro-expansion
-/// time and produces a `Dir` whose entries are baked into the
-/// binary as `&'static [u8]`. The runtime serves files by name out
-/// of this tree — no filesystem read, no CARGO_MANIFEST_DIR runtime
-/// resolution, no risk of a wiped dist/ orphaning live requests
-/// from a browser that's still holding the old shell HTML.
-///
-/// build.rs guarantees `dist/assets/` exists (with at least
-/// placeholder files when vite isn't available) so this macro
-/// always has *something* to embed.
-pub(crate) static ASSETS: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/dist/assets");
 
 /// Placeholder HTML served when the vite bundle couldn't be built
 /// (no npm, no node_modules, vite failed). Inline so the plugin
@@ -120,5 +107,25 @@ impl Plugin for PlaygroundPlugin {
         let state =
             routes::PlaygroundState::new(self.base_path.clone(), self.app_name.clone(), degraded);
         routes::router(state)
+    }
+
+    /// Serve the vite bundle off the filesystem through the framework's
+    /// unified static pipeline instead of baking it into the binary.
+    ///
+    /// The source dir is the crate's `dist/` — so `dist/assets/index.js`
+    /// is reachable at `<static_url>playground/assets/index.js`
+    /// (`/static/playground/assets/…` with the default `static_url`).
+    /// In `Environment::Dev` the pipeline serves the file LIVE off disk
+    /// on every request, so dropping a freshly-built bundle into `dist/`
+    /// is served on the next request with no Rust recompile. In prod the
+    /// collected copy under `<static_root>/playground/…` is served.
+    ///
+    /// `CARGO_MANIFEST_DIR` is baked in at compile time via `env!()` so
+    /// resolution never depends on the server's runtime working dir.
+    fn static_dirs(&self) -> Vec<StaticDir> {
+        vec![StaticDir::new(
+            "playground",
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("dist"),
+        )]
     }
 }

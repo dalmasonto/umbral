@@ -26,7 +26,7 @@ pub mod prelude {
         ChoiceField, Choices, F, FColExt, ForeignKey, M2M, Model, MultiChoice, OneToOne, Q,
         ReverseRelations,
     };
-    pub use crate::plugin::{AppContext, Plugin};
+    pub use crate::plugin::{AppContext, Plugin, StaticDir};
     pub use crate::routes::Routes;
     pub use crate::web::{
         Form, IntoResponse, Json, JsonResponse, Path, Query, Router, delete, get, patch, post, put,
@@ -274,8 +274,9 @@ pub mod static_files {
     //! resolver behind the handler.
 
     pub use umbra_core::static_files::{
-        StaticHandlerState, StaticNamespaceCollision, StaticRegistry, resolve_under_root,
-        serve_file, static_handler,
+        CollectError, CollectSummary, CollectedNamespace, MissingSourceDir, StaticHandlerState,
+        StaticNamespaceCollision, StaticRegistry, collect_static, resolve_under_root, serve_file,
+        static_handler,
     };
 }
 
@@ -371,7 +372,7 @@ pub mod templates {
     pub use minijinja::{Value, context};
     pub use umbra_core::templates::{
         CURRENT_CSRF, CURRENT_USER, TemplateError, current_csrf, merge_ambient_context,
-        merge_ambient_value, render, with_current_csrf, with_current_user,
+        merge_ambient_value, render, resolve_static_url, with_current_csrf, with_current_user,
     };
 }
 

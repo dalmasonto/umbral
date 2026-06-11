@@ -11,19 +11,6 @@ rust-version.workspace = true
 
 [dependencies]
 umbra = { path = "../../crates/umbra", version = "0.0.1" }
-# Compile-time embed of the vite-built React bundle (JS + CSS +
-# Inter woff2 fonts) into the binary. The runtime serves files
-# straight out of memory — no filesystem dependency. We re-export
-# the embedded tree as `&'static ASSETS` and hand it to
-# `StaticPlugin::embedded(...)` (umbra-static landed embedded
-# source support — closing bugs/playground-openapi-gaps.md #13)
-# so the playground dogfoods the framework's static-serving plugin
-# *and* keeps the embed-into-binary property.
-include_dir = "0.7"
-# Dogfooded asset serving via StaticPlugin's embedded variant.
-# Wraps include_dir for in-memory lookups + tower-http for cache
-# headers + dev-mode max-age=0 + the usual Plugin trait flow.
-umbra-static = { path = "../umbra-static", version = "0.0.1" }
 axum = "0.8"
 # `tracing::warn!` on the no-app-name fallback (gap #71).
 tracing = "0.1"

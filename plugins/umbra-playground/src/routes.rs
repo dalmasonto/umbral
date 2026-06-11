@@ -1,26 +1,44 @@
-//! Two routes: the HTML shell and the bundled assets.
+//! One route: the HTML shell.
 //!
 //! The shell is one HTML template substituted with the hashed asset
-//! filenames and lives here. The assets are served by `umbra-static`'s
-//! `StaticPlugin` in its embedded variant — we hand it the
-//! compile-time-baked [`crate::ASSETS`] tree and it gives us back a
-//! Router that resolves `<base>/assets/{*path}` against the in-memory
-//! `Dir`. No filesystem reads, no path-traversal surface, no risk of
-//! a wiped `dist/` orphaning live browser tabs.
+//! filenames and lives here. The assets themselves are served by the
+//! framework's unified static pipeline (see [`umbra::static_files`] /
+//! [`umbra::prelude::StaticDir`]): the plugin's
+//! [`PlaygroundPlugin::static_dirs`](crate::PlaygroundPlugin::static_dirs)
+//! registers `dist/` under the `playground` namespace, so a request for
+//! `<static_url>playground/assets/<hashed-file>` resolves to
+//! `dist/assets/<hashed-file>` — live off disk in dev, from the
+//! collected `static_root` in prod. The shell's `<script>` / `<link>`
+//! URLs are built to point at that pipeline path.
 //!
-//! Dogfooding the framework's static plugin means any improvement
-//! `umbra-static` ships (cache headers, dev-mode max-age=0, future
-//! ETag/range-request support against embedded sources) lands here
-//! for free.
+//! Dogfooding the pipeline means dropping a freshly-built bundle into
+//! `dist/` is served on the next request in dev with NO Rust recompile —
+//! the property the user asked for.
 use std::sync::Arc;
 
 use axum::body::Body;
 use axum::extract::State;
 use axum::http::{Response, StatusCode, header};
-use umbra::prelude::Plugin;
-use umbra_static::StaticPlugin;
 
-use crate::{ASSETS, CSS, JS, PLACEHOLDER_HTML};
+use crate::{CSS, JS, PLACEHOLDER_HTML};
+
+/// URL prefix the shell points its `<script>` / `<link>` tags at.
+///
+/// This is `<static_url>playground/assets/` with the framework's
+/// default `static_url` (`/static/`) hardcoded. The static pipeline
+/// resolves `/static/playground/assets/<name>` → `dist/assets/<name>`
+/// via the `playground` namespace registered in `static_dirs()`.
+///
+/// TODO(gaps2 #53): this hardcodes `/static/` instead of reading the
+/// configured `settings.static_url`. `Plugin::routes()` (where the
+/// shell state is built) gets no `Settings` handle, so the configured
+/// prefix isn't reachable here. If a deploy overrides `static_url`, the
+/// shell's asset URLs won't follow. Proper fix lives in
+/// `plugins/umbra-playground/src/{lib.rs,routes.rs}`: thread the
+/// resolved `static_url` into `PlaygroundState` (e.g. via an
+/// `on_ready` snapshot or a builder field) and build this prefix from
+/// it.
+const STATIC_ASSET_PREFIX: &str = "/static/playground/assets";
 
 /// Shared state carried through middleware: the base path (e.g.
 /// `/api/playground`) and a flag for whether we're in placeholder mode.
@@ -56,8 +74,8 @@ fn render_shell(state: &PlaygroundState) -> String {
     if state.degraded {
         return PLACEHOLDER_HTML.to_string();
     }
-    let css = format!("{}/assets/{}", state.base_path, CSS);
-    let js = format!("{}/assets/{}", state.base_path, JS);
+    let css = format!("{STATIC_ASSET_PREFIX}/{CSS}");
+    let js = format!("{STATIC_ASSET_PREFIX}/{JS}");
     let app_meta = html_escape_attr(&state.app_name);
     let app_js = json_escape(&state.app_name);
     // Read the OpenAPI spec URL the user actually configured —
@@ -114,35 +132,22 @@ pub async fn shell(State(state): State<PlaygroundState>) -> Response<Body> {
         .unwrap()
 }
 
-/// Compose both routes into a router.
+/// Compose the plugin's routes into a router.
 ///
-/// - Shell: handled inline (template substitution, not a static
-///   file) at `<base>/`.
-/// - Assets: delegated to `StaticPlugin::embedded` at
-///   `<base>/assets/*`. Routes are absolute because the plugin
-///   contract merges plugin routers flat into the app router
-///   without auto-prefixing.
-///
-/// Cache headers: one year + immutable. Safe with vite's content-
-/// hashed filenames since a changed bundle gets a new hash, so a
-/// cached `index-X.css` will always be exactly these bytes. In
-/// `Environment::Dev` umbra-static forces max-age=0 automatically.
+/// Only the shell route lives here now: handled inline (template
+/// substitution, not a static file) at `<base>/`. The asset files are
+/// served by the framework's unified static pipeline at
+/// `<static_url>playground/assets/*` (registered via
+/// [`PlaygroundPlugin::static_dirs`](crate::PlaygroundPlugin::static_dirs)),
+/// NOT by a route mounted here. The route path is absolute because the
+/// plugin contract merges plugin routers flat into the app router
+/// without auto-prefixing.
 pub fn router(state: PlaygroundState) -> axum::Router {
     use axum::routing::get;
-    use std::time::Duration;
 
-    // Snapshot the base path before we consume `state` via
-    // `.with_state(...)`. The asset mount has to be built afterwards
-    // so we need an owned copy that survives the move.
     let base_trimmed = state.base_path.trim_end_matches('/').to_string();
 
-    let shell_router = axum::Router::new()
+    axum::Router::new()
         .route(&format!("{base_trimmed}/"), get(shell))
-        .with_state(state);
-
-    let assets_router = StaticPlugin::embedded(format!("{base_trimmed}/assets"), &ASSETS)
-        .max_age(Duration::from_secs(31_536_000))
-        .routes();
-
-    shell_router.merge(assets_router)
+        .with_state(state)
 }

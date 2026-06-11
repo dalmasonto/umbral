@@ -48,11 +48,12 @@ fn main() {
     println!("cargo:rerun-if-changed=src/shell.html");
 
     fs::create_dir_all(&crate_dist).expect("create dist dir");
-    // Guarantee dist/assets/ exists so the `include_dir!` macro in
-    // lib.rs always has *something* to embed. Without this, the
-    // first build on a fresh checkout (no vite output yet) would
-    // fail at compile time on a missing-directory error from
-    // include_dir, before build.rs had a chance to populate it.
+    // Guarantee dist/assets/ exists so the static pipeline (which
+    // serves files off `<crate>/dist/` at runtime via the `playground`
+    // namespace registered in `Plugin::static_dirs`) always has a
+    // directory to resolve against. On a fresh checkout with no vite
+    // output yet this keeps the source dir present (empty) rather than
+    // missing.
     let assets_subdir = crate_dist.join("assets");
     fs::create_dir_all(&assets_subdir).expect("create dist/assets dir");
 

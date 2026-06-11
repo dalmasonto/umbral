@@ -3461,13 +3461,11 @@ version = "0.0.1"
 dependencies = [
  "axum",
  "http-body-util",
- "include_dir",
  "serde_json",
  "tokio",
  "tower",
  "tracing",
  "umbra",
- "umbra-static",
 ]
 
 [[package]]
