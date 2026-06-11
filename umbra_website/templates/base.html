@@ -14,6 +14,8 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/css/umbra.css">
   <style>
+    /* Slightly wider site container (overrides the purged Tailwind class site-wide). */
+    .max-w-\[1200px\] { max-width: 1280px; }
     /* ===== Header dropdowns ===== */
     .nav-dd { position: relative; }
     .nav-dd__btn {
@@ -33,6 +35,9 @@
       display: none; z-index: 60;
     }
     .nav-dd__panel[data-open="true"] { display: block; }
+    /* Invisible hover bridge spanning the 10px gap, so moving from the trigger
+       to the menu never crosses a non-hover zone (which made the menu vanish). */
+    .nav-dd__panel::before { content: ""; position: absolute; left: 0; right: 0; top: -14px; height: 16px; }
     .nav-dd__link {
       display: flex; align-items: center; gap: 10px;
       padding: 9px 11px; border-radius: 9px;
@@ -155,7 +160,7 @@
         <span class="logo-mark" aria-hidden="true"></span>
         <span class="text-[18px] font-bold tracking-tight">Umbra</span>
       </a>
-      <nav class="hidden items-center lg:flex" aria-label="Main navigation" data-nav-root style="gap:0.6rem">
+      <nav class="hidden items-center lg:flex" aria-label="Main navigation" data-nav-root style="gap:1.05rem">
         {# --- Product dropdown --- #}
         <div class="nav-dd" data-dd>
           <button type="button" class="nav-dd__btn" aria-expanded="false" aria-haspopup="true" data-dd-btn>
