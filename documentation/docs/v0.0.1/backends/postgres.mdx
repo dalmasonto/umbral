@@ -51,7 +51,7 @@ The engine renders Postgres DDL automatically:
 - `$1..$N` placeholders and `ON CONFLICT DO NOTHING` on the migration apply path.
 - Native types from the [Type catalogue](#type-catalogue) below - `JSONB`, `UUID`, `TIMESTAMPTZ`, arrays, INET/CIDR/MACADDR, TSVECTOR - instead of the `TEXT`/`BLOB` fallbacks SQLite uses.
 
-The migration files themselves are backend-agnostic JSON; the same file applies to both backends. Render the SQL for either one with `cargo run -- migrate --plan`.
+The migration files themselves are backend-agnostic JSON; the same file applies to both backends. The engine renders the backend-specific SQL at `migrate` time from the active pool's backend.
 
 ## Querying
 
@@ -76,7 +76,7 @@ Some workloads benefit enough from native PG features to make the SQLite story i
 | Type | Rust field | Postgres column | Notes |
 |------|------------|-----------------|-------|
 | Array | `Vec<T>` / `Option<Vec<T>>` | `T[]` | Element type is one of `i32`, `i64`, `String`, `Uuid`, `bool`. See [orm/models - Array columns](../orm/models#array-columns). |
-| JSONB | `serde_json::Value` (M3 `Json` SqlType) | `JSONB` | Indexed `@>`, `->`, `->>` operator surface; the QuerySet exposes them as `.has_key(...)` / `.contains(...)` / `.path("a.b")`. |
+| JSONB | `serde_json::Value` (M3 `Json` SqlType) | `JSONB` | Indexed `->`, `->>` operator surface; the QuerySet exposes them as `.has_key("key")` and `.path_text(&["a", "b"]).eq("v")`. See [orm/querying — JSON column ops](../orm/querying#json-column-ops). |
 | INET / CIDR / MACADDR | `IpNet`-style newtypes | `INET`, `CIDR`, `MACADDR` | Networking fields. [orm/models - Network address columns](../orm/models#network-address-columns). |
 | TSVECTOR | `umbra::orm::TsVector` | `TSVECTOR` | Full-text search. Populate via trigger or `GENERATED ALWAYS AS (to_tsvector(...))`. [orm/models - Full-text search columns](../orm/models#full-text-search-columns). |
 
@@ -87,10 +87,12 @@ Plus the standard cross-backend types (`Boolean`, `Uuid`, `Timestamptz`, etc.) a
 `inspectdb` walks `pg_catalog` and `information_schema` to produce umbra `Model` definitions for every table in an existing database:
 
 ```bash
-cargo run -- inspectdb > src/legacy_models.rs
+cargo run -- inspectdb --output src/legacy
+# -> Wrote src/legacy/models.rs
+# -> Wrote src/legacy/migrations/app/0001_initial.json
 ```
 
-The output is a Rust source file with one `#[derive(Model)]` struct per table, ready to drop into a module and register from a plugin (or via `.model::<T>()`). Round-trip integration coverage lives in `crates/umbra-core/tests/postgres_inspect.rs`.
+`--output` is a directory: inspectdb writes a `models.rs` with one `#[derive(Model)]` struct per table plus a `0001_initial.json` migration, ready to drop into a module and register from a plugin (or via `.model::<T>()`). Round-trip integration coverage lives in `crates/umbra-core/tests/postgres_inspect.rs`. See the [inspectdb page](../migrations/inspectdb) for the full flag set (`--mark-applied`, adopting a populated DB).
 
 ## Row-Level Security
 
