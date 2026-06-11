@@ -102,10 +102,29 @@ impl<T: Model> Eq for ForeignKey<T> where T::PrimaryKey: Eq {}
 /// `#[derive(Form)]` macro's `..Default::default()` tail and the typed
 /// `create()` path rely on: a model struct that mixes form-submittable
 /// FK fields with framework-skipped fields needs `Default` to fill the
-/// skipped slots, and the FK field is always overwritten with the real
-/// submitted id before the row is persisted. Centralises the
-/// `ForeignKey::new(0)` placeholder that consumers previously hand-rolled
-/// in a `Default` impl per model.
+/// skipped slots. On the form path the FK field is overwritten with the
+/// real submitted id (or `validate()` errors out) before the struct is
+/// persisted. Centralises the `ForeignKey::new(0)` placeholder that
+/// consumers previously hand-rolled in a `Default` impl per model.
+///
+/// Safety — the id-0 placeholder is NOT silently persistable. A
+/// **non-nullable** FK left at this default (e.g. a non-form caller doing
+/// `Model { real_field, ..Default::default() }` that forgets the FK) is
+/// **rejected at insert**, never written as a dangling `FK = 0` row. Two
+/// layers cover it:
+/// - The validated write paths (`create` / `bulk_create` / `insert_json`)
+///   run a live-DB FK existence check; id-0 can't reference a real row
+///   (auto-increment PKs start at 1) so it's rejected there.
+/// - The raw-transaction / Postgres-direct paths (`create_in_tx`,
+///   `bulk_create_in_tx`, `create_pg`, `bulk_create_pg`, `upsert`) skip
+///   that pre-validation and go straight to the INSERT builder. The guard
+///   `reject_unset_fk_placeholder` in `orm/queryset/write_helpers.rs`
+///   backstops them: a non-nullable, non-PK FK at the i64-0 placeholder
+///   returns a `WriteError::Validator` before any SQL runs.
+///
+/// Scope (v1): the i64-PK FK case (placeholder = JSON number 0). Nullable
+/// FKs (`Option<ForeignKey>` → `None`) are legitimately unset and
+/// untouched; the PK column has its own `is_default_pk` guard.
 impl<T: Model> Default for ForeignKey<T>
 where
     T::PrimaryKey: Default,

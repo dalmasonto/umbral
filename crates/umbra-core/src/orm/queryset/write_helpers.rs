@@ -23,6 +23,45 @@ pub(crate) fn fk_pk_hint(field: &crate::orm::FieldSpec) -> Option<crate::orm::Sq
         .and_then(|t| crate::migrate::pk_meta_for_table(t).map(|(_, ty)| ty))
 }
 
+/// Reject a non-nullable, non-PK foreign-key column left at the i64-0
+/// unset placeholder (`ForeignKey::default()` / `..Default::default()`
+/// with the FK never set). The `impl Default for ForeignKey<T>` removed
+/// the old compile-time tripwire that forced callers to supply the FK;
+/// this restores the safety at the write path so a `Model { real_field,
+/// ..Default::default() }` that forgets a required FK errors loudly
+/// instead of silently INSERTing `FK = 0` (a dangling row).
+///
+/// Scope (v1): the i64-PK FK case only — the placeholder is a JSON
+/// number equal to 0 (matching the `BigInt` arm of
+/// [`crate::orm::write::is_default_pk`]). Uuid/Text-PK FKs are out of
+/// scope and pass through untouched. Nullable FKs (`Option<ForeignKey>`
+/// → `None`) are legitimate and never reach here as a 0 (they're
+/// `null`); the PK column has its own `is_default_pk` guard.
+fn reject_unset_fk_placeholder(
+    field: &crate::orm::FieldSpec,
+    val: &serde_json::Value,
+) -> Result<(), crate::orm::write::WriteError> {
+    let is_unset_fk = field.fk_target.is_some()
+        && !field.nullable
+        && !field.primary_key
+        && val
+            .as_i64()
+            .map(|n| n == 0)
+            .or_else(|| val.as_u64().map(|n| n == 0))
+            .unwrap_or(false);
+    if is_unset_fk {
+        let target = field.fk_target.unwrap_or("the target");
+        return Err(crate::orm::write::WriteError::Validator {
+            field: field.name.to_string(),
+            message: format!(
+                "foreign key `{}` is the unset id-0 placeholder — set it to a real {} id before create",
+                field.name, target
+            ),
+        });
+    }
+    Ok(())
+}
+
 /// Convert a `T: Serialize` instance to a `Map<String, Value>` for
 /// the insert path. Errors out if the instance doesn't serialize to a
 /// JSON object (only flat structs and HashMap-like shapes do).
@@ -76,6 +115,10 @@ pub(super) fn build_insert_one_for<T: Model>(
         if val.is_null() && field.nullable && !map.contains_key(field.name) {
             continue;
         }
+        // Reject a non-nullable FK left at the id-0 unset placeholder
+        // (ForeignKey::default) before binding it — see
+        // [`reject_unset_fk_placeholder`].
+        reject_unset_fk_placeholder(field, &val)?;
         let sea_value = json_to_sea_value(
             field.ty,
             &val,
@@ -149,6 +192,12 @@ pub(super) fn build_insert_many_for<T: Model>(
                     .get(field.name)
                     .cloned()
                     .unwrap_or(serde_json::Value::Null);
+                // Reject a non-nullable FK left at the id-0 unset
+                // placeholder before binding it (per-row, so one bad row
+                // in the batch fails the whole bulk_create — no partial
+                // insert of dangling FK rows). See
+                // [`reject_unset_fk_placeholder`].
+                reject_unset_fk_placeholder(field, &val)?;
                 json_to_sea_value(
                     field.ty,
                     &val,

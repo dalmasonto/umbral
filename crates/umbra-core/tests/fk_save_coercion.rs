@@ -240,6 +240,127 @@ async fn fk_id_as_form_string_via_insert_form_links_parent() {
     assert_eq!(child.parent.id(), parent.id);
 }
 
+/// The `ForeignKey::default()` footgun: a model constructed via
+/// `..Default::default()` (or `ForeignKey::default()`) leaves a
+/// non-nullable FK at the id-0 unset placeholder. The validated
+/// `create()` path catches it via the live-DB FK-existence check
+/// (`ForeignKeyNotFound`), but the RAW-TRANSACTION write path
+/// (`create_in_tx`) deliberately skips that pre-validation and goes
+/// straight to the INSERT builder — which is exactly where the
+/// `ForeignKey::default` placeholder would be bound as `FK = 0` and
+/// persist a dangling row. The build-path guard
+/// (`reject_unset_fk_placeholder`) is the backstop for that bypass: it
+/// must REJECT the id-0 placeholder with a clear `WriteError` and insert
+/// NO row.
+#[tokio::test]
+async fn unset_id0_fk_placeholder_is_rejected_in_tx_create() {
+    boot().await;
+
+    // A `body` value unique to this test so the NO-INSERT assertion is
+    // immune to rows other tests insert concurrently into the shared
+    // in-memory pool.
+    const MARKER: &str = "orphan-create-guard-marker";
+
+    let mut tx = db::begin().await.expect("begin tx");
+    // A bare non-nullable FK left at its Default (id 0). The body is a
+    // real value so the ONLY problem is the unset FK.
+    let result = Child::objects()
+        .create_in_tx(
+            Child {
+                id: 0,
+                parent: ForeignKey::default(),
+                body: MARKER.into(),
+            },
+            &mut tx,
+        )
+        .await;
+
+    let err = result.expect_err(
+        "create_in_tx with a non-nullable FK left at the id-0 default must error, \
+         not silently insert FK = 0",
+    );
+    let msg = format!("{err:?}");
+    // The guard must fire as a STRUCTURAL placeholder rejection — naming
+    // the column AND the unset-id-0 placeholder — at the INSERT builder,
+    // BEFORE any SQL touches the DB. Pinning the message proves it's OUR
+    // guard, not a DB-side FK violation.
+    assert!(
+        msg.contains("parent") && msg.contains("placeholder"),
+        "the rejection must be the unset-id-0 placeholder guard naming `parent`; got: {msg}"
+    );
+    tx.rollback().await.expect("rollback");
+
+    // Behavioral proof: NO row carrying this marker was inserted (the
+    // guard returned Err before the INSERT ran).
+    let inserted = Child::objects()
+        .filter(child::BODY.eq(MARKER))
+        .count()
+        .await
+        .expect("count children with the marker body");
+    assert_eq!(
+        inserted, 0,
+        "the rejected create must NOT have inserted a row (id-0 FK placeholder)"
+    );
+}
+
+/// The same footgun on the bulk raw-transaction path: a
+/// `bulk_create_in_tx` batch where one row carries the id-0 FK
+/// placeholder must be rejected at the INSERT builder, inserting NO rows
+/// from the batch.
+#[tokio::test]
+async fn unset_id0_fk_placeholder_is_rejected_in_tx_bulk_create() {
+    boot().await;
+    let parent = seed_parent("Acme Bulk Guard").await;
+
+    // Markers unique to this test (see the create-path test above).
+    const OK_MARKER: &str = "bulk-ok-guard-marker";
+    const BAD_MARKER: &str = "bulk-orphan-guard-marker";
+
+    let mut tx = db::begin().await.expect("begin tx");
+    let result = Child::objects()
+        .bulk_create_in_tx(
+            vec![
+                Child {
+                    id: 0,
+                    parent: ForeignKey::new(parent.id),
+                    body: OK_MARKER.into(),
+                },
+                Child {
+                    id: 0,
+                    parent: ForeignKey::default(),
+                    body: BAD_MARKER.into(),
+                },
+            ],
+            &mut tx,
+        )
+        .await;
+
+    let err = result.expect_err("bulk_create_in_tx with an id-0 FK placeholder must error");
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("parent") && msg.contains("placeholder"),
+        "the bulk rejection must be the unset-id-0 placeholder guard naming `parent`; got: {msg}"
+    );
+    tx.rollback().await.expect("rollback");
+
+    // No row from the batch — neither the good nor the bad marker — may
+    // have been inserted (the builder errored before the INSERT ran).
+    let inserted = Child::objects()
+        .filter(child::BODY.eq(OK_MARKER))
+        .count()
+        .await
+        .expect("count ok-marker children")
+        + Child::objects()
+            .filter(child::BODY.eq(BAD_MARKER))
+            .count()
+            .await
+            .expect("count bad-marker children");
+    assert_eq!(
+        inserted, 0,
+        "a rejected bulk_create must NOT insert any row from the batch"
+    );
+}
+
 /// Unit-level regression pin on the exact arm #42 mis-bound: a numeric
 /// string FK id with a numeric-PK (or unresolved) target must bind
 /// BigInt, never TEXT; a resolved Text-PK target still binds text.
