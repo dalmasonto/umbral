@@ -7,9 +7,9 @@ icon: alert-triangle
 
 Migration drift is what happens when the `umbra_migrations` tracking table and the migration files on disk no longer agree. This guide explains how umbra detects drift, what the four states mean, and which CLI flag to reach for in each scenario.
 
-## The three drift states
+## The four migration states
 
-umbra classifies every migration into one of four states when it runs `showmigrations` or before it applies anything.
+umbra classifies every migration into one of four states when it runs `showmigrations` or before it applies anything. Two are healthy (`[X]` applied, `[ ]` pending); the other two — `[!]` applied-but-missing and `[?]` out-of-order — are the drift conditions this page covers.
 
 | State | Marker | What it means |
 |---|---|---|

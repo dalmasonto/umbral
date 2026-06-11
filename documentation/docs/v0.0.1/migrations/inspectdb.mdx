@@ -46,9 +46,11 @@ cargo run -- inspectdb --output plugins/imported --mark-applied
 
 The next `migrate` is a no-op until you actually change a model.
 
-## The M6 v1 type catalogue
+`inspectdb` dispatches on the active backend: SQLite reads `sqlite_master` plus `PRAGMA table_info`, and Postgres reads `information_schema` (tables, columns, and the constraint joins that recover the primary key). Point the CLI at whichever backend `DATABASE_URL` resolves to — the same `--output` shape comes out either way. See the [Postgres backend page](/docs/v0.0.1/backends/postgres#inspectdb-postgres) for the Postgres specifics.
 
-The columns inspectdb knows about today:
+## The SQLite type catalogue
+
+The columns inspectdb's SQLite path knows about today (the Postgres path additionally recovers `JSONB`, native arrays, and `INET` / `CIDR` / `MACADDR` — see the [Postgres backend page](/docs/v0.0.1/backends/postgres)):
 
 <CardGrid cols={3}>
   <Card icon="hash" title="Integers" description="SMALLINT, INTEGER, BIGINT and their aliases map to i16 / i32 / i64." />
@@ -59,23 +61,23 @@ The columns inspectdb knows about today:
   <Card icon="key" title="UUIDs" description="UUID → uuid::Uuid." />
 </CardGrid>
 
-A column with a SQL type outside the catalogue (NUMERIC, JSON, BYTEA,
-arrays, custom types) makes `inspectdb` stop with an `UnsupportedColumnType`
-error naming the offending column. Either add a matching `SqlType` variant
-or edit the generated `models.rs` by hand.
+A `JSON` / `JSONB`-declared column maps to `serde_json::Value` and a `BLOB` / `BYTEA` column maps to a bytes field. A SQL type still outside the catalogue (NUMERIC, custom types) makes `inspectdb` stop with an `UnsupportedColumnType` error naming the offending column. Either add a matching `SqlType` variant or edit the generated `models.rs` by hand.
 
 <Callout type="info">
 `umbra_migrations`, every `sqlite_*` internal table, and any table with an
 SQL type the catalogue doesn't know are excluded automatically.
 </Callout>
 
-## Deferred past M6 v1
+## Still deferred
 
-- Postgres introspection. Today's path is SQLite-only via `PRAGMA
-  table_info`; Postgres lands with the backend body.
-- Foreign-key and index detection. The `Column` shape doesn't yet carry FKs
-  or indexes; once the field types exist, inspectdb picks them up.
+- Foreign-key and index detection. The generated `CreateTable` ops carry
+  columns only; a Postgres FK column comes back as a plain `i64` and indexes
+  are not read out. Once the field-level FK / index types land in the
+  introspector, inspectdb picks them up. (Both backends.)
 - Generated plugin crates with a `Plugin` impl. Today the output is a flat
   `models.rs` you wire by hand. M7's full plugin shape ships the crate too.
+
+Postgres introspection has shipped (`introspect_pool_pg`, covered by
+`crates/umbra-core/tests/postgres_inspect.rs`); it is no longer on this list.
 
 The full target shape lives in `docs/specs/07-inspectdb.md`.
