@@ -36,6 +36,25 @@ pub struct Review {
 }
 
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
+#[umbra(table = "anc_note", soft_delete)]
+pub struct Note {
+    pub id: i64,
+    pub body: String,
+    pub post: ForeignKey<Post>,
+    pub moderation: String,
+    #[sqlx(default)]
+    #[umbra(index)]
+    pub deleted_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
+#[umbra(table = "anc_tag")]
+pub struct Tag {
+    pub id: i64,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
 #[umbra(table = "anc_post")]
 pub struct Post {
     pub id: i64,
@@ -48,6 +67,14 @@ pub struct Post {
     #[serde(skip)]
     #[umbra(reverse_fk = "post")]
     pub review_set: ReverseSet<Review>,
+    #[sqlx(skip)]
+    #[serde(skip)]
+    #[umbra(reverse_fk = "post")]
+    pub note_set: ReverseSet<Note>,
+    #[sqlx(skip)]
+    #[serde(skip)]
+    #[umbra(m2m = "anc_tag")]
+    pub tags: umbra::orm::M2M<Tag>,
 }
 
 static BOOT: OnceCell<()> = OnceCell::const_new();
@@ -64,6 +91,8 @@ async fn boot() {
             .model::<Post>()
             .model::<Comment>()
             .model::<Review>()
+            .model::<Note>()
+            .model::<Tag>()
             .build()
             .expect("App::build");
 
@@ -96,6 +125,36 @@ async fn boot() {
         .execute(&pool)
         .await
         .expect("CREATE TABLE anc_review");
+        sqlx::query(
+            "CREATE TABLE anc_note (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                body TEXT NOT NULL,
+                post INTEGER NOT NULL REFERENCES anc_post(id),
+                moderation TEXT NOT NULL DEFAULT 'visible',
+                deleted_at TEXT
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("CREATE TABLE anc_note");
+        sqlx::query(
+            "CREATE TABLE anc_tag (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("CREATE TABLE anc_tag");
+        sqlx::query(
+            "CREATE TABLE anc_post_tags (
+                parent_id INTEGER NOT NULL REFERENCES anc_post(id),
+                child_id INTEGER NOT NULL REFERENCES anc_tag(id)
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("CREATE TABLE anc_post_tags");
 
         for title in ["alpha", "beta", "gamma"] {
             sqlx::query("INSERT INTO anc_post (title) VALUES (?)")
@@ -121,6 +180,39 @@ async fn boot() {
                 .execute(&pool)
                 .await
                 .expect("seed review");
+        }
+        // alpha (id 1): two visible notes + one hidden, none soft-deleted.
+        // Kept pristine so the annotate_count_where test is order-independent
+        // (the soft-delete test seeds its OWN throwaway parent + notes).
+        for (body, post, moderation) in [
+            ("n1", 1, "visible"),
+            ("n2", 1, "visible"),
+            ("n3", 1, "hidden"),
+        ] {
+            sqlx::query("INSERT INTO anc_note (body, post, moderation) VALUES (?, ?, ?)")
+                .bind(body)
+                .bind(post)
+                .bind(moderation)
+                .execute(&pool)
+                .await
+                .expect("seed note");
+        }
+        // Three candidate tags; alpha (post 1) gets 2 of them via real
+        // junction rows. beta/gamma get none.
+        for name in ["rust", "web", "orm"] {
+            sqlx::query("INSERT INTO anc_tag (name) VALUES (?)")
+                .bind(name)
+                .execute(&pool)
+                .await
+                .expect("seed tag");
+        }
+        for (parent, child) in [(1, 1), (1, 2)] {
+            sqlx::query("INSERT INTO anc_post_tags (parent_id, child_id) VALUES (?, ?)")
+                .bind(parent)
+                .bind(child)
+                .execute(&pool)
+                .await
+                .expect("seed junction");
         }
     })
     .await;
@@ -239,4 +331,19 @@ async fn unknown_relation_fails_loudly_everywhere() {
         .await
         .expect_err("explain must reject an unknown relation too");
     assert!(err.to_string().contains("nope_set"));
+}
+
+#[test]
+fn reverse_fk_spec_carries_child_soft_delete() {
+    use umbra::orm::Model;
+    let note = Post::REVERSE_FK_RELATIONS
+        .iter()
+        .find(|r| r.field_name == "note_set")
+        .expect("note_set relation");
+    assert!(note.soft_delete, "child Note is soft-delete");
+    let comment = Post::REVERSE_FK_RELATIONS
+        .iter()
+        .find(|r| r.field_name == "comment_set")
+        .expect("comment_set relation");
+    assert!(!comment.soft_delete, "child Comment is not soft-delete");
 }

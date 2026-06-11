@@ -958,6 +958,7 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                     target_table: <#inner as ::umbra::orm::Model>::TABLE,
                     target_name: <#inner as ::umbra::orm::Model>::NAME,
                     fk_column: #fk_col,
+                    soft_delete: <#inner as ::umbra::orm::Model>::SOFT_DELETE,
                 }
             });
             let field_ident = field.ident.as_ref().expect("named field has ident").clone();

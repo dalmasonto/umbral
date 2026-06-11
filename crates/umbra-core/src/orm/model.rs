@@ -388,6 +388,12 @@ pub struct ReverseFkRelationSpec {
     /// parent (e.g. `"post"`). The prefetch loader filters on this
     /// column: `WHERE <fk_column> IN (parent_pks)`.
     pub fk_column: &'static str,
+    /// Mirrors the CHILD model's `Model::SOFT_DELETE`. `annotate_count`
+    /// folds `AND <child>.deleted_at IS NULL` into the correlated
+    /// count subquery when this is `true`, so a trashed child stops
+    /// inflating the parent's count. Filled by the Model derive from
+    /// `<Child as Model>::SOFT_DELETE`.
+    pub soft_delete: bool,
 }
 
 /// Types that can serve as a model's primary key.
