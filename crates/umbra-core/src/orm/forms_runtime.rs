@@ -159,6 +159,16 @@ pub fn parse_multi_ids(raw: &str) -> Vec<String> {
 /// ids that exist (used to stage the pending junction write). When any
 /// id is missing the caller treats the whole submission as invalid
 /// (atomicity) — errs is non-empty so the create never runs.
+///
+/// A *genuine miss* (the existence query ran, an id wasn't in the result
+/// set) records a per-field "id has no matching record" error. A *real
+/// database error* (the query itself failed) is a different animal: it's
+/// NOT the user's fault and every submitted id is unverifiable, not
+/// missing. Flagging all of them "no matching record" would be a lie that
+/// masks the real failure (gaps2 #48). So a DB error is logged via
+/// `tracing::error!` and surfaced as a single NON-field error
+/// ("could not validate references (database error)"); we fail closed
+/// (errs non-empty → the create never runs) but honestly.
 pub async fn validate_multi_fk_exists(
     field: &str,
     ids: &[String],
@@ -182,12 +192,30 @@ pub async fn validate_multi_fk_exists(
     // (...)`. NOT one count() per id: a list of M selected ids costs a
     // single round-trip, never M (no N+1). The set-difference below
     // finds the missing ids.
-    let rows = crate::orm::dynamic::DynQuerySet::for_meta(&meta)
+    let rows = match crate::orm::dynamic::DynQuerySet::for_meta(&meta)
         .select_cols(&[pk_col.clone()])
         .filter_in_strings(&pk_col, ids)
         .fetch_as_json()
         .await
-        .unwrap_or_default();
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            // Do NOT swallow the error into an empty result set: that
+            // would flag EVERY submitted id "no matching record" — a
+            // bogus per-field error masking a real DB failure. Log the
+            // real error and record one honest non-field error instead.
+            tracing::error!(
+                field = %field,
+                target_table = %target_table,
+                error = %e,
+                "M2M reference validation query failed; failing closed without flagging ids as missing",
+            );
+            errs.add_non_field(format!(
+                "could not validate {field} references (database error)"
+            ));
+            return Vec::new();
+        }
+    };
     let found: std::collections::HashSet<String> = rows
         .into_iter()
         .filter_map(|r| r.get(&pk_col).map(json_scalar_to_string))

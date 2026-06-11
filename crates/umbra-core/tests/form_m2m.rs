@@ -19,6 +19,18 @@ struct Tag {
     pub name: String,
 }
 
+/// A model that's REGISTERED (so `validate_multi_fk_exists` gets past the
+/// registry lookup) but whose backing table is deliberately never created.
+/// Used to drive the DB-error path: the existence query fails with
+/// "no such table", which must NOT be silently swallowed into a flood of
+/// per-field "no matching record" errors (gaps2 #48).
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbra::orm::Model)]
+#[umbra(table = "fm_phantom")]
+struct Phantom {
+    pub id: i64,
+    pub name: String,
+}
+
 #[derive(
     Debug,
     Clone,
@@ -67,6 +79,9 @@ async fn boot() {
             .database("default", pool.clone())
             .model::<Tag>()
             .model::<Article>()
+            // Registered but its table is never created — drives the
+            // DB-error path in the gaps2 #48 test below.
+            .model::<Phantom>()
             .build()
             .expect("App::build");
         sqlx::query("CREATE TABLE fm_tag (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)")
@@ -138,4 +153,85 @@ async fn m2m_form_bad_id_writes_zero_junction_rows() {
         .await
         .expect("count by title");
     assert_eq!(count, 0, "no parent row inserted on a bad m2m id");
+}
+
+// gaps2 #48 — a real DB error during M2M reference validation must NOT
+// masquerade as N per-field "id has no matching record" errors. The
+// helper used to `.unwrap_or_default()` the query result, turning any DB
+// failure into an empty result set so every submitted id was then flagged
+// "not found" — a bogus, per-field error that hid the real failure. The
+// fix: log the error and surface ONE honest non-field error, leaving the
+// per-field bucket untouched (fail-closed but honest).
+#[tokio::test]
+async fn m2m_validation_db_error_is_non_field_not_per_id_misses() {
+    boot().await;
+    // `fm_phantom` is registered but its table was never created, so the
+    // `SELECT ... WHERE id IN (...)` existence query fails with
+    // "no such table". Feed several ids: a swallow-into-empty bug would
+    // produce one per-field error PER id.
+    let ids: Vec<String> = vec!["1".into(), "2".into(), "3".into()];
+    let mut errs = umbra::forms::ValidationErrors::new();
+    let out = umbra::orm::forms_runtime::validate_multi_fk_exists(
+        "phantomtags",
+        &ids,
+        "fm_phantom",
+        &mut errs,
+    )
+    .await;
+
+    // No staged ids on a failed validation.
+    assert!(out.is_empty(), "no ids staged when the query failed");
+    // CRITICAL: the field bucket is empty — NOT N bogus
+    // "no matching record" errors keyed to the field.
+    assert!(
+        !errs.fields.contains_key("phantomtags"),
+        "DB error must NOT be flagged as per-field id misses: {:?}",
+        errs.fields
+    );
+    // The failure surfaces as exactly one honest non-field error.
+    assert_eq!(
+        errs.non_field.len(),
+        1,
+        "one non-field system error, got: {:?}",
+        errs.non_field
+    );
+    assert!(
+        errs.non_field[0].contains("database error"),
+        "non-field error names the database failure: {:?}",
+        errs.non_field[0]
+    );
+}
+
+// gaps2 #48 — the genuine-miss path (query succeeds, a truly-absent id)
+// must STILL produce the per-field "no matching record" error. The fix
+// for the DB-error path must not weaken this honest validation.
+#[tokio::test]
+async fn m2m_validation_genuine_miss_still_per_field() {
+    boot().await;
+    // Tags 1..3 exist; 9999 does not. The query runs fine; the missing id
+    // is a real user error and belongs in the per-field bucket.
+    let ids: Vec<String> = vec!["1".into(), "9999".into()];
+    let mut errs = umbra::forms::ValidationErrors::new();
+    let out =
+        umbra::orm::forms_runtime::validate_multi_fk_exists("tags", &ids, "fm_tag", &mut errs)
+            .await;
+
+    // The one valid id is staged.
+    assert_eq!(out.len(), 1, "the valid id (1) is staged");
+    // The missing id is a per-field error, not a non-field system error.
+    assert!(
+        errs.fields.contains_key("tags"),
+        "genuine miss is keyed to the field: {:?}",
+        errs.fields
+    );
+    assert!(
+        errs.fields["tags"][0].contains("9999"),
+        "per-field error names the missing id: {:?}",
+        errs.fields["tags"]
+    );
+    assert!(
+        errs.non_field.is_empty(),
+        "a genuine miss is NOT a system error: {:?}",
+        errs.non_field
+    );
 }
