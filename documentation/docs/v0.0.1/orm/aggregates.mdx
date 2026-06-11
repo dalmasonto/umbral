@@ -163,6 +163,38 @@ let rows = Post::objects()
     .await?;
 ```
 
+### Annotating an undeclared relation (auto-discovery)
+
+You don't have to declare a `ReverseSet` field to count a relation. When the relation name matches no declared `#[umbra(reverse_fk = "...")]` field, `annotate_*` scans the model registry for any child whose foreign key points back at this parent's table and resolves it for you — the same one-query correlated subquery, no field on the parent:
+
+```rust
+// Blog declares NO `entry_set: ReverseSet<Entry>` field. Entry just has
+// `#[umbra(...)] pub blog: ForeignKey<Blog>` plus an `amount: i64` column.
+let rows = Blog::objects()
+    .annotate_count("entry")                                   // COUNT(*) → "entry_count"
+    .annotate_related("total",  "entry", Aggregate::sum("amount"))
+    .annotate_related("mean",   "entry", Aggregate::avg("amount"))
+    .annotate_related("lowest", "entry", Aggregate::min("amount"))
+    .annotate_related("top",    "entry", Aggregate::max("amount"))
+    .fetch_annotated()
+    .await?;
+```
+
+All five aggregate kinds (count / sum / avg / min / max) work over an auto-discovered relation exactly as they do over a declared one, and an auto-discovered child that is `#[umbra(soft_delete)]` still has its trashed rows excluded.
+
+The relation name is matched against each candidate child's **conventional name forms**: the child's table name, the child's struct name in `snake_case` and bare `lowercase`, and any of those with a Django-style `_set` suffix. So a child `struct Entry` with table `ad_entry` answers to `"ad_entry"`, `"entry"`, `"entry_set"`, `"ad_entry_set"`, and so on.
+
+**Precedence.** A declared `ReverseSet` (or `M2M`) field always wins over auto-discovery — declaring a field never changes existing behavior. Auto-discovery only runs as a fallback when no declared relation matches.
+
+**Ambiguity.** If two candidates match — two child models that share a name form, or one child with two FK columns pointing at the same parent — the annotation is poisoned with a clear error rather than silently guessing:
+
+```text
+ambiguous reverse relation `order` on `Store` — candidates: [ad_order.buyer_store, ad_order.seller_store];
+declare a `#[umbra(reverse_fk = "<fk>")] ReverseSet<Child>` field to disambiguate
+```
+
+Declaring a `#[umbra(reverse_fk = "buyer_store")] ReverseSet<Order>` field picks the FK explicitly and resolves it. An unknown relation name fails loudly too, and the error lists the auto-discoverable children so you can see the available names.
+
 ## Pitfalls
 
 **Empty-set SUM is NULL, not 0.** Dashboards that display `summary["total"]` should treat the JSON `null` as zero explicitly. `COUNT(*)` is always an integer, never NULL — use it when you need an unconditional integer return.

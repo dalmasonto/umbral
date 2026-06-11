@@ -252,6 +252,112 @@ pub(crate) struct RelatedAnnotation {
     pub(crate) m2m_junction: Option<String>,
 }
 
+/// Outcome of auto-discovering a reverse-FK relation (gaps2 #45) when
+/// the parent declares no matching `ReverseSet` field. The resolver
+/// scans the registry for children whose FK targets the parent table
+/// and matches `relation` against their conventional name forms.
+enum AutoDiscovery {
+    /// Exactly one (child, fk_column) candidate matched.
+    Resolved {
+        child_table: String,
+        fk_column: String,
+        soft_delete: bool,
+    },
+    /// Two or more candidates matched — the caller must declare a
+    /// `#[umbra(reverse_fk = "...")]` field to disambiguate. Carries
+    /// the candidate `child.fk` labels for the error message.
+    Ambiguous(Vec<String>),
+    /// No candidate matched. Carries the list of auto-discoverable
+    /// child names so the error can teach the available relations.
+    NotFound(Vec<String>),
+}
+
+/// Lowercase a struct name into snake_case (`PluginComment` →
+/// `plugin_comment`). Inserts `_` before an uppercase letter that
+/// follows a lowercase/digit, then lowercases the whole thing. Pure
+/// ASCII — model struct names are ASCII identifiers.
+fn snake_case(name: &str) -> String {
+    let mut out = String::with_capacity(name.len() + 4);
+    let mut prev_lower_or_digit = false;
+    for ch in name.chars() {
+        if ch.is_ascii_uppercase() {
+            if prev_lower_or_digit {
+                out.push('_');
+            }
+            out.push(ch.to_ascii_lowercase());
+            prev_lower_or_digit = false;
+        } else {
+            out.push(ch);
+            prev_lower_or_digit = ch.is_ascii_lowercase() || ch.is_ascii_digit();
+        }
+    }
+    out
+}
+
+/// Scan the model registry for children whose FK targets `T::TABLE`,
+/// and match `relation` against each candidate's conventional name
+/// forms: the child's table name, the child's struct name in
+/// snake_case and bare-lowercase, and any of those with a `_set`
+/// suffix (Django's `<model>_set`). Declared `REVERSE_FK_RELATIONS` /
+/// `M2M_RELATIONS` are resolved by the caller BEFORE this runs, so
+/// they always take precedence.
+fn discover_reverse_relation<T: crate::orm::Model>(relation: &str) -> AutoDiscovery {
+    if !crate::migrate::is_initialised() {
+        return AutoDiscovery::NotFound(Vec::new());
+    }
+    let parent_table = T::TABLE;
+    // Each candidate: (child_table, fk_column, child_soft_delete).
+    let mut candidates: Vec<(String, String, bool)> = Vec::new();
+    let mut discoverable: Vec<String> = Vec::new();
+    for meta in crate::migrate::registered_models() {
+        for col in &meta.fields {
+            if col.fk_target.as_deref() != Some(parent_table) {
+                continue;
+            }
+            // Conventional name forms this (child, fk_column) answers to.
+            let snake = snake_case(&meta.name);
+            let lower = meta.name.to_ascii_lowercase();
+            let mut forms = vec![
+                meta.table.clone(),
+                snake.clone(),
+                lower.clone(),
+                format!("{}_set", meta.table),
+                format!("{snake}_set"),
+                format!("{lower}_set"),
+            ];
+            forms.sort();
+            forms.dedup();
+            // Surface a friendly name for "available children" errors.
+            discoverable.push(format!("{}_set", meta.table));
+            if forms.iter().any(|f| f == relation) {
+                candidates.push((meta.table.clone(), col.name.clone(), meta.soft_delete));
+            }
+        }
+    }
+    match candidates.len() {
+        1 => {
+            let (child_table, fk_column, soft_delete) = candidates.pop().unwrap();
+            AutoDiscovery::Resolved {
+                child_table,
+                fk_column,
+                soft_delete,
+            }
+        }
+        0 => {
+            discoverable.sort();
+            discoverable.dedup();
+            AutoDiscovery::NotFound(discoverable)
+        }
+        _ => {
+            let labels = candidates
+                .into_iter()
+                .map(|(child, fk, _)| format!("{child}.{fk}"))
+                .collect();
+            AutoDiscovery::Ambiguous(labels)
+        }
+    }
+}
+
 impl<T> QuerySet<T> {
     pub(crate) fn new(query: sea_query::SelectStatement) -> Self {
         Self {
@@ -2442,8 +2548,18 @@ impl<T: Model> QuerySet<T> {
     ///
     /// `relation` names a `ReverseSet` relation on the model
     /// (`#[umbra(reverse_fk = "...")]`), the same names
-    /// `prefetch_related` accepts. Any [`crate::orm::Aggregate`]
-    /// works; non-count aggregates name a column on the CHILD model:
+    /// `prefetch_related` accepts. When no declared relation matches,
+    /// the resolver AUTO-DISCOVERS the relation (gaps2 #45): it scans
+    /// the model registry for any child whose FK targets this parent's
+    /// table and matches `relation` against the child's conventional
+    /// name forms (table name, `snake_case` / lowercase struct name,
+    /// any of those with a `_set` suffix). Declared relations always
+    /// take precedence; an ambiguous auto-match (two children, or a
+    /// child with two FKs to this parent) poisons the annotation with
+    /// an error that names the candidates and points at the
+    /// `#[umbra(reverse_fk = "...")]` escape hatch. Any
+    /// [`crate::orm::Aggregate`] works; non-count aggregates name a
+    /// column on the CHILD model:
     ///
     /// ```rust,ignore
     /// let rows = Plugin::objects()
@@ -2503,20 +2619,43 @@ impl<T: Model> QuerySet<T> {
                 pk.to_string(),
             ))
         } else {
-            Err(format!(
-                "umbra::orm::annotate_related: `{relation}` is not a reverse-FK or M2M relation on `{}` — reverse-FK relations: [{}], M2M relations: [{}]",
-                T::NAME,
-                T::REVERSE_FK_RELATIONS
-                    .iter()
-                    .map(|r| r.field_name)
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                T::M2M_RELATIONS
-                    .iter()
-                    .map(|r| r.field_name)
-                    .collect::<Vec<_>>()
-                    .join(", "),
-            ))
+            // No DECLARED relation matched. Fall back to auto-discovery
+            // (gaps2 #45): scan the model registry for any child whose
+            // FK points back at this parent's table, and match `relation`
+            // against the conventional name forms. Declared relations
+            // always win above; this only runs as a fallback.
+            match discover_reverse_relation::<T>(relation) {
+                AutoDiscovery::Resolved {
+                    child_table,
+                    fk_column,
+                    soft_delete,
+                } => {
+                    child_soft_delete = soft_delete;
+                    Ok((child_table, fk_column, T::TABLE.to_string(), pk.to_string()))
+                }
+                AutoDiscovery::Ambiguous(candidates) => Err(format!(
+                    "umbra::orm::annotate_related: ambiguous reverse relation `{relation}` on `{}` — candidates: [{}]; declare a `#[umbra(reverse_fk = \"<fk>\")] ReverseSet<Child>` field to disambiguate",
+                    T::NAME,
+                    candidates.join(", "),
+                )),
+                AutoDiscovery::NotFound(discoverable) => {
+                    let declared = T::REVERSE_FK_RELATIONS
+                        .iter()
+                        .map(|r| r.field_name)
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let m2m = T::M2M_RELATIONS
+                        .iter()
+                        .map(|r| r.field_name)
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    Err(format!(
+                        "umbra::orm::annotate_related: `{relation}` is not a reverse-FK or M2M relation on `{}` — reverse-FK relations: [{declared}], M2M relations: [{m2m}], auto-discoverable children: [{}]",
+                        T::NAME,
+                        discoverable.join(", "),
+                    ))
+                }
+            }
         };
 
         self.annotations.push(RelatedAnnotation {
