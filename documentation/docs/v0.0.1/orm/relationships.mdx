@@ -453,6 +453,37 @@ The accessor name is `<snake_case(Child)>_set`. When one Child has **multiple** 
 
 Limitations: parent type must be local (Rust's orphan rule on inherent impls); parent's primary-key type must implement `Into<sea_query::Value>` (every built-in PK type does).
 
+### Generic instance accessor — `instance.reverse::<Child>()`
+
+The macro-emitted `comment_set()` only exists because the Child's `ForeignKey<Parent>` is visible where the Child is derived. When the Parent lives in another crate (e.g. `AuthUser` in `umbra-auth`) the macro can't enumerate its children, so there's a zero-declaration runtime accessor on **every** model instance — Django's `post.comment_set.all()` reached generically. The Child type is named at the call site; the FK column on the Child is discovered at runtime from `Child::FIELDS`:
+
+```rust
+use umbra::prelude::*; // brings ReverseRelations into scope
+
+// Returns a real, chainable QuerySet<Comment> filtered to children
+// whose FK points at this instance — no ReverseSet field required.
+let comments: Vec<Comment> = alice.reverse::<Comment>()?.fetch().await?;
+
+// Chains exactly like any QuerySet:
+let recent = alice
+    .reverse::<Comment>()?
+    .filter(comment::ID.gt(last_seen))
+    .order_by(comment::ID.desc())
+    .fetch()
+    .await?;
+
+let n = alice.reverse::<Comment>()?.count().await?;
+```
+
+`reverse::<C>()` returns `Result<QuerySet<C>, ReverseError>`: the FK discovery and parent-PK read are synchronous and fallible, so they resolve up front; the `QuerySet<C>` it yields stays lazy and awaitable. Discovery scans `C::FIELDS` for the field whose `fk_target` is this parent's table — exactly one match is required. **Zero** matches (`C` has no FK back) and **two or more** (ambiguous) both error loudly. For the ambiguous case, name the column explicitly:
+
+```rust
+// Child has TWO FKs to Parent (author AND reviewer):
+let authored = user.reverse_via::<Comment>("author")?.fetch().await?;
+```
+
+`reverse_via` validates that the named column exists on `C` and is an FK to this parent's table. V1 supports i64 primary keys only (consistent with the rest of the relation machinery); a non-i64 PK returns a clean `ReverseError::NonI64Pk` rather than mis-binding.
+
 ## prefetch_related for M2M batching
 
 The M2M counterpart of `select_related` for FKs. After the main query returns N parent rows, `prefetch_related("tags")` issues **one** batched join through the junction table for all parents, groups results by `parent_id`, and populates each parent's `M2M.resolved` slot.
