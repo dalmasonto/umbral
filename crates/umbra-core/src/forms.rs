@@ -51,6 +51,14 @@
 
 use std::collections::HashMap;
 
+use async_trait::async_trait;
+
+/// Re-exported so the `#[derive(Form)]` macro can name
+/// `::umbra::forms::async_trait` on the impl it emits without the
+/// consumer crate having to depend on `async-trait` directly.
+#[doc(hidden)]
+pub use async_trait::async_trait as async_trait_reexport;
+
 // =========================================================================
 // Form trait. The `#[derive(Form)]` macro emits an impl of this. User
 // code can also impl it by hand for the rare "I want different
@@ -68,21 +76,26 @@ use std::collections::HashMap;
 /// edit views). The default impl walks `fields()` and concatenates
 /// each field's `render_html` — most macro-derived forms inherit
 /// this and only override when they need custom layout.
+#[async_trait]
 pub trait FormValidate: Sized {
-    /// Parse and validate the form's input. Returns the typed struct
-    /// on success; returns `ValidationErrors` with every field's
-    /// problems accumulated on failure.
-    fn validate(data: &HashMap<String, String>) -> Result<Self, ValidationErrors>;
+    /// Parse and validate the form's input. Async because FK / M2M
+    /// fields verify existence through the ORM before insert. Returns
+    /// the typed struct on success; returns `ValidationErrors` with
+    /// every field's problems accumulated on failure.
+    async fn validate(data: &HashMap<String, String>) -> Result<Self, ValidationErrors>;
 
-    /// The field declarations this form carries. Used by the default
+    /// The field declarations this form carries. Sync — kinds /
+    /// validators only, no live options. Used by the default
     /// `render_html` to walk them in declaration order. The macro
     /// emits one entry per struct field.
     fn fields() -> Vec<Field>;
 
     /// Render every field as an HTML `<label>` + `<input>` pair,
     /// prefilled from `data`. Wraps each in a `<div class="field">`
-    /// for styling. Override if you want a non-default layout.
-    fn render_html(data: &HashMap<String, String>) -> String {
+    /// for styling. Async because `ModelChoice` / `ModelMultiChoice`
+    /// fetch their `<select>` options from the DB. Override if you
+    /// want a non-default layout.
+    async fn render_html(data: &HashMap<String, String>) -> String {
         let mut out = String::new();
         for field in Self::fields() {
             let value = data.get(&field.name).map(String::as_str).unwrap_or("");
@@ -91,7 +104,7 @@ pub trait FormValidate: Sized {
                 "<label for=\"{name}\">{name}</label>",
                 name = field.name
             ));
-            out.push_str(&field.render_html(value));
+            out.push_str(&field.render_html_async(value).await);
             out.push_str("</div>");
         }
         out
@@ -562,6 +575,14 @@ impl Field {
             ),
         }
     }
+
+    /// Async render entry point. For non-relation fields this is the
+    /// sync `render_html`; relation fields (`ModelChoice` /
+    /// `ModelMultiChoice`, added in Task 6) override to fetch their
+    /// `<select>` options from the DB first.
+    pub async fn render_html_async(&self, value: &str) -> String {
+        self.render_html(value)
+    }
 }
 
 /// `IntegerFormat` is a private validator used by `Field::integer`.
@@ -951,7 +972,7 @@ where
         // every keystroke on validation failure — see gaps2 #19
         // follow-up commit for the bug screenshot that prompted
         // this change.
-        match T::validate(&pairs) {
+        match T::validate(&pairs).await {
             Ok(value) => Ok(Self::valid(value)),
             Err(errs) => {
                 let write_err: WriteError = errs.into();

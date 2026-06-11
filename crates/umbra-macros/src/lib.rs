@@ -3634,8 +3634,9 @@ fn expand_form(input: DeriveInput) -> syn::Result<TokenStream2> {
     };
 
     let output = quote! {
+        #[::umbra::forms::async_trait]
         impl ::umbra::forms::FormValidate for #struct_name {
-            fn validate(
+            async fn validate(
                 data: &::std::collections::HashMap<::std::string::String, ::std::string::String>,
             ) -> ::std::result::Result<Self, ::umbra::forms::ValidationErrors> {
                 let mut errs = ::umbra::forms::ValidationErrors::new();

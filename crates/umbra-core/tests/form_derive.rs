@@ -33,15 +33,19 @@ struct MinimalForm {
     title: String,
 }
 
-#[test]
-fn minimal_string_form_round_trips_a_valid_input() {
-    let form = MinimalForm::validate(&data(&[("title", "hello")])).expect("should validate");
+#[tokio::test]
+async fn minimal_string_form_round_trips_a_valid_input() {
+    let form = MinimalForm::validate(&data(&[("title", "hello")]))
+        .await
+        .expect("should validate");
     assert_eq!(form.title, "hello");
 }
 
-#[test]
-fn minimal_string_form_rejects_empty_input() {
-    let err = MinimalForm::validate(&data(&[("title", "")])).expect_err("empty fails");
+#[tokio::test]
+async fn minimal_string_form_rejects_empty_input() {
+    let err = MinimalForm::validate(&data(&[("title", "")]))
+        .await
+        .expect_err("empty fails");
     assert!(err.fields.contains_key("title"));
     assert!(err.fields["title"][0].contains("required"));
 }
@@ -68,8 +72,8 @@ struct SignupForm {
     is_admin: bool,
 }
 
-#[test]
-fn signup_form_happy_path_returns_the_typed_struct() {
+#[tokio::test]
+async fn signup_form_happy_path_returns_the_typed_struct() {
     let form = SignupForm::validate(&data(&[
         ("username", "alice"),
         ("email", "alice@example.com"),
@@ -77,6 +81,7 @@ fn signup_form_happy_path_returns_the_typed_struct() {
         ("bio", "loves rust"),
         ("is_admin", "true"),
     ]))
+    .await
     .expect("happy path");
     assert_eq!(form.username, "alice");
     assert_eq!(form.email, "alice@example.com");
@@ -85,8 +90,8 @@ fn signup_form_happy_path_returns_the_typed_struct() {
     assert!(form.is_admin);
 }
 
-#[test]
-fn signup_form_collects_every_field_error_at_once() {
+#[tokio::test]
+async fn signup_form_collects_every_field_error_at_once() {
     let err = SignupForm::validate(&data(&[
         ("username", "ab"),
         ("email", "not-an-email"),
@@ -94,6 +99,7 @@ fn signup_form_collects_every_field_error_at_once() {
         ("bio", ""),
         ("is_admin", ""),
     ]))
+    .await
     .expect_err("multi-field failure");
     assert!(err.fields.contains_key("username"), "username missing");
     assert!(err.fields.contains_key("email"), "email missing");
@@ -116,8 +122,8 @@ fn signup_form_collects_every_field_error_at_once() {
     assert!(err.fields["password"][0].contains("at least 8"));
 }
 
-#[test]
-fn signup_form_optional_bio_handles_both_some_and_none() {
+#[tokio::test]
+async fn signup_form_optional_bio_handles_both_some_and_none() {
     let with_bio = SignupForm::validate(&data(&[
         ("username", "alice"),
         ("email", "alice@example.com"),
@@ -125,6 +131,7 @@ fn signup_form_optional_bio_handles_both_some_and_none() {
         ("bio", "wrote a book"),
         ("is_admin", "false"),
     ]))
+    .await
     .expect("with bio");
     assert_eq!(with_bio.bio.as_deref(), Some("wrote a book"));
 
@@ -133,17 +140,19 @@ fn signup_form_optional_bio_handles_both_some_and_none() {
         ("email", "bob@example.com"),
         ("password", "hunter2-stronger"),
     ]))
+    .await
     .expect("without bio");
     assert_eq!(without_bio.bio, None);
 }
 
-#[test]
-fn signup_form_checkbox_is_false_when_key_is_absent() {
+#[tokio::test]
+async fn signup_form_checkbox_is_false_when_key_is_absent() {
     let form = SignupForm::validate(&data(&[
         ("username", "alice"),
         ("email", "alice@example.com"),
         ("password", "hunter2-stronger"),
     ]))
+    .await
     .expect("happy path with no is_admin");
     assert!(
         !form.is_admin,
@@ -169,28 +178,30 @@ struct ProductForm {
     stock_count: Option<i64>,
 }
 
-#[test]
-fn numeric_form_parses_integers_and_floats() {
+#[tokio::test]
+async fn numeric_form_parses_integers_and_floats() {
     let form = ProductForm::validate(&data(&[
         ("name", "widget"),
         ("price_cents", "1299"),
         ("weight_kg", "0.42"),
         ("stock_count", "100"),
     ]))
+    .await
     .expect("happy");
     assert_eq!(form.price_cents, 1299);
     assert!((form.weight_kg - 0.42).abs() < 1e-9);
     assert_eq!(form.stock_count, Some(100));
 }
 
-#[test]
-fn numeric_form_rejects_non_numeric_input() {
+#[tokio::test]
+async fn numeric_form_rejects_non_numeric_input() {
     let err = ProductForm::validate(&data(&[
         ("name", "widget"),
         ("price_cents", "free"),
         ("weight_kg", "light"),
         ("stock_count", ""),
     ]))
+    .await
     .expect_err("two parse failures");
     assert!(
         err.fields["price_cents"][0].contains("whole number"),
@@ -205,13 +216,14 @@ fn numeric_form_rejects_non_numeric_input() {
     assert_eq!(form_field_count(&err), 2);
 }
 
-#[test]
-fn numeric_form_optional_int_with_empty_input_is_none() {
+#[tokio::test]
+async fn numeric_form_optional_int_with_empty_input_is_none() {
     let form = ProductForm::validate(&data(&[
         ("name", "widget"),
         ("price_cents", "100"),
         ("weight_kg", "1.0"),
     ]))
+    .await
     .expect("happy without stock");
     assert_eq!(form.stock_count, None);
 }
@@ -231,10 +243,10 @@ fn fields_returns_one_entry_per_struct_field_in_order() {
     );
 }
 
-#[test]
-fn render_html_emits_one_input_per_field_with_correct_types() {
+#[tokio::test]
+async fn render_html_emits_one_input_per_field_with_correct_types() {
     let prefill = data(&[("username", "alice")]);
-    let html = SignupForm::render_html(&prefill);
+    let html = SignupForm::render_html(&prefill).await;
 
     assert!(html.contains("name=\"username\""), "username field missing");
     assert!(html.contains("name=\"email\""), "email field missing");
@@ -260,17 +272,29 @@ fn render_html_emits_one_input_per_field_with_correct_types() {
     assert!(html.contains("value=\"alice\""), "prefill missing: {html}");
 }
 
-#[test]
-fn render_html_escapes_xss_in_prefill_values() {
+#[tokio::test]
+async fn render_html_escapes_xss_in_prefill_values() {
     // MinimalForm's field is `title`, so the prefill key has to
     // match. An XSS payload in the prefill value must round-trip
     // through `html_escape` and emerge as `&lt;script&gt;`.
     let prefill = data(&[("title", "<script>alert(1)</script>")]);
-    let html = MinimalForm::render_html(&prefill);
+    let html = MinimalForm::render_html(&prefill).await;
     assert!(!html.contains("<script>alert"), "raw XSS leaked: {html}");
     assert!(html.contains("&lt;script&gt;"), "escape missing: {html}");
 }
 
 fn form_field_count(err: &ValidationErrors) -> usize {
     err.fields.len()
+}
+
+// --------------------------------------------------------------------- //
+// Task 1 — FormValidate is async. The minimal form must be awaitable.   //
+// --------------------------------------------------------------------- //
+
+#[tokio::test]
+async fn async_validate_minimal_form_round_trips() {
+    let form = MinimalForm::validate(&data(&[("title", "hello")]))
+        .await
+        .expect("should validate");
+    assert_eq!(form.title, "hello");
 }

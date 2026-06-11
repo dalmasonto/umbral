@@ -289,6 +289,14 @@ pub mod forms {
         Required, ValidationErrors, Validator,
     };
 
+    /// Re-export of `async-trait` so the `#[derive(Form)]` macro can
+    /// name `::umbra::forms::async_trait` on the `impl FormValidate`
+    /// it emits — the trait is `#[async_trait]`, so its impls must be
+    /// too. `#[doc(hidden)]`: an implementation detail of the derive,
+    /// not a surface users call directly.
+    #[doc(hidden)]
+    pub use umbra_core::forms::async_trait_reexport as async_trait;
+
     /// The `#[derive(Form)]` proc-macro. Shares the `Form` name with
     /// the extractor struct — Rust's type and macro namespaces are
     /// separate so both ride in on one import. The derive emits
