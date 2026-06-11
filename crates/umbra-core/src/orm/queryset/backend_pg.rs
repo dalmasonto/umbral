@@ -43,33 +43,63 @@ pub(super) fn hydrate_joined_rels<T: Model + HydrateRelated>(
 ) -> Result<(), sqlx::Error> {
     let registered = crate::migrate::registered_models();
     for field_name in join_fields {
-        let Some(fk_field) = T::FIELDS.iter().find(|f| f.name == field_name.as_str()) else {
+        // See `super::backend_sqlite::hydrate_joined_rels` for the
+        // nested-chain algorithm; only the row type and decode helper
+        // differ.
+        let Some(hops) = crate::orm::queryset::resolve_join_hops_for::<T>(field_name) else {
             continue;
         };
-        let Some(related_table) = fk_field.fk_target else {
-            continue;
-        };
-        let Some(related_meta) = registered.iter().find(|m| m.table == related_table) else {
-            continue;
-        };
-        let Some(pk_col) = related_meta.fields.iter().find(|c| c.primary_key) else {
-            continue;
-        };
-        let pk_alias = format!("{}__{}", field_name, pk_col.name);
-        let pk_is_null = row
-            .try_get::<Option<i64>, _>(pk_alias.as_str())
-            .map(|v| v.is_none())
-            .unwrap_or(true);
-        if pk_is_null {
+        let segs: Vec<&str> = field_name.split("__").collect();
+        let mut deeper: Option<serde_json::Value> = None;
+        let mut hop0_missing = false;
+        for idx in (0..hops.len()).rev() {
+            let hop = &hops[idx];
+            let prefix = segs[..=idx].join("__");
+            let Some(meta) = registered.iter().find(|m| m.table == hop.child_table) else {
+                deeper = None;
+                if idx == 0 {
+                    hop0_missing = true;
+                }
+                continue;
+            };
+            let Some(pk_col) = meta.fields.iter().find(|c| c.primary_key) else {
+                deeper = None;
+                if idx == 0 {
+                    hop0_missing = true;
+                }
+                continue;
+            };
+            let pk_alias = format!("{prefix}__{}", pk_col.name);
+            let pk_is_null = row
+                .try_get::<Option<i64>, _>(pk_alias.as_str())
+                .map(|v| v.is_none())
+                .unwrap_or(true);
+            if pk_is_null {
+                deeper = None;
+                if idx == 0 {
+                    hop0_missing = true;
+                }
+                continue;
+            }
+            let mut obj = serde_json::Map::with_capacity(meta.fields.len());
+            for col in &meta.fields {
+                let alias = format!("{prefix}__{}", col.name);
+                let val = crate::orm::dynamic::decode_pg_to_json_aliased(row, col, &alias)?;
+                obj.insert(col.name.clone(), val);
+            }
+            if let Some(child) = deeper.take()
+                && let Some(next_seg) = segs.get(idx + 1)
+            {
+                obj.insert((*next_seg).to_string(), child);
+            }
+            deeper = Some(serde_json::Value::Object(obj));
+        }
+        if hop0_missing {
             continue;
         }
-        let mut obj = serde_json::Map::with_capacity(related_meta.fields.len());
-        for col in &related_meta.fields {
-            let alias = format!("{}__{}", field_name, col.name);
-            let val = crate::orm::dynamic::decode_pg_to_json_aliased(row, col, &alias)?;
-            obj.insert(col.name.clone(), val);
+        if let Some(nested) = deeper {
+            t.hydrate_fk(segs[0], &nested);
         }
-        t.hydrate_fk(field_name, &serde_json::Value::Object(obj));
     }
     Ok(())
 }

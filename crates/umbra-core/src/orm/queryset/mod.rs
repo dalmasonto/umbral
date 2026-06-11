@@ -788,6 +788,22 @@ impl<T> QuerySet<T> {
 /// "ForeignKey::resolved() returned None" downstream).
 fn validate_join_related_fields<T: Model>(fields: &[String]) -> Result<(), sqlx::Error> {
     for field_name in fields {
+        // Nested path (`"plugin__author"` / `"tags__category"`):
+        // validate via the hop resolver. A leading M2M segment is a
+        // valid chain entry even though it isn't an FK on `T`, so
+        // accept it and let `apply_join_related` route it.
+        if field_name.contains("__") {
+            let first = field_name.split("__").next().unwrap_or(field_name);
+            let leads_m2m = T::M2M_RELATIONS.iter().any(|r| r.field_name == first);
+            if leads_m2m || resolve_join_hops::<T>(field_name).is_some() {
+                continue;
+            }
+            return Err(sqlx::Error::Protocol(format!(
+                "umbra::orm::join_related: nested path `{field_name}` on `{}` has an \
+                 unresolvable hop (each segment must be a FK or M2M to a registered model)",
+                T::NAME
+            )));
+        }
         // Try as a regular column first.
         let col = T::FIELDS.iter().find(|f| f.name == field_name.as_str());
         if let Some(col) = col {
@@ -820,6 +836,70 @@ fn validate_join_related_fields<T: Model>(fields: &[String]) -> Result<(), sqlx:
         )));
     }
     Ok(())
+}
+
+/// One resolved hop of a `join_related` FK chain.
+#[derive(Debug, Clone)]
+pub(crate) struct JoinHop {
+    /// FK column name on the *previous* level's table.
+    pub(crate) fk_col: String,
+    /// Table this hop targets.
+    pub(crate) child_table: String,
+    /// PK column on `child_table`.
+    pub(crate) child_pk: String,
+    /// Was the FK column nullable? (drives auto-inference)
+    pub(crate) nullable: bool,
+}
+
+/// Resolve a dotted FK path (`"plugin__author"`) into ordered hops.
+/// Hop 0 reads `T::FIELDS`; deeper hops read the migrate registry's
+/// `Column`s for the prior hop's target table. Returns `None` (skip,
+/// emit no JOIN) on any unresolved hop — same forgiving posture as the
+/// pre-existing one-hop path's silent skip in `to_sql`.
+///
+/// FK-only: a path whose FIRST segment is an M2M field is NOT handled
+/// here (M2M chains route through `apply_join_related`'s M2M branch);
+/// this returns `None` for such a path.
+pub(crate) fn resolve_join_hops<T: Model>(path: &str) -> Option<Vec<JoinHop>> {
+    let registered = crate::migrate::registered_models();
+    let segs: Vec<&str> = path.split("__").filter(|s| !s.is_empty()).collect();
+    if segs.is_empty() {
+        return None;
+    }
+    let mut hops = Vec::with_capacity(segs.len());
+    // Hop 0 off the typed parent.
+    let f0 = T::FIELDS.iter().find(|f| f.name == segs[0])?;
+    let t0 = f0.fk_target?;
+    let m0 = registered.iter().find(|m| m.table == t0)?;
+    let pk0 = m0.fields.iter().find(|c| c.primary_key)?;
+    hops.push(JoinHop {
+        fk_col: segs[0].to_string(),
+        child_table: t0.to_string(),
+        child_pk: pk0.name.clone(),
+        nullable: f0.nullable,
+    });
+    let mut current = t0;
+    for seg in &segs[1..] {
+        let meta = registered.iter().find(|m| m.table == current)?;
+        let col = meta.fields.iter().find(|c| c.name == *seg)?;
+        let tgt = col.fk_target.as_deref()?;
+        let tmeta = registered.iter().find(|m| m.table == tgt)?;
+        let pk = tmeta.fields.iter().find(|c| c.primary_key)?;
+        hops.push(JoinHop {
+            fk_col: (*seg).to_string(),
+            child_table: tgt.to_string(),
+            child_pk: pk.name.clone(),
+            nullable: col.nullable,
+        });
+        current = tgt;
+    }
+    Some(hops)
+}
+
+/// Thin wrapper so the backend hydration helpers (a sibling module)
+/// can resolve a chain without importing the private name directly.
+pub(crate) fn resolve_join_hops_for<T: Model>(path: &str) -> Option<Vec<JoinHop>> {
+    resolve_join_hops::<T>(path)
 }
 
 /// Gap #111 — error returned when a typed terminal (`fetch` / `first`
@@ -1000,45 +1080,62 @@ impl<T: Model> QuerySet<T> {
         }
         for jr in &self.join_related {
             let field_name = &jr.path;
-            // FK branch first (the original path).
-            if let Some(fk_field) = T::FIELDS.iter().find(|f| f.name == field_name.as_str())
-                && let Some(related_table) = fk_field.fk_target
-                && let Some(related_meta) = registered.iter().find(|m| m.table == related_table)
-                && let Some(related_pk) = related_meta.fields.iter().find(|c| c.primary_key)
-            {
-                // Per-field table alias so two FKs to the SAME related
-                // table (e.g. `category` and `brand` both → `category`)
-                // each get a distinct identifier in the JOIN. Without
-                // this SQLite raises "ambiguous column name" on the
-                // second JOIN.
-                let join_alias = Alias::new(format!("__j_{field_name}"));
-                // Resolve the join flavor: an explicit
-                // left_/inner_/right_join_related pins `Some(kind)`;
-                // plain `join_related` infers from FK nullability —
-                // INNER for a NOT NULL FK, LEFT for a nullable one
-                // (Django's default).
-                let kind = jr.kind.unwrap_or(if fk_field.nullable {
-                    JoinKind::Left
-                } else {
-                    JoinKind::Inner
-                });
-                outer.join_as(
-                    kind.sea(),
-                    Alias::new(related_table),
-                    join_alias.clone(),
-                    Expr::col((parent_alias.clone(), Alias::new(field_name.as_str())))
-                        .equals((join_alias.clone(), Alias::new(related_pk.name.as_str()))),
-                );
-                // Aliased child cols pull from the per-field JOIN alias,
-                // so `category__name` and `brand__name` resolve to two
-                // different jr_category rows even though they share a
-                // table.
-                for col in &related_meta.fields {
-                    let alias = format!("{}__{}", field_name, col.name);
-                    outer.expr_as(
-                        Expr::col((join_alias.clone(), Alias::new(col.name.as_str()))),
-                        Alias::new(alias),
+            // FK chain branch first. A (possibly nested) FK path splits
+            // on `__` into ordered hops; each hop joins onto the prior
+            // level's alias, and the DEEPEST hop's child columns are
+            // aliased by the full dotted path so hydration can rebuild
+            // the nested relation graph. The single-hop case is
+            // byte-identical in child-column aliases to the pre-nesting
+            // path (`<field>__<col>`); only the internal join alias
+            // gains an `_h{idx}` suffix, which no test asserts.
+            if let Some(hops) = resolve_join_hops::<T>(field_name) {
+                let mut prev_alias = parent_alias.clone();
+                let last = hops.len() - 1;
+                // Cumulative dotted prefix per hop so EVERY level's own
+                // columns ride along, aliased by its path-so-far. Hop 0
+                // of `plugin__author` is `plugin`, hop 1 is
+                // `plugin__author`. Selecting every level (not just the
+                // leaf) is what lets hydration rebuild a FULL nested
+                // object — the intermediate `plugin` row needs its own
+                // `id`/`name` to deserialise into `ForeignKey<Plugin>`
+                // before `author` nests inside it.
+                let segs: Vec<&str> = field_name.split("__").collect();
+                for (idx, hop) in hops.iter().enumerate() {
+                    let hop_alias = Alias::new(format!("__j_{field_name}_h{idx}"));
+                    // Last hop: explicit request, else infer from THIS
+                    // hop's nullability. Intermediate hops always infer
+                    // per-hop (Django nests an INNER inside an outer
+                    // LEFT etc.) — an explicit kind only pins the leaf.
+                    let kind = if idx == last {
+                        jr.kind.unwrap_or(if hop.nullable {
+                            JoinKind::Left
+                        } else {
+                            JoinKind::Inner
+                        })
+                    } else if hop.nullable {
+                        JoinKind::Left
+                    } else {
+                        JoinKind::Inner
+                    };
+                    outer.join_as(
+                        kind.sea(),
+                        Alias::new(hop.child_table.as_str()),
+                        hop_alias.clone(),
+                        Expr::col((prev_alias.clone(), Alias::new(hop.fk_col.as_str())))
+                            .equals((hop_alias.clone(), Alias::new(hop.child_pk.as_str()))),
                     );
+                    if let Some(meta) = registered.iter().find(|m| m.table == hop.child_table) {
+                        // Cumulative dotted prefix for this hop's columns.
+                        let prefix = segs[..=idx].join("__");
+                        for col in &meta.fields {
+                            let alias = format!("{}__{}", prefix, col.name);
+                            outer.expr_as(
+                                Expr::col((hop_alias.clone(), Alias::new(col.name.as_str()))),
+                                Alias::new(alias),
+                            );
+                        }
+                    }
+                    prev_alias = hop_alias;
                 }
                 continue;
             }

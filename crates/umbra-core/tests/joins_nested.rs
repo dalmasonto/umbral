@@ -148,3 +148,47 @@ async fn inner_join_drops_orphan_left_keeps_it() {
     let lsql = Comment::objects().left_join_related("plugin").to_sql();
     assert!(lsql.contains("LEFT JOIN"), "expected LEFT JOIN: {lsql}");
 }
+
+#[tokio::test]
+async fn nested_inner_join_hydrates_three_level_graph_in_one_query() {
+    boot().await;
+    // comment 1 -> plugin 1 (Cache) -> author 1 (Ada).
+    let sql = Comment::objects()
+        .filter(comment::ID.eq(1))
+        .inner_join_related("plugin__author")
+        .to_sql();
+    // Two chained JOINs in one statement (one per hop).
+    assert_eq!(sql.matches("JOIN").count(), 2, "two chained joins: {sql}");
+    assert!(
+        sql.contains("INNER JOIN"),
+        "explicit INNER on the chain: {sql}"
+    );
+    // Deepest child columns aliased by the FULL dotted path.
+    assert!(
+        sql.contains("\"plugin__author__name\""),
+        "dotted alias: {sql}"
+    );
+
+    let comments = Comment::objects()
+        .filter(comment::ID.eq(1))
+        .inner_join_related("plugin__author")
+        .fetch()
+        .await
+        .expect("nested fetch");
+    assert_eq!(comments.len(), 1, "exactly one matched comment");
+    let plugin = comments[0]
+        .plugin
+        .as_ref()
+        .expect("plugin wrapper")
+        .resolved()
+        .expect("plugin hydrated");
+    assert_eq!(plugin.name, "Cache");
+    let author = plugin
+        .author
+        .resolved()
+        .expect("author hydrated from same query");
+    assert_eq!(
+        author.name, "Ada",
+        "comment.plugin.author.name round-trips from ONE query"
+    );
+}
