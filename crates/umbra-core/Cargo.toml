@@ -99,6 +99,11 @@ tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync"] 
 # merged axum::Router in `tests/plugin_contract.rs` so the plugin-routes-
 # mount-under-the-app-router check doesn't need a real TCP listener.
 tower = { version = "0.5", features = ["util"] }
+# Test-only: a tracing Layer that counts sqlx query events, so the ORM's
+# no-N+1 guarantees are proven by COUNTING executed statements (and
+# showing the count stays flat as row counts grow), not by structural
+# inference alone. Powers the query-count proof harness.
+tracing-subscriber = "0.3"
 # http::Request / Response shape for the same oneshot path. axum re-exports
 # the types but the trait bound on `oneshot` wants the concrete `http::*`
 # types, so a direct dev-dep keeps the call site short.
