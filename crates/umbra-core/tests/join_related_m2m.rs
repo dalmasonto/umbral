@@ -298,6 +298,40 @@ async fn each_parent_gets_only_its_own_tags() {
 }
 
 #[tokio::test]
+async fn inner_join_related_m2m_drops_a_tagless_parent() {
+    boot().await;
+    // The LEFT-join counterpart (`join_related`) KEEPS gamma with an empty
+    // M2M slot (see `left_join_miss_yields_empty_m2m_slot`). INNER join
+    // through the junction must instead DROP gamma entirely — a parent with
+    // no junction row has nothing to inner-join against, so it falls out of
+    // the result set. This is the row-set proof of the M2M INNER drop path.
+    let posts = Post::objects()
+        .inner_join_related("tags")
+        .fetch()
+        .await
+        .expect("fetch");
+    let by = by_title(&posts);
+
+    // gamma (no tags) is dropped; alpha + beta (which have tags) survive.
+    assert!(
+        !by.contains_key("gamma"),
+        "INNER join through the junction must DROP the tag-less parent, but gamma survived: {:?}",
+        posts.iter().map(|p| p.title.as_str()).collect::<Vec<_>>()
+    );
+    assert!(by.contains_key("alpha"), "alpha has tags → kept");
+    assert!(by.contains_key("beta"), "beta has tags → kept");
+
+    // Parents still dedup: alpha has 3 tags but appears once with all three.
+    let alpha_count = posts.iter().filter(|p| p.title == "alpha").count();
+    assert_eq!(alpha_count, 1, "alpha still dedups to one row under INNER");
+    assert_eq!(
+        by["alpha"].tags.resolved().expect("M2M hydrated").len(),
+        3,
+        "the surviving parent still carries all its tags"
+    );
+}
+
+#[tokio::test]
 async fn empty_join_related_keeps_pre_fix_path_unchanged() {
     boot().await;
     // Sanity: no join_related → no JOIN emitted, no dedup. Three
