@@ -104,8 +104,19 @@ impl Plugin for PlaygroundPlugin {
 
     fn routes(&self) -> axum::Router {
         let degraded = JS.starts_with("playground.placeholder");
-        let state =
-            routes::PlaygroundState::new(self.base_path.clone(), self.app_name.clone(), degraded);
+        // Snapshot the configured `static_url` into the shell's asset
+        // prefix. `routes()` runs at App::build Phase 5, after settings
+        // are installed at Phase 3, so this reads the deploy's STATIC_URL
+        // override / CDN origin (falling back to the default `/static/`
+        // when called outside a built App, e.g. in unit tests). Closes
+        // gaps2 #53 — no more hardcoded `/static/playground/assets`.
+        let asset_prefix = umbra::templates::resolve_static_url("playground/assets");
+        let state = routes::PlaygroundState::new(
+            self.base_path.clone(),
+            self.app_name.clone(),
+            degraded,
+            asset_prefix,
+        );
         routes::router(state)
     }
 

@@ -153,6 +153,52 @@ async fn shell_points_assets_at_static_pipeline() {
     );
 }
 
+/// A deploy that overrides `static_url` (e.g. a CDN origin) gets a shell
+/// whose `<script>` / `<link>` URLs follow that prefix — proving the
+/// asset path is resolved from the configured `static_url`, not a
+/// hardcoded `/static/`. Closes gaps2 #53. The state is built directly
+/// with the resolved prefix `PlaygroundPlugin::routes()` would snapshot
+/// from settings, so the assertion is deterministic and never touches
+/// the process-global `OnceLock` settings (which sibling tests rely on
+/// being at the default).
+#[tokio::test]
+async fn shell_follows_configured_static_url() {
+    let Some(css_name) = built_css_name() else {
+        eprintln!("skipping: dist/assets not built (placeholder mode)");
+        return;
+    };
+
+    // What `routes()` snapshots when a deploy set
+    // `static_url = "https://cdn.example.com/s/"`.
+    let state = umbra_playground::routes::PlaygroundState::new(
+        "/api/playground",
+        "cdn-app",
+        false,
+        "https://cdn.example.com/s/playground/assets",
+    );
+    let app = umbra_playground::routes::router(state);
+    let req = Request::builder()
+        .uri("/api/playground/")
+        .body(Body::empty())
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(res.into_body(), 64 * 1024)
+        .await
+        .unwrap();
+    let s = String::from_utf8_lossy(&body);
+
+    let css_url = format!("https://cdn.example.com/s/playground/assets/{css_name}");
+    assert!(
+        s.contains(&css_url),
+        "shell must link assets at the configured static_url prefix {css_url}; got: {s}"
+    );
+    assert!(
+        !s.contains("/static/playground/assets/"),
+        "shell must not fall back to the hardcoded /static/ prefix; got: {s}"
+    );
+}
+
 /// The vite-built CSS bundle resolves to a 200 `text/css` THROUGH the
 /// framework's unified static handler at
 /// `/static/playground/assets/<hashed-css>` — proving the pipeline +

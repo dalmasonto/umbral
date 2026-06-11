@@ -22,29 +22,20 @@ use axum::http::{Response, StatusCode, header};
 
 use crate::{CSS, JS, PLACEHOLDER_HTML};
 
-/// URL prefix the shell points its `<script>` / `<link>` tags at.
-///
-/// This is `<static_url>playground/assets/` with the framework's
-/// default `static_url` (`/static/`) hardcoded. The static pipeline
-/// resolves `/static/playground/assets/<name>` → `dist/assets/<name>`
-/// via the `playground` namespace registered in `static_dirs()`.
-///
-/// TODO(gaps2 #53): this hardcodes `/static/` instead of reading the
-/// configured `settings.static_url`. `Plugin::routes()` (where the
-/// shell state is built) gets no `Settings` handle, so the configured
-/// prefix isn't reachable here. If a deploy overrides `static_url`, the
-/// shell's asset URLs won't follow. Proper fix lives in
-/// `plugins/umbra-playground/src/{lib.rs,routes.rs}`: thread the
-/// resolved `static_url` into `PlaygroundState` (e.g. via an
-/// `on_ready` snapshot or a builder field) and build this prefix from
-/// it.
-const STATIC_ASSET_PREFIX: &str = "/static/playground/assets";
-
 /// Shared state carried through middleware: the base path (e.g.
 /// `/api/playground`) and a flag for whether we're in placeholder mode.
 #[derive(Clone, Debug)]
 pub struct PlaygroundState {
     pub base_path: Arc<str>,
+    /// The resolved `<static_url>playground/assets` prefix the shell's
+    /// `<script>` / `<link>` tags point at, snapshotted from the
+    /// configured `settings.static_url` when the router is built (see
+    /// [`PlaygroundPlugin::routes`](crate::PlaygroundPlugin)). Carrying
+    /// the resolved value here — rather than reading the ambient setting
+    /// inside [`render_shell`] — keeps rendering deterministic and lets a
+    /// deploy's `STATIC_URL` override / CDN origin flow through. Closes
+    /// gaps2 #53.
+    pub asset_prefix: Arc<str>,
     /// Per-app scope used by the frontend to namespace browser-side
     /// storage. Closes gap #71. Injected into the rendered shell
     /// HTML as both a `<meta>` tag (for non-JS introspection) and
@@ -55,11 +46,17 @@ pub struct PlaygroundState {
 }
 
 impl PlaygroundState {
-    pub fn new(base_path: impl Into<String>, app_name: impl Into<String>, degraded: bool) -> Self {
+    pub fn new(
+        base_path: impl Into<String>,
+        app_name: impl Into<String>,
+        degraded: bool,
+        asset_prefix: impl Into<String>,
+    ) -> Self {
         Self {
             base_path: Arc::from(base_path.into()),
             app_name: Arc::from(app_name.into()),
             degraded,
+            asset_prefix: Arc::from(asset_prefix.into()),
         }
     }
 }
@@ -74,8 +71,8 @@ fn render_shell(state: &PlaygroundState) -> String {
     if state.degraded {
         return PLACEHOLDER_HTML.to_string();
     }
-    let css = format!("{STATIC_ASSET_PREFIX}/{CSS}");
-    let js = format!("{STATIC_ASSET_PREFIX}/{JS}");
+    let css = format!("{}/{}", state.asset_prefix, CSS);
+    let js = format!("{}/{}", state.asset_prefix, JS);
     let app_meta = html_escape_attr(&state.app_name);
     let app_js = json_escape(&state.app_name);
     // Read the OpenAPI spec URL the user actually configured —
