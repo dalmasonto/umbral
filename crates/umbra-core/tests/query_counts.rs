@@ -514,3 +514,49 @@ async fn annotate_count_is_one_query_not_n() {
         statements()
     );
 }
+
+#[tokio::test]
+async fn m2m_validation_is_one_query_not_per_id() {
+    let _g = query_lock().await;
+    boot_and_seed(1).await;
+    let pool = umbra::db::pool_for("default");
+    // Ensure at least 500 candidate tags exist.
+    let have: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tag")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    for id in (have + 1)..=500 {
+        sqlx::query("INSERT INTO tag (id, label) VALUES (?, ?)")
+            .bind(id)
+            .bind(format!("t{id}"))
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
+    let mut counts = Vec::new();
+    for k in [3_usize, 300] {
+        let ids: Vec<String> = (1..=k as i64).map(|i| i.to_string()).collect();
+        let mut errs = umbra::forms::ValidationErrors::new();
+        reset();
+        // The batched validator from Plan A: validates M submitted M2M ids
+        // with ONE `WHERE pk IN (...)` query, never M per-id COUNTs.
+        let _ok =
+            umbra::orm::forms_runtime::validate_multi_fk_exists("tags", &ids, "tag", &mut errs)
+                .await;
+        assert!(errs.is_empty(), "all ids exist (errs: {:?})", errs.fields);
+        counts.push(count());
+    }
+    assert_eq!(
+        counts[0],
+        counts[1],
+        "M2M validation must be one query regardless of how many ids (saw {counts:?}; {:?})",
+        statements()
+    );
+    assert_eq!(
+        counts[0],
+        1,
+        "validating M ids is ONE IN-query; saw {:?}",
+        statements()
+    );
+}
