@@ -625,6 +625,41 @@ impl<T> QuerySet<T> {
         self
     }
 
+    /// `LEFT JOIN` the related path — keeps parent rows whose relation
+    /// is absent (the relation hydrates as unresolved/None). Accepts a
+    /// nested path (`"plugin__author"`); the join type applies to the
+    /// deepest hop.
+    pub fn left_join_related(mut self, path: impl Into<String>) -> Self {
+        self.join_related.push(JoinReq {
+            path: path.into(),
+            kind: Some(JoinKind::Left),
+        });
+        self
+    }
+
+    /// `INNER JOIN` the related path — drops parent rows whose relation
+    /// is absent. Django's default for a NOT NULL FK.
+    pub fn inner_join_related(mut self, path: impl Into<String>) -> Self {
+        self.join_related.push(JoinReq {
+            path: path.into(),
+            kind: Some(JoinKind::Inner),
+        });
+        self
+    }
+
+    /// `RIGHT JOIN` the related path. Postgres-unconditional; SQLite
+    /// needs >= 3.39 — a runtime warning fires on older SQLite (see the
+    /// boot/runtime note in the joins docs). The precise version gate
+    /// lives at execute time (the SQLite driver's own error); the warn
+    /// is the early nudge.
+    pub fn right_join_related(mut self, path: impl Into<String>) -> Self {
+        self.join_related.push(JoinReq {
+            path: path.into(),
+            kind: Some(JoinKind::Right),
+        });
+        self
+    }
+
     /// Eagerly load an M2M relation via a single batched join.
     ///
     /// After the main SELECT returns rows, one query of the shape
@@ -2846,6 +2881,21 @@ impl<T: Model> Manager<T> {
     /// See [`QuerySet::join_related_many`].
     pub fn join_related_many(&self, field_names: &[&str]) -> QuerySet<T> {
         self.queryset().join_related_many(field_names)
+    }
+
+    /// See [`QuerySet::left_join_related`].
+    pub fn left_join_related(&self, path: impl Into<String>) -> QuerySet<T> {
+        self.queryset().left_join_related(path)
+    }
+
+    /// See [`QuerySet::inner_join_related`].
+    pub fn inner_join_related(&self, path: impl Into<String>) -> QuerySet<T> {
+        self.queryset().inner_join_related(path)
+    }
+
+    /// See [`QuerySet::right_join_related`].
+    pub fn right_join_related(&self, path: impl Into<String>) -> QuerySet<T> {
+        self.queryset().right_join_related(path)
     }
 
     /// See [`QuerySet::select_related`].

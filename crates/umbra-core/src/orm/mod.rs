@@ -80,7 +80,7 @@ pub use model::{
 pub use multichoice::MultiChoice;
 pub use one_to_one::OneToOne;
 pub use post::Post;
-pub use queryset::{GetError, Manager, QuerySet, QuerySetTx, TryForEachError};
+pub use queryset::{GetError, JoinKind, Manager, QuerySet, QuerySetTx, TryForEachError};
 pub use reverse_set::ReverseSet;
 pub use tsvector::TsVector;
 pub use validators::{Email, Slug, Url, ValidatorError, validate_text_format};
