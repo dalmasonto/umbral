@@ -3572,14 +3572,22 @@ fn expand_form(input: DeriveInput) -> syn::Result<TokenStream2> {
             });
             let raw_var = format_ident!("_{}_raw", field_ident);
             let parsed_var = format_ident!("_{}_parsed", field_ident);
-            // Validate presence + parse the id (existence check added in
-            // Task 5). For v1 the parsed FK stores the i64 id.
+            // Verify the submitted id points at a live parent row through
+            // the ORM (existence probe, never raw SQL). A miss is a
+            // field-keyed error; the parse step below still runs so the
+            // ForeignKey is constructed, but errs.into_result()?
+            // short-circuits before the Self {..} literal. The .await is
+            // legal because validate() is async (Task 1).
             validate_body.push(quote! {
                 let #raw_var: ::std::string::String =
                     data.get(#field_name).cloned().unwrap_or_default();
-                if #raw_var.is_empty() && !#nullable_lit {
-                    errs.add(#field_name, format!("{} is required", #field_name));
-                }
+                ::umbra::orm::forms_runtime::validate_fk_exists(
+                    #field_name,
+                    &#raw_var,
+                    <#target_ty as ::umbra::orm::Model>::TABLE,
+                    #nullable_lit,
+                    &mut errs,
+                ).await;
             });
             let parse_expr = if is_nullable {
                 quote! {

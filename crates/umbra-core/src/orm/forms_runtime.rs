@@ -45,3 +45,42 @@ pub fn choice_options(values: &[&'static str], labels: &[&'static str]) -> Vec<(
         .map(|(v, l)| ((*v).to_string(), (*l).to_string()))
         .collect()
 }
+
+/// Verify a row with PK == `id` exists in `target_table`, through the
+/// ORM (never raw SQL). On a miss, push a field-keyed error. Empty id
+/// on a nullable field is a no-op (the caller checks requiredness).
+/// Registry / pool failures are swallowed as a miss — a form can't
+/// validate against a DB that isn't up.
+pub async fn validate_fk_exists(
+    field: &str,
+    id: &str,
+    target_table: &str,
+    nullable: bool,
+    errs: &mut ValidationErrors,
+) {
+    if id.is_empty() {
+        if !nullable {
+            errs.add(field, format!("{field} is required"));
+        }
+        return;
+    }
+    let Some(meta) = crate::migrate::registered_models()
+        .into_iter()
+        .find(|m| m.table == target_table)
+    else {
+        // Target not registered — can't verify; leave it to the DB FK.
+        return;
+    };
+    let Some(pk_col) = meta.pk_column().map(|c| c.name.clone()) else {
+        return;
+    };
+    let exists = crate::orm::dynamic::DynQuerySet::for_meta(&meta)
+        .filter_eq_string(&pk_col, id)
+        .count()
+        .await
+        .map(|n| n > 0)
+        .unwrap_or(false);
+    if !exists {
+        errs.add(field, format!("{field}: no matching record"));
+    }
+}

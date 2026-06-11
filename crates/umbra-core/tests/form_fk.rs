@@ -110,3 +110,46 @@ struct Passport {
     #[form(required, length(min = 1, max = 40))]
     pub number: String,
 }
+
+#[tokio::test]
+async fn fk_field_rejects_nonexistent_parent_and_inserts_no_row() {
+    boot().await;
+    let before = Book::objects().count().await.expect("count before");
+    let err = Book::validate(&data(&[("title", "Ghost"), ("author", "9999")]))
+        .await
+        .expect_err("nonexistent FK rejected");
+    assert!(
+        err.fields.contains_key("author"),
+        "error keyed to the FK field"
+    );
+    let after = Book::objects().count().await.expect("count after");
+    assert_eq!(before, after, "no row inserted on a bad FK");
+}
+
+#[tokio::test]
+async fn forward_o2o_unique_violation_surfaces_as_write_error() {
+    boot().await;
+    sqlx::query("CREATE TABLE IF NOT EXISTS ffk_passport (id INTEGER PRIMARY KEY AUTOINCREMENT, holder INTEGER NOT NULL UNIQUE REFERENCES ffk_author(id), number TEXT NOT NULL)")
+        .execute(&db::pool()).await.expect("create passport");
+    let p1 = Passport::validate(&data(&[("holder", "1"), ("number", "A1")]))
+        .await
+        .expect("valid o2o");
+    Passport::objects().create(p1).await.expect("first o2o row");
+    let p2 = Passport::validate(&data(&[("holder", "1"), ("number", "B2")]))
+        .await
+        .expect("validates (existence ok); UNIQUE fires at insert");
+    let err = Passport::objects()
+        .create(p2)
+        .await
+        .expect_err("duplicate target");
+    // A unique violation, not a silent second row.
+    assert!(
+        matches!(
+            err,
+            umbra::orm::write::WriteError::UniqueViolation { .. }
+                | umbra::orm::write::WriteError::Multiple { .. }
+                | umbra::orm::write::WriteError::Sqlx(_)
+        ),
+        "duplicate forward-O2O surfaces a WriteError: {err:?}"
+    );
+}
