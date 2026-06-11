@@ -26,6 +26,16 @@ struct Note {
     published_at: Option<DateTime<Utc>>,
 }
 
+// A model with a sensitive column the REST plugin hides. The generated
+// spec must NOT advertise `token` anywhere — it would leak a field the
+// API never returns (parity with the runtime response strip).
+#[derive(Debug, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
+struct Secret {
+    id: i64,
+    label: String,
+    token: String,
+}
+
 static BOOT: OnceCell<axum::Router> = OnceCell::const_new();
 
 async fn boot() -> &'static axum::Router {
@@ -48,8 +58,9 @@ async fn boot() -> &'static axum::Router {
             .settings(settings)
             .database("default", pool)
             .model::<Note>()
+            .model::<Secret>()
             .plugin(AuthPlugin::<AuthUser>::default())
-            .plugin(RestPlugin::default())
+            .plugin(RestPlugin::default().hide("secret", "token"))
             .plugin(OpenApiPlugin::default())
             .build()
             .expect("App::build with RestPlugin + OpenApiPlugin");
@@ -69,6 +80,17 @@ async fn boot() -> &'static axum::Router {
         .execute(&pool)
         .await
         .expect("create note");
+
+        sqlx::query(
+            "CREATE TABLE secret (\
+                id INTEGER PRIMARY KEY AUTOINCREMENT,\
+                label TEXT NOT NULL,\
+                token TEXT NOT NULL\
+             )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create secret");
 
         app.into_router()
     })
@@ -175,6 +197,77 @@ async fn default_block_list_keeps_auth_user_out_of_the_spec() {
     assert!(
         !paths.contains_key("/api/auth_user/"),
         "/api/auth_user/ should be absent from paths"
+    );
+}
+
+// =========================================================================
+// 3b. REST-hidden fields are excluded from the schema, the ?fields=
+//     picker, and required — parity with the runtime response strip.
+// =========================================================================
+
+#[tokio::test]
+async fn rest_hidden_field_is_excluded_from_the_model_schema() {
+    let router = boot().await.clone();
+    let (_, body) = get_request(router, "/openapi/openapi.json").await;
+    let v: serde_json::Value = serde_json::from_str(&body).expect("json");
+    let secret = &v["components"]["schemas"]["Secret"];
+    let props = secret["properties"]
+        .as_object()
+        .expect("Secret schema properties");
+
+    // The hidden column must not appear as a property...
+    assert!(
+        !props.contains_key("token"),
+        "hidden `token` leaked into the Secret schema properties: {:?}",
+        props.keys().collect::<Vec<_>>()
+    );
+    // ...nor in `required` (token is non-null non-PK, so without the
+    // hide filter it WOULD have been required).
+    if let Some(required) = secret["required"].as_array() {
+        let names: Vec<&str> = required.iter().filter_map(|x| x.as_str()).collect();
+        assert!(
+            !names.contains(&"token"),
+            "hidden `token` leaked into Secret.required: {names:?}"
+        );
+    }
+    // A visible field is still present — proves we didn't over-filter.
+    assert!(
+        props.contains_key("label"),
+        "non-hidden `label` should still be a property; got {:?}",
+        props.keys().collect::<Vec<_>>()
+    );
+}
+
+#[tokio::test]
+async fn rest_hidden_field_is_excluded_from_the_fields_picker() {
+    let router = boot().await.clone();
+    let (_, body) = get_request(router, "/openapi/openapi.json").await;
+    let v: serde_json::Value = serde_json::from_str(&body).expect("json");
+
+    // The `?fields=` parameter on the Secret list endpoint advertises
+    // its columns via `x-umbra-fields-columns`. The hidden `token`
+    // must NOT be offered (you can never get it back), but `label`
+    // must remain.
+    let list_params = v["paths"]["/api/secret/"]["get"]["parameters"]
+        .as_array()
+        .expect("list params array");
+    let fields_param = list_params
+        .iter()
+        .find(|p| p["name"] == "fields")
+        .expect("fields parameter present on /api/secret/ list op");
+    let cols: Vec<&str> = fields_param["x-umbra-fields-columns"]
+        .as_array()
+        .expect("x-umbra-fields-columns array")
+        .iter()
+        .filter_map(|x| x.as_str())
+        .collect();
+    assert!(
+        !cols.contains(&"token"),
+        "hidden `token` should not be offered in the ?fields= picker; got {cols:?}"
+    );
+    assert!(
+        cols.contains(&"label"),
+        "visible `label` should still be in the ?fields= picker; got {cols:?}"
     );
 }
 

@@ -120,6 +120,10 @@ not appear in the spec either. If you exclude a model from REST but forget to
 exclude it from OpenAPI (or vice versa), the spec will reference an endpoint
 that returns 404 - exclude consistently on both plugins to stay in sync.
 
+<Callout type="info">
+Field-level `hide` is honored too. A column hidden in REST (`ResourceConfig::hide` / `RestPlugin::hide_model`) is excluded from the model schema, dropped from the `?fields=` picker, and never shown in Swagger UI — so the spec matches what the API actually returns. A `password_hash` you hide from responses won't leak into the generated documentation either.
+</Callout>
+
 If you want framework-wide trailing-slash normalisation rather than relying on
 the plugin registering both paths, opt in on the builder:
 

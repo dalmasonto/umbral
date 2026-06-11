@@ -350,6 +350,15 @@ fn model_schema(
     let mut properties = Map::new();
     let mut required: Vec<Value> = Vec::new();
     for col in &model.fields {
+        // A column the REST plugin hides (`ResourceConfig::hide` /
+        // `RestPlugin::hide_model`) is stripped from every response
+        // body, so it must not appear in the schema either — otherwise
+        // the spec advertises (and Swagger UI shows) a field like
+        // `password_hash` the API will never return: an info leak +
+        // confusing docs. Skip it for both `properties` and `required`.
+        if umbra_rest::is_hidden(&model.table, &col.name) {
+            continue;
+        }
         properties.insert(
             col.name.clone(),
             column_schema_with_refs(col, table_to_schema),
@@ -691,9 +700,12 @@ fn search_parameter() -> Value {
 /// extension still see a `string` parameter with a clear
 /// description.
 fn fields_parameter(model: &ModelMeta) -> Value {
+    // Drop REST-hidden columns: the `?fields=` picker shouldn't offer a
+    // field you can never get back (hide always wins in the response).
     let columns: Vec<Value> = model
         .fields
         .iter()
+        .filter(|c| !umbra_rest::is_hidden(&model.table, &c.name))
         .map(|c| Value::String(c.name.clone()))
         .collect();
     json!({
@@ -718,10 +730,14 @@ fn fields_parameter(model: &ModelMeta) -> Value {
 /// of the candidate FK names. Mirrors the `fields_parameter` shape
 /// so the same UI machinery can drive both.
 fn include_parameter(model: &ModelMeta) -> Value {
+    // A hidden FK column is stripped from responses, so expanding it via
+    // `?include=` could never surface anything — drop it from the
+    // includable list for consistency with the schema + fields picker.
     let fks: Vec<Value> = model
         .fields
         .iter()
         .filter(|c| c.fk_target.is_some())
+        .filter(|c| !umbra_rest::is_hidden(&model.table, &c.name))
         .map(|c| Value::String(c.name.clone()))
         .collect();
     json!({
