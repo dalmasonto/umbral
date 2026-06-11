@@ -133,16 +133,26 @@ async fn fk_field_renders_select_with_seeded_options() {
 #[tokio::test]
 async fn fk_field_rejects_nonexistent_parent_and_inserts_no_row() {
     boot().await;
-    let before = Book::objects().count().await.expect("count before");
-    let err = Book::validate(&data(&[("title", "Ghost"), ("author", "9999")]))
-        .await
-        .expect_err("nonexistent FK rejected");
+    // Validation fails on the bad FK BEFORE create() runs, so no Book
+    // with this unique title is ever inserted. Asserting on the specific
+    // title (not a global count delta) is race-safe against the other
+    // tests inserting into the shared in-memory DB.
+    let err = Book::validate(&data(&[
+        ("title", "Ghost-unique-title"),
+        ("author", "9999"),
+    ]))
+    .await
+    .expect_err("nonexistent FK rejected");
     assert!(
         err.fields.contains_key("author"),
         "error keyed to the FK field"
     );
-    let after = Book::objects().count().await.expect("count after");
-    assert_eq!(before, after, "no row inserted on a bad FK");
+    let count = Book::objects()
+        .filter(book::TITLE.eq("Ghost-unique-title"))
+        .count()
+        .await
+        .expect("count by title");
+    assert_eq!(count, 0, "no row inserted on a bad FK");
 }
 
 #[tokio::test]
