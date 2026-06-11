@@ -67,6 +67,7 @@ async fn apply_m2m_selections(
         &serde_json::Value::String(parent_pk_str.to_string()),
         false,
         &parent_pk_col.name,
+        None,
     ) {
         Ok(v) => v,
         Err(_) => return Ok(()),
@@ -101,6 +102,7 @@ async fn apply_m2m_selections(
                 &serde_json::Value::String(raw.to_string()),
                 false,
                 &child_pk_col.name,
+                None,
             ) {
                 Ok(v) => child_values.push(v),
                 Err(_) => continue,

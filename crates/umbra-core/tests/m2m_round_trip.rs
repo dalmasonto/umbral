@@ -571,6 +571,7 @@ async fn set_junction_dynamic_replaces_selection_with_typed_values() {
         &serde_json::Value::String(group.id.to_string()),
         false,
         "id",
+        None,
     )
     .unwrap();
     let child_values: Vec<_> = [&perm_a, &perm_b]
@@ -581,6 +582,7 @@ async fn set_junction_dynamic_replaces_selection_with_typed_values() {
                 &serde_json::Value::String(p.codename.clone()),
                 false,
                 "codename",
+                None,
             )
             .unwrap()
         })
@@ -604,6 +606,7 @@ async fn set_junction_dynamic_replaces_selection_with_typed_values() {
             &serde_json::Value::String(perm_b.codename.clone()),
             false,
             "codename",
+            None,
         )
         .unwrap(),
     ];
@@ -651,6 +654,7 @@ async fn load_junction_selection_returns_current_child_pks_as_strings() {
         &serde_json::Value::String(group.id.to_string()),
         false,
         "id",
+        None,
     )
     .unwrap();
     let selection = umbra::orm::load_junction_selection(

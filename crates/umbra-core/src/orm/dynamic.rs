@@ -1135,8 +1135,13 @@ impl<'a> DynQuerySet<'a> {
                     });
                 }
             }
-            let sea_value =
-                crate::orm::write::json_to_sea_value(col.ty, json, col.nullable, &col.name)?;
+            let sea_value = crate::orm::write::json_to_sea_value(
+                col.ty,
+                json,
+                col.nullable,
+                &col.name,
+                fk_target_pk_sql_type(col),
+            )?;
             cols.push(&col.name);
             values.push(sea_value);
         }
@@ -1196,7 +1201,7 @@ impl<'a> DynQuerySet<'a> {
                             .cloned()
                             .unwrap_or(serde_json::Value::Null);
                         let sea_value = crate::orm::write::json_to_sea_value(
-                            pk_ty, &supplied, false, &pk_name,
+                            pk_ty, &supplied, false, &pk_name, None,
                         )?;
                         Expr::col(Alias::new(&pk_name)).eq(sea_value)
                     }
@@ -1357,8 +1362,13 @@ impl<'a> DynQuerySet<'a> {
                     });
                 }
             }
-            let sea_value =
-                crate::orm::write::json_to_sea_value(col.ty, json, col.nullable, &col.name)?;
+            let sea_value = crate::orm::write::json_to_sea_value(
+                col.ty,
+                json,
+                col.nullable,
+                &col.name,
+                fk_target_pk_sql_type(col),
+            )?;
             q.value(Alias::new(&col.name), sea_value);
             any = true;
         }
@@ -1949,7 +1959,7 @@ fn form_str_to_sea_value(col: &Column, raw: &str) -> Result<SeaValue, WriteError
                 field: col.name.clone(),
                 message: format!("Not valid JSON: {e}"),
             })?;
-        return json_to_sea_value(col.ty, &parsed, col.nullable, &col.name);
+        return json_to_sea_value(col.ty, &parsed, col.nullable, &col.name, None);
     }
     if matches!(col.ty, SqlType::ForeignKey) {
         return match fk_target_pk_sql_type(col) {
@@ -1972,7 +1982,7 @@ fn form_str_to_sea_value(col: &Column, raw: &str) -> Result<SeaValue, WriteError
         };
     }
     let json = serde_json::Value::String(raw.to_string());
-    json_to_sea_value(col.ty, &json, col.nullable, &col.name)
+    json_to_sea_value(col.ty, &json, col.nullable, &col.name, None)
 }
 
 /// Hex-encode a byte slice, lowercase, no `0x` prefix. The

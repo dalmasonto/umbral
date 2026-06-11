@@ -396,11 +396,21 @@ impl From<serde_json::Error> for WriteError {
 /// `"true"` / `"false"` strings coerce to booleans, `"123"` strings
 /// coerce to numbers. RFC 3339 timestamps come through as strings on
 /// JSON inputs (serde_json doesn't have a native datetime).
+///
+/// `fk_target_pk` carries the target PK's `SqlType` for a `ForeignKey`
+/// column (gaps2 #42). This function can't see `fk_target`, so without
+/// it the FK arm couldn't tell an i64-PK FK from a String-PK one and
+/// bound every string-valued FK id as TEXT — which a Postgres `bigint`
+/// FK column rejects (`column "..." is of type bigint but expression is
+/// of type text`). Callers resolve the target PK type and pass it here
+/// (`Some(Text)` / `Some(Uuid)` bind as-is; numeric-PK or unresolved
+/// targets coerce the string → BigInt). `None` for every non-FK column.
 pub fn json_to_sea_value(
     sql_type: SqlType,
     value: &JsonValue,
     nullable: bool,
     field_name: &str,
+    fk_target_pk: Option<SqlType>,
 ) -> Result<SeaValue, WriteError> {
     // null handling first — applies regardless of expected type.
     if value.is_null() {
@@ -418,15 +428,35 @@ pub fn json_to_sea_value(
             coerce_i32(value, field_name).map(|v| SeaValue::Int(Some(v)))
         }
         SqlType::BigInt => coerce_i64(value, field_name).map(|v| SeaValue::BigInt(Some(v))),
-        // PK lift Pass A follow-up: `ForeignKey` columns whose target
-        // has a String / UUID PK arrive here as `JsonValue::String`
-        // (the typed `ForeignKey<T>` macro emits `to_value(self.id())`
-        // which produces a JSON string for String-PK targets — see
-        // PK lift Pass D). Bind as text in that case; integer-PK
-        // targets stay on the BigInt path. This is the write-side
-        // counterpart to `fk_target_pk_sql_type` in `orm/dynamic.rs`.
-        SqlType::ForeignKey => match value {
-            JsonValue::String(s) => Ok(SeaValue::String(Some(Box::new(s.clone())))),
+        // gaps2 #42: bind a `ForeignKey` id against its TARGET PK's
+        // type, not the JSON value's runtime shape. Before, a
+        // `JsonValue::String("1")` FK id was bound TEXT unconditionally
+        // because this function couldn't see `fk_target` — which a
+        // Postgres `bigint` FK column rejects ("column ... is of type
+        // bigint but expression is of type text"). The caller now
+        // resolves the target PK type (via `fk_target_pk_sql_type` /
+        // `pk_meta_for_table`) and threads it in as `fk_target_pk`:
+        //   - Text-PK target  → bind the id as text;
+        //   - Uuid-PK target  → parse + bind a UUID;
+        //   - numeric-PK target (or unresolved, the common i64 case)
+        //     → coerce the string / number → BigInt.
+        // `coerce_i64` already accepts `JsonValue::String("1")`, so a
+        // numeric string now binds `BigInt(1)`. This mirrors
+        // `form_str_to_sea_value`'s FK arm in `orm/dynamic.rs`.
+        SqlType::ForeignKey => match fk_target_pk {
+            Some(SqlType::Text) => {
+                coerce_string(value, field_name).map(|s| SeaValue::String(Some(Box::new(s))))
+            }
+            Some(SqlType::Uuid) => match value {
+                JsonValue::String(s) => uuid::Uuid::parse_str(s)
+                    .map(|u| SeaValue::Uuid(Some(Box::new(u))))
+                    .map_err(|_| WriteError::TypeMismatch {
+                        field: field_name.to_string(),
+                        expected: SqlType::Uuid,
+                        got: s.clone(),
+                    }),
+                _ => coerce_i64(value, field_name).map(|v| SeaValue::BigInt(Some(v))),
+            },
             _ => coerce_i64(value, field_name).map(|v| SeaValue::BigInt(Some(v))),
         },
         SqlType::Real => coerce_f32(value, field_name).map(|v| SeaValue::Float(Some(v))),
@@ -911,37 +941,38 @@ mod tests {
 
     #[test]
     fn json_to_sea_value_passes_basic_types() {
-        let v = json_to_sea_value(SqlType::Integer, &json!(42), false, "x").unwrap();
+        let v = json_to_sea_value(SqlType::Integer, &json!(42), false, "x", None).unwrap();
         assert!(matches!(v, SeaValue::Int(Some(42))));
-        let v = json_to_sea_value(SqlType::BigInt, &json!(42), false, "x").unwrap();
+        let v = json_to_sea_value(SqlType::BigInt, &json!(42), false, "x", None).unwrap();
         assert!(matches!(v, SeaValue::BigInt(Some(42))));
-        let v = json_to_sea_value(SqlType::Text, &json!("hi"), false, "x").unwrap();
+        let v = json_to_sea_value(SqlType::Text, &json!("hi"), false, "x", None).unwrap();
         assert!(matches!(v, SeaValue::String(Some(_))));
-        let v = json_to_sea_value(SqlType::Boolean, &json!(true), false, "x").unwrap();
+        let v = json_to_sea_value(SqlType::Boolean, &json!(true), false, "x", None).unwrap();
         assert!(matches!(v, SeaValue::Bool(Some(true))));
-        let v = json_to_sea_value(SqlType::Json, &json!({ "nested": true }), false, "x").unwrap();
+        let v =
+            json_to_sea_value(SqlType::Json, &json!({ "nested": true }), false, "x", None).unwrap();
         assert!(matches!(v, SeaValue::Json(Some(_))));
     }
 
     #[test]
     fn json_to_sea_value_coerces_string_booleans() {
-        let v = json_to_sea_value(SqlType::Boolean, &json!("true"), false, "x").unwrap();
+        let v = json_to_sea_value(SqlType::Boolean, &json!("true"), false, "x", None).unwrap();
         assert!(matches!(v, SeaValue::Bool(Some(true))));
-        let v = json_to_sea_value(SqlType::Boolean, &json!("0"), false, "x").unwrap();
+        let v = json_to_sea_value(SqlType::Boolean, &json!("0"), false, "x", None).unwrap();
         assert!(matches!(v, SeaValue::Bool(Some(false))));
     }
 
     #[test]
     fn json_to_sea_value_rejects_null_on_required_field() {
-        let err = json_to_sea_value(SqlType::Integer, &json!(null), false, "x").unwrap_err();
+        let err = json_to_sea_value(SqlType::Integer, &json!(null), false, "x", None).unwrap_err();
         assert!(matches!(err, WriteError::RequiredFieldMissing { .. }));
     }
 
     #[test]
     fn json_to_sea_value_accepts_null_on_nullable_field() {
-        let v = json_to_sea_value(SqlType::Integer, &json!(null), true, "x").unwrap();
+        let v = json_to_sea_value(SqlType::Integer, &json!(null), true, "x", None).unwrap();
         assert!(matches!(v, SeaValue::Int(None)));
-        let v = json_to_sea_value(SqlType::Json, &json!(null), true, "x").unwrap();
+        let v = json_to_sea_value(SqlType::Json, &json!(null), true, "x", None).unwrap();
         assert!(matches!(v, SeaValue::Json(None)));
     }
 
@@ -953,6 +984,7 @@ mod tests {
             &json!("2026-06-03T22:24:00Z"),
             false,
             "x",
+            None,
         )
         .unwrap();
         let SeaValue::ChronoDateTimeUtc(Some(dt)) = v else {
@@ -966,6 +998,7 @@ mod tests {
             &json!("2026-06-03T22:24:00"),
             false,
             "x",
+            None,
         )
         .unwrap();
         let SeaValue::ChronoDateTimeUtc(Some(dt)) = v else {
@@ -976,16 +1009,22 @@ mod tests {
         // Naive without seconds — the literal HTML
         // `<input type="datetime-local">` shape that the admin's
         // auto-generated forms post. This was the regression.
-        let v = json_to_sea_value(SqlType::Timestamptz, &json!("2026-06-03T22:24"), false, "x")
-            .unwrap();
+        let v = json_to_sea_value(
+            SqlType::Timestamptz,
+            &json!("2026-06-03T22:24"),
+            false,
+            "x",
+            None,
+        )
+        .unwrap();
         let SeaValue::ChronoDateTimeUtc(Some(dt)) = v else {
             panic!("expected ChronoDateTimeUtc");
         };
         assert_eq!(dt.to_rfc3339(), "2026-06-03T22:24:00+00:00");
 
         // Garbage still rejected.
-        let err =
-            json_to_sea_value(SqlType::Timestamptz, &json!("not a date"), false, "x").unwrap_err();
+        let err = json_to_sea_value(SqlType::Timestamptz, &json!("not a date"), false, "x", None)
+            .unwrap_err();
         assert!(matches!(err, WriteError::TypeMismatch { .. }));
     }
 

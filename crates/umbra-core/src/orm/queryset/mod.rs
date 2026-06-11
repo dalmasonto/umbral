@@ -43,7 +43,9 @@ mod write_helpers;
 pub use errors::{GetError, TryForEachError};
 use hydration::{hydrate_prefetch_related, hydrate_select_related};
 pub use tx::QuerySetTx;
-use write_helpers::{build_insert_many_for, build_insert_one_for, pk_field, serialize_to_map};
+use write_helpers::{
+    build_insert_many_for, build_insert_one_for, fk_pk_hint, pk_field, serialize_to_map,
+};
 
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -2656,7 +2658,8 @@ impl<T: Model> QuerySet<T> {
             if field.primary_key {
                 continue;
             }
-            let sea_value = json_to_sea_value(field.ty, val, field.nullable, field.name)?;
+            let sea_value =
+                json_to_sea_value(field.ty, val, field.nullable, field.name, fk_pk_hint(field))?;
             stmt.value(Alias::new(field.name), sea_value);
         }
         for p in &self.predicates {
@@ -3325,7 +3328,7 @@ impl<T: Model> Manager<T> {
                 .cloned()
                 .unwrap_or(serde_json::Value::Null);
             let pk_sea =
-                crate::orm::write::json_to_sea_value(pk.ty, &pk_value_json, false, pk_name)?;
+                crate::orm::write::json_to_sea_value(pk.ty, &pk_value_json, false, pk_name, None)?;
             let pk_pred: Predicate<T> =
                 Predicate::new(sea_query::Expr::col(sea_query::Alias::new(pk_name)).eq(pk_sea));
             // Run the UPDATE.
@@ -3335,7 +3338,7 @@ impl<T: Model> Manager<T> {
             // one was moved into update_values.
             let pk_value_json2 = pk_value_json.clone();
             let pk_sea2 =
-                crate::orm::write::json_to_sea_value(pk.ty, &pk_value_json2, false, pk_name)?;
+                crate::orm::write::json_to_sea_value(pk.ty, &pk_value_json2, false, pk_name, None)?;
             let refetch_pred: Predicate<T> =
                 Predicate::new(sea_query::Expr::col(sea_query::Alias::new(pk_name)).eq(pk_sea2));
             let updated = self
@@ -3522,8 +3525,14 @@ impl<T: Model> Manager<T> {
                     .get(field.name)
                     .cloned()
                     .unwrap_or(serde_json::Value::Null);
-                let cell = json_to_sea_value(field.ty, &val, field.nullable, field.name)?;
-                let pk_sea = json_to_sea_value(pk_ty, pk_val, false, pk_name)?;
+                let cell = json_to_sea_value(
+                    field.ty,
+                    &val,
+                    field.nullable,
+                    field.name,
+                    fk_pk_hint(field),
+                )?;
+                let pk_sea = json_to_sea_value(pk_ty, pk_val, false, pk_name, None)?;
                 case = case.case(sea_query::Expr::col(Alias::new(pk_name)).eq(pk_sea), cell);
             }
             stmt.value(Alias::new(field.name), case);
@@ -3532,7 +3541,7 @@ impl<T: Model> Manager<T> {
         // WHERE pk IN (<pk1>, <pk2>, ...)
         let pk_seas: Vec<sea_query::Value> = serialized
             .iter()
-            .map(|(pk_val, _)| json_to_sea_value(pk_ty, pk_val, false, pk_name))
+            .map(|(pk_val, _)| json_to_sea_value(pk_ty, pk_val, false, pk_name, None))
             .collect::<Result<_, _>>()?;
         stmt.and_where(sea_query::Expr::col(Alias::new(pk_name)).is_in(pk_seas));
 
@@ -3829,14 +3838,20 @@ impl<T: Model> Manager<T> {
                     &val,
                     field.nullable,
                     field.name,
+                    fk_pk_hint(field),
                 )
                 .map_err(SaveError::Write)?;
                 stmt.value(Alias::new(field.name), sea_val);
             }
             // WHERE pk = <value>
-            let pk_sea =
-                crate::orm::write::json_to_sea_value(pk_field.ty, &pk_val, false, pk_field.name)
-                    .map_err(SaveError::Write)?;
+            let pk_sea = crate::orm::write::json_to_sea_value(
+                pk_field.ty,
+                &pk_val,
+                false,
+                pk_field.name,
+                None,
+            )
+            .map_err(SaveError::Write)?;
             stmt.and_where(Expr::col(Alias::new(pk_field.name)).eq(pk_sea));
             // RETURNING * so we can return the updated row.
             stmt.returning_all();
@@ -3908,7 +3923,7 @@ impl<T: Model> Manager<T> {
         crate::signals::emit_pre_delete::<T>(instance).await;
 
         let pk_sea =
-            crate::orm::write::json_to_sea_value(pk_field.ty, &pk_val, false, pk_field.name)
+            crate::orm::write::json_to_sea_value(pk_field.ty, &pk_val, false, pk_field.name, None)
                 .map_err(SaveError::Write)?;
 
         use sea_query::{Alias, Expr, Query};

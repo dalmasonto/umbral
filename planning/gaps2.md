@@ -249,7 +249,7 @@
 40. [ ] `/home/dalmas/E/projects/umbra/umbra_website/plugins/plugin_directory/src/models.rs ln 343` - Enable "Foreign keys" to work well with `Form` derive
 
 41. [ ] The body Markdown, code, and RTE don't work yet. I filled in markdown field and got back an error `body is required, null`. So the markdown field did not fill the underlying body input field. When the error came back, the textarea and the mardown field were both shows (./images/Screenshot from 2026-06-11 03-55-50.png)
-42. [ ] Foreign keys for forms not working well. This an orm level issue also might be linked to o2o keys and other primary key issues. The bug is, if you try to save a foreign key you might encounter `column "plugin" is of type bigint but expression is of type text`
+42. [x] FK save binds text not bigint — archived
 43. [ ] Another issue is that in django admin, errors are returned 1 by 1 not all at once. This is a bug and usability issue. They should be returned at once and each field should render the error below it not at the top of the form.
 44. [ ] Admin tables don't refresh on entry craetion or update, the page, the table should refresh. This was done but maybe the url is not receiving the refresh signal correctly.
 45. [ ] We need to fix the fks relationships. In django you do `Post.objects.get(id=1).comments_set.all()` or even better `Post.objects.annotate(comment_count=Count('comments'))` - We need a seemless way of doing this. The orm should automatically handle reverse keys for all the fks

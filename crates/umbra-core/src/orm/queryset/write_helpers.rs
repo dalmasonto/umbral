@@ -11,6 +11,18 @@ use sea_query::{Alias, Query};
 
 use crate::orm::Model;
 
+/// Resolve the target PK's `SqlType` for a `ForeignKey` field so the
+/// typed `create` / `bulk_create` path binds the FK id against the
+/// parent PK type, not raw TEXT (gaps2 #42). `FieldSpec.fk_target`
+/// names the target table; `pk_meta_for_table` returns its PK column +
+/// type. `None` for non-FK fields (and FK targets not yet registered,
+/// where the write side defaults to BigInt — the common i64-PK case).
+pub(crate) fn fk_pk_hint(field: &crate::orm::FieldSpec) -> Option<crate::orm::SqlType> {
+    field
+        .fk_target
+        .and_then(|t| crate::migrate::pk_meta_for_table(t).map(|(_, ty)| ty))
+}
+
 /// Convert a `T: Serialize` instance to a `Map<String, Value>` for
 /// the insert path. Errors out if the instance doesn't serialize to a
 /// JSON object (only flat structs and HashMap-like shapes do).
@@ -64,7 +76,13 @@ pub(super) fn build_insert_one_for<T: Model>(
         if val.is_null() && field.nullable && !map.contains_key(field.name) {
             continue;
         }
-        let sea_value = json_to_sea_value(field.ty, &val, field.nullable, field.name)?;
+        let sea_value = json_to_sea_value(
+            field.ty,
+            &val,
+            field.nullable,
+            field.name,
+            fk_pk_hint(field),
+        )?;
         columns.push(Alias::new(field.name));
         values.push(sea_value.into());
     }
@@ -131,8 +149,14 @@ pub(super) fn build_insert_many_for<T: Model>(
                     .get(field.name)
                     .cloned()
                     .unwrap_or(serde_json::Value::Null);
-                json_to_sea_value(field.ty, &val, field.nullable, field.name)
-                    .map(sea_query::SimpleExpr::from)
+                json_to_sea_value(
+                    field.ty,
+                    &val,
+                    field.nullable,
+                    field.name,
+                    fk_pk_hint(field),
+                )
+                .map(sea_query::SimpleExpr::from)
             })
             .collect();
         stmt.values(row_values?).map_err(|e| {
