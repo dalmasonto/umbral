@@ -684,25 +684,29 @@ impl RestPlugin {
         }
     }
 
-    /// Sparse fieldset (gap #81 + dotted-nested extension). Filter
-    /// the response row down to a caller-named subset of keys.
+    /// Sparse fieldset (gap #81 + nested-projection extension). Prune
+    /// the response row down to a caller-named subset of keys, walking
+    /// into `?include=`'d nested objects to N hops.
     ///
-    /// Two token shapes:
+    /// Token shapes, with `.` and `__` interchangeable as the hop
+    /// separator (`created_by__name` ≡ `created_by.name`, matching
+    /// `?include=`'s gap2 #18 normalisation):
     ///
-    /// - **Plain** (`id`, `phone`, `user`) — keeps the named TOP-LEVEL
-    ///   key. If the key holds a nested object (because it was
-    ///   `?include=`'d on the FK path), the full nested shape
-    ///   survives.
+    /// - **Plain** (`id`, `phone`, `user`) — keeps the named key. If
+    ///   the key holds a nested object (because it was `?include=`'d),
+    ///   the full nested shape survives untouched.
     ///
-    /// - **Dotted** (`user.id`, `user.username`) — keeps the named
-    ///   key on the nested object under `user`. Auto-includes the
-    ///   parent at the top level so the nested object survives the
-    ///   root retain step. ANY dotted token under a parent triggers
-    ///   filtering on that nested object — so writing
-    ///   `?fields=user,user.id` collapses to "keep user, but only
-    ///   keep `id` inside it" (most-specific wins).
+    /// - **Dotted / `__`** (`user.id`, `created_by__name`,
+    ///   `a__b__c`) — keeps the named key, then recurses into the
+    ///   nested object pruning it to the requested child path. The
+    ///   parent is auto-kept so the nested object survives the retain
+    ///   step. ANY nested token under a parent triggers pruning on
+    ///   that nested object, so `?fields=user,user.id` collapses to
+    ///   "keep user, but only keep `id` inside it" (most-specific
+    ///   wins — the presence of a deeper path overrides the bare
+    ///   "keep whole subtree").
     ///
-    /// Examples (with `?include=user`):
+    /// Examples (with `?include=user` / `?include=created_by.team`):
     ///
     /// | `?fields=` | Resulting row |
     /// |---|---|
@@ -710,63 +714,81 @@ impl RestPlugin {
     /// | `id,user` | `{id, user: {full user obj}}` |
     /// | `id,user.id,user.username` | `{id, user: {id, username}}` |
     /// | `user.id` | `{user: {id}}` — root id NOT pulled |
-    ///
-    /// The last row is the value prop: a per-relation projection
-    /// that doesn't pollute the root with fields the caller didn't
-    /// ask for. Without dot-notation, asking for "the user's id"
-    /// forced you to also accept the root's id (single global
-    /// `id` token).
+    /// | `created_by__team__name` | `{created_by: {team: {name}}}` |
     ///
     /// Applied *after* `apply_overrides` so users can still combine
     /// hide / transform / computed with sparse selection. Unknown
-    /// names are silently ignored at both levels — gives clients
+    /// names are silently ignored at every level — gives clients
     /// latitude to ask for new fields without coordinating a server
-    /// change first.
+    /// change first. A nested path against a key that's still an
+    /// integer FK (the relation wasn't `?include=`'d) leaves the
+    /// integer untouched rather than crashing.
     ///
-    /// One-hop only — `a.b.c` treats `b.c` as a single key name on
-    /// the `a` object, which won't match anything. Deeper nesting
-    /// lands when the dynamic `select_related_dyn` learns
-    /// `__`-traversal.
+    /// Field-path depth is capped at the same `?include=` 3-hop norm
+    /// (gap2 #18): hops past the cap are dropped from the token, so a
+    /// pathological `a__b__c__d` prunes to `a.b.c` and ignores the
+    /// rest rather than fanning out.
     pub(crate) fn apply_sparse_fields(row: &mut Map<String, Value>, fields_param: Option<&str>) {
+        /// Mirrors `parse_include`'s MAX_DEPTH (gap2 #18) so field-path
+        /// projection can't out-reach what `?include=` could hydrate.
+        const MAX_FIELD_DEPTH: usize = 3;
+
         let Some(raw) = fields_param else { return };
 
-        // Split tokens into top-level keys + per-parent nested keys.
-        // `user.id` adds `user` to top_level (so the parent isn't
-        // dropped) AND `id` to nested["user"] (so the nested object
-        // gets filtered to just that key).
-        let mut top_level: std::collections::HashSet<String> = std::collections::HashSet::new();
-        let mut nested: std::collections::HashMap<String, std::collections::HashSet<String>> =
-            std::collections::HashMap::new();
+        // Build an allowed-paths tree from every token. A node's
+        // `children` map names the keys to keep one level down; an
+        // EMPTY children map is a leaf meaning "keep this whole
+        // subtree". A later, deeper token under the same key adds
+        // children, which turns a leaf into a pruning node (so a
+        // deeper path always wins over a bare plain token).
+        #[derive(Default)]
+        struct Node {
+            children: std::collections::HashMap<String, Node>,
+        }
 
+        let mut root = Node::default();
+        let mut any = false;
         for token in raw.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
-            if let Some((parent, child)) = token.split_once('.') {
-                let parent = parent.to_string();
-                top_level.insert(parent.clone());
-                nested.entry(parent).or_default().insert(child.to_string());
-            } else {
-                top_level.insert(token.to_string());
+            // Normalise `__` → `.` then split, capping the hop count.
+            let canonical = token.replace("__", ".");
+            let hops: Vec<&str> = canonical
+                .split('.')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .take(MAX_FIELD_DEPTH)
+                .collect();
+            if hops.is_empty() {
+                continue;
+            }
+            any = true;
+            let mut cur = &mut root;
+            for hop in hops {
+                cur = cur.children.entry(hop.to_string()).or_default();
             }
         }
 
-        if top_level.is_empty() {
+        if !any {
             return;
         }
 
-        // First pass: drop every top-level key the caller didn't ask
-        // for. Parents named only via a dotted token survive because
-        // we inserted them above.
-        row.retain(|k, _| top_level.contains(k));
-
-        // Second pass: for every parent that had at least one dotted
-        // token, filter the nested object's keys. The check tolerates
-        // the parent being absent / not an object — that just means
-        // the caller asked for `user.id` without `?include=user`, so
-        // the FK is still an integer and there's nothing to filter.
-        for (parent, allowed_children) in &nested {
-            if let Some(Value::Object(child_map)) = row.get_mut(parent) {
-                child_map.retain(|k, _| allowed_children.contains(k));
+        // Recursively prune `obj` to the keys named in `node`. Keys
+        // not in the node are dropped. A key whose node has children
+        // is descended into when its value is an object; otherwise
+        // (leaf, or value isn't an object — e.g. an un-included
+        // integer FK) the value is kept verbatim.
+        fn prune(obj: &mut Map<String, Value>, node: &Node) {
+            obj.retain(|k, _| node.children.contains_key(k));
+            for (key, child_node) in &node.children {
+                if child_node.children.is_empty() {
+                    continue; // leaf — keep the whole subtree
+                }
+                if let Some(Value::Object(child_obj)) = obj.get_mut(key) {
+                    prune(child_obj, child_node);
+                }
             }
         }
+
+        prune(row, &root);
     }
 
     fn allow(&self, table: &str) -> bool {
@@ -1821,5 +1843,100 @@ mod sparse_fields_unit {
         assert!(r.contains_key("id"));
         let user = r.get("user").unwrap().as_object().unwrap();
         assert!(user.is_empty(), "nested object filtered down to nothing");
+    }
+
+    #[test]
+    fn double_underscore_separator_equals_dot() {
+        // `user__id` must behave exactly like `user.id` (gap2 #18
+        // normalisation carried over to ?fields=).
+        let mut a = row();
+        RestPlugin::apply_sparse_fields(&mut a, Some("user__id"));
+        let mut b = row();
+        RestPlugin::apply_sparse_fields(&mut b, Some("user.id"));
+        assert_eq!(a, b, "__ and . forms produce identical projections");
+        let user = a.get("user").unwrap().as_object().unwrap();
+        assert_eq!(
+            user.keys().cloned().collect::<Vec<_>>(),
+            vec!["id".to_string()]
+        );
+    }
+
+    fn deep_row() -> Map<String, Value> {
+        // a.b.c shape: `?include=a.b` hydrated nested objects.
+        let mut m = Map::new();
+        m.insert("id".into(), json!(1));
+        m.insert(
+            "a".into(),
+            json!({
+                "id": 10,
+                "label": "outer",
+                "b": { "id": 20, "name": "inner", "extra": "drop-me" }
+            }),
+        );
+        m
+    }
+
+    #[test]
+    fn multi_hop_prunes_each_level() {
+        let mut r = deep_row();
+        RestPlugin::apply_sparse_fields(&mut r, Some("a__b__name"));
+        // root: only `a` survives
+        assert_eq!(r.keys().cloned().collect::<Vec<_>>(), vec!["a".to_string()]);
+        let a = r.get("a").unwrap().as_object().unwrap();
+        // a: only `b` survives (label + id dropped)
+        assert_eq!(a.keys().cloned().collect::<Vec<_>>(), vec!["b".to_string()]);
+        let b = a.get("b").unwrap().as_object().unwrap();
+        // b: only `name` survives (id + extra dropped)
+        assert_eq!(
+            b.keys().cloned().collect::<Vec<_>>(),
+            vec!["name".to_string()]
+        );
+        assert_eq!(b.get("name"), Some(&json!("inner")));
+    }
+
+    #[test]
+    fn multi_hop_keeps_sibling_at_intermediate_level() {
+        let mut r = deep_row();
+        // Ask for a.label (leaf one level down) AND a.b.id (two down).
+        RestPlugin::apply_sparse_fields(&mut r, Some("a.label,a.b.id"));
+        let a = r.get("a").unwrap().as_object().unwrap();
+        let mut keys: Vec<&str> = a.keys().map(|s| s.as_str()).collect();
+        keys.sort();
+        assert_eq!(keys, vec!["b", "label"]);
+        let b = a.get("b").unwrap().as_object().unwrap();
+        assert_eq!(
+            b.keys().cloned().collect::<Vec<_>>(),
+            vec!["id".to_string()]
+        );
+    }
+
+    #[test]
+    fn nested_path_against_integer_fk_leaves_int_untouched() {
+        // a.b.c requested but `a` is still the raw integer FK
+        // (no ?include=) — no crash, the integer survives.
+        let mut r = Map::new();
+        r.insert("id".into(), json!(1));
+        r.insert("a".into(), json!(7));
+        RestPlugin::apply_sparse_fields(&mut r, Some("id,a__b__c"));
+        assert_eq!(r.get("a"), Some(&json!(7)));
+        assert_eq!(r.get("id"), Some(&json!(1)));
+    }
+
+    #[test]
+    fn depth_cap_truncates_pathological_paths() {
+        // a.b.c.d → capped to a.b.c; the 4th hop is ignored, so
+        // pruning stops at c and keeps c's whole subtree.
+        let mut m = Map::new();
+        m.insert(
+            "a".into(),
+            json!({ "b": { "c": { "d": 1, "e": 2 }, "other": 3 } }),
+        );
+        RestPlugin::apply_sparse_fields(&mut m, Some("a__b__c__d"));
+        let c = m["a"]["b"]["c"].as_object().unwrap();
+        // c kept whole (cap stopped descent before pruning into c)
+        assert!(c.contains_key("d") && c.contains_key("e"));
+        // `other` (sibling of c under b) was pruned away
+        let b = m["a"]["b"].as_object().unwrap();
+        assert_eq!(b.keys().cloned().collect::<Vec<_>>(), vec!["c".to_string()]);
     }
 }
