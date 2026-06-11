@@ -56,7 +56,7 @@ use serde_json::{Map, Value};
 
 use crate::auth::Identity;
 use crate::permission::{Action, Permission};
-use crate::{ComputedFn, TransformFn};
+use crate::{ComputedFn, HideFields, TransformFn};
 
 /// Whether a custom action is mounted on the collection
 /// (`/api/<table>/<name>/`) or on a single row
@@ -248,6 +248,18 @@ impl ResourceConfig {
         }
     }
 
+    /// Start a new resource config keyed off a model's
+    /// [`Model::TABLE`](umbra::orm::Model) const instead of a literal
+    /// table name. Matches the `ModelMeta::for_` convention, and turns
+    /// a misspelled table into a compile error.
+    ///
+    /// ```ignore
+    /// ResourceConfig::for_::<AuthUser>().hide(["password_hash", "email"])
+    /// ```
+    pub fn for_<M: umbra::orm::Model>() -> Self {
+        Self::new(M::TABLE)
+    }
+
     /// Opt OUT of django-filter-style query-string filtering on the
     /// list endpoint for this resource.
     ///
@@ -359,12 +371,20 @@ impl ResourceConfig {
         &self.table
     }
 
-    /// Strip a field from every REST response for this table.
-    /// Equivalent to [`crate::RestPlugin::hide`] but with the table
-    /// implicit. The column stays writable and ORM-readable; only
-    /// the outbound JSON shape changes.
-    pub fn hide(mut self, field: &str) -> Self {
-        self.hidden.push(field.to_string());
+    /// Strip one or more fields from every REST response for this
+    /// table. Equivalent to [`crate::RestPlugin::hide`] but with the
+    /// table implicit. The columns stay writable and ORM-readable;
+    /// only the outbound JSON shape changes.
+    ///
+    /// `fields` accepts a single name or many via [`HideFields`]:
+    ///
+    /// ```ignore
+    /// ResourceConfig::new("user")
+    ///     .hide("password_hash")               // single
+    ///     .hide(["password_hash", "ssn"])      // many
+    /// ```
+    pub fn hide(mut self, fields: impl HideFields) -> Self {
+        self.hidden.extend(fields.into_field_list());
         self
     }
 

@@ -30,6 +30,19 @@ struct User {
     last_name: String,
 }
 
+// A second model exercising the multi-field / model-reference hide
+// surface (Feature A). `hide_model::<Account>(["secret_a", ...])`
+// drops several columns at once, keyed off `Account::TABLE`.
+#[derive(Debug, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
+#[umbra(table = "account")]
+struct Account {
+    id: i64,
+    label: String,
+    secret_a: String,
+    secret_b: String,
+    secret_c: String,
+}
+
 static BOOT: OnceCell<axum::Router> = OnceCell::const_new();
 
 async fn boot() -> &'static axum::Router {
@@ -54,7 +67,14 @@ async fn boot() -> &'static axum::Router {
         // 2. masks `email` so only the domain leaks;
         // 3. synthesises a `display_name` from first + last.
         let rest = RestPlugin::default()
+            // single-str form — proves &str: HideFields keeps the old
+            // call shape compiling unchanged (non-breaking).
             .hide("user", "password_hash")
+            // slice form + model-reference form (Feature A): drop three
+            // columns from `account` keyed off Account::TABLE, and one
+            // more via the slice overload on the table-name builder.
+            .hide("account", ["secret_a"])
+            .hide_model::<Account>(["secret_b", "secret_c"])
             .transform("user", "email", |v| {
                 let s = v.as_str().unwrap_or("");
                 match s.split_once('@') {
@@ -72,6 +92,7 @@ async fn boot() -> &'static axum::Router {
             .settings(settings)
             .database("default", pool)
             .model::<User>()
+            .model::<Account>()
             .plugin(rest)
             .build()
             .expect("App::build with overrides");
@@ -101,6 +122,26 @@ async fn boot() -> &'static axum::Router {
         .execute(&pool)
         .await
         .expect("seed");
+
+        sqlx::query(
+            "CREATE TABLE account (\
+                id INTEGER PRIMARY KEY AUTOINCREMENT,\
+                label TEXT NOT NULL,\
+                secret_a TEXT NOT NULL,\
+                secret_b TEXT NOT NULL,\
+                secret_c TEXT NOT NULL\
+             )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create account table");
+        sqlx::query(
+            "INSERT INTO account (label, secret_a, secret_b, secret_c) \
+             VALUES ('acct', 'AAA', 'BBB', 'CCC')",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed account");
 
         app.into_router()
     })
@@ -345,4 +386,51 @@ async fn empty_fields_param_falls_back_to_full_row() {
     // (minus hide overrides that always apply).
     assert!(obj.contains_key("username"));
     assert!(obj.contains_key("display_name"));
+}
+
+// =====================================================================
+// Feature A — multi-field hide + model-reference hide + for_::<M>().
+// =====================================================================
+
+#[tokio::test]
+async fn slice_hide_drops_every_listed_field() {
+    // `.hide("account", ["secret_a"])` (slice form) drops secret_a;
+    // `.hide_model::<Account>(["secret_b","secret_c"])` drops the
+    // other two. All three must be absent, `label` must remain.
+    let router = boot().await.clone();
+    let (status, body) = get_json(router, "/api/account/1").await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let obj = body.as_object().expect("object");
+    assert!(obj.get("secret_a").is_none(), "secret_a leaked: {obj:?}");
+    assert!(obj.get("secret_b").is_none(), "secret_b leaked: {obj:?}");
+    assert!(obj.get("secret_c").is_none(), "secret_c leaked: {obj:?}");
+    assert_eq!(obj.get("label"), Some(&json!("acct")), "label kept");
+}
+
+#[tokio::test]
+async fn single_str_hide_still_works_non_breaking() {
+    // The original `.hide("user", "password_hash")` single-&str call
+    // shape compiles unchanged and still strips the field — proves
+    // `&str: HideFields` is non-breaking.
+    let router = boot().await.clone();
+    let (status, body) = get_json(router, "/api/user/1").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body.get("password_hash").is_none(),
+        "single-str hide regressed: {body}"
+    );
+}
+
+#[test]
+fn resource_config_for_uses_model_table() {
+    // `ResourceConfig::for_::<Account>()` builds a config whose table
+    // equals `Account::TABLE` — the model-keyed constructor.
+    use umbra::orm::Model;
+    let cfg = umbra_rest::ResourceConfig::for_::<Account>();
+    assert_eq!(cfg.table(), Account::TABLE);
+    assert_eq!(cfg.table(), "account");
+    // And its multi-field `.hide` accepts a slice without churning the
+    // call site.
+    let cfg = cfg.hide(["secret_a", "secret_b"]);
+    let _ = cfg; // builder return — compile-proof of the slice overload.
 }

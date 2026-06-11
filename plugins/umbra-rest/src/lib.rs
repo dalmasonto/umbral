@@ -86,6 +86,68 @@ pub(crate) type TransformFn = std::sync::Arc<dyn Fn(&Value) -> Value + Send + Sy
 pub(crate) type ComputedFn =
     std::sync::Arc<dyn Fn(&Map<String, Value>) -> Value + Send + Sync + 'static>;
 
+/// Accept-either argument for the `hide` builders. Lets a caller pass
+/// a single field (`"a"`) or many (`["a", "b"]`, `vec!["a"]`,
+/// `&["a"][..]`) to [`RestPlugin::hide`] / [`ResourceConfig::hide`]
+/// without two separate method names.
+///
+/// Implemented for `&str`, `String`, fixed-size arrays of either, and
+/// the slice / `Vec` forms. Adding the trait is non-breaking: every
+/// existing `.hide("field")` call keeps compiling because `&str:
+/// HideFields`.
+pub trait HideFields {
+    /// Flatten the argument into the list of field names to hide.
+    fn into_field_list(self) -> Vec<String>;
+}
+
+impl HideFields for &str {
+    fn into_field_list(self) -> Vec<String> {
+        vec![self.to_string()]
+    }
+}
+
+impl HideFields for String {
+    fn into_field_list(self) -> Vec<String> {
+        vec![self]
+    }
+}
+
+impl<const N: usize> HideFields for [&str; N] {
+    fn into_field_list(self) -> Vec<String> {
+        self.iter().map(|s| s.to_string()).collect()
+    }
+}
+
+impl<const N: usize> HideFields for [String; N] {
+    fn into_field_list(self) -> Vec<String> {
+        self.into_iter().collect()
+    }
+}
+
+impl HideFields for &[&str] {
+    fn into_field_list(self) -> Vec<String> {
+        self.iter().map(|s| s.to_string()).collect()
+    }
+}
+
+impl HideFields for &[String] {
+    fn into_field_list(self) -> Vec<String> {
+        self.to_vec()
+    }
+}
+
+impl HideFields for Vec<&str> {
+    fn into_field_list(self) -> Vec<String> {
+        self.iter().map(|s| s.to_string()).collect()
+    }
+}
+
+impl HideFields for Vec<String> {
+    fn into_field_list(self) -> Vec<String> {
+        self
+    }
+}
+
 /// The plugin. Mounts the REST routes at `/api`.
 ///
 /// Field-level customisation is configured at builder time and applied
@@ -511,18 +573,35 @@ impl RestPlugin {
         self
     }
 
-    /// Strip a field from every REST response for the given table.
-    /// The column is still readable through the ORM and writable via
-    /// POST/PUT/PATCH — this only changes the outgoing JSON shape.
+    /// Strip one or more fields from every REST response for the given
+    /// table. The columns stay readable through the ORM and writable
+    /// via POST/PUT/PATCH — this only changes the outgoing JSON shape.
     ///
-    /// Common case: hiding `password_hash` from the `user` table so
-    /// it never reaches an API consumer.
+    /// `fields` accepts a single name or many via [`HideFields`]:
     ///
     /// ```ignore
-    /// RestPlugin::new().hide("user", "password_hash")
+    /// RestPlugin::new()
+    ///     .hide("user", "password_hash")          // single
+    ///     .hide("user", ["password_hash", "ssn"]) // many
     /// ```
-    pub fn hide(mut self, table: &str, field: &str) -> Self {
-        self.hidden.push((table.to_string(), field.to_string()));
+    pub fn hide(mut self, table: &str, fields: impl HideFields) -> Self {
+        for field in fields.into_field_list() {
+            self.hidden.push((table.to_string(), field));
+        }
+        self
+    }
+
+    /// Like [`Self::hide`] but the table is taken from the model's
+    /// [`Model::TABLE`](umbra::orm::Model) const, so a typo in the
+    /// table name is a compile error rather than a silent no-op.
+    ///
+    /// ```ignore
+    /// RestPlugin::new().hide_model::<AuthUser>(["password_hash", "email"])
+    /// ```
+    pub fn hide_model<M: umbra::orm::Model>(mut self, fields: impl HideFields) -> Self {
+        for field in fields.into_field_list() {
+            self.hidden.push((M::TABLE.to_string(), field));
+        }
         self
     }
 
