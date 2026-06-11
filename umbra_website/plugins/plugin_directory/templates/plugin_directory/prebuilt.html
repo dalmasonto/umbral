@@ -1,0 +1,185 @@
+{% extends "base.html" %}
+
+{% block title %}Prebuilt Plugins - Umbra{% endblock %}
+{% block meta_description %}Official Umbra plugins maintained by the Umbra team: admin, REST, auth, ORM, forms, content, tasks, and more.{% endblock %}
+
+{% block content %}
+
+<section class="mx-auto max-w-[1080px] px-7 pb-2 pt-[52px] text-center">
+  <div class="kicker mb-3.5 text-accent">
+    <span class="h-1.5 w-1.5 rounded-full bg-accent"></span>
+    Prebuilt Plugins
+  </div>
+  <h1 class="mx-auto max-w-[760px] text-[38px] font-extrabold leading-[1.06] tracking-[-0.03em] text-ink sm:text-[46px]">
+    The batteries, maintained by the Umbra team
+  </h1>
+  <p class="mx-auto mt-3.5 max-w-[640px] text-[17px] leading-[1.55] text-muted sm:text-[17.5px]">
+    Every official capability ships through the same plugin contract a community developer can use. Enable it, replace it, or extend it with your own <code class="rounded-md bg-accent-soft px-1.5 py-px font-mono text-[15px] text-accent-2">startapp</code>.
+  </p>
+</section>
+
+<section class="mx-auto max-w-[1080px] px-7 pb-2 pt-8">
+  <div class="grid gap-3.5 md:grid-cols-3">
+    <div class="card p-5 text-center">
+      <div class="mb-1.5 text-[13px] font-bold text-ok">Use it</div>
+      <p class="m-0 text-[13.5px] leading-[1.5] text-muted">
+        Add the official plugin to <code class="font-mono text-[12px] text-ink-2">plugins</code> and migrate.
+      </p>
+    </div>
+    <div class="card p-5 text-center">
+      <div class="mb-1.5 text-[13px] font-bold text-accent-2">Replace it</div>
+      <p class="m-0 text-[13.5px] leading-[1.5] text-muted">
+        Swap in a community plugin that honors the same contract.
+      </p>
+    </div>
+    <div class="card p-5 text-center">
+      <div class="mb-1.5 text-[13px] font-bold text-warn">Build your own</div>
+      <p class="m-0 text-[13.5px] leading-[1.5] text-muted">
+        Scaffold a project-specific plugin with <code class="font-mono text-[12px] text-ink-2">startapp</code>.
+      </p>
+    </div>
+  </div>
+</section>
+
+<section class="mx-auto flex max-w-[1080px] flex-col gap-[18px] px-7 pb-2 pt-8">
+  <article class="card rounded-[20px] p-6 sm:p-[30px]">
+    <div class="grid gap-8 lg:grid-cols-[300px_1fr]">
+      <div>
+        <div class="mb-3.5 flex items-center gap-3">
+          <span class="flex h-[46px] w-[46px] shrink-0 items-center justify-center rounded-xl bg-accent-soft text-accent-2">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+          </span>
+          <div>
+            <div class="font-mono text-[16px] font-bold">umbra.admin</div>
+            <span class="pill-ok">Shipped / stable</span>
+          </div>
+        </div>
+        <p class="mb-4 text-[14px] leading-[1.55] text-muted">A batteries-included admin generated from your models, including the moderation queues this website uses.</p>
+        <code class="mb-3.5 block rounded-lg border border-hairline bg-surface-2 px-[11px] py-[9px] font-mono text-[12.5px] text-ink-2">plugins += ["umbra.admin"]</code>
+        <div class="flex gap-3.5 text-[13px] font-semibold text-accent-2">
+          <a href="/docs">Docs</a>
+          <a href="/docs">Setup notes</a>
+        </div>
+      </div>
+      <div>
+        <div class="mb-3.5 text-[12px] font-bold uppercase tracking-[0.04em] text-faint">Plugin feature tracker</div>
+        <div class="grid gap-[9px] sm:grid-cols-2">
+          <div class="flex items-center gap-[9px] rounded-[10px] border border-hairline bg-paper px-3 py-2.5"><span class="h-2 w-2 rounded-full bg-ok"></span><span class="text-[13.5px]">Dashboards</span><span class="ml-auto text-[11px] font-semibold text-ok">shipped</span></div>
+          <div class="flex items-center gap-[9px] rounded-[10px] border border-hairline bg-paper px-3 py-2.5"><span class="h-2 w-2 rounded-full bg-ok"></span><span class="text-[13.5px]">CRUD views</span><span class="ml-auto text-[11px] font-semibold text-ok">shipped</span></div>
+          <div class="flex items-center gap-[9px] rounded-[10px] border border-hairline bg-paper px-3 py-2.5"><span class="h-2 w-2 rounded-full bg-ok"></span><span class="text-[13.5px]">Filters and search</span><span class="ml-auto text-[11px] font-semibold text-ok">shipped</span></div>
+          <div class="flex items-center gap-[9px] rounded-[10px] border border-hairline bg-paper px-3 py-2.5"><span class="h-2 w-2 rounded-full bg-ok"></span><span class="text-[13.5px]">Bulk actions</span><span class="ml-auto text-[11px] font-semibold text-ok">shipped</span></div>
+          <div class="flex items-center gap-[9px] rounded-[10px] border border-hairline bg-paper px-3 py-2.5"><span class="h-2 w-2 rounded-full bg-warn"></span><span class="text-[13.5px]">Inline sheets</span><span class="ml-auto text-[11px] font-semibold text-warn">experimental</span></div>
+          <div class="flex items-center gap-[9px] rounded-[10px] border border-hairline bg-paper px-3 py-2.5"><span class="h-2 w-2 rounded-full bg-ghost"></span><span class="text-[13.5px]">Saved preferences</span><span class="ml-auto text-[11px] font-semibold text-faint">planned</span></div>
+        </div>
+      </div>
+    </div>
+  </article>
+
+  <article class="card rounded-[20px] p-6 sm:p-[30px]">
+    <div class="grid gap-8 lg:grid-cols-[300px_1fr]">
+      <div>
+        <div class="mb-3.5 flex items-center gap-3">
+          <span class="flex h-[46px] w-[46px] shrink-0 items-center justify-center rounded-xl bg-accent-soft font-mono text-[18px] font-bold text-accent-2">{}</span>
+          <div>
+            <div class="font-mono text-[16px] font-bold">umbra.rest</div>
+            <span class="pill-ok">Shipped / stable</span>
+          </div>
+        </div>
+        <p class="mb-4 text-[14px] leading-[1.55] text-muted">REST APIs the familiar way: serializers, viewsets, routers, schemas and a request playground.</p>
+        <code class="mb-3.5 block rounded-lg border border-hairline bg-surface-2 px-[11px] py-[9px] font-mono text-[12.5px] text-ink-2">plugins += ["umbra.rest"]</code>
+        <div class="flex gap-3.5 text-[13px] font-semibold text-accent-2">
+          <a href="/docs">Docs</a>
+          <a href="/plugins/umbra-rest">Plugin page</a>
+        </div>
+      </div>
+      <div>
+        <div class="mb-3.5 text-[12px] font-bold uppercase tracking-[0.04em] text-faint">Plugin feature tracker</div>
+        <div class="grid gap-[9px] sm:grid-cols-2">
+          <div class="flex items-center gap-[9px] rounded-[10px] border border-hairline bg-paper px-3 py-2.5"><span class="h-2 w-2 rounded-full bg-ok"></span><span class="text-[13.5px]">Serializers</span><span class="ml-auto text-[11px] font-semibold text-ok">shipped</span></div>
+          <div class="flex items-center gap-[9px] rounded-[10px] border border-hairline bg-paper px-3 py-2.5"><span class="h-2 w-2 rounded-full bg-ok"></span><span class="text-[13.5px]">Viewsets and routers</span><span class="ml-auto text-[11px] font-semibold text-ok">shipped</span></div>
+          <div class="flex items-center gap-[9px] rounded-[10px] border border-hairline bg-paper px-3 py-2.5"><span class="h-2 w-2 rounded-full bg-ok"></span><span class="text-[13.5px]">Pagination</span><span class="ml-auto text-[11px] font-semibold text-ok">shipped</span></div>
+          <div class="flex items-center gap-[9px] rounded-[10px] border border-hairline bg-paper px-3 py-2.5"><span class="h-2 w-2 rounded-full bg-ok"></span><span class="text-[13.5px]">OpenAPI schema</span><span class="ml-auto text-[11px] font-semibold text-ok">shipped</span></div>
+          <div class="flex items-center gap-[9px] rounded-[10px] border border-hairline bg-paper px-3 py-2.5"><span class="h-2 w-2 rounded-full bg-ok"></span><span class="text-[13.5px]">Filtering</span><span class="ml-auto text-[11px] font-semibold text-ok">shipped</span></div>
+          <div class="flex items-center gap-[9px] rounded-[10px] border border-hairline bg-paper px-3 py-2.5"><span class="h-2 w-2 rounded-full bg-warn"></span><span class="text-[13.5px]">Request playground</span><span class="ml-auto text-[11px] font-semibold text-warn">beta</span></div>
+        </div>
+      </div>
+    </div>
+  </article>
+
+  <article class="card rounded-[20px] p-6 sm:p-[30px]">
+    <div class="grid gap-8 lg:grid-cols-[300px_1fr]">
+      <div>
+        <div class="mb-3.5 flex items-center gap-3">
+          <span class="flex h-[46px] w-[46px] shrink-0 items-center justify-center rounded-xl bg-accent-soft text-accent-2">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+          </span>
+          <div>
+            <div class="font-mono text-[16px] font-bold">umbra.auth</div>
+            <span class="pill-ok">Shipped / stable</span>
+          </div>
+        </div>
+        <p class="mb-4 text-[14px] leading-[1.55] text-muted">Sessions, password hashing, permissions and groups, replaceable by OAuth or SSO plugins.</p>
+        <code class="mb-3.5 block rounded-lg border border-hairline bg-surface-2 px-[11px] py-[9px] font-mono text-[12.5px] text-ink-2">plugins += ["umbra.auth"]</code>
+        <div class="flex gap-3.5 text-[13px] font-semibold text-accent-2">
+          <a href="/docs">Docs</a>
+          <a href="/docs">Permissions</a>
+        </div>
+      </div>
+      <div>
+        <div class="mb-3.5 text-[12px] font-bold uppercase tracking-[0.04em] text-faint">Plugin feature tracker</div>
+        <div class="grid gap-[9px] sm:grid-cols-2">
+          <div class="flex items-center gap-[9px] rounded-[10px] border border-hairline bg-paper px-3 py-2.5"><span class="h-2 w-2 rounded-full bg-ok"></span><span class="text-[13.5px]">Sessions</span><span class="ml-auto text-[11px] font-semibold text-ok">shipped</span></div>
+          <div class="flex items-center gap-[9px] rounded-[10px] border border-hairline bg-paper px-3 py-2.5"><span class="h-2 w-2 rounded-full bg-ok"></span><span class="text-[13.5px]">Password hashing</span><span class="ml-auto text-[11px] font-semibold text-ok">shipped</span></div>
+          <div class="flex items-center gap-[9px] rounded-[10px] border border-hairline bg-paper px-3 py-2.5"><span class="h-2 w-2 rounded-full bg-ok"></span><span class="text-[13.5px]">Permissions</span><span class="ml-auto text-[11px] font-semibold text-ok">shipped</span></div>
+          <div class="flex items-center gap-[9px] rounded-[10px] border border-hairline bg-paper px-3 py-2.5"><span class="h-2 w-2 rounded-full bg-ok"></span><span class="text-[13.5px]">Groups and roles</span><span class="ml-auto text-[11px] font-semibold text-ok">shipped</span></div>
+          <div class="flex items-center gap-[9px] rounded-[10px] border border-hairline bg-paper px-3 py-2.5"><span class="h-2 w-2 rounded-full bg-ghost"></span><span class="text-[13.5px]">Plugin-auditor role</span><span class="ml-auto text-[11px] font-semibold text-faint">planned</span></div>
+          <div class="flex items-center gap-[9px] rounded-[10px] border border-hairline bg-paper px-3 py-2.5"><span class="h-2 w-2 rounded-full bg-ghost"></span><span class="text-[13.5px]">OAuth handshake</span><span class="ml-auto text-[11px] font-semibold text-faint">planned</span></div>
+        </div>
+      </div>
+    </div>
+  </article>
+</section>
+
+<section class="mx-auto max-w-[1080px] px-7 pb-2 pt-[30px]">
+  <div class="mb-4 text-[12px] font-bold uppercase tracking-[0.04em] text-faint">More official plugins</div>
+  <div class="grid gap-3.5 md:grid-cols-3">
+    <a href="/plugins/umbra-orm" class="card block rounded-[14px] p-5">
+      <div class="mb-2 flex items-center justify-between gap-3"><span class="font-mono text-[14px] font-bold text-accent-2">umbra.orm</span><span class="pill-ok">Shipped</span></div>
+      <p class="m-0 text-[13.5px] leading-[1.5] text-muted">Model declaration, query ergonomics, multi-database direction.</p>
+    </a>
+    <a href="/plugins/umbra-migrations" class="card block rounded-[14px] p-5">
+      <div class="mb-2 flex items-center justify-between gap-3"><span class="font-mono text-[14px] font-bold text-accent-2">umbra.migrations</span><span class="pill-ok">Shipped</span></div>
+      <p class="m-0 text-[13.5px] leading-[1.5] text-muted">makemigrations, migrate, review loop, reversible operations.</p>
+    </a>
+    <a href="/plugins/umbra-forms" class="card block rounded-[14px] p-5">
+      <div class="mb-2 flex items-center justify-between gap-3"><span class="font-mono text-[14px] font-bold text-accent-2">umbra.forms</span><span class="pill-ok">Shipped</span></div>
+      <p class="m-0 text-[13.5px] leading-[1.5] text-muted">Validation, friendly errors, spam resistance, server rendering.</p>
+    </a>
+    <a href="/plugins/umbra-content" class="card block rounded-[14px] p-5">
+      <div class="mb-2 flex items-center justify-between gap-3"><span class="font-mono text-[14px] font-bold text-accent-2">umbra.content</span><span class="pill-warn">Beta</span></div>
+      <p class="m-0 text-[13.5px] leading-[1.5] text-muted">Blog, pages, FAQ, media, redirects, banners, testimonials.</p>
+    </a>
+    <a href="/plugins/umbra-tasks" class="card block rounded-[14px] p-5">
+      <div class="mb-2 flex items-center justify-between gap-3"><span class="font-mono text-[14px] font-bold text-accent-2">umbra.tasks</span><span class="pill-warn">Experimental</span></div>
+      <p class="m-0 text-[13.5px] leading-[1.5] text-muted">Background jobs, scheduling and retries behind a plugin.</p>
+    </a>
+    <a href="/plugins/umbra-realtime" class="card block rounded-[14px] p-5">
+      <div class="mb-2 flex items-center justify-between gap-3"><span class="font-mono text-[14px] font-bold text-accent-2">umbra.realtime</span><span class="rounded-full bg-surface-2 px-2 py-[3px] text-[11.5px] font-semibold text-faint">Planned</span></div>
+      <p class="m-0 text-[13.5px] leading-[1.5] text-muted">SSE and WebSockets for live comments, queues and admin state.</p>
+    </a>
+  </div>
+</section>
+
+<section class="mx-auto max-w-[1080px] px-7 pb-2 pt-9">
+  <div class="flex flex-wrap items-center gap-6 rounded-[20px] border border-accent-line bg-accent-soft px-6 py-7 sm:px-8">
+    <div class="min-w-[280px] flex-1">
+      <h2 class="mb-1.5 text-[22px] font-extrabold tracking-[-0.02em] text-[#3A2BA8]">Want to replace a battery?</h2>
+      <p class="m-0 text-[14.5px] leading-[1.55] text-[#6E5FB8]">Browse community plugins that honor the same contract, or scaffold your own and submit it to the directory.</p>
+    </div>
+    <a href="/plugins" class="btn-accent whitespace-nowrap">Browse the directory
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+    </a>
+  </div>
+</section>
+
+{% endblock %}

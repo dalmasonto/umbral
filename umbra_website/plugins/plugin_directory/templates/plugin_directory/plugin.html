@@ -1,0 +1,234 @@
+{% extends "base.html" %}
+
+{% block title %}{{ plugin.name }} - Plugin Directory - Umbra{% endblock %}
+{% block meta_description %}Plugin detail page for {{ plugin.name }}, including install command, audit status, compatibility, features and community notes.{% endblock %}
+
+{% block content %}
+
+<section class="mx-auto max-w-[1200px] px-7 pb-0 pt-10">
+  <a href="/plugins" class="mb-6 inline-flex items-center gap-2 text-[13.5px] font-semibold text-accent-2">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M19 12H5M11 6l-6 6 6 6"/></svg>
+    Back to plugin directory
+  </a>
+
+  {% if plugin.flagged %}
+  <div class="mb-6 flex flex-wrap items-center gap-[9px] rounded-[14px] border border-[#F1C9C9] bg-[#FBEDEC] px-4 py-3">
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#C23B3B" stroke-width="2.2"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>
+    <span class="text-[13.5px] font-bold text-[#A82E2E]">Security advisory active. Do not install this package.</span>
+  </div>
+  {% endif %}
+
+  <div class="grid gap-7 lg:grid-cols-[1fr_340px] lg:items-start">
+    <div>
+      <div class="mb-5 flex flex-wrap items-start gap-4">
+        {% if plugin.flagged %}
+        <span class="flex h-[64px] w-[64px] shrink-0 items-center justify-center rounded-2xl bg-[#FBEDEC] font-mono text-[24px] font-bold text-[#C23B3B]">{{ plugin.icon }}</span>
+        {% elif plugin.source == "community" %}
+        <span class="flex h-[64px] w-[64px] shrink-0 items-center justify-center rounded-2xl bg-tan-soft font-mono text-[24px] font-bold text-tan">{{ plugin.icon }}</span>
+        {% else %}
+        <span class="flex h-[64px] w-[64px] shrink-0 items-center justify-center rounded-2xl bg-accent-soft font-mono text-[24px] font-bold text-accent-2">{{ plugin.icon }}</span>
+        {% endif %}
+        <div class="min-w-0">
+          <div class="mb-2 flex flex-wrap items-center gap-2.5">
+            <h1 class="m-0 text-[38px] font-extrabold leading-[1.06] tracking-[-0.03em] text-ink sm:text-[46px]">{{ plugin.name }}</h1>
+            {% if plugin.flagged %}
+            <span class="rounded-full bg-[#C23B3B] px-2 py-[3px] text-[11px] font-bold text-white">Flagged</span>
+            {% elif plugin.source == "community" %}
+            <span class="pill-community">Community</span>
+            {% else %}
+            <span class="pill-official">Official</span>
+            {% endif %}
+            {% if plugin.featured %}
+            <span class="rounded-full bg-warn-soft px-2 py-[3px] text-[11px] font-semibold text-warn">Featured</span>
+            {% endif %}
+            <span class="text-[12.5px] text-faint">by {{ plugin.maintainer }}</span>
+          </div>
+          <p class="max-w-[720px] text-[17px] leading-[1.55] text-muted">{{ plugin.description }}</p>
+        </div>
+      </div>
+
+      <div class="flex flex-wrap gap-2">
+        {% for tag in plugin.tags %}
+        <span class="rounded-[8px] border border-hairline bg-surface-2 px-3 py-1.5 text-[12.5px] text-body">{{ tag }}</span>
+        {% endfor %}
+      </div>
+    </div>
+
+    <aside class="card rounded-[20px] p-5 shadow-panel">
+      <div class="mb-4 flex items-center justify-between gap-3">
+        <div>
+          <div class="text-[12px] font-bold uppercase tracking-[0.04em] text-faint">Install</div>
+          <div class="mt-1 text-[13px] text-muted">{{ plugin.channel }}</div>
+        </div>
+        {% if plugin.status_kind == "ok" %}
+        <span class="pill-ok">{{ plugin.status }}</span>
+        {% elif plugin.status_kind == "bad" %}
+        <span class="rounded-full bg-[#C23B3B] px-2 py-[3px] text-[11.5px] font-semibold text-white">{{ plugin.status }}</span>
+        {% elif plugin.status_kind == "muted" %}
+        <span class="rounded-full bg-surface-2 px-2 py-[3px] text-[11.5px] font-semibold text-faint">{{ plugin.status }}</span>
+        {% else %}
+        <span class="pill-warn">{{ plugin.status }}</span>
+        {% endif %}
+      </div>
+      <code class="mb-3 block overflow-x-auto rounded-[10px] border border-hairline bg-surface-2 px-3 py-2.5 font-mono text-[12.5px] text-ink-2">{{ plugin.install }}</code>
+      <code class="block overflow-x-auto rounded-[10px] border border-hairline bg-surface-2 px-3 py-2.5 font-mono text-[12.5px] text-ink-2">{{ plugin.toml }}</code>
+      <div class="mt-5 grid grid-cols-3 gap-2 text-center">
+        <div class="rounded-[10px] border border-hairline bg-paper px-2 py-2.5">
+          <div class="text-[15px] font-bold text-ink">{{ plugin.rating }}</div>
+          <div class="text-[11.5px] text-faint">rating</div>
+        </div>
+        <div class="rounded-[10px] border border-hairline bg-paper px-2 py-2.5">
+          <div class="text-[15px] font-bold text-ink">{{ plugin.installs }}</div>
+          <div class="text-[11.5px] text-faint">installs</div>
+        </div>
+        <div class="rounded-[10px] border border-hairline bg-paper px-2 py-2.5">
+          <div class="text-[15px] font-bold text-ink">{{ plugin.notes }}</div>
+          <div class="text-[11.5px] text-faint">notes</div>
+        </div>
+      </div>
+    </aside>
+  </div>
+</section>
+
+<section class="mx-auto max-w-[1200px] px-7 pb-2 pt-8">
+  <div class="grid gap-7 lg:grid-cols-[1fr_340px]">
+    <div class="space-y-5">
+      <div class="card rounded-[20px] p-6 sm:p-7">
+        <div class="mb-5 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 class="mb-1 text-[24px] font-extrabold tracking-[-0.02em]">Plugin feature tracker</h2>
+            <p class="text-[14px] text-muted">Static backend data for this route. Database-backed rows can replace it later.</p>
+          </div>
+          {% if plugin.status_kind == "ok" %}
+          <span class="rounded-full bg-ok-soft px-3 py-1.5 text-[12px] font-semibold text-ok">{{ plugin.shipped_features }} of {{ plugin.total_features }} shipped</span>
+          {% elif plugin.status_kind == "bad" %}
+          <span class="rounded-full bg-[#FBEDEC] px-3 py-1.5 text-[12px] font-semibold text-[#A82E2E]">blocked</span>
+          {% else %}
+          <span class="rounded-full bg-warn-soft px-3 py-1.5 text-[12px] font-semibold text-warn">{{ plugin.shipped_features }} of {{ plugin.total_features }} shipped</span>
+          {% endif %}
+        </div>
+        <div class="grid gap-[9px] sm:grid-cols-2">
+          {% for feature in plugin.features %}
+          <div class="flex items-center gap-[9px] rounded-[10px] border border-hairline bg-paper px-3 py-2.5">
+            {% if feature.kind == "ok" %}
+            <span class="h-2 w-2 shrink-0 rounded-full bg-ok"></span>
+            <span class="text-[13.5px]">{{ feature.label }}</span>
+            <span class="ml-auto text-[11px] font-semibold text-ok">{{ feature.status }}</span>
+            {% elif feature.kind == "bad" %}
+            <span class="h-2 w-2 shrink-0 rounded-full bg-[#C23B3B]"></span>
+            <span class="text-[13.5px]">{{ feature.label }}</span>
+            <span class="ml-auto text-[11px] font-semibold text-[#A82E2E]">{{ feature.status }}</span>
+            {% elif feature.kind == "muted" %}
+            <span class="h-2 w-2 shrink-0 rounded-full bg-ghost"></span>
+            <span class="text-[13.5px]">{{ feature.label }}</span>
+            <span class="ml-auto text-[11px] font-semibold text-faint">{{ feature.status }}</span>
+            {% else %}
+            <span class="h-2 w-2 shrink-0 rounded-full bg-warn"></span>
+            <span class="text-[13.5px]">{{ feature.label }}</span>
+            <span class="ml-auto text-[11px] font-semibold text-warn">{{ feature.status }}</span>
+            {% endif %}
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div class="card rounded-[20px] p-6 sm:p-7">
+        <h2 class="mb-1 text-[24px] font-extrabold tracking-[-0.02em]">{{ plugin.usage_title }}</h2>
+        <p class="mb-5 text-[14px] leading-[1.55] text-muted">{{ plugin.usage_intro }}</p>
+        <div class="overflow-hidden rounded-2xl bg-shade shadow-terminal">
+          <div class="flex items-center gap-2 border-b border-shade-2 px-4 py-[13px]">
+            <span class="h-[11px] w-[11px] rounded-full bg-[#FF6259]"></span>
+            <span class="h-[11px] w-[11px] rounded-full bg-[#FFBD2E]"></span>
+            <span class="h-[11px] w-[11px] rounded-full bg-[#28C840]"></span>
+            <span class="ml-2 font-mono text-[12px] text-shade-faint">plugin setup</span>
+          </div>
+          <pre class="overflow-x-auto px-[22px] py-5 font-mono text-[13px] leading-[1.8] text-shade-ink">{{ plugin.usage_code }}</pre>
+        </div>
+      </div>
+
+      <div class="card rounded-[20px] p-6 sm:p-7">
+        <div class="mb-5 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 class="mb-1 text-[24px] font-extrabold tracking-[-0.02em]">Community notes</h2>
+            <p class="text-[14px] text-muted">Preview of the discussion area for plugin detail pages.</p>
+          </div>
+          <a href="/login" class="btn-ghost">Add a note</a>
+        </div>
+        <div class="space-y-3">
+          {% for comment in plugin.comments %}
+          <article class="rounded-[14px] border border-hairline p-[18px]">
+            <div class="mb-2.5 flex items-center gap-3">
+              <span class="flex h-9 w-9 items-center justify-center rounded-full bg-accent-line text-[13px] font-bold text-accent-2">{{ comment.initials }}</span>
+              <div>
+                <div class="text-[14px] font-bold">{{ comment.name }}</div>
+                <div class="text-[12px] text-faint">{{ comment.role }}</div>
+              </div>
+              {% if comment.badge_kind == "ok" %}
+              <span class="ml-auto text-[12px] font-semibold text-ok">{{ comment.badge }}</span>
+              {% elif comment.badge_kind == "bad" %}
+              <span class="ml-auto text-[12px] font-semibold text-[#A82E2E]">{{ comment.badge }}</span>
+              {% else %}
+              <span class="ml-auto text-[12px] font-semibold text-warn">{{ comment.badge }}</span>
+              {% endif %}
+            </div>
+            <p class="m-0 text-[14px] leading-[1.55] text-ink-2">{{ comment.body }}</p>
+          </article>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+
+    <aside class="space-y-5 lg:sticky lg:top-[84px] lg:self-start">
+      <div class="card rounded-[18px] p-5">
+        <div class="mb-4 text-[12px] font-bold uppercase tracking-[0.04em] text-faint">Health</div>
+        <div class="space-y-3">
+          <div class="flex items-center justify-between gap-3 text-[13.5px]">
+            <span class="text-muted">Audit status</span>
+            {% if plugin.audit_kind == "ok" %}
+            <span class="inline-flex items-center gap-1.5 rounded-full bg-ok-soft px-2.5 py-1 text-[12px] font-semibold text-ok"><span class="h-1.5 w-1.5 rounded-full bg-ok"></span>{{ plugin.audit_label }}</span>
+            {% elif plugin.audit_kind == "bad" %}
+            <span class="inline-flex items-center gap-1.5 rounded-full bg-[#FBEDEC] px-2.5 py-1 text-[12px] font-semibold text-[#A82E2E]"><span class="h-1.5 w-1.5 rounded-full bg-[#C23B3B]"></span>{{ plugin.audit_label }}</span>
+            {% elif plugin.audit_kind == "muted" %}
+            <span class="inline-flex items-center gap-1.5 rounded-full bg-surface-2 px-2.5 py-1 text-[12px] font-semibold text-faint"><span class="h-1.5 w-1.5 rounded-full bg-ghost"></span>{{ plugin.audit_label }}</span>
+            {% else %}
+            <span class="inline-flex items-center gap-1.5 rounded-full bg-warn-soft px-2.5 py-1 text-[12px] font-semibold text-warn"><span class="h-1.5 w-1.5 rounded-full bg-warn"></span>{{ plugin.audit_label }}</span>
+            {% endif %}
+          </div>
+          <div class="flex items-center justify-between gap-3 text-[13.5px]"><span class="text-muted">Last audit</span><span class="font-semibold text-ink-2">{{ plugin.audit_date }}</span></div>
+          <div class="flex items-center justify-between gap-3 text-[13.5px]"><span class="text-muted">Maturity</span><span class="font-semibold text-ink-2">{{ plugin.maturity }}</span></div>
+          <div class="flex items-center justify-between gap-3 text-[13.5px]"><span class="text-muted">Maintainer</span><span class="font-semibold text-ink-2">{{ plugin.maintainer }}</span></div>
+        </div>
+      </div>
+
+      <div class="card rounded-[18px] p-5">
+        <div class="mb-4 text-[12px] font-bold uppercase tracking-[0.04em] text-faint">Compatibility</div>
+        <div class="space-y-2.5">
+          {% for item in plugin.compatibility %}
+          <div class="flex items-center gap-2 rounded-[10px] border border-hairline bg-paper px-3 py-2.5 text-[13.5px]">
+            {% if item.kind == "ok" %}
+            <span class="h-2 w-2 shrink-0 rounded-full bg-ok"></span>{{ item.label }} <span class="ml-auto text-[11px] font-semibold text-ok">{{ item.status }}</span>
+            {% elif item.kind == "bad" %}
+            <span class="h-2 w-2 shrink-0 rounded-full bg-[#C23B3B]"></span>{{ item.label }} <span class="ml-auto text-[11px] font-semibold text-[#A82E2E]">{{ item.status }}</span>
+            {% elif item.kind == "muted" %}
+            <span class="h-2 w-2 shrink-0 rounded-full bg-ghost"></span>{{ item.label }} <span class="ml-auto text-[11px] font-semibold text-faint">{{ item.status }}</span>
+            {% else %}
+            <span class="h-2 w-2 shrink-0 rounded-full bg-warn"></span>{{ item.label }} <span class="ml-auto text-[11px] font-semibold text-warn">{{ item.status }}</span>
+            {% endif %}
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div class="rounded-[18px] bg-shade p-5 text-white">
+        <div class="mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-white/[0.08]">
+          <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="var(--accent-ghost)" stroke-width="2"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg>
+        </div>
+        <h2 class="mb-2 text-[18px] font-extrabold tracking-[-0.01em]">Report a security concern</h2>
+        <p class="mb-4 text-[13.5px] leading-[1.55] text-shade-muted">Every plugin page includes a direct path to responsible disclosure. Confirmed issues appear visibly in the directory.</p>
+        <a href="/security" class="inline-flex items-center gap-2 rounded-[10px] bg-white px-4 py-2.5 text-[13.5px] font-semibold text-shade">Report issue</a>
+      </div>
+    </aside>
+  </div>
+</section>
+
+{% endblock %}

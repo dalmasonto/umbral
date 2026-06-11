@@ -154,7 +154,7 @@
       <div class="card rounded-[14px] p-[18px]">
         <div class="mb-[11px] flex items-center gap-2.5">
           <span class="flex h-[34px] w-[34px] items-center justify-center rounded-[9px] bg-accent-soft font-mono text-[14px] font-bold text-accent-2">{}</span>
-          <a href="/plugins" class="truncate text-[15px] font-bold transition-colors hover:text-accent-2">{{ p.crate_name }}</a>
+          <a href="/plugins/{{ p.crate_name }}" class="truncate text-[15px] font-bold transition-colors hover:text-accent-2">{{ p.crate_name }}</a>
           <span class="pill-official ml-auto">{{ p.status }}</span>
         </div>
         <p class="mb-3 min-h-[40px] text-[13.5px] leading-[1.5] text-muted">{{ p.short_description }}</p>
@@ -183,7 +183,7 @@
       <div class="card rounded-[14px] p-[18px]">
         <div class="mb-[11px] flex items-center gap-2.5">
           <span class="flex h-[34px] w-[34px] items-center justify-center rounded-[9px] bg-accent-soft font-mono text-[14px] font-bold text-accent-2">{}</span>
-          <a href="/plugins" class="text-[15px] font-bold transition-colors hover:text-accent-2">umbra-rest</a>
+          <a href="/plugins/umbra-rest" class="text-[15px] font-bold transition-colors hover:text-accent-2">umbra-rest</a>
           <span class="pill-official ml-auto">Official</span>
         </div>
         <p class="mb-3 min-h-[40px] text-[13.5px] leading-[1.5] text-muted">Serializers, viewsets, routers, OpenAPI and a request playground.</p>
@@ -202,7 +202,7 @@
       <div class="card rounded-[14px] p-[18px]">
         <div class="mb-[11px] flex items-center gap-2.5">
           <span class="flex h-[34px] w-[34px] items-center justify-center rounded-[9px] bg-accent-soft text-accent-2"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg></span>
-          <a href="/plugins" class="text-[15px] font-bold transition-colors hover:text-accent-2">umbra-admin</a>
+          <a href="/plugins/umbra-admin" class="text-[15px] font-bold transition-colors hover:text-accent-2">umbra-admin</a>
           <span class="pill-official ml-auto">Official</span>
         </div>
         <p class="mb-3 min-h-[40px] text-[13.5px] leading-[1.5] text-muted">Auto dashboards, CRUD, filters, sheets, bulk actions and per-user preferences.</p>
@@ -221,7 +221,7 @@
       <div class="card rounded-[14px] p-[18px]">
         <div class="mb-[11px] flex items-center gap-2.5">
           <span class="flex h-[34px] w-[34px] items-center justify-center rounded-[9px] bg-tan-soft text-tan"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21V8l9-5 9 5v13"/><path d="M9 21v-6h6v6"/></svg></span>
-          <a href="/plugins" class="text-[15px] font-bold transition-colors hover:text-accent-2">umbra-multitenancy</a>
+          <a href="/plugins/umbra-multitenancy" class="text-[15px] font-bold transition-colors hover:text-accent-2">umbra-multitenancy</a>
           <span class="pill-community ml-auto">Community</span>
         </div>
         <p class="mb-3 min-h-[40px] text-[13.5px] leading-[1.5] text-muted">Schema-per-tenant and row-level tenancy with admin-aware scoping. by @kanto</p>
@@ -251,37 +251,37 @@
     <p class="text-[16.5px] leading-[1.55] text-muted">Official plugins maintained by the Umbra team. Each one is swappable, has its own page, and tracks what's shipped vs. planned.</p>
   </div>
   <div class="grid gap-3.5 sm:grid-cols-2 lg:grid-cols-4">
-    <a href="/prebuilt" class="card block rounded-[14px] p-5">
+    <a href="/plugins/umbra-orm" class="card block rounded-[14px] p-5">
       <div class="mb-2 font-mono text-[14px] font-bold text-accent-2">umbra.orm</div>
       <p class="mb-3 text-[13.5px] leading-[1.5] text-muted">Model declaration, query ergonomics, multi-database direction.</p>
       <span class="pill-ok">Shipped</span>
     </a>
-    <a href="/prebuilt" class="card block rounded-[14px] p-5">
+    <a href="/plugins/umbra-admin" class="card block rounded-[14px] p-5">
       <div class="mb-2 font-mono text-[14px] font-bold text-accent-2">umbra.admin</div>
       <p class="mb-3 text-[13.5px] leading-[1.5] text-muted">Dashboards, CRUD, filters, sheets, bulk actions, preferences.</p>
       <span class="pill-ok">Shipped</span>
     </a>
-    <a href="/prebuilt" class="card block rounded-[14px] p-5">
+    <a href="/plugins/umbra-rest" class="card block rounded-[14px] p-5">
       <div class="mb-2 font-mono text-[14px] font-bold text-accent-2">umbra.rest</div>
       <p class="mb-3 text-[13.5px] leading-[1.5] text-muted">Serializers, viewsets, routers, OpenAPI, pagination, playground.</p>
       <span class="pill-ok">Shipped</span>
     </a>
-    <a href="/prebuilt" class="card block rounded-[14px] p-5">
+    <a href="/plugins/umbra-auth" class="card block rounded-[14px] p-5">
       <div class="mb-2 font-mono text-[14px] font-bold text-accent-2">umbra.auth</div>
       <p class="mb-3 text-[13.5px] leading-[1.5] text-muted">Sessions, password hashing, permissions and groups.</p>
       <span class="pill-ok">Shipped</span>
     </a>
-    <a href="/prebuilt" class="card block rounded-[14px] p-5">
+    <a href="/plugins/umbra-forms" class="card block rounded-[14px] p-5">
       <div class="mb-2 font-mono text-[14px] font-bold text-accent-2">umbra.forms</div>
       <p class="mb-3 text-[13.5px] leading-[1.5] text-muted">Validation, friendly errors, spam resistance, server rendering.</p>
       <span class="pill-ok">Shipped</span>
     </a>
-    <a href="/prebuilt" class="card block rounded-[14px] p-5">
+    <a href="/plugins/umbra-content" class="card block rounded-[14px] p-5">
       <div class="mb-2 font-mono text-[14px] font-bold text-accent-2">umbra.content</div>
       <p class="mb-3 text-[13.5px] leading-[1.5] text-muted">Blog, pages, FAQ, media, redirects, banners, testimonials.</p>
       <span class="pill-warn">Beta</span>
     </a>
-    <a href="/prebuilt" class="card block rounded-[14px] p-5">
+    <a href="/plugins/umbra-tasks" class="card block rounded-[14px] p-5">
       <div class="mb-2 font-mono text-[14px] font-bold text-accent-2">umbra.tasks</div>
       <p class="mb-3 text-[13.5px] leading-[1.5] text-muted">Background jobs, scheduling and retries behind a plugin.</p>
       <span class="pill-warn">Experimental</span>

@@ -1,0 +1,236 @@
+{% extends "base.html" %}
+
+{% block title %}Plugin Directory - Umbra{% endblock %}
+{% block meta_description %}Browse official batteries, community packages, experiments and security-reviewed plugins for Umbra applications.{% endblock %}
+
+{% block content %}
+
+<section class="mx-auto max-w-[1200px] px-7 pb-0 pt-12">
+  <div class="flex flex-wrap items-end justify-between gap-6">
+    <div class="max-w-[650px]">
+      <div class="kicker mb-3 text-accent">
+        <span class="h-1.5 w-1.5 rounded-full bg-accent"></span>
+        Plugin Directory
+      </div>
+      <h1 class="mb-3 text-[38px] font-extrabold leading-[1.06] tracking-[-0.03em] text-ink sm:text-[44px]">Find a plugin for that</h1>
+      <p class="m-0 text-[17px] leading-[1.55] text-muted">Official batteries, community packages and experiments, searchable, reviewable, and checked for safety before you install.</p>
+    </div>
+    <a href="/plugins/submit" class="btn-ghost whitespace-nowrap">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg>
+      Submit a plugin
+    </a>
+  </div>
+
+  <div class="mt-7 flex flex-col gap-3 md:flex-row md:items-center">
+    <label class="flex flex-1 items-center gap-[11px] rounded-[13px] border border-hairline-2 bg-surface px-4 py-3.5 text-[15px] text-faint transition-colors focus-within:border-accent-line" aria-label="Search plugins">
+      <svg class="shrink-0" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
+      <input class="min-w-0 flex-1 bg-transparent text-ink outline-none placeholder:text-faint" type="search" placeholder="Search 248 plugins: rest, multitenancy, oauth, storage">
+      <span class="hidden rounded-md border border-hairline-2 px-[7px] py-0.5 font-mono text-[12px] text-ghost sm:inline">/</span>
+    </label>
+    <button type="button" class="inline-flex items-center justify-between gap-8 rounded-[13px] border border-hairline-2 bg-surface px-4 py-3.5 text-[14px] font-semibold text-ink-2">
+      Sort: Most installed
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--faint)" stroke-width="2.2"><path d="M6 9l6 6 6-6"/></svg>
+    </button>
+  </div>
+</section>
+
+<section class="mx-auto max-w-[1200px] px-7 pb-2 pt-6">
+  <div class="grid gap-7 lg:grid-cols-[248px_1fr]">
+    <aside class="space-y-[22px] lg:sticky lg:top-[84px] lg:self-start">
+      <div class="card rounded-2xl p-[18px]">
+        <div class="mb-3 text-[12px] font-bold uppercase tracking-[0.04em] text-faint">Type</div>
+        <div class="space-y-[3px]">
+          <label class="flex items-center gap-[9px] rounded-lg bg-accent-soft px-2 py-[7px] text-[14px] text-ink-2"><span class="flex h-4 w-4 items-center justify-center rounded-[5px] border-2 border-accent bg-accent"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.5"><path d="M20 6L9 17l-5-5"/></svg></span>Official <span class="ml-auto text-[12px] text-faint">14</span></label>
+          <label class="flex items-center gap-[9px] rounded-lg px-2 py-[7px] text-[14px] text-ink-2"><span class="flex h-4 w-4 items-center justify-center rounded-[5px] border-2 border-accent bg-accent"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.5"><path d="M20 6L9 17l-5-5"/></svg></span>Community <span class="ml-auto text-[12px] text-faint">201</span></label>
+          <label class="flex items-center gap-[9px] rounded-lg px-2 py-[7px] text-[14px] text-body"><span class="h-4 w-4 rounded-[5px] border border-ghost"></span>Experimental <span class="ml-auto text-[12px] text-faint">26</span></label>
+          <label class="flex items-center gap-[9px] rounded-lg px-2 py-[7px] text-[14px] text-body"><span class="h-4 w-4 rounded-[5px] border border-ghost"></span>Deprecated <span class="ml-auto text-[12px] text-faint">5</span></label>
+          <label class="flex items-center gap-[9px] rounded-lg px-2 py-[7px] text-[14px] text-body"><span class="h-4 w-4 rounded-[5px] border border-ghost"></span>Flagged <span class="ml-auto text-[12px] text-[#C23B3B]">2</span></label>
+        </div>
+      </div>
+
+      <div class="card rounded-2xl p-[18px]">
+        <div class="mb-3 text-[12px] font-bold uppercase tracking-[0.04em] text-faint">Category</div>
+        <div class="flex flex-wrap gap-[7px]">
+          <span class="rounded-full bg-shade px-[11px] py-[5px] text-[12.5px] text-white">All</span>
+          <span class="rounded-full border border-hairline bg-surface-2 px-[11px] py-[5px] text-[12.5px] text-body">Auth</span>
+          <span class="rounded-full border border-hairline bg-surface-2 px-[11px] py-[5px] text-[12.5px] text-body">API</span>
+          <span class="rounded-full border border-hairline bg-surface-2 px-[11px] py-[5px] text-[12.5px] text-body">Admin</span>
+          <span class="rounded-full border border-hairline bg-surface-2 px-[11px] py-[5px] text-[12.5px] text-body">Storage</span>
+          <span class="rounded-full border border-hairline bg-surface-2 px-[11px] py-[5px] text-[12.5px] text-body">Tasks</span>
+          <span class="rounded-full border border-hairline bg-surface-2 px-[11px] py-[5px] text-[12.5px] text-body">Tenancy</span>
+          <span class="rounded-full border border-hairline bg-surface-2 px-[11px] py-[5px] text-[12.5px] text-body">Frontend</span>
+        </div>
+      </div>
+
+      <div class="card rounded-2xl p-[18px]">
+        <div class="mb-3 text-[12px] font-bold uppercase tracking-[0.04em] text-faint">Audit status</div>
+        <div class="space-y-[3px]">
+          <label class="flex items-center gap-[9px] rounded-lg px-2 py-[7px] text-[14px] text-body"><span class="h-4 w-4 rounded-[5px] border border-ghost"></span><span class="inline-flex items-center gap-1.5"><span class="h-[7px] w-[7px] rounded-full bg-ok"></span>Audited</span></label>
+          <label class="flex items-center gap-[9px] rounded-lg px-2 py-[7px] text-[14px] text-body"><span class="h-4 w-4 rounded-[5px] border border-ghost"></span><span class="inline-flex items-center gap-1.5"><span class="h-[7px] w-[7px] rounded-full bg-warn"></span>Unverified</span></label>
+          <label class="flex items-center gap-[9px] rounded-lg px-2 py-[7px] text-[14px] text-body"><span class="h-4 w-4 rounded-[5px] border border-ghost"></span><span class="inline-flex items-center gap-1.5"><span class="h-[7px] w-[7px] rounded-full bg-[#C23B3B]"></span>Flagged</span></label>
+        </div>
+      </div>
+
+      <div class="card rounded-2xl p-[18px]">
+        <div class="mb-3 text-[12px] font-bold uppercase tracking-[0.04em] text-faint">Database backend</div>
+        <div class="space-y-[3px]">
+          <label class="flex items-center gap-[9px] rounded-lg px-2 py-[7px] text-[14px] text-body"><span class="h-4 w-4 rounded-[5px] border border-ghost"></span>PostgreSQL</label>
+          <label class="flex items-center gap-[9px] rounded-lg px-2 py-[7px] text-[14px] text-body"><span class="h-4 w-4 rounded-[5px] border border-ghost"></span>SQLite</label>
+          <label class="flex items-center gap-[9px] rounded-lg px-2 py-[7px] text-[14px] text-body"><span class="h-4 w-4 rounded-[5px] border border-ghost"></span>MySQL</label>
+        </div>
+      </div>
+    </aside>
+
+    <div class="flex flex-col gap-3.5">
+      <div class="text-[13.5px] text-muted">Showing <span class="font-semibold text-ink">8</span> of 248 plugins</div>
+
+      <a href="/plugins/umbra-rest" class="card block rounded-2xl p-[22px] transition-colors hover:border-accent-line">
+        <div class="flex flex-col gap-4 md:flex-row">
+          <span class="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-accent-soft font-mono text-[18px] font-bold text-accent-2">{}</span>
+          <div class="min-w-0 flex-1">
+            <div class="mb-1 flex flex-wrap items-center gap-[9px]">
+              <span class="text-[17px] font-bold">umbra-rest</span>
+              <span class="pill-official">Official</span>
+              <span class="rounded-full bg-warn-soft px-2 py-[3px] text-[11px] font-semibold text-warn">Featured</span>
+              <span class="text-[12.5px] text-faint">by Umbra team</span>
+            </div>
+            <p class="mb-[11px] text-[14px] leading-[1.5] text-muted">Build REST APIs the familiar way: serializers, viewsets, routers, pagination, filtering, OpenAPI schemas and an in-browser request playground.</p>
+            <div class="flex flex-wrap gap-1.5">
+              <span class="rounded-[7px] border border-hairline bg-surface-2 px-[9px] py-[3px] text-[12px] text-body">api</span>
+              <span class="rounded-[7px] border border-hairline bg-surface-2 px-[9px] py-[3px] text-[12px] text-body">openapi</span>
+              <span class="rounded-[7px] border border-hairline bg-surface-2 px-[9px] py-[3px] text-[12px] text-body">serializers</span>
+            </div>
+          </div>
+          <div class="flex shrink-0 flex-col gap-[9px] text-left md:w-[188px] md:items-end md:text-right">
+            <span class="inline-flex items-center gap-1.5 rounded-full bg-ok-soft px-2.5 py-1 text-[12px] font-semibold text-ok"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M20 6L9 17l-5-5"/></svg>Audited / Aug 2026</span>
+            <div class="text-[12.5px] text-faint"><span class="font-bold text-ink">4.9</span> rating / 38k installs</div>
+            <div class="flex items-center gap-1.5 text-[12.5px] text-faint md:justify-end"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.4 8.4 0 0 1-11.3 7.9L3 21l1.6-6.7A8.4 8.4 0 1 1 21 11.5z"/></svg>52 notes</div>
+            <code class="w-fit rounded-[7px] border border-hairline bg-surface-2 px-[9px] py-[5px] font-mono text-[12px] text-ink-2">umbra add umbra-rest</code>
+          </div>
+        </div>
+      </a>
+
+      <a href="/plugins/umbra-multitenancy" class="card block rounded-2xl p-[22px] transition-colors hover:border-tan-line">
+        <div class="flex flex-col gap-4 md:flex-row">
+          <span class="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-tan-soft text-tan"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21V8l9-5 9 5v13"/><path d="M9 21v-6h6v6"/></svg></span>
+          <div class="min-w-0 flex-1">
+            <div class="mb-1 flex flex-wrap items-center gap-[9px]">
+              <span class="text-[17px] font-bold">umbra-multitenancy</span>
+              <span class="pill-community">Community</span>
+              <span class="text-[12.5px] text-faint">by @kanto</span>
+            </div>
+            <p class="mb-[11px] text-[14px] leading-[1.5] text-muted">Schema-per-tenant and row-level tenancy with admin-aware scoping, tenant-aware migrations and middleware for request routing.</p>
+            <div class="flex flex-wrap gap-1.5">
+              <span class="rounded-[7px] border border-hairline bg-surface-2 px-[9px] py-[3px] text-[12px] text-body">tenancy</span>
+              <span class="rounded-[7px] border border-hairline bg-surface-2 px-[9px] py-[3px] text-[12px] text-body">postgres</span>
+              <span class="rounded-[7px] border border-hairline bg-surface-2 px-[9px] py-[3px] text-[12px] text-body">middleware</span>
+            </div>
+          </div>
+          <div class="flex shrink-0 flex-col gap-[9px] text-left md:w-[188px] md:items-end md:text-right">
+            <span class="inline-flex items-center gap-1.5 rounded-full bg-warn-soft px-2.5 py-1 text-[12px] font-semibold text-warn"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/></svg>Unverified</span>
+            <div class="text-[12.5px] text-faint"><span class="font-bold text-ink">4.6</span> rating / 9.1k installs</div>
+            <div class="flex items-center gap-1.5 text-[12.5px] text-faint md:justify-end"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.4 8.4 0 0 1-11.3 7.9L3 21l1.6-6.7A8.4 8.4 0 1 1 21 11.5z"/></svg>31 notes</div>
+            <code class="w-fit rounded-[7px] border border-hairline bg-surface-2 px-[9px] py-[5px] font-mono text-[11.5px] text-ink-2">umbra add umbra-multitenancy</code>
+          </div>
+        </div>
+      </a>
+
+      <a href="/plugins/umbra-oauth-github" class="card block rounded-2xl p-[22px] transition-colors hover:border-tan-line">
+        <div class="flex flex-col gap-4 md:flex-row">
+          <span class="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-tan-soft text-ink-2"><svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.58 2 12.25c0 4.53 2.87 8.37 6.84 9.73.5.1.68-.22.68-.49v-1.7c-2.78.62-3.37-1.37-3.37-1.37-.46-1.18-1.11-1.49-1.11-1.49-.91-.64.07-.62.07-.62 1 .07 1.53 1.06 1.53 1.06.89 1.56 2.34 1.11 2.91.85.09-.66.35-1.11.63-1.37-2.22-.26-4.56-1.14-4.56-5.07 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.27 2.75 1.05a9.36 9.36 0 0 1 5 0c1.91-1.32 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.94-2.34 4.81-4.57 5.06.36.32.68.94.68 1.9v2.82c0 .27.18.6.69.49A10.26 10.26 0 0 0 22 12.25C22 6.58 17.52 2 12 2Z"/></svg></span>
+          <div class="min-w-0 flex-1">
+            <div class="mb-1 flex flex-wrap items-center gap-[9px]">
+              <span class="text-[17px] font-bold">umbra-oauth-github</span>
+              <span class="pill-community">Community</span>
+              <span class="rounded-full bg-accent-soft px-2 py-[3px] text-[11px] font-semibold text-accent-2">Experimental</span>
+              <span class="text-[12.5px] text-faint">by @devlin</span>
+            </div>
+            <p class="mb-[11px] text-[14px] leading-[1.5] text-muted">GitHub OAuth, avatar import and account-age gates for reviews, submissions and malicious-plugin voting.</p>
+            <div class="flex flex-wrap gap-1.5">
+              <span class="rounded-[7px] border border-hairline bg-surface-2 px-[9px] py-[3px] text-[12px] text-body">auth</span>
+              <span class="rounded-[7px] border border-hairline bg-surface-2 px-[9px] py-[3px] text-[12px] text-body">oauth</span>
+              <span class="rounded-[7px] border border-hairline bg-surface-2 px-[9px] py-[3px] text-[12px] text-body">identity</span>
+            </div>
+          </div>
+          <div class="flex shrink-0 flex-col gap-[9px] text-left md:w-[188px] md:items-end md:text-right">
+            <span class="inline-flex items-center gap-1.5 rounded-full bg-warn-soft px-2.5 py-1 text-[12px] font-semibold text-warn"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/></svg>Unverified</span>
+            <div class="text-[12.5px] text-faint"><span class="font-bold text-ink">4.3</span> rating / 2.7k installs</div>
+            <div class="flex items-center gap-1.5 text-[12.5px] text-faint md:justify-end"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.4 8.4 0 0 1-11.3 7.9L3 21l1.6-6.7A8.4 8.4 0 1 1 21 11.5z"/></svg>44 notes</div>
+            <code class="w-fit rounded-[7px] border border-hairline bg-surface-2 px-[9px] py-[5px] font-mono text-[11.5px] text-ink-2">umbra add umbra-oauth-github</code>
+          </div>
+        </div>
+      </a>
+
+      <a href="/plugins/fast-secrets-vault" class="block rounded-2xl border border-[#F1C9C9] bg-surface p-[22px]">
+        <div class="mb-4 flex flex-wrap items-center gap-[9px] rounded-[10px] border border-[#F1C9C9] bg-[#FBEDEC] px-3 py-[9px]">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#C23B3B" stroke-width="2.2"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>
+          <span class="text-[13px] font-bold text-[#A82E2E]">Security advisory: confirmed malicious behavior in v0.2.x.</span>
+          <span class="ml-auto text-[12.5px] font-semibold text-[#A82E2E] underline">Read advisory</span>
+        </div>
+        <div class="flex flex-col gap-4 md:flex-row">
+          <span class="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-[#FBEDEC] text-[#C23B3B]"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9.5 9.5l5 5M14.5 9.5l-5 5"/></svg></span>
+          <div class="min-w-0 flex-1">
+            <div class="mb-1 flex flex-wrap items-center gap-[9px]">
+              <span class="text-[17px] font-bold text-[#7A2222]">fast-secrets-vault</span>
+              <span class="rounded-full bg-[#C23B3B] px-2 py-[3px] text-[11px] font-bold text-white">Flagged</span>
+              <span class="text-[12.5px] text-[#B08A8A]">by @anon-9931</span>
+            </div>
+            <p class="mb-[11px] text-[14px] leading-[1.5] text-[#9A7676]">Claims to manage app secrets. Auditors confirmed it exfiltrates environment variables during migration. Do not install.</p>
+            <div class="flex flex-wrap gap-1.5">
+              <span class="rounded-[7px] border border-[#F1C9C9] bg-[#FBEDEC] px-[9px] py-[3px] text-[12px] text-[#A82E2E]">secrets</span>
+              <span class="rounded-[7px] border border-[#F1C9C9] bg-[#FBEDEC] px-[9px] py-[3px] text-[12px] text-[#A82E2E]">do-not-install</span>
+            </div>
+          </div>
+          <div class="flex shrink-0 flex-col gap-[9px] text-left md:w-[188px] md:items-end md:text-right">
+            <span class="inline-flex items-center gap-1.5 rounded-full bg-[#C23B3B] px-2.5 py-1 text-[12px] font-bold text-white"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M18 6L6 18M6 6l12 12"/></svg>Malicious</span>
+            <div class="text-[12.5px] text-[#B08A8A]">delisted from install</div>
+            <div class="flex items-center gap-1.5 text-[12.5px] text-[#B08A8A] md:justify-end"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.4 8.4 0 0 1-11.3 7.9L3 21l1.6-6.7A8.4 8.4 0 1 1 21 11.5z"/></svg>87 reports</div>
+          </div>
+        </div>
+      </a>
+
+      <a href="/plugins/umbra-storage-s3" class="card block rounded-2xl p-[22px] transition-colors hover:border-tan-line">
+        <div class="flex flex-col gap-4 md:flex-row">
+          <span class="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-tan-soft text-tan"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg></span>
+          <div class="min-w-0 flex-1">
+            <div class="mb-1 flex flex-wrap items-center gap-[9px]">
+              <span class="text-[17px] font-bold">umbra-storage-s3</span>
+              <span class="pill-community">Community</span>
+              <span class="text-[12.5px] text-faint">by @lumen-labs</span>
+            </div>
+            <p class="mb-[11px] text-[14px] leading-[1.5] text-muted">Drop-in S3 and S3-compatible media backend for the content plugin, with signed URLs, lifecycle rules and streaming uploads.</p>
+            <div class="flex flex-wrap gap-1.5">
+              <span class="rounded-[7px] border border-hairline bg-surface-2 px-[9px] py-[3px] text-[12px] text-body">storage</span>
+              <span class="rounded-[7px] border border-hairline bg-surface-2 px-[9px] py-[3px] text-[12px] text-body">s3</span>
+              <span class="rounded-[7px] border border-hairline bg-surface-2 px-[9px] py-[3px] text-[12px] text-body">media</span>
+            </div>
+          </div>
+          <div class="flex shrink-0 flex-col gap-[9px] text-left md:w-[188px] md:items-end md:text-right">
+            <span class="inline-flex items-center gap-1.5 rounded-full bg-ok-soft px-2.5 py-1 text-[12px] font-semibold text-ok"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M20 6L9 17l-5-5"/></svg>Audited / Jun 2026</span>
+            <div class="text-[12.5px] text-faint"><span class="font-bold text-ink">4.7</span> rating / 12k installs</div>
+            <div class="flex items-center gap-1.5 text-[12.5px] text-faint md:justify-end"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.4 8.4 0 0 1-11.3 7.9L3 21l1.6-6.7A8.4 8.4 0 1 1 21 11.5z"/></svg>18 notes</div>
+            <code class="w-fit rounded-[7px] border border-hairline bg-surface-2 px-[9px] py-[5px] font-mono text-[11.5px] text-ink-2">umbra add umbra-storage-s3</code>
+          </div>
+        </div>
+      </a>
+
+      <div class="flex justify-center py-3.5">
+        <button type="button" class="btn-ghost">Load 240 more plugins</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="mx-auto max-w-[1200px] px-7 pb-2 pt-6">
+  <div class="flex flex-wrap items-center gap-6 rounded-[20px] bg-shade px-6 py-8 text-white sm:px-9">
+    <div class="min-w-[280px] flex-1">
+      <h2 class="mb-2 text-[24px] font-extrabold tracking-[-0.02em]">Built something? List it here.</h2>
+      <p class="m-0 text-[14.5px] leading-[1.55] text-shade-muted">Plugin submissions go through moderation before publishing. Manual review is available while OAuth-based identity checks are being built.</p>
+    </div>
+    <a href="/plugins/submit" class="inline-flex items-center gap-[9px] whitespace-nowrap rounded-[11px] bg-surface px-[22px] py-[13px] text-[15px] font-semibold text-shade">Submit a plugin
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+    </a>
+  </div>
+</section>
+
+{% endblock %}
