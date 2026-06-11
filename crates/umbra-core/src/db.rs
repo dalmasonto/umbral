@@ -193,6 +193,15 @@ pub fn pool_dispatched() -> &'static DbPool {
         .expect("umbra: no default database registered")
 }
 
+/// Like [`pool_dispatched`] but returns `None` instead of panicking
+/// when no pool is registered yet (`App::build()` hasn't run, or this
+/// is a pure SQL-building call such as `QuerySet::to_sql` in a test with
+/// no app booted). Used by runtime advisory paths that must not crash a
+/// query-builder call — see the RIGHT-JOIN-on-old-SQLite warning.
+pub fn try_pool_dispatched() -> Option<&'static DbPool> {
+    POOLS.get().and_then(|pools| pools.get("default"))
+}
+
 /// Return a named connection pool, typed as a [`SqlitePool`].
 ///
 /// # Panics

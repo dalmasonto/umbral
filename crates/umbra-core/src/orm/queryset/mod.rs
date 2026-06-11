@@ -962,6 +962,41 @@ fn resolve_pool<T: Model>(explicit: Option<DbPool>) -> DbPool {
 
 // GetError / TryForEachError moved to `errors`; re-exported above.
 
+/// Emit a one-shot advisory when a `right_join_related` is applied
+/// against a SQLite pool.
+///
+/// RIGHT/FULL JOIN landed in SQLite 3.39 (June 2022); Postgres has
+/// always supported it. The boot system check (`check.rs`) can't surface
+/// this — it's synchronous, has no live pool, and whether a RIGHT join
+/// is *reachable* is a runtime QuerySet fact rather than static model
+/// metadata. So the spec's "boot warning" is realized here: the first
+/// time a RIGHT join is built against a SQLite pool, we `tracing::warn!`
+/// once per process. We do NOT probe the library version (that needs an
+/// async round-trip the SQL builder doesn't have) — the precise gate is
+/// the SQLite driver's own error at execute time on an engine < 3.39;
+/// this warn is the early nudge, consistent with `check.rs`'s
+/// `Severity::Warning` posture.
+///
+/// Postgres pools and the no-pool case (a pure `to_sql` build with no
+/// app booted) are silent.
+fn warn_right_join_on_sqlite() {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    if matches!(
+        crate::db::try_pool_dispatched(),
+        Some(crate::db::DbPool::Sqlite(_))
+    ) {
+        ONCE.call_once(|| {
+            tracing::warn!(
+                "umbra::orm::right_join_related: RIGHT JOIN requires SQLite >= 3.39. \
+                 If your SQLite is older the query will error at execute time; \
+                 Postgres is unaffected. Prefer left_/inner_join_related on SQLite \
+                 unless you've confirmed the engine version."
+            );
+        });
+    }
+}
+
 /// Terminal methods for every `QuerySet<T>` where `T: Model`.
 ///
 /// Each terminal that materializes `T` carries a FromRow bound on the
@@ -1109,6 +1144,9 @@ impl<T: Model> QuerySet<T> {
         for f in T::FIELDS {
             outer.expr(Expr::col((parent_alias.clone(), Alias::new(f.name))));
         }
+        // Set when any emitted hop is a RIGHT JOIN — drives the
+        // once-per-process old-SQLite advisory after the emit loop.
+        let mut emitted_right = false;
         for jr in &self.join_related {
             let field_name = &jr.path;
             // FK chain branch first. A (possibly nested) FK path splits
@@ -1148,6 +1186,7 @@ impl<T: Model> QuerySet<T> {
                     } else {
                         JoinKind::Inner
                     };
+                    emitted_right |= kind == JoinKind::Right;
                     outer.join_as(
                         kind.sea(),
                         Alias::new(hop.child_table.as_str()),
@@ -1206,6 +1245,7 @@ impl<T: Model> QuerySet<T> {
                 // then the child INNER on NULL has no match -> the parent
                 // is dropped, which is the INNER contract.
                 let child_kind = jr.kind.unwrap_or(JoinKind::Left);
+                emitted_right |= child_kind == JoinKind::Right;
                 outer.join_as(
                     sea_query::JoinType::LeftJoin,
                     Alias::new(junction_table),
@@ -1270,6 +1310,11 @@ impl<T: Model> QuerySet<T> {
                 }
                 continue;
             }
+        }
+        // A RIGHT JOIN against SQLite needs >= 3.39; warn once per
+        // process. Postgres / no-pool builds stay silent.
+        if emitted_right {
+            warn_right_join_on_sqlite();
         }
         *q = outer;
     }

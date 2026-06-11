@@ -312,3 +312,45 @@ async fn m2m_chain_hydrates_child_and_onward_fk_without_dropping_parents() {
         .expect("tag.category hydrated through the chain");
     assert_eq!(cat.name, "news");
 }
+
+#[tokio::test]
+async fn right_join_emits_keyword_and_builds() {
+    boot().await;
+    // RIGHT JOIN keyword renders in the SQL.
+    let sql = Comment::objects().right_join_related("plugin").to_sql();
+    assert!(sql.contains("RIGHT JOIN"), "RIGHT JOIN keyword: {sql}");
+
+    // Building the query against a live SQLite pool exercises the
+    // once-per-process old-SQLite warning path without panicking on the
+    // pool dispatch. On SQLite >= 3.39 the rows come back; on older
+    // SQLite the driver errors at execute time — here we assert the
+    // builder + warn path is reachable and doesn't panic, and that a
+    // present relation round-trips when the engine supports RIGHT JOIN.
+    let rows = Comment::objects()
+        .right_join_related("plugin")
+        .fetch()
+        .await;
+    match rows {
+        Ok(comments) => {
+            // RIGHT JOIN keeps every plugin row; the matched comment is
+            // among them, proving the join executed.
+            let bodies: Vec<&str> = comments.iter().map(|c| c.body.as_str()).collect();
+            assert!(
+                bodies.contains(&"nice"),
+                "RIGHT JOIN surfaces the matched comment, got {bodies:?}"
+            );
+        }
+        Err(e) => {
+            // Older SQLite without RIGHT JOIN support errors at execute
+            // time — the warn fired first. The builder path is what we
+            // pin here; a driver-level syntax error is acceptable.
+            let msg = e.to_string();
+            assert!(
+                msg.to_uppercase().contains("RIGHT")
+                    || msg.to_lowercase().contains("syntax")
+                    || msg.to_lowercase().contains("near"),
+                "expected a RIGHT-JOIN-unsupported driver error, got: {msg}"
+            );
+        }
+    }
+}
