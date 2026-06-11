@@ -3460,6 +3460,72 @@ fn expand_form(input: DeriveInput) -> syn::Result<TokenStream2> {
             continue;
         }
 
+        // #[umbra(choices)] enum field → a Select. Options are the
+        // enum's compile-time VALUES/LABELS; membership checked in
+        // validate (no DB). Nullable (Option<T>) drops Required and
+        // prepends an empty option.
+        if model_attr.choices_ty.is_some() {
+            let is_nullable = option_inner_type(&field.ty).is_some();
+            let choice_ty: syn::Type = if let Some(inner) = option_inner_type(&field.ty) {
+                inner.clone()
+            } else {
+                field.ty.clone()
+            };
+            let field_var = format_ident!("_{}_field", field_ident);
+            let nullable_lit = if is_nullable {
+                quote!(true)
+            } else {
+                quote!(false)
+            };
+            field_builders.push(quote! {
+                let #field_var: ::umbra::forms::Field = ::umbra::forms::Field::select(
+                    #field_name,
+                    ::umbra::orm::forms_runtime::choice_options(
+                        <#choice_ty as ::umbra::orm::ChoiceField>::VALUES,
+                        <#choice_ty as ::umbra::orm::ChoiceField>::LABELS,
+                    ),
+                    #nullable_lit,
+                );
+            });
+            let raw_var = format_ident!("_{}_raw", field_ident);
+            let parsed_var = format_ident!("_{}_parsed", field_ident);
+            validate_body.push(quote! {
+                let #raw_var: ::std::string::String =
+                    data.get(#field_name).cloned().unwrap_or_default();
+                ::umbra::orm::forms_runtime::validate_choice_member(
+                    #field_name,
+                    &#raw_var,
+                    <#choice_ty as ::umbra::orm::ChoiceField>::VALUES,
+                    #nullable_lit,
+                    &mut errs,
+                );
+            });
+            // Parse the validated string back into the enum (or
+            // Option<enum>). from_str_ok returns None only when the
+            // value isn't a member — already flagged above, so the
+            // default fills the slot and the error short-circuits the
+            // Ok(Self {...}) construction.
+            let parse_expr = if is_nullable {
+                quote! {
+                    if #raw_var.is_empty() {
+                        ::core::option::Option::None
+                    } else {
+                        <#choice_ty as ::umbra::orm::ChoiceField>::from_str_ok(&#raw_var)
+                    }
+                }
+            } else {
+                quote! {
+                    <#choice_ty as ::umbra::orm::ChoiceField>::from_str_ok(&#raw_var)
+                        .unwrap_or_default()
+                }
+            };
+            validate_body.push(quote! {
+                let #parsed_var = { #parse_expr };
+            });
+            struct_inits.push(quote! { #field_ident: #parsed_var });
+            continue;
+        }
+
         let Some((kind, is_option)) = classify_form_field_type(&field.ty) else {
             return Err(syn::Error::new_spanned(
                 &field.ty,

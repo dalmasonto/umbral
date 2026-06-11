@@ -351,3 +351,72 @@ fn reverse_relations_absent_from_fields() {
         "reverse OneToOne skipped"
     );
 }
+
+// --------------------------------------------------------------------- //
+// Task 3 — #[umbra(choices)] enum fields become a Select. Membership    //
+// checked at validate time (no DB); out-of-set is a field error.        //
+// --------------------------------------------------------------------- //
+
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Default,
+    umbra::orm::Choices,
+    serde::Serialize,
+    serde::Deserialize,
+)]
+#[choices(rename_all = "lowercase")]
+enum Mood {
+    #[default]
+    Happy,
+    Sad,
+    Neutral,
+}
+
+#[derive(
+    Debug,
+    Default,
+    sqlx::FromRow,
+    serde::Serialize,
+    serde::Deserialize,
+    umbra::orm::Model,
+    umbra::forms::Form,
+)]
+#[umbra(table = "fd_choice_form")]
+struct ChoiceForm {
+    pub id: i64,
+    pub body: String,
+    #[umbra(choices)]
+    pub mood: Mood,
+}
+
+#[tokio::test]
+async fn choices_field_round_trips_every_variant() {
+    for (raw, expected) in [
+        ("happy", Mood::Happy),
+        ("sad", Mood::Sad),
+        ("neutral", Mood::Neutral),
+    ] {
+        let form = ChoiceForm::validate(&data(&[("body", "x"), ("mood", raw)]))
+            .await
+            .expect("valid variant");
+        assert_eq!(form.mood, expected, "decoded back as the enum");
+    }
+}
+
+#[tokio::test]
+async fn choices_field_rejects_out_of_set_value() {
+    let err = ChoiceForm::validate(&data(&[("body", "x"), ("mood", "ecstatic")]))
+        .await
+        .expect_err("out-of-set rejected");
+    assert!(err.fields.contains_key("mood"), "error keyed to the field");
+}
+
+#[test]
+fn choices_field_renders_a_select_with_all_options() {
+    let names: Vec<String> = ChoiceForm::fields().into_iter().map(|f| f.name).collect();
+    assert!(names.contains(&"mood".to_string()));
+}

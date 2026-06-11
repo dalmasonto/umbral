@@ -25,6 +25,7 @@ pub mod column;
 pub mod dynamic;
 pub mod expr;
 pub mod foreign_key;
+pub mod forms_runtime;
 pub mod m2m;
 pub mod model;
 pub mod multichoice;

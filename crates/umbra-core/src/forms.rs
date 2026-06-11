@@ -349,6 +349,10 @@ pub enum InputKind {
     Time,
     DatetimeLocal,
     Textarea,
+    /// Closed-set enum (`#[umbra(choices)]`). Options are compile-time
+    /// `(value, label)` pairs from `ChoiceField`. Rendered as a
+    /// `<select>`, not an `<input>`.
+    Select,
 }
 
 impl InputKind {
@@ -364,6 +368,10 @@ impl InputKind {
             InputKind::Date => "date",
             InputKind::Time => "time",
             InputKind::DatetimeLocal => "datetime-local",
+            // `Select` has no `<input type>`; its render arm builds a
+            // `<select>` and never calls `html_type`. "text" is a
+            // harmless default to keep the match exhaustive.
+            InputKind::Select => "text",
         }
     }
 }
@@ -376,6 +384,11 @@ pub struct Field {
     pub kind: InputKind,
     pub required: bool,
     pub validators: Vec<Box<dyn Validator>>,
+    /// `(value, label)` pairs for `Select` fields. Empty for every
+    /// other kind. For `ModelChoice` / `ModelMultiChoice` the options
+    /// are fetched async at render time (Task 6), so they stay empty
+    /// here too.
+    pub options: Vec<(String, String)>,
 }
 
 impl Field {
@@ -386,6 +399,7 @@ impl Field {
             kind: InputKind::Text,
             required: true,
             validators: vec![Box::new(Required)],
+            options: Vec::new(),
         }
     }
 
@@ -473,6 +487,7 @@ impl Field {
             kind: InputKind::Number,
             required: true,
             validators: vec![Box::new(Required), Box::new(IntegerFormat)],
+            options: Vec::new(),
         }
     }
 
@@ -487,6 +502,7 @@ impl Field {
             kind: InputKind::Number,
             required: true,
             validators: vec![Box::new(Required), Box::new(FloatFormat)],
+            options: Vec::new(),
         }
     }
 
@@ -499,6 +515,24 @@ impl Field {
             kind: InputKind::Checkbox,
             required: false,
             validators: Vec::new(),
+            options: Vec::new(),
+        }
+    }
+
+    /// New closed-set select field. `options` are `(value, label)`
+    /// pairs from a `ChoiceField`'s `VALUES`/`LABELS`. `nullable`
+    /// prepends a leading empty option and drops `Required`.
+    pub fn select(name: impl Into<String>, options: Vec<(String, String)>, nullable: bool) -> Self {
+        let mut opts = options;
+        if nullable {
+            opts.insert(0, (String::new(), String::new()));
+        }
+        Self {
+            name: name.into(),
+            kind: InputKind::Select,
+            required: !nullable,
+            validators: Vec::new(),
+            options: opts,
         }
     }
 
@@ -567,6 +601,23 @@ impl Field {
                     "<input type=\"checkbox\" name=\"{name}\" value=\"true\"{checked}>",
                     name = self.name,
                 )
+            }
+            InputKind::Select => {
+                let mut s = format!(
+                    "<select name=\"{name}\"{required}>",
+                    name = self.name,
+                    required = required
+                );
+                for (val, label) in &self.options {
+                    let selected = if val == value { " selected" } else { "" };
+                    s.push_str(&format!(
+                        "<option value=\"{v}\"{selected}>{l}</option>",
+                        v = html_escape(val),
+                        l = html_escape(label),
+                    ));
+                }
+                s.push_str("</select>");
+                s
             }
             other => format!(
                 "<input type=\"{ty}\" name=\"{name}\" value=\"{safe_value}\"{required}>",

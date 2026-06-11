@@ -418,6 +418,13 @@ pub mod orm {
     /// fixture: M3's `#[derive(Model)]` retires it; users defining their
     /// own model produce their own column module from the derive.
     pub use umbra_core::orm::post::post;
+
+    /// Runtime helpers the `#[derive(Form)]` macro emits calls to —
+    /// choice membership, FK existence probes, async `<select>` option
+    /// fetches, M2M id parsing. `#[doc(hidden)]`: an implementation
+    /// detail of the Form derive, not a surface users call by hand.
+    #[doc(hidden)]
+    pub use umbra_core::orm::forms_runtime;
 }
 
 /// The `#[task]` attribute macro.
