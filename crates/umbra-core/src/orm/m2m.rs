@@ -560,10 +560,16 @@ impl<T: Model, P: PrimaryKey> M2M<T, P> {
 /// it has only string values + a `Column` per side to derive the
 /// SqlType from.
 ///
-/// Runs `DELETE FROM <junction> WHERE parent_id = ?` followed by one
-/// `INSERT ... ON CONFLICT DO NOTHING` per child id, all inside a
-/// single transaction so a partial replacement can't leak.
-/// Empty `child_ids` is the legitimate "clear the relation" shape.
+/// Runs `DELETE FROM <junction> WHERE parent_id = ?` followed by ONE
+/// multi-row `INSERT ... VALUES (?,?),(?,?),... ON CONFLICT DO NOTHING`
+/// for the whole child set, all inside a single transaction so a partial
+/// replacement can't leak. Empty `child_ids` is the legitimate "clear the
+/// relation" shape — the DELETE runs and no INSERT is emitted at all
+/// (never an `INSERT ... VALUES ()`).
+///
+/// gaps2 #47: the insert was M one-row INSERTs in a loop; it's now a
+/// single multi-row statement (M round-trips → 1) with the same
+/// transaction + DELETE semantics and the same `ON CONFLICT DO NOTHING`.
 ///
 /// Closes the BUG-16 phase 3 admin gap: the form for editing a
 /// parent model can now persist M2M selections without knowing the
@@ -573,30 +579,44 @@ pub async fn set_junction_dynamic(
     parent_id: sea_query::Value,
     child_ids: Vec<sea_query::Value>,
 ) -> Result<(), sqlx::Error> {
+    // Build the one multi-row INSERT shared by both backends. `None` when
+    // there are no children — the empty case clears via DELETE alone and
+    // must NOT emit an `INSERT ... VALUES ()`.
+    let insert: Option<sea_query::InsertStatement> = if child_ids.is_empty() {
+        None
+    } else {
+        let mut insert = Query::insert();
+        insert
+            .into_table(Alias::new(junction_table))
+            .columns([Alias::new("parent_id"), Alias::new("child_id")])
+            .on_conflict(
+                OnConflict::columns([Alias::new("parent_id"), Alias::new("child_id")])
+                    .do_nothing()
+                    .to_owned(),
+            );
+        // One `.values_panic` call per child appends another VALUES row,
+        // so the whole set lands in a single statement.
+        for child_id in child_ids {
+            insert.values_panic([
+                Expr::value(parent_id.clone()).into(),
+                Expr::value(child_id).into(),
+            ]);
+        }
+        Some(insert)
+    };
+
+    let mut delete = Query::delete();
+    delete
+        .from_table(Alias::new(junction_table))
+        .and_where(Expr::col(Alias::new("parent_id")).eq(parent_id));
+
     let pool = crate::db::pool_dispatched();
     match pool {
         crate::db::DbPool::Sqlite(p) => {
             let mut tx = p.begin().await?;
-            let mut delete = Query::delete();
-            delete
-                .from_table(Alias::new(junction_table))
-                .and_where(Expr::col(Alias::new("parent_id")).eq(parent_id.clone()));
             let (sql, values) = delete.build_sqlx(SqliteQueryBuilder);
             sqlx::query_with(&sql, values).execute(&mut *tx).await?;
-            for child_id in child_ids {
-                let mut insert = Query::insert();
-                insert
-                    .into_table(Alias::new(junction_table))
-                    .columns([Alias::new("parent_id"), Alias::new("child_id")])
-                    .values_panic([
-                        Expr::value(parent_id.clone()).into(),
-                        Expr::value(child_id).into(),
-                    ])
-                    .on_conflict(
-                        OnConflict::columns([Alias::new("parent_id"), Alias::new("child_id")])
-                            .do_nothing()
-                            .to_owned(),
-                    );
+            if let Some(insert) = insert {
                 let (sql, values) = insert.build_sqlx(SqliteQueryBuilder);
                 sqlx::query_with(&sql, values).execute(&mut *tx).await?;
             }
@@ -604,26 +624,9 @@ pub async fn set_junction_dynamic(
         }
         crate::db::DbPool::Postgres(p) => {
             let mut tx = p.begin().await?;
-            let mut delete = Query::delete();
-            delete
-                .from_table(Alias::new(junction_table))
-                .and_where(Expr::col(Alias::new("parent_id")).eq(parent_id.clone()));
             let (sql, values) = delete.build_sqlx(PostgresQueryBuilder);
             sqlx::query_with(&sql, values).execute(&mut *tx).await?;
-            for child_id in child_ids {
-                let mut insert = Query::insert();
-                insert
-                    .into_table(Alias::new(junction_table))
-                    .columns([Alias::new("parent_id"), Alias::new("child_id")])
-                    .values_panic([
-                        Expr::value(parent_id.clone()).into(),
-                        Expr::value(child_id).into(),
-                    ])
-                    .on_conflict(
-                        OnConflict::columns([Alias::new("parent_id"), Alias::new("child_id")])
-                            .do_nothing()
-                            .to_owned(),
-                    );
+            if let Some(insert) = insert {
                 let (sql, values) = insert.build_sqlx(PostgresQueryBuilder);
                 sqlx::query_with(&sql, values).execute(&mut *tx).await?;
             }

@@ -235,3 +235,71 @@ async fn m2m_validation_genuine_miss_still_per_field() {
         errs.non_field
     );
 }
+
+// gaps2 #47 — set_junction_dynamic batches the junction write into ONE
+// multi-row INSERT (was M per-id INSERTs in a loop). Behavioral: the
+// DELETE+reinsert semantics and ON CONFLICT DO NOTHING must be preserved.
+// Uses a high, otherwise-untouched parent_id so it doesn't collide with
+// the other tests sharing this in-memory junction table.
+fn bigint(n: i64) -> umbra::_sea_query::Value {
+    umbra::_sea_query::Value::BigInt(Some(n))
+}
+
+#[tokio::test]
+async fn set_junction_dynamic_batched_insert_round_trip() {
+    boot().await;
+    let parent = 777_000_i64;
+    let pval = bigint(parent);
+
+    // Set {1,2,3} → exactly those three rows exist.
+    umbra::orm::set_junction_dynamic(
+        "fm_article_tags",
+        pval.clone(),
+        vec![bigint(1), bigint(2), bigint(3)],
+    )
+    .await
+    .expect("set {1,2,3}");
+    assert_eq!(
+        junction_child_ids(parent).await,
+        vec![1, 2, 3],
+        "batched insert writes exactly the three selected child ids"
+    );
+
+    // Re-set {2,3,4} → DELETE+reinsert: 1 drops, 4 appears, holds {2,3,4}.
+    umbra::orm::set_junction_dynamic(
+        "fm_article_tags",
+        pval.clone(),
+        vec![bigint(2), bigint(3), bigint(4)],
+    )
+    .await
+    .expect("re-set {2,3,4}");
+    assert_eq!(
+        junction_child_ids(parent).await,
+        vec![2, 3, 4],
+        "DELETE-then-reinsert replaces the whole set (1 gone, 4 added)"
+    );
+
+    // A duplicate-containing list: ON CONFLICT DO NOTHING keeps it clean —
+    // no duplicate rows, no error, even with a within-batch duplicate.
+    umbra::orm::set_junction_dynamic(
+        "fm_article_tags",
+        pval.clone(),
+        vec![bigint(5), bigint(5), bigint(6)],
+    )
+    .await
+    .expect("set with an in-batch duplicate must not error");
+    assert_eq!(
+        junction_child_ids(parent).await,
+        vec![5, 6],
+        "ON CONFLICT DO NOTHING dedupes the in-batch duplicate to one row each"
+    );
+
+    // Empty list clears the relation (no INSERT emitted at all).
+    umbra::orm::set_junction_dynamic("fm_article_tags", pval, Vec::new())
+        .await
+        .expect("empty selection clears");
+    assert!(
+        junction_child_ids(parent).await.is_empty(),
+        "empty child_ids clears the junction with no INSERT"
+    );
+}
