@@ -1,0 +1,75 @@
+---
+title: Static files
+description: Serve plugin assets through one STATIC_URL base — embedded for zero-config, filesystem for drop-in updates and CDNs — with collect_static for production.
+sidebar_position: 6
+icon: folder
+tags: [web, static, plugins, cli]
+---
+
+Every plugin can ship static assets (CSS, JS, fonts, an SPA bundle). umbra serves them all under one configurable base — `STATIC_URL` (default `/static/`) — so a request for `/static/admin/admin.css` resolves the same way whether the bytes are baked into the binary, read live off disk in development, or fronted by a CDN in production. This is Django's `staticfiles` + `collectstatic` model.
+
+## The two serving modes
+
+A plugin picks the mode that fits its assets — both coexist behind the same URL:
+
+- **Embedded** (zero-config, single binary). The plugin returns the bytes from `Plugin::static_files()`; they're `include_bytes!`-baked and mounted as routes. Best for small, rarely-changed assets. The built-in **admin** uses this — `cargo run` just works, no extra step.
+- **Filesystem** (drop-in, CDN-ready). The plugin declares a source directory with `Plugin::static_dirs()`. In development the handler serves files **live off disk** — rebuild your frontend, drop the new files in, and they're served on the next request with no recompile. In production you run `collect_static` to gather every plugin's assets into one `static_root/` that the framework (or nginx/a CDN) serves. The built-in **playground** uses this for its Vite bundle.
+
+<Callout type="info">
+Dev serves from each plugin's source dir; production serves from the collected `static_root`. Same `{{ static(...) }}` URL, two backends — exactly like Django's dev server vs. `STATIC_ROOT`.
+</Callout>
+
+## Declaring assets in a plugin
+
+A plugin points `static_dirs()` at an on-disk directory and gives it a unique namespace (the URL/dir segment that prevents collisions between plugins):
+
+```rust
+use umbra::prelude::*;
+use std::path::PathBuf;
+
+impl Plugin for MyPlugin {
+    fn static_dirs(&self) -> Vec<StaticDir> {
+        // `dist/assets/app.js` becomes reachable at `/static/myplugin/assets/app.js`
+        vec![StaticDir::new(
+            "myplugin",
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("dist"),
+        )]
+    }
+}
+```
+
+A file's path *relative to* `source_dir` is preserved under `<STATIC_URL><namespace>/…`, so `dist/assets/app.js` → `/static/myplugin/assets/app.js`.
+
+## Referencing assets in templates
+
+Use the `static()` global so URLs follow `STATIC_URL` wherever it's configured:
+
+```jinja
+<link rel="stylesheet" href="{{ static('myplugin/app.css') }}">
+<script src="{{ static('myplugin/assets/app.js') }}"></script>
+```
+
+## Configuration
+
+Two settings (overridable via `umbra.toml` or env):
+
+| Setting | Env | Default | Purpose |
+|---|---|---|---|
+| `static_url` | `UMBRA_STATIC_URL` | `/static/` | URL base every asset is served under. May be an absolute CDN origin (`https://cdn.example.com/s/`). |
+| `static_root` | `UMBRA_STATIC_ROOT` | `staticfiles/` | On-disk directory `collect_static` writes to and production serves from. |
+
+## collect_static
+
+Before deploying, gather every registered plugin's `static_dirs()` into `static_root/`:
+
+```bash
+cargo run -p umbra-cli -- collect_static          # copy all plugin assets into static_root/
+cargo run -p umbra-cli -- collect_static --clear  # wipe static_root/ first, then collect
+```
+
+Each plugin's tree lands under `static_root/<namespace>/…`. Point a CDN or nginx at that directory and set `static_url` to its origin, or let the framework serve it.
+
+## See also
+
+- Design rationale: `planning/gaps.md` #67 and the `Plugin` contract in `arch.md`.
+- The built-in admin (embedded mode) and playground (filesystem mode) plugins are the two reference implementations.

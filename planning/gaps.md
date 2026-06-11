@@ -1,6 +1,6 @@
 ## Status
 
-**As of 2026-06-07: 99 of 109 closed.** Open: 43 (plugin-extension backlog), 49 (S3 / image backend deferred), 58 (FK picker for user_id deferred), 61 (M2M auto-junction deferred), 66 (MySQL), 67 (collectstatic), 70 (Cache plugin Redis/memcache split deferred), 77 (ORM signal events), 78 (RestPlugin expand FKs), 79 (migration safety research), 89-90 / 93-95 (advanced autodetector + REPL), 104 (plugin-disable semantics), 108 (REST API versioning).
+**As of 2026-06-07: 99 of 109 closed.** Open: 43 (plugin-extension backlog), 49 (S3 / image backend deferred), 58 (FK picker for user_id deferred), 61 (M2M auto-junction deferred), 66 (MySQL), 70 (Cache plugin Redis/memcache split deferred), 77 (ORM signal events), 78 (RestPlugin expand FKs), 79 (migration safety research), 89-90 / 93-95 (advanced autodetector + REPL), 104 (plugin-disable semantics), 108 (REST API versioning).
 
 | # | Gap | Status |
 |---|-----|--------|
@@ -128,7 +128,7 @@ All known gaps closed. New gaps land below as they're surfaced.
 64. [x] Error: UnsafeAlter { model: "Session", column: "user_id", reason: "type change BigInt -> Text needs … — archived
 65. [x] We don't have unique macro for Model — archived
 66. [ ] We shall need support for MySQL - Defer this but we shall work on it.
-67. [ ] Proper static files handling with base ie STATIC_URL so that we can use something like `collect_static` command to enable cdn hosting of static per the user's wants without any problems. So the StaticPlugin should be able to expose proper static files from each of the plugins.
+67. [x] Static files pipeline — STATIC_URL/static_root settings, Plugin::static_dirs(), collect_static command, unified /static/ serving (admin + playground migrated) — archived
 68. [x] Expose on_delete and on_update for ForeignKeys — archived
 69. [x] How do we do foreignkeys to self, in django we use a string rep of the model name to refer to … — archived
 70. [ ] Cache middleware improvements ie ability to control cache through redis, in memory or in other ways. Should be easy to use. Redis has sorted sets and can be used for caching with TTL. So for caching, we should fully explore redis options and have it as CachePlugin::Redis, or memcache as CachePlugin::Memcache etc
