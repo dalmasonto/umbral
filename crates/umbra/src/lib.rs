@@ -286,7 +286,7 @@ pub mod forms {
 
     pub use umbra_core::forms::{
         EmailFormat, Field, Form, FormErrors, FormValidate, InputKind, MaxLength, MinLength,
-        Required, ValidationErrors, Validator,
+        PkKind, Required, ValidationErrors, Validator,
     };
 
     /// Re-export of `async-trait` so the `#[derive(Form)]` macro can

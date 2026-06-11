@@ -2981,6 +2981,10 @@ struct FormFieldAttr {
     /// when both fail.
     regex: Option<String>,
     regex_message: Option<String>,
+    /// `#[form(label_field = "name")]` — overrides the column a
+    /// `ModelChoice` / `ModelMultiChoice` `<select>` uses for option
+    /// labels. Default is the target's first non-PK text column.
+    label_field: Option<String>,
 }
 
 fn parse_form_attrs(attrs: &[syn::Attribute]) -> syn::Result<FormFieldAttr> {
@@ -3049,11 +3053,17 @@ fn parse_form_attrs(attrs: &[syn::Attribute]) -> syn::Result<FormFieldAttr> {
                     }
                 })?;
                 Ok(())
+            } else if meta.path.is_ident("label_field") {
+                // `#[form(label_field = "name")]` — option-label column
+                // override for a ModelChoice / ModelMultiChoice select.
+                let lit: syn::LitStr = meta.value()?.parse()?;
+                out.label_field = Some(lit.value());
+                Ok(())
             } else {
                 Err(meta.error(
                     "umbra::Form derive accepts `required`, `optional`, \
                      `email`, `password`, `min_length = N`, `max_length = N`, \
-                     `length(min = N, max = M)`",
+                     `length(min = N, max = M)`, `label_field = \"name\"`",
                 ))
             }
         })?;
@@ -3517,6 +3527,84 @@ fn expand_form(input: DeriveInput) -> syn::Result<TokenStream2> {
                 quote! {
                     <#choice_ty as ::umbra::orm::ChoiceField>::from_str_ok(&#raw_var)
                         .unwrap_or_default()
+                }
+            };
+            validate_body.push(quote! {
+                let #parsed_var = { #parse_expr };
+            });
+            struct_inits.push(quote! { #field_ident: #parsed_var });
+            continue;
+        }
+
+        // FK / forward O2O / Option<FK> → ModelChoice. Forward
+        // OneToOne<T> (no #[sqlx(skip)]) is a unique FK; the reverse
+        // variant was already skipped in Task 2.
+        let fk_target: Option<syn::Type> = foreign_key_inner(&field.ty)
+            .cloned()
+            .or_else(|| option_inner_type(&field.ty).and_then(|i| foreign_key_inner(i).cloned()))
+            .or_else(|| {
+                one_to_one_inner(&field.ty)
+                    .filter(|_| !has_sqlx_skip(&field.attrs))
+                    .cloned()
+            });
+        if let Some(target_ty) = fk_target {
+            let is_nullable = option_inner_type(&field.ty).is_some() || attrs.optional;
+            let label_field_tokens = match &attrs.label_field {
+                Some(lf) => quote!(::core::option::Option::Some(#lf)),
+                None => quote!(::core::option::Option::None),
+            };
+            let nullable_lit = if is_nullable {
+                quote!(true)
+            } else {
+                quote!(false)
+            };
+            let field_var = format_ident!("_{}_field", field_ident);
+            field_builders.push(quote! {
+                let #field_var: ::umbra::forms::Field = ::umbra::forms::Field::model_choice(
+                    #field_name,
+                    <#target_ty as ::umbra::orm::Model>::TABLE,
+                    #label_field_tokens,
+                    ::umbra::orm::forms_runtime::pk_kind_for_table(
+                        <#target_ty as ::umbra::orm::Model>::TABLE,
+                    ),
+                    #nullable_lit,
+                );
+            });
+            let raw_var = format_ident!("_{}_raw", field_ident);
+            let parsed_var = format_ident!("_{}_parsed", field_ident);
+            // Validate presence + parse the id (existence check added in
+            // Task 5). For v1 the parsed FK stores the i64 id.
+            validate_body.push(quote! {
+                let #raw_var: ::std::string::String =
+                    data.get(#field_name).cloned().unwrap_or_default();
+                if #raw_var.is_empty() && !#nullable_lit {
+                    errs.add(#field_name, format!("{} is required", #field_name));
+                }
+            });
+            let parse_expr = if is_nullable {
+                quote! {
+                    if #raw_var.is_empty() {
+                        ::core::option::Option::None
+                    } else {
+                        match #raw_var.parse::<i64>() {
+                            ::core::result::Result::Ok(v) =>
+                                ::core::option::Option::Some(::umbra::orm::ForeignKey::new(v)),
+                            ::core::result::Result::Err(_) => {
+                                errs.add(#field_name, format!("{} must be a valid id", #field_name));
+                                ::core::option::Option::None
+                            }
+                        }
+                    }
+                }
+            } else {
+                quote! {
+                    match #raw_var.parse::<i64>() {
+                        ::core::result::Result::Ok(v) => ::umbra::orm::ForeignKey::new(v),
+                        ::core::result::Result::Err(_) => {
+                            errs.add(#field_name, format!("{} must be a valid id", #field_name));
+                            ::umbra::orm::ForeignKey::new(0)
+                        }
+                    }
                 }
             };
             validate_body.push(quote! {

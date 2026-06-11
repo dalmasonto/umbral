@@ -325,6 +325,15 @@ pub const URL_PATTERN: &str = r"^https?://[A-Za-z0-9._~:%/?#\[\]@!$&'()*+,;=-]+$
 // HTML input.
 // =========================================================================
 
+/// How to parse a submitted FK id string. Resolved from the target
+/// model's PK SqlType at render/validate time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PkKind {
+    BigInt,
+    Uuid,
+    Text,
+}
+
 /// What HTML `<input type>` a field renders as. The form module
 /// uses this for `render_html`; it's the same set the admin's
 /// `input_kind` produces.
@@ -353,6 +362,13 @@ pub enum InputKind {
     /// `(value, label)` pairs from `ChoiceField`. Rendered as a
     /// `<select>`, not an `<input>`.
     Select,
+    /// FK / forward O2O to another model. Options are fetched at render
+    /// time (async). `label_field` overrides the default label column.
+    ModelChoice {
+        target_table: &'static str,
+        label_field: Option<&'static str>,
+        pk_kind: PkKind,
+    },
 }
 
 impl InputKind {
@@ -368,10 +384,10 @@ impl InputKind {
             InputKind::Date => "date",
             InputKind::Time => "time",
             InputKind::DatetimeLocal => "datetime-local",
-            // `Select` has no `<input type>`; its render arm builds a
-            // `<select>` and never calls `html_type`. "text" is a
-            // harmless default to keep the match exhaustive.
-            InputKind::Select => "text",
+            // `Select` / `ModelChoice` have no `<input type>`; their
+            // render arms build a `<select>` and never call `html_type`.
+            // "text" is a harmless default to keep the match exhaustive.
+            InputKind::Select | InputKind::ModelChoice { .. } => "text",
         }
     }
 }
@@ -533,6 +549,29 @@ impl Field {
             required: !nullable,
             validators: Vec::new(),
             options: opts,
+        }
+    }
+
+    /// New single-select FK field. `options` are fetched async at
+    /// render time (Task 6); at validate time only `pk_kind` is used to
+    /// parse the submitted id.
+    pub fn model_choice(
+        name: impl Into<String>,
+        target_table: &'static str,
+        label_field: Option<&'static str>,
+        pk_kind: PkKind,
+        nullable: bool,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            kind: InputKind::ModelChoice {
+                target_table,
+                label_field,
+                pk_kind,
+            },
+            required: !nullable,
+            validators: Vec::new(),
+            options: Vec::new(),
         }
     }
 

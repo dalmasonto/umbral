@@ -1,0 +1,112 @@
+//! Behavioral coverage for FK / forward-O2O form fields. The Form
+//! derive classifies `ForeignKey<T>` (and forward `OneToOne<T>`) into a
+//! `ModelChoice`: validate() parses the submitted id, an existence
+//! probe verifies a live parent (Task 5), and render fetches options
+//! (Task 6). Every test drives the real path against an in-memory
+//! SQLite DB and reads the object graph back.
+
+#![allow(dead_code)]
+use std::collections::HashMap;
+use tokio::sync::OnceCell;
+use umbra::forms::FormValidate;
+use umbra::orm::{ForeignKey, Model};
+use umbra_core::db;
+
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbra::orm::Model)]
+#[umbra(table = "ffk_author")]
+struct Author {
+    pub id: i64,
+    pub name: String,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    sqlx::FromRow,
+    serde::Serialize,
+    serde::Deserialize,
+    umbra::orm::Model,
+    umbra::forms::Form,
+)]
+#[umbra(table = "ffk_book")]
+struct Book {
+    #[umbra(primary_key)]
+    pub id: i64,
+    #[form(required, length(min = 1, max = 200))]
+    pub title: String,
+    pub author: ForeignKey<Author>,
+}
+
+fn data(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+    pairs
+        .iter()
+        .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+        .collect()
+}
+
+static BOOT: OnceCell<()> = OnceCell::const_new();
+async fn boot() {
+    BOOT.get_or_init(|| async {
+        let settings = umbra::Settings::from_env().expect("figment defaults");
+        let pool = db::connect_sqlite("sqlite::memory:").await.expect("sqlite");
+        umbra::App::builder()
+            .settings(settings)
+            .database("default", pool.clone())
+            .model::<Author>()
+            .model::<Book>()
+            .model::<Passport>()
+            .build()
+            .expect("App::build");
+        sqlx::query("CREATE TABLE ffk_author (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)")
+            .execute(&pool).await.expect("create author");
+        sqlx::query("CREATE TABLE ffk_book (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, author INTEGER NOT NULL REFERENCES ffk_author(id))")
+            .execute(&pool).await.expect("create book");
+        sqlx::query("INSERT INTO ffk_author (name) VALUES ('Ada')")
+            .execute(&pool).await.expect("seed author");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn fk_field_parses_and_links_real_parent() {
+    boot().await;
+    let book = Book::validate(&data(&[("title", "Notes"), ("author", "1")]))
+        .await
+        .expect("valid FK");
+    // The parsed FK carries the submitted id.
+    assert_eq!(book.author.id(), 1);
+    // Persist + read the parent back through the ORM.
+    let created = Book::objects().create(book).await.expect("create book");
+    let parent = created
+        .author
+        .resolve(&db::pool())
+        .await
+        .expect("resolve parent");
+    assert_eq!(
+        parent.name, "Ada",
+        "FK resolves to the actual seeded parent"
+    );
+}
+
+// Forward O2O is a unique FK — a duplicate target surfaces as a
+// WriteError from the DB UNIQUE constraint, not a silent second row.
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    sqlx::FromRow,
+    serde::Serialize,
+    serde::Deserialize,
+    umbra::orm::Model,
+    umbra::forms::Form,
+)]
+#[umbra(table = "ffk_passport")]
+struct Passport {
+    #[umbra(primary_key)]
+    pub id: i64,
+    #[umbra(unique)]
+    pub holder: ForeignKey<Author>,
+    #[form(required, length(min = 1, max = 40))]
+    pub number: String,
+}

@@ -97,6 +97,24 @@ where
 
 impl<T: Model> Eq for ForeignKey<T> where T::PrimaryKey: Eq {}
 
+/// Default FK = the PK type's default (id `0` for the i64-keyed common
+/// case), with no resolved row. This is the "unset" placeholder the
+/// `#[derive(Form)]` macro's `..Default::default()` tail and the typed
+/// `create()` path rely on: a model struct that mixes form-submittable
+/// FK fields with framework-skipped fields needs `Default` to fill the
+/// skipped slots, and the FK field is always overwritten with the real
+/// submitted id before the row is persisted. Centralises the
+/// `ForeignKey::new(0)` placeholder that consumers previously hand-rolled
+/// in a `Default` impl per model.
+impl<T: Model> Default for ForeignKey<T>
+where
+    T::PrimaryKey: Default,
+{
+    fn default() -> Self {
+        Self::new(T::PrimaryKey::default())
+    }
+}
+
 impl<T: Model> ForeignKey<T> {
     /// Create a new FK value wrapping the given raw primary-key value.
     pub fn new(raw: T::PrimaryKey) -> Self {
