@@ -2516,6 +2516,40 @@ impl<T: Model> QuerySet<T> {
         self.annotate_related(&alias, relation, crate::orm::Aggregate::count())
     }
 
+    /// Like [`Self::annotate_count`] but counts only the children
+    /// matching `pred` — Django's `Count("comments", filter=Q(...))`.
+    /// `C` is the CHILD model, so the predicate is typed against the
+    /// child's columns (`comment::MODERATION.eq("visible")`). The
+    /// predicate renders into the correlated count subquery's WHERE
+    /// alongside the FK correlation and the auto soft-delete filter.
+    ///
+    /// ```rust,ignore
+    /// Plugin::objects()
+    ///     .annotate_count_where::<PluginComment>(
+    ///         "visible_comments",
+    ///         "comment_set",
+    ///         plugin_comment::MODERATION.eq("visible"),
+    ///     )
+    /// ```
+    pub fn annotate_count_where<C: crate::orm::Model>(
+        self,
+        alias: &str,
+        relation: &str,
+        pred: crate::orm::Predicate<C>,
+    ) -> Self {
+        // Render the child predicate to a backend-default SimpleExpr.
+        // The count subquery embeds one expression; the equality /
+        // comparison predicates used for child filters render the same
+        // on both backends, so the default `cond` is correct.
+        let child_filter = pred.cond_for("postgres");
+        let mut queryset = self.annotate_related(alias, relation, crate::orm::Aggregate::count());
+        // The just-pushed annotation is the last one; attach the filter.
+        if let Some(last) = queryset.annotations.last_mut() {
+            last.child_filter = Some(child_filter);
+        }
+        queryset
+    }
+
     /// Loud-failure check for poisoned annotations (unknown relation
     /// names recorded by the infallible builder). Called by every
     /// fallible consumer before SQL runs.
@@ -3299,6 +3333,18 @@ impl<T: Model> Manager<T> {
     /// See [`QuerySet::annotate_count`].
     pub fn annotate_count(&self, relation: &str) -> QuerySet<T> {
         self.queryset().annotate_count(relation)
+    }
+
+    /// See [`QuerySet::annotate_count_where`] — starts a filtered
+    /// annotated chain from the manager.
+    pub fn annotate_count_where<C: crate::orm::Model>(
+        &self,
+        alias: &str,
+        relation: &str,
+        pred: crate::orm::Predicate<C>,
+    ) -> QuerySet<T> {
+        self.queryset()
+            .annotate_count_where::<C>(alias, relation, pred)
     }
 
     /// See [`QuerySet::fetch_annotated`].

@@ -402,3 +402,24 @@ async fn annotate_count_excludes_soft_deleted_children() {
         "a parent with zero notes is still returned as 0, not dropped"
     );
 }
+
+#[tokio::test]
+async fn annotate_count_where_filters_children() {
+    boot().await;
+    // alpha's pristine seed: n1/n2 visible, n3 hidden (none soft-deleted).
+    // The child predicate filters the correlated count to visible-only.
+    let rows = Post::objects()
+        .annotate_count_where::<Note>("visible_notes", "note_set", note::MODERATION.eq("visible"))
+        .fetch_annotated()
+        .await
+        .expect("fetch_annotated with child filter");
+    let alpha = rows
+        .iter()
+        .find(|(p, _)| p.title == "alpha")
+        .expect("alpha row");
+    assert_eq!(
+        alpha.1["visible_notes"].as_i64(),
+        Some(2),
+        "only the two visible notes count; the hidden one is excluded"
+    );
+}
