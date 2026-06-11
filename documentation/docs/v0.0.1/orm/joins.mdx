@@ -1,0 +1,70 @@
+---
+title: Deep joins
+description: Span relations in one round-trip with INNER/LEFT/RIGHT control, nested paths, auto-inference, and an M2M-hop chain.
+sidebar_position: 10
+icon: git-merge
+tags: [orm, joins, foreign-key, eager-loading]
+---
+
+`join_related` pulls a related row into the SAME query with a SQL `JOIN`, so the relation hydrates from one round-trip — no follow-up batch like `select_related`. It spans multiple hops (`"plugin__author"`), passes through a many-to-many relation (`"tags__category"`), and lets you pick the join flavor.
+
+Plain `join_related` infers the join type from the foreign key: **INNER** for a `NOT NULL` FK (Django's default — a row that must have a parent), **LEFT** for a nullable FK (keep the orphan, hydrate its relation as unresolved). The typed methods override that:
+
+- `inner_join_related(path)` — drops parent rows whose relation is absent.
+- `left_join_related(path)` — keeps them; the relation resolves to `None`.
+- `right_join_related(path)` — keeps every related row (see the SQLite caveat below).
+
+The join type applies to the **last** hop of a nested path; intermediate hops are always auto-inferred per-hop.
+
+## One example: a three-level graph in one query
+
+```rust
+use umbra::prelude::*;
+
+// comment.plugin is a nullable FK -> Plugin; plugin.author is a
+// NOT NULL FK -> Author. One INNER join down the whole chain.
+let comments = Comment::objects()
+    .inner_join_related("plugin__author")
+    .fetch()
+    .await?;
+
+// comment.plugin.author.name round-trips from that single query —
+// the nested ForeignKey<T> slots are populated bottom-up.
+let plugin = comments[0].plugin.as_ref().unwrap().resolved().unwrap();
+let author = plugin.author.resolved().unwrap();
+assert_eq!(author.name, "Ada");
+```
+
+## Auto-inference: NOT NULL drops, nullable keeps
+
+```rust
+// Plugin.author is NOT NULL -> plain join infers INNER:
+// a plugin with a dangling author is DROPPED.
+Plugin::objects().join_related("author").fetch().await?;
+
+// Comment.plugin is nullable -> plain join infers LEFT:
+// a comment with plugin = NULL is KEPT, plugin resolves to None.
+Comment::objects().join_related("plugin").fetch().await?;
+```
+
+## Through a many-to-many hop
+
+A path whose first segment is an M2M field routes through the junction table, then continues down the child's onward FKs. Parent rows are deduplicated (one instance per parent), so the junction never drops or duplicates a parent:
+
+```rust
+// post -> (M2M) tags -> (FK) category, in one query.
+let posts = Post::objects()
+    .inner_join_related("tags__category")
+    .fetch()
+    .await?;
+let cat = posts[0].tags.resolved().unwrap()[0]
+    .category.resolved().unwrap();
+```
+
+<Callout type="warning">
+`RIGHT JOIN` needs **SQLite >= 3.39** (June 2022); Postgres is unconditional. On older SQLite, `right_join_related` errors at execute time — umbra emits a one-time `tracing::warn!` the first time a RIGHT join is built against a SQLite pool. Prefer `left_`/`inner_join_related` on SQLite unless you've confirmed the engine version.
+</Callout>
+
+## See also
+
+Design rationale and the per-hop resolution algorithm live in the spec: `docs/superpowers/specs/2026-06-11-orm-relations-forms-and-joins-design.md` (Part 4). For the batch-query alternative that loads relations in a second round-trip, see [Relationships](/docs/v0.0.1/orm/relationships).
