@@ -129,7 +129,39 @@ WHERE "moderation" = 'approved' AND "deleted_at" IS NULL
 
 Parents with zero children report `0` for counts and `NULL` for the other aggregates. An unknown relation name fails loudly (listing the valid names) on `fetch_annotated` and `explain`. Plain `fetch()` on an annotated queryset still returns typed rows and simply doesn't surface the extra columns — use `fetch_annotated` to read them.
 
-v1 caveats: child rows aggregate unconditionally — a child-side predicate (Django's `Count(..., filter=Q(...))`) and child soft-delete awareness are tracked follow-ups.
+### Soft-deleted children are excluded automatically
+
+When the child model is `#[umbra(soft_delete)]`, `annotate_count` folds `AND <child>.deleted_at IS NULL` into the correlated subquery for you. A comment trashed via the real soft-delete `delete()` path silently drops out of the count — you never count rows the rest of the app treats as gone. No opt-in; the child's `soft_delete` flag rides through to the annotation.
+
+### Filtered counts: `.annotate_count_where(...)`
+
+Django's `Count("comments", filter=Q(moderation="visible"))`. `annotate_count_where::<C>(alias, relation, pred)` counts only the children matching `pred`, where `C` is the **child** model so the predicate is typed against the child's columns. It renders into the same correlated subquery alongside the FK correlation and the automatic soft-delete filter:
+
+```rust
+use plugin_directory::models::{self as pd, plugin, plugin_comment};
+
+let rows = pd::Plugin::objects()
+    .filter(plugin::MODERATION.eq("approved"))
+    .annotate_count_where::<pd::PluginComment>(
+        "comment_set_count",
+        "comment_set",
+        plugin_comment::MODERATION.eq("visible"),   // child-side predicate
+    )
+    .fetch_annotated()
+    .await?;
+// only VISIBLE, non-trashed comments contribute to "comment_set_count"
+```
+
+### Counting an `M2M` relation
+
+`annotate_count` also resolves a many-to-many relation (`#[umbra(m2m = "...")]`). Instead of correlating against a child table, it counts rows of the junction table (`<parent>_<field>`, columns `parent_id` / `child_id`):
+
+```rust
+let rows = Post::objects()
+    .annotate_count("tags")   // COUNT(*) over the post_tags junction → "tags_count"
+    .fetch_annotated()
+    .await?;
+```
 
 ## Pitfalls
 

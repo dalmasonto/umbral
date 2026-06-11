@@ -62,13 +62,21 @@ async fn home() -> Result<Html<String>, (StatusCode, String)> {
     let plugins: Vec<PluginRow> = pd::Plugin::objects()
         .filter(plugin::SOURCE.ne("deprecated"))
         .filter(plugin::MODERATION.eq("approved"))
-        .annotate_count("comment_set")
+        // Count VISIBLE comments only — `annotate_count_where` renders
+        // the child predicate into the correlated subquery, and the
+        // automatic soft-delete exclusion drops trashed comments too
+        // (PluginComment is `#[umbra(soft_delete)]`). A hidden / pending
+        // / flagged comment no longer inflates the public count.
+        .annotate_count_where::<pd::PluginComment>(
+            "comment_set_count",
+            "comment_set",
+            pd::plugin_comment::MODERATION.eq("visible"),
+        )
         .fetch_annotated()
         .await
         .map_err(internal_error)?
         .into_iter()
         .map(|(p, anns)| {
-            // println!("{:#?}", p);
             let mut row = PluginRow::from(p);
             row.notes = anns
                 .get("comment_set_count")
@@ -77,15 +85,6 @@ async fn home() -> Result<Html<String>, (StatusCode, String)> {
             row
         })
         .collect();
-
-    let explanation = pd::Plugin::objects()
-        .only(&["id", "name", "short_description"])
-        .filter(plugin::SOURCE.ne("deprecated"))
-        .filter(plugin::MODERATION.eq("approved"))
-        .annotate_count("comment_set")
-        .to_sql();
-    // .fetch_annotated();
-    println!("Plugins: {}", explanation);
 
     let plugin_count = if plugins.is_empty() {
         None
