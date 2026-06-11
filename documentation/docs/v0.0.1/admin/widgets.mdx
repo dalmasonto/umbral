@@ -268,7 +268,7 @@ The first column gets `<th scope="row">` treatment: `text-on-surface`, `font-med
 
 ## Feed
 
-Chronological activity stream — avatar + title + timestamp.
+Chronological activity stream. Each `FeedItem` reads as a subject-verb-object sentence with a timestamp: `actor` did `verb` to `object` `at` some time. `object_link` makes the object clickable.
 
 ```rust
 WidgetPayload::Feed(FeedPayload {
@@ -278,17 +278,18 @@ WidgetPayload::Feed(FeedPayload {
         .fetch().await.unwrap_or_default()
         .into_iter()
         .map(|u| FeedItem {
-            title: u.username.clone(),
-            subtitle: u.email,
-            timestamp: u.date_joined.to_rfc3339(),
-            icon: Some("user-plus".into()),
+            actor: u.username.clone(),
+            verb: "signed".into(),
+            object: "up".into(),
+            object_link: None,
+            at: u.date_joined.to_rfc3339(),
         })
         .collect(),
     view_all_url: Some("/admin/auth_user/".into()),
 })
 ```
 
-Timestamps render through the `naturaltime` filter ("2 hours ago") with the absolute date in a hover tooltip.
+The `at` value is an RFC 3339 timestamp string; the feed template renders it through the admin's `naturaltime` filter ("2 hours ago") with the absolute date in a hover tooltip.
 
 ## WidgetDataFn — closure shapes
 
