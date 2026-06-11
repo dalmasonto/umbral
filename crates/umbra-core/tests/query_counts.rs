@@ -211,6 +211,9 @@ async fn reading_many_rows_is_one_query_not_n() {
 // large-N pass only inserts the delta.
 // ---------------------------------------------------------------------------
 
+use std::str::FromStr;
+
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio::sync::OnceCell as TokioOnceCell;
 use umbra::orm::{ForeignKey, M2M, ReverseSet};
 use umbra::prelude::*;
@@ -265,7 +268,18 @@ static BOOT: TokioOnceCell<()> = TokioOnceCell::const_new();
 async fn boot_and_seed(n: i64) {
     BOOT.get_or_init(|| async {
         let settings = umbra::Settings::from_env().expect("figment defaults");
-        let pool = umbra::db::connect_sqlite("sqlite::memory:")
+        // Build the pool DIRECTLY rather than via `umbra::db::connect_sqlite`:
+        // production `connect_sqlite` sets `log_statements(Off)` for runtime
+        // performance, which suppresses the very `sqlx::query` tracing events
+        // this harness counts. A query-count proof needs them ON. We also pin
+        // `max_connections(1)` so the in-memory DB (which is per-connection)
+        // persists across every query the proofs issue.
+        let opts = SqliteConnectOptions::from_str("sqlite::memory:")
+            .expect("sqlite opts")
+            .foreign_keys(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
             .await
             .expect("in-memory sqlite");
         umbra::App::builder()
@@ -326,4 +340,42 @@ async fn boot_and_seed(n: i64) {
             .unwrap();
     }
     tx.commit().await.unwrap();
+}
+
+#[tokio::test]
+async fn select_related_nested_is_constant_queries_not_n_plus_1() {
+    let _g = query_lock().await;
+    let mut counts = Vec::new();
+    for n in [10_i64, 10_000] {
+        boot_and_seed(n).await;
+        reset();
+        let rows = Comment::objects()
+            .select_related("plugin__author")
+            .fetch()
+            .await
+            .expect("fetch");
+        assert_eq!(rows.len() as i64, n, "sanity: all parents returned");
+        // Deepest level hydrated from the batched chain, not per-row.
+        let author = rows[0]
+            .plugin
+            .resolved()
+            .and_then(|p| p.author.resolved())
+            .expect("author hydrated");
+        assert_eq!(author.name, "Ada");
+        counts.push(count());
+    }
+    // 1 main + 2 hop batches = 3, for BOTH sizes. Equal counts is the
+    // no-N+1 proof; the absolute value (3) is the select_related contract.
+    assert_eq!(
+        counts[0],
+        counts[1],
+        "query count must not grow with parent count (saw {counts:?}; statements: {:?})",
+        statements()
+    );
+    assert_eq!(
+        counts[0],
+        3,
+        "expected main + 2 hop batches; saw {:?}",
+        statements()
+    );
 }
