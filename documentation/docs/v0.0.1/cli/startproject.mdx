@@ -37,10 +37,7 @@ you only ever depend on, never install.
 
 ## What the global `umbra` binary does
 
-It does two things: `startproject` and `startapp`. Everything else
-(`serve`, `migrate`, `createsuperuser`, …) runs against your
-project's own binary via
-[`cargo run -- <command>`](./management-commands).
+It does three things: `startproject`, `startapp`, and `startplugin`. Everything else (`serve`, `migrate`, `createsuperuser`, …) runs against your project's own binary via [`cargo run -- <command>`](./management-commands).
 
 <Callout type="info">
 **Two CLIs, one mental model.** The global `umbra` binary scaffolds
@@ -56,6 +53,7 @@ plugin contributes) runs **inside your project** via
 GLOBAL  (cargo install umbra-cli; nothing else needed)
   umbra startproject <name>
   umbra startapp <name>
+  umbra startplugin <name>
 
 PROJECT (inside a project, after umbra startproject)
   cargo run -- serve
@@ -109,9 +107,9 @@ myblog/
 | `LoggedIn<AuthUser>` extractor | `dashboard()` handler signature |
 | `umbra::transaction` | inside `dashboard()` wrapping the ORM fetch |
 | `AuthPlugin` + `SessionsPlugin` | `.plugin(...)` in the builder |
-| `RestPlugin` with `enable_filters()` | `.plugin(RestPlugin::default().resource(...))` |
+| `RestPlugin` with a `post` resource | `.plugin(RestPlugin::default().resource(...))` |
 | `AdminPlugin` | `.plugin(AdminPlugin::default())` |
-| `OpenApiPlugin` (Swagger UI at `/api/docs/`) | `.plugin(OpenApiPlugin::new())` |
+| `OpenApiPlugin` (Swagger UI at `/openapi/`) | `.plugin(OpenApiPlugin::new())` |
 | Custom 404 / 500 templates | `.not_found_template("404.html")` + `.server_error_template("500.html")` |
 | Tailwind classes (CDN) | `templates/base.html` |
 
@@ -136,11 +134,7 @@ field. The `#[derive(Model)]` macro generates the `Model` trait impl, the ORM
 manager, and the typed column constants (`post::ID`, `post::TITLE`,
 `post::PUBLISHED`, `post::AUTHOR`).
 
-**App wiring** calls `App::builder()` with every plugin registered in order:
-`AuthPlugin`, `SessionsPlugin`, `AdminPlugin`, `RestPlugin`, and `OpenApiPlugin`.
-The `RestPlugin` call chains `.resource(ResourceConfig::new("post").enable_filters())`
-so query-string filters (`?published=true`, `?title__icontains=rust`) work on the
-`/api/post/` endpoint out of the box.
+**App wiring** calls `App::builder()` with every plugin registered in order: `AuthPlugin`, `SessionsPlugin`, `AdminPlugin`, `RestPlugin`, `OpenApiPlugin`, and `SecurityPlugin`. The `RestPlugin` call chains `.resource(ResourceConfig::new("post"))`, which exposes JSON CRUD at the `/api/post/` endpoint. Add `.enable_filters()` to the resource when you want query-string filters (`?published=true`, `?title__icontains=rust`).
 
 **Handlers** show three patterns: a public HTML page (`home`), a plain JSON
 response (`api_list_posts`), and a login-gated view (`dashboard`) that uses both
@@ -172,12 +166,16 @@ Generates:
 ```
 plugins/posts/
 ├── Cargo.toml          # umbra dep
-└── src/lib.rs          # PostsPlugin + Plugin trait stub
+└── src/
+    ├── lib.rs          # PostsPlugin + Plugin trait stub
+    └── models.rs       # an empty place to declare your first model
 ```
 
 The generated `lib.rs` looks like:
 
 ```rust
+pub mod models;
+
 use umbra::plugin::{AppContext, Plugin, PluginError};
 use umbra::web::Router;
 
@@ -185,9 +183,25 @@ use umbra::web::Router;
 pub struct PostsPlugin;
 
 impl Plugin for PostsPlugin {
-    fn name(&self) -> &'static str { "posts" }
-    fn routes(&self) -> Router { Router::new() }
-    fn on_ready(&self, _ctx: &AppContext) -> Result<(), PluginError> { Ok(()) }
+    fn name(&self) -> &'static str {
+        "posts"
+    }
+
+    fn models(&self) -> Vec<umbra::migrate::ModelMeta> {
+        // Register every model the plugin owns so makemigrations
+        // picks them up. Uncomment + extend once you've defined one
+        // in src/models.rs.
+        // vec![umbra::migrate::ModelMeta::for_::<models::Example>()]
+        Vec::new()
+    }
+
+    fn routes(&self) -> Router {
+        Router::new()
+    }
+
+    fn on_ready(&self, _ctx: &AppContext) -> Result<(), PluginError> {
+        Ok(())
+    }
 }
 ```
 
