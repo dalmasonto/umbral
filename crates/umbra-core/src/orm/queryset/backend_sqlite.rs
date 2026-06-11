@@ -137,20 +137,25 @@ pub(super) fn hydrate_joined_rels<T: Model + HydrateRelated>(
     Ok(())
 }
 
-/// Extract one M2M child row from a JOIN'd row, given the field
-/// name and child model meta. Returns `Some(JsonValue::Object)`
-/// when the child PK column is non-null (= real match), `None`
-/// when the LEFT JOIN missed (no junction row for this parent —
-/// parent still appears once with all child cols NULL).
-pub(super) fn extract_m2m_child_json(
+/// Extract one M2M child row from a JOIN'd row. `field_name` is the
+/// full join path (`"tags"` or the chained `"tags__category"`); the
+/// child columns are aliased by the FIRST segment, and any onward FK
+/// chain by its cumulative dotted prefix. Returns `Some(JsonValue::Object)`
+/// when the child PK column is non-null (= real match) — with the
+/// onward FK object nested under its field key so `tag.category`
+/// hydrates — or `None` when the LEFT JOIN missed (no junction row for
+/// this parent — parent still appears once with all child cols NULL).
+pub(super) fn extract_m2m_child_json<T: Model>(
     row: &sqlx::sqlite::SqliteRow,
     field_name: &str,
     child_meta: &crate::migrate::ModelMeta,
 ) -> Result<Option<JsonValue>, sqlx::Error> {
+    let segs: Vec<&str> = field_name.split("__").collect();
+    let m2m_seg = segs[0];
     let Some(pk_col) = child_meta.fields.iter().find(|c| c.primary_key) else {
         return Ok(None);
     };
-    let pk_alias = format!("{field_name}__{}", pk_col.name);
+    let pk_alias = format!("{m2m_seg}__{}", pk_col.name);
     let pk_null = row
         .try_get::<Option<i64>, _>(pk_alias.as_str())
         .map(|v| v.is_none())
@@ -160,9 +165,57 @@ pub(super) fn extract_m2m_child_json(
     }
     let mut obj = serde_json::Map::with_capacity(child_meta.fields.len());
     for col in &child_meta.fields {
-        let alias = format!("{field_name}__{}", col.name);
+        let alias = format!("{m2m_seg}__{}", col.name);
         let val = crate::orm::dynamic::decode_to_json_aliased(row, col, &alias)?;
         obj.insert(col.name.clone(), val);
+    }
+    // Onward FK chain off the child (`tags__category` -> category).
+    // Build the chain bottom-up from its cumulative-prefix aliases and
+    // nest it under the child's onward FK key (overriding the raw FK
+    // id that was just inserted above). A NULL onward PK leaves the FK
+    // as its raw id — unresolved, the LEFT-miss shape.
+    if let Some((_ct, _cpk, onward)) = crate::orm::queryset::resolve_m2m_chain::<T>(field_name) {
+        let registered = crate::migrate::registered_models();
+        let mut deeper: Option<JsonValue> = None;
+        for i in (0..onward.len()).rev() {
+            let hop = &onward[i];
+            let seg_idx = i + 1;
+            let prefix = segs[..=seg_idx].join("__");
+            let Some(meta) = registered.iter().find(|m| m.table == hop.child_table) else {
+                deeper = None;
+                continue;
+            };
+            let Some(hpk) = meta.fields.iter().find(|c| c.primary_key) else {
+                deeper = None;
+                continue;
+            };
+            let hpk_alias = format!("{prefix}__{}", hpk.name);
+            let hpk_null = row
+                .try_get::<Option<i64>, _>(hpk_alias.as_str())
+                .map(|v| v.is_none())
+                .unwrap_or(true);
+            if hpk_null {
+                deeper = None;
+                continue;
+            }
+            let mut hobj = serde_json::Map::with_capacity(meta.fields.len());
+            for col in &meta.fields {
+                let alias = format!("{prefix}__{}", col.name);
+                let val = crate::orm::dynamic::decode_to_json_aliased(row, col, &alias)?;
+                hobj.insert(col.name.clone(), val);
+            }
+            if let Some(child) = deeper.take()
+                && let Some(next_seg) = segs.get(seg_idx + 1)
+            {
+                hobj.insert((*next_seg).to_string(), child);
+            }
+            deeper = Some(JsonValue::Object(hobj));
+        }
+        if let Some(top) = deeper
+            && let Some(first_onward_seg) = segs.get(1)
+        {
+            obj.insert((*first_onward_seg).to_string(), top);
+        }
     }
     Ok(Some(JsonValue::Object(obj)))
 }

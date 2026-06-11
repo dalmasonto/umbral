@@ -106,16 +106,19 @@ pub(super) fn hydrate_joined_rels<T: Model + HydrateRelated>(
 
 /// Postgres counterpart of
 /// [`super::backend_sqlite::extract_m2m_child_json`]. See that
-/// function for the algorithm — only the row type differs.
-pub(super) fn extract_m2m_child_json(
+/// function for the algorithm (M2M child + onward FK chain nesting);
+/// only the row type and decode helper differ.
+pub(super) fn extract_m2m_child_json<T: Model>(
     row: &sqlx::postgres::PgRow,
     field_name: &str,
     child_meta: &crate::migrate::ModelMeta,
 ) -> Result<Option<JsonValue>, sqlx::Error> {
+    let segs: Vec<&str> = field_name.split("__").collect();
+    let m2m_seg = segs[0];
     let Some(pk_col) = child_meta.fields.iter().find(|c| c.primary_key) else {
         return Ok(None);
     };
-    let pk_alias = format!("{field_name}__{}", pk_col.name);
+    let pk_alias = format!("{m2m_seg}__{}", pk_col.name);
     let pk_null = row
         .try_get::<Option<i64>, _>(pk_alias.as_str())
         .map(|v| v.is_none())
@@ -125,9 +128,52 @@ pub(super) fn extract_m2m_child_json(
     }
     let mut obj = serde_json::Map::with_capacity(child_meta.fields.len());
     for col in &child_meta.fields {
-        let alias = format!("{field_name}__{}", col.name);
+        let alias = format!("{m2m_seg}__{}", col.name);
         let val = crate::orm::dynamic::decode_pg_to_json_aliased(row, col, &alias)?;
         obj.insert(col.name.clone(), val);
+    }
+    if let Some((_ct, _cpk, onward)) = crate::orm::queryset::resolve_m2m_chain::<T>(field_name) {
+        let registered = crate::migrate::registered_models();
+        let mut deeper: Option<JsonValue> = None;
+        for i in (0..onward.len()).rev() {
+            let hop = &onward[i];
+            let seg_idx = i + 1;
+            let prefix = segs[..=seg_idx].join("__");
+            let Some(meta) = registered.iter().find(|m| m.table == hop.child_table) else {
+                deeper = None;
+                continue;
+            };
+            let Some(hpk) = meta.fields.iter().find(|c| c.primary_key) else {
+                deeper = None;
+                continue;
+            };
+            let hpk_alias = format!("{prefix}__{}", hpk.name);
+            let hpk_null = row
+                .try_get::<Option<i64>, _>(hpk_alias.as_str())
+                .map(|v| v.is_none())
+                .unwrap_or(true);
+            if hpk_null {
+                deeper = None;
+                continue;
+            }
+            let mut hobj = serde_json::Map::with_capacity(meta.fields.len());
+            for col in &meta.fields {
+                let alias = format!("{prefix}__{}", col.name);
+                let val = crate::orm::dynamic::decode_pg_to_json_aliased(row, col, &alias)?;
+                hobj.insert(col.name.clone(), val);
+            }
+            if let Some(child) = deeper.take()
+                && let Some(next_seg) = segs.get(seg_idx + 1)
+            {
+                hobj.insert((*next_seg).to_string(), child);
+            }
+            deeper = Some(JsonValue::Object(hobj));
+        }
+        if let Some(top) = deeper
+            && let Some(first_onward_seg) = segs.get(1)
+        {
+            obj.insert((*first_onward_seg).to_string(), top);
+        }
     }
     Ok(Some(JsonValue::Object(obj)))
 }

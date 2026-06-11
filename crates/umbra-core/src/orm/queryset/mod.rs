@@ -902,6 +902,37 @@ pub(crate) fn resolve_join_hops_for<T: Model>(path: &str) -> Option<Vec<JoinHop>
     resolve_join_hops::<T>(path)
 }
 
+/// Resolve a path whose FIRST segment is an M2M field on `T` into the
+/// M2M child table + child PK + the onward FK chain hops off that
+/// child. `onward` is empty for a bare `"tags"`; for `"tags__category"`
+/// it carries the `category` FK hop off the child table. `None` when
+/// `segs[0]` isn't an M2M field or any onward hop fails to resolve.
+pub(crate) fn resolve_m2m_chain<T: Model>(path: &str) -> Option<(String, String, Vec<JoinHop>)> {
+    let registered = crate::migrate::registered_models();
+    let segs: Vec<&str> = path.split("__").filter(|s| !s.is_empty()).collect();
+    let first = segs.first()?;
+    let rel = T::M2M_RELATIONS.iter().find(|r| r.field_name == *first)?;
+    let child_meta = registered.iter().find(|m| m.table == rel.target_table)?;
+    let child_pk = child_meta.fields.iter().find(|c| c.primary_key)?;
+    let mut onward = Vec::with_capacity(segs.len().saturating_sub(1));
+    let mut current = rel.target_table;
+    for seg in &segs[1..] {
+        let meta = registered.iter().find(|m| m.table == current)?;
+        let col = meta.fields.iter().find(|c| c.name == *seg)?;
+        let tgt = col.fk_target.as_deref()?;
+        let tmeta = registered.iter().find(|m| m.table == tgt)?;
+        let pk = tmeta.fields.iter().find(|c| c.primary_key)?;
+        onward.push(JoinHop {
+            fk_col: (*seg).to_string(),
+            child_table: tgt.to_string(),
+            child_pk: pk.name.clone(),
+            nullable: col.nullable,
+        });
+        current = tgt;
+    }
+    Some((rel.target_table.to_string(), child_pk.name.clone(), onward))
+}
+
 /// Gap #111 — error returned when a typed terminal (`fetch` / `first`
 /// / `get`) runs against a QuerySet that has `.only(...)` set. A
 /// partial-column row can't satisfy `T`'s `FromRow` impl, so the
@@ -1148,17 +1179,21 @@ impl<T: Model> QuerySet<T> {
             //     ON __jm_<field>.child_id = __j_<field>.<child_pk>
             // Aliased child cols use the same `<field>__<col>` shape
             // as the FK branch so the decode helper can be reused.
-            if let Some(m2m_rel) = T::M2M_RELATIONS
-                .iter()
-                .find(|r| r.field_name == field_name.as_str())
+            // The M2M field is the FIRST segment of the path; a nested
+            // path like `"tags__category"` passes THROUGH the M2M hop
+            // and continues with an onward FK chain off the child.
+            let m2m_seg = field_name.split("__").next().unwrap_or(field_name.as_str());
+            if let Some(m2m_rel) = T::M2M_RELATIONS.iter().find(|r| r.field_name == m2m_seg)
                 && let Some(parent_pk) = T::FIELDS.iter().find(|f| f.primary_key)
                 && let Some(child_meta) =
                     registered.iter().find(|m| m.table == m2m_rel.target_table)
                 && let Some(child_pk) = child_meta.fields.iter().find(|c| c.primary_key)
             {
-                let junction_table = format!("{}_{}", T::TABLE, field_name);
-                let junction_alias = Alias::new(format!("__jm_{field_name}"));
-                let child_alias = Alias::new(format!("__j_{field_name}"));
+                // Junction table + aliases key off the M2M field name
+                // (segs[0]), NOT the full dotted path.
+                let junction_table = format!("{}_{}", T::TABLE, m2m_seg);
+                let junction_alias = Alias::new(format!("__jm_{m2m_seg}"));
+                let child_alias = Alias::new(format!("__j_{m2m_seg}"));
                 // The junction hop stays LEFT so a parent with zero
                 // junction rows isn't dropped by the join to the
                 // junction table itself — the CHILD hop's kind is what
@@ -1185,12 +1220,53 @@ impl<T: Model> QuerySet<T> {
                     Expr::col((junction_alias.clone(), Alias::new("child_id")))
                         .equals((child_alias.clone(), Alias::new(child_pk.name.as_str()))),
                 );
+                // Child columns aliased by the M2M field name so the
+                // M2M decode path (`<m2m_field>__<col>`) reads them.
                 for col in &child_meta.fields {
-                    let alias = format!("{}__{}", field_name, col.name);
+                    let alias = format!("{}__{}", m2m_seg, col.name);
                     outer.expr_as(
                         Expr::col((child_alias.clone(), Alias::new(col.name.as_str()))),
                         Alias::new(alias),
                     );
+                }
+                // Onward FK chain off the child (segs[1..]). Each hop
+                // joins onto the prior level's alias and aliases its
+                // columns by the cumulative dotted path
+                // (`tags__category__name`) so the M2M decode path can
+                // nest the onward object into each child row.
+                if let Some((_child_table, _child_pk, onward)) = resolve_m2m_chain::<T>(field_name)
+                {
+                    let segs: Vec<&str> = field_name.split("__").collect();
+                    let mut prev_alias = child_alias.clone();
+                    for (i, hop) in onward.iter().enumerate() {
+                        // segs index for this hop: segs[0] is the M2M
+                        // field, segs[1] is onward[0], etc.
+                        let seg_idx = i + 1;
+                        let hop_alias = Alias::new(format!("__j_{m2m_seg}_o{i}"));
+                        let kind = if hop.nullable {
+                            JoinKind::Left
+                        } else {
+                            JoinKind::Inner
+                        };
+                        outer.join_as(
+                            kind.sea(),
+                            Alias::new(hop.child_table.as_str()),
+                            hop_alias.clone(),
+                            Expr::col((prev_alias.clone(), Alias::new(hop.fk_col.as_str())))
+                                .equals((hop_alias.clone(), Alias::new(hop.child_pk.as_str()))),
+                        );
+                        if let Some(meta) = registered.iter().find(|m| m.table == hop.child_table) {
+                            let prefix = segs[..=seg_idx].join("__");
+                            for col in &meta.fields {
+                                let alias = format!("{}__{}", prefix, col.name);
+                                outer.expr_as(
+                                    Expr::col((hop_alias.clone(), Alias::new(col.name.as_str()))),
+                                    Alias::new(alias),
+                                );
+                            }
+                        }
+                        prev_alias = hop_alias;
+                    }
                 }
                 continue;
             }
@@ -1232,10 +1308,15 @@ impl<T: Model> QuerySet<T> {
         // M2M branch needs parent dedup (one parent row per JOIN
         // combo would surface duplicate Ts to the caller); the FK
         // branch is one-to-one with rows.
-        let (m2m_join_fields, fk_join_fields): (Vec<String>, Vec<String>) = join_fields
-            .iter()
-            .cloned()
-            .partition(|f| T::M2M_RELATIONS.iter().any(|r| r.field_name == f.as_str()));
+        // A path whose FIRST segment is an M2M field routes to the M2M
+        // group even when it continues with an onward FK chain
+        // (`"tags__category"`): the junction double-join + parent dedup
+        // live on the M2M side, and the onward FK nests into each child.
+        let (m2m_join_fields, fk_join_fields): (Vec<String>, Vec<String>) =
+            join_fields.iter().cloned().partition(|f| {
+                let first = f.split("__").next().unwrap_or(f.as_str());
+                T::M2M_RELATIONS.iter().any(|r| r.field_name == first)
+            });
         let has_m2m_join = !m2m_join_fields.is_empty();
 
         let mut rows = match resolve_pool::<T>(self.explicit_pool.clone()) {
@@ -4291,17 +4372,18 @@ where
             typed.push(t);
         }
         for m2m_field in m2m_join_fields {
-            let Some(rel) = T::M2M_RELATIONS
-                .iter()
-                .find(|r| r.field_name == m2m_field.as_str())
-            else {
+            // The M2M slot is keyed by the FIRST segment (the M2M field
+            // name); the full `m2m_field` path may carry an onward FK
+            // chain (`"tags__category"`) the child decoder nests.
+            let m2m_seg = m2m_field.split("__").next().unwrap_or(m2m_field.as_str());
+            let Some(rel) = T::M2M_RELATIONS.iter().find(|r| r.field_name == m2m_seg) else {
                 continue;
             };
             let Some(child_meta) = registered.iter().find(|m| m.table == rel.target_table) else {
                 continue;
             };
             let Some(child_json) =
-                backend_sqlite::extract_m2m_child_json(row, m2m_field, child_meta)?
+                backend_sqlite::extract_m2m_child_json::<T>(row, m2m_field, child_meta)?
             else {
                 continue;
             };
@@ -4314,7 +4396,7 @@ where
                     m.get(&pk_col.name)?.as_i64()
                 })
                 .unwrap_or(0);
-            let key = (parent_pk, m2m_field.clone());
+            let key = (parent_pk, m2m_seg.to_string());
             let seen = seen_children.entry(key.clone()).or_default();
             if seen.insert(child_pk) {
                 buckets.entry(key).or_default().push(child_json);
@@ -4333,8 +4415,9 @@ where
     // "loaded, empty" only by callers checking the absence.
     for (&parent_pk, &idx) in idx_by_pk.iter() {
         for field in m2m_join_fields {
-            if !seen_children.contains_key(&(parent_pk, field.clone())) {
-                typed[idx].set_m2m_resolved_json(field, Vec::new());
+            let seg = field.split("__").next().unwrap_or(field.as_str());
+            if !seen_children.contains_key(&(parent_pk, seg.to_string())) {
+                typed[idx].set_m2m_resolved_json(seg, Vec::new());
             }
         }
     }
@@ -4377,16 +4460,15 @@ where
             typed.push(t);
         }
         for m2m_field in m2m_join_fields {
-            let Some(rel) = T::M2M_RELATIONS
-                .iter()
-                .find(|r| r.field_name == m2m_field.as_str())
-            else {
+            let m2m_seg = m2m_field.split("__").next().unwrap_or(m2m_field.as_str());
+            let Some(rel) = T::M2M_RELATIONS.iter().find(|r| r.field_name == m2m_seg) else {
                 continue;
             };
             let Some(child_meta) = registered.iter().find(|m| m.table == rel.target_table) else {
                 continue;
             };
-            let Some(child_json) = backend_pg::extract_m2m_child_json(row, m2m_field, child_meta)?
+            let Some(child_json) =
+                backend_pg::extract_m2m_child_json::<T>(row, m2m_field, child_meta)?
             else {
                 continue;
             };
@@ -4397,7 +4479,7 @@ where
                     m.get(&pk_col.name)?.as_i64()
                 })
                 .unwrap_or(0);
-            let key = (parent_pk, m2m_field.clone());
+            let key = (parent_pk, m2m_seg.to_string());
             let seen = seen_children.entry(key.clone()).or_default();
             if seen.insert(child_pk) {
                 buckets.entry(key).or_default().push(child_json);
@@ -4412,8 +4494,9 @@ where
     // Same LEFT JOIN miss zero-init as the SQLite path.
     for (&parent_pk, &idx) in idx_by_pk.iter() {
         for field in m2m_join_fields {
-            if !seen_children.contains_key(&(parent_pk, field.clone())) {
-                typed[idx].set_m2m_resolved_json(field, Vec::new());
+            let seg = field.split("__").next().unwrap_or(field.as_str());
+            if !seen_children.contains_key(&(parent_pk, seg.to_string())) {
+                typed[idx].set_m2m_resolved_json(seg, Vec::new());
             }
         }
     }

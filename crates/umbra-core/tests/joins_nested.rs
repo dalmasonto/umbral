@@ -11,7 +11,7 @@
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::OnceCell;
-use umbra::orm::ForeignKey;
+use umbra::orm::{ForeignKey, M2M};
 use umbra_core::db;
 
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
@@ -42,6 +42,38 @@ pub struct Comment {
     pub plugin: Option<ForeignKey<Plugin>>,
 }
 
+// --- M2M-chain models (Task 6): Post2 --(M2M)--> Tag2 --(FK)--> Cat ---
+// A nested path `tags__category` passes THROUGH an M2M hop (the junction
+// double-join) then continues with an onward FK off the child.
+
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
+#[umbra(table = "dj_cat")]
+pub struct Cat {
+    pub id: i64,
+    #[umbra(string)]
+    pub name: String,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
+#[umbra(table = "dj_tag")]
+pub struct Tag2 {
+    pub id: i64,
+    #[umbra(string)]
+    pub name: String,
+    pub category: ForeignKey<Cat>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
+#[umbra(table = "dj_post")]
+pub struct Post2 {
+    pub id: i64,
+    pub title: String,
+    #[sqlx(skip)]
+    #[serde(skip)]
+    #[umbra(m2m = "dj_tag")]
+    pub tags: M2M<Tag2>,
+}
+
 static BOOT: OnceCell<()> = OnceCell::const_new();
 
 async fn boot() {
@@ -54,6 +86,9 @@ async fn boot() {
             .model::<Author>()
             .model::<Plugin>()
             .model::<Comment>()
+            .model::<Cat>()
+            .model::<Tag2>()
+            .model::<Post2>()
             .build()
             .expect("App::build");
         for ddl in [
@@ -62,6 +97,12 @@ async fn boot() {
              author INTEGER NOT NULL REFERENCES dj_author(id))",
             "CREATE TABLE dj_comment (id INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT NOT NULL, \
              plugin INTEGER REFERENCES dj_plugin(id))",
+            "CREATE TABLE dj_cat (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)",
+            "CREATE TABLE dj_tag (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, \
+             category INTEGER NOT NULL REFERENCES dj_cat(id))",
+            "CREATE TABLE dj_post (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL)",
+            "CREATE TABLE dj_post_tags (parent_id INTEGER NOT NULL REFERENCES dj_post(id), \
+             child_id INTEGER NOT NULL REFERENCES dj_tag(id), PRIMARY KEY (parent_id, child_id))",
         ] {
             sqlx::query(ddl).execute(&pool).await.expect("ddl");
         }
@@ -106,6 +147,24 @@ async fn boot() {
             .await
             .unwrap();
         sqlx::query("INSERT INTO dj_comment (body, plugin) VALUES ('orphan', NULL)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        // M2M-chain seed: cat 1 = news; tag 1 "rust" -> cat 1;
+        // post 1 "hello"; junction (post 1, tag 1).
+        sqlx::query("INSERT INTO dj_cat (name) VALUES ('news')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO dj_tag (name, category) VALUES ('rust', 1)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO dj_post (title) VALUES ('hello')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO dj_post_tags (parent_id, child_id) VALUES (1, 1)")
             .execute(&pool)
             .await
             .unwrap();
@@ -231,4 +290,25 @@ async fn plain_join_infers_left_for_nullable_fk() {
         bodies.contains(&"orphan"),
         "nullable orphan kept by inferred LEFT: {bodies:?}"
     );
+}
+
+#[tokio::test]
+async fn m2m_chain_hydrates_child_and_onward_fk_without_dropping_parents() {
+    boot().await;
+    let before = Post2::objects().fetch().await.expect("base").len();
+    let posts = Post2::objects()
+        .inner_join_related("tags__category")
+        .fetch()
+        .await
+        .expect("m2m chain fetch");
+    // Parent count stable: the junction join didn't drop or duplicate.
+    assert_eq!(posts.len(), before, "parent count stable through M2M hop");
+    let post = posts.iter().find(|p| p.title == "hello").expect("post");
+    let tags = post.tags.resolved().expect("tags hydrated");
+    assert_eq!(tags.len(), 1, "one tag");
+    let cat = tags[0]
+        .category
+        .resolved()
+        .expect("tag.category hydrated through the chain");
+    assert_eq!(cat.name, "news");
 }
