@@ -403,7 +403,7 @@ pub mod orm {
     pub use umbra_core::orm::write::{SaveError, WriteError};
     pub use umbra_core::orm::{
         Aggregate, AggregateKind, ArrayElement, ChoiceField, DynError, DynQuerySet, Email, F,
-        FColExt, FExpr, FieldSpec, FkAction, ForeignKey, GetError, HydrateRelated, M2M,
+        FColExt, FExpr, FieldSpec, FkAction, ForeignKey, GetError, HydrateRelated, JoinKind, M2M,
         M2MRelationSpec, Manager, Model, MultiChoice, OneToOne, OneToOneRelationSpec, Post,
         Predicate, PrimaryKey, Q, QuerySet, QuerySetTx, ReverseFkRelationSpec, ReverseSet, Slug,
         SqlType, TryForEachError, TsVector, Url, ValidatorError, column, decode_to_string,
