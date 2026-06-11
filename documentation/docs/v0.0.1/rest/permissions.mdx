@@ -81,7 +81,7 @@ impl Permission for IsOwnerOrReadOnly {
         }
         match identity {
             Some(_) => Ok(()),
-            None => Err(PermissionError::AuthenticationRequired),
+            None => Err(PermissionError::Unauthenticated),
         }
     }
 }

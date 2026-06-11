@@ -6,7 +6,7 @@ icon: globe
 tags: [rest, api, json, plugin]
 ---
 
-`umbra-rest` walks the same model registry the migration engine uses and mounts a JSON CRUD surface for every registered model. Add the plugin, get `/api/<table>/` on List + Retrieve + Create + Update + Delete, plus filtering, ordering, search, pagination, and an OpenAPI spec everything else (the `umbra-playground` UI, code generators, third-party clients) reads from.
+`umbra-rest` walks the same model registry the migration engine uses and mounts a JSON CRUD surface for every registered model. Add the plugin, get `/api/<table>/` on List + Retrieve + Create + Update + Delete, plus filtering, free-text search, FK expansion (`?include=`), sparse fieldsets (`?fields=`), pagination, and an OpenAPI spec everything else (the `umbra-playground` UI, code generators, third-party clients) reads from.
 
 ```rust
 use umbra::prelude::*;
@@ -35,8 +35,9 @@ Both default to "open" - `NoAuthentication` (every request anonymous) paired wit
 ## Other surfaces
 
 - **Model exposure.** Every registered model is auto-served at `/api/<table>/` (opt-out, not opt-in); `auth_user`, `session`, and `umbra_migrations` are blocked by default. Tighten with `include_only` / `exclude`, or deliberately opt in with `expose`. See [Model exposure](/docs/v0.0.1/rest/exposure).
-- **Filtering, ordering, search, pagination.** Spec-driven - every list endpoint exposes `?field__op=value`, `?ordering=field`, `?search=term`, `?page=2&page_size=50`. See `arch.md` and `docs/specs/` for the wire shape.
-- **Custom actions.** `ResourceConfig::action("publish", ...)` adds a non-CRUD endpoint that runs under the same auth + permission gate.
+- **Filtering, search, pagination.** Spec-driven - every list endpoint exposes `?field__op=value` (lookups: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`, `contains`, `icontains`, `startswith`, `isnull`), `?search=term`, and `?page=2&page_size=50` (page-number pagination) or `?limit=&offset=` once you wire a `Pagination` class via `RestPlugin::paginate(...)`. Default is no pagination. See `arch.md` and `docs/specs/` for the wire shape.
+- **FK expansion and sparse fieldsets.** `?include=author,category` inlines related rows (select_related under the hood, up to 3 hops); `?fields=id,title` trims the response to named columns.
+- **Custom actions.** `ResourceConfig::action("publish", Method::POST, ActionScope::Detail, |ctx| async move { ... })` adds a non-CRUD endpoint that runs under the same auth + permission gate.
 - **Field scoping.** `ResourceConfig::hide("password_hash")` strips a column from responses; `noform` / `noedit` field attributes control write-side behaviour.
 
 The plugin contract itself is documented in `arch.md`; this folder covers the everyday consumer surface.

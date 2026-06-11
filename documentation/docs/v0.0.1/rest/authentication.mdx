@@ -21,16 +21,19 @@ One auth class is wired per `RestPlugin` (one plugin-wide backend, not per-resou
 
 ```rust
 pub struct Identity {
-    pub user_id: i64,         // the authenticated user's PK
+    pub user_id: String,      // the authenticated user's PK, stringified (PK-type-agnostic)
     pub is_staff: bool,       // mirrors Django's User.is_staff
     pub extras: HashMap<String, Value>,  // app-specific (roles, org id, scopes)
 }
 ```
 
+`user_id` is a `String` rather than an `i64` so the same `Identity` shape works whether your PK is an integer, a UUID, or anything else `ToString`. `Identity::user(...)` takes `impl ToString`, so passing an `i64` PK just works.
+
 Constructors are chainable:
 
 ```rust
 Identity::user(user.id).with_staff(user.is_staff)
+Identity::user(user.id).staff()                       // shorthand for .with_staff(true)
 Identity::user(user.id).with_extra("org_id", json!(42))
 ```
 
