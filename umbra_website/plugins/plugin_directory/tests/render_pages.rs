@@ -22,8 +22,10 @@ use plugin_directory::models::{
     PluginFeature, PluginMaturity, PluginModeration, PluginSource, PluginStatus, SecurityStatus,
 };
 use plugin_directory::{
-    create_note, render_detail, render_detail_with, render_listing, render_search,
+    create_note, create_report, create_submission, render_detail, render_detail_with,
+    render_listing, render_report, render_search, render_submit,
 };
+use umbra::forms::ValidationErrors;
 use umbra::migrate::ModelMeta;
 use umbra::orm::{ForeignKey, Model};
 use umbra::plugin::{Plugin as PluginTrait, PluginError};
@@ -540,7 +542,10 @@ async fn listing_and_detail_render_real_db_rows() {
     let missing_note = create_note("does-not-exist", "body", "general", None)
         .await
         .expect("create_note query ok");
-    assert!(!missing_note, "create_note returns false for an unknown slug");
+    assert!(
+        !missing_note,
+        "create_note returns false for an unknown slug"
+    );
 
     // Re-render with ?submitted=1 → the success banner appears (the
     // pending note is NOT in the visible list, proving moderation gates it).
@@ -598,4 +603,203 @@ async fn listing_and_detail_render_real_db_rows() {
         !blank.contains("pd-search-result"),
         "empty query produces no result links"
     );
+
+    // --- Report an issue: GET renders the prefilled form -----------------
+    // ?plugin=<seeded slug> resolves the plugin name and renders the form
+    // (action /report, the category select, the details textarea).
+    let report = render_report(
+        Some("umbra-rest"),
+        false,
+        None,
+        &std::collections::HashMap::new(),
+    )
+    .await
+    .expect("report form renders");
+    assert!(
+        report.contains("action=\"/report\""),
+        "the report form posts to /report"
+    );
+    assert!(
+        report.contains("name=\"category\"") && report.contains("<select"),
+        "the report form has a category select"
+    );
+    assert!(
+        report.contains("name=\"details\"") && report.contains("<textarea"),
+        "the report form has a details textarea"
+    );
+    assert!(
+        report.contains("Umbra REST"),
+        "the resolved plugin name renders in the report form"
+    );
+    assert!(
+        report.contains("value=\"umbra-rest\""),
+        "the plugin slug is carried in the hidden field"
+    );
+
+    // --- Report an issue: create_report files a pending PluginComment ----
+    create_report(
+        Some("umbra-rest"),
+        "security",
+        "Leaks the session cookie on the login redirect.",
+    )
+    .await
+    .expect("create_report files the report");
+
+    let filed = PluginComment::objects()
+        .filter(
+            plugin_directory::models::plugin_comment::BODY
+                .eq("[security] Leaks the session cookie on the login redirect."),
+        )
+        .first()
+        .await
+        .expect("query the filed report")
+        .expect("the report row exists");
+    assert_eq!(
+        filed.moderation,
+        CommentModeration::Pending,
+        "a filed report awaits moderation"
+    );
+    assert_eq!(
+        filed.author_label.as_deref(),
+        Some("Issue report"),
+        "a filed report is labelled for the moderation queue"
+    );
+    assert!(
+        filed.body.contains("[security]") && filed.body.contains("Leaks the session cookie"),
+        "the report body carries the category prefix + the details"
+    );
+
+    // Empty details is rejected with a field-keyed error and NO new row.
+    let before = PluginComment::objects().count().await.expect("count ok");
+    let err = create_report(Some("umbra-rest"), "bug", "   ")
+        .await
+        .expect_err("empty details rejected");
+    assert!(
+        err.fields.contains_key("details"),
+        "the empty-details error is keyed to the details field"
+    );
+    let after = PluginComment::objects().count().await.expect("count ok");
+    assert_eq!(before, after, "a rejected report inserts no row");
+
+    // --- Submit a plugin: the GET form renders ---------------------------
+    let submit = render_submit(false, None, &std::collections::HashMap::new())
+        .await
+        .expect("submit form renders");
+    assert!(
+        submit.contains("action=\"/plugins/submit\""),
+        "the submit form posts to /plugins/submit"
+    );
+    for input in [
+        "name=\"name\"",
+        "name=\"slug\"",
+        "name=\"crate_name\"",
+        "name=\"short_description\"",
+        "name=\"full_content\"",
+        "name=\"installation_commands\"",
+    ] {
+        assert!(
+            submit.contains(input),
+            "the submit form has an input for `{input}`"
+        );
+    }
+
+    // --- Submit a plugin: valid data creates a pending community row -----
+    let id = create_submission(&submission_data(&[
+        ("name", "Umbra Webhooks"),
+        ("slug", "umbra-webhooks"),
+        ("crate_name", "umbra-webhooks"),
+        ("author", "@webhooks"),
+        (
+            "short_description",
+            "Outbound webhook delivery with retries.",
+        ),
+        (
+            "full_content",
+            "## Webhooks\n\nSign, queue and deliver outbound webhooks the Umbra way.",
+        ),
+        ("installation_commands", "umbra add umbra-webhooks"),
+    ]))
+    .await
+    .expect("valid submission creates a row");
+
+    let created = Plugin::objects()
+        .filter(plugin_directory::models::plugin::ID.eq(id))
+        .first()
+        .await
+        .expect("query the submitted plugin")
+        .expect("the submitted plugin row exists");
+    assert_eq!(
+        created.source,
+        PluginSource::Community,
+        "a public submission is a community row"
+    );
+    assert_eq!(
+        created.moderation,
+        PluginModeration::Pending,
+        "a public submission awaits moderation"
+    );
+    assert!(
+        created.created_by.is_none(),
+        "a public submission is not authored by an arbitrary user"
+    );
+
+    // --- Submit a plugin: invalid data → Err, no row, error renders ------
+    let before_plugins = Plugin::objects().count().await.expect("count ok");
+    let errs: ValidationErrors = create_submission(&submission_data(&[
+        // Blank required name.
+        ("name", ""),
+        ("slug", "umbra-x"),
+        ("crate_name", "umbra-x"),
+        ("author", "@x"),
+        (
+            "short_description",
+            "A short description that is long enough.",
+        ),
+        (
+            "full_content",
+            "Enough body content to satisfy the minimum length.",
+        ),
+        ("installation_commands", "umbra add umbra-x"),
+    ]))
+    .await
+    .expect_err("blank name is rejected");
+    assert!(
+        errs.fields.contains_key("name"),
+        "the validation error is keyed to the blank `name` field"
+    );
+    let after_plugins = Plugin::objects().count().await.expect("count ok");
+    assert_eq!(
+        before_plugins, after_plugins,
+        "an invalid submission inserts no row"
+    );
+
+    // Re-render the submit form WITH the error context → the red error
+    // text renders under the `name` field, and the typed values are kept.
+    let resubmit = render_submit(
+        false,
+        Some(&errs),
+        &submission_data(&[("name", ""), ("slug", "umbra-x"), ("crate_name", "umbra-x")]),
+    )
+    .await
+    .expect("submit form re-renders with errors");
+    assert!(
+        resubmit.contains("pd-field--error"),
+        "the errored field carries the error class"
+    );
+    assert!(
+        resubmit.contains(&errs.fields["name"][0]),
+        "the field's error message renders under the input"
+    );
+    assert!(
+        resubmit.contains("value=\"umbra-x\""),
+        "the previously-entered slug value is repopulated"
+    );
+}
+
+/// Build a form-data map for the submission tests.
+fn submission_data(pairs: &[(&str, &str)]) -> std::collections::HashMap<String, String> {
+    pairs
+        .iter()
+        .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+        .collect()
 }

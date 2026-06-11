@@ -30,12 +30,15 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use serde::Serialize;
+use umbra::forms::{FormValidate, ValidationErrors};
 use umbra::migrate::ModelMeta;
 use umbra::plugin::{AppContext, Plugin, PluginError};
 use umbra::prelude::*;
 use umbra::routes::RouteSpec;
 use umbra::templates::context;
-use umbra::web::{Form, Html, Path, Query, Redirect, Router, StatusCode, get, post};
+use umbra::web::{
+    Form, Html, IntoResponse, Path, Query, Redirect, Response, Router, StatusCode, get, post,
+};
 
 use models::{
     self as pd, Plugin as PluginModel, plugin, plugin_comment, plugin_compatibility, plugin_feature,
@@ -62,8 +65,10 @@ impl Plugin for PluginDirectoryPlugin {
         Router::new()
             .route("/prebuilt", get(prebuilt_plugins))
             .route("/plugins", get(plugin_directory))
+            .route("/plugins/submit", get(submit_page).post(post_submission))
             .route("/plugins/{slug}", get(plugin_detail))
             .route("/plugins/{slug}/notes", post(post_plugin_note))
+            .route("/report", get(report_page).post(post_report))
             .route("/search", get(plugin_search))
     }
 
@@ -71,8 +76,10 @@ impl Plugin for PluginDirectoryPlugin {
         vec![
             RouteSpec::new("/prebuilt", vec!["GET"]),
             RouteSpec::new("/plugins", vec!["GET"]),
+            RouteSpec::new("/plugins/submit", vec!["GET", "POST"]),
             RouteSpec::new("/plugins/{slug}", vec!["GET"]),
             RouteSpec::new("/plugins/{slug}/notes", vec!["POST"]),
+            RouteSpec::new("/report", vec!["GET", "POST"]),
             RouteSpec::new("/search", vec!["GET"]),
         ]
     }
@@ -468,10 +475,9 @@ async fn plugin_detail(
     Path(slug): Path<String>,
     Query(q): Query<DetailQuery>,
 ) -> Result<Html<String>, (StatusCode, String)> {
-    if slug == "submit" {
-        return render("plugin_directory/submit.html", &serde_json::json!({}));
-    }
-
+    // `/plugins/submit` is served by its own static route (registered
+    // before this `/plugins/{slug}` matcher), so the submit page never
+    // reaches here — this is the canonical plugin-detail path only.
     let submitted = q.submitted.as_deref() == Some("1");
     match render_detail_with(&slug, submitted)
         .await
@@ -559,6 +565,362 @@ pub async fn create_note(
         .await
         .map_err(|e| e.to_string())?;
     Ok(true)
+}
+
+// ---------------------------------------------------------------------------
+// Report an issue — GET /report?plugin=<slug>, POST /report
+// ---------------------------------------------------------------------------
+
+/// The category options shown in the report form's `<select>`. The value
+/// is stored verbatim in the comment body prefix (`[security] …`) so a
+/// moderator sees the reporter's classification in the queue.
+const REPORT_CATEGORIES: &[(&str, &str)] = &[
+    ("security", "Security vulnerability"),
+    ("bug", "Bug / broken behaviour"),
+    ("malware", "Malware / abuse"),
+    ("licensing", "Licensing concern"),
+    ("other", "Something else"),
+];
+
+/// Query string for the report page: `?plugin=<slug>` prefills the
+/// target plugin; `?submitted=1` renders the success state after a POST.
+#[derive(Debug, Default, serde::Deserialize)]
+struct ReportQuery {
+    plugin: Option<String>,
+    submitted: Option<String>,
+}
+
+/// One category option handed to `report.html`.
+#[derive(Debug, Serialize)]
+struct ReportCategory {
+    value: &'static str,
+    label: &'static str,
+}
+
+fn report_categories() -> Vec<ReportCategory> {
+    REPORT_CATEGORIES
+        .iter()
+        .map(|(value, label)| ReportCategory { value, label })
+        .collect()
+}
+
+async fn report_page(Query(q): Query<ReportQuery>) -> Result<Html<String>, (StatusCode, String)> {
+    let submitted = q.submitted.as_deref() == Some("1");
+    render_report(q.plugin.as_deref(), submitted, None, &HashMap::new())
+        .await
+        .map(Html)
+        .map_err(internal_error)
+}
+
+/// Handle a posted issue report (`POST /report`). Records the report as a
+/// pending [`PluginComment`] on the named plugin, then redirects back to
+/// the report page with `?submitted=1` (POST/redirect/GET, so a refresh
+/// won't re-file). A missing `details` field re-renders the form with the
+/// error instead of crashing.
+async fn post_report(
+    Form(form): Form<HashMap<String, String>>,
+) -> Result<Response, (StatusCode, String)> {
+    let slug = form
+        .get("plugin")
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let category = form
+        .get("category")
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("other");
+    let details = form.get("details").map(|s| s.trim()).unwrap_or("");
+
+    match create_report(slug.as_deref(), category, details).await {
+        Ok(()) => {
+            let target = slug.as_deref().unwrap_or("");
+            let url = if target.is_empty() {
+                "/report?submitted=1".to_string()
+            } else {
+                format!("/report?plugin={target}&submitted=1")
+            };
+            Ok(Redirect::to(&url).into_response())
+        }
+        // A validation miss (empty details) re-renders the form with the
+        // typed-in values kept and the error shown under the field.
+        Err(errs) => {
+            let html = render_report(slug.as_deref(), false, Some(&errs), &form)
+                .await
+                .map_err(internal_error)?;
+            Ok((StatusCode::UNPROCESSABLE_ENTITY, Html(html)).into_response())
+        }
+    }
+}
+
+/// File an issue report as a pending [`PluginComment`] through the ORM.
+/// `details` must be non-empty (else a field-keyed [`ValidationErrors`]).
+/// When `slug` names an approved plugin the report attaches to it; an
+/// unknown / missing slug is accepted as a free-form report against the
+/// first approved plugin we can find so the moderator still sees it — and
+/// if the directory is empty the report is rejected with a form-level
+/// note rather than a 500. Public so the render smoke-test can drive the
+/// create path without an axum runtime.
+pub async fn create_report(
+    slug: Option<&str>,
+    category: &str,
+    details: &str,
+) -> Result<(), ValidationErrors> {
+    let details = details.trim();
+    if details.is_empty() {
+        let mut errs = ValidationErrors::new();
+        errs.add("details", "Please describe the issue.");
+        return Err(errs);
+    }
+
+    // Resolve the plugin: the named slug if it exists, else (for a
+    // generic / unknown-slug report) the first approved plugin so the
+    // note still lands in a moderation queue a human watches.
+    let target = match slug.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(s) => PluginModel::objects()
+            .filter(plugin::SLUG.eq(s))
+            .filter(plugin::MODERATION.eq("approved"))
+            .first()
+            .await
+            .map_err(write_to_validation_str)?,
+        None => None,
+    };
+    let target = match target {
+        Some(p) => Some(p),
+        None => PluginModel::objects()
+            .filter(plugin::MODERATION.eq("approved"))
+            .order_by(plugin::ID.asc())
+            .first()
+            .await
+            .map_err(write_to_validation_str)?,
+    };
+
+    let Some(plugin) = target else {
+        let mut errs = ValidationErrors::new();
+        errs.add_non_field("There are no plugins to report against yet.");
+        return Err(errs);
+    };
+
+    let mut comment = pd::PluginComment::default();
+    comment.plugin = ForeignKey::new(plugin.id);
+    // Prefix the moderator-facing body with the reporter's category so the
+    // queue reads "[security] <details>" at a glance.
+    comment.body = format!("[{category}] {details}");
+    comment.kind = CommentKind::General;
+    comment.moderation = CommentModeration::Pending;
+    comment.author_label = Some("Issue report".to_string());
+
+    pd::PluginComment::objects()
+        .create(comment)
+        .await
+        .map_err(write_to_validation)?;
+    Ok(())
+}
+
+/// View-model handed to `report.html`.
+#[derive(Debug, Serialize)]
+struct ReportView {
+    /// The slug being reported (hidden field + back-link target).
+    plugin_slug: String,
+    /// The resolved plugin name when the slug matched an approved row,
+    /// else `None` (a generic report).
+    plugin_name: Option<String>,
+    categories: Vec<ReportCategory>,
+    submitted: bool,
+}
+
+/// Load + render the report page. `errors` carries a failed submission's
+/// field map (so the template repopulates + shows red error text);
+/// `form` is the raw submitted pairs (kept on the re-render). Public so
+/// the render smoke-test can exercise the template path directly.
+pub async fn render_report(
+    slug: Option<&str>,
+    submitted: bool,
+    errors: Option<&ValidationErrors>,
+    form: &HashMap<String, String>,
+) -> Result<String, String> {
+    let slug = slug
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+
+    // Look the plugin up by slug to show its real name (honest: only when
+    // the row exists + is approved — otherwise the form stays generic).
+    let plugin_name = match &slug {
+        Some(s) => PluginModel::objects()
+            .filter(plugin::SLUG.eq(s))
+            .filter(plugin::MODERATION.eq("approved"))
+            .first()
+            .await
+            .map_err(|e| e.to_string())?
+            .map(|p| p.name),
+        None => None,
+    };
+
+    let view = ReportView {
+        plugin_slug: slug.unwrap_or_default(),
+        plugin_name,
+        categories: report_categories(),
+        submitted,
+    };
+
+    let errors_ctx = errors_to_ctx(errors);
+
+    umbra::templates::render(
+        "plugin_directory/report.html",
+        &context! {
+            report => view,
+            errors => errors_ctx,
+            form => form,
+        },
+    )
+    .map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Submit a plugin — GET /plugins/submit, POST /plugins/submit
+// ---------------------------------------------------------------------------
+
+/// Query string for the submit page: `?submitted=1` renders the
+/// "submitted for review" success state after a POST/redirect/GET.
+#[derive(Debug, Default, serde::Deserialize)]
+struct SubmitQuery {
+    submitted: Option<String>,
+}
+
+async fn submit_page(Query(q): Query<SubmitQuery>) -> Result<Html<String>, (StatusCode, String)> {
+    let submitted = q.submitted.as_deref() == Some("1");
+    render_submit(submitted, None, &HashMap::new())
+        .await
+        .map(Html)
+        .map_err(internal_error)
+}
+
+/// Handle a posted plugin submission (`POST /plugins/submit`). Runs the
+/// `Plugin` Form-derive validation; on success persists a `Community`
+/// row with `moderation = Pending` and redirects to
+/// `/plugins/submit?submitted=1`. On failure the form re-renders with the
+/// per-field errors and the typed values kept.
+async fn post_submission(
+    Form(form): Form<HashMap<String, String>>,
+) -> Result<Response, (StatusCode, String)> {
+    match create_submission(&form).await {
+        Ok(_id) => Ok(Redirect::to("/plugins/submit?submitted=1").into_response()),
+        Err(errs) => {
+            let html = render_submit(false, Some(&errs), &form)
+                .await
+                .map_err(internal_error)?;
+            Ok((StatusCode::UNPROCESSABLE_ENTITY, Html(html)).into_response())
+        }
+    }
+}
+
+/// Validate a public plugin submission through the `Plugin` Form derive,
+/// set the server-managed fields (`source = Community`,
+/// `moderation = Pending`, `created_by = None`), persist it through the
+/// ORM, and return the new row's id. A UNIQUE clash (name / slug /
+/// crate_name already taken) surfaces as a friendly field-keyed
+/// [`ValidationErrors`], never a 500. Public so the render smoke-test can
+/// drive the validate → create path without an axum runtime.
+pub async fn create_submission(data: &HashMap<String, String>) -> Result<i64, ValidationErrors> {
+    // `featured` / `display_order` carry a SQL `default` but no
+    // `#[umbra(noform)]`, so the Form derive treats them as submittable
+    // and required. They're not on the public form (a visitor must not
+    // pick their own placement / featured flag), so inject the safe
+    // server-side defaults before validation rather than exposing inputs.
+    let mut data = data.clone();
+    data.entry("featured".to_string())
+        .or_insert_with(|| "false".to_string());
+    data.entry("display_order".to_string())
+        .or_insert_with(|| "0".to_string());
+
+    // The Form derive validates the user-submittable `#[form(...)]`
+    // fields and fills the `#[umbra(noform)]` ones from Default. Async
+    // because `created_by` (an optional FK) is existence-checked when
+    // present — an empty value skips the probe.
+    let mut plugin = PluginModel::validate(&data).await?;
+
+    // Server-managed: a public submission is always a pending community
+    // row, never authored by an arbitrary user.
+    plugin.source = PluginSource::Community;
+    plugin.moderation = PluginModeration::Pending;
+    plugin.created_by = None;
+
+    let created = PluginModel::objects()
+        .create(plugin)
+        .await
+        .map_err(write_to_validation)?;
+    Ok(created.id)
+}
+
+/// Render the submit page. `errors` carries a failed submission's field
+/// map; `form` is the raw submitted pairs (kept across the re-render).
+/// Public so the render smoke-test drives the template path directly.
+pub async fn render_submit(
+    submitted: bool,
+    errors: Option<&ValidationErrors>,
+    form: &HashMap<String, String>,
+) -> Result<String, String> {
+    let errors_ctx = errors_to_ctx(errors);
+
+    umbra::templates::render(
+        "plugin_directory/submit.html",
+        &context! {
+            submitted => submitted,
+            errors => errors_ctx,
+            form => form,
+        },
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// Flatten a [`ValidationErrors`] into the template-friendly shape the
+/// form pages expect: each field key maps to its FIRST message (so
+/// `{{ errors.name }}` renders red text under the input), plus a `form`
+/// key carrying the first non-field error for the page-level banner.
+fn errors_to_ctx(errors: Option<&ValidationErrors>) -> serde_json::Value {
+    let Some(errors) = errors else {
+        return serde_json::Value::Null;
+    };
+    let mut out = serde_json::Map::new();
+    for (field, msgs) in &errors.fields {
+        if let Some(first) = msgs.first() {
+            out.insert(field.clone(), serde_json::Value::String(first.clone()));
+        }
+    }
+    if let Some(first) = errors.non_field.first() {
+        out.insert("form".to_string(), serde_json::Value::String(first.clone()));
+    }
+    serde_json::Value::Object(out)
+}
+
+/// Lift an ORM [`WriteError`] (e.g. a UNIQUE clash on name/slug/crate)
+/// into a field-keyed [`ValidationErrors`] so the form layer renders a
+/// friendly message under the offending field instead of a 500.
+fn write_to_validation(e: umbra::orm::write::WriteError) -> ValidationErrors {
+    let mut errs = ValidationErrors::new();
+    for (field, msgs) in e.field_errors() {
+        for msg in msgs {
+            errs.add(&field, msg);
+        }
+    }
+    for msg in e.non_field_errors() {
+        errs.add_non_field(msg);
+    }
+    // A WriteError with no parseable field (raw sqlx, etc.) still needs a
+    // user-visible message — fall back to a generic non-field note.
+    if errs.is_empty() {
+        errs.add_non_field("We couldn't save your submission — please try again.");
+    }
+    errs
+}
+
+/// `write_to_validation`, but for the read paths in `create_report` that
+/// only need a `String` error channel — collapse a failed lookup to its
+/// `Display` text wrapped in a non-field [`ValidationErrors`].
+fn write_to_validation_str(e: sqlx::Error) -> ValidationErrors {
+    let mut errs = ValidationErrors::new();
+    errs.add_non_field(e.to_string());
+    errs
 }
 
 /// Load + render the `/plugins/{slug}` detail page. `Ok(None)` means
