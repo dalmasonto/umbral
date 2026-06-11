@@ -2497,6 +2497,21 @@ fn m2m_inner(ty: &Type) -> Option<&Type> {
     Some(inner)
 }
 
+/// True when this field is a reverse relation the Form derive must
+/// skip silently (no `#[umbra(noform)]` required): a `ReverseSet<C>`
+/// or a reverse `OneToOne<T>` (the `#[sqlx(skip)]` back-pointer
+/// variant). A forward `OneToOne<T>` (no `#[sqlx(skip)]`) is a unique
+/// FK and is NOT skipped — it becomes a ModelChoice (Task 4).
+fn form_is_reverse_relation(field: &syn::Field) -> bool {
+    if reverse_set_inner(&field.ty).is_some() {
+        return true;
+    }
+    if one_to_one_inner(&field.ty).is_some() && has_sqlx_skip(&field.attrs) {
+        return true;
+    }
+    false
+}
+
 /// If `ty` is `Vec<T>` and `T` is one of the [`ArrayElementKind`]
 /// Return `true` when `ty` is `Vec<u8>` specifically. Used to route
 /// byte payloads to `SqlType::Bytes` before the array catalogue
@@ -3431,7 +3446,8 @@ fn expand_form(input: DeriveInput) -> syn::Result<TokenStream2> {
             || model_attr.primary_key
             || model_attr.auto_now
             || model_attr.auto_now_add
-            || is_implicit_pk;
+            || is_implicit_pk
+            || form_is_reverse_relation(field);
         if skip_for_form {
             any_skipped = true;
             // Leave the field out of struct_inits entirely; the
@@ -3615,6 +3631,7 @@ fn expand_form(input: DeriveInput) -> syn::Result<TokenStream2> {
                 || attr.auto_now
                 || attr.auto_now_add
                 || is_implicit_pk
+                || form_is_reverse_relation(f)
             {
                 None
             } else {

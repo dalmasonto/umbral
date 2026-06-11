@@ -298,3 +298,56 @@ async fn async_validate_minimal_form_round_trips() {
         .expect("should validate");
     assert_eq!(form.title, "hello");
 }
+
+// --------------------------------------------------------------------- //
+// Task 2 — reverse relations are back-pointers; the Form derive skips   //
+// them WITHOUT requiring #[umbra(noform)] and they're absent from       //
+// fields().                                                             //
+// --------------------------------------------------------------------- //
+
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbra::orm::Model)]
+#[umbra(table = "fd_skip_child")]
+struct SkipChild {
+    pub id: i64,
+    pub title: String,
+    pub parent: umbra::orm::ForeignKey<SkipParent>,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    sqlx::FromRow,
+    serde::Serialize,
+    serde::Deserialize,
+    umbra::orm::Model,
+    umbra::forms::Form,
+)]
+#[umbra(table = "fd_skip_parent")]
+struct SkipParent {
+    pub id: i64,
+    pub name: String,
+    // Reverse FK collection — NO #[umbra(noform)].
+    #[sqlx(skip)]
+    #[serde(skip)]
+    #[umbra(reverse_fk = "parent")]
+    pub child_set: umbra::orm::ReverseSet<SkipChild>,
+    // Reverse OneToOne back-pointer — NO #[umbra(noform)].
+    #[sqlx(skip)]
+    #[serde(skip)]
+    pub profile: umbra::orm::OneToOne<SkipChild>,
+}
+
+#[test]
+fn reverse_relations_absent_from_fields() {
+    let names: Vec<String> = SkipParent::fields().into_iter().map(|f| f.name).collect();
+    assert!(names.contains(&"name".to_string()), "scalar field present");
+    assert!(
+        !names.contains(&"child_set".to_string()),
+        "ReverseSet skipped"
+    );
+    assert!(
+        !names.contains(&"profile".to_string()),
+        "reverse OneToOne skipped"
+    );
+}
