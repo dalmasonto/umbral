@@ -15,15 +15,7 @@ by Django's shape and ergonomics - it isn't a port and shares no code with
 the Django project.
 
 <Callout type="info">
-Umbra is pre-alpha. The architecture and specs are settled and the early
-milestones are landing in code. Pages get added here as features ship.
-Today there's enough to declare a model, run managed migrations, port
-an existing database via `inspectdb`, register the first built-in plugin
-(`umbra-auth`), render HTML through the templates substrate, and drive
-the whole thing through the project's `cargo run -- <command>` CLI
-(plus the global `umbra` scaffolding binary from `cargo install
-umbra-cli`). Start at
-[Your first app](/docs/v0.0.1/getting-started/your-first-app).
+Umbra is pre-alpha. The architecture and specs are settled and the milestones are landing in code. Pages get added here as features ship. Today there's enough to declare a model, run managed migrations, port an existing database via `inspectdb`, wire the built-in plugins (auth, sessions, admin, REST, OpenAPI, tasks, permissions, security, static), render HTML through the templates substrate, and drive the whole thing through the project's `cargo run -- <command>` CLI (plus the global `umbra` scaffolding binary from `cargo install umbra-cli`). Start at [Your first app](/docs/v0.0.1/getting-started/your-first-app).
 </Callout>
 
 ## Why Umbra exists
@@ -86,8 +78,8 @@ pub struct Post {
 
 async fn list_published() -> Result<Json<Vec<Post>>> {
     let posts = Post::objects()
-        .filter(post::published.is_not_null())
-        .order_by(post::published.desc())
+        .filter(post::PUBLISHED.is_not_null())
+        .order_by(post::PUBLISHED.desc())
         .limit(20)
         .fetch()
         .await?;
@@ -110,8 +102,7 @@ For the long version, read the design specs in the repository root: `arch.md`
 
 ## Roadmap
 
-Notable items on the backlog. Pages land here as each one ships. See
-`bugs/features.md` in the repository for the full punch-list.
+Notable items on the backlog. Pages land here as each one ships. See `planning/features.md` in the repository for the full punch-list.
 
 <CardGrid cols={2}>
   <Card
