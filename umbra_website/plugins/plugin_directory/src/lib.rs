@@ -37,7 +37,7 @@ use umbra::templates::context;
 use umbra::web::{Html, Path, Query, Router, StatusCode, get};
 
 use models::{
-    self as pd, plugin, plugin_comment, plugin_compatibility, plugin_feature, Plugin as PluginModel,
+    self as pd, Plugin as PluginModel, plugin, plugin_comment, plugin_compatibility, plugin_feature,
 };
 
 #[derive(Debug, Default, Clone)]
@@ -62,6 +62,7 @@ impl Plugin for PluginDirectoryPlugin {
             .route("/prebuilt", get(prebuilt_plugins))
             .route("/plugins", get(plugin_directory))
             .route("/plugins/{slug}", get(plugin_detail))
+            .route("/search", get(plugin_search))
     }
 
     fn route_paths(&self) -> Vec<RouteSpec> {
@@ -69,6 +70,7 @@ impl Plugin for PluginDirectoryPlugin {
             RouteSpec::new("/prebuilt", vec!["GET"]),
             RouteSpec::new("/plugins", vec!["GET"]),
             RouteSpec::new("/plugins/{slug}", vec!["GET"]),
+            RouteSpec::new("/search", vec!["GET"]),
         ]
     }
 
@@ -111,51 +113,105 @@ async fn prebuilt_plugins() -> Result<Html<String>, (StatusCode, String)> {
 // ---------------------------------------------------------------------------
 
 /// Query string for the listing page: `?source=community` filters the
-/// card list (and marks the active facet in the sidebar).
+/// card list (and marks the active facet in the sidebar); `?page=N`
+/// selects the 1-based page (page size [`PAGE_SIZE`]).
 #[derive(Debug, Default, serde::Deserialize)]
 struct ListingQuery {
     source: Option<String>,
+    page: Option<u32>,
 }
+
+/// Cards per listing page.
+const PAGE_SIZE: i64 = 12;
 
 async fn plugin_directory(
     Query(q): Query<ListingQuery>,
 ) -> Result<Html<String>, (StatusCode, String)> {
-    render_listing(q.source.as_deref())
+    render_listing(q.source.as_deref(), q.page.unwrap_or(1))
         .await
         .map(Html)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))
 }
 
+/// Pagination view-model handed to `plugins.html`.
+#[derive(Debug, Serialize)]
+struct Pagination {
+    page: i64,
+    total_pages: i64,
+    has_prev: bool,
+    has_next: bool,
+    prev_page: i64,
+    next_page: i64,
+    /// 1-based index of the first card on this page (within `total`).
+    range_start: i64,
+    /// 1-based index of the last card on this page.
+    range_end: i64,
+    /// The (small) window of page numbers to render as clickable links.
+    page_window: Vec<i64>,
+}
+
 /// Load + render the `/plugins` listing. Public so the render
 /// smoke-test can exercise the full query → view-model → template path
-/// without an axum runtime. `source` is an optional facet filter.
-pub async fn render_listing(source: Option<&str>) -> Result<String, String> {
+/// without an axum runtime. `source` is an optional facet filter;
+/// `page` is the 1-based page number (clamped to `[1, total_pages]`).
+pub async fn render_listing(source: Option<&str>, page: u32) -> Result<String, String> {
     // The active source facet, validated against the known variants so a
     // junk `?source=` value doesn't silently filter to nothing.
-    let active_source = source.filter(|s| {
-        matches!(*s, "official" | "community" | "experimental" | "deprecated")
-    });
+    let active_source =
+        source.filter(|s| matches!(*s, "official" | "community" | "experimental" | "deprecated"));
+
+    // Real facet counts — one `SELECT COUNT(*)` per facet, never a
+    // fetch-all-and-count-in-memory.
+    let counts = FacetCounts::load().await.map_err(|e| e.to_string())?;
+
+    // `total` is the count for the *current view*: the active facet's
+    // count when filtering, else the grand total. Pagination is computed
+    // against this so "X of N" and the page count agree with what's shown.
+    let total = match active_source {
+        Some("official") => counts.official,
+        Some("community") => counts.community,
+        Some("experimental") => counts.experimental,
+        Some("deprecated") => counts.deprecated,
+        _ => counts.total,
+    };
+    let total_pages = if total == 0 {
+        1
+    } else {
+        (total + PAGE_SIZE - 1) / PAGE_SIZE
+    };
+    // Clamp the requested page into range so `?page=0` / `?page=999`
+    // can't produce an empty or negative-offset query.
+    let page = (page.max(1) as i64).min(total_pages);
+    let offset = (page - 1) * PAGE_SIZE;
 
     // One annotated query: every approved, non-deleted plugin with its
     // VISIBLE comment count in a correlated subquery the ORM renders
     // (Django's `annotate(n=Count("comment_set"))`). Soft-deleted rows
     // are excluded automatically (Plugin is `#[umbra(soft_delete)]`).
-    let mut listing = PluginModel::objects()
-        .filter(plugin::MODERATION.eq("approved"));
+    // The ordering is pushed DB-side (featured first, then display_order,
+    // then stars) so LIMIT/OFFSET slices a stable, page-consistent order
+    // rather than an in-memory reshuffle that only sorts the current page.
+    let mut listing = PluginModel::objects().filter(plugin::MODERATION.eq("approved"));
     if let Some(src) = active_source {
         listing = listing.filter(plugin::SOURCE.eq(src));
     }
     let rows = listing
+        .order_by(plugin::FEATURED.desc())
+        .order_by(plugin::DISPLAY_ORDER.asc())
+        .order_by(plugin::GITHUB_STARS.desc())
+        .order_by(plugin::ID.asc())
         .annotate_count_where::<pd::PluginComment>(
             "comment_set_count",
             "comment_set",
             plugin_comment::MODERATION.eq("visible"),
         )
+        .limit(PAGE_SIZE as u64)
+        .offset(offset as u64)
         .fetch_annotated()
         .await
         .map_err(|e| e.to_string())?;
 
-    let mut cards: Vec<PluginCard> = rows
+    let cards: Vec<PluginCard> = rows
         .into_iter()
         .map(|(p, anns)| {
             let notes = anns
@@ -166,21 +222,21 @@ pub async fn render_listing(source: Option<&str>) -> Result<String, String> {
         })
         .collect();
 
-    // Featured-first, then by display_order, then by stars descending.
-    // (Sorted in-memory so the secondary star tiebreak — an Option — is
-    // honest about unknown values rather than coercing them to 0 in SQL.)
-    cards.sort_by(|a, b| {
-        b.featured
-            .cmp(&a.featured)
-            .then(a.display_order.cmp(&b.display_order))
-            .then(b.star_count.cmp(&a.star_count))
-    });
-
-    // Real facet counts — one `SELECT COUNT(*)` per facet, never a
-    // fetch-all-and-count-in-memory.
-    let counts = FacetCounts::load().await.map_err(|e| e.to_string())?;
-    let total = counts.total;
     let showing = cards.len();
+    let range_start = if showing == 0 { 0 } else { offset + 1 };
+    let range_end = offset + showing as i64;
+
+    let pagination = Pagination {
+        page,
+        total_pages,
+        has_prev: page > 1,
+        has_next: page < total_pages,
+        prev_page: (page - 1).max(1),
+        next_page: (page + 1).min(total_pages),
+        range_start,
+        range_end,
+        page_window: page_window(page, total_pages),
+    };
 
     umbra::templates::render(
         "plugin_directory/plugins.html",
@@ -190,9 +246,26 @@ pub async fn render_listing(source: Option<&str>) -> Result<String, String> {
             total => total,
             showing => showing,
             active_source => active_source,
+            pagination => pagination,
         },
     )
     .map_err(|e| e.to_string())
+}
+
+/// A small window of page numbers centred on the current page (at most
+/// five), so the control stays compact for large directories.
+fn page_window(page: i64, total_pages: i64) -> Vec<i64> {
+    const WINDOW: i64 = 5;
+    if total_pages <= WINDOW {
+        return (1..=total_pages).collect();
+    }
+    let half = WINDOW / 2;
+    let mut start = (page - half).max(1);
+    let end = (start + WINDOW - 1).min(total_pages);
+    // Re-anchor the start if we hit the right edge so the window keeps
+    // its full width (e.g. last page shows the final five, not three).
+    start = (end - WINDOW + 1).max(1);
+    (start..=end).collect()
 }
 
 /// Sidebar facet counts. Each field is its own `COUNT(*)` query.
@@ -268,11 +341,6 @@ struct PluginCard {
     tags: Vec<String>,
     /// Two-character tile initials.
     initials: String,
-    // --- sort keys (not serialized for the template) ---
-    #[serde(skip)]
-    display_order: i32,
-    #[serde(skip)]
-    star_count: i64,
 }
 
 impl PluginCard {
@@ -300,10 +368,86 @@ impl PluginCard {
             install: install_line(&p.installation_commands, &p.crate_name),
             tags: derive_tags(&p),
             initials: initials(&p.name),
-            display_order: p.display_order,
-            star_count: p.github_stars.unwrap_or(0),
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Global search — /search?q=...
+// ---------------------------------------------------------------------------
+
+/// Query string for the header search dialog: `?q=rest`.
+#[derive(Debug, Default, serde::Deserialize)]
+struct SearchQuery {
+    #[serde(default)]
+    q: Option<String>,
+}
+
+async fn plugin_search(
+    Query(sq): Query<SearchQuery>,
+) -> Result<Html<String>, (StatusCode, String)> {
+    render_search(sq.q.as_deref().unwrap_or(""))
+        .await
+        .map(Html)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))
+}
+
+/// A single search hit — the shape `search_results.html` iterates.
+#[derive(Debug, Serialize)]
+struct SearchHit {
+    slug: String,
+    name: String,
+    source: String,
+    short_description: String,
+}
+
+/// Load + render the `/search` result fragment. Public so the render
+/// smoke-test drives the query → fragment path without an axum runtime.
+/// An empty (or whitespace-only) query short-circuits to the hint state
+/// without touching the DB. The fragment does NOT extend `base.html` —
+/// it's injected into the header dialog by client JS.
+pub async fn render_search(q: &str) -> Result<String, String> {
+    let trimmed = q.trim();
+
+    let hits: Vec<SearchHit> = if trimmed.is_empty() {
+        Vec::new()
+    } else {
+        // Name / crate / description substring match across approved,
+        // non-deleted plugins. `Q::or` nests the three `.contains()`
+        // LIKE predicates; the ORM renders the backend-correct LIKE.
+        PluginModel::objects()
+            .filter(plugin::MODERATION.eq("approved"))
+            .filter(Q::or(
+                Q::or(
+                    plugin::NAME.contains(trimmed),
+                    plugin::CRATE_NAME.contains(trimmed),
+                ),
+                plugin::SHORT_DESCRIPTION.contains(trimmed),
+            ))
+            .order_by(plugin::FEATURED.desc())
+            .order_by(plugin::DISPLAY_ORDER.asc())
+            .limit(8)
+            .fetch()
+            .await
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .map(|p| SearchHit {
+                slug: p.slug,
+                name: p.name,
+                source: source_str(p.source).to_string(),
+                short_description: p.short_description,
+            })
+            .collect()
+    };
+
+    umbra::templates::render(
+        "plugin_directory/search_results.html",
+        &context! {
+            q => trimmed,
+            hits => hits,
+        },
+    )
+    .map_err(|e| e.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -439,10 +583,7 @@ impl PluginDetail {
             let (k, l) = audit_badge(p.audit_status);
             (k, l)
         };
-        let audit_date = p
-            .audit_status
-            .ne_or_label()
-            .to_string();
+        let audit_date = p.audit_status.ne_or_label().to_string();
 
         let total_features = features.len();
         let shipped_features = features
@@ -476,7 +617,11 @@ impl PluginDetail {
                 } else {
                     format!("{} · {}", c.umbra_version, backends)
                 };
-                let kind = if c.verified_at.is_some() { "ok" } else { "warn" };
+                let kind = if c.verified_at.is_some() {
+                    "ok"
+                } else {
+                    "warn"
+                };
                 StatusRow {
                     label,
                     status: if c.verified_at.is_some() {
@@ -531,14 +676,11 @@ impl PluginDetail {
             total_features,
             progress_pct,
             usage_title: "Usage".to_string(),
-            usage_intro: p
-                .setup_notes
-                .clone()
-                .unwrap_or_else(|| {
-                    "Add the plugin to your project's plugin list and wire it in \
+            usage_intro: p.setup_notes.clone().unwrap_or_else(|| {
+                "Add the plugin to your project's plugin list and wire it in \
                      `main.rs` like every other Umbra battery."
-                        .to_string()
-                }),
+                    .to_string()
+            }),
             usage_code: p.installation_commands.clone(),
             audit_label,
             audit_date,

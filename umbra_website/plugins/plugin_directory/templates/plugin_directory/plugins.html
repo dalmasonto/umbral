@@ -29,6 +29,39 @@
   .pd-card:hover { transform: translateY(-2px); border-color: var(--accent-line); box-shadow: 0 14px 34px -22px color-mix(in srgb, var(--accent) 55%, transparent); }
   .pd-card-tan:hover { border-color: var(--tan-line); box-shadow: 0 14px 34px -22px color-mix(in srgb, var(--tan) 60%, transparent); }
   .pd-facet-active { background: var(--accent-soft); color: var(--ink-2); }
+  /* Pagination controls — neutral chips, accent for the active page. */
+  .pd-page-link {
+    min-width: 38px;
+    height: 38px;
+    padding: 0 12px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 11px;
+    border: 1px solid var(--hairline-2);
+    background: var(--surface);
+    color: var(--ink-2);
+    font-size: 13.5px;
+    font-weight: 600;
+    text-decoration: none;
+    transition: border-color 0.18s ease, background 0.18s ease, color 0.18s ease;
+  }
+  .pd-page-link:hover { border-color: var(--accent-line); color: var(--ink); }
+  .pd-page-current {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+    cursor: default;
+  }
+  .pd-page-current:hover { color: #fff; }
+  .pd-page-disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+    pointer-events: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .pd-page-link { transition: none; }
+  }
 </style>
 {% endblock %}
 
@@ -88,7 +121,7 @@
     </aside>
 
     <div class="flex flex-col gap-3.5">
-      <div class="text-[13.5px] text-muted">Showing <span class="font-semibold text-ink">{{ showing }}</span> of {{ total }} plugins{% if active_source %} · <a href="/plugins" class="font-semibold text-accent-2">clear filter</a>{% endif %}</div>
+      <div class="text-[13.5px] text-muted">Showing <span class="font-semibold text-ink">{{ pagination.range_start }}–{{ pagination.range_end }}</span> of {{ total }} plugins{% if active_source %} · <a href="/plugins" class="font-semibold text-accent-2">clear filter</a>{% endif %}</div>
 
       {% for p in plugins %}
       {% if p.flagged %}
@@ -174,6 +207,44 @@
         <p class="m-0 text-[15px] text-muted">No plugins match this filter yet.{% if active_source %} <a href="/plugins" class="font-semibold text-accent-2">View all plugins</a>.{% endif %}</p>
       </div>
       {% endfor %}
+
+      {% if pagination.total_pages > 1 %}
+      {# Preserve the active source facet across every page link. #}
+      {% set src_q = ('&source=' ~ active_source) if active_source else '' %}
+      <nav class="pd-pager mt-3 flex flex-wrap items-center justify-center gap-1.5" aria-label="Plugin pages">
+        {% if pagination.has_prev %}
+        <a href="/plugins?page={{ pagination.prev_page }}{{ src_q }}" class="pd-page-link inline-flex items-center gap-1.5" rel="prev">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 18l-6-6 6-6"/></svg>
+          Prev
+        </a>
+        {% else %}
+        <span class="pd-page-link pd-page-disabled inline-flex items-center gap-1.5" aria-disabled="true">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 18l-6-6 6-6"/></svg>
+          Prev
+        </span>
+        {% endif %}
+
+        {% for n in pagination.page_window %}
+        {% if n == pagination.page %}
+        <span class="pd-page-link pd-page-current" aria-current="page">{{ n }}</span>
+        {% else %}
+        <a href="/plugins?page={{ n }}{{ src_q }}" class="pd-page-link">{{ n }}</a>
+        {% endif %}
+        {% endfor %}
+
+        {% if pagination.has_next %}
+        <a href="/plugins?page={{ pagination.next_page }}{{ src_q }}" class="pd-page-link inline-flex items-center gap-1.5" rel="next">
+          Next
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 6l6 6-6 6"/></svg>
+        </a>
+        {% else %}
+        <span class="pd-page-link pd-page-disabled inline-flex items-center gap-1.5" aria-disabled="true">
+          Next
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 6l6 6-6 6"/></svg>
+        </span>
+        {% endif %}
+      </nav>
+      {% endif %}
     </div>
   </div>
 </section>
