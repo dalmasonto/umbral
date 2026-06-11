@@ -258,3 +258,5 @@
 47. [x] M2M junction write batched into one multi-row INSERT — archived
 
 48. [x] validate_multi_fk_exists surfaces DB errors instead of masking them as "id not found" — archived
+
+49. [x] Facade re-exports with_actor / current_actor from umbra::signals — archived

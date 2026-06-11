@@ -361,7 +361,9 @@ pub mod signals {
     //! for the typed per-model API; reach `umbra::signals::subscribe`
     //! directly only for application-defined (non-model-tied) signals.
 
-    pub use umbra_core::signals::{clear_for_tests, emit, subscribe, subscribe_async};
+    pub use umbra_core::signals::{
+        clear_for_tests, current_actor, emit, subscribe, subscribe_async, with_actor,
+    };
 }
 
 pub mod inspect {
