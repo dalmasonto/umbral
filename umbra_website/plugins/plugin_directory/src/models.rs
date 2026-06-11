@@ -343,9 +343,14 @@ pub struct PluginCompatibility {
 /// tags the plugin / Umbra / DB / OS version their note applies to.
 /// Moderation status starts at [`CommentModeration::Pending`] and
 /// the public site only shows [`CommentModeration::Visible`] rows.
-/// TODO: ENABLE FORM HERE AND ENABLE FOREIGN KEYS, O2O, choice fields, and other foreign key fields then enable the commented out code. This is a work around for the admin to work well.
-// #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model, umbra::forms::Form)]
-#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
+///
+/// The Form derive handles the relations directly: `plugin` is a
+/// `ModelChoice` (FK), `kind` a `Select` (choices); `author` /
+/// `moderation` / `pinned` / `author_label` / `parent` stay
+/// server-managed via `#[umbra(noform)]`. Every remaining field is
+/// `Default`-derivable (`ForeignKey<T>: Default` lands the id-0
+/// placeholder), so the hand-rolled `Default` is gone.
+#[derive(Debug, Clone, Default, sqlx::FromRow, Serialize, Deserialize, Model, umbra::forms::Form)]
 #[umbra(
     soft_delete,
     plugin = "plugin_directory",
@@ -361,52 +366,53 @@ pub struct PluginComment {
     #[umbra(noform, on_delete = "set_null")]
     pub author: Option<ForeignKey<AuthUser>>,
 
-    // #[form(required, length(min = 5, max = 5_000))]
+    #[form(required, length(min = 5, max = 5_000))]
     #[umbra(widget = "markdown", help = "Markdown supported.")]
     pub body: String,
 
     // SQL DEFAULT takes the DB literal, not the Rust path (see the
-    // matching note on Plugin.source).
-    // #[umbra(noform, choices, default = "general")]
+    // matching note on Plugin.source). Public form field → a Select.
     #[umbra(choices, default = "general")]
     pub kind: CommentKind,
 
-    // #[umbra(noform, choices, default = "pending")]
-    #[umbra(choices, default = "pending")]
+    // Server-managed: a visitor must not pick their own moderation
+    // status. noform keeps it off the public form; the default is
+    // `pending` until a moderator acts.
+    #[umbra(noform, choices, default = "pending")]
     pub moderation: CommentModeration,
 
     /// Set to true by an Umbra maintainer or the plugin's author to
     /// pin the comment to the top of the thread. Admin-only.
-    #[umbra(default = "false")]
+    #[umbra(noform, default = "false")]
     pub pinned: bool,
 
     /// Optional self-identification ("maintainer of plugin X" / etc.).
     /// Admin-curated; we don't want random visitors claiming it.
-    #[umbra(max_length = 120)]
+    #[umbra(noform, max_length = 120)]
     pub author_label: Option<String>,
 
     /// Reply-to pointer for nested comments. Top-level comments have
     /// `parent = None`. Admin-managed once visible — the form layer
     /// leaves it null.
-    #[umbra(on_delete = "set_null")]
+    #[umbra(noform, on_delete = "set_null")]
     pub parent: Option<ForeignKey<PluginComment>>,
 
     /// The plugin version the comment is tagged with (e.g. "1.4.2").
-    // #[form(optional, length(max = 40))]
+    #[form(optional, length(max = 40))]
     pub plugin_version: Option<String>,
 
     /// The Umbra version the comment is tagged with (e.g. "0.0.1").
-    // #[form(optional, length(max = 40))]
+    #[form(optional, length(max = 40))]
     pub umbra_version: Option<String>,
 
     /// The database backend the comment is tagged with
     /// ("postgres" / "sqlite"). Free-text; moderation can clean.
-    // #[form(optional, length(max = 40))]
+    #[form(optional, length(max = 40))]
     pub database_backend: Option<String>,
 
     /// The operating system the comment is tagged with
     /// ("linux" / "macos" / "windows").
-    // #[form(optional, length(max = 40))]
+    #[form(optional, length(max = 40))]
     pub operating_system: Option<String>,
 
     #[umbra(auto_now_add)]
@@ -419,34 +425,98 @@ pub struct PluginComment {
     pub deleted_at: Option<DateTime<Utc>>,
 }
 
-// `ForeignKey<T>` deliberately doesn't implement `Default` (the
-// framework can't guess what zero or null means for an FK), so we
-// can't use `#[derive(Default)]` on `PluginComment` — three of its
-// fields are FKs. The form macro still requires `Default` (it
-// constructs the value with `..Default::default()` and then fills
-// in the user-submittable fields), so we hand-roll the impl. The
-// FK placeholders are never read because every FK field on this
-// struct is `#[umbra(noform)]` — the form layer leaves them alone
-// and the handler fills them from the URL/auth context.
-impl Default for PluginComment {
-    fn default() -> Self {
-        Self {
-            id: 0,
-            plugin: ForeignKey::new(0),
-            author: None,
-            body: String::new(),
-            kind: CommentKind::default(),
-            moderation: CommentModeration::default(),
-            pinned: false,
-            author_label: None,
-            parent: None,
-            plugin_version: None,
-            umbra_version: None,
-            database_backend: None,
-            operating_system: None,
-            created_at: DateTime::<Utc>::from_timestamp(0, 0).unwrap_or_else(chrono::Utc::now),
-            updated_at: DateTime::<Utc>::from_timestamp(0, 0).unwrap_or_else(chrono::Utc::now),
-            deleted_at: None,
-        }
+#[cfg(test)]
+mod form_tests {
+    use super::*;
+    use std::collections::HashMap;
+    use tokio::sync::OnceCell;
+    use umbra::forms::FormValidate;
+    use umbra::orm::Model;
+
+    fn data(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect()
+    }
+
+    // The ambient ORM pool is a process-wide OnceLock — both tests must
+    // share ONE boot so the FK existence probe (which dispatches through
+    // the ambient pool) sees the seeded `plugin` row. Seed id=1; the
+    // reject test points at a nonexistent id (9999) so it doesn't need
+    // its own DB.
+    static BOOT: OnceCell<()> = OnceCell::const_new();
+    async fn boot() {
+        BOOT.get_or_init(|| async {
+            let pool = umbra::db::connect_sqlite("sqlite::memory:").await.unwrap();
+            // Force the settings backend to sqlite to match the in-memory
+            // pool — the ambient umbra.toml / env may default to postgres.
+            let mut settings = umbra::Settings::from_env().unwrap();
+            settings.database_url = "sqlite::memory:".to_string();
+            umbra::App::builder()
+                .settings(settings)
+                .database("default", pool.clone())
+                .model::<Plugin>()
+                .model::<PluginComment>()
+                .build()
+                .unwrap();
+            // Minimal table for the FK existence probe — only the `id`
+            // column matters for validate(). The table name is
+            // Plugin::TABLE (plugin-name-prefixed by the derive), so the
+            // probe's DynQuerySet::for_meta targets the right table.
+            let create = format!(
+                "CREATE TABLE {t} (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT)",
+                t = Plugin::TABLE
+            );
+            sqlx::query(&create).execute(&pool).await.unwrap();
+            let insert = format!("INSERT INTO {t} (id, name) VALUES (1, 'demo')", t = Plugin::TABLE);
+            sqlx::query(&insert).execute(&pool).await.unwrap();
+        })
+        .await;
+    }
+
+    // The acceptance case: PluginComment derives Form directly off the
+    // Model struct. `plugin` is a ModelChoice (FK, existence-checked),
+    // `kind` a Select (choices), and the server-managed fields are
+    // skipped. A submitted comment validates with the FK bound and the
+    // choice decoded back into the enum.
+    #[tokio::test]
+    async fn plugin_comment_form_submits_with_fk_and_choices() {
+        boot().await;
+        let comment = PluginComment::validate(&data(&[
+            ("plugin", "1"),
+            ("body", "Great plugin, works on sqlite."),
+            ("kind", "usage_note"),
+        ]))
+        .await
+        .expect("comment validates with FK + choices");
+        assert_eq!(comment.plugin.id(), 1, "FK bound to the submitted id");
+        assert_eq!(
+            comment.kind,
+            CommentKind::UsageNote,
+            "choices decoded back into the enum"
+        );
+        // Server-managed fields took their defaults (form left them).
+        assert_eq!(comment.moderation, CommentModeration::default());
+        assert!(comment.author.is_none(), "author filled by the handler");
+    }
+
+    // A nonexistent plugin id is rejected: the FK existence probe finds
+    // no matching row and keys the error to the `plugin` field.
+    #[tokio::test]
+    async fn plugin_comment_form_rejects_nonexistent_plugin() {
+        boot().await;
+        let err = PluginComment::validate(&data(&[
+            ("plugin", "9999"),
+            ("body", "points at nobody"),
+            ("kind", "general"),
+        ]))
+        .await
+        .expect_err("nonexistent plugin FK rejected");
+        assert!(
+            err.fields.contains_key("plugin"),
+            "error keyed to the FK field"
+        );
     }
 }
+
