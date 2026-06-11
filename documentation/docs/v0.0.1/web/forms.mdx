@@ -57,11 +57,22 @@ Under `#[form(...)]`, per field:
 |---|---|
 | `required` | Reject empty values. **Default** for non-`Option<T>` types — `required` is the explicit/declarative form. |
 | `optional` | Accept empty values (skip `Required` check). Forced on for `Option<T>` fields. |
-| `email` | Validate as a syntactic email (`@` + dot in domain, non-empty local part). |
+| `email` | Validate as a syntactic email (`@` + dot in domain, non-empty local part). Renders `<input type="email">`. |
+| `url` | Validate as a URL (scheme + host). Renders `<input type="url">`. |
+| `phone` | Validate against an E.164-shaped phone pattern. |
+| `regex = "..."` | Validate the value against an arbitrary regex pattern. Pair with `message = "..."` for the error text (`{field}` interpolates the field name). |
+| `message = "..."` | Custom error message for the field's `regex` validator. |
 | `password` | Render as `<input type="password">`. Same validation rules as text. |
 | `min_length = N` | Minimum character count. |
 | `max_length = N` | Maximum character count. |
 | `length(min = N, max = M)` | Combined shorthand. Either bound optional. |
+
+Validators compose in declaration order (`required` → `min_length`/`max_length` → `regex`), and an empty/missing optional value skips the later checks. Example combined field:
+
+```rust
+#[form(required, max_length = 32, regex = r"^[a-z0-9_]+$", message = "{field} must be lowercase letters, digits, or underscore")]
+pub handle: String,
+```
 
 Container-level (on the struct):
 
@@ -208,8 +219,16 @@ The lift through `WriteError` is what unifies all surfaces. A custom validator t
 - Field types: `String`, `i8`..`i64` / `u8`..`u64` / `isize` / `usize`, `f32` / `f64`, `bool`, and `Option<T>` of those. Server-managed Model fields (DateTime, choice enums) get skipped via `#[umbra(...)]` markers and need `Default`.
 - Input preservation on validation failure: the failure branch hands back a `FormErrors`, not the user's raw input. Re-rendering the form with the typed input requires either calling `axum::Form<T>` alongside (parses but doesn't validate) or accepting the `Default::default()` template fallback. The latter is what the shop's contact form does.
 
+## Relation fields on a form
+
+When the `#[derive(Form)]` model carries relation fields, the derive classifies them automatically — a `ForeignKey<T>` (or forward `OneToOne<T>`) becomes a `<select>` whose submitted id is **existence-checked** against the target table before insert, an `M2M<T>` becomes a multi-`<select>` whose selected ids are written to the junction **atomically** after the parent insert (a single bad id fails validation before any row is written), and a `#[umbra(choices)]` enum becomes a `<select>` of the enum's variants. Reverse relations (`ReverseSet<C>`, reverse `OneToOne`) are back-pointers and are auto-skipped — no `#[umbra(noform)]` needed.
+
+Because FK/M2M existence checks and `<select>` option fetches hit the database, `FormValidate::validate` and `render_html` are **`async`** — `Form<T>::from_request` awaits them for you, so a handler taking `Form<T>` needs no extra wiring. The full classification table and worked examples live on [Forms learn relations](/docs/v0.0.1/orm/forms-relations).
+
 ## See also
 
+- [Forms learn relations](/docs/v0.0.1/orm/forms-relations) — `ForeignKey`/`OneToOne` → `ModelChoice`, `M2M` → `ModelMultiChoice`, choices → `Select`, and the FK existence check + M2M atomicity.
+- [Relationships](/docs/v0.0.1/orm/relationships) — the `ForeignKey`, `OneToOne`, and `M2M` field types the form derive reads.
 - [`examples/shop/plugins/content/src/models.rs`](https://github.com/dalmas-ogembo/umbra/tree/main/examples/shop/plugins/content/src/models.rs) — `ContactMessage` is both the Model and the Form (the canonical reuse example).
 - [`examples/shop/src/views/public.rs`](https://github.com/dalmas-ogembo/umbra/tree/main/examples/shop/src/views/public.rs) — `submit_contact` is the 25-line handler that drives the above.
 - [`umbra::orm::write::WriteError`](/docs/v0.0.1/orm/models) — the canonical error type every form surface lifts to.
