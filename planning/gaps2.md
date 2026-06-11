@@ -253,7 +253,7 @@
 43. [ ] Another issue is that in django admin, errors are returned 1 by 1 not all at once. This is a bug and usability issue. They should be returned at once and each field should render the error below it not at the top of the form.
 44. [ ] Admin tables don't refresh on entry craetion or update, the page, the table should refresh. This was done but maybe the url is not receiving the refresh signal correctly.
 45. [x] Seamless reverse-FK relations — annotate auto-discovery + instance `reverse::<Child>()` accessor (zero-declaration) — archived
-46. [ ] Session plugin is broken - I open a new browser. Load the url and it randomly loads 3 entries into the db. Tha that is wrong by all directions. Should only log a single entry. The same entry is the one to be updated once a user logs in for example. After login it didn't increase the no of sessions. The first part is the wrong one!
+46. [x] Session plugin created a DB row per cookie-less request (3 on fresh load) — fixed via lazy session creation — archived
 
 47. [x] M2M junction write batched into one multi-row INSERT — archived
 
