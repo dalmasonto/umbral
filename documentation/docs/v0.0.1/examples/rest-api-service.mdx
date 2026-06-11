@@ -40,16 +40,19 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1", features = ["serde", "v4"] }
 http = "1"
+async-trait = "0.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ```
 
 ## `.env`
 
+The settings loader only reads `UMBRA_`-prefixed keys, so the database URL goes under `UMBRA_DATABASE_URL` (a bare `DATABASE_URL` would be ignored and the app would fall back to `sqlite::memory:`).
+
 ```bash
-DATABASE_URL=postgres://api:api@localhost:5432/api_service
+UMBRA_DATABASE_URL=postgres://api:api@localhost:5432/api_service
 UMBRA_BIND_ADDR=0.0.0.0:8000
-UMBRA_SECRET_KEY=replace-me-with-`openssl rand -hex 32`
+UMBRA_SECRET_KEY=replace-me-run-openssl-rand-hex-32
 UMBRA_ENVIRONMENT=dev
 ```
 
@@ -86,6 +89,7 @@ pub struct Task {
 //! Bearer-token authentication. Tokens live in an `api_token` table;
 //! production would store hashed tokens and rotate them.
 
+use async_trait::async_trait;
 use umbra_rest::{Authentication, Identity};
 
 #[derive(Debug, Clone, sqlx::FromRow, umbra::orm::Model)]
@@ -100,7 +104,7 @@ pub struct ApiToken {
 #[derive(Default)]
 pub struct BearerAuth;
 
-#[umbra::async_trait::async_trait]
+#[async_trait]
 impl Authentication for BearerAuth {
     async fn authenticate(&self, headers: &umbra::web::HeaderMap) -> Option<Identity> {
         let auth = headers.get(http::header::AUTHORIZATION)?.to_str().ok()?;
@@ -127,6 +131,7 @@ use serde_json::{json, Map, Value};
 
 use umbra::prelude::*;
 
+use umbra_auth::{AuthPlugin, AuthUser};
 use umbra_rest::{
     ActionError, ActionScope, IsAuthenticated, IsStaff, OrPermission, PageNumberPagination,
     ReadOnly, ResourceConfig, RestPlugin,
@@ -188,8 +193,14 @@ fn task_resource() -> ResourceConfig {
                 let identity = ctx
                     .identity
                     .ok_or(ActionError::Unauthenticated)?;
+                // `Identity::user_id` is a String (PK-type-agnostic);
+                // parse it back to the i64 the `assignee_id` column uses.
+                let user_id: i64 = identity
+                    .user_id
+                    .parse()
+                    .map_err(|_| ActionError::Unauthenticated)?;
                 let rows = Task::objects()
-                    .filter(task::ASSIGNEE_ID.eq(identity.user_id))
+                    .filter(task::ASSIGNEE_ID.eq(user_id))
                     .order_by(task::CREATED_AT.desc())
                     .limit(100)
                     .fetch()
@@ -242,7 +253,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .database("default", pool)
         // Auth plugin: ships the AuthUser model and password hashing.
         // We don't expose its routes - this is an API-only service.
-        .plugin(umbra_auth::AuthPlugin)
+        .plugin(AuthPlugin::<AuthUser>::default())
         // Register the bearer-token model so migrations track it.
         .model::<auth::ApiToken>()
         .model::<Project>()
@@ -259,10 +270,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Block the auth user table from /api/auth_user/ entirely.
                 .exclude(["auth_user"]),
         )
-        // OpenAPI schema + Swagger UI.
+        // OpenAPI schema + Swagger UI. `.at("/")` mounts the UI at the
+        // root and serves the schema document at `/openapi.json` (the
+        // default `OpenApiPlugin::new()` would mount under `/openapi/`).
         .plugin(
             umbra_openapi::OpenApiPlugin::new()
-                .at("/openapi.json")
+                .at("/")
                 .title("API Service")
                 .version("1.0.0")
                 .description("Project / task tracker - bearer-token authenticated."),

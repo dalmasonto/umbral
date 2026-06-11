@@ -177,13 +177,11 @@ impl Plugin for BlogPlugin {
 ```rust
 mod blog;
 
-use std::sync::Arc;
-
 use umbra::prelude::*;
 use umbra::web::{Form, Html, IntoResponse, Redirect, StatusCode};
 
+use umbra_auth::{AuthUser, OptionalUser};
 use umbra_rest::FnAuthentication;
-use umbra_sessions::{Messages, OptionalUser, User};
 
 #[derive(serde::Deserialize)]
 struct LoginForm {
@@ -192,11 +190,11 @@ struct LoginForm {
 }
 
 async fn login(Form(form): Form<LoginForm>) -> Result<umbra::web::Response, StatusCode> {
-    let user = umbra_auth::authenticate(&form.username, &form.password)
+    let user: AuthUser = umbra_auth::authenticate(&form.username, &form.password)
         .await
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
     let mut response = Redirect::to("/").into_response();
-    umbra_sessions::login(response.headers_mut(), &user)
+    umbra_auth::login(response.headers_mut(), &user)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(response)
@@ -204,7 +202,7 @@ async fn login(Form(form): Form<LoginForm>) -> Result<umbra::web::Response, Stat
 
 async fn logout(headers: umbra::web::HeaderMap) -> umbra::web::Response {
     let mut response = Redirect::to("/").into_response();
-    umbra_sessions::logout(&headers, response.headers_mut()).await.ok();
+    umbra_auth::logout(&headers, response.headers_mut()).await.ok();
     response
 }
 
@@ -216,16 +214,15 @@ async fn me(OptionalUser(maybe): OptionalUser) -> Html<String> {
 }
 
 /// Background task - would normally live in a `tasks.rs` module.
-#[umbra_tasks::task]
-async fn send_welcome(email: String) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let backend = umbra_email::ConsoleBackend::default();
-    let msg = umbra_email::EmailMessage::builder()
+/// `#[umbra::task]` registers the handler by name at startup, so the
+/// worker (`cargo run -- tasks-worker`) can dispatch it. Enqueue work
+/// with `umbra_tasks::enqueue("send_welcome", &payload).await?`.
+#[umbra::task]
+async fn send_welcome(email: String) -> Result<(), String> {
+    let msg = umbra_email::EmailMessage::new("Welcome", vec![email])
         .from("no-reply@example.com")
-        .to(&email)
-        .subject("Welcome")
-        .body("Glad you signed up.")
-        .build()?;
-    backend.send(&msg).await?;
+        .text_body("Glad you signed up.");
+    umbra_email::send(&msg).await.map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -249,8 +246,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .server_error_template("500.html")
         // Domain plugin: model + routes + REST customisation.
         .plugin(blog::BlogPlugin)
-        // Auth: users + password hashing.
-        .plugin(umbra_auth::AuthPlugin)
+        // Auth: users + password hashing. Generic over the user model;
+        // `AuthUser` is the built-in default.
+        .plugin(umbra_auth::AuthPlugin::<AuthUser>::default())
         // Sessions: anonymous on every visit, fresh token on login.
         .plugin(umbra_sessions::SessionsPlugin::default())
         // REST: /api/post/ CRUD + /api/post/{id}/publish/ action.
@@ -260,11 +258,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .resource(blog::rest_resource())
                 .paginate(umbra_rest::PageNumberPagination::new(20))
                 .authenticate(FnAuthentication::new(|headers| async move {
-                    let user = umbra_sessions::current_user(&headers).await.ok().flatten()?;
+                    let user = umbra_auth::current_user(&headers).await.ok().flatten()?;
                     Some(umbra_rest::Identity::user(user.id).with_staff(user.is_staff))
                 })),
         )
-        // OpenAPI: schema at /openapi.json + Swagger UI at /docs.
+        // OpenAPI: Swagger UI at /openapi/ + schema at
+        // /openapi/openapi.json (the default mount; override with
+        // `.at("/docs")`).
         .plugin(
             umbra_openapi::OpenApiPlugin::new()
                 .title("Full-app API")
@@ -273,12 +273,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         // Admin: CRUD UI at /admin/, staff-only.
         .plugin(umbra_admin::AdminPlugin::default())
-        // Background tasks: DB-backed queue.
-        .plugin(umbra_tasks::TasksPlugin::default().register(send_welcome))
-        // Email: console in dev, swap to SMTP backend in prod.
-        .plugin(umbra_email::EmailPlugin::new(Arc::new(
-            umbra_email::ConsoleBackend::default(),
-        )))
+        // Background tasks: DB-backed queue. Handlers register
+        // themselves via `#[umbra::task]`, so the plugin itself takes
+        // no handler list — drain the queue with `cargo run -- tasks-worker`.
+        .plugin(umbra_tasks::TasksPlugin)
+        // Email: console backend in dev (prints to stderr). Configure
+        // the SMTP transport via settings for prod.
+        .plugin(umbra_email::EmailPlugin)
         .routes(
             Routes::new()
                 .get("/me", me)
@@ -296,8 +297,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  /api/post/              - REST CRUD");
     println!("  /api/post/{{id}}/publish/  - @action publish");
     println!("  /admin/                 - admin UI (staff only)");
-    println!("  /docs                   - OpenAPI / Swagger UI");
-    println!("  /openapi.json           - OpenAPI schema");
+    println!("  /openapi/               - OpenAPI / Swagger UI");
+    println!("  /openapi/openapi.json   - OpenAPI schema");
     println!("  /me                     - request.user demo");
     println!("  /login · /logout        - auth");
 
@@ -317,7 +318,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   </head>
   <body>
     <header>
-      <a href="/">home</a> · <a href="/admin/">admin</a> · <a href="/docs">api</a>
+      <a href="/">home</a> · <a href="/admin/">admin</a> · <a href="/openapi/">api</a>
     </header>
     <main>{% block content %}{% endblock %}</main>
   </body>
@@ -361,7 +362,7 @@ cargo run
 
 # Public surface
 curl http://127.0.0.1:3000/api/post/
-curl http://127.0.0.1:3000/openapi.json
+curl http://127.0.0.1:3000/openapi/openapi.json
 
 # Auth flow (needs an AuthUser; create via `cargo run -- createsuperuser`)
 curl -X POST -d "username=alice&password=secret" http://127.0.0.1:3000/login
@@ -379,11 +380,11 @@ curl -X POST -d "username=alice&password=secret" http://127.0.0.1:3000/login
 | REST pagination + auth + permissions | `paginate(...).authenticate(...).resource(... .permission(...))` |
 | OpenAPI schema + Swagger UI | `umbra_openapi::OpenApiPlugin` |
 | Admin UI at `/admin/` | `umbra_admin::AdminPlugin` |
-| Users + password hashing | `umbra_auth::AuthPlugin` + `authenticate(...)` |
-| Sessions + `request.user` | `umbra_sessions::SessionsPlugin::default()` + `OptionalUser` / `User` extractors |
-| Login / logout helpers | `umbra_sessions::login(...)` / `logout(...)` |
-| Background tasks | `umbra_tasks::TasksPlugin` + `#[umbra_tasks::task]` |
-| Email | `umbra_email::EmailPlugin::new(backend)` |
+| Users + password hashing | `umbra_auth::AuthPlugin::<AuthUser>::default()` + `authenticate(...)` |
+| Sessions + `request.user` | `umbra_sessions::SessionsPlugin::default()` + `umbra_auth::OptionalUser` / `User` extractors |
+| Login / logout helpers | `umbra_auth::login(...)` / `umbra_auth::logout(...)` |
+| Background tasks | `umbra_tasks::TasksPlugin` + `#[umbra::task]` (self-registering) + `tasks-worker` |
+| Email | `umbra_email::EmailPlugin` + `umbra_email::send(&msg)` |
 
 ## Next
 
