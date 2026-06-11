@@ -84,3 +84,62 @@ pub async fn validate_fk_exists(
         errs.add(field, format!("{field}: no matching record"));
     }
 }
+
+/// Fetch `(id, label)` option rows for a ModelChoice/ModelMultiChoice
+/// `<select>` through the ORM. `label_field` overrides the label
+/// column; default is the first non-PK text column (matches the admin's
+/// fk_picker convention). Returns at most 1000 rows — a form `<select>`
+/// with more candidates needs a search widget, not a flat list. Errors
+/// → empty options (an unrenderable select beats a 500).
+pub async fn fetch_model_options(
+    target_table: &str,
+    label_field: Option<&str>,
+) -> Vec<(String, String)> {
+    let Some(meta) = crate::migrate::registered_models()
+        .into_iter()
+        .find(|m| m.table == target_table)
+    else {
+        return Vec::new();
+    };
+    let Some(pk_col) = meta.pk_column().map(|c| c.name.clone()) else {
+        return Vec::new();
+    };
+    let label_col = label_field
+        .map(|s| s.to_string())
+        .or_else(|| {
+            meta.fields
+                .iter()
+                .find(|c| c.ty == crate::orm::SqlType::Text && c.name != pk_col)
+                .map(|c| c.name.clone())
+        })
+        .unwrap_or_else(|| pk_col.clone());
+    // fetch_as_json returns Vec<serde_json::Map<String, Value>> — each
+    // row is already a Map, no .as_object() needed.
+    let rows = crate::orm::dynamic::DynQuerySet::for_meta(&meta)
+        .select_cols(&[pk_col.clone(), label_col.clone()])
+        .limit(1000)
+        .fetch_as_json()
+        .await
+        .unwrap_or_default();
+    rows.into_iter()
+        .filter_map(|obj| {
+            let id = json_scalar_to_string(obj.get(&pk_col)?);
+            let label = obj
+                .get(&label_col)
+                .map(json_scalar_to_string)
+                .unwrap_or_else(|| id.clone());
+            Some((id, label))
+        })
+        .collect()
+}
+
+/// Stringify a JSON scalar for option values/labels.
+fn json_scalar_to_string(v: &serde_json::Value) -> String {
+    match v {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        serde_json::Value::Null => String::new(),
+        other => other.to_string(),
+    }
+}

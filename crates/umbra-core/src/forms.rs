@@ -666,12 +666,47 @@ impl Field {
         }
     }
 
-    /// Async render entry point. For non-relation fields this is the
-    /// sync `render_html`; relation fields (`ModelChoice` /
-    /// `ModelMultiChoice`, added in Task 6) override to fetch their
-    /// `<select>` options from the DB first.
+    /// Async render entry point. `ModelChoice` / `ModelMultiChoice`
+    /// fetch their options first, then render the `<select>`; every
+    /// other kind defers to the sync `render_html`.
     pub async fn render_html_async(&self, value: &str) -> String {
-        self.render_html(value)
+        match self.kind {
+            InputKind::ModelChoice {
+                target_table,
+                label_field,
+                ..
+            } => {
+                let options =
+                    crate::orm::forms_runtime::fetch_model_options(target_table, label_field).await;
+                self.render_select(&options, value, false)
+            }
+            _ => self.render_html(value),
+        }
+    }
+
+    /// Shared `<select>` writer for `ModelChoice` / `ModelMultiChoice`.
+    /// `multiple` adds the `multiple` attribute. `selected` matches the
+    /// option value against the prefill `value`.
+    fn render_select(&self, options: &[(String, String)], value: &str, multiple: bool) -> String {
+        let multiple_attr = if multiple { " multiple" } else { "" };
+        let required = if self.required { " required" } else { "" };
+        let mut s = format!(
+            "<select name=\"{name}\"{multiple_attr}{required}>",
+            name = self.name,
+        );
+        if !multiple && !self.required {
+            s.push_str("<option value=\"\"></option>");
+        }
+        for (val, label) in options {
+            let selected = if val == value { " selected" } else { "" };
+            s.push_str(&format!(
+                "<option value=\"{v}\"{selected}>{l}</option>",
+                v = html_escape(val),
+                l = html_escape(label),
+            ));
+        }
+        s.push_str("</select>");
+        s
     }
 }
 

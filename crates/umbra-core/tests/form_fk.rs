@@ -112,6 +112,25 @@ struct Passport {
 }
 
 #[tokio::test]
+async fn fk_field_renders_select_with_seeded_options() {
+    boot().await;
+    let html = Book::render_html(&data(&[])).await;
+    // The author <select> carries the seeded parent as an option.
+    assert!(
+        html.contains("<select name=\"author\""),
+        "renders a select: {html}"
+    );
+    assert!(
+        html.contains("value=\"1\""),
+        "seeded author id is an option: {html}"
+    );
+    assert!(
+        html.contains("Ada"),
+        "label is the parent's text column: {html}"
+    );
+}
+
+#[tokio::test]
 async fn fk_field_rejects_nonexistent_parent_and_inserts_no_row() {
     boot().await;
     let before = Book::objects().count().await.expect("count before");
