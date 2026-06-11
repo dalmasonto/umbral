@@ -1,0 +1,16 @@
+{# Search-result fragment for the header dialog. Deliberately does NOT
+   extend base.html — it's injected into the dialog by client JS, which
+   styles the `.pd-search-*` classes. Emit markup only. #}
+{% if hits %}
+{% for hit in hits %}
+<a class="pd-search-result" href="/plugins/{{ hit.slug }}">
+  <span class="pd-search-name">{{ hit.name }}</span>
+  <span class="pd-search-source">{{ hit.source }}</span>
+  <span class="pd-search-desc">{{ hit.short_description }}</span>
+</a>
+{% endfor %}
+{% elif q %}
+<div class="pd-search-empty">No plugins match "{{ q }}"</div>
+{% else %}
+<div class="pd-search-empty">Type to search plugins…</div>
+{% endif %}

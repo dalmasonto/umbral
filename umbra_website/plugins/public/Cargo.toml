@@ -15,3 +15,8 @@ chrono = { version = "0.4", features = ["serde"] }
 # never internals.
 plugin_directory = { path = "../plugin_directory" }
 site_content = { path = "../site_content" }
+
+[dev-dependencies]
+# The render smoke-test (tests/render_home.rs) drives an async handler
+# render under a tokio runtime.
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
