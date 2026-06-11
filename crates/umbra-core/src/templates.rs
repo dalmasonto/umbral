@@ -232,6 +232,33 @@ fn register_img_filter(env: &mut Environment<'static>) {
 /// Deferred (separate slices): syntax highlighting on fenced code
 /// blocks (ammonia strips the `language-*` class today) and a
 /// configurable allowlist for embeds — see the gap entries.
+/// Register the global `static()` template function so templates can
+/// write `{{ static("admin/admin.css") }}` and get back a URL prefixed
+/// with the configured `static_url`.
+///
+/// `static_url` is captured into the closure when the environment is
+/// built (rather than read per-call) — the value is fixed for the
+/// process at `App::build()` time, and minijinja functions can't reach
+/// the ambient `Settings` directly. The dev-mode render path rebuilds
+/// the env per render via [`build_env`], so a `static_url` change would
+/// be picked up there too; in practice it never changes at runtime.
+///
+/// Resolution joins `static_url` and the argument with exactly one
+/// slash: a leading slash on the argument (`static("/admin/x")`) is
+/// trimmed so the result never double-slashes. With the default
+/// `static_url = "/static/"`, `static("admin/admin.css")` yields
+/// `"/static/admin/admin.css"`; with a CDN origin
+/// `static_url = "https://cdn.example.com/s/"` it yields
+/// `"https://cdn.example.com/s/admin/admin.css"`.
+fn register_static_function(env: &mut Environment<'static>, static_url: String) {
+    env.add_function("static", move |path: String| -> String {
+        // static_url is normalised to end in a slash by Settings; the
+        // arg may or may not lead with one. Trim the arg's leading
+        // slash so the join is exactly one slash.
+        format!("{}{}", static_url, path.trim_start_matches('/'))
+    });
+}
+
 fn register_markdown_filter(env: &mut Environment<'static>) {
     env.add_filter("markdown", |input: String| -> minijinja::Value {
         minijinja::Value::from_safe_string(render_markdown(&input))
@@ -394,6 +421,16 @@ fn build_env(dirs: &[PathBuf]) -> Result<(Environment<'static>, Vec<String>), Te
     // friendly default for purely decorative images). Optional
     // `class="..."` flows through for Tailwind / scoped styling.
     register_img_filter(&mut env);
+
+    // Unified static pipeline — `{{ static("admin/admin.css") }}`
+    // expands to `<static_url>admin/admin.css`. The `static_url` is read
+    // from ambient settings (defaulting to `/static/` when settings
+    // aren't initialised yet, e.g. in a bare template unit test) and
+    // captured into the function closure. See `register_static_function`.
+    let static_url = crate::settings::get_opt()
+        .map(|s| s.static_url.clone())
+        .unwrap_or_else(|| "/static/".to_string());
+    register_static_function(&mut env, static_url);
 
     // features.md #4 — `{{ body | markdown }}` renders user-supplied
     // CommonMark/GFM to sanitized HTML. The reusable "safely show a
@@ -778,5 +815,39 @@ mod tests {
         assert!(rendered.contains("<main>"));
         assert!(rendered.contains("<h1>Nested contact</h1>"));
         assert!(rendered.contains("Contact from nested content."));
+    }
+
+    /// Render `{{ static(arg) }}` against an env whose `static()` was
+    /// registered with the given `static_url`. Exercises the helper
+    /// directly without needing the ambient `Settings` OnceLock (which
+    /// can't be set under cargo's parallel test runner).
+    fn render_static(static_url: &str, arg: &str) -> String {
+        let mut env = Environment::new();
+        register_static_function(&mut env, static_url.to_string());
+        env.add_template("t.txt", "{{ static(arg) }}")
+            .expect("add template");
+        let tmpl = env.get_template("t.txt").expect("get template");
+        tmpl.render(json!({ "arg": arg })).expect("render")
+    }
+
+    #[test]
+    fn static_helper_prepends_root_relative_url() {
+        assert_eq!(
+            render_static("/static/", "admin/admin.css"),
+            "/static/admin/admin.css"
+        );
+    }
+
+    #[test]
+    fn static_helper_prepends_cdn_origin() {
+        assert_eq!(
+            render_static("https://cdn.example.com/s/", "admin/admin.css"),
+            "https://cdn.example.com/s/admin/admin.css"
+        );
+    }
+
+    #[test]
+    fn static_helper_does_not_double_slash_on_leading_slash_arg() {
+        assert_eq!(render_static("/static/", "/admin/x"), "/static/admin/x");
     }
 }

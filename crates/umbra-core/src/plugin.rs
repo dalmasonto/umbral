@@ -227,6 +227,41 @@ pub trait Plugin: Send + Sync + 'static {
         Vec::new()
     }
 
+    /// On-disk source directories this plugin contributes to the
+    /// unified static pipeline.
+    ///
+    /// Where [`static_files`] bakes assets into the binary (zero-config,
+    /// always available), `static_dirs` declares a *filesystem* source
+    /// the framework's static handler serves live. Each entry pairs a
+    /// `namespace` (the per-plugin URL/disk segment that prevents
+    /// collisions — `"admin"`, `"playground"`) with the absolute
+    /// `source_dir` holding that plugin's source assets (plugins
+    /// typically compute it from `env!("CARGO_MANIFEST_DIR")`).
+    ///
+    /// At `App::build()` the framework walks every plugin's
+    /// `static_dirs()` into a `namespace -> source_dir` registry and
+    /// mounts one handler at the configured `static_url` (default
+    /// `/static/`). A request `/static/<namespace>/<rest>` resolves:
+    ///
+    /// - **Dev** — `<source_dir>/<rest>` first (live source serving: drop
+    ///   a rebuilt file and it's served on the next request), falling
+    ///   back to `<static_root>/<namespace>/<rest>` when the namespace
+    ///   isn't registered or the file is missing.
+    /// - **Prod / Test** — `<static_root>/<namespace>/<rest>` only.
+    ///
+    /// Two plugins declaring the same `namespace` is a boot-time error
+    /// ([`BuildError::DuplicateStaticNamespace`]) — collisions fail
+    /// loudly, never silently shadow.
+    ///
+    /// Default: no directories. A plugin that ships no filesystem assets
+    /// leaves this alone.
+    ///
+    /// [`static_files`]: Plugin::static_files
+    /// [`BuildError::DuplicateStaticNamespace`]: crate::app::BuildError::DuplicateStaticNamespace
+    fn static_dirs(&self) -> Vec<StaticDir> {
+        Vec::new()
+    }
+
     /// CLI subcommands the plugin contributes.
     ///
     /// Each command implements [`crate::cli::PluginCommand`] and ships
@@ -267,6 +302,39 @@ pub struct StaticFile {
     pub body: &'static [u8],
     /// Optional `Cache-Control` header. `None` → `public, max-age=86400`.
     pub cache_control: Option<&'static str>,
+}
+
+/// One on-disk source directory a plugin contributes to the unified
+/// static pipeline. Returned from [`Plugin::static_dirs`].
+///
+/// `namespace` is the URL/disk segment that isolates this plugin's
+/// assets from every other plugin's — a request `/static/<namespace>/…`
+/// and the collected output dir `<static_root>/<namespace>/…` both key
+/// off it. It is a `&'static str` because plugins declare it as a
+/// literal.
+///
+/// `source_dir` is the absolute on-disk directory holding the plugin's
+/// source assets, served live in dev. It is a `PathBuf` (not a
+/// `&'static str`) because plugins compute it at runtime — typically
+/// `PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("static")`.
+#[derive(Debug, Clone)]
+pub struct StaticDir {
+    /// Per-plugin URL/disk segment, e.g. `"admin"` or `"playground"`.
+    pub namespace: &'static str,
+    /// Absolute on-disk directory holding the plugin's source assets.
+    pub source_dir: PathBuf,
+}
+
+impl StaticDir {
+    /// Build a [`StaticDir`] from a namespace literal and any
+    /// `Into<PathBuf>` source (a `PathBuf`, `&Path`, or `String`/`&str`
+    /// computed from `env!("CARGO_MANIFEST_DIR")`).
+    pub fn new(namespace: &'static str, source_dir: impl Into<PathBuf>) -> Self {
+        Self {
+            namespace,
+            source_dir: source_dir.into(),
+        }
+    }
 }
 
 /// The handle plugins receive in `on_ready`.

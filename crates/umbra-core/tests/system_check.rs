@@ -39,6 +39,8 @@ fn make_settings(environment: Environment, secret_key: &str) -> Settings {
         log_level: "info".to_string(),
         bind_addr: "127.0.0.1:8000".to_string(),
         time_zone: None,
+        static_url: "/static/".to_string(),
+        static_root: "staticfiles/".to_string(),
         extra: HashMap::new(),
     }
 }

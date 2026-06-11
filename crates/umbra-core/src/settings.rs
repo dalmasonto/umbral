@@ -92,6 +92,55 @@ fn default_bind_addr() -> String {
     "127.0.0.1:8000".into()
 }
 
+fn default_static_url() -> String {
+    "/static/".into()
+}
+
+fn default_static_root() -> String {
+    "staticfiles/".into()
+}
+
+/// Normalise a `static_url` so it always carries exactly one leading
+/// and one trailing slash. `"/static"`, `"static"`, and `"/static/"`
+/// all converge on `"/static/"`. A CDN-style absolute URL
+/// (`"https://cdn.example.com/s"`) keeps its scheme+host and gains the
+/// trailing slash (`"https://cdn.example.com/s/"`) without acquiring a
+/// spurious leading slash. An empty value normalises to `"/"`.
+///
+/// The leading-slash rule only applies to root-relative paths; a value
+/// that already starts with `http://`, `https://`, or `//` is treated
+/// as absolute and left with its prefix intact.
+fn normalize_static_url(raw: &str) -> String {
+    let trimmed = raw.trim();
+    let is_absolute = trimmed.starts_with("http://")
+        || trimmed.starts_with("https://")
+        || trimmed.starts_with("//");
+
+    let mut out = String::with_capacity(trimmed.len() + 2);
+    if is_absolute {
+        out.push_str(trimmed.trim_end_matches('/'));
+    } else {
+        out.push('/');
+        out.push_str(trimmed.trim_matches('/'));
+    }
+    if !out.ends_with('/') {
+        out.push('/');
+    }
+    out
+}
+
+/// Deserialize and normalise `static_url` in one step so the invariant
+/// (leading + trailing slash) holds no matter the source — toml, env,
+/// or the struct default. Serde applies this to the raw string before
+/// it ever reaches a reader.
+fn deserialize_static_url<'de, D>(de: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = String::deserialize(de)?;
+    Ok(normalize_static_url(&raw))
+}
+
 fn dotenv_key(key: &str) -> Option<String> {
     const PREFIX: &str = "UMBRA_";
 
@@ -181,6 +230,37 @@ pub struct Settings {
     /// tz config error.
     #[serde(default)]
     pub time_zone: Option<String>,
+
+    /// URL prefix every collected/served static asset hangs under.
+    ///
+    /// Default `"/static/"`. The framework's static handler mounts at
+    /// this base and the `static()` template helper prepends it, so
+    /// `{{ static("admin/admin.css") }}` resolves to
+    /// `"/static/admin/admin.css"`. Set a CDN origin
+    /// (`UMBRA_STATIC_URL=https://cdn.example.com/s/`) to serve assets
+    /// off a separate host in production — the helper then emits
+    /// absolute URLs and the local handler simply goes unused.
+    ///
+    /// Always normalised to carry exactly one leading and one trailing
+    /// slash: `"/static"`, `"static"`, and `"/static/"` all converge on
+    /// `"/static/"`. Set via `UMBRA_STATIC_URL` or `static_url` in
+    /// `umbra.toml`.
+    #[serde(
+        default = "default_static_url",
+        deserialize_with = "deserialize_static_url"
+    )]
+    pub static_url: String,
+
+    /// On-disk directory collected static assets live under in
+    /// production.
+    ///
+    /// Default `"staticfiles/"` (relative to the binary's CWD). The
+    /// static handler resolves a request `/static/<ns>/<rest>` to
+    /// `<static_root>/<ns>/<rest>` in prod, and as the dev fallback
+    /// when a plugin's live source dir doesn't have the file. Set via
+    /// `UMBRA_STATIC_ROOT` or `static_root` in `umbra.toml`.
+    #[serde(default = "default_static_root")]
+    pub static_root: String,
 
     /// Catch-all for `UMBRA_`-prefixed environment variables (and
     /// `umbra.toml` keys) that don't map to a named field above.
@@ -386,6 +466,69 @@ mod tests {
             jail.set_env("UMBRA_DATABASE_URL", "postgres://from-process-env");
             let s = Settings::from_env().unwrap();
             assert_eq!(s.database_url, "postgres://from-process-env");
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn static_url_and_root_defaults() {
+        Jail::expect_with(|_| {
+            let s = Settings::from_env().unwrap();
+            assert_eq!(s.static_url, "/static/");
+            assert_eq!(s.static_root, "staticfiles/");
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn static_url_env_override_is_normalised() {
+        // No trailing slash on input -> normalised to one.
+        Jail::expect_with(|jail| {
+            jail.set_env("UMBRA_STATIC_URL", "/assets");
+            assert_eq!(Settings::from_env().unwrap().static_url, "/assets/");
+            Ok(())
+        });
+        // No leading slash either.
+        Jail::expect_with(|jail| {
+            jail.set_env("UMBRA_STATIC_URL", "assets");
+            assert_eq!(Settings::from_env().unwrap().static_url, "/assets/");
+            Ok(())
+        });
+        // Already-normalised value is left intact.
+        Jail::expect_with(|jail| {
+            jail.set_env("UMBRA_STATIC_URL", "/assets/");
+            assert_eq!(Settings::from_env().unwrap().static_url, "/assets/");
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn static_url_normalises_three_input_shapes() {
+        // The three canonical shapes from the spec all converge.
+        assert_eq!(normalize_static_url("/static"), "/static/");
+        assert_eq!(normalize_static_url("static"), "/static/");
+        assert_eq!(normalize_static_url("/static/"), "/static/");
+    }
+
+    #[test]
+    fn static_url_cdn_origin_keeps_scheme_and_host() {
+        // An absolute CDN URL keeps its scheme+host and only gains a
+        // trailing slash — no spurious leading slash collapsing `https://`.
+        assert_eq!(
+            normalize_static_url("https://cdn.example.com/s"),
+            "https://cdn.example.com/s/"
+        );
+        assert_eq!(
+            normalize_static_url("https://cdn.example.com/s/"),
+            "https://cdn.example.com/s/"
+        );
+    }
+
+    #[test]
+    fn static_root_env_override() {
+        Jail::expect_with(|jail| {
+            jail.set_env("UMBRA_STATIC_ROOT", "build/assets/");
+            assert_eq!(Settings::from_env().unwrap().static_root, "build/assets/");
             Ok(())
         });
     }

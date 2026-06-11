@@ -253,7 +253,30 @@ pub mod plugin {
     //! routes, or commands. The trait is also re-exported from the
     //! prelude so `use umbra::prelude::*;` brings it in.
 
-    pub use umbra_core::plugin::{AppContext, Plugin, PluginError, StaticFile};
+    pub use umbra_core::plugin::{AppContext, Plugin, PluginError, StaticDir, StaticFile};
+}
+
+pub mod static_files {
+    //! The unified static-asset pipeline's request → file resolution.
+    //!
+    //! Plugins contribute on-disk source dirs via
+    //! [`Plugin::static_dirs`](crate::plugin::Plugin::static_dirs); the
+    //! framework mounts one handler at `settings.static_url` that serves
+    //! `/static/<namespace>/<rest>` live-from-source in dev and from
+    //! `settings.static_root` in prod.
+    //!
+    //! Power-user surface — most code never names these types directly.
+    //! [`serve_file`] is the framework's single file-serving function
+    //! (Content-Type, ETag, range, conditional requests via
+    //! `tower_http::ServeFile`); a plugin that needs to serve a file off
+    //! disk should route through it rather than hand-rolling MIME / range
+    //! handling. [`resolve_under_root`] is the path-traversal-safe
+    //! resolver behind the handler.
+
+    pub use umbra_core::static_files::{
+        StaticHandlerState, StaticNamespaceCollision, StaticRegistry, resolve_under_root,
+        serve_file, static_handler,
+    };
 }
 
 pub mod cli {

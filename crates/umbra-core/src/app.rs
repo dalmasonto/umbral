@@ -709,6 +709,45 @@ impl AppBuilder {
             }
         }
 
+        // Phase 5.45 — mount the unified static pipeline handler. Walk
+        // every plugin's `static_dirs()` into a namespace -> source_dir
+        // registry (a duplicate namespace fails the build loudly), then
+        // nest ONE handler at the configured `static_url` base. It
+        // resolves `/static/<ns>/<rest>` live-from-source in dev and
+        // from `static_root` in prod (see `crate::static_files`).
+        //
+        // This coexists with the `StaticFile` embedded routes mounted in
+        // Phase 5.4 above — embedded assets stay the zero-config default;
+        // the filesystem handler is additive.
+        //
+        // A CDN-style `static_url` (an absolute http(s):// origin) can't
+        // be nested as a local route prefix; in that mode assets are
+        // served off the CDN and the local handler is intentionally not
+        // mounted — the `static()` template helper still emits the
+        // absolute URLs.
+        let settings = crate::settings::get();
+        let static_base = settings.static_url.trim_end_matches('/');
+        let is_cdn_url = settings.static_url.starts_with("http://")
+            || settings.static_url.starts_with("https://")
+            || settings.static_url.starts_with("//");
+        if !is_cdn_url && !static_base.is_empty() {
+            let registry = crate::static_files::StaticRegistry::from_plugins(&sorted_plugins)
+                .map_err(|c| BuildError::DuplicateStaticNamespace {
+                    namespace: c.namespace,
+                    first_plugin: c.first_plugin,
+                    second_plugin: c.second_plugin,
+                })?;
+            let state = crate::static_files::StaticHandlerState {
+                registry,
+                static_root: std::path::PathBuf::from(&settings.static_root),
+                dev: matches!(settings.environment, crate::settings::Environment::Dev),
+            };
+            let static_router = Router::new()
+                .fallback(crate::static_files::static_handler)
+                .with_state(state);
+            router = router.nest_service(static_base, static_router);
+        }
+
         // Phase 5.5 — apply each plugin's middleware in topological
         // order. Later plugins wrap earlier ones, so a security
         // plugin declared after the auth plugin sees the auth-
@@ -1006,6 +1045,16 @@ pub enum BuildError {
         url_backend: &'static str,
         pool_backend: &'static str,
     },
+    /// Two plugins declared the same static namespace via
+    /// `Plugin::static_dirs()`. Namespaces are the per-plugin URL/disk
+    /// segment under `static_url` / `static_root`; a collision would
+    /// silently shadow one plugin's assets with another's, so the build
+    /// fails loudly and names both plugins.
+    DuplicateStaticNamespace {
+        namespace: &'static str,
+        first_plugin: &'static str,
+        second_plugin: &'static str,
+    },
 }
 
 impl std::fmt::Display for BuildError {
@@ -1069,6 +1118,17 @@ impl std::fmt::Display for BuildError {
                  default pool passed to .database(...) is a `{pool_backend}` pool. \
                  Either change UMBRA_DATABASE_URL to match the pool, or open the pool \
                  against a URL whose scheme matches umbra::db::connect."
+            ),
+            BuildError::DuplicateStaticNamespace {
+                namespace,
+                first_plugin,
+                second_plugin,
+            } => write!(
+                f,
+                "umbra: plugins `{first_plugin}` and `{second_plugin}` both declare the static \
+                 namespace `{namespace}` via static_dirs(); namespaces must be unique \
+                 (they key the /static/<namespace>/ URL and the static_root/<namespace>/ \
+                 collected-asset dir). Rename one plugin's namespace."
             ),
         }
     }
