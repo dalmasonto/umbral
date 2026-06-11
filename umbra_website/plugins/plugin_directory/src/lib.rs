@@ -26,6 +26,7 @@ pub use models::{
     PluginMaturity, PluginModeration, PluginSource, PluginStatus, SecurityStatus,
 };
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use serde::Serialize;
@@ -34,7 +35,7 @@ use umbra::plugin::{AppContext, Plugin, PluginError};
 use umbra::prelude::*;
 use umbra::routes::RouteSpec;
 use umbra::templates::context;
-use umbra::web::{Html, Path, Query, Router, StatusCode, get};
+use umbra::web::{Form, Html, Path, Query, Redirect, Router, StatusCode, get, post};
 
 use models::{
     self as pd, Plugin as PluginModel, plugin, plugin_comment, plugin_compatibility, plugin_feature,
@@ -62,6 +63,7 @@ impl Plugin for PluginDirectoryPlugin {
             .route("/prebuilt", get(prebuilt_plugins))
             .route("/plugins", get(plugin_directory))
             .route("/plugins/{slug}", get(plugin_detail))
+            .route("/plugins/{slug}/notes", post(post_plugin_note))
             .route("/search", get(plugin_search))
     }
 
@@ -70,6 +72,7 @@ impl Plugin for PluginDirectoryPlugin {
             RouteSpec::new("/prebuilt", vec!["GET"]),
             RouteSpec::new("/plugins", vec!["GET"]),
             RouteSpec::new("/plugins/{slug}", vec!["GET"]),
+            RouteSpec::new("/plugins/{slug}/notes", vec!["POST"]),
             RouteSpec::new("/search", vec!["GET"]),
         ]
     }
@@ -454,12 +457,23 @@ pub async fn render_search(q: &str) -> Result<String, String> {
 // Detail — /plugins/{slug}
 // ---------------------------------------------------------------------------
 
-async fn plugin_detail(Path(slug): Path<String>) -> Result<Html<String>, (StatusCode, String)> {
+/// Query string for the detail page: `?submitted=1` after a successful
+/// note POST renders the "pending moderation" success banner.
+#[derive(Debug, Default, serde::Deserialize)]
+struct DetailQuery {
+    submitted: Option<String>,
+}
+
+async fn plugin_detail(
+    Path(slug): Path<String>,
+    Query(q): Query<DetailQuery>,
+) -> Result<Html<String>, (StatusCode, String)> {
     if slug == "submit" {
         return render("plugin_directory/submit.html", &serde_json::json!({}));
     }
 
-    match render_detail(&slug)
+    let submitted = q.submitted.as_deref() == Some("1");
+    match render_detail_with(&slug, submitted)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?
     {
@@ -471,11 +485,93 @@ async fn plugin_detail(Path(slug): Path<String>) -> Result<Html<String>, (Status
     }
 }
 
+/// Handle a posted community note (`POST /plugins/{slug}/notes`). Looks
+/// up the approved plugin by slug (404 if gone), creates a
+/// [`PluginComment`] through the ORM with `moderation = Pending` (so it
+/// awaits moderation), then redirects back to the detail page with
+/// `?submitted=1` so the success banner renders. The redirect (a fresh
+/// GET) is the POST/redirect/GET pattern — a refresh won't re-submit.
+async fn post_plugin_note(
+    Path(slug): Path<String>,
+    Form(form): Form<HashMap<String, String>>,
+) -> Result<Redirect, (StatusCode, String)> {
+    let body = form.get("body").map(|s| s.trim()).unwrap_or("");
+    if body.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "A note body is required.".into()));
+    }
+    let kind = form.get("kind").map(String::as_str).unwrap_or("general");
+    let author_label = form
+        .get("author_label")
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+
+    match create_note(&slug, body, kind, author_label)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?
+    {
+        true => Ok(Redirect::to(&format!("/plugins/{slug}?submitted=1"))),
+        false => Err((
+            StatusCode::NOT_FOUND,
+            format!("No plugin directory entry exists for `{slug}`."),
+        )),
+    }
+}
+
+/// Create a pending [`PluginComment`] for the approved plugin `slug`.
+/// Returns `Ok(false)` when no approved plugin matches the slug (a 404).
+/// Public so the render smoke-test can drive the create path without an
+/// axum runtime. `kind` is the form's `CommentKind` string; an unknown
+/// value falls back to `General`.
+pub async fn create_note(
+    slug: &str,
+    body: &str,
+    kind: &str,
+    author_label: Option<String>,
+) -> Result<bool, String> {
+    let Some(plugin) = PluginModel::objects()
+        .filter(plugin::SLUG.eq(slug))
+        .filter(plugin::MODERATION.eq("approved"))
+        .first()
+        .await
+        .map_err(|e| e.to_string())?
+    else {
+        return Ok(false);
+    };
+
+    let kind = match kind {
+        "question" => CommentKind::Question,
+        "usage_note" => CommentKind::UsageNote,
+        "compatibility_note" => CommentKind::CompatibilityNote,
+        "migration_note" => CommentKind::MigrationNote,
+        _ => CommentKind::General,
+    };
+
+    let mut comment = pd::PluginComment::default();
+    comment.plugin = ForeignKey::new(plugin.id);
+    comment.body = body.to_string();
+    comment.kind = kind;
+    comment.moderation = CommentModeration::Pending;
+    comment.author_label = author_label;
+
+    pd::PluginComment::objects()
+        .create(comment)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
 /// Load + render the `/plugins/{slug}` detail page. `Ok(None)` means
 /// no approved plugin matches the slug (a 404). Public so the render
 /// smoke-test drives the full reverse-relation → view-model → template
 /// path directly.
 pub async fn render_detail(slug: &str) -> Result<Option<String>, String> {
+    render_detail_with(slug, false).await
+}
+
+/// `render_detail`, with the `?submitted=1` success-banner flag threaded
+/// through to the template.
+pub async fn render_detail_with(slug: &str, submitted: bool) -> Result<Option<String>, String> {
     let Some(plugin) = PluginModel::objects()
         .filter(plugin::SLUG.eq(slug))
         .filter(plugin::MODERATION.eq("approved"))
@@ -519,9 +615,12 @@ pub async fn render_detail(slug: &str) -> Result<Option<String>, String> {
         .map_err(|e| e.to_string())?;
 
     let detail = PluginDetail::build(plugin, feature_rows, compat_rows, comment_rows);
-    umbra::templates::render("plugin_directory/plugin.html", &context!(plugin => detail))
-        .map(Some)
-        .map_err(|e| e.to_string())
+    umbra::templates::render(
+        "plugin_directory/plugin.html",
+        &context!(plugin => detail, submitted => submitted),
+    )
+    .map(Some)
+    .map_err(|e| e.to_string())
 }
 
 /// The detail view-model the `plugin.html` template renders.
@@ -529,6 +628,7 @@ pub async fn render_detail(slug: &str) -> Result<Option<String>, String> {
 struct PluginDetail {
     slug: String,
     name: String,
+    crate_name: String,
     source: String,
     maintainer: String,
     description: String,
@@ -542,15 +642,23 @@ struct PluginDetail {
     maturity: String,
     channel: String,
     install: String,
+    /// The canonical `umbra add <crate>` line (always present, copyable).
+    add_line: String,
     toml: String,
-    /// `—` when there's no real rating data — never fabricated.
-    rating: String,
+    /// Humanized GitHub stars, or `—`. Never fabricated.
+    stars: String,
     /// Humanized downloads, or `—`.
     installs: String,
+    /// `version` or `—`.
+    version: String,
+    /// `—` when there's no real rating data — never fabricated.
+    rating: String,
     /// Real visible comment count.
     notes: i64,
     tags: Vec<String>,
-    features: Vec<StatusRow>,
+    /// External links, each only present when its field is set.
+    links: Links,
+    features: Vec<FeatureRow>,
     shipped_features: usize,
     total_features: usize,
     progress_pct: u32,
@@ -560,8 +668,62 @@ struct PluginDetail {
     audit_label: &'static str,
     audit_date: String,
     audit_kind: &'static str,
+    /// Per-row compatibility detail for the Compatibility tab.
+    compat: Vec<CompatRow>,
+    /// Compact compatibility summary for the sidebar (one StatusRow/row).
     compatibility: Vec<StatusRow>,
     comments: Vec<CommentPreview>,
+    /// CommentKind options for the "Add a note" dialog select.
+    note_kinds: Vec<NoteKind>,
+}
+
+/// External links shown in the header links row + Issues tab. A field is
+/// `None` when the underlying URL is absent — the template omits the link
+/// rather than rendering a dead one (honesty rule).
+#[derive(Debug, Serialize)]
+struct Links {
+    docs: Option<String>,
+    source: Option<String>,
+    issues: Option<String>,
+    /// `source` again, but only when it's a github.com URL (drives the
+    /// "View on GitHub" social link).
+    github: Option<String>,
+}
+
+/// One feature in the tracker, driven by its individual `PluginFeature`
+/// row: name, description (markdown), a status badge and the maturity.
+#[derive(Debug, Serialize)]
+struct FeatureRow {
+    name: String,
+    description: String,
+    status: String,
+    kind: &'static str,
+    maturity: String,
+}
+
+/// One compatibility declaration, expanded for the Compatibility tab:
+/// the Umbra version, backend chips, MSRV, and verified-vs-declared.
+#[derive(Debug, Serialize)]
+struct CompatRow {
+    umbra_version: String,
+    backends: Vec<Backend>,
+    minimum_rust_version: Option<String>,
+    notes: Option<String>,
+    verified: bool,
+    verified_at: Option<String>,
+}
+
+/// A single database-backend chip ("PostgreSQL" / "SQLite" / "MySQL").
+#[derive(Debug, Serialize)]
+struct Backend {
+    label: String,
+}
+
+/// One option in the "Add a note" dialog `kind` select.
+#[derive(Debug, Serialize)]
+struct NoteKind {
+    value: &'static str,
+    label: &'static str,
 }
 
 impl PluginDetail {
@@ -596,20 +758,23 @@ impl PluginDetail {
             ((shipped_features as f64 / total_features as f64) * 100.0).round() as u32
         };
 
-        let feature_rows: Vec<StatusRow> = features
+        let feature_rows: Vec<FeatureRow> = features
             .into_iter()
             .map(|f| {
                 let (status, kind) = feature_status(f.status);
-                StatusRow {
-                    label: f.name,
+                FeatureRow {
+                    name: f.name,
+                    description: f.description,
                     status,
                     kind,
+                    maturity: title_case(&format!("{:?}", f.maturity)),
                 }
             })
             .collect();
 
+        // Sidebar summary: one compact StatusRow per declaration.
         let compat_rows: Vec<StatusRow> = compatibility
-            .into_iter()
+            .iter()
             .map(|c| {
                 let backends = backend_summary(&c.supported_database_backends);
                 let label = if backends.is_empty() {
@@ -634,6 +799,22 @@ impl PluginDetail {
             })
             .collect();
 
+        // Compatibility tab: the full row with backend chips + MSRV.
+        let compat_detail: Vec<CompatRow> = compatibility
+            .into_iter()
+            .map(|c| {
+                let backends = backend_chips(&c.supported_database_backends);
+                CompatRow {
+                    umbra_version: c.umbra_version,
+                    backends,
+                    minimum_rust_version: c.minimum_rust_version,
+                    notes: c.notes,
+                    verified: c.verified_at.is_some(),
+                    verified_at: c.verified_at.map(|d| d.format("%b %-d, %Y").to_string()),
+                }
+            })
+            .collect();
+
         let comment_previews: Vec<CommentPreview> = comments
             .into_iter()
             .map(CommentPreview::from_model)
@@ -641,6 +822,7 @@ impl PluginDetail {
         let notes = comment_previews.len() as i64;
 
         let install = install_line(&p.installation_commands, &p.crate_name);
+        let add_line = format!("umbra add {}", p.crate_name);
         let maintainer = p.author.clone();
         let source = source_str(p.source).to_string();
         let channel = match p.source {
@@ -651,9 +833,22 @@ impl PluginDetail {
         }
         .to_string();
 
+        let github = p
+            .source_url
+            .as_ref()
+            .filter(|u| u.contains("github.com"))
+            .cloned();
+        let links = Links {
+            docs: nonempty(p.docs_url.clone()),
+            source: nonempty(p.source_url.clone()),
+            issues: nonempty(p.issue_tracker_url.clone()),
+            github,
+        };
+
         Self {
             slug: p.slug.clone(),
             name: p.name.clone(),
+            crate_name: p.crate_name.clone(),
             source,
             maintainer,
             description: p.short_description.clone(),
@@ -666,11 +861,19 @@ impl PluginDetail {
             maturity: title_case(&format!("{:?}", p.maturity)),
             channel,
             install,
+            add_line,
             toml: p.installation_commands.clone(),
-            rating: "—".to_string(),
+            stars: humanize_opt(p.github_stars),
             installs: humanize_opt(p.downloads),
+            version: p
+                .version
+                .clone()
+                .filter(|v| !v.trim().is_empty())
+                .unwrap_or_else(|| "—".to_string()),
+            rating: "—".to_string(),
             notes,
             tags: derive_tags(&p),
+            links,
             features: feature_rows,
             shipped_features,
             total_features,
@@ -685,10 +888,44 @@ impl PluginDetail {
             audit_label,
             audit_date,
             audit_kind,
+            compat: compat_detail,
             compatibility: compat_rows,
             comments: comment_previews,
+            note_kinds: note_kinds(),
         }
     }
+}
+
+/// `Some(s)` only when `s` is present and non-blank; collapses an empty
+/// URL string to `None` so the template omits a dead link.
+fn nonempty(s: Option<String>) -> Option<String> {
+    s.filter(|v| !v.trim().is_empty())
+}
+
+/// The `CommentKind` options shown in the "Add a note" dialog select.
+fn note_kinds() -> Vec<NoteKind> {
+    vec![
+        NoteKind {
+            value: "general",
+            label: "General",
+        },
+        NoteKind {
+            value: "question",
+            label: "Question",
+        },
+        NoteKind {
+            value: "usage_note",
+            label: "Usage note",
+        },
+        NoteKind {
+            value: "compatibility_note",
+            label: "Compatibility note",
+        },
+        NoteKind {
+            value: "migration_note",
+            label: "Migration note",
+        },
+    ]
 }
 
 #[derive(Debug, Serialize)]
@@ -706,6 +943,12 @@ struct CommentPreview {
     badge: String,
     badge_kind: &'static str,
     body: String,
+    /// Humanized creation date ("Jun 11, 2026").
+    created: String,
+    /// `plugin_version` tag, when the visitor set one.
+    plugin_version: Option<String>,
+    /// `database_backend` tag, when the visitor set one.
+    backend: Option<String>,
 }
 
 impl CommentPreview {
@@ -715,6 +958,9 @@ impl CommentPreview {
             .clone()
             .filter(|s| !s.trim().is_empty())
             .unwrap_or_else(|| "Anonymous".to_string());
+        let created = c.created_at.format("%b %-d, %Y").to_string();
+        let plugin_version = c.plugin_version.clone().filter(|s| !s.trim().is_empty());
+        let backend = c.database_backend.clone().filter(|s| !s.trim().is_empty());
         let (role, badge, badge_kind) = match c.kind {
             CommentKind::MaintainerReply => ("maintainer", "maintainer reply", "ok"),
             CommentKind::CompatibilityNote => ("compatibility note", "compatibility", "warn"),
@@ -735,6 +981,9 @@ impl CommentPreview {
             badge: badge.to_string(),
             badge_kind,
             body: c.body,
+            created,
+            plugin_version,
+            backend,
         }
     }
 }
@@ -803,6 +1052,26 @@ fn backend_summary(v: &serde_json::Value) -> String {
         })
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// Normalized backend chips from the JSON `supported_database_backends`
+/// array (`["postgres","sqlite"]` → `[PostgreSQL, SQLite]`), for the
+/// Compatibility tab's chip row.
+fn backend_chips(v: &serde_json::Value) -> Vec<Backend> {
+    let Some(arr) = v.as_array() else {
+        return Vec::new();
+    };
+    arr.iter()
+        .filter_map(|b| b.as_str())
+        .map(|b| Backend {
+            label: match b.to_ascii_lowercase().as_str() {
+                "postgres" | "postgresql" => "PostgreSQL".to_string(),
+                "sqlite" => "SQLite".to_string(),
+                "mysql" => "MySQL".to_string(),
+                other => title_case(other),
+            },
+        })
+        .collect()
 }
 
 /// First non-empty line of the stored install commands, else a sane

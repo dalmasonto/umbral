@@ -13,7 +13,21 @@
     .pd-rise { opacity: 0; animation: pd-rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) both; animation-delay: calc(var(--i, 0) * 60ms); }
     .pd-meter-fill { animation: pd-grow 0.9s cubic-bezier(0.22, 1, 0.36, 1) both 0.2s; }
     @keyframes pd-grow { from { width: 0; } }
+    .pd-tabpanel[data-active] { animation: pd-rise 0.35s cubic-bezier(0.22, 1, 0.36, 1) both; }
   }
+  /* Scoped helpers for utilities the purged Tailwind build doesn't ship. */
+  .pd-mt4 { margin-top: 1rem; }
+  .pd-gap4 { gap: 1rem; }
+  .pd-gap-x6 { column-gap: 1.5rem; row-gap: 0.375rem; }
+  .pd-justify-end { justify-content: flex-end; }
+  .pd-space-3-5 > * + * { margin-top: 0.875rem; }
+  .pd-space-4 > * + * { margin-top: 1rem; }
+  .pd-success { border: 1px solid #bfe3cd; }
+  .pd-p15 { padding: 15px; }
+  .pd-py2 { padding-top: 2px; padding-bottom: 2px; }
+  .pd-maxw440 { max-width: 440px; }
+  .pd-fw-normal { font-weight: 400; }
+
   .pd-head { position: relative; }
   .pd-head::before {
     content: "";
@@ -25,10 +39,49 @@
     z-index: 0;
   }
   .pd-head > * { position: relative; z-index: 1; }
-  /* Progress meter for the feature tracker. */
+
+  /* ---- Stat cards ---- */
+  .pd-stat { border: 1px solid var(--hairline); background: var(--surface); border-radius: 14px; padding: 13px 15px; transition: border-color 0.18s ease, transform 0.18s ease; }
+  .pd-stat:hover { border-color: color-mix(in srgb, var(--accent) 30%, var(--hairline)); transform: translateY(-1px); }
+  .pd-stat-value { font-size: 21px; font-weight: 800; letter-spacing: -0.02em; color: var(--ink); line-height: 1.1; }
+  .pd-stat-label { font-size: 11.5px; color: var(--faint); margin-top: 3px; display: flex; align-items: center; gap: 5px; }
+  .pd-stat-label svg { width: 13px; height: 13px; opacity: 0.7; }
+
+  /* ---- Install / copy ---- */
+  .pd-cmd { display: flex; align-items: center; gap: 8px; border: 1px solid var(--hairline); background: var(--surface-2); border-radius: 10px; padding: 8px 8px 8px 12px; }
+  .pd-cmd code { flex: 1; overflow-x: auto; font-family: var(--font-mono, ui-monospace, monospace); font-size: 12.5px; color: var(--ink-2); white-space: nowrap; }
+  .pd-cmd .copy-btn { flex-shrink: 0; }
+
+  /* ---- Progress meter ---- */
   .pd-meter { height: 7px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
   .pd-meter-fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--accent), var(--ok)); }
-  /* Markdown prose styling for the full_content body, scoped to .pd-prose. */
+
+  /* ---- Segmented tab bar ---- */
+  .pd-tabs { display: flex; flex-wrap: wrap; gap: 2px; border-bottom: 1px solid var(--hairline); margin-bottom: 4px; }
+  .pd-tab { position: relative; appearance: none; background: transparent; border: 0; cursor: pointer; padding: 11px 16px 13px; font-size: 14px; font-weight: 600; color: var(--muted); border-radius: 10px 10px 0 0; transition: color 0.15s ease, background 0.15s ease; display: inline-flex; align-items: center; gap: 7px; }
+  .pd-tab:hover { color: var(--ink-2); background: color-mix(in srgb, var(--accent) 5%, transparent); }
+  .pd-tab[aria-selected="true"] { color: var(--accent-2); }
+  .pd-tab[aria-selected="true"]::after { content: ""; position: absolute; left: 12px; right: 12px; bottom: -1px; height: 2.5px; border-radius: 3px; background: var(--accent); }
+  .pd-tab .pd-tab-count { font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 999px; background: var(--surface-2); color: var(--faint); }
+  .pd-tab[aria-selected="true"] .pd-tab-count { background: var(--accent-soft); color: var(--accent-2); }
+  .pd-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  /* JS-off graceful degradation: when no panel is JS-activated, show all stacked. */
+  .pd-tabpanel { display: block; }
+  body.pd-js .pd-tabpanel { display: none; }
+  body.pd-js .pd-tabpanel[data-active] { display: block; }
+  body:not(.pd-js) .pd-tabs { display: none; }
+  body:not(.pd-js) .pd-tabpanel + .pd-tabpanel { margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--hairline); }
+
+  /* ---- Backend chips ---- */
+  .pd-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; color: var(--ink-2); border: 1px solid var(--hairline); background: var(--surface-2); border-radius: 999px; padding: 4px 11px; }
+  .pd-chip::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+
+  /* ---- Links row ---- */
+  .pd-link { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 600; color: var(--ink-2); border: 1px solid var(--hairline); background: var(--surface); border-radius: 10px; padding: 8px 13px; transition: border-color 0.16s ease, color 0.16s ease, transform 0.16s ease; }
+  .pd-link:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--hairline)); color: var(--accent-2); transform: translateY(-1px); }
+  .pd-link svg { width: 15px; height: 15px; }
+
+  /* ---- Markdown prose ---- */
   .pd-prose { color: var(--ink-2); font-size: 15px; line-height: 1.7; }
   .pd-prose h1, .pd-prose h2, .pd-prose h3 { color: var(--ink); font-weight: 800; letter-spacing: -0.01em; margin: 1.4em 0 0.5em; line-height: 1.25; }
   .pd-prose h1 { font-size: 23px; }
@@ -45,6 +98,13 @@
   .pd-prose table { width: 100%; border-collapse: collapse; margin: 1em 0; font-size: 14px; }
   .pd-prose th, .pd-prose td { border: 1px solid var(--hairline); padding: 8px 12px; text-align: left; }
   .pd-prose th { background: var(--surface-2); font-weight: 700; }
+
+  /* ---- Note dialog ---- */
+  .pd-dialog { border: 0; padding: 0; border-radius: 18px; max-width: 520px; width: calc(100vw - 32px); background: var(--paper); color: var(--ink); box-shadow: 0 24px 60px -20px rgba(20, 14, 8, 0.4); }
+  .pd-dialog::backdrop { background: rgba(27, 23, 20, 0.45); backdrop-filter: blur(2px); }
+  .pd-field { width: 100%; border: 1px solid var(--hairline); background: var(--surface); border-radius: 10px; padding: 9px 12px; font-size: 14px; color: var(--ink); font-family: inherit; }
+  .pd-field:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: transparent; }
+  textarea.pd-field { min-height: 110px; resize: vertical; }
 </style>
 {% endblock %}
 
@@ -55,6 +115,13 @@
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M19 12H5M11 6l-6 6 6 6"/></svg>
     Back to plugin directory
   </a>
+
+  {% if submitted %}
+  <div class="mb-6 flex items-center gap-2.5 rounded-[14px] border pd-success bg-ok-soft px-4 py-3">
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--ok)" stroke-width="2.2"><path d="M20 6 9 17l-5-5"/></svg>
+    <span class="text-[13.5px] font-bold text-ok">Thanks — your note is pending moderation.</span>
+  </div>
+  {% endif %}
 
   {% if plugin.flagged %}
   <div class="mb-6 flex flex-wrap items-center gap-[9px] rounded-[14px] border border-[#F1C9C9] bg-[#FBEDEC] px-4 py-3">
@@ -94,15 +161,44 @@
         </div>
       </div>
 
-      <div class="flex flex-wrap gap-2">
+      <div class="mb-5 flex flex-wrap gap-2">
         {% for tag in plugin.tags %}
         <span class="rounded-[8px] border border-hairline bg-surface-2 px-3 py-1.5 text-[12.5px] text-body">{{ tag }}</span>
         {% endfor %}
       </div>
+
+      {# ---- Links row (only present fields render) ---- #}
+      <div class="flex flex-wrap gap-2.5">
+        {% if plugin.links.docs %}
+        <a href="{{ plugin.links.docs }}" class="pd-link" rel="noopener">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+          Docs
+        </a>
+        {% endif %}
+        {% if plugin.links.source %}
+        <a href="{{ plugin.links.source }}" class="pd-link" rel="noopener">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m18 16 4-4-4-4M6 8l-4 4 4 4M14.5 4l-5 16"/></svg>
+          Source
+        </a>
+        {% endif %}
+        {% if plugin.links.issues %}
+        <a href="{{ plugin.links.issues }}" class="pd-link" rel="noopener">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+          Issues
+        </a>
+        {% endif %}
+        {% if plugin.links.github %}
+        <a href="{{ plugin.links.github }}" class="pd-link" rel="noopener">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.58 2 12.25c0 4.53 2.87 8.37 6.84 9.73.5.1.68-.22.68-.49v-1.71c-2.78.62-3.37-1.37-3.37-1.37-.45-1.18-1.11-1.5-1.11-1.5-.91-.63.07-.62.07-.62 1 .07 1.53 1.06 1.53 1.06.9 1.57 2.35 1.12 2.92.86.09-.66.35-1.12.63-1.38-2.22-.26-4.56-1.14-4.56-5.06 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.28 2.75 1.05a9.3 9.3 0 0 1 5 0c1.91-1.33 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.93-2.35 4.79-4.58 5.05.36.32.68.94.68 1.9v2.82c0 .27.18.59.69.49A10.26 10.26 0 0 0 22 12.25C22 6.58 17.52 2 12 2z"/></svg>
+          GitHub
+        </a>
+        {% endif %}
+      </div>
     </div>
 
+    {# ---- Install + stat panel ---- #}
     <aside class="card pd-rise rounded-[20px] p-5 shadow-panel" style="--i: 1">
-      <div class="mb-4 flex items-center justify-between gap-3">
+      <div class="mb-3 flex items-center justify-between gap-3">
         <div>
           <div class="text-[12px] font-bold uppercase tracking-[0.04em] text-faint">Install</div>
           <div class="mt-1 text-[13px] text-muted">{{ plugin.channel }}</div>
@@ -117,15 +213,53 @@
         <span class="pill-warn">{{ plugin.status }}</span>
         {% endif %}
       </div>
-      <code class="block overflow-x-auto rounded-[10px] border border-hairline bg-surface-2 px-3 py-2.5 font-mono text-[12.5px] text-ink-2">{{ plugin.install }}</code>
-      <div class="mt-5 grid grid-cols-2 gap-2 text-center">
-        <div class="rounded-[10px] border border-hairline bg-paper px-2 py-2.5">
-          <div class="text-[15px] font-bold text-ink">{{ plugin.installs }}</div>
-          <div class="text-[11.5px] text-faint">installs</div>
+
+      <div class="pd-cmd mb-2" data-copy="{{ plugin.add_line }}">
+        <code>{{ plugin.add_line }}</code>
+        <button class="copy-btn" type="button" aria-label="Copy install command" data-copy-target>
+          <svg class="icon-copy" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          <svg class="icon-check" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6 9 17l-5-5"/></svg>
+        </button>
+      </div>
+      {% if plugin.install != plugin.add_line %}
+      <div class="pd-cmd" data-copy="{{ plugin.install }}">
+        <code>{{ plugin.install }}</code>
+        <button class="copy-btn" type="button" aria-label="Copy command" data-copy-target>
+          <svg class="icon-copy" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          <svg class="icon-check" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6 9 17l-5-5"/></svg>
+        </button>
+      </div>
+      {% endif %}
+
+      {# ---- Stat cards row ---- #}
+      <div class="pd-mt4 grid grid-cols-2 gap-2">
+        <div class="pd-stat">
+          <div class="pd-stat-value">{{ plugin.stars }}</div>
+          <div class="pd-stat-label">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11.5 2.6 14 7.7l5.6.8-4 4 1 5.6-5-2.7-5 2.7 1-5.6-4-4 5.6-.8z"/></svg>
+            stars
+          </div>
         </div>
-        <div class="rounded-[10px] border border-hairline bg-paper px-2 py-2.5">
-          <div class="text-[15px] font-bold text-ink">{{ plugin.notes }}</div>
-          <div class="text-[11.5px] text-faint">notes</div>
+        <div class="pd-stat">
+          <div class="pd-stat-value">{{ plugin.installs }}</div>
+          <div class="pd-stat-label">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+            downloads
+          </div>
+        </div>
+        <div class="pd-stat">
+          <div class="pd-stat-value">{{ plugin.notes }}</div>
+          <div class="pd-stat-label">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            notes
+          </div>
+        </div>
+        <div class="pd-stat">
+          <div class="pd-stat-value font-mono text-[16px]">{{ plugin.version }}</div>
+          <div class="pd-stat-label">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 7h.01M3 9V5a2 2 0 0 1 2-2h4l11 11-6 6L3 9z"/></svg>
+            version
+          </div>
         </div>
       </div>
     </aside>
@@ -134,99 +268,196 @@
 
 <section class="mx-auto max-w-[1200px] px-7 pb-2 pt-8">
   <div class="grid gap-7 lg:grid-cols-[1fr_340px]">
-    <div class="space-y-5">
-      <div class="card pd-rise rounded-[20px] p-6 sm:p-7" style="--i: 2">
-        <h2 class="mb-4 text-[24px] font-extrabold tracking-[-0.02em]">About</h2>
-        <div class="pd-prose">{{ plugin.full_content | markdown }}</div>
+    <div class="pd-rise" style="--i: 2">
+      {# ---- Tab bar ---- #}
+      <div class="pd-tabs" role="tablist" aria-label="Plugin details">
+        <button class="pd-tab" role="tab" id="tab-overview" aria-controls="panel-overview" aria-selected="true" data-tab="overview">Overview</button>
+        <button class="pd-tab" role="tab" id="tab-features" aria-controls="panel-features" aria-selected="false" tabindex="-1" data-tab="features">Features<span class="pd-tab-count">{{ plugin.total_features }}</span></button>
+        <button class="pd-tab" role="tab" id="tab-compatibility" aria-controls="panel-compatibility" aria-selected="false" tabindex="-1" data-tab="compatibility">Compatibility</button>
+        <button class="pd-tab" role="tab" id="tab-notes" aria-controls="panel-notes" aria-selected="false" tabindex="-1" data-tab="notes">Notes<span class="pd-tab-count">{{ plugin.notes }}</span></button>
+        <button class="pd-tab" role="tab" id="tab-issues" aria-controls="panel-issues" aria-selected="false" tabindex="-1" data-tab="issues">Issues</button>
       </div>
 
-      {% if plugin.total_features %}
-      <div class="card pd-rise rounded-[20px] p-6 sm:p-7" style="--i: 3">
-        <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 class="mb-1 text-[24px] font-extrabold tracking-[-0.02em]">Feature tracker</h2>
-            <p class="text-[14px] text-muted">Per-feature shipping status, recorded in the directory.</p>
+      <div class="space-y-5 pt-5">
+        {# ===== Overview ===== #}
+        <section class="pd-tabpanel" id="panel-overview" role="tabpanel" aria-labelledby="tab-overview" data-active>
+          <div class="card rounded-[20px] p-6 sm:p-7">
+            <h2 class="mb-4 text-[24px] font-extrabold tracking-[-0.02em]">About</h2>
+            <div class="pd-prose">{{ plugin.full_content | markdown }}</div>
           </div>
-          {% if plugin.status_kind == "bad" %}
-          <span class="rounded-full bg-[#FBEDEC] px-3 py-1.5 text-[12px] font-semibold text-[#A82E2E]">blocked</span>
-          {% else %}
-          <span class="rounded-full bg-ok-soft px-3 py-1.5 text-[12px] font-semibold text-ok">{{ plugin.shipped_features }} of {{ plugin.total_features }} shipped</span>
-          {% endif %}
-        </div>
-        <div class="pd-meter mb-5"><div class="pd-meter-fill" style="width: {{ plugin.progress_pct }}%"></div></div>
-        <div class="grid gap-[9px] sm:grid-cols-2">
-          {% for feature in plugin.features %}
-          <div class="flex items-center gap-[9px] rounded-[10px] border border-hairline bg-paper px-3 py-2.5">
-            {% if feature.kind == "ok" %}
-            <span class="h-2 w-2 shrink-0 rounded-full bg-ok"></span>
-            <span class="text-[13.5px]">{{ feature.label }}</span>
-            <span class="ml-auto text-[11px] font-semibold text-ok">{{ feature.status }}</span>
-            {% elif feature.kind == "bad" %}
-            <span class="h-2 w-2 shrink-0 rounded-full bg-[#C23B3B]"></span>
-            <span class="text-[13.5px]">{{ feature.label }}</span>
-            <span class="ml-auto text-[11px] font-semibold text-[#A82E2E]">{{ feature.status }}</span>
-            {% elif feature.kind == "muted" %}
-            <span class="h-2 w-2 shrink-0 rounded-full bg-ghost"></span>
-            <span class="text-[13.5px]">{{ feature.label }}</span>
-            <span class="ml-auto text-[11px] font-semibold text-faint">{{ feature.status }}</span>
-            {% else %}
-            <span class="h-2 w-2 shrink-0 rounded-full bg-warn"></span>
-            <span class="text-[13.5px]">{{ feature.label }}</span>
-            <span class="ml-auto text-[11px] font-semibold text-warn">{{ feature.status }}</span>
-            {% endif %}
-          </div>
-          {% endfor %}
-        </div>
-      </div>
-      {% endif %}
 
-      <div class="card pd-rise rounded-[20px] p-6 sm:p-7" style="--i: 4">
-        <h2 class="mb-1 text-[24px] font-extrabold tracking-[-0.02em]">{{ plugin.usage_title }}</h2>
-        <p class="mb-5 text-[14px] leading-[1.55] text-muted">{{ plugin.usage_intro }}</p>
-        <div class="overflow-hidden rounded-2xl bg-shade shadow-terminal">
-          <div class="flex items-center gap-2 border-b border-shade-2 px-4 py-[13px]">
-            <span class="h-[11px] w-[11px] rounded-full bg-[#FF6259]"></span>
-            <span class="h-[11px] w-[11px] rounded-full bg-[#FFBD2E]"></span>
-            <span class="h-[11px] w-[11px] rounded-full bg-[#28C840]"></span>
-            <span class="ml-2 font-mono text-[12px] text-shade-faint">plugin setup</span>
-          </div>
-          <pre class="overflow-x-auto px-[22px] py-5 font-mono text-[13px] leading-[1.8] text-shade-ink">{{ plugin.usage_code }}</pre>
-        </div>
-      </div>
-
-      <div class="card pd-rise rounded-[20px] p-6 sm:p-7" style="--i: 5">
-        <div class="mb-5 flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 class="mb-1 text-[24px] font-extrabold tracking-[-0.02em]">Community notes</h2>
-            <p class="text-[14px] text-muted">{{ plugin.notes }} visible note{% if plugin.notes != 1 %}s{% endif %} from the discussion thread.</p>
-          </div>
-          <a href="/login" class="btn-ghost">Add a note</a>
-        </div>
-        <div class="space-y-3">
-          {% for comment in plugin.comments %}
-          <article class="rounded-[14px] border border-hairline p-[18px]">
-            <div class="mb-2.5 flex items-center gap-3">
-              <span class="flex h-9 w-9 items-center justify-center rounded-full bg-accent-line text-[13px] font-bold text-accent-2">{{ comment.initials }}</span>
-              <div>
-                <div class="text-[14px] font-bold">{{ comment.name }}</div>
-                <div class="text-[12px] text-faint">{{ comment.role }}</div>
+          <div class="card mt-5 rounded-[20px] p-6 sm:p-7">
+            <h2 class="mb-1 text-[24px] font-extrabold tracking-[-0.02em]">{{ plugin.usage_title }}</h2>
+            <p class="mb-5 text-[14px] leading-[1.55] text-muted">{{ plugin.usage_intro }}</p>
+            <div class="overflow-hidden rounded-2xl bg-shade shadow-terminal">
+              <div class="flex items-center gap-2 border-b border-shade-2 px-4 py-[13px]">
+                <span class="h-[11px] w-[11px] rounded-full bg-[#FF6259]"></span>
+                <span class="h-[11px] w-[11px] rounded-full bg-[#FFBD2E]"></span>
+                <span class="h-[11px] w-[11px] rounded-full bg-[#28C840]"></span>
+                <span class="ml-2 font-mono text-[12px] text-shade-faint">plugin setup</span>
               </div>
-              {% if comment.badge %}
-              {% if comment.badge_kind == "ok" %}
-              <span class="ml-auto text-[12px] font-semibold text-ok">{{ comment.badge }}</span>
-              {% elif comment.badge_kind == "bad" %}
-              <span class="ml-auto text-[12px] font-semibold text-[#A82E2E]">{{ comment.badge }}</span>
+              <pre class="overflow-x-auto px-[22px] py-5 font-mono text-[13px] leading-[1.8] text-shade-ink">{{ plugin.usage_code }}</pre>
+            </div>
+          </div>
+        </section>
+
+        {# ===== Features ===== #}
+        <section class="pd-tabpanel" id="panel-features" role="tabpanel" aria-labelledby="tab-features">
+          <div class="card rounded-[20px] p-6 sm:p-7">
+            {% if plugin.total_features %}
+            <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 class="mb-1 text-[24px] font-extrabold tracking-[-0.02em]">Feature tracker</h2>
+                <p class="text-[14px] text-muted">Per-feature shipping status, recorded in the directory.</p>
+              </div>
+              {% if plugin.status_kind == "bad" %}
+              <span class="rounded-full bg-[#FBEDEC] px-3 py-1.5 text-[12px] font-semibold text-[#A82E2E]">blocked</span>
               {% else %}
-              <span class="ml-auto text-[12px] font-semibold text-warn">{{ comment.badge }}</span>
-              {% endif %}
+              <span class="rounded-full bg-ok-soft px-3 py-1.5 text-[12px] font-semibold text-ok">{{ plugin.shipped_features }} of {{ plugin.total_features }} shipped</span>
               {% endif %}
             </div>
-            <div class="pd-prose text-[14px]">{{ comment.body | markdown }}</div>
-          </article>
-          {% else %}
-          <p class="m-0 rounded-[14px] border border-hairline bg-paper px-4 py-5 text-[14px] text-muted">No notes yet. Be the first to share how this plugin works for you.</p>
-          {% endfor %}
-        </div>
+            <div class="pd-meter mb-5"><div class="pd-meter-fill" style="width: {{ plugin.progress_pct }}%"></div></div>
+            <div class="space-y-2.5">
+              {% for feature in plugin.features %}
+              <div class="rounded-[12px] border border-hairline bg-paper pd-p15">
+                <div class="flex flex-wrap items-center gap-2.5">
+                  {% if feature.kind == "ok" %}
+                  <span class="h-2 w-2 shrink-0 rounded-full bg-ok"></span>
+                  <span class="text-[14.5px] font-semibold">{{ feature.name }}</span>
+                  <span class="rounded-full bg-ok-soft px-2 pd-py2 text-[11px] font-semibold text-ok">{{ feature.status }}</span>
+                  {% elif feature.kind == "bad" %}
+                  <span class="h-2 w-2 shrink-0 rounded-full bg-[#C23B3B]"></span>
+                  <span class="text-[14.5px] font-semibold">{{ feature.name }}</span>
+                  <span class="rounded-full bg-[#FBEDEC] px-2 pd-py2 text-[11px] font-semibold text-[#A82E2E]">{{ feature.status }}</span>
+                  {% elif feature.kind == "muted" %}
+                  <span class="h-2 w-2 shrink-0 rounded-full bg-ghost"></span>
+                  <span class="text-[14.5px] font-semibold">{{ feature.name }}</span>
+                  <span class="rounded-full bg-surface-2 px-2 pd-py2 text-[11px] font-semibold text-faint">{{ feature.status }}</span>
+                  {% else %}
+                  <span class="h-2 w-2 shrink-0 rounded-full bg-warn"></span>
+                  <span class="text-[14.5px] font-semibold">{{ feature.name }}</span>
+                  <span class="rounded-full bg-warn-soft px-2 pd-py2 text-[11px] font-semibold text-warn">{{ feature.status }}</span>
+                  {% endif %}
+                  <span class="ml-auto text-[11.5px] text-faint">{{ feature.maturity }}</span>
+                </div>
+                {% if feature.description %}
+                <div class="pd-prose mt-2 text-[13.5px]">{{ feature.description | markdown }}</div>
+                {% endif %}
+              </div>
+              {% endfor %}
+            </div>
+            {% else %}
+            <h2 class="mb-2 text-[24px] font-extrabold tracking-[-0.02em]">Feature tracker</h2>
+            <p class="m-0 rounded-[14px] border border-hairline bg-paper px-4 py-5 text-[14px] text-muted">No tracked features recorded yet.</p>
+            {% endif %}
+          </div>
+        </section>
+
+        {# ===== Compatibility ===== #}
+        <section class="pd-tabpanel" id="panel-compatibility" role="tabpanel" aria-labelledby="tab-compatibility">
+          <div class="card rounded-[20px] p-6 sm:p-7">
+            <h2 class="mb-1 text-[24px] font-extrabold tracking-[-0.02em]">Compatibility</h2>
+            <p class="mb-5 text-[14px] text-muted">Declared support per Umbra version and database backend.</p>
+            {% if plugin.compat %}
+            <div class="pd-space-4">
+              {% for row in plugin.compat %}
+              <div class="rounded-[14px] border border-hairline bg-paper p-[18px]">
+                <div class="mb-3 flex flex-wrap items-center gap-2.5">
+                  <span class="font-mono text-[14px] font-bold text-ink">Umbra {{ row.umbra_version }}</span>
+                  {% if row.verified %}
+                  <span class="inline-flex items-center gap-1.5 rounded-full bg-ok-soft px-2.5 py-1 text-[11.5px] font-semibold text-ok"><span class="h-1.5 w-1.5 rounded-full bg-ok"></span>verified{% if row.verified_at %} · {{ row.verified_at }}{% endif %}</span>
+                  {% else %}
+                  <span class="inline-flex items-center gap-1.5 rounded-full bg-warn-soft px-2.5 py-1 text-[11.5px] font-semibold text-warn"><span class="h-1.5 w-1.5 rounded-full bg-warn"></span>declared</span>
+                  {% endif %}
+                </div>
+                {% if row.backends %}
+                <div class="mb-3 flex flex-wrap gap-2">
+                  {% for b in row.backends %}
+                  <span class="pd-chip">{{ b.label }}</span>
+                  {% endfor %}
+                </div>
+                {% endif %}
+                <div class="flex flex-wrap pd-gap-x6 text-[13px]">
+                  {% if row.minimum_rust_version %}
+                  <span class="text-muted">Min Rust <span class="font-mono font-semibold text-ink-2">{{ row.minimum_rust_version }}</span></span>
+                  {% endif %}
+                </div>
+                {% if row.notes %}
+                <p class="mt-2 text-[13px] leading-[1.55] text-muted">{{ row.notes }}</p>
+                {% endif %}
+              </div>
+              {% endfor %}
+            </div>
+            {% else %}
+            <p class="m-0 rounded-[14px] border border-hairline bg-paper px-4 py-5 text-[14px] text-muted">No compatibility rows declared yet.</p>
+            {% endif %}
+          </div>
+        </section>
+
+        {# ===== Notes ===== #}
+        <section class="pd-tabpanel" id="panel-notes" role="tabpanel" aria-labelledby="tab-notes">
+          <div class="card rounded-[20px] p-6 sm:p-7">
+            <div class="mb-5 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 class="mb-1 text-[24px] font-extrabold tracking-[-0.02em]">Community notes</h2>
+                <p class="text-[14px] text-muted">{{ plugin.notes }} visible note{% if plugin.notes != 1 %}s{% endif %} from the discussion thread.</p>
+              </div>
+              <button type="button" class="btn-accent" data-open-note>Add a note</button>
+            </div>
+            <div class="space-y-3">
+              {% for comment in plugin.comments %}
+              <article class="rounded-[14px] border border-hairline p-[18px]">
+                <div class="mb-2.5 flex flex-wrap items-center gap-3">
+                  <span class="flex h-9 w-9 items-center justify-center rounded-full bg-accent-line text-[13px] font-bold text-accent-2">{{ comment.initials }}</span>
+                  <div>
+                    <div class="text-[14px] font-bold">{{ comment.name }}</div>
+                    <div class="text-[12px] text-faint">{{ comment.role }} · {{ comment.created }}</div>
+                  </div>
+                  {% if comment.badge %}
+                  {% if comment.badge_kind == "ok" %}
+                  <span class="ml-auto text-[12px] font-semibold text-ok">{{ comment.badge }}</span>
+                  {% elif comment.badge_kind == "bad" %}
+                  <span class="ml-auto text-[12px] font-semibold text-[#A82E2E]">{{ comment.badge }}</span>
+                  {% else %}
+                  <span class="ml-auto text-[12px] font-semibold text-warn">{{ comment.badge }}</span>
+                  {% endif %}
+                  {% endif %}
+                </div>
+                <div class="pd-prose text-[14px]">{{ comment.body | markdown }}</div>
+                {% if comment.plugin_version or comment.backend %}
+                <div class="mt-3 flex flex-wrap gap-2">
+                  {% if comment.plugin_version %}
+                  <span class="rounded-[7px] border border-hairline bg-surface-2 px-2 py-1 font-mono text-[11.5px] text-body">v{{ comment.plugin_version }}</span>
+                  {% endif %}
+                  {% if comment.backend %}
+                  <span class="rounded-[7px] border border-hairline bg-surface-2 px-2 py-1 text-[11.5px] text-body">{{ comment.backend }}</span>
+                  {% endif %}
+                </div>
+                {% endif %}
+              </article>
+              {% else %}
+              <p class="m-0 rounded-[14px] border border-hairline bg-paper px-4 py-5 text-[14px] text-muted">No notes yet. Be the first to share how this plugin works for you.</p>
+              {% endfor %}
+            </div>
+          </div>
+        </section>
+
+        {# ===== Issues ===== #}
+        <section class="pd-tabpanel" id="panel-issues" role="tabpanel" aria-labelledby="tab-issues">
+          <div class="card rounded-[20px] p-6 sm:p-7 text-center">
+            <div class="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-accent-soft">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--accent-2)" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+            </div>
+            <h2 class="mb-2 text-[22px] font-extrabold tracking-[-0.02em]">Issues live with the maintainer</h2>
+            <p class="mx-auto mb-5 pd-maxw440 text-[14px] leading-[1.55] text-muted">There's no live issue feed here yet. Track and file bugs on the plugin's tracker, or flag a directory problem to the Umbra team.</p>
+            <div class="flex flex-wrap justify-center gap-2.5">
+              {% if plugin.links.issues %}
+              <a href="{{ plugin.links.issues }}" class="btn-accent" rel="noopener">Open issue tracker</a>
+              {% endif %}
+              <a href="/report?plugin={{ plugin.slug }}" class="btn-ghost">Report an issue</a>
+            </div>
+          </div>
+        </section>
       </div>
     </div>
 
@@ -246,6 +477,7 @@
           </div>
           <div class="flex items-center justify-between gap-3 text-[13.5px]"><span class="text-muted">Reviewed by</span><span class="font-semibold text-ink-2">{{ plugin.audit_date }}</span></div>
           <div class="flex items-center justify-between gap-3 text-[13.5px]"><span class="text-muted">Maturity</span><span class="font-semibold text-ink-2">{{ plugin.maturity }}</span></div>
+          <div class="flex items-center justify-between gap-3 text-[13.5px]"><span class="text-muted">Version</span><span class="font-mono font-semibold text-ink-2">{{ plugin.version }}</span></div>
           <div class="flex items-center justify-between gap-3 text-[13.5px]"><span class="text-muted">Maintainer</span><span class="font-semibold text-ink-2">{{ plugin.maintainer }}</span></div>
         </div>
       </div>
@@ -282,5 +514,116 @@
     </aside>
   </div>
 </section>
+
+{# ---- Add a note dialog ---- #}
+<dialog class="pd-dialog" id="pd-note-dialog">
+  <form method="post" action="/plugins/{{ plugin.slug }}/notes" class="p-6">
+    <div class="mb-4 flex items-start justify-between gap-3">
+      <div>
+        <h2 class="m-0 text-[20px] font-extrabold tracking-[-0.02em]">Add a note</h2>
+        <p class="mt-1 text-[13px] text-muted">Shared after moderation. Be specific — versions and backends help.</p>
+      </div>
+      <button type="button" class="btn-ghost px-2.5 py-1.5" data-close-note aria-label="Close">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="pd-space-3-5">
+      <div>
+        <label class="mb-1.5 block text-[12.5px] font-semibold text-ink-2" for="pd-note-body">Your note</label>
+        <textarea class="pd-field" id="pd-note-body" name="body" required placeholder="How does this plugin work for you? Markdown supported."></textarea>
+      </div>
+      <div class="grid pd-gap4 sm:grid-cols-2">
+        <div>
+          <label class="mb-1.5 block text-[12.5px] font-semibold text-ink-2" for="pd-note-kind">Kind</label>
+          <select class="pd-field" id="pd-note-kind" name="kind">
+            {% for opt in plugin.note_kinds %}
+            <option value="{{ opt.value }}">{{ opt.label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label class="mb-1.5 block text-[12.5px] font-semibold text-ink-2" for="pd-note-author">Name <span class="pd-fw-normal text-faint">(optional)</span></label>
+          <input class="pd-field" id="pd-note-author" name="author_label" maxlength="120" placeholder="Anonymous">
+        </div>
+      </div>
+    </div>
+    <div class="mt-5 flex pd-justify-end gap-2.5">
+      <button type="button" class="btn-ghost" data-close-note>Cancel</button>
+      <button type="submit" class="btn-accent">Post note</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+  (function () {
+    document.body.classList.add('pd-js');
+
+    // ---- Tabs ----
+    var tabs = Array.prototype.slice.call(document.querySelectorAll('.pd-tab'));
+    var panels = {};
+    document.querySelectorAll('.pd-tabpanel').forEach(function (p) {
+      panels[p.id.replace('panel-', '')] = p;
+    });
+    function activate(name, focus) {
+      tabs.forEach(function (t) {
+        var on = t.dataset.tab === name;
+        t.setAttribute('aria-selected', on ? 'true' : 'false');
+        t.tabIndex = on ? 0 : -1;
+        if (on && focus) t.focus();
+      });
+      Object.keys(panels).forEach(function (key) {
+        if (key === name) { panels[key].setAttribute('data-active', ''); }
+        else { panels[key].removeAttribute('data-active'); }
+      });
+      if (history.replaceState) history.replaceState(null, '', '#' + name);
+    }
+    tabs.forEach(function (t, i) {
+      t.addEventListener('click', function () { activate(t.dataset.tab); });
+      t.addEventListener('keydown', function (e) {
+        var idx = null;
+        if (e.key === 'ArrowRight') idx = (i + 1) % tabs.length;
+        else if (e.key === 'ArrowLeft') idx = (i - 1 + tabs.length) % tabs.length;
+        else if (e.key === 'Home') idx = 0;
+        else if (e.key === 'End') idx = tabs.length - 1;
+        if (idx !== null) { e.preventDefault(); activate(tabs[idx].dataset.tab, true); }
+      });
+    });
+    // Deep-link via #tab hash.
+    var hash = (location.hash || '').replace('#', '');
+    if (hash && panels[hash]) activate(hash);
+
+    // ---- Copy buttons ----
+    document.querySelectorAll('[data-copy]').forEach(function (wrap) {
+      var btn = wrap.querySelector('[data-copy-target]');
+      if (!btn) return;
+      btn.addEventListener('click', function () {
+        var text = wrap.getAttribute('data-copy') || '';
+        navigator.clipboard.writeText(text).then(function () {
+          btn.classList.add('copied');
+          setTimeout(function () { btn.classList.remove('copied'); }, 1500);
+        });
+      });
+    });
+
+    // ---- Note dialog ----
+    var dlg = document.getElementById('pd-note-dialog');
+    if (dlg) {
+      document.querySelectorAll('[data-open-note]').forEach(function (b) {
+        b.addEventListener('click', function () {
+          if (typeof dlg.showModal === 'function') dlg.showModal();
+          else dlg.setAttribute('open', '');
+          var ta = dlg.querySelector('textarea');
+          if (ta) ta.focus();
+        });
+      });
+      dlg.querySelectorAll('[data-close-note]').forEach(function (b) {
+        b.addEventListener('click', function () { dlg.close(); });
+      });
+      dlg.addEventListener('click', function (e) {
+        if (e.target === dlg) dlg.close();
+      });
+    }
+  })();
+</script>
 
 {% endblock %}

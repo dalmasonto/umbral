@@ -21,7 +21,9 @@ use plugin_directory::models::{
     AuditStatus, CommentKind, CommentModeration, Plugin, PluginComment, PluginCompatibility,
     PluginFeature, PluginMaturity, PluginModeration, PluginSource, PluginStatus, SecurityStatus,
 };
-use plugin_directory::{render_detail, render_listing, render_search};
+use plugin_directory::{
+    create_note, render_detail, render_detail_with, render_listing, render_search,
+};
 use umbra::migrate::ModelMeta;
 use umbra::orm::{ForeignKey, Model};
 use umbra::plugin::{Plugin as PluginTrait, PluginError};
@@ -93,6 +95,7 @@ async fn ensure_tables(pool: &sqlx::SqlitePool) {
             "CREATE TABLE {t} (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 public_id TEXT NOT NULL,
+                created_by INTEGER,
                 name TEXT NOT NULL,
                 slug TEXT NOT NULL,
                 logo TEXT,
@@ -211,6 +214,10 @@ async fn seed() {
     rest.featured = true;
     rest.display_order = 10;
     rest.github_stars = Some(2_140);
+    rest.version = Some("0.0.1".to_string());
+    rest.docs_url = Some("https://umbra.dev/docs/rest".to_string());
+    rest.source_url = Some("https://github.com/umbra/umbra-rest".to_string());
+    rest.issue_tracker_url = Some("https://github.com/umbra/umbra-rest/issues".to_string());
     // downloads left None → must render the honest em-dash.
     let rest = Plugin::objects().create(rest).await.expect("create rest");
 
@@ -449,6 +456,105 @@ async fn listing_and_detail_render_real_db_rows() {
     assert!(
         detail.contains("PostgreSQL"),
         "the compatibility row's backends are summarized"
+    );
+
+    // --- Rich detail surfaces (stats, tabs, links, copy, dialog) ----------
+    // Stat cards show the humanized star count and the real version.
+    assert!(detail.contains("2.1k"), "the stars stat card is humanized");
+    assert!(
+        detail.contains("0.0.1"),
+        "the version stat card shows the real version"
+    );
+    // Honest em-dash for the unknown downloads — not a fabricated 0.
+    assert!(
+        detail.contains("—"),
+        "unknown downloads render the em-dash, not 0"
+    );
+    // Feature name + its derived status both render.
+    assert!(
+        detail.contains("Cursor pagination") && detail.contains("shipped"),
+        "a feature renders with its status label"
+    );
+    // All five tab labels render (incl. Issues and Notes).
+    for tab in ["Overview", "Features", "Compatibility", "Notes", "Issues"] {
+        assert!(detail.contains(tab), "the `{tab}` tab label renders");
+    }
+    // The docs link href is rendered honestly from the real field.
+    // minijinja autoescape encodes `/` in attribute values as `&#x2f;`
+    // (the browser decodes it back) — assert the escaped host so we know
+    // the real docs_url, not a placeholder, drives the link.
+    assert!(
+        detail.contains("umbra.dev&#x2f;docs&#x2f;rest"),
+        "the docs link href renders from the real docs_url"
+    );
+    // The copy-button markup (with the icon swap classes) is present.
+    assert!(
+        detail.contains("class=\"copy-btn\"") && detail.contains("icon-copy"),
+        "the copy button markup is present"
+    );
+    // The add-note dialog form posts to the new route with a textarea +
+    // kind select.
+    assert!(
+        detail.contains("action=\"/plugins/umbra-rest/notes\""),
+        "the note form posts to the new route"
+    );
+    assert!(
+        detail.contains("name=\"body\"") && detail.contains("name=\"kind\""),
+        "the note form has a body textarea and a kind select"
+    );
+    assert!(
+        detail.contains("<select") && detail.contains("usage_note"),
+        "the kind select renders CommentKind options"
+    );
+    // No success banner without the ?submitted=1 flag.
+    assert!(
+        !detail.contains("pending moderation"),
+        "the success banner is absent on a plain detail render"
+    );
+
+    // --- POST a note → a pending PluginComment exists, banner shows -------
+    let created = create_note(
+        "umbra-rest",
+        "Works great on Postgres 16.",
+        "usage_note",
+        Some("Reviewer".to_string()),
+    )
+    .await
+    .expect("note create query ok");
+    assert!(created, "create_note returns true for an existing plugin");
+
+    // The row exists with the submitted body and Pending moderation.
+    let pending = PluginComment::objects()
+        .filter(plugin_directory::models::plugin_comment::BODY.eq("Works great on Postgres 16."))
+        .first()
+        .await
+        .expect("query the posted note")
+        .expect("the posted note row exists");
+    assert_eq!(
+        pending.moderation,
+        CommentModeration::Pending,
+        "a posted note awaits moderation"
+    );
+
+    // A note for an unknown slug is a clean 404 (Ok(false)), no row.
+    let missing_note = create_note("does-not-exist", "body", "general", None)
+        .await
+        .expect("create_note query ok");
+    assert!(!missing_note, "create_note returns false for an unknown slug");
+
+    // Re-render with ?submitted=1 → the success banner appears (the
+    // pending note is NOT in the visible list, proving moderation gates it).
+    let after = render_detail_with("umbra-rest", true)
+        .await
+        .expect("submitted detail renders")
+        .expect("plugin exists");
+    assert!(
+        after.contains("Thanks — your note is pending moderation."),
+        "the ?submitted=1 success banner renders"
+    );
+    assert!(
+        !after.contains("Works great on Postgres 16."),
+        "the pending note is filtered out of the visible thread"
     );
 
     // A non-existent slug is a clean 404 (Ok(None)), not an error.
