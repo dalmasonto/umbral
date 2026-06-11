@@ -3,6 +3,51 @@
 {% block title %}{{ plugin.name }} - Plugin Directory - Umbra{% endblock %}
 {% block meta_description %}Plugin detail page for {{ plugin.name }}, including install command, audit status, compatibility, features and community notes.{% endblock %}
 
+{% block extra_head %}
+<style>
+  @media (prefers-reduced-motion: no-preference) {
+    @keyframes pd-rise {
+      from { opacity: 0; transform: translateY(14px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .pd-rise { opacity: 0; animation: pd-rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) both; animation-delay: calc(var(--i, 0) * 60ms); }
+    .pd-meter-fill { animation: pd-grow 0.9s cubic-bezier(0.22, 1, 0.36, 1) both 0.2s; }
+    @keyframes pd-grow { from { width: 0; } }
+  }
+  .pd-head { position: relative; }
+  .pd-head::before {
+    content: "";
+    position: absolute;
+    left: -30px; top: -50px;
+    width: 360px; height: 200px;
+    background: radial-gradient(closest-side, color-mix(in srgb, var(--accent) 14%, transparent), transparent 72%);
+    pointer-events: none;
+    z-index: 0;
+  }
+  .pd-head > * { position: relative; z-index: 1; }
+  /* Progress meter for the feature tracker. */
+  .pd-meter { height: 7px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
+  .pd-meter-fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--accent), var(--ok)); }
+  /* Markdown prose styling for the full_content body, scoped to .pd-prose. */
+  .pd-prose { color: var(--ink-2); font-size: 15px; line-height: 1.7; }
+  .pd-prose h1, .pd-prose h2, .pd-prose h3 { color: var(--ink); font-weight: 800; letter-spacing: -0.01em; margin: 1.4em 0 0.5em; line-height: 1.25; }
+  .pd-prose h1 { font-size: 23px; }
+  .pd-prose h2 { font-size: 20px; }
+  .pd-prose h3 { font-size: 17px; }
+  .pd-prose p { margin: 0.8em 0; }
+  .pd-prose ul, .pd-prose ol { margin: 0.8em 0; padding-left: 1.3em; }
+  .pd-prose li { margin: 0.3em 0; }
+  .pd-prose a { color: var(--accent-2); text-decoration: underline; }
+  .pd-prose code { font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.88em; background: var(--surface-2); border: 1px solid var(--hairline); border-radius: 6px; padding: 0.12em 0.4em; color: var(--ink-2); }
+  .pd-prose pre { background: var(--shade); color: var(--shade-ink); border-radius: 14px; padding: 16px 20px; overflow-x: auto; margin: 1em 0; }
+  .pd-prose pre code { background: transparent; border: 0; padding: 0; color: inherit; }
+  .pd-prose blockquote { border-left: 3px solid var(--accent-line); padding-left: 14px; color: var(--muted); margin: 1em 0; }
+  .pd-prose table { width: 100%; border-collapse: collapse; margin: 1em 0; font-size: 14px; }
+  .pd-prose th, .pd-prose td { border: 1px solid var(--hairline); padding: 8px 12px; text-align: left; }
+  .pd-prose th { background: var(--surface-2); font-weight: 700; }
+</style>
+{% endblock %}
+
 {% block content %}
 
 <section class="mx-auto max-w-[1200px] px-7 pb-0 pt-10">
@@ -18,15 +63,15 @@
   </div>
   {% endif %}
 
-  <div class="grid gap-7 lg:grid-cols-[1fr_340px] lg:items-start">
-    <div>
+  <div class="pd-head grid gap-7 lg:grid-cols-[1fr_340px] lg:items-start">
+    <div class="pd-rise" style="--i: 0">
       <div class="mb-5 flex flex-wrap items-start gap-4">
         {% if plugin.flagged %}
-        <span class="flex h-[64px] w-[64px] shrink-0 items-center justify-center rounded-2xl bg-[#FBEDEC] font-mono text-[24px] font-bold text-[#C23B3B]">{{ plugin.icon }}</span>
+        <span class="flex h-[64px] w-[64px] shrink-0 items-center justify-center rounded-2xl bg-[#FBEDEC] font-mono text-[22px] font-bold text-[#C23B3B]">{{ plugin.icon }}</span>
         {% elif plugin.source == "community" %}
-        <span class="flex h-[64px] w-[64px] shrink-0 items-center justify-center rounded-2xl bg-tan-soft font-mono text-[24px] font-bold text-tan">{{ plugin.icon }}</span>
+        <span class="flex h-[64px] w-[64px] shrink-0 items-center justify-center rounded-2xl bg-tan-soft font-mono text-[22px] font-bold text-tan">{{ plugin.icon }}</span>
         {% else %}
-        <span class="flex h-[64px] w-[64px] shrink-0 items-center justify-center rounded-2xl bg-accent-soft font-mono text-[24px] font-bold text-accent-2">{{ plugin.icon }}</span>
+        <span class="flex h-[64px] w-[64px] shrink-0 items-center justify-center rounded-2xl bg-accent-soft font-mono text-[22px] font-bold text-accent-2">{{ plugin.icon }}</span>
         {% endif %}
         <div class="min-w-0">
           <div class="mb-2 flex flex-wrap items-center gap-2.5">
@@ -35,6 +80,8 @@
             <span class="rounded-full bg-[#C23B3B] px-2 py-[3px] text-[11px] font-bold text-white">Flagged</span>
             {% elif plugin.source == "community" %}
             <span class="pill-community">Community</span>
+            {% elif plugin.source == "experimental" %}
+            <span class="rounded-full bg-accent-soft px-2 py-[3px] text-[11px] font-semibold text-accent-2">Experimental</span>
             {% else %}
             <span class="pill-official">Official</span>
             {% endif %}
@@ -54,7 +101,7 @@
       </div>
     </div>
 
-    <aside class="card rounded-[20px] p-5 shadow-panel">
+    <aside class="card pd-rise rounded-[20px] p-5 shadow-panel" style="--i: 1">
       <div class="mb-4 flex items-center justify-between gap-3">
         <div>
           <div class="text-[12px] font-bold uppercase tracking-[0.04em] text-faint">Install</div>
@@ -70,13 +117,8 @@
         <span class="pill-warn">{{ plugin.status }}</span>
         {% endif %}
       </div>
-      <code class="mb-3 block overflow-x-auto rounded-[10px] border border-hairline bg-surface-2 px-3 py-2.5 font-mono text-[12.5px] text-ink-2">{{ plugin.install }}</code>
-      <code class="block overflow-x-auto rounded-[10px] border border-hairline bg-surface-2 px-3 py-2.5 font-mono text-[12.5px] text-ink-2">{{ plugin.toml }}</code>
-      <div class="mt-5 grid grid-cols-3 gap-2 text-center">
-        <div class="rounded-[10px] border border-hairline bg-paper px-2 py-2.5">
-          <div class="text-[15px] font-bold text-ink">{{ plugin.rating }}</div>
-          <div class="text-[11.5px] text-faint">rating</div>
-        </div>
+      <code class="block overflow-x-auto rounded-[10px] border border-hairline bg-surface-2 px-3 py-2.5 font-mono text-[12.5px] text-ink-2">{{ plugin.install }}</code>
+      <div class="mt-5 grid grid-cols-2 gap-2 text-center">
         <div class="rounded-[10px] border border-hairline bg-paper px-2 py-2.5">
           <div class="text-[15px] font-bold text-ink">{{ plugin.installs }}</div>
           <div class="text-[11.5px] text-faint">installs</div>
@@ -93,20 +135,25 @@
 <section class="mx-auto max-w-[1200px] px-7 pb-2 pt-8">
   <div class="grid gap-7 lg:grid-cols-[1fr_340px]">
     <div class="space-y-5">
-      <div class="card rounded-[20px] p-6 sm:p-7">
-        <div class="mb-5 flex flex-wrap items-center justify-between gap-3">
+      <div class="card pd-rise rounded-[20px] p-6 sm:p-7" style="--i: 2">
+        <h2 class="mb-4 text-[24px] font-extrabold tracking-[-0.02em]">About</h2>
+        <div class="pd-prose">{{ plugin.full_content | markdown }}</div>
+      </div>
+
+      {% if plugin.total_features %}
+      <div class="card pd-rise rounded-[20px] p-6 sm:p-7" style="--i: 3">
+        <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 class="mb-1 text-[24px] font-extrabold tracking-[-0.02em]">Plugin feature tracker</h2>
-            <p class="text-[14px] text-muted">Static backend data for this route. Database-backed rows can replace it later.</p>
+            <h2 class="mb-1 text-[24px] font-extrabold tracking-[-0.02em]">Feature tracker</h2>
+            <p class="text-[14px] text-muted">Per-feature shipping status, recorded in the directory.</p>
           </div>
-          {% if plugin.status_kind == "ok" %}
-          <span class="rounded-full bg-ok-soft px-3 py-1.5 text-[12px] font-semibold text-ok">{{ plugin.shipped_features }} of {{ plugin.total_features }} shipped</span>
-          {% elif plugin.status_kind == "bad" %}
+          {% if plugin.status_kind == "bad" %}
           <span class="rounded-full bg-[#FBEDEC] px-3 py-1.5 text-[12px] font-semibold text-[#A82E2E]">blocked</span>
           {% else %}
-          <span class="rounded-full bg-warn-soft px-3 py-1.5 text-[12px] font-semibold text-warn">{{ plugin.shipped_features }} of {{ plugin.total_features }} shipped</span>
+          <span class="rounded-full bg-ok-soft px-3 py-1.5 text-[12px] font-semibold text-ok">{{ plugin.shipped_features }} of {{ plugin.total_features }} shipped</span>
           {% endif %}
         </div>
+        <div class="pd-meter mb-5"><div class="pd-meter-fill" style="width: {{ plugin.progress_pct }}%"></div></div>
         <div class="grid gap-[9px] sm:grid-cols-2">
           {% for feature in plugin.features %}
           <div class="flex items-center gap-[9px] rounded-[10px] border border-hairline bg-paper px-3 py-2.5">
@@ -131,8 +178,9 @@
           {% endfor %}
         </div>
       </div>
+      {% endif %}
 
-      <div class="card rounded-[20px] p-6 sm:p-7">
+      <div class="card pd-rise rounded-[20px] p-6 sm:p-7" style="--i: 4">
         <h2 class="mb-1 text-[24px] font-extrabold tracking-[-0.02em]">{{ plugin.usage_title }}</h2>
         <p class="mb-5 text-[14px] leading-[1.55] text-muted">{{ plugin.usage_intro }}</p>
         <div class="overflow-hidden rounded-2xl bg-shade shadow-terminal">
@@ -146,11 +194,11 @@
         </div>
       </div>
 
-      <div class="card rounded-[20px] p-6 sm:p-7">
+      <div class="card pd-rise rounded-[20px] p-6 sm:p-7" style="--i: 5">
         <div class="mb-5 flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 class="mb-1 text-[24px] font-extrabold tracking-[-0.02em]">Community notes</h2>
-            <p class="text-[14px] text-muted">Preview of the discussion area for plugin detail pages.</p>
+            <p class="text-[14px] text-muted">{{ plugin.notes }} visible note{% if plugin.notes != 1 %}s{% endif %} from the discussion thread.</p>
           </div>
           <a href="/login" class="btn-ghost">Add a note</a>
         </div>
@@ -163,6 +211,7 @@
                 <div class="text-[14px] font-bold">{{ comment.name }}</div>
                 <div class="text-[12px] text-faint">{{ comment.role }}</div>
               </div>
+              {% if comment.badge %}
               {% if comment.badge_kind == "ok" %}
               <span class="ml-auto text-[12px] font-semibold text-ok">{{ comment.badge }}</span>
               {% elif comment.badge_kind == "bad" %}
@@ -170,16 +219,19 @@
               {% else %}
               <span class="ml-auto text-[12px] font-semibold text-warn">{{ comment.badge }}</span>
               {% endif %}
+              {% endif %}
             </div>
-            <p class="m-0 text-[14px] leading-[1.55] text-ink-2">{{ comment.body }}</p>
+            <div class="pd-prose text-[14px]">{{ comment.body | markdown }}</div>
           </article>
+          {% else %}
+          <p class="m-0 rounded-[14px] border border-hairline bg-paper px-4 py-5 text-[14px] text-muted">No notes yet. Be the first to share how this plugin works for you.</p>
           {% endfor %}
         </div>
       </div>
     </div>
 
     <aside class="space-y-5 lg:sticky lg:top-[84px] lg:self-start">
-      <div class="card rounded-[18px] p-5">
+      <div class="card pd-rise rounded-[18px] p-5" style="--i: 3">
         <div class="mb-4 text-[12px] font-bold uppercase tracking-[0.04em] text-faint">Health</div>
         <div class="space-y-3">
           <div class="flex items-center justify-between gap-3 text-[13.5px]">
@@ -188,19 +240,18 @@
             <span class="inline-flex items-center gap-1.5 rounded-full bg-ok-soft px-2.5 py-1 text-[12px] font-semibold text-ok"><span class="h-1.5 w-1.5 rounded-full bg-ok"></span>{{ plugin.audit_label }}</span>
             {% elif plugin.audit_kind == "bad" %}
             <span class="inline-flex items-center gap-1.5 rounded-full bg-[#FBEDEC] px-2.5 py-1 text-[12px] font-semibold text-[#A82E2E]"><span class="h-1.5 w-1.5 rounded-full bg-[#C23B3B]"></span>{{ plugin.audit_label }}</span>
-            {% elif plugin.audit_kind == "muted" %}
-            <span class="inline-flex items-center gap-1.5 rounded-full bg-surface-2 px-2.5 py-1 text-[12px] font-semibold text-faint"><span class="h-1.5 w-1.5 rounded-full bg-ghost"></span>{{ plugin.audit_label }}</span>
             {% else %}
             <span class="inline-flex items-center gap-1.5 rounded-full bg-warn-soft px-2.5 py-1 text-[12px] font-semibold text-warn"><span class="h-1.5 w-1.5 rounded-full bg-warn"></span>{{ plugin.audit_label }}</span>
             {% endif %}
           </div>
-          <div class="flex items-center justify-between gap-3 text-[13.5px]"><span class="text-muted">Last audit</span><span class="font-semibold text-ink-2">{{ plugin.audit_date }}</span></div>
+          <div class="flex items-center justify-between gap-3 text-[13.5px]"><span class="text-muted">Reviewed by</span><span class="font-semibold text-ink-2">{{ plugin.audit_date }}</span></div>
           <div class="flex items-center justify-between gap-3 text-[13.5px]"><span class="text-muted">Maturity</span><span class="font-semibold text-ink-2">{{ plugin.maturity }}</span></div>
           <div class="flex items-center justify-between gap-3 text-[13.5px]"><span class="text-muted">Maintainer</span><span class="font-semibold text-ink-2">{{ plugin.maintainer }}</span></div>
         </div>
       </div>
 
-      <div class="card rounded-[18px] p-5">
+      {% if plugin.compatibility %}
+      <div class="card pd-rise rounded-[18px] p-5" style="--i: 4">
         <div class="mb-4 text-[12px] font-bold uppercase tracking-[0.04em] text-faint">Compatibility</div>
         <div class="space-y-2.5">
           {% for item in plugin.compatibility %}
@@ -218,6 +269,7 @@
           {% endfor %}
         </div>
       </div>
+      {% endif %}
 
       <div class="rounded-[18px] bg-shade p-5 text-white">
         <div class="mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-white/[0.08]">
