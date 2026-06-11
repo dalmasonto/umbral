@@ -71,6 +71,15 @@ macro_rules! models {
 #[doc(hidden)]
 pub use serde_json as _serde_json;
 
+/// Re-export of `sea_query` for use in macro-generated code.
+///
+/// The `#[derive(Model)]` macro emits `::umbra::_sea_query::Value` in the
+/// `write_pending_m2m` body (form-staged M2M junction writes). Routing
+/// through this re-export means user crates don't need a direct
+/// `sea-query` dep for the generated code to compile.
+#[doc(hidden)]
+pub use umbra_core::_sea_query;
+
 /// Re-export of `sqlx` for use in macro-generated code.
 ///
 /// `#[derive(Choices)]` emits `sqlx::Type` / `Encode` / `Decode` impls

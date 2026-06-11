@@ -2997,7 +2997,7 @@ impl<T: Model> Manager<T> {
     /// INSERT one row, return the row as it now exists in the
     /// database (with any autoincrement PK populated). Uses the
     /// ambient pool via `Manager::queryset().resolve_pool`.
-    pub async fn create(&self, instance: T) -> Result<T, crate::orm::write::WriteError>
+    pub async fn create(&self, mut instance: T) -> Result<T, crate::orm::write::WriteError>
     where
         T: serde::Serialize
             + for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
@@ -3065,6 +3065,12 @@ impl<T: Model> Manager<T> {
                 // `junction_table` seeded on its M2M slots — otherwise
                 // `row.tags.add(...)` is a silent no-op.
                 row.set_m2m_parent_ids();
+                // Carry form-staged M2M pending ids from the caller's
+                // instance onto the readback row, then flush them to
+                // junction rows now that parent_id + junction_table are
+                // seeded on the readback row.
+                instance.take_pending_m2m_into(&mut row);
+                row.write_pending_m2m().await?;
                 Ok(row)
             }
             DbPool::Postgres(pool) => {
@@ -3094,6 +3100,8 @@ impl<T: Model> Manager<T> {
                         .unwrap_or(WriteError::Sqlx(e))
                 })?;
                 row.set_m2m_parent_ids();
+                instance.take_pending_m2m_into(&mut row);
+                row.write_pending_m2m().await?;
                 Ok(row)
             }
         }

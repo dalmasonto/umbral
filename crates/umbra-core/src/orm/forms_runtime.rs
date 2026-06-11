@@ -143,3 +143,64 @@ fn json_scalar_to_string(v: &serde_json::Value) -> String {
         other => other.to_string(),
     }
 }
+
+/// Split a submitted M2M value into ids. The form layer joins repeated
+/// keys with `,`; we also accept whitespace. Empty pieces are dropped.
+pub fn parse_multi_ids(raw: &str) -> Vec<String> {
+    raw.split([',', ' ', '\n'])
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .collect()
+}
+
+/// Verify every id in `ids` exists in `target_table`; on any miss, push
+/// a field-keyed error. Returns the parsed sea_query PK values for the
+/// ids that exist (used to stage the pending junction write). When any
+/// id is missing the caller treats the whole submission as invalid
+/// (atomicity) — errs is non-empty so the create never runs.
+pub async fn validate_multi_fk_exists(
+    field: &str,
+    ids: &[String],
+    target_table: &str,
+    errs: &mut ValidationErrors,
+) -> Vec<sea_query::Value> {
+    // Empty / optional M2M submitted nothing → no DB hit at all.
+    if ids.is_empty() {
+        return Vec::new();
+    }
+    let Some(meta) = crate::migrate::registered_models()
+        .into_iter()
+        .find(|m| m.table == target_table)
+    else {
+        return Vec::new();
+    };
+    let Some(pk_col) = meta.pk_column().map(|c| c.name.clone()) else {
+        return Vec::new();
+    };
+    // ONE batched query — `SELECT <pk> FROM <target> WHERE <pk> IN
+    // (...)`. NOT one count() per id: a list of M selected ids costs a
+    // single round-trip, never M (no N+1). The set-difference below
+    // finds the missing ids.
+    let rows = crate::orm::dynamic::DynQuerySet::for_meta(&meta)
+        .select_cols(&[pk_col.clone()])
+        .filter_in_strings(&pk_col, ids)
+        .fetch_as_json()
+        .await
+        .unwrap_or_default();
+    let found: std::collections::HashSet<String> = rows
+        .into_iter()
+        .filter_map(|r| r.get(&pk_col).map(json_scalar_to_string))
+        .collect();
+    let mut out = Vec::with_capacity(ids.len());
+    for id in ids {
+        if found.contains(id) {
+            if let Ok(n) = id.parse::<i64>() {
+                out.push(sea_query::Value::BigInt(Some(n)));
+            }
+        } else {
+            errs.add(field, format!("{field}: id {id} has no matching record"));
+        }
+    }
+    out
+}

@@ -369,6 +369,13 @@ pub enum InputKind {
         label_field: Option<&'static str>,
         pk_kind: PkKind,
     },
+    /// M2M relation. Submits a list of child ids; written as junction
+    /// rows after the parent insert.
+    ModelMultiChoice {
+        target_table: &'static str,
+        label_field: Option<&'static str>,
+        pk_kind: PkKind,
+    },
 }
 
 impl InputKind {
@@ -384,10 +391,13 @@ impl InputKind {
             InputKind::Date => "date",
             InputKind::Time => "time",
             InputKind::DatetimeLocal => "datetime-local",
-            // `Select` / `ModelChoice` have no `<input type>`; their
-            // render arms build a `<select>` and never call `html_type`.
-            // "text" is a harmless default to keep the match exhaustive.
-            InputKind::Select | InputKind::ModelChoice { .. } => "text",
+            // `Select` / `ModelChoice` / `ModelMultiChoice` have no
+            // `<input type>`; their render arms build a `<select>` and
+            // never call `html_type`. "text" is a harmless default to
+            // keep the match exhaustive.
+            InputKind::Select
+            | InputKind::ModelChoice { .. }
+            | InputKind::ModelMultiChoice { .. } => "text",
         }
     }
 }
@@ -575,6 +585,28 @@ impl Field {
         }
     }
 
+    /// New multi-select M2M field. Options are fetched async at render
+    /// time; submission is a list of child ids written to the junction
+    /// table after the parent insert.
+    pub fn model_multi_choice(
+        name: impl Into<String>,
+        target_table: &'static str,
+        label_field: Option<&'static str>,
+        pk_kind: PkKind,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            kind: InputKind::ModelMultiChoice {
+                target_table,
+                label_field,
+                pk_kind,
+            },
+            required: false,
+            validators: Vec::new(),
+            options: Vec::new(),
+        }
+    }
+
     /// Mark the field as optional. The `validate` method
     /// short-circuits when `required` is false and the value is
     /// empty, so the `Required` validator (if any) doesn't fire on
@@ -679,6 +711,15 @@ impl Field {
                 let options =
                     crate::orm::forms_runtime::fetch_model_options(target_table, label_field).await;
                 self.render_select(&options, value, false)
+            }
+            InputKind::ModelMultiChoice {
+                target_table,
+                label_field,
+                ..
+            } => {
+                let options =
+                    crate::orm::forms_runtime::fetch_model_options(target_table, label_field).await;
+                self.render_select(&options, value, true)
             }
             _ => self.render_html(value),
         }

@@ -1472,6 +1472,72 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         }}
     };
 
+    // Form-staged M2M flush body: for each M2M field, drain its pending
+    // child ids (seeded by the Form derive's validate()) and write them
+    // to the junction table via the existing set_junction_dynamic
+    // machinery. parent_id + junction_table were seeded by
+    // set_m2m_parent_ids just before this runs in the typed create()
+    // path. No M2M fields → empty body (the trait default no-ops).
+    let take_pending_m2m_into_override = if m2m_field_idents.is_empty() {
+        quote! {}
+    } else {
+        let move_arms = m2m_field_idents.iter().map(|ident| {
+            quote! {
+                dest.#ident.set_pending_ids(self.#ident.take_pending_ids());
+            }
+        });
+        quote! {
+            fn take_pending_m2m_into(&mut self, dest: &mut Self) {
+                #(#move_arms)*
+            }
+        }
+    };
+
+    let write_pending_m2m_override = if m2m_field_idents.is_empty() {
+        quote! {}
+    } else {
+        let arms = m2m_field_idents.iter().map(|ident| {
+            quote! {
+                {
+                    let pending = self.#ident.take_pending_ids();
+                    if !pending.is_empty() {
+                        if let (
+                            ::core::option::Option::Some(parent_id),
+                            ::core::option::Option::Some(junction),
+                        ) = (
+                            self.#ident.parent_id().copied(),
+                            self.#ident.junction_table(),
+                        ) {
+                            ::umbra::orm::set_junction_dynamic(
+                                junction,
+                                ::umbra::_sea_query::Value::BigInt(
+                                    ::core::option::Option::Some(parent_id),
+                                ),
+                                pending,
+                            )
+                            .await
+                            .map_err(::umbra::orm::write::WriteError::Sqlx)?;
+                        }
+                    }
+                }
+            }
+        });
+        quote! {
+            fn write_pending_m2m<'a>(
+                &'a mut self,
+            ) -> ::std::pin::Pin<::std::boxed::Box<
+                dyn ::std::future::Future<
+                    Output = ::core::result::Result<(), ::umbra::orm::write::WriteError>,
+                > + ::core::marker::Send + 'a,
+            >> {
+                ::std::boxed::Box::pin(async move {
+                    #(#arms)*
+                    ::core::result::Result::Ok(())
+                })
+            }
+        }
+    };
+
     // BUG-16 phase 3 follow-up: typed bulk-across-parents helpers
     // emitted on the parent's inherent impl. Closes the developer
     // ergonomics gap: the auto-generated junction-table name never
@@ -1805,6 +1871,8 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                 #set_m2m_body
             }
             #pk_i64_override
+            #take_pending_m2m_into_override
+            #write_pending_m2m_override
             fn set_m2m_resolved_json(
                 &mut self,
                 field_name: &str,
@@ -3617,6 +3685,51 @@ fn expand_form(input: DeriveInput) -> syn::Result<TokenStream2> {
             };
             validate_body.push(quote! {
                 let #parsed_var = { #parse_expr };
+            });
+            struct_inits.push(quote! { #field_ident: #parsed_var });
+            continue;
+        }
+
+        // M2M<T> → ModelMultiChoice. No parent column; ids parsed and
+        // staged on the M2M field's pending slot for the post-insert
+        // junction write. Restricted to the bare `M2M<T>` shape — a
+        // form-submittable M2M is always `M2M<T>`; `Option<M2M<T>>` on a
+        // Model is a Model-side ergonomic, not a form field (and its
+        // `Default` is `None`, which has no `set_pending_ids`).
+        if let Some(target_ty) = m2m_inner(&field.ty).cloned() {
+            let target_field_ty = &field.ty;
+            let label_field_tokens = match &attrs.label_field {
+                Some(lf) => quote!(::core::option::Option::Some(#lf)),
+                None => quote!(::core::option::Option::None),
+            };
+            let field_var = format_ident!("_{}_field", field_ident);
+            field_builders.push(quote! {
+                let #field_var: ::umbra::forms::Field = ::umbra::forms::Field::model_multi_choice(
+                    #field_name,
+                    <#target_ty as ::umbra::orm::Model>::TABLE,
+                    #label_field_tokens,
+                    ::umbra::orm::forms_runtime::pk_kind_for_table(
+                        <#target_ty as ::umbra::orm::Model>::TABLE,
+                    ),
+                );
+            });
+            let raw_var = format_ident!("_{}_raw", field_ident);
+            let ids_var = format_ident!("_{}_ids", field_ident);
+            let pending_var = format_ident!("_{}_pending", field_ident);
+            let parsed_var = format_ident!("_{}_parsed", field_ident);
+            validate_body.push(quote! {
+                let #raw_var: ::std::string::String =
+                    data.get(#field_name).cloned().unwrap_or_default();
+                let #ids_var = ::umbra::orm::forms_runtime::parse_multi_ids(&#raw_var);
+                let #pending_var = ::umbra::orm::forms_runtime::validate_multi_fk_exists(
+                    #field_name,
+                    &#ids_var,
+                    <#target_ty as ::umbra::orm::Model>::TABLE,
+                    &mut errs,
+                ).await;
+                // Build the M2M field with its pending ids staged.
+                let mut #parsed_var: #target_field_ty = ::core::default::Default::default();
+                #parsed_var.set_pending_ids(#pending_var);
             });
             struct_inits.push(quote! { #field_ident: #parsed_var });
             continue;

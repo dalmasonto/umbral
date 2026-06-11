@@ -92,6 +92,10 @@ pub struct M2M<T: Model, P: PrimaryKey = i64> {
     /// and return `Ok(())` / `Ok(Vec::new())` — same shape as a row
     /// with no parent id.
     junction_table: Option<&'static str>,
+    /// Child PKs submitted through a form, awaiting the post-insert
+    /// junction write. Drained by `take_pending_ids` in the typed
+    /// create() path. Empty for hydrated / loaded rows.
+    pending: Vec<sea_query::Value>,
     _phantom: PhantomData<T>,
 }
 
@@ -114,6 +118,7 @@ impl<T: Model, P: PrimaryKey> M2M<T, P> {
             resolved: None,
             parent_id: None,
             junction_table: None,
+            pending: Vec::new(),
             _phantom: PhantomData,
         }
     }
@@ -151,6 +156,17 @@ impl<T: Model, P: PrimaryKey> M2M<T, P> {
     /// unattached `M2M::empty()`.
     pub fn junction_table(&self) -> Option<&'static str> {
         self.junction_table
+    }
+
+    /// Stage child PKs to be written as junction rows after the parent
+    /// insert. Called by the Form derive's validate().
+    pub fn set_pending_ids(&mut self, ids: Vec<sea_query::Value>) {
+        self.pending = ids;
+    }
+
+    /// Drain the staged child PKs (post-insert junction write).
+    pub fn take_pending_ids(&mut self) -> Vec<sea_query::Value> {
+        std::mem::take(&mut self.pending)
     }
 
     /// `SELECT child.* FROM <child_table> child INNER JOIN

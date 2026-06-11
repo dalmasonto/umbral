@@ -142,6 +142,37 @@ pub trait HydrateRelated {
     /// declaring `pub <name>: OneToOne<C>` fields.
     fn set_one_to_one_resolved_json(&mut self, _field_name: &str, _row: Option<serde_json::Value>) {
     }
+
+    /// Move form-staged M2M pending ids from `self` into `dest`,
+    /// field by field. The typed `create()` builds its INSERT from the
+    /// caller's instance, then reads a *fresh* row back from the DB
+    /// (carrying the autoincremented PK) — the pending ids staged by the
+    /// Form derive live on the caller's instance, not the readback row.
+    /// This hook transfers them across so `write_pending_m2m` on the
+    /// readback row (which has the real parent_id seeded) finds them.
+    /// Default: no-op for models with no M2M fields.
+    fn take_pending_m2m_into(&mut self, _dest: &mut Self) {}
+
+    /// Flush form-staged M2M selections to their junction tables after
+    /// the parent row was inserted. The macro emits a body that walks
+    /// this model's M2M fields, reads `parent_id` + `junction_table`
+    /// (seeded by `set_m2m_parent_ids`) and the pending child ids, and
+    /// calls `set_junction_dynamic`. Default: no-op for models with no
+    /// M2M fields.
+    ///
+    /// Async + boxed (rather than `#[async_trait]` on the whole trait)
+    /// so `HydrateRelated`'s existing non-async methods stay as they
+    /// are. Junction writes hit the DB, so this is kept off the hot
+    /// decode path — only the typed `create()` calls it.
+    fn write_pending_m2m<'a>(
+        &'a mut self,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<(), crate::orm::write::WriteError>> + Send + 'a,
+        >,
+    > {
+        Box::pin(async { Ok(()) })
+    }
 }
 
 /// The trait every model implements.
