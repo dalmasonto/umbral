@@ -5,9 +5,38 @@ sidebar_position: 2
 tags: [templates, filters, helpers, minijinja]
 ---
 
-umbra templates run on [minijinja 2](https://docs.rs/minijinja/latest/minijinja/), which ships a Jinja2-compatible filter set out of the box. umbra does not yet register any custom filters of its own - the full set you have available today is the minijinja standard library. Custom filter registration through `Plugin::on_ready` is [deferred](rendering-html#what-ships-at-v1-vs-deferred) until the admin plugin lands at M11.
+umbra templates run on [minijinja 2](https://docs.rs/minijinja/latest/minijinja/), which ships a Jinja2-compatible filter set out of the box. On top of that standard library, umbra-core registers a handful of custom filters of its own (`img`, `markdown`, `sanitize`) and injects two ambient globals into every render (`csrf_token`, `csrf_input`, plus the anonymous-safe `user`).
 
 This page catalogues the filters and globals umbra users reach for most, with examples written in the umbra template style.
+
+## umbra's own filters and globals
+
+These are registered by umbra-core's template engine (`crates/umbra-core/src/templates.rs`) and are available in every `.html` template the framework renders, on top of the minijinja standard library below.
+
+| Name | Kind | Purpose | Usage |
+|------|------|---------|-------|
+| `img` | filter | Build an `<img>` with `loading="lazy"`, `decoding="async"`, and explicit `width`/`height` (CLS-safe). All attributes are HTML-escaped. | `{{ url \| img(alt="Logo", width=400, height=300, class="rounded") }}` |
+| `markdown` | filter | Render CommonMark + GFM (tables, strikethrough, task lists, footnotes) to HTML, then sanitize through ammonia. Output is marked safe. | `{{ body \| markdown }}` |
+| `sanitize` | filter | Clean stored HTML (e.g. the admin RTE widget's output) down to ammonia's safe allowlist and mark it safe. | `{{ body \| sanitize }}` |
+| `csrf_token` | global | The current request's CSRF token string. Injected ambiently when a CSRF middleware scoped a token for the request. | `<input name="csrf_token" value="{{ csrf_token }}">` |
+| `csrf_input` | global | A ready-made `<input type="hidden" name="csrf_token" ...>`, marked safe. Django's `{% csrf_token %}` ergonomic. | `<form method="post">{{ csrf_input }}</form>` |
+| `user` | global | The current user, injected into every render. Authenticated requests get the full serialized user when `AuthPlugin::with_user_in_templates()` is on; otherwise the anonymous sentinel `{ is_authenticated: false, is_staff: false, is_superuser: false }`. | `{% if user.is_authenticated %}...{% endif %}` |
+
+`img`, `markdown`, and `sanitize` all return safe (pre-escaped) values, so autoescape won't double-encode the markup they generate. The kwargs on `img` are strict: a typo'd key like `alt_text` raises a clear template error rather than being silently dropped.
+
+```html
+{# user-supplied markdown, rendered and sanitized in one pipe #}
+<div class="prose">{{ plugin.usage \| markdown }}</div>
+
+{# CLS-safe responsive image #}
+{{ logo_url \| img(alt=plugin.name, width=64, height=64, class="logo") }}
+```
+
+<Callout type="info">
+**`None` and `Undefined` render as the empty string.** umbra installs a custom formatter so an `Option<String>` field that is `None`, or an undefined variable, renders as `""` instead of the literal tokens `none` / `undefined`. This means `<input value="{{ form.phone }}">` on a fresh form yields `value=""`, not `value="none"`. Non-null values pass through the normal escaping formatter unchanged.
+</Callout>
+
+Custom filter registration *by plugins* (through `Plugin::on_ready`) is still deferred. The admin plugin registers its own `naturaltime` filter against its private environment, but that filter is scoped to admin templates - it isn't available in app-level templates.
 
 ## String filters
 
@@ -150,7 +179,7 @@ There is no global escape bypass. See [Rendering HTML](rendering-html#autoescape
 
 ## What is missing today: humanize helpers
 
-Django's `django.contrib.humanize` provides filters like `naturalday`, `naturaltime`, `intcomma`, `ordinal`, and `filesizeformat`. minijinja 2 does not ship these, and umbra has not yet added them as custom filters. The deferred design (in `rendering-html.mdx` and `arch.md §4.5`) shows that custom filters will come through `Plugin::on_ready` once the engine's ambient pattern supports mutable registration. When humanize filters land they will be documented here.
+Django's `django.contrib.humanize` provides filters like `naturalday`, `naturaltime`, `intcomma`, `ordinal`, and `filesizeformat`. minijinja 2 does not ship these, and umbra-core does not register app-level equivalents yet (the admin plugin ships a `naturaltime` filter, but it's scoped to admin templates only). When humanize-style filters land for app templates they will be documented here.
 
 In the meantime, compute humanized representations in the handler and pass them as context values:
 
