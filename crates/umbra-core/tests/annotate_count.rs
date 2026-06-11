@@ -226,7 +226,10 @@ async fn counts_arrive_with_the_rows_in_one_query() {
         .fetch_annotated()
         .await
         .expect("fetch_annotated");
-    assert_eq!(rows.len(), 3);
+    // At least the three seeded posts come back (another test may have
+    // added a throwaway parent to the shared in-memory DB; we assert on
+    // titles, not total length, to stay order-independent).
+    assert!(rows.len() >= 3);
     let by_title: std::collections::HashMap<String, i64> = rows
         .into_iter()
         .map(|(p, anns)| (p.title, anns["comment_set_count"].as_i64().unwrap()))
@@ -346,4 +349,56 @@ fn reverse_fk_spec_carries_child_soft_delete() {
         .find(|r| r.field_name == "comment_set")
         .expect("comment_set relation");
     assert!(!comment.soft_delete, "child Comment is not soft-delete");
+}
+
+#[tokio::test]
+async fn annotate_count_excludes_soft_deleted_children() {
+    boot().await;
+    // Seed a throwaway parent + 3 notes so this test owns its own state
+    // (boot()'s OnceCell is process-wide; alpha's seed stays pristine for
+    // the annotate_count_where test). Then soft-delete exactly one via the
+    // REAL soft-delete path: delete() on a soft_delete model UPDATEs
+    // deleted_at rather than removing the row.
+    let p = umbra_core::db::pool();
+    sqlx::query("INSERT INTO anc_post (title) VALUES ('delta')")
+        .execute(&p)
+        .await
+        .expect("seed delta post");
+    let delta_id: i64 = sqlx::query_scalar("SELECT id FROM anc_post WHERE title = 'delta'")
+        .fetch_one(&p)
+        .await
+        .expect("delta id");
+    for body in ["d1", "d2", "d3"] {
+        sqlx::query("INSERT INTO anc_note (body, post, moderation) VALUES (?, ?, 'visible')")
+            .bind(body)
+            .bind(delta_id)
+            .execute(&p)
+            .await
+            .expect("seed delta note");
+    }
+
+    let removed = Note::objects()
+        .filter(note::BODY.eq("d2"))
+        .delete()
+        .await
+        .expect("soft-delete one note");
+    assert_eq!(removed, 1, "exactly one note soft-deleted");
+
+    let rows = Post::objects()
+        .annotate_count("note_set")
+        .fetch_annotated()
+        .await
+        .expect("fetch_annotated");
+    let by_title: std::collections::HashMap<String, i64> = rows
+        .into_iter()
+        .map(|(p, a)| (p.title, a["note_set_count"].as_i64().unwrap()))
+        .collect();
+    assert_eq!(
+        by_title["delta"], 2,
+        "soft-deleted note must NOT be counted (3 seeded, 1 trashed)"
+    );
+    assert_eq!(
+        by_title["gamma"], 0,
+        "a parent with zero notes is still returned as 0, not dropped"
+    );
 }

@@ -239,6 +239,17 @@ pub(crate) struct RelatedAnnotation {
     /// `Ok((child_table, fk_column, parent_table, parent_pk))` or the
     /// loud error message for an unknown relation.
     pub(crate) resolved: Result<(String, String, String, String), String>,
+    /// Child model is `#[umbra(soft_delete)]` — fold
+    /// `AND <child>.deleted_at IS NULL` into the correlated subquery so
+    /// a trashed child stops inflating the parent's count.
+    pub(crate) child_soft_delete: bool,
+    /// Optional child-side predicate (Django's `Count(filter=Q(...))`),
+    /// pre-rendered to a backend-default `SimpleExpr`. ANDed into the
+    /// subquery WHERE. From `annotate_count_where`.
+    pub(crate) child_filter: Option<sea_query::SimpleExpr>,
+    /// `Some(junction_table)` when this annotation counts M2M junction
+    /// rows instead of child rows (`annotate_count` over an `M2M<T>`).
+    pub(crate) m2m_junction: Option<String>,
 }
 
 impl<T> QuerySet<T> {
@@ -385,9 +396,39 @@ impl<T> QuerySet<T> {
         // this infallible path; the fallible consumers call
         // `check_annotations()` first and fail loudly instead.
         for ann in &self.annotations {
+            // M2M-junction annotations count rows of the junction table
+            // (`<parent>_<field>`, columns parent_id / child_id),
+            // correlated on parent_id = <parent>.<pk>.
+            if let Some(junction) = &ann.m2m_junction {
+                if let Ok((_child_table, _fk_col, parent_table, parent_pk)) = &ann.resolved {
+                    let mut sub = sea_query::Query::select();
+                    sub.expr(ann.agg.to_simple_expr())
+                        .from(Alias::new(junction.as_str()))
+                        .and_where(
+                            sea_query::Expr::col((
+                                Alias::new(junction.as_str()),
+                                Alias::new("parent_id"),
+                            ))
+                            .equals((
+                                Alias::new(parent_table.as_str()),
+                                Alias::new(parent_pk.as_str()),
+                            )),
+                        );
+                    q.expr_as(
+                        sea_query::SimpleExpr::SubQuery(
+                            None,
+                            Box::new(sea_query::SubQueryStatement::SelectStatement(
+                                sub.to_owned(),
+                            )),
+                        ),
+                        Alias::new(ann.alias.as_str()),
+                    );
+                }
+                continue;
+            }
             if let Ok((child_table, fk_col, parent_table, parent_pk)) = &ann.resolved {
-                let sub = sea_query::Query::select()
-                    .expr(ann.agg.to_simple_expr())
+                let mut sub = sea_query::Query::select();
+                sub.expr(ann.agg.to_simple_expr())
                     .from(Alias::new(child_table.as_str()))
                     .and_where(
                         sea_query::Expr::col((
@@ -398,12 +439,28 @@ impl<T> QuerySet<T> {
                             Alias::new(parent_table.as_str()),
                             Alias::new(parent_pk.as_str()),
                         )),
-                    )
-                    .to_owned();
+                    );
+                // Auto-exclude soft-deleted children from the count when
+                // the child model is `#[umbra(soft_delete)]`.
+                if ann.child_soft_delete {
+                    sub.and_where(
+                        sea_query::Expr::col((
+                            Alias::new(child_table.as_str()),
+                            Alias::new("deleted_at"),
+                        ))
+                        .is_null(),
+                    );
+                }
+                // Child-side predicate (annotate_count_where).
+                if let Some(filter) = &ann.child_filter {
+                    sub.and_where(filter.clone());
+                }
                 q.expr_as(
                     sea_query::SimpleExpr::SubQuery(
                         None,
-                        Box::new(sea_query::SubQueryStatement::SelectStatement(sub)),
+                        Box::new(sea_query::SubQueryStatement::SelectStatement(
+                            sub.to_owned(),
+                        )),
                     ),
                     Alias::new(ann.alias.as_str()),
                 );
@@ -2410,9 +2467,11 @@ impl<T: Model> QuerySet<T> {
         relation: &str,
         agg: crate::orm::Aggregate,
     ) -> Self {
-        let resolved = T::REVERSE_FK_RELATIONS
+        let spec = T::REVERSE_FK_RELATIONS
             .iter()
-            .find(|r| r.field_name == relation)
+            .find(|r| r.field_name == relation);
+        let child_soft_delete = spec.map(|s| s.soft_delete).unwrap_or(false);
+        let resolved = spec
             .map(|spec| {
                 let pk = T::FIELDS
                     .iter()
@@ -2441,6 +2500,9 @@ impl<T: Model> QuerySet<T> {
             alias: alias.to_string(),
             agg,
             resolved,
+            child_soft_delete,
+            child_filter: None,
+            m2m_junction: None,
         });
         self
     }
