@@ -104,6 +104,37 @@ impl<T> Default for Manager<T> {
     }
 }
 
+/// SQL join flavor recorded per `join_related` hop. `None` in a
+/// `JoinReq` means "infer from FK nullability" (gap 4c); an explicit
+/// `left_/inner_/right_join_related` records `Some(..)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JoinKind {
+    Inner,
+    Left,
+    Right,
+}
+
+impl JoinKind {
+    /// Lower to sea-query's join type.
+    pub(crate) fn sea(self) -> sea_query::JoinType {
+        match self {
+            JoinKind::Inner => sea_query::JoinType::InnerJoin,
+            JoinKind::Left => sea_query::JoinType::LeftJoin,
+            JoinKind::Right => sea_query::JoinType::RightJoin,
+        }
+    }
+}
+
+/// One requested eager-join: a dotted relation path (`"plugin__author"`)
+/// plus the join type to apply to the LAST hop. `kind: None` means
+/// auto-infer per-hop from FK nullability (INNER for NOT NULL, LEFT for
+/// nullable) — Django's default. The explicit methods pin `Some(..)`.
+#[derive(Debug, Clone)]
+pub(crate) struct JoinReq {
+    pub(crate) path: String,
+    pub(crate) kind: Option<JoinKind>,
+}
+
 /// A lazy, chainable SQL query.
 ///
 /// Carries a sea-query `SelectStatement` plus pool-resolution state.
@@ -183,7 +214,7 @@ pub struct QuerySet<T> {
     /// `select_related` path keeps its "batched-IN-followup-query"
     /// shape — both are valid; this one wins when round-trip count
     /// matters more than the per-row column overhead.
-    pub(crate) join_related: Vec<String>,
+    pub(crate) join_related: Vec<JoinReq>,
     /// Related-aggregate annotations added via
     /// [`Self::annotate_related`] / [`Self::annotate_count`]. Applied
     /// inside `build_query_for`, so EVERY terminal and introspection
@@ -576,14 +607,20 @@ impl<T> QuerySet<T> {
     /// or contributed by a plugin) so we can resolve its column
     /// layout for the aliased SELECT.
     pub fn join_related(mut self, field_name: impl Into<String>) -> Self {
-        self.join_related.push(field_name.into());
+        self.join_related.push(JoinReq {
+            path: field_name.into(),
+            kind: None,
+        });
         self
     }
 
     /// Sugar for chained [`Self::join_related`] calls.
     pub fn join_related_many(mut self, field_names: &[&str]) -> Self {
         for name in field_names {
-            self.join_related.push(name.to_string());
+            self.join_related.push(JoinReq {
+                path: (*name).to_string(),
+                kind: None,
+            });
         }
         self
     }
@@ -889,9 +926,13 @@ impl<T: Model> QuerySet<T> {
                 .filter(|c| parent_field_names.contains(c.as_str()))
                 .cloned()
                 .collect();
-            for join_field in &self.join_related {
-                if parent_field_names.contains(join_field.as_str()) {
-                    needed.insert(join_field.clone());
+            for jr in &self.join_related {
+                // Nested paths only need the FIRST hop's FK column at
+                // the parent level; deeper hops join off the prior
+                // level's alias, not the parent subquery.
+                let join_field = jr.path.split("__").next().unwrap_or(jr.path.as_str());
+                if parent_field_names.contains(join_field) {
+                    needed.insert(join_field.to_string());
                 }
             }
             if !needed.is_empty() {
@@ -922,7 +963,8 @@ impl<T: Model> QuerySet<T> {
         for f in T::FIELDS {
             outer.expr(Expr::col((parent_alias.clone(), Alias::new(f.name))));
         }
-        for field_name in &self.join_related {
+        for jr in &self.join_related {
+            let field_name = &jr.path;
             // FK branch first (the original path).
             if let Some(fk_field) = T::FIELDS.iter().find(|f| f.name == field_name.as_str())
                 && let Some(related_table) = fk_field.fk_target
@@ -1018,7 +1060,8 @@ impl<T: Model> QuerySet<T> {
         }
         let sr_fields = self.select_related.clone();
         let prefetch_fields = self.prefetch_related.clone();
-        let join_fields = self.join_related.clone();
+        let join_reqs = self.join_related.clone();
+        let join_fields: Vec<String> = join_reqs.iter().map(|j| j.path.clone()).collect();
         // Validate join_related field names up front so a typo or an
         // M2M field name doesn't silently no-op (it used to render a
         // SELECT with no JOIN). Pre-#42 the failure mode was
