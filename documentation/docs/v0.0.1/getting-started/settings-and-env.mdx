@@ -21,11 +21,12 @@ After `App::build` runs, `umbra::settings::get()` returns the resolved value fro
 pub struct Settings {
     pub database_url: String,       // "sqlite::memory:" by default
     pub databases: HashMap<String, String>,  // named secondary pools (optional)
-    pub secret_key: String,         // randomised in dev; required for prod
+    pub secret_key: String,         // insecure dev default; required for prod
     pub environment: Environment,   // Dev | Test | Prod (default Dev)
-    pub allowed_hosts: Vec<String>, // empty by default
+    pub allowed_hosts: Vec<String>, // ["localhost", "127.0.0.1"] by default
     pub log_level: String,          // "info"
     pub bind_addr: String,          // "127.0.0.1:8000"
+    pub time_zone: Option<String>,  // None (UTC everywhere) by default
     pub extra: HashMap<String, toml::Value>,  // catch-all for app-defined keys
 }
 ```
@@ -34,11 +35,12 @@ pub struct Settings {
 |---|---|---|---|
 | `database_url` | `UMBRA_DATABASE_URL` | `database_url` | `"sqlite::memory:"` |
 | `databases` | `UMBRA_DATABASES__<NAME>` (double underscore) | `[databases]` table | empty map |
-| `secret_key` | `UMBRA_SECRET_KEY` | `secret_key` | random per process (dev only) |
+| `secret_key` | `UMBRA_SECRET_KEY` | `secret_key` | `"umbra-insecure-dev-key-change-me"` (rejected in prod) |
 | `environment` | `UMBRA_ENVIRONMENT` | `environment` | `"dev"` |
-| `allowed_hosts` | `UMBRA_ALLOWED_HOSTS` (comma-list) | `allowed_hosts` | `[]` |
+| `allowed_hosts` | `UMBRA_ALLOWED_HOSTS` (comma-list) | `allowed_hosts` | `["localhost", "127.0.0.1"]` |
 | `log_level` | `UMBRA_LOG_LEVEL` | `log_level` | `"info"` |
 | `bind_addr` | `UMBRA_BIND_ADDR` | `bind_addr` | `"127.0.0.1:8000"` |
+| `time_zone` | `UMBRA_TIME_ZONE` | `time_zone` | `None` (treats naive datetimes as UTC) |
 
 ## umbra.toml
 
@@ -173,10 +175,10 @@ Later wins:
 4. `UMBRA_`-prefixed env vars already present in the process environment.
 5. The `--addr` flag on `umbra serve` (one-off override; doesn't write back to settings).
 
-Run `cargo run -- serve` to see the resolved values logged at startup:
+When the server starts it logs the bound address:
 
 ```
-INFO umbra_core::app: umbra config: environment=Dev bind_addr=127.0.0.1:8000 database_url=sqlite::memory: log_level=info
+INFO umbra_core::app: umbra serving on 127.0.0.1:8000
 ```
 
 ## Loading settings yourself (rare)
