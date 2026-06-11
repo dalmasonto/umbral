@@ -480,3 +480,37 @@ async fn nested_join_related_is_one_query_not_n() {
         statements()
     );
 }
+
+#[tokio::test]
+async fn annotate_count_is_one_query_not_n() {
+    let _g = query_lock().await;
+    let mut counts = Vec::new();
+    for n in [10_i64, 10_000] {
+        boot_and_seed(n).await;
+        reset();
+        // Correlated subquery rides in the main SELECT — one statement for
+        // all N parents. Both the reverse-FK count and the M2M count.
+        let rows = Comment::objects()
+            .annotate_count("reaction_set")
+            .annotate_count("tags")
+            .fetch_annotated()
+            .await
+            .expect("fetch_annotated");
+        assert_eq!(rows.len() as i64, n);
+        assert_eq!(rows[0].1["reaction_set_count"].as_i64(), Some(1));
+        assert_eq!(rows[0].1["tags_count"].as_i64(), Some(2));
+        counts.push(count());
+    }
+    assert_eq!(
+        counts[0],
+        counts[1],
+        "annotate query count must not grow with parent count (saw {counts:?}; {:?})",
+        statements()
+    );
+    assert_eq!(
+        counts[0],
+        1,
+        "annotate is one correlated query; saw {:?}",
+        statements()
+    );
+}
