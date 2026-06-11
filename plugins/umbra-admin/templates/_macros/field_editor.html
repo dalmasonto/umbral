@@ -99,7 +99,7 @@
     <textarea
       id="f_{{ field.name }}"
       name="{{ field.name }}"
-      {# data-widget="{{ field.kind }}" #}
+      data-widget="{{ field.kind }}"
       rows="10"
       {% if not field.nullable and not is_readonly %}aria-required="true" data-required="true"{% endif %}
       {% if is_readonly %}disabled{% endif %}
