@@ -660,9 +660,49 @@ impl RestPlugin {
     /// hide → transform → computed. Run after the handlers build the
     /// raw row map from the database; mutates in place.
     ///
+    /// Recurses into `?include=`'d nested relations: when a column is a
+    /// foreign key and its value in `row` has been hydrated into a JSON
+    /// object (rather than left as the raw integer FK), the same
+    /// overrides — keyed off the FK's *target* table — are applied to
+    /// that nested object. This is the difference between a top-level
+    /// `hide("auth_user", "password_hash")` that only scrubs the root
+    /// row and one that ALSO scrubs `auth_user` when it appears nested
+    /// under e.g. `?include=created_by` — without the recursion, a
+    /// hidden column leaks through the nested relation (a data leak).
+    ///
     /// Public-by-virtue-of-being-pub-crate so the handlers in this
     /// crate can reach it. Not exposed in the umbra facade.
     pub(crate) fn apply_overrides(&self, table: &str, row: &mut Map<String, Value>) {
+        // Cap recursion so a self-referential FK that got `?include=`'d
+        // (or a pathological hydration) can't loop forever. 5 hops is
+        // comfortably past `?include=`'s own MAX_DEPTH of 3.
+        self.apply_overrides_depth(table, row, 0);
+    }
+
+    fn apply_overrides_depth(&self, table: &str, row: &mut Map<String, Value>, depth: usize) {
+        const MAX_DEPTH: usize = 5;
+
+        // --- Recurse into hydrated nested relations FIRST, so the
+        // nested objects are scrubbed by their own table's overrides
+        // before the parent's hide/transform/computed run on the
+        // (now-clean) parent row. Only FK columns whose value is a JSON
+        // object were `?include=`-hydrated; everything else (raw integer
+        // FKs, scalar columns) is left untouched. ---
+        if depth < MAX_DEPTH
+            && let Some(meta) = umbra::migrate::registered_models()
+                .into_iter()
+                .find(|m| m.table == table)
+        {
+            for col in &meta.fields {
+                let Some(fk_target) = col.fk_target.as_deref() else {
+                    continue;
+                };
+                if let Some(Value::Object(nested)) = row.get_mut(&col.name) {
+                    self.apply_overrides_depth(fk_target, nested, depth + 1);
+                }
+            }
+        }
+
         for (t, f) in &self.hidden {
             if t == table {
                 row.remove(f);

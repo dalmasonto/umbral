@@ -53,6 +53,8 @@ RestPlugin::default()
     .resource(ResourceConfig::new("auth_user").hide("password_hash"));
 ```
 
+<Callout type="info">`hide` (and `transform` / `computed`) also applies to a table when it appears NESTED under an `?include=`'d relation — e.g. `?include=created_by` hydrates `auth_user` under `created_by`, and the `password_hash` hidden on `auth_user` is stripped from that nested object too, at every hop.</Callout>
+
 ### Precedence
 
 `allow(table)` decides exposure top-down — the first matching rule wins:
