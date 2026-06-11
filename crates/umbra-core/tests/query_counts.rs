@@ -199,3 +199,131 @@ async fn reading_many_rows_is_one_query_not_n() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Scale proofs — the no-N+1 contract for every relation-loading path. Each
+// proof runs the SAME ORM op against a SMALL (10) and a LARGE (10,000) row
+// set and asserts the statement count is EQUAL across the two sizes (the
+// data-size-invariance proof — this is the assertion that catches a real
+// N+1; it must never be weakened) AND matches the per-feature absolute
+// constant (the feature's contract). All share one in-memory pool booted
+// once; the BOOT cell tops the seed up from 10 → 10,000 across calls so the
+// large-N pass only inserts the delta.
+// ---------------------------------------------------------------------------
+
+use tokio::sync::OnceCell as TokioOnceCell;
+use umbra::orm::{ForeignKey, M2M, ReverseSet};
+use umbra::prelude::*;
+
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, Model)]
+pub struct Author {
+    pub id: i64,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, Model)]
+pub struct Plugin {
+    pub id: i64,
+    pub name: String,
+    pub author: ForeignKey<Author>, // NOT NULL → INNER under auto-inference
+}
+
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, Model)]
+pub struct Tag {
+    pub id: i64,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, Model)]
+pub struct Comment {
+    pub id: i64,
+    pub body: String,
+    pub plugin: ForeignKey<Plugin>,
+    #[sqlx(skip)]
+    #[serde(skip)]
+    #[umbra(reverse_fk = "comment")]
+    pub reaction_set: ReverseSet<Reaction>,
+    #[sqlx(skip)]
+    #[serde(skip)]
+    #[umbra(m2m = "tag")]
+    pub tags: M2M<Tag>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, Model)]
+pub struct Reaction {
+    pub id: i64,
+    pub kind: String,
+    pub comment: ForeignKey<Comment>,
+}
+
+static BOOT: TokioOnceCell<()> = TokioOnceCell::const_new();
+
+/// Boot the App once with the proof models against an in-memory SQLite
+/// pool, create the tables, and seed `n` Comments each pointing at a
+/// Plugin → Author chain, each with one Reaction and two Tags. Idempotent
+/// per process; re-seeds up to `n` rows so a later larger-N call tops up.
+async fn boot_and_seed(n: i64) {
+    BOOT.get_or_init(|| async {
+        let settings = umbra::Settings::from_env().expect("figment defaults");
+        let pool = umbra::db::connect_sqlite("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite");
+        umbra::App::builder()
+            .settings(settings)
+            .database("default", pool.clone())
+            .model::<Author>()
+            .model::<Plugin>()
+            .model::<Tag>()
+            .model::<Comment>()
+            .model::<Reaction>()
+            .build()
+            .expect("App::build");
+        for ddl in [
+            "CREATE TABLE author (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+            "CREATE TABLE plugin (id INTEGER PRIMARY KEY, name TEXT NOT NULL, author INTEGER NOT NULL)",
+            "CREATE TABLE tag (id INTEGER PRIMARY KEY, label TEXT NOT NULL)",
+            "CREATE TABLE comment (id INTEGER PRIMARY KEY, body TEXT NOT NULL, plugin INTEGER NOT NULL)",
+            "CREATE TABLE reaction (id INTEGER PRIMARY KEY, kind TEXT NOT NULL, comment INTEGER NOT NULL)",
+            "CREATE TABLE comment_tags (parent_id INTEGER NOT NULL, child_id INTEGER NOT NULL)",
+            "INSERT INTO author (id, name) VALUES (1, 'Ada')",
+            "INSERT INTO plugin (id, name, author) VALUES (1, 'orm', 1)",
+            "INSERT INTO tag (id, label) VALUES (1, 'perf'), (2, 'safety')",
+        ] {
+            sqlx::query(ddl).execute(&pool).await.unwrap();
+        }
+    })
+    .await;
+
+    // Top up to `n` comments (+ one reaction + two tag links each) in a
+    // single transaction so the 10k seed stays fast and never bloats the
+    // measured count (the caller resets right after this returns).
+    let pool = umbra::db::pool_for("default");
+    let have: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM comment")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    if have >= n {
+        return;
+    }
+    let mut tx = pool.begin().await.unwrap();
+    for id in (have + 1)..=n {
+        sqlx::query("INSERT INTO comment (id, body, plugin) VALUES (?, ?, 1)")
+            .bind(id)
+            .bind(format!("c{id}"))
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO reaction (kind, comment) VALUES ('up', ?)")
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO comment_tags (parent_id, child_id) VALUES (?, 1), (?, 2)")
+            .bind(id)
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+    }
+    tx.commit().await.unwrap();
+}
