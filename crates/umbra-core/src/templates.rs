@@ -252,11 +252,35 @@ fn register_img_filter(env: &mut Environment<'static>) {
 /// `"https://cdn.example.com/s/admin/admin.css"`.
 fn register_static_function(env: &mut Environment<'static>, static_url: String) {
     env.add_function("static", move |path: String| -> String {
-        // static_url is normalised to end in a slash by Settings; the
-        // arg may or may not lead with one. Trim the arg's leading
-        // slash so the join is exactly one slash.
-        format!("{}{}", static_url, path.trim_start_matches('/'))
+        join_static_url(&static_url, &path)
     });
+}
+
+/// Join a `static_url` prefix and an asset path with exactly one slash.
+///
+/// `static_url` is normalised to end in a slash by [`crate::settings`];
+/// the asset path may or may not lead with one, so its leading slash is
+/// trimmed before the join. With `static_url = "/static/"`,
+/// `join_static_url(.., "admin/admin.css")` yields
+/// `"/static/admin/admin.css"`.
+fn join_static_url(static_url: &str, path: &str) -> String {
+    format!("{}{}", static_url, path.trim_start_matches('/'))
+}
+
+/// Resolve an asset path against the ambient `static_url`, mirroring the
+/// `static()` template global outside a minijinja render.
+///
+/// Plugins that build their own minijinja [`Environment`] (the admin
+/// engine, for one) call this to register an equivalent `static()`
+/// function so their templates can write `{{ static("admin/admin.css") }}`
+/// and resolve through the same unified static pipeline URL as the core
+/// engine. Reads `static_url` from ambient [`crate::settings`], defaulting
+/// to `/static/` when settings aren't initialised yet (bare unit tests).
+pub fn resolve_static_url(path: &str) -> String {
+    let static_url = crate::settings::get_opt()
+        .map(|s| s.static_url.clone())
+        .unwrap_or_else(|| "/static/".to_string());
+    join_static_url(&static_url, path)
 }
 
 fn register_markdown_filter(env: &mut Environment<'static>) {

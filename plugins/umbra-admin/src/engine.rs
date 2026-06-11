@@ -235,7 +235,7 @@ pub(crate) fn engine() -> &'static Environment<'static> {
 
         // Expose the runtime environment ("dev" / "test" / "prod") as a
         // template global. wrapper.html gates the Tailwind CDN script
-        // on this: dev loads the CDN, prod expects /admin/static/admin.css.
+        // on this: dev loads the CDN, prod expects /static/admin/admin.css.
         // Read from `umbra::settings::get_opt()` (Optional) so the engine
         // builds even before `App::build` ran — tests bypass App::build
         // and would otherwise panic in `settings::get()`.
@@ -273,6 +273,18 @@ pub(crate) fn engine() -> &'static Environment<'static> {
             "admin_base",
             minijinja::Value::from_safe_string(branding.base_path),
         );
+
+        // Unified static pipeline — register the `static()` global so
+        // admin templates resolve assets through the same `static_url`
+        // the core engine uses: `{{ static("admin/admin.css") }}` →
+        // `<static_url>admin/admin.css` (default `/static/admin/admin.css`).
+        // The admin engine builds its own minijinja `Environment`, so the
+        // core engine's `static()` function isn't inherited; we register an
+        // equivalent here, routing through `umbra::templates::resolve_static_url`
+        // so the resolution logic lives in one place.
+        env.add_function("static", |path: String| -> String {
+            umbra::templates::resolve_static_url(&path)
+        });
 
         env
     })

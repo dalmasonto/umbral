@@ -43,14 +43,14 @@
   {#
     Tailwind CDN is loaded only in development. In production
     (settings.environment == "prod"), the framework expects a
-    pre-compiled stylesheet at {{ admin_base }}/static/admin.css. Until that
+    pre-compiled stylesheet at {{ static("admin/admin.css") }}. Until that
     lands as a phase-4 hardening task, the CDN warning in dev is a
     known footgun, documented in docs/v0.0.1/plugins/admin.mdx.
   #}
   {% if environment == "dev" or environment is undefined %}
   <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
   {% else %}
-  <link href="{{ admin_base }}/static/admin.css" rel="stylesheet"/>
+  <link href="{{ static("admin/admin.css") }}" rel="stylesheet"/>
   {% endif %}
   <script src="https://unpkg.com/htmx.org@2.0.4"></script>
   <script src="https://unpkg.com/lucide@latest"></script>
@@ -580,7 +580,7 @@
 
      gaps2 #4 — ~1080 lines of inline JS moved to
      `src/assets/admin.js`, served via the `StaticFile` mechanism at
-     `/admin/static/admin.js`. This site (and the two below, at the
+     `/static/admin/admin.js`. This site (and the two below, at the
      prior block-4 and block-5 positions) used to host
      `<script>(function(){...})()</script>` IIFEs. The bootstrap
      below stamps `umbraAdminBase` (the only `{{ admin_base }}`
@@ -588,7 +588,7 @@
      can read it.
      ======================================================== -->
 <script>var umbraAdminBase = '{{ admin_base }}';</script>
-<script src="{{ admin_base }}/static/admin.js" defer></script>
+<script src="{{ static("admin/admin.js") }}" defer></script>
 
 {% block extra_scripts %}{% endblock %}
 

@@ -232,13 +232,16 @@ async fn dashboard_page_renders_widget_placeholders() {
 }
 
 /// gaps2 #4 — the admin runtime JS is served as a single external
-/// asset (`/admin/static/admin.js`) rather than ~1080 lines of
-/// inline `<script>` blocks in wrapper.html. Three pins:
+/// asset (now on the unified `/static/admin/admin.js` URL) rather than
+/// ~1080 lines of inline `<script>` blocks in wrapper.html. Four pins:
 ///
-/// 1. The external endpoint serves a valid `application/javascript`
-///    response with non-empty body.
-/// 2. wrapper.html references the external file + sets the
-///    `umbraAdminBase` bootstrap.
+/// 1. The unified `/static/admin/admin.js` endpoint serves a valid
+///    `application/javascript` response whose body is the EMBEDDED bytes
+///    (proves the re-point onto `/static/admin/…` resolves through the
+///    real Phase-5.4 specific route, beating the pipeline fallback —
+///    zero-config single-binary serving preserved on the new URL).
+/// 2. wrapper.html references the external file (via `static()`) + sets
+///    the `umbraAdminBase` bootstrap.
 /// 3. The pre-fix inline IIFE marker (`// Sheet stack state machine.`,
 ///    the comment at the top of old Block 5) no longer appears in
 ///    the served wrapper HTML — would catch a revert that re-inlines
@@ -249,9 +252,11 @@ async fn admin_js_served_as_external_asset_not_inline() {
     let router = boot().await;
     let cookie = staff_cookie().await;
 
-    // 1. External asset endpoint
+    // 1. Unified static-pipeline asset endpoint. The specific Phase-5.4
+    //    route serves the embedded bytes, winning over the nested pipeline
+    //    fallback at `static_url`.
     let asset_req = Request::builder()
-        .uri("/admin/static/admin.js")
+        .uri("/static/admin/admin.js")
         .body(Body::empty())
         .unwrap();
     let asset_resp = router.clone().oneshot(asset_req).await.unwrap();
@@ -271,6 +276,13 @@ async fn admin_js_served_as_external_asset_not_inline() {
         "admin.js body should be non-trivial, got {} bytes",
         body.len()
     );
+    // The served bytes ARE the embedded include_bytes! content — proves the
+    // re-point serves the in-binary asset end to end, not a disk file.
+    assert_eq!(
+        body.as_ref(),
+        include_bytes!("../src/assets/admin.js").as_slice(),
+        "/static/admin/admin.js should serve the embedded admin.js bytes"
+    );
 
     // 2. wrapper.html references the external file
     let page_req = Request::builder()
@@ -286,8 +298,8 @@ async fn admin_js_served_as_external_asset_not_inline() {
         "umbraAdminBase bootstrap should be inline (read by admin.js)"
     );
     assert!(
-        html.contains("/admin/static/admin.js"),
-        "wrapper.html should reference the external admin.js"
+        html.contains("/static/admin/admin.js"),
+        "wrapper.html should reference the external admin.js on the unified static URL"
     );
 
     // 3. The old inline IIFE comments must be gone — if they reappear

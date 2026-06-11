@@ -464,6 +464,24 @@ impl Plugin for AdminPlugin {
         admin_static_files()
     }
 
+    fn static_dirs(&self) -> Vec<umbra::plugin::StaticDir> {
+        // The admin ships its assets EMBEDDED (see `static_files()`), so it
+        // works with zero config. This `static_dirs()` entry additionally
+        // exposes the on-disk source so `collect_static` can gather the
+        // admin's `admin.css` / `admin.js` into `<static_root>/admin/` for
+        // CDN / disk serving. Both modes coexist: the embedded specific
+        // route wins in-binary, the collected files serve when a deployment
+        // customises `static_url` or fronts assets with a CDN.
+        //
+        // Because the embedded specific route shadows the pipeline in-binary,
+        // live-editing admin.css won't hot-reload — acceptable for these
+        // framework-internal assets.
+        let source_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("assets");
+        vec![umbra::plugin::StaticDir::new("admin", source_dir)]
+    }
+
     fn models(&self) -> Vec<umbra::migrate::ModelMeta> {
         vec![
             umbra::migrate::ModelMeta::for_::<crate::models::AdminUserPref>(),
@@ -765,5 +783,50 @@ mod tests {
     fn admin_config_alias_compiles() {
         // The type alias must be identical to AdminModel at the Rust level.
         let _: AdminConfig = AdminModel::new("test");
+    }
+
+    #[test]
+    fn static_files_use_unified_static_url() {
+        // The embedded admin assets now mount on the unified `/static/admin/…`
+        // pipeline URL (default `static_url`), not the legacy `/admin/static/…`.
+        let files = AdminPlugin::default().static_files();
+        let paths: Vec<&str> = files.iter().map(|f| f.url_path).collect();
+        assert!(
+            paths.contains(&"/static/admin/admin.css"),
+            "admin.css should mount at /static/admin/admin.css, got {paths:?}"
+        );
+        assert!(
+            paths.contains(&"/static/admin/admin.js"),
+            "admin.js should mount at /static/admin/admin.js, got {paths:?}"
+        );
+        // Both still ship non-trivial embedded bytes (zero-config preserved).
+        for f in &files {
+            assert!(
+                f.body.len() > 100,
+                "{} should ship embedded bytes, got {} bytes",
+                f.url_path,
+                f.body.len()
+            );
+        }
+    }
+
+    #[test]
+    fn static_dirs_maps_admin_namespace_to_existing_assets_dir() {
+        let dirs = AdminPlugin::default().static_dirs();
+        assert_eq!(dirs.len(), 1, "admin contributes exactly one static dir");
+        let dir = &dirs[0];
+        assert_eq!(dir.namespace, "admin");
+        // The source dir actually exists on disk and holds the css/js the
+        // embedded route serves — so `collect_static` has real files to gather.
+        assert!(
+            dir.source_dir.join("admin.css").is_file(),
+            "{} should contain admin.css",
+            dir.source_dir.display()
+        );
+        assert!(
+            dir.source_dir.join("admin.js").is_file(),
+            "{} should contain admin.js",
+            dir.source_dir.display()
+        );
     }
 }
