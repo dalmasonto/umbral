@@ -295,6 +295,13 @@ pub struct ModelMeta {
     /// junction tables. Closes BUG-16.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub m2m_relations: Vec<M2MRelation>,
+    /// Mirrors `Model::SOFT_DELETE` (`#[umbra(soft_delete)]`). The
+    /// dynamic / annotate paths read this to auto-exclude
+    /// `deleted_at IS NULL` children from correlated counts and to
+    /// drive trash-aware admin views without re-reaching into the
+    /// typed trait. Shared enabler for gaps2 #35 + #39a.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub soft_delete: bool,
 }
 
 /// Owned mirror of `orm::M2MRelationSpec` so `ModelMeta` can be
@@ -359,6 +366,7 @@ impl ModelMeta {
                     target_name: r.target_name.to_string(),
                 })
                 .collect(),
+            soft_delete: T::SOFT_DELETE,
         }
     }
 }
@@ -3605,6 +3613,7 @@ mod tests {
                 indexes: Vec::new(),
                 ordering: Vec::new(),
                 m2m_relations: Vec::new(),
+                soft_delete: false,
             }],
         );
         per_plugin.insert(
@@ -3621,6 +3630,7 @@ mod tests {
                 indexes: Vec::new(),
                 ordering: Vec::new(),
                 m2m_relations: Vec::new(),
+                soft_delete: false,
             }],
         );
         init_plugins(per_plugin);
@@ -3964,6 +3974,7 @@ mod tests {
                 indexes: Vec::new(),
                 ordering: Vec::new(),
                 m2m_relations: Vec::new(),
+                soft_delete: false,
             }
         }
         let prev = meta_with(baseline());

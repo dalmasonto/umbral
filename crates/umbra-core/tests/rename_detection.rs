@@ -34,6 +34,7 @@ fn make_meta(name: &str, table: &str, cols: Vec<Column>) -> ModelMeta {
         indexes: Vec::new(),
         ordering: Vec::new(),
         m2m_relations: Vec::new(),
+        soft_delete: false,
     }
 }
 

@@ -762,6 +762,7 @@ pub fn render_initial_migration(schema: &IntrospectedSchema) -> MigrationFile {
             indexes: Vec::new(),
             ordering: Vec::new(),
             m2m_relations: Vec::new(),
+            soft_delete: false,
         })
         .collect();
     models.sort_by(|a, b| a.name.cmp(&b.name));

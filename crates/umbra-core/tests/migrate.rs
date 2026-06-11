@@ -733,6 +733,7 @@ fn post_model(fields: Vec<Column>) -> ModelMeta {
         indexes: Vec::new(),
         ordering: Vec::new(),
         m2m_relations: Vec::new(),
+        soft_delete: false,
     }
 }
 
@@ -1437,6 +1438,7 @@ fn tag_model() -> ModelMeta {
         indexes: Vec::new(),
         ordering: Vec::new(),
         m2m_relations: Vec::new(),
+        soft_delete: false,
     }
 }
 
@@ -1580,4 +1582,28 @@ fn diff_rejects_m2m_pointing_at_unregistered_table() {
         msg.contains("nonexistent_table"),
         "error must name the missing target table; got: {msg}",
     );
+}
+
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbra::orm::Model)]
+#[umbra(table = "mm_soft", soft_delete)]
+struct SoftThing {
+    id: i64,
+    name: String,
+    #[umbra(index)]
+    deleted_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbra::orm::Model)]
+#[umbra(table = "mm_hard")]
+struct HardThing {
+    id: i64,
+    name: String,
+}
+
+#[test]
+fn model_meta_carries_soft_delete_flag() {
+    let soft = umbra::migrate::ModelMeta::for_::<SoftThing>();
+    let hard = umbra::migrate::ModelMeta::for_::<HardThing>();
+    assert!(soft.soft_delete, "soft_delete model must carry the flag");
+    assert!(!hard.soft_delete, "non-soft-delete model must not");
 }
