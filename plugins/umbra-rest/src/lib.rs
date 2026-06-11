@@ -703,10 +703,21 @@ impl RestPlugin {
             }
         }
 
-        for (t, f) in &self.hidden {
-            if t == table {
-                row.remove(f);
-            }
+        // Reuse `is_field_hidden` as the single source of truth so the
+        // runtime strip here and the public `is_hidden` (which the
+        // OpenAPI plugin reads to scrub the spec) can never disagree on
+        // which fields are hidden. `self.hidden` carries both the
+        // plugin-level hides and the resource-level ones (merged in at
+        // `RestPlugin::resource`), so iterating its keys covers both.
+        let to_remove: Vec<String> = self
+            .hidden
+            .iter()
+            .filter(|(t, _)| t == table)
+            .map(|(_, f)| f.clone())
+            .filter(|f| self.is_field_hidden(table, f))
+            .collect();
+        for f in to_remove {
+            row.remove(&f);
         }
         for (t, f, func) in &self.transforms {
             if t == table {
@@ -831,6 +842,21 @@ impl RestPlugin {
         prune(row, &root);
     }
 
+    /// True when `field` on `table` is stripped from response bodies.
+    /// The single membership check both [`Self::apply_overrides`]'s
+    /// hide loop and the public [`crate::is_hidden`] read, so the
+    /// runtime strip and the OpenAPI spec can't drift.
+    ///
+    /// Covers BOTH hide sources because they land in the same place:
+    /// plugin-level `RestPlugin::hide` / `hide_model` push into
+    /// `self.hidden`, and resource-level `ResourceConfig::hide` fields
+    /// are merged into `self.hidden` at `RestPlugin::resource(...)`
+    /// time. So checking `self.hidden` alone agrees 1:1 with what
+    /// `apply_overrides` removes.
+    pub(crate) fn is_field_hidden(&self, table: &str, field: &str) -> bool {
+        self.hidden.iter().any(|(t, f)| t == table && f == field)
+    }
+
     fn allow(&self, table: &str) -> bool {
         if let Some(allow) = &self.include_only {
             return allow.iter().any(|t| t == table);
@@ -875,6 +901,28 @@ static CONFIG: OnceLock<RestPlugin> = OnceLock::new();
 /// branch before the REST plugin's `routes()` runs in tests.
 pub fn is_exposed(table: &str) -> bool {
     CONFIG.get().map(|cfg| cfg.allow(table)).unwrap_or(true)
+}
+
+/// Public read: would this REST plugin strip `field` from `table`'s
+/// response bodies? Returns the SAME answer `RestPlugin::apply_overrides`
+/// uses at request time (both consult `RestPlugin::is_field_hidden`), so
+/// spec consumers (umbra-openapi) advertise exactly the fields the API
+/// actually returns — a `hide`d column like `password_hash` never leaks
+/// into the generated schema, the `?fields=` picker, or Swagger UI.
+///
+/// Covers both hide sources: plugin-level `RestPlugin::hide` /
+/// `hide_model` AND resource-level `ResourceConfig::hide` (which is
+/// merged into the plugin's hide set at registration).
+///
+/// `false` when CONFIG isn't populated yet (no REST plugin booted —
+/// spec-only smoke tests) so the spec describes the default "nothing
+/// hidden" shape. Same defaulting ordering as `is_exposed`, which
+/// assumes CONFIG is set before openapi runs.
+pub fn is_hidden(table: &str, field: &str) -> bool {
+    CONFIG
+        .get()
+        .map(|cfg| cfg.is_field_hidden(table, field))
+        .unwrap_or(false)
 }
 
 pub fn filters_enabled_for(table: &str) -> bool {
@@ -1772,6 +1820,30 @@ mod allow_block_unit {
             !p.allow("auth_user"),
             "include_only's allow-list is exhaustive — expose can't punch through"
         );
+    }
+
+    #[test]
+    fn is_field_hidden_covers_plugin_and_resource_hides() {
+        // Plugin-level `.hide(...)` and resource-level
+        // `ResourceConfig::hide(...)` both land in `self.hidden`, so
+        // `is_field_hidden` must report true for either source — and
+        // false for a visible field / unknown table.
+        let p = RestPlugin::new()
+            .hide("account", "password_hash")
+            .resource(crate::ResourceConfig::new("account").hide("api_token"));
+        assert!(p.is_field_hidden("account", "password_hash"));
+        assert!(p.is_field_hidden("account", "api_token"));
+        assert!(!p.is_field_hidden("account", "label"));
+        assert!(!p.is_field_hidden("other", "password_hash"));
+    }
+
+    #[test]
+    fn is_hidden_defaults_false_when_config_unset() {
+        // The lib's own test binary never boots an App, so the CONFIG
+        // OnceLock is empty here — `is_hidden` must default to false so
+        // a spec built before the REST plugin's `routes()` runs
+        // describes the "nothing hidden" shape rather than panicking.
+        assert!(!crate::is_hidden("anything", "any_field"));
     }
 }
 
