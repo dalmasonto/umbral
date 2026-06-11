@@ -13,7 +13,7 @@ without any additional infrastructure.
 
 Registering the plugin creates one migration: a `session` table with columns `id` (the SHA-256 digest of the raw cookie token - the raw token only ever lives in the cookie, so a DB leak can't replay sessions), `user_id` (nullable, the user PK stringified - `TEXT`, not a typed FK, so any PK type round-trips), `data` (JSON string), `created_at`, and `expires_at`. The plugin has no hard dependency on `umbra-auth`; anonymous sessions are valid. The `umbra_session` cookie is set with `Secure`, `HttpOnly`, `SameSite=Lax`, and `Max-Age=1209600` (14 days, matching Django's `SESSION_COOKIE_AGE` default).
 
-By default `SessionsPlugin` auto-applies its `session_layer` middleware through `Plugin::wrap_router`. Call `.without_auto_layer()` to skip it and apply the layer only to a sub-router (e.g. so unauthenticated REST/health routes don't write a session row on every request).
+By default `SessionsPlugin` auto-applies its `session_layer` middleware through `Plugin::wrap_router`. The layer creates a session row **lazily on first write** (Django-style): every request gets a session token in memory, but the row is only persisted when something actually writes the session (`set_data`, `Messages`, login). A cookie-less request that never writes the session — a favicon, a CSS/JS asset, an anonymous read-only page — leaves no row and sets no `Set-Cookie`. The first write materialises exactly one row and emits the cookie. Call `.without_auto_layer()` to skip the layer entirely and apply it only to a sub-router.
 
 ```rust
 App::builder()
