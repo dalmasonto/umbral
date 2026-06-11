@@ -9,7 +9,7 @@ tags: [orm, signals, hooks, audit, m2m]
 
 Umbra ships a name-keyed in-process pub/sub. Subscribers register handlers against a signal name; ORM write paths fire those names with a JSON payload. Plugins (audit logs, notifications, cache invalidation) hang functionality off the events without touching the framework's write code.
 
-The full surface lives in `umbra_core::signals`. Re-exported callable bits: `subscribe`, `subscribe_async`, `emit`, `with_actor`, `current_actor`.
+The full surface lives in `umbra_core::signals`. The facade module `umbra::signals` re-exports `subscribe`, `subscribe_async`, and `emit`. The actor helpers `with_actor` and `current_actor` are public on `umbra_core::signals` but are not yet re-exported through the facade — reach them via `umbra_core::signals::with_actor` until the facade re-export lands (tracked as `gaps2 #49`).
 
 ## Signal names
 
@@ -38,7 +38,8 @@ PK shape: the `instance` JSON and `ids` array carry the row's primary key in wha
 ```rust
 use umbra::signals::{subscribe, subscribe_async};
 
-// Sync handler — runs inline during emit().
+// Sync handler — runs inline during emit(). (with_actor / current_actor
+// are not yet on the facade; import them from umbra_core::signals.)
 subscribe("post_save:post", |payload| {
     let actor = &payload["actor"];
     let id = payload["instance"]["id"].as_i64();
@@ -59,7 +60,7 @@ Handlers stack in registration order. Multiple handlers per name all run.
 Every signal payload carries an `"actor"` key whose value is whatever JSON the nearest enclosing `with_actor(...)` scope set. With no scope active, the value is `Value::Null`. This is how an audit-log plugin learns who triggered a write without each plugin reinventing the same middleware.
 
 ```rust
-use umbra::signals::with_actor;
+use umbra_core::signals::with_actor;
 use serde_json::json;
 
 // Typical auth middleware: resolve the request's identity into JSON,
@@ -125,6 +126,7 @@ The actor merge lives inside `emit()`, not the per-helper emitters. That means u
 
 ```rust
 use umbra::signals::emit;
+use umbra_core::signals::with_actor;
 
 with_actor(json!({ "id": 7 }), async {
     emit("payment_captured", json!({ "amount_cents": 4200 })).await;

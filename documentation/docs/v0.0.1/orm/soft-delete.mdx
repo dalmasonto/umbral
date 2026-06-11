@@ -61,4 +61,8 @@ Adding soft delete to an existing model is the normal migration loop: add the at
 Soft-deleted rows still exist: they count toward UNIQUE constraints, foreign keys keep pointing at them, and they occupy the table. If a unique column (say `email`) must be reusable after deletion, that's a schema design decision soft delete doesn't make for you.
 </Callout>
 
+<Callout type="warning">
+`update_values` is **not** auto-scoped. Only reads (`fetch` / `first` / `get` / `count` / `exists`) and `delete()` inject the `deleted_at IS NULL` filter. A bulk `Post::objects().update_values(...)` with no predicate mutates trashed rows too, and `.with_deleted()` / `.only_deleted()` are currently silent no-ops on the update path (tracked as `gaps2 #34`). Always pin the rows you mean to touch with an explicit `.filter(...)` predicate — as the restore example above does — rather than relying on the auto-filter to spare the trash.
+</Callout>
+
 Pinned by `crates/umbra-core/tests/soft_delete.rs` (feature #72); behaviour reference in the `Model::SOFT_DELETE` docs in `crates/umbra-core/src/orm/model.rs`.
