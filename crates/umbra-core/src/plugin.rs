@@ -262,6 +262,29 @@ pub trait Plugin: Send + Sync + 'static {
         Vec::new()
     }
 
+    /// On-disk directories served at the **root** of `static_url` — with
+    /// no namespace segment.
+    ///
+    /// Where [`static_dirs`] serves a plugin's assets under a namespaced
+    /// path (`/static/<namespace>/<file>`), these directories back the
+    /// bare `/static/<file>` space for app/site-level static (a project's
+    /// own CSS, images, favicon). The framework's single static handler
+    /// resolves a request by trying registered namespaces first, then
+    /// these root directories with the full request path.
+    ///
+    /// This is the seam that lets the framework own `static_url` as a
+    /// single mount: a `StaticPlugin` pointed at the configured
+    /// `static_url` contributes its directory here instead of nesting its
+    /// own (conflicting) catch-all route. A plugin serving its directory
+    /// at a *different* mount returns nothing here and nests as usual.
+    ///
+    /// Default: none.
+    ///
+    /// [`static_dirs`]: Plugin::static_dirs
+    fn static_root_dirs(&self) -> Vec<std::path::PathBuf> {
+        Vec::new()
+    }
+
     /// CLI subcommands the plugin contributes.
     ///
     /// Each command implements [`crate::cli::PluginCommand`] and ships

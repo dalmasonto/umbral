@@ -36,6 +36,7 @@ fn dev_static_state(plugin: &PlaygroundPlugin) -> StaticHandlerState {
     StaticHandlerState {
         registry,
         static_root: PathBuf::from("staticfiles"),
+        root_dirs: Vec::new(),
         dev: true,
     }
 }

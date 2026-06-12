@@ -238,26 +238,43 @@ pub async fn static_handler(
     req: Request<Body>,
 ) -> Response<Body> {
     // `nest_service` strips the mount prefix, so `req.uri().path()` is
-    // already relative to the static base: `/admin/admin.css`.
+    // already relative to the static base: `/admin/admin.css`,
+    // `/css/site.css`.
     let path = req.uri().path().to_string();
-    let Some((namespace, rest)) = split_namespace(&path) else {
-        return not_found();
-    };
+    let rel = path.trim_start_matches('/');
 
-    // Dev: try the plugin's live source dir first.
+    // Step 1 — dev live source for a *registered* namespace. Lets a
+    // rebuilt plugin asset be served straight off its source dir without
+    // a recompile or a collect step. Only a namespace a plugin actually
+    // declared takes this path; an unregistered first segment (e.g.
+    // `css`) is not a namespace and flows to the steps below.
     if state.dev {
-        if let Some(source_dir) = state.registry.source_dir(namespace) {
-            if let Some(resolved) = resolve_under_root(source_dir, rest) {
-                return serve_file(&resolved, true, req).await;
+        if let Some((namespace, rest)) = split_namespace(rel) {
+            if let Some(source_dir) = state.registry.source_dir(namespace) {
+                if let Some(resolved) = resolve_under_root(source_dir, rest) {
+                    return serve_file(&resolved, true, req).await;
+                }
             }
         }
-        // Fall through to the static_root fallback below.
     }
 
-    // Prod, OR dev-fallback: <static_root>/<namespace>/<rest>.
-    let ns_root = state.static_root.join(namespace);
-    if let Some(resolved) = resolve_under_root(&ns_root, rest) {
+    // Step 2 — the collected/prod tree: `<static_root>/<full path>`. This
+    // is the general path that serves every collected namespace
+    // (`<static_root>/admin/admin.css`) in prod, and the dev fallback when
+    // a live source missed. A missing `static_root` (no collect run yet)
+    // canonicalises to `None` here and flows on to the root dirs.
+    if let Some(resolved) = resolve_under_root(&state.static_root, rel) {
         return serve_file(&resolved, state.dev, req).await;
+    }
+
+    // Step 3 — app/site root dirs (no namespace), the full request path.
+    // Real on-disk directories (a project's `./static`), served the same
+    // in dev and prod. This is what a `StaticPlugin` at `static_url`
+    // contributes, so site CSS / images live at the bare `/static/...`.
+    for root in &state.root_dirs {
+        if let Some(resolved) = resolve_under_root(root, rel) {
+            return serve_file(&resolved, state.dev, req).await;
+        }
     }
 
     not_found()
@@ -272,6 +289,16 @@ pub struct StaticHandlerState {
     /// On-disk root the collected/prod assets live under
     /// (`settings.static_root`, e.g. `staticfiles/`).
     pub static_root: PathBuf,
+    /// App/site-level static directories served at the bare
+    /// `static_url` root (no namespace), from every plugin's
+    /// [`Plugin::static_root_dirs`]. Tried after namespaces, with the
+    /// full request path. Typically a `StaticPlugin` pointed at
+    /// `static_url` contributes its directory here so the framework owns
+    /// `static_url` as one mount instead of a second catch-all colliding
+    /// with the pipeline.
+    ///
+    /// [`Plugin::static_root_dirs`]: crate::plugin::Plugin::static_root_dirs
+    pub root_dirs: Vec<PathBuf>,
     /// Whether the app is running in `Environment::Dev`.
     pub dev: bool,
 }
@@ -670,6 +697,7 @@ mod tests {
         let state = StaticHandlerState {
             registry,
             static_root: static_root.path().to_path_buf(),
+            root_dirs: Vec::new(),
             dev: true,
         };
 
@@ -723,6 +751,7 @@ mod tests {
         let state = StaticHandlerState {
             registry,
             static_root: static_root.path().to_path_buf(),
+            root_dirs: Vec::new(),
             dev: false,
         };
 
@@ -959,6 +988,7 @@ mod tests {
         let state = StaticHandlerState {
             registry: StaticRegistry::default(),
             static_root: static_root.path().to_path_buf(),
+            root_dirs: Vec::new(),
             dev: false,
         };
 

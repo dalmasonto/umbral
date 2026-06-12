@@ -209,6 +209,32 @@ impl StaticPlugin {
 
         Some(configured)
     }
+
+    /// Whether this plugin defers to the framework's unified static
+    /// pipeline instead of nesting its own route.
+    ///
+    /// True only for a *filesystem* plugin mounted AT the configured
+    /// `static_url` (running inside a built `App`, so ambient settings
+    /// exist). In that case the framework's single static handler owns
+    /// `static_url`; this plugin contributes its directory as a root
+    /// source via [`Plugin::static_root_dirs`] rather than nesting a
+    /// second `/static/{*rest}` catch-all (which would collide with the
+    /// pipeline mount and panic the build).
+    ///
+    /// Standalone use / tests have no ambient settings, so this is
+    /// `false` and the plugin nests normally — its behaviour outside an
+    /// `App` is unchanged. An embedded plugin, or one mounted at a
+    /// different path (`/media`), also nests as before.
+    fn defers_to_pipeline(&self) -> bool {
+        if !matches!(self.source, Source::Fs(_)) {
+            return false;
+        }
+        let Some(settings) = umbra::settings::get_opt() else {
+            return false;
+        };
+        let norm = |p: &str| p.trim_matches('/').to_string();
+        norm(&settings.static_url) == norm(&self.mount)
+    }
 }
 
 impl Plugin for StaticPlugin {
@@ -217,6 +243,14 @@ impl Plugin for StaticPlugin {
     }
 
     fn routes(&self) -> Router {
+        // When mounted at the configured `static_url`, the framework's
+        // unified pipeline owns that path — we contribute our directory
+        // through `static_root_dirs()` instead of nesting a second
+        // (conflicting) catch-all here. Return an empty router.
+        if self.defers_to_pipeline() {
+            return Router::new();
+        }
+
         // Warn for filesystem mode when the directory doesn't exist.
         // Embedded mode can't have this misconfig (the macro would
         // have failed at compile time), so the warning is skipped.
@@ -258,6 +292,19 @@ impl Plugin for StaticPlugin {
                     ),
                 }
             }
+        }
+    }
+
+    /// When mounted at the configured `static_url`, contribute this
+    /// plugin's filesystem directory as a root source for the framework's
+    /// unified static handler (see [`Self::defers_to_pipeline`]). The
+    /// handler serves `static_url/<file>` from it after trying namespaced
+    /// plugin assets, so a project's own CSS / images live at the bare
+    /// `/static/...` space without a second catch-all mount.
+    fn static_root_dirs(&self) -> Vec<PathBuf> {
+        match &self.source {
+            Source::Fs(dir) if self.defers_to_pipeline() => vec![dir.clone()],
+            _ => Vec::new(),
         }
     }
 }

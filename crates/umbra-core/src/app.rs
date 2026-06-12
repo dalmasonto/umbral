@@ -737,15 +737,30 @@ impl AppBuilder {
                     first_plugin: c.first_plugin,
                     second_plugin: c.second_plugin,
                 })?;
-            let state = crate::static_files::StaticHandlerState {
-                registry,
-                static_root: std::path::PathBuf::from(&settings.static_root),
-                dev: matches!(settings.environment, crate::settings::Environment::Dev),
-            };
-            let static_router = Router::new()
-                .fallback(crate::static_files::static_handler)
-                .with_state(state);
-            router = router.nest_service(static_base, static_router);
+            // App/site-level static dirs served at the bare `static_url`
+            // root. A `StaticPlugin` mounted AT `static_url` contributes
+            // its directory here (and skips nesting its own catch-all),
+            // so the framework owns `static_url` as ONE mount — a second
+            // `/static/{*rest}` nest is exactly the conflict this avoids.
+            let root_dirs: Vec<std::path::PathBuf> = sorted_plugins
+                .iter()
+                .flat_map(|p| p.static_root_dirs())
+                .collect();
+            // Nothing to serve and no app static dirs — don't claim the
+            // `static_url` path at all, so a consumer that wants to mount
+            // their own router there can.
+            if !registry.is_empty() || !root_dirs.is_empty() {
+                let state = crate::static_files::StaticHandlerState {
+                    registry,
+                    static_root: std::path::PathBuf::from(&settings.static_root),
+                    root_dirs,
+                    dev: matches!(settings.environment, crate::settings::Environment::Dev),
+                };
+                let static_router = Router::new()
+                    .fallback(crate::static_files::static_handler)
+                    .with_state(state);
+                router = router.nest_service(static_base, static_router);
+            }
         }
 
         // Phase 5.5 — apply each plugin's middleware in topological
