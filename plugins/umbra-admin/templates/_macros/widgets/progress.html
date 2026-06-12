@@ -1,0 +1,41 @@
+{#
+  progress.html
+  =============
+  Progress-bar list widget — a ranked set of labeled horizontal bars,
+  each filled relative to the largest value (or an explicit target).
+  The "top N by metric" tile: revenue by product, traffic by source,
+  completion per category.
+
+  Pure HTML / CSS — no chart library, no JS mount. The only inline
+  style is the data-driven bar `width` (and an optional per-bar color),
+  which can't be a static utility class.
+
+  Expects payload:
+    { items: [{ label, display, percent /* 0-100 */, color? }] }
+#}
+
+{% macro progress_widget(title, payload) %}
+<div class="progress-widget h-full flex flex-col p-md">
+  <p class="text-label-sm text-outline uppercase tracking-wider mb-sm flex-shrink-0">{{ title }}</p>
+  {% if payload.items and payload.items | length > 0 %}
+  <div class="flex-1 min-h-0 overflow-y-auto flex flex-col gap-sm">
+    {% for item in payload.items %}
+    <div>
+      <div class="flex items-baseline justify-between gap-sm mb-xs">
+        <span class="text-body-sm text-on-surface truncate">{{ item.label }}</span>
+        <span class="text-label-sm text-outline tabular-nums flex-shrink-0">{{ item.display }}</span>
+      </div>
+      <div class="h-2 rounded-full bg-surface-container-high overflow-hidden">
+        <div
+          class="h-full rounded-full"
+          style="width: {{ item.percent }}%; background: {% if item.color %}{{ item.color }}{% else %}var(--primary, #60a5fa){% endif %}"
+        ></div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="text-label-sm text-outline italic mt-auto">No data</p>
+  {% endif %}
+</div>
+{% endmacro %}

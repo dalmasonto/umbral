@@ -59,6 +59,7 @@ Then register it in the dashboard:
 | `Bar` | Categorical counts that exceed donut's 6-slice readability. | [`BarPayload`](#bar-) |
 | `Radial` | Progress toward a goal — one or more 0–100% gauges (quota attainment, capacity used, completion rate). One big ring, or 2–4 to compare ratios. | [`RadialPayload`](#radial-) |
 | `Heatmap` | Activity-by-time / cohort patterns — a 2-D grid of cells colored by magnitude (day × hour signups, retention by cohort). | [`HeatmapPayload`](#heatmap-) |
+| `Progress` | "Top N by metric" — a ranked list of labeled horizontal bars (revenue by product, traffic by source). Pure HTML, no chart lib. | [`ProgressPayload`](#progress-) |
 | `Table` | "Recent orders / posts / comments." Three or four columns, 5-10 rows, optional "View all →" link. | [`TablePayload`](#table-) |
 | `Feed` | Chronological activity — recent signups, comments, audit log entries. Avatar + title + timestamp per item. | [`FeedPayload`](#feed-) |
 | `Kpi` | The original simple stat card. Superseded by `Card` for most cases; kept for backwards compat. | `KpiPayload` |
@@ -297,6 +298,33 @@ WidgetPayload::Heatmap(HeatmapPayload::from_grid(
 ```
 
 `from_grid` is rectangular by construction: a short value row is padded with `0.0` and any extra values past the column labels are dropped, so ragged input never desyncs the grid. For full control build `HeatmapRow { name, cells: vec![HeatmapCell { x, y }] }` and pass to `HeatmapPayload::new(rows)`. ApexCharts shades each cell from a single hue by value; the payload's first row renders at the top.
+
+## Progress
+
+A ranked list of labeled horizontal bars — "top N by metric": revenue by product, traffic by source, completion per category. It's the readable middle ground between a `Donut` (proportions, but circular and capped at ~6 slices) and a `Table` (exact numbers, but no visual weight). Rendered as pure HTML — no chart library mounts.
+
+By default each bar is sized relative to the largest value, so the top item fills the bar:
+
+```rust
+use umbra_admin::widgets::{ProgressPayload, WidgetPayload};
+
+WidgetPayload::Progress(ProgressPayload::from_pairs([
+    ("Pro", 48_200.0),
+    ("Team", 31_000.0),
+    ("Free", 9_400.0),
+]))
+```
+
+When each row should be measured against a fixed target instead (a per-row "% of goal"), use `from_pairs_of(pairs, target)` — values over the target clamp to a full bar, and a non-positive target falls back to sizing against the max:
+
+```rust
+WidgetPayload::Progress(ProgressPayload::from_pairs_of(
+    [("Web", 82.0), ("Mobile", 57.0)],
+    100.0, // 100-task target
+))
+```
+
+`display` (the right-aligned value) is thousands-grouped for you; `percent` is the clamped `[0, 100]` bar width. For explicit per-bar colors or pre-formatted values, build `ProgressItem { label, display, percent, color }` and pass to `ProgressPayload::new(items)`.
 
 ## Table
 

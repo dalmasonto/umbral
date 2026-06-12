@@ -92,6 +92,11 @@ pub enum WidgetKind {
     /// hour-of-day signups, cohort retention, per-region load. Each
     /// row is a series; each cell an `(x, value)` pair.
     Heatmap,
+    /// Progress bars — a ranked list of labeled horizontal bars, each
+    /// filled relative to the largest value (or an explicit target).
+    /// The "top N by metric" tile: revenue by product, traffic by
+    /// source, completion per category. Pure HTML; no chart library.
+    Progress,
     Table,
     Feed,
 }
@@ -106,6 +111,7 @@ impl WidgetKind {
             WidgetKind::Donut => "donut",
             WidgetKind::Radial => "radial",
             WidgetKind::Heatmap => "heatmap",
+            WidgetKind::Progress => "progress",
             WidgetKind::Table => "table",
             WidgetKind::Feed => "feed",
         }
@@ -555,6 +561,101 @@ impl HeatmapPayload {
     }
 }
 
+/// One row of a [`ProgressPayload`] — a labeled horizontal bar.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProgressItem {
+    pub label: String,
+    /// Pre-formatted value shown at the right of the row (the
+    /// `from_pairs` constructors thousands-group it; `new` takes it
+    /// verbatim).
+    pub display: String,
+    /// Bar fill width, `0–100`, relative to the payload's reference
+    /// (the largest value, or an explicit target).
+    pub percent: f64,
+    /// Optional explicit bar color (CSS hex / rgb / token name).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+}
+
+/// Progress-bar list payload — a ranked set of labeled horizontal bars,
+/// each filled relative to the largest value (or an explicit target).
+/// The "top N by metric" tile: revenue by product, traffic by source,
+/// completion per category. Rendered as pure HTML — no chart library.
+///
+/// ```ignore
+/// // Revenue by product; the top product fills the bar.
+/// ProgressPayload::from_pairs([("Pro", 48200.0), ("Team", 31000.0), ("Free", 9400.0)])
+/// // Completion per team, each measured against a 100-task target.
+/// ProgressPayload::from_pairs_of([("Web", 82.0), ("Mobile", 57.0)], 100.0)
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProgressPayload {
+    pub items: Vec<ProgressItem>,
+}
+
+impl ProgressPayload {
+    /// New payload from explicit items (you set `display` + `percent`).
+    pub fn new(items: Vec<ProgressItem>) -> Self {
+        Self { items }
+    }
+
+    /// From `(label, value)` pairs, with each bar sized relative to the
+    /// LARGEST value (the top item fills the bar). `display` is the
+    /// thousands-grouped value.
+    pub fn from_pairs<L: Into<String>>(pairs: impl IntoIterator<Item = (L, f64)>) -> Self {
+        let items: Vec<(String, f64)> = pairs.into_iter().map(|(l, v)| (l.into(), v)).collect();
+        let reference = items
+            .iter()
+            .map(|(_, v)| *v)
+            .filter(|v| v.is_finite())
+            .fold(0.0_f64, f64::max);
+        Self::build(items, reference)
+    }
+
+    /// From `(label, value)` pairs, with each bar sized against an
+    /// explicit `target` (e.g. a per-row "% of goal"). A non-positive
+    /// target falls back to sizing against the largest value.
+    pub fn from_pairs_of<L: Into<String>>(
+        pairs: impl IntoIterator<Item = (L, f64)>,
+        target: f64,
+    ) -> Self {
+        let items: Vec<(String, f64)> = pairs.into_iter().map(|(l, v)| (l.into(), v)).collect();
+        let reference = if target > 0.0 {
+            target
+        } else {
+            items
+                .iter()
+                .map(|(_, v)| *v)
+                .filter(|v| v.is_finite())
+                .fold(0.0_f64, f64::max)
+        };
+        Self::build(items, reference)
+    }
+
+    /// Shared: turn `(label, value)` + a reference max into rendered
+    /// items. `percent = value / reference * 100`, clamped to
+    /// `[0, 100]`; a zero/non-finite reference yields empty bars.
+    fn build(items: Vec<(String, f64)>, reference: f64) -> Self {
+        let items = items
+            .into_iter()
+            .map(|(label, value)| {
+                let percent = if reference > 0.0 && value.is_finite() {
+                    (value / reference * 100.0).clamp(0.0, 100.0)
+                } else {
+                    0.0
+                };
+                ProgressItem {
+                    label,
+                    display: format_thousands(value),
+                    percent,
+                    color: None,
+                }
+            })
+            .collect();
+        Self { items }
+    }
+}
+
 /// Table widget column descriptor.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TableColumn {
@@ -679,6 +780,7 @@ pub enum WidgetPayload {
     Donut(DonutPayload),
     Radial(RadialPayload),
     Heatmap(HeatmapPayload),
+    Progress(ProgressPayload),
     Table(TablePayload),
     Feed(FeedPayload),
 }
@@ -1080,5 +1182,51 @@ mod tests {
         assert_eq!(json["rows"][0]["name"], "Row");
         assert_eq!(json["rows"][0]["cells"][0]["x"], "a");
         assert_eq!(json["rows"][0]["cells"][1]["y"], 8.0);
+    }
+
+    #[test]
+    fn progress_kind_serializes_as_progress() {
+        assert_eq!(WidgetKind::Progress.as_str(), "progress");
+    }
+
+    #[test]
+    fn progress_from_pairs_sizes_against_largest_value() {
+        let p = ProgressPayload::from_pairs([("A", 100.0), ("B", 50.0), ("C", 25.0)]);
+        assert_eq!(p.items.len(), 3);
+        // The largest value fills the bar; the rest are proportional.
+        assert_eq!(p.items[0].percent, 100.0);
+        assert_eq!(p.items[1].percent, 50.0);
+        assert_eq!(p.items[2].percent, 25.0);
+        // `display` is the thousands-grouped value, order preserved.
+        assert_eq!(p.items[0].label, "A");
+        assert_eq!(p.items[0].display, "100");
+    }
+
+    #[test]
+    fn progress_from_pairs_of_sizes_against_target_and_clamps() {
+        let p = ProgressPayload::from_pairs_of([("Web", 82.0), ("Mobile", 150.0)], 100.0);
+        assert_eq!(p.items[0].percent, 82.0);
+        // Over target fills the bar rather than overrunning it.
+        assert_eq!(p.items[1].percent, 100.0);
+    }
+
+    #[test]
+    fn progress_non_positive_target_falls_back_to_max() {
+        // target = 0 -> size against the largest value (40 -> 100%).
+        let p = ProgressPayload::from_pairs_of([("A", 40.0), ("B", 10.0)], 0.0);
+        assert_eq!(p.items[0].percent, 100.0);
+        assert_eq!(p.items[1].percent, 25.0);
+    }
+
+    #[test]
+    fn progress_payload_serializes_with_kind_tag() {
+        let payload = WidgetPayload::Progress(ProgressPayload::from_pairs([("Pro", 48200.0)]));
+        let json = serde_json::to_value(&payload).expect("serialize");
+        assert_eq!(json["kind"], "progress");
+        assert_eq!(json["items"][0]["label"], "Pro");
+        assert_eq!(json["items"][0]["display"], "48,200");
+        assert_eq!(json["items"][0]["percent"], 100.0);
+        // No explicit color -> the field is skipped entirely.
+        assert!(json["items"][0].get("color").is_none());
     }
 }
