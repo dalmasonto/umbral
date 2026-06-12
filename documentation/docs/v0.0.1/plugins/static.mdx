@@ -1,6 +1,6 @@
 ---
 title: Static Files
-description: Serve CSS, JS, and image assets from a directory with optional Cache-Control headers.
+description: Serve CSS, JS, and image assets via the unified STATIC_URL pipeline - filesystem or embedded, with collectstatic and Cache-Control headers.
 sidebar_position: 14
 tags: [static, assets, cache, middleware]
 ---
@@ -36,7 +36,7 @@ App::builder()
     .build()?;
 ```
 
-This is what an *embeddable plugin* should use: the plugin's UI travels with the plugin's crate, so when a user drops the plugin into their app, the assets come along. No "remember to deploy a `dist/` directory next to the binary" footgun. (`umbra-playground` itself uses this - its React bundle is embedded into the plugin and served via `StaticPlugin::embedded`.)
+This is what an *embeddable plugin* should use when its UI is small and rarely rebuilt: the assets travel with the plugin's crate, so when a user drops the plugin into their app, the UI comes along. No "remember to deploy a `dist/` directory next to the binary" footgun. The built-in `umbra-admin` uses embedded mode for its small CSS/JS. A plugin with a heavy, frequently-rebuilt bundle (like `umbra-playground`'s Vite output) instead declares a filesystem source via [`Plugin::static_dirs()`](#the-unified-static-pipeline) so a rebuild drops in without recompiling.
 
 Path traversal is structurally impossible against an embedded source: lookups are a tree walk against in-memory keys, not a path join - a `..` segment becomes a literal key that won't match.
 
@@ -64,44 +64,64 @@ StaticPlugin::new("/static", "./assets")
 
 The dev-mode check reads the ambient settings at route-build time (when `Plugin::routes` is called), not at constructor time.
 
-## Referencing files from templates
+## The unified static pipeline
 
-The mount path is the URL prefix; reference assets at `<mount>/<relative-path>` and the browser hits the same handler that serves the file. Reaching them from a `minijinja` template is just normal HTML:
+Beyond serving one directory, the framework runs a single static handler at a configurable base — `STATIC_URL` (default `/static/`) — that every plugin can contribute to. This is Django's `staticfiles` model. Two settings drive it:
 
-```jinja
-{# In wrapper.html or base.html #}
-<link rel="stylesheet" href="/static/css/app.css"/>
-<script src="/static/js/htmx.min.js"></script>
-<link rel="icon" href="/static/favicon.svg" type="image/svg+xml"/>
-```
+| Setting | Env | Default | Purpose |
+|---|---|---|---|
+| `static_url` | `UMBRA_STATIC_URL` | `/static/` | URL base every asset is served under. May be an absolute CDN origin (`https://cdn.example.com/s/`). |
+| `static_root` | `UMBRA_STATIC_ROOT` | `staticfiles/` | On-disk dir `collectstatic` writes to and production serves from. |
 
-```jinja
-{# Inside a page template #}
-<img src="/static/img/logo.svg" alt="Acme" class="h-8"/>
-<a href="/static/docs/eula.pdf">Terms of service</a>
-```
+A plugin contributes assets two ways, both served under `static_url`:
 
-Subdirectories under `./assets` map directly. If `./assets/css/app.css` exists on disk, `/static/css/app.css` serves it. The plugin does no rewriting - what you put on disk is what the browser sees.
+- **`Plugin::static_dirs()`** — namespaced plugin assets, served at `/static/<namespace>/<file>`. In dev the handler serves them **live off the source dir** (rebuild your bundle, drop it in, served next request — no recompile); in prod from the collected `static_root`. This is the filesystem alternative to `static_files()` embedding.
+- **`Plugin::static_root_dirs()`** — app/site-level dirs served at the bare `/static/<file>` space (your own CSS, images, favicon).
 
-### A small template helper
+### StaticPlugin and the pipeline
 
-If your asset paths change between dev and prod (different mount point, cache-busted filenames), thread the mount through the template context once and reference it from there:
+When you mount a filesystem `StaticPlugin` **at the configured `static_url`**, it becomes the site's static-dir provider for that one pipeline rather than nesting its own route:
 
 ```rust
-// In your handler
-let ctx = context!(
-    static_url => "/static",
-    user       => user.username,
-);
-templates::render("dashboard.html", &ctx)?;
+App::builder()
+    // Serves ./static/css/app.css at /static/css/app.css, AND coexists
+    // with every plugin's /static/<namespace>/... assets under one mount.
+    .plugin(StaticPlugin::new("/static", "./static"))
+    .build()?;
 ```
+
+Mounted at a *different* path (e.g. `StaticPlugin::new("/media", "./uploads")`), it nests independently at that prefix as before. This is why a `StaticPlugin` at `/static` no longer collides with the framework's own `/static` handler — there is one owner of `static_url`.
+
+## Referencing assets in templates
+
+Use the `static()` template global so URLs follow `static_url` wherever it's configured (including a CDN origin):
 
 ```jinja
-{# dashboard.html #}
-<link rel="stylesheet" href="{{ static_url }}/css/app.css"/>
+{# base.html / wrapper.html #}
+<link rel="stylesheet" href="{{ static('css/app.css') }}"/>
+<script src="{{ static('js/htmx.min.js') }}"></script>
+<link rel="icon" href="{{ static('favicon.svg') }}" type="image/svg+xml"/>
+
+{# Namespaced plugin asset #}
+<script src="{{ static('playground/assets/app.js') }}"></script>
 ```
 
-This is the same pattern Django's `{% static "..." %}` tag uses, just hand-rolled. A `static_url` template global may land in v0.1 to make the mount path implicit.
+`{{ static('css/app.css') }}` resolves to `<static_url>css/app.css` — `/static/css/app.css` by default, or `https://cdn.example.com/s/css/app.css` when `static_url` points at a CDN. This is umbra's equivalent of Django's `{% static "..." %}` tag.
+
+## collectstatic
+
+`collectstatic` gathers every registered plugin's `static_dirs()` (into `static_root/<namespace>/`) and `static_root_dirs()` (into `static_root/`) so `static_root` is a complete, CDN-servable tree:
+
+```bash
+cargo run -- collectstatic          # collect into static_root/
+cargo run -- collectstatic --clear  # wipe static_root/ first, then collect
+```
+
+The command is **provided by `StaticPlugin` itself** — it only exists when you register the plugin (`.plugin(StaticPlugin::new(...))`). Point a CDN or nginx at `static_root` and set `static_url` to its origin, or let the framework serve it.
+
+<Callout type="info">
+For the pipeline design end-to-end (dev-vs-prod resolution, embedded vs filesystem trade-offs), see [Static files](/docs/v0.0.1/web/static-files).
+</Callout>
 
 ## Production note
 
