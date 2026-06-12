@@ -76,6 +76,12 @@ Drag-resize: ~50 LOC vanilla JS at the bottom; width in localStorage.
     {% endif %}
 
     {% if is_edit %}
+    {# Wave 4: switch the sheet form to multipart only when a file/image
+       field is present. `enctype` covers the native fallback submit and
+       `hx-encoding` makes HTMX send a FormData (so the file part rides
+       along); plain forms stay urlencoded and backend-independent. #}
+    {% set _enc = namespace(file=false) %}
+    {% for field in fields %}{% if field.kind == "file" or field.kind == "image" %}{% set _enc.file = true %}{% endif %}{% endfor %}
     <form id="sheet-form" method="post"
       {% if mode == "create" %}
       action="{{ admin_base }}/{{ table }}/create"
@@ -84,6 +90,7 @@ Drag-resize: ~50 LOC vanilla JS at the bottom; width in localStorage.
       action="{{ admin_base }}/{{ table }}/{{ instance_id }}/edit"
       hx-post="{{ admin_base }}/{{ table }}/{{ instance_id }}/edit"
       {% endif %}
+      {% if _enc.file %}enctype="multipart/form-data" hx-encoding="multipart/form-data"{% endif %}
       hx-target="#umbra-sheet-slot" hx-swap="innerHTML" hx-push-url="false"
       class="space-y-xs"
     >

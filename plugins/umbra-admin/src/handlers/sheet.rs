@@ -247,7 +247,7 @@ pub(crate) async fn sheet_create(
     State(state): State<AdminState>,
     headers: HeaderMap,
     Path(table): Path<String>,
-    body: String,
+    body: axum::body::Bytes,
 ) -> Response {
     let path = format!("{}/{table}/create", crate::branding::current().base_path);
     let who = match require_staff(&headers, &path).await {
@@ -262,11 +262,20 @@ pub(crate) async fn sheet_create(
     {
         return r;
     }
-    let form: HashMap<String, String> = match serde_urlencoded::from_str(&body) {
-        Ok(m) => m,
-        Err(e) => return AdminError::BadInput(e.to_string()).into_response(),
+    // Wave 4: the sheet-create form submits every field (file/image
+    // included), so decode urlencoded or multipart the same way the
+    // full-page `crud::create` does, storing uploads via the ambient
+    // Storage backend.
+    let content_type = headers
+        .get(umbra::web::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let pairs = match crate::handlers::crud::body_to_pairs(content_type, body).await {
+        Ok(p) => p,
+        Err(e) => return e.into_response(),
     };
-    let multi_form: Vec<(String, String)> = serde_urlencoded::from_str(&body).unwrap_or_default();
+    let form: HashMap<String, String> = pairs.iter().cloned().collect();
+    let multi_form: Vec<(String, String)> = pairs;
     let cfg = state.config_for(&table);
     match insert_row(&model, &form, cfg).await {
         Ok(new_pk) => {

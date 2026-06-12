@@ -7,7 +7,12 @@
   <div class="panel">
     <h2>{{ verb }} {{ model.name }}{% if row %} #{{ row[pk] }}{% endif %}</h2>
     {% if error %}<p style="color:#b8453d">{{ error }}</p>{% endif %}
-    <form method="post" action="{{ action }}">
+    {# Wave 4: switch to multipart only when a file/image field is on the
+       form, so plain admin forms keep the default urlencoded encoding
+       (and work without a Storage backend wired). #}
+    {% set _enc = namespace(file=false) %}
+    {% for field in fields %}{% if field.kind == "file" or field.kind == "image" %}{% set _enc.file = true %}{% endif %}{% endfor %}
+    <form method="post" action="{{ action }}"{% if _enc.file %} enctype="multipart/form-data"{% endif %}>
       {% for field in fields %}
         <div class="field">
           <label for="f_{{ field.name }}">
@@ -79,6 +84,21 @@
 
           {% elif field.kind == "json" %}
             <textarea id="f_{{ field.name }}" name="{{ field.name }}" rows="5" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; font-family: monospace;">{{ field.value }}</textarea>
+
+          {% elif field.kind == "file" %}
+            {% if field.value %}
+              <p class="meta">Current: <a href="{{ field.value_url }}" target="_blank" rel="noopener">{{ field.value }}</a></p>
+            {% endif %}
+            <input type="file" id="f_{{ field.name }}" name="{{ field.name }}"{% if not field.nullable and not field.value and not field.readonly %} required{% endif %}{% if field.readonly %} disabled{% endif %} style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;" />
+
+          {% elif field.kind == "image" %}
+            {% if field.value %}
+              <div style="margin-bottom:8px">
+                <img src="{{ field.value_url }}" alt="{{ field.name }}" style="max-height:160px; width:auto; border:1px solid #ccc; border-radius:8px; display:block;" />
+                <p class="meta"><a href="{{ field.value_url }}" target="_blank" rel="noopener">View full image</a></p>
+              </div>
+            {% endif %}
+            <input type="file" id="f_{{ field.name }}" name="{{ field.name }}" accept="image/*"{% if not field.nullable and not field.value and not field.readonly %} required{% endif %}{% if field.readonly %} disabled{% endif %} style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;" />
 
           {% elif field.kind == "multiselect" %}
             <div class="multichoice-picker" data-field="{{ field.name }}">

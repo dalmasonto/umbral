@@ -40,6 +40,14 @@ In a template, `{{ post.cover.url }}` turns the stored key into a usable `src`. 
 
 Both fields serialise as the bare key string, so a REST API round-trips `"ab12-hero.png"`, the same shape a plain `String` column would have.
 
+## In the admin
+
+The admin change / add form renders a native file input for a `FileField` and an image thumbnail plus an upload input for an `ImageField`. When the form carries any file/image field it switches to `enctype="multipart/form-data"`; plain forms stay urlencoded so an admin without a `Storage` backend keeps working.
+
+On submit, the admin stores each uploaded file through the ambient `Storage` and writes the returned key to the column - you never wire an upload handler yourself. Editing a row *without* choosing a new file leaves the existing key untouched (the empty file part is skipped), so a "save" that only changes other fields never clears the attachment.
+
+File and image columns aren't editable inline from the changelist table (a single-cell text edit can't carry an upload); use the row's change form / sheet to replace a file.
+
 ## See also
 
 - [Storage and media](/docs/v0.0.1/plugins/media) - the `Storage` trait and `MediaPlugin`.

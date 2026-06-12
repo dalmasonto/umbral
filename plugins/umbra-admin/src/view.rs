@@ -103,6 +103,15 @@ pub(crate) struct FormField {
     /// too so the template / future client JS can branch on the raw
     /// widget name (e.g. load a markdown editor module). Empty = none.
     pub widget: String,
+    /// For `file` / `image` fields: the resolved public URL for the
+    /// currently-stored key, used by the template to render the
+    /// "Current:" link / `<img>` thumbnail. `value` stays the raw
+    /// storage key (the round-trip value the hidden form submits);
+    /// `value_url` is purely presentational. Resolved through the
+    /// ambient Storage backend, falling back to the raw key when no
+    /// backend is wired. Empty string for non-file fields and for an
+    /// empty value.
+    pub value_url: String,
 }
 
 /// One `<option>` entry on a choices-field `<select>`.
@@ -197,10 +206,24 @@ pub(crate) fn form_fields_for(
                         .unwrap_or_else(|| value.clone()),
                 })
                 .collect();
+            let kind = input_kind(c);
+            let value = format_for_input(&raw, c.ty);
+            // For file/image fields resolve the stored key to a public
+            // URL through the ambient Storage backend; fall back to the
+            // raw key when no backend is wired (so the link still
+            // renders something). Non-file fields and empty values get
+            // an empty string (the template skips the markup).
+            let value_url = if (kind == "file" || kind == "image") && !value.is_empty() {
+                umbra::storage::storage_opt()
+                    .map(|s| s.url(&value))
+                    .unwrap_or_else(|| value.clone())
+            } else {
+                String::new()
+            };
             FormField {
                 name: c.name.clone(),
-                kind: input_kind(c),
-                value: format_for_input(&raw, c.ty),
+                kind,
+                value,
                 nullable: c.nullable,
                 readonly: is_readonly,
                 fk_table,
@@ -208,6 +231,7 @@ pub(crate) fn form_fields_for(
                 choices,
                 help: c.help.clone(),
                 widget: c.widget.clone().unwrap_or_default(),
+                value_url,
             }
         })
         .collect();
@@ -226,6 +250,7 @@ pub(crate) fn form_fields_for(
                     choices: Vec::new(),
                     help: String::new(),
                     widget: String::new(),
+                    value_url: String::new(),
                 });
             }
         }
@@ -454,6 +479,14 @@ pub(crate) fn input_kind(col: &umbra::migrate::Column) -> &'static str {
             Some("rte") => return "rte",
             Some("code") => return "code",
             Some("textarea") => return "textarea",
+            // File/image upload widgets (Wave 4). FileField/ImageField
+            // set these by default; a plain Text column with
+            // `#[umbra(widget = "file" | "image")]` opts in too. The
+            // value stored in the column is the storage key; the form
+            // renders a native `<input type="file">` and the POST is
+            // multipart, with the upload stored via the ambient Storage.
+            Some("file") => return "file",
+            Some("image") => return "image",
             _ => {}
         }
     }

@@ -56,6 +56,18 @@ pub(crate) async fn cell_edit_get(
     if is_readonly {
         return (StatusCode::FORBIDDEN, "field is read-only").into_response();
     }
+    // Wave 4: file/image fields aren't inline-editable. The inline cell
+    // POST path is urlencoded (single `name=value`), so it can't carry a
+    // multipart upload; submitting one would write an empty value and
+    // null the stored key. Uploads go through the full change form /
+    // sheet (which switch to multipart). Refuse the cell editor.
+    if matches!(input_kind(col), "file" | "image") {
+        return (
+            StatusCode::FORBIDDEN,
+            "file fields can't be edited inline; use the change form",
+        )
+            .into_response();
+    }
 
     let all_cols: Vec<String> = model.fields.iter().map(|f| f.name.clone()).collect();
     let rows = match fetch_rows_filtered(&model, Some((&pk.name, &id)), &all_cols).await {
@@ -132,12 +144,21 @@ pub(crate) async fn cell_edit_post(
     let Some(pk) = pk_column(&model) else {
         return AdminError::Render("no pk".to_string()).into_response();
     };
-    if !model.fields.iter().any(|c| c.name == field) {
+    let Some(col) = model.fields.iter().find(|c| c.name == field) else {
         return AdminError::NotFound(format!("no field `{field}`")).into_response();
-    }
+    };
     let cfg = state.config_for(&table);
     if cfg.is_some_and(|c| c.readonly_fields.contains(&field)) {
         return (StatusCode::FORBIDDEN, "field is read-only").into_response();
+    }
+    // Wave 4: reject inline edits of file/image columns (see
+    // `cell_edit_get`). A urlencoded cell POST would null the stored key.
+    if matches!(input_kind(col), "file" | "image") {
+        return (
+            StatusCode::FORBIDDEN,
+            "file fields can't be edited inline; use the change form",
+        )
+            .into_response();
     }
     let form: HashMap<String, String> = serde_urlencoded::from_str(&body).unwrap_or_default();
     let new_value = form.get(&field).cloned().unwrap_or_default();

@@ -25,6 +25,34 @@ use crate::rows::{fetch_rows_filtered, insert_row, update_row};
 use crate::util::{is_htmx, sanitise_form_error};
 use crate::view::{form_fields_for, form_m2m_fields_for, model_for_template, sidebar_apps};
 
+/// Decode a request body into ordered `(field, value)` pairs, handling
+/// both urlencoded and `multipart/form-data` admin POSTs (Wave 4).
+///
+/// For multipart bodies the file parts are stored through the ambient
+/// Storage backend and their values become the returned storage keys —
+/// the exact same flat shape `serde_urlencoded::from_str` yields, so the
+/// caller's `HashMap` (last-wins) and `Vec` (repeated M2M values) builds
+/// are unchanged. Empty file parts are skipped by
+/// `parse_and_store_multipart`, so an edit that doesn't re-pick a file
+/// simply omits that column (update preserves the existing key).
+///
+/// Returns an `AdminError` on a malformed body or a storage failure,
+/// mirroring the urlencoded `BadInput` path the handlers used before.
+pub(crate) async fn body_to_pairs(
+    content_type: &str,
+    body: axum::body::Bytes,
+) -> Result<Vec<(String, String)>, AdminError> {
+    if umbra::web::is_multipart(content_type) {
+        umbra::web::parse_and_store_multipart(content_type, body)
+            .await
+            .map_err(|e| AdminError::BadInput(e.to_string()))
+    } else {
+        let s = String::from_utf8(body.to_vec())
+            .map_err(|_| AdminError::BadInput("request body was not valid UTF-8".to_string()))?;
+        serde_urlencoded::from_str(&s).map_err(|e| AdminError::BadInput(e.to_string()))
+    }
+}
+
 /// Cross-module wrapper used by the sheet handler — keeps
 /// `apply_m2m_selections` private to this file while still letting
 /// `handlers::sheet::sheet_create` reuse the same write path.
@@ -232,7 +260,7 @@ pub(crate) async fn create(
     State(state): State<AdminState>,
     headers: HeaderMap,
     Path(table): Path<String>,
-    body: String,
+    body: axum::body::Bytes,
 ) -> Response {
     let path = format!("{}/{table}/new", crate::branding::current().base_path);
     let user = match require_staff(&headers, &path).await {
@@ -247,17 +275,24 @@ pub(crate) async fn create(
     {
         return r;
     }
-    // Parse the body twice with different deserialisers:
-    //   - HashMap collapses duplicates to "last wins" (right for
-    //     scalar fields).
-    //   - Vec<(K, V)> preserves duplicates (right for `m2m_<field>`
-    //     repeated entries — the checkbox list emits one body pair
-    //     per checked candidate).
-    let form: HashMap<String, String> = match serde_urlencoded::from_str(&body) {
-        Ok(m) => m,
-        Err(e) => return AdminError::BadInput(e.to_string()).into_response(),
+    // Decode the body once into ordered (field, value) pairs, storing any
+    // uploaded files via the ambient Storage (Wave 4). The pairs then
+    // feed the two views the write paths need:
+    //   - HashMap collapses duplicates to "last wins" (scalar fields,
+    //     including the file column's stored key).
+    //   - Vec<(K, V)> preserves duplicates (`m2m_<field>` repeated
+    //     entries — the checkbox list emits one pair per checked
+    //     candidate).
+    let content_type = headers
+        .get(umbra::web::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let pairs = match body_to_pairs(content_type, body).await {
+        Ok(p) => p,
+        Err(e) => return e.into_response(),
     };
-    let multi_form: Vec<(String, String)> = serde_urlencoded::from_str(&body).unwrap_or_default();
+    let form: HashMap<String, String> = pairs.iter().cloned().collect();
+    let multi_form: Vec<(String, String)> = pairs;
     let cfg = state.config_for(&table);
     match insert_row(&model, &form, cfg).await {
         Ok(new_pk) => {
@@ -402,7 +437,7 @@ pub(crate) async fn update(
     State(state): State<AdminState>,
     headers: HeaderMap,
     Path((table, id)): Path<(String, String)>,
-    body: String,
+    body: axum::body::Bytes,
 ) -> Response {
     let path = format!("{}/{table}/{id}/edit", crate::branding::current().base_path);
     let user = match require_staff(&headers, &path).await {
@@ -425,11 +460,21 @@ pub(crate) async fn update(
     let Some(pk) = pk_column(&model) else {
         return AdminError::Render(format!("model `{table}` has no primary key")).into_response();
     };
-    let form: HashMap<String, String> = match serde_urlencoded::from_str(&body) {
-        Ok(m) => m,
-        Err(e) => return AdminError::BadInput(e.to_string()).into_response(),
+    // Wave 4: same body decode as `create`. An empty file part is
+    // skipped by `parse_and_store_multipart`, so the file column is
+    // simply absent from `form` when the user didn't pick a new file —
+    // `update_form` only writes columns present in the map, so the
+    // existing stored key is preserved (never nulled).
+    let content_type = headers
+        .get(umbra::web::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let pairs = match body_to_pairs(content_type, body).await {
+        Ok(p) => p,
+        Err(e) => return e.into_response(),
     };
-    let multi_form: Vec<(String, String)> = serde_urlencoded::from_str(&body).unwrap_or_default();
+    let form: HashMap<String, String> = pairs.iter().cloned().collect();
+    let multi_form: Vec<(String, String)> = pairs;
     let cfg = state.config_for(&table);
     match update_row(&model, pk, &id, &form, cfg).await {
         Ok(_) => {
