@@ -97,8 +97,14 @@
     {% for w in section.widgets %}
     {%- set col_span = w.span.cols if w.span and w.span.cols else 3 -%}
     {%- set row_span = w.span.rows if w.span and w.span.rows else 1 -%}
+    {# Grid span is a DATA-DRIVEN per-widget value, so it lives in an
+       inline style, not a `col-span-N` utility class — Tailwind purges
+       interpolated class names (`col-span-{{ ... }}`), so those classes
+       never made it into admin.css and every widget collapsed to one
+       column. Inline grid styles are purge-proof and need no rebuild. #}
     <div
-      class="col-span-{{ col_span }} row-span-{{ row_span }} bg-surface-container border border-outline-variant rounded-xl overflow-hidden"
+      class="bg-surface-container border border-outline-variant rounded-xl overflow-hidden"
+      style="grid-column: span {{ col_span }} / span {{ col_span }}; grid-row: span {{ row_span }} / span {{ row_span }};"
       data-widget-kind="{{ w.kind }}"
       id="widget-{{ w.key }}"
       hx-get="{{ admin_base }}/api/dashboard/widgets/{{ w.key }}/data"
