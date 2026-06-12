@@ -155,6 +155,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         .widget(widgets::shop_order_status_donut()),
                 )
                 .dashboard_section(
+                    umbra_admin::WidgetSection::new("Gauges & rankings")
+                        .subtitle("Radial gauge, calendar heatmap, and a ranked bar list")
+                        .widget(widgets::shop_fulfillment_radial())
+                        .widget(widgets::shop_sales_heatmap())
+                        .widget(widgets::shop_order_status_progress()),
+                )
+                .dashboard_section(
                     umbra_admin::WidgetSection::new("Content")
                         .subtitle("Editorial activity from the content plugin")
                         .widget(widgets::content_subscribers_card())

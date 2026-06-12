@@ -20,9 +20,11 @@ pub mod aggregates;
 pub mod cards;
 pub mod charts;
 pub mod content;
+pub mod gauges;
 pub mod tables;
 
 pub use cards::*;
 pub use charts::*;
 pub use content::*;
+pub use gauges::*;
 pub use tables::*;
