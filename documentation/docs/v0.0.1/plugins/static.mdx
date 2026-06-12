@@ -120,7 +120,7 @@ cargo run -- collectstatic --clear  # wipe static_root/ first, then collect
 The command is **provided by `StaticPlugin` itself** — it only exists when you register the plugin (`.plugin(StaticPlugin::new(...))`). Point a CDN or nginx at `static_root` and set `static_url` to its origin, or let the framework serve it.
 
 <Callout type="info">
-For the pipeline design end-to-end (dev-vs-prod resolution, embedded vs filesystem trade-offs), see [Static files](/docs/v0.0.1/web/static-files).
+**Dev vs prod.** In development the pipeline serves plugin `static_dirs()` live from each source directory (rebuild, drop in, served next request - no recompile) and `StaticPlugin` site dirs straight off disk. In production you run `collectstatic` once and serve the resulting `static_root/` tree from the framework, nginx, or a CDN. Embedded assets (`static_files()` / `StaticPlugin::embedded`) need neither - they ship in the binary. Design rationale: `arch.md` and `planning/gaps.md` #67.
 </Callout>
 
 ## Production note
