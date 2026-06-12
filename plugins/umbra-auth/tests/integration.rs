@@ -347,9 +347,16 @@ async fn auth_plugin_registers_the_authuser_model() {
 /// without a TTY; username + email from `--username` / `--email`
 /// for the same reason. Mirrors what a CI / container superuser
 /// bootstrap would look like in production.
+/// Serialises the two tests that mutate the process-global
+/// `UMBRA_SUPERUSER_PASSWORD` env var (gaps2 #52) so they can't race —
+/// one sets it, the other asserts it's absent. Held for the whole
+/// env-dependent body of each test.
+static SUPERUSER_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 #[tokio::test]
 async fn dispatch_routes_createsuperuser_command_with_noinput() {
     boot().await;
+    let _env_guard = SUPERUSER_ENV_LOCK.lock().await;
 
     // Setup: the auth_user table was created earlier in `boot()`. We
     // need a clean slate so the username uniqueness constraint
@@ -417,6 +424,7 @@ async fn dispatch_routes_createsuperuser_command_with_noinput() {
 #[tokio::test]
 async fn createsuperuser_noinput_errors_without_password_env() {
     boot().await;
+    let _env_guard = SUPERUSER_ENV_LOCK.lock().await;
 
     // Make sure the var isn't accidentally set from the previous test.
     unsafe {

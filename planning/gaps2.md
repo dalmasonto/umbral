@@ -263,13 +263,13 @@
 
 50. [ ] Admin plugin inline editing of children. This will remain defered since its a large refactoring effort with no direct impact on the core Umbra API.
 
-51. [ ] Why is there inline css like the style tags in the umbra-site. Unless its for custom. We agreed to just use tailwind css mahn. Tailwind comes with plugins like animations, typography (for prose) and
+51. [x] Inline CSS in the umbra-site is the legitimate "custom" case (Tailwind utilities can't express the dropdown component's `::before` hover bridge, `[aria-expanded]`/`:hover` state selectors, `:root` design tokens, or dynamic per-element values like `--i: {{ loop.index }}` / `width: {{ pct }}%`) — explained, not a Tailwind-avoidance to fix — archived
 
-52. [ ] Flaky test: `createsuperuser_noinput_errors_without_password_env` fails only under full-workspace `cargo test`. Root cause is a process-global env-var race in `plugins/umbra-auth/tests/integration.rs`: `createsuperuser_noinput` (line ~368) does `std::env::set_var("UMBRA_SUPERUSER_PASSWORD", "swordfish-9-9")` while `createsuperuser_noinput_errors_without_password_env` (line ~418) does `std::env::remove_var("UMBRA_SUPERUSER_PASSWORD")` then asserts the CLI errors. Both `#[tokio::test]`s run in the same process and race on the shared env var, so the "no password" test intermittently sees the value the other test set and fails its `expect_err`. Passes in isolation and with `--test-threads=1`. The fix is to remove the cross-test reliance on a process-global var — either serialize the two with a shared mutex (`serial_test`), or thread the superuser password through an explicit CLI/dispatch argument instead of an ambient env var so the tests don't share global state. Pre-existing; unrelated to the static-files pipeline (gaps #67) it surfaced under.
+52. [x] Flaky `createsuperuser_noinput_errors_without_password_env` env-var race fixed — the two tests that mutate `UMBRA_SUPERUSER_PASSWORD` now serialise on a shared `static SUPERUSER_ENV_LOCK: tokio::sync::Mutex<()>` held across each test's env-dependent body, so they can't race under parallel runs — archived
 
 53. [x] Playground shell resolves its asset prefix from the configured `static_url` (snapshotted into `PlaygroundState` at router-build time) instead of a hardcoded `/static/playground/assets` — archived
 
-54. [ ] If a user runs an unknown command, the CLI responds with a generic "unknown command" error message instead of a helpful usage hint ie with a list of registered commands with their usage and description ie `umbra migrate  A migration command`. If a user runs `umbra help`, it should pull all the list of registered commands with their usage and description. This means, we need to alert the developer to register commands well so that they can be found and used correctly.
+54. [x] CLI lists every built-in + plugin-contributed command (name + description, column-aligned) on `umbra help` / `--help` and on an unknown command (with `error: unknown command` + the listing) — `62660a1` — archived
 
 55. [ ] Django's collectstatic can autocollect static to the configured aws bucket by the staticstorage backend. We need the same I guess.
 
