@@ -1232,13 +1232,19 @@
       window.location.reload();
       return;
     }
-    // Synthesize the rows URL by inserting `/rows` between the table
-    // segment and the query string. The changelist URL is
-    // `/admin/<table>/?<params>`; the rows fragment lives at
-    // `/admin/<table>/rows?<params>`.
-    var pathname = window.location.pathname.replace(/\/+$/, '');
-    var rows_path = pathname + '/rows';
-    var url = rows_path + window.location.search;
+    // Prefer the authoritative rows endpoint the server stamped onto the
+    // tbody (`data-rows-url`) — it's rendered with the real admin base +
+    // table, so it's correct regardless of base path, trailing slash, or
+    // any locale/prefix segment. Only the query string (search / sort /
+    // filter / pagination) is read from window.location, which is the
+    // fresh signal because the changelist controls push their state with
+    // `hx-push-url="true"`. Fall back to the old pathname synthesis when
+    // the attribute is absent (e.g. a custom template predating this).
+    var base = tbody.getAttribute('data-rows-url');
+    if (!base) {
+      base = window.location.pathname.replace(/\/+$/, '') + '/rows';
+    }
+    var url = base + window.location.search;
     htmx.ajax('GET', url, { target: '#table-body', swap: 'innerHTML' });
   });
 

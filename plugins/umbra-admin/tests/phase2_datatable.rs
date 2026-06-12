@@ -265,6 +265,29 @@ async fn test_changelist_list_display_columns_only() {
     // (may appear in other contexts but not as a table header)
 }
 
+/// gaps2 #44: the changelist tbody must carry `data-rows-url` with the
+/// server-authoritative rows endpoint, so the post-save `refreshTable`
+/// handler re-fetches THAT url instead of string-synthesizing one from
+/// `window.location` (which silently 404'd under a custom base path or a
+/// different trailing-slash shape — no refresh, no error).
+#[tokio::test]
+async fn test_changelist_tbody_carries_authoritative_rows_url() {
+    let router = boot().await.clone();
+    let session = login_session(router.clone(), "dt_admin", "password123").await;
+
+    let req = Request::builder()
+        .uri("/admin/post/")
+        .header(header::COOKIE, format!("umbra_session={session}"))
+        .body(Body::empty())
+        .unwrap();
+    let (status, body) = send(router, req).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body.contains(r#"data-rows-url="/admin/post/rows""#),
+        "tbody must expose the authoritative rows URL for the refreshTable handler: {body}"
+    );
+}
+
 #[tokio::test]
 async fn test_changelist_search_returns_matching_rows() {
     let router = boot().await.clone();

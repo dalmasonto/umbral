@@ -334,8 +334,12 @@
         </tr>
       </thead>
 
-      {# HTMX swap target for rows + pagination #}
-      <tbody id="table-body" class="divide-y dark:divide-gray-800">
+      {# HTMX swap target for rows + pagination. `data-rows-url` carries
+         the authoritative rows endpoint (server-rendered with the real
+         admin base + table) so the post-save `refreshTable` handler
+         doesn't have to string-synthesize it from window.location —
+         which silently broke on a custom base path / trailing slash. #}
+      <tbody id="table-body" data-rows-url="{{ admin_base }}/{{ model.table }}/rows" class="divide-y dark:divide-gray-800">
         {% if rows %}
           {% for row in rows %}
           <tr
