@@ -158,6 +158,10 @@ pub fn framework_checks() -> Vec<SystemCheck> {
             id: "field.storage_backend",
             run: field_storage_backend,
         },
+        SystemCheck {
+            id: "field.choices_default",
+            run: field_choices_default,
+        },
     ]
 }
 
@@ -456,6 +460,103 @@ fn field_storage_backend(ctx: &CheckContext<'_>) -> Vec<SystemCheckFinding> {
                          `App::build()` to wire a custom backend."
                             .to_string(),
                     ),
+                });
+            }
+        }
+    }
+    findings
+}
+
+/// Walk every registered model and fail at boot when a `choices`
+/// column's declared default isn't one of the column's choices.
+///
+/// **Why this exists (gaps2 #32):** a choices field's default lands
+/// verbatim in DDL (`migrate.rs`'s `def.default(col.default.clone())`),
+/// so writing `#[umbra(default = "PostStatus::Draft")]` — the Rust enum
+/// *path* instead of the stored DB literal `"draft"` — ships a broken
+/// schema. Postgres rejects the row at insert via the `CHECK (col IN
+/// (...))` constraint; SQLite stores the undecodable text and errors on
+/// the next `SELECT` when the `ChoiceField` decoder can't map it back.
+/// Per the "backend mismatches caught at boot" principle, this surfaces
+/// the mistake at build time with a clear message instead of in prod.
+///
+/// The check works off `Column.choices`, which already holds the DB
+/// values (`FieldSpec::choices`), so `choices` *is* the allowed set —
+/// no need to reach for `ChoiceField::VALUES`. When the bad default
+/// contains `::` (the tell-tale of a pasted Rust enum path), we lower
+/// the part after the last `::` and, if that matches a real choice,
+/// emit a did-you-mean for the stored literal.
+///
+/// **Error**, not Warning: the DDL is wrong and the table is unusable.
+fn field_choices_default(_ctx: &CheckContext<'_>) -> Vec<SystemCheckFinding> {
+    let mut findings = Vec::new();
+    // Low-level tests that drive `run_all` without booting an App never
+    // publish the model registry; skip silently (same guard as the
+    // other model-walking checks).
+    if !crate::migrate::is_initialised() {
+        return findings;
+    }
+    for plugin in crate::migrate::registered_plugins() {
+        for model in crate::migrate::models_for_plugin(&plugin) {
+            for field in &model.fields {
+                // Only choices columns with an explicit default can be
+                // wrong this way: a non-choices column has no allowed
+                // set to violate, and an empty default emits no DDL
+                // `DEFAULT` at all.
+                if field.choices.is_empty()
+                    || field.default.is_empty()
+                    || field.choices.contains(&field.default)
+                {
+                    continue;
+                }
+                let hint = if field.default.contains("::") {
+                    // `Foo::Bar` → `bar`; choices are typically declared
+                    // with `rename_all = "lowercase"`, so lower the tail
+                    // before checking for a match.
+                    let suggested = field
+                        .default
+                        .rsplit("::")
+                        .next()
+                        .unwrap_or(&field.default)
+                        .to_lowercase();
+                    if field.choices.contains(&suggested) {
+                        format!(
+                            "Did you mean the DB literal `{suggested}`? Choices defaults are \
+                             the stored value (e.g. `\"draft\"`), not the Rust enum path \
+                             (`\"PostStatus::Draft\"`)."
+                        )
+                    } else {
+                        format!(
+                            "Set the default to one of the stored values: [{}].",
+                            field.choices.join(", "),
+                        )
+                    }
+                } else {
+                    format!(
+                        "Set the default to one of the stored values: [{}].",
+                        field.choices.join(", "),
+                    )
+                };
+                // Leak the owned strings into the finding's
+                // &'static-typed location — the walk runs once at boot,
+                // matching the storage check's pattern.
+                findings.push(SystemCheckFinding {
+                    check_id: "field.choices_default",
+                    severity: Severity::Error,
+                    location: CheckLocation::Field {
+                        plugin: Box::leak(plugin.clone().into_boxed_str()),
+                        model: Box::leak(model.name.clone().into_boxed_str()),
+                        field: Box::leak(field.name.clone().into_boxed_str()),
+                    },
+                    message: format!(
+                        "Model `{plugin}::{}` field `{}` has default `{}` which is not one \
+                         of its choices: [{}].",
+                        model.name,
+                        field.name,
+                        field.default,
+                        field.choices.join(", "),
+                    ),
+                    hint: Some(hint),
                 });
             }
         }
