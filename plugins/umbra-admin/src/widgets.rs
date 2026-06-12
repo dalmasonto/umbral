@@ -80,6 +80,13 @@ pub enum WidgetKind {
     /// overkill. 3-6 slices reads cleanly; past that switch
     /// to a bar.
     Donut,
+    /// Radial gauge — one or more 0–100% tracks rendered as
+    /// concentric arcs (ApexCharts `radialBar`). The everyday
+    /// "progress toward a goal" tile: quota attainment, capacity
+    /// used, completion rate, SLA. A single track reads as one big
+    /// ring with the percent in the centre; 2–4 tracks compare
+    /// related ratios (e.g. per-plan conversion).
+    Radial,
     Table,
     Feed,
 }
@@ -92,6 +99,7 @@ impl WidgetKind {
             WidgetKind::Line => "line",
             WidgetKind::Bar => "bar",
             WidgetKind::Donut => "donut",
+            WidgetKind::Radial => "radial",
             WidgetKind::Table => "table",
             WidgetKind::Feed => "feed",
         }
@@ -370,6 +378,96 @@ impl DonutPayload {
     }
 }
 
+/// One arc of a [`RadialPayload`] gauge — a labeled 0–100% value.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RadialTrack {
+    pub label: String,
+    /// Percent in `[0, 100]`. The `RadialPayload` constructors clamp
+    /// this so the arc never overruns the ring.
+    pub value: f64,
+    /// Optional explicit arc color (CSS hex / rgb / token name).
+    /// `None` falls back to the chart's default palette.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+}
+
+/// Radial gauge payload — one or more 0–100% tracks rendered as
+/// concentric arcs (ApexCharts `radialBar`). Use for "progress toward
+/// a goal" metrics: quota attainment, capacity used, completion rate.
+///
+/// ```ignore
+/// // One ring: 73% of the monthly sales goal.
+/// RadialPayload::goal("Monthly goal", sales, target)
+/// // Compare conversion across plans.
+/// RadialPayload::from_pairs([("Free", 8.0), ("Pro", 21.5), ("Team", 34.0)])
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RadialPayload {
+    pub tracks: Vec<RadialTrack>,
+}
+
+impl RadialPayload {
+    /// New payload from explicit tracks; each `value` is clamped to
+    /// `[0, 100]` (non-finite -> 0).
+    pub fn new(tracks: Vec<RadialTrack>) -> Self {
+        Self {
+            tracks: tracks
+                .into_iter()
+                .map(|t| RadialTrack {
+                    value: clamp_percent(t.value),
+                    ..t
+                })
+                .collect(),
+        }
+    }
+
+    /// A single-track gauge — the common case (one big ring with the
+    /// percent in the centre).
+    pub fn single(label: impl Into<String>, percent: f64) -> Self {
+        Self::new(vec![RadialTrack {
+            label: label.into(),
+            value: percent,
+            color: None,
+        }])
+    }
+
+    /// A single-track gauge whose percent is `current / target * 100`
+    /// — the literal "progress toward a goal" shape. A non-positive
+    /// `target` yields 0% (nothing to measure against).
+    pub fn goal(label: impl Into<String>, current: f64, target: f64) -> Self {
+        let pct = if target > 0.0 {
+            current / target * 100.0
+        } else {
+            0.0
+        };
+        Self::single(label, pct)
+    }
+
+    /// Build tracks from `(label, percent)` tuples; the chart picks
+    /// colors from its default palette. Each percent is clamped.
+    pub fn from_pairs<L: Into<String>>(pairs: impl IntoIterator<Item = (L, f64)>) -> Self {
+        Self::new(
+            pairs
+                .into_iter()
+                .map(|(label, value)| RadialTrack {
+                    label: label.into(),
+                    value,
+                    color: None,
+                })
+                .collect(),
+        )
+    }
+}
+
+/// Clamp a percentage into `[0, 100]`; non-finite -> 0.
+fn clamp_percent(v: f64) -> f64 {
+    if v.is_finite() {
+        v.clamp(0.0, 100.0)
+    } else {
+        0.0
+    }
+}
+
 /// Table widget column descriptor.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TableColumn {
@@ -492,6 +590,7 @@ pub enum WidgetPayload {
     Line(LinePayload),
     Bar(BarPayload),
     Donut(DonutPayload),
+    Radial(RadialPayload),
     Table(TablePayload),
     Feed(FeedPayload),
 }
@@ -788,5 +887,69 @@ impl WidgetSection {
     pub fn widgets(mut self, ws: impl IntoIterator<Item = Widget>) -> Self {
         self.widgets.extend(ws);
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn radial_kind_serializes_as_radial() {
+        assert_eq!(WidgetKind::Radial.as_str(), "radial");
+    }
+
+    #[test]
+    fn radial_single_builds_one_track() {
+        let p = RadialPayload::single("Monthly goal", 73.0);
+        assert_eq!(p.tracks.len(), 1);
+        assert_eq!(p.tracks[0].label, "Monthly goal");
+        assert_eq!(p.tracks[0].value, 73.0);
+        assert!(p.tracks[0].color.is_none());
+    }
+
+    #[test]
+    fn radial_clamps_out_of_range_and_non_finite_percents() {
+        // Over 100, under 0, and non-finite all clamp into [0, 100].
+        assert_eq!(RadialPayload::single("over", 150.0).tracks[0].value, 100.0);
+        assert_eq!(RadialPayload::single("under", -20.0).tracks[0].value, 0.0);
+        // Non-finite (NaN, ±∞) is meaningless as a percent -> 0.
+        assert_eq!(RadialPayload::single("nan", f64::NAN).tracks[0].value, 0.0);
+        assert_eq!(
+            RadialPayload::single("inf", f64::INFINITY).tracks[0].value,
+            0.0,
+        );
+    }
+
+    #[test]
+    fn radial_goal_is_current_over_target() {
+        assert_eq!(RadialPayload::goal("g", 73.0, 100.0).tracks[0].value, 73.0);
+        // current > target clamps to 100 (overachieved, full ring).
+        assert_eq!(
+            RadialPayload::goal("g", 120.0, 100.0).tracks[0].value,
+            100.0
+        );
+        // A non-positive target has nothing to measure against -> 0%.
+        assert_eq!(RadialPayload::goal("g", 5.0, 0.0).tracks[0].value, 0.0);
+    }
+
+    #[test]
+    fn radial_from_pairs_keeps_order_and_clamps() {
+        let p = RadialPayload::from_pairs([("Free", 8.0), ("Pro", 150.0), ("Team", 34.0)]);
+        assert_eq!(p.tracks.len(), 3);
+        assert_eq!(p.tracks[0].label, "Free");
+        assert_eq!(p.tracks[1].value, 100.0); // clamped
+        assert_eq!(p.tracks[2].label, "Team");
+    }
+
+    #[test]
+    fn radial_payload_serializes_with_kind_tag() {
+        let payload = WidgetPayload::Radial(RadialPayload::single("Quota", 42.0));
+        let json = serde_json::to_value(&payload).expect("serialize");
+        assert_eq!(json["kind"], "radial");
+        assert_eq!(json["tracks"][0]["label"], "Quota");
+        assert_eq!(json["tracks"][0]["value"], 42.0);
+        // No explicit color -> the field is skipped entirely.
+        assert!(json["tracks"][0].get("color").is_none());
     }
 }

@@ -57,6 +57,7 @@ Then register it in the dashboard:
 | `Line` | Time series. Single series (one metric over time) or multi (overlay 2-5 metrics on the same x-axis). Period chips `[7d] [30d] [90d]` in the header. | [`LinePayload`](#line-) |
 | `Donut` | Categorical breakdown — 3-6 buckets (status mix, top regions). Center label shows the total. | [`DonutPayload`](#donut-) |
 | `Bar` | Categorical counts that exceed donut's 6-slice readability. | [`BarPayload`](#bar-) |
+| `Radial` | Progress toward a goal — one or more 0–100% gauges (quota attainment, capacity used, completion rate). One big ring, or 2–4 to compare ratios. | [`RadialPayload`](#radial-) |
 | `Table` | "Recent orders / posts / comments." Three or four columns, 5-10 rows, optional "View all →" link. | [`TablePayload`](#table-) |
 | `Feed` | Chronological activity — recent signups, comments, audit log entries. Avatar + title + timestamp per item. | [`FeedPayload`](#feed-) |
 | `Kpi` | The original simple stat card. Superseded by `Card` for most cases; kept for backwards compat. | `KpiPayload` |
@@ -249,6 +250,34 @@ WidgetPayload::Bar(BarPayload {
     x_type: "category".to_string(),
 })
 ```
+
+## Radial
+
+A gauge of one or more 0–100% tracks, rendered as concentric arcs (ApexCharts `radialBar`). Reach for it when a metric is a *ratio against a target* — quota attainment, capacity used, completion rate, SLA — where a card's bare number hides how close you are to "done".
+
+The everyday case is a single ring built straight from the current value and its target; the percent lands in the centre:
+
+```rust
+use umbra_admin::widgets::{RadialPayload, WidgetPayload};
+
+// 73% of the monthly sales goal.
+WidgetPayload::Radial(RadialPayload::goal("Monthly goal", sales, target))
+```
+
+`goal(label, current, target)` computes `current / target * 100` and clamps to `[0, 100]` (a non-positive target reads as 0%). For a percentage you already have, use `RadialPayload::single(label, percent)`.
+
+Pass two to four tracks to compare related ratios on one tile — the centre then shows their average:
+
+```rust
+// Per-plan conversion, compared at a glance.
+WidgetPayload::Radial(RadialPayload::from_pairs([
+    ("Free", 8.0),
+    ("Pro", 21.5),
+    ("Team", 34.0),
+]))
+```
+
+Every percent is clamped to `[0, 100]` (non-finite → 0), so an overshoot fills the ring rather than overrunning it. For an explicit arc color, build `RadialTrack { label, value, color: Some("#34d399") }` and pass to `RadialPayload::new(tracks)`.
 
 ## Table
 

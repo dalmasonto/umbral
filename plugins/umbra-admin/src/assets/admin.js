@@ -593,6 +593,104 @@
       };
     }
 
+    // Radial gauge — one or more 0–100% tracks as concentric arcs.
+    // Reads (label, value, optional color) from
+    // `[data-chart-track][data-label][data-value][data-color]`
+    // siblings. A single track shows one big ring with the percent
+    // in the centre; multiple tracks compare related ratios and the
+    // centre shows their average.
+    function radialChartOptions(el) {
+      var labels = [];
+      var values = [];
+      var explicitColors = [];
+      var hasAnyColor = false;
+      el.querySelectorAll('[data-chart-track]').forEach(function(track) {
+        labels.push(track.getAttribute('data-label') || '');
+        var v = Number(track.getAttribute('data-value') || 0);
+        values.push(Number.isFinite(v) ? Math.max(0, Math.min(100, v)) : 0);
+        var c = track.getAttribute('data-color');
+        explicitColors.push(c || null);
+        if (c) hasAnyColor = true;
+      });
+      if (values.length === 0) return null;
+      var muted     = token('--outline', 'rgb(148 163 184)');
+      var onSurface = token('--on-surface', 'rgb(229 231 235)');
+      // Same accent palette the donut + line charts use — readable in
+      // both themes (explicit accents, not tokens).
+      var defaultPalette = ['#34d399', '#60a5fa', '#fbbf24', '#f472b6', '#a78bfa', '#22d3ee'];
+      var colors = hasAnyColor
+        ? explicitColors.map(function(c, i) { return c || defaultPalette[i % defaultPalette.length]; })
+        : defaultPalette;
+      var single = values.length === 1;
+      return {
+        chart: {
+          type: 'radialBar',
+          height: '100%',
+          width: '100%',
+          background: 'transparent',
+          fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
+          foreColor: muted,
+          parentHeightOffset: 0,
+          animations: {
+            enabled: true,
+            speed: 380,
+            animateGradually: { enabled: false },
+            dynamicAnimation: { enabled: true, speed: 220 },
+          },
+        },
+        series: values,
+        labels: labels,
+        colors: colors,
+        stroke: { lineCap: 'round' },
+        plotOptions: {
+          radialBar: {
+            hollow: { size: single ? '60%' : '38%' },
+            track: {
+              background: token('--surface-container-high', 'rgba(148,163,184,0.15)'),
+              strokeWidth: '100%',
+              margin: 4,
+            },
+            dataLabels: {
+              name: {
+                show: true,
+                fontSize: '11px',
+                color: muted,
+                offsetY: single ? -8 : 0,
+              },
+              value: {
+                show: true,
+                fontSize: single ? '22px' : '14px',
+                fontWeight: 600,
+                color: onSurface,
+                offsetY: single ? 4 : 0,
+                formatter: function(v) { return Math.round(Number(v)) + '%'; },
+              },
+              total: single ? undefined : {
+                show: true,
+                label: 'Avg',
+                color: muted,
+                fontSize: '11px',
+                formatter: function(w) {
+                  var s = w.globals.series;
+                  if (!s.length) return '0%';
+                  var sum = s.reduce(function(a, b) { return a + b; }, 0);
+                  return Math.round(sum / s.length) + '%';
+                },
+              },
+            },
+          },
+        },
+        legend: single ? { show: false } : {
+          show: true,
+          position: 'bottom',
+          labels: { colors: muted },
+          markers: { width: 8, height: 8, radius: 4 },
+          itemMargin: { vertical: 2 },
+        },
+        tooltip: { enabled: false },
+      };
+    }
+
     function initCharts(root) {
       root = root || document;
       root.querySelectorAll('[data-umbra-chart="bar"]').forEach(function(el) {
@@ -659,6 +757,24 @@
         }
         if (fallback) fallback.classList.add('hidden');
         var options = donutChartOptions(el);
+        if (!options) return;
+        if (canvas._umbraApexChart) {
+          canvas._umbraApexChart.updateOptions(options, false, true);
+          return;
+        }
+        canvas._umbraApexChart = new ApexCharts(canvas, options);
+        canvas._umbraApexChart.render();
+      });
+      root.querySelectorAll('[data-umbra-chart="radial"]').forEach(function(el) {
+        var canvas = el.querySelector('[data-chart-canvas]');
+        var fallback = el.querySelector('[data-chart-unavailable]');
+        if (!canvas) return;
+        if (!window.ApexCharts) {
+          if (fallback) fallback.classList.remove('hidden');
+          return;
+        }
+        if (fallback) fallback.classList.add('hidden');
+        var options = radialChartOptions(el);
         if (!options) return;
         if (canvas._umbraApexChart) {
           canvas._umbraApexChart.updateOptions(options, false, true);
