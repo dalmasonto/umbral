@@ -55,7 +55,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use axum::{Router, routing::get_service};
+use axum::Router;
 use http::header::{HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
 use tower_http::services::ServeDir;
@@ -318,7 +318,6 @@ impl Plugin for MediaPlugin {
             );
         }
         let mount = self.mount.trim_end_matches('/').to_string();
-        let nest = format!("{mount}/{{*path}}");
         let serve = ServeDir::new(&self.dir);
 
         let svc = tower::ServiceBuilder::new()
@@ -328,7 +327,11 @@ impl Plugin for MediaPlugin {
             ))
             .service(serve);
 
-        Router::new().route(&nest, get_service(svc))
+        // `nest_service` strips the `/media` prefix before `ServeDir`
+        // resolves the path, so `/media/<key>` maps to `<dir>/<key>`. A
+        // plain `route("/media/{*path}", ...)` does NOT strip, leaving
+        // ServeDir to look under `<dir>/media/<key>` — a guaranteed 404.
+        Router::new().nest_service(&mount, svc)
     }
 
     /// Register this plugin's storage backend as the ambient default.
