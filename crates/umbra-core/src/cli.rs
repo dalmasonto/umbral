@@ -190,6 +190,87 @@ where
     Ok(DispatchOutcome::Unmatched)
 }
 
+/// Collect every plugin-contributed command as `(name, about)` pairs.
+///
+/// This is the plugin half of the unified help catalog the CLI prints
+/// on `umbra help`, `umbra --help`, and `umbra <unknown>`. The other
+/// half — the framework's built-in subcommands (`serve` / `migrate` /
+/// …) — is collected in `umbra-cli` from the derived clap `Command`,
+/// then merged with this list by [`render_help`].
+///
+/// Duplicate names across plugins are dropped (first-registered wins),
+/// mirroring [`dispatch`]'s own dedup so the listing matches what would
+/// actually run. A command whose `clap::Command` carries no `about`
+/// still appears (with `None` description); the CLI renders a dash for
+/// it and emits a `debug!` nudging the plugin author to add help text.
+pub fn command_catalog(plugins: &[Box<dyn Plugin>]) -> Vec<(String, Option<String>)> {
+    let mut out: Vec<(String, Option<String>)> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for plugin in plugins {
+        for cmd in plugin.commands() {
+            let clap_cmd = cmd.command();
+            let name = clap_cmd.get_name().to_string();
+            if !seen.insert(name.clone()) {
+                continue;
+            }
+            let about = clap_cmd.get_about().map(|s| s.to_string());
+            if about.is_none() {
+                tracing::debug!(
+                    target: "umbra::cli",
+                    "plugin command `{name}` (from `{}`) has no `about`; \
+                     it lists with a blank description. Add `.about(...)` so \
+                     users can discover what it does.",
+                    plugin.name()
+                );
+            }
+            out.push((name, about));
+        }
+    }
+    out
+}
+
+/// Render the unified command listing shown on help / unknown-command.
+///
+/// `catalog` is the merged `(name, about)` set — built-in subcommands
+/// plus every plugin-contributed command. Entries are sorted by name
+/// and deduplicated (first occurrence wins, so callers should place the
+/// built-ins first to let them win a name clash). Descriptions are
+/// padded into an aligned column; a command with no `about` shows a
+/// dash.
+///
+/// The output is a complete help screen (header, usage, command table,
+/// footer hint) ready to print to stdout (for `help`/`--help`) or
+/// stderr (after an `error: unknown command` line).
+pub fn render_help(catalog: &[(String, Option<String>)]) -> String {
+    // Dedup by name, preserving order so built-ins (passed first) win.
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut rows: Vec<(&str, &str)> = Vec::new();
+    for (name, about) in catalog {
+        if !seen.insert(name.as_str()) {
+            continue;
+        }
+        let desc = about.as_deref().map(str::trim).unwrap_or("");
+        rows.push((name.as_str(), desc));
+    }
+    rows.sort_by(|a, b| a.0.cmp(b.0));
+
+    let width = rows.iter().map(|(n, _)| n.len()).max().unwrap_or(0);
+
+    let mut s = String::new();
+    s.push_str("umbra — manage your umbra app\n\n");
+    s.push_str("Usage: umbra <command> [options]\n\n");
+    s.push_str("Commands:\n");
+    for (name, desc) in &rows {
+        let desc = if desc.is_empty() { "-" } else { desc };
+        // First line of a multi-line `about` is the summary.
+        let summary = desc.lines().next().unwrap_or("-");
+        s.push_str(&format!("  {name:<width$}  {summary}\n"));
+    }
+    s.push('\n');
+    s.push_str("Run `umbra <command> --help` for command-specific help.\n");
+    s
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -266,6 +347,120 @@ mod tests {
         // The FIRST-registered plugin's command wins.
         assert_eq!(counter_a.load(Ordering::SeqCst), 1);
         assert_eq!(counter_b.load(Ordering::SeqCst), 0);
+    }
+
+    struct NoAboutCmd;
+
+    #[async_trait]
+    impl PluginCommand for NoAboutCmd {
+        fn command(&self) -> clap::Command {
+            // Deliberately no `.about(...)` — exercises the blank-desc path.
+            clap::Command::new("tasks-worker")
+        }
+        async fn run(&self, _matches: &ArgMatches) -> Result<(), CliError> {
+            Ok(())
+        }
+    }
+
+    struct AboutCmd;
+
+    #[async_trait]
+    impl PluginCommand for AboutCmd {
+        fn command(&self) -> clap::Command {
+            clap::Command::new("tasks-worker").about("Run the task worker")
+        }
+        async fn run(&self, _matches: &ArgMatches) -> Result<(), CliError> {
+            Ok(())
+        }
+    }
+
+    fn plugin_with(cmd: fn() -> Box<dyn PluginCommand>) -> Box<dyn Plugin> {
+        Box::new(OnePlugin {
+            name: "tasks",
+            cmd: Box::new(cmd),
+        })
+    }
+
+    #[test]
+    fn command_catalog_collects_name_and_about() {
+        let plugins: Vec<Box<dyn Plugin>> = vec![plugin_with(|| Box::new(AboutCmd))];
+        let cat = command_catalog(&plugins);
+        assert_eq!(cat.len(), 1);
+        assert_eq!(cat[0].0, "tasks-worker");
+        assert_eq!(cat[0].1.as_deref(), Some("Run the task worker"));
+    }
+
+    #[test]
+    fn command_catalog_lists_command_without_about_as_none() {
+        let plugins: Vec<Box<dyn Plugin>> = vec![plugin_with(|| Box::new(NoAboutCmd))];
+        let cat = command_catalog(&plugins);
+        assert_eq!(cat.len(), 1);
+        assert_eq!(cat[0].0, "tasks-worker");
+        assert_eq!(cat[0].1, None);
+    }
+
+    #[test]
+    fn render_help_aligns_and_shows_dash_for_blank() {
+        // A built-in-style entry, a plugin entry with about, one without.
+        let catalog = vec![
+            (
+                "migrate".to_string(),
+                Some("Apply pending migrations".to_string()),
+            ),
+            (
+                "tasks-worker".to_string(),
+                Some("Run the task worker".to_string()),
+            ),
+            ("blank".to_string(), None),
+        ];
+        let out = render_help(&catalog);
+
+        // Both descriptions present.
+        assert!(
+            out.contains("Apply pending migrations"),
+            "missing built-in desc:\n{out}"
+        );
+        assert!(
+            out.contains("Run the task worker"),
+            "missing plugin desc:\n{out}"
+        );
+        // Blank-about command shows a dash.
+        assert!(
+            out.contains("blank") && out.contains(" -\n"),
+            "missing dash for blank:\n{out}"
+        );
+        // Column alignment: the longest name is `tasks-worker` (12). The
+        // shorter `migrate` row pads its name out to the same column, so
+        // its description starts at the same offset.
+        let worker_line = out.lines().find(|l| l.contains("tasks-worker")).unwrap();
+        let migrate_line = out.lines().find(|l| l.contains("migrate")).unwrap();
+        let worker_desc_col = worker_line.find("Run the task worker").unwrap();
+        let migrate_desc_col = migrate_line.find("Apply pending migrations").unwrap();
+        assert_eq!(
+            worker_desc_col, migrate_desc_col,
+            "descriptions not column-aligned:\n{out}"
+        );
+        // Sorted by name: blank < migrate < tasks-worker.
+        let bi = out.find("\n  blank").unwrap();
+        let mi = out.find("\n  migrate").unwrap();
+        let ti = out.find("\n  tasks-worker").unwrap();
+        assert!(bi < mi && mi < ti, "commands not sorted by name:\n{out}");
+    }
+
+    #[test]
+    fn render_help_dedups_first_wins() {
+        // Built-in `migrate` placed first should win over a plugin that
+        // also registers `migrate` with a different description.
+        let catalog = vec![
+            (
+                "migrate".to_string(),
+                Some("Apply pending migrations".to_string()),
+            ),
+            ("migrate".to_string(), Some("a plugin override".to_string())),
+        ];
+        let out = render_help(&catalog);
+        assert!(out.contains("Apply pending migrations"), "{out}");
+        assert!(!out.contains("a plugin override"), "{out}");
     }
 
     #[tokio::test]

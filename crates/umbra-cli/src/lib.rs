@@ -48,7 +48,7 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use umbra::App;
 use umbra::inspect::{InspectError, InspectOptions};
 use umbra::migrate::MigrateError;
@@ -175,6 +175,17 @@ pub async fn dispatch_with_argv(
     app: App,
     argv: Vec<std::ffi::OsString>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Step 0: intercept the unified-help requests before any per-command
+    // clap parser sees argv. `umbra help`, `umbra --help`, and `umbra -h`
+    // all print the merged catalog of built-in + plugin commands and exit
+    // clean. This is gaps2 #54: the user gets one list of everything they
+    // can run, not a per-layer clap help that omits the other layer's
+    // commands. (A bare `umbra` keeps its documented serve default.)
+    if wants_top_level_help(&argv) {
+        print!("{}", render_full_help(&app));
+        return Ok(());
+    }
+
     // Step 1: try plugin-contributed subcommands first. Each registered
     // plugin's `commands()` is queried; if argv matches one of them
     // (e.g. `createsuperuser` from `umbra-auth`, `worker` from
@@ -185,7 +196,10 @@ pub async fn dispatch_with_argv(
         match umbra_core::cli::dispatch(app.plugins(), argv.clone()).await {
             Ok(umbra_core::cli::DispatchOutcome::Matched(_)) => return Ok(()),
             Ok(umbra_core::cli::DispatchOutcome::Help(msg)) => {
-                // A plugin command's --help was requested. Print and exit clean.
+                // A plugin command's --help was requested (e.g.
+                // `umbra createsuperuser --help`). That's command-specific
+                // help, not the top-level catalog, so print clap's
+                // rendered body verbatim and exit clean.
                 print!("{msg}");
                 return Ok(());
             }
@@ -202,11 +216,29 @@ pub async fn dispatch_with_argv(
     let cli = match Cli::try_parse_from(&argv) {
         Ok(c) => c,
         Err(e) => {
-            // clap formats the error (usage / suggestion / --help body)
-            // and returns it as the error message.
-            e.print()?;
-            // Exit 0 for --help/--version; otherwise exit 2 for usage.
-            std::process::exit(if e.use_stderr() { 2 } else { 0 });
+            use clap::error::ErrorKind;
+            match e.kind() {
+                // Unknown subcommand / stray arg. The token is neither a
+                // plugin command (Step 1 ruled that out) nor a built-in.
+                // Print our unified `error: unknown command` + the full
+                // catalog so the user sees what IS available, then exit
+                // non-zero. Routing through `render_full_help` instead of
+                // clap's default keeps plugin commands in the listing.
+                ErrorKind::InvalidSubcommand
+                | ErrorKind::UnknownArgument
+                | ErrorKind::InvalidValue => {
+                    let bad = unknown_token(&argv);
+                    eprint!("{}", render_unknown(&app, bad.as_deref()));
+                    std::process::exit(2);
+                }
+                _ => {
+                    // Genuine clap output (a subcommand's own --help, a
+                    // missing-required-arg usage error, --version, …).
+                    // Let clap render it as before.
+                    e.print()?;
+                    std::process::exit(if e.use_stderr() { 2 } else { 0 });
+                }
+            }
         }
     };
     match cli.command.unwrap_or(Command::Serve { addr: None }) {
@@ -226,6 +258,69 @@ pub async fn dispatch_with_argv(
         Command::Loaddata { input } => loaddata(input).await,
         Command::Dev { watch, run_args } => dev(watch, run_args).await,
     }
+}
+
+/// True when argv is asking for the top-level command catalog: the
+/// `help` pseudo-subcommand, or a top-level `--help` / `-h`. A `--help`
+/// that follows a subcommand (e.g. `migrate --help`) is NOT top-level —
+/// that's command-specific help and is left to clap, so we only treat
+/// the FIRST post-argv0 token.
+///
+/// A bare `umbra` (no subcommand) is deliberately NOT intercepted: it
+/// keeps its documented default of booting the server (`Serve`), which
+/// the example apps rely on via a plain `cargo run`.
+fn wants_top_level_help(argv: &[std::ffi::OsString]) -> bool {
+    match argv.get(1) {
+        None => false,
+        Some(first) => first == "help" || first == "--help" || first == "-h",
+    }
+}
+
+/// The first non-flag token after argv0 — the subcommand the user
+/// tried to run. Used to name the offending command in the
+/// `error: unknown command \`<x>\`` line.
+fn unknown_token(argv: &[std::ffi::OsString]) -> Option<String> {
+    argv.iter()
+        .skip(1)
+        .find(|a| !a.to_string_lossy().starts_with('-'))
+        .map(|a| a.to_string_lossy().into_owned())
+}
+
+/// Build the merged `(name, about)` catalog: every built-in subcommand
+/// (read off the derived clap `Command` via `CommandFactory`) followed
+/// by every plugin-contributed command. Built-ins are placed first so
+/// they win a name clash in [`umbra_core::cli::render_help`]'s dedup.
+fn full_catalog(app: &App) -> Vec<(String, Option<String>)> {
+    let mut catalog: Vec<(String, Option<String>)> = Vec::new();
+    let root = <Cli as CommandFactory>::command();
+    for sub in root.get_subcommands() {
+        catalog.push((
+            sub.get_name().to_string(),
+            sub.get_about().map(|s| s.to_string()),
+        ));
+    }
+    catalog.extend(umbra_core::cli::command_catalog(app.plugins()));
+    catalog
+}
+
+/// Render the full help screen (built-ins + plugin commands), for
+/// `umbra help` / `umbra --help` / bare `umbra`. Prints to stdout.
+fn render_full_help(app: &App) -> String {
+    umbra_core::cli::render_help(&full_catalog(app))
+}
+
+/// Render the unknown-command screen: an `error: unknown command` line
+/// (naming the bad token if known) followed by the full catalog so the
+/// user sees what they CAN run. Printed to stderr; the caller exits
+/// non-zero.
+fn render_unknown(app: &App, bad: Option<&str>) -> String {
+    let mut s = String::new();
+    match bad {
+        Some(b) => s.push_str(&format!("error: unknown command `{b}`\n\n")),
+        None => s.push_str("error: unknown command\n\n"),
+    }
+    s.push_str(&render_full_help(app));
+    s
 }
 
 /// `umbra dev` — wraps `cargo-watch` to re-run `cargo run` on source
@@ -445,4 +540,128 @@ async fn loaddata(input: PathBuf) -> Result<(), Box<dyn std::error::Error + Send
         eprintln!("warning: skipped table `{skipped}` (not in current schema)");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_trait::async_trait;
+    use clap::ArgMatches;
+    use umbra::Settings;
+    use umbra_core::cli::{CliError, PluginCommand};
+    use umbra_core::plugin::Plugin;
+
+    struct WorkerCmd;
+
+    #[async_trait]
+    impl PluginCommand for WorkerCmd {
+        fn command(&self) -> clap::Command {
+            clap::Command::new("tasks-worker").about("Run the task worker")
+        }
+        async fn run(&self, _m: &ArgMatches) -> Result<(), CliError> {
+            Ok(())
+        }
+    }
+
+    struct WorkerPlugin;
+
+    impl Plugin for WorkerPlugin {
+        fn name(&self) -> &'static str {
+            "tasks"
+        }
+        fn commands(&self) -> Vec<Box<dyn PluginCommand>> {
+            vec![Box::new(WorkerCmd)]
+        }
+    }
+
+    async fn app_with_worker() -> App {
+        let settings = Settings::from_env().expect("figment defaults load");
+        let pool = umbra::db::connect_sqlite("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite connects");
+        App::builder()
+            .settings(settings)
+            .database("default", pool)
+            .plugin(WorkerPlugin)
+            .build()
+            .expect("App builds")
+    }
+
+    #[test]
+    fn wants_top_level_help_recognizes_help_forms() {
+        let os = |s: &str| std::ffi::OsString::from(s);
+        assert!(wants_top_level_help(&[os("umbra"), os("help")]));
+        assert!(wants_top_level_help(&[os("umbra"), os("--help")]));
+        assert!(wants_top_level_help(&[os("umbra"), os("-h")]));
+        // Bare invocation keeps the serve default — NOT intercepted.
+        assert!(!wants_top_level_help(&[os("umbra")]));
+        // `migrate --help` is command-specific, left to clap.
+        assert!(!wants_top_level_help(&[
+            os("umbra"),
+            os("migrate"),
+            os("--help")
+        ]));
+        // A real subcommand is not help.
+        assert!(!wants_top_level_help(&[os("umbra"), os("migrate")]));
+    }
+
+    #[test]
+    fn unknown_token_picks_first_non_flag() {
+        let os = |s: &str| std::ffi::OsString::from(s);
+        assert_eq!(
+            unknown_token(&[os("umbra"), os("--verbose"), os("frobnicate")]).as_deref(),
+            Some("frobnicate")
+        );
+        assert_eq!(unknown_token(&[os("umbra")]), None);
+    }
+
+    // NOTE: both the help and unknown-command paths are asserted in ONE
+    // test because `App::build` calls the global `settings::init` (a
+    // `OnceLock`) which panics if called twice in the same process.
+    // Building one App and exercising both render paths against it sidesteps
+    // that, and is also a faithful "one process, one App" shape.
+    #[tokio::test]
+    async fn help_and_unknown_list_builtins_and_plugin_commands() {
+        let app = app_with_worker().await;
+
+        // --- full help (umbra help / --help) ---
+        let out = render_full_help(&app);
+        // A built-in subcommand with its real `about`.
+        assert!(
+            out.contains("migrate"),
+            "built-in `migrate` missing:\n{out}"
+        );
+        assert!(
+            out.contains("Apply every pending migration"),
+            "built-in `migrate` about missing:\n{out}"
+        );
+        // The plugin-contributed command with its about.
+        assert!(
+            out.contains("tasks-worker") && out.contains("Run the task worker"),
+            "plugin command missing:\n{out}"
+        );
+        // Column alignment: built-in and plugin descriptions start at the
+        // same offset on their respective lines.
+        let mig_line = out
+            .lines()
+            .find(|l| l.trim_start().starts_with("migrate"))
+            .unwrap();
+        let worker_line = out.lines().find(|l| l.contains("tasks-worker")).unwrap();
+        let mig_col = mig_line.find("Apply every pending migration").unwrap();
+        let worker_col = worker_line.find("Run the task worker").unwrap();
+        assert_eq!(mig_col, worker_col, "descriptions not aligned:\n{out}");
+
+        // --- unknown command (umbra frobnicate) ---
+        let out = render_unknown(&app, Some("frobnicate"));
+        assert!(
+            out.contains("unknown command") && out.contains("frobnicate"),
+            "missing unknown-command error:\n{out}"
+        );
+        // Still shows what IS available — both a built-in and the plugin cmd.
+        assert!(out.contains("migrate"), "listing missing built-in:\n{out}");
+        assert!(
+            out.contains("tasks-worker"),
+            "listing missing plugin cmd:\n{out}"
+        );
+    }
 }
