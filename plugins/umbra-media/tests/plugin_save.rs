@@ -7,7 +7,7 @@ use std::sync::Arc;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio::sync::OnceCell;
 use umbra::storage::Storage;
-use umbra_media::{FsStorage, MediaFile, MediaPlugin};
+use umbra_media::{FsStorage, MediaFile, MediaPlugin, MediaTracking};
 
 /// Boot a one-process App with a tempfile SQLite DB and create the
 /// `media_file` table. `App::build` sets the process-global pool
@@ -52,6 +52,17 @@ async fn boot() {
         .execute(&pool)
         .await
         .expect("create media_file");
+
+        // Register the ambient storage as a `MediaTracking` wrapping an
+        // `FsStorage` (matching what `MediaPlugin::on_ready` does), so the
+        // admin/form path test below can store through
+        // `umbra::storage::storage()` and observe a tracking row. Boot
+        // happens once, so this set_storage wins the OnceLock.
+        let ambient_dir = tempfile::tempdir().expect("ambient media dir");
+        let path = ambient_dir.path().to_path_buf();
+        std::mem::forget(ambient_dir);
+        let fs: Arc<dyn Storage> = Arc::new(FsStorage::new("/media", path));
+        umbra::storage::set_storage(Arc::new(MediaTracking::new(fs)));
     })
     .await;
 }
@@ -66,20 +77,24 @@ async fn save_writes_bytes_and_inserts_row() {
     let fs = Arc::new(FsStorage::new("/media", media_dir.path()));
     let plugin = MediaPlugin::with_storage("/media", fs.clone());
 
-    let before = MediaFile::objects().count().await.expect("count before");
-
     let bytes = b"the quick brown fox";
     let outcome = plugin
         .save("report.txt", "text/plain", bytes)
         .await
         .expect("save should succeed");
 
-    // A row was inserted with the right metadata.
-    let after = MediaFile::objects().count().await.expect("count after");
+    // Exactly one row exists for THIS upload's key. Counting by the
+    // generated key (not the whole table) keeps the assertion race-free
+    // against any other test sharing the process-global pool, while still
+    // proving `save` inserts exactly one — never zero, never two.
+    let rows_for_key = MediaFile::objects()
+        .filter(umbra_media::media_file::KEY.eq(&outcome.file.key))
+        .count()
+        .await
+        .expect("count by key");
     assert_eq!(
-        after,
-        before + 1,
-        "save must insert exactly one media_file row"
+        rows_for_key, 1,
+        "save must insert exactly one media_file row for the stored key"
     );
     assert_eq!(outcome.file.filename, "report.txt");
     assert_eq!(outcome.file.content_type, "text/plain");
@@ -96,6 +111,54 @@ async fn save_writes_bytes_and_inserts_row() {
     // The bytes are retrievable via the storage backend.
     let got = fs
         .retrieve(&outcome.file.key)
+        .await
+        .expect("stored bytes must be retrievable");
+    assert_eq!(got, bytes);
+}
+
+/// An upload through the AMBIENT storage (the `MediaTracking` decorator
+/// registered at boot, the path the admin/form upload takes via
+/// `parse_and_store_multipart`) inserts exactly one `media_file` row with
+/// the right metadata, and the bytes are retrievable.
+#[tokio::test]
+async fn ambient_upload_tracks_exactly_one_row() {
+    boot().await;
+
+    let ambient = umbra::storage::storage();
+
+    let bytes = b"ambient upload bytes";
+    let stored = ambient
+        .store("photo.jpg", "image/jpeg", bytes)
+        .await
+        .expect("ambient store should succeed");
+
+    // Exactly one tracking row exists for this upload's key — counting by
+    // key (not the whole table) is race-free against the concurrent
+    // `save_writes_bytes_and_inserts_row` test sharing the global pool.
+    let rows_for_key = MediaFile::objects()
+        .filter(umbra_media::media_file::KEY.eq(&stored.key))
+        .count()
+        .await
+        .expect("count by key");
+    assert_eq!(
+        rows_for_key, 1,
+        "an ambient upload must insert exactly one media_file row for its key"
+    );
+
+    // The tracking row carries the right metadata.
+    let row = MediaFile::objects()
+        .filter(umbra_media::media_file::KEY.eq(&stored.key))
+        .first()
+        .await
+        .expect("query row")
+        .expect("tracking row must exist");
+    assert_eq!(row.filename, "photo.jpg");
+    assert_eq!(row.content_type, "image/jpeg");
+    assert_eq!(row.size, bytes.len() as i64);
+
+    // The bytes round-trip through the ambient backend.
+    let got = ambient
+        .retrieve(&stored.key)
         .await
         .expect("stored bytes must be retrievable");
     assert_eq!(got, bytes);

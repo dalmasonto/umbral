@@ -73,11 +73,18 @@ use umbra::storage::{StorageError, StoredFile};
 /// `store` writes `<dir>/<key>` where the key is `<uuid>-<sanitised
 /// filename>`; the UUID guarantees uniqueness without serialising on a
 /// counter and the trailing filename keeps URLs human-readable. `url`
-/// returns `<mount>/<key>`.
+/// returns `<mount>/<key>` by default, or
+/// `<public_base><mount>/<key>` when an absolute public base
+/// (scheme + host, e.g. `http://localhost:8100`) has been configured.
 #[derive(Debug, Clone)]
 pub struct FsStorage {
     dir: PathBuf,
     mount: String,
+    /// Optional absolute public base (scheme + host, no trailing slash),
+    /// e.g. `http://localhost:8100`. When set, [`FsStorage::url`] returns
+    /// a fully-qualified URL so a deploy can hand clients an absolute
+    /// link; `None` keeps the relative `<mount>/<key>` form.
+    public_base: Option<String>,
 }
 
 impl FsStorage {
@@ -86,7 +93,16 @@ impl FsStorage {
         Self {
             dir: dir.as_ref().to_path_buf(),
             mount: mount.into(),
+            public_base: None,
         }
+    }
+
+    /// Set the absolute public base (scheme + host like
+    /// `http://localhost:8100`). Any trailing slash is trimmed so the
+    /// join with the (leading-slash) mount never double-slashes.
+    pub fn with_public_base(mut self, base: impl Into<String>) -> Self {
+        self.public_base = Some(base.into().trim_end_matches('/').to_string());
+        self
     }
 
     /// On-disk directory.
@@ -147,7 +163,87 @@ impl Storage for FsStorage {
     }
 
     fn url(&self, key: &str) -> String {
-        format!("{}/{}", self.mount.trim_end_matches('/'), key)
+        let mount = self.mount.trim_end_matches('/');
+        match &self.public_base {
+            // `base` is scheme+host with any trailing slash already
+            // trimmed; `mount` starts with `/`, so the join is
+            // `http://host` + `/media` + `/` + key.
+            Some(base) => format!("{base}{mount}/{key}"),
+            None => format!("{mount}/{key}"),
+        }
+    }
+}
+
+/// A [`Storage`] decorator that records every successful `store` in the
+/// `media_file` table, so the admin's MediaFile changelist is populated
+/// no matter which entry point performed the upload.
+///
+/// The admin / form upload path (`umbra::web::parse_and_store_multipart`)
+/// writes through the *ambient* backend (`umbra::storage::storage()`),
+/// which BYPASSES [`MediaPlugin::save`]. Without this decorator those
+/// uploads would land on disk but never produce a tracking row.
+/// [`MediaPlugin::on_ready`] therefore registers a `MediaTracking`
+/// wrapping the real backend as the ambient default.
+///
+/// The insert is BEST-EFFORT: if it fails (e.g. no ambient DB pool in a
+/// non-`App` context) it is logged via `tracing::warn!` and the
+/// [`StoredFile`] is still returned. An upload must never fail because
+/// tracking failed. `retrieve` / `delete` / `url` delegate straight to
+/// the inner backend.
+pub struct MediaTracking {
+    inner: Arc<dyn Storage>,
+}
+
+impl MediaTracking {
+    /// Wrap `inner` so every successful `store` records a `media_file`
+    /// row.
+    pub fn new(inner: Arc<dyn Storage>) -> Self {
+        Self { inner }
+    }
+}
+
+#[umbra::storage::async_trait]
+impl Storage for MediaTracking {
+    async fn store(
+        &self,
+        filename: &str,
+        content_type: &str,
+        bytes: &[u8],
+    ) -> Result<StoredFile, StorageError> {
+        // Persist the bytes first; the row only makes sense once the
+        // object actually exists.
+        let stored = self.inner.store(filename, content_type, bytes).await?;
+
+        // Best-effort tracking insert. A failure here (no ambient pool,
+        // transient DB error) must NOT fail the upload — log and move on.
+        let row = MediaFile {
+            id: 0,
+            key: stored.key.clone(),
+            filename: filename.to_string(),
+            content_type: content_type.to_string(),
+            size: bytes.len() as i64,
+            uploaded_at: chrono::Utc::now(),
+        };
+        if let Err(e) = MediaFile::objects().create(row).await {
+            tracing::warn!(
+                key = %stored.key,
+                "umbra-media: upload stored but media_file tracking insert failed: {e}"
+            );
+        }
+
+        Ok(stored)
+    }
+
+    async fn retrieve(&self, key: &str) -> Result<Vec<u8>, StorageError> {
+        self.inner.retrieve(key).await
+    }
+
+    async fn delete(&self, key: &str) -> Result<(), StorageError> {
+        self.inner.delete(key).await
+    }
+
+    fn url(&self, key: &str) -> String {
+        self.inner.url(key)
     }
 }
 
@@ -235,6 +331,23 @@ impl MediaPlugin {
         }
     }
 
+    /// Configure an absolute public base (scheme + host like
+    /// `http://localhost:8100`) for the default [`FsStorage`] backend, so
+    /// resolved URLs are fully-qualified (`http://localhost:8100/media/<key>`)
+    /// instead of relative (`/media/<key>`). Any trailing slash on `base`
+    /// is trimmed.
+    ///
+    /// Only meaningful for the [`FsStorage`] built by [`MediaPlugin::new`];
+    /// it rebuilds that backend with the base threaded in. A backend
+    /// supplied via [`MediaPlugin::with_storage`] owns its own URL scheme,
+    /// so this builder leaves a custom backend untouched.
+    pub fn public_base(mut self, base: impl Into<String>) -> Self {
+        let base = base.into();
+        self.storage =
+            Arc::new(FsStorage::new(self.mount.clone(), self.dir.clone()).with_public_base(base));
+        self
+    }
+
     /// Enforce a hard upload-size cap. [`Self::save`] rejects bytes
     /// longer than this with [`MediaError::TooLarge`].
     pub fn max_size(mut self, bytes: u64) -> Self {
@@ -250,6 +363,14 @@ impl MediaPlugin {
     /// On-disk directory.
     pub fn dir(&self) -> &Path {
         &self.dir
+    }
+
+    /// The storage backend this plugin will register as the ambient
+    /// default (before the `MediaTracking` decorator is applied in
+    /// `on_ready`). Exposed so callers / tests can resolve a key's public
+    /// URL the same way the registered backend will.
+    pub fn storage(&self) -> &Arc<dyn Storage> {
+        &self.storage
     }
 
     /// Persist one upload to disk and record it in `media_file`.
@@ -344,7 +465,13 @@ impl Plugin for MediaPlugin {
     /// `umbra::storage::set_storage`) leaves the first in place and only
     /// warns.
     fn on_ready(&self, _ctx: &AppContext) -> Result<(), umbra::plugin::PluginError> {
-        umbra::storage::set_storage(self.storage.clone());
+        // Register the storage wrapped in a `MediaTracking` decorator so
+        // the admin / form upload path (which writes through the ambient
+        // backend, BYPASSING `MediaPlugin::save`) still records a
+        // `media_file` row per upload. `save` keeps writing through the
+        // inner `self.storage` plus its own single insert, so the two
+        // entry points each record exactly one row — no double-insert.
+        umbra::storage::set_storage(Arc::new(MediaTracking::new(self.storage.clone())));
         Ok(())
     }
 

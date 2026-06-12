@@ -3,7 +3,7 @@
 //! so these are safe to run alongside everything else).
 
 use umbra::storage::{Storage, StorageError};
-use umbra_media::FsStorage;
+use umbra_media::{FsStorage, MediaPlugin};
 
 /// store → retrieve round-trips the exact bytes; the returned url matches
 /// `url(key)`.
@@ -80,6 +80,36 @@ async fn retrieve_missing_key_is_not_found() {
         Err(StorageError::NotFound) => {}
         other => panic!("expected NotFound for a missing key, got {other:?}"),
     }
+}
+
+/// By default `url(key)` is relative: `<mount>/<key>`, no host.
+#[test]
+fn url_is_relative_by_default() {
+    let fs = FsStorage::new("/media", "./d");
+    assert_eq!(fs.url("k.png"), "/media/k.png");
+}
+
+/// The `MediaPlugin::public_base` builder threads an absolute base into
+/// the `FsStorage` it builds, so the registered backend resolves a key to
+/// a fully-qualified URL.
+#[test]
+fn public_base_yields_absolute_url() {
+    let plugin = MediaPlugin::new("/media", "./d").public_base("http://localhost:8100");
+    assert_eq!(
+        plugin.storage().url("k.png"),
+        "http://localhost:8100/media/k.png"
+    );
+}
+
+/// A trailing slash on the base is normalized away — no double slash
+/// between host and mount.
+#[test]
+fn public_base_trailing_slash_is_normalized() {
+    let plugin = MediaPlugin::new("/media", "./d").public_base("http://localhost:8100/");
+    assert_eq!(
+        plugin.storage().url("k.png"),
+        "http://localhost:8100/media/k.png"
+    );
 }
 
 /// A filename with path separators can't escape `dir` — the separators are

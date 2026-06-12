@@ -283,6 +283,34 @@ pub fn resolve_static_url(path: &str) -> String {
     join_static_url(&static_url, path)
 }
 
+/// Register the global `media_url()` template function so a template can
+/// write `{{ media_url(plugin.logo) }}` and get back the public URL for a
+/// stored file/image KEY, resolved through the ambient
+/// [`crate::storage::Storage`] backend.
+///
+/// Mirrors the `static()` global ([`register_static_function`]) but for
+/// user-uploaded media instead of developer-shipped assets:
+/// `ImageField` / `FileField` serialize as the bare storage key, so
+/// `{{ media_url(plugin.logo) }}` (where `plugin.logo` is the key string)
+/// resolves to the storage backend's public URL.
+///
+/// - An empty key yields the empty string (the surrounding `{% if %}`
+///   guard skips the markup).
+/// - With no `Storage` backend registered, the raw key falls through
+///   unchanged.
+/// - A `None`/optional field serializes to null, which the template's
+///   `{% if %}` guard handles before the helper is ever called.
+fn register_media_url_function(env: &mut Environment<'static>) {
+    env.add_function("media_url", |key: String| -> String {
+        if key.is_empty() {
+            return String::new();
+        }
+        crate::storage::storage_opt()
+            .map(|s| s.url(&key))
+            .unwrap_or(key)
+    });
+}
+
 fn register_markdown_filter(env: &mut Environment<'static>) {
     env.add_filter("markdown", |input: String| -> minijinja::Value {
         minijinja::Value::from_safe_string(render_markdown(&input))
@@ -455,6 +483,13 @@ fn build_env(dirs: &[PathBuf]) -> Result<(Environment<'static>, Vec<String>), Te
         .map(|s| s.static_url.clone())
         .unwrap_or_else(|| "/static/".to_string());
     register_static_function(&mut env, static_url);
+
+    // `{{ media_url(plugin.logo) }}` resolves a stored file/image KEY
+    // through the ambient Storage backend's `url()`, the media-side
+    // companion to `static()`. ImageField/FileField serialize as the
+    // bare key; this turns it into the public URL. See
+    // `register_media_url_function`.
+    register_media_url_function(&mut env);
 
     // features.md #4 — `{{ body | markdown }}` renders user-supplied
     // CommonMark/GFM to sanitized HTML. The reusable "safely show a
