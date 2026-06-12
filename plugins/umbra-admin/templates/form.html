@@ -127,6 +127,7 @@
               style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px;"
             >
           {% endif %}
+          {% if field.error %}<p class="field-error" style="color:#b8453d; margin-top:4px; font-size:13px;">{{ field.error }}</p>{% endif %}
         </div>
       {% endfor %}
 

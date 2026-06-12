@@ -112,6 +112,13 @@ pub(crate) struct FormField {
     /// backend is wired. Empty string for non-file fields and for an
     /// empty value.
     pub value_url: String,
+    /// Per-field validation message (gaps2 #43). Populated by the
+    /// create / update handlers when `validate_form` rejects the
+    /// submitted value for this field; rendered as a red hint line
+    /// under the input by `form.html`. Empty string = no error (the
+    /// template skips the markup), which is the default on every GET
+    /// render and on a field that validated cleanly.
+    pub error: String,
 }
 
 /// One `<option>` entry on a choices-field `<select>`.
@@ -232,6 +239,7 @@ pub(crate) fn form_fields_for(
                 help: c.help.clone(),
                 widget: c.widget.clone().unwrap_or_default(),
                 value_url,
+                error: String::new(),
             }
         })
         .collect();
@@ -251,12 +259,154 @@ pub(crate) fn form_fields_for(
                     help: String::new(),
                     widget: String::new(),
                     value_url: String::new(),
+                    error: String::new(),
                 });
             }
         }
     }
 
     result
+}
+
+/// Validate one create/edit form submission against the model's
+/// editable fields, returning `field_name → message` for every
+/// failure (gaps2 #43).
+///
+/// Django shows ALL field errors at once, each below its own input;
+/// this is the server-side pass that produces them. It walks the SAME
+/// `FormField` list the form renders (via `form_fields_for`) so the
+/// exclusion logic — pk / noform / auto_now / auto_now_add / password —
+/// is shared and can't drift from what the user actually sees.
+///
+/// The map is collected exhaustively (never break on the first
+/// failure) so a single re-render surfaces every problem. An empty map
+/// means "submit is clean as far as static validation can tell"; the
+/// handler then proceeds to the DB write, where a UNIQUE / constraint
+/// violation that validation can't predict still surfaces at the top
+/// of the form.
+pub(crate) fn validate_form(
+    model: &ModelMeta,
+    form: &HashMap<String, String>,
+    cfg: Option<&AdminConfig>,
+) -> std::collections::BTreeMap<String, String> {
+    let mut errors = std::collections::BTreeMap::new();
+    let fields = form_fields_for(model, Some(form), cfg);
+    for field in &fields {
+        // The synthetic password field runs its own confirm flow in
+        // `insert_row`; static validation doesn't second-guess it.
+        if field.is_password || field.kind == "password" {
+            continue;
+        }
+        // Readonly fields are never written from the form — skip.
+        if field.readonly {
+            continue;
+        }
+        // File/image uploads aren't carried in `form` as a plain value
+        // (multipart parts become storage keys, and an edit that keeps
+        // the current file omits the column entirely). The template
+        // already gates `required` on "no current value", so a
+        // server-side required-check here would produce false
+        // positives. Skip these kinds outright.
+        if field.kind == "file" || field.kind == "image" {
+            continue;
+        }
+
+        let raw = form.get(&field.name).map(|s| s.as_str()).unwrap_or("");
+        let value = raw.trim();
+        let col = model.fields.iter().find(|c| c.name == field.name);
+
+        // --- Required ---------------------------------------------------
+        // A field is required when its column is NOT nullable and has
+        // no DB default. Bool checkboxes are exempt: an unchecked box
+        // submits nothing, which the write path coerces to `false`.
+        let required = match col {
+            Some(c) => !c.nullable && c.default.is_empty(),
+            None => false,
+        };
+        if required && value.is_empty() && field.kind != "bool" {
+            errors.insert(field.name.clone(), "This field is required.".to_string());
+            // Nothing more to validate on an empty required field.
+            continue;
+        }
+        // A non-empty value is what the remaining checks inspect; an
+        // empty optional field is fine.
+        if value.is_empty() {
+            continue;
+        }
+
+        // --- Type-shape checks -----------------------------------------
+        match field.kind {
+            "number" => {
+                let is_float = matches!(
+                    col.map(|c| c.ty),
+                    Some(SqlType::Real) | Some(SqlType::Double) | Some(SqlType::Decimal)
+                );
+                let ok = if is_float {
+                    value.parse::<f64>().is_ok()
+                } else {
+                    // Integer columns: accept an integer; fall back to
+                    // f64 only when the SqlType is unknown.
+                    value.parse::<i64>().is_ok()
+                };
+                if !ok {
+                    errors.insert(field.name.clone(), "Enter a valid number.".to_string());
+                }
+            }
+            "date" => {
+                if chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").is_err() {
+                    errors.insert(field.name.clone(), "Enter a valid date.".to_string());
+                }
+            }
+            "time" => {
+                if !valid_time(value) {
+                    errors.insert(field.name.clone(), "Enter a valid time.".to_string());
+                }
+            }
+            "datetime-local" => {
+                if !valid_datetime_local(value) {
+                    errors.insert(
+                        field.name.clone(),
+                        "Enter a valid date and time.".to_string(),
+                    );
+                }
+            }
+            "select" => {
+                if !field.choices.iter().any(|c| c.value == value) {
+                    errors.insert(field.name.clone(), "Select a valid option.".to_string());
+                }
+            }
+            _ => {}
+        }
+
+        // --- max_length ------------------------------------------------
+        if let Some(c) = col {
+            if c.max_length > 0 && value.chars().count() > c.max_length as usize {
+                // A type-shape error already populated this field — the
+                // length error is secondary; only set it if nothing else
+                // claimed the slot.
+                errors
+                    .entry(field.name.clone())
+                    .or_insert_with(|| format!("Must be at most {} characters.", c.max_length));
+            }
+        }
+    }
+    errors
+}
+
+/// Accept `HH:MM` or `HH:MM:SS` (the shapes a `<input type="time">`
+/// emits). Lenient: the DB layer parses the canonical form, so we only
+/// reject values that are obviously not a time.
+fn valid_time(value: &str) -> bool {
+    chrono::NaiveTime::parse_from_str(value, "%H:%M:%S").is_ok()
+        || chrono::NaiveTime::parse_from_str(value, "%H:%M").is_ok()
+}
+
+/// Accept `YYYY-MM-DDTHH:MM` or `…:SS` (what `<input
+/// type="datetime-local">` emits). Lenient for the same reason as
+/// `valid_time`.
+fn valid_datetime_local(value: &str) -> bool {
+    chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S").is_ok()
+        || chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M").is_ok()
 }
 
 // =========================================================================
@@ -890,5 +1040,106 @@ mod tests {
     fn format_for_input_passes_through_bad_rfc3339_unchanged() {
         let bad = "not-a-valid-timestamp";
         assert_eq!(format_for_input(bad, SqlType::Timestamptz), bad);
+    }
+
+    // ---------------------------------------------------------------
+    // gaps2 #43: form validation surfaces ALL field errors at once.
+    // ---------------------------------------------------------------
+
+    /// A submission with two distinct violations — a required text
+    /// field left blank AND a number field given a non-numeric value —
+    /// returns a 2-entry map keyed by each field, NOT just the first.
+    /// This is the unit-level proof of the "show everything at once"
+    /// contract; the template renders each message under its input.
+    #[test]
+    fn validate_form_collects_all_field_errors() {
+        let mut name = col("name", false, false, false);
+        name.ty = SqlType::Text;
+        name.nullable = false; // required
+
+        let mut age = col("age", false, false, false);
+        age.ty = SqlType::Integer;
+        age.nullable = false; // required, but supplied (just invalid)
+
+        let model = meta("person", vec![col("id", false, false, true), name, age]);
+
+        let mut form = std::collections::HashMap::new();
+        form.insert("name".to_string(), "".to_string()); // blank required text
+        form.insert("age".to_string(), "abc".to_string()); // not a number
+
+        let errors = super::validate_form(&model, &form, None);
+        assert_eq!(errors.len(), 2, "both fields must report, got {errors:?}");
+        assert_eq!(
+            errors.get("name").map(String::as_str),
+            Some("This field is required.")
+        );
+        assert_eq!(
+            errors.get("age").map(String::as_str),
+            Some("Enter a valid number.")
+        );
+    }
+
+    /// A clean submission produces an empty map (the handler then
+    /// proceeds straight to the DB write).
+    #[test]
+    fn validate_form_accepts_valid_submission() {
+        let mut name = col("name", false, false, false);
+        name.ty = SqlType::Text;
+        name.nullable = false;
+
+        let mut age = col("age", false, false, false);
+        age.ty = SqlType::Integer;
+        age.nullable = true; // optional
+
+        let model = meta("person", vec![col("id", false, false, true), name, age]);
+
+        let mut form = std::collections::HashMap::new();
+        form.insert("name".to_string(), "Ada".to_string());
+        form.insert("age".to_string(), "42".to_string());
+
+        let errors = super::validate_form(&model, &form, None);
+        assert!(errors.is_empty(), "valid form should pass, got {errors:?}");
+    }
+
+    /// An out-of-set choice value is rejected; a valid one passes.
+    #[test]
+    fn validate_form_rejects_invalid_choice() {
+        let mut status = col("status", false, false, false);
+        status.ty = SqlType::Text;
+        status.nullable = false;
+        status.choices = vec!["draft".to_string(), "published".to_string()];
+        status.choice_labels = vec!["Draft".to_string(), "Published".to_string()];
+
+        let model = meta("post", vec![col("id", false, false, true), status]);
+
+        let mut bad = std::collections::HashMap::new();
+        bad.insert("status".to_string(), "archived".to_string());
+        let errors = super::validate_form(&model, &bad, None);
+        assert_eq!(
+            errors.get("status").map(String::as_str),
+            Some("Select a valid option.")
+        );
+
+        let mut good = std::collections::HashMap::new();
+        good.insert("status".to_string(), "draft".to_string());
+        assert!(super::validate_form(&model, &good, None).is_empty());
+    }
+
+    /// A non-nullable column WITH a DB default is not required (the DB
+    /// fills it), so a blank submission validates clean.
+    #[test]
+    fn validate_form_default_satisfies_required() {
+        let mut flag = col("flag", false, false, false);
+        flag.ty = SqlType::Text;
+        flag.nullable = false;
+        flag.default = "active".to_string();
+
+        let model = meta("thing", vec![col("id", false, false, true), flag]);
+        let mut form = std::collections::HashMap::new();
+        form.insert("flag".to_string(), "".to_string());
+        assert!(
+            super::validate_form(&model, &form, None).is_empty(),
+            "a column with a DEFAULT is not required"
+        );
     }
 }

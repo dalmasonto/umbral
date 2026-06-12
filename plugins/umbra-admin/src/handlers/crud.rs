@@ -23,7 +23,9 @@ use crate::error::AdminError;
 use crate::handlers::sheet::edit_sheet_handler;
 use crate::rows::{fetch_rows_filtered, insert_row, update_row};
 use crate::util::{is_htmx, sanitise_form_error};
-use crate::view::{form_fields_for, form_m2m_fields_for, model_for_template, sidebar_apps};
+use crate::view::{
+    form_fields_for, form_m2m_fields_for, model_for_template, sidebar_apps, validate_form,
+};
 
 /// Decode a request body into ordered `(field, value)` pairs, handling
 /// both urlencoded and `multipart/form-data` admin POSTs (Wave 4).
@@ -294,6 +296,44 @@ pub(crate) async fn create(
     let form: HashMap<String, String> = pairs.iter().cloned().collect();
     let multi_form: Vec<(String, String)> = pairs;
     let cfg = state.config_for(&table);
+    // gaps2 #43: validate every field up front and surface ALL failures
+    // at once (each below its own input) rather than letting the user
+    // discover them one DB error at a time.
+    let field_errors = validate_form(&model, &form, cfg);
+    if !field_errors.is_empty() {
+        let mut fields = form_fields_for(&model, Some(&form), cfg);
+        for f in &mut fields {
+            if let Some(m) = field_errors.get(&f.name) {
+                f.error = m.clone();
+            }
+        }
+        let m2m_fields = form_m2m_fields_for(&model, None).await;
+        let apps = sidebar_apps(&state, &user);
+        let breadcrumbs = vec![
+            serde_json::json!({ "label": model.name.clone(), "url": format!("{}/{table}/", crate::branding::current().base_path) }),
+            serde_json::json!({ "label": "Add", "url": format!("{}/{table}/new", crate::branding::current().base_path) }),
+        ];
+        let initial_theme = user_theme(&user).await;
+        return match render(
+            "admin/form.html",
+            context!(
+                user          => user.username.clone(),
+                model         => model_for_template(&model),
+                fields        => fields,
+                m2m_fields    => m2m_fields,
+                verb          => "Create",
+                action        => format!("{}/{}/new", crate::branding::current().base_path, model.table),
+                error         => "",
+                apps          => apps,
+                active_table  => table,
+                breadcrumbs   => breadcrumbs,
+                initial_theme => initial_theme,
+            ),
+        ) {
+            Ok(html) => (StatusCode::BAD_REQUEST, html).into_response(),
+            Err(e2) => e2.into_response(),
+        };
+    }
     match insert_row(&model, &form, cfg).await {
         Ok(new_pk) => {
             // BUG-16 admin: with the parent row written, apply any
@@ -476,6 +516,43 @@ pub(crate) async fn update(
     let form: HashMap<String, String> = pairs.iter().cloned().collect();
     let multi_form: Vec<(String, String)> = pairs;
     let cfg = state.config_for(&table);
+    // gaps2 #43: same up-front, all-at-once field validation as `create`.
+    let field_errors = validate_form(&model, &form, cfg);
+    if !field_errors.is_empty() {
+        let mut fields = form_fields_for(&model, Some(&form), cfg);
+        for f in &mut fields {
+            if let Some(m) = field_errors.get(&f.name) {
+                f.error = m.clone();
+            }
+        }
+        let m2m_fields = form_m2m_fields_for(&model, Some(&id)).await;
+        let apps = sidebar_apps(&state, &user);
+        let breadcrumbs = vec![
+            serde_json::json!({ "label": model.name.clone(), "url": format!("{}/{table}/", crate::branding::current().base_path) }),
+            serde_json::json!({ "label": format!("#{id}"), "url": format!("{}/{table}/{id}", crate::branding::current().base_path) }),
+            serde_json::json!({ "label": "Edit", "url": format!("{}/{table}/{id}/edit", crate::branding::current().base_path) }),
+        ];
+        let initial_theme = user_theme(&user).await;
+        return match render(
+            "admin/form.html",
+            context!(
+                user          => user.username.clone(),
+                model         => model_for_template(&model),
+                fields        => fields,
+                m2m_fields    => m2m_fields,
+                verb          => "Edit",
+                action        => format!("{}/{}/{}/edit", crate::branding::current().base_path, model.table, id),
+                error         => "",
+                apps          => apps,
+                active_table  => table,
+                breadcrumbs   => breadcrumbs,
+                initial_theme => initial_theme,
+            ),
+        ) {
+            Ok(html) => (StatusCode::BAD_REQUEST, html).into_response(),
+            Err(e2) => e2.into_response(),
+        };
+    }
     match update_row(&model, pk, &id, &form, cfg).await {
         Ok(_) => {
             // BUG-16 admin: replace this parent's M2M selections in

@@ -250,7 +250,7 @@
 
 41. [ ] The body Markdown, code, and RTE don't work yet. I filled in markdown field and got back an error `body is required, null`. So the markdown field did not fill the underlying body input field. When the error came back, the textarea and the mardown field were both shows (./images/Screenshot from 2026-06-11 03-55-50.png)
 42. [x] FK save binds text not bigint — archived
-43. [ ] Another issue is that in django admin, errors are returned 1 by 1 not all at once. This is a bug and usability issue. They should be returned at once and each field should render the error below it not at the top of the form.
+43. [x] Admin full-page create/edit forms now validate every field up front (`validate_form` in `view.rs`) and surface ALL failures at once — required / number / date / time / datetime-local / choice / max_length — each rendered below its own input (`FormField.error` + `form.html`), instead of one DB error at a time at the top. — archived
 44. [ ] Admin tables don't refresh on entry craetion or update, the page, the table should refresh. This was done but maybe the url is not receiving the refresh signal correctly.
 45. [x] Seamless reverse-FK relations — annotate auto-discovery + instance `reverse::<Child>()` accessor (zero-declaration) — archived
 46. [x] Session plugin created a DB row per cookie-less request (3 on fresh load) — fixed via lazy session creation — archived
