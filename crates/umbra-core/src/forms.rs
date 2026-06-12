@@ -358,6 +358,13 @@ pub enum InputKind {
     Time,
     DatetimeLocal,
     Textarea,
+    /// `<input type="file">`. Submission is opaque: the admin's
+    /// multipart handler stores the upload and puts the resulting
+    /// storage *key* (a plain string) into the form data, which the
+    /// `FileField` / `ImageField` newtype is constructed from. The
+    /// rendered input never echoes the key as its `value` (browsers
+    /// reject programmatic file-input values), so it has no prefill.
+    File,
     /// Closed-set enum (`#[umbra(choices)]`). Options are compile-time
     /// `(value, label)` pairs from `ChoiceField`. Rendered as a
     /// `<select>`, not an `<input>`.
@@ -391,6 +398,7 @@ impl InputKind {
             InputKind::Date => "date",
             InputKind::Time => "time",
             InputKind::DatetimeLocal => "datetime-local",
+            InputKind::File => "file",
             // `Select` / `ModelChoice` / `ModelMultiChoice` have no
             // `<input type>`; their render arms build a `<select>` and
             // never call `html_type`. "text" is a harmless default to
@@ -504,6 +512,26 @@ impl Field {
         let mut f = Self::text(name);
         f.kind = InputKind::Password;
         f
+    }
+
+    /// New file field — renders `<input type="file">`. One kind covers
+    /// both `FileField` and `ImageField`: the Form-side input is just a
+    /// file input (the admin's image-preview is a column-`widget`
+    /// concern, not a form-input concern).
+    ///
+    /// The submitted value is the opaque storage *key* the admin's
+    /// multipart handler stored after the upload; there's nothing to
+    /// validate about a key string beyond required/optional, so the
+    /// only validator is `Required` (dropped via `.optional()` for a
+    /// nullable field). Length / regex / format validators don't apply.
+    pub fn file(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            kind: InputKind::File,
+            required: true,
+            validators: vec![Box::new(Required)],
+            options: Vec::new(),
+        }
     }
 
     /// New integer field. Validates that the value parses as `i64`.
@@ -690,6 +718,14 @@ impl Field {
                 s.push_str("</select>");
                 s
             }
+            InputKind::File => format!(
+                // No `value` attribute: browsers reject programmatic
+                // file-input values, and echoing the storage key into
+                // the markup would leak it. The prefill is intentionally
+                // dropped.
+                "<input type=\"file\" name=\"{name}\"{required}>",
+                name = self.name,
+            ),
             other => format!(
                 "<input type=\"{ty}\" name=\"{name}\" value=\"{safe_value}\"{required}>",
                 ty = other.html_type(),

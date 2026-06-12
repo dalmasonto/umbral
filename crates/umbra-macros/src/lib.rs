@@ -2840,6 +2840,32 @@ fn type_is_ident(ty: &Type, name: &str) -> bool {
     false
 }
 
+/// Which file/image newtype a Form field is, and whether it's nullable.
+/// The Form derive constructs the value from the submitted storage-key
+/// string (`FileField::from(key)` / `ImageField::from(key)`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FileFormKind {
+    File,
+    Image,
+}
+
+/// Classify a Form field's type as a `FileField` / `ImageField` (or
+/// `Option<…>` of either), matched by leaf ident so both `FileField`
+/// (after `use umbra::orm::FileField`) and `orm::FileField` resolve.
+/// Returns `(kind, is_option)`; `None` for any other type so the
+/// generic `classify_form_field_type` path handles it.
+fn classify_file_form_field(ty: &Type) -> Option<(FileFormKind, bool)> {
+    let leaf = option_inner_type(ty).unwrap_or(ty);
+    let is_option = option_inner_type(ty).is_some();
+    if type_is_ident(leaf, "FileField") {
+        Some((FileFormKind::File, is_option))
+    } else if type_is_ident(leaf, "ImageField") {
+        Some((FileFormKind::Image, is_option))
+    } else {
+        None
+    }
+}
+
 /// True when `ty` is `DateTime<Utc>` (regardless of the path prefix).
 ///
 /// The derive only commits to recognising the `chrono::DateTime<chrono::Utc>`
@@ -3791,6 +3817,65 @@ fn expand_form(input: DeriveInput) -> syn::Result<TokenStream2> {
                 // Build the M2M field with its pending ids staged.
                 let mut #parsed_var: #target_field_ty = ::core::default::Default::default();
                 #parsed_var.set_pending_ids(#pending_var);
+            });
+            struct_inits.push(quote! { #field_ident: #parsed_var });
+            continue;
+        }
+
+        // FileField / ImageField (and Option<…> of either) → file
+        // input. The submitted value is the opaque storage key the
+        // admin's multipart handler already put in the form data; we
+        // construct the typed newtype straight from it. Mirrors the FK
+        // branch shape (raw string from `data.get`, nullable vs
+        // required, typed construction). Placed BEFORE the generic
+        // classifier so these don't fall through to the "unsupported
+        // type" error that forced users onto `#[umbra(noform)]`.
+        if let Some((file_kind, is_option)) = classify_file_form_field(&field.ty) {
+            let is_optional = is_option || attrs.optional;
+            let newtype = match file_kind {
+                FileFormKind::File => quote!(::umbra::orm::FileField),
+                FileFormKind::Image => quote!(::umbra::orm::ImageField),
+            };
+            let field_var = format_ident!("_{}_field", field_ident);
+            let mut chain = quote! {
+                ::umbra::forms::Field::file(#field_name)
+            };
+            if is_optional {
+                chain = quote! { #chain.optional() };
+            }
+            field_builders.push(quote! {
+                let #field_var: ::umbra::forms::Field = #chain;
+            });
+
+            let raw_var = format_ident!("_{}_raw", field_ident);
+            let parsed_var = format_ident!("_{}_parsed", field_ident);
+            let parse_expr = if is_optional {
+                quote! {
+                    if #raw_var.is_empty() {
+                        ::core::option::Option::None
+                    } else {
+                        ::core::option::Option::Some(<#newtype>::from(#raw_var.clone()))
+                    }
+                }
+            } else {
+                // Non-nullable: an empty / missing key is a required
+                // error (mirrors how the non-nullable FK branch reports
+                // a missing value). Still construct the value so the
+                // Self {..} literal type-checks; errs short-circuits the
+                // build before it's returned.
+                quote! {
+                    {
+                        if #raw_var.is_empty() {
+                            errs.add(#field_name, format!("{} is required", #field_name));
+                        }
+                        <#newtype>::from(#raw_var.clone())
+                    }
+                }
+            };
+            validate_body.push(quote! {
+                let #raw_var: ::std::string::String =
+                    data.get(#field_name).cloned().unwrap_or_default();
+                let #parsed_var = { #parse_expr };
             });
             struct_inits.push(quote! { #field_ident: #parsed_var });
             continue;
