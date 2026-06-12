@@ -201,6 +201,20 @@ Drag-resize: ~50 LOC vanilla JS at the bottom; width in localStorage.
             {% endif %}
           {% elif field.value == "" or field.value is none %}
             <span class="text-outline/60 italic font-normal text-body-sm">—</span>
+          {% elif field.kind == "image" %}
+            {# ImageField — inline thumbnail + a "view full" link. value_url
+               is the storage-resolved public URL (value stays the raw key). #}
+            <div class="flex flex-col gap-xs">
+              <img src="{{ field.value_url }}" alt="{{ field.name }}" class="rounded-xl border border-outline-variant max-h-40 w-auto object-contain bg-surface-container-low" />
+              <a href="{{ field.value_url }}" target="_blank" rel="noopener" class="text-primary text-body-sm hover:underline inline-flex items-center gap-xs">
+                <i data-lucide="image" class="w-3 h-3"></i> View full image
+              </a>
+            </div>
+          {% elif field.kind == "file" %}
+            {# FileField — download/view link instead of the raw key. #}
+            <a href="{{ field.value_url }}" target="_blank" rel="noopener" class="text-primary text-body-sm hover:underline inline-flex items-center gap-xs">
+              <i data-lucide="paperclip" class="w-3 h-3"></i> {{ field.value }}
+            </a>
           {% else %}
             {{ field.value }}
           {% endif %}

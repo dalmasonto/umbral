@@ -509,3 +509,87 @@ async fn update_without_new_file_preserves_existing_key() {
         "existing cover key preserved when no new file uploaded"
     );
 }
+
+/// The CHANGELIST renders an image column as an `<img>` thumbnail whose
+/// `src` is the resolved storage URL — not the raw key printed as text.
+#[tokio::test]
+async fn changelist_renders_image_thumbnail_not_raw_key() {
+    let router = boot().await.clone();
+    let session = login(router.clone()).await;
+
+    // Seed a row with a known image key.
+    let pool = umbra::db::pool();
+    sqlx::query("INSERT INTO product (name, cover) VALUES ('Listed', 'uploads/list.png')")
+        .execute(&pool)
+        .await
+        .expect("seed");
+
+    let (status, _h, html) = send(
+        router.clone(),
+        Request::builder()
+            .method("GET")
+            .uri("/admin/product/")
+            .header(header::COOKIE, format!("umbra_session={session}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "changelist loads");
+
+    // minijinja entity-escapes `/` in attribute values; compare against
+    // the un-escaped HTML so the assertion is about the URL not escaping.
+    let unescaped = html.replace("&#x2f;", "/").replace("&#47;", "/");
+    assert!(
+        unescaped.contains("<img src=\"https://cdn.test/uploads/list.png\""),
+        "changelist renders an <img> thumbnail with the resolved URL"
+    );
+    // The raw key must NOT appear as bare cell text (it's only inside the
+    // resolved src/href URL).
+    assert!(
+        !unescaped.contains(">uploads/list.png<"),
+        "raw storage key must not be printed as cell text"
+    );
+}
+
+/// The PREVIEW sheet renders an image column as an `<img>` whose `src`
+/// is the resolved storage URL.
+#[tokio::test]
+async fn preview_sheet_renders_image_not_raw_key() {
+    let router = boot().await.clone();
+    let session = login(router.clone()).await;
+
+    let pool = umbra::db::pool();
+    sqlx::query("INSERT INTO product (name, cover) VALUES ('Previewed', 'uploads/prev.png')")
+        .execute(&pool)
+        .await
+        .expect("seed");
+    let id: i64 = sqlx::query_scalar("SELECT id FROM product WHERE name = 'Previewed'")
+        .fetch_one(&pool)
+        .await
+        .expect("id");
+
+    let (status, _h, html) = send(
+        router.clone(),
+        Request::builder()
+            .method("GET")
+            .uri(format!("/admin/product/{id}/sheet"))
+            .header(header::COOKIE, format!("umbra_session={session}"))
+            // The preview sheet only renders the fragment for HTMX
+            // requests; otherwise it redirects to the changelist.
+            .header("HX-Request", "true")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "preview sheet loads");
+
+    let unescaped = html.replace("&#x2f;", "/").replace("&#47;", "/");
+    assert!(
+        unescaped.contains("<img src=\"https://cdn.test/uploads/prev.png\""),
+        "preview sheet renders an <img> with the resolved URL, not the raw key"
+    );
+    assert!(
+        !unescaped.contains("src=\"uploads/prev.png\""),
+        "preview must use the resolved URL, never the raw key"
+    );
+}

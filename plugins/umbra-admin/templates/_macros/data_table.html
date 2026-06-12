@@ -381,6 +381,18 @@
                 {% endif %}
               {% elif val == "" or val is none %}
                 <span class="text-outline text-body-sm italic">—</span>
+              {% elif col.kind == "image" %}
+                {# ImageField — small thumbnail linking to the full image.
+                   stopPropagation so clicking the image doesn't open the
+                   row sheet. media_url resolves the stored key → URL. #}
+                <a href="{{ media_url(val) }}" target="_blank" rel="noopener" onclick="event.stopPropagation()">
+                  <img src="{{ media_url(val) }}" alt="" class="h-8 w-8 rounded object-cover border border-outline-variant" />
+                </a>
+              {% elif col.kind == "file" %}
+                {# FileField — download/view link instead of the raw key. #}
+                <a href="{{ media_url(val) }}" target="_blank" rel="noopener" onclick="event.stopPropagation()" class="text-primary text-body-sm hover:underline inline-flex items-center gap-xs">
+                  <i data-lucide="paperclip" class="w-3 h-3 inline"></i> file
+                </a>
               {% else %}
                 <span class="text-on-surface text-body-md tabular-nums">{{ val }}</span>
               {% endif %}

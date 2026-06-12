@@ -556,6 +556,13 @@ pub(crate) struct ColumnView {
     pub primary_key: bool,
     /// Lowercase SQL type name for template filter logic.
     pub sql_type: String,
+    /// Form/display widget kind for this column, from `input_kind`:
+    /// `"image"` / `"file"` for FileField/ImageField columns, otherwise
+    /// the SqlType-derived kind (`"text"`, `"number"`, …). The
+    /// changelist + preview templates branch on `"image"` / `"file"`
+    /// to render a thumbnail / download link instead of the raw
+    /// storage key.
+    pub kind: String,
 }
 
 /// Lowercase SQL-type label rendered into the detail view's column
@@ -596,6 +603,7 @@ pub(crate) fn model_for_template(model: &ModelMeta) -> ModelView {
                 nullable: c.nullable,
                 primary_key: c.primary_key,
                 sql_type: sql_type_name(c.ty).to_string(),
+                kind: input_kind(c).to_string(),
             })
             .collect(),
     }
@@ -617,6 +625,7 @@ pub(crate) fn model_for_template_cols(model: &ModelMeta, display_cols: &[String]
                 nullable: col.nullable,
                 primary_key: col.primary_key,
                 sql_type: sql_type_name(col.ty).to_string(),
+                kind: input_kind(col).to_string(),
             }
         })
         .collect();

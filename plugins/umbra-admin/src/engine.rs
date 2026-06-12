@@ -286,6 +286,21 @@ pub(crate) fn engine() -> &'static Environment<'static> {
             umbra::templates::resolve_static_url(&path)
         });
 
+        // Media-key resolver — mirrors `static()` but routes a stored
+        // file/image KEY through the ambient Storage backend's `url()`
+        // so changelist + preview templates render the public URL
+        // (`/media/<key>`) instead of the opaque key. An empty key
+        // yields an empty string (the template skips the markup); with
+        // no Storage backend wired the raw key falls through unchanged.
+        env.add_function("media_url", |key: String| -> String {
+            if key.is_empty() {
+                return String::new();
+            }
+            umbra::storage::storage_opt()
+                .map(|s| s.url(&key))
+                .unwrap_or(key)
+        });
+
         env
     })
 }

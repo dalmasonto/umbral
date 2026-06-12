@@ -694,6 +694,30 @@ impl RestPlugin {
                 .find(|m| m.table == table)
         {
             for col in &meta.fields {
+                // File/image columns store a bare storage KEY in a TEXT
+                // column. REST consumers want the resolved public URL, not
+                // the opaque key, so swap a non-empty string value for
+                // `storage().url(key)`. A nullable field with no upload is
+                // `Value::Null` and stays null; an empty string stays empty
+                // (never turned into a bare `/media/`). Resolved through the
+                // ambient Storage backend, falling back to the raw key when
+                // no backend is wired.
+                if matches!(col.widget.as_deref(), Some("file") | Some("image")) {
+                    // Compute the owned resolved URL while only borrowing
+                    // `row` immutably (via `row.get`); let that borrow end
+                    // before the `row.insert` below (borrow-checker dance).
+                    let resolved: Option<String> = match row.get(&col.name) {
+                        Some(Value::String(key)) if !key.is_empty() => Some(
+                            umbra::storage::storage_opt()
+                                .map(|s| s.url(key))
+                                .unwrap_or_else(|| key.clone()),
+                        ),
+                        _ => None,
+                    };
+                    if let Some(url) = resolved {
+                        row.insert(col.name.clone(), Value::String(url));
+                    }
+                }
                 let Some(fk_target) = col.fk_target.as_deref() else {
                     continue;
                 };
