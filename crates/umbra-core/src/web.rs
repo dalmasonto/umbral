@@ -4,6 +4,8 @@
 //! `reverse()`, middleware registration through the Plugin contract, etc.)
 //! while keeping the underlying axum API accessible.
 
+pub mod multipart;
+
 pub use axum::Router;
 pub use axum::extract::{Form, Json, Path, Query};
 pub use axum::http::{HeaderMap, StatusCode, header};

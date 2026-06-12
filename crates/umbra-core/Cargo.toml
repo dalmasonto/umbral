@@ -88,6 +88,19 @@ toml = "0.8"
 tokio = "1"
 tracing = "0.1"
 uuid = { version = "1", features = ["serde", "v7"] }
+# multipart/form-data body parsing for file uploads (FileField/ImageField,
+# the admin's create/update on multipart POSTs). multer is the same
+# streaming multipart parser axum uses internally for its `Multipart`
+# extractor; we bind it directly so `crate::web::multipart` can parse a
+# raw body into text fields + file parts without going through axum's
+# extractor (the admin reads the body as bytes itself). `bytes` is the
+# Bytes type multer's stream constructor consumes; `futures-util` wraps a
+# single Bytes chunk in a one-item stream for that constructor. Both are
+# already transitive deps of axum/tower; naming them directly lets the
+# multipart module reference `bytes::Bytes` / `futures_util::stream`.
+multer = "3"
+bytes = "1"
+futures-util = { version = "0.3", default-features = false }
 
 [dev-dependencies]
 # figment::Jail (for env-var and toml file sandboxing in tests) lives behind

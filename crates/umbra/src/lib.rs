@@ -449,6 +449,10 @@ pub mod web {
     //! changing the names here.
 
     pub use umbra_core::slash::SlashRedirect;
+    pub use umbra_core::web::multipart::{
+        FilePart, MultipartError, MultipartForm, MultipartUploadError, is_multipart,
+        parse_and_store_multipart, parse_multipart,
+    };
     pub use umbra_core::web::*;
 }
 
