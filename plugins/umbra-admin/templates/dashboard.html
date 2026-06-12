@@ -137,6 +137,13 @@
           <div class="w-24 h-24 rounded-full border-[10px] border-surface-container-high"></div>
         </div>
       </div>
+      {% elif w.kind == "heatmap" %}
+      <div class="h-full p-md flex flex-col animate-pulse">
+        <div class="h-3 bg-surface-container-high rounded w-1/3 flex-shrink-0 mb-md"></div>
+        <div class="flex-1 grid grid-cols-6 grid-rows-4 gap-1">
+          {% for i in range(24) %}<div class="bg-surface-container-high rounded-sm"></div>{% endfor %}
+        </div>
+      </div>
       {% elif w.kind == "feed" %}
       <div class="h-full p-md flex flex-col animate-pulse">
         <div class="h-3 bg-surface-container-high rounded w-1/3 flex-shrink-0 mb-sm"></div>

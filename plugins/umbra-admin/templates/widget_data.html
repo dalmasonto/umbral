@@ -10,6 +10,7 @@
 {% from "admin/_macros/widgets/line.html" import line_widget %}
 {% from "admin/_macros/widgets/donut.html" import donut_widget %}
 {% from "admin/_macros/widgets/radial.html" import radial_widget %}
+{% from "admin/_macros/widgets/heatmap.html" import heatmap_widget %}
 {% from "admin/_macros/widgets/feed.html" import feed_widget %}
 {% from "admin/_macros/widgets/table.html" import table_widget %}
 
@@ -25,6 +26,8 @@
   {{ donut_widget(title, payload) }}
 {% elif kind == "radial" %}
   {{ radial_widget(title, payload) }}
+{% elif kind == "heatmap" %}
+  {{ heatmap_widget(title, payload) }}
 {% elif kind == "feed" %}
   {{ feed_widget(title, payload) }}
 {% elif kind == "table" %}

@@ -691,6 +691,65 @@
       };
     }
 
+    // Heatmap — a 2-D grid colored by magnitude. Reads one
+    // `[data-chart-cell][data-row][data-x][data-y]` span per cell and
+    // groups them into one ApexCharts series per row, preserving the
+    // first-seen row order and the per-row column order. ApexCharts
+    // draws series bottom-up, so we reverse to keep the payload's first
+    // row at the TOP.
+    function heatmapChartOptions(el) {
+      var order = [];
+      var byRow = {};
+      el.querySelectorAll('[data-chart-cell]').forEach(function(cell) {
+        var name = cell.getAttribute('data-row') || '';
+        if (!byRow[name]) { byRow[name] = []; order.push(name); }
+        var y = Number(cell.getAttribute('data-y') || 0);
+        byRow[name].push({
+          x: cell.getAttribute('data-x') || '',
+          y: Number.isFinite(y) ? y : 0,
+        });
+      });
+      if (order.length === 0) return null;
+      var series = order.slice().reverse().map(function(name) {
+        return { name: name, data: byRow[name] };
+      });
+      var muted = token('--outline', 'rgb(148 163 184)');
+      return {
+        chart: {
+          type: 'heatmap',
+          height: '100%',
+          width: '100%',
+          background: 'transparent',
+          fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
+          foreColor: muted,
+          parentHeightOffset: 0,
+          toolbar: { show: false },
+          animations: { enabled: true, speed: 320 },
+        },
+        series: series,
+        dataLabels: { enabled: false },
+        stroke: { width: 2, colors: ['transparent'] },
+        // Single-hue ramp — ApexCharts shades it by magnitude.
+        colors: ['#60a5fa'],
+        plotOptions: {
+          heatmap: { radius: 4, enableShades: true, shadeIntensity: 0.6 },
+        },
+        xaxis: {
+          type: 'category',
+          labels: { style: { colors: muted, fontSize: '10px' } },
+          axisBorder: { show: false },
+          axisTicks: { show: false },
+        },
+        yaxis: { labels: { style: { colors: muted, fontSize: '10px' } } },
+        grid: { borderColor: 'transparent', padding: { top: 0, right: 0 } },
+        tooltip: {
+          theme: chartIsDark() ? 'dark' : 'light',
+          y: { formatter: function(v) { return Math.round(v); } },
+        },
+        legend: { show: false },
+      };
+    }
+
     function initCharts(root) {
       root = root || document;
       root.querySelectorAll('[data-umbra-chart="bar"]').forEach(function(el) {
@@ -775,6 +834,24 @@
         }
         if (fallback) fallback.classList.add('hidden');
         var options = radialChartOptions(el);
+        if (!options) return;
+        if (canvas._umbraApexChart) {
+          canvas._umbraApexChart.updateOptions(options, false, true);
+          return;
+        }
+        canvas._umbraApexChart = new ApexCharts(canvas, options);
+        canvas._umbraApexChart.render();
+      });
+      root.querySelectorAll('[data-umbra-chart="heatmap"]').forEach(function(el) {
+        var canvas = el.querySelector('[data-chart-canvas]');
+        var fallback = el.querySelector('[data-chart-unavailable]');
+        if (!canvas) return;
+        if (!window.ApexCharts) {
+          if (fallback) fallback.classList.remove('hidden');
+          return;
+        }
+        if (fallback) fallback.classList.add('hidden');
+        var options = heatmapChartOptions(el);
         if (!options) return;
         if (canvas._umbraApexChart) {
           canvas._umbraApexChart.updateOptions(options, false, true);

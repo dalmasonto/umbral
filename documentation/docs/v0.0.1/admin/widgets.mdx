@@ -58,6 +58,7 @@ Then register it in the dashboard:
 | `Donut` | Categorical breakdown — 3-6 buckets (status mix, top regions). Center label shows the total. | [`DonutPayload`](#donut-) |
 | `Bar` | Categorical counts that exceed donut's 6-slice readability. | [`BarPayload`](#bar-) |
 | `Radial` | Progress toward a goal — one or more 0–100% gauges (quota attainment, capacity used, completion rate). One big ring, or 2–4 to compare ratios. | [`RadialPayload`](#radial-) |
+| `Heatmap` | Activity-by-time / cohort patterns — a 2-D grid of cells colored by magnitude (day × hour signups, retention by cohort). | [`HeatmapPayload`](#heatmap-) |
 | `Table` | "Recent orders / posts / comments." Three or four columns, 5-10 rows, optional "View all →" link. | [`TablePayload`](#table-) |
 | `Feed` | Chronological activity — recent signups, comments, audit log entries. Avatar + title + timestamp per item. | [`FeedPayload`](#feed-) |
 | `Kpi` | The original simple stat card. Superseded by `Card` for most cases; kept for backwards compat. | `KpiPayload` |
@@ -278,6 +279,24 @@ WidgetPayload::Radial(RadialPayload::from_pairs([
 ```
 
 Every percent is clamped to `[0, 100]` (non-finite → 0), so an overshoot fills the ring rather than overrunning it. For an explicit arc color, build `RadialTrack { label, value, color: Some("#34d399") }` and pass to `RadialPayload::new(tracks)`.
+
+## Heatmap
+
+A 2-D grid of cells colored by magnitude (ApexCharts `heatmap`). Reach for it when the story is *when* or *where* something concentrates — signups by weekday × hour, retention by cohort × week, load by region × day.
+
+The dense-grid constructor takes row labels, the shared column labels, and a `values[row][col]` matrix:
+
+```rust
+use umbra_admin::widgets::{HeatmapPayload, WidgetPayload};
+
+WidgetPayload::Heatmap(HeatmapPayload::from_grid(
+    ["Mon", "Tue", "Wed", "Thu", "Fri"],
+    ["00-06", "06-12", "12-18", "18-24"],
+    signups_by_day_and_bucket, // Vec<Vec<f64>>, one inner vec per row
+))
+```
+
+`from_grid` is rectangular by construction: a short value row is padded with `0.0` and any extra values past the column labels are dropped, so ragged input never desyncs the grid. For full control build `HeatmapRow { name, cells: vec![HeatmapCell { x, y }] }` and pass to `HeatmapPayload::new(rows)`. ApexCharts shades each cell from a single hue by value; the payload's first row renders at the top.
 
 ## Table
 

@@ -87,6 +87,11 @@ pub enum WidgetKind {
     /// ring with the percent in the centre; 2–4 tracks compare
     /// related ratios (e.g. per-plan conversion).
     Radial,
+    /// Heatmap — a 2-D grid of cells colored by magnitude (ApexCharts
+    /// `heatmap`). Best for "activity by time" patterns: day-of-week ×
+    /// hour-of-day signups, cohort retention, per-region load. Each
+    /// row is a series; each cell an `(x, value)` pair.
+    Heatmap,
     Table,
     Feed,
 }
@@ -100,6 +105,7 @@ impl WidgetKind {
             WidgetKind::Bar => "bar",
             WidgetKind::Donut => "donut",
             WidgetKind::Radial => "radial",
+            WidgetKind::Heatmap => "heatmap",
             WidgetKind::Table => "table",
             WidgetKind::Feed => "feed",
         }
@@ -468,6 +474,87 @@ fn clamp_percent(v: f64) -> f64 {
     }
 }
 
+/// One cell in a [`HeatmapRow`] — an x-axis bucket and its magnitude.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HeatmapCell {
+    /// X-axis label for this cell (e.g. an hour `"09"`, a month `"Mar"`).
+    pub x: String,
+    /// The value that colors the cell. Higher = hotter.
+    pub y: f64,
+}
+
+/// One row (series) of a [`HeatmapPayload`] — a label plus its cells
+/// across the shared x-axis.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HeatmapRow {
+    pub name: String,
+    pub cells: Vec<HeatmapCell>,
+}
+
+/// Heatmap payload — a 2-D grid of cells colored by magnitude
+/// (ApexCharts `heatmap`). Every row shares the same ordered x-axis.
+/// Use for "activity by time" patterns (day-of-week × hour), cohort
+/// retention, or per-region load.
+///
+/// ```ignore
+/// HeatmapPayload::from_grid(
+///     ["Mon", "Tue", "Wed"],
+///     ["00-06", "06-12", "12-18", "18-24"],
+///     vec![
+///         vec![2.0, 9.0, 14.0, 6.0],
+///         vec![1.0, 11.0, 17.0, 8.0],
+///         vec![3.0, 13.0, 19.0, 7.0],
+///     ],
+/// )
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HeatmapPayload {
+    pub rows: Vec<HeatmapRow>,
+}
+
+impl HeatmapPayload {
+    /// New payload from explicit rows.
+    pub fn new(rows: Vec<HeatmapRow>) -> Self {
+        Self { rows }
+    }
+
+    /// Build a rectangular grid from row labels, shared column (x)
+    /// labels, and a `values[row][col]` matrix. A short value row is
+    /// padded with `0.0` and extra values past the columns are dropped,
+    /// so the grid is always rectangular regardless of ragged input.
+    pub fn from_grid<R, C>(
+        row_labels: impl IntoIterator<Item = R>,
+        col_labels: impl IntoIterator<Item = C>,
+        values: Vec<Vec<f64>>,
+    ) -> Self
+    where
+        R: Into<String>,
+        C: Into<String>,
+    {
+        let cols: Vec<String> = col_labels.into_iter().map(Into::into).collect();
+        let rows = row_labels
+            .into_iter()
+            .enumerate()
+            .map(|(r, label)| {
+                let row_vals = values.get(r);
+                let cells = cols
+                    .iter()
+                    .enumerate()
+                    .map(|(c, x)| HeatmapCell {
+                        x: x.clone(),
+                        y: row_vals.and_then(|v| v.get(c)).copied().unwrap_or(0.0),
+                    })
+                    .collect();
+                HeatmapRow {
+                    name: label.into(),
+                    cells,
+                }
+            })
+            .collect();
+        Self { rows }
+    }
+}
+
 /// Table widget column descriptor.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TableColumn {
@@ -591,6 +678,7 @@ pub enum WidgetPayload {
     Bar(BarPayload),
     Donut(DonutPayload),
     Radial(RadialPayload),
+    Heatmap(HeatmapPayload),
     Table(TablePayload),
     Feed(FeedPayload),
 }
@@ -951,5 +1039,46 @@ mod tests {
         assert_eq!(json["tracks"][0]["value"], 42.0);
         // No explicit color -> the field is skipped entirely.
         assert!(json["tracks"][0].get("color").is_none());
+    }
+
+    #[test]
+    fn heatmap_kind_serializes_as_heatmap() {
+        assert_eq!(WidgetKind::Heatmap.as_str(), "heatmap");
+    }
+
+    #[test]
+    fn heatmap_from_grid_is_rectangular_and_padded() {
+        // A ragged matrix: row 0 short (padded with 0), row 1 long
+        // (extra dropped), row 2 exact.
+        let p = HeatmapPayload::from_grid(
+            ["Mon", "Tue", "Wed"],
+            ["AM", "PM"],
+            vec![vec![3.0], vec![1.0, 2.0, 99.0], vec![4.0, 5.0]],
+        );
+        assert_eq!(p.rows.len(), 3);
+        // Every row has exactly one cell per column label.
+        for row in &p.rows {
+            assert_eq!(row.cells.len(), 2, "row `{}` must be rectangular", row.name);
+            assert_eq!(row.cells[0].x, "AM");
+            assert_eq!(row.cells[1].x, "PM");
+        }
+        assert_eq!(p.rows[0].name, "Mon");
+        assert_eq!(p.rows[0].cells[1].y, 0.0); // short row padded
+        assert_eq!(p.rows[1].cells[1].y, 2.0); // extra `99.0` dropped
+        assert_eq!(p.rows[2].cells[0].y, 4.0);
+    }
+
+    #[test]
+    fn heatmap_payload_serializes_with_kind_tag() {
+        let payload = WidgetPayload::Heatmap(HeatmapPayload::from_grid(
+            ["Row"],
+            ["a", "b"],
+            vec![vec![7.0, 8.0]],
+        ));
+        let json = serde_json::to_value(&payload).expect("serialize");
+        assert_eq!(json["kind"], "heatmap");
+        assert_eq!(json["rows"][0]["name"], "Row");
+        assert_eq!(json["rows"][0]["cells"][0]["x"], "a");
+        assert_eq!(json["rows"][0]["cells"][1]["y"], 8.0);
     }
 }

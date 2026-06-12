@@ -1,0 +1,46 @@
+{#
+  heatmap.html
+  ============
+  Heatmap widget — a 2-D grid of cells colored by magnitude (ApexCharts
+  heatmap). Best for "activity by time" patterns (day-of-week × hour),
+  cohort retention, or per-region load.
+
+  Mounts ApexCharts on `data-chart-canvas`; emits one hidden
+  `[data-chart-cell][data-row][data-x][data-y]` span per cell. The JS
+  groups cells back into one series per row (preserving row + column
+  order) — the same flat-DOM-encoding approach the donut/radial widgets
+  use, extended to two dimensions.
+
+  Expects payload:
+    { rows: [{ name, cells: [{ x, y }] }] }
+#}
+
+{% macro heatmap_widget(title, payload) %}
+<div class="heatmap-widget h-full flex flex-col p-md">
+  <p class="text-label-sm text-outline uppercase tracking-wider mb-sm flex-shrink-0">{{ title }}</p>
+  {% if payload.rows and payload.rows | length > 0 %}
+  <div
+    class="flex-1 min-h-0 relative"
+    data-umbra-chart="heatmap"
+  >
+    {% for row in payload.rows %}
+      {% for cell in row.cells %}
+      <span
+        data-chart-cell
+        data-row="{{ row.name }}"
+        data-x="{{ cell.x }}"
+        data-y="{{ cell.y }}"
+        hidden
+      ></span>
+      {% endfor %}
+    {% endfor %}
+    <div data-chart-canvas class="absolute inset-0"></div>
+    <div data-chart-unavailable class="absolute inset-0 hidden flex flex-col">
+      <p class="text-label-sm text-outline italic m-auto">Chart library unavailable</p>
+    </div>
+  </div>
+  {% else %}
+  <p class="text-label-sm text-outline italic mt-auto">No data</p>
+  {% endif %}
+</div>
+{% endmacro %}
