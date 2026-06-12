@@ -130,19 +130,6 @@ enum Command {
         /// Path to the JSON envelope.
         input: PathBuf,
     },
-    /// Collect every registered plugin's `static_dirs()` into
-    /// `settings.static_root` (Django's `collectstatic`). Each
-    /// `<namespace>` source tree is copied to
-    /// `<static_root>/<namespace>/`, preserving each file's path
-    /// relative to its source dir. Run this before deploying so prod
-    /// (which serves only from `static_root`) has every asset on disk.
-    CollectStatic {
-        /// Empty `static_root` before collecting, dropping stale assets
-        /// no plugin ships any more. Like Django's `--clear`. No
-        /// confirmation prompt — safe to script.
-        #[arg(long, default_value_t = false)]
-        clear: bool,
-    },
     /// Dev-loop runner: watches `src/` and re-runs `cargo run` on
     /// change. Wraps `cargo-watch`; if not installed, prints the
     /// install hint and exits. Templates hot-reload in-process when
@@ -237,62 +224,8 @@ pub async fn dispatch_with_argv(
         } => inspectdb(output, mark_applied).await,
         Command::Dumpdata { output } => dumpdata(output).await,
         Command::Loaddata { input } => loaddata(input).await,
-        Command::CollectStatic { clear } => collect_static(app, clear).await,
         Command::Dev { watch, run_args } => dev(watch, run_args).await,
     }
-}
-
-/// `umbra collect_static` — copy every registered plugin's source
-/// `static_dirs()` into `settings.static_root`, the dir prod serves
-/// assets from. Reads the plugin list off the built `App` (same source
-/// the other commands use) and the destination off the published
-/// settings (`umbra_core::settings::get().static_root`).
-///
-/// Collisions are detected up front by the core
-/// [`umbra_core::static_files::collect_static`] before any file is
-/// written, so a misconfigured app fails loudly without half-populating
-/// `static_root`. A plugin whose source dir is absent is WARNED about
-/// (a real misconfiguration the dev should see) but doesn't abort the
-/// run — every other plugin still collects.
-async fn collect_static(
-    app: App,
-    clear: bool,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let static_root = umbra_core::settings::get().static_root.clone();
-
-    let summary = umbra_core::static_files::collect_static(app.plugins(), &static_root, clear)?;
-
-    // Warn about every declared-but-absent source dir. These are
-    // misconfigurations (a plugin promised assets that aren't on disk);
-    // surface them rather than swallowing silently.
-    for missing in &summary.missing {
-        eprintln!(
-            "warning: collect_static: plugin `{}` declares static namespace `{}` with source \
-             dir `{}`, which does not exist on disk — skipped.",
-            missing.plugin,
-            missing.namespace,
-            missing.source_dir.display(),
-        );
-    }
-
-    if summary.collected.is_empty() {
-        println!("No static assets to collect (no plugin contributed an on-disk source dir).");
-        return Ok(());
-    }
-
-    for collected in &summary.collected {
-        println!(
-            "{} file(s) -> {}",
-            collected.files,
-            collected.destination.display(),
-        );
-    }
-    println!(
-        "Collected {} file(s) into {}",
-        summary.total_files(),
-        summary.static_root.display(),
-    );
-    Ok(())
 }
 
 /// `umbra dev` — wraps `cargo-watch` to re-run `cargo run` on source

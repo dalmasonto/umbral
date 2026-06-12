@@ -3558,8 +3558,10 @@ dependencies = [
 name = "umbra-static"
 version = "0.0.1"
 dependencies = [
+ "async-trait",
  "axum",
  "bytes",
+ "clap",
  "http",
  "http-body-util",
  "include_dir",

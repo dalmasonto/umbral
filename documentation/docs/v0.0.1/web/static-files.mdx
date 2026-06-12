@@ -1,6 +1,6 @@
 ---
 title: Static files
-description: Serve plugin assets through one STATIC_URL base — embedded for zero-config, filesystem for drop-in updates and CDNs — with collect_static for production.
+description: Serve plugin assets through one STATIC_URL base — embedded for zero-config, filesystem for drop-in updates and CDNs — with collectstatic (provided by StaticPlugin) for production.
 sidebar_position: 6
 icon: folder
 tags: [web, static, plugins, cli]
@@ -13,7 +13,7 @@ Every plugin can ship static assets (CSS, JS, fonts, an SPA bundle). umbra serve
 A plugin picks the mode that fits its assets — both coexist behind the same URL:
 
 - **Embedded** (zero-config, single binary). The plugin returns the bytes from `Plugin::static_files()`; they're `include_bytes!`-baked and mounted as routes. Best for small, rarely-changed assets. The built-in **admin** uses this — `cargo run` just works, no extra step.
-- **Filesystem** (drop-in, CDN-ready). The plugin declares a source directory with `Plugin::static_dirs()`. In development the handler serves files **live off disk** — rebuild your frontend, drop the new files in, and they're served on the next request with no recompile. In production you run `collect_static` to gather every plugin's assets into one `static_root/` that the framework (or nginx/a CDN) serves. The built-in **playground** uses this for its Vite bundle.
+- **Filesystem** (drop-in, CDN-ready). The plugin declares a source directory with `Plugin::static_dirs()`. In development the handler serves files **live off disk** — rebuild your frontend, drop the new files in, and they're served on the next request with no recompile. In production you run `collectstatic` to gather every plugin's assets into one `static_root/` that the framework (or nginx/a CDN) serves. The built-in **playground** uses this for its Vite bundle.
 
 <Callout type="info">
 Dev serves from each plugin's source dir; production serves from the collected `static_root`. Same `{{ static(...) }}` URL, two backends — exactly like Django's dev server vs. `STATIC_ROOT`.
@@ -56,18 +56,47 @@ Two settings (overridable via `umbra.toml` or env):
 | Setting | Env | Default | Purpose |
 |---|---|---|---|
 | `static_url` | `UMBRA_STATIC_URL` | `/static/` | URL base every asset is served under. May be an absolute CDN origin (`https://cdn.example.com/s/`). |
-| `static_root` | `UMBRA_STATIC_ROOT` | `staticfiles/` | On-disk directory `collect_static` writes to and production serves from. |
+| `static_root` | `UMBRA_STATIC_ROOT` | `staticfiles/` | On-disk directory `collectstatic` writes to and production serves from. |
 
-## collect_static
+## Using StaticPlugin
 
-Before deploying, gather every registered plugin's `static_dirs()` into `static_root/`:
+`StaticPlugin` (the `umbra-static` crate) is how an app serves its own filesystem assets — and it's also what provides the `collectstatic` command. Register it in the builder:
 
-```bash
-cargo run -p umbra-cli -- collect_static          # copy all plugin assets into static_root/
-cargo run -p umbra-cli -- collect_static --clear  # wipe static_root/ first, then collect
+```rust
+use umbra::prelude::*;
+use umbra_static::StaticPlugin;
+
+let app = App::builder()
+    // Mounted AT `static_url`: the framework's unified pipeline owns
+    // `/static/`, and this plugin's directory is served at the bare
+    // `/static/<file>` root (your site CSS / images) alongside every
+    // plugin's namespaced assets.
+    .plugin(StaticPlugin::new("/static", "./static"))
+    // Mounted elsewhere (e.g. `/media`): nests independently as its own
+    // route, separate from the pipeline.
+    .plugin(StaticPlugin::new("/media", "./media"))
+    .build()?;
 ```
 
-Each plugin's tree lands under `static_root/<namespace>/…`. Point a CDN or nginx at that directory and set `static_url` to its origin, or let the framework serve it.
+A `StaticPlugin` mounted at `static_url` contributes its directory through `static_root_dirs()` so the framework serves `/static/<file>` from it (your project's own CSS / images live at the bare `/static/...` space). Mounted at any other path, it nests its own route independently.
+
+## collectstatic
+
+`collectstatic` is **provided by `StaticPlugin`**, not a core built-in — it's available **only when you register `StaticPlugin`**. A static-free app never sees the command, matching umbra's thin-core, plugin-heavy rule: serving static assets is a plugin capability, so collecting them is too.
+
+Before deploying, gather assets into `static_root/`:
+
+```bash
+cargo run -- collectstatic          # copy every plugin's assets into static_root/
+cargo run -- collectstatic --clear  # wipe static_root/ first, then collect
+```
+
+It collects both kinds of contribution:
+
+- every plugin's **namespaced** `static_dirs()` → `static_root/<namespace>/…`
+- every plugin's **site** `static_root_dirs()` (e.g. a `StaticPlugin` at `static_url`) → the `static_root/` root
+
+The result is a complete, CDN-servable tree. Point a CDN or nginx at `static_root/` and set `static_url` to its origin, or let the framework serve it.
 
 ## See also
 

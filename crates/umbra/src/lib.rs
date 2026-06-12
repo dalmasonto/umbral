@@ -274,9 +274,10 @@ pub mod static_files {
     //! resolver behind the handler.
 
     pub use umbra_core::static_files::{
-        CollectError, CollectSummary, CollectedNamespace, MissingSourceDir, StaticHandlerState,
-        StaticNamespaceCollision, StaticRegistry, collect_static, resolve_under_root, serve_file,
-        static_handler,
+        CollectError, CollectSummary, CollectedNamespace, MissingSourceDir, PublishedStatic,
+        StaticContribution, StaticHandlerState, StaticNamespaceCollision, StaticRegistry,
+        collect_into, collect_static, publish_static, published_static, resolve_under_root,
+        serve_file, static_handler,
     };
 }
 

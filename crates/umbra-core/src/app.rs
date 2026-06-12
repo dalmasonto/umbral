@@ -730,6 +730,25 @@ impl AppBuilder {
         let is_cdn_url = settings.static_url.starts_with("http://")
             || settings.static_url.starts_with("https://")
             || settings.static_url.starts_with("//");
+
+        // App/site-level static dirs served at the bare `static_url` root.
+        // A `StaticPlugin` mounted AT `static_url` contributes its
+        // directory here (and skips nesting its own catch-all), so the
+        // framework owns `static_url` as ONE mount — a second
+        // `/static/{*rest}` nest is exactly the conflict this avoids.
+        let root_dirs = crate::static_files::StaticContribution::collect_root_dirs(&sorted_plugins);
+
+        // Publish the static contributions ambiently for `collectstatic`
+        // (the `StaticPlugin` CLI command). Published UNCONDITIONALLY —
+        // before the serving-mode gate below — because `collectstatic`
+        // copies assets to disk regardless of serving mode (a CDN-mode
+        // app still needs the disk tree built for upload). Mirrors the
+        // `settings` ambient OnceLock: read-only config set once at build.
+        crate::static_files::publish_static(crate::static_files::PublishedStatic {
+            contributions: crate::static_files::StaticContribution::collect(&sorted_plugins),
+            root_dirs: root_dirs.clone(),
+        });
+
         if !is_cdn_url && !static_base.is_empty() {
             let registry = crate::static_files::StaticRegistry::from_plugins(&sorted_plugins)
                 .map_err(|c| BuildError::DuplicateStaticNamespace {
@@ -737,15 +756,6 @@ impl AppBuilder {
                     first_plugin: c.first_plugin,
                     second_plugin: c.second_plugin,
                 })?;
-            // App/site-level static dirs served at the bare `static_url`
-            // root. A `StaticPlugin` mounted AT `static_url` contributes
-            // its directory here (and skips nesting its own catch-all),
-            // so the framework owns `static_url` as ONE mount — a second
-            // `/static/{*rest}` nest is exactly the conflict this avoids.
-            let root_dirs: Vec<std::path::PathBuf> = sorted_plugins
-                .iter()
-                .flat_map(|p| p.static_root_dirs())
-                .collect();
             // Nothing to serve and no app static dirs — don't claim the
             // `static_url` path at all, so a consumer that wants to mount
             // their own router there can.

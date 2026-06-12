@@ -39,6 +39,7 @@
 
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
+use std::sync::OnceLock;
 
 use axum::body::Body;
 use axum::extract::State;
@@ -47,6 +48,97 @@ use tower::ServiceExt;
 use tower_http::services::ServeFile;
 
 use crate::plugin::{Plugin, StaticDir};
+
+/// One plugin's namespaced static contribution, flattened so it can be
+/// published ambiently for a CLI command that has no access to the
+/// plugin list. Carries the plugin name too, so `collectstatic`'s
+/// summary and missing-source warnings can name the culprit exactly as
+/// the plugin-list path did.
+#[derive(Debug, Clone)]
+pub struct StaticContribution {
+    /// The static namespace this source dir collects under
+    /// (`<static_root>/<namespace>/`).
+    pub namespace: &'static str,
+    /// On-disk source dir whose tree is copied at collect time.
+    pub source_dir: PathBuf,
+    /// The plugin that declared this contribution (for summaries /
+    /// warnings).
+    pub plugin: &'static str,
+}
+
+impl StaticContribution {
+    /// Flatten every plugin's [`Plugin::static_dirs`] into a list of
+    /// contributions, capturing each plugin's `name()` so the collect
+    /// summary can attribute files and missing-source warnings.
+    ///
+    /// No collision check here — the caller that publishes this list
+    /// (`App::build`) has already run [`StaticRegistry::from_plugins`],
+    /// which fails the build on a duplicate namespace before anything is
+    /// published. The published list is therefore pre-validated.
+    pub fn collect(plugins: &[Box<dyn Plugin>]) -> Vec<StaticContribution> {
+        let mut out = Vec::new();
+        for plugin in plugins {
+            for dir in plugin.static_dirs() {
+                let StaticDir {
+                    namespace,
+                    source_dir,
+                } = dir;
+                out.push(StaticContribution {
+                    namespace,
+                    source_dir,
+                    plugin: plugin.name(),
+                });
+            }
+        }
+        out
+    }
+
+    /// Collect every plugin's [`Plugin::static_root_dirs`] into a flat
+    /// list of app/site root dirs, copied into `<static_root>/` root at
+    /// collect time (Django `STATICFILES_DIRS` parity).
+    pub fn collect_root_dirs(plugins: &[Box<dyn Plugin>]) -> Vec<PathBuf> {
+        plugins.iter().flat_map(|p| p.static_root_dirs()).collect()
+    }
+}
+
+/// The static contributions published ambiently at `App::build` for CLI
+/// commands that can't take the plugin list as an argument.
+///
+/// This mirrors the `settings` ambient `OnceLock` (see
+/// [`crate::settings`]): read-only app config published exactly once at
+/// build time. It is NOT a mutable creeping global — nothing mutates it
+/// after `publish_static`, and the only reader is `collectstatic`, which
+/// runs after `App::build` and so needs every plugin's `static_dirs()`
+/// (namespaced) and `static_root_dirs()` (app/site) without the plugin
+/// list being threaded through `PluginCommand::run`.
+#[derive(Debug, Clone, Default)]
+pub struct PublishedStatic {
+    /// Every plugin's namespaced static contributions.
+    pub contributions: Vec<StaticContribution>,
+    /// Every plugin's app/site root dirs (no namespace), copied into the
+    /// `<static_root>/` root.
+    pub root_dirs: Vec<PathBuf>,
+}
+
+/// The one published-static slot, set once at `App::build`. Same family
+/// as `settings::SETTINGS` — the single intentional read-only ambient
+/// for CLI commands that run outside a request and can't be handed the
+/// plugin list directly.
+static PUBLISHED: OnceLock<PublishedStatic> = OnceLock::new();
+
+/// Publish the static contributions ambiently. Idempotent: a second
+/// call (e.g. a second `App::build` in one test process) is a no-op —
+/// the first publish wins, matching the `settings` OnceLock semantics.
+pub fn publish_static(p: PublishedStatic) {
+    let _ = PUBLISHED.set(p);
+}
+
+/// The static contributions published at `App::build`, or `None` if no
+/// `App` has been built in this process yet. `collectstatic` reads this
+/// to learn every plugin's source dirs without the plugin list.
+pub fn published_static() -> Option<&'static PublishedStatic> {
+    PUBLISHED.get()
+}
 
 /// Maps a plugin's static namespace to its on-disk source directory.
 ///
@@ -351,10 +443,23 @@ pub struct CollectSummary {
     pub missing: Vec<MissingSourceDir>,
     /// The destination root every namespace was collected under.
     pub static_root: PathBuf,
+    /// Count of files copied from app/site root dirs
+    /// ([`Plugin::static_root_dirs`]) into the `<static_root>/` ROOT
+    /// (no namespace) — Django `STATICFILES_DIRS` parity. Counted
+    /// separately from namespaced files so the CLI can report both.
+    ///
+    /// [`Plugin::static_root_dirs`]: crate::plugin::Plugin::static_root_dirs
+    pub root_files: usize,
+    /// The app/site root dirs that were collected (those that existed on
+    /// disk). A declared-but-absent root dir is skipped silently — unlike
+    /// a namespaced source, a root dir is a project convention dir
+    /// (`./static`) that legitimately may not exist yet.
+    pub root_dirs: Vec<PathBuf>,
 }
 
 impl CollectSummary {
-    /// Total files copied across every namespace.
+    /// Total files copied across every namespace (not counting root-dir
+    /// files; use [`Self::root_files`] for those).
     pub fn total_files(&self) -> usize {
         self.collected.iter().map(|c| c.files).sum()
     }
@@ -433,16 +538,45 @@ pub fn collect_static(
     static_root: impl Into<PathBuf>,
     clear: bool,
 ) -> Result<CollectSummary, CollectError> {
-    let static_root = static_root.into();
-
     // Detect collisions BEFORE writing anything. `from_plugins` is the
     // single source of truth for the "namespace -> source_dir" map and
     // the collision rule; running it here keeps collect_static and the
-    // runtime handler in lockstep. We discard the returned registry and
-    // re-walk plugins below because the per-plugin loop needs each
-    // plugin's `name()` for the summary, which the flattened registry
-    // doesn't carry.
+    // runtime handler in lockstep. The flattened contributions below
+    // carry each plugin's `name()`, which the summary needs and the
+    // registry doesn't keep.
     StaticRegistry::from_plugins(plugins).map_err(CollectError::Collision)?;
+
+    let contributions = StaticContribution::collect(plugins);
+    let root_dirs = StaticContribution::collect_root_dirs(plugins);
+    collect_into(&contributions, &root_dirs, static_root, clear)
+}
+
+/// The single core copy routine, shared by the plugin-list path
+/// ([`collect_static`]) and the published-contributions path (the
+/// `collectstatic` plugin command).
+///
+/// Copies each `StaticContribution`'s `source_dir` tree into
+/// `<static_root>/<namespace>/`, and each app/site `root_dir` into the
+/// `<static_root>/` ROOT (no namespace) — Django `STATICFILES_DIRS`
+/// parity, so `static_root` is a complete CDN-servable tree.
+///
+/// No collision check: the contributions are pre-validated (either by
+/// [`collect_static`]'s `from_plugins` call, or at `App::build` before
+/// they were published). The same guarantees as [`collect_static`]
+/// apply: collisions never reach here, missing namespaced sources are
+/// warned-not-fatal, re-runs are idempotent, and `clear` empties
+/// `static_root` first.
+///
+/// This is filesystem infrastructure (copying asset files), so
+/// `std::fs` is the correct tool — the ORM-only rule governs database
+/// rows, not files.
+pub fn collect_into(
+    contributions: &[StaticContribution],
+    root_dirs: &[PathBuf],
+    static_root: impl Into<PathBuf>,
+    clear: bool,
+) -> Result<CollectSummary, CollectError> {
+    let static_root = static_root.into();
 
     if clear && static_root.exists() {
         std::fs::remove_dir_all(&static_root).map_err(|source| CollectError::Io {
@@ -461,36 +595,50 @@ pub fn collect_static(
         ..Default::default()
     };
 
-    for plugin in plugins {
-        for dir in plugin.static_dirs() {
-            let StaticDir {
+    // Namespaced contributions → <static_root>/<namespace>/.
+    for contribution in contributions {
+        let StaticContribution {
+            namespace,
+            source_dir,
+            plugin,
+        } = contribution;
+
+        if !source_dir.exists() {
+            // A declared-but-absent source dir is a real
+            // misconfiguration. Record it so the CLI warns; don't
+            // swallow it silently (fix-don't-patch), and don't abort
+            // the whole run — the other contributions still collect.
+            summary.missing.push(MissingSourceDir {
                 namespace,
-                source_dir,
-            } = dir;
-
-            if !source_dir.exists() {
-                // A declared-but-absent source dir is a real
-                // misconfiguration. Record it so the CLI warns; don't
-                // swallow it silently (fix-don't-patch), and don't abort
-                // the whole run — the other plugins still collect.
-                summary.missing.push(MissingSourceDir {
-                    namespace,
-                    plugin: plugin.name(),
-                    source_dir,
-                });
-                continue;
-            }
-
-            let dest = static_root.join(namespace);
-            let files = copy_tree(&source_dir, &dest)?;
-
-            summary.collected.push(CollectedNamespace {
-                namespace,
-                plugin: plugin.name(),
-                files,
-                destination: dest,
+                plugin,
+                source_dir: source_dir.clone(),
             });
+            continue;
         }
+
+        let dest = static_root.join(namespace);
+        let files = copy_tree(source_dir, &dest)?;
+
+        summary.collected.push(CollectedNamespace {
+            namespace,
+            plugin,
+            files,
+            destination: dest,
+        });
+    }
+
+    // App/site root dirs → <static_root>/ root (no namespace). A root dir
+    // is a project convention dir (`./static`) that may legitimately not
+    // exist yet, so an absent one is skipped silently rather than warned
+    // — it is not the "plugin promised assets that aren't there"
+    // misconfiguration a namespaced source is.
+    for root in root_dirs {
+        if !root.exists() {
+            continue;
+        }
+        let files = copy_tree(root, &static_root)?;
+        summary.root_files += files;
+        summary.root_dirs.push(root.clone());
     }
 
     Ok(summary)
@@ -977,6 +1125,65 @@ mod tests {
 
         collect_static(&plugins, &static_root, false).expect("collect creates root");
         assert_eq!(read_at(&static_root, "ns/x.css"), b"X");
+    }
+
+    #[test]
+    fn collect_into_copies_root_dirs_into_static_root_root() {
+        let ns_src = tempfile::tempdir().expect("ns src");
+        let root_a = tempfile::tempdir().expect("root a");
+        let root_b = tempfile::tempdir().expect("root b");
+        let static_root = tempfile::tempdir().expect("static root");
+
+        // A namespaced contribution lands under <root>/<ns>/...
+        write_at(ns_src.path(), "admin.css", b"ADMIN");
+        // Root dirs land at the bare <static_root>/... root, preserving
+        // their tree shape.
+        write_at(root_a.path(), "site.css", b"SITE_CSS");
+        write_at(root_a.path(), "img/logo.png", b"LOGO");
+        write_at(root_b.path(), "app.js", b"APP_JS");
+
+        let contributions = vec![StaticContribution {
+            namespace: "admin",
+            source_dir: ns_src.path().to_path_buf(),
+            plugin: "admin-plugin",
+        }];
+        let root_dirs = vec![root_a.path().to_path_buf(), root_b.path().to_path_buf()];
+
+        let summary = collect_into(&contributions, &root_dirs, static_root.path(), false)
+            .expect("collect_into succeeds");
+
+        // Namespaced file under its namespace.
+        assert_eq!(read_at(static_root.path(), "admin/admin.css"), b"ADMIN");
+        // Root-dir files at the bare root, bytes intact, tree preserved.
+        assert_eq!(read_at(static_root.path(), "site.css"), b"SITE_CSS");
+        assert_eq!(read_at(static_root.path(), "img/logo.png"), b"LOGO");
+        assert_eq!(read_at(static_root.path(), "app.js"), b"APP_JS");
+
+        // Summary tracks both counts separately.
+        assert_eq!(summary.total_files(), 1, "1 namespaced file");
+        assert_eq!(summary.root_files, 3, "3 root-dir files across two dirs");
+        assert_eq!(summary.root_dirs.len(), 2);
+    }
+
+    #[test]
+    fn collect_into_skips_absent_root_dir_silently() {
+        let static_root = tempfile::tempdir().expect("static root");
+        let present = tempfile::tempdir().expect("present root");
+        write_at(present.path(), "x.css", b"X");
+
+        let absent = present.path().join("does-not-exist");
+        assert!(!absent.exists());
+
+        let root_dirs = vec![present.path().to_path_buf(), absent];
+        let summary = collect_into(&[], &root_dirs, static_root.path(), false)
+            .expect("collect_into succeeds");
+
+        // Present root collected; absent one skipped, NOT recorded as a
+        // missing-source warning (those are namespace-only).
+        assert_eq!(read_at(static_root.path(), "x.css"), b"X");
+        assert_eq!(summary.root_files, 1);
+        assert_eq!(summary.root_dirs.len(), 1);
+        assert!(summary.missing.is_empty());
     }
 
     #[tokio::test]

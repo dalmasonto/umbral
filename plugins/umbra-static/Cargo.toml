@@ -23,6 +23,13 @@ include_dir = { version = "0.7", default-features = false }
 mime_guess = "2"
 bytes = "1"
 axum = "0.8"
+# clap for the `collectstatic` management command — Plugin::commands()
+# returns a Vec<Box<dyn PluginCommand>>, and each command exposes a
+# clap::Command for arg parsing.
+clap = "4"
+# async-trait for the PluginCommand impl. The trait in `umbra::cli` is
+# async, made object-safe via async-trait's Pin<Box<...>> desugaring.
+async-trait = "0.1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync"] }

@@ -307,6 +307,112 @@ impl Plugin for StaticPlugin {
             _ => Vec::new(),
         }
     }
+
+    /// Provide `collectstatic`, Django's asset-collection command, as a
+    /// plugin-contributed CLI subcommand. It lives HERE — not as a
+    /// built-in `umbra-cli` subcommand — so it is only available when a
+    /// project registers `StaticPlugin`. A REST-free, static-free app
+    /// never sees the command, matching the "thin core, plugin-heavy"
+    /// rule: serving static assets is a plugin capability, so collecting
+    /// them is too.
+    fn commands(&self) -> Vec<Box<dyn umbra::cli::PluginCommand>> {
+        vec![Box::new(CollectStaticCommand)]
+    }
+}
+
+/// The `collectstatic` management command. Copies every registered
+/// plugin's namespaced `static_dirs()` into
+/// `<static_root>/<namespace>/` and every app/site `static_root_dirs()`
+/// into the `<static_root>/` root, so prod (which serves only from
+/// `static_root`) and CDN uploads have a complete on-disk tree.
+///
+/// It reads the static contributions from the ambient
+/// [`umbra::static_files::published_static`] slot that `App::build`
+/// populated — `PluginCommand::run` isn't handed the plugin list, so the
+/// list is published at build time the same way `settings` is (a
+/// read-only ambient set once at boot).
+struct CollectStaticCommand;
+
+#[async_trait::async_trait]
+impl umbra::cli::PluginCommand for CollectStaticCommand {
+    fn command(&self) -> clap::Command {
+        clap::Command::new("collectstatic")
+            .about(
+                "Collect every plugin's static_dirs() (namespaced) and static_root_dirs() \
+                 (site dirs) into settings.static_root. Django's collectstatic.",
+            )
+            .arg(
+                clap::Arg::new("clear")
+                    .long("clear")
+                    .help(
+                        "Empty static_root before collecting, dropping stale assets no plugin \
+                         ships any more. Like Django's --clear. No confirmation prompt.",
+                    )
+                    .action(clap::ArgAction::SetTrue),
+            )
+    }
+
+    async fn run(&self, matches: &clap::ArgMatches) -> Result<(), umbra::cli::CliError> {
+        let clear = matches.get_flag("clear");
+        let static_root = umbra::settings::get().static_root.clone();
+
+        // The published contributions come from `App::build`. If they're
+        // absent, the command was invoked without a built App — surface
+        // that clearly rather than silently collecting nothing.
+        let published = umbra::static_files::published_static().ok_or_else(|| -> umbra::cli::CliError {
+            "collectstatic requires a built App; ensure App::build() ran before dispatching the \
+             command (umbra-cli::dispatch is called with the built App)."
+                .into()
+        })?;
+
+        let summary = umbra::static_files::collect_into(
+            &published.contributions,
+            &published.root_dirs,
+            &static_root,
+            clear,
+        )?;
+
+        // Warn about every declared-but-absent namespaced source dir.
+        // These are misconfigurations (a plugin promised assets that
+        // aren't on disk); surface them rather than swallowing silently.
+        for missing in &summary.missing {
+            eprintln!(
+                "warning: collectstatic: plugin `{}` declares static namespace `{}` with source \
+                 dir `{}`, which does not exist on disk — skipped.",
+                missing.plugin,
+                missing.namespace,
+                missing.source_dir.display(),
+            );
+        }
+
+        if summary.collected.is_empty() && summary.root_files == 0 {
+            println!(
+                "No static assets to collect (no plugin contributed an on-disk source or site dir)."
+            );
+            return Ok(());
+        }
+
+        for collected in &summary.collected {
+            println!(
+                "{} file(s) -> {}",
+                collected.files,
+                collected.destination.display(),
+            );
+        }
+        if summary.root_files > 0 {
+            println!(
+                "{} site file(s) -> {}",
+                summary.root_files,
+                summary.static_root.display(),
+            );
+        }
+        println!(
+            "Collected {} file(s) into {}",
+            summary.total_files() + summary.root_files,
+            summary.static_root.display(),
+        );
+        Ok(())
+    }
 }
 
 /// Tower `Service` that resolves a request path against an embedded
