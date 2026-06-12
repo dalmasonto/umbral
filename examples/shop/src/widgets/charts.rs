@@ -10,6 +10,7 @@
 
 use ecommerce::models::{Order, order};
 use std::collections::HashMap;
+use umbra::orm::Aggregate;
 use umbra_admin::{
     ChartPoint, DonutPayload, LinePayload, Series, Span, Widget, WidgetDataFn, WidgetKind,
     WidgetPayload,
@@ -72,13 +73,14 @@ pub fn shop_activity_chart() -> Widget {
                     for back in (0..days).rev() {
                         let end = now - chrono::Duration::days(back);
                         let start = end - chrono::Duration::days(1);
+                        // COUNT in SQL — don't pull the day's rows into
+                        // memory just to .len() them (gaps2 #56).
                         let orders_n = Order::objects()
                             .filter(order::PLACED_AT.gte(start))
                             .filter(order::PLACED_AT.lt(end))
-                            .fetch()
+                            .count()
                             .await
-                            .unwrap_or_default()
-                            .len();
+                            .unwrap_or(0);
                         // Approximate items_sold ≈ N × small constant.
                         out.push((orders_n as f64) * 1.5);
                     }
@@ -124,11 +126,22 @@ pub fn shop_order_status_donut() -> Widget {
         permission: None,
         default_period: None,
         data: WidgetDataFn::new(|_user| async move {
-            let orders = Order::objects().fetch().await.unwrap_or_default();
+            // GROUP BY status in SQL — one row per status with its
+            // count — instead of fetching every order into memory and
+            // tallying client-side (gaps2 #56). The ORM equivalent of
+            // Django's `.values("status").annotate(count=Count("id"))`.
+            let rows = Order::objects()
+                .annotate(&["status"], &[("count", Aggregate::count())])
+                .await
+                .unwrap_or_default();
             let mut counts: HashMap<String, f64> = HashMap::new();
-            for o in &orders {
-                let label = format!("{:?}", o.status).to_lowercase();
-                *counts.entry(label).or_insert(0.0) += 1.0;
+            for row in &rows {
+                if let (Some(label), Some(n)) = (
+                    row.get("status").and_then(|v| v.as_str()),
+                    row.get("count").and_then(|v| v.as_f64()),
+                ) {
+                    counts.insert(label.to_string(), n);
+                }
             }
             let order = [
                 "pending",

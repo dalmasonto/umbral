@@ -3361,6 +3361,40 @@ impl<T: Model> Manager<T> {
         self.queryset().exclude(p)
     }
 
+    /// A bare [`QuerySet`] over every row — Django's `Model.objects.all()`.
+    ///
+    /// The entry point when you need a `QuerySet` terminal without a
+    /// filter: a grouped aggregate over the whole table, an unfiltered
+    /// `aggregate`, or just an explicit "all rows" for readability.
+    pub fn all(&self) -> QuerySet<T> {
+        self.queryset()
+    }
+
+    /// See [`QuerySet::aggregate`] — single-row aggregate over every row.
+    ///
+    /// Forwards from the manager so `Model::objects().aggregate(...)`
+    /// works without an intervening `.filter(...)` / `.on(...)`.
+    pub async fn aggregate(
+        &self,
+        aggs: &[(&str, crate::orm::Aggregate)],
+    ) -> Result<JsonValue, sqlx::Error> {
+        self.queryset().aggregate(aggs).await
+    }
+
+    /// See [`QuerySet::annotate`] — grouped aggregate (`GROUP BY <group_cols>`).
+    ///
+    /// Forwards from the manager so the documented
+    /// `Model::objects().annotate(&["status"], &[("count", Aggregate::count())])`
+    /// (Django's `.values("status").annotate(count=Count("id"))`) compiles
+    /// directly, without a filter first.
+    pub async fn annotate(
+        &self,
+        group_cols: &[&str],
+        aggs: &[(&str, crate::orm::Aggregate)],
+    ) -> Result<Vec<JsonValue>, sqlx::Error> {
+        self.queryset().annotate(group_cols, aggs).await
+    }
+
     /// Feature #72 — see `QuerySet::with_deleted`.
     pub fn with_deleted(&self) -> QuerySet<T> {
         self.queryset().with_deleted()

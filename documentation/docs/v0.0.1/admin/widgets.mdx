@@ -194,13 +194,26 @@ When the URL has no `?period=`, the handler stamps `params.period = Some("7d")` 
 
 Categorical breakdown summing to 100%. Best for 3-6 slices; past that, switch to `Bar`.
 
+Compute the per-bucket counts **in SQL** with a grouped [`annotate`](/docs/v0.0.1/orm/aggregates) — one row per status — rather than pulling every order into memory to tally client-side:
+
 ```rust
+use umbra::orm::Aggregate;
+
 data: WidgetDataFn::new(|_user| async move {
-    let orders = Order::objects().fetch().await.unwrap_or_default();
+    // GROUP BY status, COUNT(*) per group — Django's
+    // `.values("status").annotate(count=Count("id"))`.
+    let rows = Order::objects()
+        .annotate(&["status"], &[("count", Aggregate::count())])
+        .await
+        .unwrap_or_default();
     let mut counts: HashMap<String, f64> = HashMap::new();
-    for o in &orders {
-        *counts.entry(format!("{:?}", o.status).to_lowercase())
-            .or_insert(0.0) += 1.0;
+    for row in &rows {
+        if let (Some(label), Some(n)) = (
+            row.get("status").and_then(|v| v.as_str()),
+            row.get("count").and_then(|v| v.as_f64()),
+        ) {
+            counts.insert(label.to_string(), n);
+        }
     }
     // Canonical lifecycle order — donut reads as a flow,
     // not random alphabetical buckets.
@@ -212,6 +225,10 @@ data: WidgetDataFn::new(|_user| async move {
     WidgetPayload::Donut(DonutPayload::from_pairs(pairs))
 }),
 ```
+
+<Callout type="info">
+`annotate(&["status"], &[("count", Aggregate::count())])` returns `[{ "status": "paid", "count": 12 }, ...]` — the count happens in the database, so the widget scales to millions of orders without loading them. The canonical-order reshuffle stays client-side (it's presentation, not aggregation). See [Aggregates and annotate](/docs/v0.0.1/orm/aggregates) for `Sum`/`Avg`/multi-column grouping.
+</Callout>
 
 `DonutPayload::from_pairs([(label, value), ...])` is the short constructor. For explicit colors per slice, build `DonutSlice { label, value, color: Some("#34d399") }` and pass to `DonutPayload::new(slices)`.
 

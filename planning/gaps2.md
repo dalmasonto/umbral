@@ -273,53 +273,6 @@
 
 55. [ ] Django's collectstatic can autocollect static to the configured aws bucket by the staticstorage backend. We need the same I guess.
 
-56. [ ] The code below looks great
-
-```rust
-data: WidgetDataFn::new(|_user| async move {
-    let orders = Order::objects().fetch().await.unwrap_or_default();
-    let mut counts: HashMap<String, f64> = HashMap::new();
-    for o in &orders {
-        *counts.entry(format!("{:?}", o.status).to_lowercase())
-            .or_insert(0.0) += 1.0;
-    }
-    // Canonical lifecycle order — donut reads as a flow,
-    // not random alphabetical buckets.
-    let order = ["pending", "paid", "shipped", "delivered", "cancelled"];
-    let mut pairs: Vec<(String, f64)> = Vec::new();
-    for k in order {
-        if let Some(v) = counts.remove(k) { pairs.push((k.to_string(), v)); }
-    }
-    WidgetPayload::Donut(DonutPayload::from_pairs(pairs))
-}),
-```
-
-BUT BUT: There is a catch, the user queried all orders and then calculated the counts code-side. Since orders here are of no use other than the counts themselves. How can we refactor this in the orm level so that a user can do a query on fks, choices once and get counts directly?
-
-The django way is `Order.objects.values("status").annotate(count=Count("id")).order_by()`
-
-We need something like:
-```rust
-let pairs = Order::objects()
-    .group_by(Order::status)
-    .count(Order::id)
-    .fetch()
-    .await?;
-```
-
-or django way
-
-```rust
-let pairs = Order::objects()
-    .values([Order::status])
-    .annotate("count", Count::new(Order::id))
-    .fetch()
-    .await?;
-```
-
-Maybe this is covered under `annotate` in the orm level I think!
-Fix `/home/dalmas/E/projects/umbra/examples/shop/src/widgets/charts.rs ln 118` with a proper ORM query than pulling every order to memory
-
-After the fixes above in all widgets, then update docs: http://localhost:5173/docs/v0.0.1/admin/widgets#donut
+56. [x] Grouped aggregate in the ORM (`QuerySet::annotate(group_cols, aggs)` = Django's `.values("status").annotate(count=Count("id"))`) was already shipped + documented; the shop donut + activity widgets refactored off fetch-all-then-count, and the widgets doc updated — archived
 
 57. [ ] The media plugin can be improved to allow background file uploads and processing. This can be done through a function that just returns the perceived file path or URL, and the actual processing is done asynchronously. Also, the media plugin should be directly swappable for different storage backends (e.g. local filesystem, cloud storage) or just extended to maintain the same interface.
