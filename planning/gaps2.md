@@ -240,7 +240,7 @@
 
 36. [~] **Rich field-editor follow-ups — code-block syntax highlighting; CDN self-hosting.** SHIPPED (features.md #4, 2026-06-10): `admin.js` lazy-mounts EasyMDE (`markdown`), Quill (`rte`), and CodeMirror (`code`, JSON syntax) on every form-render path, themed to the admin tokens; editor previews are sandboxed through DOMPurify (EasyMDE preview + Quill initial load). What remains: (a) **syntax-highlighted fenced code** in `render_markdown` *display* output (distinct from the `code` *editor* widget) — ammonia strips the `language-*` class pulldown-cmark emits, so highlight.js/Prism have nothing to hook; either widen the ammonia allowlist for `class` on `code`/`pre` (scoped to `language-*`) or pre-highlight server-side (syntect) before sanitizing. (b) **Self-hosting the editor CDNs** (EasyMDE, Quill, CodeMirror, DOMPurify, and EasyMDE's transitive FontAwesome) via `Plugin::static_files`, same call as the htmx/lucide/apexcharts self-hosting already noted in gaps2 #4 — today they load from unpkg/jsdelivr, consistent with the rest of the admin but an offline/air-gapped gap. (c) **EasyMDE image-upload** hook into a future media endpoint. Surfaced 2026-06-10 alongside the widget/markdown landing.
 
-37. [ ] Image submission - We have not yet matured the FileField, together with ImageField. Since ImageField is more of a wrapper around FileField except for the image preview. And I think, it should only be a FileField then we annotate with widget="image". Then, we can link this in form submission so that once a form is submitted, the file is processed. Going forward, we need to make sure the MediaPlugin is active since it will help us avoid this chaos at once.
+37. [x] FileField + ImageField (ImageField = FileField + widget="image") wired through multipart form submission to the ambient Storage backend; MediaPlugin provides it, enforced by a boot system-check — archived
 
 38. [ ] `.filter(sc::ContactMessage::CREATED_AT.gte(week_ago))` - This does not work, should atleast work well as `.filter(contact_message::CREATED_AT.gte(week_ago))` (This works well)
 
@@ -268,3 +268,58 @@
 52. [ ] Flaky test: `createsuperuser_noinput_errors_without_password_env` fails only under full-workspace `cargo test`. Root cause is a process-global env-var race in `plugins/umbra-auth/tests/integration.rs`: `createsuperuser_noinput` (line ~368) does `std::env::set_var("UMBRA_SUPERUSER_PASSWORD", "swordfish-9-9")` while `createsuperuser_noinput_errors_without_password_env` (line ~418) does `std::env::remove_var("UMBRA_SUPERUSER_PASSWORD")` then asserts the CLI errors. Both `#[tokio::test]`s run in the same process and race on the shared env var, so the "no password" test intermittently sees the value the other test set and fails its `expect_err`. Passes in isolation and with `--test-threads=1`. The fix is to remove the cross-test reliance on a process-global var — either serialize the two with a shared mutex (`serial_test`), or thread the superuser password through an explicit CLI/dispatch argument instead of an ambient env var so the tests don't share global state. Pre-existing; unrelated to the static-files pipeline (gaps #67) it surfaced under.
 
 53. [x] Playground shell resolves its asset prefix from the configured `static_url` (snapshotted into `PlaygroundState` at router-build time) instead of a hardcoded `/static/playground/assets` — archived
+
+54. [ ] If a user runs an unknown command, the CLI responds with a generic "unknown command" error message instead of a helpful usage hint ie with a list of registered commands with their usage and description ie `umbra migrate  A migration command`. If a user runs `umbra help`, it should pull all the list of registered commands with their usage and description. This means, we need to alert the developer to register commands well so that they can be found and used correctly.
+
+55. [ ] Django's collectstatic can autocollect static to the configured aws bucket by the staticstorage backend. We need the same I guess.
+
+56. [ ] The code below looks great
+
+```rust
+data: WidgetDataFn::new(|_user| async move {
+    let orders = Order::objects().fetch().await.unwrap_or_default();
+    let mut counts: HashMap<String, f64> = HashMap::new();
+    for o in &orders {
+        *counts.entry(format!("{:?}", o.status).to_lowercase())
+            .or_insert(0.0) += 1.0;
+    }
+    // Canonical lifecycle order — donut reads as a flow,
+    // not random alphabetical buckets.
+    let order = ["pending", "paid", "shipped", "delivered", "cancelled"];
+    let mut pairs: Vec<(String, f64)> = Vec::new();
+    for k in order {
+        if let Some(v) = counts.remove(k) { pairs.push((k.to_string(), v)); }
+    }
+    WidgetPayload::Donut(DonutPayload::from_pairs(pairs))
+}),
+```
+
+BUT BUT: There is a catch, the user queried all orders and then calculated the counts code-side. Since orders here are of no use other than the counts themselves. How can we refactor this in the orm level so that a user can do a query on fks, choices once and get counts directly?
+
+The django way is `Order.objects.values("status").annotate(count=Count("id")).order_by()`
+
+We need something like:
+```rust
+let pairs = Order::objects()
+    .group_by(Order::status)
+    .count(Order::id)
+    .fetch()
+    .await?;
+```
+
+or django way
+
+```rust
+let pairs = Order::objects()
+    .values([Order::status])
+    .annotate("count", Count::new(Order::id))
+    .fetch()
+    .await?;
+```
+
+Maybe this is covered under `annotate` in the orm level I think!
+Fix `/home/dalmas/E/projects/umbra/examples/shop/src/widgets/charts.rs ln 118` with a proper ORM query than pulling every order to memory
+
+After the fixes above in all widgets, then update docs: http://localhost:5173/docs/v0.0.1/admin/widgets#donut
+
+57. [ ] The media plugin can be improved to allow background file uploads and processing. This can be done through a function that just returns the perceived file path or URL, and the actual processing is done asynchronously. Also, the media plugin should be directly swappable for different storage backends (e.g. local filesystem, cloud storage) or just extended to maintain the same interface.

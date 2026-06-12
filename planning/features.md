@@ -178,15 +178,11 @@ These are the cross-cutting capabilities that turn a framework from a neat ORM d
     >
     > How: `umbra-email` plugin with `EmailMessage::builder().to("...").subject("...").body("...").send().await`. Backends: SMTP (lettre), SendGrid, Mailgun, AWS SES. Integrate with the task queue (gap #43) for async sending. The plugin should be small — mostly a typed wrapper around `lettre` plus a backend trait.
 
-40. [ ] **File uploads and multipart handling** 🔴 High
-    > Why: Avatars, attachments, CSV imports, and image uploads are universal. The REST plugin currently doesn't handle `multipart/form-data`; there is no `FileField` type for models.
-    >
-    > How: Add `Multipart` extractor to `umbra::web`. Stream uploads to disk or memory. Add `FileField` to the ORM that stores a path/URL string. The admin already has file upload UI from gap #51; wire it to the new field type.
+40. [x] **File uploads and multipart handling** 🔴 High
+    > — SHIPPED (branch `feat/file-image-fields`, 2026-06-12). `umbra::web` gained `is_multipart` / `parse_multipart` / `parse_and_store_multipart` (multer-based, binary-safe, stores file parts via the ambient `Storage`). `FileField` / `ImageField` ORM types store a storage key in a TEXT column (macro-classified, default `widget="file"/"image"`). The admin renders file/image upload widgets (image thumbnail preview), switches to `multipart/form-data` when a file field is present, and writes the stored key on submit (empty file part preserves the existing key). A boot system-check fails the build if a model declares a file field with no `Storage` backend registered. Archived under gaps2 #37.
 
-41. [ ] **Media storage — local, S3, R2, GCS** 🟡 Medium
-    > Why: User-generated content needs a storage backend abstraction. `FileField` (gap #40) stores a path; this feature decides whether that path is local or remote.
-    >
-    > How: A `Storage` trait with `store(path, bytes) -> Url` and `url(path) -> Url`. Implementations: `LocalStorage`, `S3Storage` (via `aws-sdk-s3` or `rust-s3`). Admin renders `ImageField` values as `<img>` thumbnails by calling `storage.url(path)`. Depends on gap #40.
+41. [/] **Media storage — local, S3, R2, GCS** 🟡 Medium
+    > — Partially shipped (2026-06-12). The `Storage` trait landed in `umbra-core` (`store(filename, content_type, bytes) -> StoredFile{key,url}`, `retrieve`, `delete`, `url`), with `FsStorage` (local filesystem) in `umbra-media` registered ambiently, and `MediaPlugin::with_storage(...)` to swap backends. The admin renders `ImageField` values as `<img>` thumbnails via `storage.url(key)`. STILL DEFERRED: `S3Storage` (aws-sdk-s3 / rust-s3, any S3-compatible endpoint) and the image library (thumbnails/EXIF) — both slot into `with_storage` / a cargo feature without touching `FileField` or the admin.
 
 42. [ ] **Social auth / OAuth2 / OIDC** 🟡 Medium
     > Why: "Sign in with GitHub/Google" is table stakes for modern SaaS. Without it, every app re-implements the same 200 lines of OAuth dance.

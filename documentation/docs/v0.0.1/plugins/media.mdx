@@ -25,7 +25,28 @@ App::builder()
 
 `./media/` is the on-disk directory; `/media/<key>` is the public URL.
 
+## Model fields & the `Storage` trait
+
+The easiest way to attach a file to a model is a [`FileField` / `ImageField`](/docs/v0.0.1/orm/file-image-fields) column — you declare `cover: ImageField` and the admin renders an upload widget, stores the file, and writes the returned key for you. No hand-written upload handler.
+
+That works because `MediaPlugin` registers a **`Storage`** backend ambiently when the app boots. `Storage` is the framework's storage abstraction (in `umbra-core`, so the ORM's file fields depend on the trait, never on this plugin):
+
+```rust
+#[async_trait]
+pub trait Storage: Send + Sync {
+    async fn store(&self, filename: &str, content_type: &str, bytes: &[u8])
+        -> Result<StoredFile, StorageError>; // returns { key, url }
+    async fn retrieve(&self, key: &str) -> Result<Vec<u8>, StorageError>;
+    async fn delete(&self, key: &str) -> Result<(), StorageError>;
+    fn url(&self, key: &str) -> String;
+}
+```
+
+`MediaPlugin::new(mount, dir)` builds a filesystem `FsStorage` and registers it as the ambient default in `on_ready`, so `FileField::url(key)`, the admin upload path, and `umbra::web::parse_and_store_multipart` all resolve through it. Supply your own backend (an S3 impl, say) with `MediaPlugin::with_storage(mount, Arc::new(MyStorage))`. A model that declares a file field but registers no `Storage` backend fails a boot system-check — the framework won't let the gap reach production.
+
 ## Accepting an upload
+
+For a custom (non-admin) upload route, write a handler — either through the ambient `Storage` or the plugin's `save` (which also tracks a `media_file` row):
 
 The plugin doesn't ship its own upload route - write a handler that parses a multipart form and calls `media.save(...)` once you have the bytes:
 
@@ -80,7 +101,7 @@ Every upload is one row:
 
 The model is registered through `Plugin::models()`, so the migration engine creates the table on the next `migrate run` and the admin lists it under the **media** sidebar group automatically. Every column is `#[umbra(noedit)]` - the admin shows the row read-only because mutating it from the UI would diverge from what's on disk.
 
-To delete a file, write a small handler that removes the row with `MediaFile::objects().filter(media_file::ID.eq(id)).delete().await?` and then `tokio::fs::remove_file(...)`. v0 does not auto-cleanup on row delete; that's wired in v0.2 when the storage backend trait lands.
+To delete a file, write a small handler that removes the row with `MediaFile::objects().filter(media_file::ID.eq(id)).delete().await?` and then `Storage::delete(key)` (or `tokio::fs::remove_file(...)`). v0 does not auto-cleanup on row delete; that's a future enhancement.
 
 ## Serving from templates
 
@@ -106,11 +127,11 @@ The plugin sets `X-Content-Type-Options: nosniff` on every response so the brows
 
 ## What v0 does not ship
 
-Three things `gaps.md #49` calls for that the current release deliberately defers:
+The storage-backend trait `gaps.md #49` called for **has shipped** — it landed as `Storage` (in `umbra-core`, see above), with the filesystem `FsStorage` impl and `MediaPlugin::with_storage(...)` for swapping backends. Three things still deferred:
 
-1. **S3-compatible backend.** Filesystem-only today. A `MediaBackend` trait extraction lands in v0.1 with `FsBackend` and `S3Backend` (any S3-compatible endpoint: AWS, MinIO, R2, B2).
-2. **Image library.** Thumbnails, EXIF strip, format probing. Behind an `images` cargo feature in v0.2.
-3. **Signed URLs.** Auth-required reads against the S3 backend. v0.3.
+1. **S3-compatible backend.** Filesystem-only ships today; an `S3Storage` impl (any S3-compatible endpoint: AWS, MinIO, R2, B2) is the next backend, dropping into `with_storage` without touching `FileField` or the admin.
+2. **Image library.** Thumbnails, EXIF strip, format probing. Behind an `images` cargo feature, later.
+3. **Signed URLs.** Auth-required reads against the S3 backend.
 
 Design rationale and the migration plan live in `docs/decisions/2026-06-02-media-and-s3.md` in the repo. Each step keeps the v0 public surface compatible.
 
