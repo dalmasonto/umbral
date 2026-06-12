@@ -28,6 +28,11 @@ pub mod prelude {
     };
     pub use crate::plugin::{AppContext, Plugin, StaticDir};
     pub use crate::routes::Routes;
+    // The `Storage` trait so plugin authors can implement a custom
+    // file-bytes backend via `use umbra::prelude::*`. The ambient
+    // accessors (`storage`/`set_storage`/`storage_opt`) stay on the
+    // `umbra::storage` module — power-user surface, not bare names.
+    pub use crate::storage::Storage;
     pub use crate::web::{
         Form, IntoResponse, Json, JsonResponse, Path, Query, Router, delete, get, patch, post, put,
     };
@@ -279,6 +284,34 @@ pub mod static_files {
         collect_into, collect_static, publish_static, published_static, resolve_under_root,
         serve_file, static_handler,
     };
+}
+
+pub mod storage {
+    //! The file-bytes storage backend and its ambient registry.
+    //!
+    //! [`Storage`] is the backend-agnostic seam for file uploads — the
+    //! file counterpart to the DB pool. The filesystem impl (`FsStorage`)
+    //! ships in the `umbra-media` plugin, which registers it as the
+    //! ambient default in `on_ready`; future `FileField` / `ImageField`
+    //! and the admin resolve uploads through [`storage`] without naming
+    //! a backend.
+    //!
+    //! Plugin authors implementing a custom backend get the [`Storage`]
+    //! trait from the prelude (`use umbra::prelude::*`). The ambient
+    //! accessors ([`storage`], [`storage_opt`], [`set_storage`]) are
+    //! power-user surface, reached as `umbra::storage::storage()` so they
+    //! don't pollute the prelude with bare names.
+
+    pub use umbra_core::storage::{
+        Storage, StorageError, StoredFile, set_storage, storage, storage_opt,
+    };
+
+    /// Re-export of `async-trait` so a plugin author implementing
+    /// [`Storage`] (an `#[async_trait]` trait) can annotate the impl as
+    /// `#[umbra::storage::async_trait]` without adding a direct
+    /// `async-trait` dependency to their crate. Mirrors
+    /// `umbra::forms::async_trait`.
+    pub use umbra_core::storage::async_trait_reexport as async_trait;
 }
 
 pub mod cli {

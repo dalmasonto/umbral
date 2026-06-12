@@ -24,6 +24,7 @@ pub mod settings;
 pub mod signals;
 pub mod slash;
 pub mod static_files;
+pub mod storage;
 pub mod templates;
 pub mod timezone;
 pub mod web;
