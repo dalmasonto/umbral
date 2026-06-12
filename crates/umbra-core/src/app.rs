@@ -651,9 +651,15 @@ impl AppBuilder {
         // state, run the framework checks plus every plugin's
         // contribution in topological order, partition into errors vs
         // warnings, log the warnings, fail the build on any errors.
+        // Whether any registered plugin declares a Storage backend. Read
+        // by the `field.storage_backend` check; computed from the
+        // capability flag (not the ambient `storage_opt()`) because
+        // backends register in `on_ready`, which runs *after* this phase.
+        let provides_storage = sorted_plugins.iter().any(|p| p.provides_storage());
         let ctx = crate::check::CheckContext {
             backend,
             settings: crate::settings::get(),
+            provides_storage,
         };
         let mut checks = crate::check::framework_checks();
         for plugin in &sorted_plugins {

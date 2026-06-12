@@ -57,6 +57,20 @@ pub struct CheckContext<'a> {
     pub backend: &'a dyn DatabaseBackend,
     /// The runtime settings, post-load, pre-publish.
     pub settings: &'a Settings,
+    /// `true` when at least one registered plugin reports
+    /// [`crate::plugin::Plugin::provides_storage`]. The
+    /// `field.storage_backend` check reads this to decide whether a
+    /// model with a `FileField` / `ImageField` has a backend to resolve
+    /// uploads through.
+    ///
+    /// This is the *capability flag* of the plugin list, not the ambient
+    /// `crate::storage::storage_opt()` — storage is registered in
+    /// `on_ready`, which runs *after* this check, so the ambient backend
+    /// isn't published yet at check time. `App::build` populates this
+    /// from the sorted plugin list before running the checks. Tests that
+    /// build a `CheckContext` by hand (without a plugin walk) set `true`
+    /// to keep the storage check inert.
+    pub provides_storage: bool,
 }
 
 /// One issue surfaced by a system check.
@@ -139,6 +153,10 @@ pub fn framework_checks() -> Vec<SystemCheck> {
         SystemCheck {
             id: "field.backend",
             run: field_backend,
+        },
+        SystemCheck {
+            id: "field.storage_backend",
+            run: field_storage_backend,
         },
     ]
 }
@@ -370,6 +388,75 @@ fn field_backend(ctx: &CheckContext<'_>) -> Vec<SystemCheckFinding> {
                         ),
                     });
                 }
+            }
+        }
+    }
+    findings
+}
+
+/// Fail at boot when a model declares a `FileField` / `ImageField`
+/// (detected by the column's `widget` being `"file"` or `"image"`) but
+/// no registered plugin provides a [`Storage`](crate::storage::Storage)
+/// backend.
+///
+/// **Why the capability flag, not the ambient `storage_opt()`:** a
+/// `Storage` backend is registered in `Plugin::on_ready`, which runs
+/// *after* the system-check phase (see `App::build`'s phase ordering).
+/// So at check time `crate::storage::storage_opt()` is still `None` even
+/// when `MediaPlugin` is wired and *will* register a backend a moment
+/// later. Checking the ambient here would false-positive on every app
+/// that uses media. Instead we read `ctx.provides_storage`, which
+/// `App::build` computes from the sorted plugin list's
+/// `Plugin::provides_storage()` flags — the *declared capability*, which
+/// is knowable at check time.
+///
+/// **Error**, not Warning: a file/image field with no backend means
+/// `FileField::url` silently falls back to the raw key, producing broken
+/// `<img src>` / download links in production. Failing the build with a
+/// clear fix is the right behaviour.
+fn field_storage_backend(ctx: &CheckContext<'_>) -> Vec<SystemCheckFinding> {
+    let mut findings = Vec::new();
+    // A backend is (or will be) registered — nothing to check.
+    if ctx.provides_storage {
+        return findings;
+    }
+    // Low-level tests that drive `run_all` without booting an App never
+    // publish the model registry; skip silently (there are no models to
+    // walk anyway, same guard as `field_backend`).
+    if !crate::migrate::is_initialised() {
+        return findings;
+    }
+    for plugin in crate::migrate::registered_plugins() {
+        for model in crate::migrate::models_for_plugin(&plugin) {
+            for field in &model.fields {
+                let is_file_field = matches!(field.widget.as_deref(), Some("file") | Some("image"));
+                if !is_file_field {
+                    continue;
+                }
+                // Leak the owned strings into the finding's
+                // &'static-typed location. The walk runs once at boot, so
+                // the small leak is acceptable and matches the
+                // location-string contract (Field carries &'static str).
+                findings.push(SystemCheckFinding {
+                    check_id: "field.storage_backend",
+                    severity: Severity::Error,
+                    location: CheckLocation::Field {
+                        plugin: Box::leak(plugin.clone().into_boxed_str()),
+                        model: Box::leak(model.name.clone().into_boxed_str()),
+                        field: Box::leak(field.name.clone().into_boxed_str()),
+                    },
+                    message: format!(
+                        "Model `{plugin}::{}` field `{}` declares a file/image field, \
+                         but no Storage backend is registered.",
+                        model.name, field.name,
+                    ),
+                    hint: Some(
+                        "add `MediaPlugin` to your app (it registers a filesystem Storage \
+                         backend), or call `umbra::storage::set_storage(...)` before \
+                         `App::build()` to wire a custom backend."
+                            .to_string(),
+                    ),
+                });
             }
         }
     }

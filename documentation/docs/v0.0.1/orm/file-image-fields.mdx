@@ -1,0 +1,46 @@
+---
+title: File and image fields
+description: FileField and ImageField store a Storage key in a TEXT column and resolve it to a public URL through the ambient storage backend.
+sidebar_position: 11
+icon: image
+tags: [orm, files, images, storage, media]
+---
+
+`FileField` and `ImageField` are TEXT-backed model fields that hold a *storage key* - the opaque identifier a [`Storage`](/docs/v0.0.1/plugins/media) backend returns when it persists a file. The column stores the bare key; `FileField::url()` resolves it to a public URL at render time, so a template can show an uploaded file without the model author threading a storage handle through every call.
+
+`ImageField` is a `FileField` in everything but its default form widget: the admin renders an image preview for an `ImageField` and a plain file input for a `FileField`. At the storage, serialisation, and SQL layers they behave identically.
+
+<Callout type="info">
+A model that declares a `FileField` / `ImageField` needs a `Storage` backend registered, or the build fails the `field.storage_backend` system check at boot. Add [`MediaPlugin`](/docs/v0.0.1/plugins/media) (it registers a filesystem backend) or call `umbra::storage::set_storage(...)` before `App::build()`.
+</Callout>
+
+## Example
+
+```rust
+use umbra::prelude::*;
+
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, Model)]
+pub struct Post {
+    pub id: i64,
+    pub title: String,
+    pub cover: ImageField,            // widget = "image"
+    pub attachment: FileField,        // widget = "file"
+    pub thumbnail: Option<FileField>, // nullable
+}
+
+// Store the key returned by your upload handler:
+let post = Post { cover: ImageField::from("ab12-hero.png"), /* ... */ };
+
+// Resolve a public URL in a handler or template:
+let src = post.cover.url();   // e.g. "/media/ab12-hero.png"
+let key = post.cover.key();   // "ab12-hero.png" (the persisted value)
+```
+
+In a template, `{{ post.cover.url }}` turns the stored key into a usable `src`. When no backend is registered, `url()` falls back to the raw key rather than panicking - the boot check is the loud guard.
+
+Both fields serialise as the bare key string, so a REST API round-trips `"ab12-hero.png"`, the same shape a plain `String` column would have.
+
+## See also
+
+- [Storage and media](/docs/v0.0.1/plugins/media) - the `Storage` trait and `MediaPlugin`.
+- `arch.md` and `docs/decisions/2026-06-02-media-and-s3.md` for the design rationale.

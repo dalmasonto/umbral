@@ -146,6 +146,23 @@ pub trait Plugin: Send + Sync + 'static {
         Vec::new()
     }
 
+    /// `true` if this plugin registers a [`Storage`](crate::storage::Storage)
+    /// backend (e.g. `MediaPlugin`, which calls
+    /// [`crate::storage::set_storage`] in [`Plugin::on_ready`]).
+    ///
+    /// The boot system check `field.storage_backend` reads this flag to
+    /// decide whether a model that declares a `FileField` / `ImageField`
+    /// has somewhere to resolve its uploads. It checks the *capability
+    /// flag* rather than the ambient `storage_opt()` because storage is
+    /// registered in `on_ready`, which runs *after* the system-check
+    /// phase — at check time the ambient backend isn't published yet, but
+    /// the declared capability is knowable from the plugin list. Override
+    /// this (return `true`) in any plugin whose `on_ready` registers a
+    /// backend.
+    fn provides_storage(&self) -> bool {
+        false
+    }
+
     /// The database alias every model this plugin contributes should
     /// be read from and written to. Returns `None` to use the
     /// `"default"` pool (the same one `umbra::db::pool()` returns).

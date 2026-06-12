@@ -344,6 +344,14 @@ impl Plugin for MediaPlugin {
         umbra::storage::set_storage(self.storage.clone());
         Ok(())
     }
+
+    /// `MediaPlugin` registers an `FsStorage` (or the custom backend
+    /// passed to `with_storage`) as the ambient default in `on_ready`,
+    /// so the boot `field.storage_backend` check is satisfied for any
+    /// model that declares a `FileField` / `ImageField`.
+    fn provides_storage(&self) -> bool {
+        true
+    }
 }
 
 /// Result of a successful upload.

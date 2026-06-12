@@ -24,6 +24,7 @@ pub mod choices;
 pub mod column;
 pub mod dynamic;
 pub mod expr;
+pub mod file_field;
 pub mod foreign_key;
 pub mod forms_runtime;
 pub mod m2m;
@@ -72,6 +73,7 @@ impl Subquery {
 pub use choices::ChoiceField;
 pub use dynamic::{DynError, DynQuerySet, decode_to_string};
 pub use expr::{F, FColExt, FExpr, Q};
+pub use file_field::{FileField, ImageField};
 pub use foreign_key::ForeignKey;
 pub use m2m::{M2M, load_junction_selection, set_junction_dynamic};
 pub use model::{

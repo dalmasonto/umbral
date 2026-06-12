@@ -23,8 +23,8 @@ pub mod prelude {
     //! not pollute the prelude with bare names like `pool`.
 
     pub use crate::orm::{
-        ChoiceField, Choices, F, FColExt, ForeignKey, M2M, Model, MultiChoice, OneToOne, Q,
-        ReverseRelations,
+        ChoiceField, Choices, F, FColExt, FileField, ForeignKey, ImageField, M2M, Model,
+        MultiChoice, OneToOne, Q, ReverseRelations,
     };
     pub use crate::plugin::{AppContext, Plugin, StaticDir};
     pub use crate::routes::Routes;
@@ -464,12 +464,12 @@ pub mod orm {
     pub use umbra_core::orm::write::{SaveError, WriteError};
     pub use umbra_core::orm::{
         Aggregate, AggregateKind, ArrayElement, ChoiceField, DynError, DynQuerySet, Email, F,
-        FColExt, FExpr, FieldSpec, FkAction, ForeignKey, GetError, HydrateRelated, JoinKind, M2M,
-        M2MRelationSpec, Manager, Model, MultiChoice, OneToOne, OneToOneRelationSpec, Post,
-        Predicate, PrimaryKey, Q, QuerySet, QuerySetTx, ReverseError, ReverseFkRelationSpec,
-        ReverseRelations, ReverseSet, Slug, SqlType, TryForEachError, TsVector, Url,
-        ValidatorError, column, decode_to_string, load_junction_selection, set_junction_dynamic,
-        validate_text_format, write,
+        FColExt, FExpr, FieldSpec, FileField, FkAction, ForeignKey, GetError, HydrateRelated,
+        ImageField, JoinKind, M2M, M2MRelationSpec, Manager, Model, MultiChoice, OneToOne,
+        OneToOneRelationSpec, Post, Predicate, PrimaryKey, Q, QuerySet, QuerySetTx, ReverseError,
+        ReverseFkRelationSpec, ReverseRelations, ReverseSet, Slug, SqlType, TryForEachError,
+        TsVector, Url, ValidatorError, column, decode_to_string, load_junction_selection,
+        set_junction_dynamic, validate_text_format, write,
     };
 
     /// The `#[derive(Model)]` proc macro. Shares the `Model` name with the

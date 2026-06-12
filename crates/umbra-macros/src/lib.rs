@@ -1196,9 +1196,20 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             Some(s) => quote! { #s },
             None => quote! { "" },
         };
-        let widget_tokens = match &field_attr.widget {
-            Some(s) => quote! { ::core::option::Option::Some(#s) },
-            None => quote! { ::core::option::Option::None },
+        // Type-derived default widget. A `FileField` defaults to the
+        // `"file"` widget and an `ImageField` to `"image"`, so the admin
+        // (a later wave) renders a file input / image preview without the
+        // model author writing `#[umbra(widget = ...)]`. An explicit
+        // `#[umbra(widget = "...")]` always wins — it's checked first.
+        let default_widget = match kind {
+            FieldKind::FileField | FieldKind::NullableFileField => Some("file"),
+            FieldKind::ImageField | FieldKind::NullableImageField => Some("image"),
+            _ => None,
+        };
+        let widget_tokens = match (&field_attr.widget, default_widget) {
+            (Some(s), _) => quote! { ::core::option::Option::Some(#s) },
+            (None, Some(d)) => quote! { ::core::option::Option::Some(#d) },
+            (None, None) => quote! { ::core::option::Option::None },
         };
         let backends_tokens = if field_attr.backends.is_empty() {
             quote! { &[] }
@@ -2081,6 +2092,19 @@ enum FieldKind {
     /// `umbra::orm::Url` — TEXT with `http(s)://...` validation.
     /// Closes BUG-13.
     Url,
+    /// `umbra::orm::FileField` — TEXT storing a storage key. Storage is
+    /// plain TEXT (the key string); the default `widget = "file"` tells
+    /// the admin to render a file input. Backed by a `String` newtype,
+    /// so the column const + bind/decode behave exactly like `String`.
+    FileField,
+    /// `Option<FileField>` — a nullable file column.
+    NullableFileField,
+    /// `umbra::orm::ImageField` — a `FileField` with the default
+    /// `widget = "image"` (image preview in the admin). Same TEXT
+    /// storage + bind/decode as `FileField`.
+    ImageField,
+    /// `Option<ImageField>` — a nullable image column.
+    NullableImageField,
     /// Catch-all: not a recognised M3 catalogue type, or one of the
     /// explicitly-rejected wide / unsigned ints. Carries the exact
     /// diagnostic to emit at the field's span.
@@ -2143,6 +2167,15 @@ impl FieldKind {
             // loop below) tells downstream consumers which
             // validator runs / which OpenAPI format to emit.
             FieldKind::Slug | FieldKind::Email | FieldKind::Url => {
+                quote!(::umbra::orm::SqlType::Text)
+            }
+            // FileField / ImageField are TEXT columns storing a storage
+            // key. The discrimination (file vs image) is carried by the
+            // default `widget`, not the SqlType — both are plain TEXT.
+            FieldKind::FileField
+            | FieldKind::NullableFileField
+            | FieldKind::ImageField
+            | FieldKind::NullableImageField => {
                 quote!(::umbra::orm::SqlType::Text)
             }
             FieldKind::Date | FieldKind::NullableDate => quote!(::umbra::orm::SqlType::Date),
@@ -2208,6 +2241,8 @@ impl FieldKind {
                 | FieldKind::NullableFullText
                 | FieldKind::NullableForeignKey(_)
                 | FieldKind::NullableBytes
+                | FieldKind::NullableFileField
+                | FieldKind::NullableImageField
         )
     }
 
@@ -2278,6 +2313,18 @@ fn classify_field_type(ty: &Type) -> FieldKind {
     }
     if type_is_ident(ty, "Url") {
         return FieldKind::Url;
+    }
+    // FileField / ImageField — TEXT storing a storage key. Matched by
+    // leaf ident so both `FileField` (after `use umbra::orm::FileField`)
+    // and `orm::FileField` resolve. The default widget is assigned in
+    // the field loop from the FieldKind, so a bare `FileField` field
+    // gets `widget = Some("file")` and `ImageField` gets
+    // `Some("image")` unless `#[umbra(widget = "...")]` overrides.
+    if type_is_ident(ty, "FileField") {
+        return FieldKind::FileField;
+    }
+    if type_is_ident(ty, "ImageField") {
+        return FieldKind::ImageField;
     }
     if type_is_ident(ty, "NaiveDate") {
         return FieldKind::Date;
@@ -2394,6 +2441,12 @@ fn classify_field_type(ty: &Type) -> FieldKind {
         }
         if type_is_ident(inner, "String") {
             return FieldKind::NullableStr;
+        }
+        if type_is_ident(inner, "FileField") {
+            return FieldKind::NullableFileField;
+        }
+        if type_is_ident(inner, "ImageField") {
+            return FieldKind::NullableImageField;
         }
         if type_is_ident(inner, "NaiveDate") {
             return FieldKind::NullableDate;
@@ -2915,6 +2968,13 @@ fn column_const_for(
         FieldKind::NullableForeignKey(_) => format_ident!("NullableForeignKeyCol"),
         FieldKind::Bytes => format_ident!("BytesCol"),
         FieldKind::NullableBytes => format_ident!("NullableBytesCol"),
+        // FileField / ImageField are TEXT newtypes — the column const is
+        // a string column, same as a plain `String` field, so filter
+        // chains like `post::COVER.eq("key")` work.
+        FieldKind::FileField | FieldKind::ImageField => format_ident!("StrCol"),
+        FieldKind::NullableFileField | FieldKind::NullableImageField => {
+            format_ident!("NullableStrCol")
+        }
         FieldKind::Decimal => format_ident!("DecimalCol"),
         // MultiChoice and Many2Many are handled inline by the caller,
         // so these arms are unreachable in practice. We return an empty
