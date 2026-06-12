@@ -15,7 +15,10 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio::sync::{Mutex, OnceCell};
 use tower::ServiceExt;
 
-use umbra_admin::{AdminPlugin, KpiPayload, Span, Widget, WidgetDataFn, WidgetKind, WidgetPayload};
+use umbra_admin::{
+    AdminPlugin, HeatmapPayload, KpiPayload, ProgressPayload, RadialPayload, Span, Widget,
+    WidgetDataFn, WidgetKind, WidgetPayload,
+};
 use umbra_auth::{AuthPlugin, AuthUser, create_user_with_flags};
 use umbra_sessions::SessionsPlugin;
 
@@ -55,6 +58,48 @@ async fn boot() -> &'static axum::Router {
             }),
         };
 
+        // The newer widget kinds — each must render its HTML fragment
+        // through the macro registered in engine.rs (regression guard
+        // for "macro template never registered" -> import error ->
+        // blank widget cell).
+        let radial_widget = Widget {
+            key: "test_radial",
+            title: "Test Radial".to_string(),
+            kind: WidgetKind::Radial,
+            default_span: Span { cols: 3, rows: 2 },
+            permission: None,
+            default_period: None,
+            data: WidgetDataFn::new(|_user| async move {
+                WidgetPayload::Radial(RadialPayload::single("Done", 73.0))
+            }),
+        };
+        let heatmap_widget = Widget {
+            key: "test_heatmap",
+            title: "Test Heatmap".to_string(),
+            kind: WidgetKind::Heatmap,
+            default_span: Span { cols: 6, rows: 3 },
+            permission: None,
+            default_period: None,
+            data: WidgetDataFn::new(|_user| async move {
+                WidgetPayload::Heatmap(HeatmapPayload::from_grid(
+                    ["R1"],
+                    ["a", "b"],
+                    vec![vec![1.0, 2.0]],
+                ))
+            }),
+        };
+        let progress_widget = Widget {
+            key: "test_progress",
+            title: "Test Progress".to_string(),
+            kind: WidgetKind::Progress,
+            default_span: Span { cols: 3, rows: 3 },
+            permission: None,
+            default_period: None,
+            data: WidgetDataFn::new(|_user| async move {
+                WidgetPayload::Progress(ProgressPayload::from_pairs([("A", 10.0), ("B", 5.0)]))
+            }),
+        };
+
         let app = umbra::App::builder()
             .settings(settings)
             .database("default", pool_obj)
@@ -67,7 +112,10 @@ async fn boot() -> &'static axum::Router {
                 AdminPlugin::default()
                     .register_widget(umbra_admin::builtin_total_models_widget())
                     .register_widget(umbra_admin::builtin_recent_users_widget())
-                    .register_widget(custom_widget),
+                    .register_widget(custom_widget)
+                    .register_widget(radial_widget)
+                    .register_widget(heatmap_widget)
+                    .register_widget(progress_widget),
             )
             .build()
             .expect("App::build");
@@ -192,6 +240,40 @@ async fn widget_data_returns_typed_payload() {
     assert_eq!(json["kind"].as_str().unwrap_or(""), "kpi");
     assert_eq!(json["payload"]["value"].as_str().unwrap_or(""), "99");
     assert_eq!(json["payload"]["unit"].as_str().unwrap_or(""), "items");
+}
+
+/// Every widget kind must render its HTML fragment through the macro
+/// registered in `engine.rs`. Regression guard: the radial/heatmap/
+/// progress macro templates were initially added to `widget_data.html`
+/// but NOT registered with the minijinja env, so the `{% from ... %}`
+/// import failed at render time and the widget cell stayed blank.
+#[tokio::test]
+async fn new_widget_kinds_render_html_fragments() {
+    let _guard = LOCK.lock().await;
+    let router = boot().await;
+    let cookie = staff_cookie().await;
+
+    for (key, marker) in [
+        ("test_radial", "data-umbra-chart=\"radial\""),
+        ("test_heatmap", "data-umbra-chart=\"heatmap\""),
+        ("test_progress", "progress-widget"),
+    ] {
+        let req = Request::builder()
+            .uri(format!("/admin/api/dashboard/widgets/{key}/data"))
+            .header(header::COOKIE, cookie.clone())
+            // HTML path (the dashboard cell's hx-get), not the JSON API.
+            .header("hx-request", "true")
+            .body(Body::empty())
+            .unwrap();
+        let resp = router.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "{key} should render 200");
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let html = String::from_utf8_lossy(&body);
+        assert!(
+            html.contains(marker),
+            "{key} fragment must contain `{marker}` (macro not registered?); got: {html}"
+        );
+    }
 }
 
 #[tokio::test]

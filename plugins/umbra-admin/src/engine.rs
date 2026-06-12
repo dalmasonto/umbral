@@ -206,6 +206,21 @@ pub(crate) fn engine() -> &'static Environment<'static> {
             include_str!("../templates/_macros/widgets/table.html"),
         )
         .expect("admin/_macros/widgets/table.html parses");
+        env.add_template(
+            "admin/_macros/widgets/radial.html",
+            include_str!("../templates/_macros/widgets/radial.html"),
+        )
+        .expect("admin/_macros/widgets/radial.html parses");
+        env.add_template(
+            "admin/_macros/widgets/heatmap.html",
+            include_str!("../templates/_macros/widgets/heatmap.html"),
+        )
+        .expect("admin/_macros/widgets/heatmap.html parses");
+        env.add_template(
+            "admin/_macros/widgets/progress.html",
+            include_str!("../templates/_macros/widgets/progress.html"),
+        )
+        .expect("admin/_macros/widgets/progress.html parses");
         // Preview macros
         env.add_template(
             "admin/_macros/previews/image.html",
