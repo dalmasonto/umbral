@@ -23,7 +23,7 @@ use plugin_directory::models::{
 };
 use plugin_directory::{
     create_note, create_report, create_submission, render_detail, render_detail_with,
-    render_listing, render_report, render_search, render_submit,
+    render_listing, render_prebuilt, render_report, render_search, render_submit,
 };
 use umbra::forms::ValidationErrors;
 use umbra::migrate::ModelMeta;
@@ -48,14 +48,54 @@ impl PluginTrait for TemplatesOnly {
     fn templates_dirs(&self) -> Vec<PathBuf> {
         vec![PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("templates")]
     }
+    /// Declare storage capability so the `field.storage_backend` system
+    /// check passes for the `Plugin` model's `logo` / `cover_image` image
+    /// fields. The check reads this flag (not the ambient backend); we DID
+    /// register a real `TestStorage` ambiently in `boot()`, so this is honest.
+    fn provides_storage(&self) -> bool {
+        true
+    }
     fn on_ready(&self, _ctx: &umbra::plugin::AppContext) -> Result<(), PluginError> {
         Ok(())
+    }
+}
+
+/// A no-op storage backend so the boot-time system check passes — the
+/// `Plugin` model declares `logo` / `cover_image` file/image fields, which
+/// require a registered `Storage`. The render tests never upload, so this
+/// only needs to satisfy the check and resolve `url(key)`.
+struct TestStorage;
+
+#[umbra::storage::async_trait]
+impl umbra::storage::Storage for TestStorage {
+    async fn store(
+        &self,
+        filename: &str,
+        _content_type: &str,
+        _bytes: &[u8],
+    ) -> Result<umbra::storage::StoredFile, umbra::storage::StorageError> {
+        let key = filename.to_string();
+        let url = self.url(&key);
+        Ok(umbra::storage::StoredFile { key, url })
+    }
+    async fn retrieve(&self, _key: &str) -> Result<Vec<u8>, umbra::storage::StorageError> {
+        Err(umbra::storage::StorageError::NotFound)
+    }
+    async fn delete(&self, _key: &str) -> Result<(), umbra::storage::StorageError> {
+        Ok(())
+    }
+    fn url(&self, key: &str) -> String {
+        format!("/media/{key}")
     }
 }
 
 /// Boot the app once: ambient pool + model registry + template engine,
 /// then create the tables and seed representative rows.
 async fn boot() {
+    // Register a storage backend before build so the `logo` / `cover_image`
+    // image-field system check passes. Set-once / first-wins, so harmless.
+    let _ = umbra::storage::set_storage(std::sync::Arc::new(TestStorage));
+
     let pool = umbra::db::connect_sqlite("sqlite::memory:")
         .await
         .expect("in-memory sqlite");
@@ -101,6 +141,7 @@ async fn ensure_tables(pool: &sqlx::SqlitePool) {
                 name TEXT NOT NULL,
                 slug TEXT NOT NULL,
                 logo TEXT,
+                cover_image TEXT,
                 crate_name TEXT NOT NULL,
                 author TEXT NOT NULL,
                 short_description TEXT NOT NULL,
@@ -554,7 +595,7 @@ async fn listing_and_detail_render_real_db_rows() {
         .expect("submitted detail renders")
         .expect("plugin exists");
     assert!(
-        after.contains("Thanks — your note is pending moderation."),
+        after.contains("Thanks - your note is pending moderation."),
         "the ?submitted=1 success banner renders"
     );
     assert!(
@@ -793,6 +834,43 @@ async fn listing_and_detail_render_real_db_rows() {
     assert!(
         resubmit.contains("value=\"umbra-x\""),
         "the previously-entered slug value is repopulated"
+    );
+
+    // --- Prebuilt page: official-only, each with its feature tracker ------
+    // Loads official, approved plugins with `prefetch_related("feature_set")`
+    // (1 parents + 1 children query). The seeded official "Umbra REST" and
+    // its "Cursor pagination" feature render; the community plugin and the
+    // deleted "More official plugins" strip do not.
+    let prebuilt = render_prebuilt().await.expect("prebuilt renders");
+    assert!(
+        prebuilt.contains("umbra.rest"),
+        "the official plugin's dotted crate name renders"
+    );
+    // The install line renders the dotted crate name (the surrounding
+    // quotes are HTML-escaped by autoescape, so match the unescaped part).
+    assert!(
+        prebuilt.contains("plugins += ["),
+        "the install line renders"
+    );
+    assert!(
+        prebuilt.contains("Cursor pagination"),
+        "the prefetched feature row renders"
+    );
+    assert!(
+        prebuilt.contains("shipped"),
+        "the feature's derived status label renders"
+    );
+    assert!(
+        prebuilt.contains("/plugins/umbra-rest"),
+        "the card links to the plugin detail page"
+    );
+    assert!(
+        !prebuilt.contains("Umbra Multitenancy"),
+        "community plugins are excluded from the official-only page"
+    );
+    assert!(
+        !prebuilt.contains("More official plugins"),
+        "the hardcoded 'More official plugins' strip was removed"
     );
 }
 

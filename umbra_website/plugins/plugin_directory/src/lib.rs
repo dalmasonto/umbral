@@ -118,6 +118,14 @@ impl Plugin for PluginDirectoryPlugin {
                 Ok(n) => tracing::info!("{}: back-filled audit status on {} rows", plugin_name, n),
                 Err(e) => tracing::warn!("{}: audit-status back-fill failed: {e}", plugin_name),
             }
+            // Seed each official plugin's feature tracker rows so the
+            // /prebuilt grid and the /plugins/{slug} tracker render real
+            // data. Idempotent per plugin (back-fills already-seeded rows).
+            match seed::seed_plugin_features().await {
+                Ok(0) => {}
+                Ok(n) => tracing::info!("{}: seeded {} plugin feature rows", plugin_name, n),
+                Err(e) => tracing::warn!("{}: plugin-feature seed failed: {e}", plugin_name),
+            }
             // Seed demo discussion notes so the admin dashboard's
             // engagement widgets have real data. Idempotent.
             match seed::seed_demo_comments().await {
@@ -131,7 +139,106 @@ impl Plugin for PluginDirectoryPlugin {
 }
 
 async fn prebuilt_plugins() -> Result<Html<String>, (StatusCode, String)> {
-    render("plugin_directory/prebuilt.html", &serde_json::json!({}))
+    render_prebuilt().await.map(Html).map_err(internal_error)
+}
+
+/// One official-plugin card on `/prebuilt` — the plugin plus its feature
+/// tracker rows.
+#[derive(Debug, Serialize)]
+struct PrebuiltCard {
+    slug: String,
+    /// Dotted crate name for display: `umbra-admin` → `umbra.admin`.
+    crate_dotted: String,
+    /// Two-letter monogram tile.
+    icon: String,
+    short_description: String,
+    /// "Shipped / stable" — status label + maturity.
+    status: String,
+    /// "ok" / "warn" / "muted" — drives the pill colour.
+    status_kind: &'static str,
+    /// The `plugins += ["umbra.admin"]` install line.
+    install: String,
+    docs_url: Option<String>,
+    features: Vec<PrebuiltFeature>,
+}
+
+/// One row in a `/prebuilt` card's feature tracker.
+#[derive(Debug, Serialize)]
+struct PrebuiltFeature {
+    name: String,
+    /// "shipped" / "usable" / "experimental" / "planned" / …
+    status: String,
+    /// "ok" / "warn" / "muted" — drives the dot + label colour.
+    kind: &'static str,
+}
+
+/// Load + render `/prebuilt`: every official, approved plugin with its
+/// feature tracker, in one parents + one children query
+/// (`prefetch_related("feature_set")`) — no N+1. Public so the render
+/// smoke-test drives the full query → view-model → template path without
+/// an axum runtime.
+pub async fn render_prebuilt() -> Result<String, String> {
+    let plugins = PluginModel::objects()
+        .filter(plugin::MODERATION.eq("approved"))
+        .filter(plugin::SOURCE.eq("official"))
+        .order_by(plugin::FEATURED.desc())
+        .order_by(plugin::DISPLAY_ORDER.asc())
+        .order_by(plugin::ID.asc())
+        .fetch()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Batch-load every plugin's visible features in ONE query (no N+1):
+    // `WHERE plugin IN (<ids>)`, then group by plugin in memory. (We use
+    // the IN-batch rather than `prefetch_related("feature_set")` because
+    // that path returns empty buckets for a second reverse-FK field on the
+    // same model — see planning/orm_fixes.md #1.)
+    let ids: Vec<i64> = plugins.iter().map(|p| p.id).collect();
+    let mut features_by_plugin: HashMap<i64, Vec<PrebuiltFeature>> = HashMap::new();
+    if !ids.is_empty() {
+        let rows = PluginFeature::objects()
+            .filter(plugin_feature::PLUGIN.in_(&ids))
+            .filter(plugin_feature::VISIBLE.eq(true))
+            .order_by(plugin_feature::DISPLAY_ORDER.asc())
+            .order_by(plugin_feature::ID.asc())
+            .fetch()
+            .await
+            .map_err(|e| e.to_string())?;
+        for f in rows {
+            let (status, kind) = feature_status(f.status);
+            features_by_plugin
+                .entry(f.plugin.id())
+                .or_default()
+                .push(PrebuiltFeature {
+                    name: f.name,
+                    status,
+                    kind,
+                });
+        }
+    }
+
+    let cards: Vec<PrebuiltCard> = plugins
+        .into_iter()
+        .map(|p| {
+            let features = features_by_plugin.remove(&p.id).unwrap_or_default();
+            let (status_label, status_kind) = status_badge(p.status);
+            let maturity = format!("{:?}", p.maturity).to_lowercase();
+            PrebuiltCard {
+                slug: p.slug.clone(),
+                crate_dotted: p.crate_name.replace('-', "."),
+                icon: initials(&p.name),
+                short_description: p.short_description.clone(),
+                status: format!("{status_label} / {maturity}"),
+                status_kind,
+                install: format!("plugins += [\"{}\"]", p.crate_name.replace('-', ".")),
+                docs_url: nonempty(p.docs_url.clone()),
+                features,
+            }
+        })
+        .collect();
+
+    umbra::templates::render("plugin_directory/prebuilt.html", &context! { plugins => cards })
+        .map_err(|e| e.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -1538,12 +1645,6 @@ fn title_case(s: &str) -> String {
         Some(first) => first.to_uppercase().collect::<String>() + &chars.as_str().to_lowercase(),
         None => String::new(),
     }
-}
-
-fn render<C: Serialize>(template: &str, context: &C) -> Result<Html<String>, (StatusCode, String)> {
-    umbra::templates::render(template, context)
-        .map(Html)
-        .map_err(internal_error)
 }
 
 fn internal_error<E: std::fmt::Display>(err: E) -> (StatusCode, String) {

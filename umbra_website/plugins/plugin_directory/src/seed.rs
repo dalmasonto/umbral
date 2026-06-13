@@ -11,9 +11,10 @@
 //! one-off CLI command).
 
 use crate::models::{
-    CommentKind, CommentModeration, Plugin, PluginComment, PluginMaturity, PluginModeration,
-    PluginSource, PluginStatus, plugin,
+    CommentKind, CommentModeration, Plugin, PluginComment, PluginFeature, PluginMaturity,
+    PluginModeration, PluginSource, PluginStatus, plugin, plugin_feature,
 };
+use chrono::Utc;
 use umbra::prelude::*;
 
 /// One row of official Umbra plugin data. Hand-curated; the spec
@@ -322,6 +323,188 @@ pub async fn seed_demo_comments() -> Result<usize, Box<dyn std::error::Error + S
         comment.author = None;
         PluginComment::objects().create(comment).await?;
         inserted += 1;
+    }
+    Ok(inserted)
+}
+
+// ---------------------------------------------------------------------------
+// Per-plugin feature tracker rows.
+// ---------------------------------------------------------------------------
+
+/// One curated feature row for an official plugin. `status`/`maturity` are
+/// editorial facts about the framework (like `audit_status`), not external
+/// metrics — legitimate to seed. Powers the `/prebuilt` feature grid and
+/// the `/plugins/{slug}` tracker.
+struct FeatureSeed {
+    name: &'static str,
+    description: &'static str,
+    status: PluginStatus,
+    maturity: PluginMaturity,
+}
+
+/// The feature set for one official plugin, keyed by crate name.
+struct PluginFeatureSet {
+    crate_name: &'static str,
+    features: &'static [FeatureSeed],
+}
+
+const S: PluginStatus = PluginStatus::Shipped;
+const U: PluginStatus = PluginStatus::Usable;
+const E: PluginStatus = PluginStatus::Experimental;
+const IP: PluginStatus = PluginStatus::InProgress;
+const PL: PluginStatus = PluginStatus::Planned;
+const STA: PluginMaturity = PluginMaturity::Stable;
+const BETA: PluginMaturity = PluginMaturity::Beta;
+const ALPHA: PluginMaturity = PluginMaturity::Alpha;
+const DES: PluginMaturity = PluginMaturity::Design;
+
+/// Hand-curated feature tracker per official plugin. Mirrors the real
+/// status of each capability in the framework (see `planning/features.md`).
+const PLUGIN_FEATURES: &[PluginFeatureSet] = &[
+    PluginFeatureSet {
+        crate_name: "umbra-admin",
+        features: &[
+            FeatureSeed { name: "Auto CRUD views", description: "List, create, edit, delete generated from every registered model.", status: S, maturity: STA },
+            FeatureSeed { name: "Search and multi-filter", description: "Toolbar search plus combinable `list_filter` facets.", status: S, maturity: STA },
+            FeatureSeed { name: "FK / M2M / O2O pickers", description: "Async relation pickers with search-as-you-type.", status: S, maturity: STA },
+            FeatureSeed { name: "Per-model permissions", description: "Django-style `view/add/change/delete` gating via umbra-permissions.", status: S, maturity: STA },
+            FeatureSeed { name: "File and image widgets", description: "Multipart upload with image thumbnail preview.", status: S, maturity: STA },
+            FeatureSeed { name: "Markdown / RTE field widgets", description: "`#[umbra(widget = ...)]` renders rich editors in the form.", status: S, maturity: STA },
+            FeatureSeed { name: "Dashboard widgets", description: "KPI cards, charts, and recent-activity panels on the index.", status: IP, maturity: BETA },
+            FeatureSeed { name: "Bulk actions", description: "Select rows then act — delete, publish, export.", status: PL, maturity: DES },
+            FeatureSeed { name: "Inline editing", description: "Edit related rows on the parent form (tabular / stacked).", status: PL, maturity: DES },
+        ],
+    },
+    PluginFeatureSet {
+        crate_name: "umbra-auth",
+        features: &[
+            FeatureSeed { name: "User and group models", description: "Built-in `AuthUser` plus groups and roles.", status: S, maturity: STA },
+            FeatureSeed { name: "Argon2 password hashing", description: "Modern password hashing with sensible defaults.", status: S, maturity: STA },
+            FeatureSeed { name: "Permissions and RBAC", description: "Group/permission M2M checks via umbra-permissions.", status: S, maturity: STA },
+            FeatureSeed { name: "Bearer tokens", description: "Opaque DB-backed API tokens, hashed at rest.", status: S, maturity: STA },
+            FeatureSeed { name: "OAuth / social login", description: "Sign in with Google/GitHub and connect accounts (umbra-oauth).", status: S, maturity: BETA },
+            FeatureSeed { name: "Password reset", description: "Token-based reset flow (email delivery pending umbra-email).", status: IP, maturity: BETA },
+            FeatureSeed { name: "SSO / OIDC", description: "Enterprise single sign-on.", status: PL, maturity: DES },
+        ],
+    },
+    PluginFeatureSet {
+        crate_name: "umbra-sessions",
+        features: &[
+            FeatureSeed { name: "DB-backed session store", description: "Server-side sessions persisted through the ORM.", status: S, maturity: STA },
+            FeatureSeed { name: "Session middleware", description: "Cookie handling with secure defaults.", status: S, maturity: STA },
+            FeatureSeed { name: "Login / logout flow", description: "Establish and tear down the authenticated session.", status: S, maturity: STA },
+            FeatureSeed { name: "Redis-backed sessions", description: "Shared session store for horizontal scaling.", status: PL, maturity: DES },
+        ],
+    },
+    PluginFeatureSet {
+        crate_name: "umbra-rest",
+        features: &[
+            FeatureSeed { name: "Serializers and viewsets", description: "Models become JSON resources with zero config.", status: S, maturity: BETA },
+            FeatureSeed { name: "Routers and pagination", description: "Collection/detail routes with page slicing.", status: S, maturity: BETA },
+            FeatureSeed { name: "Filtering and search", description: "Query-string filters and free-text search per resource.", status: S, maturity: BETA },
+            FeatureSeed { name: "Authentication and permissions", description: "Session/bearer auth chain with per-resource permission gates.", status: S, maturity: BETA },
+            FeatureSeed { name: "Endpoint discovery", description: "`GET /api/` API root listing resources and plugin endpoints.", status: S, maturity: BETA },
+            FeatureSeed { name: "Custom @action endpoints", description: "Collection/detail actions beyond CRUD.", status: U, maturity: BETA },
+            FeatureSeed { name: "Nested writable serializers", description: "Create a parent and its children in one request.", status: PL, maturity: DES },
+        ],
+    },
+    PluginFeatureSet {
+        crate_name: "umbra-openapi",
+        features: &[
+            FeatureSeed { name: "OpenAPI 3 schema generation", description: "Auto-generated spec from registered resources.", status: S, maturity: BETA },
+            FeatureSeed { name: "Playground UI", description: "Mini-Postman request/response surface (umbra-playground).", status: S, maturity: BETA },
+            FeatureSeed { name: "Vendor extensions", description: "FK targets, enums, nullable/readOnly surfaced in the schema.", status: S, maturity: BETA },
+            FeatureSeed { name: "securitySchemes publishing", description: "Auth requirements per endpoint for auto-detect in the playground.", status: IP, maturity: BETA },
+        ],
+    },
+    PluginFeatureSet {
+        crate_name: "umbra-tasks",
+        features: &[
+            FeatureSeed { name: "#[task] macro", description: "Annotate a function as an enqueueable background job.", status: U, maturity: ALPHA },
+            FeatureSeed { name: "DB-backed queue", description: "Jobs persisted to a table and drained by a worker.", status: E, maturity: ALPHA },
+            FeatureSeed { name: "Worker process", description: "`cargo run -- worker` consumes and executes jobs.", status: E, maturity: ALPHA },
+            FeatureSeed { name: "Retries and backoff", description: "Failed jobs retry with exponential backoff.", status: E, maturity: ALPHA },
+            FeatureSeed { name: "Scheduled tasks", description: "Run a job at a future `eta`.", status: PL, maturity: DES },
+        ],
+    },
+    PluginFeatureSet {
+        crate_name: "umbra-security",
+        features: &[
+            FeatureSeed { name: "CSRF protection", description: "Double-submit token enforced on every POST.", status: S, maturity: STA },
+            FeatureSeed { name: "HSTS and secure headers", description: "Strict-Transport-Security and friends by default.", status: S, maturity: STA },
+            FeatureSeed { name: "Clickjacking protection", description: "X-Frame-Options / frame-ancestors headers.", status: S, maturity: STA },
+            FeatureSeed { name: "Template auto-escaping", description: "Output escaped by default; opt out explicitly.", status: S, maturity: STA },
+        ],
+    },
+    PluginFeatureSet {
+        crate_name: "umbra-static",
+        features: &[
+            FeatureSeed { name: "Production static serving", description: "Serve compiled assets and uploaded media in prod.", status: S, maturity: STA },
+            FeatureSeed { name: "collectstatic command", description: "Gather every plugin's static dir into one output tree.", status: S, maturity: STA },
+            FeatureSeed { name: "gzip / brotli compression", description: "Compressed responses for static assets.", status: PL, maturity: DES },
+        ],
+    },
+];
+
+/// Slugify a feature name into the `<crate>-<name>` unique-slug tail.
+fn feature_slug(crate_name: &str, name: &str) -> String {
+    let tail: String = name
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
+        .collect();
+    let tail = tail
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    format!("{crate_name}-{tail}")
+}
+
+/// Seed each official plugin's feature tracker rows. Idempotent per plugin:
+/// a plugin that already has features is skipped, so this runs every boot
+/// (the plugin rows seed first, then this back-fills their features) and a
+/// re-run after adding a new plugin's feature list only inserts the new
+/// rows. Returns the number of feature rows inserted.
+pub async fn seed_plugin_features() -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
+    let mut inserted = 0;
+    for set in PLUGIN_FEATURES {
+        let Some(plugin) = Plugin::objects()
+            .filter(plugin::CRATE_NAME.eq(set.crate_name))
+            .first()
+            .await?
+        else {
+            continue;
+        };
+        if PluginFeature::objects()
+            .filter(plugin_feature::PLUGIN.eq(plugin.id))
+            .count()
+            .await?
+            > 0
+        {
+            continue;
+        }
+        for (i, f) in set.features.iter().enumerate() {
+            let now = Utc::now();
+            let row = PluginFeature {
+                id: 0,
+                plugin: ForeignKey::new(plugin.id),
+                name: f.name.to_string(),
+                slug: feature_slug(set.crate_name, f.name),
+                description: f.description.to_string(),
+                status: f.status,
+                maturity: f.maturity,
+                release_target: None,
+                docs_url: None,
+                example_url: None,
+                display_order: (i as i32) * 10,
+                visible: true,
+                created_at: now,
+                updated_at: now,
+                deleted_at: None,
+            };
+            PluginFeature::objects().create(row).await?;
+            inserted += 1;
+        }
     }
     Ok(inserted)
 }

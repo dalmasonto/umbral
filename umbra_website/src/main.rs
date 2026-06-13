@@ -33,6 +33,10 @@ use umbra_static::StaticPlugin;
 // widgets module.
 mod widgets;
 
+// The `seed_orm_data` management command (orchestrates every website
+// plugin's idempotent seed).
+mod seed_command;
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tracing_subscriber::fmt()
@@ -100,6 +104,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .plugin(AccountsPlugin::default())
         .plugin(CommunityPlugin::default())
         .plugin(PublicPlugin::default())
+        // Contributes the `seed_orm_data` management command.
+        .plugin(seed_command::SeedDataPlugin::default())
         // --- Admin/API/security --------------------------------------------
         .plugin(
             RestPlugin::default()

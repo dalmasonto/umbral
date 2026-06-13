@@ -256,6 +256,15 @@ pub struct Plugin {
     #[umbra(noform, reverse_fk = "plugin")]
     pub comment_set: umbra::orm::ReverseSet<PluginComment>,
 
+    /// Reverse relation to this plugin's feature tracker rows. Powers the
+    /// `/prebuilt` page's per-plugin feature grid in one batched query via
+    /// `prefetch_related("feature_set")` instead of an N+1 per-plugin
+    /// reverse lookup. Not a column — skipped by sqlx, serde, migrations.
+    #[sqlx(skip)]
+    #[serde(skip)]
+    #[umbra(noform, reverse_fk = "plugin")]
+    pub feature_set: umbra::orm::ReverseSet<PluginFeature>,
+
     #[umbra(auto_now_add)]
     pub created_at: DateTime<Utc>,
 
