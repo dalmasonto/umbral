@@ -19,6 +19,8 @@ use umbra::web::{Html, SlashRedirect, StatusCode};
 use umbra_admin::AdminPlugin;
 use umbra_auth::{AuthPlugin, AuthUser, login_required_html};
 use umbra_media::MediaPlugin;
+use umbra_oauth::OAuthPlugin;
+use umbra_oauth::providers::{GitHubProvider, GoogleProvider};
 use umbra_openapi::OpenApiPlugin;
 use umbra_playground::PlaygroundPlugin;
 use umbra_rest::{ResourceConfig, RestPlugin};
@@ -53,6 +55,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .with_user_in_templates(),
         )
         .plugin(SessionsPlugin::default())
+        // OAuth / social login. Credentials are read from the environment
+        // (UMBRA_OAUTH_<PROVIDER>_CLIENT_ID / _CLIENT_SECRET); a provider
+        // with no credentials is simply not registered, so this is safe to
+        // leave on with nothing configured. `redirect_base` is the public
+        // origin — override it in prod with UMBRA_OAUTH_REDIRECT_BASE.
+        .plugin({
+            let mut oauth = OAuthPlugin::new(
+                std::env::var("UMBRA_OAUTH_REDIRECT_BASE")
+                    .unwrap_or_else(|_| "http://localhost:8000".to_string()),
+            )
+            .login_redirect("/dashboard");
+            if let Some(google) = GoogleProvider::from_env() {
+                oauth = oauth.provider(google);
+            }
+            if let Some(github) = GitHubProvider::from_env() {
+                oauth = oauth.provider(github);
+            }
+            oauth
+        })
         // --- Website apps ---------------------------------------------------
         .plugin(SiteContentPlugin::default())
         .plugin(FeaturesPlugin::default())
