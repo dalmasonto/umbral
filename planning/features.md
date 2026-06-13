@@ -292,10 +292,8 @@ These are the cross-cutting capabilities that turn a framework from a neat ORM d
     >
     > How: A management command that validates a migration is safe (no `DROP COLUMN` on non-nullable without default, no `RENAME TABLE` without rename detection). Document the expand-contract pattern in the ops guide. Defer until the framework has production users doing multiple deploys per day.
 
-66. [ ] **Static files handling and compression** 🟡 Medium
-    > Why: `STATIC_URL` + `STATIC_ROOT` equivalent, `gzip`/`brotli` compression, and `{% static "logo.png" %}` template tag. The `umbra-static` plugin exists but needs a `collectstatic` command and compression.
-    >
-    > How: `cargo run -- collectstatic` that walks every plugin's `static/` directory and copies files to a single output directory. Add `gzip` and `brotli` middleware (using `tower-http::compression`) for responses. The template tag is a small addition to the minijinja environment.
+66. [x] **Static files handling and compression** 🟡 Medium
+       — Shipped. All three pieces are in: (1) **`collectstatic`** — `collect_static` walks every plugin's `static_dirs()` into one output tree (`crates/umbra-core/src/static_files.rs`), wired as a CLI command. (2) The **`{% static "path" %}`** template tag — `register_static_function` adds a `static` minijinja function resolving against `settings.static_url` (`templates.rs`). (3) **gzip/brotli compression** — `AppBuilder::compression()` wraps the router in a `tower-http` `CompressionLayer` (gzip + brotli features); opt-in (off by default since a reverse proxy usually owns it), chooses the algorithm from `Accept-Encoding`, skips non-compressible/already-encoded bodies. Test: `crates/umbra-core/tests/compression.rs` (compresses when gzip accepted; passes through otherwise). **Deferred**: per-file pre-compressed `.gz`/`.br` static artifacts (the live layer covers the common case).
 
 67. [ ] **Custom template tags and filters** 🟢 Low
     > Why: `{% now "Y-m-d" %}`, `{% url "product_detail" id=product.id %}`, `{{ price|currency:"USD" }}`. Django has hundreds of built-in tags; Umbra has zero custom ones.

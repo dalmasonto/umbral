@@ -120,6 +120,11 @@ pub struct AppBuilder {
     /// pre-flag behaviour (no auto-wrapping). See
     /// [`AppBuilder::atomic_transactions`].
     atomic_transactions: Option<bool>,
+    /// When `true`, a `tower-http` gzip/brotli compression layer wraps the
+    /// router. Off by default — a reverse proxy usually owns compression,
+    /// and double-compressing behind one is wasteful. Enable via
+    /// [`AppBuilder::compression`].
+    compress: bool,
 }
 
 impl Default for AppBuilder {
@@ -140,6 +145,7 @@ impl Default for AppBuilder {
             cors: None,
             cors_scoped: Vec::new(),
             atomic_transactions: None,
+            compress: false,
         }
     }
 }
@@ -429,6 +435,19 @@ impl AppBuilder {
     /// per-call `.atomic()` / `.non_atomic()` overrides still work.
     pub fn atomic_transactions(mut self, enabled: bool) -> Self {
         self.atomic_transactions = Some(enabled);
+        self
+    }
+
+    /// Compress responses with gzip / brotli (a `tower-http`
+    /// `CompressionLayer`). The algorithm is chosen from the request's
+    /// `Accept-Encoding`; already-encoded or non-compressible content types
+    /// are skipped automatically.
+    ///
+    /// Off by default: in most deployments the reverse proxy (nginx, a CDN)
+    /// already compresses, and doing it twice is wasted CPU. Enable this
+    /// when you serve directly (a single binary with no proxy in front).
+    pub fn compression(mut self) -> Self {
+        self.compress = true;
         self
     }
 
@@ -894,6 +913,15 @@ impl AppBuilder {
                 render_state,
                 crate::errors::render_500_middleware,
             ));
+        }
+
+        // Optional response compression (gzip / brotli), opt-in via
+        // `AppBuilder::compression`. tower-http chooses the algorithm from
+        // `Accept-Encoding` and skips already-encoded / non-compressible
+        // bodies. Applied here so it wraps handler responses; CORS + host
+        // checks layer outside it.
+        if self.compress {
+            router = router.layer(tower_http::compression::CompressionLayer::new());
         }
 
         // Phase 5.9 — CORS, applied last so it's the outermost
