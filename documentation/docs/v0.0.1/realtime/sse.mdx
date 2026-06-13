@@ -10,7 +10,7 @@ tags: [realtime, sse, websockets, push, notifications]
 `umbra-realtime` pushes data from the server to connected clients — **to one user** or **to a named group/room** — without you tracking sockets by hand. Two transports share one targeting API: **SSE** (one-way server → client, proxy-friendly, `EventSource`) and **WebSocket** (bidirectional). SSE is the simplest and the default; reach for WebSocket when the client also needs to *send*.
 
 <Callout type="info">
-This is a single-instance plugin today. A `Broker` seam is in place so a Redis backplane can route `to_user(42)` across multiple app instances later — without any API change.
+A single instance needs no configuration. To run several instances behind a load balancer, point them at a shared Redis with `RealtimePlugin::redis(url)` (the `redis` feature) and `to_user(42)` routes across all of them — same API, see [Scaling across instances](scaling).
 </Callout>
 
 ## Wiring
@@ -135,5 +135,5 @@ RealtimePlugin::default()
 ## See also
 
 - [Signals](../orm/signals) — the `post_save`/`post_delete` events this bridges.
-- Design + the multi-instance broker plan: `docs/superpowers/specs/2026-06-13-umbra-realtime-design.md`.
-- Closes the core of features.md #45 (SSE + WebSocket + model fan-out); a multi-instance Redis broker is the documented future swap.
+- [Scaling across instances](scaling) — the Redis pub/sub backplane for multi-instance deployments.
+- Design: `docs/superpowers/specs/2026-06-13-umbra-realtime-design.md`.

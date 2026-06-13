@@ -11,26 +11,27 @@
 //! Realtime::broadcast().send("ping", &json!({})).await;
 //! ```
 //!
-//! Shipped: the connection registry + broker seam (`InProcessBroker` for
-//! single-instance; a `RedisBroker` is the documented multi-instance
-//! swap), the ambient [`Realtime`] handle, and both transports — SSE
-//! (`GET /realtime/sse`, push-only) and WebSocket (`GET /realtime/ws`,
-//! bidirectional with a [`MessageHandler`] for inbound frames). The
-//! signals bridge (`on_model`) is the remaining phase (see
-//! `docs/superpowers/specs/2026-06-13-umbra-realtime-design.md`).
+//! Shipped: the connection registry + broker seam ([`InProcessBroker`]
+//! for single-instance, [`RedisBroker`] for multi-instance pub/sub), the
+//! ambient [`Realtime`] handle, both transports — SSE (`GET /realtime/sse`,
+//! push-only) and WebSocket (`GET /realtime/ws`, bidirectional with a
+//! [`MessageHandler`] for inbound frames) — and the signals bridge
+//! ([`on_model`](RealtimePlugin::on_model), zero-poll model-change fan-out).
+//! Full design: `docs/superpowers/specs/2026-06-13-umbra-realtime-design.md`.
 //!
-//! ## Why a broker now
+//! ## Why a broker
 //!
 //! `to_user(42)` only reaches user 42 if the message lands on the process
-//! that owns their socket. Single-process is fine for v1, but routing
-//! through a [`Broker`] means multi-instance becomes a drop-in
-//! (`RedisBroker`) later instead of an API break.
+//! that owns their socket. One process needs nothing; to scale out, point
+//! [`RealtimePlugin::redis`] at a shared Redis and every targeted send
+//! relays to whichever instance holds the socket — the [`Realtime`] API is
+//! identical, only the [`Broker`] swaps. Requires the `redis` feature.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::{RwLock, mpsc};
 use umbra::plugin::{AppContext, Plugin, PluginError};
 
@@ -63,7 +64,11 @@ pub struct Event {
 }
 
 /// Who an [`Event`] is addressed to.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// `Serialize`/`Deserialize` so an [`Envelope`] can cross a process
+/// boundary — the multi-instance [`RedisBroker`] ships it as JSON over
+/// pub/sub.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TargetKind {
     /// Every live connection authenticated as this user id.
     User(i64),
@@ -74,7 +79,10 @@ pub enum TargetKind {
 }
 
 /// A message published to the [`Broker`]: a target + the event to deliver.
-#[derive(Clone, Debug)]
+///
+/// `Serialize`/`Deserialize` is the wire format the [`RedisBroker`] uses
+/// to relay a send to every instance.
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Envelope {
     pub target: TargetKind,
     pub event: String,
@@ -262,6 +270,124 @@ impl Broker for InProcessBroker {
                 },
             )
             .await;
+    }
+}
+
+/// Multi-instance broker over Redis pub/sub (P6 phase 5). Requires the
+/// `redis` cargo feature.
+///
+/// Every instance runs one background pump that does two things on a
+/// shared channel (`umbra:realtime:events`):
+///   * PUBLISHes the envelopes this instance's handlers produce, and
+///   * SUBSCRIBEs and dispatches every envelope (including its own) to the
+///     LOCAL [`Registry`].
+///
+/// So `Realtime::to_user(42).send(...)` reaches user 42's socket no matter
+/// which instance holds it — the [`Realtime`] API is unchanged; only the
+/// broker swaps. The pump reconnects with a fixed backoff if Redis drops.
+///
+/// Note the originating instance also delivers via its own subscription
+/// (not a direct local dispatch), so a connection is never double-served.
+#[cfg(feature = "redis")]
+pub struct RedisBroker {
+    tx: tokio::sync::mpsc::UnboundedSender<Envelope>,
+}
+
+#[cfg(feature = "redis")]
+impl RedisBroker {
+    /// The pub/sub channel every umbra instance shares.
+    const CHANNEL: &'static str = "umbra:realtime:events";
+
+    /// Connect to `url` and spawn the background pump (publish + subscribe).
+    /// Spawned rather than awaited so it slots into the synchronous
+    /// `Plugin::on_ready`; the pump owns the connections.
+    pub fn start(url: String, registry: Arc<Registry>) -> Self {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        tokio::spawn(Self::pump(url, registry, rx));
+        Self { tx }
+    }
+
+    /// Reconnect loop around [`run_once`](Self::run_once). Returns only when
+    /// the outbound channel closes (the plugin/process is shutting down).
+    async fn pump(
+        url: String,
+        registry: Arc<Registry>,
+        mut rx: tokio::sync::mpsc::UnboundedReceiver<Envelope>,
+    ) {
+        loop {
+            match Self::run_once(&url, &registry, &mut rx).await {
+                Ok(()) => return,
+                Err(err) => {
+                    tracing::warn!("realtime redis broker: {err}; reconnecting in 1s");
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                }
+            }
+        }
+    }
+
+    /// One connection's lifetime: PUBLISH outbound envelopes and dispatch
+    /// inbound ones until the channel closes (`Ok`) or Redis errors (`Err`,
+    /// triggering a reconnect).
+    async fn run_once(
+        url: &str,
+        registry: &Arc<Registry>,
+        rx: &mut tokio::sync::mpsc::UnboundedReceiver<Envelope>,
+    ) -> Result<(), redis::RedisError> {
+        use futures_util::StreamExt;
+
+        let client = redis::Client::open(url)?;
+        let mut publisher = redis::aio::ConnectionManager::new(client.clone()).await?;
+        let mut pubsub = client.get_async_pubsub().await?;
+        pubsub.subscribe(Self::CHANNEL).await?;
+        let mut messages = pubsub.on_message();
+
+        loop {
+            tokio::select! {
+                outbound = rx.recv() => {
+                    let Some(env) = outbound else {
+                        return Ok(()); // channel closed → shut the pump down
+                    };
+                    if let Ok(json) = serde_json::to_string(&env) {
+                        // A publish failure surfaces as a stream error / the
+                        // next command erroring; ConnectionManager also
+                        // reconnects under us. Swallow the per-publish result.
+                        let _ = redis::cmd("PUBLISH")
+                            .arg(Self::CHANNEL)
+                            .arg(json)
+                            .query_async::<i64>(&mut publisher)
+                            .await;
+                    }
+                }
+                inbound = messages.next() => {
+                    let Some(msg) = inbound else {
+                        // Subscription stream ended → reconnect.
+                        return Err(redis::RedisError::from((
+                            redis::ErrorKind::IoError,
+                            "realtime pub/sub stream closed",
+                        )));
+                    };
+                    let payload: String = msg.get_payload().unwrap_or_default();
+                    if let Ok(env) = serde_json::from_str::<Envelope>(&payload) {
+                        registry
+                            .dispatch(
+                                &env.target,
+                                Event { event: env.event, data: env.data },
+                            )
+                            .await;
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(feature = "redis")]
+#[async_trait::async_trait]
+impl Broker for RedisBroker {
+    async fn publish(&self, env: Envelope) {
+        // Hand off to the pump without blocking the request handler. If the
+        // pump is gone (process shutting down) the send is silently dropped.
+        let _ = self.tx.send(env);
     }
 }
 
@@ -494,6 +620,10 @@ pub struct RealtimePlugin {
     /// `on_model` call). Run once at `on_ready` so they only fire when the
     /// plugin is actually installed.
     subscriptions: Vec<Box<dyn Fn() + Send + Sync>>,
+    /// When set (and the `redis` feature is on), boot a [`RedisBroker`]
+    /// instead of the single-instance [`InProcessBroker`]. Configured via
+    /// [`redis`](Self::redis).
+    redis_url: Option<String>,
 }
 
 impl Default for RealtimePlugin {
@@ -502,6 +632,7 @@ impl Default for RealtimePlugin {
             policy: Arc::new(PublicGroupsOnly),
             handler: Arc::new(NoopMessageHandler),
             subscriptions: Vec::new(),
+            redis_url: None,
         }
     }
 }
@@ -519,6 +650,20 @@ impl RealtimePlugin {
     /// default ([`NoopMessageHandler`]) ignores client frames (push-only).
     pub fn message_handler<H: MessageHandler + 'static>(mut self, handler: H) -> Self {
         self.handler = Arc::new(handler);
+        self
+    }
+
+    /// Scale horizontally: relay targeted sends through a Redis pub/sub
+    /// backplane so `to_user` / `to_group` / `broadcast` reach sockets held
+    /// by *other* instances (P6 phase 5). Without this, each instance only
+    /// serves the connections it holds — correct for a single process.
+    ///
+    /// Requires the `redis` cargo feature (`--features redis`). The same
+    /// `url` must point every instance at one Redis. The [`Realtime`] API is
+    /// unchanged; only the broker swaps.
+    #[cfg(feature = "redis")]
+    pub fn redis(mut self, url: impl Into<String>) -> Self {
+        self.redis_url = Some(url.into());
         self
     }
 
@@ -570,6 +715,26 @@ impl RealtimePlugin {
     {
         self.on_table(T::TABLE, handler)
     }
+
+    /// Pick the broker at boot: a [`RedisBroker`] when a URL is configured
+    /// and the `redis` feature is on, else the single-instance
+    /// [`InProcessBroker`]. A URL set without the feature warns and falls
+    /// back rather than silently scaling to one instance.
+    fn build_broker(&self, registry: Arc<Registry>) -> Arc<dyn Broker> {
+        #[cfg(feature = "redis")]
+        if let Some(url) = self.redis_url.clone() {
+            tracing::info!("realtime: redis broker backplane → {url}");
+            return Arc::new(RedisBroker::start(url, registry));
+        }
+        #[cfg(not(feature = "redis"))]
+        if self.redis_url.is_some() {
+            tracing::warn!(
+                "realtime: a redis url is set but the `redis` feature is off; \
+                 using the single-instance in-process broker"
+            );
+        }
+        Arc::new(InProcessBroker::new(registry))
+    }
 }
 
 impl Plugin for RealtimePlugin {
@@ -585,7 +750,7 @@ impl Plugin for RealtimePlugin {
 
     fn on_ready(&self, _ctx: &AppContext) -> Result<(), PluginError> {
         let registry = Arc::new(Registry::default());
-        let broker: Arc<dyn Broker> = Arc::new(InProcessBroker::new(registry.clone()));
+        let broker: Arc<dyn Broker> = self.build_broker(registry.clone());
         let _ = REALTIME.set(Realtime {
             broker,
             registry,
@@ -597,9 +762,7 @@ impl Plugin for RealtimePlugin {
         for register in &self.subscriptions {
             register();
         }
-        tracing::info!(
-            "realtime: in-process broker ready; SSE at /realtime/sse, WS at /realtime/ws"
-        );
+        tracing::info!("realtime: SSE at /realtime/sse, WS at /realtime/ws");
         Ok(())
     }
 }

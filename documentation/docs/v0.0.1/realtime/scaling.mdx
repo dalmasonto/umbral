@@ -1,0 +1,71 @@
+---
+title: Scaling across instances
+description: Run umbra-realtime behind a load balancer with a Redis pub/sub backplane so targeted sends reach sockets on any instance.
+sidebar_position: 4
+tags: [realtime, scaling, redis, websocket, sse]
+---
+
+# Scaling across instances
+
+`Realtime::to_user(42).send(...)` delivers to user 42's socket — but only if that socket is held by the *same process* that runs the send. With one instance, every socket is local, so nothing is needed. Behind a load balancer, user 42's browser might be connected to instance A while the code that sends runs on instance B. The `RedisBroker` bridges that gap.
+
+<Callout type="info">
+This is a drop-in: the `Realtime` API (`to_user` / `to_group` / `broadcast` / `on_model`) is identical whether you run one instance or fifty. Only the broker swaps.
+</Callout>
+
+## How it works
+
+Every instance runs one background pump on a shared Redis channel (`umbra:realtime:events`):
+
+1. **Publish** — when your code calls `.send(...)`, the envelope is `PUBLISH`ed to Redis instead of dispatched locally.
+2. **Subscribe** — every instance (including the one that published) `SUBSCRIBE`s and dispatches each received envelope to its *own* connection registry.
+
+So a send on instance B reaches user 42 on instance A: B publishes → Redis fans out → A's pump delivers to the local socket. A connection is served exactly once (by the instance that holds it, via its subscription), never doubled. The pump reconnects with a backoff if Redis drops.
+
+## Enabling it
+
+The Redis backend is behind a cargo feature so single-instance apps carry no Redis dependency:
+
+```toml
+# Cargo.toml
+umbra-realtime = { version = "0.0.1", features = ["redis"] }
+```
+
+Then point every instance at the same Redis:
+
+```rust
+use umbra_realtime::RealtimePlugin;
+
+App::builder()
+    .plugin(
+        RealtimePlugin::default()
+            .redis(std::env::var("REDIS_URL").unwrap())   // e.g. redis://10.0.0.5:6379/0
+            .on_model::<Order>(|ev| async move {
+                Realtime::to_group(format!("order:{}", ev.pk().unwrap_or(0)))
+                    .send("changed", &ev).await;
+            }),
+    )
+    .build()?;
+```
+
+All instances must share one Redis (or a Redis cluster). Without the feature, `.redis(url)` isn't available and the plugin uses the single-instance in-process broker; a URL set in a build that lacks the feature logs a warning and falls back rather than silently serving one instance.
+
+## What still needs care at scale
+
+<Steps>
+<Step title="Sticky sessions are not required">
+A client can connect to any instance — the backplane handles cross-instance delivery. You don't need load-balancer affinity.
+</Step>
+<Step title="Group membership is per-instance">
+A connection's group joins live on the instance holding it. Targeting `to_group("room:5")` works across instances (every instance dispatches the published envelope to its local members), but a server-driven `registry.join(...)` only affects the local connection — which is correct, since that connection only exists on one instance.
+</Step>
+<Step title="Delivery is best-effort">
+As in the single-instance case, a connection whose buffer is full drops events rather than applying back-pressure. Redis pub/sub itself is fire-and-forget — a message published while an instance is briefly disconnected is not replayed. For guaranteed delivery, persist and reconcile on reconnect at the application layer.
+</Step>
+</Steps>
+
+## See also
+
+- [Server-Sent Events](sse) — the push transport and the `on_model` bridge.
+- `plugins/umbra-realtime/src/lib.rs` (`RedisBroker`) for the pump implementation.
+- The integration test `plugins/umbra-realtime/tests/broker.rs` (run with `REDIS_URL=... cargo test --features redis -p umbra-realtime`).
