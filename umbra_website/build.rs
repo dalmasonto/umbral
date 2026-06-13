@@ -11,7 +11,11 @@ use std::process::Command;
 
 fn main() {
     println!("cargo:rerun-if-changed=templates");
-    println!("cargo:rerun-if-changed=plugins/public/templates");
+    // Watch ALL plugin sources, not just public's templates: the Tailwind
+    // config scans `plugins/**/templates` and `plugins/**/src/**/*.rs`, so
+    // a new class in any plugin template (e.g. the community page) must
+    // re-trigger the CSS build — otherwise its utilities never generate.
+    println!("cargo:rerun-if-changed=plugins");
     println!("cargo:rerun-if-changed=styles/input.css");
     println!("cargo:rerun-if-changed=styles/tailwind.config.js");
     println!("cargo:rerun-if-changed=styles/package-lock.json");

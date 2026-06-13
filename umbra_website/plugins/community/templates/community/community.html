@@ -1,0 +1,199 @@
+{% extends "base.html" %}
+{#
+  /community — the community hub. Built within the site's existing design
+  language (kicker pill + extrabold hero, .reveal stagger, .card, accent
+  tokens). Channel URLs marked PLACEHOLDER below should be swapped for the
+  real Discord / Reddit / X destinations.
+#}
+
+{% block title %}Community — Umbra{% endblock %}
+{% block meta_description %}Join the Umbra community: GitHub, Discord, Reddit, the blog, and the Sentinmail newsletter. Ship a plugin, ask a question, or follow along.{% endblock %}
+
+{% block extra_head %}
+<style>
+  /* ===== Hero glow ===== */
+  .cm-hero { position: relative; }
+  .cm-hero > *:not(.cm-glow) { position: relative; z-index: 1; }
+  .cm-glow {
+    position: absolute; top: -30px; left: 50%; transform: translateX(-50%);
+    width: 640px; height: 340px; max-width: 92vw; z-index: 0; pointer-events: none;
+    background: radial-gradient(closest-side, color-mix(in srgb, var(--accent) 16%, transparent), transparent 70%);
+  }
+
+  /* ===== Channel cards ===== */
+  .cm-channel {
+    display: flex; align-items: center; gap: 14px;
+    padding: 15px 17px; border-radius: 15px;
+    background: var(--surface); border: 1px solid var(--hairline);
+    text-decoration: none;
+    transition: border-color .16s ease, transform .16s ease, box-shadow .16s ease;
+  }
+  .cm-channel:hover {
+    transform: translateY(-2px);
+    border-color: color-mix(in srgb, var(--brand, var(--accent)) 45%, var(--hairline));
+    box-shadow: 0 16px 32px -20px color-mix(in srgb, var(--brand, var(--accent)) 50%, transparent);
+  }
+  .cm-channel__icon {
+    flex-shrink: 0; width: 42px; height: 42px; border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    background: color-mix(in srgb, var(--brand, var(--accent)) 13%, var(--surface-2));
+    transition: background .16s ease;
+  }
+  .cm-channel:hover .cm-channel__icon { background: color-mix(in srgb, var(--brand, var(--accent)) 20%, var(--surface-2)); }
+  .cm-channel__icon svg { width: 22px; height: 22px; }
+  .cm-channel__name { font-size: 15px; font-weight: 700; letter-spacing: -.01em; color: var(--ink); }
+  .cm-channel__desc { font-size: 12.5px; color: var(--faint); margin-top: 2px; }
+  .cm-channel__arrow { margin-left: auto; flex-shrink: 0; width: 17px; height: 17px; color: var(--ghost); transition: transform .16s ease, color .16s ease; }
+  .cm-channel:hover .cm-channel__arrow { color: var(--brand, var(--accent)); transform: translateX(3px); }
+
+  /* ===== Newsletter band ===== */
+  .cm-news {
+    display: grid; gap: 26px; padding: 28px 26px; border-radius: 22px;
+    background: var(--accent-soft); border: 1px solid var(--accent-line);
+    position: relative; overflow: hidden;
+  }
+  .cm-news::after {
+    content: ""; position: absolute; right: -60px; bottom: -80px;
+    width: 260px; height: 260px; border-radius: 50%; pointer-events: none;
+    background: radial-gradient(closest-side, color-mix(in srgb, var(--accent) 14%, transparent), transparent 72%);
+  }
+  @media (min-width: 880px) { .cm-news { grid-template-columns: 1.05fr 1fr; align-items: center; padding: 38px 42px; column-gap: 44px; } }
+  .cm-news > * { position: relative; z-index: 1; }
+  .cm-news__kicker { font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: .07em; color: var(--accent-2); }
+  .cm-news__title { margin: 9px 0 0; font-size: 27px; font-weight: 800; letter-spacing: -.025em; line-height: 1.1; color: var(--ink); }
+  .cm-news__sub { margin: 11px 0 0; font-size: 15px; line-height: 1.55; color: var(--muted); max-width: 430px; }
+  .cm-news__lists { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+  .cm-news__lists li { display: flex; align-items: baseline; gap: 11px; font-size: 14px; line-height: 1.4; color: var(--muted); }
+  .cm-news__lists b { color: var(--ink); font-weight: 700; }
+  .cm-news__dot { flex-shrink: 0; width: 7px; height: 7px; border-radius: 999px; background: var(--accent); transform: translateY(5px); }
+
+  /* ===== Contribute tiles ===== */
+  .cm-do { display: block; padding: 18px; border-radius: 15px; background: var(--surface); border: 1px solid var(--hairline); text-decoration: none; transition: border-color .16s ease, transform .16s ease; }
+  .cm-do:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--accent) 35%, var(--hairline)); }
+  .cm-do svg { width: 22px; height: 22px; color: var(--accent-2); margin-bottom: 11px; }
+  .cm-do__t { font-size: 14.5px; font-weight: 700; color: var(--ink); }
+  .cm-do__d { font-size: 12.5px; color: var(--faint); margin-top: 3px; line-height: 1.45; }
+</style>
+{% endblock %}
+
+{% block content %}
+
+{# ===== Hero ===== #}
+<section class="cm-hero mx-auto max-w-[1100px] px-7 pb-2 pt-[68px] text-center">
+  <div class="cm-glow" aria-hidden="true"></div>
+  <div class="reveal mb-[22px] inline-flex items-center gap-[9px] rounded-full border border-accent-line bg-accent-soft px-3.5 py-1.5 text-[13px] font-semibold text-accent-2" style="--d:0ms">
+    <span class="h-[7px] w-[7px] rounded-full bg-accent"></span>
+    Community
+  </div>
+  <h1 class="reveal mx-auto max-w-[760px] text-[40px] font-extrabold leading-[1.05] tracking-[-0.035em] text-ink sm:text-[52px]" style="--d:60ms">
+    Build Umbra <span class="text-accent">in the open.</span>
+  </h1>
+  <p class="reveal mx-auto mt-6 max-w-[600px] text-[18px] leading-[1.55] text-muted sm:text-[19px]" style="--d:130ms">
+    Ship a plugin, ask a question, report a bug, or just follow along. Pick a channel below — or get the highlights straight to your inbox.
+  </p>
+  <div class="reveal mt-9 flex flex-wrap justify-center gap-3" style="--d:200ms">
+    <a href="https://sentinmail.app/subscribe/24479467-8815-497e-94f5-61aa11278687" target="_blank" rel="noopener" class="btn-accent btn-accent--lg">
+      Join the newsletter
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+    </a>
+    <a href="https://github.com/dalmasonto/umbra" target="_blank" rel="noopener" class="btn-ghost btn-ghost--lg">Star on GitHub</a>
+  </div>
+</section>
+
+{# ===== Channels ===== #}
+<section class="mx-auto max-w-[1100px] px-7 pb-2 pt-14">
+  <h2 class="reveal text-[24px] font-extrabold tracking-[-0.025em] text-ink" style="--d:0ms">Find your channel</h2>
+  <p class="reveal mb-6 mt-1 text-[15px] text-muted" style="--d:60ms">Every channel is open — jump in wherever feels right.</p>
+
+  <div class="grid gap-3.5 sm:grid-cols-2 lg:grid-cols-3">
+    {# GitHub #}
+    <a href="https://github.com/dalmasonto/umbra" target="_blank" rel="noopener" class="cm-channel reveal" style="--d:80ms; --brand: var(--ink)">
+      <span class="cm-channel__icon"><svg viewBox="0 0 24 24" fill="var(--ink)"><path d="M12 2C6.48 2 2 6.58 2 12.25c0 4.53 2.87 8.37 6.84 9.73.5.1.68-.22.68-.49v-1.7c-2.78.62-3.37-1.37-3.37-1.37-.46-1.18-1.11-1.49-1.11-1.49-.91-.64.07-.62.07-.62 1 .07 1.53 1.06 1.53 1.06.89 1.56 2.34 1.11 2.91.85.09-.66.35-1.11.63-1.37-2.22-.26-4.56-1.14-4.56-5.07 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.27 2.75 1.05a9.36 9.36 0 0 1 5 0c1.91-1.32 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.94-2.34 4.81-4.57 5.06.36.32.68.94.68 1.9v2.82c0 .27.18.6.69.49A10.26 10.26 0 0 0 22 12.25C22 6.58 17.52 2 12 2Z"/></svg></span>
+      <div><div class="cm-channel__name">GitHub</div><div class="cm-channel__desc">Source, issues &amp; pull requests</div></div>
+      <svg class="cm-channel__arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+    </a>
+    {# GitHub Discussions #}
+    <a href="https://github.com/dalmasonto/umbra/discussions" target="_blank" rel="noopener" class="cm-channel reveal" style="--d:140ms; --brand: #6E40C9">
+      <span class="cm-channel__icon"><svg viewBox="0 0 24 24" fill="none" stroke="#6E40C9" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>
+      <div><div class="cm-channel__name">Discussions</div><div class="cm-channel__desc">Q&amp;A, ideas &amp; show-and-tell</div></div>
+      <svg class="cm-channel__arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+    </a>
+    {# Discord — PLACEHOLDER: set the real invite #}
+    <a href="https://discord.gg/umbra" target="_blank" rel="noopener" class="cm-channel reveal" style="--d:200ms; --brand: #5865F2">
+      <span class="cm-channel__icon"><svg viewBox="0 0 24 24" fill="#5865F2"><path d="M20 4.5A19 19 0 0 0 15.3 3l-.3.6a14 14 0 0 1 4.2 1.4A16.5 16.5 0 0 0 4.8 5 14 14 0 0 1 9 3.6L8.7 3A19 19 0 0 0 4 4.5C1.5 8.2 1 11.8 1.2 15.3A19 19 0 0 0 7 18l.6-1c-1-.4-1.9-.8-2.7-1.4l.5-.4a13 13 0 0 0 11.2 0l.5.4c-.8.6-1.7 1-2.7 1.4l.6 1a19 19 0 0 0 5.8-2.7c.4-4.2-.5-7.8-2.6-10.8ZM8.3 13.3c-.9 0-1.7-.8-1.7-1.9s.7-1.9 1.7-1.9 1.7.9 1.7 1.9-.8 1.9-1.7 1.9Zm7.4 0c-.9 0-1.7-.8-1.7-1.9s.8-1.9 1.7-1.9 1.7.9 1.7 1.9-.7 1.9-1.7 1.9Z"/></svg></span>
+      <div><div class="cm-channel__name">Discord</div><div class="cm-channel__desc">Real-time chat &amp; support</div></div>
+      <svg class="cm-channel__arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+    </a>
+    {# Reddit — PLACEHOLDER #}
+    <a href="https://reddit.com/r/umbra" target="_blank" rel="noopener" class="cm-channel reveal" style="--d:260ms; --brand: #FF4500">
+      <span class="cm-channel__icon"><svg viewBox="0 0 24 24" fill="#FF4500"><circle cx="12" cy="12" r="10"/><path d="M18 12a1.4 1.4 0 0 0-2.4-1 7 7 0 0 0-3.5-1.1l.6-2.8 2 .4a1 1 0 1 0 .1-.9l-2.3-.5-.7 3.3a7 7 0 0 0-3.6 1.1A1.4 1.4 0 1 0 6 13.4a2.6 2.6 0 0 0 0 .5c0 1.8 2.1 3.3 4.8 3.3s4.8-1.5 4.8-3.3a2.6 2.6 0 0 0 0-.5A1.4 1.4 0 0 0 18 12Zm-8.6 1a1 1 0 1 1 1 1 1 1 0 0 1-1-1Zm5.3 2.4a3.4 3.4 0 0 1-2.7.9 3.4 3.4 0 0 1-2.7-.9.3.3 0 0 1 .5-.4 2.8 2.8 0 0 0 2.2.7 2.8 2.8 0 0 0 2.2-.7.3.3 0 1 1 .5.4Zm-.2-1.4a1 1 0 1 1 1-1 1 1 0 0 1-1 1Z" fill="#fff"/></svg></span>
+      <div><div class="cm-channel__name">Reddit</div><div class="cm-channel__desc">r/umbra — links &amp; threads</div></div>
+      <svg class="cm-channel__arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+    </a>
+    {# X — PLACEHOLDER #}
+    <a href="https://x.com/umbra_rs" target="_blank" rel="noopener" class="cm-channel reveal" style="--d:320ms; --brand: var(--ink)">
+      <span class="cm-channel__icon"><svg viewBox="0 0 24 24" fill="var(--ink)"><path d="M18.2 2h3.3l-7.2 8.2L23 22h-6.6l-5.2-6.8L5.3 22H2l7.7-8.8L1.4 2H8l4.7 6.2L18.2 2Zm-1.2 18h1.8L7.1 3.9H5.2L17 20Z"/></svg></span>
+      <div><div class="cm-channel__name">X</div><div class="cm-channel__desc">@umbra_rs — quick updates</div></div>
+      <svg class="cm-channel__arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+    </a>
+    {# Blog #}
+    <a href="/blog" class="cm-channel reveal" style="--d:380ms; --brand: #E8771A">
+      <span class="cm-channel__icon"><svg viewBox="0 0 24 24" fill="#E8771A"><circle cx="6.2" cy="17.8" r="2.2"/><path d="M4 11a9 9 0 0 1 9 9h-3a6 6 0 0 0-6-6v-3Zm0-5a14 14 0 0 1 14 14h-3A11 11 0 0 0 4 9V6Z"/></svg></span>
+      <div><div class="cm-channel__name">Blog &amp; RSS</div><div class="cm-channel__desc">Deep dives &amp; release notes</div></div>
+      <svg class="cm-channel__arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+    </a>
+  </div>
+</section>
+
+{# ===== Newsletter ===== #}
+<section class="mx-auto max-w-[1100px] px-7 py-14">
+  <div class="cm-news reveal" style="--d:0ms">
+    <div>
+      <div class="cm-news__kicker">Newsletter · via Sentinmail</div>
+      <h2 class="cm-news__title">The Umbra newsletter</h2>
+      <p class="cm-news__sub">Subscribe once, then choose exactly which lists you want — from "tell me when something ships" to the monthly roundup. No spam, unsubscribe anytime.</p>
+      <a href="https://sentinmail.app/subscribe/24479467-8815-497e-94f5-61aa11278687" target="_blank" rel="noopener" class="btn-accent btn-accent--lg cm-news__btn" style="margin-top: 20px;">
+        Subscribe on Sentinmail
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+      </a>
+    </div>
+    <ul class="cm-news__lists">
+      <li><span class="cm-news__dot"></span><span><b>Releases</b> — every version, the moment it ships</span></li>
+      <li><span class="cm-news__dot"></span><span><b>The Umbra Monthly</b> — features, plugin spotlights &amp; tutorials</span></li>
+      <li><span class="cm-news__dot"></span><span><b>Security advisories</b> — rare, but you'll want them</span></li>
+      <li><span class="cm-news__dot"></span><span><b>Plugin authors</b> — contract changes &amp; deprecations</span></li>
+      <li><span class="cm-news__dot"></span><span><b>Early access</b> — preview builds &amp; open RFCs</span></li>
+      <li><span class="cm-news__dot"></span><span><b>Built with Umbra</b> — real-world showcases</span></li>
+    </ul>
+  </div>
+</section>
+
+{# ===== Contribute ===== #}
+<section class="mx-auto max-w-[1100px] px-7 pb-16">
+  <h2 class="reveal text-[24px] font-extrabold tracking-[-0.025em] text-ink" style="--d:0ms">Ways to pitch in</h2>
+  <p class="reveal mb-6 mt-1 text-[15px] text-muted" style="--d:60ms">You don't need permission — every one of these is a pull request, a form, or a click away.</p>
+  <div class="grid gap-3.5 sm:grid-cols-2 lg:grid-cols-4">
+    <a href="/plugins/submit" class="cm-do reveal" style="--d:80ms">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M3.27 6.96 12 12l8.73-5.04M12 22V12"/></svg>
+      <div class="cm-do__t">Ship a plugin</div>
+      <div class="cm-do__d">List your crate in the directory.</div>
+    </a>
+    <a href="/plugins" class="cm-do reveal" style="--d:140ms">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l2.4 7.4H22l-6 4.6 2.3 7.4-6.3-4.6L5.7 21.4 8 14 2 9.4h7.6z"/></svg>
+      <div class="cm-do__t">Review &amp; rate</div>
+      <div class="cm-do__d">Help others pick the right battery.</div>
+    </a>
+    <a href="/security" class="cm-do reveal" style="--d:200ms">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+      <div class="cm-do__t">Report an issue</div>
+      <div class="cm-do__d">Flag a bug or a security concern.</div>
+    </a>
+    <a href="/docs" class="cm-do reveal" style="--d:260ms">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+      <div class="cm-do__t">Improve the docs</div>
+      <div class="cm-do__d">Fix a typo or write a guide.</div>
+    </a>
+  </div>
+</section>
+
+{% endblock %}
