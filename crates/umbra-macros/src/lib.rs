@@ -1536,18 +1536,20 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                 {
                     let pending = self.#ident.take_pending_ids();
                     if !pending.is_empty() {
+                        // PK lift: the M2M parent id is `P: PrimaryKey`
+                        // (Into<sea_query::Value>), not necessarily i64.
+                        // Clone it out and convert generically rather than
+                        // wrapping a copied i64 in Value::BigInt.
                         if let (
                             ::core::option::Option::Some(parent_id),
                             ::core::option::Option::Some(junction),
                         ) = (
-                            self.#ident.parent_id().copied(),
+                            self.#ident.parent_id().cloned(),
                             self.#ident.junction_table(),
                         ) {
                             ::umbra::orm::set_junction_dynamic(
                                 junction,
-                                ::umbra::_sea_query::Value::BigInt(
-                                    ::core::option::Option::Some(parent_id),
-                                ),
+                                ::core::convert::Into::into(parent_id),
                                 pending,
                             )
                             .await
@@ -2648,9 +2650,15 @@ fn reverse_set_inner(ty: &Type) -> Option<&Type> {
     Some(inner)
 }
 
-/// If `ty` is `M2M<T>` (with or without the `orm::` qualifier),
-/// return the inner model type `T`. Returns `None` otherwise. Mirrors
-/// [`foreign_key_inner`] — leaf ident `M2M` plus one generic arg.
+/// If `ty` is `M2M<T>` or `M2M<T, P>` (with or without the `orm::`
+/// qualifier), return the inner model type `T`. Returns `None`
+/// otherwise. Mirrors [`foreign_key_inner`] on the leaf ident `M2M`.
+///
+/// The optional second type arg `P` is the parent model's PK type (PK
+/// lift — `M2M<Tag, String>` for a String-PK parent). The macro doesn't
+/// need to extract it: the field's own declared type carries it, and the
+/// emitted code calls the field's `P`-generic methods. We only reject a
+/// spurious third type arg.
 fn m2m_inner(ty: &Type) -> Option<&Type> {
     let Type::Path(TypePath { qself: None, path }) = ty else {
         return None;
@@ -2667,8 +2675,9 @@ fn m2m_inner(ty: &Type) -> Option<&Type> {
         _ => None,
     });
     let inner = type_args.next()?;
+    let _optional_parent_pk = type_args.next(); // M2M<T, P> — P ignored here
     if type_args.next().is_some() {
-        return None;
+        return None; // M2M<T, P, ?> is not a thing
     }
     Some(inner)
 }

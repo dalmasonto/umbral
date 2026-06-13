@@ -565,14 +565,9 @@ pub(super) async fn hydrate_prefetch_related<T: Model + HydrateRelated>(
             None => continue,
         };
 
-        // Collect parent PKs (i64 only) from the main rows.
-        let mut parent_ids: Vec<i64> = Vec::with_capacity(rows.len());
-        for row in rows.iter() {
-            if let Some(pk) = row.pk_i64() {
-                parent_ids.push(pk);
-            }
-        }
-        if parent_ids.is_empty() {
+        // Collect parent PKs (PK-agnostic) from the main rows.
+        let mut parent_pks: Vec<JsonValue> = rows.iter().filter_map(|r| r.pk_as_json()).collect();
+        if parent_pks.is_empty() {
             // Still need to set empty resolved on every parent so
             // `tags.resolved()` returns `Some(&[])` after prefetch,
             // matching the documented "empty Vec, not None" contract.
@@ -581,6 +576,38 @@ pub(super) async fn hydrate_prefetch_related<T: Model + HydrateRelated>(
             }
             continue;
         }
+        dedup_by_pk_key(&mut parent_pks);
+
+        // A Column descriptor for the aliased junction `parent_id` carrying
+        // the PARENT model's PK SqlType — lets us (a) bind the IN-list and
+        // (b) decode `__parent_id` back through the shape-aware helpers, so
+        // i64 / String / Uuid parents all work on both backends.
+        let parent_id_col = {
+            let meta = crate::migrate::ModelMeta::for_::<T>();
+            match meta.fields.into_iter().find(|c| c.primary_key) {
+                Some(mut c) => {
+                    c.name = "__parent_id".to_string();
+                    c
+                }
+                None => continue, // no PK column — can't bucket
+            }
+        };
+        // Convert the parent PK Values to the junction column's SQL type
+        // for the `IN (...)` predicate.
+        let parent_seavals: Vec<sea_query::SimpleExpr> = parent_pks
+            .iter()
+            .filter_map(|v| {
+                crate::orm::write::json_to_sea_value(
+                    parent_id_col.ty,
+                    v,
+                    false,
+                    "__parent_id",
+                    None,
+                )
+                .ok()
+                .map(sea_query::SimpleExpr::Value)
+            })
+            .collect();
 
         // Build the SELECT joining child + junction.
         let mut q = sea_query::Query::select();
@@ -622,11 +649,13 @@ pub(super) async fn hydrate_prefetch_related<T: Model + HydrateRelated>(
                 sea_query::Alias::new("j"),
                 sea_query::Alias::new("parent_id"),
             ))
-            .is_in(parent_ids.iter().copied()),
+            .is_in(parent_seavals),
         );
 
-        // Execute and group by parent_id.
-        let mut buckets: HashMap<i64, Vec<JsonValue>> = HashMap::new();
+        // Execute and group by parent_id, keyed PK-agnostically. The
+        // `__parent_id` value decodes through the same shape-aware helper
+        // as the child columns, using the parent PK's SqlType.
+        let mut buckets: HashMap<String, Vec<JsonValue>> = HashMap::new();
         match pool {
             DbPool::Sqlite(p) => {
                 let (sql, vals) = q.build_sqlx(SqliteQueryBuilder);
@@ -634,15 +663,14 @@ pub(super) async fn hydrate_prefetch_related<T: Model + HydrateRelated>(
                     .fetch_all(p)
                     .await?;
                 for raw in &raw_rows {
-                    use sqlx::Row;
-                    let parent_id: i64 = raw.try_get("__parent_id")?;
+                    let parent_json = crate::orm::dynamic::decode_to_json(raw, &parent_id_col)?;
                     let mut obj = serde_json::Map::with_capacity(child_meta.fields.len());
                     for col in &child_meta.fields {
                         let v = crate::orm::dynamic::decode_to_json(raw, col)?;
                         obj.insert(col.name.clone(), v);
                     }
                     buckets
-                        .entry(parent_id)
+                        .entry(crate::orm::pk_key(&parent_json))
                         .or_default()
                         .push(JsonValue::Object(obj));
                 }
@@ -653,15 +681,14 @@ pub(super) async fn hydrate_prefetch_related<T: Model + HydrateRelated>(
                     .fetch_all(p)
                     .await?;
                 for raw in &raw_rows {
-                    use sqlx::Row;
-                    let parent_id: i64 = raw.try_get("__parent_id")?;
+                    let parent_json = crate::orm::dynamic::decode_pg_to_json(raw, &parent_id_col)?;
                     let mut obj = serde_json::Map::with_capacity(child_meta.fields.len());
                     for col in &child_meta.fields {
                         let v = crate::orm::dynamic::decode_pg_to_json(raw, col)?;
                         obj.insert(col.name.clone(), v);
                     }
                     buckets
-                        .entry(parent_id)
+                        .entry(crate::orm::pk_key(&parent_json))
                         .or_default()
                         .push(JsonValue::Object(obj));
                 }
@@ -672,8 +699,8 @@ pub(super) async fn hydrate_prefetch_related<T: Model + HydrateRelated>(
         // still get an empty Vec so .resolved() returns Some(&[])
         // consistently after prefetch.
         for row in rows.iter_mut() {
-            let bucket = match row.pk_i64() {
-                Some(id) => buckets.remove(&id).unwrap_or_default(),
+            let bucket = match row.pk_as_json() {
+                Some(pk) => buckets.remove(&crate::orm::pk_key(&pk)).unwrap_or_default(),
                 None => Vec::new(),
             };
             row.set_m2m_resolved_json(field_name.as_str(), bucket);
