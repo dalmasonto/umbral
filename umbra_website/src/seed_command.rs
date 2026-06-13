@@ -69,8 +69,12 @@ impl PluginCommand for SeedOrmData {
         let reviews = reviews::seed::seed().await?;
         println!("  reviews: {reviews} reviews");
 
-        // Further plugin seeds (navigation, showcase, blog, changelog) are
-        // wired in as each page lands.
+        // --- showcase: dogfooding gallery entries --------------------------
+        let showcase = showcase::seed::seed().await?;
+        println!("  showcase: {showcase} entries");
+
+        // Further plugin seeds (navigation, blog, changelog) are wired in
+        // as each page lands.
 
         println!("Done.");
         Ok(())
