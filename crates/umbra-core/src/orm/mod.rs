@@ -46,6 +46,26 @@ use std::ops::{BitAnd, BitOr};
 
 pub use aggregate::{Aggregate, AggregateKind};
 
+/// Canonical string key for a primary-key (or FK) value, for bucketing
+/// relation children by their parent's PK in a `HashMap` / `HashSet`.
+///
+/// `serde_json::Value` is not `Hash`, and the relation-hydration paths
+/// need to group children by parent PK whatever the PK type — `i64`,
+/// `String`, `uuid::Uuid`. This is the **PK-agnostic** replacement for the
+/// historical `i64` keys: the value is namespaced by shape (`n:` number,
+/// `s:` string, `o:` other) so a numeric `42` and the string `"42"` never
+/// collide in the same bucket. Pairs with
+/// [`Model::pk_as_json`](crate::orm::Model::pk_as_json) and
+/// [`HydrateRelated::fk_id_for`](crate::orm::HydrateRelated::fk_id_for),
+/// both of which return a `serde_json::Value`.
+pub fn pk_key(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Number(n) => format!("n:{n}"),
+        serde_json::Value::String(s) => format!("s:{s}"),
+        other => format!("o:{other}"),
+    }
+}
+
 /// A typed wrapper around a `sea_query::SelectStatement` for use in
 /// `col IN (SELECT col FROM ...)` predicates (gap #26).
 ///

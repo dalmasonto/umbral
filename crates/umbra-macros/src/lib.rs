@@ -1822,6 +1822,18 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         quote! {}
     };
 
+    // PK lift: the PK-agnostic counterpart to `pk_i64`. Emitted for EVERY
+    // model (not just i64-PK ones) so the relation-hydration paths can
+    // bucket children by the parent's PK whatever its type — i64, String,
+    // Uuid. `to_value(&self.<pk>)` works for any `Serialize` PK; `.ok()`
+    // turns the (practically impossible) serialize failure into the same
+    // skip-this-row posture the default `None` has.
+    let pk_as_json_override: TokenStream2 = quote! {
+        fn pk_as_json(&self) -> ::core::option::Option<::umbra::_serde_json::Value> {
+            ::umbra::_serde_json::to_value(&self.#pk_field_name).ok()
+        }
+    };
+
     let output = quote! {
         impl ::umbra::orm::Model for #struct_name {
             type PrimaryKey = #pk_ty_tokens;
@@ -1884,6 +1896,7 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                 #set_m2m_body
             }
             #pk_i64_override
+            #pk_as_json_override
             #take_pending_m2m_into_override
             #write_pending_m2m_override
             fn set_m2m_resolved_json(

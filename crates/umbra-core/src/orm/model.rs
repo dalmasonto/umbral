@@ -94,6 +94,24 @@ pub trait HydrateRelated {
         None
     }
 
+    /// Return this row's primary key as a `serde_json::Value`, whatever
+    /// the PK type — `i64`, `String`, `uuid::Uuid`, a custom newtype.
+    /// This is the **PK-agnostic** replacement for [`pk_i64`](Self::pk_i64):
+    /// the relation-hydration paths (`prefetch_related`, reverse-FK and
+    /// reverse-OneToOne collection) bucket children by the parent's PK,
+    /// and keying those buckets on a `Value` (canonicalised via
+    /// [`crate::orm::pk_key`]) lifts the historical i64-only constraint so
+    /// UUID- and slug-PK models flow through too.
+    ///
+    /// Default: `None`. The `#[derive(Model)]` macro emits an override for
+    /// every model that returns `to_value(&self.<pk>)` — so a hand-written
+    /// `Model` impl that doesn't override it simply opts out of the
+    /// Value-keyed hydration (the same forgive-and-skip posture `pk_i64`
+    /// had).
+    fn pk_as_json(&self) -> Option<serde_json::Value> {
+        None
+    }
+
     /// Attach a list of pre-fetched child rows to the named `M2M<U>`
     /// field's `resolved` slot. Called by `QuerySet::prefetch_related`
     /// (gap #19) after a batched JOIN through the junction table

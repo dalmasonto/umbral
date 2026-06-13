@@ -504,7 +504,7 @@ pub mod orm {
         MaskKeyring, Masked, Model, MultiChoice, OneToOne, OneToOneRelationSpec, Post, Predicate,
         PrimaryKey, Q, QuerySet, QuerySetTx, ReverseError, ReverseFkRelationSpec, ReverseRelations,
         ReverseSet, Slug, SqlType, TryForEachError, TsVector, Url, ValidatorError, column,
-        decode_to_string, import_table_rows, load_junction_selection, set_junction_dynamic,
+        decode_to_string, import_table_rows, load_junction_selection, pk_key, set_junction_dynamic,
         set_mask_keyring, validate_text_format, write,
     };
 
