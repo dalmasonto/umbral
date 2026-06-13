@@ -1,0 +1,70 @@
+---
+title: OAuth / social login
+description: Sign in with Google or GitHub and connect external accounts to a user, with provider tokens encrypted at rest.
+sidebar_position: 4
+tags: [auth, oauth, social-login, google, github, allauth]
+---
+
+# OAuth / social login
+
+`umbra-oauth` is umbra's django-allauth equivalent. It does two things with one flow, layered on `umbra-auth`:
+
+- **Social login** — "Sign in with Google" resolves (or creates) an `AuthUser` and logs them in.
+- **Account connection** — a logged-in user attaches a provider ("Connect GitHub"), which is how the app later gets API access (Drive, repos, …) on their behalf.
+
+A social identity is an **extension** of the user — a `SocialAccount` row linked by foreign key — never a replacement for the username. A user can link several accounts (the unique key is `(provider, provider_uid)`). Provider tokens are stored in [`Masked`](../orm/masked) columns, encrypted at rest.
+
+## Wiring
+
+```rust
+use umbra_oauth::OAuthPlugin;
+use umbra_oauth::providers::{GoogleProvider, GitHubProvider};
+
+let mut oauth = OAuthPlugin::new("https://example.com").login_redirect("/dashboard");
+if let Some(g) = GoogleProvider::from_env() { oauth = oauth.provider(g); }
+if let Some(gh) = GitHubProvider::from_env() { oauth = oauth.provider(gh); }
+
+App::builder()
+    .plugin(AuthPlugin::<AuthUser>::default())
+    .plugin(SessionsPlugin::default()) // required: the flow stores CSRF state in the session
+    .plugin(oauth)
+```
+
+`redirect_base` is your app's public origin; each provider's callback is `{base}/oauth/{provider}/callback`, which must match what's registered in the provider console. Credentials come from the environment:
+
+```bash
+UMBRA_OAUTH_GOOGLE_CLIENT_ID=...     UMBRA_OAUTH_GOOGLE_CLIENT_SECRET=...
+UMBRA_OAUTH_GITHUB_CLIENT_ID=...     UMBRA_OAUTH_GITHUB_CLIENT_SECRET=...
+```
+
+## Routes
+
+The plugin mounts, per registered provider:
+
+| Route | Purpose |
+|---|---|
+| `GET /oauth/{provider}/login` | Start a social login |
+| `GET /oauth/{provider}/connect` | Connect a provider (auth required) |
+| `GET /oauth/{provider}/callback` | Provider redirects back here |
+| `POST /oauth/{provider}/disconnect` | Unlink a provider (auth required) |
+
+A `<a href="/oauth/google/login">Sign in with Google</a>` is all a template needs.
+
+## Linking policy
+
+On the callback, the resolved identity is matched in order:
+
+<Steps>
+<Step title="Already linked">If a `SocialAccount` exists for `(provider, provider_uid)`, refresh its tokens and log in as its user.</Step>
+<Step title="Connect mode">If a logged-in user started a connect flow, attach the identity to them (refusing it if it already belongs to someone else).</Step>
+<Step title="Verified-email link">If the provider asserts a **verified** email matching an existing user, link to that user. Only when verified — an unverified address can't capture an account.</Step>
+<Step title="Auto-create">Otherwise mint a new `AuthUser` (unique username; the password is unusable until they set one).</Step>
+</Steps>
+
+<Callout type="warning">
+CSRF is handled with a one-time `state` token persisted in the session before the redirect and checked on the callback — `SessionsPlugin` must be registered. Email-based auto-linking only happens for provider-verified emails, to prevent account takeover.
+</Callout>
+
+## Design rationale
+
+See `docs/superpowers/specs/2026-06-13-masked-and-oauth-design.md` (Component B) for the provider abstraction, the reqwest-over-`oauth2`-crate choice, and the policy's security reasoning.

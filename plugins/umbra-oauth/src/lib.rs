@@ -32,8 +32,10 @@
 //! ```
 
 pub mod models;
+pub mod policy;
 pub mod provider;
 pub mod providers;
+mod routes;
 
 use std::sync::Arc;
 
@@ -51,8 +53,6 @@ pub use provider::{Identity, OAuthError, OAuthProvider, TokenSet};
 pub struct OAuthPlugin {
     /// Public base URL of this app (scheme + host[:port]), used to build
     /// each provider's `redirect_uri` as `{base}/oauth/{key}/callback`.
-    // Read by `redirect_uri`, which the flow routes (next commit) call.
-    #[allow(dead_code)]
     redirect_base: String,
     /// Where to send the browser after a successful login / connect.
     login_redirect: String,
@@ -87,8 +87,6 @@ impl OAuthPlugin {
     }
 
     /// The callback URL for a provider key.
-    // Used by the `/oauth/<provider>/login` + `/connect` routes (next commit).
-    #[allow(dead_code)]
     pub(crate) fn redirect_uri(&self, provider_key: &str) -> String {
         format!(
             "{}/oauth/{}/callback",
@@ -98,8 +96,6 @@ impl OAuthPlugin {
     }
 
     /// Look up a registered provider by key.
-    // Used by the flow routes (next commit) to dispatch per provider.
-    #[allow(dead_code)]
     pub(crate) fn lookup(&self, key: &str) -> Option<&Arc<dyn OAuthProvider>> {
         self.providers.iter().find(|p| p.key() == key)
     }
@@ -121,10 +117,6 @@ impl Plugin for OAuthPlugin {
     }
 
     fn routes(&self) -> Router {
-        // Flow routes (/oauth/<provider>/login | callback | connect |
-        // disconnect) land in the next step. Empty for now so the plugin
-        // registers its model + dependency without claiming routes it
-        // can't yet serve.
-        Router::new()
+        routes::router(self.clone())
     }
 }

@@ -3794,6 +3794,7 @@ dependencies = [
  "umbra-auth",
  "umbra-sessions",
  "url",
+ "uuid",
 ]
 
 [[package]]
