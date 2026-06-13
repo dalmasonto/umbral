@@ -105,6 +105,19 @@ enum Command {
     /// Markers: [X] applied, [ ] pending, [!] applied-but-missing-on-disk,
     /// [?] on-disk-but-out-of-order.
     Showmigrations,
+    /// Classify pending migrations for zero-downtime (blue-green) safety.
+    ///
+    /// Walks every operation in every pending migration and tags it
+    /// SAFE / WARNING / UNSAFE, with an expand-contract note on each
+    /// non-safe op. Exits non-zero when any UNSAFE op is found (or any
+    /// WARNING under `--strict`), so it drops into a CI gate before deploy.
+    /// Read-only — applies nothing.
+    Checkmigrations {
+        /// Also exit non-zero when a WARNING-tier op is present, not just
+        /// UNSAFE. Use in CI when even a column rename must be reviewed.
+        #[arg(long, default_value_t = false)]
+        strict: bool,
+    },
     /// Introspect the ambient database into a `models.rs` plus an
     /// initial migration. Used to onboard an existing schema.
     Inspectdb {
@@ -254,6 +267,7 @@ pub async fn dispatch_with_argv(
             allow_drift,
         } => migrate(fake, fake_initial, allow_drift).await,
         Command::Showmigrations => showmigrations().await,
+        Command::Checkmigrations { strict } => checkmigrations(strict).await,
         Command::Inspectdb {
             output,
             mark_applied,
@@ -517,6 +531,99 @@ async fn showmigrations() -> Result<(), Box<dyn std::error::Error + Send + Sync>
         println!("\n{pending} migration(s) not yet applied.");
     }
     Ok(())
+}
+
+/// `umbra checkmigrations` — classify every pending operation for
+/// zero-downtime safety (feature #65). Prints the UNSAFE ops first, then
+/// WARNING, then a SAFE count, and exits non-zero when any UNSAFE op is
+/// present (or any WARNING under `--strict`). Applies nothing.
+async fn checkmigrations(strict: bool) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let ops = umbra::migrate::check_pending_safety().await?;
+    if ops.is_empty() {
+        println!("No pending migrations — nothing to check.");
+        return Ok(());
+    }
+
+    let unsafe_ops: Vec<_> = ops.iter().filter(|c| c.safety.is_unsafe()).collect();
+    let warn_ops: Vec<_> = ops.iter().filter(|c| c.safety.is_warning()).collect();
+    let safe_count = ops.len() - unsafe_ops.len() - warn_ops.len();
+
+    let migrations: std::collections::BTreeSet<_> =
+        ops.iter().map(|c| (&c.plugin, &c.migration)).collect();
+    println!(
+        "Checking {} operation(s) across {} pending migration(s)...\n",
+        ops.len(),
+        migrations.len()
+    );
+
+    if !unsafe_ops.is_empty() {
+        println!("UNSAFE ({}):", unsafe_ops.len());
+        for c in &unsafe_ops {
+            println!(
+                "  [{}] {}/{} — {}",
+                op_kind(&c.op),
+                c.plugin,
+                c.migration,
+                c.safety.reason()
+            );
+        }
+        println!();
+    }
+
+    if !warn_ops.is_empty() {
+        println!("WARNING ({}):", warn_ops.len());
+        for c in &warn_ops {
+            println!(
+                "  [{}] {}/{} — {}",
+                op_kind(&c.op),
+                c.plugin,
+                c.migration,
+                c.safety.reason()
+            );
+        }
+        println!();
+    }
+
+    println!(
+        "Summary: {} safe, {} warning, {} unsafe.",
+        safe_count,
+        warn_ops.len(),
+        unsafe_ops.len()
+    );
+
+    // Gate: UNSAFE always fails; WARNING fails only under --strict.
+    let blocked = !unsafe_ops.is_empty() || (strict && !warn_ops.is_empty());
+    if blocked {
+        let why = if !unsafe_ops.is_empty() {
+            format!("{} unsafe operation(s) found", unsafe_ops.len())
+        } else {
+            format!("{} warning(s) found (--strict)", warn_ops.len())
+        };
+        return Err(format!(
+            "checkmigrations: {why}. Review the expand-contract notes above before deploying."
+        )
+        .into());
+    }
+
+    println!("\nAll pending operations are safe for a rolling deploy.");
+    Ok(())
+}
+
+/// Short uppercase tag for an operation, used in the `checkmigrations`
+/// report (e.g. `DROP TABLE`, `RENAME COL`, `ADD COL`).
+fn op_kind(op: &umbra::migrate::Operation) -> &'static str {
+    use umbra::migrate::Operation;
+    match op {
+        Operation::CreateTable { .. } => "CREATE TABLE",
+        Operation::DropTable { .. } => "DROP TABLE",
+        Operation::AddColumn { .. } => "ADD COL",
+        Operation::DropColumn { .. } => "DROP COL",
+        Operation::AlterColumn { .. } => "ALTER COL",
+        Operation::RenameTable { .. } => "RENAME TABLE",
+        Operation::RenameColumn { .. } => "RENAME COL",
+        Operation::CreateM2MTable { .. } => "CREATE M2M",
+        Operation::DropM2MTable { .. } => "DROP M2M",
+    }
 }
 
 async fn inspectdb(

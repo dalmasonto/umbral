@@ -1919,6 +1919,156 @@ pub async fn show_in(dir: &Path) -> Result<u64, MigrateError> {
     Ok(pending)
 }
 
+/// Safety classification for a single pending migration operation.
+///
+/// Feature #65 (blue-green / zero-downtime). The `checkmigrations`
+/// command walks every pending operation and tags it so an operator
+/// deploying without a maintenance window can tell which changes are safe
+/// under a rolling deploy (old and new code serving traffic at once) and
+/// which need the expand-contract dance. This is advisory triage — the
+/// engine still *applies* every op exactly as written; nothing here gates
+/// `migrate`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OpSafety {
+    /// Additive and backward-compatible — safe while old code still runs.
+    Safe,
+    /// Applies cleanly but can break still-running old code, lock a large
+    /// table, or fail against unexpected production data. Review first.
+    Warning(String),
+    /// Destroys data or is irreversible; old code referencing the dropped
+    /// surface errors immediately.
+    Unsafe(String),
+}
+
+impl OpSafety {
+    /// The advisory reason for a `Warning` / `Unsafe`; empty for `Safe`.
+    pub fn reason(&self) -> &str {
+        match self {
+            OpSafety::Safe => "",
+            OpSafety::Warning(r) | OpSafety::Unsafe(r) => r,
+        }
+    }
+
+    /// True for the destructive / irreversible tier only.
+    pub fn is_unsafe(&self) -> bool {
+        matches!(self, OpSafety::Unsafe(_))
+    }
+
+    /// True for the review-before-deploy tier only.
+    pub fn is_warning(&self) -> bool {
+        matches!(self, OpSafety::Warning(_))
+    }
+}
+
+/// One pending operation tagged with its [`OpSafety`] and the migration
+/// that introduced it. The unit of output for `checkmigrations`.
+#[derive(Debug, Clone)]
+pub struct ClassifiedOp {
+    pub plugin: String,
+    pub migration: String,
+    pub op: Operation,
+    pub safety: OpSafety,
+}
+
+/// Classify one operation for zero-downtime safety. Pure — no DB access,
+/// no file reads — so it is trivially unit-testable and reused by both
+/// the CLI report and any plugin that wants to gate its own deploys.
+pub fn classify_operation(op: &Operation) -> OpSafety {
+    match op {
+        // Brand-new tables touch no existing rows and no old code reads
+        // them yet.
+        Operation::CreateTable { .. } | Operation::CreateM2MTable { .. } => OpSafety::Safe,
+
+        // Adding a column is additive — unless it's NOT NULL with no
+        // default, in which case old code inserting a row without the
+        // column fails. (The engine refuses such an add against a
+        // populated SQLite table at apply time; this surfaces the same
+        // hazard *before* the operator runs it, and for Postgres too.)
+        Operation::AddColumn { table, column } => {
+            if !column.nullable && column.default.is_empty() {
+                OpSafety::Warning(format!(
+                    "adds NOT NULL column `{}.{}` with no default — old code inserting without it will fail. Add it nullable (or with a default), backfill, then tighten",
+                    table, column.name
+                ))
+            } else {
+                OpSafety::Safe
+            }
+        }
+
+        // Destructive / irreversible: data loss the moment it runs.
+        Operation::DropTable { table } => OpSafety::Unsafe(format!(
+            "drops table `{table}` and every row in it — irreversible, and old code still reading it breaks. Stop using it, deploy, then drop in a later migration"
+        )),
+        Operation::DropM2MTable { junction_table } => OpSafety::Unsafe(format!(
+            "drops join table `{junction_table}` and every row in it — irreversible"
+        )),
+        Operation::DropColumn { table, column } => OpSafety::Unsafe(format!(
+            "drops column `{table}.{column}` and its data — old code reading it breaks. Expand-contract: stop writing it, deploy, then drop"
+        )),
+
+        // Renames apply atomically in the DB but NOT atomically with a
+        // code deploy: between the migration and the rollout, one of the
+        // two code versions references the missing name.
+        Operation::RenameTable { from, to } => OpSafety::Warning(format!(
+            "renames table `{from}` → `{to}` — not atomic with a code deploy; old code references `{from}`. Expand-contract: add `{to}`, dual-write, switch, then drop `{from}`"
+        )),
+        Operation::RenameColumn {
+            table, from, to, ..
+        } => OpSafety::Warning(format!(
+            "renames column `{table}.{from}` → `{to}` — old code references `{from}`. Expand-contract: add `{to}`, backfill, switch reads, then drop `{from}`"
+        )),
+
+        // An alter can rewrite a column (table lock on large data) and a
+        // nullable→NOT NULL tightening fails on existing NULLs.
+        Operation::AlterColumn { table, column, .. } => OpSafety::Warning(format!(
+            "alters column `{table}.{column}` — a type change rewrites the column (locks the table on large data) and a NOT NULL tightening fails on existing NULLs; verify against production data first"
+        )),
+    }
+}
+
+/// Classify every operation across all pending migrations against the
+/// ambient pool. Reads the same applied-set + on-disk diff that
+/// `migrate` / `showmigrations` use, then loads each pending migration
+/// file and classifies its operations in order. Powers `checkmigrations`.
+pub async fn check_pending_safety() -> Result<Vec<ClassifiedOp>, MigrateError> {
+    check_pending_safety_in(Path::new(MIGRATIONS_DIR)).await
+}
+
+/// [`check_pending_safety`] against an explicit migrations directory.
+/// The seam tests use to point at a fixture tree.
+pub async fn check_pending_safety_in(dir: &Path) -> Result<Vec<ClassifiedOp>, MigrateError> {
+    let applied = match crate::db::pool_dispatched() {
+        crate::db::DbPool::Sqlite(pool) => {
+            ensure_tracking_table_sqlite(pool).await?;
+            applied_names_sqlite(pool).await?
+        }
+        crate::db::DbPool::Postgres(pool) => {
+            ensure_tracking_table_postgres(pool).await?;
+            applied_names_postgres(pool).await?
+        }
+    };
+
+    let report = detect_all_drift(&applied, dir)?;
+
+    let mut out: Vec<ClassifiedOp> = Vec::new();
+    for entry in &report.entries {
+        if entry.status != MigrationStatus::Pending {
+            continue;
+        }
+        let path = dir.join(&entry.plugin).join(format!("{}.json", entry.name));
+        let file = read_migration_file(&path)?;
+        for op in &file.operations {
+            out.push(ClassifiedOp {
+                plugin: entry.plugin.clone(),
+                migration: entry.name.clone(),
+                op: op.clone(),
+                safety: classify_operation(op),
+            });
+        }
+    }
+    Ok(out)
+}
+
 // =========================================================================
 // Internal helpers. Crate-private; the public surface above is the only
 // thing the rest of umbra calls into.

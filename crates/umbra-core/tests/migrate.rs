@@ -1607,3 +1607,78 @@ fn model_meta_carries_soft_delete_flag() {
     assert!(soft.soft_delete, "soft_delete model must carry the flag");
     assert!(!hard.soft_delete, "non-soft-delete model must not");
 }
+
+// --------------------------------------------------------------------- //
+// Feature #65: `checkmigrations` zero-downtime safety classification.    //
+// End-to-end through the public loader: a pending migration file on disk //
+// is read and each operation classified by tier. A high sequence number  //
+// (0099) keeps the fixture `Pending` regardless of what other tests in   //
+// this binary already applied to the shared pool.                        //
+// --------------------------------------------------------------------- //
+
+#[tokio::test]
+async fn check_pending_safety_classifies_a_pending_migration_off_disk() {
+    boot().await;
+
+    let tmp = tempfile::tempdir().expect("create tempdir");
+    let app_dir = tmp.path().join(APP_PLUGIN_NAME);
+    std::fs::create_dir_all(&app_dir).expect("mkdir app/");
+
+    // One pending migration carrying one op per safety tier.
+    let fixture = MigrationFile {
+        id: "0099_safety_fixture".to_string(),
+        plugin: APP_PLUGIN_NAME.to_string(),
+        depends_on: Vec::new(),
+        operations: vec![
+            // Brand-new table -> Safe.
+            Operation::CreateTable {
+                table: "audit_log".to_string(),
+                columns: vec![id_column()],
+                unique_together: Vec::new(),
+                indexes: Vec::new(),
+            },
+            // NOT NULL column, no default -> Warning.
+            Operation::AddColumn {
+                table: "post".to_string(),
+                column: text_column("safety_note"),
+            },
+            // Column drop -> Unsafe (data loss).
+            Operation::DropColumn {
+                table: "post".to_string(),
+                column: "legacy_field".to_string(),
+            },
+        ],
+        snapshot_after: Snapshot::default(),
+    };
+    std::fs::write(
+        app_dir.join("0099_safety_fixture.json"),
+        serde_json::to_string_pretty(&fixture).expect("serialize fixture"),
+    )
+    .expect("write fixture migration");
+
+    let classified = umbra::migrate::check_pending_safety_in(tmp.path())
+        .await
+        .expect("safety check should load and classify the pending file");
+
+    let ours: Vec<_> = classified
+        .iter()
+        .filter(|c| c.migration == "0099_safety_fixture")
+        .collect();
+    assert_eq!(ours.len(), 3, "all three ops classified: {classified:?}");
+
+    let safe = ours
+        .iter()
+        .filter(|c| c.safety == umbra::migrate::OpSafety::Safe)
+        .count();
+    let warn = ours.iter().filter(|c| c.safety.is_warning()).count();
+    let unsafe_ = ours.iter().filter(|c| c.safety.is_unsafe()).count();
+    assert_eq!((safe, warn, unsafe_), (1, 1, 1), "one op per tier");
+
+    // The destructive op names the column it drops, with the expand-contract hint.
+    let drop = ours.iter().find(|c| c.safety.is_unsafe()).unwrap();
+    assert!(
+        drop.safety.reason().contains("legacy_field"),
+        "drop reason names the column: {}",
+        drop.safety.reason()
+    );
+}

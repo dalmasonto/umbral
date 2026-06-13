@@ -23,6 +23,7 @@ manage your database because it doesn't know about your models.
   <Card icon="file-plus" title="makemigrations" description="Diff registered plugin models against the latest snapshot. Writes a migration file per plugin with changes." />
   <Card icon="play-circle" title="migrate" description="Apply every pending migration against the ambient pool. Each migration runs in its own transaction." />
   <Card icon="list" title="showmigrations" description="Print applied/pending state per plugin. [X] applied, [ ] pending." />
+  <Card icon="shield-check" title="checkmigrations" description="Classify pending operations SAFE/WARNING/UNSAFE for zero-downtime deploys. Exits non-zero on unsafe ops — a CI gate before migrate." />
   <Card icon="download" title="inspectdb" description="Introspect an existing database into models.rs + a 0001_initial migration. The porting on-ramp." />
   <Card icon="archive" title="dumpdata / loaddata" description="Snapshot every model's rows to JSON; replay them into a fresh schema." />
 </CardGrid>
@@ -210,6 +211,32 @@ Prints each migration's state, grouped by plugin:
 | `[ ]` | Pending - on disk, newer than the last applied migration. |
 | `[!]` | Applied but missing on disk - tracking table is ahead of VCS. Critical drift. |
 | `[?]` | Out of order - on disk, not applied, but older than the last applied migration. Warning only. |
+
+## checkmigrations - zero-downtime safety gate
+
+Classifies every **pending** operation `SAFE` / `WARNING` / `UNSAFE` so you know what's risky to apply while old code is still serving traffic. Read-only — it applies nothing.
+
+```bash
+cargo run -- checkmigrations
+```
+
+```
+Checking 3 operation(s) across 2 pending migration(s)...
+
+UNSAFE (1):
+  [DROP COL] app/0007_drop_legacy — drops column `order.legacy_total` and its data — old code reading it breaks. Expand-contract: stop writing it, deploy, then drop
+
+Summary: 2 safe, 0 warning, 1 unsafe.
+```
+
+Exits non-zero when any `UNSAFE` op is found (or any `WARNING` under `--strict`), so it gates a deploy pipeline before `migrate` runs.
+
+| Flag | Default | Effect |
+|---|---|---|
+| *(none)* | fail on unsafe | Exit non-zero only when a destructive op (`DROP TABLE/COLUMN/M2M`) is pending. |
+| `--strict` | off | Also exit non-zero on `WARNING`-tier ops (renames, alters, NOT-NULL-no-default adds). |
+
+Full tier rules + the expand-contract pattern: [Checking migrations for zero-downtime safety](/docs/v0.0.1/migrations/checkmigrations).
 
 ## inspectdb - generate models from an existing database
 
