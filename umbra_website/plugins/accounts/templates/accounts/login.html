@@ -39,6 +39,7 @@
 
     {# --- Password login --- #}
     <form method="post" action="/login">
+      {{ csrf_input }}
       <input type="hidden" name="next" value="{{ next }}">
       <label style="display: block; margin-bottom: 6px; font-size: 13px; font-weight: 600; color: var(--ink-2)">Username</label>
       <input name="username" required autocomplete="username" style="width: 100%; box-sizing: border-box; padding: 10px 12px; margin-bottom: 14px; border: 1px solid var(--hairline-2); border-radius: 9px; background: var(--surface-2); color: var(--ink); font: inherit; font-size: 14px">
