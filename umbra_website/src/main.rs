@@ -26,6 +26,11 @@ use umbra_security::{SecurityConfig, SecurityPlugin};
 use umbra_sessions::SessionsPlugin;
 use umbra_static::StaticPlugin;
 
+// Admin dashboard widgets, grouped by rendering shape in `src/widgets/`
+// and bound to the plugin-directory data. Mirrors the shop example's
+// widgets module.
+mod widgets;
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tracing_subscriber::fmt()
@@ -75,7 +80,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             ..Default::default()
         }))
         .plugin(
-            AdminPlugin::default().site_title("Umbra".to_string()), // .register_widget(widget)
+            AdminPlugin::default()
+                .site_title("Umbra".to_string())
+                // Dashboard layout — named sections, one per rendering
+                // shape. Builders live in `src/widgets/`; see that
+                // module's docstring for which file owns each one.
+                .dashboard_section(
+                    umbra_admin::WidgetSection::new("Directory overview")
+                        .subtitle("Headline counts across the plugin directory")
+                        .widget(widgets::total_plugins_card())
+                        .widget(widgets::pending_review_card())
+                        .widget(widgets::discussion_notes_card())
+                        .widget(widgets::total_stars_card()),
+                )
+                .dashboard_section(
+                    umbra_admin::WidgetSection::new("Composition")
+                        .subtitle("How the directory breaks down by source and status")
+                        .widget(widgets::source_mix_donut())
+                        .widget(widgets::status_mix_donut()),
+                )
+                .dashboard_section(
+                    umbra_admin::WidgetSection::new("Trends")
+                        .subtitle("Submissions + discussion activity over time")
+                        .widget(widgets::submissions_chart().with_default_period("30d"))
+                        .widget(widgets::activity_chart().with_default_period("30d")),
+                )
+                .dashboard_section(
+                    umbra_admin::WidgetSection::new("Gauges & rankings")
+                        .subtitle("Audit coverage gauge + the most-starred plugins")
+                        .widget(widgets::audit_coverage_radial())
+                        .widget(widgets::top_plugins_progress()),
+                ),
         )
         // --- Templates ------------------------------------------------------
         .templates_dir("templates")
