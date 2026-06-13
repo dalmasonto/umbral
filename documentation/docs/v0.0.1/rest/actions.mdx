@@ -1,0 +1,72 @@
+---
+title: Action schemas
+description: Give custom @action endpoints a typed request/response shape that validates input and feeds the OpenAPI spec.
+sidebar_position: 7
+tags: [rest, actions, openapi]
+---
+
+# Action schemas
+
+A custom `@action` (e.g. `POST /api/order/1/ship/`) usually needs a request body that is **not** the model's own fields — a carrier name, a reason, a target channel. Attach a JSON Schema to the action and umbra validates the body **before** your handler runs, then publishes the same schema to the OpenAPI document so the playground knows the shape.
+
+<Callout type="info">
+This is the action-level companion to model-level CRUD. The action still runs your handler; the schema only guards the door and documents it.
+</Callout>
+
+## Declaring a schema
+
+`action_input_schema` and `action_output_schema` attach to the action by name. The schema is a plain `serde_json::Value` — write it inline with `json!`:
+
+```rust
+use umbra_rest::{ActionContext, ActionError, ActionScope, ResourceConfig};
+use serde_json::{json, Value};
+
+let orders = ResourceConfig::for_::<Order>()
+    .action("ship", http::Method::POST, ActionScope::Detail, |ctx: ActionContext| async move {
+        // ctx.body has already passed the input schema below.
+        let carrier = ctx.body["carrier"].as_str().unwrap();
+        Ok::<Value, ActionError>(json!({ "shipped": true, "carrier": carrier }))
+    })
+    .action_input_schema("ship", json!({
+        "type": "object",
+        "required": ["carrier"],
+        "properties": {
+            "carrier": { "type": "string" },
+            "speed":   { "type": "string", "enum": ["ground", "air"] }
+        }
+    }))
+    .action_output_schema("ship", json!({
+        "type": "object",
+        "properties": { "shipped": { "type": "boolean" } }
+    }));
+```
+
+A request whose body is missing `carrier`, sends `carrier` as a number, or sets `speed` to something outside the enum is rejected with `400 Bad Request` and a message naming the offending field — your handler never runs.
+
+## What the validator checks
+
+The built-in validator covers the common action-guard subset, applied recursively to nested objects:
+
+- top-level and nested `type` (`object`, `string`, `number`/`integer`, `boolean`, `array`, `null`)
+- `required` property lists
+- `properties` (each validated against its own sub-schema)
+- per-property `enum` membership
+
+Unsupported keywords (`$ref`, `oneOf`, `allOf`, numeric bounds, `pattern`) are **ignored by the validator but still shipped verbatim to OpenAPI** — so a richer schema documents correctly even though the in-process guard only enforces the subset above. If you need full JSON-Schema enforcement, validate inside your handler.
+
+## OpenAPI emission
+
+Every action that carries a schema is published to the OpenAPI document by `umbra-openapi`. A detail action lands at `/api/<table>/{id}/<name>/` (with an `{id}` path parameter); a list action at `/api/<table>/<name>/`. The `input_schema` becomes the `requestBody` and the `output_schema` the `200` response — so the Swagger playground renders a typed form for the action with no extra wiring.
+
+```rust
+// nothing extra to call — building the app with both plugins is enough
+App::builder()
+    .plugin(RestPlugin::default().resource(orders))
+    .plugin(OpenApiPlugin::default())
+    .build()?;
+```
+
+## See also
+
+- [Nested writes](./nested) — writing related rows in one request.
+- `arch.md` and `plugins/umbra-rest/src/resource.rs` for the `ActionDef` design.

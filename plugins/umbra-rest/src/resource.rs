@@ -166,6 +166,14 @@ pub(crate) struct ActionDef {
     pub(crate) method: Method,
     pub(crate) scope: ActionScope,
     pub(crate) handler: ActionHandler,
+    /// Optional JSON Schema for the request body. When set, the dispatch
+    /// validates the body against it (the common `type`/`required`/
+    /// `properties`/`enum` subset) before the handler runs, and the schema
+    /// is published into the OpenAPI spec.
+    pub(crate) input_schema: Option<Value>,
+    /// Optional JSON Schema for the 200 response — published into OpenAPI
+    /// (the playground reads it). Not validated at runtime.
+    pub(crate) output_schema: Option<Value>,
 }
 
 impl std::fmt::Debug for ActionDef {
@@ -499,7 +507,42 @@ impl ResourceConfig {
             method,
             scope,
             handler,
+            input_schema: None,
+            output_schema: None,
         });
+        self
+    }
+
+    /// Attach a JSON Schema for a custom action's **request body**. The
+    /// dispatch validates the body against it before the handler runs (the
+    /// common `type` / `required` / `properties` / `enum` subset; a failure
+    /// is a `400` with the field errors), and the schema is published into
+    /// the OpenAPI spec so the playground knows the expected shape. Applies
+    /// to the most recently declared action with that `name`.
+    ///
+    /// ```ignore
+    /// .action("ship", Method::POST, ActionScope::Detail, ship_handler)
+    /// .action_input_schema("ship", json!({
+    ///     "type": "object",
+    ///     "required": ["carrier"],
+    ///     "properties": { "carrier": { "type": "string" }, "express": { "type": "boolean" } }
+    /// }))
+    /// ```
+    pub fn action_input_schema(mut self, action: &str, schema: Value) -> Self {
+        if let Some(def) = self.actions.iter_mut().rev().find(|d| d.name == action) {
+            def.input_schema = Some(schema);
+        }
+        self
+    }
+
+    /// Attach a JSON Schema for a custom action's **200 response**.
+    /// Published into the OpenAPI spec (documentation only — not validated
+    /// at runtime). Applies to the most recently declared action with that
+    /// `name`.
+    pub fn action_output_schema(mut self, action: &str, schema: Value) -> Self {
+        if let Some(def) = self.actions.iter_mut().rev().find(|d| d.name == action) {
+            def.output_schema = Some(schema);
+        }
         self
     }
 }

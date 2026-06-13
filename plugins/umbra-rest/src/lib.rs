@@ -994,6 +994,124 @@ pub fn registered_security_schemes() -> Vec<(String, serde_json::Value)> {
         .unwrap_or_default()
 }
 
+/// One custom `@action`'s OpenAPI-facing schema info — read by
+/// `umbra-openapi` to emit the action's path + request/response schemas
+/// (feature #60).
+#[derive(Debug, Clone)]
+pub struct ActionSchema {
+    pub table: String,
+    pub name: String,
+    /// HTTP method, e.g. `"POST"`.
+    pub method: String,
+    /// `true` for detail-scope (`/{id}/<name>/`), `false` for collection.
+    pub detail: bool,
+    /// The base path resources mount under (e.g. `"/api"`).
+    pub base_path: String,
+    pub input_schema: Option<serde_json::Value>,
+    pub output_schema: Option<serde_json::Value>,
+}
+
+/// Public read: every custom `@action` that declared an input or output
+/// schema (`ResourceConfig::action_input_schema` / `action_output_schema`).
+/// Used by `umbra-openapi` at spec-build time. Empty when no REST plugin
+/// has booted.
+pub fn registered_action_schemas() -> Vec<ActionSchema> {
+    let Some(cfg) = CONFIG.get() else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for (table, defs) in &cfg.actions {
+        for d in defs {
+            if d.input_schema.is_none() && d.output_schema.is_none() {
+                continue;
+            }
+            out.push(ActionSchema {
+                table: table.clone(),
+                name: d.name.clone(),
+                method: d.method.to_string(),
+                detail: matches!(d.scope, ActionScope::Detail),
+                base_path: cfg.base_path.clone(),
+                input_schema: d.input_schema.clone(),
+                output_schema: d.output_schema.clone(),
+            });
+        }
+    }
+    out
+}
+
+/// Validate `instance` against a subset of JSON Schema — the common
+/// action-guard shapes: top-level `type`, `required`, and `properties`
+/// (recursing into each, with per-property `type` + `enum`). Unsupported
+/// keywords are ignored (permissive); the full schema still ships in the
+/// OpenAPI spec. Returns human-readable errors (empty = valid).
+fn validate_against_schema(schema: &Value, instance: &Value) -> Vec<String> {
+    let mut errors = Vec::new();
+    validate_schema_node("", schema, instance, &mut errors);
+    errors
+}
+
+fn validate_schema_node(path: &str, schema: &Value, instance: &Value, errors: &mut Vec<String>) {
+    let Some(schema) = schema.as_object() else {
+        return;
+    };
+    if let Some(ty) = schema.get("type").and_then(|v| v.as_str()) {
+        if !json_type_matches(ty, instance) {
+            errors.push(format!("{}: expected type `{ty}`", schema_label(path)));
+            return; // type mismatch — deeper checks are moot
+        }
+    }
+    if let Some(Value::Array(allowed)) = schema.get("enum") {
+        if !allowed.iter().any(|a| a == instance) {
+            errors.push(format!(
+                "{}: value is not one of the allowed options",
+                schema_label(path)
+            ));
+        }
+    }
+    if let Some(obj) = instance.as_object() {
+        if let Some(Value::Array(required)) = schema.get("required") {
+            for r in required.iter().filter_map(|v| v.as_str()) {
+                if obj.get(r).map(|v| v.is_null()).unwrap_or(true) {
+                    errors.push(format!("`{r}` is required"));
+                }
+            }
+        }
+        if let Some(Value::Object(props)) = schema.get("properties") {
+            for (name, prop_schema) in props {
+                if let Some(val) = obj.get(name) {
+                    let child = if path.is_empty() {
+                        name.clone()
+                    } else {
+                        format!("{path}.{name}")
+                    };
+                    validate_schema_node(&child, prop_schema, val, errors);
+                }
+            }
+        }
+    }
+}
+
+fn json_type_matches(expected: &str, v: &Value) -> bool {
+    match expected {
+        "object" => v.is_object(),
+        "array" => v.is_array(),
+        "string" => v.is_string(),
+        "boolean" => v.is_boolean(),
+        "null" => v.is_null(),
+        "number" => v.is_number(),
+        "integer" => v.is_i64() || v.is_u64() || v.as_f64().is_some_and(|f| f.fract() == 0.0),
+        _ => true, // unknown type keyword — don't reject
+    }
+}
+
+fn schema_label(path: &str) -> String {
+    if path.is_empty() {
+        "body".to_string()
+    } else {
+        format!("`{path}`")
+    }
+}
+
 impl Plugin for RestPlugin {
     fn name(&self) -> &'static str {
         "rest"
@@ -1933,6 +2051,18 @@ async fn custom_action_dispatch(
         body: body.map(|Json(v)| v).unwrap_or(Value::Null),
         query,
     };
+
+    // Validate the request body against the action's declared input schema
+    // (feature #60), before the handler runs. A mismatch is a 400.
+    if let Some(schema) = &def.input_schema {
+        let errors = validate_against_schema(schema, &ctx.body);
+        if !errors.is_empty() {
+            return Err(ApiError::BadInput(format!(
+                "request body does not match the action schema: {}",
+                errors.join("; ")
+            )));
+        }
+    }
 
     let result = (def.handler)(ctx).await;
     match result {

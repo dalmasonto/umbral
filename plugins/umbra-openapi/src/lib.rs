@@ -307,6 +307,21 @@ fn build_spec(cfg: &OpenApiPlugin) -> Value {
         }
     }
 
+    // Feature #60: custom `@action` endpoints that declared an input or
+    // output schema get their own path item, with the request/response
+    // schemas inlined so the playground knows the shape.
+    for action in umbra_rest::registered_action_schemas() {
+        let path = if action.detail {
+            format!(
+                "{}/{}/{{id}}/{}/",
+                action.base_path, action.table, action.name
+            )
+        } else {
+            format!("{}/{}/{}/", action.base_path, action.table, action.name)
+        };
+        paths.insert(path, action_path_item(&action));
+    }
+
     let mut info = Map::new();
     info.insert("title".into(), Value::String(cfg.title.clone()));
     info.insert("version".into(), Value::String(cfg.version.clone()));
@@ -341,6 +356,51 @@ fn build_spec(cfg: &OpenApiPlugin) -> Value {
         document.insert("security".into(), Value::Array(security));
     }
     Value::Object(document)
+}
+
+/// Path Item for a custom `@action` (feature #60): the declared HTTP
+/// method with the request/response schemas inlined, plus the `{id}` path
+/// param for detail-scope actions.
+fn action_path_item(a: &umbra_rest::ActionSchema) -> Value {
+    let mut op = Map::new();
+    op.insert(
+        "operationId".into(),
+        Value::String(format!("{}_{}", a.table, a.name)),
+    );
+    op.insert("tags".into(), json!([a.table]));
+    op.insert(
+        "summary".into(),
+        Value::String(format!("`{}` action on {}", a.name, a.table)),
+    );
+    if a.detail {
+        op.insert(
+            "parameters".into(),
+            json!([{
+                "name": "id", "in": "path", "required": true,
+                "schema": { "type": "string" },
+                "description": "Primary key of the target row"
+            }]),
+        );
+    }
+    if let Some(input) = &a.input_schema {
+        op.insert(
+            "requestBody".into(),
+            json!({ "required": true, "content": { "application/json": { "schema": input } } }),
+        );
+    }
+    let mut ok = Map::new();
+    ok.insert("description".into(), Value::String("Action result".into()));
+    if let Some(output) = &a.output_schema {
+        ok.insert(
+            "content".into(),
+            json!({ "application/json": { "schema": output } }),
+        );
+    }
+    op.insert("responses".into(), json!({ "200": Value::Object(ok) }));
+
+    let mut item = Map::new();
+    item.insert(a.method.to_lowercase(), Value::Object(op));
+    Value::Object(item)
 }
 
 fn model_schema(
