@@ -125,6 +125,10 @@ pub struct AppBuilder {
     /// and double-compressing behind one is wasteful. Enable via
     /// [`AppBuilder::compression`].
     compress: bool,
+    /// App-level framework middleware (feature #68), prepended to the
+    /// plugins' contributions in the final stack. Added via
+    /// [`AppBuilder::middleware`].
+    middleware: Vec<std::sync::Arc<dyn crate::middleware::Middleware>>,
 }
 
 impl Default for AppBuilder {
@@ -146,6 +150,7 @@ impl Default for AppBuilder {
             cors_scoped: Vec::new(),
             atomic_transactions: None,
             compress: false,
+            middleware: Vec::new(),
         }
     }
 }
@@ -448,6 +453,22 @@ impl AppBuilder {
     /// when you serve directly (a single binary with no proxy in front).
     pub fn compression(mut self) -> Self {
         self.compress = true;
+        self
+    }
+
+    /// Register a framework-level [`Middleware`](crate::middleware::Middleware)
+    /// (feature #68) with `before_request` / `after_response` hooks.
+    ///
+    /// App-level middleware is added to the stack *before* any plugin's
+    /// contribution, so its `before_request` runs first and its
+    /// `after_response` runs last (it's the outermost layer of the onion).
+    /// Call this multiple times to register several, in order.
+    ///
+    /// Use this for the common "look at every request / response" case.
+    /// For a real tower `Layer` (timeouts, body limits) reach for the
+    /// router directly via a plugin's `wrap_router`.
+    pub fn middleware<M: crate::middleware::Middleware>(mut self, mw: M) -> Self {
+        self.middleware.push(std::sync::Arc::new(mw));
         self
     }
 
@@ -887,6 +908,20 @@ impl AppBuilder {
                 router = router.fallback(fallback);
             }
         }
+
+        // Phase 5.65 — framework middleware stack (feature #68). App-level
+        // middleware first, then every plugin's contribution in topological
+        // order, collected into one stack and installed as a single layer.
+        // Placed AFTER the 404 fallback so middleware sees misses too, and
+        // BEFORE the panic / compression / CORS / host layers so those stay
+        // the outermost wrappers (security and content-encoding run before
+        // user middleware ever touches the request).
+        let mut middleware_stack = crate::middleware::MiddlewareStack::new();
+        middleware_stack.extend(std::mem::take(&mut self.middleware));
+        for plugin in &sorted_plugins {
+            middleware_stack.extend(plugin.middleware());
+        }
+        router = middleware_stack.apply(router);
 
         // Phase 5.7 — wrap with the panic-catch layer. Comes AFTER the
         // fallback wiring so a panicking fallback handler is also caught

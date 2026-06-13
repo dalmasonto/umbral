@@ -250,6 +250,28 @@ pub trait Plugin: Send + Sync + 'static {
         router
     }
 
+    /// Framework-level request/response middleware this plugin contributes
+    /// (feature #68).
+    ///
+    /// Where [`wrap_router`](Plugin::wrap_router) hands you the raw axum
+    /// `Router` for arbitrary tower `Layer`s, this is the ergonomic
+    /// surface: each [`Middleware`](crate::middleware::Middleware) gets a
+    /// `before_request` / `after_response` hook and nothing else to wire.
+    /// All plugins' middleware (plus the app's) are collected into one
+    /// stack and installed as a single layer at `App::build`, in plugin
+    /// topological order — a plugin's `before_request` runs after those of
+    /// the plugins it depends on, and its `after_response` runs before
+    /// them (onion order).
+    ///
+    /// Reach for `wrap_router` when you need a real tower `Layer` (timeouts,
+    /// tracing spans, body-limit); reach for this when you just want to
+    /// look at the request or response.
+    ///
+    /// Default: no middleware.
+    fn middleware(&self) -> Vec<std::sync::Arc<dyn crate::middleware::Middleware>> {
+        Vec::new()
+    }
+
     /// Static files the plugin ships baked into its binary.
     ///
     /// Each entry produces one `GET <url_path>` route that returns the

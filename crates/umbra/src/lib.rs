@@ -22,6 +22,7 @@ pub mod prelude {
     //! raw pool accessors are reached as `umbra::db::pool()` so they do
     //! not pollute the prelude with bare names like `pool`.
 
+    pub use crate::middleware::Middleware;
     pub use crate::orm::{
         ChoiceField, Choices, F, FColExt, FileField, ForeignKey, ImageField, M2M, Masked, Model,
         MultiChoice, OneToOne, Q, ReverseRelations,
@@ -42,6 +43,13 @@ pub mod prelude {
     // prelude because it pairs with the rest of the model APIs.
     pub use crate::models;
 }
+
+/// The `async_trait` attribute macro, re-exported so plugin authors can
+/// write `#[umbra::async_trait] impl Middleware for ...` (feature #68)
+/// without declaring a direct `async-trait` dependency. The desugared
+/// trait is dyn-compatible (`Arc<dyn Middleware>`), which a native
+/// `async fn` in a trait is not.
+pub use async_trait::async_trait;
 
 /// Resolve a list of `Model` types to their `TABLE` strings.
 /// Use anywhere an API takes table names — admin config, model
@@ -262,6 +270,19 @@ pub mod plugin {
     pub use umbra_core::plugin::{
         ApiEndpoint, AppContext, Plugin, PluginError, StaticDir, StaticFile,
     };
+}
+
+pub mod middleware {
+    //! Framework request/response middleware (feature #68).
+    //!
+    //! Implement [`Middleware`]'s `before_request` / `after_response`
+    //! hooks for the common "look at every request / response" case;
+    //! register it with `AppBuilder::middleware` or contribute it from a
+    //! plugin via `Plugin::middleware`. The trait is also re-exported
+    //! from the prelude. [`MiddlewareStack`] is the collected, ordered
+    //! set `App::build` installs as one axum layer.
+
+    pub use umbra_core::middleware::{Middleware, MiddlewareStack};
 }
 
 pub mod static_files {

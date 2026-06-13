@@ -1,0 +1,101 @@
+---
+title: Middleware
+description: A typed Middleware trait with before_request / after_response hooks, composed in a predictable onion order.
+sidebar_position: 8
+tags: [web, middleware, plugins]
+---
+
+# Middleware
+
+axum and tower already give you `Layer` + `Service`, but writing one means learning poll-readiness, boxed futures, and the `Service` ownership rules. Most application middleware only wants two things: look at the request before the handler, and look at the response after. umbra's `Middleware` trait is exactly that — Django's `process_request` / `process_response`, typed for Rust.
+
+<Callout type="info">
+Reach for `Middleware` for the common "inspect/modify every request or response" case. When you genuinely need a tower `Layer` (timeouts, body-size limits, tracing spans), use a plugin's `wrap_router` to layer the raw axum router instead.
+</Callout>
+
+## The trait
+
+```rust
+use umbra::prelude::*;          // brings in Middleware
+use axum::extract::Request;
+use axum::response::{IntoResponse, Response};
+use http::StatusCode;
+
+struct RequireApiKey;
+
+#[umbra::async_trait]
+impl Middleware for RequireApiKey {
+    async fn before_request(&self, req: Request) -> Result<Request, Response> {
+        if req.headers().get("x-api-key").is_some() {
+            Ok(req)                                   // continue to the handler
+        } else {
+            Err((StatusCode::UNAUTHORIZED, "missing API key").into_response()) // short-circuit
+        }
+    }
+
+    async fn after_response(&self, mut res: Response) -> Response {
+        res.headers_mut().insert("x-powered-by", "umbra".parse().unwrap());
+        res
+    }
+}
+```
+
+Both hooks have a default pass-through, so implement only the one you need. `#[umbra::async_trait]` is re-exported from the facade — no direct `async-trait` dependency required.
+
+## Registering it
+
+Two ways, and they share one ordered stack:
+
+<Tabs>
+<Tab title="App-level">
+```rust
+App::builder()
+    .middleware(RequireApiKey)
+    .middleware(RequestTimer)   // call again for more, in order
+    .build()?;
+```
+</Tab>
+<Tab title="From a plugin">
+```rust
+impl Plugin for MyPlugin {
+    fn name(&self) -> &'static str { "myplugin" }
+
+    fn middleware(&self) -> Vec<std::sync::Arc<dyn Middleware>> {
+        vec![std::sync::Arc::new(RequireApiKey)]
+    }
+}
+```
+</Tab>
+</Tabs>
+
+App-level middleware is added to the stack first, then each plugin's contribution in topological dependency order.
+
+## Composition: the onion
+
+`before_request` hooks run in **registration order**; `after_response` hooks run in the **reverse** order, so each middleware wraps the ones registered after it. With a stack `[A, B, C]` and a request that reaches the handler:
+
+```
+A.before → B.before → C.before → handler → C.after → B.after → A.after
+```
+
+This onion model is what makes composition predictable: an outer middleware always sees the request first and the response last.
+
+### Short-circuiting
+
+A `before_request` that returns `Err(response)` stops the chain: the handler and every **later** middleware are skipped. Only the middleware whose `before_request` already ran get an `after_response`, still in reverse. So if `B` short-circuits in the stack above:
+
+```
+A.before → B.before (Err) → A.after → (response returned)
+```
+
+`C` and the handler never run; `A` — which already processed the request — still gets to process the rejection response.
+
+## Where it sits in the layer stack
+
+The middleware stack is installed so that umbra's own security and transport layers stay outermost: host-header validation, CORS, and compression all run **before** your middleware ever sees the request, and the 404 fallback is **inside** it (so your middleware observes misses too). You don't configure this — it's wired at `App::build`.
+
+## See also
+
+- [Routes](routes) — declaring the handlers your middleware wraps.
+- [Auth gating](auth-gating) — the built-in login-required guard.
+- `crates/umbra-core/src/middleware.rs` for the trait + stack implementation.

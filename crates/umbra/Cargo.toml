@@ -27,6 +27,11 @@ serde_json = "1"
 # with matching feature flags. Feature set mirrors umbra-core: native
 # Sqlite + Postgres + chrono / uuid / json.
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "postgres", "chrono", "uuid", "json"] }
+# Re-exported as `umbra::async_trait` so plugin authors can write
+# `#[umbra::async_trait] impl Middleware for ...` (feature #68) without a
+# direct async-trait dependency. The trait it desugars is dyn-compatible,
+# which native `async fn` in traits is not — hence the macro.
+async-trait = "0.1"
 
 [dev-dependencies]
 # `tests/models_macro.rs` declares throwaway `#[derive(Model)]`
