@@ -175,10 +175,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 }
 
 async fn dashboard(
-    user: umbra_auth::LoggedIn<AuthUser>,
+    _user: umbra_auth::LoggedIn<AuthUser>,
 ) -> Result<Html<String>, (StatusCode, String)> {
-    let body =
-        umbra::templates::render("dashboard.html", &context!(user)).map_err(internal_error)?;
+    // Don't pass our own `user` into the context: that would shadow the
+    // ambient `user` injected by AuthPlugin::with_user_in_templates()
+    // (the only one that carries `is_authenticated`), desyncing this
+    // page's body from the base-template nav — the page body would say
+    // "logged in" while the header showed "Log in / Sign up". The
+    // `LoggedIn` extractor stays to enforce the login requirement; the
+    // template reads `user.username` / `user.is_authenticated` from the
+    // ambient context.
+    let body = umbra::templates::render("dashboard.html", &context! {}).map_err(internal_error)?;
     Ok(Html(body))
 }
 
