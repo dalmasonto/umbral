@@ -419,8 +419,11 @@ impl<'a> DynQuerySet<'a> {
         let expr = Expr::col(Alias::new(col));
         // Coerce each string value to the column's native type so the
         // bind kind matches and SQLite's STRICT mode (and Postgres's
-        // type system) accepts the parameter.
-        let cond = match meta_col.ty {
+        // type system) accepts the parameter. `fk_effective_type` resolves
+        // a ForeignKey to its target's PK type, so an FK to a String/Uuid
+        // target binds the raw string (via the `_` arm) instead of being
+        // parsed as i64 and dropped.
+        let cond = match crate::migrate::fk_effective_type(meta_col) {
             SqlType::SmallInt | SqlType::Integer => {
                 let parsed: Vec<i32> = vals.iter().filter_map(|s| s.parse().ok()).collect();
                 if parsed.is_empty() {
@@ -463,7 +466,9 @@ impl<'a> DynQuerySet<'a> {
             return self;
         };
         let expr = Expr::col(Alias::new(col));
-        let predicate = match meta_col.ty {
+        // FK-to-non-i64-target columns resolve to their target PK type, so
+        // a String/Uuid FK matches the `_` arm and binds the raw string.
+        let predicate = match crate::migrate::fk_effective_type(meta_col) {
             SqlType::SmallInt | SqlType::Integer => value.parse::<i32>().ok().map(|v| expr.eq(v)),
             SqlType::BigInt | SqlType::ForeignKey => value.parse::<i64>().ok().map(|v| expr.eq(v)),
             SqlType::Real | SqlType::Double => value.parse::<f64>().ok().map(|v| expr.eq(v)),

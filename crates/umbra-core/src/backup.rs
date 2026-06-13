@@ -406,7 +406,7 @@ fn column_to_json(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<Value, 
     // The nullable path always tries Option<T>. SQLite stores NULL
     // explicitly so `try_get::<Option<T>>` is the safe read.
     if col.nullable {
-        return Ok(match col.ty {
+        return Ok(match crate::migrate::fk_effective_type(col) {
             SqlType::SmallInt | SqlType::Integer => row
                 .try_get::<Option<i32>, _>(name)?
                 .map_or(Value::Null, Value::from),
@@ -468,7 +468,7 @@ fn column_to_json(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<Value, 
         });
     }
     // Non-nullable: same dispatch without the Option layer.
-    Ok(match col.ty {
+    Ok(match crate::migrate::fk_effective_type(col) {
         SqlType::SmallInt | SqlType::Integer => Value::from(row.try_get::<i32, _>(name)?),
         SqlType::BigInt => Value::from(row.try_get::<i64, _>(name)?),
         SqlType::Real => Value::from(row.try_get::<f32, _>(name)? as f64),
@@ -496,7 +496,7 @@ fn column_to_json(row: &sqlx::sqlite::SqliteRow, col: &Column) -> Result<Value, 
 fn column_to_json_pg(row: &sqlx::postgres::PgRow, col: &Column) -> Result<Value, BackupError> {
     let name = col.name.as_str();
     if col.nullable {
-        return Ok(match col.ty {
+        return Ok(match crate::migrate::fk_effective_type(col) {
             SqlType::SmallInt => row
                 .try_get::<Option<i16>, _>(name)?
                 .map_or(Value::Null, Value::from),
@@ -551,7 +551,7 @@ fn column_to_json_pg(row: &sqlx::postgres::PgRow, col: &Column) -> Result<Value,
                 .map_or(Value::Null, |v| Value::from(v.to_string())),
         });
     }
-    Ok(match col.ty {
+    Ok(match crate::migrate::fk_effective_type(col) {
         SqlType::SmallInt => Value::from(row.try_get::<i16, _>(name)?),
         SqlType::Integer => Value::from(row.try_get::<i32, _>(name)?),
         SqlType::BigInt | SqlType::ForeignKey => Value::from(row.try_get::<i64, _>(name)?),
@@ -679,7 +679,7 @@ fn bind_value<'q>(
     // Null binding is the same shape regardless of SqlType — SQLite
     // accepts a typed NULL on any column whose schema allows it.
     if matches!(val, Value::Null) {
-        return Ok(match col.ty {
+        return Ok(match crate::migrate::fk_effective_type(col) {
             SqlType::SmallInt | SqlType::Integer => q.bind(None::<i32>),
             SqlType::BigInt => q.bind(None::<i64>),
             SqlType::Real => q.bind(None::<f32>),
@@ -706,7 +706,7 @@ fn bind_value<'q>(
         expected: col.ty,
         got: got.to_string(),
     };
-    Ok(match col.ty {
+    Ok(match crate::migrate::fk_effective_type(col) {
         SqlType::SmallInt | SqlType::Integer => {
             q.bind(val.as_i64().ok_or_else(|| mismatch(json_type_name(&val)))? as i32)
         }
@@ -775,7 +775,7 @@ fn bind_value_pg<'q>(
     val: Value,
 ) -> Result<PgQuery<'q>, BackupError> {
     if matches!(val, Value::Null) {
-        return Ok(match col.ty {
+        return Ok(match crate::migrate::fk_effective_type(col) {
             SqlType::SmallInt => q.bind(None::<i16>),
             SqlType::Integer => q.bind(None::<i32>),
             SqlType::BigInt | SqlType::ForeignKey => q.bind(None::<i64>),
@@ -802,7 +802,7 @@ fn bind_value_pg<'q>(
         expected: col.ty,
         got: got.to_string(),
     };
-    Ok(match col.ty {
+    Ok(match crate::migrate::fk_effective_type(col) {
         SqlType::SmallInt => q.bind(
             i16::try_from(val.as_i64().ok_or_else(|| mismatch(json_type_name(&val)))?)
                 .map_err(|_| mismatch("number out of i16 range"))?,

@@ -140,6 +140,28 @@ pub fn pk_meta_for_table(table: &str) -> Option<(String, crate::orm::SqlType)> {
     map.get(table).cloned()
 }
 
+/// The SQL type a column's value actually binds / decodes as (PK lift).
+/// Equals `col.ty` for everything except a `ForeignKey`, where it resolves
+/// to the referenced model's PK type via [`pk_meta_for_table`] — so an FK
+/// pointing at a `String`-slug- or `Uuid`-PK target is handled as text /
+/// uuid instead of being forced through i64. Falls back to `BigInt` (the
+/// historical default) when the target can't be resolved (registry not yet
+/// initialised, or an unregistered target table).
+///
+/// The single source of truth for "what shape is this FK really?", used by
+/// `backup` (dump/load) and the dynamic filter helpers.
+pub fn fk_effective_type(col: &Column) -> crate::orm::SqlType {
+    if matches!(col.ty, crate::orm::SqlType::ForeignKey) {
+        col.fk_target
+            .as_deref()
+            .and_then(pk_meta_for_table)
+            .map(|(_, ty)| ty)
+            .unwrap_or(crate::orm::SqlType::BigInt)
+    } else {
+        col.ty
+    }
+}
+
 /// Return the registered plugin names that contributed at least one
 /// model. Sorted deterministically. Used as a fallback when no
 /// topological order is published; the M7 walk used this directly,
