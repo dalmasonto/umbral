@@ -133,6 +133,74 @@ A login (or connect) entry point is just a link — `GET` routes need no form:
 If `SecurityPlugin` is mounted (it enforces CSRF on every `POST`) and you omit `{{ csrf_input }}`, the request fails with "CSRF verification failed". This applies to *any* POST form in your app — login, signup, logout, disconnect.
 </Callout>
 
+## SPA login (bearer token)
+
+The flow above ends in a cookie session — perfect for a server-rendered app. A single-page app on a **different origin** (Vite, Next, a mobile client) can use the *same* routes and get back a **bearer token** instead, so it can call the API with `Authorization: Bearer`.
+
+<Steps>
+<Step title="Allowlist the SPA's return URL">
+Add the URL your SPA handles the callback on. Only URLs starting with an allowlisted prefix are honored — this is the open-redirect / token-theft defense.
+
+```rust
+let oauth = OAuthPlugin::new("https://api.example.com")
+    .allow_return("https://app.example.com/auth/callback")
+    .provider(GoogleProvider::from_env().unwrap());
+```
+</Step>
+<Step title="Send the browser to login with ?next=">
+From the SPA, do a full-page navigation (not `fetch` — OAuth uses redirects):
+
+```js
+window.location = "https://api.example.com/oauth/google/login"
+  + "?next=https://app.example.com/auth/callback";
+```
+</Step>
+<Step title="Read the token from the URL fragment">
+After consent, the callback redirects to `…/auth/callback#token=umbra_…&token_type=Bearer`. The token rides in the URL **fragment**, which browsers never send to a server and proxies never log.
+
+```js
+// SPA callback route
+const params = new URLSearchParams(location.hash.slice(1));
+const token = params.get("token");
+if (token) {
+  localStorage.setItem("umbra_token", token);
+  history.replaceState(null, "", location.pathname); // scrub the fragment
+}
+```
+</Step>
+<Step title="Call the API with the token">
+```js
+fetch("https://api.example.com/api/post/", {
+  headers: { Authorization: `Bearer ${localStorage.getItem("umbra_token")}` },
+});
+```
+
+umbra-rest's bearer authentication resolves it — the token is a real `AuthToken` row, so it works everywhere bearer auth does and can be revoked.
+</Step>
+</Steps>
+
+<Callout type="warning">
+A `?next=` that doesn't match an `allow_return` prefix is rejected with **400** — an attacker can't point the flow at their own origin to harvest a freshly minted token. With **no** `allow_return` configured, `?next=` is ignored entirely and the flow keeps its server-rendered session behavior (safe by default). Token mode is login-only: a connect flow never mints a token (the user already holds one).
+</Callout>
+
+## Endpoint discovery
+
+`GET /oauth/providers` returns the configured providers and their flow URLs, auto-built from what's registered — so a SPA renders its buttons without hardcoding paths:
+
+```json
+{ "providers": [
+  { "key": "google", "label": "Google",
+    "login":    { "path": "/oauth/google/login",    "url": "https://api.example.com/oauth/google/login" },
+    "connect":  { "path": "/oauth/google/connect",  "url": "https://api.example.com/oauth/google/connect" },
+    "callback": { "path": "/oauth/google/callback", "url": "https://api.example.com/oauth/google/callback" } } ] }
+```
+
+`path` is relative; `url` is absolute (joined onto the `redirect_base`). The endpoint is public — it lists provider names only, never secrets.
+
+<Callout type="info">
+If you also run **umbra-rest**, these same `login` / `connect` endpoints show up in its `GET /api/` root under `endpoints`, next to your REST resources — one index for the whole API. The plugin advertises them through the framework's `Plugin::api_endpoints()` seam, so REST lists them without depending on `umbra-oauth`.
+</Callout>
+
 ## Linking policy
 
 On the callback, the resolved identity is matched in order:

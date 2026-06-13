@@ -75,6 +75,26 @@ The block-list matches by **table name**, not by type — `umbra-rest` discovers
 Auto-exposure means a business model — `customer`, `payment`, `invoice` — is **open the moment you add `RestPlugin::default()`**, with `NoAuthentication` + `AllowAny` by default. The block-list only protects the framework's own internal tables, not yours. Lock down write access with a [permission class](/docs/v0.0.1/rest/permissions) (e.g. `ReadOnly` or `IsAuthenticated`) per resource, and reach for `include_only` when you want exposure to be an explicit allowlist rather than opt-out.
 </Callout>
 
+## The API root
+
+`GET /api/` (the base path you mounted at) returns a browsable index of everything the API exposes:
+
+```json
+{
+  "resources": {
+    "post": { "path": "/api/post/", "detail": "/api/post/{id}" }
+  },
+  "endpoints": [
+    { "group": "oauth", "name": "google.login", "method": "GET",
+      "path": "/oauth/google/login",
+      "url": "https://api.example.com/oauth/google/login",
+      "label": "Sign in with Google" }
+  ]
+}
+```
+
+`resources` lists every model that passes the exposure rules above, each with its collection + detail path. `endpoints` aggregates what *other* plugins advertise via the framework's `Plugin::api_endpoints()` seam — OAuth's login/connect links, for instance — each with an absolute `url` joined from the incoming request's origin. REST lists them without depending on those plugins' crates. (When REST is mounted at the bare root, the index is skipped so it doesn't shadow your app's home route.)
+
 ## See also
 
 - [Permissions](/docs/v0.0.1/rest/permissions) — gate *who* can perform each action once a table is exposed.
