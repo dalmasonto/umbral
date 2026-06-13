@@ -11,3 +11,4 @@ serde_json = "1"
 sqlx = { version = "0.8", default-features = false, features = ["macros", "runtime-tokio", "chrono", "uuid", "json"] }
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["serde"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }  # #[tokio::test].
