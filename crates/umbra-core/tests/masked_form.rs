@@ -18,7 +18,14 @@ use umbra::forms::FormValidate;
 use umbra::orm::Masked;
 
 #[derive(
-    Debug, Clone, Default, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model, umbra::forms::Form,
+    Debug,
+    Clone,
+    Default,
+    sqlx::FromRow,
+    Serialize,
+    Deserialize,
+    umbra::orm::Model,
+    umbra::forms::Form,
 )]
 #[umbra(table = "masked_form_contact")]
 pub struct Contact {
