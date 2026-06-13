@@ -83,16 +83,25 @@ struct AuthQuery {
 // Login
 // ---------------------------------------------------------------------------
 
-async fn login_page(Query(q): Query<AuthQuery>) -> Result<Html<String>, (StatusCode, String)> {
-    let body = umbra::templates::render(
+async fn login_page(headers: HeaderMap, Query(q): Query<AuthQuery>) -> Response {
+    // Already logged in → don't show an auth page; bounce to the app.
+    if current_session_user_id(&headers).await.is_some() {
+        return Redirect::to("/dashboard").into_response();
+    }
+    let providers = umbra_oauth::available_providers();
+    match umbra::templates::render(
         "accounts/login.html",
         &context! {
             error => q.error.is_some(),
             next => safe_next(q.next.as_deref()),
+            show_google => providers.contains(&"google"),
+            show_github => providers.contains(&"github"),
+            any_oauth => !providers.is_empty(),
         },
-    )
-    .map_err(internal_error)?;
-    Ok(Html(body))
+    ) {
+        Ok(body) => Html(body).into_response(),
+        Err(e) => internal_error(e).into_response(),
+    }
 }
 
 async fn do_login(headers: HeaderMap, Form(form): Form<HashMap<String, String>>) -> Response {
@@ -110,7 +119,10 @@ async fn do_login(headers: HeaderMap, Form(form): Form<HashMap<String, String>>)
 // Signup
 // ---------------------------------------------------------------------------
 
-async fn signup_page(Query(q): Query<AuthQuery>) -> Result<Html<String>, (StatusCode, String)> {
+async fn signup_page(headers: HeaderMap, Query(q): Query<AuthQuery>) -> Response {
+    if current_session_user_id(&headers).await.is_some() {
+        return Redirect::to("/dashboard").into_response();
+    }
     // Map the error CODE to a fixed message so nothing user-controlled is
     // reflected into the page.
     let message = match q.error.as_deref() {
@@ -118,9 +130,19 @@ async fn signup_page(Query(q): Query<AuthQuery>) -> Result<Html<String>, (Status
         Some("invalid") => Some("Please fill every field (password at least 8 characters)."),
         _ => None,
     };
-    let body = umbra::templates::render("accounts/signup.html", &context! { error => message })
-        .map_err(internal_error)?;
-    Ok(Html(body))
+    let providers = umbra_oauth::available_providers();
+    match umbra::templates::render(
+        "accounts/signup.html",
+        &context! {
+            error => message,
+            show_google => providers.contains(&"google"),
+            show_github => providers.contains(&"github"),
+            any_oauth => !providers.is_empty(),
+        },
+    ) {
+        Ok(body) => Html(body).into_response(),
+        Err(e) => internal_error(e).into_response(),
+    }
 }
 
 async fn do_signup(headers: HeaderMap, Form(form): Form<HashMap<String, String>>) -> Response {
