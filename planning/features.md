@@ -199,10 +199,8 @@ These are the cross-cutting capabilities that turn a framework from a neat ORM d
     >
     > How: `Cache::redis(url)` already exists. What's missing: cache key invalidation on model saves (via signals, gap #38), cache-aware QuerySet (`Post::objects().cache(300).fetch()`), and distributed cache invalidation across multiple app instances. Start with per-view `cache_page` (already shipped) and expand to low-level cache API.
 
-45. [ ] **WebSockets / SSE — real-time push** 🟡 Medium
-    > Why: Notifications, chat, live dashboards, and collaborative editing need real-time channels. This pairs with gap #2 (notifications plugin) for the full Phoenix-like experience.
-    >
-    > How: `umbra-realtime` plugin with `WebSocketHandler` and `EventStream` traits. Room-based broadcasting (`room("chat:123").send(msg)`). Built on `tokio-tungstenite` for WebSockets and SSE via axum's built-in support. Depends on gap #38 (signals) to broadcast model changes to connected clients.
+45. [~] **WebSockets / SSE — real-time push** 🟡 Medium
+       — Core shipped as `umbra-realtime`. User- AND group/room-targeted delivery (`Realtime::to_user(uid)` / `to_group("chat:123")` / `broadcast()`, `Target::send(event, data)`) over a connection registry (by_user/by_group indexes, O(1) targeting, leak-free deregister) and a `Broker` seam (`InProcessBroker` v1; `RedisBroker` is the documented multi-instance swap, no API change). Two transports: **SSE** (`GET /realtime/sse`, push-only) and **WebSocket** (`GET /realtime/ws`, bidirectional with a `MessageHandler` for inbound frames). Auth-aware `GroupPolicy` gates joins at handshake (default-deny non-`public:` groups → 403). Signals bridge: `RealtimePlugin::on_model::<T>()` / `on_table()` fans `post_save`/`post_delete` (#38) to a real-time send — zero-poll live dashboards. 9 tests (registry/broker/policy unit + SSE stream + WS round-trip via a bound tungstenite client + signals fan-out). Docs: `realtime/sse.mdx`; design: `docs/superpowers/specs/2026-06-13-umbra-realtime-design.md`. **Deferred**: the multi-instance Redis broker, a demo on `umbra_website`, and the playground "Realtime" tab (#10).
 
 46. [ ] **Rate limiting and throttling** 🟡 Medium
     > Why: Per-IP, per-user, and per-endpoint limits are essential for public APIs and login brute-force protection.

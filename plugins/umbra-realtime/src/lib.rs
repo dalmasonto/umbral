@@ -323,6 +323,68 @@ impl MessageHandler for NoopMessageHandler {
 }
 
 // =========================================================================
+// Signals bridge — model changes fan out with zero polling.
+// =========================================================================
+
+/// What happened to a model row (decoded from the ORM signal payload).
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelAction {
+    Created,
+    Updated,
+    Deleted,
+}
+
+/// A model-change event handed to an [`on_model`](RealtimePlugin::on_model)
+/// handler: the table, what happened, the row as JSON, and the actor that
+/// triggered it (from the signals task-local).
+#[derive(Clone, Debug, Serialize)]
+pub struct ModelEvent {
+    pub table: String,
+    pub action: ModelAction,
+    /// The row, serialized to JSON (the signal's `instance` payload).
+    pub instance: serde_json::Value,
+    /// Who triggered the change (`Null` outside a `with_actor` scope).
+    pub actor: serde_json::Value,
+}
+
+impl ModelEvent {
+    /// The row's `id`, if present and integer — the common case for the
+    /// default i64 PK. Returns `None` for a non-`id` PK or a missing id.
+    pub fn pk(&self) -> Option<i64> {
+        self.instance.get("id").and_then(|v| v.as_i64())
+    }
+
+    fn from_payload(table: &str, payload: &serde_json::Value, is_delete: bool) -> ModelEvent {
+        let instance = payload
+            .get("instance")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        let actor = payload
+            .get("actor")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        let action = if is_delete {
+            ModelAction::Deleted
+        } else if payload
+            .get("created")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            ModelAction::Created
+        } else {
+            ModelAction::Updated
+        };
+        ModelEvent {
+            table: table.to_string(),
+            action,
+            instance,
+            actor,
+        }
+    }
+}
+
+// =========================================================================
 // Ambient handle.
 // =========================================================================
 
@@ -415,6 +477,10 @@ impl Target {
 pub struct RealtimePlugin {
     policy: Arc<dyn GroupPolicy>,
     handler: Arc<dyn MessageHandler>,
+    /// Deferred signal-subscription registrations (one per `on_table` /
+    /// `on_model` call). Run once at `on_ready` so they only fire when the
+    /// plugin is actually installed.
+    subscriptions: Vec<Box<dyn Fn() + Send + Sync>>,
 }
 
 impl Default for RealtimePlugin {
@@ -422,6 +488,7 @@ impl Default for RealtimePlugin {
         Self {
             policy: Arc::new(PublicGroupsOnly),
             handler: Arc::new(NoopMessageHandler),
+            subscriptions: Vec::new(),
         }
     }
 }
@@ -440,6 +507,55 @@ impl RealtimePlugin {
     pub fn message_handler<H: MessageHandler + 'static>(mut self, handler: H) -> Self {
         self.handler = Arc::new(handler);
         self
+    }
+
+    /// Fan out a table's create/update/delete to real-time clients with
+    /// zero polling. Subscribes to the ORM's `post_save:<table>` /
+    /// `post_delete:<table>` signals (gap #38); each fire decodes a
+    /// [`ModelEvent`] and runs `handler` (which typically pushes via
+    /// [`Realtime::to_group`] / [`to_user`](Realtime::to_user)).
+    ///
+    /// ```ignore
+    /// RealtimePlugin::default().on_table("post", |ev| async move {
+    ///     Realtime::to_group(format!("post:{}", ev.pk().unwrap_or(0)))
+    ///         .send("changed", &ev).await;
+    /// })
+    /// ```
+    pub fn on_table<F, Fut>(mut self, table: impl Into<String>, handler: F) -> Self
+    where
+        F: Fn(ModelEvent) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
+        let table = table.into();
+        let handler = Arc::new(handler);
+        self.subscriptions.push(Box::new(move || {
+            for (signal, is_delete) in [("post_save", false), ("post_delete", true)] {
+                let h = handler.clone();
+                let t = table.clone();
+                umbra::signals::subscribe_async(
+                    &format!("{signal}:{table}"),
+                    move |payload: &serde_json::Value| {
+                        let ev = ModelEvent::from_payload(&t, payload, is_delete);
+                        let h = h.clone();
+                        async move {
+                            h(ev).await;
+                        }
+                    },
+                );
+            }
+        }));
+        self
+    }
+
+    /// Typed sugar over [`on_table`](Self::on_table): `on_model::<Post>(...)`
+    /// uses `Post`'s table name.
+    pub fn on_model<T, F, Fut>(self, handler: F) -> Self
+    where
+        T: umbra::orm::Model,
+        F: Fn(ModelEvent) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
+        self.on_table(T::TABLE, handler)
     }
 }
 
@@ -463,6 +579,11 @@ impl Plugin for RealtimePlugin {
             policy: self.policy.clone(),
             handler: self.handler.clone(),
         });
+        // Register the model-change subscriptions now that the ambient
+        // handle exists (a fired handler calls Realtime::to_group, etc.).
+        for register in &self.subscriptions {
+            register();
+        }
         tracing::info!(
             "realtime: in-process broker ready; SSE at /realtime/sse, WS at /realtime/ws"
         );

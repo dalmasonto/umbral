@@ -28,7 +28,7 @@ Anything in **Part B** that Umbra does not yet cover is a strategic gap — it b
 | 11 | **OpenAPI / Swagger Auto-docs** | Every REST endpoint documented with schemas, ready for frontend code generation. | ✅ `umbra-openapi` generates spec |
 | 12 | **Social Auth / OAuth** | "Sign in with GitHub/Google" — table stakes for modern SaaS. | ✅ `umbra-oauth` — Google/GitHub login + account connection, SPA token return, encrypted tokens (`Masked<T>`) |
 | 13 | **Full-text Search** | Typeahead, fuzzy matching, ranking — not just exact `LIKE` queries. | ⚠️ Postgres `tsvector` FTS shipped (`TsVector` field, `.matches()`/`.matches_websearch()`, boot-time SQLite gating); auto-GIN-index + SQLite FTS5 fallback deferred (features.md #33) |
-| 14 | **WebSockets / Real-time** | Chat, notifications, live dashboards without polling. | ❌ Not yet implemented |
+| 14 | **WebSockets / Real-time** | Chat, notifications, live dashboards without polling. | ✅ `umbra-realtime` — SSE + WebSocket, user/group-targeted, GroupPolicy gate, signals bridge (`on_model`). Multi-instance Redis broker deferred |
 | 15 | **Caching Layer** | Redis-backed cache for expensive queries, view fragments, or session stores. | ❌ Not yet implemented |
 | 16 | **Form Validation & Error Messages** | Declarative validation (min/max, regex, custom rules) with user-friendly errors. | ⚠️ Basic validation exists; rich error formatting missing |
 | 17 | **i18n / Internationalization** | Translate templates, model labels, and error messages for multiple locales. | ❌ Not yet implemented |

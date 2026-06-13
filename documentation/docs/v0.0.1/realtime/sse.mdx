@@ -111,7 +111,29 @@ ws.send(JSON.stringify({ room: "chat:123", body: "hi" }));
 
 The same `GroupPolicy` gate applies at the WS handshake (a denied group fails the upgrade). The default `MessageHandler` ignores inbound frames — fine for push-only apps.
 
+## Model fan-out (zero polling)
+
+Push automatically whenever a model changes — the "live dashboard" story — by bridging the ORM's [signals](../orm/signals) to a real-time send. `on_model::<T>()` subscribes to `T`'s `post_save` / `post_delete`; each fire hands you a `ModelEvent` (table, action, the row as JSON, the actor):
+
+```rust
+use umbra_realtime::{ModelEvent, Realtime, RealtimePlugin};
+
+RealtimePlugin::default()
+    .on_model::<Post>(|ev: ModelEvent| async move {
+        // a create/update/delete on Post → everyone watching that post
+        Realtime::to_group(format!("post:{}", ev.pk().unwrap_or(0)))
+            .send("changed", &ev).await;
+    })
+    // and the admin notification bell: any new submission → the staff room
+    .on_model::<Submission>(|ev| async move {
+        Realtime::to_group("staff").send("submitted", &ev).await;
+    })
+```
+
+`on_table("name", ...)` is the untyped form (when you don't have the model type handy). The handler runs server-side on every write — no client polling, no glue code.
+
 ## See also
 
-- Design + the full plan (signals bridge, multi-instance broker): `docs/superpowers/specs/2026-06-13-umbra-realtime-design.md`.
-- Closes the SSE + WebSocket transports of features.md #45 (signals bridge remains).
+- [Signals](../orm/signals) — the `post_save`/`post_delete` events this bridges.
+- Design + the multi-instance broker plan: `docs/superpowers/specs/2026-06-13-umbra-realtime-design.md`.
+- Closes the core of features.md #45 (SSE + WebSocket + model fan-out); a multi-instance Redis broker is the documented future swap.
