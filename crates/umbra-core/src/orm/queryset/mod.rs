@@ -1751,36 +1751,46 @@ impl<T: Model> QuerySet<T> {
     }
 
     /// Fetch many rows by their primary keys and return a
-    /// `HashMap<i64, T>` keyed by PK. The everyday companion to a
-    /// cached list of ids — `User::objects().in_bulk(user_ids)`
-    /// gives you direct lookup access without a second
-    /// `.iter().find(...)` pass per id.
+    /// `HashMap<T::PrimaryKey, T>` keyed by PK. The everyday companion to
+    /// a cached list of ids — `User::objects().in_bulk(user_ids)` gives
+    /// you direct lookup access without a second `.iter().find(...)` pass
+    /// per id.
     ///
     /// Missing ids are silently absent from the map; callers that
     /// need the existence check can compare `map.len()` to
     /// `pks.len()`. Empty input is a no-op (returns the empty map).
     ///
-    /// v1 limitation: i64-PK models only (matches `pk_i64()`'s
-    /// constraint). Non-i64 PK models silently drop every row from
-    /// the result map.
-    pub async fn in_bulk(self, pks: Vec<i64>) -> Result<HashMap<i64, T>, sqlx::Error>
+    /// PK-agnostic (PK lift — was `Vec<i64>` / `HashMap<i64, T>`): the key
+    /// is the model's `PrimaryKey` type, so i64-, String/slug-, and
+    /// Uuid-keyed models all work. The map key requires `Hash + Eq`,
+    /// which every standard PK type (integers, `String`, `Uuid`) satisfies.
+    pub async fn in_bulk(
+        self,
+        pks: Vec<T::PrimaryKey>,
+    ) -> Result<HashMap<T::PrimaryKey, T>, sqlx::Error>
     where
         T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
             + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>
             + HydrateRelated,
+        T::PrimaryKey: std::hash::Hash + Eq,
     {
         if pks.is_empty() {
             return Ok(HashMap::new());
         }
         let pk_name = pk_field::<T>().map(|f| f.name).unwrap_or("id");
-        let pk_pred: Predicate<T> =
-            Predicate::new(Expr::col(Alias::new(pk_name)).is_in(pks.iter().copied()));
+        // Each PK converts to a `sea_query::Value` (the `PrimaryKey` trait
+        // bounds `Into<sea_query::Value>`); wrap as a `SimpleExpr` for the
+        // IN-list so any PK shape binds correctly.
+        let pk_pred: Predicate<T> = Predicate::new(
+            Expr::col(Alias::new(pk_name)).is_in(
+                pks.into_iter()
+                    .map(|p| sea_query::SimpleExpr::Value(p.into())),
+            ),
+        );
         let rows = self.filter(pk_pred).fetch().await?;
-        let mut out: HashMap<i64, T> = HashMap::with_capacity(rows.len());
+        let mut out: HashMap<T::PrimaryKey, T> = HashMap::with_capacity(rows.len());
         for row in rows {
-            if let Some(id) = row.pk_i64() {
-                out.insert(id, row);
-            }
+            out.insert(row.primary_key(), row);
         }
         Ok(out)
     }
@@ -4692,10 +4702,13 @@ fn dedup_decode_sqlite<T: Model + HydrateRelated>(
 where
     T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>,
 {
-    let pk_name = T::FIELDS
-        .iter()
-        .find(|f| f.primary_key)
-        .map(|f| f.name)
+    // PK-agnostic dedup: read the parent PK back through the shape-aware
+    // decoder (using the parent model's PK SqlType) and key by `pk_key`,
+    // so i64 / String / Uuid parents all dedup correctly.
+    let parent_pk_col = crate::migrate::ModelMeta::for_::<T>()
+        .fields
+        .into_iter()
+        .find(|c| c.primary_key)
         .ok_or_else(|| {
             sqlx::Error::Protocol(format!(
                 "umbra::orm::join_related: model `{}` has no primary key, M2M JOIN \
@@ -4705,16 +4718,17 @@ where
         })?;
     let registered = crate::migrate::registered_models();
     let mut typed: Vec<T> = Vec::new();
-    let mut idx_by_pk: HashMap<i64, usize> = HashMap::new();
-    // (parent_pk, field) → Vec<JsonValue> + a Set tracking seen child PKs.
-    let mut buckets: HashMap<(i64, String), Vec<JsonValue>> = HashMap::new();
-    let mut seen_children: HashMap<(i64, String), std::collections::HashSet<i64>> = HashMap::new();
+    let mut idx_by_pk: HashMap<String, usize> = HashMap::new();
+    // (parent_pk_key, field) → Vec<JsonValue> + a Set of seen child PK keys.
+    let mut buckets: HashMap<(String, String), Vec<JsonValue>> = HashMap::new();
+    let mut seen_children: HashMap<(String, String), std::collections::HashSet<String>> =
+        HashMap::new();
     for row in raw_rows {
-        use sqlx::Row;
-        let Ok(parent_pk) = row.try_get::<i64, _>(pk_name) else {
+        let Ok(parent_json) = crate::orm::dynamic::decode_to_json(row, &parent_pk_col) else {
             continue;
         };
-        if let std::collections::hash_map::Entry::Vacant(e) = idx_by_pk.entry(parent_pk) {
+        let parent_key = crate::orm::pk_key(&parent_json);
+        if let std::collections::hash_map::Entry::Vacant(e) = idx_by_pk.entry(parent_key.clone()) {
             let mut t = <T as sqlx::FromRow<_>>::from_row(row)?;
             backend_sqlite::hydrate_joined_rels::<T>(&mut t, row, fk_join_fields)?;
             e.insert(typed.len());
@@ -4736,24 +4750,24 @@ where
             else {
                 continue;
             };
-            // Dedup by child PK so multi-M2M cartesian doesn't
-            // duplicate this field's children.
-            let child_pk = child_json
+            // Dedup by child PK (PK-agnostic) so multi-M2M cartesian
+            // doesn't duplicate this field's children.
+            let child_key = child_json
                 .as_object()
                 .and_then(|m| {
                     let pk_col = child_meta.fields.iter().find(|c| c.primary_key)?;
-                    m.get(&pk_col.name)?.as_i64()
+                    m.get(&pk_col.name).map(crate::orm::pk_key)
                 })
-                .unwrap_or(0);
-            let key = (parent_pk, m2m_seg.to_string());
+                .unwrap_or_default();
+            let key = (parent_key.clone(), m2m_seg.to_string());
             let seen = seen_children.entry(key.clone()).or_default();
-            if seen.insert(child_pk) {
+            if seen.insert(child_key) {
                 buckets.entry(key).or_default().push(child_json);
             }
         }
     }
-    for ((parent_pk, field), children) in buckets {
-        if let Some(&idx) = idx_by_pk.get(&parent_pk) {
+    for ((parent_key, field), children) in buckets {
+        if let Some(&idx) = idx_by_pk.get(&parent_key) {
             typed[idx].set_m2m_resolved_json(&field, children);
         }
     }
@@ -4762,10 +4776,10 @@ where
     // got a hit. Without this a parent with no matching M2M
     // children would leave its slot None — distinguishable from
     // "loaded, empty" only by callers checking the absence.
-    for (&parent_pk, &idx) in idx_by_pk.iter() {
+    for (parent_key, &idx) in idx_by_pk.iter() {
         for field in m2m_join_fields {
             let seg = field.split("__").next().unwrap_or(field.as_str());
-            if !seen_children.contains_key(&(parent_pk, seg.to_string())) {
+            if !seen_children.contains_key(&(parent_key.clone(), seg.to_string())) {
                 typed[idx].set_m2m_resolved_json(seg, Vec::new());
             }
         }
@@ -4781,10 +4795,11 @@ fn dedup_decode_pg<T: Model + HydrateRelated>(
 where
     T: for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
 {
-    let pk_name = T::FIELDS
-        .iter()
-        .find(|f| f.primary_key)
-        .map(|f| f.name)
+    // PK-agnostic dedup — see the SQLite variant.
+    let parent_pk_col = crate::migrate::ModelMeta::for_::<T>()
+        .fields
+        .into_iter()
+        .find(|c| c.primary_key)
         .ok_or_else(|| {
             sqlx::Error::Protocol(format!(
                 "umbra::orm::join_related: model `{}` has no primary key, M2M JOIN \
@@ -4794,15 +4809,16 @@ where
         })?;
     let registered = crate::migrate::registered_models();
     let mut typed: Vec<T> = Vec::new();
-    let mut idx_by_pk: HashMap<i64, usize> = HashMap::new();
-    let mut buckets: HashMap<(i64, String), Vec<JsonValue>> = HashMap::new();
-    let mut seen_children: HashMap<(i64, String), std::collections::HashSet<i64>> = HashMap::new();
+    let mut idx_by_pk: HashMap<String, usize> = HashMap::new();
+    let mut buckets: HashMap<(String, String), Vec<JsonValue>> = HashMap::new();
+    let mut seen_children: HashMap<(String, String), std::collections::HashSet<String>> =
+        HashMap::new();
     for row in raw_rows {
-        use sqlx::Row;
-        let Ok(parent_pk) = row.try_get::<i64, _>(pk_name) else {
+        let Ok(parent_json) = crate::orm::dynamic::decode_pg_to_json(row, &parent_pk_col) else {
             continue;
         };
-        if let std::collections::hash_map::Entry::Vacant(e) = idx_by_pk.entry(parent_pk) {
+        let parent_key = crate::orm::pk_key(&parent_json);
+        if let std::collections::hash_map::Entry::Vacant(e) = idx_by_pk.entry(parent_key.clone()) {
             let mut t = <T as sqlx::FromRow<_>>::from_row(row)?;
             backend_pg::hydrate_joined_rels::<T>(&mut t, row, fk_join_fields)?;
             e.insert(typed.len());
@@ -4821,30 +4837,30 @@ where
             else {
                 continue;
             };
-            let child_pk = child_json
+            let child_key = child_json
                 .as_object()
                 .and_then(|m| {
                     let pk_col = child_meta.fields.iter().find(|c| c.primary_key)?;
-                    m.get(&pk_col.name)?.as_i64()
+                    m.get(&pk_col.name).map(crate::orm::pk_key)
                 })
-                .unwrap_or(0);
-            let key = (parent_pk, m2m_seg.to_string());
+                .unwrap_or_default();
+            let key = (parent_key.clone(), m2m_seg.to_string());
             let seen = seen_children.entry(key.clone()).or_default();
-            if seen.insert(child_pk) {
+            if seen.insert(child_key) {
                 buckets.entry(key).or_default().push(child_json);
             }
         }
     }
-    for ((parent_pk, field), children) in buckets {
-        if let Some(&idx) = idx_by_pk.get(&parent_pk) {
+    for ((parent_key, field), children) in buckets {
+        if let Some(&idx) = idx_by_pk.get(&parent_key) {
             typed[idx].set_m2m_resolved_json(&field, children);
         }
     }
     // Same LEFT JOIN miss zero-init as the SQLite path.
-    for (&parent_pk, &idx) in idx_by_pk.iter() {
+    for (parent_key, &idx) in idx_by_pk.iter() {
         for field in m2m_join_fields {
             let seg = field.split("__").next().unwrap_or(field.as_str());
-            if !seen_children.contains_key(&(parent_pk, seg.to_string())) {
+            if !seen_children.contains_key(&(parent_key.clone(), seg.to_string())) {
                 typed[idx].set_m2m_resolved_json(seg, Vec::new());
             }
         }

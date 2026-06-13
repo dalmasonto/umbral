@@ -128,4 +128,23 @@ async fn m2m_add_and_prefetch_on_a_string_pk_parent() {
         go.students.resolved().expect("hydrated (empty)").is_empty(),
         "go101 has no students"
     );
+
+    // Also via the eager LEFT-JOIN path (`join_related` → dedup_decode),
+    // which dedups parents + children by PK key — both keyed on the
+    // String code here.
+    let joined = Course::objects()
+        .join_related("students")
+        .fetch()
+        .await
+        .expect("join_related");
+    let rust = joined.iter().find(|c| c.code == "rust101").unwrap();
+    let mut jnames: Vec<&str> = rust
+        .students
+        .resolved()
+        .expect("M2M resolved via join_related")
+        .iter()
+        .map(|s| s.name.as_str())
+        .collect();
+    jnames.sort();
+    assert_eq!(jnames, vec!["alice", "bob"]);
 }
