@@ -2625,10 +2625,15 @@ impl<T> ColExpr<T> {
     }
 }
 
-/// String-function helpers — `lower()`, `upper()`, `length()`.
-/// Implemented for both `StrCol<T>` and `NullableStrCol<T>` so the
-/// extension methods work whether the column is `String` or
-/// `Option<String>`.
+/// String-function helpers — `lower()`, `upper()`, `length()`, `trim()`,
+/// `coalesce()`, `concat()`. Implemented for both `StrCol<T>` and
+/// `NullableStrCol<T>` so the extension methods work whether the column is
+/// `String` or `Option<String>`.
+///
+/// Each returns a [`ColExpr`]; chain a comparison (`.eq` / `.ne` / `.lt`
+/// …) to produce a `Predicate<T>` for `filter` / `exclude`. All six render
+/// identically on SQLite and Postgres (`TRIM`, `COALESCE` are standard
+/// SQL; `||` is the standard concatenation operator both backends accept).
 pub trait StrColExt<T> {
     /// `LOWER(col)` — case-insensitive comparison primitive.
     fn lower(&self) -> ColExpr<T>;
@@ -2636,6 +2641,38 @@ pub trait StrColExt<T> {
     fn upper(&self) -> ColExpr<T>;
     /// `LENGTH(col)` — character count of the stored value.
     fn length(&self) -> ColExpr<T>;
+    /// `TRIM(col)` — strip leading/trailing whitespace before comparing,
+    /// so `name.trim().eq("ada")` matches a stored `" ada "`.
+    fn trim(&self) -> ColExpr<T>;
+    /// `COALESCE(col, default)` — substitute `default` when the column is
+    /// NULL, so a nullable column compares as the fallback. Mostly paired
+    /// with `NullableStrCol`.
+    fn coalesce<V: Into<sea_query::Value>>(&self, default: V) -> ColExpr<T>;
+    /// `col || suffix` — append `suffix` (the standard SQL concatenation
+    /// operator, which both backends accept) before comparing.
+    fn concat<V: Into<sea_query::Value>>(&self, suffix: V) -> ColExpr<T>;
+}
+
+/// `TRIM("col")`. No bound values; same SQL on both backends.
+fn str_trim_expr(name: &'static str) -> sea_query::SimpleExpr {
+    Expr::cust(format!("TRIM(\"{}\")", name.replace('"', "\"\"")))
+}
+
+/// `COALESCE("col", default)` built as a native sea-query function so the
+/// bound `default` is ordered alongside any later comparison value by
+/// sea-query itself (mixing `cust_with_values`' embedded params with a
+/// builder-added `.eq` value swaps their bind order).
+fn str_coalesce_expr(name: &'static str, default: sea_query::Value) -> sea_query::SimpleExpr {
+    let col: sea_query::SimpleExpr = Expr::col(Alias::new(name)).into();
+    let def: sea_query::SimpleExpr = Expr::val(default).into();
+    Func::coalesce([col, def]).into()
+}
+
+/// `"col" || suffix` via the standard concatenation operator `||` (which
+/// both backends accept) as a native binary expr, so the bound `suffix`
+/// orders correctly with a later comparison value.
+fn str_concat_expr(name: &'static str, suffix: sea_query::Value) -> sea_query::SimpleExpr {
+    Expr::col(Alias::new(name)).binary(sea_query::BinOper::Custom("||"), Expr::val(suffix))
 }
 
 impl<T> StrColExt<T> for StrCol<T> {
@@ -2648,6 +2685,15 @@ impl<T> StrColExt<T> for StrCol<T> {
     fn length(&self) -> ColExpr<T> {
         ColExpr::new(Func::char_length(Expr::col(Alias::new(self.name))).into())
     }
+    fn trim(&self) -> ColExpr<T> {
+        ColExpr::new(str_trim_expr(self.name))
+    }
+    fn coalesce<V: Into<sea_query::Value>>(&self, default: V) -> ColExpr<T> {
+        ColExpr::new(str_coalesce_expr(self.name, default.into()))
+    }
+    fn concat<V: Into<sea_query::Value>>(&self, suffix: V) -> ColExpr<T> {
+        ColExpr::new(str_concat_expr(self.name, suffix.into()))
+    }
 }
 
 impl<T> StrColExt<T> for NullableStrCol<T> {
@@ -2659,6 +2705,15 @@ impl<T> StrColExt<T> for NullableStrCol<T> {
     }
     fn length(&self) -> ColExpr<T> {
         ColExpr::new(Func::char_length(Expr::col(Alias::new(self.name))).into())
+    }
+    fn trim(&self) -> ColExpr<T> {
+        ColExpr::new(str_trim_expr(self.name))
+    }
+    fn coalesce<V: Into<sea_query::Value>>(&self, default: V) -> ColExpr<T> {
+        ColExpr::new(str_coalesce_expr(self.name, default.into()))
+    }
+    fn concat<V: Into<sea_query::Value>>(&self, suffix: V) -> ColExpr<T> {
+        ColExpr::new(str_concat_expr(self.name, suffix.into()))
     }
 }
 

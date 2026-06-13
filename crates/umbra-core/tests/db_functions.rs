@@ -234,3 +234,103 @@ async fn hour_and_minute_compose() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].title, "Mixed Case");
 }
+
+// =====================================================================
+// Feature #24 — trim / coalesce / concat
+//
+// A separate model with a NULLABLE column so the COALESCE case has a
+// genuine NULL to fall back from, and a whitespace-padded label for TRIM
+// — without perturbing the `fn_post` length-count assertions above.
+// =====================================================================
+
+#[derive(
+    Debug, Clone, PartialEq, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbra::orm::Model,
+)]
+#[umbra(table = "fn_tagged")]
+pub struct Tagged {
+    pub id: i64,
+    pub label: String,
+    pub note: Option<String>,
+}
+
+async fn tagged_pool() -> SqlitePool {
+    let pool = db::connect_sqlite("sqlite::memory:")
+        .await
+        .expect("in-memory SQLite");
+    sqlx::query(
+        "CREATE TABLE fn_tagged (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            label TEXT NOT NULL,
+            note TEXT
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("CREATE TABLE");
+    for (label, note) in &[
+        (" spaced ", Some("x")), // whitespace around the value → TRIM
+        ("plain", None),         // NULL note → COALESCE fallback
+        ("alpha", Some("beta")), // → CONCAT
+    ] {
+        sqlx::query("INSERT INTO fn_tagged (label, note) VALUES (?, ?)")
+            .bind(*label)
+            .bind(*note)
+            .execute(&pool)
+            .await
+            .expect("seed");
+    }
+    pool
+}
+
+#[tokio::test]
+async fn trim_eq_matches_after_stripping_whitespace() {
+    let pool = tagged_pool().await;
+    let rows = Tagged::objects()
+        .filter(tagged::LABEL.trim().eq("spaced"))
+        .on(&pool)
+        .fetch()
+        .await
+        .expect("filter TRIM");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].label, " spaced "); // stored value still padded
+}
+
+#[tokio::test]
+async fn coalesce_substitutes_for_null() {
+    let pool = tagged_pool().await;
+    // COALESCE(note, 'zzz') = 'zzz' matches the row whose note IS NULL.
+    // Distinct fallback vs compared value so a swapped bind order would
+    // fail (it can't accidentally pass like equal values would).
+    let rows = Tagged::objects()
+        .filter(tagged::NOTE.coalesce("zzz").eq("zzz"))
+        .on(&pool)
+        .fetch()
+        .await
+        .expect("filter COALESCE null");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].label, "plain");
+    assert_eq!(rows[0].note, None);
+
+    // A non-NULL note passes through COALESCE unchanged.
+    let rows = Tagged::objects()
+        .filter(tagged::NOTE.coalesce("zzz").eq("beta"))
+        .on(&pool)
+        .fetch()
+        .await
+        .expect("filter COALESCE passthrough");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].label, "alpha");
+}
+
+#[tokio::test]
+async fn concat_appends_before_comparison() {
+    let pool = tagged_pool().await;
+    let rows = Tagged::objects()
+        .filter(tagged::LABEL.concat("!").eq("alpha!"))
+        .on(&pool)
+        .fetch()
+        .await
+        .expect("filter CONCAT");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].label, "alpha");
+}
