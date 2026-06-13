@@ -131,6 +131,7 @@ pub fn shop_order_status_donut() -> Widget {
             // tallying client-side (gaps2 #56). The ORM equivalent of
             // Django's `.values("status").annotate(count=Count("id"))`.
             let rows = Order::objects()
+                .only(&["id", "status"])
                 .annotate(&["status"], &[("count", Aggregate::count())])
                 .await
                 .unwrap_or_default();
