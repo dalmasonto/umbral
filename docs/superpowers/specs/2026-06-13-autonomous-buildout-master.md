@@ -138,6 +138,8 @@ Single-process broadcast works for one instance. Multi-instance needs a backplan
 
 Status: **P6 COMPLETE** (Redis broker shipped). **P4 done** bar #69 (deferred by design). Session `[~]` cleanup: #45/#58/#65/#67/#68 flipped to `[x]` — they were shipped-with-a-deferred-note but mislabeled `[~]` (the file's convention is `[x]` + a `Deferred:` line, like #13/#16/#18). The remaining `[~]` (#19/#24/#26/#29/#33/#55/#12) are genuinely-partial pre-existing items: a usable core shipped, with a deliberately-deferred remainder ("when a consumer needs it"), several gated on the PrimaryKey refactor / ORM gap backlog — NOT mislabels, left intentionally.
 
+Cheap-ORM cleanup done (user-chosen): **#24 closed** (b9dffc3 — trim/coalesce/concat on StrColExt, native sea-query exprs to avoid a cust_with_values bind-order swap; `now` deferred with SQLite-format rationale) + **#33 closed** (0868511 — auto-GIN index on every tsvector column in the PG render path). Remaining genuinely-partial `[~]`: #19 (reverse-FK prefetch — needs new ORM slot), #26 (correlated EXISTS), #29 (iterator), #55 (date hierarchy), #12 (playground tabs) — real infra/frontend scope, left intentionally.
+
 Next: **P3 #61 remainder** (CSV import command, admin bulk-export action, Excel). Everything is committed; nothing half-applied.
 
 ### P1 detail
