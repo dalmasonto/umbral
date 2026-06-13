@@ -61,8 +61,12 @@ impl PluginCommand for SeedOrmData {
         let (channels, newsletter, lists) = community::seed::seed().await?;
         println!("  community: {channels} channels · {newsletter} newsletter · {lists} lists");
 
-        // Further plugin seeds (navigation, showcase, blog, framework
-        // features) are wired in as each page lands.
+        // --- features: the framework capability catalog --------------------
+        let (cats, feats) = features::seed::seed().await?;
+        println!("  features: {cats} categories · {feats} features");
+
+        // Further plugin seeds (navigation, showcase, blog, reviews,
+        // changelog) are wired in as each page lands.
 
         println!("Done.");
         Ok(())

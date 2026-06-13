@@ -84,7 +84,7 @@ Goal: a developer can push **user-specific** data ("notify user 42") AND **group
 // umbra-realtime
 pub struct Realtime;                       // ambient handle, set in App::build (OnceLock)
 impl Realtime {
-    pub fn to_user(uid: i64)   -> Target;  // a single authenticated user (all their connections)
+    pub fn to_user(uid: i64)   -> Target;  // a single authenticated user (all their connections). It might not be i64, it might be UUID, so this is generic, remember that.
     pub fn to_group(name: &str) -> Target; // a named room/group ("chat:123", "staff", "tenant:7")
     pub fn broadcast()          -> Target;  // everyone connected
 }
@@ -129,4 +129,15 @@ Single-process broadcast works for one instance. Multi-instance needs a backplan
 - **Realtime in-process first, broker trait now:** correctness for single-instance today, clean multi-instance path later without an API break.
 
 ## Status ledger (update as phases land)
-- [ ] P1 website  · [ ] P2 testing · [ ] P3 #56–61 · [ ] P4 #65–70 · [ ] P5 trackers · [ ] P6 realtime
+- [~] P1 website  · [ ] P2 testing · [ ] P3 #56–61 · [ ] P4 #65–70 · [ ] P5 trackers · [ ] P6 realtime
+
+### P1 detail
+- [x] 1a seed foundation (feature_set + seed_plugin_features + seed_orm_data cmd) — commit f1eb714
+- [x] 1b /prebuilt backed (official plugins + features, dropped "more" strip) — f1eb714
+- [x] 1c /community backed (SocialLink/Newsletter/CommunityResource) — 43c803c
+- [ ] 1d base nav + footer ← NavigationItem
+- [ ] 1e new pages: /features /showcase /blog(+detail) /changelog (+ /security, /docs resolution)
+- [ ] 1f /dashboard real widgets
+- [ ] 1g verify no 404 (render crawl test)
+
+Known ORM gap logged: planning/orm_fixes.md #1 (prefetch_related 2nd reverse-FK field → IN-batch workaround).
