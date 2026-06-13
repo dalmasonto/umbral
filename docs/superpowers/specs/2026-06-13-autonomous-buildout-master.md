@@ -129,7 +129,14 @@ Single-process broadcast works for one instance. Multi-instance needs a backplan
 - **Realtime in-process first, broker trait now:** correctness for single-instance today, clean multi-instance path later without an API break.
 
 ## Status ledger (update as phases land)
-- [~] P1 website  · [ ] P2 testing · [ ] P3 #56–61 · [ ] P4 #65–70 · [ ] P5 trackers · [ ] P6 realtime
+- [~] P1 website (nav-links resolve; nav-from-DB + dashboard widgets + /blog detail remain)
+- [x] **P2 testing** — `Factory` trait added to umbra-testing (build/create/create_with/create_batch + `seq()` + `fake` re-export); marker-type shape for the orphan rule; doc pages (testing/factories + test-client). Commit 517fc84. (#79/#52 ✓)
+- [~] **P3 #56–61** — #56/#57/#59 verified shipped + closed in features.md (c37e928). **Still open (not started):** #58 nested writable serializers, #60 action input/output schemas, #61 CSV/Excel import-export.
+- [ ] **P4 #65–70** — not started this session. #66 collectstatic exists (needs compression + `{% static %}`); #67 `add_filter` exists internally (needs a Plugin::register_template hook); #65 migration-safety check primitives exist in migrate.rs (`is_safe_cast`); #68/#69/#70 fresh.
+- [~] **P5 trackers** — REAL-GAPS.md updated for shipped items (4b33b07). features.md #56/#57/#59 closed.
+- [~] **P6 realtime** — full design spec (60662b8) + **phase 1 shipped** (registry/broker/Realtime handle/GroupPolicy, 6 tests, 0cb17bc). **Remaining:** phase 2 SSE transport (`GET /realtime/sse` + identity/GroupPolicy at handshake + ConnGuard async-drop cleanup + futures-util/axum-sse + integration test), phase 3 WS transport + MessageHandler, phase 4 signals bridge (`on_model`), phase 5 demo + docs. See 2026-06-13-umbra-realtime-design.md §"Implementation plan".
+
+Next-session priority order (user's emphasis): P6 phase 2 (SSE transport — makes realtime usable end-to-end) → P4 #65–70 → P3 #58/#61. Everything is committed; nothing half-applied.
 
 ### P1 detail
 - [x] 1a seed foundation (feature_set + seed_plugin_features + seed_orm_data cmd) — f1eb714
