@@ -11,7 +11,8 @@
 //! one-off CLI command).
 
 use crate::models::{
-    Plugin, PluginMaturity, PluginModeration, PluginSource, PluginStatus,
+    CommentKind, CommentModeration, Plugin, PluginComment, PluginMaturity, PluginModeration,
+    PluginSource, PluginStatus, plugin,
 };
 use umbra::prelude::*;
 
@@ -191,6 +192,135 @@ pub async fn seed_official_plugins() -> Result<usize, Box<dyn std::error::Error 
         p.featured = row.featured;
         p.display_order = row.display_order;
         Plugin::objects().create(p).await?;
+        inserted += 1;
+    }
+    Ok(inserted)
+}
+
+/// Editorial audit assessment for each first-party plugin, keyed by
+/// crate name. `audit_status` is a curated editorial field (like
+/// `status` / `maturity`), NOT an externally-synced metric — so unlike
+/// `github_stars` / `downloads` it's legitimate to seed. The values
+/// drive the admin "Audit coverage" gauge and the per-plugin audit
+/// badge on the public site.
+const AUDIT: &[(&str, &str)] = &[
+    ("umbra-admin", "umbra_reviewed"),
+    ("umbra-auth", "umbra_reviewed"),
+    ("umbra-sessions", "umbra_reviewed"),
+    ("umbra-rest", "self_reviewed"),
+    ("umbra-openapi", "self_reviewed"),
+    ("umbra-tasks", "needs_review"),
+    ("umbra-security", "third_party_reviewed"),
+    ("umbra-static", "self_reviewed"),
+];
+
+/// Back-fill `audit_status` on already-seeded rows. Idempotent: only
+/// touches rows still at the `not_reviewed` default, so an admin's
+/// later hand-edit is never clobbered, and re-running is a no-op once
+/// every row has its curated value. This runs every boot (the row
+/// insert short-circuits once the table is populated, so without this
+/// the existing rows would never gain their audit status).
+pub async fn backfill_audit_status() -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
+    let mut updated = 0;
+    for (crate_name, audit) in AUDIT {
+        let mut values = serde_json::Map::new();
+        values.insert(
+            "audit_status".to_string(),
+            serde_json::Value::String((*audit).to_string()),
+        );
+        updated += Plugin::objects()
+            .filter(plugin::CRATE_NAME.eq(*crate_name))
+            .filter(plugin::AUDIT_STATUS.eq("not_reviewed"))
+            .update_values(values)
+            .await?;
+    }
+    Ok(updated)
+}
+
+/// One demo discussion note: which plugin it hangs off (by crate name),
+/// the body, and its kind. Seeds the comment threads so the admin
+/// dashboard's Discussion Notes / activity / recent-activity widgets
+/// have real engagement data instead of empty zeros.
+struct DemoNote {
+    crate_name: &'static str,
+    body: &'static str,
+    kind: CommentKind,
+}
+
+const DEMO_NOTES: &[DemoNote] = &[
+    DemoNote {
+        crate_name: "umbra-admin",
+        body: "The auto-generated dashboards saved us about a week of glue code.",
+        kind: CommentKind::UsageNote,
+    },
+    DemoNote {
+        crate_name: "umbra-admin",
+        body: "Does the changelist support registering custom bulk actions yet?",
+        kind: CommentKind::Question,
+    },
+    DemoNote {
+        crate_name: "umbra-auth",
+        body: "argon2 defaults are sensible — migrated off bcrypt without surprises.",
+        kind: CommentKind::UsageNote,
+    },
+    DemoNote {
+        crate_name: "umbra-rest",
+        body: "Pagination + filters are great. Any plan for cursor pagination?",
+        kind: CommentKind::Question,
+    },
+    DemoNote {
+        crate_name: "umbra-rest",
+        body: "Confirmed working end-to-end on Postgres 16.",
+        kind: CommentKind::CompatibilityNote,
+    },
+    DemoNote {
+        crate_name: "umbra-openapi",
+        body: "Swagger UI mounts cleanly at /openapi/ — handy for sharing the API.",
+        kind: CommentKind::UsageNote,
+    },
+    DemoNote {
+        crate_name: "umbra-tasks",
+        body: "Retry backoff is configurable, which covered our flaky-webhook case.",
+        kind: CommentKind::General,
+    },
+    DemoNote {
+        crate_name: "umbra-static",
+        body: "Serves compiled CSS + uploaded media in prod without reaching for nginx.",
+        kind: CommentKind::General,
+    },
+];
+
+/// Seed the demo discussion notes. Idempotent: short-circuits if any
+/// comment already exists. Each note is published (`Visible`) so it
+/// counts toward the dashboard's visible-notes metrics, and is bound to
+/// its plugin by a `crate_name` lookup (skipped if the plugin is
+/// missing). Returns the number of notes inserted.
+pub async fn seed_demo_comments() -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
+    if PluginComment::objects().count().await? > 0 {
+        return Ok(0);
+    }
+
+    let mut inserted = 0;
+    for note in DEMO_NOTES {
+        let Some(plugin) = Plugin::objects()
+            .filter(plugin::CRATE_NAME.eq(note.crate_name))
+            .first()
+            .await?
+        else {
+            continue;
+        };
+        let mut comment = PluginComment {
+            plugin: ForeignKey::new(plugin.id),
+            body: note.body.to_string(),
+            kind: note.kind,
+            moderation: CommentModeration::Visible,
+            ..Default::default()
+        };
+        // The Form-derived Default leaves `author` None (a visitor note);
+        // the dashboard widgets key off the body + plugin + created_at,
+        // none of which need an author.
+        comment.author = None;
+        PluginComment::objects().create(comment).await?;
         inserted += 1;
     }
     Ok(inserted)

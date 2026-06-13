@@ -109,6 +109,22 @@ impl Plugin for PluginDirectoryPlugin {
                     plugin_name
                 ),
             }
+            // Back-fill the editorial audit status on existing rows (the
+            // row insert above short-circuits once populated, so these
+            // updates are how already-seeded directories gain their audit
+            // values). Idempotent — only rows still at the default move.
+            match seed::backfill_audit_status().await {
+                Ok(0) => {}
+                Ok(n) => tracing::info!("{}: back-filled audit status on {} rows", plugin_name, n),
+                Err(e) => tracing::warn!("{}: audit-status back-fill failed: {e}", plugin_name),
+            }
+            // Seed demo discussion notes so the admin dashboard's
+            // engagement widgets have real data. Idempotent.
+            match seed::seed_demo_comments().await {
+                Ok(0) => {}
+                Ok(n) => tracing::info!("{}: seeded {} demo discussion notes", plugin_name, n),
+                Err(e) => tracing::warn!("{}: demo comment seed failed: {e}", plugin_name),
+            }
         });
         Ok(())
     }
