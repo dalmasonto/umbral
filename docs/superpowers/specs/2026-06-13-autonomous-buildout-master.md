@@ -140,7 +140,9 @@ Status: **P6 COMPLETE** (Redis broker shipped). **P4 done** bar #69 (deferred by
 
 Cheap-ORM cleanup done (user-chosen): **#24 closed** (b9dffc3 — trim/coalesce/concat on StrColExt, native sea-query exprs to avoid a cust_with_values bind-order swap; `now` deferred with SQLite-format rationale) + **#33 closed** (0868511 — auto-GIN index on every tsvector column in the PG render path). Remaining genuinely-partial `[~]`: #19 (reverse-FK prefetch — needs new ORM slot), #26 (correlated EXISTS), #29 (iterator), #55 (date hierarchy), #12 (playground tabs) — real infra/frontend scope, left intentionally.
 
-Next: **P3 #61 remainder** (CSV import command, admin bulk-export action, Excel). Everything is committed; nothing half-applied.
+**#61 CSV import shipped** (37ebf1e — `umbra importcsv <table> <file>`; `orm::import_table_rows` coerces cells per column type → `insert_json` per row; best-effort with per-line errors; test reads back typed rows). #61 stays `[~]`: admin "export selected → CSV" is **blocked on the unstarted #53 bulk-action UI**; Excel (`.xlsx`) is a separate binary-format add (rust_xlsxwriter/calamine), not yet done.
+
+Next (open, user's call): Excel for #61, OR the genuinely-partial backlog (#19 reverse-FK prefetch, #26 correlated EXISTS, #29 iterator, #55 date hierarchy, #12 playground tabs, #10 playground Realtime tab) — each real infra/frontend scope. Everything is committed; nothing half-applied.
 
 ### P1 detail
 - [x] 1a seed foundation (feature_set + seed_plugin_features + seed_orm_data cmd) — f1eb714
