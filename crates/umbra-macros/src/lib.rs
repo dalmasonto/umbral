@@ -3337,6 +3337,18 @@ fn classify_form_field_type(ty: &syn::Type) -> Option<(FormFieldKind, bool)> {
     None
 }
 
+/// True when `ty` is `Masked<…>` or `Option<Masked<…>>`. A `Masked`
+/// column holds an encrypted secret; it is excluded from auto-generated
+/// forms by default (treated as `#[umbra(noform)]`) because the generic
+/// form pipeline can't safely round-trip a secret on *edit* — it can't
+/// pre-fill the existing value, and a blank resubmit is ambiguous between
+/// "no change" and "clear". Set masked fields in your handler with
+/// `Masked::new(value)` instead.
+fn form_field_is_masked(ty: &syn::Type) -> bool {
+    let target = option_inner_type(ty).unwrap_or(ty);
+    type_leaf_is(target, "Masked")
+}
+
 fn option_inner_type(ty: &syn::Type) -> Option<&syn::Type> {
     let syn::Type::Path(tp) = ty else {
         return None;
@@ -3649,6 +3661,9 @@ fn expand_form(input: DeriveInput) -> syn::Result<TokenStream2> {
             || model_attr.auto_now
             || model_attr.auto_now_add
             || is_implicit_pk
+            // Masked (encrypted secret) fields are server-set, never
+            // user-submittable — skip them as if they were `noform`.
+            || form_field_is_masked(&field.ty)
             || form_is_reverse_relation(field);
         if skip_for_form {
             any_skipped = true;
@@ -4089,6 +4104,7 @@ fn expand_form(input: DeriveInput) -> syn::Result<TokenStream2> {
                 || attr.auto_now
                 || attr.auto_now_add
                 || is_implicit_pk
+                || form_field_is_masked(&f.ty)
                 || form_is_reverse_relation(f)
             {
                 None
