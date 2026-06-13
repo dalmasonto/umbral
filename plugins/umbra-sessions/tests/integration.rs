@@ -177,7 +177,10 @@ fn set_cookie_header_carries_secure_defaults() {
     let s = set_cookie_header("the-id", None);
     assert!(s.contains("the-id"));
     assert!(s.contains("HttpOnly"));
-    assert!(s.contains("Secure"));
+    // `Secure` is environment-gated (off in Dev so session cookies work
+    // over plain http://localhost; on in Prod). The test process's
+    // ambient environment isn't fixed here, so we assert the always-on
+    // flags only.
     assert!(s.contains("SameSite=Lax"));
     assert!(s.contains("Path=/"));
     // Default TTL is 14 days = 1_209_600 seconds.
@@ -306,7 +309,8 @@ async fn login_creates_session_sets_cookie_and_bumps_last_login() {
         .unwrap();
     assert!(set_cookie.starts_with(&format!("{COOKIE_NAME}=")));
     assert!(set_cookie.contains("HttpOnly"));
-    assert!(set_cookie.contains("Secure"));
+    // `Secure` is environment-gated (off in Dev) — see
+    // `set_cookie_header_carries_secure_defaults`.
 
     // The session row is readable via the returned token.
     let session = read_session(&token).await.expect("read").expect("present");

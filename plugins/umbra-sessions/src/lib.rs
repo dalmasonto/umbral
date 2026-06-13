@@ -303,11 +303,29 @@ pub fn set_cookie_header(id: &str, max_age: Option<i64>) -> String {
     set_cookie_header_named(COOKIE_NAME, id, max_age)
 }
 
-/// [`set_cookie_header`] with an explicit cookie name. The `Secure`
-/// flag stays on; HTTPS-only is non-negotiable for session cookies.
+/// The `Secure; ` cookie attribute — present in every environment
+/// except `Dev`. A `Secure` cookie is only sent over HTTPS, which is
+/// correct (and non-negotiable) in production but breaks cookie-based
+/// auth over plain `http://` in local development: the browser silently
+/// drops it, so every request resolves anonymous. Gating it on the
+/// environment mirrors the framework's "HSTS off for local http dev"
+/// posture. Defaults to `Secure` when settings aren't resolved yet
+/// (secure-by-default).
+fn secure_attr() -> &'static str {
+    match umbra::settings::get_opt() {
+        Some(s) if matches!(s.environment, umbra::Environment::Dev) => "",
+        _ => "Secure; ",
+    }
+}
+
+/// [`set_cookie_header`] with an explicit cookie name. `Secure` is set
+/// in every environment except `Dev` (see [`secure_attr`]).
 pub fn set_cookie_header_named(name: &str, id: &str, max_age: Option<i64>) -> String {
     let max_age = max_age.unwrap_or(DEFAULT_TTL_SECONDS);
-    format!("{name}={id}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age={max_age}")
+    format!(
+        "{name}={id}; Path=/; HttpOnly; {secure}SameSite=Lax; Max-Age={max_age}",
+        secure = secure_attr()
+    )
 }
 
 /// Build the Set-Cookie header that deletes the session cookie.
@@ -319,7 +337,10 @@ pub fn clear_cookie_header() -> String {
 
 /// [`clear_cookie_header`] with an explicit cookie name.
 pub fn clear_cookie_header_named(name: &str) -> String {
-    format!("{name}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0")
+    format!(
+        "{name}=; Path=/; HttpOnly; {secure}SameSite=Lax; Max-Age=0",
+        secure = secure_attr()
+    )
 }
 
 /// Read the request's session cookie and return the active `Session`
