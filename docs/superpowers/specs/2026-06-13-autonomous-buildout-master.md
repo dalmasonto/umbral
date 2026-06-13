@@ -132,11 +132,11 @@ Single-process broadcast works for one instance. Multi-instance needs a backplan
 - [~] P1 website (nav-links resolve; nav-from-DB + dashboard widgets + /blog detail remain)
 - [x] **P2 testing** — `Factory` trait added to umbra-testing (build/create/create_with/create_batch + `seq()` + `fake` re-export); marker-type shape for the orphan rule; doc pages (testing/factories + test-client). Commit 517fc84. (#79/#52 ✓)
 - [~] **P3 #56–61** — #56/#57/#59 verified shipped + closed in features.md (c37e928). **Still open (not started):** #58 nested writable serializers, #60 action input/output schemas, #61 CSV/Excel import-export.
-- [ ] **P4 #65–70** — not started this session. #66 collectstatic exists (needs compression + `{% static %}`); #67 `add_filter` exists internally (needs a Plugin::register_template hook); #65 migration-safety check primitives exist in migrate.rs (`is_safe_cast`); #68/#69/#70 fresh.
+- [~] **P4 #65–70** — **#66 SHIPPED** (gzip/brotli compression via `AppBuilder::compression()`; collectstatic + `{% static %}` tag already existed — 5497823). Remaining: #65 migration-safety command (primitives `is_safe_cast`/destructive detection exist in migrate.rs — wrap as a command), #67 template tags/filters Plugin hook (friction: ENGINE is a built-once OnceLock, so the `&mut Environment` hook must thread through `templates::init`/`build_env`), #68 middleware-pipeline trait, #69 DB routers, #70 streaming response bodies.
 - [~] **P5 trackers** — REAL-GAPS.md updated for shipped items (4b33b07). features.md #56/#57/#59 closed.
-- [x] **P6 realtime CORE** — spec (60662b8) + phase 1 registry/broker/handle/GroupPolicy (0cb17bc) + phase 2 SSE (8035f9e) + phase 3 WebSocket + MessageHandler (af86351) + **phase 4 signals bridge** (`on_model::<T>()` / `on_table()` → post_save/post_delete fan-out). features.md #45 core closed; 9 tests. **Deferred (phase 5+):** multi-instance Redis broker, a live demo on umbra_website, the playground "Realtime" tab (#10).
+- [x] **P6 realtime CORE** — spec (60662b8) + phase 1 (0cb17bc) + phase 2 SSE (8035f9e) + phase 3 WebSocket (af86351) + phase 4 signals bridge (388d49e) + **live demo: SSE note feed on plugin pages** (e156ad5 — create_note broadcasts to `public:plugin-<id>` watchers; detail page EventSource banner; `Realtime::send` made graceful when uninstalled). features.md #45 core closed; 10 tests. **Deferred:** multi-instance Redis broker, the playground "Realtime" tab (#10).
 
-Next-session priority order: P4 #65–70 → P3 #58/#61 → P6 phase 5 (realtime demo). Everything is committed; nothing half-applied.
+Next-session priority order: P4 #65/#67–70 → P3 #58/#61. Everything is committed; nothing half-applied.
 
 ### P1 detail
 - [x] 1a seed foundation (feature_set + seed_plugin_features + seed_orm_data cmd) — f1eb714
