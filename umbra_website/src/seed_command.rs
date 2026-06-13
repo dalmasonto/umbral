@@ -65,8 +65,12 @@ impl PluginCommand for SeedOrmData {
         let (cats, feats) = features::seed::seed().await?;
         println!("  features: {cats} categories · {feats} features");
 
-        // Further plugin seeds (navigation, showcase, blog, reviews,
-        // changelog) are wired in as each page lands.
+        // --- reviews: developer testimonials -------------------------------
+        let reviews = reviews::seed::seed().await?;
+        println!("  reviews: {reviews} reviews");
+
+        // Further plugin seeds (navigation, showcase, blog, changelog) are
+        // wired in as each page lands.
 
         println!("Done.");
         Ok(())
