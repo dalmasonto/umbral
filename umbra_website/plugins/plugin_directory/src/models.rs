@@ -156,8 +156,9 @@ pub struct Plugin {
     #[form(required, length(min = 2, max = 140))]
     pub slug: String,
 
-    #[form(optional, length(max = 4_000))]
-    pub logo: Option<String>,
+    pub logo: Option<ImageField>,
+
+    pub cover_image: Option<ImageField>,
 
     #[umbra(unique, max_length = 140)]
     #[form(required, length(min = 2, max = 140))]

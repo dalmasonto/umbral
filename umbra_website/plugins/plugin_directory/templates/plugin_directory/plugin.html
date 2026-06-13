@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "plugin_directory/_macros.html" as media %}
 
 {% block title %}{{ plugin.name }} - Plugin Directory - Umbra{% endblock %}
 {% block meta_description %}Plugin detail page for {{ plugin.name }}, including install command, audit status, compatibility, features and community notes.{% endblock %}
@@ -133,13 +134,7 @@
   <div class="pd-head grid gap-7 lg:grid-cols-[1fr_340px] lg:items-start">
     <div class="pd-rise" style="--i: 0">
       <div class="mb-5 flex flex-wrap items-start gap-4">
-        {% if plugin.flagged %}
-        <span class="flex h-[64px] w-[64px] shrink-0 items-center justify-center rounded-2xl bg-[#FBEDEC] font-mono text-[22px] font-bold text-[#C23B3B]">{{ plugin.icon }}</span>
-        {% elif plugin.source == "community" %}
-        <span class="flex h-[64px] w-[64px] shrink-0 items-center justify-center rounded-2xl bg-tan-soft font-mono text-[22px] font-bold text-tan">{{ plugin.icon }}</span>
-        {% else %}
-        <span class="flex h-[64px] w-[64px] shrink-0 items-center justify-center rounded-2xl bg-accent-soft font-mono text-[22px] font-bold text-accent-2">{{ plugin.icon }}</span>
-        {% endif %}
+        {{ media.plugin_logo(plugin.logo, plugin.name, plugin.source, plugin.flagged, plugin.icon, 64) }}
         <div class="min-w-0">
           <div class="mb-2 flex flex-wrap items-center gap-2.5">
             <h1 class="m-0 text-[38px] font-extrabold leading-[1.06] tracking-[-0.03em] text-ink sm:text-[46px]">{{ plugin.name }}</h1>
@@ -166,6 +161,10 @@
         <span class="rounded-[8px] border border-hairline bg-surface-2 px-3 py-1.5 text-[12.5px] text-body">{{ tag }}</span>
         {% endfor %}
       </div>
+
+      {# Cover image — sits below the header text (logo, title,
+         description, tags), not as a top-of-page banner. #}
+      {{ media.plugin_cover(plugin.cover_image, plugin.name) }}
 
       {# ---- Links row (only present fields render) ---- #}
       <div class="flex flex-wrap gap-2.5">

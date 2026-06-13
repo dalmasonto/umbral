@@ -18,6 +18,7 @@ use umbra::templates::context;
 use umbra::web::{Html, SlashRedirect, StatusCode};
 use umbra_admin::AdminPlugin;
 use umbra_auth::{AuthPlugin, AuthUser, login_required_html};
+use umbra_media::MediaPlugin;
 use umbra_openapi::OpenApiPlugin;
 use umbra_playground::PlaygroundPlugin;
 use umbra_rest::{ResourceConfig, RestPlugin};
@@ -65,11 +66,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .plugin(OpenApiPlugin::new())
         .plugin(PlaygroundPlugin::new("Umbra").at("/api/playground/"))
         .plugin(StaticPlugin::new("/static", "./static"))
+        // Registers the filesystem Storage backend that powers the
+        // Plugin model's `logo` / `cover_image` File/Image fields.
+        // Uploads land in ./media and serve at /media/<key>.
+        .plugin(MediaPlugin::new("/media", "./media"))
         .plugin(SecurityPlugin::with_config(SecurityConfig {
             csrf_exempt_paths: vec!["/api".to_string()],
             ..Default::default()
         }))
-        .plugin(AdminPlugin::default().site_title("Umbra".to_string()))
+        .plugin(
+            AdminPlugin::default().site_title("Umbra".to_string()), // .register_widget(widget)
+        )
         // --- Templates ------------------------------------------------------
         .templates_dir("templates")
         .not_found_template("404.html")

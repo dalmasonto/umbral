@@ -351,6 +351,8 @@ struct PluginCard {
     tags: Vec<String>,
     /// Two-character tile initials.
     initials: String,
+    /// Storage key for the logo image, resolved to a URL by `media_url()`.
+    logo: Option<String>,
 }
 
 impl PluginCard {
@@ -378,6 +380,7 @@ impl PluginCard {
             install: install_line(&p.installation_commands, &p.crate_name),
             tags: derive_tags(&p),
             initials: initials(&p.name),
+            logo: p.logo.map(|f| f.key().to_string()),
         }
     }
 }
@@ -409,6 +412,8 @@ struct SearchHit {
     name: String,
     source: String,
     short_description: String,
+    /// Storage key for the logo image, resolved to a URL by `media_url()`.
+    logo: Option<String>,
 }
 
 /// Load + render the `/search` result fragment. Public so the render
@@ -446,6 +451,7 @@ pub async fn render_search(q: &str) -> Result<String, String> {
                 name: p.name,
                 source: source_str(p.source).to_string(),
                 short_description: p.short_description,
+                logo: p.logo.map(|f| f.key().to_string()),
             })
             .collect()
     };
@@ -1037,6 +1043,10 @@ struct PluginDetail {
     comments: Vec<CommentPreview>,
     /// CommentKind options for the "Add a note" dialog select.
     note_kinds: Vec<NoteKind>,
+    /// Storage key for the logo image, resolved to a URL by `media_url()`.
+    logo: Option<String>,
+    /// Storage key for the cover image, resolved to a URL by `media_url()`.
+    cover_image: Option<String>,
 }
 
 /// External links shown in the header links row + Issues tab. A field is
@@ -1254,6 +1264,8 @@ impl PluginDetail {
             compatibility: compat_rows,
             comments: comment_previews,
             note_kinds: note_kinds(),
+            logo: p.logo.map(|f| f.key().to_string()),
+            cover_image: p.cover_image.map(|f| f.key().to_string()),
         }
     }
 }

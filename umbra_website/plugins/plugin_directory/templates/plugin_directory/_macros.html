@@ -1,0 +1,48 @@
+{#
+  _macros.html — reusable media macros for plugin logos and cover images.
+
+  Import in any template (including those outside plugin_directory) as:
+    {% import "plugin_directory/_macros.html" as media %}
+
+  The `media_url(key)` global is always available inside macros because
+  minijinja macros share the Environment's globals.
+#}
+
+{#
+  plugin_logo — renders a plugin's logo image, or a letter-tile fallback.
+
+  Parameters:
+    logo    — the storage key string (from ImageField serialisation), or falsy
+    name    — plugin display name; used for alt text and first-letter fallback
+    source  — "official" / "community" / "experimental" / "deprecated"
+    flagged — true → reddish tile
+    icon    — explicit letter(s) for the tile; defaults to name's first letter
+    px      — tile size in pixels (default 48)
+    radius  — Tailwind radius class (default "rounded-2xl")
+#}
+{% macro plugin_logo(logo, name="", source="official", flagged=false, icon="", px=48, radius="rounded-2xl") %}
+{%- if logo %}
+<img src="{{ media_url(logo) }}" alt="{{ name }} logo" class="shrink-0 {{ radius }}" style="height: {{ px }}px; width: {{ px }}px; object-fit: cover" />
+{%- elif flagged %}
+<span class="flex shrink-0 items-center justify-center {{ radius }} bg-[#FBEDEC] font-mono font-bold text-[#C23B3B]" style="height: {{ px }}px; width: {{ px }}px; font-size: {{ px // 3 }}px">{{ icon if icon else (name | first | upper) }}</span>
+{%- elif source == "community" %}
+<span class="flex shrink-0 items-center justify-center {{ radius }} bg-tan-soft font-mono font-bold text-tan" style="height: {{ px }}px; width: {{ px }}px; font-size: {{ px // 3 }}px">{{ icon if icon else (name | first | upper) }}</span>
+{%- else %}
+<span class="flex shrink-0 items-center justify-center {{ radius }} bg-accent-soft font-mono font-bold text-accent-2" style="height: {{ px }}px; width: {{ px }}px; font-size: {{ px // 3 }}px">{{ icon if icon else (name | first | upper) }}</span>
+{%- endif %}
+{% endmacro %}
+
+{#
+  plugin_cover — renders a plugin's cover image banner, or nothing.
+
+  Parameters:
+    cover  — the storage key string, or falsy
+    name   — plugin display name; used for alt text
+#}
+{% macro plugin_cover(cover, name="") %}
+{%- if cover %}
+<div class="pd-rise mb-6" style="--i: 0; overflow: hidden; border-radius: 16px; border: 1px solid var(--line, #e7e2d9)">
+  <img src="{{ media_url(cover) }}" alt="{{ name }} cover" style="display: block; width: 100%; height: 230px; object-fit: cover" />
+</div>
+{%- endif %}
+{% endmacro %}

@@ -20,6 +20,7 @@ umbra-openapi  = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-openapi" 
 umbra-security = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-security" }
 umbra-static   = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-static" }
 umbra-playground   = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-playground" }  # Interactive API playground UI (think mini-Postman) at /playground/.
+umbra-media        = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-media" }  # Uploaded-file storage abstraction (local FS + S3).
 
 # ----- Available built-ins (uncomment + register in main.rs to enable) -----
 # umbra-tasks        = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-tasks" }  # DB-backed background task queue (Celery-equivalent).
@@ -27,9 +28,7 @@ umbra-playground   = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-playg
 # umbra-rls          = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-rls" }  # Postgres row-level security policy registration.
 # umbra-cache        = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-cache" }  # Per-request caching helper.
 # umbra-email        = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-email" }  # SMTP + MIME email composer + sender.
-# umbra-media        = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-media" }  # Uploaded-file storage abstraction (local FS + S3).
 # umbra-signals      = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-signals" }  # Pre/post save/delete signal dispatch.
-# umbra-static       = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-static" }  # Static-file serving for prod (whitenoise-equivalent).
 
 # ----- Third-party + framework runtime deps --------------------------------
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

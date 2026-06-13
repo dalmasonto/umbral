@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "plugin_directory/_macros.html" as media %}
 
 {% block title %}Umbra — the batteries are real plugins{% endblock %}
 {% block meta_description %}Umbra gives Rust developers a complete app framework — models, migrations, admin, forms, REST, background work — with every battery delivered as a plugin you can enable, replace, or extend. This site is built with Umbra.{% endblock %}
@@ -298,7 +299,7 @@
          shows the crate's first letter; the reveal staggers per card. #}
       <div class="plugin-card reveal card rounded-[14px] p-[18px]" style="--d:{{ 80 + loop.index0 * 90 }}ms">
         <div class="mb-[11px] flex items-center gap-2.5">
-          <span class="flex h-[34px] w-[34px] items-center justify-center rounded-[9px] bg-accent-soft font-mono text-[14px] font-bold uppercase text-accent-2">{{ p.crate_name | replace("umbra-", "") | first | upper }}</span>
+          {{ media.plugin_logo(p.logo, p.crate_name | replace("umbra-", ""), "official", false, "", 34, "rounded-[9px]") }}
           <a href="/plugins/{{ p.crate_name }}" class="truncate text-[15px] font-bold transition-colors hover:text-accent-2">{{ p.crate_name }}</a>
           <span class="pill-official ml-auto">{{ p.status }}</span>
         </div>

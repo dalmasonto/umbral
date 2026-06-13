@@ -195,6 +195,8 @@ pub struct PluginRow {
     /// Install command shown on the card: the plugin's stored
     /// `installation_commands` first line, else `umbra add <crate>`.
     pub install: String,
+    /// Storage key for the logo image, resolved to a URL by `media_url()`.
+    pub logo: Option<String>,
 }
 
 impl From<pd::Plugin> for PluginRow {
@@ -233,6 +235,7 @@ impl From<pd::Plugin> for PluginRow {
             install,
             crate_name: p.crate_name,
             short_description: p.short_description,
+            logo: p.logo.map(|f| f.key().to_string()),
         }
     }
 }

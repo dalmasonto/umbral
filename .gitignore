@@ -31,3 +31,6 @@ plugins/umbra-playground/src/generated_assets.rs
 plugins/umbra-playground/frontend/node_modules/
 
 .env
+
+# Media storage (local FS + S3).
+media/
