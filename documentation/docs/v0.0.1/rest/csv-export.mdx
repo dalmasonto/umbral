@@ -1,0 +1,44 @@
+---
+title: CSV export
+description: Download any resource as CSV with ?format=csv — same filters, search, and field selection as the JSON list.
+sidebar_position: 6
+tags: [rest, csv, export, download]
+---
+
+# CSV export
+
+Any list endpoint can return CSV instead of JSON — add `?format=csv`:
+
+```http
+GET /api/order/?format=csv
+```
+```http
+HTTP/1.1 200 OK
+Content-Type: text/csv; charset=utf-8
+Content-Disposition: attachment; filename="order.csv"
+
+id,customer,total
+1,Ada,42
+2,"Grace, Inc.",17
+```
+
+It's the **same data as the JSON list** — same authentication gate, and every query option works: filters, `?search=`, `?include=`, and `?fields=`. Only the serialization differs.
+
+```http
+GET /api/order/?status=paid&search=ada&fields=id,customer&format=csv
+```
+
+## What you get
+
+- **Columns** follow the model's field order, after any hidden / sparse-field scrubbing. Computed fields are appended.
+- **Cells**: scalars verbatim, `null` → empty, objects/arrays → compact JSON. Values with commas or quotes are quoted/escaped per RFC 4180.
+- **The full filtered set** — CSV export ignores pagination (you want the whole download). Pair it with filters on large tables.
+
+<Callout type="info">
+CSV *import*, an admin "export selected rows" bulk action, and Excel (`.xlsx`) are not in this slice yet — see `planning/features.md` #61.
+</Callout>
+
+## See also
+
+- [Exposure](./exposure) — which models become resources, and how to hide fields.
+- [Authentication & permissions](./authentication) — the list gate also guards the CSV export.

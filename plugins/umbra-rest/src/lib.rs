@@ -42,7 +42,7 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 use umbra::migrate::ModelMeta;
 use umbra::prelude::*;
-use umbra::web::{Json, Path, Query, Response, StatusCode};
+use umbra::web::{IntoResponse, Json, Path, Query, Response, StatusCode};
 
 pub mod filtering;
 pub(crate) use filtering::{FilterClause, parse_filters, parse_search};
@@ -1466,7 +1466,7 @@ async fn list(
     Path(table): Path<String>,
     Query(params): Query<HashMap<String, String>>,
     headers: umbra::web::HeaderMap,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Response, ApiError> {
     let cfg = CONFIG.get().expect("RestPlugin::routes was called");
     let identity = cfg.authentication.authenticate(&headers).await;
     let model = allowed_model(&table)?;
@@ -1490,15 +1490,30 @@ async fn list(
         }
     }
 
-    let page_req = cfg.pagination.extract_request(&params);
     // `?include=fk1,fk2` — expand the named FK columns into their
     // full related-row objects via one batched IN(...) per FK. The
     // parser rejects unknown / non-FK names with a 400 so clients
     // get loud feedback on typos instead of a silently-unexpanded
     // response that looks fine until they check it.
     let include = parse_include(params.get("include").map(|s| s.as_str()), &model)?;
-    let mut rows = fetch_rows(&model, None, Some(page_req), &filter, &include).await?;
     let fields_param = params.get("fields").map(|s| s.as_str());
+
+    // `?format=csv` — export the FULL filtered set (no pagination) as a
+    // downloadable CSV (feature #61). Same auth gate, filters, search,
+    // `?include=` and `?fields=` as the JSON list — just a different
+    // serialization. The honest tradeoff: it streams every matching row,
+    // so pair it with filters on large tables.
+    if params.get("format").map(String::as_str) == Some("csv") {
+        let mut rows = fetch_rows(&model, None, None, &filter, &include).await?;
+        for row in &mut rows {
+            cfg.apply_overrides(&table, row);
+            RestPlugin::apply_sparse_fields(row, fields_param);
+        }
+        return Ok(csv_response(&table, &model, &rows));
+    }
+
+    let page_req = cfg.pagination.extract_request(&params);
+    let mut rows = fetch_rows(&model, None, Some(page_req), &filter, &include).await?;
     for row in &mut rows {
         cfg.apply_overrides(&table, row);
         RestPlugin::apply_sparse_fields(row, fields_param);
@@ -1512,7 +1527,69 @@ async fn list(
         rows.len() as i64
     };
     let envelope = cfg.pagination.paginate(rows, total, &page_req);
-    Ok(Json(envelope))
+    Ok(Json(envelope).into_response())
+}
+
+/// Build a CSV download response from the fetched rows.
+fn csv_response(table: &str, model: &ModelMeta, rows: &[Map<String, Value>]) -> Response {
+    let csv = rows_to_csv(model, rows);
+    (
+        StatusCode::OK,
+        [
+            (
+                http::header::CONTENT_TYPE,
+                "text/csv; charset=utf-8".to_string(),
+            ),
+            (
+                http::header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{table}.csv\""),
+            ),
+        ],
+        csv,
+    )
+        .into_response()
+}
+
+/// Serialize rows to CSV. Columns follow the model's field order (only
+/// those present after hide / sparse-field filtering), with any extra keys
+/// (computed fields) appended in first-seen order. Object / array cells
+/// render as compact JSON. The `csv` writer handles quoting + escaping.
+fn rows_to_csv(model: &ModelMeta, rows: &[Map<String, Value>]) -> String {
+    let mut cols: Vec<String> = Vec::new();
+    for f in &model.fields {
+        if rows.iter().any(|r| r.contains_key(&f.name)) {
+            cols.push(f.name.clone());
+        }
+    }
+    for r in rows {
+        for k in r.keys() {
+            if !cols.iter().any(|c| c == k) {
+                cols.push(k.clone());
+            }
+        }
+    }
+    let mut wtr = csv::Writer::from_writer(Vec::new());
+    let _ = wtr.write_record(&cols);
+    for r in rows {
+        let record: Vec<String> = cols.iter().map(|c| csv_cell(r.get(c))).collect();
+        let _ = wtr.write_record(&record);
+    }
+    wtr.into_inner()
+        .ok()
+        .and_then(|b| String::from_utf8(b).ok())
+        .unwrap_or_default()
+}
+
+/// One CSV cell from a JSON value: scalars verbatim, null → empty,
+/// object/array → compact JSON.
+fn csv_cell(v: Option<&Value>) -> String {
+    match v {
+        None | Some(Value::Null) => String::new(),
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Number(n)) => n.to_string(),
+        Some(Value::Bool(b)) => b.to_string(),
+        Some(other) => other.to_string(),
+    }
 }
 
 async fn retrieve(

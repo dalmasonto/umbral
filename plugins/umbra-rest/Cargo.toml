@@ -38,6 +38,8 @@ axum = "0.8"
 # `http::Method` for the `@action` registration shape — users pick
 # the HTTP method as `Method::POST` etc.
 http = "1"
+# `?format=csv` list export (feature #61).
+csv = "1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync"] }

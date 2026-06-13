@@ -68,6 +68,9 @@ const RESERVED_KEYS: &[&str] = &[
     // Skipped here so the filter parser doesn't mistake it for a
     // column name and reject as "unknown field".
     "include",
+    // `?format=csv` — consumed by the list handler to switch the
+    // response serialization (feature #61); not a column filter.
+    "format",
 ];
 
 /// A parsed filter ready to splice into a DynQuerySet.

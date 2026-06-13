@@ -265,10 +265,8 @@ These are the cross-cutting capabilities that turn a framework from a neat ORM d
     >
     > How: Extend `Action` to carry an optional `input_schema: JsonSchema` and `output_schema: JsonSchema`. The macro or builder validates the input body against the schema before calling the handler. The OpenAPI generator includes the custom schema in the spec. This makes custom actions first-class in the playground.
 
-61. [ ] **Data import / export — CSV and Excel** 🟡 Medium
-    > Why: Admin action "Export selected rows to CSV" and management command `cargo run -- importcsv` are essential for content migration, bulk updates, and reporting.
-    >
-    > How: Use `csv` crate for CSV and `calamine` for Excel. Add `AdminModel::export_formats(&["csv", "xlsx"])`. The export handler streams rows to a tempfile and returns a download response. The import command reads a CSV, validates each row against the model's fields, and inserts via `bulk_create`.
+61. [~] **Data import / export — CSV and Excel** 🟡 Medium
+       — CSV **export** shipped via the REST list endpoint: `GET /api/<table>/?format=csv` downloads the full filtered set as CSV (same auth gate, `?filter`/`?search`/`?include`/`?fields` as the JSON list — just a different serialization). Columns follow the model's field order (after hide/sparse-field scrubbing); object/array cells render as compact JSON; the `csv` crate handles quoting/escaping; `Content-Disposition: attachment; filename="<table>.csv"`. `format` is a reserved query key (`filtering.rs`). Helpers `csv_response`/`rows_to_csv`/`csv_cell` in `plugins/umbra-rest/src/lib.rs`; test `tests/csv_export.rs`; doc `rest/csv-export.mdx`. **Still open**: CSV **import** (a `loadcsv`/`importcsv` command validating each row via `insert_json` + `bulk_create`), an admin "Export selected → CSV" bulk action (depends on #53 bulk-action UI), and Excel (`.xlsx` via `calamine`/`rust_xlsxwriter`).
 
 62. [ ] **Feature flags** 🟢 Low
     > Why: `is_enabled("dark_mode")` checks for A/B testing and safe deploys. Useful but not urgent — most apps can get by with env vars at v1.
