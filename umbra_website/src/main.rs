@@ -43,6 +43,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .init();
 
     let settings = Settings::from_env()?;
+
+    // OAuth credentials. figment parses `.env` into `Settings.extra` as
+    // `oauth_<provider>_client_id` / `oauth_<provider>_client_secret`
+    // (from `UMBRA_OAUTH_<PROVIDER>_CLIENT_ID` / `_CLIENT_SECRET`).
+    // Reading them from Settings is reliable regardless of whether `.env`
+    // also reached the raw process environment. Each provider registers
+    // only when BOTH its id and secret are present.
+    let google = settings
+        .extra_str("oauth_google_client_id")
+        .zip(settings.extra_str("oauth_google_client_secret"))
+        .map(|(id, secret)| GoogleProvider::new(id, secret));
+    let github = settings
+        .extra_str("oauth_github_client_id")
+        .zip(settings.extra_str("oauth_github_client_secret"))
+        .map(|(id, secret)| GitHubProvider::new(id, secret));
+    let oauth_base = settings
+        .extra_str("oauth_redirect_base")
+        .unwrap_or("http://localhost:8100")
+        .to_string();
+
     let pool = umbra::db::connect(&settings.database_url).await?;
 
     let app = App::builder()
@@ -61,16 +81,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // leave on with nothing configured. `redirect_base` is the public
         // origin — override it in prod with UMBRA_OAUTH_REDIRECT_BASE.
         .plugin({
-            let mut oauth = OAuthPlugin::new(
-                std::env::var("UMBRA_OAUTH_REDIRECT_BASE")
-                    .unwrap_or_else(|_| "http://localhost:8000".to_string()),
-            )
-            .login_redirect("/dashboard");
-            if let Some(google) = GoogleProvider::from_env() {
-                oauth = oauth.provider(google);
+            let mut oauth = OAuthPlugin::new(oauth_base).login_redirect("/dashboard");
+            if let Some(p) = google {
+                oauth = oauth.provider(p);
             }
-            if let Some(github) = GitHubProvider::from_env() {
-                oauth = oauth.provider(github);
+            if let Some(p) = github {
+                oauth = oauth.provider(p);
             }
             oauth
         })
