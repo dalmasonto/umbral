@@ -172,7 +172,11 @@ async fn detail_resolves_image_and_file_keys_to_urls() {
         Value::String("/media/datasheet.pdf".into()),
         "nullable file field with a key resolves to the public URL: {body}"
     );
-    assert_eq!(body["name"], Value::String("apple".into()), "name untouched");
+    assert_eq!(
+        body["name"],
+        Value::String("apple".into()),
+        "name untouched"
+    );
 }
 
 #[tokio::test]
