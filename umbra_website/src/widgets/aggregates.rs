@@ -82,14 +82,59 @@ pub async fn plugin_counts(column: &'static str) -> Vec<(String, f64)> {
         .collect()
 }
 
-/// SQL `SUM(<column>)` over every non-deleted plugin — nulls (an
-/// unsynced star/download count) are ignored by SUM, and an empty table
-/// yields 0.0. `column` is `"github_stars"` or `"downloads"`.
-pub async fn plugin_total(column: &'static str) -> f64 {
-    pd::Plugin::objects()
-        .aggregate(&[("total", Aggregate::sum(column))])
+/// Weekly new-plugin counts for the last `weeks` weeks, oldest-first.
+/// Feeds the submissions bar chart (coarser than the daily line).
+pub async fn weekly_plugins_trail(weeks: i64) -> Vec<f64> {
+    let now = Utc::now();
+    let mut out = Vec::with_capacity(weeks as usize);
+    for back in (0..weeks).rev() {
+        let end = now - Duration::weeks(back);
+        let start = end - Duration::weeks(1);
+        out.push(plugins_between(start, end).await as f64);
+    }
+    out
+}
+
+/// Total visible discussion notes across every thread (all-time).
+pub async fn visible_comments_total() -> i64 {
+    pd::PluginComment::objects()
+        .filter(plugin_comment::MODERATION.eq("visible"))
+        .count()
         .await
-        .ok()
-        .and_then(|v| v.get("total").and_then(|x| x.as_f64()))
-        .unwrap_or(0.0)
+        .unwrap_or(0)
+}
+
+/// Count of plugins for each `(status, maturity)` pair, shaped as a grid
+/// in the given row (status) × column (maturity) order — one `GROUP BY
+/// status, maturity` query, zero-filled for absent combinations. Feeds
+/// the status×maturity heatmap.
+pub async fn status_maturity_grid(statuses: &[&str], maturities: &[&str]) -> Vec<Vec<f64>> {
+    let rows = pd::Plugin::objects()
+        .only(&["id", "status", "maturity"])
+        .annotate(&["status", "maturity"], &[("count", Aggregate::count())])
+        .await
+        .unwrap_or_default();
+    let mut map: std::collections::HashMap<(String, String), f64> =
+        std::collections::HashMap::new();
+    for row in &rows {
+        if let (Some(s), Some(m), Some(n)) = (
+            row.get("status").and_then(|v| v.as_str()),
+            row.get("maturity").and_then(|v| v.as_str()),
+            row.get("count").and_then(|v| v.as_f64()),
+        ) {
+            map.insert((s.to_string(), m.to_string()), n);
+        }
+    }
+    statuses
+        .iter()
+        .map(|s| {
+            maturities
+                .iter()
+                .map(|m| {
+                    *map.get(&((*s).to_string(), (*m).to_string()))
+                        .unwrap_or(&0.0)
+                })
+                .collect()
+        })
+        .collect()
 }

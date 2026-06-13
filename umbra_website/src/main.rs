@@ -91,25 +91,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         .widget(widgets::total_plugins_card())
                         .widget(widgets::pending_review_card())
                         .widget(widgets::discussion_notes_card())
-                        .widget(widgets::total_stars_card()),
+                        .widget(widgets::featured_card()),
                 )
                 .dashboard_section(
                     umbra_admin::WidgetSection::new("Composition")
-                        .subtitle("How the directory breaks down by source and status")
+                        .subtitle("How the directory breaks down by source, status, and maturity")
                         .widget(widgets::source_mix_donut())
-                        .widget(widgets::status_mix_donut()),
+                        .widget(widgets::status_mix_donut())
+                        .widget(widgets::submissions_bar())
+                        .widget(widgets::status_maturity_heatmap()),
                 )
                 .dashboard_section(
                     umbra_admin::WidgetSection::new("Trends")
-                        .subtitle("Submissions + discussion activity over time")
-                        .widget(widgets::submissions_chart().with_default_period("30d"))
-                        .widget(widgets::activity_chart().with_default_period("30d")),
+                        .subtitle("Submissions + discussion activity over the last week")
+                        .widget(widgets::submissions_chart().with_default_period("7d"))
+                        .widget(widgets::activity_chart().with_default_period("7d")),
                 )
                 .dashboard_section(
                     umbra_admin::WidgetSection::new("Gauges & rankings")
-                        .subtitle("Audit coverage gauge + the most-starred plugins")
+                        .subtitle("Audit coverage gauge, maturity breakdown, and a shipped KPI")
                         .widget(widgets::audit_coverage_radial())
-                        .widget(widgets::top_plugins_progress()),
+                        .widget(widgets::plugins_by_maturity())
+                        .widget(widgets::shipped_kpi()),
+                )
+                .dashboard_section(
+                    umbra_admin::WidgetSection::new("Recent activity")
+                        .subtitle("The latest plugins listed in the directory")
+                        .widget(widgets::recent_plugins_table())
+                        .widget(widgets::recent_activity_feed()),
                 ),
         )
         // --- Templates ------------------------------------------------------

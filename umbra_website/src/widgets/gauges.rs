@@ -6,7 +6,6 @@
 //! - `top_plugins_progress`: the directory's most-starred plugins as
 //!   a ranked bar list, each bar sized against the leader.
 
-use plugin_directory::models::{self as pd};
 use umbra_admin::{
     ProgressPayload, RadialPayload, Span, Widget, WidgetDataFn, WidgetKind, WidgetPayload,
 };
@@ -46,36 +45,24 @@ pub fn audit_coverage_radial() -> Widget {
     }
 }
 
-/// Progress bar-list — the top plugins by GitHub stars, ranked
-/// descending, each bar sized against the leader. Plugins with no
-/// synced star count are excluded (never shown as a zero bar).
-pub fn top_plugins_progress() -> Widget {
+/// Progress bar-list — how many plugins sit at each maturity level
+/// (stable / beta / alpha / design), ranked descending with each bar
+/// sized against the largest bucket.
+///
+/// (Replaces a top-plugins-by-stars ranking: stars are a maintainer-
+/// synced metric the directory must never fabricate, so until a real
+/// sync lands it has no data to rank. Maturity is always populated.)
+pub fn plugins_by_maturity() -> Widget {
     Widget {
-        key: "pd_top_plugins_progress",
-        title: "Top plugins by stars".to_string(),
+        key: "pd_plugins_by_maturity",
+        title: "Plugins by maturity".to_string(),
         kind: WidgetKind::Progress,
         default_span: Span { cols: 4, rows: 3 },
         permission: None,
         default_period: None,
         data: WidgetDataFn::new(|_user| async move {
-            // Small dataset: pull (name, stars) for every plugin, then
-            // rank in memory — the ranking needs the values anyway, and
-            // doing it here sidesteps nullable-column NULLS-FIRST
-            // ordering quirks across backends.
-            let rows = pd::Plugin::objects()
-                .only(&["id", "name", "github_stars"])
-                .fetch()
-                .await
-                .unwrap_or_default();
-            let mut pairs: Vec<(String, f64)> = rows
-                .into_iter()
-                .filter_map(|p| match p.github_stars {
-                    Some(n) if n > 0 => Some((p.name, n as f64)),
-                    _ => None,
-                })
-                .collect();
+            let mut pairs = plugin_counts("maturity").await;
             pairs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-            pairs.truncate(8);
             WidgetPayload::Progress(ProgressPayload::from_pairs(pairs))
         }),
     }

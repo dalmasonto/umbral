@@ -7,10 +7,11 @@
 //! to "12.4K" when the column gets narrow.
 
 use plugin_directory::models::{self as pd, plugin};
-use umbra_admin::{CardPayload, Span, Widget, WidgetDataFn, WidgetKind, WidgetPayload};
+use umbra_admin::{CardPayload, KpiPayload, Span, Widget, WidgetDataFn, WidgetKind, WidgetPayload};
 
 use super::aggregates::{
-    comments_between, daily_comments_trail, daily_plugins_trail, plugin_total, plugins_between,
+    comments_between, daily_comments_trail, daily_plugins_trail, plugins_between,
+    visible_comments_total,
 };
 
 /// Total plugins in the directory (all non-deleted rows), with a
@@ -90,12 +91,12 @@ pub fn discussion_notes_card() -> Widget {
             let current = comments_between(month_ago, now).await;
             let previous = comments_between(two_months_ago, month_ago).await;
             let trail = daily_comments_trail(30).await;
-            // The card's headline is the visible all-time total; the
-            // 30d window drives the growth pill + sparkline.
-            let total: f64 = trail.iter().sum::<f64>().max(current as f64);
+            // Headline is the all-time visible-notes count; the 30d window
+            // drives the growth pill + sparkline.
+            let total = visible_comments_total().await;
 
             WidgetPayload::Card(
-                CardPayload::new(umbra_admin::humanize_number(total))
+                CardPayload::new(umbra_admin::humanize_number(total as f64))
                     .unit("notes")
                     .icon("message-square")
                     .subtitle("Last 30 days")
@@ -107,24 +108,58 @@ pub fn discussion_notes_card() -> Widget {
     }
 }
 
-/// Total GitHub stars summed across the directory — a single SQL
-/// `SUM`. Maintainer-synced, so no growth pill (it's a snapshot).
-pub fn total_stars_card() -> Widget {
+/// Featured plugins — the curated set surfaced on the public landing
+/// page. (Replaces a GitHub-stars tile: stars are a maintainer-synced
+/// metric the directory must never fabricate, so a stars widget would
+/// read 0 until a real sync lands.)
+pub fn featured_card() -> Widget {
     Widget {
-        key: "pd_total_stars",
-        title: "GitHub Stars".to_string(),
+        key: "pd_featured",
+        title: "Featured".to_string(),
         kind: WidgetKind::Card,
         default_span: Span { cols: 3, rows: 2 },
         permission: None,
         default_period: None,
         data: WidgetDataFn::new(|_user| async move {
-            let stars = plugin_total("github_stars").await;
+            let featured = pd::Plugin::objects()
+                .filter(plugin::FEATURED.eq(true))
+                .count()
+                .await
+                .unwrap_or(0);
             WidgetPayload::Card(
-                CardPayload::new(umbra_admin::humanize_number(stars))
-                    .unit("stars")
+                CardPayload::new(umbra_admin::humanize_number(featured as f64))
+                    .unit("plugins")
                     .icon("star")
-                    .subtitle("Across the directory"),
+                    .subtitle("Surfaced on the landing page"),
             )
+        }),
+    }
+}
+
+/// Shipped plugins as a compact KPI tile (the `Kpi` widget kind) — the
+/// count of plugins at the `shipped` lifecycle status, with a 14-day
+/// submissions sparkline.
+pub fn shipped_kpi() -> Widget {
+    Widget {
+        key: "pd_shipped_kpi",
+        title: "Shipped".to_string(),
+        kind: WidgetKind::Kpi,
+        default_span: Span { cols: 4, rows: 2 },
+        permission: None,
+        default_period: None,
+        data: WidgetDataFn::new(|_user| async move {
+            let shipped = pd::Plugin::objects()
+                .filter(plugin::STATUS.eq("shipped"))
+                .count()
+                .await
+                .unwrap_or(0);
+            let trail = daily_plugins_trail(14).await;
+            WidgetPayload::Kpi(KpiPayload {
+                value: umbra_admin::humanize_number(shipped as f64),
+                unit: Some("shipped".to_string()),
+                delta: None,
+                sparkline: Some(trail),
+            })
         }),
     }
 }

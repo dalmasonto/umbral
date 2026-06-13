@@ -9,11 +9,14 @@
 //!   on one timeline.
 
 use umbra_admin::{
-    ChartPoint, DonutPayload, LinePayload, Series, Span, Widget, WidgetDataFn, WidgetKind,
-    WidgetPayload,
+    BarPayload, ChartPoint, DonutPayload, HeatmapPayload, LinePayload, Series, Span, Widget,
+    WidgetDataFn, WidgetKind, WidgetPayload,
 };
 
-use super::aggregates::{daily_comments_trail, daily_plugins_trail, plugin_counts};
+use super::aggregates::{
+    daily_comments_trail, daily_plugins_trail, plugin_counts, status_maturity_grid,
+    weekly_plugins_trail,
+};
 
 /// Order a `(value, count)` set by a canonical key list, appending any
 /// unrecognised buckets at the end so nothing is silently dropped.
@@ -98,9 +101,9 @@ pub fn submissions_chart() -> Widget {
         kind: WidgetKind::Line,
         default_span: Span { cols: 8, rows: 3 },
         permission: None,
-        default_period: Some("30d"),
+        default_period: Some("7d"),
         data: WidgetDataFn::with_params(|_user, params| async move {
-            let days = params.period_days().unwrap_or(30);
+            let days = params.period_days().unwrap_or(7);
             let trail = daily_plugins_trail(days).await;
             let points: Vec<ChartPoint> = day_labels(days)
                 .into_iter()
@@ -127,9 +130,9 @@ pub fn activity_chart() -> Widget {
         kind: WidgetKind::Line,
         default_span: Span { cols: 8, rows: 3 },
         permission: None,
-        default_period: Some("30d"),
+        default_period: Some("7d"),
         data: WidgetDataFn::with_params(|_user, params| async move {
-            let days = params.period_days().unwrap_or(30);
+            let days = params.period_days().unwrap_or(7);
             let (plugins, comments) =
                 tokio::join!(daily_plugins_trail(days), daily_comments_trail(days));
             let labels = day_labels(days);
@@ -148,6 +151,72 @@ pub fn activity_chart() -> Widget {
                 ],
                 x_type: "date".to_string(),
             })
+        }),
+    }
+}
+
+/// Weekly submission volume — new plugins per week over the last 8
+/// weeks, as a bar chart (coarser companion to the daily line).
+pub fn submissions_bar() -> Widget {
+    Widget {
+        key: "pd_submissions_bar",
+        title: "Submissions by week".to_string(),
+        kind: WidgetKind::Bar,
+        default_span: Span { cols: 4, rows: 3 },
+        permission: None,
+        default_period: None,
+        data: WidgetDataFn::new(|_user| async move {
+            let weeks = 8;
+            let trail = weekly_plugins_trail(weeks).await;
+            let now = chrono::Utc::now();
+            let points: Vec<ChartPoint> = trail
+                .into_iter()
+                .enumerate()
+                .map(|(i, y)| {
+                    let back = weeks - 1 - i as i64;
+                    let wk = now - chrono::Duration::weeks(back);
+                    ChartPoint {
+                        x: wk.format("%b %-d").to_string(),
+                        y,
+                    }
+                })
+                .collect();
+            WidgetPayload::Bar(BarPayload {
+                series: vec![Series {
+                    name: "Plugins".to_string(),
+                    points,
+                }],
+                x_type: "category".to_string(),
+            })
+        }),
+    }
+}
+
+/// Status × maturity heatmap — how the directory's plugins distribute
+/// across the lifecycle-status (rows) by maturity (columns) grid. Reads
+/// as a single `GROUP BY status, maturity`, zero-filled.
+pub fn status_maturity_heatmap() -> Widget {
+    Widget {
+        key: "pd_status_maturity_heatmap",
+        title: "Status × maturity".to_string(),
+        kind: WidgetKind::Heatmap,
+        default_span: Span { cols: 8, rows: 3 },
+        permission: None,
+        default_period: None,
+        data: WidgetDataFn::new(|_user| async move {
+            // Canonical orders so the grid axes stay stable regardless of
+            // which combinations currently have rows.
+            let statuses = [
+                "shipped",
+                "usable",
+                "experimental",
+                "in_progress",
+                "planned",
+                "deprecated",
+            ];
+            let maturities = ["stable", "beta", "alpha", "design"];
+            let grid = status_maturity_grid(&statuses, &maturities).await;
+            WidgetPayload::Heatmap(HeatmapPayload::from_grid(statuses, maturities, grid))
         }),
     }
 }
