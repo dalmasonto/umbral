@@ -23,6 +23,12 @@ http = "1"
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 url = "2"
+# OAuth flow HTTP: token exchange (POST) + identity fetch (GET). We build
+# the requests directly on reqwest rather than pulling the `oauth2` crate
+# (whose API churns across versions) — the authorization-code flow is thin
+# integration glue, not a primitive worth a heavy dep. rustls avoids a
+# system OpenSSL build dependency.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync"] }

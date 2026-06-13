@@ -33,6 +33,7 @@
 
 pub mod models;
 pub mod provider;
+pub mod providers;
 
 use std::sync::Arc;
 
