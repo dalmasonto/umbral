@@ -3868,6 +3868,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "umbra-realtime"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "umbra",
+]
+
+[[package]]
 name = "umbra-rest"
 version = "0.0.1"
 dependencies = [
