@@ -211,6 +211,10 @@ pub struct RestPlugin {
     /// `?search=`. Tables not in the map default to "every
     /// searchable column" (see `filtering::parse_search`).
     search_fields: HashMap<String, Vec<String>>,
+    /// Writable nested resources per table: `table -> [(json_field,
+    /// child_table)]`. Merged from `ResourceConfig::nested(...)`; read by
+    /// the create handler to insert children alongside the parent.
+    nested: HashMap<String, Vec<(String, String)>>,
     /// Gap 107: base URL prefix for all REST endpoints. Default
     /// `/api`. Set via `RestPlugin::at("/v1")`. Always normalised
     /// to one leading slash, no trailing slash.
@@ -309,6 +313,7 @@ impl RestPlugin {
             filters_disabled: std::collections::HashSet::new(),
             search_disabled: std::collections::HashSet::new(),
             search_fields: HashMap::new(),
+            nested: HashMap::new(),
             base_path: "/api".to_string(),
         }
     }
@@ -498,6 +503,7 @@ impl RestPlugin {
             filters_disabled,
             search_disabled,
             search_fields,
+            nested,
         } = config;
         for field in hidden {
             self.hidden.push((table.clone(), field));
@@ -533,6 +539,9 @@ impl RestPlugin {
         }
         if let Some(fields) = search_fields {
             self.search_fields.insert(table.clone(), fields);
+        }
+        if !nested.is_empty() {
+            self.nested.entry(table.clone()).or_default().extend(nested);
         }
         self
     }
@@ -1538,24 +1547,201 @@ async fn retrieve(
 async fn create(
     Path(table): Path<String>,
     headers: umbra::web::HeaderMap,
-    Json(body): Json<Map<String, Value>>,
+    Json(mut body): Json<Map<String, Value>>,
 ) -> Result<(StatusCode, Json<Map<String, Value>>), ApiError> {
     let cfg = CONFIG.get().expect("RestPlugin::routes was called");
     let identity = cfg.authentication.authenticate(&headers).await;
     let model = allowed_model(&table)?;
     cfg.gate(&table, &Action::Create, identity.as_ref())?;
 
-    // The ORM owns pre-validation + constraint classification +
-    // noform-stripping now — `insert_json` returns a structured
-    // `WriteError` that `From<WriteError> for ApiError`
-    // translates into a
-    // 400 with field-level errors. No body parsing at the
-    // boundary, no string-based Protocol-error contracts.
-    let mut row = umbra::orm::DynQuerySet::for_meta(&model)
-        .insert_json(&body)
+    let nested_specs = cfg.nested.get(&table).cloned().unwrap_or_default();
+
+    // Flat path (the common case) — unchanged, zero overhead. The ORM owns
+    // pre-validation + constraint classification + noform-stripping;
+    // `insert_json` returns a structured `WriteError` that
+    // `From<WriteError> for ApiError` translates into a 400 with
+    // field-level errors.
+    if nested_specs.is_empty() {
+        let mut row = umbra::orm::DynQuerySet::for_meta(&model)
+            .insert_json(&body)
+            .await?;
+        cfg.apply_overrides(&table, &mut row);
+        return Ok((StatusCode::CREATED, Json(row)));
+    }
+
+    create_nested(cfg, &table, model, &mut body, &nested_specs).await
+}
+
+/// Writable nested create (feature #58): insert the parent, then each
+/// declared child array with its FK to the parent set, returning the full
+/// nested object.
+///
+/// **Atomicity:** the dynamic write path (`DynQuerySet::insert_json`) has
+/// no transaction variant yet (see `planning/orm_fixes.md`), so this is
+/// *compensating*, not a true DB transaction — if any child fails, the
+/// parent and already-created siblings are deleted, so a bad child never
+/// leaves a half-created parent. (A process crash mid-write could still
+/// orphan a parent; the true fix is `insert_json_in_tx`.)
+async fn create_nested(
+    cfg: &RestPlugin,
+    table: &str,
+    model: ModelMeta,
+    body: &mut Map<String, Value>,
+    specs: &[(String, String)],
+) -> Result<(StatusCode, Json<Map<String, Value>>), ApiError> {
+    struct Pending {
+        field: String,
+        child: ModelMeta,
+        fk: String,
+        items: Vec<Value>,
+    }
+
+    // Split the nested arrays out of the parent body; resolve each child
+    // model + the FK column that points back at the parent.
+    let mut pending: Vec<Pending> = Vec::new();
+    for (field, child_table) in specs {
+        let items = match body.remove(field) {
+            Some(Value::Array(a)) => a,
+            None | Some(Value::Null) => Vec::new(),
+            Some(_) => {
+                return Err(ApiError::BadInput(format!(
+                    "nested field `{field}` must be an array"
+                )));
+            }
+        };
+        if items.is_empty() {
+            continue;
+        }
+        let child = meta_for_table(child_table)?;
+        let fk = child_fk_to(&child, table)?.to_string();
+        pending.push(Pending {
+            field: field.clone(),
+            child,
+            fk,
+            items,
+        });
+    }
+
+    // Insert the parent.
+    let mut parent = umbra::orm::DynQuerySet::for_meta(&model)
+        .insert_json(body)
         .await?;
-    cfg.apply_overrides(&table, &mut row);
-    Ok((StatusCode::CREATED, Json(row)))
+    let parent_pk = pk_column(&model)?.name.clone();
+    let pk_value = parent.get(&parent_pk).cloned().ok_or_else(|| {
+        ApiError::BadInput("nested: parent row has no primary key after insert".into())
+    })?;
+
+    // Insert children, tracking created rows so a failure can compensate.
+    let mut undo: Vec<(ModelMeta, String, Value)> = Vec::new();
+    let mut results: Vec<(String, Vec<Value>)> = Vec::new();
+
+    for p in pending {
+        let child_pk = pk_column(&p.child)?.name.clone();
+        let mut created = Vec::with_capacity(p.items.len());
+        for item in p.items {
+            let Value::Object(mut child_body) = item else {
+                compensate(&undo, &model, &parent_pk, &pk_value).await;
+                return Err(ApiError::BadInput(format!(
+                    "items in nested `{}` must be objects",
+                    p.field
+                )));
+            };
+            // Set the child's FK to the just-created parent.
+            child_body.insert(p.fk.clone(), pk_value.clone());
+            match umbra::orm::DynQuerySet::for_meta(&p.child)
+                .insert_json(&child_body)
+                .await
+            {
+                Ok(mut crow) => {
+                    if let Some(cpk) = crow.get(&child_pk).cloned() {
+                        undo.push((p.child.clone(), child_pk.clone(), cpk));
+                    }
+                    cfg.apply_overrides(&p.child.table, &mut crow);
+                    created.push(Value::Object(crow));
+                }
+                Err(e) => {
+                    compensate(&undo, &model, &parent_pk, &pk_value).await;
+                    return Err(e.into());
+                }
+            }
+        }
+        results.push((p.field, created));
+    }
+
+    cfg.apply_overrides(table, &mut parent);
+    for (field, children) in results {
+        parent.insert(field, Value::Array(children));
+    }
+    Ok((StatusCode::CREATED, Json(parent)))
+}
+
+/// Resolve a child model's `ModelMeta` by table (no allow-gate — nested
+/// children are declared by the developer, not exposed as a top-level
+/// resource).
+fn meta_for_table(table: &str) -> Result<ModelMeta, ApiError> {
+    for plugin in umbra::migrate::registered_plugins() {
+        for m in umbra::migrate::models_for_plugin(&plugin) {
+            if m.table == table {
+                return Ok(m);
+            }
+        }
+    }
+    Err(ApiError::BadInput(format!(
+        "nested: unknown child table `{table}`"
+    )))
+}
+
+/// The child column whose foreign key targets `parent_table`. Errors when
+/// there are zero or multiple such columns (the latter is ambiguous).
+fn child_fk_to<'a>(child: &'a ModelMeta, parent_table: &str) -> Result<&'a str, ApiError> {
+    let mut found: Option<&str> = None;
+    for c in &child.fields {
+        if c.fk_target.as_deref() == Some(parent_table) {
+            if found.is_some() {
+                return Err(ApiError::BadInput(format!(
+                    "nested: `{}` has multiple FKs to `{}` — ambiguous",
+                    child.table, parent_table
+                )));
+            }
+            found = Some(c.name.as_str());
+        }
+    }
+    found.ok_or_else(|| {
+        ApiError::BadInput(format!(
+            "nested: `{}` has no foreign key to `{}`",
+            child.table, parent_table
+        ))
+    })
+}
+
+/// Undo a partial nested write: delete created children (newest first),
+/// then the parent. Best-effort — we're already returning the real error.
+async fn compensate(
+    undo: &[(ModelMeta, String, Value)],
+    parent: &ModelMeta,
+    parent_pk: &str,
+    parent_pk_value: &Value,
+) {
+    for (child, pk_name, pk_val) in undo.iter().rev() {
+        let _ = umbra::orm::DynQuerySet::for_meta(child)
+            .filter_eq_string(pk_name, &scalar_to_string(pk_val))
+            .delete()
+            .await;
+    }
+    let _ = umbra::orm::DynQuerySet::for_meta(parent)
+        .filter_eq_string(parent_pk, &scalar_to_string(parent_pk_value))
+        .delete()
+        .await;
+}
+
+/// Render a JSON scalar to the string form `filter_eq_string` coerces.
+fn scalar_to_string(v: &Value) -> String {
+    match v {
+        Value::String(s) => s.clone(),
+        Value::Number(n) => n.to_string(),
+        Value::Bool(b) => b.to_string(),
+        _ => String::new(),
+    }
 }
 
 async fn update(

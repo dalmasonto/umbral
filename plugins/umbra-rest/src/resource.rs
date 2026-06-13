@@ -217,6 +217,11 @@ pub struct ResourceConfig {
     /// numeric + FK + Boolean — see `filtering::parse_search`).
     /// When `Some(list)`, only those column names contribute.
     pub(crate) search_fields: Option<Vec<String>>,
+    /// Writable nested resources: `(json_field, child_table)`. A `POST`
+    /// with `{ ..., "<json_field>": [ {child}, ... ] }` creates the parent
+    /// then each child (with its FK to the parent set), returning the full
+    /// nested object. Declared via [`ResourceConfig::nested`].
+    pub(crate) nested: Vec<(String, String)>,
 }
 
 impl std::fmt::Debug for ResourceConfig {
@@ -245,7 +250,28 @@ impl ResourceConfig {
             filters_disabled: false,
             search_disabled: false,
             search_fields: None,
+            nested: Vec::new(),
         }
+    }
+
+    /// Declare a writable nested resource. A `POST` to this resource whose
+    /// body carries `"<json_field>": [ {child}, ... ]` creates the parent,
+    /// then inserts each child with its foreign key to the parent set
+    /// automatically (the FK column is discovered from the child model —
+    /// the column that references this resource's table). The response
+    /// echoes the created children back under `json_field`.
+    ///
+    /// If any child fails validation the whole write is undone (the parent
+    /// and any already-created siblings are deleted), so you never get a
+    /// half-created parent.
+    ///
+    /// ```ignore
+    /// ResourceConfig::for_::<Order>().nested("items", "order_item")
+    /// // POST /api/order/ { "customer": 1, "items": [{ "product": 7, "qty": 2 }] }
+    /// ```
+    pub fn nested(mut self, json_field: impl Into<String>, child_table: impl Into<String>) -> Self {
+        self.nested.push((json_field.into(), child_table.into()));
+        self
     }
 
     /// Start a new resource config keyed off a model's

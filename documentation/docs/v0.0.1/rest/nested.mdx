@@ -1,0 +1,69 @@
+---
+title: Nested writes
+description: Create a parent and its children in one POST — writable nested serializers.
+sidebar_position: 5
+tags: [rest, nested, serializers, relations]
+---
+
+# Writable nested objects
+
+Create a parent row **and its children in a single request** — the most-requested DRF feature. Declare the nested relationship on the resource:
+
+```rust
+RestPlugin::default()
+    .resource(ResourceConfig::for_::<Order>().nested("items", "order_item"))
+```
+
+Now a `POST` whose body carries the nested array creates everything:
+
+```http
+POST /api/order/
+Content-Type: application/json
+
+{
+  "customer": "Ada",
+  "items": [
+    { "product": "Widget", "qty": 2 },
+    { "product": "Gadget", "qty": 1 }
+  ]
+}
+```
+
+The order is inserted first; then each item is inserted with **its foreign key to the order set automatically** — you don't repeat the parent id in each child. The response echoes the created children back:
+
+```json
+{
+  "id": 7,
+  "customer": "Ada",
+  "items": [
+    { "id": 1, "order": 7, "product": "Widget", "qty": 2 },
+    { "id": 2, "order": 7, "product": "Gadget", "qty": 1 }
+  ]
+}
+```
+
+## How the FK is found
+
+`.nested("items", "order_item")` says "the `items` array holds `order_item` rows." The framework discovers which column on `order_item` points back at `order` (the column whose foreign key targets the parent's table) and fills it. If the child has no FK to the parent — or more than one (ambiguous) — the request fails with a clear 400.
+
+## All-or-nothing on failure
+
+If any child fails validation (a missing required field, a bad FK, a constraint clash), the **whole write is rolled back** — the parent and any already-created siblings are deleted — so you never get a half-created parent:
+
+```http
+POST /api/order/ { "customer": "Grace", "items": [ {"product":"ok","qty":1}, {"qty":5} ] }
+→ 400  (the second item has no product)  → no order is created
+```
+
+<Callout type="warning">
+The rollback is **compensating** (delete-on-failure), not yet a true database transaction — the dynamic write path has no transaction variant. It covers the common validation-failure case fully; a process crash *between* the parent and child inserts could still orphan a parent. The transactional fix is tracked in `planning/orm_fixes.md` #2.
+</Callout>
+
+## Scope
+
+One level of nesting (a parent and its direct children). Declare multiple nested arrays by calling `.nested(...)` more than once. The flat create path is unchanged and carries zero overhead when no nested resources are declared.
+
+## See also
+
+- [Exposure](./exposure) — which models become resources.
+- [Authentication & permissions](./authentication) — gate the create action.
