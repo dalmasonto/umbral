@@ -56,12 +56,14 @@ use super::Model;
 /// `set_fk_column` stay unset (the field is inert).
 #[derive(Debug, Clone)]
 pub struct ReverseSet<C: Model> {
-    /// Cached parent-row PK. Set by the macro-emitted
-    /// `set_m2m_parent_ids` hook (which post-#44 covers both M2M
-    /// and reverse-FK slots) after each parent row is decoded. The
-    /// prefetch loader uses this to group children back to their
-    /// parent without re-fetching the parent's PK.
-    parent_id: Option<i64>,
+    /// Cached parent-row PK as a `serde_json::Value` (PK lift — was
+    /// `Option<i64>`). Set by the macro-emitted `set_m2m_parent_ids` hook
+    /// (which post-#44 covers both M2M and reverse-FK slots) after each
+    /// parent row is decoded. Holding the PK shape-agnostically lets a
+    /// `String`/slug- or `Uuid`-PK parent carry a `ReverseSet` field; the
+    /// prefetch loader groups children by the parent's `pk_as_json()`
+    /// regardless of this cache.
+    parent_id: Option<serde_json::Value>,
     /// Name of the FK column on `C` that points back at the parent.
     /// Set by the same macro hook from the `#[umbra(reverse_fk =
     /// "...")]` attribute. The prefetch loader emits
@@ -106,8 +108,9 @@ impl<C: Model> ReverseSet<C> {
 
     /// Set the parent's PK on this slot so the prefetch loader knows
     /// which `WHERE <fk_column> = parent_pk` bucket to target.
-    /// Called by the macro-emitted `set_m2m_parent_ids` arm.
-    pub fn set_parent_id(&mut self, id: i64) {
+    /// Called by the macro-emitted `set_m2m_parent_ids` arm with the
+    /// parent's PK as a `serde_json::Value` (PK lift — was `i64`).
+    pub fn set_parent_id(&mut self, id: serde_json::Value) {
         self.parent_id = Some(id);
     }
 
@@ -123,8 +126,8 @@ impl<C: Model> ReverseSet<C> {
     /// `set_m2m_parent_ids` wasn't called yet). Returns
     /// `Option<(parent_id, fk_column)>` so the caller can early-exit
     /// without a separate isset check.
-    pub fn parent_link(&self) -> Option<(i64, &'static str)> {
-        match (self.parent_id, self.fk_column) {
+    pub fn parent_link(&self) -> Option<(&serde_json::Value, &'static str)> {
+        match (&self.parent_id, self.fk_column) {
             (Some(id), Some(col)) => Some((id, col)),
             _ => None,
         }

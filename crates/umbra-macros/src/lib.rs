@@ -964,7 +964,7 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             let field_ident = field.ident.as_ref().expect("named field has ident").clone();
             let fk_col_lit = fk_col.clone();
             reverse_fk_parent_arms.push(quote! {
-                self.#field_ident.set_parent_id(__pk);
+                self.#field_ident.set_parent_id(__pk_json.clone());
                 self.#field_ident.set_fk_column(#fk_col_lit);
             });
             reverse_fk_resolved_arms.push(quote! {
@@ -1471,14 +1471,35 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                 self.#ident.set_junction_table(#junction_name);
             }
         });
-        // ReverseSet arms expect a bare `__pk: i64` (the slot stores
-        // Option<i64>). Models with non-i64 PKs that happen to have
-        // a ReverseSet field will fail to compile here — matches the
-        // same v1 i64-PK constraint as the M2M plumbing.
         let rfk_arms = reverse_fk_parent_arms.iter();
         let o2o_arms = one_to_one_parent_arms.iter();
+        // PK lift: ReverseSet slots now store the parent PK as a
+        // `serde_json::Value` (`__pk_json`), so a String/Uuid-PK parent
+        // can carry one. M2M and OneToOne slots still take the typed PK
+        // (`__pk`, i64-bound) — lifting those is a follow-up. Each `let`
+        // is emitted only when a slot kind that needs it is present, so a
+        // model with only a ReverseSet field gets just `__pk_json` (no
+        // unused-variable warning).
+        let needs_typed_pk = !m2m_field_idents.is_empty() || !one_to_one_parent_arms.is_empty();
+        let needs_json_pk = !reverse_fk_parent_arms.is_empty();
+        let typed_pk_decl = if needs_typed_pk {
+            quote! { let __pk = <Self as ::umbra::orm::Model>::primary_key(self); }
+        } else {
+            quote! {}
+        };
+        let json_pk_decl = if needs_json_pk {
+            quote! {
+                let __pk_json = ::umbra::_serde_json::to_value(
+                    &<Self as ::umbra::orm::Model>::primary_key(self),
+                )
+                .unwrap_or(::umbra::_serde_json::Value::Null);
+            }
+        } else {
+            quote! {}
+        };
         quote! {{
-            let __pk = <Self as ::umbra::orm::Model>::primary_key(self);
+            #typed_pk_decl
+            #json_pk_decl
             #(#m2m_arms)*
             #(#rfk_arms)*
             #(#o2o_arms)*
