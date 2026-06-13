@@ -316,6 +316,30 @@ pub trait Plugin: Send + Sync + 'static {
         Vec::new()
     }
 
+    /// Callable HTTP endpoints this plugin wants advertised in a
+    /// machine-readable index (e.g. a REST API root, or a client's
+    /// service-discovery fetch).
+    ///
+    /// This is *not* how a plugin mounts routes — that's [`routes`].
+    /// It's a declaration of which of those routes are worth surfacing
+    /// to an API client, with a human label and a grouping key. The
+    /// framework collects every plugin's list at `App::build()` into a
+    /// global readable via [`crate::migrate::registered_api_endpoints`];
+    /// a plugin like `umbra-rest` reads that global to render an API
+    /// root without ever naming the plugins that contributed.
+    ///
+    /// Paths are relative (`/oauth/google/login`) — the core type stays
+    /// origin-agnostic; a consumer joins its own origin when it needs an
+    /// absolute URL.
+    ///
+    /// Default: nothing advertised. Plugins that don't expose a
+    /// client-facing API leave this alone.
+    ///
+    /// [`routes`]: Plugin::routes
+    fn api_endpoints(&self) -> Vec<ApiEndpoint> {
+        Vec::new()
+    }
+
     /// Wire signals, start background work, seal admin registrations.
     /// Called after phase 4 (system checks) passes, in topological
     /// dependency order. Sync, on purpose; spawn async work via
@@ -375,6 +399,31 @@ impl StaticDir {
             source_dir: source_dir.into(),
         }
     }
+}
+
+/// One callable endpoint a plugin advertises for service discovery.
+/// Returned from [`Plugin::api_endpoints`] and collected at
+/// `App::build()` into [`crate::migrate::registered_api_endpoints`].
+///
+/// The shape is deliberately minimal and origin-agnostic: `path` is
+/// relative, so the type carries no assumption about the public host.
+/// A consumer (a REST API root, a SPA) joins its own origin to build an
+/// absolute URL. `group` lets a consumer bucket endpoints by source
+/// (`"oauth"`, `"tasks"`); `name` is a stable machine key within the
+/// group (`"google.login"`); `label` is the human string a UI renders.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ApiEndpoint {
+    /// Grouping key, e.g. `"oauth"`. Lets a consumer bucket endpoints
+    /// by the plugin/area that contributed them.
+    pub group: String,
+    /// Stable machine name within the group, e.g. `"google.login"`.
+    pub name: String,
+    /// HTTP method, uppercase: `"GET"`, `"POST"`, …
+    pub method: String,
+    /// Relative path, e.g. `"/oauth/google/login"`. No origin.
+    pub path: String,
+    /// Human label a UI renders, e.g. `"Sign in with Google"`.
+    pub label: String,
 }
 
 /// The handle plugins receive in `on_ready`.

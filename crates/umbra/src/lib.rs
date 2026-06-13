@@ -229,8 +229,8 @@ pub mod migrate {
         MigrationEntry, MigrationFile, MigrationRef, MigrationStatus, ModelMeta, Operation,
         Snapshot, detect_all_drift, detect_drift, diff, fake_apply, fake_apply_in, fake_initial,
         fake_initial_in, make, make_in, model_alias, models_for_plugin, plugin_order,
-        record_applied, registered_models, registered_plugins, render_operation_for, run,
-        run_checked, run_checked_in, run_in, show, show_in, table_alias,
+        record_applied, registered_api_endpoints, registered_models, registered_plugins,
+        render_operation_for, run, run_checked, run_checked_in, run_in, show, show_in, table_alias,
     };
 }
 
@@ -258,7 +258,9 @@ pub mod plugin {
     //! routes, or commands. The trait is also re-exported from the
     //! prelude so `use umbra::prelude::*;` brings it in.
 
-    pub use umbra_core::plugin::{AppContext, Plugin, PluginError, StaticDir, StaticFile};
+    pub use umbra_core::plugin::{
+        ApiEndpoint, AppContext, Plugin, PluginError, StaticDir, StaticFile,
+    };
 }
 
 pub mod static_files {

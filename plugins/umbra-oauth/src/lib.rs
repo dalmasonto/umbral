@@ -40,7 +40,7 @@ mod routes;
 use std::sync::{Arc, OnceLock};
 
 use umbra::migrate::ModelMeta;
-use umbra::plugin::{AppContext, Plugin, PluginError};
+use umbra::plugin::{ApiEndpoint, AppContext, Plugin, PluginError};
 use umbra::web::Router;
 
 pub use models::SocialAccount;
@@ -71,6 +71,24 @@ pub struct OAuthPlugin {
     login_redirect: String,
     /// The registered providers, keyed by `provider.key()`.
     providers: Vec<Arc<dyn OAuthProvider>>,
+    /// Allowlisted prefixes for the SPA `?next=` return URL. A login
+    /// started with `?next=<url>` is honored only when `<url>` begins
+    /// with one of these; the callback then returns a bearer token in
+    /// the URL fragment instead of establishing a cookie session. Empty
+    /// (the default) disables token mode entirely — `?next=` is ignored
+    /// and the flow keeps its server-rendered session behavior.
+    allowed_returns: Vec<String>,
+}
+
+/// The relative paths for one provider's flow endpoints. Single source
+/// of truth shared by the `/oauth/providers` discovery endpoint and
+/// [`OAuthPlugin::api_endpoints`] so the two can never drift.
+pub(crate) struct ProviderLinks {
+    pub key: &'static str,
+    pub label: &'static str,
+    pub login: String,
+    pub connect: String,
+    pub callback: String,
 }
 
 impl OAuthPlugin {
@@ -83,6 +101,7 @@ impl OAuthPlugin {
             redirect_base: redirect_base.into(),
             login_redirect: "/".to_string(),
             providers: Vec::new(),
+            allowed_returns: Vec::new(),
         }
     }
 
@@ -97,6 +116,55 @@ impl OAuthPlugin {
     pub fn login_redirect(mut self, path: impl Into<String>) -> Self {
         self.login_redirect = path.into();
         self
+    }
+
+    /// Allow a SPA return URL (prefix) for token-mode login. Call once
+    /// per trusted callback URL your single-page app serves. A login
+    /// started as `GET /oauth/{provider}/login?next=<url>` is honored
+    /// only when `<url>` starts with one of these prefixes; the OAuth
+    /// callback then redirects to `<url>#token=<bearer>&token_type=Bearer`
+    /// instead of setting a session cookie, so a separate-origin SPA can
+    /// pick the token out of the fragment and call the REST API with
+    /// `Authorization: Bearer`.
+    ///
+    /// This allowlist is the open-redirect / token-theft defense: a
+    /// `next` that matches nothing is rejected with `400`, so an attacker
+    /// can't point the flow at `https://evil.example` and harvest a
+    /// freshly minted token. With no allowlist set, `?next=` is ignored.
+    pub fn allow_return(mut self, url_prefix: impl Into<String>) -> Self {
+        self.allowed_returns.push(url_prefix.into());
+        self
+    }
+
+    /// Whether `next` is a permitted SPA return URL (prefix match
+    /// against the [`allow_return`](Self::allow_return) allowlist).
+    pub(crate) fn is_allowed_return(&self, next: &str) -> bool {
+        self.allowed_returns.iter().any(|p| next.starts_with(p))
+    }
+
+    /// The flow-endpoint paths for every registered provider. The one
+    /// source of truth behind both discovery surfaces.
+    pub(crate) fn provider_links(&self) -> Vec<ProviderLinks> {
+        self.providers
+            .iter()
+            .map(|p| {
+                let key = p.key();
+                ProviderLinks {
+                    key,
+                    label: p.label(),
+                    login: format!("/oauth/{key}/login"),
+                    connect: format!("/oauth/{key}/connect"),
+                    callback: format!("/oauth/{key}/callback"),
+                }
+            })
+            .collect()
+    }
+
+    /// Absolute form of a relative flow path, joined onto `redirect_base`
+    /// (the app's authoritative public origin). Used by the discovery
+    /// endpoint's `url` fields.
+    pub(crate) fn absolute(&self, path: &str) -> String {
+        format!("{}{}", self.redirect_base.trim_end_matches('/'), path)
     }
 
     /// The callback URL for a provider key.
@@ -131,6 +199,32 @@ impl Plugin for OAuthPlugin {
 
     fn routes(&self) -> Router {
         routes::router(self.clone())
+    }
+
+    /// Advertise each provider's `login` and `connect` entry points for
+    /// service discovery (a REST API root, etc.). The `callback` is
+    /// omitted here — it's the provider's redirect target, not a
+    /// client-callable action — but `GET /oauth/providers` still lists
+    /// it for setup convenience.
+    fn api_endpoints(&self) -> Vec<ApiEndpoint> {
+        let mut out = Vec::new();
+        for link in self.provider_links() {
+            out.push(ApiEndpoint {
+                group: "oauth".to_string(),
+                name: format!("{}.login", link.key),
+                method: "GET".to_string(),
+                path: link.login,
+                label: format!("Sign in with {}", link.label),
+            });
+            out.push(ApiEndpoint {
+                group: "oauth".to_string(),
+                name: format!("{}.connect", link.key),
+                method: "GET".to_string(),
+                path: link.connect,
+                label: format!("Connect {}", link.label),
+            });
+        }
+        out
     }
 
     /// Publish the registered provider keys so the UI can show a button

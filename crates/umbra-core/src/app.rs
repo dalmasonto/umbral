@@ -608,6 +608,17 @@ impl AppBuilder {
         }
         crate::migrate::init_plugin_order(order);
 
+        // Collect every plugin's advertised API endpoints into a global
+        // so a discovery surface (umbra-rest's API root) can list them
+        // without depending on the contributing plugins' crates. In
+        // registration order; plugins that advertise nothing contribute
+        // nothing.
+        let mut api_endpoints = Vec::new();
+        for plugin in &sorted_plugins {
+            api_endpoints.extend(plugin.api_endpoints());
+        }
+        crate::migrate::init_api_endpoints(api_endpoints);
+
         // Publish the per-plugin model alias map collected in phase
         // 2.5. Done after `migrate::init_plugins` so the migration
         // registry is alive when QuerySet's resolve_pool starts

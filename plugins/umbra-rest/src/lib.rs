@@ -1005,6 +1005,16 @@ impl Plugin for RestPlugin {
                 get(retrieve).put(update).patch(update).delete(destroy),
             );
 
+        // API root index: lists the exposed resources + every plugin's
+        // advertised endpoints (service discovery). Skipped when REST is
+        // mounted at the bare root (empty base), where `/` would collide
+        // with the app's own home route.
+        if !base.is_empty() {
+            router = router
+                .route(&format!("{base}/"), get(api_root))
+                .route(base, get(api_root));
+        }
+
         // Mount the `@action`-style custom endpoints. We register
         // each one with the table name and action name baked into
         // the path as LITERAL segments — axum's matchit router
@@ -1354,6 +1364,64 @@ fn enrich_404_body(msg: String, code: &'static str) -> ApiErrorBody {
 // =========================================================================
 // Model discovery + the allow/block check.
 // =========================================================================
+
+/// The API root index — a browsable map of what this API exposes.
+///
+/// `resources` lists every model the plugin serves (the allow/block
+/// filter applies, so hidden models never appear), each with its
+/// collection + detail path. `endpoints` is every plugin's advertised
+/// `api_endpoints()` (OAuth login/connect, etc.), collected by the
+/// framework at build time — REST reads the core registry without
+/// depending on the contributing plugins' crates. Each endpoint gets an
+/// absolute `url` joined from the incoming request's origin.
+async fn api_root(headers: umbra::web::HeaderMap) -> Json<Value> {
+    let cfg = CONFIG.get().expect("RestPlugin::routes was called");
+    let base = &cfg.base_path;
+
+    let mut resources = Map::new();
+    for meta in umbra::migrate::registered_models() {
+        if !cfg.allow(&meta.table) {
+            continue;
+        }
+        resources.insert(
+            meta.table.clone(),
+            serde_json::json!({
+                "path": format!("{base}/{}/", meta.table),
+                "detail": format!("{base}/{}/{{id}}", meta.table),
+            }),
+        );
+    }
+
+    let origin = request_origin(&headers);
+    let endpoints: Vec<Value> = umbra::migrate::registered_api_endpoints()
+        .into_iter()
+        .map(|e| {
+            serde_json::json!({
+                "group": e.group,
+                "name": e.name,
+                "method": e.method,
+                "path": e.path,
+                "label": e.label,
+                "url": origin.as_ref().map(|o| format!("{o}{}", e.path)),
+            })
+        })
+        .collect();
+
+    Json(serde_json::json!({ "resources": resources, "endpoints": endpoints }))
+}
+
+/// Best-effort absolute origin (`scheme://host`) from request headers,
+/// honoring `X-Forwarded-Proto` behind a proxy. `None` when there's no
+/// usable `Host` header (then the API root omits absolute `url`s and a
+/// client falls back to the relative `path`).
+fn request_origin(headers: &umbra::web::HeaderMap) -> Option<String> {
+    let host = headers.get("host")?.to_str().ok()?;
+    let scheme = headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("http");
+    Some(format!("{scheme}://{host}"))
+}
 
 fn allowed_model(table: &str) -> Result<ModelMeta, ApiError> {
     let config = CONFIG.get().expect("RestPlugin::routes was called");

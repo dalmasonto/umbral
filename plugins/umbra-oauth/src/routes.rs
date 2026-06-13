@@ -13,9 +13,10 @@
 use axum::Extension;
 use axum::extract::{Path, Query};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use umbra::templates::context;
-use umbra::web::{Html, IntoResponse, Redirect, Response, Router, StatusCode, get, post};
-use umbra_auth::current_session_user_id;
+use umbra::web::{Html, IntoResponse, Json, Redirect, Response, Router, StatusCode, get, post};
+use umbra_auth::{AuthToken, AuthUser, auth_user, current_session_user_id};
 use umbra_sessions::{SessionToken, current_session, get_data, login_user_id, set_data};
 
 use crate::OAuthPlugin;
@@ -53,17 +54,69 @@ struct FlowState {
     /// `Some(user_id)` for a connect flow (attach to this user);
     /// `None` for a login flow (resolve / create a user).
     connect_user: Option<i64>,
+    /// `Some(url)` when the flow was started by a SPA with an
+    /// allowlisted `?next=`. The callback redirects here instead of
+    /// `login_redirect`, and (for a login flow) appends a bearer token
+    /// in the URL fragment. `#[serde(default)]` so flows already in the
+    /// session from before this field existed still deserialize.
+    #[serde(default)]
+    return_to: Option<String>,
+}
+
+/// `?next=<url>` on a login/connect start — the SPA return URL.
+#[derive(Deserialize)]
+struct StartQuery {
+    next: Option<String>,
 }
 
 /// Build the flow routes, with the plugin config attached as an
 /// extension the handlers read.
 pub(crate) fn router(plugin: OAuthPlugin) -> Router {
     Router::new()
+        .route("/oauth/providers", get(oauth_providers))
         .route("/oauth/{provider}/login", get(oauth_login))
         .route("/oauth/{provider}/connect", get(oauth_connect))
         .route("/oauth/{provider}/callback", get(oauth_callback))
         .route("/oauth/{provider}/disconnect", post(oauth_disconnect))
         .layer(Extension(plugin))
+}
+
+/// Service-discovery: the configured providers and their flow URLs,
+/// auto-built from the registered providers. Public — lists provider
+/// names only, no secrets. A SPA fetches this to render login buttons
+/// and learn the URLs to navigate to.
+async fn oauth_providers(Extension(plugin): Extension<OAuthPlugin>) -> Response {
+    let providers: Vec<_> = plugin
+        .provider_links()
+        .into_iter()
+        .map(|l| {
+            json!({
+                "key": l.key,
+                "label": l.label,
+                "login":    { "path": l.login,    "url": plugin.absolute(&l.login) },
+                "connect":  { "path": l.connect,  "url": plugin.absolute(&l.connect) },
+                "callback": { "path": l.callback, "url": plugin.absolute(&l.callback) },
+            })
+        })
+        .collect();
+    Json(json!({ "providers": providers })).into_response()
+}
+
+/// Validate a `?next=` against the plugin's return-URL allowlist.
+/// `None` (no `next`) passes as `None`. A present-but-disallowed `next`
+/// is rejected with `400` — never a silent fallback, so an attacker
+/// can't redirect a minted token to an arbitrary origin.
+fn validate_next(
+    plugin: &OAuthPlugin,
+    next: Option<String>,
+) -> Result<Option<String>, Box<Response>> {
+    match next {
+        None => Ok(None),
+        Some(url) if plugin.is_allowed_return(&url) => Ok(Some(url)),
+        Some(_) => Err(Box::new(
+            (StatusCode::BAD_REQUEST, "next is not an allowed return URL").into_response(),
+        )),
+    }
 }
 
 /// Start a flow: persist a fresh `state` in the session, redirect to the
@@ -73,6 +126,7 @@ async fn begin_flow(
     token: &str,
     provider: &str,
     connect_user: Option<i64>,
+    return_to: Option<String>,
 ) -> Response {
     let Some(p) = plugin.lookup(provider) else {
         return server_error(&format!(
@@ -84,6 +138,7 @@ async fn begin_flow(
         state: state.clone(),
         provider: provider.to_string(),
         connect_user,
+        return_to,
     };
     if let Err(e) = set_data(token, FLOW_KEY, &flow).await {
         return server_error(&format!("failed to store flow state: {e}"));
@@ -96,14 +151,20 @@ async fn oauth_login(
     Extension(plugin): Extension<OAuthPlugin>,
     Extension(SessionToken(token)): Extension<SessionToken>,
     Path(provider): Path<String>,
+    Query(q): Query<StartQuery>,
 ) -> Response {
-    begin_flow(&plugin, &token, &provider, None).await
+    let return_to = match validate_next(&plugin, q.next) {
+        Ok(rt) => rt,
+        Err(resp) => return *resp,
+    };
+    begin_flow(&plugin, &token, &provider, None, return_to).await
 }
 
 async fn oauth_connect(
     Extension(plugin): Extension<OAuthPlugin>,
     Extension(SessionToken(token)): Extension<SessionToken>,
     Path(provider): Path<String>,
+    Query(q): Query<StartQuery>,
     headers: umbra::web::HeaderMap,
 ) -> Response {
     let Some(user_id) = current_session_user_id(&headers).await else {
@@ -113,7 +174,11 @@ async fn oauth_connect(
         )
             .into_response();
     };
-    begin_flow(&plugin, &token, &provider, Some(user_id)).await
+    let return_to = match validate_next(&plugin, q.next) {
+        Ok(rt) => rt,
+        Err(resp) => return *resp,
+    };
+    begin_flow(&plugin, &token, &provider, Some(user_id), return_to).await
 }
 
 #[derive(Deserialize)]
@@ -177,9 +242,31 @@ async fn oauth_callback(
         }
     };
 
-    let mut response = Redirect::to(&plugin.login_redirect).into_response();
+    // Where the browser lands: a SPA's allowlisted `return_to`, else
+    // the configured `login_redirect`.
+    let mut target = flow
+        .return_to
+        .clone()
+        .unwrap_or_else(|| plugin.login_redirect.clone());
+
+    // SPA token mode: a login flow with a `return_to` mints a bearer
+    // token and hands it back in the URL fragment, so a separate-origin
+    // SPA can authenticate the REST API. Connect flows never mint a
+    // token (the user already holds one).
+    if flow.connect_user.is_none() && flow.return_to.is_some() {
+        match mint_login_token(user_id).await {
+            Ok(plaintext) => {
+                let sep = if target.contains('#') { '&' } else { '#' };
+                target = format!("{target}{sep}token={plaintext}&token_type=Bearer");
+            }
+            Err(e) => return server_error(&format!("failed to mint login token: {e}")),
+        }
+    }
+
+    let mut response = Redirect::to(&target).into_response();
     // Connect flow: the user is already logged in as themselves — leave
-    // their session alone. Login flow: establish the session now.
+    // their session alone. Login flow: establish the session now (still
+    // useful for a same-origin client; harmless for a token-mode SPA).
     if flow.connect_user.is_none() {
         if let Err(e) =
             login_user_id(&headers, response.headers_mut(), Some(user_id.to_string())).await
@@ -188,6 +275,22 @@ async fn oauth_callback(
         }
     }
     response
+}
+
+/// Mint a fresh bearer token for a just-resolved user. `resolve_user`
+/// returns the id; `AuthToken::create_for` needs the row, so we load it
+/// back (it was just written/looked-up, so this is a cheap point read).
+async fn mint_login_token(user_id: i64) -> Result<String, String> {
+    let user = AuthUser::objects()
+        .filter(auth_user::ID.eq(user_id))
+        .first()
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("resolved user {user_id} not found"))?;
+    let (_row, plaintext) = AuthToken::create_for(&user, "oauth")
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(plaintext.0)
 }
 
 async fn oauth_disconnect(

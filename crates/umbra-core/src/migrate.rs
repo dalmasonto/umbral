@@ -189,6 +189,26 @@ pub fn plugin_order() -> Vec<String> {
         .unwrap_or_else(registered_plugins)
 }
 
+/// The client-facing API endpoints every registered plugin advertised
+/// via `Plugin::api_endpoints()`, collected by `App::build()`. `None`
+/// until that runs; an app with no advertising plugins publishes an
+/// empty vec.
+static API_ENDPOINTS: OnceLock<Vec<crate::plugin::ApiEndpoint>> = OnceLock::new();
+
+/// Publish the collected `Plugin::api_endpoints()`. Called once by
+/// `App::build()` after walking every registered plugin.
+pub(crate) fn init_api_endpoints(endpoints: Vec<crate::plugin::ApiEndpoint>) {
+    let _ = API_ENDPOINTS.set(endpoints);
+}
+
+/// Every callable endpoint registered plugins advertised for service
+/// discovery, in plugin-registration order. Empty until `App::build()`
+/// has run. A REST API root (or any discovery surface) reads this to
+/// list plugin endpoints without depending on those plugins' crates.
+pub fn registered_api_endpoints() -> Vec<crate::plugin::ApiEndpoint> {
+    API_ENDPOINTS.get().cloned().unwrap_or_default()
+}
+
 /// Publish the per-model alias routing. Called by `App::build()`
 /// during phase 3 after walking every plugin's `Plugin::database()`.
 /// Plugins that returned `None` contribute no entries; only the
