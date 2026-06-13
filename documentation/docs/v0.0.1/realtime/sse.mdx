@@ -1,0 +1,89 @@
+---
+title: Server-Sent Events
+description: Push data to one user or a whole room over SSE — notifications, live dashboards, presence — with zero polling.
+sidebar_position: 1
+tags: [realtime, sse, websockets, push, notifications]
+---
+
+# Real-time push (SSE)
+
+`umbra-realtime` pushes data from the server to connected clients — **to one user** or **to a named group/room** — without you tracking sockets by hand. Server-Sent Events is the default transport: one-way (server → client), proxy-friendly, and built into every browser via `EventSource`. (WebSockets land next; the targeting API is identical.)
+
+<Callout type="info">
+This is a single-instance plugin today. A `Broker` seam is in place so a Redis backplane can route `to_user(42)` across multiple app instances later — without any API change.
+</Callout>
+
+## Wiring
+
+```rust
+use umbra_realtime::RealtimePlugin;
+
+App::builder()
+    .plugin(AuthPlugin::<AuthUser>::default())   // identity at handshake
+    .plugin(SessionsPlugin::default())
+    .plugin(RealtimePlugin::default())           // mounts GET /realtime/sse
+```
+
+## Sending
+
+From anywhere — a handler, a signal, a task — build a target and `send` a named event with a JSON payload:
+
+```rust
+use umbra_realtime::Realtime;
+
+Realtime::to_user(42).send("notification", &json!({ "title": "Build passed" })).await;
+Realtime::to_group("chat:123").send("message", &msg).await;
+Realtime::broadcast().send("ping", &json!({})).await;
+```
+
+| Target | Reaches |
+|---|---|
+| `to_user(uid)` | every live connection authenticated as that user (laptop + phone) |
+| `to_group(name)` | every connection that joined that room |
+| `broadcast()` | every connection |
+
+`send` is **fire-and-forget** — it never blocks on socket I/O, so it's safe to call inside a request handler. A connection that can't keep up is skipped (best-effort), never back-pressured.
+
+## Connecting (the browser)
+
+A client opens the stream and names the rooms it wants:
+
+```js
+const es = new EventSource("/realtime/sse?groups=public:lobby,chat:123");
+
+es.addEventListener("message", (e) => {
+  const data = JSON.parse(e.data);
+  // render the chat message
+});
+
+es.addEventListener("notification", (e) => {
+  showToast(JSON.parse(e.data));
+});
+```
+
+The connection's **user** is resolved from the session cookie at handshake, so `to_user(...)` finds it with no extra work.
+
+## Group access: `GroupPolicy`
+
+Joining a room is gated — by default only `public:*` groups are allowed, so a client can't subscribe to `tenant:99` or `chat:123` it has no claim to (a rejected group fails the handshake with `403`). Grant access from the authenticated identity by supplying a policy:
+
+```rust
+struct MyPolicy;
+impl umbra_realtime::GroupPolicy for MyPolicy {
+    fn can_join(&self, user_id: Option<i64>, group: &str) -> bool {
+        if group.starts_with("public:") { return true; }
+        match group.strip_prefix("user:") {
+            // a user may join their own private channel
+            Some(id) => user_id.map(|u| u.to_string()) == Some(id.to_string()),
+            None => false, // extend with your membership / tenant checks
+        }
+    }
+}
+
+RealtimePlugin::default().group_policy(MyPolicy)
+```
+
+## See also
+
+- Design + the full plan (WebSockets, signals bridge, multi-instance broker): `docs/superpowers/specs/2026-06-13-umbra-realtime-design.md`.
+- Closes the SSE half of features.md #45.
