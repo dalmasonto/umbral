@@ -21,6 +21,17 @@ pub struct App {
 impl App {
     /// Create a new [`AppBuilder`].
     pub fn builder() -> AppBuilder {
+        // Load `.env` into the *process* environment so plain
+        // `std::env::var(...)` code sees it — most importantly a plugin's
+        // `from_env()` credential loader (e.g. the OAuth providers reading
+        // `UMBRA_OAUTH_*`). This runs before the `.plugin(...)` arguments
+        // are evaluated, so those loaders find the values. `dotenv()`
+        // never overrides an already-set process var (so real env vars
+        // keep precedence) and is a no-op when there's no `.env` file.
+        // Settings read `.env` separately via figment in
+        // `Settings::from_env`; this is the parallel path for code that
+        // reaches for the process environment directly.
+        dotenvy::dotenv().ok();
         AppBuilder::default()
     }
 
