@@ -118,11 +118,7 @@ impl OAuthProvider for GoogleProvider {
         url.to_string()
     }
 
-    async fn exchange_code(
-        &self,
-        code: &str,
-        redirect_uri: &str,
-    ) -> Result<TokenSet, OAuthError> {
+    async fn exchange_code(&self, code: &str, redirect_uri: &str) -> Result<TokenSet, OAuthError> {
         let resp = reqwest::Client::new()
             .post(TOKEN_URL)
             .form(&[
@@ -135,7 +131,10 @@ impl OAuthProvider for GoogleProvider {
             .send()
             .await
             .map_err(|e| OAuthError::Http(e.to_string()))?;
-        let body = resp.text().await.map_err(|e| OAuthError::Http(e.to_string()))?;
+        let body = resp
+            .text()
+            .await
+            .map_err(|e| OAuthError::Http(e.to_string()))?;
         parse_token(&body)
     }
 
@@ -146,7 +145,10 @@ impl OAuthProvider for GoogleProvider {
             .send()
             .await
             .map_err(|e| OAuthError::Http(e.to_string()))?;
-        let body = resp.text().await.map_err(|e| OAuthError::Http(e.to_string()))?;
+        let body = resp
+            .text()
+            .await
+            .map_err(|e| OAuthError::Http(e.to_string()))?;
         parse_identity(&body)
     }
 }

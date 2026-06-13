@@ -86,8 +86,7 @@ pub trait OAuthProvider: Send + Sync {
     fn authorize_url(&self, state: &str, redirect_uri: &str) -> String;
 
     /// Exchange an authorization `code` for tokens.
-    async fn exchange_code(&self, code: &str, redirect_uri: &str)
-    -> Result<TokenSet, OAuthError>;
+    async fn exchange_code(&self, code: &str, redirect_uri: &str) -> Result<TokenSet, OAuthError>;
 
     /// Resolve a token set to the account identity.
     async fn fetch_identity(&self, tokens: &TokenSet) -> Result<Identity, OAuthError>;

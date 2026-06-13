@@ -364,7 +364,10 @@ mod tests {
         let existing = seed_user("ada", "ada@verified.com").await;
         let id = identity("github-uid-B", Some("ada@verified.com"), true);
         let resolved = resolve_user("github", &id, &tokens(), None).await.unwrap();
-        assert_eq!(resolved, existing, "linked to the existing user, not a new one");
+        assert_eq!(
+            resolved, existing,
+            "linked to the existing user, not a new one"
+        );
     }
 
     // Rule 3 gate: an UNVERIFIED email matching an existing user must NOT
@@ -375,7 +378,10 @@ mod tests {
         let existing = seed_user("grace", "grace@verified.com").await;
         let id = identity("github-uid-C", Some("grace@verified.com"), false);
         let resolved = resolve_user("github", &id, &tokens(), None).await.unwrap();
-        assert_ne!(resolved, existing, "unverified email must not hijack the account");
+        assert_ne!(
+            resolved, existing,
+            "unverified email must not hijack the account"
+        );
     }
 
     // Rule 2: connect mode attaches the provider to the logged-in user.

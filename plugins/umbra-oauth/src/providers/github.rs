@@ -126,11 +126,7 @@ impl OAuthProvider for GitHubProvider {
         url.to_string()
     }
 
-    async fn exchange_code(
-        &self,
-        code: &str,
-        redirect_uri: &str,
-    ) -> Result<TokenSet, OAuthError> {
+    async fn exchange_code(&self, code: &str, redirect_uri: &str) -> Result<TokenSet, OAuthError> {
         let resp = reqwest::Client::new()
             .post(TOKEN_URL)
             .header(reqwest::header::ACCEPT, "application/json")
@@ -143,7 +139,10 @@ impl OAuthProvider for GitHubProvider {
             .send()
             .await
             .map_err(|e| OAuthError::Http(e.to_string()))?;
-        let body = resp.text().await.map_err(|e| OAuthError::Http(e.to_string()))?;
+        let body = resp
+            .text()
+            .await
+            .map_err(|e| OAuthError::Http(e.to_string()))?;
         parse_token(&body)
     }
 
@@ -207,7 +206,10 @@ mod tests {
 
     #[test]
     fn parses_token_without_refresh() {
-        let t = parse_token(r#"{"access_token":"gho_abc","scope":"read:user,user:email","token_type":"bearer"}"#).unwrap();
+        let t = parse_token(
+            r#"{"access_token":"gho_abc","scope":"read:user,user:email","token_type":"bearer"}"#,
+        )
+        .unwrap();
         assert_eq!(t.access_token, "gho_abc");
         assert_eq!(t.refresh_token, None);
         assert_eq!(t.scopes, "read:user,user:email");
