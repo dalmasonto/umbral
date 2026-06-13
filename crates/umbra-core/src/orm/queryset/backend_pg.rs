@@ -23,6 +23,11 @@ pub(super) fn row_to_json(row: &sqlx::postgres::PgRow) -> JsonValue {
             opt.map_or(JsonValue::Null, |v| serde_json::json!(v))
         } else if let Ok(opt) = row.try_get::<Option<bool>, _>(ord) {
             opt.map_or(JsonValue::Null, JsonValue::Bool)
+        } else if let Ok(opt) = row.try_get::<Option<uuid::Uuid>, _>(ord) {
+            // PG-native `uuid` columns don't decode as String — without
+            // this arm a Uuid-PK related model's id came back null, so
+            // select_related / reverse-FK couldn't match it (PK lift).
+            opt.map_or(JsonValue::Null, |u| JsonValue::String(u.to_string()))
         } else if let Ok(opt) = row.try_get::<Option<String>, _>(ord) {
             opt.map_or(JsonValue::Null, JsonValue::String)
         } else {

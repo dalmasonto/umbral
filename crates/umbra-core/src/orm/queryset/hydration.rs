@@ -98,11 +98,11 @@ pub(super) async fn hydrate_select_related<T: Model + HydrateRelated>(
         // registry isn't initialised (low-level tests that drive
         // the QuerySet without `App::build` — the legacy behaviour,
         // byte-identical for every integer-PK target).
-        let target_pk_col = crate::migrate::pk_meta_for_table(fk_target)
-            .map(|(name, _ty)| name)
-            .unwrap_or_else(|| "id".to_string());
+        let (target_pk_col, target_pk_ty) = crate::migrate::pk_meta_for_table(fk_target)
+            .unwrap_or_else(|| ("id".to_string(), crate::orm::SqlType::BigInt));
         let related_rows =
-            fetch_related_as_json_by_pk(fk_target, &target_pk_col, &ids, pool).await?;
+            fetch_related_as_json_by_pk(fk_target, &target_pk_col, target_pk_ty, &ids, pool)
+                .await?;
         let id_to_json: HashMap<String, JsonValue> = related_rows
             .into_iter()
             .filter_map(|obj| {
@@ -138,6 +138,20 @@ fn pk_json_key(v: &JsonValue) -> String {
 fn dedup_by_pk_key(ids: &mut Vec<JsonValue>) {
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     ids.retain(|v| seen.insert(pk_json_key(v)));
+}
+
+/// The SQL type of `T`'s primary-key column. Used by the reverse-FK /
+/// reverse-OneToOne hydrators to bind the parent PK values in the child's
+/// FK-column `IN (...)` list as the right type — so a `Uuid` parent PK
+/// binds as a native `uuid` on Postgres, not text. Falls back to `BigInt`
+/// (the historical i64 default) when the PK column can't be resolved.
+fn parent_pk_sql_type<T: Model>() -> crate::orm::SqlType {
+    crate::migrate::ModelMeta::for_::<T>()
+        .fields
+        .iter()
+        .find(|c| c.primary_key)
+        .map(|c| c.ty)
+        .unwrap_or(crate::orm::SqlType::BigInt)
 }
 
 /// Nested `select_related("a__b__c")` traversal. Walks the hop chain
@@ -198,16 +212,16 @@ pub(super) async fn hydrate_select_related_nested<T: Model + HydrateRelated>(
     // PK lift Pass D: resolve each hop target's PK column name
     // (was hardcoded `"id"`) so codename / slug / UUID-keyed
     // targets bind against the right column.
-    let hop_target_pk_cols: Vec<String> = hop_targets
+    let hop_target_pk: Vec<(String, crate::orm::SqlType)> = hop_targets
         .iter()
         .filter_map(|t| {
             registered
                 .iter()
                 .find(|m| &m.table == t)
-                .and_then(|m| m.pk_column().map(|c| c.name.clone()))
+                .and_then(|m| m.pk_column().map(|c| (c.name.clone(), c.ty)))
         })
         .collect();
-    if hop_target_pk_cols.len() != hops.len() {
+    if hop_target_pk.len() != hops.len() {
         // A target meta lookup failed mid-chain. Same shape the
         // dynamic-side hydrator falls back with — skip the chain
         // rather than crash.
@@ -231,7 +245,14 @@ pub(super) async fn hydrate_select_related_nested<T: Model + HydrateRelated>(
     dedup_by_pk_key(&mut ids);
     let mut levels: Vec<Vec<JsonValue>> = Vec::with_capacity(hops.len());
     levels.push(
-        fetch_related_as_json_by_pk(hop_targets[0], &hop_target_pk_cols[0], &ids, pool).await?,
+        fetch_related_as_json_by_pk(
+            hop_targets[0],
+            &hop_target_pk[0].0,
+            hop_target_pk[0].1,
+            &ids,
+            pool,
+        )
+        .await?,
     );
 
     for hop_idx in 1..hops.len() {
@@ -253,8 +274,14 @@ pub(super) async fn hydrate_select_related_nested<T: Model + HydrateRelated>(
         }
         dedup_by_pk_key(&mut next_ids);
         levels.push(
-            fetch_related_as_json_by_pk(hop_target, &hop_target_pk_cols[hop_idx], &next_ids, pool)
-                .await?,
+            fetch_related_as_json_by_pk(
+                hop_target,
+                &hop_target_pk[hop_idx].0,
+                hop_target_pk[hop_idx].1,
+                &next_ids,
+                pool,
+            )
+            .await?,
         );
     }
 
@@ -264,7 +291,7 @@ pub(super) async fn hydrate_select_related_nested<T: Model + HydrateRelated>(
     // levels[0], its rows carry the full nested chain.
     if levels.len() > 1 {
         for i in (0..levels.len() - 1).rev() {
-            let next_pk_col = &hop_target_pk_cols[i + 1];
+            let next_pk_col = &hop_target_pk[i + 1].0;
             let next_by_pk: HashMap<String, JsonValue> = levels[i + 1]
                 .iter()
                 .filter_map(|obj| {
@@ -294,7 +321,7 @@ pub(super) async fn hydrate_select_related_nested<T: Model + HydrateRelated>(
     // Phase 3: hydrate root parents with the fully-nested level-0
     // rows. Recursive ForeignKey<T>::Deserialize unpacks the chain
     // into resolved slots at every depth.
-    let first_pk_col = &hop_target_pk_cols[0];
+    let first_pk_col = &hop_target_pk[0].0;
     let first_by_pk: HashMap<String, JsonValue> = levels
         .into_iter()
         .next()
@@ -343,11 +370,18 @@ pub(super) async fn hydrate_reverse_fk_for_field<T: Model + HydrateRelated>(
         return Ok(());
     }
     dedup_by_pk_key(&mut parent_pks);
-    // SELECT * FROM <target> WHERE <fk_col> IN (parent_pks). Reuses the
-    // shape-agnostic IN binder the typed select_related path uses (it
-    // infers an integer vs string bind from the value shape).
-    let child_rows =
-        fetch_related_as_json_by_pk(spec.target_table, spec.fk_column, &parent_pks, pool).await?;
+    // SELECT * FROM <target> WHERE <fk_col> IN (parent_pks). The child's FK
+    // column is typed as the PARENT's PK, so bind the parent PK values as
+    // that type (correct uuid binding on Postgres).
+    let parent_pk_ty = parent_pk_sql_type::<T>();
+    let child_rows = fetch_related_as_json_by_pk(
+        spec.target_table,
+        spec.fk_column,
+        parent_pk_ty,
+        &parent_pks,
+        pool,
+    )
+    .await?;
     // Bucket children by their fk_column value, keyed PK-agnostically.
     let mut by_parent: HashMap<String, Vec<JsonValue>> = HashMap::new();
     for row in child_rows {
@@ -450,8 +484,15 @@ async fn hydrate_one_to_one_for_field<T: Model + HydrateRelated>(
     }
     dedup_by_pk_key(&mut parent_pks);
 
-    let child_rows =
-        fetch_related_as_json_by_pk(spec.target_table, fk_column, &parent_pks, pool).await?;
+    let parent_pk_ty = parent_pk_sql_type::<T>();
+    let child_rows = fetch_related_as_json_by_pk(
+        spec.target_table,
+        fk_column,
+        parent_pk_ty,
+        &parent_pks,
+        pool,
+    )
+    .await?;
     // Index by parent PK key. Take FIRST per parent — the UNIQUE
     // constraint guarantees uniqueness, but if there are dupes
     // (legacy data, deferred constraint, race condition during
@@ -735,85 +776,55 @@ pub(super) async fn hydrate_prefetch_related<T: Model + HydrateRelated>(
 pub(crate) async fn fetch_related_as_json_by_pk(
     table: &str,
     pk_col: &str,
+    pk_ty: crate::orm::SqlType,
     ids: &[JsonValue],
     pool: &DbPool,
 ) -> Result<Vec<JsonValue>, sqlx::Error> {
     if ids.is_empty() {
         return Ok(vec![]);
     }
-    // Decide the bind shape from the first non-null id. Mixed shapes
-    // are rejected because a heterogeneous bind list would silently
-    // truncate or coerce values on the way to the driver.
-    let first = ids
-        .iter()
-        .find(|v| !v.is_null())
-        .ok_or_else(|| sqlx::Error::Protocol("fetch_related_as_json_by_pk: all ids null".into()))?;
-    let bind_kind = match first {
-        JsonValue::Number(_) => BindKind::Int,
-        JsonValue::String(_) => BindKind::Str,
-        other => {
-            return Err(sqlx::Error::Protocol(format!(
-                "fetch_related_as_json_by_pk: unsupported id shape {other:?}"
-            )));
+    // Convert each non-null id to a `sea_query::Value` using the column's
+    // PK SqlType (NOT the JSON shape). This is what lets a `uuid::Uuid` PK
+    // — which serialises to a String, indistinguishable from a slug —
+    // bind as a native `uuid` on Postgres rather than as text (which PG's
+    // uuid column rejects). `json_to_sea_value` already parses Uuid /
+    // dates / etc. per type; sea-query then renders dialect-correct
+    // placeholders and binds the typed values.
+    let mut seavals: Vec<sea_query::Value> = Vec::with_capacity(ids.len());
+    for id in ids {
+        if id.is_null() {
+            continue;
         }
-    };
-    for v in ids {
-        let ok = match (bind_kind, v) {
-            (_, JsonValue::Null) => true,
-            (BindKind::Int, JsonValue::Number(_)) => true,
-            (BindKind::Str, JsonValue::String(_)) => true,
-            _ => false,
-        };
-        if !ok {
-            return Err(sqlx::Error::Protocol(format!(
-                "fetch_related_as_json_by_pk: mixed id shapes; expected {bind_kind:?}, got {v:?}"
-            )));
+        if let Ok(v) = crate::orm::write::json_to_sea_value(pk_ty, id, false, pk_col, None) {
+            seavals.push(v);
         }
     }
+    if seavals.is_empty() {
+        return Ok(vec![]);
+    }
 
-    let table_quoted = table.replace('"', "\"\"");
-    let pk_quoted = pk_col.replace('"', "\"\"");
+    let mut q = sea_query::Query::select();
+    q.column(sea_query::Asterisk)
+        .from(sea_query::Alias::new(table))
+        .and_where(
+            sea_query::Expr::col(sea_query::Alias::new(pk_col))
+                .is_in(seavals.into_iter().map(sea_query::SimpleExpr::Value)),
+        );
 
     match pool {
         DbPool::Sqlite(pool) => {
-            let placeholders: Vec<String> = (0..ids.len()).map(|_| "?".to_string()).collect();
-            let sql = format!(
-                "SELECT * FROM \"{table_quoted}\" WHERE \"{pk_quoted}\" IN ({})",
-                placeholders.join(", ")
-            );
-            let mut query = sqlx::query(&sql);
-            for id in ids {
-                query = match (bind_kind, id) {
-                    (BindKind::Int, JsonValue::Number(n)) => query.bind(n.as_i64().unwrap_or(0)),
-                    (BindKind::Str, JsonValue::String(s)) => query.bind(s.clone()),
-                    _ => continue,
-                };
-            }
-            let rows = query.fetch_all(pool).await?;
+            let (sql, args) = q.build_sqlx(SqliteQueryBuilder);
+            let rows = sqlx::query_with::<sqlx::Sqlite, _>(&sql, args)
+                .fetch_all(pool)
+                .await?;
             Ok(rows.iter().map(backend_sqlite::row_to_json).collect())
         }
         DbPool::Postgres(pool) => {
-            let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("${i}")).collect();
-            let sql = format!(
-                "SELECT * FROM \"{table_quoted}\" WHERE \"{pk_quoted}\" IN ({})",
-                placeholders.join(", ")
-            );
-            let mut query = sqlx::query(&sql);
-            for id in ids {
-                query = match (bind_kind, id) {
-                    (BindKind::Int, JsonValue::Number(n)) => query.bind(n.as_i64().unwrap_or(0)),
-                    (BindKind::Str, JsonValue::String(s)) => query.bind(s.clone()),
-                    _ => continue,
-                };
-            }
-            let rows = query.fetch_all(pool).await?;
+            let (sql, args) = q.build_sqlx(PostgresQueryBuilder);
+            let rows = sqlx::query_with::<sqlx::Postgres, _>(&sql, args)
+                .fetch_all(pool)
+                .await?;
             Ok(rows.iter().map(backend_pg::row_to_json).collect())
         }
     }
-}
-
-#[derive(Clone, Copy, Debug)]
-enum BindKind {
-    Int,
-    Str,
 }

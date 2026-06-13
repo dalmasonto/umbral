@@ -2151,16 +2151,16 @@ async fn hydrate_select_related_into(
         // the pre-fix `.as_i64()` silently dropping non-integer
         // links.
         let registered = crate::migrate::registered_models();
-        let hop_target_pk_cols: Vec<String> = targets
+        let hop_target_pk: Vec<(String, SqlType)> = targets
             .iter()
             .filter_map(|t| {
                 registered
                     .iter()
                     .find(|m| &m.table == t)
-                    .and_then(|m| m.pk_column().map(|c| c.name.clone()))
+                    .and_then(|m| m.pk_column().map(|c| (c.name.clone(), c.ty)))
             })
             .collect();
-        if hop_target_pk_cols.len() != hops.len() {
+        if hop_target_pk.len() != hops.len() {
             // A meta lookup failed mid-chain (only possible from
             // an unregistered intermediate model — unreachable in
             // practice). Skip the chain rather than crash.
@@ -2189,7 +2189,8 @@ async fn hydrate_select_related_into(
         levels.push(
             crate::orm::queryset::hydration::fetch_related_as_json_by_pk(
                 &targets[0],
-                &hop_target_pk_cols[0],
+                &hop_target_pk[0].0,
+                hop_target_pk[0].1,
                 &ids,
                 &pool,
             )
@@ -2218,7 +2219,8 @@ async fn hydrate_select_related_into(
             levels.push(
                 crate::orm::queryset::hydration::fetch_related_as_json_by_pk(
                     hop_target,
-                    &hop_target_pk_cols[hop_idx],
+                    &hop_target_pk[hop_idx].0,
+                    hop_target_pk[hop_idx].1,
                     &next_ids,
                     &pool,
                 )
@@ -2232,7 +2234,7 @@ async fn hydrate_select_related_into(
         // level 0 its rows carry the full nested chain.
         if levels.len() > 1 {
             for i in (0..levels.len() - 1).rev() {
-                let next_pk_col = &hop_target_pk_cols[i + 1];
+                let next_pk_col = &hop_target_pk[i + 1].0;
                 let next_by_pk: HashMap<String, serde_json::Value> = levels[i + 1]
                     .iter()
                     .filter_map(|obj| {
@@ -2266,7 +2268,7 @@ async fn hydrate_select_related_into(
         // and the IN-lookup — a race window) keep the raw FK
         // value; the alternative would be silently nulling the
         // field which hides a real referential-integrity issue.
-        let first_pk_col = &hop_target_pk_cols[0];
+        let first_pk_col = &hop_target_pk[0].0;
         let first_by_pk: HashMap<String, serde_json::Value> = levels
             .into_iter()
             .next()
