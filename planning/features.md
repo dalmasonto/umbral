@@ -298,10 +298,8 @@ These are the cross-cutting capabilities that turn a framework from a neat ORM d
     >
     > How: `DbRouter` trait with `read_db_for::<Product>() -> "replica"` and `write_db_for::<Order>() -> "primary"`. The `QuerySet` and `Manager` already support `on(&pool)`; a router would auto-select the pool based on the operation type. Defer until read-replica scaling is a real bottleneck.
 
-70. [ ] **Compression and streaming response bodies** 🟢 Low
-    > Why: Streaming bodies for large CSV exports or file downloads without loading everything into memory. Currently responses are fully buffered strings.
-    >
-    > How: `Response` builder with `.gzip(true)` or `.brotli(true)` using `tower-http::compression`. For streaming, use axum's `Stream` body type instead of `String`. Defer until a real app generates multi-megabyte responses.
+70. [x] **Compression and streaming response bodies** 🟢 Low
+       — Both halves shipped. Compression landed with #66 (`AppBuilder::compression()` gzip/brotli). Streaming now: `web::StreamingResponse` (impl `IntoResponse`) builds an axum `Body::from_stream` body — `from_chunks(stream)` for an infallible `Stream<Item: Into<Bytes>>` (the row-generator case), `new(stream)` for a fallible `Result<impl Into<Bytes>, impl Into<BoxError>>` (a DB/file read that can fail mid-flight → truncated body, headers already sent). Builder: `content_type`, `attachment(name)` / `inline(name)` (Content-Disposition, filename stripped of CR/LF/`"` against header injection), `status`. Composes with the compression layer (streamed bodies compress on the fly). Facade: `umbra::web::StreamingResponse` + in the prelude. Test: `crates/umbra-core/tests/streaming_response.rs` (concatenation + headers, mid-stream error truncation, filename sanitization, defaults). Doc: `web/streaming.mdx`.
 
 71. [x] **Management command extensions** 🟡 Medium
        — Already shipped at the trait + CLI layer. `Plugin::commands(&self) -> Vec<Box<dyn PluginCommand>>` is on the `Plugin` trait (default empty); `PluginCommand` lives in `crates/umbra-core/src/cli.rs` with a `clap::Command` builder + an async `run` handler. `umbra_core::cli::dispatch(plugins, argv)` walks every plugin's commands and routes argv to the matching handler. `umbra_cli::dispatch(app)` (the user-binary entry point in `crates/umbra-cli/src/lib.rs`) calls into it. `umbra-auth`'s `createsuperuser` and `umbra-tasks`'s `worker` are real consumers — the pattern is generalized and the surface is stable.

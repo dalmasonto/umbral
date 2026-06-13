@@ -1,0 +1,67 @@
+---
+title: Streaming responses
+description: Stream a large export or download chunk-by-chunk with StreamingResponse instead of buffering it in memory.
+sidebar_position: 9
+tags: [web, streaming, downloads, csv]
+---
+
+# Streaming responses
+
+A normal handler returns a fully-buffered body — a `String`, `Html`, or `Json`. That's right for a page, but a 200 MB CSV export or a file download shouldn't sit in memory all at once. `StreamingResponse` sends the body **chunk-by-chunk** from an async stream: memory stays flat regardless of size, and the client starts receiving bytes before the last row is generated.
+
+<Callout type="info">
+`StreamingResponse` composes with [compression](compression): a streamed body is gzip/brotli-compressed on the fly by the same layer, so a huge `?format=csv` both streams *and* compresses without buffering.
+</Callout>
+
+## Infallible chunks
+
+When producing a chunk can't fail (you're formatting rows you already have), use `from_chunks`. Each item is anything that converts to bytes — `String`, `Bytes`, `Vec<u8>`, `&'static str`:
+
+```rust
+use umbra::prelude::*;            // brings in StreamingResponse
+use futures_util::stream;
+
+async fn export_csv() -> StreamingResponse {
+    let header = std::iter::once("id,name,total\n".to_string());
+    let rows = (0..1_000_000).map(|i| format!("{i},item-{i},{}\n", i * 10));
+    let body = stream::iter(header.chain(rows));
+
+    StreamingResponse::from_chunks(body)
+        .content_type("text/csv; charset=utf-8")
+        .attachment("export.csv")          // browser offers a save dialog
+}
+```
+
+## Fallible chunks
+
+When producing a chunk *can* fail (reading a DB row, a file `read`), use `new` with a stream of `Result<impl Into<Bytes>, impl Into<BoxError>>`. The status line and headers are sent as soon as the first chunk is ready, so an error partway through aborts the response — the client sees a **truncated** body, which is the honest outcome for an already-started stream:
+
+```rust
+use umbra::web::StreamingResponse;
+use axum::body::Bytes;
+
+async fn download_file(path: std::path::PathBuf) -> StreamingResponse {
+    let file = tokio::fs::File::open(path).await.unwrap();
+    let reader = tokio_util::io::ReaderStream::new(file);   // Stream<Item = io::Result<Bytes>>
+    StreamingResponse::new(reader)
+        .content_type("application/pdf")
+        .inline("invoice.pdf")             // display in-browser, suggest a name
+}
+```
+
+## Builder options
+
+| Method | Effect |
+|--------|--------|
+| `.content_type(ct)` | Set `Content-Type` (default `application/octet-stream`). |
+| `.attachment(name)` | `Content-Disposition: attachment; filename="<name>"` — download. |
+| `.inline(name)` | `Content-Disposition: inline; filename="<name>"` — display, suggest a name. |
+| `.status(code)` | Override the status (default `200 OK`). |
+
+Filenames passed to `.attachment` / `.inline` are stripped of CR, LF, and `"` so they can't inject extra response headers or break the quoted header value.
+
+## See also
+
+- [Compression](compression) — gzip/brotli, which wraps streamed bodies transparently.
+- [CSV export](/docs/v0.0.1/rest/csv-export) — the REST list endpoint's `?format=csv`.
+- `crates/umbra-core/src/web/streaming.rs` for the implementation.

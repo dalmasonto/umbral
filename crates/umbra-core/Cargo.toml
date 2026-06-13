@@ -115,6 +115,11 @@ rand_core = { version = "0.6", features = ["getrandom"] }
 # figment::Jail (for env-var and toml file sandboxing in tests) lives behind
 # the "test" feature.
 figment = { version = "0.10", features = ["test"] }
+# `stream::iter` to synthesize streams in the streaming-response tests
+# (feature #70). It's also a normal dep, but integration tests are a
+# separate crate and only see dev-deps; the full feature set carries the
+# `stream` combinators the tests build on.
+futures-util = "0.3"
 # Isolated per-test scratch directories for the migrate integration tests
 # (declare -> migrate -> change -> migrate loop reads and writes JSON files,
 # so each test needs its own dir to stay independent of test order).
