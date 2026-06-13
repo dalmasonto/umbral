@@ -132,12 +132,21 @@ Single-process broadcast works for one instance. Multi-instance needs a backplan
 - [~] P1 website  · [ ] P2 testing · [ ] P3 #56–61 · [ ] P4 #65–70 · [ ] P5 trackers · [ ] P6 realtime
 
 ### P1 detail
-- [x] 1a seed foundation (feature_set + seed_plugin_features + seed_orm_data cmd) — commit f1eb714
+- [x] 1a seed foundation (feature_set + seed_plugin_features + seed_orm_data cmd) — f1eb714
 - [x] 1b /prebuilt backed (official plugins + features, dropped "more" strip) — f1eb714
 - [x] 1c /community backed (SocialLink/Newsletter/CommunityResource) — 43c803c
-- [ ] 1d base nav + footer ← NavigationItem
-- [ ] 1e new pages: /features /showcase /blog(+detail) /changelog (+ /security, /docs resolution)
-- [ ] 1f /dashboard real widgets
-- [ ] 1g verify no 404 (render crawl test)
+- [x] 1e new pages — **every base.html nav/footer link now resolves (no 404s)**:
+    - /features (FeatureCategory+FrameworkFeature, grouped) — ab5e56c
+    - /reviews (Review testimonials) — ea76aec
+    - /showcase (ShowcaseEntry, dogfooding-only, honest empty state) — c7ed7ab
+    - /security (policy page, no DB) + /docs (landing, no DB) — aff126c
+    - /changelog (curated, no DB) + /blog (BlogPost list, honest empty state) — 932a0fc
+- [ ] 1d base nav + footer ← NavigationItem (currently hardcoded in base.html but RESOLVES; backing it is polish — needs an ambient context-processor; see spec §"nav injection")
+- [ ] 1f /dashboard (the website's logged-in /dashboard, login-gated) → real widget queries (currently empty context, hardcoded template)
+- [ ] 1g verify: render-crawl test for the new pages. Data-backed pages HAVE render tests (features/reviews/showcase/community/prebuilt). Static pages (security/docs/changelog) + /blog empty-state do NOT yet — add smoke-tests, and a /blog/{slug} detail route for when posts exist.
 
-Known ORM gap logged: planning/orm_fixes.md #1 (prefetch_related 2nd reverse-FK field → IN-batch workaround).
+Verification status: every new page `cargo check`s clean; data-backed pages have passing render smoke-tests. The dev server at :8100 is running (cargo builds coexisted via target lock — never disrupted it).
+
+Known ORM gap logged: planning/orm_fixes.md #1 (prefetch_related 2nd reverse-FK field → IN-batch workaround; proper fix = emit hydration arms for EVERY ReverseSet field in umbra-macros).
+
+Pattern established for each page (replicate for remaining work): plugin gets `pub async fn seed()` (idempotent, editorial facts only — never fabricate metrics/adoption) + a `pub async fn render_*()` (IN-batch over N+1) + a `<plugin>/templates/<plugin>/*.html` extending base.html + tokio/tracing deps for on_ready + wire into `umbra_website/src/seed_command.rs` + a `tests/render_*.rs` (own test binary → own boot; register a TestStorage if the model has File/Image fields; one boot per binary since settings::init is one-shot).
