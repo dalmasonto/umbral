@@ -13,7 +13,8 @@
 use axum::Extension;
 use axum::extract::{Path, Query};
 use serde::{Deserialize, Serialize};
-use umbra::web::{IntoResponse, Redirect, Response, Router, StatusCode, get, post};
+use umbra::templates::context;
+use umbra::web::{Html, IntoResponse, Redirect, Response, Router, StatusCode, get, post};
 use umbra_auth::current_session_user_id;
 use umbra_sessions::{SessionToken, current_session, get_data, login_user_id, set_data};
 
@@ -22,6 +23,24 @@ use crate::models::{SocialAccount, social_account};
 use crate::policy::resolve_user;
 
 const FLOW_KEY: &str = "oauth_flow";
+
+/// Render a server-error (500) response for an unrecoverable OAuth
+/// failure — an unconfigured provider, a provider-communication error,
+/// or a failed session write. These are *server-side* problems (the user
+/// did nothing wrong), so they get the app's branded 500 page when one is
+/// registered (`server_error_template`), falling back to plain text. The
+/// underlying error is logged by the caller; the page never leaks it.
+fn server_error(log_message: &str) -> Response {
+    tracing::warn!("oauth: {log_message}");
+    match umbra::templates::render("500.html", &context! {}) {
+        Ok(body) => (StatusCode::INTERNAL_SERVER_ERROR, Html(body)).into_response(),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Something went wrong completing sign-in. Please try again later.",
+        )
+            .into_response(),
+    }
+}
 
 /// The in-flight flow, stored in the session between the authorize
 /// redirect and the callback.
@@ -56,7 +75,9 @@ async fn begin_flow(
     connect_user: Option<i64>,
 ) -> Response {
     let Some(p) = plugin.lookup(provider) else {
-        return (StatusCode::NOT_FOUND, format!("unknown provider `{provider}`")).into_response();
+        return server_error(&format!(
+            "provider `{provider}` is not configured on this server (no credentials set)"
+        ));
     };
     let state = uuid::Uuid::new_v4().to_string();
     let flow = FlowState {
@@ -65,8 +86,7 @@ async fn begin_flow(
         connect_user,
     };
     if let Err(e) = set_data(token, FLOW_KEY, &flow).await {
-        tracing::error!("oauth: failed to store flow state: {e}");
-        return (StatusCode::INTERNAL_SERVER_ERROR, "session error").into_response();
+        return server_error(&format!("failed to store flow state: {e}"));
     }
     let url = p.authorize_url(&state, &plugin.redirect_uri(provider));
     Redirect::to(&url).into_response()
@@ -87,7 +107,11 @@ async fn oauth_connect(
     headers: umbra::web::HeaderMap,
 ) -> Response {
     let Some(user_id) = current_session_user_id(&headers).await else {
-        return (StatusCode::UNAUTHORIZED, "log in before connecting an account").into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            "log in before connecting an account",
+        )
+            .into_response();
     };
     begin_flow(&plugin, &token, &provider, Some(user_id)).await
 }
@@ -106,7 +130,9 @@ async fn oauth_callback(
     headers: umbra::web::HeaderMap,
 ) -> Response {
     let Some(p) = plugin.lookup(&provider) else {
-        return (StatusCode::NOT_FOUND, format!("unknown provider `{provider}`")).into_response();
+        return server_error(&format!(
+            "provider `{provider}` is not configured on this server"
+        ));
     };
 
     // The user denied consent (or the provider errored).
@@ -135,17 +161,11 @@ async fn oauth_callback(
     let redirect_uri = plugin.redirect_uri(&provider);
     let tokens = match p.exchange_code(&code, &redirect_uri).await {
         Ok(t) => t,
-        Err(e) => {
-            tracing::warn!("oauth: token exchange failed for `{provider}`: {e}");
-            return (StatusCode::BAD_GATEWAY, "token exchange failed").into_response();
-        }
+        Err(e) => return server_error(&format!("token exchange failed for `{provider}`: {e}")),
     };
     let identity = match p.fetch_identity(&tokens).await {
         Ok(i) => i,
-        Err(e) => {
-            tracing::warn!("oauth: identity fetch failed for `{provider}`: {e}");
-            return (StatusCode::BAD_GATEWAY, "identity fetch failed").into_response();
-        }
+        Err(e) => return server_error(&format!("identity fetch failed for `{provider}`: {e}")),
     };
 
     // Apply the create-or-link policy.
@@ -164,8 +184,7 @@ async fn oauth_callback(
         if let Err(e) =
             login_user_id(&headers, response.headers_mut(), Some(user_id.to_string())).await
         {
-            tracing::error!("oauth: failed to establish session: {e}");
-            return (StatusCode::INTERNAL_SERVER_ERROR, "login failed").into_response();
+            return server_error(&format!("failed to establish session: {e}"));
         }
     }
     response

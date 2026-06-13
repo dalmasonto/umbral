@@ -37,14 +37,27 @@ pub mod provider;
 pub mod providers;
 mod routes;
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use umbra::migrate::ModelMeta;
-use umbra::plugin::Plugin;
+use umbra::plugin::{AppContext, Plugin, PluginError};
 use umbra::web::Router;
 
 pub use models::SocialAccount;
 pub use provider::{Identity, OAuthError, OAuthProvider, TokenSet};
+
+/// The provider keys that were registered on the `OAuthPlugin`, published
+/// at boot so the UI can show a button only for a *configured* provider
+/// (a `from_env()` provider with no credentials is never registered, so
+/// it never appears here). Read it with [`available_providers`].
+static REGISTERED_PROVIDERS: OnceLock<Vec<&'static str>> = OnceLock::new();
+
+/// The provider keys available for login/connect (e.g. `["google"]`).
+/// Empty until the `OAuthPlugin` has booted. Use this to render only the
+/// social buttons that will actually work.
+pub fn available_providers() -> Vec<&'static str> {
+    REGISTERED_PROVIDERS.get().cloned().unwrap_or_default()
+}
 
 /// The OAuth plugin. Holds the registered providers plus where to send
 /// the browser back to. Build it with [`OAuthPlugin::new`] + the chained
@@ -118,5 +131,13 @@ impl Plugin for OAuthPlugin {
 
     fn routes(&self) -> Router {
         routes::router(self.clone())
+    }
+
+    /// Publish the registered provider keys so the UI can show a button
+    /// only for a configured provider (see [`available_providers`]).
+    fn on_ready(&self, _ctx: &AppContext) -> Result<(), PluginError> {
+        let keys: Vec<&'static str> = self.providers.iter().map(|p| p.key()).collect();
+        let _ = REGISTERED_PROVIDERS.set(keys);
+        Ok(())
     }
 }
