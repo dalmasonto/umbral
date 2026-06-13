@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+
+{% block title %}Changelog - Umbra{% endblock %}
+{% block meta_description %}What's shipped in Umbra and what's next — release notes and the milestone roadmap.{% endblock %}
+
+{% block extra_head %}
+<style>
+  .cl-row { display: grid; grid-template-columns: 132px 1fr; gap: 22px; }
+  @media (max-width: 640px) { .cl-row { grid-template-columns: 1fr; gap: 6px; } }
+  .cl-rail { border-left: 2px solid var(--hairline); padding-left: 22px; padding-bottom: 26px; }
+</style>
+{% endblock %}
+
+{% block content %}
+
+<section class="mx-auto max-w-[860px] px-7 pb-2 pt-[52px]">
+  <div class="kicker mb-3.5 text-accent">
+    <span class="h-1.5 w-1.5 rounded-full bg-accent"></span>
+    Changelog
+  </div>
+  <h1 class="text-[34px] font-extrabold leading-[1.08] tracking-[-0.03em] text-ink sm:text-[40px]">
+    What's shipped, what's next
+  </h1>
+  <p class="mt-3.5 max-w-[640px] text-[16.5px] leading-[1.6] text-muted">
+    Umbra is greenfield and moving fast. Here's where it stands today and the milestones on the way to v0.1.
+  </p>
+</section>
+
+<section class="mx-auto max-w-[860px] px-7 py-10">
+  <div class="cl-row mb-7">
+    <div>
+      <span class="pill-ok">Current</span>
+      <div class="mt-1.5 font-mono text-[14px] font-bold text-ink">v0.0.1</div>
+    </div>
+    <div class="cl-rail">
+      <h2 class="mb-2 text-[17px] font-bold text-ink">The core loop, end to end</h2>
+      <ul class="m-0 list-disc space-y-1 pl-5 text-[14px] leading-[1.6] text-muted">
+        <li>ORM with managed migrations — declare → migrate → change → migrate.</li>
+        <li>Auto admin: CRUD, search, multi-filters, FK/M2M/O2O pickers, permissions, dashboard widgets.</li>
+        <li>REST + OpenAPI + an interactive playground; auth-gated resources.</li>
+        <li>Auth, sessions, OAuth (Google/GitHub) + account connection.</li>
+        <li>Secure-by-default: CSRF, HSTS, clickjacking headers, auto-escaping.</li>
+        <li>File/image fields with pluggable storage; soft deletes; signals; fixtures.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="cl-row">
+    <div>
+      <span class="rounded-full bg-surface-2 px-2.5 py-[3px] text-[12px] font-semibold text-faint">Roadmap</span>
+      <div class="mt-1.5 font-mono text-[14px] font-bold text-muted">toward v0.1</div>
+    </div>
+    <div style="padding-left: 22px">
+      <ul class="m-0 list-disc space-y-1 pl-5 text-[14px] leading-[1.6] text-muted">
+        <li>Email sending (SMTP / API backends) and a hardened background task queue.</li>
+        <li>WebSockets / SSE for realtime push — user- and room-targeted.</li>
+        <li>REST nested writable serializers; CSV / Excel import-export.</li>
+        <li>A testing & factory library for models and pages.</li>
+        <li>Caching, rate limiting, structured logging, and metrics.</li>
+      </ul>
+      <p class="mt-3 text-[13px] text-faint">Track the work on <a href="https://github.com/dalmasonto/umbra" target="_blank" rel="noopener" class="font-semibold text-accent-2">GitHub</a>, or follow releases via the <a href="/community" class="font-semibold text-accent-2">newsletter</a>.</p>
+    </div>
+  </div>
+</section>
+
+{% endblock %}

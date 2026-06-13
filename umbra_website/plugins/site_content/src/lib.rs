@@ -20,10 +20,13 @@ pub use models::{
 
 use std::path::PathBuf;
 
+use serde::Serialize;
 use umbra::migrate::ModelMeta;
 use umbra::plugin::{AppContext, Plugin, PluginError};
 use umbra::templates::context;
 use umbra::web::{Html, Router, StatusCode, get};
+
+use models::blog_post;
 
 #[derive(Debug, Default, Clone)]
 pub struct SiteContentPlugin;
@@ -51,7 +54,10 @@ impl Plugin for SiteContentPlugin {
     }
 
     fn routes(&self) -> Router {
-        Router::new().route("/docs", get(docs_page))
+        Router::new()
+            .route("/docs", get(docs_page))
+            .route("/changelog", get(changelog_page))
+            .route("/blog", get(blog_page))
     }
 
     fn on_ready(&self, _ctx: &AppContext) -> Result<(), PluginError> {
@@ -65,4 +71,61 @@ async fn docs_page() -> Result<Html<String>, (StatusCode, String)> {
     umbra::templates::render("site_content/docs.html", &context! {})
         .map(Html)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
+/// The `/changelog` page — curated release notes + milestone roadmap.
+/// Editorial content, no DB.
+async fn changelog_page() -> Result<Html<String>, (StatusCode, String)> {
+    umbra::templates::render("site_content/changelog.html", &context! {})
+        .map(Html)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
+/// One blog post card on `/blog`.
+#[derive(Debug, Serialize)]
+struct PostCard {
+    title: String,
+    slug: String,
+    excerpt: String,
+    kind: String,
+    /// Humanized publish date ("Jun 13, 2026"), or empty.
+    published: String,
+    reading_minutes: i32,
+}
+
+async fn blog_page() -> Result<Html<String>, (StatusCode, String)> {
+    render_blog()
+        .await
+        .map(Html)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))
+}
+
+/// Load + render `/blog`: published posts, newest first. Honest empty
+/// state when nothing's published yet (a greenfield project hasn't blogged
+/// — that's the truth, not a bug). Public so a render smoke-test can drive
+/// it without an axum runtime.
+pub async fn render_blog() -> Result<String, String> {
+    let posts: Vec<PostCard> = BlogPost::objects()
+        .filter(blog_post::STATUS.eq("published"))
+        .order_by(blog_post::PUBLISHED_AT.desc())
+        .order_by(blog_post::ID.desc())
+        .fetch()
+        .await
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|p| PostCard {
+            title: p.title,
+            slug: p.slug,
+            excerpt: p.excerpt.unwrap_or_default(),
+            kind: format!("{:?}", p.kind),
+            published: p
+                .published_at
+                .map(|d| d.format("%b %-d, %Y").to_string())
+                .unwrap_or_default(),
+            reading_minutes: p.reading_minutes,
+        })
+        .collect();
+
+    umbra::templates::render("site_content/blog.html", &context! { posts => posts })
+        .map_err(|e| e.to_string())
 }

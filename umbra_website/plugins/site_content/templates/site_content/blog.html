@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+
+{% block title %}Blog - Umbra{% endblock %}
+{% block meta_description %}The Umbra blog — deep dives, release notes, design notes, and plugin spotlights.{% endblock %}
+
+{% block content %}
+
+<section class="mx-auto max-w-[920px] px-7 pb-2 pt-[52px] text-center">
+  <div class="kicker mb-3.5 text-accent">
+    <span class="h-1.5 w-1.5 rounded-full bg-accent"></span>
+    Blog
+  </div>
+  <h1 class="mx-auto max-w-[760px] text-[38px] font-extrabold leading-[1.06] tracking-[-0.03em] text-ink sm:text-[44px]">
+    Deep dives &amp; release notes
+  </h1>
+  <p class="mx-auto mt-3.5 max-w-[600px] text-[17px] leading-[1.55] text-muted">
+    Design notes, tutorials, and what's new — straight from the people building Umbra.
+  </p>
+</section>
+
+<section class="mx-auto max-w-[920px] px-7 pb-12 pt-10">
+  {% if posts %}
+  <div class="grid gap-3.5">
+    {% for p in posts %}
+    <a href="/blog/{{ p.slug }}" class="card flex flex-col p-6 transition hover:-translate-y-0.5">
+      <div class="mb-2 flex items-center gap-3 text-[12px] text-faint">
+        <span class="rounded-md bg-accent-soft px-2 py-[2px] font-semibold text-accent-2">{{ p.kind }}</span>
+        {% if p.published %}<span>{{ p.published }}</span>{% endif %}
+        {% if p.reading_minutes %}<span>· {{ p.reading_minutes }} min read</span>{% endif %}
+      </div>
+      <h2 class="mb-1.5 text-[18px] font-bold leading-snug text-ink">{{ p.title }}</h2>
+      <p class="m-0 text-[14px] leading-[1.55] text-muted">{{ p.excerpt }}</p>
+    </a>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="card rounded-[20px] p-12 text-center">
+    <div class="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-accent-soft text-accent-2">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+    </div>
+    <h2 class="mb-1.5 text-[18px] font-bold text-ink">No posts yet</h2>
+    <p class="mx-auto mb-5 max-w-[420px] text-[14.5px] leading-[1.55] text-muted">The first posts are on the way. Subscribe to the newsletter and we'll send them to your inbox when they land.</p>
+    <a href="/community" class="btn-accent">Join the newsletter
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+    </a>
+  </div>
+  {% endif %}
+</section>
+
+{% endblock %}
