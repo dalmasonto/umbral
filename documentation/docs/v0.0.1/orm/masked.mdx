@@ -7,41 +7,65 @@ tags: [orm, masked, encryption, gdpr, pii, security]
 
 # Masked fields
 
-`Masked<String>` is a string field that is **stored encrypted** in the database and **redacted** everywhere it would otherwise leak. Use it for PII (phone numbers, national IDs) and secrets (API keys, OAuth tokens): a stolen database dump leaks ciphertext, not plaintext.
+`Masked<String>` is a string field that is **stored encrypted** in the database and **redacted** everywhere it would otherwise leak. Use it for PII (phone numbers, national IDs, addresses) and secrets (API keys, OAuth tokens): a stolen database dump leaks ciphertext, not plaintext.
 
 The full surface lives in `umbra::orm`: `Masked`, `MaskKeyring`, `MaskError`, `set_mask_keyring`.
 
+<Callout type="info">
+`Masked` is the building block the [OAuth plugin](../auth/oauth) uses to store provider access/refresh tokens. Anything you'd be uncomfortable seeing in a `pg_dump` is a candidate.
+</Callout>
+
 ## How it works
 
-Encryption is **public-key** (X25519 sealed boxes). The public key encrypts; the private key decrypts. That asymmetry buys two things:
+Encryption is **public-key** (X25519 sealed boxes — the libsodium `crypto_box_seal` construction). The public key encrypts; the private key decrypts. That asymmetry is the whole point:
 
-- a tier that only holds the public key can store PII it can never read, and
-- **crypto-shredding**: deleting the private key renders every masked column permanently unrecoverable — a fast, bulk "right to be forgotten".
+- **A write-only tier** that holds only the public key can store PII it can never read back. An edge service can capture a phone number that only a separate, locked-down service (holding the private key) can ever decrypt.
+- **Crypto-shredding**: deleting the private key renders every masked column permanently unrecoverable — a fast, bulk "right to be forgotten" that doesn't require touching a single row.
 
-A `Masked` value is plaintext in memory when you construct it and ciphertext once loaded from the database. Its `Debug`, `Display`, and serde output never reveal the plaintext — call `.reveal()` (which needs the private key) to read it.
+A `Masked` value is **plaintext in memory** when you construct it with `Masked::new(...)`, and **ciphertext** once it has been loaded from the database. The plaintext is only recoverable through an explicit `.reveal()` call.
+
+### What each output shows
+
+This is the most important table on the page — masked data behaves differently depending on how it's accessed:
+
+| Access | Result |
+|---|---|
+| `Debug` (`{:?}`) | `Masked(••••••)` — safe in logs |
+| `Display` (`{}`) | `••••••` — safe in templates |
+| serde / JSON output | **opaque ciphertext** (encrypt-on-serialize) |
+| `.reveal()` | the plaintext (needs the private key) |
+| the database column | base64 ciphertext (`TEXT`) |
 
 <Callout type="warning">
-A masked field **serializes as an opaque encrypted blob**, not the plaintext and not a `••••••` marker — the ORM write path stores exactly what serde emits, so it must be ciphertext. For a clean REST response, hide the field with the serializer's `.hide([...])`. `Debug`/`Display` stay redacted, so logs are safe by default.
+serde output is **ciphertext, not the `••••••` marker**. This is load-bearing: the ORM write path binds INSERT values via `serde_json::to_value(instance)`, so whatever serde emits is what lands in the column — it *must* be the encrypted value. The plaintext therefore never leaves the process through serde. For a clean REST response, hide the field with the serializer's `.hide([...])`; `Debug` and `Display` stay redacted regardless, so logs and templates are safe by default.
 </Callout>
 
 ## Set up keys
 
-Generate a keypair once:
+Generate a keypair once with the built-in CLI command:
 
 ```bash
 cargo run -- maskkeygen
 ```
 
-It prints two lines — add them to your environment (`.env`):
+It prints two lines — add them to your environment (a `.env` file in dev, your secret manager in prod):
 
 ```bash
-UMBRA_MASK_PUBLIC_KEY=...   # encrypts (every tier that writes masked data needs it)
+UMBRA_MASK_PUBLIC_KEY=...   # encrypts — every tier that WRITES masked data needs it
 UMBRA_MASK_PRIVATE_KEY=...  # decrypts / reveal() — keep secret; deleting it crypto-shreds
 ```
 
-The keyring is resolved once from the environment, or injected explicitly with `umbra::orm::set_mask_keyring` (tests, or loading keys from a vault).
+The keyring is resolved **once** (an ambient `OnceLock`, like the DB pool), lazily from the environment on first use. You can also inject it explicitly — useful in tests, or when loading keys from a vault rather than env vars:
 
-## Example
+```rust
+use umbra::orm::{MaskKeyring, set_mask_keyring};
+
+set_mask_keyring(MaskKeyring::from_base64(&public_b64, Some(&private_b64))?);
+```
+
+A tier configured with **only** the public key can store masked data but not reveal it — `reveal()` returns `MaskError::NoPrivateKey`.
+
+## Declaring and using a masked field
 
 ```rust
 use umbra::prelude::*;
@@ -50,8 +74,8 @@ use umbra::prelude::*;
 pub struct Customer {
     pub id: i64,
     pub name: String,
-    pub phone: Masked<String>,            // encrypted at rest
-    pub backup_phone: Option<Masked<String>>, // nullable; None stays NULL
+    pub phone: Masked<String>,                  // encrypted at rest, NOT NULL
+    pub backup_phone: Option<Masked<String>>,   // nullable; None stays SQL NULL
 }
 
 // Write: plaintext in, sealed on save.
@@ -64,13 +88,63 @@ Customer::objects()
     })
     .await?;
 
-// Read: loads ciphertext; reveal() decrypts (needs the private key).
+// Read: the row loads with ciphertext held internally; reveal() decrypts.
 let c = Customer::objects().filter(customer::ID.eq(1)).first().await?.unwrap();
 let number = c.phone.reveal()?; // "+254712345678"
 ```
 
-If no private key is configured, `reveal()` returns `MaskError::NoPrivateKey`; if no public key is configured, a write fails loudly rather than storing plaintext.
+The `#[derive(Model)]` macro recognises `Masked<String>` and `Option<Masked<String>>` and maps them to a `TEXT` column with the `masked` widget. No extra attributes are required.
+
+## API reference
+
+### `Masked<String>`
+
+| Item | Description |
+|---|---|
+| `Masked::new(plaintext)` | Construct from plaintext (sealed on the next write). |
+| `.reveal() -> Result<String, MaskError>` | Decrypt. Needs the private key. For an in-memory value, returns it directly without touching the keyring. |
+| `.is_revealable() -> bool` | Whether the value can currently be revealed (in-memory, or keyring has a private key). |
+| `Masked::default()` | An empty masked value (empty plaintext). |
+| `From<String>` / `From<&str>` | Same as `new`. |
+
+### `MaskKeyring`
+
+| Item | Description |
+|---|---|
+| `MaskKeyring::generate() -> (String, String)` | A fresh `(public_b64, private_b64)` keypair. |
+| `MaskKeyring::from_base64(pub, Some(priv))` | Build a keyring from base64 keys (private optional). |
+| `MaskKeyring::from_env()` | Read `UMBRA_MASK_PUBLIC_KEY` / `UMBRA_MASK_PRIVATE_KEY`. |
+| `.seal(bytes) -> String` / `.open(ct) -> Result<String, MaskError>` | Low-level seal/open against this specific keyring (no ambient state). |
+
+### `MaskError`
+
+`NoKeyring` (nothing configured), `NoPrivateKey` (can store but not reveal), `BadKey`, `Malformed`, `Decrypt` (wrong key or tampered data). Implements `std::error::Error`.
+
+## Limitations
+
+### You can't filter or sort by a masked column's value
+
+Each encryption uses a fresh ephemeral key, so the same plaintext seals to different ciphertext every time — `WHERE phone = '...'` can never match. Masked columns are for store-and-reveal, not querying. If you need to look something up by a sensitive value, store a separate non-reversible hash (e.g. SHA-256) in an indexed column and query that.
+
+### Forms treat a masked field as write-only
+
+Deserialization reads input as new plaintext. A form that re-submits a redacted value would overwrite the stored one, so render masked fields as write-only (set a new value, never edit the existing ciphertext). OAuth tokens are server-set, so this doesn't arise there.
+
+### Ciphertext is larger than the plaintext
+
+A sealed box adds ~48 bytes (ephemeral public key + nonce + auth tag) before base64. Fine for PII-sized fields; not intended for large blobs.
+
+## GDPR operations
+
+<Steps>
+<Step title="Erasure (right to be forgotten)">
+For a clean break across *all* masked data, destroy `UMBRA_MASK_PRIVATE_KEY` — every masked column becomes permanently unrecoverable (crypto-shredding), no row updates needed. For per-user erasure, overwrite or delete that user's rows as usual.
+</Step>
+<Step title="Key rotation">
+Keep the old private key available, decrypt-with-old and re-encrypt-with-new in a one-off migration, then retire the old key. (A dedicated rotation command is a planned follow-up; today this is a manual pass.)
+</Step>
+</Steps>
 
 ## Design rationale
 
-See `docs/superpowers/specs/2026-06-13-masked-and-oauth-design.md` (Component A) for the crypto choice (sealed boxes vs. symmetric AES vs. `age`), the encrypt-on-serialize integration with the ORM write path, and the GDPR crypto-shredding / key-rotation notes.
+See `docs/superpowers/specs/2026-06-13-masked-and-oauth-design.md` (Component A) for the crypto choice (sealed boxes vs. symmetric AES vs. `age`), the encrypt-on-serialize integration with the ORM write path, and the GDPR notes.

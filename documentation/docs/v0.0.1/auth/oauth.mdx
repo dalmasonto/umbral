@@ -7,12 +7,12 @@ tags: [auth, oauth, social-login, google, github, allauth]
 
 # OAuth / social login
 
-`umbra-oauth` is umbra's django-allauth equivalent. It does two things with one flow, layered on `umbra-auth`:
+`umbra-oauth` is umbra's [django-allauth](https://docs.allauth.org/) equivalent. It does two things with one flow, layered on `umbra-auth`:
 
 - **Social login** — "Sign in with Google" resolves (or creates) an `AuthUser` and logs them in.
 - **Account connection** — a logged-in user attaches a provider ("Connect GitHub"), which is how the app later gets API access (Drive, repos, …) on their behalf.
 
-A social identity is an **extension** of the user — a `SocialAccount` row linked by foreign key — never a replacement for the username. A user can link several accounts (the unique key is `(provider, provider_uid)`). Provider tokens are stored in [`Masked`](../orm/masked) columns, encrypted at rest.
+A social identity is an **extension** of the user — a `SocialAccount` row linked by foreign key — never a replacement for the username. A user can link several accounts (the unique key is `(provider, provider_uid)`, so even two GitHub accounts on one user are fine). Provider tokens are stored in [`Masked`](../orm/masked) columns, encrypted at rest.
 
 ## Wiring
 
@@ -30,12 +30,53 @@ App::builder()
     .plugin(oauth)
 ```
 
-`redirect_base` is your app's public origin; each provider's callback is `{base}/oauth/{provider}/callback`, which must match what's registered in the provider console. Credentials come from the environment:
+`OAuthPlugin::new(redirect_base)` takes your app's **public origin** (`https://example.com`, or `http://localhost:8000` in dev). Each provider's callback is `{redirect_base}/oauth/{provider}/callback`, which must match what you register in the provider's console. `.login_redirect(path)` is where the browser lands after a successful login (default `/`). Using `from_env()` means a provider with no credentials configured is simply skipped — safe to leave the plugin on with nothing set.
+
+<Callout type="warning">
+`SessionsPlugin` is **required** — the flow stores its CSRF `state` token in the session. Without it, every callback fails the state check.
+</Callout>
+
+## Create the table
+
+`SocialAccount` is a model like any other, so generate and apply its migration:
 
 ```bash
-UMBRA_OAUTH_GOOGLE_CLIENT_ID=...     UMBRA_OAUTH_GOOGLE_CLIENT_SECRET=...
-UMBRA_OAUTH_GITHUB_CLIENT_ID=...     UMBRA_OAUTH_GITHUB_CLIENT_SECRET=...
+cargo run -- makemigrations   # writes the oauth migration
+cargo run -- migrate          # creates the oauth_social_account table
 ```
+
+## Provider setup
+
+Register an OAuth app with each provider and set the credentials as environment variables.
+
+<Tabs>
+<Tab title="Google">
+1. In the [Google Cloud Console](https://console.cloud.google.com/apis/credentials), create an **OAuth client ID** (type: Web application).
+2. Add an **Authorized redirect URI**: `{redirect_base}/oauth/google/callback`.
+3. Copy the client ID + secret into your env:
+
+```bash
+UMBRA_OAUTH_GOOGLE_CLIENT_ID=...
+UMBRA_OAUTH_GOOGLE_CLIENT_SECRET=...
+```
+
+Default scopes are `openid email profile`. Google receives `access_type=offline` + `prompt=consent`, so it returns a **refresh token** for later API access (widen scopes with `.scopes("openid email profile https://www.googleapis.com/auth/drive.readonly")`).
+</Tab>
+<Tab title="GitHub">
+1. In **Settings → Developer settings → [OAuth Apps](https://github.com/settings/developers)**, register a new app.
+2. Set the **Authorization callback URL**: `{redirect_base}/oauth/github/callback`.
+3. Copy the client ID + secret:
+
+```bash
+UMBRA_OAUTH_GITHUB_CLIENT_ID=...
+UMBRA_OAUTH_GITHUB_CLIENT_SECRET=...
+```
+
+Default scopes are `read:user user:email`. The verified primary email is read from `/user/emails`. GitHub **OAuth apps don't issue refresh tokens** (GitHub Apps do), so `refresh_token` is `None`.
+</Tab>
+</Tabs>
+
+Optional: override the callback origin in prod without recompiling — the website example reads `UMBRA_OAUTH_REDIRECT_BASE`.
 
 ## Routes
 
@@ -48,22 +89,99 @@ The plugin mounts, per registered provider:
 | `GET /oauth/{provider}/callback` | Provider redirects back here |
 | `POST /oauth/{provider}/disconnect` | Unlink a provider (auth required) |
 
-A `<a href="/oauth/google/login">Sign in with Google</a>` is all a template needs.
+A login button is just a link:
+
+```html
+<a href="/oauth/google/login">Sign in with Google</a>
+<a href="/oauth/github/login">Sign in with GitHub</a>
+
+<!-- For a logged-in user, on a profile page: -->
+<a href="/oauth/github/connect">Connect GitHub</a>
+<form method="post" action="/oauth/github/disconnect">
+  <button type="submit">Disconnect</button>
+</form>
+```
 
 ## Linking policy
 
 On the callback, the resolved identity is matched in order:
 
 <Steps>
-<Step title="Already linked">If a `SocialAccount` exists for `(provider, provider_uid)`, refresh its tokens and log in as its user.</Step>
-<Step title="Connect mode">If a logged-in user started a connect flow, attach the identity to them (refusing it if it already belongs to someone else).</Step>
+<Step title="Already linked">If a `SocialAccount` exists for `(provider, provider_uid)`, refresh its tokens and log in as its user. (In connect mode, this is refused if the identity belongs to a *different* user.)</Step>
+<Step title="Connect mode">If a logged-in user started a connect flow, attach the identity to them.</Step>
 <Step title="Verified-email link">If the provider asserts a **verified** email matching an existing user, link to that user. Only when verified — an unverified address can't capture an account.</Step>
 <Step title="Auto-create">Otherwise mint a new `AuthUser` (unique username; the password is unusable until they set one).</Step>
 </Steps>
 
 <Callout type="warning">
-CSRF is handled with a one-time `state` token persisted in the session before the redirect and checked on the callback — `SessionsPlugin` must be registered. Email-based auto-linking only happens for provider-verified emails, to prevent account takeover.
+Email-based auto-linking happens **only** for provider-verified emails. This prevents account takeover: an attacker can't pre-register an unverified address to capture a future real signup.
 </Callout>
+
+## The `SocialAccount` model
+
+| Field | Type | Notes |
+|---|---|---|
+| `user` | `ForeignKey<AuthUser>` | The linked user (cascade delete). |
+| `provider` | `String` | `"google"` / `"github"` / …. |
+| `provider_uid` | `String` | The provider's stable id. Unique with `provider`. |
+| `provider_email` | `Option<String>` | Email the provider reported. |
+| `email_verified` | `bool` | Whether the provider verified it. |
+| `access_token` | `Masked<String>` | Encrypted at rest. |
+| `refresh_token` | `Option<Masked<String>>` | Encrypted; `None` if not issued. |
+| `scopes`, `expires_at` | | Granted scopes + token expiry. |
+
+## Using stored tokens (API access)
+
+The tokens are exactly what you need to call the provider's API later (e.g. Google Drive). Load the account and `.reveal()` the token (requires the [mask private key](../orm/masked)):
+
+```rust
+use umbra_oauth::models::{SocialAccount, social_account};
+
+let account = SocialAccount::objects()
+    .filter(social_account::USER.eq(user_id))
+    .filter(social_account::PROVIDER.eq("google"))
+    .first().await?.unwrap();
+
+let access_token = account.access_token.reveal()?;
+// → bearer token for the Google Drive API
+```
+
+## Adding a custom provider
+
+Implement `OAuthProvider` (three methods) and register it like any built-in:
+
+```rust
+use umbra_oauth::provider::{Identity, OAuthError, OAuthProvider, TokenSet};
+
+#[async_trait::async_trait]
+impl OAuthProvider for GitLabProvider {
+    fn key(&self) -> &'static str { "gitlab" }
+    fn label(&self) -> &'static str { "GitLab" }
+    fn authorize_url(&self, state: &str, redirect_uri: &str) -> String { /* build URL */ }
+    async fn exchange_code(&self, code: &str, redirect_uri: &str) -> Result<TokenSet, OAuthError> { /* POST token endpoint */ }
+    async fn fetch_identity(&self, tokens: &TokenSet) -> Result<Identity, OAuthError> { /* GET userinfo */ }
+}
+```
+
+`Identity { uid, email, email_verified, display_name }` is what the policy consumes — set `email_verified` honestly, since it gates auto-linking.
+
+## Troubleshooting
+
+### `redirect_uri_mismatch` / invalid redirect
+
+The callback URL registered in the provider console must exactly equal `{redirect_base}/oauth/{provider}/callback`, including scheme and trailing-slash rules. Check the `redirect_base` you passed to `OAuthPlugin::new`.
+
+### `oauth state mismatch` (400)
+
+The CSRF `state` in the session didn't match the callback. Usually means `SessionsPlugin` isn't mounted, the session cookie was dropped between login and callback (third-party cookie / SameSite issues across origins), or the user took too long. Confirm sessions work for a normal login first.
+
+### No refresh token from Google
+
+Google only returns a refresh token on the first consent unless `prompt=consent` forces it (which umbra sets). If you'd already consented, revoke the app's access in your Google account and re-link.
+
+### `unknown provider` (404)
+
+The provider wasn't registered — `from_env()` returned `None` because its `UMBRA_OAUTH_<PROVIDER>_CLIENT_ID` / `_CLIENT_SECRET` aren't set.
 
 ## Design rationale
 
