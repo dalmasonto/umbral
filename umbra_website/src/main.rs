@@ -23,6 +23,7 @@ use umbra_oauth::OAuthPlugin;
 use umbra_oauth::providers::{GitHubProvider, GoogleProvider};
 use umbra_openapi::OpenApiPlugin;
 use umbra_playground::PlaygroundPlugin;
+use umbra_realtime::RealtimePlugin;
 use umbra_rest::{ResourceConfig, RestPlugin};
 use umbra_security::{SecurityConfig, SecurityPlugin};
 use umbra_sessions::SessionsPlugin;
@@ -104,6 +105,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .plugin(AccountsPlugin::default())
         .plugin(CommunityPlugin::default())
         .plugin(PublicPlugin::default())
+        // Real-time push (SSE at /realtime/sse). The plugin-notes section
+        // broadcasts a posted note to `public:plugin-<id>` watchers; the
+        // default GroupPolicy allows those `public:*` groups.
+        .plugin(RealtimePlugin::default())
         // Contributes the `seed_orm_data` management command.
         .plugin(seed_command::SeedDataPlugin::default())
         // --- Admin/API/security --------------------------------------------

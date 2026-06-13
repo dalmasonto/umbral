@@ -681,6 +681,11 @@ pub async fn create_note(
         "migration_note" => CommentKind::MigrationNote,
         _ => CommentKind::General,
     };
+    // Capture broadcast bits before the values move into the comment.
+    let kind_label = format!("{kind:?}");
+    let author = author_label
+        .clone()
+        .unwrap_or_else(|| "Someone".to_string());
 
     let mut comment = pd::PluginComment::default();
     comment.plugin = ForeignKey::new(plugin.id);
@@ -693,6 +698,22 @@ pub async fn create_note(
         .create(comment)
         .await
         .map_err(|e| e.to_string())?;
+
+    // Live note feed (SSE): notify everyone watching this plugin's notes.
+    // The note is pending moderation, so we broadcast only a lightweight
+    // notification (who + kind), NOT the unmoderated body. No-op when
+    // RealtimePlugin isn't installed (e.g. the render smoke-test).
+    umbra_realtime::Realtime::to_group(format!("public:plugin-{}", plugin.id))
+        .send(
+            "note",
+            &serde_json::json!({
+                "plugin": plugin.id,
+                "author": author,
+                "kind": kind_label,
+                "pending": true,
+            }),
+        )
+        .await;
     Ok(true)
 }
 
@@ -1117,6 +1138,8 @@ pub async fn render_detail_with(slug: &str, submitted: bool) -> Result<Option<St
 /// The detail view-model the `plugin.html` template renders.
 #[derive(Debug, Serialize)]
 struct PluginDetail {
+    /// Plugin PK — drives the live-note SSE group `public:plugin-<id>`.
+    id: i64,
     slug: String,
     name: String,
     crate_name: String,
@@ -1341,6 +1364,7 @@ impl PluginDetail {
         };
 
         Self {
+            id: p.id,
             slug: p.slug.clone(),
             name: p.name.clone(),
             crate_name: p.crate_name.clone(),

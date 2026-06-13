@@ -6,6 +6,8 @@ edition = "2024"
 [dependencies]
 umbra = { path = "/home/dalmas/E/projects/umbra/crates/umbra" }
 umbra-auth = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-auth" }
+# Live note feed: broadcast a posted note to the plugin's SSE watchers.
+umbra-realtime = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-realtime" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sqlx = { version = "0.8", default-features = false, features = ["macros", "runtime-tokio", "chrono", "uuid", "json"] }

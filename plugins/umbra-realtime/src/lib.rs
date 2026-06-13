@@ -408,6 +408,12 @@ impl Realtime {
             .expect("umbra-realtime: RealtimePlugin is not installed")
     }
 
+    /// Whether `RealtimePlugin` has been installed (the ambient handle is
+    /// set). `send` no-ops when this is `false`.
+    pub fn is_installed() -> bool {
+        REALTIME.get().is_some()
+    }
+
     /// The shared registry (the transports register connections here).
     pub fn registry() -> Arc<Registry> {
         Self::get().registry.clone()
@@ -455,10 +461,17 @@ impl Target {
     /// Serialize `data` to JSON and push a named event to every matching
     /// connection. Fire-and-forget: it publishes to the broker and returns
     /// — it never blocks on socket I/O, so it's safe in a request handler.
+    ///
+    /// **No-op when `RealtimePlugin` isn't installed** — so a handler can
+    /// call `Realtime::to_group(...).send(...)` unconditionally and an app
+    /// (or a test) that doesn't wire realtime simply ignores it, rather
+    /// than panicking. Check [`Realtime::is_installed`] if you need to know.
     pub async fn send<T: Serialize>(self, event: &str, data: &T) {
+        let Some(rt) = REALTIME.get() else {
+            return;
+        };
         let data = serde_json::to_value(data).unwrap_or(serde_json::Value::Null);
-        Realtime::get()
-            .broker
+        rt.broker
             .publish(Envelope {
                 target: self.target,
                 event: event.to_string(),

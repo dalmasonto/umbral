@@ -123,7 +123,7 @@
   {% if submitted %}
   <div class="mb-6 flex items-center gap-2.5 rounded-[14px] border pd-success bg-ok-soft px-4 py-3">
     <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--ok)" stroke-width="2.2"><path d="M20 6 9 17l-5-5"/></svg>
-    <span class="text-[13.5px] font-bold text-ok">Thanks — your note is pending moderation.</span>
+    <span class="text-[13.5px] font-bold text-ok">Thanks - your note is pending moderation.</span>
   </div>
   {% endif %}
 
@@ -165,7 +165,7 @@
         {% endfor %}
       </div>
 
-      {# Cover image — sits below the header text (logo, title,
+      {# Cover image - sits below the header text (logo, title,
          description, tags), not as a top-of-page banner. #}
       {{ media.plugin_cover(plugin.cover_image, plugin.name) }}
 
@@ -406,6 +406,11 @@
               </div>
               <button type="button" class="btn-accent" data-open-note>Add a note</button>
             </div>
+            {# Live note feed (SSE): revealed when someone posts a note. #}
+            <div id="pd-live-note" class="mb-4 hidden items-center gap-2.5 rounded-[12px] border border-accent-line bg-accent-soft px-4 py-3 text-[13.5px] font-semibold text-accent-2">
+              <span class="relative flex h-2 w-2"><span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent opacity-75"></span><span class="relative inline-flex h-2 w-2 rounded-full bg-accent"></span></span>
+              <span id="pd-live-note-text">A new note was just posted, awaiting review.</span>
+            </div>
             <div class="space-y-3">
               {% for comment in plugin.comments %}
               <article class="rounded-[14px] border border-hairline p-[18px]">
@@ -523,7 +528,7 @@
     <div class="mb-4 flex items-start justify-between gap-3">
       <div>
         <h2 class="m-0 text-[20px] font-extrabold tracking-[-0.02em]">Add a note</h2>
-        <p class="mt-1 text-[13px] text-muted">Shared after moderation. Be specific — versions and backends help.</p>
+        <p class="mt-1 text-[13px] text-muted">Shared after moderation. Be specific - versions and backends help.</p>
       </div>
       <button type="button" class="btn-ghost px-2.5 py-1.5" data-close-note aria-label="Close">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M18 6 6 18M6 6l12 12"/></svg>
@@ -625,6 +630,23 @@
         if (e.target === dlg) dlg.close();
       });
     }
+  })();
+
+  // Live note feed (SSE). Subscribes to this plugin's public realtime
+  // group; when anyone posts a note, reveal the banner. Powered by
+  // umbra-realtime (GET /realtime/sse). Degrades silently if unsupported.
+  (function () {
+    if (!('EventSource' in window)) return;
+    var es = new EventSource('/realtime/sse?groups=public:plugin-{{ plugin.id }}');
+    es.addEventListener('note', function (e) {
+      var banner = document.getElementById('pd-live-note');
+      var txt = document.getElementById('pd-live-note-text');
+      try {
+        var d = JSON.parse(e.data);
+        if (txt) txt.textContent = (d.author || 'Someone') + ' just posted a note, awaiting review.';
+      } catch (_) {}
+      if (banner) { banner.classList.remove('hidden'); banner.classList.add('flex'); }
+    });
   })();
 </script>
 

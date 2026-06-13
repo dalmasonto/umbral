@@ -22,6 +22,7 @@ umbra-static   = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-static" }
 umbra-playground   = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-playground" }  # Interactive API playground UI (think mini-Postman) at /playground/.
 umbra-media        = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-media" }  # Uploaded-file storage abstraction (local FS + S3).
 umbra-oauth        = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-oauth" }  # OAuth / social login (Google, GitHub) + account connection.
+umbra-realtime     = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-realtime" }  # SSE + WebSocket real-time push (live note feed).
 
 # ----- Available built-ins (uncomment + register in main.rs to enable) -----
 # umbra-tasks        = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-tasks" }  # DB-backed background task queue (Celery-equivalent).

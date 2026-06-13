@@ -122,6 +122,8 @@ async fn boot() {
         .model::<PluginComment>()
         .templates_dir(site_templates)
         .plugin(TemplatesOnly::default())
+        // Real-time push so posting a note fans out to SSE watchers.
+        .plugin(umbra_realtime::RealtimePlugin::default())
         .build()
         .expect("App::build");
 
@@ -556,6 +558,22 @@ async fn listing_and_detail_render_real_db_rows() {
     );
 
     // --- POST a note → a pending PluginComment exists, banner shows -------
+    // A live-feed watcher subscribes to this plugin's SSE group first, so
+    // we can assert posting a note fans out over realtime (the demo the
+    // detail page wires with EventSource). Registered directly on the
+    // registry (the SSE route's policy gate isn't exercised here).
+    let rest_row = Plugin::objects()
+        .filter(plugin_directory::models::plugin::SLUG.eq("umbra-rest"))
+        .first()
+        .await
+        .expect("query rest")
+        .expect("rest exists");
+    let mut watch_groups = std::collections::HashSet::new();
+    watch_groups.insert(format!("public:plugin-{}", rest_row.id));
+    let (_watch_id, mut watcher) = umbra_realtime::Realtime::registry()
+        .register(None, watch_groups, umbra_realtime::DEFAULT_BUFFER)
+        .await;
+
     let created = create_note(
         "umbra-rest",
         "Works great on Postgres 16.",
@@ -565,6 +583,26 @@ async fn listing_and_detail_render_real_db_rows() {
     .await
     .expect("note create query ok");
     assert!(created, "create_note returns true for an existing plugin");
+
+    // The note fanned out over SSE: the watcher got a `note` event with the
+    // author + a pending flag (NOT the unmoderated body).
+    let live = watcher
+        .try_recv()
+        .expect("posting a note broadcast to the plugin's SSE watchers");
+    assert_eq!(live.event, "note");
+    let live_data = live.data.to_string();
+    assert!(
+        live_data.contains("Reviewer"),
+        "the live note names the author; got {live_data}"
+    );
+    assert!(
+        live_data.contains("pending"),
+        "the live note is flagged pending; got {live_data}"
+    );
+    assert!(
+        !live_data.contains("Postgres 16"),
+        "the unmoderated body is NOT broadcast; got {live_data}"
+    );
 
     // The row exists with the submitted body and Pending moderation.
     let pending = PluginComment::objects()
