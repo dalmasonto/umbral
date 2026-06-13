@@ -25,13 +25,25 @@ impl App {
         // `std::env::var(...)` code sees it — most importantly a plugin's
         // `from_env()` credential loader (e.g. the OAuth providers reading
         // `UMBRA_OAUTH_*`). This runs before the `.plugin(...)` arguments
-        // are evaluated, so those loaders find the values. `dotenv()`
-        // never overrides an already-set process var (so real env vars
-        // keep precedence) and is a no-op when there's no `.env` file.
-        // Settings read `.env` separately via figment in
-        // `Settings::from_env`; this is the parallel path for code that
-        // reaches for the process environment directly.
-        dotenvy::dotenv().ok();
+        // are evaluated, so those loaders find the values.
+        //
+        // We read `.env` the *same* CWD-relative way figment's settings
+        // loader does (`from_filename_iter(".env")`) rather than
+        // `dotenvy::dotenv()`, whose parent-directory search resolves the
+        // file differently and missed it in practice. Each key is set only
+        // when it isn't already present, so real environment vars keep
+        // precedence. No-op when there's no `.env`.
+        if let Ok(iter) = dotenvy::from_filename_iter(".env") {
+            for (key, value) in iter.flatten() {
+                if std::env::var_os(&key).is_none() {
+                    // SAFETY: runs at startup (App::builder), before the
+                    // server spawns request handlers that read the
+                    // environment — the same operation `dotenvy::dotenv()`
+                    // performs internally.
+                    unsafe { std::env::set_var(&key, &value) };
+                }
+            }
+        }
         AppBuilder::default()
     }
 
