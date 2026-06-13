@@ -143,6 +143,18 @@ enum Command {
         /// Path to the JSON envelope.
         input: PathBuf,
     },
+    /// Import a CSV file into one table's rows. The header row names the
+    /// columns; each cell is coerced to its column type and inserted
+    /// through the same validated write path as a REST POST (validators,
+    /// `auto_now`, `slug_from`, FK-existence all apply). Best-effort: a
+    /// bad row is reported by line number and skipped, not fatal. The
+    /// inverse of the REST list endpoint's `?format=csv` export.
+    Importcsv {
+        /// Target table name (e.g. `blog_post`).
+        table: String,
+        /// Path to the CSV file. Must have a header row.
+        input: PathBuf,
+    },
     /// Dev-loop runner: watches `src/` and re-runs `cargo run` on
     /// change. Wraps `cargo-watch`; if not installed, prints the
     /// install hint and exits. Templates hot-reload in-process when
@@ -274,6 +286,7 @@ pub async fn dispatch_with_argv(
         } => inspectdb(output, mark_applied).await,
         Command::Dumpdata { output } => dumpdata(output).await,
         Command::Loaddata { input } => loaddata(input).await,
+        Command::Importcsv { table, input } => importcsv(table, input).await,
         Command::Dev { watch, run_args } => dev(watch, run_args).await,
         Command::Maskkeygen => maskkeygen(),
     }
@@ -669,6 +682,63 @@ async fn loaddata(input: PathBuf) -> Result<(), Box<dyn std::error::Error + Send
         eprintln!("warning: skipped table `{skipped}` (not in current schema)");
     }
     Ok(())
+}
+
+/// `umbra importcsv <table> <file.csv>` — parse the CSV (the `csv` crate
+/// handles quoting/escaping) and hand the header + string rows to
+/// `import_table_rows`, which coerces each cell to its column type and
+/// inserts through the validated dynamic write path.
+async fn importcsv(
+    table: String,
+    input: PathBuf,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Resolve the table against the registered models so a typo fails
+    // loudly (with the list of valid tables) before we read the file.
+    let models = umbra::migrate::registered_models();
+    let Some(meta) = models.into_iter().find(|m| m.table == table) else {
+        let mut known: Vec<String> = umbra::migrate::registered_models()
+            .iter()
+            .map(|m| m.table.clone())
+            .collect();
+        known.sort();
+        return Err(format!(
+            "importcsv: unknown table `{table}`. Registered tables: {}",
+            known.join(", ")
+        )
+        .into());
+    };
+
+    let mut reader = csv::ReaderBuilder::new()
+        .has_headers(true)
+        .flexible(true)
+        .from_path(&input)?;
+    let headers: Vec<String> = reader.headers()?.iter().map(|s| s.to_string()).collect();
+    if headers.is_empty() {
+        return Err("importcsv: the CSV has no header row".into());
+    }
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    for record in reader.records() {
+        let record = record?;
+        rows.push(record.iter().map(|s| s.to_string()).collect());
+    }
+
+    let report = umbra::orm::import_table_rows(&meta, &headers, &rows).await;
+    println!(
+        "Imported {} row(s) into `{}` ({} failed)",
+        report.inserted,
+        table,
+        report.errors.len()
+    );
+    for (line, message) in &report.errors {
+        eprintln!("  line {line}: {message}");
+    }
+    // Non-zero exit when any row failed, so a CI/script catches a partial
+    // import without parsing stdout.
+    if report.errors.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("importcsv: {} row(s) failed", report.errors.len()).into())
+    }
 }
 
 #[cfg(test)]

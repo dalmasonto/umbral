@@ -41,6 +41,10 @@ sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio"] }
 # `derive` so the subcommand enum picks up Parser/Subcommand impls. The
 # CLI is the only place clap shows up; the facade stays free of it.
 clap = { version = "4", features = ["derive"] }
+# CSV parsing for the `importcsv` command (#61). Same crate the REST
+# plugin uses for the `?format=csv` export, so import/export share quoting
+# / escaping behaviour.
+csv = "1"
 
 [dev-dependencies]
 tempfile = "3"

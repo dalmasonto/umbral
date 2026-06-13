@@ -26,6 +26,7 @@ manage your database because it doesn't know about your models.
   <Card icon="shield-check" title="checkmigrations" description="Classify pending operations SAFE/WARNING/UNSAFE for zero-downtime deploys. Exits non-zero on unsafe ops — a CI gate before migrate." />
   <Card icon="download" title="inspectdb" description="Introspect an existing database into models.rs + a 0001_initial migration. The porting on-ramp." />
   <Card icon="archive" title="dumpdata / loaddata" description="Snapshot every model's rows to JSON; replay them into a fresh schema." />
+  <Card icon="table" title="importcsv" description="Load a CSV file into one table, coercing each cell to its column type through the validated write path. Inverse of the ?format=csv export." />
 </CardGrid>
 
 Plugin-contributed subcommands (`createsuperuser`, `tasks-worker`, plus any third-party plugin's commands) share the same `cargo run -- <cmd>` form. Each is detailed in its own section below.
@@ -280,6 +281,29 @@ cargo run -- loaddata backup.json
 | `loaddata` | `<input>` (positional) | - (required) | Path to a `dumpdata` JSON envelope. |
 
 Use case: the upgrade-safety snapshot. Dump before a risky migration; if the migration goes sideways, drop the DB, `migrate` from scratch, `loaddata` the snapshot.
+
+## importcsv - load a CSV into one table
+
+The inverse of the REST list endpoint's [`?format=csv` export](/docs/v0.0.1/rest/csv-export). Reads a CSV file and inserts its rows into one table, coercing each cell to the column's type and routing through the same validated write path as a REST POST - so validators, `auto_now`, `slug_from`, and FK-existence checks all apply per row.
+
+```bash
+cargo run -- importcsv blog_post posts.csv
+```
+
+```text
+Imported 142 row(s) into `blog_post` (2 failed)
+  line 17: title: This field is required.
+  line 88: author: no Author with id=999
+```
+
+The first CSV line is the header and names the columns; a header that matches no model field is ignored (so an extra column, or a re-ordered export, imports cleanly). Cells coerce by column type: integer/float/boolean columns parse from their text, an empty cell on a **nullable** column becomes `NULL`, a `Json` column parses as JSON, and everything else (text, dates, UUIDs) passes through as a string.
+
+Import is **best-effort**: each row commits independently, a failing row is reported by its 1-based line number and skipped, and the rest still import. The command exits non-zero when any row failed, so a script catches a partial import. (Rows are not wrapped in one transaction - the dynamic write path has none yet; see `planning/orm_fixes.md` #2.)
+
+| Command | Arg | Default | Effect |
+|---|---|---|---|
+| `importcsv` | `<table>` (positional) | - (required) | Target table name (e.g. `blog_post`). A typo lists the valid tables. |
+| `importcsv` | `<input>` (positional) | - (required) | Path to the CSV file. Must have a header row. |
 
 ## createsuperuser - `umbra-auth`
 

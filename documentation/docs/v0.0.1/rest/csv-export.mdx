@@ -35,7 +35,7 @@ GET /api/order/?status=paid&search=ada&fields=id,customer&format=csv
 - **The full filtered set** — CSV export ignores pagination (you want the whole download). Pair it with filters on large tables.
 
 <Callout type="info">
-CSV *import*, an admin "export selected rows" bulk action, and Excel (`.xlsx`) are not in this slice yet — see `planning/features.md` #61.
+The inverse — **CSV import** — ships as the [`importcsv` management command](/docs/v0.0.1/cli/management-commands#importcsv-load-a-csv-into-one-table). An admin "export selected rows" bulk action (waiting on the bulk-action UI) and Excel (`.xlsx`) are not in this slice yet — see `planning/features.md` #61.
 </Callout>
 
 ## See also

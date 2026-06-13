@@ -2573,6 +2573,96 @@ async fn write_m2m_junctions(
     Ok(())
 }
 
+// =========================================================================
+// CSV / tabular import (#61). Coerce string cells to the column's type and
+// route each row through `insert_json`, so validators / auto_now /
+// slug_from / FK-existence checks all apply. The CSV *parsing* lives in the
+// CLI (the `csv` crate); this is the coerce-and-insert half, kept in core
+// because the type coercion needs `ModelMeta` + `SqlType` + the dynamic
+// write path.
+// =========================================================================
+
+/// Coerce one raw CSV cell to the `serde_json::Value` shape its column
+/// expects, so downstream validation (`min`/`max`, choices) sees a typed
+/// value rather than a string. An empty cell on a nullable column becomes
+/// `null`. A value that doesn't parse for a numeric/bool column falls back
+/// to the raw string, letting `insert_json` surface a clear per-row error
+/// instead of silently dropping data. Text / Date / Time / Uuid / etc.
+/// pass through as strings — `json_to_sea_value` parses each from there.
+fn coerce_csv_cell(ty: SqlType, nullable: bool, raw: &str) -> serde_json::Value {
+    use serde_json::Value;
+    if raw.is_empty() && nullable {
+        return Value::Null;
+    }
+    match ty {
+        SqlType::SmallInt | SqlType::Integer | SqlType::BigInt | SqlType::ForeignKey => raw
+            .parse::<i64>()
+            .map(Value::from)
+            .unwrap_or_else(|_| Value::String(raw.to_string())),
+        SqlType::Real | SqlType::Double => raw
+            .parse::<f64>()
+            .ok()
+            .and_then(serde_json::Number::from_f64)
+            .map(Value::Number)
+            .unwrap_or_else(|| Value::String(raw.to_string())),
+        SqlType::Boolean => match raw.trim().to_ascii_lowercase().as_str() {
+            "true" | "1" | "t" | "yes" | "y" => Value::Bool(true),
+            "false" | "0" | "f" | "no" | "n" => Value::Bool(false),
+            _ => Value::String(raw.to_string()),
+        },
+        SqlType::Json => {
+            serde_json::from_str(raw).unwrap_or_else(|_| Value::String(raw.to_string()))
+        }
+        _ => Value::String(raw.to_string()),
+    }
+}
+
+/// Outcome of [`import_table_rows`]: how many rows inserted, plus the
+/// `(line, message)` of every row that failed. Best-effort — a bad row is
+/// reported and skipped, never fatal — because messy real-world CSVs want
+/// "tell me which rows are wrong," not an all-or-nothing abort. `line` is
+/// 1-based over the file (the header is line 1, so the first data row is
+/// line 2), matching what a spreadsheet shows.
+#[derive(Debug, Default)]
+pub struct CsvImportReport {
+    pub inserted: usize,
+    pub errors: Vec<(usize, String)>,
+}
+
+/// Insert tabular string rows into `meta`'s table. Each cell is coerced to
+/// its column's type ([`coerce_csv_cell`]) and the row routes through the
+/// dynamic write path ([`DynQuerySet::insert_json`]) so every per-row
+/// framework behaviour (validators, `auto_now`, `slug_from`, FK existence,
+/// soft-delete) applies exactly as it would for a REST POST.
+///
+/// `headers` names the column each cell maps to; a header that matches no
+/// model field is ignored, so an extra CSV column (or a re-ordered export)
+/// imports cleanly. Rows commit independently — there is no surrounding
+/// transaction (the dynamic write path has none; see `orm_fixes.md` #2).
+pub async fn import_table_rows(
+    meta: &ModelMeta,
+    headers: &[String],
+    rows: &[Vec<String>],
+) -> CsvImportReport {
+    let col_for: HashMap<&str, &Column> =
+        meta.fields.iter().map(|c| (c.name.as_str(), c)).collect();
+
+    let mut report = CsvImportReport::default();
+    for (i, row) in rows.iter().enumerate() {
+        let mut obj = serde_json::Map::new();
+        for (header, cell) in headers.iter().zip(row.iter()) {
+            if let Some(col) = col_for.get(header.as_str()) {
+                obj.insert(header.clone(), coerce_csv_cell(col.ty, col.nullable, cell));
+            }
+        }
+        match DynQuerySet::for_meta(meta).insert_json(&obj).await {
+            Ok(_) => report.inserted += 1,
+            Err(e) => report.errors.push((i + 2, e.to_string())),
+        }
+    }
+    report
+}
+
 #[cfg(test)]
 mod tests {
     use super::form_str_to_sea_value;
