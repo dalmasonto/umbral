@@ -1010,7 +1010,7 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             });
             let field_ident = field.ident.as_ref().expect("named field has ident").clone();
             one_to_one_parent_arms.push(quote! {
-                self.#field_ident.set_parent_id(__pk);
+                self.#field_ident.set_parent_id(__pk_json.clone());
             });
             one_to_one_resolved_arms.push(quote! {
                 #field_name_str => {
@@ -1480,8 +1480,9 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         // is emitted only when a slot kind that needs it is present, so a
         // model with only a ReverseSet field gets just `__pk_json` (no
         // unused-variable warning).
-        let needs_typed_pk = !m2m_field_idents.is_empty() || !one_to_one_parent_arms.is_empty();
-        let needs_json_pk = !reverse_fk_parent_arms.is_empty();
+        let needs_typed_pk = !m2m_field_idents.is_empty();
+        let needs_json_pk =
+            !reverse_fk_parent_arms.is_empty() || !one_to_one_parent_arms.is_empty();
         let typed_pk_decl = if needs_typed_pk {
             quote! { let __pk = <Self as ::umbra::orm::Model>::primary_key(self); }
         } else {

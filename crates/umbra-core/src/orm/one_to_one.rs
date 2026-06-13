@@ -82,13 +82,19 @@ enum Side {
 
 #[derive(Debug, Clone)]
 pub struct OneToOne<C: Model> {
-    /// Cached parent-row PK. Set by the macro-emitted
-    /// `set_m2m_parent_ids` hook so the loader knows which
-    /// `WHERE <fk_column> = parent_pk` bucket to target. (The
-    /// macro hook is named `set_m2m_parent_ids` for historical
-    /// reasons — it now covers M2M, ReverseSet, and OneToOne
-    /// slots uniformly.)
-    parent_id: Option<i64>,
+    /// Child-side FK value: the target `C`'s primary key, the value
+    /// stored in this row's FK column. Generic over `C::PrimaryKey`
+    /// (PK lift — was a shared `Option<i64>`), so a child-side
+    /// `OneToOne<T>` pointing at a `String`- or `Uuid`-PK target stores
+    /// the right shape, mirroring `ForeignKey<T>`. `None` on a parent-
+    /// side slot.
+    fk: Option<C::PrimaryKey>,
+    /// Parent-side cache: the owning row's PK as a `serde_json::Value`
+    /// (the owner's PK type isn't a parameter here, so it's held shape-
+    /// agnostically). Set by the macro-emitted `set_m2m_parent_ids` hook.
+    /// Holding it as a `Value` lets a `String`/`Uuid`-PK parent carry a
+    /// parent-side `OneToOne` back-link. `None` on a child-side slot.
+    parent_pk: Option<serde_json::Value>,
     /// Resolved child row. `None` = not loaded
     /// (`.prefetch_related(...)` wasn't called for this field).
     /// `Some(None)` is collapsed to a flat `None` because the
@@ -124,7 +130,8 @@ impl<C: Model> OneToOne<C> {
     /// [`sqlx::Decode`], both of which switch to `Side::Child`.
     pub fn empty() -> Self {
         Self {
-            parent_id: None,
+            fk: None,
+            parent_pk: None,
             resolved: None,
             loaded: false,
             side: Side::Parent,
@@ -142,9 +149,10 @@ impl<C: Model> OneToOne<C> {
     /// because the two directions never share an instance — a given
     /// `OneToOne<T>` is either child-side (FK value) or parent-side
     /// (parent PK for prefetch bucketing).
-    pub fn new(id: i64) -> Self {
+    pub fn new(id: C::PrimaryKey) -> Self {
         Self {
-            parent_id: Some(id),
+            fk: Some(id),
+            parent_pk: None,
             resolved: None,
             loaded: false,
             side: Side::Child,
@@ -152,12 +160,14 @@ impl<C: Model> OneToOne<C> {
         }
     }
 
-    /// Read the FK value on a child-side `OneToOne<T>`. Mirrors
-    /// [`super::ForeignKey::id`]. Panics when called on an unset
-    /// slot — the v1 contract matches `ForeignKey::id` (the caller
-    /// constructed the row, so they should have set the FK).
-    pub fn id(&self) -> i64 {
-        self.parent_id
+    /// Read the FK value on a child-side `OneToOne<T>` as the target's
+    /// PK type (PK lift — was `i64`; for an `i64`-PK target this is still
+    /// `i64`). Mirrors [`super::ForeignKey::id`]. Panics when called on
+    /// an unset slot — the v1 contract matches `ForeignKey::id` (the
+    /// caller constructed the row, so they should have set the FK).
+    pub fn id(&self) -> C::PrimaryKey {
+        self.fk
+            .clone()
             .expect("OneToOne::id called on an unset slot — construct with OneToOne::new(id)")
     }
 
@@ -177,17 +187,19 @@ impl<C: Model> OneToOne<C> {
         self.loaded
     }
 
-    /// Read the parent's PK so the prefetch loader knows which
-    /// `WHERE <fk_column> = parent_pk` bucket to target. `None`
-    /// means this slot was never wired up.
-    pub fn parent_id(&self) -> Option<i64> {
-        self.parent_id
+    /// Read the parent-side cache — the owning row's PK as a `Value`.
+    /// `None` means this slot was never wired up (or it's a child-side
+    /// slot). The prefetch loader actually buckets by the parent row's
+    /// `pk_as_json()`, so this is bookkeeping rather than load-bearing.
+    pub fn parent_id(&self) -> Option<&serde_json::Value> {
+        self.parent_pk.as_ref()
     }
 
-    /// Set the parent's PK on this slot. Called by the macro-
-    /// emitted `set_m2m_parent_ids` arm.
-    pub fn set_parent_id(&mut self, id: i64) {
-        self.parent_id = Some(id);
+    /// Set the parent's PK on this slot as a `serde_json::Value` (PK
+    /// lift — was `i64`). Called by the macro-emitted `set_m2m_parent_ids`
+    /// arm with `to_value(&parent.primary_key())`.
+    pub fn set_parent_id(&mut self, id: serde_json::Value) {
+        self.parent_pk = Some(id);
     }
 
     /// Populate the resolved bucket from a definitely-present child
@@ -221,13 +233,16 @@ impl<C: Model> OneToOne<C> {
 ///     number. This is what keeps the create-path validator
 ///     happy (it sees the FK value in the JSON map and the
 ///     non-null `user` column is satisfied).
-impl<C: Model + Serialize> Serialize for OneToOne<C> {
+impl<C: Model + Serialize> Serialize for OneToOne<C>
+where
+    C::PrimaryKey: Serialize,
+{
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         if let Some(row) = &self.resolved {
             return row.serialize(s);
         }
         match self.side {
-            Side::Child => match self.parent_id {
+            Side::Child => match &self.fk {
                 Some(id) => id.serialize(s),
                 None => s.serialize_none(),
             },
@@ -244,7 +259,8 @@ impl<'de, C: Model + Deserialize<'de>> Deserialize<'de> for OneToOne<C> {
         let opt = Option::<C>::deserialize(d).unwrap_or(None);
         let loaded = opt.is_some();
         Ok(Self {
-            parent_id: None,
+            fk: None,
+            parent_pk: None,
             resolved: opt.map(Box::new),
             loaded,
             // Round-trip — preserve the parent-side default
@@ -262,66 +278,84 @@ impl<'de, C: Model + Deserialize<'de>> Deserialize<'de> for OneToOne<C> {
 // hard-erroring.
 // =========================================================================
 
-impl<C: Model> sqlx::Type<sqlx::Sqlite> for OneToOne<C> {
+impl<C: Model> sqlx::Type<sqlx::Sqlite> for OneToOne<C>
+where
+    C::PrimaryKey: sqlx::Type<sqlx::Sqlite>,
+{
     fn type_info() -> sqlx::sqlite::SqliteTypeInfo {
-        <i64 as sqlx::Type<sqlx::Sqlite>>::type_info()
+        <C::PrimaryKey as sqlx::Type<sqlx::Sqlite>>::type_info()
     }
     fn compatible(ty: &sqlx::sqlite::SqliteTypeInfo) -> bool {
-        <i64 as sqlx::Type<sqlx::Sqlite>>::compatible(ty)
+        <C::PrimaryKey as sqlx::Type<sqlx::Sqlite>>::compatible(ty)
     }
 }
 
-impl<C: Model> sqlx::Type<sqlx::Postgres> for OneToOne<C> {
+impl<C: Model> sqlx::Type<sqlx::Postgres> for OneToOne<C>
+where
+    C::PrimaryKey: sqlx::Type<sqlx::Postgres>,
+{
     fn type_info() -> sqlx::postgres::PgTypeInfo {
-        <i64 as sqlx::Type<sqlx::Postgres>>::type_info()
+        <C::PrimaryKey as sqlx::Type<sqlx::Postgres>>::type_info()
     }
     fn compatible(ty: &sqlx::postgres::PgTypeInfo) -> bool {
-        <i64 as sqlx::Type<sqlx::Postgres>>::compatible(ty)
+        <C::PrimaryKey as sqlx::Type<sqlx::Postgres>>::compatible(ty)
     }
 }
 
-impl<'r, C: Model> sqlx::Decode<'r, sqlx::Sqlite> for OneToOne<C> {
+impl<'r, C: Model> sqlx::Decode<'r, sqlx::Sqlite> for OneToOne<C>
+where
+    C::PrimaryKey: sqlx::Decode<'r, sqlx::Sqlite>,
+{
     fn decode(
         value: sqlx::sqlite::SqliteValueRef<'r>,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        // Real decode for the child-side OneToOne<T> sugar — keep the
-        // i64 so .id() works after a select_related-less fetch.
-        // Parent-side fields are `#[sqlx(skip)]` and never hit this
-        // path, so the upgrade is backwards-compatible.
-        let raw = <i64 as sqlx::Decode<sqlx::Sqlite>>::decode(value)?;
+        // Real decode for the child-side OneToOne<T> sugar — decode the
+        // target's PK type (i64 / String / Uuid) so .id() works after a
+        // select_related-less fetch. Parent-side fields are
+        // `#[sqlx(skip)]` and never hit this path.
+        let raw = <C::PrimaryKey as sqlx::Decode<sqlx::Sqlite>>::decode(value)?;
         Ok(Self::new(raw))
     }
 }
 
-impl<'r, C: Model> sqlx::Decode<'r, sqlx::Postgres> for OneToOne<C> {
+impl<'r, C: Model> sqlx::Decode<'r, sqlx::Postgres> for OneToOne<C>
+where
+    C::PrimaryKey: sqlx::Decode<'r, sqlx::Postgres>,
+{
     fn decode(
         value: sqlx::postgres::PgValueRef<'r>,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        let raw = <i64 as sqlx::Decode<sqlx::Postgres>>::decode(value)?;
+        let raw = <C::PrimaryKey as sqlx::Decode<sqlx::Postgres>>::decode(value)?;
         Ok(Self::new(raw))
     }
 }
 
-// Encode — required for child-side OneToOne<T> on INSERT/UPDATE. The
-// FK value is in `parent_id`; encode it as `i64` exactly like the FK
-// column would. Parent-side OneToOne<C> fields are `#[sqlx(skip)]`
+// Encode — required for child-side OneToOne<T> on INSERT/UPDATE. The FK
+// value is in `fk`; encode it as the target's PK type exactly like the
+// FK column would. Parent-side OneToOne<C> fields are `#[sqlx(skip)]`
 // and never reach the encoder.
-impl<'q, C: Model> sqlx::Encode<'q, sqlx::Sqlite> for OneToOne<C> {
+impl<'q, C: Model> sqlx::Encode<'q, sqlx::Sqlite> for OneToOne<C>
+where
+    C::PrimaryKey: sqlx::Encode<'q, sqlx::Sqlite> + Clone + Default,
+{
     fn encode_by_ref(
         &self,
         buf: &mut <sqlx::Sqlite as sqlx::Database>::ArgumentBuffer<'q>,
     ) -> Result<sqlx::encode::IsNull, Box<dyn std::error::Error + Send + Sync>> {
-        let id = self.parent_id.unwrap_or_default();
-        <i64 as sqlx::Encode<'q, sqlx::Sqlite>>::encode_by_ref(&id, buf)
+        let id = self.fk.clone().unwrap_or_default();
+        <C::PrimaryKey as sqlx::Encode<'q, sqlx::Sqlite>>::encode_by_ref(&id, buf)
     }
 }
 
-impl<'q, C: Model> sqlx::Encode<'q, sqlx::Postgres> for OneToOne<C> {
+impl<'q, C: Model> sqlx::Encode<'q, sqlx::Postgres> for OneToOne<C>
+where
+    C::PrimaryKey: sqlx::Encode<'q, sqlx::Postgres> + Clone + Default,
+{
     fn encode_by_ref(
         &self,
         buf: &mut <sqlx::Postgres as sqlx::Database>::ArgumentBuffer<'q>,
     ) -> Result<sqlx::encode::IsNull, Box<dyn std::error::Error + Send + Sync>> {
-        let id = self.parent_id.unwrap_or_default();
-        <i64 as sqlx::Encode<'q, sqlx::Postgres>>::encode_by_ref(&id, buf)
+        let id = self.fk.clone().unwrap_or_default();
+        <C::PrimaryKey as sqlx::Encode<'q, sqlx::Postgres>>::encode_by_ref(&id, buf)
     }
 }
