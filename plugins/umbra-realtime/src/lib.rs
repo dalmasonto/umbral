@@ -11,11 +11,13 @@
 //! Realtime::broadcast().send("ping", &json!({})).await;
 //! ```
 //!
-//! This file is **phase 1**: the connection registry, the broker seam
-//! (`InProcessBroker` for single-instance; a `RedisBroker` is the
-//! documented multi-instance swap), and the ambient [`Realtime`] handle.
-//! The SSE / WebSocket transports + the signals bridge land in phases 2–4
-//! (see `docs/superpowers/specs/2026-06-13-umbra-realtime-design.md`).
+//! Shipped: the connection registry + broker seam (`InProcessBroker` for
+//! single-instance; a `RedisBroker` is the documented multi-instance
+//! swap), the ambient [`Realtime`] handle, and both transports — SSE
+//! (`GET /realtime/sse`, push-only) and WebSocket (`GET /realtime/ws`,
+//! bidirectional with a [`MessageHandler`] for inbound frames). The
+//! signals bridge (`on_model`) is the remaining phase (see
+//! `docs/superpowers/specs/2026-06-13-umbra-realtime-design.md`).
 //!
 //! ## Why a broker now
 //!
@@ -32,7 +34,12 @@ use serde::Serialize;
 use tokio::sync::{RwLock, mpsc};
 use umbra::plugin::{AppContext, Plugin, PluginError};
 
+/// Re-export so a `MessageHandler` impl can name the attribute
+/// (`#[umbra_realtime::async_trait]`) without a direct `async-trait` dep.
+pub use async_trait::async_trait;
+
 mod sse;
+mod ws;
 
 /// A unique id per open connection (one socket).
 pub type ConnId = u64;
@@ -280,6 +287,42 @@ pub struct PublicGroupsOnly;
 impl GroupPolicy for PublicGroupsOnly {}
 
 // =========================================================================
+// Inbound WebSocket messages.
+// =========================================================================
+
+/// Who sent an inbound WebSocket message — the connection id + its user.
+/// A handler uses this to authorize and route (e.g. join a room, or
+/// broadcast back to the sender's group via [`Realtime::to_group`]).
+pub struct MessageContext {
+    pub conn_id: ConnId,
+    pub user_id: Option<i64>,
+}
+
+/// Handles text frames a WebSocket client sends to the server. SSE is
+/// push-only, so this only matters for the WS transport. The default
+/// ([`NoopMessageHandler`]) ignores inbound frames; a chat app implements
+/// this to broadcast a received message to its room:
+///
+/// ```ignore
+/// async fn on_message(&self, ctx: &MessageContext, text: String) {
+///     let msg: ChatMsg = serde_json::from_str(&text).unwrap();
+///     Realtime::to_group(&msg.room).send("message", &msg).await;
+/// }
+/// ```
+#[async_trait::async_trait]
+pub trait MessageHandler: Send + Sync {
+    async fn on_message(&self, ctx: &MessageContext, text: String);
+}
+
+/// Ignores inbound frames — for push-only apps.
+pub struct NoopMessageHandler;
+
+#[async_trait::async_trait]
+impl MessageHandler for NoopMessageHandler {
+    async fn on_message(&self, _ctx: &MessageContext, _text: String) {}
+}
+
+// =========================================================================
 // Ambient handle.
 // =========================================================================
 
@@ -293,6 +336,7 @@ pub struct Realtime {
     broker: Arc<dyn Broker>,
     registry: Arc<Registry>,
     policy: Arc<dyn GroupPolicy>,
+    handler: Arc<dyn MessageHandler>,
 }
 
 impl Realtime {
@@ -311,6 +355,11 @@ impl Realtime {
     /// handshake before joining a connection to a group).
     pub fn policy() -> Arc<dyn GroupPolicy> {
         Self::get().policy.clone()
+    }
+
+    /// The configured inbound-message handler (WS transport).
+    pub fn message_handler() -> Arc<dyn MessageHandler> {
+        Self::get().handler.clone()
     }
 
     /// Target a single user's every live connection.
@@ -365,12 +414,14 @@ impl Target {
 /// and mounts `GET /realtime/sse`.
 pub struct RealtimePlugin {
     policy: Arc<dyn GroupPolicy>,
+    handler: Arc<dyn MessageHandler>,
 }
 
 impl Default for RealtimePlugin {
     fn default() -> Self {
         Self {
             policy: Arc::new(PublicGroupsOnly),
+            handler: Arc::new(NoopMessageHandler),
         }
     }
 }
@@ -383,6 +434,13 @@ impl RealtimePlugin {
         self.policy = Arc::new(policy);
         self
     }
+
+    /// Set the inbound-message handler for the WebSocket transport. The
+    /// default ([`NoopMessageHandler`]) ignores client frames (push-only).
+    pub fn message_handler<H: MessageHandler + 'static>(mut self, handler: H) -> Self {
+        self.handler = Arc::new(handler);
+        self
+    }
 }
 
 impl Plugin for RealtimePlugin {
@@ -391,7 +449,9 @@ impl Plugin for RealtimePlugin {
     }
 
     fn routes(&self) -> umbra::web::Router {
-        umbra::web::Router::new().route("/realtime/sse", umbra::web::get(sse::sse_handler))
+        umbra::web::Router::new()
+            .route("/realtime/sse", umbra::web::get(sse::sse_handler))
+            .route("/realtime/ws", umbra::web::get(ws::ws_handler))
     }
 
     fn on_ready(&self, _ctx: &AppContext) -> Result<(), PluginError> {
@@ -401,8 +461,11 @@ impl Plugin for RealtimePlugin {
             broker,
             registry,
             policy: self.policy.clone(),
+            handler: self.handler.clone(),
         });
-        tracing::info!("realtime: in-process broker ready; SSE at /realtime/sse");
+        tracing::info!(
+            "realtime: in-process broker ready; SSE at /realtime/sse, WS at /realtime/ws"
+        );
         Ok(())
     }
 }

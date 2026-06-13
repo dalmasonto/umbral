@@ -134,9 +134,9 @@ Single-process broadcast works for one instance. Multi-instance needs a backplan
 - [~] **P3 #56–61** — #56/#57/#59 verified shipped + closed in features.md (c37e928). **Still open (not started):** #58 nested writable serializers, #60 action input/output schemas, #61 CSV/Excel import-export.
 - [ ] **P4 #65–70** — not started this session. #66 collectstatic exists (needs compression + `{% static %}`); #67 `add_filter` exists internally (needs a Plugin::register_template hook); #65 migration-safety check primitives exist in migrate.rs (`is_safe_cast`); #68/#69/#70 fresh.
 - [~] **P5 trackers** — REAL-GAPS.md updated for shipped items (4b33b07). features.md #56/#57/#59 closed.
-- [~] **P6 realtime** — design spec (60662b8) + **phase 1** (registry/broker/handle/GroupPolicy, 6 tests, 0cb17bc) + **phase 2 SSE transport** (`GET /realtime/sse`, identity + GroupPolicy at handshake, ConnGuard async-drop cleanup, integration test, doc page — 8035f9e). Usable end-to-end now. **Remaining:** phase 3 WS transport + `MessageHandler`, phase 4 signals bridge (`on_model`), phase 5 demo (umbra_website live feed + playground Realtime tab #10). See 2026-06-13-umbra-realtime-design.md §"Implementation plan".
+- [~] **P6 realtime** — spec (60662b8) + **phase 1** (registry/broker/handle/GroupPolicy, 0cb17bc) + **phase 2 SSE** (`GET /realtime/sse`, 8035f9e + doc 9237f8b) + **phase 3 WebSocket** (`GET /realtime/ws`, bidirectional, `MessageHandler` for inbound, bound-server tungstenite round-trip test). Both transports usable; 8 tests. **Remaining:** phase 4 signals bridge (`on_model::<T>()` → post_save/post_delete fan-out), phase 5 demo (umbra_website live feed + playground Realtime tab #10). See 2026-06-13-umbra-realtime-design.md §"Implementation plan".
 
-Next-session priority order: P6 phase 3 (WebSocket transport) + phase 4 (signals bridge) → P4 #65–70 → P3 #58/#61. Everything is committed; nothing half-applied.
+Next-session priority order: P6 phase 4 (signals bridge — closes #45 core) → P4 #65–70 → P3 #58/#61. Everything is committed; nothing half-applied.
 
 ### P1 detail
 - [x] 1a seed foundation (feature_set + seed_plugin_features + seed_orm_data cmd) — f1eb714

@@ -7,7 +7,7 @@ tags: [realtime, sse, websockets, push, notifications]
 
 # Real-time push (SSE)
 
-`umbra-realtime` pushes data from the server to connected clients — **to one user** or **to a named group/room** — without you tracking sockets by hand. Server-Sent Events is the default transport: one-way (server → client), proxy-friendly, and built into every browser via `EventSource`. (WebSockets land next; the targeting API is identical.)
+`umbra-realtime` pushes data from the server to connected clients — **to one user** or **to a named group/room** — without you tracking sockets by hand. Two transports share one targeting API: **SSE** (one-way server → client, proxy-friendly, `EventSource`) and **WebSocket** (bidirectional). SSE is the simplest and the default; reach for WebSocket when the client also needs to *send*.
 
 <Callout type="info">
 This is a single-instance plugin today. A `Broker` seam is in place so a Redis backplane can route `to_user(42)` across multiple app instances later — without any API change.
@@ -83,7 +83,35 @@ impl umbra_realtime::GroupPolicy for MyPolicy {
 RealtimePlugin::default().group_policy(MyPolicy)
 ```
 
+## WebSockets
+
+For two-way traffic (chat, presence, typed commands), connect to `GET /realtime/ws?groups=...` instead. The same `Realtime::to_user`/`to_group`/`broadcast` push API works unchanged; events arrive as JSON text frames `{"event":"…","data":{…}}`. Inbound client frames go to a handler you register:
+
+```rust
+use umbra_realtime::{MessageContext, MessageHandler, Realtime};
+
+struct Chat;
+#[umbra_realtime::async_trait]
+impl MessageHandler for Chat {
+    async fn on_message(&self, ctx: &MessageContext, text: String) {
+        // ctx.conn_id / ctx.user_id let you authorize + route
+        let msg: ChatMsg = serde_json::from_str(&text).unwrap();
+        Realtime::to_group(&msg.room).send("message", &msg).await;
+    }
+}
+
+RealtimePlugin::default().message_handler(Chat)
+```
+
+```js
+const ws = new WebSocket("ws://localhost:8000/realtime/ws?groups=chat:123");
+ws.onmessage = (e) => { const { event, data } = JSON.parse(e.data); /* … */ };
+ws.send(JSON.stringify({ room: "chat:123", body: "hi" }));
+```
+
+The same `GroupPolicy` gate applies at the WS handshake (a denied group fails the upgrade). The default `MessageHandler` ignores inbound frames — fine for push-only apps.
+
 ## See also
 
-- Design + the full plan (WebSockets, signals bridge, multi-instance broker): `docs/superpowers/specs/2026-06-13-umbra-realtime-design.md`.
-- Closes the SSE half of features.md #45.
+- Design + the full plan (signals bridge, multi-instance broker): `docs/superpowers/specs/2026-06-13-umbra-realtime-design.md`.
+- Closes the SSE + WebSocket transports of features.md #45 (signals bridge remains).

@@ -19,12 +19,17 @@ serde_json = "1"
 tokio = { version = "1", features = ["sync", "rt"] }
 async-trait = "0.1"
 tracing = "0.1"
-# SSE transport.
-axum = "0.8"
+# SSE + WebSocket transports.
+axum = { version = "0.8", features = ["ws"] }
 http = "1"
 futures-core = "0.3"
+# WS socket split + Sink/Stream send/recv.
+futures-util = { version = "0.3", default-features = false }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync"] }
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync", "net", "time"] }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
+# Real WS client for the round-trip integration test.
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
