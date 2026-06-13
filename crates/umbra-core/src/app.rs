@@ -692,13 +692,20 @@ impl AppBuilder {
         for plugin in &sorted_plugins {
             all_template_dirs.extend(plugin.templates_dirs());
         }
-        // `init` returns the list of collision names (templates present in
-        // more than one directory). We log each one via tracing here so the
-        // `App::build()` phase is the single point that handles warnings;
+        // features.md #67 — collect every plugin's custom tags/filters in
+        // topological order so a dependency's registrar runs before its
+        // dependent's (and a later plugin can override an earlier one).
+        let mut template_registrars: Vec<crate::templates::TemplateRegistrar> = Vec::new();
+        for plugin in &sorted_plugins {
+            template_registrars.extend(plugin.template_registrars());
+        }
+        // `init_with` returns the list of collision names (templates present
+        // in more than one directory). We log each one via tracing here so
+        // the `App::build()` phase is the single point that handles warnings;
         // `templates::init` itself also emits tracing::warn! for each, but
         // returning the list lets callers (tests) assert without a subscriber.
-        let _collisions =
-            crate::templates::init(&all_template_dirs).map_err(BuildError::TemplatesInit)?;
+        let _collisions = crate::templates::init_with(&all_template_dirs, template_registrars)
+            .map_err(BuildError::TemplatesInit)?;
 
         // Phase 4 — system check. Build the context against ambient
         // state, run the framework checks plus every plugin's

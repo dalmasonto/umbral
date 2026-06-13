@@ -110,6 +110,23 @@ use serde::Serialize;
 
 static ENGINE: OnceLock<Environment<'static>> = OnceLock::new();
 
+/// A plugin-contributed mutation of the template [`Environment`]: adds
+/// custom filters, functions, or globals at engine-build time
+/// (feature #67 — Django's custom template tags/filters). Returned by
+/// `Plugin::template_registrars` and stored process-wide so the dev-mode
+/// hot-reload rebuild re-applies it.
+///
+/// It is `Fn` (not `FnOnce`) on purpose: in dev mode the engine is
+/// rebuilt on every template edit, so each registrar runs once per build.
+/// Make it owned and `'static` (no borrows of the plugin) so it survives
+/// in the [`REGISTRARS`] handle past `App::build`.
+pub type TemplateRegistrar = Box<dyn Fn(&mut Environment<'static>) + Send + Sync>;
+
+/// Plugin-contributed [`TemplateRegistrar`]s captured at `init_with` time.
+/// Stored separately from [`ENGINE`] so the dev-mode rebuild path (which
+/// goes through [`build_env`]) re-applies them without the App builder.
+static REGISTRARS: OnceLock<Vec<TemplateRegistrar>> = OnceLock::new();
+
 /// Register the built-in default 404/500 templates into an environment.
 ///
 /// Called from `init` before any disk directories are scanned. The names
@@ -317,6 +334,64 @@ fn register_markdown_filter(env: &mut Environment<'static>) {
     });
 }
 
+/// features.md #67 — `{{ now() }}` / `{{ now("%Y-%m-%d") }}`. Renders the
+/// current UTC time, optionally via a chrono `strftime` format string.
+/// With no argument it emits RFC 3339 (e.g. `2026-06-13T10:30:00+00:00`).
+/// The reference built-in tag for the custom-tag surface.
+fn register_now_function(env: &mut Environment<'static>) {
+    env.add_function("now", |fmt: Option<String>| -> String {
+        let now = chrono::Utc::now();
+        match fmt {
+            Some(f) if !f.is_empty() => now.format(&f).to_string(),
+            _ => now.to_rfc3339(),
+        }
+    });
+}
+
+/// features.md #67 — `{{ price | currency }}` / `{{ price | currency("EUR") }}`.
+/// Formats a number as money: two decimals, thousands grouping, and a
+/// leading symbol for the common ISO codes (USD/EUR/GBP/JPY); an unknown
+/// code falls back to `1,234.56 CODE`. The reference built-in filter.
+fn register_currency_filter(env: &mut Environment<'static>) {
+    env.add_filter("currency", |amount: f64, code: Option<String>| -> String {
+        let code = code.unwrap_or_else(|| "USD".to_string());
+        let symbol = match code.as_str() {
+            "USD" | "AUD" | "CAD" | "NZD" => "$",
+            "EUR" => "€",
+            "GBP" => "£",
+            "JPY" | "CNY" => "¥",
+            "KES" => "KSh ",
+            _ => "",
+        };
+        // Sign goes outside the symbol: -$12.40, not $-12.40.
+        let sign = if amount < 0.0 { "-" } else { "" };
+        let body = group_thousands(amount.abs());
+        if symbol.is_empty() {
+            format!("{sign}{body} {code}")
+        } else {
+            format!("{sign}{symbol}{body}")
+        }
+    });
+}
+
+/// Format a float with two decimals and comma thousands separators on the
+/// integer part: `1234567.5 -> "1,234,567.50"`, `-12.4 -> "-12.40"`.
+fn group_thousands(amount: f64) -> String {
+    let negative = amount.is_sign_negative() && amount != 0.0;
+    let formatted = format!("{:.2}", amount.abs());
+    let (int_part, frac_part) = formatted.split_once('.').unwrap_or((&formatted, "00"));
+
+    let mut grouped = String::new();
+    let digits: Vec<char> = int_part.chars().collect();
+    for (i, ch) in digits.iter().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            grouped.push(',');
+        }
+        grouped.push(*ch);
+    }
+    format!("{}{grouped}.{frac_part}", if negative { "-" } else { "" })
+}
+
 /// features.md #4 — register the `sanitize` filter: clean a string of
 /// HTML (e.g. the output of the admin's RTE widget, which stores
 /// HTML rather than markdown) down to ammonia's safe allowlist and
@@ -443,6 +518,24 @@ pub fn init(dirs: &[PathBuf]) -> Result<Vec<String>, TemplateError> {
     Ok(collisions)
 }
 
+/// Like [`init`], but also installs plugin-contributed
+/// [`TemplateRegistrar`]s (feature #67). The registrars are stashed in
+/// the process-wide [`REGISTRARS`] handle *before* the engine is built so
+/// [`build_env`] applies them — both here and on every dev-mode rebuild.
+///
+/// Called by `App::build` with the flattened registrars from every
+/// plugin's `template_registrars()`, in topological order. The plain
+/// [`init`] stays the no-plugin entry point used by template unit tests.
+pub fn init_with(
+    dirs: &[PathBuf],
+    registrars: Vec<TemplateRegistrar>,
+) -> Result<Vec<String>, TemplateError> {
+    // Set even when empty so a second (errant) init can't smuggle in a
+    // different registrar set behind the already-published engine.
+    let _ = REGISTRARS.set(registrars);
+    init(dirs)
+}
+
 /// Build a fresh `Environment` from the given dirs. Shared by the
 /// init path and the dev-mode hot-reload path; both produce
 /// bit-identical engines from the same input.
@@ -522,6 +615,23 @@ fn build_env(dirs: &[PathBuf]) -> Result<(Environment<'static>, Vec<String>), Te
         }
         minijinja::escape_formatter(out, state, value)
     });
+
+    // features.md #67 — built-in example tags/filters. These ship as the
+    // reference implementations for the custom-tag surface: `now()` for a
+    // server-rendered timestamp, `currency` for money formatting. Plugins
+    // add their own via `Plugin::template_registrars` (applied below).
+    register_now_function(&mut env);
+    register_currency_filter(&mut env);
+
+    // features.md #67 — plugin-contributed filters/functions. Applied
+    // AFTER the built-ins so a plugin can deliberately override one by
+    // re-registering the same name (minijinja's add_* overwrites). Runs
+    // on every rebuild (dev hot-reload) because `Fn`, not `FnOnce`.
+    if let Some(registrars) = REGISTRARS.get() {
+        for registrar in registrars {
+            registrar(&mut env);
+        }
+    }
 
     let mut seen: HashSet<String> = HashSet::new();
     let mut collisions: Vec<String> = Vec::new();

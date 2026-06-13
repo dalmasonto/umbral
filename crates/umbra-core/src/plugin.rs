@@ -202,6 +202,35 @@ pub trait Plugin: Send + Sync + 'static {
         Vec::new()
     }
 
+    /// Custom template tags / filters this plugin contributes
+    /// (feature #67 — Django's `{% load %}`-able template library).
+    ///
+    /// Each returned [`TemplateRegistrar`] is a closure that mutates the
+    /// minijinja [`Environment`](minijinja::Environment) at engine-build
+    /// time — `env.add_filter(...)`, `env.add_function(...)`,
+    /// `env.add_global(...)`. They are collected across all plugins in
+    /// topological order and applied *after* the framework built-ins
+    /// (`static`, `media_url`, `markdown`, `now`, `currency`, …), so a
+    /// plugin may deliberately override a built-in by re-registering the
+    /// same name.
+    ///
+    /// The closures must be owned and `'static` (no borrow of `self`) so
+    /// the framework can stash them and re-run them on every dev-mode
+    /// hot-reload rebuild. Capture any per-plugin config by value.
+    ///
+    /// ```ignore
+    /// fn template_registrars(&self) -> Vec<TemplateRegistrar> {
+    ///     vec![Box::new(|env| {
+    ///         env.add_filter("shout", |s: String| s.to_uppercase());
+    ///     })]
+    /// }
+    /// ```
+    ///
+    /// Default: no custom tags. A plugin that ships none leaves this alone.
+    fn template_registrars(&self) -> Vec<crate::templates::TemplateRegistrar> {
+        Vec::new()
+    }
+
     /// Wrap the app router with the plugin's middleware layers.
     ///
     /// Called once per plugin during `App::build`'s phase 5, in

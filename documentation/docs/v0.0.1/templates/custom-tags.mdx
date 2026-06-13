@@ -1,0 +1,84 @@
+---
+title: Custom template tags
+description: Add your own filters and functions to umbra templates from a plugin via Plugin::template_registrars.
+sidebar_position: 3
+tags: [templates, plugins, filters, minijinja]
+---
+
+# Custom template tags
+
+Django plugins ship template libraries you `{% load %}` to get extra filters and tags. umbra's equivalent is the `Plugin::template_registrars` hook: a plugin returns closures that mutate the minijinja [`Environment`](https://docs.rs/minijinja/latest/minijinja/struct.Environment.html) at engine-build time, adding filters, functions, and globals that every app-level template can then use.
+
+<Callout type="info">
+This is the app-level surface. The admin plugin keeps its own private environment with its own filters (e.g. `naturaltime`); those are not visible to app templates. A registrar returned from `template_registrars` *is*.
+</Callout>
+
+## The hook
+
+```rust
+use umbra::prelude::*;
+use umbra::templates::TemplateRegistrar;
+
+struct HumanizePlugin;
+
+impl Plugin for HumanizePlugin {
+    fn name(&self) -> &'static str { "humanize" }
+
+    fn template_registrars(&self) -> Vec<TemplateRegistrar> {
+        vec![Box::new(|env| {
+            // A filter: {{ "hello" | shout }} -> "HELLO"
+            env.add_filter("shout", |s: String| s.to_uppercase());
+
+            // A function: {{ pluralize(count, "item", "items") }}
+            env.add_function("pluralize", |n: i64, one: String, many: String| {
+                if n == 1 { one } else { many }
+            });
+        })]
+    }
+}
+```
+
+```html
+<p>{{ heading | shout }}</p>
+<p>{{ cart.count }} {{ pluralize(cart.count, "item", "items") }}</p>
+```
+
+Register the plugin on the builder as usual and the tags are live:
+
+```rust
+App::builder()
+    .plugin(HumanizePlugin)
+    .build()?;
+```
+
+## Rules
+
+<Steps>
+<Step title="Closures are owned and 'static">
+A registrar is a `Box<dyn Fn(&mut Environment) + Send + Sync>`. It can't borrow `self` — capture any per-plugin config **by value** into the closure. This is what lets umbra stash the registrar and re-run it on every dev-mode hot-reload rebuild.
+</Step>
+<Step title="Applied after the built-ins">
+Registrars run after the framework's own filters/functions (`static`, `media_url`, `markdown`, `now`, `currency`, …) and in plugin dependency order. Because minijinja's `add_filter` / `add_function` overwrite by name, a plugin *can* deliberately replace a built-in by registering the same name — do this sparingly and document it.
+</Step>
+<Step title="Fn, not FnOnce">
+The engine is rebuilt whenever a template file changes in dev mode, so each registrar may run many times over a process's life. Keep them pure — no one-shot side effects.
+</Step>
+</Steps>
+
+## What you can add
+
+A registrar has the full minijinja `Environment` API:
+
+| Call | Adds | Used in a template as |
+|------|------|-----------------------|
+| `env.add_filter("name", f)` | a pipe filter | `{{ value \| name(arg) }}` |
+| `env.add_function("name", f)` | a callable | `{{ name(arg) }}` |
+| `env.add_global("name", value)` | a constant value | `{{ name }}` |
+
+Filter and function arguments are deserialized from the template call: take `String`, `i64`, `f64`, `bool`, `Option<T>` for optional args, or any `serde::Deserialize` type. Return anything `serde::Serialize`, or `minijinja::Value::from_safe_string(...)` to mark generated HTML safe from autoescape (as the `markdown` filter does).
+
+## See also
+
+- [Template Filters and Helpers](helpers) — the built-in filters and globals your tags sit alongside.
+- [minijinja `Environment` API](https://docs.rs/minijinja/latest/minijinja/struct.Environment.html) — every `add_*` method.
+- `crates/umbra-core/src/templates.rs` (`now` / `currency`) for reference implementations of a built-in function and filter.

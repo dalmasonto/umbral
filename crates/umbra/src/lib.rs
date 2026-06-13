@@ -406,10 +406,16 @@ pub mod templates {
     //! it's re-exported here so a user crate doesn't need to depend on
     //! minijinja directly.
 
-    pub use minijinja::{Value, context};
+    //! Plugins add custom tags/filters by returning
+    //! [`TemplateRegistrar`]s from `Plugin::template_registrars`; each is
+    //! a closure over the minijinja [`Environment`] (re-exported here so a
+    //! plugin crate doesn't depend on minijinja directly).
+
+    pub use minijinja::{Environment, Value, context};
     pub use umbra_core::templates::{
-        CURRENT_CSRF, CURRENT_USER, TemplateError, current_csrf, merge_ambient_context,
-        merge_ambient_value, render, resolve_static_url, with_current_csrf, with_current_user,
+        CURRENT_CSRF, CURRENT_USER, TemplateError, TemplateRegistrar, current_csrf,
+        merge_ambient_context, merge_ambient_value, render, resolve_static_url, with_current_csrf,
+        with_current_user,
     };
 }
 

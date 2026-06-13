@@ -5,7 +5,7 @@ sidebar_position: 2
 tags: [templates, filters, helpers, minijinja]
 ---
 
-umbra templates run on [minijinja 2](https://docs.rs/minijinja/latest/minijinja/), which ships a Jinja2-compatible filter set out of the box. On top of that standard library, umbra-core registers a handful of custom filters of its own (`img`, `markdown`, `sanitize`) and injects two ambient globals into every render (`csrf_token`, `csrf_input`, plus the anonymous-safe `user`).
+umbra templates run on [minijinja 2](https://docs.rs/minijinja/latest/minijinja/), which ships a Jinja2-compatible filter set out of the box. On top of that standard library, umbra-core registers a handful of custom filters and functions of its own (`img`, `markdown`, `sanitize`, `now`, `currency`) and injects ambient globals into every render (`csrf_token`, `csrf_input`, plus the anonymous-safe `user`). Plugins can add their own — see [Custom template tags](custom-tags).
 
 This page catalogues the filters and globals umbra users reach for most, with examples written in the umbra template style.
 
@@ -18,6 +18,8 @@ These are registered by umbra-core's template engine (`crates/umbra-core/src/tem
 | `img` | filter | Build an `<img>` with `loading="lazy"`, `decoding="async"`, and explicit `width`/`height` (CLS-safe). All attributes are HTML-escaped. | `{{ url \| img(alt="Logo", width=400, height=300, class="rounded") }}` |
 | `markdown` | filter | Render CommonMark + GFM (tables, strikethrough, task lists, footnotes) to HTML, then sanitize through ammonia. Output is marked safe. | `{{ body \| markdown }}` |
 | `sanitize` | filter | Clean stored HTML (e.g. the admin RTE widget's output) down to ammonia's safe allowlist and mark it safe. | `{{ body \| sanitize }}` |
+| `now` | function | Current UTC time. No argument → RFC 3339; a chrono `strftime` string → formatted. | `{{ now("%Y-%m-%d") }}` |
+| `currency` | filter | Format a number as money: two decimals, thousands grouping, leading symbol for common ISO codes (USD/EUR/GBP/JPY/…). Unknown code → `1,234.56 CODE`. | `{{ price \| currency("EUR") }}` |
 | `csrf_token` | global | The current request's CSRF token string. Injected ambiently when a CSRF middleware scoped a token for the request. | `<input name="csrf_token" value="{{ csrf_token }}">` |
 | `csrf_input` | global | A ready-made `<input type="hidden" name="csrf_token" ...>`, marked safe. Django's `{% csrf_token %}` ergonomic. | `<form method="post">{{ csrf_input }}</form>` |
 | `user` | global | The current user, injected into every render. Authenticated requests get the full serialized user when `AuthPlugin::with_user_in_templates()` is on; otherwise the anonymous sentinel `{ is_authenticated: false, is_staff: false, is_superuser: false }`. | `{% if user.is_authenticated %}...{% endif %}` |
@@ -36,7 +38,7 @@ These are registered by umbra-core's template engine (`crates/umbra-core/src/tem
 **`None` and `Undefined` render as the empty string.** umbra installs a custom formatter so an `Option<String>` field that is `None`, or an undefined variable, renders as `""` instead of the literal tokens `none` / `undefined`. This means `<input value="{{ form.phone }}">` on a fresh form yields `value=""`, not `value="none"`. Non-null values pass through the normal escaping formatter unchanged.
 </Callout>
 
-Custom filter registration *by plugins* (through `Plugin::on_ready`) is still deferred. The admin plugin registers its own `naturaltime` filter against its private environment, but that filter is scoped to admin templates - it isn't available in app-level templates.
+Plugins register their own app-level filters and functions through `Plugin::template_registrars` — see [Custom template tags](custom-tags). (The admin plugin additionally registers a `naturaltime` filter against its *private* environment; that one is scoped to admin templates and isn't available in app-level templates.)
 
 ## String filters
 
