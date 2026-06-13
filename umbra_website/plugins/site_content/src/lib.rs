@@ -18,9 +18,12 @@ pub use models::{
     SiteSetting,
 };
 
+use std::path::PathBuf;
+
 use umbra::migrate::ModelMeta;
 use umbra::plugin::{AppContext, Plugin, PluginError};
-use umbra::web::Router;
+use umbra::templates::context;
+use umbra::web::{Html, Router, StatusCode, get};
 
 #[derive(Debug, Default, Clone)]
 pub struct SiteContentPlugin;
@@ -43,13 +46,23 @@ impl Plugin for SiteContentPlugin {
         ]
     }
 
+    fn templates_dirs(&self) -> Vec<PathBuf> {
+        vec![PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("templates")]
+    }
+
     fn routes(&self) -> Router {
-        // Add your routes here. The base path is up to you — convention
-        // is `/<name>/...` for HTML and `/api/<name>/...` for JSON.
-        Router::new()
+        Router::new().route("/docs", get(docs_page))
     }
 
     fn on_ready(&self, _ctx: &AppContext) -> Result<(), PluginError> {
         Ok(())
     }
+}
+
+/// The `/docs` landing page — a map into the documentation site. Static
+/// editorial content (the doc topics), so no DB query.
+async fn docs_page() -> Result<Html<String>, (StatusCode, String)> {
+    umbra::templates::render("site_content/docs.html", &context! {})
+        .map(Html)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }
