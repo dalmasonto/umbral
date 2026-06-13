@@ -1204,6 +1204,7 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         let default_widget = match kind {
             FieldKind::FileField | FieldKind::NullableFileField => Some("file"),
             FieldKind::ImageField | FieldKind::NullableImageField => Some("image"),
+            FieldKind::Masked | FieldKind::NullableMasked => Some("masked"),
             _ => None,
         };
         let widget_tokens = match (&field_attr.widget, default_widget) {
@@ -2105,6 +2106,13 @@ enum FieldKind {
     ImageField,
     /// `Option<ImageField>` — a nullable image column.
     NullableImageField,
+    /// `umbra::orm::Masked<String>` — an encrypt-at-rest TEXT column.
+    /// Stored as base64 ciphertext (the sqlx `Encode` impl seals on
+    /// write); the default `widget = "masked"` tells the admin to render
+    /// it redacted.
+    Masked,
+    /// `Option<Masked<String>>` — a nullable masked column.
+    NullableMasked,
     /// Catch-all: not a recognised M3 catalogue type, or one of the
     /// explicitly-rejected wide / unsigned ints. Carries the exact
     /// diagnostic to emit at the field's span.
@@ -2175,7 +2183,9 @@ impl FieldKind {
             FieldKind::FileField
             | FieldKind::NullableFileField
             | FieldKind::ImageField
-            | FieldKind::NullableImageField => {
+            | FieldKind::NullableImageField
+            | FieldKind::Masked
+            | FieldKind::NullableMasked => {
                 quote!(::umbra::orm::SqlType::Text)
             }
             FieldKind::Date | FieldKind::NullableDate => quote!(::umbra::orm::SqlType::Date),
@@ -2243,6 +2253,7 @@ impl FieldKind {
                 | FieldKind::NullableBytes
                 | FieldKind::NullableFileField
                 | FieldKind::NullableImageField
+                | FieldKind::NullableMasked
         )
     }
 
@@ -2325,6 +2336,11 @@ fn classify_field_type(ty: &Type) -> FieldKind {
     }
     if type_is_ident(ty, "ImageField") {
         return FieldKind::ImageField;
+    }
+    // `Masked<String>` — matched by leaf ident (it carries a generic arg,
+    // so `type_is_ident`'s no-args check would reject it).
+    if type_leaf_is(ty, "Masked") {
+        return FieldKind::Masked;
     }
     if type_is_ident(ty, "NaiveDate") {
         return FieldKind::Date;
@@ -2447,6 +2463,9 @@ fn classify_field_type(ty: &Type) -> FieldKind {
         }
         if type_is_ident(inner, "ImageField") {
             return FieldKind::NullableImageField;
+        }
+        if type_leaf_is(inner, "Masked") {
+            return FieldKind::NullableMasked;
         }
         if type_is_ident(inner, "NaiveDate") {
             return FieldKind::NullableDate;
@@ -2840,6 +2859,19 @@ fn type_is_ident(ty: &Type, name: &str) -> bool {
     false
 }
 
+/// True when `ty` is a path whose last segment ident equals `name`,
+/// *regardless* of generic arguments. Used for framework wrapper types
+/// whose inner is fixed, like `Masked<String>` — `type_is_ident` rejects
+/// those because they carry a `PathArguments::AngleBracketed`.
+fn type_leaf_is(ty: &Type, name: &str) -> bool {
+    if let Type::Path(TypePath { qself: None, path }) = ty {
+        if let Some(last) = path.segments.last() {
+            return last.ident == name;
+        }
+    }
+    false
+}
+
 /// Which file/image newtype a Form field is, and whether it's nullable.
 /// The Form derive constructs the value from the submitted storage-key
 /// string (`FileField::from(key)` / `ImageField::from(key)`).
@@ -3001,6 +3033,11 @@ fn column_const_for(
         FieldKind::NullableFileField | FieldKind::NullableImageField => {
             format_ident!("NullableStrCol")
         }
+        // Masked is a TEXT column storing ciphertext. The column const is
+        // a string column so the field is referenceable, but note that
+        // filtering by plaintext is meaningless (each seal is distinct).
+        FieldKind::Masked => format_ident!("StrCol"),
+        FieldKind::NullableMasked => format_ident!("NullableStrCol"),
         FieldKind::Decimal => format_ident!("DecimalCol"),
         // MultiChoice and Many2Many are handled inline by the caller,
         // so these arms are unreachable in practice. We return an empty

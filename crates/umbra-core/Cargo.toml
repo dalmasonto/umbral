@@ -101,6 +101,15 @@ uuid = { version = "1", features = ["serde", "v7"] }
 multer = "3"
 bytes = "1"
 futures-util = { version = "0.3", default-features = false }
+# `Masked<T>` field encryption (GDPR encrypt-at-rest). crypto_box is the
+# RustCrypto X25519 + XSalsa20-Poly1305 box primitive; the module composes
+# it into an anonymous-sender ("sealed box") scheme — encrypt with a public
+# key, decrypt with the private key. base64 encodes the ciphertext for the
+# TEXT column + the env-var keypair; rand_core::OsRng is the CSPRNG for the
+# ephemeral keypair + nonce.
+crypto_box = { version = "0.9", features = ["std"] }
+base64 = "0.22"
+rand_core = { version = "0.6", features = ["getrandom"] }
 
 [dev-dependencies]
 # figment::Jail (for env-var and toml file sandboxing in tests) lives behind

@@ -1,0 +1,76 @@
+---
+title: Masked fields (encrypt at rest)
+description: Encrypt sensitive columns at rest with public-key cryptography — GDPR-style field encryption with Masked<T>.
+sidebar_position: 12
+tags: [orm, masked, encryption, gdpr, pii, security]
+---
+
+# Masked fields
+
+`Masked<String>` is a string field that is **stored encrypted** in the database and **redacted** everywhere it would otherwise leak. Use it for PII (phone numbers, national IDs) and secrets (API keys, OAuth tokens): a stolen database dump leaks ciphertext, not plaintext.
+
+The full surface lives in `umbra::orm`: `Masked`, `MaskKeyring`, `MaskError`, `set_mask_keyring`.
+
+## How it works
+
+Encryption is **public-key** (X25519 sealed boxes). The public key encrypts; the private key decrypts. That asymmetry buys two things:
+
+- a tier that only holds the public key can store PII it can never read, and
+- **crypto-shredding**: deleting the private key renders every masked column permanently unrecoverable — a fast, bulk "right to be forgotten".
+
+A `Masked` value is plaintext in memory when you construct it and ciphertext once loaded from the database. Its `Debug`, `Display`, and serde output never reveal the plaintext — call `.reveal()` (which needs the private key) to read it.
+
+<Callout type="warning">
+A masked field **serializes as an opaque encrypted blob**, not the plaintext and not a `••••••` marker — the ORM write path stores exactly what serde emits, so it must be ciphertext. For a clean REST response, hide the field with the serializer's `.hide([...])`. `Debug`/`Display` stay redacted, so logs are safe by default.
+</Callout>
+
+## Set up keys
+
+Generate a keypair once:
+
+```bash
+cargo run -- maskkeygen
+```
+
+It prints two lines — add them to your environment (`.env`):
+
+```bash
+UMBRA_MASK_PUBLIC_KEY=...   # encrypts (every tier that writes masked data needs it)
+UMBRA_MASK_PRIVATE_KEY=...  # decrypts / reveal() — keep secret; deleting it crypto-shreds
+```
+
+The keyring is resolved once from the environment, or injected explicitly with `umbra::orm::set_mask_keyring` (tests, or loading keys from a vault).
+
+## Example
+
+```rust
+use umbra::prelude::*;
+
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, Model)]
+pub struct Customer {
+    pub id: i64,
+    pub name: String,
+    pub phone: Masked<String>,            // encrypted at rest
+    pub backup_phone: Option<Masked<String>>, // nullable; None stays NULL
+}
+
+// Write: plaintext in, sealed on save.
+Customer::objects()
+    .create(Customer {
+        id: 0,
+        name: "Ada".into(),
+        phone: Masked::new("+254712345678"),
+        backup_phone: None,
+    })
+    .await?;
+
+// Read: loads ciphertext; reveal() decrypts (needs the private key).
+let c = Customer::objects().filter(customer::ID.eq(1)).first().await?.unwrap();
+let number = c.phone.reveal()?; // "+254712345678"
+```
+
+If no private key is configured, `reveal()` returns `MaskError::NoPrivateKey`; if no public key is configured, a write fails loudly rather than storing plaintext.
+
+## Design rationale
+
+See `docs/superpowers/specs/2026-06-13-masked-and-oauth-design.md` (Component A) for the crypto choice (sealed boxes vs. symmetric AES vs. `age`), the encrypt-on-serialize integration with the ORM write path, and the GDPR crypto-shredding / key-rotation notes.

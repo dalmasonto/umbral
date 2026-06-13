@@ -28,6 +28,7 @@ pub mod file_field;
 pub mod foreign_key;
 pub mod forms_runtime;
 pub mod m2m;
+pub mod masked;
 pub mod model;
 pub mod multichoice;
 pub mod one_to_one;
@@ -76,6 +77,7 @@ pub use expr::{F, FColExt, FExpr, Q};
 pub use file_field::{FileField, ImageField};
 pub use foreign_key::ForeignKey;
 pub use m2m::{M2M, load_junction_selection, set_junction_dynamic};
+pub use masked::{MaskError, MaskKeyring, Masked, set_mask_keyring};
 pub use model::{
     ArrayElement, FieldSpec, FkAction, HydrateRelated, M2MRelationSpec, Model,
     OneToOneRelationSpec, PrimaryKey, ReverseFkRelationSpec, SqlType,

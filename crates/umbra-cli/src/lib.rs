@@ -146,6 +146,10 @@ enum Command {
         #[arg(last = true)]
         run_args: Vec<String>,
     },
+    /// Generate a fresh X25519 keypair for `Masked<T>` field encryption
+    /// and print the two env-var lines (`UMBRA_MASK_PUBLIC_KEY` /
+    /// `UMBRA_MASK_PRIVATE_KEY`) needed to configure it.
+    Maskkeygen,
 }
 
 /// Parse argv and run the requested management subcommand against the
@@ -257,7 +261,25 @@ pub async fn dispatch_with_argv(
         Command::Dumpdata { output } => dumpdata(output).await,
         Command::Loaddata { input } => loaddata(input).await,
         Command::Dev { watch, run_args } => dev(watch, run_args).await,
+        Command::Maskkeygen => maskkeygen(),
     }
+}
+
+/// Generate a fresh `Masked<T>` field-encryption keypair and print the
+/// two env-var lines. The public key encrypts (every tier that writes
+/// masked data needs it); the private key decrypts (`reveal()`) and
+/// crypto-shreds on deletion.
+fn maskkeygen() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let (public, secret) = umbra_core::orm::MaskKeyring::generate();
+    println!("# Masked<T> field-encryption keypair — add to your environment / .env:");
+    println!("#   UMBRA_MASK_PUBLIC_KEY encrypts; UMBRA_MASK_PRIVATE_KEY decrypts (reveal()).");
+    println!(
+        "#   Keep the PRIVATE key secret. Destroying it crypto-shreds every masked column\n\
+         #   (a fast bulk \"right to be forgotten\")."
+    );
+    println!("UMBRA_MASK_PUBLIC_KEY={public}");
+    println!("UMBRA_MASK_PRIVATE_KEY={secret}");
+    Ok(())
 }
 
 /// True when argv is asking for the top-level command catalog: the

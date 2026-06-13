@@ -23,7 +23,7 @@ pub mod prelude {
     //! not pollute the prelude with bare names like `pool`.
 
     pub use crate::orm::{
-        ChoiceField, Choices, F, FColExt, FileField, ForeignKey, ImageField, M2M, Model,
+        ChoiceField, Choices, F, FColExt, FileField, ForeignKey, ImageField, M2M, Masked, Model,
         MultiChoice, OneToOne, Q, ReverseRelations,
     };
     pub use crate::plugin::{AppContext, Plugin, StaticDir};
@@ -469,11 +469,12 @@ pub mod orm {
     pub use umbra_core::orm::{
         Aggregate, AggregateKind, ArrayElement, ChoiceField, DynError, DynQuerySet, Email, F,
         FColExt, FExpr, FieldSpec, FileField, FkAction, ForeignKey, GetError, HydrateRelated,
-        ImageField, JoinKind, M2M, M2MRelationSpec, Manager, Model, MultiChoice, OneToOne,
-        OneToOneRelationSpec, Post, Predicate, PrimaryKey, Q, QuerySet, QuerySetTx, ReverseError,
-        ReverseFkRelationSpec, ReverseRelations, ReverseSet, Slug, SqlType, TryForEachError,
-        TsVector, Url, ValidatorError, column, decode_to_string, load_junction_selection,
-        set_junction_dynamic, validate_text_format, write,
+        ImageField, JoinKind, M2M, M2MRelationSpec, Manager, MaskError, MaskKeyring, Masked, Model,
+        MultiChoice, OneToOne, OneToOneRelationSpec, Post, Predicate, PrimaryKey, Q, QuerySet,
+        QuerySetTx, ReverseError, ReverseFkRelationSpec, ReverseRelations, ReverseSet, Slug,
+        SqlType, TryForEachError, TsVector, Url, ValidatorError, column, decode_to_string,
+        load_junction_selection, set_junction_dynamic, set_mask_keyring, validate_text_format,
+        write,
     };
 
     /// The `#[derive(Model)]` proc macro. Shares the `Model` name with the
