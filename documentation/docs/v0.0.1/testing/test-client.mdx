@@ -1,0 +1,69 @@
+---
+title: Test client
+description: Boot your app in a test, send requests, and assert on the response — TestClient, TempPool, and response assertions.
+sidebar_position: 2
+tags: [testing, test-client, integration]
+---
+
+# Test client
+
+`umbra-testing` gives you Django's `TestCase` + `Client` ergonomics in Rust. The repeated work in every integration test — spin up a pool, build the router, send a request, read the response — collapses into three types:
+
+- **`TempPool`** — a tempfile-backed SQLite pool, deleted when the guard drops.
+- **`TestClient`** — wraps an `axum::Router` with HTTP-verb methods, a per-client cookie jar (a session set on one request rides on the next), and JSON helpers.
+- **`TestResponse`** — owns the body + headers and exposes assertions.
+
+<Callout type="info">
+Add `umbra-testing` under `[dev-dependencies]` — it's a test-only utility crate, never shipped in a release build.
+</Callout>
+
+## A request round-trip
+
+```rust
+use umbra_testing::{TempPool, TestClient};
+
+#[tokio::test]
+async fn list_endpoint_returns_seeded_rows() {
+    let pool = TempPool::new().await;
+    // ... build the router using pool.handle(), seed rows ...
+    let client = TestClient::new(router);
+
+    let resp = client.get("/api/notes").await;
+    resp.assert_status_ok();
+
+    let notes: Vec<Note> = resp.body_json();
+    assert_eq!(notes.len(), 2);
+}
+```
+
+## Sending requests
+
+`TestClient` has `get` / `post` / `put` / `patch` / `delete`. POST-family methods take a JSON body. The cookie jar is automatic — a `Set-Cookie` on one response is sent back on the next request, so a login flow "just works":
+
+```rust
+client.post("/api/auth/login", &json!({ "username": "ada", "password": "secret" })).await
+    .assert_status_ok();
+
+// the session cookie rides automatically on this next call:
+client.get("/api/profile").await.assert_status_ok();
+```
+
+Set a header that persists across requests (e.g. a bearer token) with `set_default_header`, and read a cookie the server set with `cookie(name)`.
+
+## Asserting on the response
+
+`TestResponse` carries the status, headers, and body, with chainable assertions:
+
+| Method | Checks |
+|---|---|
+| `assert_status(code)` / `assert_status_ok()` | the HTTP status (prints the body on mismatch) |
+| `assert_body_contains(needle)` | a substring of the rendered body |
+| `assert_header(name, expected)` | a response header value |
+| `body_text()` / `body_bytes()` | the raw body |
+| `body_json::<T>()` | deserialize the body into `T` |
+| `status()` / `header(name)` | read without asserting |
+
+## See also
+
+- [Factories](./factories) — generate realistic rows to drive these requests.
+- [Fixtures](../orm/fixtures) — load hand-edited JSON seed files.

@@ -1,0 +1,94 @@
+---
+title: Factories
+description: Generate realistic test data — build in-memory instances or persist them through the ORM, the factory_boy way.
+sidebar_position: 1
+tags: [testing, factories, fixtures, fake]
+---
+
+# Factories
+
+`umbra-testing`'s `Factory` trait makes it easy to produce *realistic* model instances in tests — one row, an overridden row, or a whole batch — without hand-writing the same struct literal in every test. It's the [factory_boy](https://factoryboy.readthedocs.io/) / FactoryBot shape, in Rust, layered on the [`fake`](https://docs.rs/fake) crate for believable values.
+
+It pairs with [fixtures](../orm/fixtures) (hand-edited JSON seed files) and the [test client](./test-client): factories *generate* the rows, the test client *exercises* the handler against them.
+
+<Callout type="info">
+`umbra-testing` is a **dev-dependency utility crate**, not a plugin — it never ships in a release build. Add it under `[dev-dependencies]`.
+</Callout>
+
+## The marker shape
+
+A factory is a small **marker type** with an associated `Model`, not an `impl` on the model itself. That's deliberate: in a test crate both your model and the `Factory` trait are foreign, so `impl Factory for Plugin` would violate Rust's orphan rule — but `impl Factory for PluginFactory` (a local marker) compiles fine.
+
+```rust
+use umbra_testing::{Factory, seq};
+use umbra_testing::fake::{Fake, faker::{lorem::en::Sentence, company::en::CompanyName}};
+
+struct PluginFactory;
+
+impl Factory for PluginFactory {
+    type Model = Plugin;
+
+    fn build() -> Plugin {
+        let mut p = Plugin::default();
+        p.name = CompanyName().fake();
+        p.slug = format!("plugin-{}", seq());          // unique per call
+        p.short_description = Sentence(4..8).fake();
+        p
+    }
+}
+```
+
+`build()` is **pure** — a fresh, unsaved instance with realistic values and an `id` of `0`. You only write `type Model = Plugin;` and `build()`; everything else is provided.
+
+## Creating rows
+
+The `create*` methods persist through the ORM against the **ambient pool**, so a built app (`App::builder()…build()`) must be in scope and the tables must exist.
+
+```rust
+let one      = PluginFactory::create().await?;                    // one row
+let many     = PluginFactory::create_batch(5).await?;             // five rows
+let featured = PluginFactory::create_with(|p| p.featured = true).await?;
+```
+
+<Steps>
+<Step title="build()">A pure, unsaved instance with fake values.</Step>
+<Step title="create()">Build one and persist it; returns the row with its assigned id.</Step>
+<Step title="create_with(tweak)">Build one, apply a closure to override specific fields, then persist — the `create(featured = true)` override hook.</Step>
+<Step title="create_batch(n)">Build and persist `n` rows.</Step>
+</Steps>
+
+## Unique columns: `seq()`
+
+`seq()` is a process-wide monotonic counter. Use it for any `unique` column (slug, email, crate name) so a `create_batch` doesn't trip the UNIQUE constraint:
+
+```rust
+slug: format!("plugin-{}", seq()),   // "plugin-1", "plugin-2", …
+```
+
+## Realistic submissions, end to end
+
+The point of #79 — simulate a realistic submission, then drive the actual flow with the [test client](./test-client):
+
+```rust
+#[tokio::test]
+async fn directory_lists_a_factory_built_plugin() {
+    // App::builder()…build() sets the ambient pool + registers models.
+    boot().await;
+
+    let plugin = PluginFactory::create_with(|p| {
+        p.moderation = PluginModeration::Approved;
+        p.source = PluginSource::Official;
+    }).await.unwrap();
+
+    let client = TestClient::new(router());
+    client.get("/plugins").await
+        .assert_status_ok()
+        .assert_body_contains(&plugin.name);
+}
+```
+
+## See also
+
+- [Test client](./test-client) — boot the app and assert on responses.
+- [Fixtures](../orm/fixtures) — hand-edited JSON seed files (`load_fixture` / `dump_fixture`).
+- Design + rationale: `planning/features.md` #79 / #52.

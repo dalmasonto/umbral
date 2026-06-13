@@ -343,3 +343,133 @@ impl TestResponse {
         self
     }
 }
+
+// =========================================================================
+// Factory — realistic test data (feature #79).
+// =========================================================================
+
+/// Re-export of the [`fake`] crate so factories can reach its generators
+/// (`umbra_testing::fake::faker::...`, the `Fake` trait) without adding a
+/// direct dependency of their own.
+pub use fake;
+
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// A process-wide monotonic counter for unique values within a test run.
+/// Use it to keep `unique` columns (slugs, emails, crate names) from
+/// colliding across a `create_batch`:
+///
+/// ```ignore
+/// slug: format!("plugin-{}", umbra_testing::seq()),
+/// ```
+pub fn seq() -> u64 {
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    SEQ.fetch_add(1, Ordering::Relaxed) + 1
+}
+
+/// Error from a [`Factory`] persistence call.
+#[derive(Debug)]
+pub enum FactoryError {
+    /// The ORM write failed (constraint violation, missing table, an FK
+    /// that doesn't exist yet, …).
+    Write(umbra::orm::write::WriteError),
+}
+
+impl std::fmt::Display for FactoryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FactoryError::Write(e) => write!(f, "factory write failed: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for FactoryError {}
+
+impl From<umbra::orm::write::WriteError> for FactoryError {
+    fn from(e: umbra::orm::write::WriteError) -> Self {
+        FactoryError::Write(e)
+    }
+}
+
+/// A factory for producing realistic instances of a model — the
+/// factory_boy / FactoryBot shape, in Rust.
+///
+/// You define a zero-sized marker type and point it at a [`Model`] through
+/// the associated type. The orphan rule is why the impl lives on a marker
+/// rather than on the model: in a downstream test crate both the model and
+/// this trait are foreign, so `impl Factory for Plugin` wouldn't compile —
+/// but `impl Factory for PluginFactory` (a local marker) does.
+///
+/// ```ignore
+/// use umbra_testing::{Factory, fake::{Fake, faker::{lorem::en::*, company::en::*}}, seq};
+///
+/// struct PluginFactory;
+/// impl Factory for PluginFactory {
+///     type Model = Plugin;
+///     fn build() -> Plugin {
+///         let mut p = Plugin::default();
+///         p.name = CompanyName().fake();
+///         p.slug = format!("plugin-{}", seq());          // unique per call
+///         p.short_description = Sentence(4..8).fake();
+///         p
+///     }
+/// }
+///
+/// // In a test, after `App::builder()...build()` has set the ambient pool
+/// // and the tables exist:
+/// let one      = PluginFactory::create().await?;                    // one row
+/// let many     = PluginFactory::create_batch(5).await?;             // five rows
+/// let featured = PluginFactory::create_with(|p| p.featured = true).await?;
+/// ```
+///
+/// [`build`](Factory::build) is pure (no I/O); the `create*` methods
+/// persist through the ORM against the ambient pool, so a built app must
+/// be in scope. Combine with [`TestClient`] to then exercise a handler
+/// against the rows the factory produced.
+///
+/// [`Model`]: umbra::orm::Model
+#[async_trait::async_trait]
+pub trait Factory {
+    /// The model this factory produces. The bound set is exactly what
+    /// `#[derive(Model)]` already provides on every model (the ORM's
+    /// `create` path needs `Serialize` + `FromRow` + `HydrateRelated`), so
+    /// in practice you only ever write `type Model = YourModel;`.
+    type Model: umbra::orm::Model
+        + serde::Serialize
+        + for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
+        + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>
+        + umbra::orm::HydrateRelated;
+
+    /// A fresh, unsaved instance with realistic fake values. Pure — no
+    /// database I/O. Override `unique` fields with [`seq`] so a batch
+    /// doesn't collide.
+    fn build() -> Self::Model;
+
+    /// Build and persist one row through the ORM.
+    async fn create() -> Result<Self::Model, FactoryError> {
+        Self::create_with(|_| {}).await
+    }
+
+    /// Build one row, apply `tweak` to override specific fields, then
+    /// persist. This is the `create(featured = true)` override hook.
+    async fn create_with<F>(tweak: F) -> Result<Self::Model, FactoryError>
+    where
+        F: FnOnce(&mut Self::Model) + Send,
+    {
+        let mut instance = Self::build();
+        tweak(&mut instance);
+        umbra::orm::Manager::<Self::Model>::default()
+            .create(instance)
+            .await
+            .map_err(FactoryError::Write)
+    }
+
+    /// Build and persist `n` rows.
+    async fn create_batch(n: usize) -> Result<Vec<Self::Model>, FactoryError> {
+        let mut out = Vec::with_capacity(n);
+        for _ in 0..n {
+            out.push(Self::create().await?);
+        }
+        Ok(out)
+    }
+}
