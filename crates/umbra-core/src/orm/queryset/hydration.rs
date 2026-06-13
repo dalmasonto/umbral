@@ -123,17 +123,12 @@ pub(super) async fn hydrate_select_related<T: Model + HydrateRelated>(
     Ok(())
 }
 
-/// PK lift Pass D — local cycle-set / lookup-key helper. Stable
-/// `String` for any `serde_json::Value`, namespaced by shape so a
-/// numeric 42 and a string "42" stay in different buckets. Mirrors
-/// the same-named helper in `umbra-core::orm::dynamic` (kept local
-/// while only two call sites need it).
+/// PK lift — local alias for the canonical [`crate::orm::pk_key`]. Kept as
+/// a thin delegate so the existing `dedup_by_pk_key` call site reads the
+/// same while there's one source of truth for the `n:`/`s:`/`o:`
+/// shape-namespacing.
 fn pk_json_key(v: &JsonValue) -> String {
-    match v {
-        JsonValue::Number(n) => format!("n:{n}"),
-        JsonValue::String(s) => format!("s:{s}"),
-        other => format!("o:{other}"),
-    }
+    crate::orm::pk_key(v)
 }
 
 /// PK lift Pass D — dedup a `Vec<Value>` of PK ids by stable string
@@ -328,16 +323,17 @@ pub(super) async fn hydrate_select_related_nested<T: Model + HydrateRelated>(
 ///
 /// Query budget: 1 query per declared `prefetch_related("...")`
 /// field regardless of parent count. Same no-N+1 guarantee the M2M
-/// path has. Parents without an i64 PK (`pk_i64()` returns `None`)
-/// are skipped — same v1 constraint as the rest of the M2M plumbing.
+/// path has. PK-agnostic (PK lift): parents are collected via
+/// [`HydrateRelated::pk_as_json`] and bucketed by [`crate::orm::pk_key`],
+/// so i64-, String/slug-, and Uuid-PK parents all hydrate.
 pub(super) async fn hydrate_reverse_fk_for_field<T: Model + HydrateRelated>(
     rows: &mut [T],
     spec: &crate::orm::model::ReverseFkRelationSpec,
     pool: &DbPool,
 ) -> Result<(), sqlx::Error> {
-    // Parent PKs (i64 only at v1).
-    let mut parent_ids: Vec<i64> = rows.iter().filter_map(|r| r.pk_i64()).collect();
-    if parent_ids.is_empty() {
+    // Parent PKs as JSON Values — i64 / String / Uuid all flow.
+    let mut parent_pks: Vec<JsonValue> = rows.iter().filter_map(|r| r.pk_as_json()).collect();
+    if parent_pks.is_empty() {
         // Set empty resolved on every parent so `comment_set.resolved()`
         // returns `Some(&[])` after prefetch (matches the "no children
         // found" shape — distinct from "not loaded").
@@ -346,84 +342,34 @@ pub(super) async fn hydrate_reverse_fk_for_field<T: Model + HydrateRelated>(
         }
         return Ok(());
     }
-    parent_ids.sort_unstable();
-    parent_ids.dedup();
-    // Query children: SELECT * FROM <target> WHERE <fk_col> IN (...)
-    // We use a raw query because the target table's column list is
-    // fixed (every column comes back) and we want the rows as JSON
-    // for the hydrate trait method.
+    dedup_by_pk_key(&mut parent_pks);
+    // SELECT * FROM <target> WHERE <fk_col> IN (parent_pks). Reuses the
+    // shape-agnostic IN binder the typed select_related path uses (it
+    // infers an integer vs string bind from the value shape).
     let child_rows =
-        fetch_reverse_fk_children(spec.target_table, spec.fk_column, &parent_ids, pool).await?;
-    // Bucket children by their fk_column value.
-    let mut by_parent: HashMap<i64, Vec<JsonValue>> = HashMap::new();
+        fetch_related_as_json_by_pk(spec.target_table, spec.fk_column, &parent_pks, pool).await?;
+    // Bucket children by their fk_column value, keyed PK-agnostically.
+    let mut by_parent: HashMap<String, Vec<JsonValue>> = HashMap::new();
     for row in child_rows {
-        let parent_id = row
+        let key = row
             .as_object()
             .and_then(|m| m.get(spec.fk_column))
-            .and_then(|v| v.as_i64());
-        if let Some(pid) = parent_id {
-            by_parent.entry(pid).or_default().push(row);
+            .map(crate::orm::pk_key);
+        if let Some(key) = key {
+            by_parent.entry(key).or_default().push(row);
         }
     }
     // Populate each parent's ReverseSet — empty bucket → empty Vec
     // (matches the documented "loaded, no children" shape).
     for row in rows.iter_mut() {
-        if let Some(pk) = row.pk_i64() {
-            let bucket = by_parent.remove(&pk).unwrap_or_default();
+        if let Some(pk) = row.pk_as_json() {
+            let bucket = by_parent
+                .remove(&crate::orm::pk_key(&pk))
+                .unwrap_or_default();
             row.set_reverse_fk_resolved_json(spec.field_name, bucket);
         }
     }
     Ok(())
-}
-
-/// Batched `SELECT * FROM <target_table> WHERE <fk_column> IN (?, ?, ...)`
-/// returning each child row as a `serde_json::Value::Object`. Reuses
-/// the `backend_sqlite::row_to_json` / `backend_pg::row_to_json`
-/// decoders so NULL columns map correctly to `JsonValue::Null`
-/// (post-#42 fix).
-async fn fetch_reverse_fk_children(
-    target_table: &str,
-    fk_column: &str,
-    parent_ids: &[i64],
-    pool: &DbPool,
-) -> Result<Vec<JsonValue>, sqlx::Error> {
-    if parent_ids.is_empty() {
-        return Ok(vec![]);
-    }
-    match pool {
-        DbPool::Sqlite(pool) => {
-            let placeholders: Vec<String> =
-                (0..parent_ids.len()).map(|_| "?".to_string()).collect();
-            let sql = format!(
-                "SELECT * FROM \"{}\" WHERE \"{}\" IN ({})",
-                target_table.replace('"', "\"\""),
-                fk_column.replace('"', "\"\""),
-                placeholders.join(", ")
-            );
-            let mut q = sqlx::query(&sql);
-            for id in parent_ids {
-                q = q.bind(*id);
-            }
-            let rows = q.fetch_all(pool).await?;
-            Ok(rows.iter().map(backend_sqlite::row_to_json).collect())
-        }
-        DbPool::Postgres(pool) => {
-            let placeholders: Vec<String> =
-                (1..=parent_ids.len()).map(|i| format!("${i}")).collect();
-            let sql = format!(
-                "SELECT * FROM \"{}\" WHERE \"{}\" IN ({})",
-                target_table.replace('"', "\"\""),
-                fk_column.replace('"', "\"\""),
-                placeholders.join(", ")
-            );
-            let mut q = sqlx::query(&sql);
-            for id in parent_ids {
-                q = q.bind(*id);
-            }
-            let rows = q.fetch_all(pool).await?;
-            Ok(rows.iter().map(backend_pg::row_to_json).collect())
-        }
-    }
 }
 
 /// OneToOne reverse hydration. Discovers the back-pointing FK
@@ -492,9 +438,9 @@ async fn hydrate_one_to_one_for_field<T: Model + HydrateRelated>(
         }
     };
 
-    // Parent PKs (i64 only at v1 — same constraint as ReverseSet).
-    let mut parent_ids: Vec<i64> = rows.iter().filter_map(|r| r.pk_i64()).collect();
-    if parent_ids.is_empty() {
+    // Parent PKs as JSON Values — PK-agnostic (i64 / String / Uuid).
+    let mut parent_pks: Vec<JsonValue> = rows.iter().filter_map(|r| r.pk_as_json()).collect();
+    if parent_pks.is_empty() {
         // Mark every parent as loaded-with-no-child so
         // `is_loaded()` flips even on empty parents.
         for r in rows.iter_mut() {
@@ -502,29 +448,28 @@ async fn hydrate_one_to_one_for_field<T: Model + HydrateRelated>(
         }
         return Ok(());
     }
-    parent_ids.sort_unstable();
-    parent_ids.dedup();
+    dedup_by_pk_key(&mut parent_pks);
 
     let child_rows =
-        fetch_reverse_fk_children(spec.target_table, fk_column, &parent_ids, pool).await?;
-    // Index by parent id. Take FIRST per parent — the UNIQUE
+        fetch_related_as_json_by_pk(spec.target_table, fk_column, &parent_pks, pool).await?;
+    // Index by parent PK key. Take FIRST per parent — the UNIQUE
     // constraint guarantees uniqueness, but if there are dupes
     // (legacy data, deferred constraint, race condition during
     // an in-flight migration) the loader doesn't crash; it
     // picks one deterministically.
-    let mut by_parent: std::collections::HashMap<i64, JsonValue> = std::collections::HashMap::new();
+    let mut by_parent: HashMap<String, JsonValue> = HashMap::new();
     for row in child_rows {
-        let parent_id = row
+        let key = row
             .as_object()
             .and_then(|m| m.get(fk_column))
-            .and_then(|v| v.as_i64());
-        if let Some(pid) = parent_id {
-            by_parent.entry(pid).or_insert(row);
+            .map(crate::orm::pk_key);
+        if let Some(key) = key {
+            by_parent.entry(key).or_insert(row);
         }
     }
     for row in rows.iter_mut() {
-        if let Some(pk) = row.pk_i64() {
-            let child = by_parent.remove(&pk);
+        if let Some(pk) = row.pk_as_json() {
+            let child = by_parent.remove(&crate::orm::pk_key(&pk));
             row.set_one_to_one_resolved_json(spec.field_name, child);
         }
     }
