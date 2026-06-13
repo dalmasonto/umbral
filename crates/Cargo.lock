@@ -3577,6 +3577,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "umbra-oauth"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "axum",
+ "chrono",
+ "http",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "umbra",
+ "umbra-auth",
+ "umbra-sessions",
+ "url",
+]
+
+[[package]]
 name = "umbra-openapi"
 version = "0.0.1"
 dependencies = [
