@@ -32,6 +32,8 @@ use serde::Serialize;
 use tokio::sync::{RwLock, mpsc};
 use umbra::plugin::{AppContext, Plugin, PluginError};
 
+mod sse;
+
 /// A unique id per open connection (one socket).
 pub type ConnId = u64;
 
@@ -290,6 +292,7 @@ static REALTIME: OnceLock<Realtime> = OnceLock::new();
 pub struct Realtime {
     broker: Arc<dyn Broker>,
     registry: Arc<Registry>,
+    policy: Arc<dyn GroupPolicy>,
 }
 
 impl Realtime {
@@ -302,6 +305,12 @@ impl Realtime {
     /// The shared registry (the transports register connections here).
     pub fn registry() -> Arc<Registry> {
         Self::get().registry.clone()
+    }
+
+    /// The configured group-join policy (the transports check it at
+    /// handshake before joining a connection to a group).
+    pub fn policy() -> Arc<dyn GroupPolicy> {
+        Self::get().policy.clone()
     }
 
     /// Target a single user's every live connection.
@@ -352,21 +361,48 @@ impl Target {
 // Plugin.
 // =========================================================================
 
-/// Installs real-time push. Sets the ambient [`Realtime`] handle at boot;
-/// the SSE / WebSocket routes mount in phase 2.
-#[derive(Default)]
-pub struct RealtimePlugin;
+/// Installs real-time push: sets the ambient [`Realtime`] handle at boot
+/// and mounts `GET /realtime/sse`.
+pub struct RealtimePlugin {
+    policy: Arc<dyn GroupPolicy>,
+}
+
+impl Default for RealtimePlugin {
+    fn default() -> Self {
+        Self {
+            policy: Arc::new(PublicGroupsOnly),
+        }
+    }
+}
+
+impl RealtimePlugin {
+    /// Override the group-join policy. The default ([`PublicGroupsOnly`])
+    /// allows only `public:*` groups; supply your own to grant access to
+    /// private rooms from the authenticated identity.
+    pub fn group_policy<P: GroupPolicy + 'static>(mut self, policy: P) -> Self {
+        self.policy = Arc::new(policy);
+        self
+    }
+}
 
 impl Plugin for RealtimePlugin {
     fn name(&self) -> &'static str {
         "realtime"
     }
 
+    fn routes(&self) -> umbra::web::Router {
+        umbra::web::Router::new().route("/realtime/sse", umbra::web::get(sse::sse_handler))
+    }
+
     fn on_ready(&self, _ctx: &AppContext) -> Result<(), PluginError> {
         let registry = Arc::new(Registry::default());
         let broker: Arc<dyn Broker> = Arc::new(InProcessBroker::new(registry.clone()));
-        let _ = REALTIME.set(Realtime { broker, registry });
-        tracing::info!("realtime: in-process broker ready");
+        let _ = REALTIME.set(Realtime {
+            broker,
+            registry,
+            policy: self.policy.clone(),
+        });
+        tracing::info!("realtime: in-process broker ready; SSE at /realtime/sse");
         Ok(())
     }
 }

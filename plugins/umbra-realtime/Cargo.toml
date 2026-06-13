@@ -11,11 +11,20 @@ rust-version.workspace = true
 
 [dependencies]
 umbra = { path = "../../crates/umbra", version = "0.0.1" }
+# Identity at the SSE/WS handshake (session cookie → user id). Same
+# plugin→plugin dep as umbra-oauth uses; no cycle (auth never imports us).
+umbra-auth = { path = "../umbra-auth", version = "0.0.1" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["sync", "rt"] }
 async-trait = "0.1"
 tracing = "0.1"
+# SSE transport.
+axum = "0.8"
+http = "1"
+futures-core = "0.3"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "sync"] }
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

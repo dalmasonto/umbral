@@ -3872,11 +3872,17 @@ name = "umbra-realtime"
 version = "0.0.1"
 dependencies = [
  "async-trait",
+ "axum",
+ "futures-core",
+ "http",
+ "http-body-util",
  "serde",
  "serde_json",
  "tokio",
+ "tower",
  "tracing",
  "umbra",
+ "umbra-auth",
 ]
 
 [[package]]
