@@ -137,6 +137,15 @@ impl Plugin for OAuthPlugin {
     /// only for a configured provider (see [`available_providers`]).
     fn on_ready(&self, _ctx: &AppContext) -> Result<(), PluginError> {
         let keys: Vec<&'static str> = self.providers.iter().map(|p| p.key()).collect();
+        if keys.is_empty() {
+            tracing::warn!(
+                "oauth: no providers registered — check that UMBRA_OAUTH_<PROVIDER>_CLIENT_ID \
+                 and _CLIENT_SECRET are set (in the environment or a .env in the launch \
+                 directory). The social sign-in buttons stay hidden until at least one is set."
+            );
+        } else {
+            tracing::info!("oauth: registered providers: {keys:?}");
+        }
         let _ = REGISTERED_PROVIDERS.set(keys);
         Ok(())
     }
