@@ -768,6 +768,24 @@ fn create_index_stmt(table: &str, column: &str) -> String {
     )
 }
 
+/// Build a Postgres `CREATE INDEX ... USING GIN` for a `tsvector`
+/// (`SqlType::FullText`) column (#33). A tsvector column is useless for
+/// search without a GIN index, so the migration engine emits one
+/// automatically for every full-text column — the caller never has to
+/// hand-write it. **Postgres-only**: GIN is Postgres syntax and FullText
+/// columns are system-check-gated to Postgres, so this only ever renders
+/// from `render_operation_postgres`. The `_gin` name suffix keeps it
+/// distinct from any plain index on the same column.
+fn create_gin_index_stmt(table: &str, column: &str) -> String {
+    let t = table.replace('"', "\"\"");
+    let c = column.replace('"', "\"\"");
+    format!(
+        "CREATE INDEX IF NOT EXISTS \"idx_{table}_{column}_gin\" ON \"{t}\" USING GIN (\"{c}\")",
+        table = table.replace('"', ""),
+        column = column.replace('"', ""),
+    )
+}
+
 /// Multi-column variant of [`create_index_stmt`]. Closes BUG-7.
 /// Renders `CREATE INDEX IF NOT EXISTS idx_<table>_<col1>_<col2>
 /// ON "<table>" ("<col1>", "<col2>")`. Both backends accept the
@@ -3101,7 +3119,12 @@ fn render_operation_postgres(op: &Operation) -> Vec<String> {
             }
             let mut stmts = vec![stmt.build(PostgresQueryBuilder)];
             for col in columns {
-                if col.index && !col.primary_key && !col.unique {
+                if matches!(col.ty, crate::orm::SqlType::FullText) {
+                    // tsvector columns get an auto-GIN index (#33) — they're
+                    // useless for search without one, so the engine never
+                    // makes the caller hand-write it.
+                    stmts.push(create_gin_index_stmt(table, &col.name));
+                } else if col.index && !col.primary_key && !col.unique {
                     stmts.push(create_index_stmt(table, &col.name));
                 }
             }
@@ -3121,7 +3144,10 @@ fn render_operation_postgres(op: &Operation) -> Vec<String> {
             let mut def = build_column_def_postgres(column);
             stmt.add_column(&mut def);
             let mut stmts = vec![stmt.build(PostgresQueryBuilder)];
-            if column.index && !column.primary_key && !column.unique {
+            if matches!(column.ty, crate::orm::SqlType::FullText) {
+                // Auto-GIN for a tsvector column added later (#33).
+                stmts.push(create_gin_index_stmt(table, &column.name));
+            } else if column.index && !column.primary_key && !column.unique {
                 stmts.push(create_index_stmt(table, &column.name));
             }
             stmts

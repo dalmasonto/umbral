@@ -210,6 +210,8 @@ Two matching predicates are available on every `TsVector` column:
 
 Both predicates compile only for Postgres; use the `_pg` terminal variants (`.fetch_pg`, `.first_pg`, etc.) on any model that includes a `TsVector` field.
 
+**Indexes are automatic.** A `tsvector` column is useless for search without a GIN index, so the migration engine emits one for you — `CREATE INDEX "idx_<table>_<col>_gin" ON "<table>" USING GIN ("<col>")` — for every `TsVector` field, on both `CreateTable` and a later `AddColumn`. You don't write `#[umbra(index)]` and you don't hand-author the GIN DDL; `migrate` does it. (The column you *populate* a `tsvector` from — running `to_tsvector(...)` over your text columns via a trigger or a generated column — is still yours to set up; umbra stores and queries the `tsvector`, it doesn't yet generate it from source text at write time.)
+
 <Callout type="info">
 umbra's migration engine emits a bare `tsvector` column. Populating it is your responsibility: use a `GENERATED ALWAYS AS (to_tsvector('english', title)) STORED` clause in a hand-edited migration, or wire up a Postgres trigger. See the live-Postgres integration test in `crates/umbra-core/tests/fulltext_field.rs` for a working example.
 </Callout>

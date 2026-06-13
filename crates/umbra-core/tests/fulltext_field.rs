@@ -112,6 +112,25 @@ fn postgres_ddl_renders_tsvector_type() {
         "expected `tsvector`; got {}",
         stmts[0]
     );
+
+    // #33 — the tsvector column gets an auto-GIN index in a follow-up
+    // statement (a tsvector column is useless for search without one).
+    let all = stmts.join("\n").to_ascii_lowercase();
+    assert!(
+        all.contains("using gin"),
+        "expected an auto-GIN index for the tsvector column; got {stmts:?}"
+    );
+    assert!(
+        all.contains("idx_umbra_phase43_doc_search_gin"),
+        "GIN index named per the idx_<table>_<col>_gin convention; got {stmts:?}"
+    );
+    // The id column has no `index` flag, so it gets no extra index — only
+    // the GIN one is added beyond the CREATE TABLE.
+    assert_eq!(
+        stmts.len(),
+        2,
+        "exactly CREATE TABLE + the GIN index; got {stmts:?}"
+    );
 }
 
 #[test]
