@@ -264,3 +264,71 @@ async fn fulltext_field_filters_real_postgres_rows() {
     assert_eq!(rust_via_websearch.len(), 1);
     assert!(rust_via_websearch[0].title.to_lowercase().contains("rust"));
 }
+
+/// Documents the semantics that back the FTS docs (and answer the common
+/// "will `?search=tseb` match `best`?" question): full-text search matches
+/// LEXEMES (whole, stemmed words + prefixes), NOT substrings and NOT
+/// reversed strings. `best product` matches; `tseb` matches nothing.
+#[tokio::test]
+#[ignore = "needs UMBRA_TEST_POSTGRES_URL"]
+async fn fts_matches_lexemes_not_substrings_or_reverses() {
+    let url =
+        std::env::var("UMBRA_TEST_POSTGRES_URL").expect("UMBRA_TEST_POSTGRES_URL must be set");
+    let pool = sqlx::PgPool::connect(&url).await.unwrap();
+
+    sqlx::query("DROP TABLE IF EXISTS umbra_phase43_doc")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "CREATE TABLE umbra_phase43_doc ( \
+            id BIGSERIAL PRIMARY KEY, \
+            title TEXT NOT NULL, \
+            search TSVECTOR GENERATED ALWAYS AS (to_tsvector('english', title)) STORED, \
+            alt_search TSVECTOR \
+         )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    for title in [
+        "The best product ever made",
+        "Best practices guide",
+        "A great widget tool",
+    ] {
+        sqlx::query("INSERT INTO umbra_phase43_doc (title) VALUES ($1)")
+            .bind(title)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
+    let count = |pred| {
+        let pool = pool.clone();
+        async move {
+            Doc::objects()
+                .filter(pred)
+                .fetch_pg(&pool)
+                .await
+                .unwrap()
+                .len()
+        }
+    };
+
+    // "best product": spaces mean AND → docs containing BOTH lexemes.
+    // Only "The best product ever made" has both.
+    assert_eq!(
+        count(doc::SEARCH.matches_websearch("best product")).await,
+        1
+    );
+    // "best" alone (stemmed, case-insensitive) hits both "best …" rows.
+    assert_eq!(count(doc::SEARCH.matches_websearch("best")).await, 2);
+    // "tseb" (best reversed) is not a lexeme in any doc → ZERO matches.
+    // FTS does not reverse or fuzzy-match; this is the key clarification.
+    assert_eq!(count(doc::SEARCH.matches_websearch("tseb")).await, 0);
+    // A real substring of a word ("rodu" inside "product") is ALSO not a
+    // lexeme → ZERO. FTS is word-based, not substring-based.
+    assert_eq!(count(doc::SEARCH.matches_websearch("rodu")).await, 0);
+    // Prefix matching is the supported "partial word": `prod:*` → product.
+    assert_eq!(count(doc::SEARCH.matches("prod:*")).await, 1);
+}
