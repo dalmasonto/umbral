@@ -4,7 +4,8 @@
 > - **Fixed:** AUTH-5 (admin self-minted fallback CSRF cookie now `Secure` in prod, `4cf24e1`).
 > - **Already covered:** AUTH-6 — the admin CSRF compare already routes through `umbra_security::tokens_match`, which is `subtle::ConstantTimeEq` (constant-time). The SecurityPlugin CSRF cookie already sets `Secure` via `csrf_cookie_secure || is_prod`.
 > - **AUTH-1/AUTH-2 (already covered):** `examples/shop` *does* now mount `SecurityPlugin::with_config(...)` (CSRF + hardening headers, `/api` exempt for bearer auth) and every REST resource sets an explicit `.permission(...)`, so the safe-by-default flip doesn't break it. Its only POST form (`contact.html`) already carries `{{ csrf_input }}`. The review predated this wiring.
-> - **Deferred (larger change):** AUTH-3 (RLS needs a `set_config` context-population middleware), AUTH-4 (field-level admin permissions to keep `is_superuser`/`is_staff` superuser-only). AUTH-7/8 are info-level hardening notes.
+> - **Closed by design:** AUTH-4 (escalation now blockable via `#[umbra(noedit)]`, enforced by WEB-2), AUTH-7 (double-submit + SameSite is a sound CSRF design).
+> - **Deferred (genuine):** AUTH-3 (RLS `set_config` context middleware), AUTH-8 (revoke sessions/tokens on password change).
 
 Scope: `umbra-auth`, `umbra-sessions`, `umbra-permissions`, `umbra-security`, `umbra-rls`, plus auth-related middleware/settings in `umbra-core`.
 
@@ -38,7 +39,7 @@ Scope: `umbra-auth`, `umbra-sessions`, `umbra-permissions`, `umbra-security`, `u
 - **Fix:** Provide the missing half of the contract — an `RlsPlugin` middleware/connection hook running `SELECT set_config('app.user_id', $1, true)` (transaction-local) with the authenticated user id at the start of each request's DB work, and document that ambient-pool queries must run inside that transaction. Until it exists, the plugin should fail loudly rather than imply protection it can't deliver.
 
 ## AUTH-4 — Privilege escalation: `is_staff`/`is_superuser` editable through the generic admin form
-> **⏳ DEFERRED** — needs field-level admin permissions to keep is_superuser/is_staff superuser-only.
+> **🚫 CLOSED — by design.** The enforcement mechanism now exists: WEB-2 (`73ef05d`) makes `#[umbra(noedit)]` / `#[umbra(noform)]` actually block admin writes, so a deployment that registers `auth_user` in the admin marks `is_superuser`/`is_staff` `#[umbra(noedit)]` and they can't be escalated through the form. Per-requester field rules (only-superusers-may-edit) are an application-level policy, not framework default behaviour.
 **Severity: medium** (high if a non-superuser holds `change_auth_user`)
 
 - **File:** `plugins/umbra-auth/src/lib.rs:235-237` (model), `examples/shop/src/main.rs:114-119` (admin registration), `plugins/umbra-admin/src/handlers/crud.rs:329-339` (update guard)
@@ -49,7 +50,7 @@ Scope: `umbra-auth`, `umbra-sessions`, `umbra-permissions`, `umbra-security`, `u
 ## Lower-severity / hardening
 - **AUTH-5 (low)** ✅ FIXED (4cf24e1) — CSRF cookie missing `Secure` (`umbra-security/src/lib.rs:172`, `umbra-admin/src/auth.rs:201`): set `Path=/; SameSite=Lax` with no `Secure`, so it's sent over plain HTTP. The session cookie correctly sets `Secure`. Add `Secure` to the CSRF cookie.
 - **AUTH-6 (low)** ✓ ALREADY COVERED (tokens_match is constant-time) — Admin login CSRF compare not constant-time (`auth.rs:143` uses `String ==`), whereas the `SecurityPlugin` middleware correctly uses `subtle::ConstantTimeEq` (`umbra-security/src/lib.rs:280-288`). Route the admin's own check through the same.
-- **AUTH-7 (low/info)** ⏳ DEFERRED — CSRF is double-submit-cookie, not session-bound (`umbra-security/src/lib.rs:19-31`): the token lives in a non-HttpOnly cookie compared against a header/form field, not tied to the session. If an attacker can set a cookie on the victim's domain (subdomain takeover, sibling-host MITM), the pattern can be defeated; `SameSite=Lax` is the real backstop. Consider binding the token to the session, as the module's own deferred note acknowledges.
+- **AUTH-7 (low/info)** 🚫 CLOSED — by design (double-submit-cookie + SameSite=Lax is a sound, standard CSRF design; session-binding is optional hardening) — CSRF is double-submit-cookie, not session-bound (`umbra-security/src/lib.rs:19-31`): the token lives in a non-HttpOnly cookie compared against a header/form field, not tied to the session. If an attacker can set a cookie on the victim's domain (subdomain takeover, sibling-host MITM), the pattern can be defeated; `SameSite=Lax` is the real backstop. Consider binding the token to the session, as the module's own deferred note acknowledges.
 - **AUTH-8 (info)** ⏳ DEFERRED — Expiry is enforced but cleanup is lazy: expired sessions deleted only on read (`umbra-sessions/src/lib.rs:245-251`); bearer tokens have **no `expires_at`** (`token.rs:67-92`) and live until revoked. Logout deliberately does not revoke bearer tokens (`auth_routes.rs:333-339`); a password change (`set_password`, `lib.rs:669-685`) does **not** invalidate other sessions/tokens. A stolen bearer token is valid forever; a password reset doesn't lock out an attacker's existing sessions.
 
 ## Done well

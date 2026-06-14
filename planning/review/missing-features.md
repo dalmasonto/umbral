@@ -1,14 +1,14 @@
 # Missing features
 
 > **Sweep status — 2026-06-14**
-> - **Deferred (optimization, not correctness):** MISS-1 (`select_for_update()`/`skip_locked()`). The task double-claim it was needed for (BROKEN-1/PERF-6) is now closed by a conditional `UPDATE ... WHERE status='pending'` claim guard (`98ef6e9`), which is correct on both SQLite and Postgres. `FOR UPDATE SKIP LOCKED` remains worth adding as a contention optimization (avoids the wasted SELECT under heavy concurrency), but no longer gates correctness.
+> - **Closed — delivered elsewhere:** MISS-1's only in-tree need (the tasks double-claim) is fixed by BROKEN-1's conditional `UPDATE ... WHERE status='pending'` guard (`98ef6e9`), correct on both backends. `FOR UPDATE SKIP LOCKED` has no other caller — a speculative optimization, not a gap.
 
 Django-parity gaps grounded in an actual in-tree need (not speculation). Broad, already-tracked gaps live in `bugs/features.md`, `gaps.md`, `gaps2.md`, `REAL-GAPS.md` — see the "already tracked" list in [`broken-features.md`](broken-features.md). Only the evidence-grounded new gap is below.
 
 ---
 
 ## MISS-1 — No `select_for_update()` / `skip_locked()` anywhere in the ORM
-> **⏳ DEFERRED** — optimization only; the task double-claim it was for is closed by BROKEN-1 (`98ef6e9`).
+> **✅ CLOSED — delivered elsewhere.** The only in-tree need (the tasks double-claim) is fixed by BROKEN-1's conditional `UPDATE ... WHERE status='pending'` guard (`98ef6e9`), correct on both backends. `FOR UPDATE SKIP LOCKED` has no other caller in the codebase, so it's a speculative optimization, not a gap — reopen if/when a second row-claiming use case appears.
 **Severity: medium** · **Verified** (zero hits for `FOR UPDATE` / `for_update` / `skip_locked` in `crates/umbra-core/src`)
 
 - **Evidence:** The ORM has no row-locking primitive. This isn't a theoretical gap — it's the exact operation `umbra-tasks` needed and worked around incorrectly (see [BROKEN-1](broken-features.md)). The tasks `claim_one` wraps a read-then-update in a transaction and *claims in a comment* that this prevents Postgres double-claims, but without `FOR UPDATE SKIP LOCKED` it doesn't.

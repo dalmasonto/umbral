@@ -3,7 +3,8 @@
 > **Sweep status — 2026-06-14**
 > - **Fixed:** BROKEN-1 (conditional claim, `98ef6e9`), BROKEN-3 (mutex-poison recover + catch_unwind, `23ad8b0`), BROKEN-4 (no `process::exit`, `98ef6e9`), BROKEN-5 (logged decode failure, `23ad8b0`), BROKEN-6 (`get_opt`, `23ad8b0`), BROKEN-13 (stale comment, `23ad8b0`).
 > - **Also fixed:** BROKEN-7 (`cache_page` logs + 502 instead of fake-200, `17939c4`), BROKEN-8 (`Form<T>` checks Content-Type → 415, surfaces parse errors → 400, `dbb57c8`), BROKEN-9 (`CachePlugin::new(cache)` wires the ambient cache in `on_ready`, `17939c4`).
-> - **Deferred (larger change):** BROKEN-2 (worker-crash task reclaim — needs a lease/reclaim watcher). Low-severity BROKEN-10/11/12/14 not yet triaged.
+> - **Also fixed:** BROKEN-11 (405 for non-GET/HEAD on embedded static), BROKEN-12 (cache backends log swallowed write errors), BROKEN-14 (Form derive message lists all validators) — all `93bf205`.
+> - **Deferred (genuine larger work):** BROKEN-2 (worker-crash task reclaim — needs a lease/reclaim watcher), BROKEN-10 (memory-backend eviction).
 
 Code that cannot work as written, swallows failures, or contradicts its own docs. Checked against `bugs/gaps.md`, `gaps2.md`, `REAL-GAPS.md`, `features.md` — only new findings here. The "already tracked" list is at the bottom.
 
@@ -92,10 +93,10 @@ Code that cannot work as written, swallows failures, or contradicts its own docs
 
 ## Lower-severity
 - **BROKEN-10 (low–med)** ⏳ DEFERRED — `MemoryBackend` never evicts expired entries except on read (`umbra-cache/src/lib.rs:241-276`); `SqliteBackend` has `sweep()`, memory has none. Write-once-read-never keys (e.g. `cache_page` keys for long-tail query strings) grow unbounded — a crawler inflates RSS without limit. Add opportunistic purge on `set`, a `sweep()` parity method, and/or a max-entry cap. (Expiry-on-read itself is correctly enforced.)
-- **BROKEN-11 (low)** ⏳ DEFERRED — Embedded static service answers every HTTP method with the body (`umbra-static/src/lib.rs:288-313`): `EmbeddedDirService::call` never inspects `req.method()`, so `POST /widget/assets/app.js` returns 200+body (Fs mode correctly returns 405). Embedded mode also lacks the ETag/`If-Modified-Since` the module doc attributes to the plugin. Early-return 405 for non-GET/HEAD; consider a content-hash ETag.
-- **BROKEN-12 (low)** ⏳ DEFERRED — `CacheBackend` trait doc promises "backends swallow errors internally **and log them**" (`umbra-cache/src/lib.rs:129-132`) but `SqliteBackend::set/delete/clear` and all `RedisBackend` methods are `let _ = …` with no `tracing` (`:362-384, :433-450`). A dead Redis / locked SQLite means every cache write silently no-ops forever. Add `tracing::warn!` on each swallowed `Err`.
+- **BROKEN-11 (low)** ✅ FIXED (93bf205) — Embedded static service answers every HTTP method with the body (`umbra-static/src/lib.rs:288-313`): `EmbeddedDirService::call` never inspects `req.method()`, so `POST /widget/assets/app.js` returns 200+body (Fs mode correctly returns 405). Embedded mode also lacks the ETag/`If-Modified-Since` the module doc attributes to the plugin. Early-return 405 for non-GET/HEAD; consider a content-hash ETag.
+- **BROKEN-12 (low)** ✅ FIXED (93bf205) — `CacheBackend` trait doc promises "backends swallow errors internally **and log them**" (`umbra-cache/src/lib.rs:129-132`) but `SqliteBackend::set/delete/clear` and all `RedisBackend` methods are `let _ = …` with no `tracing` (`:362-384, :433-450`). A dead Redis / locked SQLite means every cache write silently no-ops forever. Add `tracing::warn!` on each swallowed `Err`.
 - **BROKEN-13 (low)** ✅ FIXED (23ad8b0) — Stale comment in `crates/umbra-core/src/orm/write.rs:26-34` claims umbra-rest still has a SQLite-only `bind_json_value` path; `bind_json_value`/`sqlx::Sqlite` no longer exist in `plugins/umbra-rest/src/`. Delete/update the paragraph — it sends the next dev hunting a Postgres-breaking path that was already fixed.
-- **BROKEN-14 (low)** ⏳ DEFERRED — `#[derive(Form)]` rejection message (`crates/umbra-macros/src/lib.rs:3019-3025`) lists only `required, optional, email, password, min_length, max_length, length(...)` but the parser also accepts `phone`, `url`, `regex = "..."`, `message = "..."` (`:2963-2976`). Extend the message.
+- **BROKEN-14 (low)** ✅ FIXED (93bf205) — `#[derive(Form)]` rejection message (`crates/umbra-macros/src/lib.rs:3019-3025`) lists only `required, optional, email, password, min_length, max_length, length(...)` but the parser also accepts `phone`, `url`, `regex = "..."`, `message = "..."` (`:2963-2976`). Extend the message.
 
 ## Plugin-contract review (raw `sqlx::query` in plugins)
 | Hit | Verdict |
