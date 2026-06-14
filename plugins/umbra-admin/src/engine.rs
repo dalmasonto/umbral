@@ -41,7 +41,21 @@ pub(crate) fn engine() -> &'static Environment<'static> {
         // find `umbra._filterFkSearch`.
         env.add_filter("tojson", |v: minijinja::Value| -> minijinja::Value {
             let json = serde_json::to_string(&v).unwrap_or_else(|_| "null".to_string());
-            minijinja::Value::from_safe_string(json)
+            // WEB-3: this output is dropped into inline <script> blocks via
+            // `from_safe_string` (autoescape skipped). serde_json leaves
+            // `<`, `>`, `&` raw, so a filter value containing `</script>`
+            // would break out of the script element and run attacker JS in
+            // the admin origin. Escape those to their `\uXXXX` JSON forms
+            // (still valid JSON, parses to the same value) plus the U+2028/
+            // U+2029 line separators that terminate JS strings. Mirrors
+            // Django's `json_script`.
+            let safe = json
+                .replace('<', "\\u003c")
+                .replace('>', "\\u003e")
+                .replace('&', "\\u0026")
+                .replace('\u{2028}', "\\u2028")
+                .replace('\u{2029}', "\\u2029");
+            minijinja::Value::from_safe_string(safe)
         });
         // Django-style date/datetime humanizers. Templates render
         // raw RFC3339 / SQL-shaped timestamps through one of these
@@ -331,4 +345,38 @@ pub(crate) fn render(name: &str, ctx: minijinja::Value) -> Result<Html<String>, 
         .render(umbra::templates::merge_ambient_value(ctx))
         .map_err(|e| AdminError::Render(e.to_string()))?;
     Ok(Html(body))
+}
+
+#[cfg(test)]
+mod tojson_xss_tests {
+    /// WEB-3 regression: `tojson` output is interpolated into inline
+    /// `<script>` blocks (via `from_safe_string`, so autoescape is off).
+    /// A filter value containing `</script>` must be escaped to its
+    /// `\uXXXX` JSON form so it can't terminate the script element and
+    /// inject attacker JS into the admin origin.
+    #[test]
+    fn tojson_escapes_script_breakout_sequences() {
+        let env = super::engine();
+        let out = env
+            .render_str(
+                "{{ v | tojson }}",
+                minijinja::context! { v => "</script><script>alert(1)</script>" },
+            )
+            .expect("render tojson");
+        assert!(
+            !out.contains("</script>"),
+            "a raw </script> must not survive tojson: {out}"
+        );
+        assert!(
+            !out.contains("<script>"),
+            "a raw <script> must not survive tojson: {out}"
+        );
+        assert!(
+            out.contains("\\u003c"),
+            "`<` should be escaped to \\u003c: {out}"
+        );
+        // It must still be valid JSON that round-trips to the same string.
+        let parsed: String = serde_json::from_str(&out).expect("valid JSON");
+        assert_eq!(parsed, "</script><script>alert(1)</script>");
+    }
 }

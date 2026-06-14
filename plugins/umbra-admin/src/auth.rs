@@ -205,7 +205,18 @@ fn ensure_csrf_token(headers: &HeaderMap) -> (String, Option<String>) {
         return (tok, None);
     }
     let tok = umbra_security::generate_token();
-    let cookie = format!("umbra_csrf_token={tok}; Path=/; SameSite=Lax");
+    // AUTH-5: when the admin mints its own CSRF cookie (no SecurityPlugin
+    // mounted), still set `Secure` in prod so it isn't sent over plain
+    // HTTP — mirroring SecurityPlugin's `csrf_cookie_secure || is_prod`.
+    // Dev stays non-Secure so the cookie works over HTTP localhost.
+    let is_prod = matches!(
+        umbra::settings::get_opt().map(|s| &s.environment),
+        Some(umbra::Environment::Prod)
+    );
+    let mut cookie = format!("umbra_csrf_token={tok}; Path=/; SameSite=Lax");
+    if is_prod {
+        cookie.push_str("; Secure");
+    }
     (tok, Some(cookie))
 }
 

@@ -30,6 +30,17 @@ pub(crate) async fn run_action(
         Ok(u) => u,
         Err(r) => return r,
     };
+    // WEB-7: same model-level gate as `dispatch_action` — the legacy
+    // form-POST path runs the same mutating bulk-action handlers.
+    let Some((plugin_name, _model)) = crate::discovery::find_model(&table) else {
+        return AdminError::NotFound(format!("no model `{table}`")).into_response();
+    };
+    if let Err(r) =
+        crate::permcheck::require(&who, &plugin_name, &table, crate::permcheck::Action::Change)
+            .await
+    {
+        return r;
+    }
     let form: HashMap<String, String> = match serde_urlencoded::from_str(&body) {
         Ok(m) => m,
         Err(e) => return AdminError::BadInput(e.to_string()).into_response(),
@@ -127,6 +138,22 @@ pub(crate) async fn dispatch_action(
         Ok(u) => u,
         Err(r) => return r,
     };
+
+    // WEB-7: bulk actions run developer-defined handlers that can mutate
+    // or delete rows, so they need the same model-level permission gate as
+    // the CRUD handlers — `require_staff` alone lets any staff user fire
+    // them regardless of `change_<model>`. Gate on Change (the broadest
+    // thing an action can do); a no-permissions install (no
+    // umbra-permissions) still passes, matching the rest of the admin.
+    let Some((plugin_name, _model)) = crate::discovery::find_model(&table) else {
+        return AdminError::NotFound(format!("no model `{table}`")).into_response();
+    };
+    if let Err(r) =
+        crate::permcheck::require(&who, &plugin_name, &table, crate::permcheck::Action::Change)
+            .await
+    {
+        return r;
+    }
 
     let ids: Vec<i64> = if body.trim_start().starts_with('{') {
         match serde_json::from_str::<serde_json::Value>(&body) {

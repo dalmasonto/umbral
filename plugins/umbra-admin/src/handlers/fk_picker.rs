@@ -42,12 +42,22 @@ pub(crate) async fn fk_options(
         "{}/api/{table}/{field}/options",
         crate::branding::current().base_path
     );
-    if let Err(r) = require_staff(&headers, &path).await {
-        return r;
-    }
-    let Some((_, model)) = find_model(&table) else {
+    let who = match require_staff(&headers, &path).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let Some((plugin_name, model)) = find_model(&table) else {
         return AdminError::NotFound(format!("no model `{table}`")).into_response();
     };
+    // WEB-7: the FK autocomplete returns rows of a model; without a
+    // permission gate any staff user could enumerate a model they have no
+    // `view_<model>` right to. Require View on the parent table, mirroring
+    // the CRUD/list handlers (a no-permissions install still passes).
+    if let Err(r) =
+        crate::permcheck::require(&who, &plugin_name, &table, crate::permcheck::Action::View).await
+    {
+        return r;
+    }
     // Resolve `field` against both regular columns (FK case) and the
     // model's M2M relations. M2M fields aren't in `model.fields` —
     // they live in `model.m2m_relations` and target a different table.
@@ -223,12 +233,22 @@ pub(crate) async fn fk_options_resolve(
         "{}/api/{table}/{field}/options/resolve",
         crate::branding::current().base_path
     );
-    if let Err(r) = require_staff(&headers, &path).await {
-        return r;
-    }
-    let Some((_, model)) = find_model(&table) else {
+    let who = match require_staff(&headers, &path).await {
+        Ok(u) => u,
+        Err(r) => return r,
+    };
+    let Some((plugin_name, model)) = find_model(&table) else {
         return AdminError::NotFound(format!("no model `{table}`")).into_response();
     };
+    // WEB-7: the FK autocomplete returns rows of a model; without a
+    // permission gate any staff user could enumerate a model they have no
+    // `view_<model>` right to. Require View on the parent table, mirroring
+    // the CRUD/list handlers (a no-permissions install still passes).
+    if let Err(r) =
+        crate::permcheck::require(&who, &plugin_name, &table, crate::permcheck::Action::View).await
+    {
+        return r;
+    }
     // Same dual-lookup as `fk_options`: FK columns live in
     // `model.fields`, M2M relations in `model.m2m_relations`. Either
     // path resolves to the same related table.
