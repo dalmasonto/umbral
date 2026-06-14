@@ -292,12 +292,38 @@ pub async fn connect(url: &str) -> Result<DbPool, sqlx::Error> {
 /// | `busy_timeout` | `5000ms` | Wait up to 5 s for a contended writer to release the lock before raising `SQLITE_BUSY`. Without this, two concurrent writers immediately race to error. |
 /// | `foreign_keys` | `ON` | sqlite turns FK enforcement off by default. The ORM emits `REFERENCES` clauses assuming they're respected — turning it on per connection makes the FK contract real. |
 ///
-/// `:memory:` databases get the PRAGMAs too (harmless: WAL is a no-op
-/// on memory dbs and busy-timeout never fires). The shared-cache
-/// in-memory form (`sqlite::memory:`) keeps working since the same
-/// `SqliteConnectOptions::from_str` parser accepts it.
+/// **In-memory URLs are backed by a process-unique temp file.** A bare
+/// `sqlite::memory:` gives every connection in the pool its OWN private,
+/// empty database, so a table created on one connection is invisible to a
+/// query that lands on another — and a shared in-memory database doesn't
+/// survive the connection (or the tokio runtime) that created it being
+/// dropped. Both surface as a flaky "no such table" whenever a pool is
+/// reused across queries or test cases. Routing in-memory URLs through a
+/// small temp file (which every connection sees and which persists for the
+/// process) sidesteps both — the same approach `umbra-testing::TempPool`
+/// already documents. File-backed (`sqlite://app.db`) and Postgres URLs are
+/// untouched.
 pub async fn connect_sqlite(url: &str) -> Result<SqlitePool, sqlx::Error> {
-    let opts = SqliteConnectOptions::from_str(url)?
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static MEM_SEQ: AtomicU64 = AtomicU64::new(0);
+
+    let lower = url.to_ascii_lowercase();
+    let in_memory = lower.contains(":memory:") || lower.contains("mode=memory");
+
+    let opts = if in_memory {
+        let n = MEM_SEQ.fetch_add(1, Ordering::Relaxed);
+        let path =
+            std::env::temp_dir().join(format!("umbra_mem_{}_{n}.sqlite", std::process::id()));
+        // Best-effort: remove a stale file from a previous run with this
+        // exact (pid, seq) — pids recycle. WAL/SHM siblings are recreated.
+        let _ = std::fs::remove_file(&path);
+        SqliteConnectOptions::new()
+            .filename(&path)
+            .create_if_missing(true)
+    } else {
+        SqliteConnectOptions::from_str(url)?
+    };
+    let opts = opts
         .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
         .synchronous(SqliteSynchronous::Normal)
         .busy_timeout(Duration::from_secs(5))
