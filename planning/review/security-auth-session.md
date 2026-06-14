@@ -1,5 +1,11 @@
 # Security — auth / session / authorization
 
+> **Sweep status — 2026-06-14**
+> - **Fixed:** AUTH-5 (admin self-minted fallback CSRF cookie now `Secure` in prod, `4cf24e1`).
+> - **Already covered:** AUTH-6 — the admin CSRF compare already routes through `umbra_security::tokens_match`, which is `subtle::ConstantTimeEq` (constant-time). The SecurityPlugin CSRF cookie already sets `Secure` via `csrf_cookie_secure || is_prod`.
+> - **Open (needs the example wired):** AUTH-1/AUTH-2 — `examples/shop` doesn't mount `SecurityPlugin` (the framework *has* CSRF + headers; the example just doesn't enable them). Enabling it enforces CSRF on the shop's POST forms, so those templates must carry the `csrf_token` field first — risk of breaking the running dev server until they do.
+> - **Deferred (larger change):** AUTH-3 (RLS needs a `set_config` context-population middleware), AUTH-4 (field-level admin permissions to keep `is_superuser`/`is_staff` superuser-only). AUTH-7/8 are info-level hardening notes.
+
 Scope: `umbra-auth`, `umbra-sessions`, `umbra-permissions`, `umbra-security`, `umbra-rls`, plus auth-related middleware/settings in `umbra-core`.
 
 ---

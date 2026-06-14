@@ -1,5 +1,8 @@
 # Missing features
 
+> **Sweep status — 2026-06-14**
+> - **Deferred (optimization, not correctness):** MISS-1 (`select_for_update()`/`skip_locked()`). The task double-claim it was needed for (BROKEN-1/PERF-6) is now closed by a conditional `UPDATE ... WHERE status='pending'` claim guard (`98ef6e9`), which is correct on both SQLite and Postgres. `FOR UPDATE SKIP LOCKED` remains worth adding as a contention optimization (avoids the wasted SELECT under heavy concurrency), but no longer gates correctness.
+
 Django-parity gaps grounded in an actual in-tree need (not speculation). Broad, already-tracked gaps live in `bugs/features.md`, `gaps.md`, `gaps2.md`, `REAL-GAPS.md` — see the "already tracked" list in [`broken-features.md`](broken-features.md). Only the evidence-grounded new gap is below.
 
 ---

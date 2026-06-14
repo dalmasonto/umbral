@@ -1,5 +1,10 @@
 # Security — HTTP-facing plugins
 
+> **Sweep status — 2026-06-14**
+> - **Fixed:** WEB-2 admin half (noform/noedit are write guards on admin POSTs, `73ef05d`); WEB-3 (script-safe `tojson`, `4cf24e1`); WEB-5 (no raw DB error in 500, `20042bf`); WEB-7 (permcheck on bulk-actions + FK pickers, `4cf24e1`).
+> - **Partial:** WEB-1 — block-list extended to permissions/tasks/audit tables + a boot warning on `AllowAny + NoAuthentication` (`20042bf`); the full open-by-default → closed-by-default flip is a deliberate breaking change left for a decision. WEB-2 — REST half: `noedit` is *documented* as REST-irrelevant (model.rs:520-530 says use `noform`/`hide`); making it write-protect REST (or making `hide()` imply write-protection) is a contract decision, also pending.
+> - **Open (contained, not yet done):** WEB-4 (media MIME/extension allow-list), WEB-6 (playground staff/dev gate).
+
 Scope: `umbra-rest`, `umbra-admin`, `umbra-playground`, `umbra-openapi`, `umbra-media`, `umbra-static`, and the MiniJinja integration in `umbra-core`. This file holds the only **critical** in the review.
 
 ---

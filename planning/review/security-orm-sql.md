@@ -1,5 +1,9 @@
 # Security — ORM / SQL layer
 
+> **Sweep status — 2026-06-14**
+> - **Fixed:** ORM-1 — LIKE wildcards (`%`/`_`/`\`) in user input for `contains`/`icontains`/`startswith`/`istartswith` (typed), `DynQuerySet::search`, and the REST `__contains`/`__icontains`/`__startswith` filters are now escaped via `umbra::orm::escape_like_literal` + `LikeExpr::escape('\\')` (`586ed84`). Behavioral round-trip test added. The raw `.like()`/`.ilike()` builders intentionally stay unescaped (user-authored patterns).
+> - Everything else here is the "verified safe / done well" list — no action.
+
 Scope: `crates/umbra-core/src` (queryset/query building, `DynQuerySet`, F-expressions, ordering, migrations DDL, inspectdb, backup) and `crates/umbra-cli`. **This answers the two open questions in `bugs/security.md`.**
 
 ## Verdict on `bugs/security.md`
