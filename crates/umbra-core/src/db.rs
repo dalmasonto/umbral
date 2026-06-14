@@ -264,7 +264,7 @@ pub async fn connect(url: &str) -> Result<DbPool, sqlx::Error> {
         .unwrap_or(url);
     match scheme {
         "sqlite" => Ok(DbPool::Sqlite(connect_sqlite(url).await?)),
-        "postgres" | "postgresql" => Ok(DbPool::Postgres(PgPool::connect(url).await?)),
+        "postgres" | "postgresql" => Ok(DbPool::Postgres(connect_postgres(url).await?)),
         other => Err(sqlx::Error::Configuration(
             format!(
                 "umbra::db::connect: unsupported URL scheme `{other}://`. \
@@ -273,6 +273,26 @@ pub async fn connect(url: &str) -> Result<DbPool, sqlx::Error> {
             .into(),
         )),
     }
+}
+
+/// Open a Postgres pool from a URL with umbra's pool configuration.
+///
+/// PERF-5: bare `PgPool::connect` uses sqlx's defaults with **no acquire
+/// timeout**, so a saturated pool blocks request tasks forever. We always
+/// set a bounded `acquire_timeout` (fail fast) and a configurable
+/// `max_connections`, read from [`crate::settings`] when available
+/// (falling back to the documented defaults if the pool is opened before
+/// settings are installed).
+pub async fn connect_postgres(url: &str) -> Result<PgPool, sqlx::Error> {
+    use std::time::Duration;
+    let (max_conn, acquire_secs) = crate::settings::get_opt()
+        .map(|s| (s.db_max_connections, s.db_acquire_timeout_secs))
+        .unwrap_or((10, 30));
+    sqlx::postgres::PgPoolOptions::new()
+        .max_connections(max_conn.max(1))
+        .acquire_timeout(Duration::from_secs(acquire_secs))
+        .connect(url)
+        .await
 }
 
 /// Open a SQLite-backed pool from a URL.

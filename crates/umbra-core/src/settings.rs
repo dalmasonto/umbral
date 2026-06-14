@@ -85,6 +85,19 @@ fn default_log_level() -> String {
     "info".into()
 }
 
+/// PERF-5: pool size default (matches sqlx's own default of 10). Raise
+/// for a high-concurrency Postgres deploy via `UMBRA_DB_MAX_CONNECTIONS`.
+fn default_db_max_connections() -> u32 {
+    10
+}
+
+/// PERF-5: seconds to wait for a free pooled connection before failing a
+/// request. A bounded timeout means a saturated pool fails fast (503)
+/// instead of blocking the request task forever.
+fn default_db_acquire_timeout_secs() -> u64 {
+    30
+}
+
 fn default_bind_addr() -> String {
     // 127.0.0.1 only by default — exposing the server on 0.0.0.0
     // is a deliberate keystroke. Override with UMBRA_BIND_ADDR or
@@ -186,6 +199,17 @@ pub struct Settings {
 
     #[serde(default)]
     pub databases: std::collections::HashMap<String, String>,
+
+    /// Max connections in the Postgres pool (PERF-5). Default 10. Set via
+    /// `UMBRA_DB_MAX_CONNECTIONS` or `db_max_connections` in `umbra.toml`.
+    #[serde(default = "default_db_max_connections")]
+    pub db_max_connections: u32,
+
+    /// Seconds to wait for a free pooled connection before failing the
+    /// request (Postgres acquire timeout, PERF-5). Default 30. Set via
+    /// `UMBRA_DB_ACQUIRE_TIMEOUT_SECS` or `db_acquire_timeout_secs`.
+    #[serde(default = "default_db_acquire_timeout_secs")]
+    pub db_acquire_timeout_secs: u64,
 
     #[serde(default = "default_secret_key")]
     pub secret_key: String,
