@@ -622,6 +622,5 @@ For the design spec see `docs/admin-backend/backend-prd.md` and `docs/admin-back
   SQLite-backed admin. A Postgres-aware admin upgrade is a later milestone.
 - **Per-row permissions.** Auth gating is binary: staff or not. Row-level
   restrictions and per-model action gating are deferred.
-- **Pagination.** The list view returns up to 200 rows. Cursor-based pagination lands in a later upgrade.
 
 The spec lives in `docs/specs/02-plugin-contract.md`. Source: `plugins/umbra-admin/src/lib.rs` and `plugins/umbra-admin/src/config.rs`.

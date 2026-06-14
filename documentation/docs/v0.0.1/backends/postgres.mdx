@@ -76,7 +76,7 @@ Some workloads benefit enough from native PG features to make the SQLite story i
 | Type | Rust field | Postgres column | Notes |
 |------|------------|-----------------|-------|
 | Array | `Vec<T>` / `Option<Vec<T>>` | `T[]` | Element type is one of `i32`, `i64`, `String`, `Uuid`, `bool`. See [orm/models - Array columns](../orm/models#array-columns). |
-| JSONB | `serde_json::Value` (M3 `Json` SqlType) | `JSONB` | Indexed `->`, `->>` operator surface; the QuerySet exposes them as `.has_key("key")` and `.path_text(&["a", "b"]).eq("v")`. See [orm/querying — JSON column ops](../orm/querying#json-column-ops). |
+| JSONB | `serde_json::Value` (M3 `Json` SqlType) | `JSONB` | Indexed `->`, `->>` operator surface; the QuerySet exposes them as `.has_key("key")` and `.path_text(&["a", "b"]).eq("v")`. See [orm/querying - JSON column ops](../orm/querying#json-column-ops). |
 | INET / CIDR / MACADDR | `IpNet`-style newtypes | `INET`, `CIDR`, `MACADDR` | Networking fields. [orm/models - Network address columns](../orm/models#network-address-columns). |
 | TSVECTOR | `umbra::orm::TsVector` | `TSVECTOR` | Full-text search. Populate via trigger or `GENERATED ALWAYS AS (to_tsvector(...))`. [orm/models - Full-text search columns](../orm/models#full-text-search-columns). |
 

@@ -10,7 +10,7 @@ Declarative form validation. Annotate a struct with `#[derive(Form)]` and per-fi
 
 ## The one rule
 
-**Validation errors originate at the ORM's `WriteError`. Every surface MAPS them, none REDEFINES them.** REST 400 bodies, admin form spans, and HTML form re-renders all consume the same `WriteError` accessors (`field_errors()` + `non_field_errors()`). A custom field validator declares a `WriteError::Validator { field, message }` once and surfaces everywhere — no per-surface translation drift.
+**Validation errors originate at the ORM's `WriteError`. Every surface MAPS them, none REDEFINES them.** REST 400 bodies, admin form spans, and HTML form re-renders all consume the same `WriteError` accessors (`field_errors()` + `non_field_errors()`). A custom field validator declares a `WriteError::Validator { field, message }` once and surfaces everywhere, with no per-surface translation drift.
 
 `FormErrors` is a thin wrapper around `WriteError` that adds the template-friendly flat view (`{{ errors.name }}` instead of `{{ errors.fields.name[0] }}`).
 
@@ -47,7 +47,7 @@ pub async fn submit_contact(form: Form<ContactForm>) -> impl IntoResponse {
 }
 ```
 
-The extractor **never rejects** on validation failure. Handlers always receive a `Form<T>` and decide what to render — re-render the page with errors, return a 4xx, queue a retry, whatever fits.
+The extractor **never rejects** on validation failure. Handlers always receive a `Form<T>` and decide what to render: re-render the page with errors, return a 4xx, queue a retry, whatever fits.
 
 ## Field attributes
 
@@ -55,7 +55,7 @@ Under `#[form(...)]`, per field:
 
 | Attribute | Effect |
 |---|---|
-| `required` | Reject empty values. **Default** for non-`Option<T>` types — `required` is the explicit/declarative form. |
+| `required` | Reject empty values. **Default** for non-`Option<T>` types; `required` is the explicit/declarative form. |
 | `optional` | Accept empty values (skip `Required` check). Forced on for `Option<T>` fields. |
 | `email` | Validate as a syntactic email (`@` + dot in domain, non-empty local part). Renders `<input type="email">`. |
 | `url` | Validate as a URL (scheme + host). Renders `<input type="url">`. |
@@ -82,7 +82,7 @@ Container-level (on the struct):
 
 ## Reuse the Model struct (recommended)
 
-You don't need a parallel form type. Apply `#[derive(Form)]` directly to your persisted `Model` struct — the macro reads the existing `#[umbra(...)]` field attrs and skips server-managed fields automatically:
+You don't need a parallel form type. Apply `#[derive(Form)]` directly to your persisted `Model` struct. The macro reads the existing `#[umbra(...)]` field attrs and skips server-managed fields automatically:
 
 | Field marker | Skipped from form? | How it gets filled |
 |---|---|---|
@@ -116,7 +116,7 @@ pub enum ContactStatus {
          Model, umbra::forms::Form)]
 #[form(normalize_strings)]
 pub struct ContactMessage {
-    pub id: i64,                            // skipped — implicit PK
+    pub id: i64,                            // skipped: implicit PK
 
     #[umbra(string)]                        // admin display hint
     #[form(required, length(min = 1, max = 100))]
@@ -134,13 +134,13 @@ pub struct ContactMessage {
     #[form(required, length(min = 10, max = 5000))]
     pub message: String,
 
-    #[umbra(choices, noform)]               // skipped — defaults to New
+    #[umbra(choices, noform)]               // skipped: defaults to New
     pub status: ContactStatus,
 
-    #[umbra(noform)]                        // skipped — None default
+    #[umbra(noform)]                        // skipped: None default
     pub ip_address: Option<String>,
 
-    #[umbra(auto_now_add)]                  // skipped — ORM stamps Utc::now()
+    #[umbra(auto_now_add)]                  // skipped: ORM stamps Utc::now()
     pub created_at: DateTime<Utc>,
 }
 
@@ -175,13 +175,13 @@ The user's submission AND the persisted Model are now one declaration. No `Conta
 {% endif %}
 ```
 
-Handler-side, the whole failure path is one call — `FormErrors::render` binds `form` to the raw pairs the user submitted (every keystroke kept), `errors` to the flat view above (with the summary banner defaulted when no non-field error supplied one), and returns 422:
+Handler-side, the whole failure path is one call. `FormErrors::render` binds `form` to the raw pairs the user submitted (every keystroke kept), `errors` to the flat view above (with the summary banner defaulted when no non-field error supplied one), and returns 422:
 
 ```rust
 Err(errs) => return errs.render("contact.html"),
 ```
 
-Need extra context keys on the re-render (page flags, chrome)? `errs.render_with("contact.html", extra_map)` — your keys win on collision. For templates that need to render **every** error per field (multiple validators firing on one input), call `errs.field_errors()` and pass the `HashMap<String, Vec<String>>` directly.
+Need extra context keys on the re-render (page flags, chrome)? `errs.render_with("contact.html", extra_map)`, and your keys win on collision. For templates that need to render **every** error per field (multiple validators firing on one input), call `errs.field_errors()` and pass the `BTreeMap<String, Vec<String>>` directly.
 
 ## How errors flow
 
@@ -192,7 +192,7 @@ User input
 Form<T>::from_request       (parse body → HashMap<String, String>)
    │
    ▼
-T::validate(&data)          (FormValidate trait — derived)
+T::validate(&data)          (FormValidate trait, derived)
    │
    ├── Ok(T)               → handler runs persistence
    │
@@ -221,15 +221,15 @@ The lift through `WriteError` is what unifies all surfaces. A custom validator t
 
 ## Relation fields on a form
 
-When the `#[derive(Form)]` model carries relation fields, the derive classifies them automatically — a `ForeignKey<T>` (or forward `OneToOne<T>`) becomes a `<select>` whose submitted id is **existence-checked** against the target table before insert, an `M2M<T>` becomes a multi-`<select>` whose selected ids are written to the junction **atomically** after the parent insert (a single bad id fails validation before any row is written), and a `#[umbra(choices)]` enum becomes a `<select>` of the enum's variants. Reverse relations (`ReverseSet<C>`, reverse `OneToOne`) are back-pointers and are auto-skipped — no `#[umbra(noform)]` needed.
+When the `#[derive(Form)]` model carries relation fields, the derive classifies them automatically: a `ForeignKey<T>` (or forward `OneToOne<T>`) becomes a `<select>` whose submitted id is **existence-checked** against the target table before insert, an `M2M<T>` becomes a multi-`<select>` whose selected ids are written to the junction **atomically** after the parent insert (a single bad id fails validation before any row is written), and a `#[umbra(choices)]` enum becomes a `<select>` of the enum's variants. Reverse relations (`ReverseSet<C>`, reverse `OneToOne`) are back-pointers and are auto-skipped, with no `#[umbra(noform)]` needed.
 
-Because FK/M2M existence checks and `<select>` option fetches hit the database, `FormValidate::validate` and `render_html` are **`async`** — `Form<T>::from_request` awaits them for you, so a handler taking `Form<T>` needs no extra wiring. The full classification table and worked examples live on [Forms learn relations](/docs/v0.0.1/orm/forms-relations).
+Because FK/M2M existence checks and `<select>` option fetches hit the database, `FormValidate::validate` and `render_html` are **`async`**, and `Form<T>::from_request` awaits them for you, so a handler taking `Form<T>` needs no extra wiring. The full classification table and worked examples live on [Forms learn relations](/docs/v0.0.1/orm/forms-relations).
 
 ## See also
 
-- [Forms learn relations](/docs/v0.0.1/orm/forms-relations) — `ForeignKey`/`OneToOne` → `ModelChoice`, `M2M` → `ModelMultiChoice`, choices → `Select`, and the FK existence check + M2M atomicity.
-- [Relationships](/docs/v0.0.1/orm/relationships) — the `ForeignKey`, `OneToOne`, and `M2M` field types the form derive reads.
-- [`examples/shop/plugins/content/src/models.rs`](https://github.com/dalmas-ogembo/umbra/tree/main/examples/shop/plugins/content/src/models.rs) — `ContactMessage` is both the Model and the Form (the canonical reuse example).
-- [`examples/shop/src/views/public.rs`](https://github.com/dalmas-ogembo/umbra/tree/main/examples/shop/src/views/public.rs) — `submit_contact` is the 25-line handler that drives the above.
-- [`umbra::orm::write::WriteError`](/docs/v0.0.1/orm/models) — the canonical error type every form surface lifts to.
-- [Admin per-field error rendering](/docs/v0.0.1/plugins/admin) — same `WriteError`, different surface.
+- [Forms learn relations](/docs/v0.0.1/orm/forms-relations) - `ForeignKey`/`OneToOne` → `ModelChoice`, `M2M` → `ModelMultiChoice`, choices → `Select`, and the FK existence check + M2M atomicity.
+- [Relationships](/docs/v0.0.1/orm/relationships) - the `ForeignKey`, `OneToOne`, and `M2M` field types the form derive reads.
+- [`examples/shop/plugins/content/src/models.rs`](https://github.com/dalmas-ogembo/umbra/tree/main/examples/shop/plugins/content/src/models.rs) - `ContactMessage` is both the Model and the Form (the canonical reuse example).
+- [`examples/shop/src/views/public.rs`](https://github.com/dalmas-ogembo/umbra/tree/main/examples/shop/src/views/public.rs) - `submit_contact` is the handler that drives the above.
+- [`umbra::orm::write::WriteError`](/docs/v0.0.1/orm/models) - the canonical error type every form surface lifts to.
+- [Admin per-field error rendering](/docs/v0.0.1/plugins/admin) - same `WriteError`, different surface.

@@ -5,9 +5,7 @@ sidebar_position: 1
 icon: layers
 ---
 
-A model is a struct with `#[derive(Model)]`. The derive generates the trait
-impl, the per-field column constants, and an `objects()` Manager that picks
-up the ambient database pool.
+A model is a struct with `#[derive(Model)]`. The derive generates the trait impl, the per-field column constants, and an `objects()` Manager that picks up the ambient database pool.
 
 For the full list of supported field types, what each maps to on Postgres vs SQLite, and how to handle constraints the derive doesn't accept yet (`varchar(64)`, `default`, `unique`, etc.), see [Column types](./column-types).
 
@@ -28,7 +26,7 @@ pub struct Post {
 
 The rules the derive enforces:
 
-- Exactly one field named `id` - that is the primary key. Supported PK types: `i32`, `i64` (auto-increment), `uuid::Uuid` (no auto-generation - you supply the value), `String` (no auto-generation - you supply the value).
+- Exactly one field named `id` - that is the primary key. Supported PK types: `i32`, `i64` (auto-increment), `uuid::Uuid` (no auto-generation, you supply the value), `String` (no auto-generation, you supply the value).
 - Field types come from the M3 catalogue: signed ints (`i16` / `i32` / `i64`), `f32` / `f64`, `bool`, `String`, `chrono::NaiveDate` / `NaiveTime` / `DateTime<Utc>`, `uuid::Uuid`, `ForeignKey<T>`.
 - `serde_json::Value` for a JSON column; `Option<serde_json::Value>` for a nullable one.
 - `Option<T>` of any of the above is the only path to a nullable column.
@@ -54,7 +52,7 @@ use umbra::prelude::*;
 pub struct Event {
     pub id: i64,
     pub kind: String,
-    pub payload: serde_json::Value,          // JSONB / TEXT - required
+    pub payload: serde_json::Value,          // JSONB / TEXT, required
     pub meta: Option<serde_json::Value>,     // nullable JSON
 }
 ```
@@ -63,8 +61,8 @@ pub struct Event {
 
 Two Postgres-native predicates let you query inside a JSON column directly from a filter chain.
 
-- `path_text(keys: &[&str])` - extracts a nested value as text using chained `->` steps plus a final `->>`. Returns a builder; finalize with `.eq(s)`, `.ne(s)`, `.is_null()`, or `.is_not_null()`.
-- `has_key(key: &str)` - true when the JSON object contains the given top-level key (Postgres `?` operator). Returns a `Predicate` directly.
+- `path_text(keys: &[&str])`: extracts a nested value as text using chained `->` steps plus a final `->>`. Returns a builder; finalize with `.eq(s)`, `.ne(s)`, `.is_null()`, or `.is_not_null()`.
+- `has_key(key: &str)`: true when the JSON object contains the given top-level key (Postgres `?` operator). Returns a `Predicate` directly.
 
 ```rust
 use umbra::prelude::*;
@@ -76,13 +74,13 @@ pub struct Event {
     pub payload: Value,
 }
 
-// Deep path equality - renders as "payload" -> 'author' ->> 'name' = 'alice'
+// Deep path equality, renders as "payload" -> 'author' ->> 'name' = 'alice'
 let alice_rows = Event::objects()
     .filter(event::PAYLOAD.path_text(&["author", "name"]).eq("alice"))
     .fetch_pg(&pg_pool)
     .await?;
 
-// Top-level key presence - renders as "payload" ? 'status'
+// Top-level key presence, renders as "payload" ? 'status'
 let has_status = Event::objects()
     .filter(event::PAYLOAD.has_key("status"))
     .fetch_pg(&pg_pool)
@@ -93,7 +91,7 @@ SQLite JSON1 operator support is deferred; `is_null()` / `is_not_null()` and `as
 
 ## Array columns
 
-A field typed `Vec<T>` maps to a native Postgres array column (`T[]`). `Option<Vec<T>>` produces a nullable array column. Array fields are **Postgres-only** - the boot-time system check fails with a clear error naming the model and field if an Array field is registered against a SQLite backend.
+A field typed `Vec<T>` maps to a native Postgres array column (`T[]`). `Option<Vec<T>>` produces a nullable array column. Array fields are **Postgres-only**: the boot-time system check fails with a clear error naming the model and field if an Array field is registered against a SQLite backend.
 
 Supported element types: `i16`, `i32`, `i64`, `f32`, `f64`, `bool`, `String`, `uuid::Uuid`.
 
@@ -104,28 +102,28 @@ use umbra::prelude::*;
 pub struct Event {
     pub id: i64,
     pub kind: String,
-    pub tags: Vec<String>,              // TEXT[] - required
-    pub scores: Option<Vec<i64>>,      // BIGINT[] - nullable
+    pub tags: Vec<String>,              // TEXT[], required
+    pub scores: Option<Vec<i64>>,      // BIGINT[], nullable
 }
 
-// Fetch rows - use the _pg terminal for models with PG-only fields
+// Fetch rows, use the _pg terminal for models with PG-only fields
 let events: Vec<Event> = Event::objects().fetch_pg(&pg_pool).await?;
 ```
 
 Models that include at least one PG-only field cannot use the cross-backend `.fetch()` / `.first()` / `.count()` / `.exists()` terminals. Use the `_pg` variants instead: `.fetch_pg(&pool)`, `.first_pg(&pool)`, `.count_pg(&pool)`, `.exists_pg(&pool)`. The pool is passed at the terminal, not on the manager. See `docs/specs/04-orm-model-and-fields.md` for the full `_pg` surface.
 
 <Callout type="info">
-Need portable list storage? Use a `serde_json::Value` field with a JSON array - see JSON columns above. The JSON type compiles and runs against both Postgres and SQLite.
+Need portable list storage? Use a `serde_json::Value` field with a JSON array; see JSON columns above. The JSON type compiles and runs against both Postgres and SQLite.
 </Callout>
 
 ### Array operators
 
 Filter on array contents with four Postgres-native predicates:
 
-- `.contains(elem)` - column array contains the given element (`@>`).
-- `.contains_all(iter)` - column contains every value in the iterator (`@>`).
-- `.contained_by(iter)` - column is a subset of the iterator's values (`<@`).
-- `.overlaps(iter)` - column shares at least one value with the iterator (`&&`).
+- `.contains(elem)`: column array contains the given element (`@>`).
+- `.contains_all(iter)`: column contains every value in the iterator (`@>`).
+- `.contained_by(iter)`: column is a subset of the iterator's values (`<@`).
+- `.overlaps(iter)`: column shares at least one value with the iterator (`&&`).
 
 ```rust
 let info_events = Event::objects()
@@ -147,11 +145,11 @@ Postgres natively stores and indexes IP addresses and MAC addresses. Three **Pos
 
 | Rust type | SqlType | Postgres column |
 |---|---|---|
-| `ipnetwork::IpNetwork` | `Inet` | `INET` - IPv4 or IPv6 host address, optional prefix length |
-| `ipnetwork::IpNetwork` | `Cidr` | `CIDR` - network address, host bits enforced zero by Postgres |
-| `mac_address::MacAddress` | `MacAddr` | `MACADDR` - 6-byte hardware address |
+| `ipnetwork::IpNetwork` | `Inet` | `INET`: IPv4 or IPv6 host address, optional prefix length |
+| `ipnetwork::IpNetwork` | `Cidr` | `CIDR`: network address, host bits enforced zero by Postgres |
+| `mac_address::MacAddress` | `MacAddr` | `MACADDR`: 6-byte hardware address |
 
-The derive defaults `ipnetwork::IpNetwork` to `Inet`. Opt-in to `CIDR` semantics is deferred to a future `#[umbra(cidr)]` attribute; until then, edit the generated migration directly if you need the stricter constraint.
+The derive defaults `ipnetwork::IpNetwork` to `Inet`. Opting into `CIDR` semantics is deferred to a future `#[umbra(cidr)]` attribute; until then, edit the generated migration directly if you need the stricter constraint.
 
 ```rust
 use umbra::prelude::*;
@@ -161,12 +159,12 @@ use mac_address::MacAddress;
 #[derive(Debug, Clone, sqlx::FromRow, umbra::orm::Model)]
 pub struct Node {
     pub id: i64,
-    pub addr: IpNetwork,                  // INET - required
-    pub mac: MacAddress,                  // MACADDR - required
-    pub fallback: Option<IpNetwork>,      // INET - nullable
+    pub addr: IpNetwork,                  // INET, required
+    pub mac: MacAddress,                  // MACADDR, required
+    pub fallback: Option<IpNetwork>,      // INET, nullable
 }
 
-// Filter by exact address - use _pg terminals for PG-only models
+// Filter by exact address, use _pg terminals for PG-only models
 let target = "10.0.0.1/24".parse::<IpNetwork>()?;
 let nodes: Vec<Node> = Node::objects()
     .filter(node::ADDR.eq(target))
@@ -177,12 +175,12 @@ let nodes: Vec<Node> = Node::objects()
 The predicate surface ships `.eq(val)` / `.ne(val)` / `.asc()` / `.desc()`, plus `.is_null()` / `.is_not_null()` on nullable variants. Network containment operators (`<<`, `>>`) are deferred to a later phase.
 
 <Callout type="info">
-Need portable IP storage without a Postgres dependency? Store addresses as `String` and call `.parse::<IpAddr>()` at the application layer. The network-specific predicates won't be available, but the model will compile and run against SQLite.
+Need portable IP storage without a Postgres dependency? Store addresses as `String` and call `.parse::<IpAddr>()` at the application layer. The network-specific predicates won't be available, but the model compiles and runs against SQLite.
 </Callout>
 
 ## Full-text search columns
 
-Postgres's `tsvector` type stores a pre-processed lexeme document that supports fast `@@` full-text matching. umbra exposes this as the `umbra::orm::TsVector` newtype - a `String` wrapper with sqlx `Type`/`Encode`/`Decode` impls that map to a `tsvector` column. Like array and network fields, `TsVector` is **Postgres-only**; the boot-time system check fails with a clear error if the field is registered against a SQLite backend.
+Postgres's `tsvector` type stores a pre-processed lexeme document that supports fast `@@` full-text matching. umbra exposes this as the `umbra::orm::TsVector` newtype: a `String` wrapper with sqlx `Type`/`Encode`/`Decode` impls that map to a `tsvector` column. Like array and network fields, `TsVector` is **Postgres-only**; the boot-time system check fails with a clear error if the field is registered against a SQLite backend.
 
 ```rust
 use umbra::prelude::*;
@@ -192,8 +190,8 @@ use umbra::orm::TsVector;
 pub struct Doc {
     pub id: i64,
     pub title: String,
-    pub search: TsVector,              // tsvector - required
-    pub extra: Option<TsVector>,      // tsvector - nullable
+    pub search: TsVector,              // tsvector, required
+    pub extra: Option<TsVector>,      // tsvector, nullable
 }
 
 // User-friendly query syntax: spaces=AND, OR, -word, "quoted phrase"
@@ -205,56 +203,56 @@ let results = Doc::objects()
 
 Two matching predicates are available on every `TsVector` column:
 
-- `.matches_websearch(query)` - `col @@ websearch_to_tsquery($1)`. Accepts natural language: spaces mean AND, bare `OR` means OR, `-word` negates, `"quoted phrase"` requires adjacency. Preferred for search boxes.
-- `.matches(query)` - `col @@ to_tsquery($1)`. Requires strict `tsquery` syntax (`&`, `|`, `!`, `:*` for prefix). Use it when you control the query string programmatically.
+- `.matches_websearch(query)`: `col @@ websearch_to_tsquery($1)`. Accepts natural language: spaces mean AND, bare `OR` means OR, `-word` negates, `"quoted phrase"` requires adjacency. Preferred for search boxes.
+- `.matches(query)`: `col @@ to_tsquery($1)`. Requires strict `tsquery` syntax (`&`, `|`, `!`, `:*` for prefix). Use it when you control the query string programmatically.
 
 Both predicates compile only for Postgres; use the `_pg` terminal variants (`.fetch_pg`, `.first_pg`, etc.) on any model that includes a `TsVector` field.
 
-**Indexes are automatic.** A `tsvector` column is useless for search without a GIN index, so the migration engine emits one for you — `CREATE INDEX "idx_<table>_<col>_gin" ON "<table>" USING GIN ("<col>")` — for every `TsVector` field, on both `CreateTable` and a later `AddColumn`. You don't write `#[umbra(index)]` and you don't hand-author the GIN DDL; `migrate` does it. (The column you *populate* a `tsvector` from — running `to_tsvector(...)` over your text columns via a trigger or a generated column — is still yours to set up; umbra stores and queries the `tsvector`, it doesn't yet generate it from source text at write time.)
+**Indexes are automatic.** A `tsvector` column needs a GIN index to be searchable, so the migration engine emits one for you (`CREATE INDEX "idx_<table>_<col>_gin" ON "<table>" USING GIN ("<col>")`) for every `TsVector` field, on both `CreateTable` and a later `AddColumn`. You don't write `#[umbra(index)]` and you don't hand-author the GIN DDL; `migrate` does it. Populating the `tsvector` from your text columns (running `to_tsvector(...)` via a trigger or a generated column) is still yours to set up; umbra stores and queries the `tsvector`, it doesn't yet generate it from source text at write time.
 
 <Callout type="info">
 umbra's migration engine emits a bare `tsvector` column. Populating it is your responsibility: use a `GENERATED ALWAYS AS (to_tsvector('english', title)) STORED` clause in a hand-edited migration, or wire up a Postgres trigger. See the live-Postgres integration test in `crates/umbra-core/tests/fulltext_field.rs` for a working example.
 </Callout>
 
-### What full-text search matches — and what it doesn't
+### What full-text search matches, and what it doesn't
 
-Full-text search matches **lexemes**: whole words, normalised by the language config (stemming, case-folding, stop-word removal). It is **not** substring search and **not** fuzzy/reverse matching. This trips people up, so concretely, against a document `"The best product ever made"`:
+Full-text search matches **lexemes**: whole words, normalised by the language config (stemming, case-folding, stop-word removal). It is **not** substring search and **not** fuzzy/reverse matching. Against a document `"The best product ever made"`:
 
 | Query | Matches? | Why |
 |---|---|---|
-| `matches_websearch("best product")` | ✅ | both lexemes present — a space means **AND** |
-| `matches_websearch("best")` | ✅ | `best` is a lexeme (and matches `Best` — case-folded) |
+| `matches_websearch("best product")` | ✅ | both lexemes present; a space means **AND** |
+| `matches_websearch("best")` | ✅ | `best` is a lexeme (and matches `Best`, case-folded) |
 | `matches_websearch("products")` | ✅ | stemmed to the same root as `product` |
 | `matches_websearch("tseb")` | ❌ | `tseb` (best reversed) is not a word in the document |
 | `matches_websearch("rodu")` | ❌ | a substring *inside* `product` is not a lexeme |
-| `matches("prod:*")` | ✅ | `:*` is a **prefix** match — the supported "partial word" |
+| `matches("prod:*")` | ✅ | `:*` is a **prefix** match, the supported "partial word" |
 
-So a "reverse" or arbitrary substring like `tseb` will **never** match `best` — no full-text engine does that. The closest thing to partial-word matching is the prefix form (`prod:*` via `.matches`, or just typing a leading word in `.matches_websearch`). These rows are pinned by a live-Postgres test (`fts_matches_lexemes_not_substrings_or_reverses`).
+A "reverse" or arbitrary substring like `tseb` will never match `best`; no full-text engine does that. The closest thing to partial-word matching is the prefix form (`prod:*` via `.matches`, or a leading word in `.matches_websearch`). These rows are pinned by a live-Postgres test (`fts_matches_lexemes_not_substrings_or_reverses`).
 
 ### Then why use it, if `?search=` can match `rodu` and it can't?
 
-Because matching `rodu` inside `product` is almost never what you want — it's noise. A substring scan (`?search=`, `LIKE '%term%'`) is literal and naive; a `tsvector` understands *words*, and the trade-off mostly runs the other way:
+Matching `rodu` inside `product` is rarely what you want. A substring scan (`?search=`, `LIKE '%term%'`) is literal; a `tsvector` understands *words*, and the trade-off mostly runs the other way:
 
 | | `?search=` / `LIKE '%term%'` (substring) | `tsvector` + `.matches_websearch` (full-text) |
 |---|---|---|
 | `run` finds | `running` ✅ but **misses** `ran`; false-matches `brunch`, `prune` | `running`, `ran`, `runs` ✅ (stemmed); not `brunch` |
 | `cat` finds | `category`, `concatenate`, `education` (false positives) | the word `cat` only |
-| stop words | `the best` requires the literal `the` | `the` ignored — `best` is what counts |
+| stop words | `the best` requires the literal `the` | `the` ignored; `best` is what counts |
 | operators | one literal substring | `best AND cheap`, `best OR great`, `-discontinued`, `"exact phrase"` |
 | ranking | none | `ts_rank` orders by relevance |
 | speed at scale | `'%term%'` can't use an index → full table scan, O(n) | GIN index → fast on millions of rows |
 
-So `rodu` failing is the *point*: full-text search indexes **meaning** (stemmed words), not character fragments. Reach for `?search=`/`LIKE` for "find this literal fragment" on small tables (SKUs, codes, exact substrings); reach for a `tsvector` for word-aware, ranked, index-backed search that scales.
+So `rodu` failing is the point: full-text search indexes meaning (stemmed words), not character fragments. Reach for `?search=`/`LIKE` for "find this literal fragment" on small tables (SKUs, codes, exact substrings); reach for a `tsvector` for word-aware, ranked, index-backed search that scales.
 
 ### Reading a `tsvector` column: you get lexemes, not your text
 
-A `tsvector` is a search index in column form — it stores the **lexeme document**, not your original text. `to_tsvector('english', 'The Best Product ever made')` stores:
+A `tsvector` is a search index in column form: it stores the **lexeme document**, not your original text. `to_tsvector('english', 'The Best Product ever made')` stores:
 
 ```text
 'best':2 'ever':4 'made':5 'product':3
 ```
 
-— stemmed, lower-cased, stop-words dropped (`The` is gone), with word positions. The original phrasing, casing, and word order are **not** recoverable from it. So when you fetch a model, the `TsVector` field hands you that lexeme string, not `"The Best Product ever made"`:
+Stemmed, lower-cased, stop-words dropped (`The` is gone), with word positions. The original phrasing, casing, and word order are **not** recoverable from it. So when you fetch a model, the `TsVector` field hands you that lexeme string, not `"The Best Product ever made"`:
 
 ```rust
 let doc = Doc::objects().first_pg(&pool).await?.unwrap();
@@ -262,12 +260,12 @@ doc.search.as_str();   // "'best':2 'ever':4 'made':5 'product':3"  ← not disp
 doc.title;             // "The Best Product ever made"             ← keep + show THIS
 ```
 
-The takeaway: **keep your real text in a normal `TEXT` column** (`title`, `body`) — that's what you display and return in API responses — and **derive the `tsvector` from it** for searching. The two columns play different roles. Mark the `TsVector` field `#[serde(skip)]` if you don't want the raw lexeme vector leaking into JSON responses.
+The takeaway: **keep your real text in a normal `TEXT` column** (`title`, `body`), which is what you display and return in API responses, and **derive the `tsvector` from it** for searching. The two columns play different roles. Mark the `TsVector` field `#[serde(skip)]` if you don't want the raw lexeme vector leaking into JSON responses.
 
 <Callout type="warning">
 **Full-text search is *not* the REST `?search=` parameter.** They are two different mechanisms:
 
-- **REST `/api/<table>/?search=term`** is a case-insensitive **substring** match (`UPPER(col) LIKE UPPER('%term%')`, i.e. Django's `icontains`) across the resource's text columns. `tsvector` columns are **skipped** by `?search=`. So `?search=best product` finds rows whose text literally contains the substring `best product`, and `?search=tseb` finds rows literally containing `tseb` — handy and forgiving, but it doesn't stem, rank, or use the GIN index.
+- **REST `/api/<table>/?search=term`** is a case-insensitive **substring** match (`UPPER(col) LIKE UPPER('%term%')`, i.e. Django's `icontains`) across the resource's text columns. `tsvector` columns are **skipped** by `?search=`. So `?search=best product` finds rows whose text literally contains the substring `best product`, and `?search=tseb` finds rows literally containing `tseb`; forgiving, but it doesn't stem, rank, or use the GIN index.
 - **`TsVector` + `.matches()` / `.matches_websearch()`** is the ORM-level, index-backed, lexeme-based search shown above. There is currently no automatic `?search=` → `tsvector` wiring; to expose full-text search over HTTP today you add a custom resource action or a dedicated query parameter that calls `.matches_websearch(...)`. (Wiring `?search=` to prefer a model's `tsvector` column when one exists is a tracked enhancement.)
 
 Rule of thumb: reach for `?search=` for quick "contains this text" filtering on small/medium tables; reach for a `TsVector` column when you want word-aware, ranked, index-backed search at scale.
@@ -275,7 +273,7 @@ Rule of thumb: reach for `?search=` for quick "contains this text" filtering on 
 
 ## The table name
 
-By default the table is snake_case of the struct name - `BlogPost` becomes `blog_post`. Override with the struct-level attribute when you need a different name:
+By default the table is snake_case of the struct name: `BlogPost` becomes `blog_post`. Override with the struct-level attribute when you need a different name:
 
 ```rust
 #[derive(Debug, Clone, sqlx::FromRow, umbra::orm::Model)]
@@ -286,7 +284,7 @@ pub struct User {
 }
 ```
 
-The attribute lands at M3.1; per-field attributes for `db_index`, `default`, `on_delete` are scheduled as the plugins that need them ship. (`choices` is shipped - `#[derive(Choices)]` on the enum + `#[umbra(choices)]` on the field; see [Column types - Using a Rust enum](./column-types#derivechoices---using-a-rust-enum-as-a-field-type).)
+The attribute lands at M3.1; per-field attributes for `db_index`, `default`, `on_delete` are scheduled as the plugins that need them ship. (`choices` is shipped: `#[derive(Choices)]` on the enum + `#[umbra(choices)]` on the field; see [Column types - Using a Rust enum](./column-types#derivechoices---using-a-rust-enum-as-a-field-type).)
 
 ## Display hints (`string`, `max_length`)
 
@@ -303,10 +301,10 @@ pub struct Article {
 }
 ```
 
-- `#[umbra(string)]` - the Django-style `__str__`, **opt-in**. Tagging one field per model switches the admin's default `list_display` to that single column when no explicit config is registered. Without any field tagged, the changelist shows every column - the legacy behaviour. The PK isn't rendered as a separate column because every row in the admin is clickable into the sheet, so the id is already reachable. The attribute is never required; it's how you ask for the compact single-column form. Equivalent shapes: `#[umbra(string)]` and `#[umbra(string = true)]`.
-- `#[umbra(max_length = N)]` - soft truncation cap for display. The admin trims the value at `N` characters when rendering it in `list_display`, appending `…` so the cut is visible. Counted in characters, not bytes - emoji and combining characters survive intact.
+- `#[umbra(string)]`: the Django-style `__str__`, **opt-in**. Tagging one field per model switches the admin's default `list_display` to that single column when no explicit config is registered. Without any field tagged, the changelist shows every column. The PK isn't rendered as a separate column because every row in the admin is clickable into the sheet, so the id is already reachable. The attribute is never required; it's how you ask for the compact single-column form. Equivalent shapes: `#[umbra(string)]` and `#[umbra(string = true)]`.
+- `#[umbra(max_length = N)]`: soft truncation cap for display. The admin trims the value at `N` characters when rendering it in `list_display`, appending `…` so the cut is visible. Counted in characters, not bytes, so emoji and combining characters survive intact.
 
-Both attributes are display-only - they do not constrain the column at the SQL level. A `String` field with `max_length = 60` is still `TEXT` (unbounded) at the database; the cap only affects how the admin renders cells. Use `#[umbra(table = "...")]` plus a manual `CHECK` constraint via a custom migration if you want the limit enforced at the DB.
+Both attributes are display-only; they do not constrain the column at the SQL level. A `String` field with `max_length = 60` is still `TEXT` (unbounded) at the database; the cap only affects how the admin renders cells. Use `#[umbra(table = "...")]` plus a manual `CHECK` constraint via a custom migration if you want the limit enforced at the DB.
 
 ## Plugin-namespaced tables
 
@@ -336,12 +334,11 @@ When to reach for `plugin = "..."`: multi-plugin apps where two or more plugins 
 
 **Built-in plugins keep their bare names.** `umbra-auth`, `umbra-sessions`, `umbra-admin`, and `umbra-tasks` do NOT use this attribute. Their table names (`auth_user`, `session`, etc.) are stable DB identifiers; switching them would break every existing database. If you are writing a third-party plugin, you should opt into `plugin = "..."` for every model the plugin ships to avoid future collisions with other plugins.
 
-`Model::NAME` (the Rust struct name) is not affected by the `plugin` attribute - it stays `"Post"` regardless of which table name is used. The migration engine uses `Model::NAME` as the stable identity key when detecting table renames (see [Managed migrations](/docs/v0.0.1/migrations/managed-migrations#rename-detection)).
+`Model::NAME` (the Rust struct name) is not affected by the `plugin` attribute; it stays `"Post"` regardless of which table name is used. The migration engine uses `Model::NAME` as the stable identity key when detecting table renames (see [Managed migrations](/docs/v0.0.1/migrations/managed-migrations#rename-detection)).
 
 ## Reading rows
 
-`Post::objects()` returns a `Manager<Post>` that builds a `QuerySet`. No pool
-argument - the manager reaches the ambient pool published by `App::build()`.
+`Post::objects()` returns a `Manager<Post>` that builds a `QuerySet`. No pool argument; the manager reaches the ambient pool published by `App::build()`.
 
 ```rust
 let recent = Post::objects()
@@ -352,21 +349,19 @@ let recent = Post::objects()
     .await?;
 ```
 
-Each field gets a typed column constant under the snake_case module:
-`post::id`, `post::title`, `post::body`, `post::published_at`. The
-comparison methods are checked at compile time.
+Each field gets a typed column constant under the snake_case module: `post::id`, `post::title`, `post::body`, `post::published_at`. The comparison methods are checked at compile time.
 
-### Terminals - `.fetch()`, `.first()`, `.get()`, `.count()`, `.exists()`
+### Terminals: `.fetch()`, `.first()`, `.get()`, `.count()`, `.exists()`
 
 | Terminal | Returns | When to reach for it |
 |----------|---------|----------------------|
-| `.fetch()` | `Result<Vec<T>, sqlx::Error>` | The collection - list views, anything that maps over rows. |
+| `.fetch()` | `Result<Vec<T>, sqlx::Error>` | The collection: list views, anything that maps over rows. |
 | `.first()` | `Result<Option<T>, sqlx::Error>` | "Give me one if there is one." `None` is a normal case. |
 | `.get()` | `Result<T, GetError>` | Django's exactly-one. Three branches: `Ok(row)`, `Err(NotFound)`, `Err(MultipleObjectsReturned)`. |
 | `.count()` | `Result<i64, sqlx::Error>` | A row count without materializing rows. |
 | `.exists()` | `Result<bool, sqlx::Error>` | A `LIMIT 1` existence probe. |
 
-`.get()` is the Django shape for "this filter should pin one row exactly." `MultipleObjectsReturned` is a data-integrity signal, not a control-flow case - it fires when filters that should hit a UNIQUE constraint stop being unique.
+`.get()` is the Django shape for "this filter should pin one row exactly." `MultipleObjectsReturned` is a data-integrity signal, not a control-flow case; it fires when filters that should hit a UNIQUE constraint stop being unique.
 
 ```rust
 use umbra::orm::GetError;
@@ -387,12 +382,9 @@ let user = User::objects().get(user::email.eq(addr)).await?;
 
 ## Writing rows
 
-Four write primitives complement the read side. All return a
-`Result<_, umbra::orm::WriteError>` whose variants name the offending
-field on type mismatch / null-on-required-column / unknown-column
-errors.
+Four write primitives complement the read side. All return a `Result<_, umbra::orm::WriteError>` whose variants name the offending field on type mismatch / null-on-required-column / unknown-column errors.
 
-### `create(instance)` - INSERT one row
+### `create(instance)`: INSERT one row
 
 ```rust
 let new_post = Post {
@@ -406,16 +398,11 @@ let inserted = Post::objects().create(new_post).await?;
 assert!(inserted.id > 0); // autoincrement PK populated
 ```
 
-The integer `0`, the nil UUID, and the empty `String` are all treated
-as autoincrement-PK sentinels - the column is omitted from the INSERT
-so the database assigns one. An explicit non-default PK (`id = 999`)
-is bound as-is, so callers with UUID PKs or slug PKs can set them
-themselves.
+The integer `0`, the nil UUID, and the empty `String` are all treated as autoincrement-PK sentinels; the column is omitted from the INSERT so the database assigns one. An explicit non-default PK (`id = 999`) is bound as-is, so callers with UUID PKs or slug PKs can set them themselves.
 
-The returned struct comes from `RETURNING *`, so timestamps that
-default to `NOW()` server-side land populated.
+The returned struct comes from `RETURNING *`, so timestamps that default to `NOW()` server-side land populated.
 
-### `bulk_create([...])` - INSERT many in one statement
+### `bulk_create([...])`: INSERT many in one statement
 
 ```rust
 let rows = (1..=100)
@@ -426,12 +413,9 @@ let count = Post::objects().bulk_create(rows).await?;
 assert_eq!(count, 100);
 ```
 
-One INSERT with N value tuples - far faster than calling `.create()`
-in a loop. Returns the affected-rows count rather than the populated
-rows; if you need the inserted IDs, follow up with a
-`.filter(...).fetch()`.
+One INSERT with N value tuples, far faster than calling `.create()` in a loop. Returns the affected-rows count rather than the populated rows; if you need the inserted IDs, follow up with a `.filter(...).fetch()`.
 
-### `.delete()` - DELETE matching rows
+### `.delete()`: DELETE matching rows
 
 ```rust
 let removed = Post::objects()
@@ -440,12 +424,9 @@ let removed = Post::objects()
     .await?;
 ```
 
-Applies the accumulated filter predicates as the WHERE clause and
-returns the deleted-rows count. **Without `.filter(...)`, deletes
-every row.** The type system can't tell "I forgot the filter" from
-"I really meant to truncate."
+Applies the accumulated filter predicates as the WHERE clause and returns the deleted-rows count. **Without `.filter(...)`, deletes every row.** The type system can't tell "I forgot the filter" from "I really meant to truncate."
 
-### `.update_values(map)` - UPDATE matching rows
+### `.update_values(map)`: UPDATE matching rows
 
 ```rust
 use serde_json::{json, Map};
@@ -460,21 +441,13 @@ let touched = Post::objects()
     .await?;
 ```
 
-Takes a `serde_json::Map<String, Value>` of column → new value.
-Each value is converted to the right sea-query type per the column's
-`SqlType`. PATCH semantics - columns absent from the map keep their
-current values. The PK column is silently skipped if present in the
-map (rewriting the PK while filtering on the old one is a footgun).
+Takes a `serde_json::Map<String, Value>` of column → new value. Each value is converted to the right sea-query type per the column's `SqlType`. PATCH semantics: columns absent from the map keep their current values. The PK column is silently skipped if present in the map (rewriting the PK while filtering on the old one is a footgun).
 
 <Callout type="info">
-A typed per-column setter API (`.update([post::TITLE.set("...")])`)
-is on the roadmap. For now the JSON-map shape reuses the same
-dispatch the REST plugin uses for PATCH bodies, which means a
-request body lands directly in `.update_values(...)` with no
-intermediate struct.
+A typed per-column setter API (`.update([post::TITLE.set("...")])`) is on the roadmap. For now the JSON-map shape reuses the same dispatch the REST plugin uses for PATCH bodies, which means a request body lands directly in `.update_values(...)` with no intermediate struct.
 </Callout>
 
-### `get_or_create(predicate, defaults)` - INSERT only when missing
+### `get_or_create(predicate, defaults)`: INSERT only when missing
 
 Django's exact shape: fetch the first row matching `predicate`; if none exists, insert `defaults` and return it. The second tuple element says whether a write happened so the caller can branch on first-time-ever vs already-seeded.
 
@@ -490,20 +463,20 @@ let (ct, created) = ContentType::objects()
     )
     .await?;
 if created {
-    tracing::info!("first boot - seeded blog.post content type");
+    tracing::info!("first boot, seeded blog.post content type");
 }
 ```
 
-Two round-trips on the miss path (filter+first, then create), one on the hit path. Pair with a UNIQUE constraint on the predicate columns for at-most-one semantics under concurrent inserters - the constraint is the backstop a concurrent caller hits if both pass the filter check before either creates.
+Two round-trips on the miss path (filter+first, then create), one on the hit path. Pair with a UNIQUE constraint on the predicate columns for at-most-one semantics under concurrent inserters; the constraint is the backstop a concurrent caller hits if both pass the filter check before either creates.
 
 Common shapes:
 
 - **Seeding on first boot.** A plugin's `on_ready` walks a list of canonical rows and `get_or_create`s each. Idempotent regardless of how many times the app restarts.
 - **Find-or-make.** A handler that needs a tag, category, or content-type row to attach to a write: `Tag::objects().get_or_create(tag::SLUG.eq(slug), Tag { ... })`.
 
-### `upsert(row)` - INSERT or UPDATE keyed on the primary key
+### `upsert(row)`: INSERT or UPDATE keyed on the primary key
 
-INSERT-or-UPDATE for cases where you have a fully-formed row and want it to "win" against any existing row with the same PK. Sea-query emits `INSERT ... ON CONFLICT(<pk>) DO UPDATE SET col = excluded.col, ...` - the SQLite and Postgres syntax happens to match.
+INSERT-or-UPDATE for cases where you have a fully-formed row and want it to "win" against any existing row with the same PK. Sea-query emits `INSERT ... ON CONFLICT(<pk>) DO UPDATE SET col = excluded.col, ...`; the SQLite and Postgres syntax happens to match.
 
 ```rust
 let cached = CacheEntry::objects()
@@ -522,7 +495,7 @@ Compared to `get_or_create`, `upsert` is the right call when you want to OVERWRI
 ## What's next
 
 - Register the model with the migration engine so [makemigrations](/docs/v0.0.1/migrations/managed-migrations) tracks it.
-- [Relationships (ForeignKey)](/docs/v0.0.1/orm/relationships) - declare `ForeignKey<T>` fields, query by FK, and eager-load with `select_related`.
-- [Transactions](/docs/v0.0.1/orm/transactions) - wrap multiple writes in `umbra::transaction(...)` to commit or roll back atomically.
-- [Querying](/docs/v0.0.1/orm/querying) - F-expressions, Q-objects, exclude, projections, sugar (earliest/latest/distinct/explain), mutate-side terminals, subqueries + set ops, JSON column ops.
+- [Relationships (ForeignKey)](/docs/v0.0.1/orm/relationships): declare `ForeignKey<T>` fields, query by FK, and eager-load with `select_related`.
+- [Transactions](/docs/v0.0.1/orm/transactions): wrap multiple writes in `umbra::transaction(...)` to commit or roll back atomically.
+- [Querying](/docs/v0.0.1/orm/querying): F-expressions, Q-objects, exclude, projections, sugar (earliest/latest/distinct/explain), mutate-side terminals, subqueries + set ops, JSON column ops.
 - Read the spec at `docs/specs/04-orm-model-and-fields.md` for the full field-type catalogue and the QuerySet surface.

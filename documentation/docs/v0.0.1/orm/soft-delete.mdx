@@ -1,13 +1,13 @@
 ---
 title: Soft delete
-description: Tag a model with soft_delete and deletes become reversible — rows hide instead of dying.
+description: Tag a model with soft_delete and deletes become reversible. Rows hide instead of dying.
 sidebar_position: 8
 tags: [orm, soft-delete, trash]
 ---
 
 # Soft delete
 
-Tag a model `#[umbra(soft_delete)]` and the framework stops destroying its rows: `delete()` becomes an `UPDATE ... SET deleted_at = NOW()`, and every normal query automatically excludes rows where `deleted_at` is set. You get a trash can instead of a shredder — undo, audits, and "restore this account" flows all stay possible.
+Tag a model `#[umbra(soft_delete)]` and the framework stops destroying its rows: `delete()` becomes an `UPDATE ... SET deleted_at = NOW()`, and every normal query automatically excludes rows where `deleted_at` is set. You get a trash can instead of a shredder: undo, audits, and "restore this account" flows all stay possible.
 
 You declare the timestamp column yourself (the marker doesn't synthesize it):
 
@@ -27,7 +27,7 @@ That's the whole setup. From here:
 // Soft-deletes: UPDATE post SET deleted_at = NOW() WHERE title = 'a'
 Post::objects().filter(post::TITLE.eq("a")).delete().await?;
 
-// Normal reads never see the row again — WHERE deleted_at IS NULL
+// Normal reads never see the row again: WHERE deleted_at IS NULL
 // is injected on every terminal (fetch / first / get / count / exists).
 let visible = Post::objects().fetch().await?;
 
@@ -42,7 +42,7 @@ let mut patch = serde_json::Map::new();
 patch.insert("deleted_at".into(), serde_json::Value::Null);
 Post::objects().filter(post::ID.eq(id)).update_values(patch).await?;
 
-// True purge ("empty the trash") — opt-in, two explicit steps:
+// True purge ("empty the trash"): opt-in, two explicit steps.
 Post::objects()
     .filter(post::ID.eq(id))
     .with_deleted()
@@ -54,7 +54,7 @@ Post::objects()
 Models **without** the marker keep the classic behaviour: `delete()` is a real `DELETE FROM`, no filter injection.
 
 <Callout type="info">
-Adding soft delete to an existing model is the normal migration loop: add the attribute and the nullable `deleted_at` field, run `makemigrations` (autodetects a nullable `AddColumn` — no default needed), then `migrate`. Existing rows are untouched and stay visible, since their `deleted_at` starts NULL.
+Adding soft delete to an existing model is the normal migration loop: add the attribute and the nullable `deleted_at` field, run `makemigrations` (autodetects a nullable `AddColumn`, no default needed), then `migrate`. Existing rows are untouched and stay visible, since their `deleted_at` starts NULL.
 </Callout>
 
 <Callout type="warning">
@@ -62,7 +62,7 @@ Soft-deleted rows still exist: they count toward UNIQUE constraints, foreign key
 </Callout>
 
 <Callout type="warning">
-`update_values` is **not** auto-scoped. Only reads (`fetch` / `first` / `get` / `count` / `exists`) and `delete()` inject the `deleted_at IS NULL` filter. A bulk `Post::objects().update_values(...)` with no predicate mutates trashed rows too, and `.with_deleted()` / `.only_deleted()` are currently silent no-ops on the update path (tracked as `gaps2 #34`). Always pin the rows you mean to touch with an explicit `.filter(...)` predicate — as the restore example above does — rather than relying on the auto-filter to spare the trash.
+`update_values` is **not** auto-scoped. Only reads (`fetch` / `first` / `get` / `count` / `exists`) and `delete()` inject the `deleted_at IS NULL` filter. A bulk `Post::objects().update_values(...)` with no predicate mutates trashed rows too, and `.with_deleted()` / `.only_deleted()` are currently silent no-ops on the update path (tracked as `gaps2 #34`). Always pin the rows you mean to touch with an explicit `.filter(...)` predicate (as the restore example above does) rather than relying on the auto-filter to spare the trash.
 </Callout>
 
 Pinned by `crates/umbra-core/tests/soft_delete.rs` (feature #72); behaviour reference in the `Model::SOFT_DELETE` docs in `crates/umbra-core/src/orm/model.rs`.

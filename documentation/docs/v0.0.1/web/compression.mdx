@@ -19,7 +19,7 @@ App::builder()
 This wraps the router in a `tower-http` `CompressionLayer`. It picks the algorithm from the request's `Accept-Encoding` (brotli or gzip), and skips bodies that are already encoded or aren't worth compressing (images, video, etc.).
 
 <Callout type="info">
-Compression is **off by default**. In most deployments a reverse proxy (nginx, a CDN) already compresses, and doing it twice is wasted CPU. Turn it on when you serve directly — a single binary with no proxy in front.
+Compression is **off by default**. In most deployments a reverse proxy (nginx, a CDN) already compresses, and doing it twice is wasted CPU. Turn it on when you serve directly, a single binary with no proxy in front.
 </Callout>
 
 ## What gets compressed
@@ -35,7 +35,7 @@ HTTP/1.1 200 OK
 Content-Encoding: gzip
 ```
 
-A client that doesn't advertise an encoding gets the plain body back — the layer never compresses blindly.
+A client that doesn't advertise an encoding gets the plain body back. The layer never compresses blindly.
 
 ## See also
 

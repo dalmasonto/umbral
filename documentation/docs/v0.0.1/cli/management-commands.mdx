@@ -23,10 +23,11 @@ manage your database because it doesn't know about your models.
   <Card icon="file-plus" title="makemigrations" description="Diff registered plugin models against the latest snapshot. Writes a migration file per plugin with changes." />
   <Card icon="play-circle" title="migrate" description="Apply every pending migration against the ambient pool. Each migration runs in its own transaction." />
   <Card icon="list" title="showmigrations" description="Print applied/pending state per plugin. [X] applied, [ ] pending." />
-  <Card icon="shield-check" title="checkmigrations" description="Classify pending operations SAFE/WARNING/UNSAFE for zero-downtime deploys. Exits non-zero on unsafe ops — a CI gate before migrate." />
+  <Card icon="shield-check" title="checkmigrations" description="Classify pending operations SAFE/WARNING/UNSAFE for zero-downtime deploys. Exits non-zero on unsafe ops, a CI gate before migrate." />
   <Card icon="download" title="inspectdb" description="Introspect an existing database into models.rs + a 0001_initial migration. The porting on-ramp." />
   <Card icon="archive" title="dumpdata / loaddata" description="Snapshot every model's rows to JSON; replay them into a fresh schema." />
   <Card icon="table" title="importcsv" description="Load a CSV file into one table, coercing each cell to its column type through the validated write path. Inverse of the ?format=csv export." />
+  <Card icon="key" title="maskkeygen" description="Generate an X25519 keypair for Masked<T> field encryption and print the two env-var lines to configure it." />
 </CardGrid>
 
 Plugin-contributed subcommands (`createsuperuser`, `tasks-worker`, plus any third-party plugin's commands) share the same `cargo run -- <cmd>` form. Each is detailed in its own section below.
@@ -215,7 +216,7 @@ Prints each migration's state, grouped by plugin:
 
 ## checkmigrations - zero-downtime safety gate
 
-Classifies every **pending** operation `SAFE` / `WARNING` / `UNSAFE` so you know what's risky to apply while old code is still serving traffic. Read-only — it applies nothing.
+Classifies every **pending** operation `SAFE` / `WARNING` / `UNSAFE` so you know what's risky to apply while old code is still serving traffic. Read-only; it applies nothing.
 
 ```bash
 cargo run -- checkmigrations
@@ -225,7 +226,7 @@ cargo run -- checkmigrations
 Checking 3 operation(s) across 2 pending migration(s)...
 
 UNSAFE (1):
-  [DROP COL] app/0007_drop_legacy — drops column `order.legacy_total` and its data — old code reading it breaks. Expand-contract: stop writing it, deploy, then drop
+  [DROP COL] app/0007_drop_legacy: drops column `order.legacy_total` and its data; old code reading it breaks. Expand-contract: stop writing it, deploy, then drop
 
 Summary: 2 safe, 0 warning, 1 unsafe.
 ```
@@ -304,6 +305,18 @@ Import is **best-effort**: each row commits independently, a failing row is repo
 |---|---|---|---|
 | `importcsv` | `<table>` (positional) | - (required) | Target table name (e.g. `blog_post`). A typo lists the valid tables. |
 | `importcsv` | `<input>` (positional) | - (required) | Path to the CSV file. Must have a header row. |
+
+## maskkeygen - keypair for `Masked<T>` fields
+
+Generates a fresh X25519 keypair for `Masked<T>` field encryption and prints the two env-var lines that configure it. The public key encrypts; the private key decrypts (`reveal()`).
+
+```bash
+cargo run -- maskkeygen
+# -> UMBRA_MASK_PUBLIC_KEY=...
+# -> UMBRA_MASK_PRIVATE_KEY=...
+```
+
+No flags. Set both lines in your environment (or `.env`) before booting an app that has `Masked<T>` fields.
 
 ## createsuperuser - `umbra-auth`
 

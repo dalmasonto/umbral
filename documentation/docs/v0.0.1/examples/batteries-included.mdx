@@ -1,6 +1,6 @@
 ---
 title: Batteries included
-description: Everything wired - ORM, REST + OpenAPI, admin, auth, sessions, email, tasks. The kitchen-sink reference.
+description: Everything wired. ORM, REST + OpenAPI, admin, auth, sessions, email, tasks. The kitchen-sink reference.
 sidebar_position: 2
 icon: package-2
 tags: [examples, full-stack]
@@ -50,7 +50,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ```
 
-## `src/blog.rs` - the app's domain plugin
+## `src/blog.rs`, the app's domain plugin
 
 ```rust
 //! The blog plugin - owns the Post model, mounts /blog routes,
@@ -275,7 +275,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .plugin(umbra_admin::AdminPlugin::default())
         // Background tasks: DB-backed queue. Handlers register
         // themselves via `#[umbra::task]`, so the plugin itself takes
-        // no handler list — drain the queue with `cargo run -- tasks-worker`.
+        // no handler list. Drain the queue with `cargo run -- tasks-worker`.
         .plugin(umbra_tasks::TasksPlugin)
         // Email: console backend in dev (prints to stderr). Configure
         // the SMTP transport via settings for prod.

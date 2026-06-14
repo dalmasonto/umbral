@@ -1,6 +1,6 @@
 ---
 title: Querying
-description: The full QuerySet surface — F-expressions, Q-objects, exclude, projections, sugar, subqueries, set ops, JSON ops, and the write-side terminals (update_or_create, bulk_update, raw).
+description: The full QuerySet surface: F-expressions, Q-objects, exclude, projections, sugar, subqueries, set ops, JSON ops, and the write-side terminals (update_or_create, bulk_update, raw).
 sidebar_position: 4
 icon: formula
 tags: [orm, queryset, filter, expressions, querying, project, write]
@@ -8,11 +8,11 @@ tags: [orm, queryset, filter, expressions, querying, project, write]
 
 Everything you do against a QuerySet that isn't covered by [Models](/docs/v0.0.1/orm/models), [Column types](/docs/v0.0.1/orm/column-types), [Relationships](/docs/v0.0.1/orm/relationships), [Aggregates](/docs/v0.0.1/orm/aggregates), [Transactions](/docs/v0.0.1/orm/transactions), or [Signals](/docs/v0.0.1/orm/signals) lives on this page.
 
-That's broad on purpose — it grew organically as the ORM shipped. A future split lands the read surface, the expressions surface, and the write surface on three focused pages (`querying.mdx`, `expressions.mdx`, `writes.mdx`); the design is captured in `docs/decisions/2026-06-06-orm-docs-restructure.md`. Until then, the H2 sections below group related material so the page is at least skimmable: **F-expressions** and **Q-objects** for composable predicates; **values**, **DB-function helpers**, and **QuerySet sugar** for read-side composition; **Mutate-side terminals** for the write-and-return-row APIs; **Composition** for subqueries + set ops + `in_bulk`; **JSON column ops** at the end.
+A future split lands the read surface, the expressions surface, and the write surface on three pages (`querying.mdx`, `expressions.mdx`, `writes.mdx`); the design is in `docs/decisions/2026-06-06-orm-docs-restructure.md`. Until then, the H2 sections below group related material: **F-expressions** and **Q-objects** for composable predicates; **values**, **DB-function helpers**, and **QuerySet sugar** for read-side composition; **Mutate-side terminals** for the write-and-return-row APIs; **Composition** for subqueries, set ops, and `in_bulk`; **JSON column ops** at the end.
 
 ## F-expressions
 
-An `F` expression wraps a column name so it can appear on the right-hand side of a comparison or inside an atomic UPDATE. The key distinction: the value is evaluated **in the database** at query time, not read into Rust first.
+An `F` expression wraps a column name so it can appear on the right-hand side of a comparison or inside an atomic UPDATE. The value is evaluated **in the database** at query time, not read into Rust first.
 
 ### Column-vs-column WHERE
 
@@ -37,14 +37,14 @@ let posts = Post::objects()
 ```rust
 use umbra::orm::F;
 
-// SET views = views + 1 - no read-modify-write round-trip
+// SET views = views + 1, no read-modify-write round-trip
 Post::objects()
     .filter(post::ID.eq(42))
     .update_expr("views", F::col("views").add(1))
     .await?;
 ```
 
-`FExpr` supports four arithmetic operations - `.add(n)`, `.sub(n)`, `.mul(n)`, `.div(n)` - each taking an `i64` operand. Chaining is supported: `F::col("x").add(3).mul(2)` emits `(x + 3) * 2`.
+`FExpr` supports four arithmetic operations (`.add(n)`, `.sub(n)`, `.mul(n)`, `.div(n)`), each taking an `i64` operand. Chaining is supported: `F::col("x").add(3).mul(2)` emits `(x + 3) * 2`.
 
 `update_expr` returns `WriteError::UnknownColumn` when the column name is not present on the model. It silently skips the PK column (same as `update_values`).
 
@@ -109,9 +109,9 @@ Post::objects()
     .await?;
 ```
 
-Chained `.filter()` calls still AND together as before - `Q` is purely additive.
+Chained `.filter()` calls still AND together as before; `Q` is purely additive.
 
-### `.exclude(p)` - the negated complement of `.filter(p)`
+### `.exclude(p)`: the negated complement of `.filter(p)`
 
 `QuerySet::exclude(p)` and `Manager::exclude(p)` are sugar for `.filter(Q::not(p))`. They drop rows where the predicate holds; the negated predicate still ANDs into the chain alongside any `filter` calls.
 
@@ -142,11 +142,9 @@ Mirrors Django's `QuerySet.exclude()`. Useful for soft-delete patterns (`exclude
 
 ---
 
----
-
 ## Column projection: `.values()`
 
-When a list view only needs a couple of fields, swap the full-row read for a column-pinned projection that returns JSON objects instead of typed model rows. Skips both the unused-column transfer cost AND the FromRow hydration overhead.
+When a list view only needs a couple of fields, swap the full-row read for a column-pinned projection that returns JSON objects instead of typed model rows. This skips both the unused-column transfer cost and the FromRow hydration overhead.
 
 ```rust
 let rows: Vec<serde_json::Value> = Post::objects()
@@ -201,9 +199,9 @@ Tagged::objects()
     .await?;
 ```
 
-`StrColExt` ships `.lower()`, `.upper()`, `.length()`, `.trim()`, `.coalesce(default)`, `.concat(suffix)`; `DateTimeColExt` ships `.year()`/`.month()`/`.day()`/`.hour()`/`.minute()`/`.second()`/`.week_day()`. Each returns a `ColExpr<T>`; chain `.eq` / `.ne` / `.lt` / `.le` / `.gt` / `.ge` to finalise the predicate. Date extracts hide backend dispatch automatically — `CAST(EXTRACT(YEAR FROM col) AS INTEGER)` on Postgres, `CAST(strftime('%Y', col) AS INTEGER)` on SQLite — so the call site stays portable.
+`StrColExt` ships `.lower()`, `.upper()`, `.length()`, `.trim()`, `.coalesce(default)`, `.concat(suffix)`; `DateTimeColExt` ships `.year()`/`.month()`/`.day()`/`.hour()`/`.minute()`/`.second()`/`.week_day()`. Each returns a `ColExpr<T>`; chain `.eq` / `.ne` / `.lt` / `.le` / `.gt` / `.ge` to finalise the predicate. Date extracts hide backend dispatch automatically (`CAST(EXTRACT(YEAR FROM col) AS INTEGER)` on Postgres, `CAST(strftime('%Y', col) AS INTEGER)` on SQLite), so the call site stays portable.
 
-A DB-side `now()` is intentionally **not** provided: `CURRENT_TIMESTAMP`'s text format differs from sqlx-chrono's stored ISO format on SQLite, so a column-vs-now comparison would be silently wrong there. Bind the Rust value instead — `post::PUBLISHED_AT.lt(chrono::Utc::now())` — which is correct on every backend.
+A DB-side `now()` is intentionally **not** provided: `CURRENT_TIMESTAMP`'s text format differs from sqlx-chrono's stored ISO format on SQLite, so a column-vs-now comparison would be silently wrong there. Bind the Rust value instead, `post::PUBLISHED_AT.lt(chrono::Utc::now())`, which is correct on every backend.
 
 ## QuerySet sugar: `.earliest()`, `.latest()`, `.distinct()`, `.explain()`
 
@@ -212,13 +210,13 @@ A DB-side `now()` is intentionally **not** provided: `CURRENT_TIMESTAMP`'s text 
 let first_post = Post::objects().earliest("created_at").await?;
 let newest = Post::objects().latest("created_at").await?;
 
-// SELECT DISTINCT — most useful with values() to dedupe a column projection.
+// SELECT DISTINCT, most useful with values() to dedupe a column projection.
 let unique_tags = Post::objects()
     .distinct()
     .values(&["tag"])
     .await?;
 
-// EXPLAIN — eyeball the execution plan.
+// EXPLAIN: eyeball the execution plan.
 let plan: String = Post::objects()
     .filter(post::PUBLISHED.eq(true))
     .explain()
@@ -246,12 +244,12 @@ let recent: Vec<Post> = Post::objects()
     .await?;
 ```
 
-`update_or_create` returns `(row, created: bool)`. `bulk_update` returns rows-affected. `raw` skips select_related/prefetch_related chains and binds no parameters — sanitise input before calling.
+`update_or_create` returns `(row, created: bool)`. `bulk_update` returns rows-affected. `raw` skips select_related/prefetch_related chains and binds no parameters; sanitise input before calling.
 
 ## Composition: subqueries + set ops + in_bulk
 
 ```rust
-// col IN (SELECT col FROM ...) — sub-builders bind cleanly.
+// col IN (SELECT col FROM ...), sub-builders bind cleanly.
 let staff_posts = Post::objects()
     .filter(post::AUTHOR.in_subquery(
         User::objects()
@@ -273,21 +271,21 @@ let users_by_id: HashMap<i64, User> =
     User::objects().in_bulk(vec![1, 2, 3]).await?;
 ```
 
-`into_subquery(col)` clears the SELECT list to just `col` and hands the result to `IntCol::in_subquery` / `ForeignKeyCol::in_subquery`. `union` / `intersect` / `except` work on same-typed QuerySets — column-shape compatibility is enforced by the shared `T` param. `in_bulk` requires an i64-PK model.
+`into_subquery(col)` clears the SELECT list to just `col` and hands the result to `IntCol::in_subquery` / `ForeignKeyCol::in_subquery`. `union` / `intersect` / `except` work on same-typed QuerySets; column-shape compatibility is enforced by the shared `T` param. `in_bulk` requires an i64-PK model.
 
 ## JSON column ops
 
 `JsonCol` and `NullableJsonCol` carry backend-aware helpers for the everyday "is this key present" / "drill into nested value" patterns:
 
 ```rust
-// has_key — true when the JSON object has the named top-level key.
+// has_key: true when the JSON object has the named top-level key.
 // Postgres: meta ? 'name'   /   SQLite: json_extract(meta, '$.name') IS NOT NULL
 Doc::objects()
     .filter(doc::META.has_key("name"))
     .fetch()
     .await?;
 
-// path_text — drill into a nested path; compare as text.
+// path_text: drill into a nested path; compare as text.
 // Postgres: meta -> 'nested' ->> 'role' = 'admin'
 // SQLite:   json_extract(meta, '$.nested.role') = 'admin'
 Doc::objects()
@@ -300,10 +298,10 @@ Doc::objects()
 
 ## See also
 
-- [Declaring models](/docs/v0.0.1/orm/models) - the QuerySet API (`filter`, `update_values`, `fetch`, `get`, etc.) that F and Q plug into.
-- [Relationships](/docs/v0.0.1/orm/relationships) - `ForeignKey<T>` and `select_related`; `ForeignKeyCol` supports `eq_f` / `ne_f` for column-vs-column WHERE.
-- [Aggregates](/docs/v0.0.1/orm/aggregates) - `Count`, `Sum`, `Avg`, `Max`, `Min` plus `annotate(group_cols, ...)`.
-- [Transactions](/docs/v0.0.1/orm/transactions) - combining F-expression updates with other writes atomically.
+- [Declaring models](/docs/v0.0.1/orm/models): the QuerySet API (`filter`, `update_values`, `fetch`, `get`, etc.) that F and Q plug into.
+- [Relationships](/docs/v0.0.1/orm/relationships): `ForeignKey<T>` and `select_related`; `ForeignKeyCol` supports `eq_f` / `ne_f` for column-vs-column WHERE.
+- [Aggregates](/docs/v0.0.1/orm/aggregates): `Count`, `Sum`, `Avg`, `Max`, `Min` plus `annotate(group_cols, ...)`.
+- [Transactions](/docs/v0.0.1/orm/transactions): combining F-expression updates with other writes atomically.
 
 ## Design rationale
 

@@ -1,6 +1,6 @@
 ---
 title: Security plugin
-description: Automatic CSRF protection and a hardening-headers bundle — mount it and you're done.
+description: Automatic CSRF protection and a hardening-headers bundle. Mount it and you're done.
 sidebar_position: 6
 icon: shield
 ---
@@ -14,7 +14,7 @@ App::builder()
     .build()?;
 ```
 
-In an HTML form, emit the hidden input with `{{ csrf_input }}` — the `{% csrf_token %}` of umbra:
+In an HTML form, emit the hidden input with `{{ csrf_input }}`, the `{% csrf_token %}` of umbra:
 
 ```html
 <form method="post" action="/contact">
@@ -30,10 +30,10 @@ For JavaScript or htmx writes, send the raw token as a header instead. One attri
 ```
 
 <Callout type="info">
-Token-authenticated APIs carry no session cookie, so their writes would 403 — exempt them with `csrf_exempt_paths: vec!["/api".into()]` on `SecurityConfig`.
+Token-authenticated APIs carry no session cookie, so their writes would 403. Exempt them with `csrf_exempt_paths: vec!["/api".into()]` on `SecurityConfig`.
 </Callout>
 
-Tokens are HMAC-signed with your app's `secret_key` by default (`signed_csrf: true`); a cookie planted by a sibling subdomain can't forge a valid signature. Stale or unsigned cookies rotate automatically on the next safe request. Configuration is a struct, not a builder chain — flip exactly what you need:
+Tokens are HMAC-signed with your app's `secret_key` by default (`signed_csrf: true`); a cookie planted by a sibling subdomain can't forge a valid signature. Stale or unsigned cookies rotate automatically on the next safe request. Configuration is a struct, not a builder chain; flip exactly what you need:
 
 ```rust
 SecurityPlugin::with_config(SecurityConfig {

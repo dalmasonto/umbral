@@ -5,7 +5,7 @@ sidebar_position: 2
 tags: [templates, filters, helpers, minijinja]
 ---
 
-umbra templates run on [minijinja 2](https://docs.rs/minijinja/latest/minijinja/), which ships a Jinja2-compatible filter set out of the box. On top of that standard library, umbra-core registers a handful of custom filters and functions of its own (`img`, `markdown`, `sanitize`, `now`, `currency`) and injects ambient globals into every render (`csrf_token`, `csrf_input`, plus the anonymous-safe `user`). Plugins can add their own — see [Custom template tags](custom-tags).
+umbra templates run on [minijinja 2](https://docs.rs/minijinja/latest/minijinja/), which ships a Jinja2-compatible filter set out of the box. On top of that standard library, umbra-core registers a handful of custom filters and functions of its own (`img`, `markdown`, `sanitize`, `now`, `currency`) and injects ambient globals into every render (`csrf_token`, `csrf_input`, plus the anonymous-safe `user`). Plugins can add their own; see [Custom template tags](custom-tags).
 
 This page catalogues the filters and globals umbra users reach for most, with examples written in the umbra template style.
 
@@ -22,7 +22,7 @@ These are registered by umbra-core's template engine (`crates/umbra-core/src/tem
 | `currency` | filter | Format a number as money: two decimals, thousands grouping, leading symbol for common ISO codes (USD/EUR/GBP/JPY/…). Unknown code → `1,234.56 CODE`. | `{{ price \| currency("EUR") }}` |
 | `csrf_token` | global | The current request's CSRF token string. Injected ambiently when a CSRF middleware scoped a token for the request. | `<input name="csrf_token" value="{{ csrf_token }}">` |
 | `csrf_input` | global | A ready-made `<input type="hidden" name="csrf_token" ...>`, marked safe. Django's `{% csrf_token %}` ergonomic. | `<form method="post">{{ csrf_input }}</form>` |
-| `user` | global | The current user, injected into every render. Authenticated requests get the full serialized user when `AuthPlugin::with_user_in_templates()` is on; otherwise the anonymous sentinel `{ is_authenticated: false, is_staff: false, is_superuser: false }`. | `{% if user.is_authenticated %}...{% endif %}` |
+| `user` | global | The current user, injected into every render. Authenticated requests get the full serialized user when `AuthPlugin::with_user_in_templates()` is on; otherwise the anonymous sentinel `{ is_authenticated: false, is_staff: false, is_superuser: false }`, so `user.is_authenticated` always resolves. | `{% if user.is_authenticated %}...{% endif %}` |
 
 `img`, `markdown`, and `sanitize` all return safe (pre-escaped) values, so autoescape won't double-encode the markup they generate. The kwargs on `img` are strict: a typo'd key like `alt_text` raises a clear template error rather than being silently dropped.
 
@@ -38,7 +38,7 @@ These are registered by umbra-core's template engine (`crates/umbra-core/src/tem
 **`None` and `Undefined` render as the empty string.** umbra installs a custom formatter so an `Option<String>` field that is `None`, or an undefined variable, renders as `""` instead of the literal tokens `none` / `undefined`. This means `<input value="{{ form.phone }}">` on a fresh form yields `value=""`, not `value="none"`. Non-null values pass through the normal escaping formatter unchanged.
 </Callout>
 
-Plugins register their own app-level filters and functions through `Plugin::template_registrars` — see [Custom template tags](custom-tags). (The admin plugin additionally registers a `naturaltime` filter against its *private* environment; that one is scoped to admin templates and isn't available in app-level templates.)
+Plugins register their own app-level filters and functions through `Plugin::template_registrars`; see [Custom template tags](custom-tags). (The admin plugin additionally registers a `naturaltime` filter against its *private* environment; that one is scoped to admin templates and isn't available in app-level templates.)
 
 ## String filters
 
@@ -50,9 +50,6 @@ Plugins register their own app-level filters and functions through `Plugin::temp
 | `capitalize` | Uppercase first character, lowercase the rest | `{{ name | capitalize }}` |
 | `trim` | Strip leading and trailing whitespace | `{{ text | trim }}` |
 | `replace(from, to)` | Replace all occurrences of `from` with `to` | `{{ s | replace("old", "new") }}` |
-| `truncate(length)` | Shorten to at most `length` characters, appending `...` | `{{ bio | truncate(120) }}` |
-| `wordcount` | Count whitespace-delimited words | `{{ body | wordcount }}` |
-| `striptags` | Remove HTML tags from a string | `{{ html | striptags }}` |
 | `safe` | Mark a value as HTML-safe, bypassing autoescape | `{{ content | safe }}` |
 | `escape` | HTML-escape the value (same as the autoescaper, but explicit) | `{{ text | escape }}` |
 | `urlencode` | Percent-encode a string for use in a URL query parameter | `{{ query | urlencode }}` |
@@ -61,8 +58,7 @@ Plugins register their own app-level filters and functions through `Plugin::temp
 ```html
 {# templates/profile.html #}
 <h1>{{ user.name | title }}</h1>
-<p>{{ bio | truncate(120) }}</p>
-<p>{{ description | striptags | truncate(200) }}</p>
+<p>{{ bio | default("No bio.") }}</p>
 ```
 
 ## Number filters
@@ -94,9 +90,11 @@ Plugins register their own app-level filters and functions through `Plugin::temp
 | `min` | Smallest value in a sequence | `{{ scores | min }}` |
 | `max` | Largest value in a sequence | `{{ scores | max }}` |
 | `sum` | Sum of numeric values in a sequence | `{{ prices | sum }}` |
-| `map(attr)` | Extract an attribute from every item in a sequence | `{{ items | map(attribute="name") }}` |
-| `select(attr)` | Filter a sequence to items where `attr` is truthy | `{{ items | select("active") }}` |
-| `reject(attr)` | Filter a sequence to items where `attr` is falsy | `{{ items | reject("archived") }}` |
+| `map(attribute=...)` | Extract an attribute from every item in a sequence | `{{ items | map(attribute="name") }}` |
+| `select(test)` | Keep items that pass a test | `{{ nums | select("odd") }}` |
+| `reject(test)` | Drop items that pass a test | `{{ nums | reject("odd") }}` |
+| `selectattr(attr)` | Keep items whose attribute is truthy (or passes a test) | `{{ items | selectattr("active") }}` |
+| `rejectattr(attr)` | Drop items whose attribute is truthy (or passes a test) | `{{ items | rejectattr("archived") }}` |
 | `batch(size)` | Group items into chunks of `size` | `{{ items | batch(3) }}` |
 | `slice(count)` | Slice a sequence into `count` parts | `{{ items | slice(3) }}` |
 
@@ -160,7 +158,7 @@ minijinja exposes a small set of global functions callable anywhere in a templat
 | `range(start, stop, step)` | Generate an integer range (like Python's `range`) | `{% for i in range(5) %}` |
 | `dict(...)` | Construct a dictionary inline | `{% set d = dict(key="value") %}` |
 | `namespace(...)` | A mutable namespace for storing values across loop iterations | `{% set ns = namespace(count=0) %}` |
-| `lipsum(n)` | Generate `n` paragraphs of Lorem Ipsum (useful in layout prototyping) | `{{ lipsum(2) }}` |
+| `debug(...)` | Dump the current context (or an argument) for inspection | `{{ debug() }}` |
 
 ```html
 {% for i in range(1, 6) %}

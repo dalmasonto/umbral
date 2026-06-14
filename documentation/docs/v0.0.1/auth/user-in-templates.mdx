@@ -1,11 +1,11 @@
 ---
 title: user in templates
-description: Inject the current user into every HTML template's context — `is_authenticated`, `is_staff`, and the full serialized AuthUser — via one builder method on AuthPlugin.
+description: Inject the current user into every HTML template's context (`is_authenticated`, `is_staff`, and the full serialized AuthUser) via one builder method on AuthPlugin.
 sidebar_position: 3
 icon: user-check
 ---
 
-Django's templates have `{% if user.is_authenticated %}` and `{% if user.is_staff %}` because Django's `auth` middleware injects `request.user` into every template context for free. Umbra ships the same shape — opt-in, one builder call.
+Django's templates have `{% if user.is_authenticated %}` and `{% if user.is_staff %}` because Django's `auth` middleware injects `request.user` into every template context for free. Umbra ships the same shape, opt-in, one builder call.
 
 ## The one-line opt-in
 
@@ -17,7 +17,7 @@ Django's templates have `{% if user.is_authenticated %}` and `{% if user.is_staf
 )
 ```
 
-That's it. The `user` global is *always* present in every `umbra::templates::render(...)` call — handler templates, plugin templates, error pages — because umbra-core injects it unconditionally. What `.with_user_in_templates()` changes is what authenticated requests see: with the opt-in, a logged-in request gets the full serialized user row; without it, every request (logged-in or not) gets the anonymous sentinel.
+That's it. The `user` global is *always* present in every `umbra::templates::render(...)` call (handler templates, plugin templates, error pages) because umbra-core injects it unconditionally. What `.with_user_in_templates()` changes is what authenticated requests see: with the opt-in, a logged-in request gets the full serialized user row; without it, every request (logged-in or not) gets the anonymous sentinel.
 
 ## What `user` looks like in your template
 
@@ -31,9 +31,9 @@ That's it. The `user` global is *always* present in every `umbra::templates::ren
 {% endif %}
 ```
 
-`user` is `{ "is_authenticated": false, "is_staff": false, "is_superuser": false }` — these three boolean keys are the only shape an anonymous user carries, so any `{% if user.is_staff %}` / `{% if user.is_superuser %}` gate evaluates to `false` instead of throwing.
+`user` is `{ "is_authenticated": false, "is_staff": false, "is_superuser": false }`. These three boolean keys are the only shape an anonymous user carries, so any `{% if user.is_staff %}` / `{% if user.is_superuser %}` gate evaluates to `false` instead of throwing.
 
-**Authenticated request** — `user` is the full serialized `AuthUser` (every field on the model) plus `"is_authenticated": true`:
+**Authenticated request**: `user` is the full serialized `AuthUser` (every field on the model) plus `"is_authenticated": true`:
 
 ```jinja
 {% if user.is_authenticated %}
@@ -47,11 +47,11 @@ That's it. The `user` global is *always* present in every `umbra::templates::ren
 {% endif %}
 ```
 
-Every column on `AuthUser` is accessible: `user.email`, `user.date_joined`, `user.last_login`, and so on. A custom `UserModel` (the `AuthPlugin::<MyUser>` form) needs its own template wiring; see [Custom user models](#custom-user-models) below.
+Every column on `AuthUser` is accessible: `user.email`, `user.date_joined`, `user.last_login`, and so on. A custom `UserModel` (the `AuthPlugin::<MyUser>` form) needs its own template wiring. See [Custom user models](#custom-user-models) below.
 
 ## Why opt-in
 
-Each request that touches a template pays one DB read (cookie → session → user row). A REST-only service has no templates and nothing to gain — leaving the middleware off keeps the per-request cost where it belongs. HTML-heavy apps turn it on once at boot and forget about it.
+Each request that touches a template pays one DB read (cookie to session to user row). A REST-only service has no templates and nothing to gain, so leaving the middleware off keeps the per-request cost where it belongs. HTML-heavy apps turn it on once at boot and forget about it.
 
 ## What's happening under the hood
 
@@ -72,7 +72,7 @@ Request → [user_context_layer]
 The middleware lives at `plugins/umbra-auth/src/session_user.rs:263`. It uses a tokio task-local (`CURRENT_USER`) scoped for the duration of the request so the rendered context is per-request, not global.
 
 <Callout type="info">
-  `user` is **always defined** in templates — umbra-core's renderer injects it unconditionally. Without `.with_user_in_templates()`, it's the anonymous sentinel `{ is_authenticated: false, is_staff: false, is_superuser: false }` for *every* request, even authenticated ones, because no middleware populates the per-request user. So `{% if user.is_staff %}` evaluates cleanly (to `false`) rather than throwing an "undefined value" 500. What `.with_user_in_templates()` adds is the live, *authenticated* shape: it mounts the middleware that replaces the sentinel with the real serialized user for logged-in requests.
+  `user` is **always defined** in templates: umbra-core's renderer injects it unconditionally. Without `.with_user_in_templates()`, it's the anonymous sentinel `{ is_authenticated: false, is_staff: false, is_superuser: false }` for *every* request, even authenticated ones, because no middleware populates the per-request user. So `{% if user.is_staff %}` evaluates cleanly (to `false`) rather than throwing an "undefined value" 500. What `.with_user_in_templates()` adds is the live, *authenticated* shape: it mounts the middleware that replaces the sentinel with the real serialized user for logged-in requests.
 </Callout>
 
 ## Common patterns
@@ -113,12 +113,12 @@ The serialized shape carries every column on `AuthUser`. If you've added a `disp
 <span>{{ user.display_name or user.username }}</span>
 ```
 
-## What `user` does NOT carry — related objects
+## What `user` does NOT carry: related objects
 
 <Callout type="warning">
-  **Reverse-OneToOne, reverse-FK, and forward-FK traversal in templates is not implemented yet.** `{{ user.profile.avatar }}`, `{{ user.customer.id }}`, `{{ user.order_set }}`, `{{ user.profile.address.city }}` — none of these work today, regardless of how the relations are declared on the Rust side.
+  **Reverse-OneToOne, reverse-FK, and forward-FK traversal in templates is not implemented yet.** `{{ user.profile.avatar }}`, `{{ user.customer.id }}`, `{{ user.order_set }}`, `{{ user.profile.address.city }}`: none of these work today, regardless of how the relations are declared on the Rust side.
 
-  Why: `user` in templates is the JSON-serialized AuthUser. Relation accessors are Rust async methods that aren't serialized into the value (they'd need DB access to resolve, and minijinja is sync — can't `.await`). The cross-crate reverse-OneToOne accessor (e.g. `user.customer().await?` from [orm/relationships](/v0.0.1/orm/relationships#parent-side-cross-crate)) is a Rust-only API.
+  Why: `user` in templates is the JSON-serialized AuthUser. Relation accessors are Rust async methods that aren't serialized into the value (they'd need DB access to resolve, and minijinja is sync, can't `.await`). The cross-crate reverse-OneToOne accessor (e.g. `user.customer().await?` from [orm/relationships](/v0.0.1/orm/relationships#parent-side-cross-crate)) is a Rust-only API.
 
   **What to do today**: resolve the relations you need in the handler and pass them into the template context explicitly:
 
@@ -129,12 +129,12 @@ The serialized shape carries every column on `AuthUser`. If you've added a `disp
   render("me.html", &context!(username, customer_id, loyalty))
   ```
 
-  Then in the template: `{{ customer_id }}`, `{{ loyalty }}` — flat keys, pre-resolved.
+  Then in the template: `{{ customer_id }}`, `{{ loyalty }}`, flat keys, pre-resolved.
 
-  **What's coming**: `bugs/gaps2.md` #14 captures the design space. The front-runner is an eager-prefetch declaration that mirrors Django's `select_related` / `prefetch_related` — the handler declares "this template will walk user.customer.address," the framework resolves those before rendering, and the template uses dot-notation against the pre-loaded values. No ETA; logged as a focused follow-on.
+  **What's coming**: `planning/gaps2.md` #14 captures the design space. The front-runner is an eager-prefetch declaration that mirrors Django's `select_related` / `prefetch_related`: the handler declares "this template will walk user.customer.address," the framework resolves those before rendering, and the template uses dot-notation against the pre-loaded values. No ETA; logged as a focused follow-on.
 </Callout>
 
-For now, `user.<column>` works only for **columns on the AuthUser table itself** — `is_authenticated`, `is_staff`, `is_superuser`, `username`, `email`, `date_joined`, etc. Anything that requires a SQL query to fetch (relations, computed fields, M2M sets) has to be resolved in the handler.
+For now, `user.<column>` works only for **columns on the AuthUser table itself**: `is_authenticated`, `is_staff`, `is_superuser`, `username`, `email`, `date_joined`, etc. Anything that requires a SQL query to fetch (relations, computed fields, M2M sets) has to be resolved in the handler.
 
 ## Custom user models
 
@@ -152,9 +152,9 @@ See the source of `user_context_layer` in `plugins/umbra-auth/src/session_user.r
 For handler-level user access, extractors are still the right shape:
 
 ```rust
-async fn dashboard(user: LoggedIn<AuthUser>) -> Result<Html<String>, ...> {
-    let body = render("dashboard.html", &context!(username))
-        .map_err(internal_error)?;
+async fn dashboard(LoggedIn(user): LoggedIn<AuthUser>) -> Result<Html<String>, StatusCode> {
+    let body = render("dashboard.html", &context!(username => user.username))
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Html(body))
 }
 ```
@@ -165,12 +165,12 @@ The extractor and the template global serve different purposes:
 |---|---|
 | Handler logic needs the user (DB queries, branching) | `LoggedIn<AuthUser>` / `OptionalUser` extractors |
 | Template needs to render conditionally based on user | `.with_user_in_templates()` global |
-| Both | Both — they don't conflict. The extractor reads the user fresh from the session per-handler; the global is populated by the middleware that runs before any handler |
+| Both | Both. They don't conflict. The extractor reads the user fresh from the session per-handler; the global is populated by the middleware that runs before any handler |
 
-Pages that include partials (the navbar in a wrapper, a sidebar everyone sees) are why the template global exists — every handler shouldn't have to thread `user` into every template's context for the wrapper to render correctly.
+Pages that include partials (the navbar in a wrapper, a sidebar everyone sees) are why the template global exists: every handler shouldn't have to thread `user` into every template's context for the wrapper to render correctly.
 
 ## Related
 
-- [Login, logout, request.user](/v0.0.1/auth/login-and-request-user) — extractors for handler-level user access
-- [Users and passwords](/v0.0.1/auth/users-and-passwords) — the `AuthUser` model + password hashing
-- [Plugin trait](/v0.0.1/plugins/the-plugin-trait) — what `wrap_router` is and how middleware is contributed
+- [Login, logout, request.user](/v0.0.1/auth/login-and-request-user): extractors for handler-level user access
+- [Users and passwords](/v0.0.1/auth/users-and-passwords): the `AuthUser` model + password hashing
+- [Plugin trait](/v0.0.1/plugins/the-plugin-trait): what `wrap_router` is and how middleware is contributed

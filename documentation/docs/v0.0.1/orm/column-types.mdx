@@ -6,7 +6,7 @@ icon: columns
 tags: [orm, types, columns, schema]
 ---
 
-`#[derive(Model)]` reads each field's Rust type and emits one column in the migration. The catalogue is closed by design - every supported type is in the table below. Off-catalogue types fail at derive time with a compile-time error that points at the field and names the issue.
+`#[derive(Model)]` reads each field's Rust type and emits one column in the migration. The catalogue is closed: every supported type is in the table below. Off-catalogue types fail at derive time with a compile-time error that points at the field and names the issue.
 
 ## Quick lookup
 
@@ -39,7 +39,7 @@ Off-catalogue types and the explicitly-rejected wide / unsigned ints (`i128`, `u
 
 ## "How do I write `VARCHAR(64)`?"
 
-Two layers, two knobs - pick the one whose error site matches where you want the failure to surface.
+Two layers, two knobs. Pick the one whose error site matches where you want the failure to surface.
 
 ### At the model - `#[umbra(max_length = N)]`
 
@@ -163,8 +163,8 @@ The macro reads each field-level attribute straight off the struct field. Empty 
 | `#[umbra(index)]` | Single-column index in the DDL. The migration engine emits `CREATE INDEX` on both backends. |
 | `#[umbra(unique)]` | UNIQUE constraint in the DDL. UNIQUE violations on insert / update surface as `WriteError::UniqueViolation { field, value }` - REST renders them as `{ "slug": ["A row with slug='widget' already exists."] }`. |
 | `#[umbra(default = "...")]` | DDL default for the column - the string lands verbatim in the `DEFAULT` clause (booleans are translated to `1`/`0` on SQLite). For a `choices` field use the DB literal (`"draft"`), **not** the Rust path (`"PostStatus::Draft"`); see [Defaults: two mechanisms](#defaults-two-mechanisms-two-layers). Required when adding a NOT NULL column to a populated table - Postgres / SQLite reject the ALTER otherwise. Also the value the DB uses when an INSERT omits the column. |
-| `#[umbra(help = "...")]` | OpenAPI `description` + a hint line under the admin form input. One place to say "use Markdown here" or "ISO-8601 date" — it reaches both the API docs and the editor. |
-| `#[umbra(widget = "markdown" \| "rte" \| "code" \| "textarea")]` | Presentation hint for form renderers (features.md #4). Metadata only — no DDL change. In the admin: `markdown` mounts an EasyMDE editor (toolbar + sandboxed live preview), `rte` a Quill rich-text editor (stores HTML — render with `\| sanitize`), `code` a CodeMirror editor (JSON syntax + line numbers) for JSON/structured text. Pair `markdown` with the [`\| markdown` filter](#rendering-markdown-safely) on the display side. An unrecognised widget name falls back to the type-derived input, so plugin-defined widgets never break the form. |
+| `#[umbra(help = "...")]` | OpenAPI `description` + a hint line under the admin form input. One place to say "use Markdown here" or "ISO-8601 date": it reaches both the API docs and the editor. |
+| `#[umbra(widget = "markdown" \| "rte" \| "code" \| "textarea")]` | Presentation hint for form renderers (features.md #4). Metadata only, no DDL change. In the admin: `markdown` mounts an EasyMDE editor (toolbar + sandboxed live preview), `rte` a Quill rich-text editor (stores HTML, render with `\| sanitize`), `code` a CodeMirror editor (JSON syntax + line numbers) for JSON/structured text. Pair `markdown` with the [`\| markdown` filter](#rendering-markdown-safely) on the display side. An unrecognised widget name falls back to the type-derived input, so plugin-defined widgets never break the form. |
 | `#[umbra(example = "...")]` | OpenAPI `example` value. Generated clients show it as a placeholder; the playground uses it to seed the request body. |
 | `#[umbra(on_delete = "cascade" \| "restrict" \| "set_null" \| "no_action")]` | FK `ON DELETE` clause. Default `no_action` (SQL standard's default - no extra clause emitted). Applies only to `ForeignKey<T>` columns; a typed error fires at derive time if you set it on a non-FK field. |
 | `#[umbra(on_update = "...")]` | FK `ON UPDATE` clause. Same vocabulary as `on_delete`. |
@@ -347,7 +347,7 @@ That's the whole setup. `Post { status: PostStatus::Draft, .. }` round-trips thr
 
 The `default = "..."` is required when you add the `status` column to an existing populated table - both Postgres and SQLite reject `ALTER TABLE ADD COLUMN` for a NOT NULL column without a default. It also doubles as the value the DB uses on any future `INSERT` that omits the column.
 
-**Filtering by a choice value.** The column constant filters on the **stored string** — the `rename_all`'d variant text, not the Rust path:
+**Filtering by a choice value.** The column constant filters on the **stored string**: the `rename_all`'d variant text, not the Rust path:
 
 ```rust
 // All published posts. `"published"` is the DB literal for
@@ -357,7 +357,7 @@ let live = Post::objects()
     .fetch()
     .await?;
 
-// Membership across several states — OR the equalities with a Q object:
+// Membership across several states: OR the equalities with a Q object.
 use umbra::orm::Q;
 let active = Post::objects()
     .filter(Q::or(post::STATUS.eq("review"), post::STATUS.eq("published")))
@@ -482,7 +482,7 @@ Every type in the [Quick lookup](#quick-lookup) above the divider works on both 
 | `serde_json::Value` | `JSONB` on Postgres, `TEXT` on SQLite. The JSON operator surface picks the dialect-correct rendering at query time. |
 | `Vec<u8>` | `BLOB` on SQLite, `BYTEA` on Postgres. Cross-backend by sqlx encoding; admin renders as a text input with hex / array wire shape. |
 
-This is the cross-backend ORM payoff: most models stay on the cross-backend types and run on either backend, with SQLite for tests / dev and Postgres for prod.
+Most models stay on the cross-backend types and run on either backend, with SQLite for tests / dev and Postgres for prod.
 
 ### `Vec<u8>` - binary payloads
 
@@ -591,34 +591,34 @@ See the [admin reference](../plugins/admin) for the `password_field(...)` builde
 
 ## Rendering markdown safely
 
-Text/body fields — plugin descriptions, usage docs, reviews — are usually authored in Markdown. Capture the source in a plain `String` column, hint the editor with `#[umbra(widget = "markdown")]` + `#[umbra(help = "...")]`, and render it on the display side with the built-in `| markdown` filter:
+Text/body fields (plugin descriptions, usage docs, reviews) are usually authored in Markdown. Capture the source in a plain `String` column, hint the editor with `#[umbra(widget = "markdown")]` + `#[umbra(help = "...")]`, and render it on the display side with the built-in `| markdown` filter:
 
 ```rust
 #[derive(Debug, Clone, sqlx::FromRow, Model)]
 pub struct Plugin {
     pub id: i64,
     pub name: String,
-    #[umbra(widget = "markdown", help = "Markdown supported — headings, lists, tables, code.")]
+    #[umbra(widget = "markdown", help = "Markdown supported: headings, lists, tables, code.")]
     pub body: String,
 }
 ```
 
 ```html
-{# detail template — render the stored Markdown to HTML #}
+{# detail template: render the stored Markdown to HTML #}
 <article class="prose">{{ plugin.body | markdown }}</article>
 ```
 
-The filter renders CommonMark + GitHub-flavored extensions (tables, strikethrough, task lists, footnotes), then **sanitizes** the output: `<script>`, inline event handlers (`onerror=`, `onclick=`), and `javascript:` URLs are stripped, so user-submitted Markdown can't smuggle XSS into a page. The result is a safe string, so template autoescaping leaves the generated tags intact. It's a plain template filter — reusable everywhere, in the admin and your own end-user templates alike; nothing is admin-specific.
+The filter renders CommonMark + GitHub-flavored extensions (tables, strikethrough, task lists, footnotes), then **sanitizes** the output: `<script>`, inline event handlers (`onerror=`, `onclick=`), and `javascript:` URLs are stripped, so user-submitted Markdown can't smuggle XSS into a page. The result is a safe string, so template autoescaping leaves the generated tags intact. It's a plain template filter, reusable everywhere, in the admin and your own end-user templates alike; nothing is admin-specific.
 
-In the admin, a `markdown` field mounts a full editor inline on the create / edit form — [EasyMDE](https://github.com/Ionaru/easy-markdown-editor) with a toolbar and live side-by-side preview. The editor is lazy-loaded (the library only downloads on a page that actually has a markdown field) and degrades to a plain, usable textarea if JavaScript is off — the stored value is Markdown either way.
+In the admin, a `markdown` field mounts a full editor inline on the create / edit form: [EasyMDE](https://github.com/Ionaru/easy-markdown-editor) with a toolbar and live side-by-side preview. The editor is lazy-loaded (the library only downloads on a page that actually has a markdown field) and degrades to a plain, usable textarea if JavaScript is off. The stored value is Markdown either way.
 
 <Callout type="info">
-The column stays plain `TEXT` — `widget` is a rendering hint, not a data type. Syntax-highlighted code blocks in the rendered output are a tracked follow-up.
+The column stays plain `TEXT`: `widget` is a rendering hint, not a data type. Syntax-highlighted code blocks in the rendered output are a tracked follow-up.
 </Callout>
 
-### The `rte` widget — rich text → HTML
+### The `rte` widget: rich text to HTML
 
-`#[umbra(widget = "rte")]` mounts a [Quill](https://quilljs.com) rich-text editor instead. Unlike `markdown`, the `rte` field **stores HTML**, so render it with the `| sanitize` filter (Quill's HTML, cleaned to a safe allowlist — the display companion to `| markdown`):
+`#[umbra(widget = "rte")]` mounts a [Quill](https://quilljs.com) rich-text editor instead. Unlike `markdown`, the `rte` field **stores HTML**, so render it with the `| sanitize` filter (Quill's HTML, cleaned to a safe allowlist, the display companion to `| markdown`):
 
 ```rust
 #[umbra(widget = "rte", help = "Rich text.")]
@@ -629,22 +629,22 @@ pub announcement: String,   // stores HTML
 <div class="prose">{{ row.announcement | sanitize }}</div>
 ```
 
-Always render stored HTML through `| sanitize` (never `| safe`): a value written via the REST API bypasses the editor, so the page is only safe if the display path cleans it. Prefer `markdown` when you can — Markdown source is smaller, diffable, and portable; reach for `rte` when non-technical editors need a Word-like surface.
+Always render stored HTML through `| sanitize` (never `| safe`): a value written via the REST API bypasses the editor, so the page is only safe if the display path cleans it. Prefer `markdown` when you can: Markdown source is smaller, diffable, and portable; reach for `rte` when non-technical editors need a Word-like surface.
 
 <Callout type="warning">
-The admin editor previews are sandboxed (rendered HTML is run through DOMPurify before it reaches the preview pane), so previewing authored content can't execute script. That's defense-in-depth on top of the server-side filters — it does not replace them. Stored values must still be rendered through `| markdown` / `| sanitize` on every display path.
+The admin editor previews are sandboxed (rendered HTML is run through DOMPurify before it reaches the preview pane), so previewing authored content can't execute script. That's defense-in-depth on top of the server-side filters; it does not replace them. Stored values must still be rendered through `| markdown` / `| sanitize` on every display path.
 </Callout>
 
-### The `code` widget — JSON / structured text
+### The `code` widget: JSON / structured text
 
-`#[umbra(widget = "code")]` mounts a [CodeMirror](https://codemirror.net) editor with JSON syntax highlighting and line numbers — the comfortable way to edit a `Json` column or any `String` holding structured text:
+`#[umbra(widget = "code")]` mounts a [CodeMirror](https://codemirror.net) editor with JSON syntax highlighting and line numbers: the comfortable way to edit a `Json` column or any `String` holding structured text:
 
 ```rust
-#[umbra(widget = "code", help = "JSON object — see the schema docs.")]
+#[umbra(widget = "code", help = "JSON object, see the schema docs.")]
 pub config: serde_json::Value,
 ```
 
-It's opt-in: a plain `Json` column without the widget keeps the default textarea-plus-Format-button editor, which already validates on save. Add `widget = "code"` when you want the richer editing surface. No display filter is needed — JSON is data, not markup; render individual values from the parsed object as usual.
+It's opt-in: a plain `Json` column without the widget keeps the default textarea-plus-Format-button editor, which already validates on save. Add `widget = "code"` when you want the richer editing surface. No display filter is needed: JSON is data, not markup; render individual values from the parsed object as usual.
 
 ## See also
 

@@ -1,6 +1,6 @@
 ---
 title: REST API service
-description: API-only umbra app - REST + OpenAPI + token auth, no HTML, no admin. The "Rust microservice" shape.
+description: API-only umbra app. REST + OpenAPI + token auth, no HTML, no admin. The "Rust microservice" shape.
 sidebar_position: 3
 icon: cloud
 tags: [examples, rest, api, openapi]
@@ -298,8 +298,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 cargo run -- makemigrations
 cargo run -- migrate
 
-# 2) Seed an API token directly (production: a /token POST handler)
-psql $DATABASE_URL <<'SQL'
+# 2) Seed an API token directly (production: a /token POST handler).
+# The URL lives under UMBRA_DATABASE_URL; psql wants a bare connection string.
+psql "$UMBRA_DATABASE_URL" <<'SQL'
 INSERT INTO auth_user (username, email, password_hash, is_staff, is_superuser, is_active, date_joined)
 VALUES ('alice', 'alice@example.com', 'argon2-hidden', true, true, true, NOW());
 INSERT INTO api_token (user_id, token, is_staff, revoked)
@@ -342,13 +343,13 @@ curl http://localhost:8000/openapi.json | jq '.paths | keys'
 | Workflow transition | `done` detail action sets `status = "done"` |
 | Hiding internal tables | `RestPlugin::exclude(["auth_user"])` |
 | OpenAPI document | `umbra_openapi::OpenApiPlugin::new().title(...).version(...)` |
-| Per-route security headers + CSRF defaults | On by default - see [Web → Error pages](../web/error-pages) |
+| Per-route security headers + CSRF defaults | On by default. See [Web error pages](../web/error-pages) |
 
 ## What it deliberately doesn't ship
 
 - **No HTML rendering.** Add `templates_dir(...)` + a handler that returns `Html<String>` if you need a docs landing.
 - **No admin UI.** Add `.plugin(umbra_admin::AdminPlugin::default())` if you want one.
-- **No background tasks / email.** Both plug in with one line - see [Batteries included](./batteries-included).
+- **No background tasks / email.** Both plug in with one line. See [Batteries included](./batteries-included).
 
 ## Next
 

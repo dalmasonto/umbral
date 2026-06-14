@@ -1,6 +1,6 @@
 ---
 title: Forms learn relations
-description: "#[derive(Form)] on a model with ForeignKey, OneToOne, M2M, and choices fields — FK/O2O become a ModelChoice, M2M a ModelMultiChoice, choices a Select, and reverse relations are auto-skipped."
+description: "#[derive(Form)] on a model with ForeignKey, OneToOne, M2M, and choices fields. FK/O2O become a ModelChoice, M2M a ModelMultiChoice, choices a Select, and reverse relations are auto-skipped."
 sidebar_position: 9
 tags: [orm, forms, foreign-key, many-to-many, choices, validation]
 ---
@@ -14,12 +14,12 @@ tags: [orm, forms, foreign-key, many-to-many, choices, validation]
 | `ForeignKey<T>` / forward `OneToOne<T>` / `Option<ForeignKey<T>>` | `ModelChoice` | id parsed + existence-checked through the ORM | `<select>` of `(id, label)` rows fetched from `T` |
 | `M2M<T>` | `ModelMultiChoice` | each submitted id existence-checked in ONE batched query | multi-`<select>`; selected ids written to the junction table after insert |
 | `#[umbra(choices)]` enum | `Select` | membership against the enum's compile-time values (no DB) | `<select>` of the enum's `VALUES`/`LABELS` |
-| `ReverseSet<C>` / reverse `OneToOne<T>` (`#[sqlx(skip)]`) | *skipped* | — | absent from `fields()` |
+| `ReverseSet<C>` / reverse `OneToOne<T>` (`#[sqlx(skip)]`) | *skipped* | n/a | absent from `fields()` |
 
-`FormValidate::validate` and `render_html` are `async` — FK/M2M existence checks and `<select>` option fetches resolve through the ambient pool. `validate` is the only place a relation touches the DB before insert; a miss is a field-keyed error and no row is written.
+`FormValidate::validate` and `render_html` are `async`: FK/M2M existence checks and `<select>` option fetches resolve through the ambient pool. `validate` is the only place a relation touches the DB before insert; a miss is a field-keyed error and no row is written.
 
 <Callout type="info">
-Reverse relations (`ReverseSet<C>`, the `#[sqlx(skip)]` reverse `OneToOne`) are back-pointers — never user-submittable — so the derive skips them automatically. You do **not** need `#[umbra(noform)]` on them.
+Reverse relations (`ReverseSet<C>`, the `#[sqlx(skip)]` reverse `OneToOne`) are back-pointers, never user-submittable, so the derive skips them automatically. You do **not** need `#[umbra(noform)]` on them.
 </Callout>
 
 ## ForeignKey → ModelChoice
@@ -67,7 +67,7 @@ struct Article {
 
 // The submitted tag ids are verified in ONE batched query and staged on
 // the M2M field; create() writes them to the junction table after the
-// parent insert, atomically — a single bad id fails validation before
+// parent insert, atomically. A single bad id fails validation before
 // any row is inserted.
 let article = Article::validate(&data).await?;
 let created = Article::objects().create(article).await?;
@@ -94,6 +94,6 @@ A non-member value is a field-keyed error; a valid value decodes straight back i
 
 ## See also
 
-- [Relationships](/docs/v0.0.1/orm/relationships) — the `ForeignKey`, `OneToOne`, and `M2M` field types themselves.
-- [Column types](/docs/v0.0.1/orm/column-types) — `#[umbra(choices)]` enums via `#[derive(Choices)]`.
-- Design spec: `docs/superpowers/specs/2026-06-11-orm-relations-forms-and-joins-design.md` (Part 1 — field classification; Part 2 — async `FormValidate`).
+- [Relationships](/docs/v0.0.1/orm/relationships): the `ForeignKey`, `OneToOne`, and `M2M` field types themselves.
+- [Column types](/docs/v0.0.1/orm/column-types): `#[umbra(choices)]` enums via `#[derive(Choices)]`.
+- Design spec: `docs/superpowers/specs/2026-06-11-orm-relations-forms-and-joins-design.md` (Part 1: field classification; Part 2: async `FormValidate`).

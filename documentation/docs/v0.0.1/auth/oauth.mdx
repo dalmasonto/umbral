@@ -9,10 +9,10 @@ tags: [auth, oauth, social-login, google, github, allauth]
 
 `umbra-oauth` is umbra's [django-allauth](https://docs.allauth.org/) equivalent. It does two things with one flow, layered on `umbra-auth`:
 
-- **Social login** — "Sign in with Google" resolves (or creates) an `AuthUser` and logs them in.
-- **Account connection** — a logged-in user attaches a provider ("Connect GitHub"), which is how the app later gets API access (Drive, repos, …) on their behalf.
+- **Social login**: "Sign in with Google" resolves (or creates) an `AuthUser` and logs them in.
+- **Account connection**: a logged-in user attaches a provider ("Connect GitHub"), which is how the app later gets API access (Drive, repos, …) on their behalf.
 
-A social identity is an **extension** of the user — a `SocialAccount` row linked by foreign key — never a replacement for the username. A user can link several accounts (the unique key is `(provider, provider_uid)`, so even two GitHub accounts on one user are fine). Provider tokens are stored in [`Masked`](../orm/masked) columns, encrypted at rest.
+A social identity is an **extension** of the user (a `SocialAccount` row linked by foreign key), never a replacement for the username. A user can link several accounts (the unique key is `(provider, provider_uid)`, so even two GitHub accounts on one user are fine). Provider tokens are stored in [`Masked`](../orm/masked) columns, encrypted at rest.
 
 ## Wiring
 
@@ -30,10 +30,10 @@ App::builder()
     .plugin(oauth)
 ```
 
-`OAuthPlugin::new(redirect_base)` takes your app's **public origin** (`https://example.com`, or `http://localhost:8000` in dev). Each provider's callback is `{redirect_base}/oauth/{provider}/callback`, which must match what you register in the provider's console. `.login_redirect(path)` is where the browser lands after a successful login (default `/`). Using `from_env()` means a provider with no credentials configured is simply skipped — safe to leave the plugin on with nothing set.
+`OAuthPlugin::new(redirect_base)` takes your app's **public origin** (`https://example.com`, or `http://localhost:8000` in dev). Each provider's callback is `{redirect_base}/oauth/{provider}/callback`, which must match what you register in the provider's console. `.login_redirect(path)` is where the browser lands after a successful login (default `/`). Using `from_env()` means a provider with no credentials configured is simply skipped, so it's safe to leave the plugin on with nothing set.
 
 <Callout type="warning">
-`SessionsPlugin` is **required** — the flow stores its CSRF `state` token in the session. Without it, every callback fails the state check.
+`SessionsPlugin` is **required**: the flow stores its CSRF `state` token in the session. Without it, every callback fails the state check.
 </Callout>
 
 ## Create the table
@@ -60,7 +60,7 @@ UMBRA_OAUTH_GOOGLE_CLIENT_ID=...
 UMBRA_OAUTH_GOOGLE_CLIENT_SECRET=...
 ```
 
-Default scopes are `openid email profile`. Google receives `access_type=offline` + `prompt=consent`, so it returns a **refresh token** for later API access (widen scopes with `.scopes("openid email profile https://www.googleapis.com/auth/drive.readonly")`).
+Default scopes are `openid email profile`. Google receives `access_type=offline` and `prompt=consent`, so it returns a **refresh token** for later API access (widen scopes with `.scopes("openid email profile https://www.googleapis.com/auth/drive.readonly")`).
 </Tab>
 <Tab label="GitHub">
 1. In **Settings → Developer settings → [OAuth Apps](https://github.com/settings/developers)**, register a new app.
@@ -73,17 +73,18 @@ UMBRA_OAUTH_GITHUB_CLIENT_SECRET=...
 ```
 
 Default scopes are `read:user user:email`. The verified primary email is read from `/user/emails`. GitHub **OAuth apps don't issue refresh tokens** (GitHub Apps do), so `refresh_token` is `None`.
+
 </Tab>
 </Tabs>
 
-Optional: override the callback origin in prod without recompiling — the website example reads `UMBRA_OAUTH_REDIRECT_BASE`.
+Optional: override the callback origin in prod without recompiling. The website example reads `UMBRA_OAUTH_REDIRECT_BASE`.
 
 ### Using a `.env` file
 
-You don't have to export the variables by hand. Drop them in a `.env` file in the directory you launch the app from (next to `Cargo.toml`), and Umbra loads it into the process environment at `App::builder()` — so the providers' `from_env()` picks them up:
+You don't have to export the variables by hand. Drop them in a `.env` file in the directory you launch the app from (next to `Cargo.toml`), and Umbra loads it into the process environment at `App::builder()`, so the providers' `from_env()` picks them up:
 
 ```bash
-# .env  (add this file to .gitignore — never commit credentials)
+# .env  (add this file to .gitignore; never commit credentials)
 UMBRA_OAUTH_GOOGLE_CLIENT_ID=98840861591-xxxx.apps.googleusercontent.com
 UMBRA_OAUTH_GOOGLE_CLIENT_SECRET=GOCSPX-xxxx
 UMBRA_OAUTH_GITHUB_CLIENT_ID=Ov23xxxx
@@ -94,7 +95,7 @@ UMBRA_OAUTH_REDIRECT_BASE=http://localhost:8100
 ```
 
 <Callout type="warning">
-The variable names must match **exactly**. The secret is `UMBRA_OAUTH_<PROVIDER>_CLIENT_SECRET` — note the `CLIENT_`. A common mistake is `UMBRA_OAUTH_GOOGLE_SECRET`, which `from_env()` never sees; a provider registers only when **both** its id and secret are present, so a misnamed secret means the provider silently doesn't register (you'll get "no providers registered" at boot and the buttons stay hidden).
+The variable names must match **exactly**. The secret is `UMBRA_OAUTH_<PROVIDER>_CLIENT_SECRET`; note the `CLIENT_`. A common mistake is `UMBRA_OAUTH_GOOGLE_SECRET`, which `from_env()` never sees; a provider registers only when **both** its id and secret are present, so a misnamed secret means the provider silently doesn't register (you'll get "no providers registered" at boot and the buttons stay hidden).
 </Callout>
 
 `.env` is read relative to the **working directory**, so launch the app from the project root (where the `.env` lives). Real exported environment variables always win over `.env` values.
@@ -110,7 +111,7 @@ The plugin mounts, per registered provider:
 | `GET /oauth/{provider}/callback` | Provider redirects back here |
 | `POST /oauth/{provider}/disconnect` | Unlink a provider (auth required) |
 
-A login (or connect) entry point is just a link — `GET` routes need no form:
+A login (or connect) entry point is just a link; `GET` routes need no form:
 
 ```html
 <a href="/oauth/google/login">Sign in with Google</a>
@@ -120,7 +121,7 @@ A login (or connect) entry point is just a link — `GET` routes need no form:
 <a href="/oauth/github/connect">Connect GitHub</a>
 ```
 
-**Disconnect is a `POST`**, so include the CSRF token. Umbra exposes `{{ csrf_input }}` — a ready-made, safe hidden `<input name="csrf_token">` (the same one the admin uses) that's available in every template render when the security middleware is active:
+**Disconnect is a `POST`**, so include the CSRF token. Umbra exposes `{{ csrf_input }}`, a ready-made, safe hidden `<input name="csrf_token">` (the same one the admin uses) that's available in every template render when the security middleware is active:
 
 ```html
 <form method="post" action="/oauth/github/disconnect">
@@ -130,16 +131,16 @@ A login (or connect) entry point is just a link — `GET` routes need no form:
 ```
 
 <Callout type="warning">
-If `SecurityPlugin` is mounted (it enforces CSRF on every `POST`) and you omit `{{ csrf_input }}`, the request fails with "CSRF verification failed". This applies to *any* POST form in your app — login, signup, logout, disconnect.
+If `SecurityPlugin` is mounted (it enforces CSRF on every `POST`) and you omit `{{ csrf_input }}`, the request fails with "CSRF verification failed". This applies to *any* POST form in your app: login, signup, logout, disconnect.
 </Callout>
 
 ## SPA login (bearer token)
 
-The flow above ends in a cookie session — perfect for a server-rendered app. A single-page app on a **different origin** (Vite, Next, a mobile client) can use the *same* routes and get back a **bearer token** instead, so it can call the API with `Authorization: Bearer`.
+The flow above ends in a cookie session, perfect for a server-rendered app. A single-page app on a **different origin** (Vite, Next, a mobile client) can use the *same* routes and get back a **bearer token** instead, so it can call the API with `Authorization: Bearer`.
 
 <Steps>
 <Step title="Allowlist the SPA's return URL">
-Add the URL your SPA handles the callback on. Only URLs starting with an allowlisted prefix are honored — this is the open-redirect / token-theft defense.
+Add the URL your SPA handles the callback on. Only URLs starting with an allowlisted prefix are honored; this is the open-redirect / token-theft defense.
 
 ```rust
 let oauth = OAuthPlugin::new("https://api.example.com")
@@ -148,7 +149,7 @@ let oauth = OAuthPlugin::new("https://api.example.com")
 ```
 </Step>
 <Step title="Send the browser to login with ?next=">
-From the SPA, do a full-page navigation (not `fetch` — OAuth uses redirects):
+From the SPA, do a full-page navigation (not `fetch`; OAuth uses redirects):
 
 ```js
 window.location = "https://api.example.com/oauth/google/login"
@@ -175,17 +176,17 @@ fetch("https://api.example.com/api/post/", {
 });
 ```
 
-umbra-rest's bearer authentication resolves it — the token is a real `AuthToken` row, so it works everywhere bearer auth does and can be revoked.
+umbra-rest's bearer authentication resolves it: the token is a real `AuthToken` row, so it works everywhere bearer auth does and can be revoked.
 </Step>
 </Steps>
 
 <Callout type="warning">
-A `?next=` that doesn't match an `allow_return` prefix is rejected with **400** — an attacker can't point the flow at their own origin to harvest a freshly minted token. With **no** `allow_return` configured, `?next=` is ignored entirely and the flow keeps its server-rendered session behavior (safe by default). Token mode is login-only: a connect flow never mints a token (the user already holds one).
+A `?next=` that doesn't match an `allow_return` prefix is rejected with **400**, so an attacker can't point the flow at their own origin to harvest a freshly minted token. With **no** `allow_return` configured, `?next=` is ignored entirely and the flow keeps its server-rendered session behavior (safe by default). Token mode is login-only: a connect flow never mints a token (the user already holds one).
 </Callout>
 
 ## Endpoint discovery
 
-`GET /oauth/providers` returns the configured providers and their flow URLs, auto-built from what's registered — so a SPA renders its buttons without hardcoding paths:
+`GET /oauth/providers` returns the configured providers and their flow URLs, auto-built from what's registered, so a SPA renders its buttons without hardcoding paths:
 
 ```json
 { "providers": [
@@ -195,10 +196,10 @@ A `?next=` that doesn't match an `allow_return` prefix is rejected with **400** 
     "callback": { "path": "/oauth/google/callback", "url": "https://api.example.com/oauth/google/callback" } } ] }
 ```
 
-`path` is relative; `url` is absolute (joined onto the `redirect_base`). The endpoint is public — it lists provider names only, never secrets.
+`path` is relative; `url` is absolute (joined onto the `redirect_base`). The endpoint is public; it lists provider names only, never secrets.
 
 <Callout type="info">
-If you also run **umbra-rest**, these same `login` / `connect` endpoints show up in its `GET /api/` root under `endpoints`, next to your REST resources — one index for the whole API. The plugin advertises them through the framework's `Plugin::api_endpoints()` seam, so REST lists them without depending on `umbra-oauth`.
+If you also run **umbra-rest**, these same `login` / `connect` endpoints show up in its `GET /api/` root under `endpoints`, next to your REST resources, one index for the whole API. The plugin advertises them through the framework's `Plugin::api_endpoints()` seam, so REST lists them without depending on `umbra-oauth`.
 </Callout>
 
 ## Linking policy
@@ -208,7 +209,7 @@ On the callback, the resolved identity is matched in order:
 <Steps>
 <Step title="Already linked">If a `SocialAccount` exists for `(provider, provider_uid)`, refresh its tokens and log in as its user. (In connect mode, this is refused if the identity belongs to a *different* user.)</Step>
 <Step title="Connect mode">If a logged-in user started a connect flow, attach the identity to them.</Step>
-<Step title="Verified-email link">If the provider asserts a **verified** email matching an existing user, link to that user. Only when verified — an unverified address can't capture an account.</Step>
+<Step title="Verified-email link">If the provider asserts a **verified** email matching an existing user, link to that user. Only when verified; an unverified address can't capture an account.</Step>
 <Step title="Auto-create">Otherwise mint a new `AuthUser` (unique username; the password is unusable until they set one).</Step>
 </Steps>
 
@@ -262,7 +263,7 @@ impl OAuthProvider for GitLabProvider {
 }
 ```
 
-`Identity { uid, email, email_verified, display_name }` is what the policy consumes — set `email_verified` honestly, since it gates auto-linking.
+`Identity { uid, email, email_verified, display_name }` is what the policy consumes; set `email_verified` honestly, since it gates auto-linking.
 
 ## Troubleshooting
 
@@ -280,7 +281,7 @@ Google only returns a refresh token on the first consent unless `prompt=consent`
 
 ### `unknown provider` (404)
 
-The provider wasn't registered — `from_env()` returned `None` because its `UMBRA_OAUTH_<PROVIDER>_CLIENT_ID` / `_CLIENT_SECRET` aren't set.
+The provider wasn't registered: `from_env()` returned `None` because its `UMBRA_OAUTH_<PROVIDER>_CLIENT_ID` / `_CLIENT_SECRET` aren't set.
 
 ## Design rationale
 

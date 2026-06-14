@@ -66,7 +66,7 @@ The dev-mode check reads the ambient settings at route-build time (when `Plugin:
 
 ## The unified static pipeline
 
-Beyond serving one directory, the framework runs a single static handler at a configurable base — `STATIC_URL` (default `/static/`) — that every plugin can contribute to. This is Django's `staticfiles` model. Two settings drive it:
+Beyond serving one directory, the framework runs a single static handler at a configurable base (`STATIC_URL`, default `/static/`) that every plugin can contribute to. This is Django's `staticfiles` model. Two settings drive it:
 
 | Setting | Env | Default | Purpose |
 |---|---|---|---|
@@ -75,8 +75,8 @@ Beyond serving one directory, the framework runs a single static handler at a co
 
 A plugin contributes assets two ways, both served under `static_url`:
 
-- **`Plugin::static_dirs()`** — namespaced plugin assets, served at `/static/<namespace>/<file>`. In dev the handler serves them **live off the source dir** (rebuild your bundle, drop it in, served next request — no recompile); in prod from the collected `static_root`. This is the filesystem alternative to `static_files()` embedding.
-- **`Plugin::static_root_dirs()`** — app/site-level dirs served at the bare `/static/<file>` space (your own CSS, images, favicon).
+- **`Plugin::static_dirs()`**: namespaced plugin assets, served at `/static/<namespace>/<file>`. In dev the handler serves them **live off the source dir** (rebuild your bundle, drop it in, served next request, no recompile); in prod from the collected `static_root`. This is the filesystem alternative to `static_files()` embedding.
+- **`Plugin::static_root_dirs()`**: app/site-level dirs served at the bare `/static/<file>` space (your own CSS, images, favicon).
 
 ### StaticPlugin and the pipeline
 
@@ -90,7 +90,7 @@ App::builder()
     .build()?;
 ```
 
-Mounted at a *different* path (e.g. `StaticPlugin::new("/media", "./uploads")`), it nests independently at that prefix as before. This is why a `StaticPlugin` at `/static` no longer collides with the framework's own `/static` handler — there is one owner of `static_url`.
+Mounted at a *different* path (e.g. `StaticPlugin::new("/media", "./uploads")`), it nests independently at that prefix as before. This is why a `StaticPlugin` at `/static` no longer collides with the framework's own `/static` handler: there is one owner of `static_url`.
 
 ## Referencing assets in templates
 
@@ -106,7 +106,7 @@ Use the `static()` template global so URLs follow `static_url` wherever it's con
 <script src="{{ static('playground/assets/app.js') }}"></script>
 ```
 
-`{{ static('css/app.css') }}` resolves to `<static_url>css/app.css` — `/static/css/app.css` by default, or `https://cdn.example.com/s/css/app.css` when `static_url` points at a CDN. This is umbra's equivalent of Django's `{% static "..." %}` tag.
+`{{ static('css/app.css') }}` resolves to `<static_url>css/app.css`: `/static/css/app.css` by default, or `https://cdn.example.com/s/css/app.css` when `static_url` points at a CDN. This is umbra's equivalent of Django's `{% static "..." %}` tag.
 
 ## collectstatic
 
@@ -117,7 +117,7 @@ cargo run -- collectstatic          # collect into static_root/
 cargo run -- collectstatic --clear  # wipe static_root/ first, then collect
 ```
 
-The command is **provided by `StaticPlugin` itself** — it only exists when you register the plugin (`.plugin(StaticPlugin::new(...))`). Point a CDN or nginx at `static_root` and set `static_url` to its origin, or let the framework serve it.
+The command is **provided by `StaticPlugin` itself**; it only exists when you register the plugin (`.plugin(StaticPlugin::new(...))`). Point a CDN or nginx at `static_root` and set `static_url` to its origin, or let the framework serve it.
 
 <Callout type="info">
 **Dev vs prod.** In development the pipeline serves plugin `static_dirs()` live from each source directory (rebuild, drop in, served next request - no recompile) and `StaticPlugin` site dirs straight off disk. In production you run `collectstatic` once and serve the resulting `static_root/` tree from the framework, nginx, or a CDN. Embedded assets (`static_files()` / `StaticPlugin::embedded`) need neither - they ship in the binary. Design rationale: `arch.md` and `planning/gaps.md` #67.

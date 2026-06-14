@@ -58,7 +58,7 @@ CREATE TABLE "post" (
 
 ## Referential actions: `on_delete` / `on_update`
 
-By default the FK emits no `ON DELETE` / `ON UPDATE` clause, which means "NO ACTION" - the database blocks a delete of the parent if any child row references it, and refuses to update the parent's primary key. Override per FK with the `on_delete` and `on_update` attributes:
+By default the FK emits no `ON DELETE` / `ON UPDATE` clause, which means "NO ACTION": the database blocks a delete of the parent if any child row references it, and refuses to update the parent's primary key. Override per FK with the `on_delete` and `on_update` attributes:
 
 ```rust
 #[derive(Model)]
@@ -80,13 +80,13 @@ The attribute accepts four values, mirroring the SQL standard:
 | `"restrict"` | `ON DELETE RESTRICT` | block immediately, no commit-time deferral |
 | `"set_null"` | `ON DELETE SET NULL` | null the child column (only valid on `Option<ForeignKey<T>>`) |
 
-`on_update` accepts the same vocabulary; useful when the parent PK might move (rare in practice - most apps use immutable PKs).
+`on_update` accepts the same vocabulary; useful when the parent PK might move (rare in practice, since most apps use immutable PKs).
 
-The attribute applies at `CREATE TABLE` time only. Changing the action on an already-created table needs a hand-written migration - SQLite can't ALTER FK actions in place, and the diff engine doesn't watch constraint flags yet.
+The attribute applies at `CREATE TABLE` time only. Changing the action on an already-created table needs a hand-written migration: SQLite can't ALTER FK actions in place, and the diff engine doesn't watch constraint flags yet.
 
 ## Self-referential foreign keys
 
-A model can hold a `ForeignKey` to itself - useful for category trees, threaded comments, replies, manager hierarchies, anything that nests. Write the type literally:
+A model can hold a `ForeignKey` to itself, useful for category trees, threaded comments, replies, manager hierarchies, anything that nests. Write the type literally:
 
 ```rust
 #[derive(Model)]
@@ -100,9 +100,9 @@ pub struct Category {
 }
 ```
 
-No `Self` keyword (Rust doesn't allow `Self` in a field type), no string sentinel like Django's `ForeignKey('self', ...)` - just the struct's own name. Why it works: `ForeignKey<T>` stores `T::PrimaryKey` and `Option<Box<T>>` (boxed so the type stays finite-size), and `<T as Model>::TABLE` resolves at the same expansion step that emits `impl Model for Category`, so `T = Category` is satisfied within one derive pass.
+No `Self` keyword (Rust doesn't allow `Self` in a field type), no string sentinel like Django's `ForeignKey('self', ...)`, just the struct's own name. Why it works: `ForeignKey<T>` stores `T::PrimaryKey` and `Option<Box<T>>` (boxed so the type stays finite-size), and `<T as Model>::TABLE` resolves at the same expansion step that emits `impl Model for Category`, so `T = Category` is satisfied within one derive pass.
 
-The DDL is a normal inline `REFERENCES` clause - the table references itself within the same `CREATE TABLE` statement, which both SQLite and Postgres handle natively:
+The DDL is a normal inline `REFERENCES` clause: the table references itself within the same `CREATE TABLE` statement, which both SQLite and Postgres handle natively:
 
 ```sql
 CREATE TABLE "category" (
@@ -112,7 +112,7 @@ CREATE TABLE "category" (
 )
 ```
 
-Querying a self-FK is the same as any other FK - the column constants live in the model's sibling module and accept `i64` comparisons. To walk the tree, fetch one level at a time (or write a recursive CTE by hand if depth matters):
+Querying a self-FK is the same as any other FK: the column constants live in the model's sibling module and accept `i64` comparisons. To walk the tree, fetch one level at a time (or write a recursive CTE by hand if depth matters):
 
 ```rust
 // Direct children of category 1:
@@ -124,23 +124,23 @@ let children = Category::objects()
 
 ## One-to-one relationships
 
-Django's `OneToOneField` is `ForeignKey(unique=True)` underneath. Umbra ships **two equivalent spellings** on the child (referencing) side. Pick whichever reads cleaner — both compile to the same column shape and emit the same back-link accessors.
+Django's `OneToOneField` is `ForeignKey(unique=True)` underneath. Umbra ships two equivalent spellings on the child (referencing) side. Pick whichever reads cleaner; both compile to the same column shape and emit the same back-link accessors.
 
-### Sugar spelling — `OneToOne<T>`
+### Sugar spelling: `OneToOne<T>`
 
 ```rust
 #[derive(Model)]
 pub struct Profile {
     pub id: i64,
-    pub user: OneToOne<AuthUser>,   // ← sugar
+    pub user: OneToOne<AuthUser>,   // sugar
     pub bio: String,
     pub avatar: String,
 }
 ```
 
-The derive macro sees `OneToOne<T>` without `#[sqlx(skip)]` and rewrites it internally to `#[umbra(unique)] pub user: ForeignKey<AuthUser>` — same column DDL (`bigint NOT NULL UNIQUE REFERENCES "auth_user"("id")`), same `select_related("user")` behavior, same reverse-O2O accessor on the parent (`auth_user.profile().await?`). The `OneToOne<T>` type carries the FK value at runtime: construct with `OneToOne::new(id)`, read with `.id()`, and (after `select_related`) `.resolved() -> Option<&T>` — symmetric with `ForeignKey<T>`.
+The derive macro sees `OneToOne<T>` without `#[sqlx(skip)]` and rewrites it internally to `#[umbra(unique)] pub user: ForeignKey<AuthUser>`: same column DDL (`bigint NOT NULL UNIQUE REFERENCES "auth_user"("id")`), same `select_related("user")` behavior, same reverse-O2O accessor on the parent (`auth_user.profile().await?`). The `OneToOne<T>` type carries the FK value at runtime: construct with `OneToOne::new(id)`, read with `.id()`, and (after `select_related`) `.resolved() -> Option<&T>`, symmetric with `ForeignKey<T>`.
 
-### Longhand spelling — `#[umbra(unique)] ForeignKey<T>`
+### Longhand spelling: `#[umbra(unique)] ForeignKey<T>`
 
 ```rust
 #[derive(Model)]
@@ -174,12 +174,12 @@ let profile = Profile::objects()
     .select_related("user")
     .get(profile::USER.eq(user.id))
     .await?;
-// profile.user.resolved() → Some(&AuthUser)
+// profile.user.resolved() is Some(&AuthUser)
 ```
 
-### Reading from the parent side — `OneToOne<C>`
+### Reading from the parent side: `OneToOne<C>`
 
-Django's pattern `request.user.profile.avatar` reads the relation from the **parent**. Umbra ships a dedicated `OneToOne<C>` field type for this — declared on the parent, with no umbra-specific attribute (the back-link is discovered at runtime by scanning the child's `FIELDS` for the unique FK pointing back at the parent):
+Django's pattern `request.user.profile.avatar` reads the relation from the parent. Umbra ships a dedicated `OneToOne<C>` field type for this, declared on the parent, with no umbra-specific attribute (the back-link is discovered at runtime by scanning the child's `FIELDS` for the unique FK pointing back at the parent):
 
 ```rust
 #[derive(Model)]
@@ -201,18 +201,18 @@ let user = AuthUser::objects()
     .get(auth_user::ID.eq(1))
     .await?;
 
-// user.profile.resolved() → Option<&Profile>
+// user.profile.resolved() is Option<&Profile>
 if let Some(profile) = user.profile.resolved() {
     println!("{}", profile.avatar);
 }
 ```
 
-Query budget: 1 (users) + 1 (profiles) regardless of how many users come back — no N+1.
+Query budget: 1 (users) + 1 (profiles) regardless of how many users come back, no N+1.
 
 In a template the serialised user has the profile as a nested object (or `null`), so `{{ user.profile.avatar }}` works directly:
 
 ```rust
-serde_json::to_value(&user)["profile"]["avatar"]  // → "alice.png"
+serde_json::to_value(&user)["profile"]["avatar"]  // "alice.png"
 ```
 
 ### Loaded vs unloaded
@@ -232,9 +232,9 @@ if user.profile.is_loaded() && user.profile.resolved().is_none() {
 
 The back-link discovery requires **exactly one** UNIQUE FK on the child pointing at the parent. If the child has two unique FKs to the same parent (rare but possible), `prefetch_related` errors loudly naming the candidates and suggesting you either rename one or drop the `unique` attribute. If the child has *no* unique FK to the parent, the error tells you to add `#[umbra(unique)]`.
 
-### Cross-crate back-link — `auth_user.profile().await?`
+### Cross-crate back-link: `auth_user.profile().await?`
 
-`OneToOne<C>` as a struct field needs the parent type to be in your crate or one you can edit. That doesn't fit `AuthUser`, which lives in `umbra-auth` and you don't want to fork. For exactly this case the derive macro emits a **trait-based reverse-OneToOne accessor** alongside the existing reverse-FK trait:
+`OneToOne<C>` as a struct field needs the parent type to be in your crate or one you can edit. That doesn't fit `AuthUser`, which lives in `umbra-auth` and you don't want to fork. For exactly this case the derive macro emits a trait-based reverse-OneToOne accessor alongside the existing reverse-FK trait:
 
 ```rust
 // In your app crate.
@@ -242,7 +242,7 @@ The back-link discovery requires **exactly one** UNIQUE FK on the child pointing
 pub struct Profile {
     pub id: i64,
     #[umbra(unique, on_delete = "cascade")]
-    pub user: ForeignKey<AuthUser>,   // unique → o2o
+    pub user: ForeignKey<AuthUser>,   // unique = o2o
     pub bio: String,
 }
 
@@ -253,29 +253,29 @@ if let Some(profile) = user.profile().await? {
 }
 ```
 
-The macro emits both `pub trait ProfileUserOneToOneReverse { async fn profile(&self) -> Result<Option<Profile>, sqlx::Error> }` and `impl ProfileUserOneToOneReverse for AuthUser { ... }` in your crate — the same trait-on-foreign-type pattern that powers reverse-FK (`user.profile_set()`). Rust's orphan rule allows `impl LocalTrait for ForeignType`, so the accessor works without touching `AuthUser` at all.
+The macro emits both `pub trait ProfileUserOneToOneReverse { async fn profile(&self) -> Result<Option<Profile>, sqlx::Error> }` and `impl ProfileUserOneToOneReverse for AuthUser { ... }` in your crate, the same trait-on-foreign-type pattern that powers reverse-FK (`user.profile_set()`). Rust's orphan rule allows `impl LocalTrait for ForeignType`, so the accessor works without touching `AuthUser` at all.
 
-Naming is `<child_snake>()`, with `<child_snake>_via_<field>()` disambiguating when one child has multiple unique FKs to the same parent. The accessor is only emitted when the FK carries `#[umbra(unique)]` — a plain FK gets the `_set()` form but not the o2o form, since the cardinality is `0..N`.
+Naming is `<child_snake>()`, with `<child_snake>_via_<field>()` disambiguating when one child has multiple unique FKs to the same parent. The accessor is only emitted when the FK carries `#[umbra(unique)]`; a plain FK gets the `_set()` form but not the o2o form, since the cardinality is `0..N`.
 
-This is the right shape for `request.user.profile.avatar`-style flows in **Rust**: one method call, one `LIMIT 1` query, no need for the user to know the back-link convention.
+This is the right shape for `request.user.profile.avatar`-style flows in Rust: one method call, one `LIMIT 1` query, no need for the user to know the back-link convention.
 
 <Callout type="warning">
-  **Template-side relation traversal is not implemented.** Writing `{{ user.profile.avatar }}` directly in a minijinja template does NOT work — neither for cross-crate reverse-OneToOne nor for reverse-FK collections nor for the plain FK forward direction. `user` in templates is the JSON-serialized AuthUser (via [user in templates](/v0.0.1/auth/user-in-templates)); relation accessors are Rust async methods that don't survive serialization, and minijinja is synchronous so it can't `.await` anyway.
+  **Template-side relation traversal is not implemented.** Writing `{{ user.profile.avatar }}` directly in a minijinja template does NOT work: neither for cross-crate reverse-OneToOne nor for reverse-FK collections nor for the plain FK forward direction. `user` in templates is the JSON-serialized AuthUser (via [user in templates](/v0.0.1/auth/user-in-templates)); relation accessors are Rust async methods that don't survive serialization, and minijinja is synchronous so it can't `.await` anyway.
 
   **The workaround today**: resolve the relation in the handler and pass the value into the template context explicitly:
 
   ```rust
-  let customer = user.0.customer().await?;          // ← resolve in Rust
+  let customer = user.0.customer().await?;          // resolve in Rust
   let customer_id = customer.as_ref().map(|c| c.id);
-  render("me.html", &context!(customer_id))         // ← template uses `{{ customer_id }}`
+  render("me.html", &context!(customer_id))         // template uses `{{ customer_id }}`
   ```
 
-  The eager-prefetch approach is shipped: resolve the relation with [`select_related`](#eager-loading-with-select_related) (forward FK, including nested `__` chains) or [`prefetch_related`](#prefetch_related-for-m2m-batching) (reverse FK / M2M / reverse-O2O), then serialise the parent — the resolved child rides into the template context as a nested object, so `{{ post.author.username }}` works *when the post was fetched with `select_related("author")`*. What still doesn't work is a *bare* relation accessor (`user.profile`) on an unprefetched row, since that would need an async DB call mid-render.
+  The eager-prefetch approach is shipped: resolve the relation with [`select_related`](#eager-loading-with-select_related) (forward FK, including nested `__` chains) or [`prefetch_related`](#prefetch_related-for-m2m-batching) (reverse FK / M2M / reverse-O2O), then serialise the parent. The resolved child rides into the template context as a nested object, so `{{ post.author.username }}` works *when the post was fetched with `select_related("author")`*. What still doesn't work is a *bare* relation accessor (`user.profile`) on an unprefetched row, since that would need an async DB call mid-render.
 </Callout>
 
 ### Unique-constraint violations in the admin
 
-Trying to create a second `Profile` for a user who already has one trips the UNIQUE constraint. The admin surfaces this as **"A record with this `user` already exists."** rather than a generic "database error" — the column name comes from the parser in `umbra-admin/src/util.rs::parse_unique_violation_column`, which handles both SQLite (`UNIQUE constraint failed: profile.user`) and Postgres (`Key (user)=(7) already exists.`) message formats.
+Trying to create a second `Profile` for a user who already has one trips the UNIQUE constraint. The admin surfaces this as **"A record with this `user` already exists."** rather than a generic "database error". The column name comes from the parser in `umbra-admin/src/util.rs::parse_unique_violation_column`, which handles both SQLite (`UNIQUE constraint failed: profile.user`) and Postgres (`Key (user)=(7) already exists.`) message formats.
 
 ## Querying with a foreign key
 
@@ -317,7 +317,7 @@ println!("written by {}", author.name);
 
 ## Serialisation
 
-`ForeignKey<T>` serialises and deserialises as a plain JSON integer. The REST layer and the backup tool see it as an `i64` - no nested object, no special envelope.
+`ForeignKey<T>` serialises and deserialises as a plain JSON integer. The REST layer and the backup tool see it as an `i64`: no nested object, no special envelope.
 
 ```json
 { "id": 1, "title": "Hello", "author": 42 }
@@ -325,7 +325,7 @@ println!("written by {}", author.name);
 
 ## Eager loading with select_related
 
-By default, a fetched `Post` carries only the raw integer in its `author` FK field. Accessing `post.author.resolve(&pool)` requires a second database round-trip. When you need the referenced row without an extra query - especially when rendering templates - call `.select_related("author")` on the QuerySet.
+By default, a fetched `Post` carries only the raw integer in its `author` FK field. Accessing `post.author.resolve(&pool)` requires a second database round-trip. When you need the referenced row without an extra query (especially when rendering templates), call `.select_related("author")` on the QuerySet.
 
 ```rust
 let post = Post::objects()
@@ -343,7 +343,7 @@ let ctx = serde_json::to_value(&post)?;
 // ctx["author"]["username"] == "alice"
 ```
 
-Under the hood, `select_related` runs a single batch `SELECT ... FROM user WHERE id IN (...)` after the main query. If the result set contains 50 posts, one batch query fetches all referenced users - not 50 individual queries.
+Under the hood, `select_related` runs a single batch `SELECT ... FROM user WHERE id IN (...)` after the main query. If the result set contains 50 posts, one batch query fetches all referenced users, not 50 individual queries.
 
 ### Multiple FK fields
 
@@ -371,12 +371,12 @@ Each named FK generates one batch query. Two FKs = two batch queries + the main 
 
 This means `{{ post.author.username }}` in a minijinja template renders correctly when the template context was built from a post fetched with `select_related("author")`.
 
-### Nested traversal — `select_related("author__manager")`
+### Nested traversal: `select_related("author__manager")`
 
-Chain FK hops with `__`. Each hop is one batched `IN (...)` query, so the budget is `1 + len(hops)` regardless of row count — never N+1. The full chain unpacks into `resolved()` slots at every depth:
+Chain FK hops with `__`. Each hop is one batched `IN (...)` query, so the budget is `1 + len(hops)` regardless of row count, never N+1. The full chain unpacks into `resolved()` slots at every depth:
 
 ```rust
-// post.author.manager.manager — three hops in 4 queries total
+// post.author.manager.manager: three hops in 4 queries total
 // (1 posts + 1 per hop), for any number of posts.
 let posts = Post::objects()
     .filter(post::TITLE.eq("third"))
@@ -389,20 +389,20 @@ let manager = author.manager.as_ref().unwrap().resolved().expect("hop 2");
 let grandmgr = manager.manager.as_ref().unwrap().resolved().expect("hop 3");
 ```
 
-A `NULL` column anywhere in the chain bottoms out cleanly (the deeper hops simply don't load) — no panic. An unknown hop name fails loudly, naming the bad field and the table it was looked up on.
+A `NULL` column anywhere in the chain bottoms out cleanly (the deeper hops simply don't load), no panic. An unknown hop name fails loudly, naming the bad field and the table it was looked up on.
 
-`select_related` loads the chain in `1 + len(hops)` **batched** queries. For the SAME relations resolved in a **single** query via a SQL `JOIN` — with INNER/LEFT/RIGHT control, nested `__` paths, and an M2M hop — reach for [`join_related`](/docs/v0.0.1/orm/joins) instead.
+`select_related` loads the chain in `1 + len(hops)` **batched** queries. For the SAME relations resolved in a **single** query via a SQL `JOIN` (with INNER/LEFT/RIGHT control, nested `__` paths, and an M2M hop), reach for [`join_related`](/docs/v0.0.1/orm/joins) instead.
 
 ### Still deferred
 
-- **`ON DELETE` behaviour** — supported (see [`on_delete` / `on_update`](#referential-actions-on_delete--on_update)); only *changing* the action on an already-created table needs a hand-written migration.
-- **FK columns referencing a non-`i64` primary key** — the relation machinery (`select_related`, `prefetch_related`, `reverse::<C>()`) is i64-PK only at v1; a non-i64 PK returns a clean error rather than mis-binding.
+- **`ON DELETE` behaviour**: supported (see [`on_delete` / `on_update`](#referential-actions-on_delete--on_update)); only *changing* the action on an already-created table needs a hand-written migration.
+- **FK columns referencing a non-`i64` primary key**: the relation machinery (`select_related`, `prefetch_related`, `reverse::<C>()`) is i64-PK only at v1; a non-i64 PK returns a clean error rather than mis-binding.
 
 For the design rationale see [`arch.md`](../../../../arch.md) §M9 and the design spec `docs/superpowers/specs/2026-06-11-orm-relations-forms-and-joins-design.md`.
 
 ## Many-to-many relationships
 
-Declare a many-to-many with the `M2M<T>` field type. The framework auto-creates a junction table named `<parent_table>_<field>` with `(parent_id, child_id)` columns at migration time — no through-model to write by hand.
+Declare a many-to-many with the `M2M<T>` field type. The framework auto-creates a junction table named `<parent_table>_<field>` with `(parent_id, child_id)` columns at migration time, no through-model to write by hand.
 
 ```rust
 use umbra::orm::M2M;
@@ -416,7 +416,7 @@ pub struct Tag { pub id: i64, pub name: String }
 pub struct Post {
     pub id: i64,
     pub title: String,
-    // The M2M field carries no column on the post table — it's the
+    // The M2M field carries no column on the post table; it's the
     // junction `post_tags(parent_id, child_id)`. `#[sqlx(skip)]` +
     // `#[serde(skip)]` keep it out of the row decode / default serialise.
     #[sqlx(skip)]
@@ -425,13 +425,13 @@ pub struct Post {
 }
 ```
 
-The `M2M<T>` type is detected from the Rust type alone — no `#[umbra(m2m)]` marker is required. Add `#[umbra(m2m = "<child_table>")]` only when the child's table name isn't the snake_case default of `T` (e.g. the field's `T` is `Tag2` but the table is `tag`).
+The `M2M<T>` type is detected from the Rust type alone; no `#[umbra(m2m)]` marker is required. Add `#[umbra(m2m = "<child_table>")]` only when the child's table name isn't the snake_case default of `T` (e.g. the field's `T` is `Tag2` but the table is `tag`).
 
 <Callout type="info">
 First-class M2M (the `M2M<T>` field, `prefetch_related`, `join_related`, the form `ModelMultiChoice`, and `annotate_count`) is the shipped path. `examples/shop/plugins/content/src/models.rs` (`Post.tags: M2M<Tag>`) and `umbra_website/plugins/site_content/src/models.rs` (`BlogPost.tags: M2M<ContentTag>`) are real reference uses.
 </Callout>
 
-### Loading the related set — `prefetch_related("tags")`
+### Loading the related set: `prefetch_related("tags")`
 
 After the main query returns N parents, `prefetch_related("tags")` issues **one** batched join through the junction for all parents and populates each parent's `M2M.resolved` slot. See [prefetch_related for M2M batching](#prefetch_related-for-m2m-batching) below for the full shape and the `join_related` single-query alternative.
 
@@ -448,18 +448,18 @@ for p in &posts {
 }
 ```
 
-### Counting the related set — `annotate_count("tags")`
+### Counting the related set: `annotate_count("tags")`
 
-To get the size of each parent's M2M set in the *same* query (no second round-trip), use `annotate_count` — it counts junction rows per parent via a correlated subquery. See [Aggregates › Counting an M2M relation](/docs/v0.0.1/orm/aggregates#counting-an-m2m-relation):
+To get the size of each parent's M2M set in the *same* query (no second round-trip), use `annotate_count`. It counts junction rows per parent via a correlated subquery. See [Aggregates › Counting an M2M relation](/docs/v0.0.1/orm/aggregates#counting-an-m2m-relation):
 
 ```rust
 let rows = Post::objects()
-    .annotate_count("tags")   // COUNT(*) over post_tags → "tags_count"
+    .annotate_count("tags")   // COUNT(*) over post_tags as "tags_count"
     .fetch_annotated()
     .await?;
 ```
 
-### M2M in a form — `ModelMultiChoice`
+### M2M in a form: `ModelMultiChoice`
 
 `#[derive(umbra::forms::Form)]` on a model with an `M2M<T>` field renders a multi-`<select>` and writes the selected ids to the junction after the parent insert, atomically. See [Forms learn relations › M2M](/docs/v0.0.1/orm/forms-relations#m2m--modelmultichoice).
 
@@ -499,7 +499,7 @@ Limitations: parent type must be local (Rust's orphan rule on inherent impls); p
 
 ### Declared `ReverseSet<Child>` + batched `prefetch_related`
 
-The `_set()` accessor above fetches one parent's children on demand. When you have **N parents** and want their children without an N+1 fetch loop, declare a typed `ReverseSet<Child>` field on the Parent and batch-load it with `prefetch_related` — Django's `Author.objects.prefetch_related("books")`:
+The `_set()` accessor above fetches one parent's children on demand. When you have **N parents** and want their children without an N+1 fetch loop, declare a typed `ReverseSet<Child>` field on the Parent and batch-load it with `prefetch_related` (Django's `Author.objects.prefetch_related("books")`):
 
 ```rust
 use umbra::orm::{ForeignKey, ReverseSet};
@@ -523,7 +523,7 @@ pub struct Parent {
 pub struct Child {
     pub id: i64,
     pub label: String,
-    pub parent: ForeignKey<Parent>,   // ← the FK named by reverse_fk
+    pub parent: ForeignKey<Parent>,   // the FK named by reverse_fk
 }
 
 // One query for the parents, ONE batched query for ALL their children.
@@ -533,7 +533,7 @@ let parents = Parent::objects()
     .await?;
 
 for p in &parents {
-    // .resolved() is Some(&[Child]) after prefetch — an empty slice
+    // .resolved() is Some(&[Child]) after prefetch: an empty slice
     // for a childless parent, never None.
     for child in p.child_set.resolved().unwrap_or_default() {
         println!("{}: {}", p.name, child.label);
@@ -541,17 +541,17 @@ for p in &parents {
 }
 ```
 
-`prefetch_related` flows reverse-FK (`ReverseSet`), M2M, and reverse-O2O (`OneToOne<C>`) through the same dispatch — see [prefetch_related for M2M batching](#prefetch_related-for-m2m-batching).
+`prefetch_related` flows reverse-FK (`ReverseSet`), M2M, and reverse-O2O (`OneToOne<C>`) through the same dispatch. See [prefetch_related for M2M batching](#prefetch_related-for-m2m-batching).
 
-### Generic instance accessor — `instance.reverse::<Child>()`
+### Generic instance accessor: `instance.reverse::<Child>()`
 
-The macro-emitted `comment_set()` only exists because the Child's `ForeignKey<Parent>` is visible where the Child is derived. When the Parent lives in another crate (e.g. `AuthUser` in `umbra-auth`) the macro can't enumerate its children, so there's a zero-declaration runtime accessor on **every** model instance — Django's `post.comment_set.all()` reached generically. The Child type is named at the call site; the FK column on the Child is discovered at runtime from `Child::FIELDS`:
+The macro-emitted `comment_set()` only exists because the Child's `ForeignKey<Parent>` is visible where the Child is derived. When the Parent lives in another crate (e.g. `AuthUser` in `umbra-auth`) the macro can't enumerate its children, so there's a zero-declaration runtime accessor on **every** model instance, Django's `post.comment_set.all()` reached generically. The Child type is named at the call site; the FK column on the Child is discovered at runtime from `Child::FIELDS`:
 
 ```rust
 use umbra::prelude::*; // brings ReverseRelations into scope
 
 // Returns a real, chainable QuerySet<Comment> filtered to children
-// whose FK points at this instance — no ReverseSet field required.
+// whose FK points at this instance; no ReverseSet field required.
 let comments: Vec<Comment> = alice.reverse::<Comment>()?.fetch().await?;
 
 // Chains exactly like any QuerySet:
@@ -565,7 +565,7 @@ let recent = alice
 let n = alice.reverse::<Comment>()?.count().await?;
 ```
 
-`reverse::<C>()` returns `Result<QuerySet<C>, ReverseError>`: the FK discovery and parent-PK read are synchronous and fallible, so they resolve up front; the `QuerySet<C>` it yields stays lazy and awaitable. Discovery scans `C::FIELDS` for the field whose `fk_target` is this parent's table — exactly one match is required. **Zero** matches (`C` has no FK back) and **two or more** (ambiguous) both error loudly. For the ambiguous case, name the column explicitly:
+`reverse::<C>()` returns `Result<QuerySet<C>, ReverseError>`: the FK discovery and parent-PK read are synchronous and fallible, so they resolve up front; the `QuerySet<C>` it yields stays lazy and awaitable. Discovery scans `C::FIELDS` for the field whose `fk_target` is this parent's table; exactly one match is required. **Zero** matches (`C` has no FK back) and **two or more** (ambiguous) both error loudly. For the ambiguous case, name the column explicitly:
 
 ```rust
 // Child has TWO FKs to Parent (author AND reviewer):
@@ -586,7 +586,7 @@ let groups: Vec<Group> = Group::objects()
     .await?;
 
 for g in &groups {
-    // .resolved() returns Some(&[Tag]) after prefetch — even an empty
+    // .resolved() returns Some(&[Tag]) after prefetch: even an empty
     // slice for parents with no children, never None.
     for tag in g.tags.resolved().unwrap_or_default() {
         println!("{}: {}", g.name, tag.label);
@@ -600,7 +600,7 @@ Without `.prefetch_related(...)`, `M2M.resolved()` stays `None` and accessing th
 
 Scope: M2M, `ReverseSet<C>` reverse-FK collections, and `OneToOne<C>` (see [One-to-one relationships](#one-to-one-relationships)). All three flow through the same dispatch in `hydrate_prefetch_related`. i64 parent PK only (matches the rest of the M2M plumbing).
 
-## M2M via LEFT JOIN — `join_related("<m2m_field>")`
+## M2M via LEFT JOIN: `join_related("<m2m_field>")`
 
 An alternative to `prefetch_related` for M2M: instead of one extra round-trip, fold the M2M load into the main SELECT via a double LEFT JOIN through the junction. One query, but the row set multiplies by avg M2M cardinality (a parent with 3 tags appears as 3 rows pre-dedup).
 
@@ -612,7 +612,7 @@ let posts: Vec<Post> = Post::objects()
     .await?;
 
 for p in &posts {
-    // Same shape as prefetch_related — populated M2M slot.
+    // Same shape as prefetch_related: populated M2M slot.
     for tag in p.tags.resolved().unwrap_or_default() {
         println!("{}: {}", p.title, tag.name);
     }
@@ -628,7 +628,7 @@ Post::objects()
     .join_related("category")  // FK join (one-to-one with rows)
     .join_related("tags")      // M2M join (multiplies row count)
     .fetch().await?;
-// → each post has resolved category + tags slot in one round-trip.
+// each post has resolved category + tags slot in one round-trip.
 ```
 
 **When to choose which:**
@@ -639,14 +639,14 @@ Post::objects()
 | Row count | One per parent | parent × avg M2M cardinality |
 | Network bytes | Compact (no parent dup) | Wider rows × duplication |
 | Best for | List pages with non-trivial M2M cardinality | Hot path detail / small fixed-set M2Ms (tags-on-post) |
-| Multi-M2M | Independent — each is one query | Cartesian (m2m_a × m2m_b) — measurable cost |
+| Multi-M2M | Independent (each is one query) | Cartesian (m2m_a × m2m_b), measurable cost |
 
 For most list views `prefetch_related` is the right default. Reach for `join_related` when the second round-trip dominates AND the M2M cardinality is small + bounded.
 
 ## See also
 
-- [Deep joins](/docs/v0.0.1/orm/joins) — the full `join_related` / `inner_join_related` / `left_join_related` / `right_join_related` surface, INNER/LEFT auto-inference, nested `__` paths, and the M2M-hop chain.
-- [Aggregates and annotate](/docs/v0.0.1/orm/aggregates) — `annotate_count("rel")` / `annotate_count_where` / M2M counts in one query, including auto-discovery of an undeclared relation.
-- [Forms learn relations](/docs/v0.0.1/orm/forms-relations) — `#[derive(Form)]` turns `ForeignKey`/`OneToOne` into a `ModelChoice`, `M2M` into a `ModelMultiChoice`, and a `#[umbra(choices)]` enum into a `Select`.
-- [Forms (Form&lt;T&gt;)](/docs/v0.0.1/web/forms) — the general form derive, async `validate`, `ValidationErrors`, and the `Form<T>` extractor.
-- [Column types](/docs/v0.0.1/orm/column-types) — `ForeignKey<T>` DDL, `#[umbra(choices)]` enums, and the `default` literal rule.
+- [Deep joins](/docs/v0.0.1/orm/joins): the full `join_related` / `inner_join_related` / `left_join_related` / `right_join_related` surface, INNER/LEFT auto-inference, nested `__` paths, and the M2M-hop chain.
+- [Aggregates and annotate](/docs/v0.0.1/orm/aggregates): `annotate_count("rel")` / `annotate_count_where` / M2M counts in one query, including auto-discovery of an undeclared relation.
+- [Forms learn relations](/docs/v0.0.1/orm/forms-relations): `#[derive(Form)]` turns `ForeignKey`/`OneToOne` into a `ModelChoice`, `M2M` into a `ModelMultiChoice`, and a `#[umbra(choices)]` enum into a `Select`.
+- [Forms (Form&lt;T&gt;)](/docs/v0.0.1/web/forms): the general form derive, async `validate`, `ValidationErrors`, and the `Form<T>` extractor.
+- [Column types](/docs/v0.0.1/orm/column-types): `ForeignKey<T>` DDL, `#[umbra(choices)]` enums, and the `default` literal rule.

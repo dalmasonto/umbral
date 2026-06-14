@@ -262,11 +262,13 @@ pub struct TenantUser {
 
 ### Step 2 - implement UserModel
 
-`UserModel` requires exactly four methods. The flag methods (`is_active`, `is_staff`, `is_superuser`) have default implementations that return safe values, so you only override them when your struct actually stores them.
+`UserModel` requires four methods. The flag methods (`is_active`, `is_staff`, `is_superuser`) have default implementations that return safe values, so you only override them when your struct actually stores them.
+
+`id()` returns `<Self as Model>::PrimaryKey`, the type `#[derive(Model)]` infers from your `id` field (`i64`, `uuid::Uuid`, `String`, ...). For an `i64` PK the body is just `self.id`.
 
 ```rust
 impl UserModel for TenantUser {
-    fn id(&self) -> i64 { self.id }
+    fn id(&self) -> <Self as umbra::orm::Model>::PrimaryKey { self.id }
     fn username(&self) -> &str { &self.username }
     fn password_hash(&self) -> &str { &self.password_hash }
     fn set_password_hash(&mut self, hash: String) { self.password_hash = hash; }
@@ -281,7 +283,8 @@ The full `UserModel` surface:
 
 | Method | Required | Default | Used by |
 |---|---|---|---|
-| `id() -> i64` | yes | - | `set_password` WHERE clause |
+| `id() -> <Self as Model>::PrimaryKey` | yes | - | `set_password` WHERE clause |
+| `id_string() -> String` | no | PK's `Display` | sessions / REST `Identity` user id |
 | `username() -> &str` | yes | - | `authenticate` SELECT |
 | `password_hash() -> &str` | yes | - | `authenticate` verify |
 | `set_password_hash(String)` | yes | - | `set_password` in-place update |
@@ -304,7 +307,7 @@ pub struct EmailUser {
 }
 
 impl UserModel for EmailUser {
-    fn id(&self) -> i64 { self.id }
+    fn id(&self) -> <Self as umbra::orm::Model>::PrimaryKey { self.id }
     fn username(&self) -> &str { &self.email }   // ← email-as-handle
     fn password_hash(&self) -> &str { &self.password_hash }
     fn set_password_hash(&mut self, hash: String) { self.password_hash = hash; }
@@ -318,19 +321,13 @@ The framework never assumes your handle column is called `username`. The only re
 
 ### User-id type and the permissions plugin
 
-`UserModel::id()` returns `i64` today. The framework's stored-id surfaces are PK-agnostic at the storage layer: `umbra-sessions` stores `user_id` as `Option<String>` (the PK stringified, so a UUID or i64 both round-trip), and `Identity` from `umbra-rest` carries `user_id: String`. A custom user model with a `uuid::Uuid` PK isn't fully supported through the `UserModel` trait's `id()` return yet; a follow-up generalises `id()` to an associated `Pk` type.
+`UserModel::id()` returns the model's typed `PrimaryKey`, so a `uuid::Uuid` or `String` PK is supported directly. The stored-id surfaces are PK-agnostic: `umbra-sessions` stores `user_id` as `Option<String>` (the PK stringified, so a UUID or i64 both round-trip), and `Identity` from `umbra-rest` carries `user_id: String`. The trait's `id_string()` does that stringification for you using the PK's `Display`.
 
-In the meantime, `umbra-permissions` is PK-agnostic - its `user_id` columns are `TEXT`, and `has_perm` / `user_perms` take `&str`. Callers stringify whatever their user PK is at the perm-call boundary:
+`umbra-permissions` is PK-agnostic too: its `user_id` columns are `TEXT`, and `has_perm` / `user_perms` take `&str`. Pass the stringified PK at the perm-call boundary:
 
 ```rust
-// i64 PK (today's AuthUser):
-has_perm(&user.id().to_string(), "blog.publish_post").await?;
-
-// UUID PK (after the UserModel generalisation lands):
-has_perm(&user.id().to_string(), "blog.publish_post").await?;
+has_perm(&user.id_string(), "blog.publish_post").await?;
 ```
-
-So as soon as you can hold a `Uuid`/`String` user PK in your custom struct (today: by hand-rolling around `UserModel::id()`'s i64 return), the permissions plugin already accepts it.
 
 ### Step 3 - wire the plugin
 

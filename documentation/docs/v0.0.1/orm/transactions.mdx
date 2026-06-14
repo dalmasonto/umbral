@@ -157,7 +157,7 @@ Post::objects()
     .await?;
 ```
 
-Wired terminals: `Manager::create`, `Manager::bulk_create`, `QuerySet::update_values`, `QuerySet::delete`. Other write terminals (`save`, `delete_instance`, `upsert`, `get_or_create`, `update_expr`) are single-statement at the DB level — an explicit BEGIN/COMMIT around them would add overhead without changing observable semantics, so they currently ignore the flag.
+Wired terminals: `Manager::create`, `Manager::bulk_create`, `QuerySet::update_values`, `QuerySet::delete`. Other write terminals (`save`, `delete_instance`, `upsert`, `get_or_create`, `update_expr`) are single-statement at the DB level. An explicit BEGIN/COMMIT around them would add overhead without changing observable semantics, so they currently ignore the flag.
 
 ## Builder default: `atomic_transactions(true)`
 
@@ -186,7 +186,7 @@ Post::objects()
 
 ## `.atomic()` and `.on_tx()` are mutually exclusive
 
-`.on_tx(tx)` already runs your statement inside an open transaction. Calling `.atomic()` alongside it would try to start a second, separate transaction on a different connection — which would deadlock on backends without nested transactions. The framework documents `.on_tx()` as the winner: when both are set, `.on_tx()` runs and `.atomic()` is silently a no-op for that call.
+`.on_tx(tx)` already runs your statement inside an open transaction. Calling `.atomic()` alongside it would try to start a second, separate transaction on a different connection, which would deadlock on backends without nested transactions. The framework documents `.on_tx()` as the winner: when both are set, `.on_tx()` runs and `.atomic()` is silently a no-op for that call.
 
 Reach for `.on_tx(tx)` when you want several statements to commit or roll back together. Reach for `.atomic()` when you want one statement protected without writing a closure.
 

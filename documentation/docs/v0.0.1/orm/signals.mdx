@@ -17,8 +17,8 @@ ORM signals use a `<event>:<table>` shape so the built-in set is namespaced away
 
 | Name | Fired by | Payload |
 |---|---|---|
-| `pre_save:<table>` | `Manager::save` (typed) **AND** `DynQuerySet::insert_json` (dynamic) — before INSERT or UPDATE | `{ instance, created, actor }` |
-| `post_save:<table>` | `Manager::save` (typed) **AND** `DynQuerySet::insert_json` (dynamic) — after, with the DB read-back row | `{ instance, created, actor }` |
+| `pre_save:<table>` | `Manager::save` (typed) **AND** `DynQuerySet::insert_json` (dynamic), before INSERT or UPDATE | `{ instance, created, actor }` |
+| `post_save:<table>` | `Manager::save` (typed) **AND** `DynQuerySet::insert_json` (dynamic), after, with the DB read-back row | `{ instance, created, actor }` |
 | `pre_delete:<table>` | `Manager::delete_instance` (before) | `{ instance, actor }` |
 | `post_delete:<table>` | `Manager::delete_instance` (after) | `{ instance, actor }` |
 | `bulk_post_save:<table>` | `bulk_create`, `update_values`, `update_expr` (typed) **AND** `DynQuerySet::update_json` (dynamic) | `{ ids, created, actor }` |
@@ -29,23 +29,23 @@ User-defined signals keep their own namespace. The `<event>:<table>` prefix on O
 
 ### Typed and dynamic paths fire the same signals (gaps #77)
 
-`DynQuerySet` is the runtime-typed ORM surface that REST endpoints (`umbra-rest`) and admin form submits (`umbra-admin`) write through. Every signal in the table above fires from BOTH the typed `Manager` / `QuerySet` paths AND the dynamic `DynQuerySet::insert_json` / `update_json` / `delete` paths — so an audit-log subscriber on `post_save:order` sees writes from a typed handler, a REST `POST /api/order/`, and an admin form-create alike. The signal name + payload shape are identical across surfaces.
+`DynQuerySet` is the runtime-typed ORM surface that REST endpoints (`umbra-rest`) and admin form submits (`umbra-admin`) write through. Every signal in the table above fires from BOTH the typed `Manager` / `QuerySet` paths AND the dynamic `DynQuerySet::insert_json` / `update_json` / `delete` paths, so an audit-log subscriber on `post_save:order` sees writes from a typed handler, a REST `POST /api/order/`, and an admin form-create alike. The signal name + payload shape are identical across surfaces.
 
-PK shape: the `instance` JSON and `ids` array carry the row's primary key in whatever shape the model declares (`i64`, `String`, `Uuid`). Subscribers that index on PK should read the value as a `serde_json::Value` rather than assuming `i64` — the framework's planned `PrimaryKey` refactor will lift the rest of the i64-hardcoded surfaces, and signal subscribers should already be forward-compatible.
+PK shape: the `instance` JSON and `ids` array carry the row's primary key in whatever shape the model declares (`i64`, `String`, `Uuid`). Subscribers that index on PK should read the value as a `serde_json::Value` rather than assuming `i64`. The framework's planned `PrimaryKey` refactor will lift the rest of the i64-hardcoded surfaces, and signal subscribers should already be forward-compatible.
 
 ## Subscribing
 
 ```rust
 use umbra::signals::{subscribe, subscribe_async};
 
-// Sync handler — runs inline during emit().
+// Sync handler: runs inline during emit().
 subscribe("post_save:post", |payload| {
     let actor = &payload["actor"];
     let id = payload["instance"]["id"].as_i64();
     tracing::info!(?actor, ?id, "post saved");
 });
 
-// Async handler — awaited in series after the sync handlers.
+// Async handler: awaited in series after the sync handlers.
 subscribe_async("post_delete:post", |payload| async move {
     let id = payload["instance"]["id"].as_i64();
     redis::invalidate(&format!("post:{:?}", id)).await;
@@ -117,7 +117,7 @@ subscribe("m2m_changed:post_tags", |payload| {
 
 `set` reports the SQL-level reality: every prior child lands in `removed` (the DB DELETE wiped them all) and every supplied child lands in `added` (the DB INSERTs re-built the set). Subscribers that want a Django-style diff compute it in their handler.
 
-`clear` on an empty relation skips emission — there is nothing to report.
+`clear` on an empty relation skips emission: there is nothing to report.
 
 ## When `emit()` itself merges actor
 
@@ -143,7 +143,7 @@ Object payloads gain an `"actor"` key. Non-object payloads (rare) are wrapped as
 
 **Bulk signals fire even when zero rows were affected for INSERT, but skip for UPDATE / DELETE / clear.** `bulk_create([])` short-circuits before the SQL; an `update_values` that matches zero rows stays silent because a "zero-row" event is usually noise.
 
-**The actor task-local is in-process only too.** It does not propagate across `tokio::spawn` boundaries automatically — `tokio::task_local` resets when a new task starts. If you spawn from inside a `with_actor(...)` scope and want the actor to survive, capture `current_actor()` into a `let` and re-establish via `with_actor(actor, ...)` inside the spawned task.
+**The actor task-local is in-process only too.** It does not propagate across `tokio::spawn` boundaries automatically: `tokio::task_local` resets when a new task starts. If you spawn from inside a `with_actor(...)` scope and want the actor to survive, capture `current_actor()` into a `let` and re-establish via `with_actor(actor, ...)` inside the spawned task.
 
 ## See also
 

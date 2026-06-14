@@ -118,6 +118,7 @@ Flags:
 | Flag | Effect |
 |---|---|
 | `--path <dir>` | Parent directory the new project goes under. Defaults to `.`. |
+| `--local <path>` | Path-dep every umbra crate against a local repo checkout instead of the public `git = "..."` URL. For framework contributors iterating without a remote push. `startapp` and `startplugin` accept the same flag. |
 
 The command refuses to overwrite an existing directory - pick a
 different name or move the old one aside.

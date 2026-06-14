@@ -1,6 +1,6 @@
 ---
 title: Plugins are apps
-description: umbra's `Plugin` is the Django-app concept under a different name. The same thing your Django muscle memory expects.
+description: umbra's `Plugin` is the Django-app concept under a different name.
 sidebar_position: 2
 icon: package
 ---
@@ -8,7 +8,7 @@ icon: package
 If you came to umbra from Django and went looking for `INSTALLED_APPS`, you
 probably didn't find it. The reason is naming, not a missing feature.
 
-**A `Plugin` is an app.** The umbra `Plugin` trait carries every contribution a Django app makes - models, routes, system checks, an `on_ready` hook, middleware (via `wrap_router`), management commands (`commands()`), template directories, and embedded static files - through one trait, into one builder call. The built-in `umbra-auth` plugin is the
+**A `Plugin` is an app.** The umbra `Plugin` trait carries every contribution a Django app makes (models, routes, system checks, an `on_ready` hook, middleware via `wrap_router`, management commands via `commands()`, template directories, and embedded static files) through one trait, into one builder call. The built-in `umbra-auth` plugin is the
 canonical example: it ships a `User` model, password hashing helpers, a
 `Plugin` impl that registers the model under the `"auth"` namespace, and
 lives in its own crate under `plugins/umbra-auth/`. Structurally it's
@@ -24,8 +24,8 @@ identical to anything you'd write yourself.
 | `my_app/migrations/` | `plugins/my-app/migrations/<my-app>/` |
 | `my_app/urls.py` | `Plugin::routes()` returning an axum `Router` |
 | `apps.py` `ready()` | `Plugin::on_ready(&ctx)` |
-| `my_app/management/commands/` | `Plugin::commands()` - shipped; `umbra-auth` contributes `createsuperuser` this way (see the [Plugin trait page](/docs/v0.0.1/plugins/the-plugin-trait)) |
-| `auth_user`, `auth_permission` (Django's auto-prefixed table names) | Up to you - `#[umbra(table = "...")]` overrides the snake-case default |
+| `my_app/management/commands/` | `Plugin::commands()`; `umbra-auth` contributes `createsuperuser` this way (see the [Plugin trait page](/docs/v0.0.1/plugins/the-plugin-trait)) |
+| `auth_user`, `auth_permission` (Django's auto-prefixed table names) | Up to you. `#[umbra(table = "...")]` overrides the snake-case default |
 
 ## Where apps live
 

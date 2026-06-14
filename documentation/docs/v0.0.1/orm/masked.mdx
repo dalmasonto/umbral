@@ -1,6 +1,6 @@
 ---
 title: Masked fields (encrypt at rest)
-description: Encrypt sensitive columns at rest with public-key cryptography — GDPR-style field encryption with Masked<T>.
+description: Encrypt sensitive columns at rest with public-key cryptography. GDPR-style field encryption with Masked<T>.
 sidebar_position: 12
 tags: [orm, masked, encryption, gdpr, pii, security]
 ---
@@ -17,27 +17,27 @@ The full surface lives in `umbra::orm`: `Masked`, `MaskKeyring`, `MaskError`, `s
 
 ## How it works
 
-Encryption is **public-key** (X25519 sealed boxes — the libsodium `crypto_box_seal` construction). The public key encrypts; the private key decrypts. That asymmetry is the whole point:
+Encryption is **public-key** (X25519 sealed boxes, the libsodium `crypto_box_seal` construction). The public key encrypts; the private key decrypts. That asymmetry is the whole point:
 
 - **A write-only tier** that holds only the public key can store PII it can never read back. An edge service can capture a phone number that only a separate, locked-down service (holding the private key) can ever decrypt.
-- **Crypto-shredding**: deleting the private key renders every masked column permanently unrecoverable — a fast, bulk "right to be forgotten" that doesn't require touching a single row.
+- **Crypto-shredding**: deleting the private key renders every masked column permanently unrecoverable, a fast bulk "right to be forgotten" that doesn't require touching a single row.
 
 A `Masked` value is **plaintext in memory** when you construct it with `Masked::new(...)`, and **ciphertext** once it has been loaded from the database. The plaintext is only recoverable through an explicit `.reveal()` call.
 
 ### What each output shows
 
-This is the most important table on the page — masked data behaves differently depending on how it's accessed:
+This is the most important table on the page. Masked data behaves differently depending on how it's accessed:
 
 | Access | Result |
 |---|---|
-| `Debug` (`{:?}`) | `Masked(••••••)` — safe in logs |
-| `Display` (`{}`) | `••••••` — safe in templates |
+| `Debug` (`{:?}`) | `Masked(••••••)` (safe in logs) |
+| `Display` (`{}`) | `••••••` (safe in templates) |
 | serde / JSON output | **opaque ciphertext** (encrypt-on-serialize) |
 | `.reveal()` | the plaintext (needs the private key) |
 | the database column | base64 ciphertext (`TEXT`) |
 
 <Callout type="warning">
-serde output is **ciphertext, not the `••••••` marker**. This is load-bearing: the ORM write path binds INSERT values via `serde_json::to_value(instance)`, so whatever serde emits is what lands in the column — it *must* be the encrypted value. The plaintext therefore never leaves the process through serde. For a clean REST response, hide the field with the serializer's `.hide([...])`; `Debug` and `Display` stay redacted regardless, so logs and templates are safe by default.
+serde output is **ciphertext, not the `••••••` marker**. This is load-bearing: the ORM write path binds INSERT values via `serde_json::to_value(instance)`, so whatever serde emits is what lands in the column: it *must* be the encrypted value. The plaintext therefore never leaves the process through serde. For a clean REST response, hide the field with the serializer's `.hide([...])`; `Debug` and `Display` stay redacted regardless, so logs and templates are safe by default.
 </Callout>
 
 ## Set up keys
@@ -48,14 +48,14 @@ Generate a keypair once with the built-in CLI command:
 cargo run -- maskkeygen
 ```
 
-It prints two lines — add them to your environment (a `.env` file in dev, your secret manager in prod):
+It prints two lines. Add them to your environment (a `.env` file in dev, your secret manager in prod):
 
 ```bash
-UMBRA_MASK_PUBLIC_KEY=...   # encrypts — every tier that WRITES masked data needs it
-UMBRA_MASK_PRIVATE_KEY=...  # decrypts / reveal() — keep secret; deleting it crypto-shreds
+UMBRA_MASK_PUBLIC_KEY=...   # encrypts; every tier that WRITES masked data needs it
+UMBRA_MASK_PRIVATE_KEY=...  # decrypts / reveal(); keep secret; deleting it crypto-shreds
 ```
 
-The keyring is resolved **once** (an ambient `OnceLock`, like the DB pool), lazily from the environment on first use. You can also inject it explicitly — useful in tests, or when loading keys from a vault rather than env vars:
+The keyring is resolved **once** (an ambient `OnceLock`, like the DB pool), lazily from the environment on first use. You can also inject it explicitly, useful in tests, or when loading keys from a vault rather than env vars:
 
 ```rust
 use umbra::orm::{MaskKeyring, set_mask_keyring};
@@ -63,7 +63,7 @@ use umbra::orm::{MaskKeyring, set_mask_keyring};
 set_mask_keyring(MaskKeyring::from_base64(&public_b64, Some(&private_b64))?);
 ```
 
-A tier configured with **only** the public key can store masked data but not reveal it — `reveal()` returns `MaskError::NoPrivateKey`.
+A tier configured with **only** the public key can store masked data but not reveal it: `reveal()` returns `MaskError::NoPrivateKey`.
 
 ## Declaring and using a masked field
 
@@ -124,11 +124,11 @@ The `#[derive(Model)]` macro recognises `Masked<String>` and `Option<Masked<Stri
 
 ### You can't filter or sort by a masked column's value
 
-Each encryption uses a fresh ephemeral key, so the same plaintext seals to different ciphertext every time — `WHERE phone = '...'` can never match. Masked columns are for store-and-reveal, not querying. If you need to look something up by a sensitive value, store a separate non-reversible hash (e.g. SHA-256) in an indexed column and query that.
+Each encryption uses a fresh ephemeral key, so the same plaintext seals to different ciphertext every time: `WHERE phone = '...'` can never match. Masked columns are for store-and-reveal, not querying. If you need to look something up by a sensitive value, store a separate non-reversible hash (e.g. SHA-256) in an indexed column and query that.
 
 ### Masked fields are excluded from auto-generated forms
 
-A `Masked` field is treated as `#[umbra(noform)]` automatically — a struct can derive both `Model` and `umbra::forms::Form` with masked fields and they're simply skipped (no compile error, no manual attribute). They're considered **server-set**: set them in your handler with `Masked::new(value)`.
+A `Masked` field is treated as `#[umbra(noform)]` automatically: a struct can derive both `Model` and `umbra::forms::Form` with masked fields and they're simply skipped (no compile error, no manual attribute). They're considered **server-set**: set them in your handler with `Masked::new(value)`.
 
 This is deliberate. The generic form pipeline can't safely round-trip a secret on *edit*: it can't pre-fill the existing value (the stored value is ciphertext, and revealing it into an HTML input would defeat the point), and a blank resubmit is ambiguous between "no change" and "clear it". So rather than half-support a footgun, masked fields stay off forms.
 
@@ -148,7 +148,7 @@ A sealed box adds ~48 bytes (ephemeral public key + nonce + auth tag) before bas
 
 <Steps>
 <Step title="Erasure (right to be forgotten)">
-For a clean break across *all* masked data, destroy `UMBRA_MASK_PRIVATE_KEY` — every masked column becomes permanently unrecoverable (crypto-shredding), no row updates needed. For per-user erasure, overwrite or delete that user's rows as usual.
+For a clean break across *all* masked data, destroy `UMBRA_MASK_PRIVATE_KEY`: every masked column becomes permanently unrecoverable (crypto-shredding), no row updates needed. For per-user erasure, overwrite or delete that user's rows as usual.
 </Step>
 <Step title="Key rotation">
 Keep the old private key available, decrypt-with-old and re-encrypt-with-new in a one-off migration, then retire the old key. (A dedicated rotation command is a planned follow-up; today this is a manual pass.)

@@ -142,8 +142,7 @@ When `makemigrations` sees a model disappear from the snapshot and a new model a
 **Second pass - column-shape match.** For models that are unpaired after the first pass (different struct names on both sides), the autodetector checks whether the column shapes are bit-identical (same column names, types, nullable, FK target). If they match, it emits `RenameTable` and prints a warning to stderr so you can verify the intent:
 
 ```
-umbra makemigrations: rename detected (column-shape match): `foo` → `bar`
-- please verify this is a rename and not a coincidental column-shape match
+umbra makemigrations: rename detected (column-shape match): `foo` -> `bar` - please verify this is a rename and not a coincidental column-shape match between two unrelated models
 ```
 
 **No match.** If neither pass pairs a drop with a create, the autodetector falls back to plain `DropTable` + `CreateTable`.

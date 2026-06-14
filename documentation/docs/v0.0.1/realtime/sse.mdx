@@ -1,16 +1,16 @@
 ---
 title: Server-Sent Events
-description: Push data to one user or a whole room over SSE — notifications, live dashboards, presence — with zero polling.
+description: Push data to one user or a whole room over SSE: notifications, live dashboards, presence, with zero polling.
 sidebar_position: 1
 tags: [realtime, sse, websockets, push, notifications]
 ---
 
 # Real-time push (SSE)
 
-`umbra-realtime` pushes data from the server to connected clients — **to one user** or **to a named group/room** — without you tracking sockets by hand. Two transports share one targeting API: **SSE** (one-way server → client, proxy-friendly, `EventSource`) and **WebSocket** (bidirectional). SSE is the simplest and the default; reach for WebSocket when the client also needs to *send*.
+`umbra-realtime` pushes data from the server to connected clients, to one user or to a named group/room, without you tracking sockets by hand. Two transports share one targeting API: SSE (one-way server to client, proxy-friendly, `EventSource`) and WebSocket (bidirectional). SSE is the default; reach for WebSocket when the client also needs to send.
 
 <Callout type="info">
-A single instance needs no configuration. To run several instances behind a load balancer, point them at a shared Redis with `RealtimePlugin::redis(url)` (the `redis` feature) and `to_user(42)` routes across all of them — same API, see [Scaling across instances](scaling).
+A single instance needs no configuration. To run several instances behind a load balancer, point them at a shared Redis with `RealtimePlugin::redis(url)` (the `redis` feature) and `to_user(42)` routes across all of them. Same API; see [Scaling across instances](scaling).
 </Callout>
 
 ## Wiring
@@ -21,12 +21,12 @@ use umbra_realtime::RealtimePlugin;
 App::builder()
     .plugin(AuthPlugin::<AuthUser>::default())   // identity at handshake
     .plugin(SessionsPlugin::default())
-    .plugin(RealtimePlugin::default())           // mounts GET /realtime/sse
+    .plugin(RealtimePlugin::default())           // mounts /realtime/sse + /realtime/ws
 ```
 
 ## Sending
 
-From anywhere — a handler, a signal, a task — build a target and `send` a named event with a JSON payload:
+From anywhere (a handler, a signal, a task), build a target and `send` a named event with a JSON payload:
 
 ```rust
 use umbra_realtime::Realtime;
@@ -42,14 +42,14 @@ Realtime::broadcast().send("ping", &json!({})).await;
 | `to_group(name)` | every connection that joined that room |
 | `broadcast()` | every connection |
 
-`send` is **fire-and-forget** — it never blocks on socket I/O, so it's safe to call inside a request handler. A connection that can't keep up is skipped (best-effort), never back-pressured.
+`send` is fire-and-forget. It never blocks on socket I/O, so it's safe to call inside a request handler. A connection that can't keep up is skipped (best-effort), never back-pressured. When `RealtimePlugin` isn't installed, `send` is a no-op rather than a panic.
 
 ## Connecting (the browser)
 
 A client opens the stream and names the rooms it wants:
 
 ```js
-const es = new EventSource("/realtime/sse?groups=public:lobby,chat:123");
+const es = new EventSource("/realtime/sse?groups=public:lobby");
 
 es.addEventListener("message", (e) => {
   const data = JSON.parse(e.data);
@@ -61,11 +61,11 @@ es.addEventListener("notification", (e) => {
 });
 ```
 
-The connection's **user** is resolved from the session cookie at handshake, so `to_user(...)` finds it with no extra work.
+The connection's user is resolved from the session cookie at handshake, so `to_user(...)` finds it with no extra work.
 
 ## Group access: `GroupPolicy`
 
-Joining a room is gated — by default only `public:*` groups are allowed, so a client can't subscribe to `tenant:99` or `chat:123` it has no claim to (a rejected group fails the handshake with `403`). Grant access from the authenticated identity by supplying a policy:
+Joining a room is gated. By default only `public:*` groups are allowed, so a client can't subscribe to `tenant:99` or `chat:123` it has no claim to (a rejected group fails the handshake with `403`). Grant access from the authenticated identity by supplying a policy:
 
 ```rust
 struct MyPolicy;
@@ -104,16 +104,16 @@ RealtimePlugin::default().message_handler(Chat)
 ```
 
 ```js
-const ws = new WebSocket("ws://localhost:8000/realtime/ws?groups=chat:123");
+const ws = new WebSocket("ws://localhost:8000/realtime/ws?groups=public:lobby");
 ws.onmessage = (e) => { const { event, data } = JSON.parse(e.data); /* … */ };
-ws.send(JSON.stringify({ room: "chat:123", body: "hi" }));
+ws.send(JSON.stringify({ room: "public:lobby", body: "hi" }));
 ```
 
-The same `GroupPolicy` gate applies at the WS handshake (a denied group fails the upgrade). The default `MessageHandler` ignores inbound frames — fine for push-only apps.
+The same `GroupPolicy` gate applies at the WS handshake (a denied group fails the upgrade). The default `MessageHandler` ignores inbound frames, which is fine for push-only apps.
 
 ## Model fan-out (zero polling)
 
-Push automatically whenever a model changes — the "live dashboard" story — by bridging the ORM's [signals](../orm/signals) to a real-time send. `on_model::<T>()` subscribes to `T`'s `post_save` / `post_delete`; each fire hands you a `ModelEvent` (table, action, the row as JSON, the actor):
+Push automatically whenever a model changes, the "live dashboard" story, by bridging the ORM's [signals](../orm/signals) to a real-time send. `on_model::<T>()` subscribes to `T`'s `post_save` / `post_delete`; each fire hands you a `ModelEvent` (table, action, the row as JSON, the actor):
 
 ```rust
 use umbra_realtime::{ModelEvent, Realtime, RealtimePlugin};
@@ -130,10 +130,12 @@ RealtimePlugin::default()
     })
 ```
 
-`on_table("name", ...)` is the untyped form (when you don't have the model type handy). The handler runs server-side on every write — no client polling, no glue code.
+`on_table("name", ...)` is the untyped form (when you don't have the model type handy). The handler runs server-side on every write: no client polling, no glue code.
 
 ## See also
 
-- [Signals](../orm/signals) — the `post_save`/`post_delete` events this bridges.
-- [Scaling across instances](scaling) — the Redis pub/sub backplane for multi-instance deployments.
+- [Signals](../orm/signals) for the `post_save`/`post_delete` events this bridges.
+- [Scaling across instances](scaling) for the Redis pub/sub backplane.
 - Design: `docs/superpowers/specs/2026-06-13-umbra-realtime-design.md`.
+</content>
+</invoke>

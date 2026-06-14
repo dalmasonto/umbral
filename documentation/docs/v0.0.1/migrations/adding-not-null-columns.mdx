@@ -4,17 +4,15 @@ description: How to safely add NOT NULL columns to populated tables without losi
 sidebar_position: 4
 ---
 
-import { Callout } from '@specra/components';
-
 Adding a new NOT NULL column to a table that already has rows is the most common "your migration won't apply" scenario. This page covers the safe paths umbra knows about and the backend differences you'll hit.
 
 ## The constraint, in one paragraph
 
-Both SQLite and Postgres refuse to `ALTER TABLE x ADD COLUMN y NOT NULL` against existing rows unless they're told *what value to put in y for those rows*. SQLite is stricter — it also refuses non-constant defaults like `CURRENT_TIMESTAMP` in `ADD COLUMN`. Postgres allows `DEFAULT now()` and backfills inline. The migration engine handles both transparently for the timestamp columns; for everything else you pick the backfill shape.
+Both SQLite and Postgres refuse to `ALTER TABLE x ADD COLUMN y NOT NULL` against existing rows unless they're told *what value to put in y for those rows*. SQLite is stricter: it also refuses non-constant defaults like `CURRENT_TIMESTAMP` in `ADD COLUMN`. Postgres allows `DEFAULT now()` and backfills inline. The migration engine handles both transparently for the timestamp columns; for everything else you pick the backfill shape.
 
 ## The three safe shapes
 
-### 1. `Option<T>` — nullable, no backfill needed
+### 1. `Option<T>`: nullable, no backfill needed
 
 ```rust
 pub struct Customer {
@@ -25,7 +23,7 @@ pub struct Customer {
 
 The column is `NULL`-permitting, existing rows get `NULL`, no migration drama. Use this when the new field genuinely doesn't apply to historical rows (soft-delete timestamps, optional metadata, etc.).
 
-### 2. `#[umbra(default = "...")]` — constant default
+### 2. `#[umbra(default = "...")]`: constant default
 
 ```rust
 pub struct Order {
@@ -37,9 +35,9 @@ pub struct Order {
 }
 ```
 
-The default lands in the DDL as `DEFAULT 0` / `DEFAULT 0` (booleans are translated to integer literals so SQLite doesn't see `DEFAULT 'false'`). The DB backfills existing rows automatically. Works on both backends.
+Each default lands in the DDL verbatim (`DEFAULT 0` for `refund_count`). Boolean defaults are translated to integer literals on SQLite, so `false` renders as `DEFAULT 0`, not `DEFAULT 'false'`. The DB backfills existing rows automatically. Works on both backends.
 
-### 3. `#[umbra(auto_now)]` / `#[umbra(auto_now_add)]` — timestamp columns
+### 3. `#[umbra(auto_now)]` / `#[umbra(auto_now_add)]`: timestamp columns
 
 ```rust
 pub struct Customer {
@@ -53,12 +51,12 @@ pub struct Customer {
 
 Special-cased by the engine because timestamp defaults differ across backends:
 
-- **Postgres**: emits `DEFAULT now() NOT NULL` in the `ALTER` — backfilled inline by the DB.
+- **Postgres**: emits `DEFAULT now() NOT NULL` in the `ALTER`, backfilled inline by the DB.
 - **SQLite**: emits a **two-statement** migration:
-  1. `ALTER TABLE x ADD COLUMN y` (nullable, no default — SQLite refuses non-constant defaults)
+  1. `ALTER TABLE x ADD COLUMN y` (nullable, no default, since SQLite refuses non-constant defaults)
   2. `UPDATE x SET y = datetime('now') WHERE y IS NULL`
 
-After step 2 every existing row has a sensible value. The column ends up **NULL-permitting at the SQLite layer**; Rust still types it as `DateTime<Utc>` (not Option), and every INSERT through the ORM supplies a value via the macro-emitted auto_now arm. Direct-SQL writers could theoretically write NULL — see "Caveats" below.
+After step 2 every existing row has a sensible value. The column ends up **NULL-permitting at the SQLite layer**; Rust still types it as `DateTime<Utc>` (not Option), and every INSERT through the ORM supplies a value via the macro-emitted auto_now arm. Direct-SQL writers could theoretically write NULL; see "Caveats" below.
 
 <Callout type="note" title="Why the SQLite asymmetry?">
 SQLite's `ALTER TABLE ADD COLUMN` requires a **constant** default. `CURRENT_TIMESTAMP` is computed at evaluation time, not constant, so SQLite rejects it with "Cannot add a column with non-constant default". The full table-rebuild dance (CREATE new, COPY, DROP, RENAME) would let us keep DB-level NOT NULL, but it's heavy machinery for a guarantee Rust already provides at the type level. We picked the lighter compromise.
@@ -66,26 +64,26 @@ SQLite's `ALTER TABLE ADD COLUMN` requires a **constant** default. `CURRENT_TIME
 
 ## What NOT to do
 
-- **Don't `rm -f *.db`** to dodge a failing migration. The framework's CLAUDE.md spells this out — the failure IS the test, deleting your DB hides it and destroys real data.
+- **Don't `rm -f *.db`** to dodge a failing migration. The framework's CLAUDE.md spells this out: the failure IS the test, deleting your DB hides it and destroys real data.
 - **Don't delete migration files** in `migrations/<plugin>/` to "regenerate cleanly." The history is part of the schema's audit trail; older deploys depend on it.
-- **Don't `cargo run -- makemigrations` and ignore the diff**. Read the generated JSON — if you see an `AddColumn` with `nullable: false`, no `default`, and no `auto_now*` flag, the migration will fail to apply on a populated DB.
+- **Don't `cargo run -- makemigrations` and ignore the diff**. Read the generated JSON. If you see an `AddColumn` with `nullable: false`, no `default`, and no `auto_now*` flag, the migration will fail to apply on a populated DB.
 
 ## Recovering from a failed ALTER
 
 If a migration failed mid-flight:
 
-1. **Don't panic.** Failed `ALTER TABLE` is transactional on both backends — your table is unchanged.
+1. **Don't panic.** Failed `ALTER TABLE` is transactional on both backends; your table is unchanged.
 2. **Inspect** the most recent migration file under `migrations/<plugin>/` to understand what was attempted.
 3. **Adjust the model** to one of the three safe shapes above.
-4. **Delete the failed migration file** (it's the last one, never applied). You're not removing history — the migration was never recorded as applied in `umbra_migrations`.
+4. **Delete the failed migration file** (it's the last one, never applied). You're not removing history; the migration was never recorded as applied in `umbra_migrations`.
 5. **Re-run** `cargo run -- makemigrations` to regenerate the operation against your fix, then `cargo run -- migrate` to apply.
 
 <Callout type="warning" title="Step 4 is the exception to 'never delete migration files'">
-The general rule (CLAUDE.md) is "never delete migration files." The exception is a migration that **failed to apply** — it lives on disk but was never recorded in the tracking table. Re-running `makemigrations` after fixing the model would create a *second* migration alongside the broken one; the engine would attempt both. Deleting the broken one first keeps history clean.
+The general rule (CLAUDE.md) is "never delete migration files." The exception is a migration that **failed to apply**: it lives on disk but was never recorded in the tracking table. Re-running `makemigrations` after fixing the model would create a *second* migration alongside the broken one; the engine would attempt both. Deleting the broken one first keeps history clean.
 </Callout>
 
 ## Caveats
 
-- **Direct-SQL writers can NULL out a "NOT NULL" auto_now column on SQLite** when that column was added via `ALTER` to a populated table. The Rust ORM enforces non-null on every INSERT/UPDATE; nothing downstream of the ORM sees NULL in practice. If you have raw-SQL writers (analytics jobs, third-party tools), audit them or migrate the column via a table rebuild — the engine doesn't do that automatically.
-- **Postgres users get the cleaner story**: every auto_now column keeps DB-level NOT NULL whether added at CREATE or ALTER time. Prefer Postgres for production deploys (the framework already recommends this — see `arch.md §9`).
+- **Direct-SQL writers can NULL out a "NOT NULL" auto_now column on SQLite** when that column was added via `ALTER` to a populated table. The Rust ORM enforces non-null on every INSERT/UPDATE; nothing downstream of the ORM sees NULL in practice. If you have raw-SQL writers (analytics jobs, third-party tools), audit them or migrate the column via a table rebuild; the engine doesn't do that automatically.
+- **Postgres users get the cleaner story**: every auto_now column keeps DB-level NOT NULL whether added at CREATE or ALTER time. Prefer Postgres for production deploys (the framework already recommends this; see `arch.md §9`).
 - **`#[umbra(default = "...")]` strings are passed through verbatim to the DDL** as literal SQL. Use single quotes around string defaults yourself if needed (`default = "'pending'"`); booleans get auto-translated to `1`/`0` for SQLite.

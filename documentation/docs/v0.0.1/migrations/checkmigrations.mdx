@@ -10,7 +10,7 @@ tags: [migrations, cli, deployment]
 When you deploy multiple times a day, a migration runs while the **old** code is still serving traffic. Some schema changes are fine in that window (adding a nullable column); others break it (dropping a column the old code still reads) or aren't atomic with the code rollout (renaming a table). `umbra checkmigrations` walks every **pending** operation and tags it so you know which is which before you ship.
 
 <Callout type="info">
-This is read-only triage — it applies nothing. `migrate` still runs every operation exactly as written. `checkmigrations` is the gate you put in CI *before* `migrate`.
+This is read-only triage; it applies nothing. `migrate` still runs every operation exactly as written. `checkmigrations` is the gate you put in CI *before* `migrate`.
 </Callout>
 
 ## Running it
@@ -23,10 +23,10 @@ umbra checkmigrations
 Checking 4 operation(s) across 2 pending migration(s)...
 
 UNSAFE (1):
-  [DROP COL] app/0007_drop_legacy — drops column `order.legacy_total` and its data — old code reading it breaks. Expand-contract: stop writing it, deploy, then drop
+  [DROP COL] app/0007_drop_legacy: drops column `order.legacy_total` and its data; old code reading it breaks. Expand-contract: stop writing it, deploy, then drop
 
 WARNING (1):
-  [RENAME COL] app/0006_rename — renames column `order.total` → `amount` — old code references `total`. Expand-contract: add `amount`, backfill, switch reads, then drop `total`
+  [RENAME COL] app/0006_rename: renames column `order.total` -> `amount`; old code references `total`. Expand-contract: add `amount`, backfill, switch reads, then drop `total`
 
 Summary: 2 safe, 1 warning, 1 unsafe.
 ```
@@ -40,20 +40,20 @@ umbra checkmigrations --strict
 ## The three tiers
 
 <Steps>
-<Step title="SAFE — additive and backward-compatible">
+<Step title="SAFE: additive and backward-compatible">
 `CREATE TABLE`, a new M2M join table, and adding a **nullable** column (or a NOT NULL column **with** a default). Old code keeps working untouched.
 </Step>
-<Step title="WARNING — review before deploying">
-`RENAME TABLE` / `RENAME COLUMN` (not atomic with a code deploy — one code version references the missing name), `ALTER COLUMN` (a type change rewrites the column and locks a large table; a NOT NULL tightening fails on existing NULLs), and adding a NOT NULL column **with no default** (old inserts that omit it fail).
+<Step title="WARNING: review before deploying">
+`RENAME TABLE` / `RENAME COLUMN` (not atomic with a code deploy, since one code version references the missing name), `ALTER COLUMN` (a type change rewrites the column and locks a large table; a NOT NULL tightening fails on existing NULLs), and adding a NOT NULL column **with no default** (old inserts that omit it fail).
 </Step>
-<Step title="UNSAFE — destructive or irreversible">
+<Step title="UNSAFE: destructive or irreversible">
 `DROP TABLE`, `DROP COLUMN`, `DROP` of an M2M join table. Data is gone the moment it runs, and old code reading the dropped surface errors immediately.
 </Step>
 </Steps>
 
 ## The expand-contract pattern
 
-The notes on each non-safe operation point at expand-contract — the standard way to make a breaking change in two safe deploys instead of one breaking one:
+The notes on each non-safe operation point at expand-contract, the standard way to make a breaking change in two safe deploys instead of one breaking one:
 
 1. **Expand.** Add the new shape alongside the old (add the new column, dual-write to both). This migration is `SAFE`.
 2. **Migrate the data and switch reads** to the new shape, then deploy the code that only uses it.
@@ -75,6 +75,6 @@ if blockers > 0 {
 
 ## See also
 
-- [Adding NOT NULL columns to existing tables](./adding-not-null-columns) — the safe backfill path for the WARNING case.
-- [Recovering from migration drift](./migration-drift) — when the tracking table and disk disagree.
+- [Adding NOT NULL columns to existing tables](./adding-not-null-columns): the safe backfill path for the WARNING case.
+- [Recovering from migration drift](./migration-drift): when the tracking table and disk disagree.
 - `crates/umbra-core/src/migrate.rs` (`classify_operation`) for the full rule set.

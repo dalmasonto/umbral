@@ -51,11 +51,12 @@ you supply.
 ## Excluding models
 
 By default the plugin exposes every model that `umbra-rest` exposes.
-Built-in framework tables (`umbra_migrations`, `umbra_sessions`,
-`umbra_users`, and related auth tables) are always blocked regardless of any
-configuration.
+The framework's internal tables (`auth_user`, `session`, `umbra_migrations`,
+the `permissions_*` tables, `task_row`, `admin_audit_log`) sit on `umbra-rest`'s
+default block-list, so they stay out of the spec unless you opt them back in
+on `RestPlugin`.
 
-To block additional models:
+To block additional models from the spec only:
 
 ```rust
 OpenApiPlugin::default()
@@ -121,7 +122,7 @@ exclude it from OpenAPI (or vice versa), the spec will reference an endpoint
 that returns 404 - exclude consistently on both plugins to stay in sync.
 
 <Callout type="info">
-Field-level `hide` is honored too. A column hidden in REST (`ResourceConfig::hide` / `RestPlugin::hide_model`) is excluded from the model schema, dropped from the `?fields=` picker, and never shown in Swagger UI — so the spec matches what the API actually returns. A `password_hash` you hide from responses won't leak into the generated documentation either.
+Field-level `hide` is honored too. A column hidden in REST (`ResourceConfig::hide` / `RestPlugin::hide_model`) is excluded from the model schema, dropped from the `?fields=` picker, and never shown in Swagger UI, so the spec matches what the API actually returns. A `password_hash` you hide from responses won't leak into the generated documentation either.
 </Callout>
 
 If you want framework-wide trailing-slash normalisation rather than relying on
@@ -137,7 +138,7 @@ See [Trailing-slash redirect policy](../web/trailing-slash) for details.
 
 ## Security schemes
 
-When the configured `RestPlugin` auth chain contributes a `securitySchemes` entry (for example `BearerAuthentication`), the plugin emits a `components.securitySchemes` block plus a global `security` array referencing each scheme. The global security is an OR — any one scheme satisfies the request, matching how `ChainAuthentication([Session, Bearer])` actually behaves at runtime. If the wired auth class contributes no scheme (the default `NoAuthentication`), the spec carries no `securitySchemes` block.
+When the configured `RestPlugin` auth chain contributes a `securitySchemes` entry (for example `BearerAuthentication`), the plugin emits a `components.securitySchemes` block plus a global `security` array referencing each scheme. The global security is an OR: any one scheme satisfies the request, matching how `ChainAuthentication([Session, Bearer])` actually behaves at runtime. If the wired auth class contributes no scheme (the default `NoAuthentication`), the spec carries no `securitySchemes` block.
 
 ## What's not in v1
 

@@ -5,14 +5,9 @@ sidebar_position: 1
 icon: info
 ---
 
-**Umbra** is a batteries-included web framework for Rust, shaped like Django.
-You declare your data and you get migrations, CRUD, an admin, and an optional
-REST API almost for free. The difference is that you get Rust's compile-time
-guarantees instead of having to hope at runtime.
+**Umbra** is a batteries-included web framework for Rust, shaped like Django. You declare your data and you get migrations, CRUD, an admin, and an optional REST API almost for free, with Rust's compile-time guarantees instead of runtime hope.
 
-The name is Latin for *shadow*. umbra is a separate Rust framework inspired
-by Django's shape and ergonomics - it isn't a port and shares no code with
-the Django project.
+The name is Latin for *shadow*. umbra is a separate Rust framework inspired by Django's shape and ergonomics. It isn't a port and shares no code with Django.
 
 <Callout type="info">
 Umbra is pre-alpha. The architecture and specs are settled and the milestones are landing in code. Pages get added here as features ship. Today there's enough to declare a model, run managed migrations, port an existing database via `inspectdb`, wire the built-in plugins (auth, sessions, admin, REST, OpenAPI, tasks, permissions, security, static), render HTML through the templates substrate, and drive the whole thing through the project's `cargo run -- <command>` CLI (plus the global `umbra` scaffolding binary from `cargo install umbra-cli`). Start at [Your first app](/docs/v0.0.1/getting-started/your-first-app).
@@ -20,17 +15,12 @@ Umbra is pre-alpha. The architecture and specs are settled and the milestones ar
 
 ## Why Umbra exists
 
-Web development in Rust is unassembled. Unlike Django or Rails, there's no
-mainstream "just works" path. Every team picks and wires a web framework, a
-database layer, a migration tool, serialization, auth, and background jobs.
+Web development in Rust is unassembled. Unlike Django or Rails, there's no mainstream "just works" path. Every team picks and wires a web framework, a database layer, a migration tool, serialization, auth, and background jobs.
 
 Two things suffer:
 
-- **Greenfield productivity.** A basic CRUD/REST API takes days of plumbing
-  before you can write any real code.
-- **Porting.** Moving an existing API to Rust means re-deriving the schema,
-  the models, and the conventions by hand. There's no `inspectdb`, no managed
-  migrations, no obvious on-ramp.
+- **Greenfield productivity.** A basic CRUD/REST API takes days of plumbing before you write any real code.
+- **Porting.** Moving an existing API to Rust means re-deriving the schema, the models, and the conventions by hand. There's no `inspectdb`, no managed migrations, no obvious on-ramp.
 
 Umbra targets that on-ramp.
 
@@ -61,9 +51,7 @@ Umbra targets that on-ramp.
 
 ## What you write
 
-A model is a struct. A migration is generated. A handler reads ambient data.
-This is the day-to-day feel. It's not working code yet, but it's the target
-shape:
+A model is a struct. A migration is generated. A handler reads ambient data. This is the target shape:
 
 ```rust
 use umbra::prelude::*;
@@ -87,18 +75,13 @@ async fn list_published() -> Result<Json<Vec<Post>>> {
 }
 ```
 
-No `State<DbPool>` in the handler signature. No `axum::` types. The ORM is
-ambient; the request body, params, and session are explicit arguments.
+No `State<DbPool>` in the handler signature. No `axum::` types. The ORM is ambient; the request body, params, and session are explicit arguments.
 
 ## Status
 
-Umbra is **pre-alpha**. There's no published crate yet. The architecture, the
-PRD, and the per-subsystem specs are being written first, and implementation
-follows milestone by milestone. As features land, each gets a doc page here.
+Umbra is **pre-alpha**. There's no published crate yet. The architecture, the PRD, and the per-subsystem specs come first, and implementation follows milestone by milestone. As features land, each gets a doc page here.
 
-For the long version, read the design specs in the repository root: `arch.md`
-(architecture), `umbra-PRD.md` (product requirements), and `docs/specs/`
-(per-subsystem deep specs).
+For the long version, read the design specs in the repository root: `arch.md` (architecture), `umbra-PRD.md` (product requirements), and `docs/specs/` (per-subsystem deep specs).
 
 ## Roadmap
 

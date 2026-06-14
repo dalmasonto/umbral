@@ -5,9 +5,7 @@ sidebar_position: 1
 icon: rocket
 ---
 
-The minimal umbra app boots through one builder, registers a database pool,
-and serves a hand-written route. From there you grow into models, migrations,
-and plugins.
+The minimal umbra app boots through one builder, registers a database pool, and serves a hand-written route. From there you grow into models, migrations, and plugins.
 
 ## The shape
 
@@ -30,35 +28,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-`App::builder().build()` runs five phases under the hood: collect, detect the
-backend, publish the ambient state, run system checks, and merge plugin
-routers. From the user's perspective the call is a single line.
+`App::builder().build()` runs five phases under the hood: collect, detect the backend, publish the ambient state, run system checks, and merge plugin routers. From the caller's side it's a single line.
 
 ## Settings
 
-`Settings::from_env()` layers defaults, an `umbra.toml` file (optional), and
-`UMBRA_`-prefixed environment variables (last wins). The fields that matter
-on day one:
+`Settings::from_env()` layers defaults, an optional `umbra.toml`, and `UMBRA_`-prefixed environment variables (last wins). The fields that matter on day one:
 
 <CardGrid cols={2}>
-  <Card icon="database" title="database_url" description="The DB connection string. Default sqlite::memory: - fine for tests, not for the management CLI. Override with UMBRA_DATABASE_URL." />
-  <Card icon="key" title="secret_key" description="Required. Set via UMBRA_SECRET_KEY. The dev default is rejected in production." />
+  <Card icon="database" title="database_url" description="The DB connection string. Default sqlite::memory:, fine for tests but not for the management CLI. Override with UMBRA_DATABASE_URL." />
+  <Card icon="key" title="secret_key" description="Set via UMBRA_SECRET_KEY. The dev default is rejected in production." />
 </CardGrid>
 
 <Callout type="warning">
-The `sqlite::memory:` default doesn't persist between subcommand invocations,
-which makes `cargo run -- migrate` quietly target a throwaway
-database. Export `UMBRA_DATABASE_URL=sqlite://app.db?mode=rwc` for any
-real work.
+The `sqlite::memory:` default doesn't persist between subcommand invocations, so `cargo run -- migrate` quietly targets a throwaway database. Export `UMBRA_DATABASE_URL=sqlite://app.db?mode=rwc` for any real work.
 </Callout>
 
 ## What's next
 
 - [Declare a model](/docs/v0.0.1/orm/models) and let the derive generate the `Model` impl.
-- [Run a migration](/docs/v0.0.1/migrations/managed-migrations) - declare, migrate, change, migrate.
-- [Relationships (ForeignKey)](/docs/v0.0.1/orm/relationships) - link models with `ForeignKey<T>` and eager-load with `select_related`.
-- [Transactions](/docs/v0.0.1/orm/transactions) - wrap multi-step writes in `umbra::transaction(...)` so they commit together or roll back together.
-- [Querying](/docs/v0.0.1/orm/querying) - F-expressions, Q-objects, exclude, projections, mutate-side terminals, subqueries.
+- [Run a migration](/docs/v0.0.1/migrations/managed-migrations): declare, migrate, change, migrate.
+- [Relationships (ForeignKey)](/docs/v0.0.1/orm/relationships): link models with `ForeignKey<T>` and eager-load with `select_related`.
+- [Transactions](/docs/v0.0.1/orm/transactions): wrap multi-step writes in `umbra::transaction(...)` so they commit or roll back together.
+- [Querying](/docs/v0.0.1/orm/querying): F-expressions, Q-objects, exclude, projections, mutate-side terminals, subqueries.
 - [Port an existing database](/docs/v0.0.1/migrations/inspectdb).
 
 The full builder shape lives in `docs/specs/01-app-and-settings.md`.

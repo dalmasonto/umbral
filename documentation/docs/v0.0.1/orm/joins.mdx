@@ -6,13 +6,13 @@ icon: git-merge
 tags: [orm, joins, foreign-key, eager-loading]
 ---
 
-`join_related` pulls a related row into the SAME query with a SQL `JOIN`, so the relation hydrates from one round-trip — no follow-up batch like `select_related`. It spans multiple hops (`"plugin__author"`), passes through a many-to-many relation (`"tags__category"`), and lets you pick the join flavor.
+`join_related` pulls a related row into the same query with a SQL `JOIN`, so the relation hydrates from one round-trip, with no follow-up batch like `select_related`. It spans multiple hops (`"plugin__author"`), passes through a many-to-many relation (`"tags__category"`), and lets you pick the join type.
 
-Plain `join_related` infers the join type from the foreign key: **INNER** for a `NOT NULL` FK (Django's default — a row that must have a parent), **LEFT** for a nullable FK (keep the orphan, hydrate its relation as unresolved). The typed methods override that:
+Plain `join_related` infers the join type from the foreign key: **INNER** for a `NOT NULL` FK (a row that must have a parent), **LEFT** for a nullable FK (keep the orphan, hydrate its relation as unresolved). The typed methods override that:
 
-- `inner_join_related(path)` — drops parent rows whose relation is absent.
-- `left_join_related(path)` — keeps them; the relation resolves to `None`.
-- `right_join_related(path)` — keeps every related row (see the SQLite caveat below).
+- `inner_join_related(path)`: drops parent rows whose relation is absent.
+- `left_join_related(path)`: keeps them; the relation resolves to `None`.
+- `right_join_related(path)`: keeps every related row (see the SQLite caveat below).
 
 The join type applies to the **last** hop of a nested path; intermediate hops are always auto-inferred per-hop.
 
@@ -28,7 +28,7 @@ let comments = Comment::objects()
     .fetch()
     .await?;
 
-// comment.plugin.author.name round-trips from that single query —
+// comment.plugin.author.name round-trips from that single query;
 // the nested ForeignKey<T> slots are populated bottom-up.
 let plugin = comments[0].plugin.as_ref().unwrap().resolved().unwrap();
 let author = plugin.author.resolved().unwrap();
@@ -62,7 +62,7 @@ let cat = posts[0].tags.resolved().unwrap()[0]
 ```
 
 <Callout type="warning">
-`RIGHT JOIN` needs **SQLite >= 3.39** (June 2022); Postgres is unconditional. On older SQLite, `right_join_related` errors at execute time — umbra emits a one-time `tracing::warn!` the first time a RIGHT join is built against a SQLite pool. Prefer `left_`/`inner_join_related` on SQLite unless you've confirmed the engine version.
+`RIGHT JOIN` needs **SQLite >= 3.39** (June 2022); Postgres is unconditional. On older SQLite, `right_join_related` errors at execute time, and umbra emits a one-time `tracing::warn!` the first time a RIGHT join is built against a SQLite pool. Prefer `left_`/`inner_join_related` on SQLite unless you've confirmed the engine version.
 </Callout>
 
 ## See also

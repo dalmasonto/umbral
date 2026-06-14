@@ -17,14 +17,14 @@ The full surface lives in `umbra::orm`: `Aggregate`, `QuerySet::aggregate`, `Que
 use umbra::orm::Aggregate;
 
 Aggregate::count();              // COUNT(*)
-Aggregate::count_col("body");    // COUNT(body) — skips NULL bodies
+Aggregate::count_col("body");    // COUNT(body), skips NULL bodies
 Aggregate::sum("view_count");    // SUM(view_count)
 Aggregate::avg("price");         // AVG(price)
 Aggregate::max("created_at");    // MAX(created_at)
 Aggregate::min("created_at");    // MIN(created_at)
 ```
 
-Each variant carries the source column it operates on (or `*` for `count()`). The macro emits no special metadata for aggregates — they are pure runtime constructions, validated against the model's `FIELDS` list before any SQL runs.
+Each variant carries the source column it operates on (or `*` for `count()`). Aggregates are pure runtime constructions, validated against the model's `FIELDS` list before any SQL runs.
 
 ## Single-row: `.aggregate(...)`
 
@@ -45,7 +45,7 @@ let summary = Post::objects()
 // summary["avg_views"] → JSON float (always f64)
 ```
 
-Return shape is `serde_json::Value::Object` keyed by the supplied names. ORDER BY / LIMIT / OFFSET are dropped on the aggregate path (they make no sense without GROUP BY); the WHERE accumulated by upstream `.filter()` / `.exclude()` calls is preserved.
+Return shape is `serde_json::Value::Object` keyed by the supplied names. ORDER BY / LIMIT / OFFSET are dropped on the aggregate path (they make no sense without GROUP BY). The WHERE accumulated by upstream `.filter()` / `.exclude()` calls is preserved.
 
 Return-type rules:
 
@@ -76,13 +76,13 @@ let by_author = Post::objects()
 // ]
 ```
 
-Return shape is `Vec<serde_json::Value::Object>` — one entry per group. Each row carries the group column values (typed per their declared `SqlType`) plus each named aggregate.
+Return shape is `Vec<serde_json::Value::Object>`, one entry per group. Each row carries the group column values (typed per their declared `SqlType`) plus each named aggregate.
 
 Group columns are validated against `Model::FIELDS`; aggregate source columns are validated the same way. An unknown column name fails loudly with `sqlx::Error::Protocol` before any SQL runs.
 
 ## Composing with the rest of the QuerySet API
 
-Both terminals respect the upstream chain — `filter`, `exclude`, even `.on(&pool)` for tests:
+Both terminals respect the upstream chain (`filter`, `exclude`, even `.on(&pool)` for tests):
 
 ```rust
 let summary = Post::objects()
@@ -97,9 +97,9 @@ ORDER BY / LIMIT / OFFSET are intentionally dropped on the aggregate paths.
 
 ## Related aggregates: `.annotate_related(...)` / `.annotate_count(...)`
 
-Django's chainable `annotate()` over a relation — `Post.objects.filter(...).annotate(comments=Count("comments"), rating=Avg("reviews__rating"))`. The annotation is **query-builder state**: it renders as a correlated scalar subquery inside the one SELECT every terminal builds, so it stacks, composes with `.filter` / `.order_by` / `.limit`, and shows up in `.to_sql()` and `.explain()` out of the box. One query, no N+1, ever.
+Aggregate over a relation, like Django's `Post.objects.filter(...).annotate(comments=Count("comments"), rating=Avg("reviews__rating"))`. The annotation is query-builder state: it renders as a correlated scalar subquery inside the one SELECT every terminal builds, so it stacks, composes with `.filter` / `.order_by` / `.limit`, and shows up in `.to_sql()` and `.explain()`. The work happens in one query.
 
-The relation is the same `ReverseSet` name `prefetch_related` accepts (`#[umbra(reverse_fk = "...")]` on the model); any `Aggregate` works, with non-count aggregates naming a column on the **child** model:
+The relation is the same `ReverseSet` name `prefetch_related` accepts (`#[umbra(reverse_fk = "...")]` on the model). Any `Aggregate` works, with non-count aggregates naming a column on the **child** model:
 
 ```rust
 let rows = Plugin::objects()
@@ -111,7 +111,7 @@ let rows = Plugin::objects()
 
 for (plugin, anns) in rows {
     let notes = anns["comment_set_count"].as_i64().unwrap_or(0);
-    let rating = anns["rating_avg"].as_f64();   // None when no reviews — never fabricated
+    let rating = anns["rating_avg"].as_f64();   // None when no reviews, never fabricated
 }
 ```
 
@@ -127,11 +127,11 @@ FROM "plugin"
 WHERE "moderation" = 'approved' AND "deleted_at" IS NULL
 ```
 
-Parents with zero children report `0` for counts and `NULL` for the other aggregates. An unknown relation name fails loudly (listing the valid names) on `fetch_annotated` and `explain`. Plain `fetch()` on an annotated queryset still returns typed rows and simply doesn't surface the extra columns — use `fetch_annotated` to read them.
+Parents with zero children report `0` for counts and `NULL` for the other aggregates. An unknown relation name fails loudly (listing the valid names) on `fetch_annotated` and `explain`. Plain `fetch()` on an annotated queryset still returns typed rows and simply doesn't surface the extra columns. Use `fetch_annotated` to read them.
 
 ### Soft-deleted children are excluded automatically
 
-When the child model is `#[umbra(soft_delete)]`, `annotate_count` folds `AND <child>.deleted_at IS NULL` into the correlated subquery for you. A comment trashed via the real soft-delete `delete()` path silently drops out of the count — you never count rows the rest of the app treats as gone. No opt-in; the child's `soft_delete` flag rides through to the annotation.
+When the child model is `#[umbra(soft_delete)]`, `annotate_count` folds `AND <child>.deleted_at IS NULL` into the correlated subquery for you. A comment trashed via the soft-delete `delete()` path drops out of the count, so you never count rows the rest of the app treats as gone. No opt-in: the child's `soft_delete` flag rides through to the annotation.
 
 ### Filtered counts: `.annotate_count_where(...)`
 
@@ -165,7 +165,7 @@ let rows = Post::objects()
 
 ### Annotating an undeclared relation (auto-discovery)
 
-You don't have to declare a `ReverseSet` field to count a relation. When the relation name matches no declared `#[umbra(reverse_fk = "...")]` field, `annotate_*` scans the model registry for any child whose foreign key points back at this parent's table and resolves it for you — the same one-query correlated subquery, no field on the parent:
+You don't have to declare a `ReverseSet` field to count a relation. When the relation name matches no declared `#[umbra(reverse_fk = "...")]` field, `annotate_*` scans the model registry for any child whose foreign key points back at this parent's table and resolves it for you: the same one-query correlated subquery, no field on the parent.
 
 ```rust
 // Blog declares NO `entry_set: ReverseSet<Entry>` field. Entry just has
@@ -184,29 +184,28 @@ All five aggregate kinds (count / sum / avg / min / max) work over an auto-disco
 
 The relation name is matched against each candidate child's **conventional name forms**: the child's table name, the child's struct name in `snake_case` and bare `lowercase`, and any of those with a Django-style `_set` suffix. So a child `struct Entry` with table `ad_entry` answers to `"ad_entry"`, `"entry"`, `"entry_set"`, `"ad_entry_set"`, and so on.
 
-**Precedence.** A declared `ReverseSet` (or `M2M`) field always wins over auto-discovery — declaring a field never changes existing behavior. Auto-discovery only runs as a fallback when no declared relation matches.
+**Precedence.** A declared `ReverseSet` (or `M2M`) field always wins over auto-discovery. Declaring a field never changes existing behavior. Auto-discovery only runs as a fallback when no declared relation matches.
 
-**Ambiguity.** If two candidates match — two child models that share a name form, or one child with two FK columns pointing at the same parent — the annotation is poisoned with a clear error rather than silently guessing:
+**Ambiguity.** If two candidates match (two child models that share a name form, or one child with two FK columns pointing at the same parent) the annotation is poisoned with a clear error rather than silently guessing:
 
 ```text
-ambiguous reverse relation `order` on `Store` — candidates: [ad_order.buyer_store, ad_order.seller_store];
-declare a `#[umbra(reverse_fk = "<fk>")] ReverseSet<Child>` field to disambiguate
+umbra::orm::annotate_related: ambiguous reverse relation `order` on `Store`, candidates: [ad_order.buyer_store, ad_order.seller_store]; declare a `#[umbra(reverse_fk = "<fk>")] ReverseSet<Child>` field to disambiguate
 ```
 
 Declaring a `#[umbra(reverse_fk = "buyer_store")] ReverseSet<Order>` field picks the FK explicitly and resolves it. An unknown relation name fails loudly too, and the error lists the auto-discoverable children so you can see the available names.
 
 ## Pitfalls
 
-**Empty-set SUM is NULL, not 0.** Dashboards that display `summary["total"]` should treat the JSON `null` as zero explicitly. `COUNT(*)` is always an integer, never NULL — use it when you need an unconditional integer return.
+**Empty-set SUM is NULL, not 0.** Dashboards that display `summary["total"]` should treat the JSON `null` as zero explicitly. `COUNT(*)` is always an integer, never NULL: use it when you need an unconditional integer return.
 
 **`AVG` is always a float.** Even when averaging an INTEGER column on SQLite, the aggregate returns `f64`. JSON serialisation produces a number with a decimal even when the value is whole (e.g. `2.0`).
 
-**`SUM` / `MAX` / `MIN` inherit the source column's SqlType.** Averaging timestamps would yield a non-meaningful float; `MAX("created_at")` returns the timestamp as an ISO string on SQLite. The runtime trusts the declared SqlType to dispatch the right `try_get`.
+**`SUM` / `MAX` / `MIN` inherit the source column's SqlType.** Averaging timestamps would yield a non-meaningful float. `MAX("created_at")` returns the timestamp as an ISO string on SQLite. The runtime trusts the declared SqlType to dispatch the right `try_get`.
 
-**Deferred features.** `StdDev`, `Variance`, and window-function aggregates are not in v1 — extend the `Aggregate` enum when a concrete consumer needs them.
+**Deferred features.** `StdDev`, `Variance`, and window-function aggregates are not in v1. Extend the `Aggregate` enum when a concrete consumer needs them.
 
 ## See also
 
-- [Querying](/docs/v0.0.1/orm/querying) — F-expressions, Q-objects, `exclude`, projections, subqueries, JSON ops.
-- [Relationships](/docs/v0.0.1/orm/relationships) — `prefetch_related` for batched M2M loads alongside aggregate dashboards.
-- [Transactions](/docs/v0.0.1/orm/transactions) — `.atomic()` for write paths; aggregates are read-only and always single-statement.
+- [Querying](/docs/v0.0.1/orm/querying): F-expressions, Q-objects, `exclude`, projections, subqueries, JSON ops.
+- [Relationships](/docs/v0.0.1/orm/relationships): `prefetch_related` for batched M2M loads alongside aggregate dashboards.
+- [Transactions](/docs/v0.0.1/orm/transactions): `.atomic()` for write paths. Aggregates are read-only and always single-statement.

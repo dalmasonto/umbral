@@ -6,7 +6,7 @@ icon: key
 tags: [rest, authentication, bearer, session, identity]
 ---
 
-Authentication answers *who is the caller?* It runs once per request, inspects the headers, and returns an `Identity` - or `None` if nothing is recognised. The permission layer then decides what to do with that identity.
+Authentication answers *who is the caller?*. It runs once per request, inspects the headers, and returns an `Identity`, or `None` if nothing is recognised. The permission layer then decides what to do with that identity.
 
 ```rust
 #[async_trait]
@@ -27,7 +27,7 @@ pub struct Identity {
 }
 ```
 
-`user_id` is a `String` rather than an `i64` so the same `Identity` shape works whether your PK is an integer, a UUID, or anything else `ToString`. `Identity::user(...)` takes `impl ToString`, so passing an `i64` PK just works.
+`user_id` is a `String` rather than an `i64` so the same `Identity` shape works whether your PK is an integer, a UUID, or anything else stringifiable. `Identity::user(...)` takes `impl ToString`, so passing an `i64` PK just works.
 
 Constructors are chainable:
 
@@ -37,13 +37,13 @@ Identity::user(user.id).staff()                       // shorthand for .with_sta
 Identity::user(user.id).with_extra("org_id", json!(42))
 ```
 
-The shape is intentionally narrow - `user_id` + `is_staff` covers most checks, `extras` carries anything app-specific your `Permission` impl wants to consult.
+The shape is intentionally narrow: `user_id` + `is_staff` covers most checks, `extras` carries anything app-specific your `Permission` impl wants to consult.
 
 ## Built-in classes
 
 <CardGrid cols={2}>
   <Card icon="x" title="NoAuthentication" description="The default. Every request looks anonymous. Pair with AllowAny for fully open endpoints." />
-  <Card icon="cookie" title="SessionAuthentication" description="Reads the umbra-sessions cookie, hydrates the AuthUser. Lives in umbra-sessions." />
+  <Card icon="cookie" title="SessionAuthentication" description="Reads the umbra-sessions cookie, hydrates the AuthUser. Lives in umbra-auth." />
   <Card icon="key" title="BearerAuthentication" description="Reads Authorization: Bearer <key>, looks up an AuthToken row. Lives in umbra-auth." />
   <Card icon="link" title="ChainAuthentication" description="Tries multiple backends in order; first hit wins." />
   <Card icon="code" title="FnAuthentication" description="Wraps an async closure. The DIY hook for one-off needs." />
@@ -55,8 +55,9 @@ The browser cookie path. The `SessionsPlugin` middleware already sets a session 
 
 ```rust
 use umbra::prelude::*;
+use umbra_auth::SessionAuthentication;
 use umbra_rest::RestPlugin;
-use umbra_sessions::{SessionAuthentication, SessionsPlugin};
+use umbra_sessions::SessionsPlugin;
 
 App::builder()
     .plugin(SessionsPlugin::default())
@@ -68,7 +69,7 @@ Anonymous sessions (no logged-in user yet) resolve to `None`; the permission cla
 
 ### BearerAuthentication
 
-The opaque DB-backed bearer-token path - same shape DRF ships. Each user can hold any number of named tokens; the row stores `sha256(plaintext)` so a DB leak does not surrender live tokens.
+The opaque DB-backed bearer-token path, the same shape DRF ships. Each user can hold any number of named tokens; the row stores `sha256(plaintext)` so a DB leak does not surrender live tokens.
 
 ```rust
 use umbra_auth::{AuthToken, BearerAuthentication};
@@ -78,8 +79,8 @@ use umbra_rest::RestPlugin;
 RestPlugin::default().authenticate(BearerAuthentication::default());
 
 // Mint a token elsewhere (an admin action, an `umbra` CLI command,
-// a /auth/token endpoint - the last is on the roadmap).
-let (token, plaintext) = AuthToken::create_for(&user, "laptop").await?;
+// a /auth/token endpoint; the last is on the roadmap).
+let (_token, plaintext) = AuthToken::create_for(&user, "laptop").await?;
 println!("Save this: {plaintext}");   // shown ONCE; not recoverable from the row
 ```
 
@@ -89,19 +90,18 @@ A request then carries it as a normal Bearer header:
 curl -H "Authorization: Bearer umbra_K3PqJ4nMr9X2v..." https://api.example.com/api/article/
 ```
 
-Token format: `umbra_` prefix + 43 URL-safe base64 chars from 32 random bytes (~50 chars total). The prefix is grep-able - log scrubbers can flag accidentally-committed tokens by pattern.
+Token format: `umbra_` prefix + 43 URL-safe base64 chars from 32 random bytes (~50 chars total). The prefix is grep-able, so log scrubbers can flag accidentally-committed tokens by pattern.
 
-Revoke with `token.revoke()` - the row is deleted, the next request with that plaintext fails the lookup, the caller is treated as anonymous.
+Revoke with `token.revoke()`: the row is deleted, the next request with that plaintext fails the lookup, the caller is treated as anonymous.
 
-### ChainAuthentication - cookie OR token
+### ChainAuthentication: cookie OR token
 
 Browsers send the cookie; CLI clients and CI send a bearer. First class to return `Some` wins.
 
 ```rust
 use std::sync::Arc;
-use umbra_auth::BearerAuthentication;
+use umbra_auth::{BearerAuthentication, SessionAuthentication};
 use umbra_rest::{ChainAuthentication, RestPlugin};
-use umbra_sessions::SessionAuthentication;
 
 let auth = ChainAuthentication::new(vec![
     Arc::new(SessionAuthentication::default()),
@@ -110,13 +110,13 @@ let auth = ChainAuthentication::new(vec![
 RestPlugin::default().authenticate(auth);
 ```
 
-### FnAuthentication - anything else
+### FnAuthentication: anything else
 
 Wraps an async closure when there is no built-in for what you need. Two common shapes:
 
 ```rust
 use umbra::web::HeaderMap;
-use umbra_rest::{FnAuthentication, Identity, RestPlugin};
+use umbra_rest::{FnAuthentication, Identity, RestPlugin, parse_basic_credentials};
 
 // HTTP Basic Auth against umbra-auth:
 RestPlugin::default().authenticate(FnAuthentication::new(|headers: HeaderMap| async move {
@@ -166,11 +166,11 @@ keys.insert("svc_metrics_a91c...".into(), (2, false));
 RestPlugin::default().authenticate(ApiKeyAuthentication::new(keys));
 ```
 
-The contract is small on purpose - *parse headers, return Identity*. Anything more (verifying a credential, looking up a user) is implementation detail.
+The contract is small on purpose: *parse headers, return Identity*. Anything more (verifying a credential, looking up a user) is implementation detail.
 
 ## Reading the identity from a custom handler
 
-`RestPlugin` runs the configured auth chain inside its CRUD handlers - but a handler you write yourself (`/api/auth/me`, a custom action, anything outside the auto-CRUD surface) doesn't go through that pipeline. Two axum extractors in `umbra-auth` give you the same `Identity` shape from a hand-written handler:
+`RestPlugin` runs the configured auth chain inside its CRUD handlers, but a handler you write yourself (`/api/auth/me`, a custom action, anything outside the auto-CRUD surface) doesn't go through that pipeline. Two axum extractors in `umbra-auth` give you the same `Identity` shape from a hand-written handler:
 
 ```rust
 use umbra::web::Json;
@@ -182,20 +182,20 @@ async fn dashboard(CurrentIdentity(id): CurrentIdentity) -> Json<DashboardData> 
     ...
 }
 
-// Never rejects - `id` is None for anonymous callers:
+// Never rejects; `id` is None for anonymous callers:
 async fn home(OptionalIdentity(id): OptionalIdentity) -> Json<Page> {
     let authenticated = id.is_some();
     ...
 }
 ```
 
-Both run the same session-then-bearer chain `RestPlugin` uses by default. If you need a different chain (bearer only, custom backend), write a one-off extractor that calls your own chain - the type is `Option<Identity>` either way.
+Both run the same session-then-bearer chain `RestPlugin` uses by default. If you need a different chain (bearer only, custom backend), write a one-off extractor that calls your own chain; the type is `Option<Identity>` either way.
 
 The bare resolution helper is also exposed: `umbra_auth::resolve_identity(&headers).await -> Option<Identity>`. Use it when you need the result inside a closure or somewhere the extractor framing doesn't fit.
 
 ## Why `authenticate` never returns an error
 
-The trait signature is `Option<Identity>`, not `Result<Identity, _>`. Returning a typed error would leak *which credential you tried* - an attacker probing the system could distinguish "I sent no token at all" from "I sent a malformed token" from "I sent a valid-format token that doesn't exist." Treating all three as `None` and letting the permission class produce a uniform 401 closes that side channel.
+The trait signature is `Option<Identity>`, not `Result<Identity, _>`. Returning a typed error would leak *which credential you tried*: an attacker probing the system could distinguish "I sent no token at all" from "I sent a malformed token" from "I sent a valid-format token that doesn't exist." Treating all three as `None` and letting the permission class produce a uniform 401 closes that side channel.
 
 ## What's deferred
 

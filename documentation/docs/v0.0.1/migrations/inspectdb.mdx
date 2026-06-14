@@ -46,11 +46,11 @@ cargo run -- inspectdb --output plugins/imported --mark-applied
 
 The next `migrate` is a no-op until you actually change a model.
 
-`inspectdb` dispatches on the active backend: SQLite reads `sqlite_master` plus `PRAGMA table_info`, and Postgres reads `information_schema` (tables, columns, and the constraint joins that recover the primary key). Point the CLI at whichever backend `DATABASE_URL` resolves to — the same `--output` shape comes out either way. See the [Postgres backend page](/docs/v0.0.1/backends/postgres#inspectdb-postgres) for the Postgres specifics.
+`inspectdb` dispatches on the active backend: SQLite reads `sqlite_master` plus `PRAGMA table_info`, and Postgres reads `information_schema` (tables, columns, and the constraint joins that recover the primary key). Point the CLI at whichever backend `DATABASE_URL` resolves to; the same `--output` shape comes out either way. See the [Postgres backend page](/docs/v0.0.1/backends/postgres#inspectdb-postgres) for the Postgres specifics.
 
 ## The SQLite type catalogue
 
-The columns inspectdb's SQLite path knows about today (the Postgres path additionally recovers `JSONB`, native arrays, and `INET` / `CIDR` / `MACADDR` — see the [Postgres backend page](/docs/v0.0.1/backends/postgres)):
+The columns inspectdb's SQLite path knows about today (the Postgres path additionally recovers `JSONB`, native arrays, and `INET` / `CIDR` / `MACADDR`; see the [Postgres backend page](/docs/v0.0.1/backends/postgres)):
 
 <CardGrid cols={3}>
   <Card icon="hash" title="Integers" description="SMALLINT, INTEGER, BIGINT and their aliases map to i16 / i32 / i64." />

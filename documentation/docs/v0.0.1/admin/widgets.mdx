@@ -1,13 +1,13 @@
 ---
 title: Dashboard widgets
-description: KPI cards, line + donut + bar charts, tables, feed widgets — declared in Rust, rendered via ApexCharts, grouped into named sections.
+description: KPI cards, line + donut + bar charts, tables, feed widgets, declared in Rust, rendered via ApexCharts, grouped into named sections.
 sidebar_position: 1
 icon: layout-dashboard
 ---
 
-The admin dashboard is more than a list of tables. Cards summarise the day, charts trace trends, tables surface recent activity, donuts show distribution. Each one is a `Widget` — declared in Rust, registered against `AdminPlugin`, and rendered through ApexCharts (charts) or minijinja (cards / tables / feed).
+The admin dashboard is more than a list of tables. Cards summarise the day, charts trace trends, tables surface recent activity, donuts show distribution. Each one is a `Widget`: declared in Rust, registered against `AdminPlugin`, and rendered through ApexCharts (charts) or minijinja (cards / tables / feed).
 
-The shape is the same across every kind: pick a `WidgetKind`, declare a `default_span` (grid cells wide × rows tall), and hand a `WidgetDataFn` async closure that returns a typed payload.
+The shape is the same across every kind: pick a `WidgetKind`, declare a `default_span` (grid cells wide by rows tall), and hand a `WidgetDataFn` async closure that returns a typed payload.
 
 ## A widget in 10 lines
 
@@ -53,25 +53,25 @@ Then register it in the dashboard:
 
 | Kind | When to reach for it | Payload |
 |---|---|---|
-| `Card` | KPI tiles — sales total, order count, AOV. Icon + headline value + optional growth-vs-previous-period + sparkline trail. | [`CardPayload`](#card-) |
-| `Line` | Time series. Single series (one metric over time) or multi (overlay 2-5 metrics on the same x-axis). Period chips `[7d] [30d] [90d]` in the header. | [`LinePayload`](#line-) |
-| `Donut` | Categorical breakdown — 3-6 buckets (status mix, top regions). Center label shows the total. | [`DonutPayload`](#donut-) |
-| `Bar` | Categorical counts that exceed donut's 6-slice readability. | [`BarPayload`](#bar-) |
-| `Radial` | Progress toward a goal — one or more 0–100% gauges (quota attainment, capacity used, completion rate). One big ring, or 2–4 to compare ratios. | [`RadialPayload`](#radial-) |
-| `Heatmap` | Activity-by-time / cohort patterns — a 2-D grid of cells colored by magnitude (day × hour signups, retention by cohort). | [`HeatmapPayload`](#heatmap-) |
-| `Progress` | "Top N by metric" — a ranked list of labeled horizontal bars (revenue by product, traffic by source). Pure HTML, no chart lib. | [`ProgressPayload`](#progress-) |
-| `Table` | "Recent orders / posts / comments." Three or four columns, 5-10 rows, optional "View all →" link. | [`TablePayload`](#table-) |
-| `Feed` | Chronological activity — recent signups, comments, audit log entries. Avatar + title + timestamp per item. | [`FeedPayload`](#feed-) |
+| `Card` | KPI tiles: sales total, order count, AOV. Icon + headline value + optional growth-vs-previous-period + sparkline trail. | [`CardPayload`](#card) |
+| `Line` | Time series. Single series (one metric over time) or multi (overlay 2-5 metrics on the same x-axis). | [`LinePayload`](#line) |
+| `Donut` | Categorical breakdown: 3-6 buckets (status mix, top regions). Center label shows the total. | [`DonutPayload`](#donut) |
+| `Bar` | Categorical counts that exceed donut's 6-slice readability. | [`BarPayload`](#bar) |
+| `Radial` | Progress toward a goal: one or more 0-100% gauges (quota attainment, capacity used, completion rate). One big ring, or 2-4 to compare ratios. | [`RadialPayload`](#radial) |
+| `Heatmap` | Activity-by-time / cohort patterns: a 2-D grid of cells colored by magnitude (day by hour signups, retention by cohort). | [`HeatmapPayload`](#heatmap) |
+| `Progress` | "Top N by metric": a ranked list of labeled horizontal bars (revenue by product, traffic by source). Pure HTML, no chart lib. | [`ProgressPayload`](#progress) |
+| `Table` | "Recent orders / posts / comments." Three or four columns, 5-10 rows, optional "View all" link. | [`TablePayload`](#table) |
+| `Feed` | Chronological activity: recent signups, comments, audit log entries. Avatar + title + timestamp per item. | [`FeedPayload`](#feed) |
 | `Kpi` | The original simple stat card. Superseded by `Card` for most cases; kept for backwards compat. | `KpiPayload` |
 
-## Span — sizing widgets on the grid
+## Span: sizing widgets on the grid
 
 The dashboard is a 12-column grid; rows auto-size to 120px each. `Span { cols, rows }` says how many cells a widget occupies.
 
 ```rust
-default_span: Span { cols: 3, rows: 2 },   // 1/4 width, 240px tall — standard card
-default_span: Span { cols: 8, rows: 3 },   // 2/3 width, 360px tall — line chart
-default_span: Span { cols: 12, rows: 4 },  // full width, 480px tall — big table
+default_span: Span { cols: 3, rows: 2 },   // 1/4 width, 240px tall, standard card
+default_span: Span { cols: 8, rows: 3 },   // 2/3 width, 360px tall, line chart
+default_span: Span { cols: 12, rows: 4 },  // full width, 480px tall, big table
 ```
 
 A user override (via `Widget::with_span(cols, rows)`) wins over `default_span` at registration time:
@@ -80,7 +80,7 @@ A user override (via `Widget::with_span(cols, rows)`) wins over `default_span` a
 umbra_admin::builtin_total_models_widget().with_span(8, 2)
 ```
 
-## Sections — grouping widgets
+## Sections: grouping widgets
 
 `WidgetSection` is a named group with a title + optional subtitle + its own widget grid:
 
@@ -102,11 +102,11 @@ umbra_admin::builtin_total_models_widget().with_span(8, 2)
 )
 ```
 
-Sections render top-to-bottom in registration order with a heading band between each. Past ~3 widgets per section, sections beat a single mega-grid for visual scanability.
+Sections render top-to-bottom in registration order with a heading band between each. Past roughly 3 widgets per section, sections beat a single mega-grid for visual scanability.
 
 ## Card
 
-The everyday KPI tile — icon top-left, optional growth-vs-prior pill top-right, label, big humanized value, subtitle, optional sparkline trail.
+The everyday KPI tile: icon top-left, optional growth-vs-prior pill top-right, label, big humanized value, subtitle, optional sparkline trail.
 
 ```rust
 data: WidgetDataFn::new(|_user| async move {
@@ -130,13 +130,13 @@ data: WidgetDataFn::new(|_user| async move {
 }),
 ```
 
-`humanize_number(12_438.0) → "12.4K"` — gives the headline value room when the column gets narrow. Use `format_thousands(12438.0) → "12,438"` for tiles where the precise figure matters (AOV, invoice totals).
+`humanize_number(12_438.0)` returns `"12.4K"`, giving the headline value room when the column gets narrow. Use `format_thousands(12438.0)` for `"12,438"` on tiles where the precise figure matters (AOV, invoice totals).
 
-The sparkline goes through ApexCharts (NOT hand-rolled SVG) — pass any `Vec<f64>` of length ≥ 2 and the renderer mounts a smoothed area chart in the card's trail area. `Span { cols: 3, rows: 2 }` gives it 240px to fit icon row + body + 48px trail without clipping.
+The sparkline goes through ApexCharts (not hand-rolled SVG). Pass any `Vec<f64>` and the renderer mounts a smoothed area chart in the card's trail area; keep it to 7-30 points. `Span { cols: 3, rows: 2 }` gives it 240px to fit icon row + body + trail without clipping.
 
 ## Line
 
-Two flavours: single-series (one metric over time, gradient area fill) and multi-series (2-5 metrics overlaid, solid colors). The same `LinePayload` shape covers both — the renderer picks the style based on how many series the payload carries.
+Two flavours: single-series (one metric over time, gradient area fill) and multi-series (2-5 metrics overlaid, solid colors). The same `LinePayload` shape covers both; the renderer picks the style based on how many series the payload carries.
 
 ```rust
 data: WidgetDataFn::with_params(|_user, params| async move {
@@ -159,7 +159,7 @@ data: WidgetDataFn::with_params(|_user, params| async move {
 }),
 ```
 
-Multi-series — pass two or more `Series` and the renderer drops the heavy gradient fill so overlaid lines stay readable, and surfaces a legend strip in the header:
+For multi-series, pass two or more `Series`. The renderer drops the heavy gradient fill so overlaid lines stay readable and surfaces a legend strip in the header:
 
 ```rust
 WidgetPayload::Line(LinePayload {
@@ -172,11 +172,9 @@ WidgetPayload::Line(LinePayload {
 })
 ```
 
-The default palette is primary + emerald + blue + amber + pink + violet + cyan — explicit accents, readable in both light and dark themes.
-
 ### Period chips
 
-Line widgets carry a `[7d] [30d] [90d]` chip strip in the header. Clicking re-fetches the widget data with `?period=X`. The data closure reads via `params.period_days()`:
+Line widgets can carry a `[7d] [30d] [90d]` chip strip in the header. Clicking re-fetches the widget data with `?period=X`. The data closure reads via `params.period_days()`:
 
 ```rust
 data: WidgetDataFn::with_params(|_user, params| async move {
@@ -191,19 +189,19 @@ Pre-select the active chip on first load via `.with_default_period("7d")`:
 .widget(shop_daily_sales_chart().with_default_period("7d"))
 ```
 
-When the URL has no `?period=`, the handler stamps `params.period = Some("7d")` before calling the data fn — so the template renders the matching chip highlighted AND the data closure sees the same period. One source of truth: the URL.
+When the URL has no `?period=`, the handler stamps `params.period = Some("7d")` before calling the data fn, so the template renders the matching chip highlighted and the data closure sees the same period. One source of truth: the URL.
 
 ## Donut
 
 Categorical breakdown summing to 100%. Best for 3-6 slices; past that, switch to `Bar`.
 
-Compute the per-bucket counts **in SQL** with a grouped [`annotate`](/docs/v0.0.1/orm/aggregates) — one row per status — rather than pulling every order into memory to tally client-side:
+Compute the per-bucket counts in SQL with a grouped [`annotate`](/docs/v0.0.1/orm/aggregates), one row per status, rather than pulling every order into memory to tally client-side:
 
 ```rust
 use umbra::orm::Aggregate;
 
 data: WidgetDataFn::new(|_user| async move {
-    // GROUP BY status, COUNT(*) per group — Django's
+    // GROUP BY status, COUNT(*) per group, Django's
     // `.values("status").annotate(count=Count("id"))`.
     let rows = Order::objects()
         .annotate(&["status"], &[("count", Aggregate::count())])
@@ -218,7 +216,7 @@ data: WidgetDataFn::new(|_user| async move {
             counts.insert(label.to_string(), n);
         }
     }
-    // Canonical lifecycle order — donut reads as a flow,
+    // Canonical lifecycle order: the donut reads as a flow,
     // not random alphabetical buckets.
     let order = ["pending", "paid", "shipped", "delivered", "cancelled"];
     let mut pairs: Vec<(String, f64)> = Vec::new();
@@ -230,7 +228,7 @@ data: WidgetDataFn::new(|_user| async move {
 ```
 
 <Callout type="info">
-`annotate(&["status"], &[("count", Aggregate::count())])` returns `[{ "status": "paid", "count": 12 }, ...]` — the count happens in the database, so the widget scales to millions of orders without loading them. The canonical-order reshuffle stays client-side (it's presentation, not aggregation). See [Aggregates and annotate](/docs/v0.0.1/orm/aggregates) for `Sum`/`Avg`/multi-column grouping.
+`annotate(&["status"], &[("count", Aggregate::count())])` returns `[{ "status": "paid", "count": 12 }, ...]`. The count happens in the database, so the widget scales to millions of orders without loading them. The canonical-order reshuffle stays client-side (it's presentation, not aggregation). See [Aggregates and annotate](/docs/v0.0.1/orm/aggregates) for `Sum`/`Avg`/multi-column grouping.
 </Callout>
 
 `DonutPayload::from_pairs([(label, value), ...])` is the short constructor. For explicit colors per slice, build `DonutSlice { label, value, color: Some("#34d399") }` and pass to `DonutPayload::new(slices)`.
@@ -255,7 +253,7 @@ WidgetPayload::Bar(BarPayload {
 
 ## Radial
 
-A gauge of one or more 0–100% tracks, rendered as concentric arcs (ApexCharts `radialBar`). Reach for it when a metric is a *ratio against a target* — quota attainment, capacity used, completion rate, SLA — where a card's bare number hides how close you are to "done".
+A gauge of one or more 0-100% tracks, rendered as concentric arcs (ApexCharts `radialBar`). Reach for it when a metric is a ratio against a target (quota attainment, capacity used, completion rate, SLA) where a card's bare number hides how close you are to "done".
 
 The everyday case is a single ring built straight from the current value and its target; the percent lands in the centre:
 
@@ -268,7 +266,7 @@ WidgetPayload::Radial(RadialPayload::goal("Monthly goal", sales, target))
 
 `goal(label, current, target)` computes `current / target * 100` and clamps to `[0, 100]` (a non-positive target reads as 0%). For a percentage you already have, use `RadialPayload::single(label, percent)`.
 
-Pass two to four tracks to compare related ratios on one tile — the centre then shows their average:
+Pass two to four tracks to compare related ratios on one tile:
 
 ```rust
 // Per-plan conversion, compared at a glance.
@@ -279,11 +277,11 @@ WidgetPayload::Radial(RadialPayload::from_pairs([
 ]))
 ```
 
-Every percent is clamped to `[0, 100]` (non-finite → 0), so an overshoot fills the ring rather than overrunning it. For an explicit arc color, build `RadialTrack { label, value, color: Some("#34d399") }` and pass to `RadialPayload::new(tracks)`.
+Every percent is clamped to `[0, 100]` (non-finite to 0), so an overshoot fills the ring rather than overrunning it. For an explicit arc color, build `RadialTrack { label, value, color: Some("#34d399") }` and pass to `RadialPayload::new(tracks)`.
 
 ## Heatmap
 
-A 2-D grid of cells colored by magnitude (ApexCharts `heatmap`). Reach for it when the story is *when* or *where* something concentrates — signups by weekday × hour, retention by cohort × week, load by region × day.
+A 2-D grid of cells colored by magnitude (ApexCharts `heatmap`). Reach for it when the story is when or where something concentrates: signups by weekday and hour, retention by cohort and week, load by region and day.
 
 The dense-grid constructor takes row labels, the shared column labels, and a `values[row][col]` matrix:
 
@@ -297,11 +295,11 @@ WidgetPayload::Heatmap(HeatmapPayload::from_grid(
 ))
 ```
 
-`from_grid` is rectangular by construction: a short value row is padded with `0.0` and any extra values past the column labels are dropped, so ragged input never desyncs the grid. For full control build `HeatmapRow { name, cells: vec![HeatmapCell { x, y }] }` and pass to `HeatmapPayload::new(rows)`. ApexCharts shades each cell from a single hue by value; the payload's first row renders at the top.
+`from_grid` is rectangular by construction: a short value row is padded with `0.0` and any extra values past the column labels are dropped, so ragged input never desyncs the grid. For full control build `HeatmapRow { name, cells: vec![HeatmapCell { x, y }] }` and pass to `HeatmapPayload::new(rows)`.
 
 ## Progress
 
-A ranked list of labeled horizontal bars — "top N by metric": revenue by product, traffic by source, completion per category. It's the readable middle ground between a `Donut` (proportions, but circular and capped at ~6 slices) and a `Table` (exact numbers, but no visual weight). Rendered as pure HTML — no chart library mounts.
+A ranked list of labeled horizontal bars, "top N by metric": revenue by product, traffic by source, completion per category. It's the readable middle ground between a `Donut` (proportions, but circular and capped at roughly 6 slices) and a `Table` (exact numbers, but no visual weight). Rendered as pure HTML; no chart library mounts.
 
 By default each bar is sized relative to the largest value, so the top item fills the bar:
 
@@ -315,7 +313,7 @@ WidgetPayload::Progress(ProgressPayload::from_pairs([
 ]))
 ```
 
-When each row should be measured against a fixed target instead (a per-row "% of goal"), use `from_pairs_of(pairs, target)` — values over the target clamp to a full bar, and a non-positive target falls back to sizing against the max:
+When each row should be measured against a fixed target instead (a per-row "% of goal"), use `from_pairs_of(pairs, target)`. Values over the target clamp to a full bar, and a non-positive target falls back to sizing against the max:
 
 ```rust
 WidgetPayload::Progress(ProgressPayload::from_pairs_of(
@@ -328,7 +326,7 @@ WidgetPayload::Progress(ProgressPayload::from_pairs_of(
 
 ## Table
 
-Three to four columns, 5-10 rows, optional "View all →" link in the header.
+Three to four columns, 5-10 rows, optional "View all" link in the header.
 
 ```rust
 data: WidgetDataFn::new(|_user| async move {
@@ -350,14 +348,12 @@ data: WidgetDataFn::new(|_user| async move {
         .collect();
     WidgetPayload::Table(
         TablePayload::new(columns, rows)
-            .view_all_for::<Order>(),       // ← auto-resolves to /admin/order/
+            .view_all_for::<Order>(),       // auto-resolves to {admin_base}/order/
     )
 }),
 ```
 
-The `view_all_for::<T>()` helper takes any `T: Model` and resolves to the admin changelist URL for that table (`/admin/<table>/`). No string-typing, rename-safe — a `#[umbra(table = "...")]` change to the model propagates without chasing strings in the widget code.
-
-The first column gets `<th scope="row">` treatment: `text-on-surface`, `font-medium`, no-wrap. The rest are softer (`text-on-surface-variant`) and tabular-nums for number alignment.
+The `view_all_for::<T>()` helper takes any `T: Model` and resolves to the admin changelist URL for that table (`{admin_base}/<table>/`). No string-typing, rename-safe: a `#[umbra(table = "...")]` change to the model propagates without chasing strings in the widget code. For a non-managed target, set `view_all_url(...)` explicitly.
 
 ## Feed
 
@@ -384,18 +380,18 @@ WidgetPayload::Feed(FeedPayload {
 
 The `at` value is an RFC 3339 timestamp string; the feed template renders it through the admin's `naturaltime` filter ("2 hours ago") with the absolute date in a hover tooltip.
 
-## WidgetDataFn — closure shapes
+## WidgetDataFn: closure shapes
 
 Two constructors:
 
 ```rust
-// Per-request params dropped — use for widgets that always render
+// Per-request params dropped: use for widgets that always render
 // the same shape (count tiles, registry-size cards, etc.)
 WidgetDataFn::new(|user| async move {
     ...
 })
 
-// Per-request params passed in — use for widgets that read query
+// Per-request params passed in: use for widgets that read query
 // state like period chips, status filters, etc.
 WidgetDataFn::with_params(|user, params| async move {
     let days = params.period_days().unwrap_or(30);
@@ -409,10 +405,10 @@ WidgetDataFn::with_params(|user, params| async move {
 
 Two builtins ship with `umbra-admin`:
 
-- `umbra_admin::builtin_total_models_widget()` — bar chart of model counts grouped by plugin.
-- `umbra_admin::builtin_recent_users_widget()` — feed of the 5 most-recent signups.
+- `umbra_admin::builtin_total_models_widget()`: a bar chart of model counts grouped by plugin.
+- `umbra_admin::builtin_recent_users_widget()`: a feed of the 5 most-recent signups.
 
-Both are regular `Widget` values you opt into via `.widget(...)` on a section — register them where you want, override `with_span(cols, rows)` if you want a non-default size, and skip them if your dashboard doesn't need them.
+Both are regular `Widget` values you opt into via `.widget(...)` on a section. Register them where you want, override `with_span(cols, rows)` for a non-default size, and skip them if your dashboard doesn't need them.
 
 ```rust
 .dashboard_section(
@@ -425,13 +421,13 @@ Both are regular `Widget` values you opt into via `.widget(...)` on a section �
 
 ## Model cards section
 
-Below the widget sections, the dashboard renders one card per registered model — quick access to every CRUD table. Configure via:
+Below the widget sections, the dashboard renders one card per registered model, quick access to every CRUD table. Configure via:
 
 ```rust
 AdminPlugin::default()
     .dashboard_models_title("Data")
     .dashboard_models_subtitle("Jump straight to a managed table")
-    .dashboard_models_only(&umbra::models![     // ← type-safe table list
+    .dashboard_models_only(&umbra::models![     // type-safe table list
         ecommerce::models::Product,
         ecommerce::models::Order,
         ecommerce::models::Customer,
@@ -439,13 +435,13 @@ AdminPlugin::default()
     ])
 ```
 
-`umbra::models![T, U, V]` expands to `[T::TABLE, U::TABLE, V::TABLE]` — rename-safe (a `#[umbra(table = "...")]` change propagates) and type-checked at compile time.
+`umbra::models![T, U, V]` expands to `[T::TABLE, U::TABLE, V::TABLE]`, rename-safe (a `#[umbra(table = "...")]` change propagates) and type-checked at compile time.
 
 Three modes:
 
-- `.dashboard_models_only(&[...])` — show exactly these tables
-- `.dashboard_models_hidden()` — hide the section entirely
-- (default) — show every registered model card
+- `.dashboard_models_only(&[...])`: show exactly these tables
+- `.dashboard_models_hidden()`: hide the section entirely
+- (default): show every registered model card
 
 ## How it wires together
 
@@ -458,10 +454,11 @@ The runtime contract:
 5. The handler renders the per-kind macro (`card.html` / `line.html` / `donut.html` / etc.) and HTMX swaps it into the placeholder.
 6. ApexCharts mounts on `[data-umbra-chart="<kind>"]` divs that the macros emit.
 
-The skeleton-first shape means the dashboard paints fast — every widget loads in parallel after the initial HTML lands.
+The skeleton-first shape means the dashboard paints fast: every widget loads in parallel after the initial HTML lands.
 
 ## Related
 
-- [Plugin trait](/v0.0.1/plugins/the-plugin-trait) — `AdminPlugin` IS a plugin; widgets are how it exposes a customisation surface
-- [Admin plugin](/v0.0.1/plugins/admin) — the broader admin features (CRUD, filters, search, permissions)
-- [user in templates](/v0.0.1/auth/user-in-templates) — widget headers can branch on `user.is_staff` for staff-only widgets
+- [Plugin trait](/v0.0.1/plugins/the-plugin-trait): `AdminPlugin` IS a plugin; widgets are how it exposes a customisation surface.
+- [Admin plugin](/v0.0.1/plugins/admin): the broader admin features (CRUD, filters, search, permissions).
+- [user in templates](/v0.0.1/auth/user-in-templates): widget headers can branch on `user.is_staff` for staff-only widgets.
+</content>

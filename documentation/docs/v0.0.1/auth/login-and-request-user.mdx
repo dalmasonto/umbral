@@ -28,7 +28,7 @@ spans the user's whole visit:
 
 ```rust
 let app = App::builder()
-    .plugin(AuthPlugin)
+    .plugin(AuthPlugin::<AuthUser>::default())
     .plugin(SessionsPlugin::default())   // auto session-on-every-visit
     .routes(Routes::new().get("/", home))
     .build()?;
