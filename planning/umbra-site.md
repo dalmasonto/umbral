@@ -395,3 +395,27 @@ Use the website itself as the first public proof that Umbra can build a real con
 ## Good features
 
 1. Plugin ordering - since it might be hard to track installs as they happen through cargo add, it might be useful to use plugin reviews, rating, to order plugins by popularity or relevance. Actually to track plugin installs, we can provide an installation command like `umbra install <plugin>` that adds the plugin to the project using cargo add but sends a tracking event to the umbra backend. This means, whenever umbra cli is used to install a plugin, we instantiate like a config in the user root that is saved and signed by our server, its like an auth key but in this it will be specifically an identification key to track plugin installs from different devices. We can make this opt in only but this means we don't use installs as a metric. When we have a given device id which is only known to our server means that regardless the user installing the plugin 10x, it can only be recorded once till that code changes! Actually we can also use crates.io site `https://crates.io{crate_name}/{version}/downloads`
+
+
+## Required Quick fixes 
+
+1. ✅ DONE. The security page should use the main wrapper fully width ie 1200px as of now
+   — `security.html` wrapper now `max-w-[1200px]`; the cards row goes 4-up (`lg:grid-cols-4`).
+2. ✅ DONE. Same with reviews, same width and maybe 3 cards per row
+   — `reviews.html` now `max-w-[1200px]` with `lg:grid-cols-3`.
+3. ✅ DONE. Footer advisories and security are same page. Use security, drop advisories
+   — dropped the duplicate "Advisories" footer link (kept Security + Report a plugin).
+4. ✅ DONE. The reviews on the home page are a sharm, use backend to fill this
+   — homepage trust strip now renders `reviews::featured_reviews(2)` (featured-first, live), with an honest empty state. The hardcoded "Rosa/Theo" cards are gone (asserted in `public/tests/render_home.rs`).
+5. ✅ DONE. The tabs under the plugin section for all, official, community, audited don't work…
+   — homepage tabs are now links into the directory facets. Added an `?audited=1` facet to `/plugins` (count + clickable, OR of umbra/third-party-reviewed). The `Plugin.featured` flag already existed; the homepage preview now orders featured-first.
+6. ✅ DONE. The homepage source code says "umbra-cli" but should be umbra…
+   — hero terminal now uses `umbra startproject/startapp`, `cargo run -- makemigrations && migrate`, and shows plugins wired via `App::builder().plugin(...)` (the `plugins = [...]` TOML snippet was wrong — plugins are wired in main.rs, not a config array). Footer label → `umbra v0.1.0`.
+7. ✅ DONE. …post refreshes the whole page; want SSE to work…
+   — the note form now submits via `fetch()` (handler returns JSON for `Accept: application/json`, redirects for no-JS). The page no longer reloads; an in-place success banner shows and the existing SSE live-note feed updates.
+8. ✅ DONE. Sponsor button on the header + Sponsor plugin + Partners model…
+   — new `sponsor` plugin: `Partner` + `SponsorInquiry` models, `/sponsor` page (GitHub Sponsors card + "Talk to us" Umbra Form + partners grid), header Sponsor dropdown (GitHub / Talk to us), footer link. **Action required: run `cargo run -- makemigrations && cargo run -- migrate` to create the `sponsor_partner` / `sponsor_sponsorinquiry` tables** (left for the operator per the no-auto-migrate rule; the page degrades to an empty state until then).
+9. ✅ DONE. Link up the SSE for admin notifications (is_superuser only)…
+   — `RealtimePlugin.on_model(...)` fires on create of plugin notes, reviews, plugin submissions, contact messages, and sponsor inquiries; `notify_admins` pushes an `admin_notification` event targeted by user id to active superusers only (a true superuser-only channel — no public group). The superuser dashboard subscribes over SSE and shows a live feed + toasts.
+10. ✅ DONE. Markdown blogs + custom code/image components…
+    — seeded 5 lengthy markdown posts (`site_content/src/seed.rs`, runs on `on_ready`); added the `/blog/{slug}` detail page rendering markdown. New `static/js/md-enhance.js` + `static/css/md-enhance.css` (loaded globally) enhance any `[data-md]` container: code blocks get a language label + copy button + preview frame, images get a click-to-zoom lightbox gallery. Applied on blog posts and plugin notes. (The framework `| markdown` filter itself was left untouched — it lives outside `umbra_website` — so enhancement is post-render in the browser.)

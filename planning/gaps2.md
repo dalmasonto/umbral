@@ -276,3 +276,16 @@
 56. [x] Grouped aggregate in the ORM (`QuerySet::annotate(group_cols, aggs)` = Django's `.values("status").annotate(count=Count("id"))`) was already shipped + documented; the shop donut + activity widgets refactored off fetch-all-then-count, and the widgets doc updated — archived
 
 57. [ ] The media plugin can be improved to allow background file uploads and processing. This can be done through a function that just returns the perceived file path or URL, and the actual processing is done asynchronously. Also, the media plugin should be directly swappable for different storage backends (e.g. local filesystem, cloud storage) or just extended to maintain the same interface.
+
+58. [x] Same struct = model, form & serializer — surfaced on `/features` (editorial callout + DB catalog entry + self-healing seed) and the `/docs` landing. — archived
+
+59. [ ] We have RBAC already using the permissions plugin. The issue for now is, if a user registers the plugin, do they automatically get permissions gates through their users? Like the rest plugin, will it go through the permissions too? The idea is, how can we make it like a callable ie `.enable_permissions()` if the permissions plugin exists, it enables permissions for users and a user can configure the permissions right from the auth plugin and it towers everything as a middleware or another way, is it immediately enables a middleware that does role check for is_staff, is_superuser, the user is in group x or the specific permissions like `blog.can_publish_post`
+
+60. [ ] From #59 above, I have noticed our middleware is not strong for now. Usually, once a middlware is set, it cuts across every other app without touching any app/plugin code ie in django, the csrf middleware touches nothing, it sought of returns true or false and the next thing is called to continue processing the request.
+
+61. [ ] How does one publish multiple resources for Rest plugin, a user might not want to just called .resource() to publish every model on the main.rs but rather create and export resources from each plugin and just call .resources use the vec once
+
+62. [x] Browser live-reload — new opt-in `umbra-livereload` plugin (SSE push + `notify` file watcher + auto-injected client; CSS hot-swap + full reload; `.rs` handled by the rebuild→restart→reconnect→reload path). Dev-only, framework-level, dogfooded in umbra_website. — archived
+63. [ ] We need to generate alot of data upto about 5GB or even 10GB or 20GB ie a table with about 200 Million rows to just excerise and test the ORM ie in querying, aggregation, and other operations to ensure proper speed. (https://lemire.me/blog/2012/03/27/publicly-available-large-data-sets-for-database-research/)
+64. [ ] Can we use wasm for our js requirements for admin ie rendering widget charts etc - Defer, this is a complete non-requirement but worthy trying out.
+65. [ ] We need a pagination plugin, not for rest but rather for the system itself, for content rendered through the jinja templates. If the rest plugin is reusable, we can pull that and reuse it else, we need a different plugin for the same.
