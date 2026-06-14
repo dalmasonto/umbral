@@ -1689,36 +1689,17 @@ impl<T: Model> QuerySet<T> {
         if self.only_cols.is_some() {
             return Err(only_with_typed_terminal_error("first"));
         }
-        let sr_fields = self.select_related.clone();
+        // Review #2: delegate to `fetch()` with LIMIT 1 so select_related,
+        // prefetch_related, AND join_related are all hydrated. `first()`
+        // used to build a plain query and hydrate only select_related, so
+        // `.prefetch_related("tags").first()` returned an unprefetched row
+        // and `.join_related("author").first()` an unresolved join — both
+        // silently. (For a to-many `join_related`, LIMIT 1 truncates the
+        // joined children the same way `fetch()` does with `.limit(1)`;
+        // prefer `prefetch_related` there.)
         self.query.limit(1);
-        let row = match resolve_pool::<T>(self.explicit_pool.clone()) {
-            DbPool::Sqlite(pool) => {
-                let q = self.build_query_for("sqlite");
-                let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
-                sqlx::query_as_with::<sqlx::Sqlite, T, _>(&sql, values)
-                    .fetch_optional(&pool)
-                    .await?
-            }
-            DbPool::Postgres(pool) => {
-                let q = self.build_query_for("postgres");
-                let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
-                sqlx::query_as_with::<sqlx::Postgres, T, _>(&sql, values)
-                    .fetch_optional(&pool)
-                    .await?
-            }
-        };
-        if row.is_none() {
-            return Ok(row);
-        }
-        // BUG-16 step 2: wire the row's PK into its M2M slots.
-        let mut rows = vec![row.unwrap()];
-        rows[0].set_m2m_parent_ids();
-        if sr_fields.is_empty() {
-            return Ok(rows.pop());
-        }
-        let pool = resolve_pool::<T>(self.explicit_pool.clone());
-        hydrate_select_related::<T>(&mut rows, &sr_fields, &pool).await?;
-        Ok(Some(rows.pop().unwrap()))
+        let rows = self.fetch().await?;
+        Ok(rows.into_iter().next())
     }
 
     /// Return the row with the smallest value in `col_name`. Sugar
