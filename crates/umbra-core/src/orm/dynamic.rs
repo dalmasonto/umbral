@@ -1509,9 +1509,18 @@ pub fn decode_to_string(
             SqlType::Inet | SqlType::Cidr | SqlType::MacAddr | SqlType::FullText => {
                 panic_pg_only_unsupported(&col.name)
             }
-            SqlType::ForeignKey => row
-                .try_get::<Option<i64>, _>(name)?
-                .map_or(String::new(), |v| v.to_string()),
+            // PK lift (review #3): FK columns to a String/Uuid-PK target
+            // store TEXT/UUID, not BIGINT — decode by the target PK type so
+            // the admin display path doesn't fail on a non-i64 FK.
+            SqlType::ForeignKey => match fk_target_pk_sql_type(col) {
+                Some(SqlType::Text) => row.try_get::<Option<String>, _>(name)?.unwrap_or_default(),
+                Some(SqlType::Uuid) => row
+                    .try_get::<Option<Uuid>, _>(name)?
+                    .map_or(String::new(), |v| v.to_string()),
+                _ => row
+                    .try_get::<Option<i64>, _>(name)?
+                    .map_or(String::new(), |v| v.to_string()),
+            },
             SqlType::Bytes => row
                 .try_get::<Option<Vec<u8>>, _>(name)?
                 .map_or(String::new(), |b| hex_encode(&b)),
@@ -1539,7 +1548,11 @@ pub fn decode_to_string(
         SqlType::Inet | SqlType::Cidr | SqlType::MacAddr | SqlType::FullText => {
             panic_pg_only_unsupported(&col.name)
         }
-        SqlType::ForeignKey => row.try_get::<i64, _>(name)?.to_string(),
+        SqlType::ForeignKey => match fk_target_pk_sql_type(col) {
+            Some(SqlType::Text) => row.try_get::<String, _>(name)?,
+            Some(SqlType::Uuid) => row.try_get::<Uuid, _>(name)?.to_string(),
+            _ => row.try_get::<i64, _>(name)?.to_string(),
+        },
         SqlType::Bytes => hex_encode(&row.try_get::<Vec<u8>, _>(name)?),
         SqlType::Decimal => panic_pg_only_unsupported(&col.name),
     })
@@ -1616,9 +1629,17 @@ pub fn decode_pg_to_string(
                 .ok()
                 .flatten()
                 .unwrap_or_default(),
-            SqlType::ForeignKey => row
-                .try_get::<Option<i64>, _>(name)?
-                .map_or(String::new(), |v| v.to_string()),
+            // PK lift (review #3): FK to a String/Uuid-PK target is a
+            // TEXT/native-uuid column on PG — decode by the target PK type.
+            SqlType::ForeignKey => match fk_target_pk_sql_type(col) {
+                Some(SqlType::Text) => row.try_get::<Option<String>, _>(name)?.unwrap_or_default(),
+                Some(SqlType::Uuid) => row
+                    .try_get::<Option<Uuid>, _>(name)?
+                    .map_or(String::new(), |v| v.to_string()),
+                _ => row
+                    .try_get::<Option<i64>, _>(name)?
+                    .map_or(String::new(), |v| v.to_string()),
+            },
             SqlType::Bytes => row
                 .try_get::<Option<Vec<u8>>, _>(name)?
                 .map_or(String::new(), |b| hex_encode(&b)),
@@ -1649,7 +1670,11 @@ pub fn decode_pg_to_string(
         | SqlType::Cidr
         | SqlType::MacAddr
         | SqlType::FullText => row.try_get::<String, _>(name).unwrap_or_default(),
-        SqlType::ForeignKey => row.try_get::<i64, _>(name)?.to_string(),
+        SqlType::ForeignKey => match fk_target_pk_sql_type(col) {
+            Some(SqlType::Text) => row.try_get::<String, _>(name)?,
+            Some(SqlType::Uuid) => row.try_get::<Uuid, _>(name)?.to_string(),
+            _ => row.try_get::<i64, _>(name)?.to_string(),
+        },
         SqlType::Bytes => hex_encode(&row.try_get::<Vec<u8>, _>(name)?),
         SqlType::Decimal => panic_pg_only_unsupported(&col.name),
     })

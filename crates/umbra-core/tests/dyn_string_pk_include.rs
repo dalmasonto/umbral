@@ -150,6 +150,26 @@ async fn select_related_dyn_expands_string_pk_target() {
 }
 
 #[tokio::test]
+async fn fetch_as_strings_renders_string_pk_fk_cell() {
+    // Review #3: the admin display path (`fetch_as_strings`) decoded every
+    // ForeignKey cell as i64. `Bookmark.tag` targets a String-PK `Tag`, so
+    // its column holds a slug — decoding it as i64 fails. It must render as
+    // the slug string.
+    boot().await;
+    let rows = DynQuerySet::for_meta(&meta_for("spk_bookmark"))
+        .order_by_col("id", false)
+        .fetch_as_strings()
+        .await
+        .expect("fetch_as_strings must not fail on a String-PK FK column");
+    assert!(rows.len() >= 3);
+    assert_eq!(rows[0].get("tag").map(String::as_str), Some("rust"));
+    assert_eq!(
+        rows[0].get("url").map(String::as_str),
+        Some("https://rust-lang.org")
+    );
+}
+
+#[tokio::test]
 async fn select_related_dyn_dedupes_string_pk_fk_ids_across_rows() {
     // Two of the three bookmarks point at slug="rust". The
     // pk-key dedup must collapse those into ONE bind in the
