@@ -121,6 +121,33 @@ impl FsStorage {
     }
 }
 
+/// Extensions whose files browsers render as active content (script can
+/// run). A user-uploaded file with one of these served inline is a stored
+/// XSS vector (WEB-4), so [`neutralise_active_content`] defangs them.
+const ACTIVE_CONTENT_EXTENSIONS: &[&str] = &[
+    "html", "htm", "xhtml", "shtml", "xml", "svg", "svgz", "js", "mjs", "mhtml", "htc", "vbs",
+];
+
+/// If `name`'s extension is active content (`.html`, `.svg`, `.js`, …),
+/// append `.txt` so the served file is inert `text/plain` instead of
+/// executable markup. Returns `name` unchanged otherwise. Case-insensitive.
+fn neutralise_active_content(name: &str) -> String {
+    let ext = name
+        .rsplit_once('.')
+        .map(|(_, e)| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    if ACTIVE_CONTENT_EXTENSIONS.contains(&ext.as_str()) {
+        tracing::warn!(
+            filename = %name,
+            "umbra-media: stored an active-content upload as `.txt` to prevent inline \
+             execution (stored-XSS defence, WEB-4)"
+        );
+        format!("{name}.txt")
+    } else {
+        name.to_string()
+    }
+}
+
 #[umbra::storage::async_trait]
 impl Storage for FsStorage {
     async fn store(
@@ -136,6 +163,15 @@ impl Storage for FsStorage {
             .filter(|c| !matches!(c, '/' | '\\' | '\0'))
             .take(120)
             .collect();
+        // WEB-4: neutralise active-content extensions. The serving layer
+        // (ServeDir) derives Content-Type from the on-disk extension, so a
+        // stored `x.html` / `x.svg` would be served as `text/html` /
+        // `image/svg+xml` and RENDERED INLINE — running attacker script on
+        // the app's origin (stored XSS), since these uploads are arbitrary
+        // bytes from untrusted clients. Appending `.txt` makes the file
+        // serve as inert `text/plain`; the bytes are preserved and still
+        // retrievable. Images/docs are untouched and still render normally.
+        let safe_name = neutralise_active_content(&safe_name);
         let key = format!("{}-{safe_name}", uuid::Uuid::new_v4());
         let path = self.path_for(&key);
         if let Some(parent) = path.parent() {
@@ -528,6 +564,42 @@ impl From<StorageError> for MediaError {
             StorageError::Io(io) => MediaError::Io(io),
             StorageError::NotFound => MediaError::Storage("object not found".to_string()),
             StorageError::Backend(s) => MediaError::Storage(s),
+        }
+    }
+}
+
+#[cfg(test)]
+mod active_content_tests {
+    use super::neutralise_active_content;
+
+    #[test]
+    fn dangerous_extensions_get_neutralised() {
+        for n in [
+            "evil.html",
+            "x.HTM",
+            "a.svg",
+            "p.SVG",
+            "s.js",
+            "m.mjs",
+            "d.xhtml",
+            "q.xml",
+        ] {
+            let out = neutralise_active_content(n);
+            assert!(out.ends_with(".txt"), "{n} should be defanged, got {out}");
+        }
+    }
+
+    #[test]
+    fn safe_files_are_untouched() {
+        for n in [
+            "photo.png",
+            "doc.pdf",
+            "a.jpg",
+            "data.csv",
+            "noext",
+            "archive.zip",
+        ] {
+            assert_eq!(neutralise_active_content(n), n, "{n} must be left as-is");
         }
     }
 }
