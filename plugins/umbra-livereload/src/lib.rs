@@ -244,9 +244,18 @@ async fn inject_client(
     req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
-    use axum::http::header::{CONTENT_LENGTH, CONTENT_TYPE};
+    use axum::http::HeaderValue;
+    use axum::http::header::{CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE};
 
-    let res = next.run(req).await;
+    let mut res = next.run(req).await;
+
+    // Dev = never let the browser cache. This is why a template/asset edit
+    // can look "stuck" after a save even with no cache plugin: the browser
+    // is serving its own cached copy. Force revalidation on every response
+    // (HTML, CSS, JS, …) so saves always show up. Dev-only — this layer is
+    // mounted only in `Environment::Dev`.
+    res.headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store, must-revalidate"));
 
     let is_html = res
         .headers()
