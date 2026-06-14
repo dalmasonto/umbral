@@ -36,6 +36,12 @@ pub(crate) const PLACEHOLDER_HTML: &str = include_str!("placeholder.html");
 pub struct PlaygroundPlugin {
     base_path: String,
     app_name: String,
+    /// Whether to mount under `Environment::Prod`. Default `false`
+    /// (WEB-6): the playground is an interactive request runner that
+    /// fires REST calls with the visitor's ambient cookies, so leaving it
+    /// reachable in production hands anyone who finds the URL a console
+    /// against the live API. Opt in with [`Self::allow_in_prod`].
+    allow_in_prod: bool,
 }
 
 impl Default for PlaygroundPlugin {
@@ -69,7 +75,20 @@ impl PlaygroundPlugin {
         Self {
             base_path: "/api/playground".to_string(),
             app_name: app_name.into(),
+            allow_in_prod: false,
         }
+    }
+
+    /// Allow the playground to mount in `Environment::Prod`.
+    ///
+    /// Off by default (WEB-6) — the playground runs live API requests with
+    /// the visitor's cookies, so it's dev/test-only unless you explicitly
+    /// accept exposing it (e.g. behind your own auth proxy). When this is
+    /// not set and the app runs in Prod, [`routes`](Plugin::routes) mounts
+    /// nothing and logs a warning.
+    pub fn allow_in_prod(mut self) -> Self {
+        self.allow_in_prod = true;
+        self
     }
 
     /// Mount under a different path. Trailing slashes are normalised.
@@ -103,6 +122,22 @@ impl Plugin for PlaygroundPlugin {
     }
 
     fn routes(&self) -> axum::Router {
+        // WEB-6: don't expose the request console in production unless the
+        // developer explicitly opted in. `get_opt` (not `get`) so this
+        // never panics before settings are installed (tests).
+        let is_prod = matches!(
+            umbra::settings::get_opt().map(|s| &s.environment),
+            Some(umbra::Environment::Prod)
+        );
+        if is_prod && !self.allow_in_prod {
+            tracing::warn!(
+                "umbra-playground: not mounting in Environment::Prod (the request console \
+                 runs live API calls with the visitor's cookies). Call \
+                 PlaygroundPlugin::new(..).allow_in_prod() to override.",
+            );
+            return axum::Router::new();
+        }
+
         let degraded = JS.starts_with("playground.placeholder");
         // Snapshot the configured `static_url` into the shell's asset
         // prefix. `routes()` runs at App::build Phase 5, after settings
