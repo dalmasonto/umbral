@@ -20,7 +20,7 @@ Anything in **Part B** that Umbra does not yet cover is a strategic gap — it b
 | 3 | **REST API Auto-generation** | Expose models as JSON endpoints with pagination, filtering, sorting with zero config. | ✅ `umbra-rest` — list, retrieve, create, update, delete |
 | 4 | **Database Migrations** | `makemigrations` + `migrate` that diffs models and generates safe SQL. | ✅ Phase 1 complete — autodetect, apply, track |
 | 5 | **CLI Scaffolding** | `startproject`, `startapp`, `createsuperuser` — reduces boilerplate to near zero. | ✅ `umbra-cli` ships all three |
-| 6 | **Hot Reload / Dev Server** | Edit a template or handler, see the change immediately without recompile. | ⚠️ Templates hot-reload; Rust source needs `cargo-watch` (Already done with `cargo run -- dev`) |
+| 6 | **Hot Reload / Dev Server** | Edit a template or handler, see the change immediately without recompile. | ✅ `umbra dev` (cargo-watch) + in-process template hot-reload + `umbra-livereload` — browser auto-reloads over SSE on template/CSS edits (CSS hot-swaps in place) and reconnect-reloads after a `.rs` rebuild. No manual refresh. |
 | 7 | **Simple Deployment** | Single binary + static files. No Docker required for side projects. | ✅ Cargo binary + `templates/` dir |
 | 8 | **Background Tasks / Job Queue** | Schedule emails, image processing, reports without blocking the web server. | ⚠️ `umbra-tasks` planned (M9) (There is some implementation of it, an improvement to use apalis) |
 | 9 | **Email Sending** | Password resets, notifications, transactional emails with SMTP or API backends. | ❌ Not yet implemented (There is AuthPlugin, needs proper extension to make it reusable and easily update some things like the email templates, the sending task, etc) |
@@ -74,7 +74,7 @@ Anything in **Part B** that Umbra does not yet cover is a strategic gap — it b
 
 ## Strategic Takeaway
 
-Umbra now covers roughly **80% of Part A** (added OAuth, file uploads/media, testing utilities + factories; FTS partial) and **~25% of Part B** (added health checks; data-masking via `Masked<T>` and RLS partial). Updated 2026-06-13.
+Umbra now covers roughly **80% of Part A** (added OAuth, file uploads/media, testing utilities + factories, browser live-reload via `umbra-livereload`; FTS partial) and **~25% of Part B** (added health checks; data-masking via `Masked<T>` and RLS partial). Updated 2026-06-14.
 
 The gap pattern is clear:
 - **Developer features** that Django already solved are being rebuilt well (admin, auth, REST, migrations, CLI).
