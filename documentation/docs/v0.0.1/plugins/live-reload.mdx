@@ -1,0 +1,113 @@
+---
+title: Live reload
+description: Edit a template, stylesheet, or asset and the browser refreshes itself — instantly, over SSE, with CSS hot-swapped in place. The Vite dev-loop feel for a server-rendered Rust app.
+sidebar_position: 18
+tags: [live-reload, dev, sse, dx, hot-reload, watch]
+---
+
+# Live reload
+
+Save a file, see it in the browser — no `Cmd-R`, no fighting the cache. `umbra-livereload` gives a server-rendered Rust app the dev loop you expect from Vite or `next dev`: a file watcher in the running server **pushes** a refresh to the browser the instant you save. Stylesheets hot-swap in place without a reload; templates and assets trigger a fast full reload; a `.rs` change rides the rebuild and reloads when the new binary is up.
+
+<Callout type="info">
+It's **opt-in** and **dev-only**. Add the plugin once; in `Environment::Dev` it mounts a tiny SSE endpoint, watches your files, and injects a small client script into every HTML page. In any other environment it does nothing — no route, no watcher, no injected script.
+</Callout>
+
+## Enabling it
+
+One line in your app builder:
+
+```rust
+use umbra_livereload::LiveReloadPlugin;
+
+App::builder()
+    .plugin(LiveReloadPlugin::new())   // watches ./templates and ./static
+    // ...your other plugins
+    .build()?;
+```
+
+And the dependency:
+
+```toml
+# Cargo.toml
+umbra-livereload = { version = "0.0.1" }
+```
+
+Run your app with the dev server so Rust changes rebuild automatically:
+
+```bash
+umbra dev
+```
+
+Now open the site and start editing. Saving `templates/home.html` refreshes the tab; saving `static/css/app.css` restyles it without losing scroll position.
+
+## How it works
+
+No polling. The browser holds **one** open connection and the server speaks first — the same shape Vite uses, minus the bundler.
+
+<Steps>
+<Step title="An SSE endpoint">
+The plugin mounts `GET /__umbra/livereload` — a Server-Sent Events stream. SSE is one-way (server → client), which is all a reload signal needs, and `EventSource` reconnects on its own.
+</Step>
+<Step title="A file watcher">
+On boot (Dev only) the plugin starts an OS file watcher over your watched paths. A save fires a native FS event; the plugin debounces the burst and publishes a single message.
+</Step>
+<Step title="A pushed event">
+A `.css` change publishes `{"type":"css"}`; anything else publishes `{"type":"reload"}`. The message is pushed down the open SSE connection — instantly, no request from the browser.
+</Step>
+<Step title="The client reacts">
+A tiny script (auto-injected before `</body>` on every HTML response) listens: `css` → swap every `<link rel="stylesheet">` with a cache-busted href (no reload); `reload` → `location.reload()`.
+</Step>
+</Steps>
+
+Because the client is injected by the framework, there is **zero per-app template work** — you don't add a script tag, you don't touch `base.html`. Any app that registers the plugin gets reload on every page.
+
+## CSS hot-swap vs. full reload
+
+This is the "only change what changed" win that's actually achievable for server-rendered HTML:
+
+| You save… | What happens |
+|---|---|
+| `*.css` | The `<link>` href is swapped with a `?v=…` cache-bust — styles update **in place**, no reload, scroll position kept. |
+| `*.html` / templates / other assets | Fast full `location.reload()`. |
+| `*.rs` (handlers, models, `main.rs`) | Handled by the rebuild → restart → reconnect path (below). |
+
+<Callout type="note">
+True HMR/hydration — re-running just one handler or swapping a single DOM fragment — needs a client-side module graph that a server-rendered app doesn't have. CSS hot-swap is the realistic partial update; everything else is a (fast) full reload.
+</Callout>
+
+## Rust changes reload too
+
+You don't watch `src/` — and shouldn't. When you edit `main.rs` or any handler, `umbra dev` (cargo-watch) rebuilds and restarts the server. That drops the SSE connection; the browser auto-reconnects to the new process, sees a new per-process **boot id**, and reloads. So a Rust edit reloads the page the moment the new build is serving — no premature refresh against a half-dead server.
+
+<Callout type="warning">
+The watcher deliberately **ignores `.rs`** (and `target/`, `node_modules/`, editor temp files). Reacting to a source save directly would reload the browser before the rebuild finished. Let the restart path handle Rust; let the watcher handle templates and assets.
+</Callout>
+
+## Watching more than the defaults
+
+`new()` watches `./templates` and `./static`. Projects with a different layout add roots — a **directory** (watched recursively) or a **single file**:
+
+```rust
+LiveReloadPlugin::new()
+    .watch("plugins")          // e.g. per-plugin template dirs under plugins/*/templates
+    .watch("content")          // a markdown/content tree
+    .watch("site.config.toml") // a single file
+```
+
+Or replace the list entirely with `.watch_only([...])`.
+
+Path handling is a **denylist**, not an allowlist: everything under a watched root triggers a reload *except* build inputs (`.rs`, lockfiles) and editor/VCS/build noise. So a non-standard layout just works by pointing `.watch(...)` at it — there's no extension list to keep in sync. A `.css` path hot-swaps; everything else reloads.
+
+## No stale pages in dev
+
+While it's mounted, the plugin also sends `Cache-Control: no-store, must-revalidate` on every response in Dev. That's the standard dev-server behaviour (Vite et al. do the same): it stops the browser from quietly serving its own cached copy, which is the usual reason a saved change "doesn't show up" even though the server is fresh.
+
+## Production
+
+Nothing ships to production. The endpoint, the watcher, and the script injection are all gated behind `Environment::Dev`, so a prod build carries the dependency but mounts none of it. You can leave the `.plugin(LiveReloadPlugin::new())` line in `main.rs` unconditionally.
+
+## See also
+
+- [Real-time push (SSE & WebSocket)](../realtime/sse) — the user-facing realtime plugin the dev loop's transport is modeled on.
+- [CLI & the dev server](../cli/management-commands) — `umbra dev` and the rebuild-on-save loop.

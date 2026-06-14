@@ -55,6 +55,7 @@ const CATALOG: &[Category] = &[
             Feat { name: "minijinja templates", summary: "Auto-escaped templates with a markdown filter and plugin dirs.", status: SH, maturity: STA },
             Feat { name: "Forms & validation", summary: "Form derive, field validation, friendly per-field errors.", status: US, maturity: BETA },
             Feat { name: "File & image fields", summary: "Multipart upload to a pluggable Storage backend.", status: SH, maturity: STA },
+            Feat { name: "Live reload (dev)", summary: "Save a template, CSS, or asset and the browser refreshes itself over SSE — CSS hot-swaps in place, no manual refresh. Opt-in umbra-livereload plugin, inert in production.", status: SH, maturity: BETA },
         ],
     },
     Category {
