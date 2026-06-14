@@ -231,6 +231,39 @@ Full-text search matches **lexemes**: whole words, normalised by the language co
 
 So a "reverse" or arbitrary substring like `tseb` will **never** match `best` — no full-text engine does that. The closest thing to partial-word matching is the prefix form (`prod:*` via `.matches`, or just typing a leading word in `.matches_websearch`). These rows are pinned by a live-Postgres test (`fts_matches_lexemes_not_substrings_or_reverses`).
 
+### Then why use it, if `?search=` can match `rodu` and it can't?
+
+Because matching `rodu` inside `product` is almost never what you want — it's noise. A substring scan (`?search=`, `LIKE '%term%'`) is literal and naive; a `tsvector` understands *words*, and the trade-off mostly runs the other way:
+
+| | `?search=` / `LIKE '%term%'` (substring) | `tsvector` + `.matches_websearch` (full-text) |
+|---|---|---|
+| `run` finds | `running` ✅ but **misses** `ran`; false-matches `brunch`, `prune` | `running`, `ran`, `runs` ✅ (stemmed); not `brunch` |
+| `cat` finds | `category`, `concatenate`, `education` (false positives) | the word `cat` only |
+| stop words | `the best` requires the literal `the` | `the` ignored — `best` is what counts |
+| operators | one literal substring | `best AND cheap`, `best OR great`, `-discontinued`, `"exact phrase"` |
+| ranking | none | `ts_rank` orders by relevance |
+| speed at scale | `'%term%'` can't use an index → full table scan, O(n) | GIN index → fast on millions of rows |
+
+So `rodu` failing is the *point*: full-text search indexes **meaning** (stemmed words), not character fragments. Reach for `?search=`/`LIKE` for "find this literal fragment" on small tables (SKUs, codes, exact substrings); reach for a `tsvector` for word-aware, ranked, index-backed search that scales.
+
+### Reading a `tsvector` column: you get lexemes, not your text
+
+A `tsvector` is a search index in column form — it stores the **lexeme document**, not your original text. `to_tsvector('english', 'The Best Product ever made')` stores:
+
+```text
+'best':2 'ever':4 'made':5 'product':3
+```
+
+— stemmed, lower-cased, stop-words dropped (`The` is gone), with word positions. The original phrasing, casing, and word order are **not** recoverable from it. So when you fetch a model, the `TsVector` field hands you that lexeme string, not `"The Best Product ever made"`:
+
+```rust
+let doc = Doc::objects().first_pg(&pool).await?.unwrap();
+doc.search.as_str();   // "'best':2 'ever':4 'made':5 'product':3"  ← not display text
+doc.title;             // "The Best Product ever made"             ← keep + show THIS
+```
+
+The takeaway: **keep your real text in a normal `TEXT` column** (`title`, `body`) — that's what you display and return in API responses — and **derive the `tsvector` from it** for searching. The two columns play different roles. Mark the `TsVector` field `#[serde(skip)]` if you don't want the raw lexeme vector leaking into JSON responses.
+
 <Callout type="warning">
 **Full-text search is *not* the REST `?search=` parameter.** They are two different mechanisms:
 
