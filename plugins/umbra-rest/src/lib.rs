@@ -76,6 +76,13 @@ pub use permission::{
 /// one served opts back in explicitly with `RestPlugin::expose(...)`.
 /// WEB-1: keeping framework-internal security/infra tables off the
 /// default surface limits the blast radius of the open-by-default API.
+/// Hard ceiling on rows a single list request can return, even under
+/// `NoPagination` (the default). PERF-1: stops `GET /api/<table>/` from
+/// buffering an unbounded table into memory. A resource that genuinely
+/// needs more configures a paginator with a higher page size; this is the
+/// floor that protects the default config.
+const MAX_LIST_ROWS: u64 = 1000;
+
 const DEFAULT_BLOCKED_TABLES: &[&str] = &[
     "auth_user",
     "session",
@@ -2228,10 +2235,16 @@ async fn fetch_rows(
         {
             qs = qs.filter_condition(cond);
         }
-        if let Some(req) = page
-            && req.limit != u64::MAX
-        {
-            qs = qs.limit(req.limit).offset(req.offset);
+        if let Some(req) = page {
+            // PERF-1: a list request must never issue an unbounded
+            // `SELECT * FROM table` that buffers a whole (possibly
+            // million-row) table into RAM — a DoS surface, and worse now
+            // that the endpoint is anonymously readable by default. When
+            // the paginator asks for "everything" (`NoPagination` →
+            // `limit u64::MAX`) we still clamp to a hard safety ceiling.
+            // A real bounded paginator passes a concrete limit, used as-is.
+            let effective_limit = req.limit.min(MAX_LIST_ROWS);
+            qs = qs.limit(effective_limit).offset(req.offset);
         }
     }
 
