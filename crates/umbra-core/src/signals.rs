@@ -146,13 +146,29 @@ fn registry() -> &'static Mutex<Registry> {
     REGISTRY.get_or_init(|| Mutex::new(Registry::new()))
 }
 
+/// Lock the registry, recovering from a poisoned mutex.
+///
+/// A sync signal handler that panics while we hold this lock would
+/// otherwise poison it, and every later `.expect(...)` would then panic
+/// — bricking *every* ORM write that emits a signal, permanently, for
+/// the life of the process. The registry is just a handler map: a
+/// panicking handler can't leave it half-mutated (it only ever reads the
+/// map while dispatching), so recovering the guard via `into_inner` is
+/// safe. Pairs with the `catch_unwind` around each sync handler in
+/// [`emit`], which stops a bad handler from poisoning the lock at all.
+fn lock_registry() -> std::sync::MutexGuard<'static, Registry> {
+    registry()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// Register a sync handler for `name`. Multiple handlers per name
 /// stack in registration order.
 pub fn subscribe<F>(name: &str, handler: F)
 where
     F: Fn(&Value) + Send + Sync + 'static,
 {
-    let mut reg = registry().lock().expect("signals registry poisoned");
+    let mut reg = lock_registry();
     reg.sync
         .entry(name.to_string())
         .or_default()
@@ -166,7 +182,7 @@ where
     F: Fn(&Value) -> Fut + Send + Sync + 'static,
     Fut: std::future::Future<Output = ()> + Send + 'static,
 {
-    let mut reg = registry().lock().expect("signals registry poisoned");
+    let mut reg = lock_registry();
     let wrapped: AsyncHandler = Box::new(move |payload| {
         let fut = handler(payload);
         Box::pin(fut)
@@ -195,11 +211,18 @@ pub async fn emit(name: &str, payload: Value) -> usize {
     // always present, which keeps subscriber payload-shape stable.
     let payload = with_payload_actor(payload);
     let (futures, total) = {
-        let reg = registry().lock().expect("signals registry poisoned");
+        let reg = lock_registry();
         let mut count = 0;
         if let Some(handlers) = reg.sync.get(name) {
             for h in handlers {
-                h(&payload);
+                // Isolate each handler: a panic here would otherwise
+                // poison the registry mutex (bricking every later signal
+                // emit, hence every ORM write) and abort this emit before
+                // the remaining handlers run. Catch it, log it, carry on.
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| h(&payload)));
+                if result.is_err() {
+                    tracing::error!(signal = %name, "sync signal handler panicked; skipping it");
+                }
                 count += 1;
             }
         }
@@ -440,7 +463,7 @@ pub async fn emit_m2m_changed(
 /// them.
 #[doc(hidden)]
 pub fn clear_for_tests() {
-    let mut reg = registry().lock().expect("signals registry poisoned");
+    let mut reg = lock_registry();
     reg.sync.clear();
     reg.r#async.clear();
 }

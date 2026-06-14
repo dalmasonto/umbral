@@ -24,14 +24,14 @@
 //!
 //! ## Why not just bind through sqlx directly
 //!
-//! The existing `umbra-rest` plugin binds JSON values straight to
-//! `sqlx::query::Query` via [`bind_json_value`] (in `plugins/umbra-
-//! rest/src/lib.rs`). That works only against `sqlx::Sqlite`. The
-//! umbra-core write methods support both backends (SQLite +
-//! Postgres), so they go through sea-query's typed Value enum, which
-//! `build_sqlx` then binds against whichever backend the resolved
-//! pool dictates. REST keeps its sqlite-only path until a future
-//! consolidation lifts it through here.
+//! Binding JSON values straight to a `sqlx::query::Query` ties you to
+//! one driver: the `?` placeholders the SQLite driver expects don't
+//! work on Postgres, so that shortcut is sqlite-only. The umbra-core
+//! write methods support both backends, so they go through sea-query's
+//! typed `Value` enum, which `build_sqlx` then binds against whichever
+//! backend the resolved pool dictates. The `umbra-rest` plugin's
+//! dynamic writes route through `DynQuerySet::insert_json` /
+//! `update_json`, which land here — so REST is backend-agnostic too.
 
 use sea_query::Value as SeaValue;
 use serde_json::Value as JsonValue;

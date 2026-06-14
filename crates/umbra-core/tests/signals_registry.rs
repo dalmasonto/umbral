@@ -137,3 +137,46 @@ async fn clear_for_tests_removes_all_handlers() {
         "handler should not fire after clear"
     );
 }
+
+#[tokio::test]
+async fn panicking_sync_handler_does_not_brick_the_registry() {
+    // Regression for the mutex-poisoning bug (gaps: BROKEN-3): a sync
+    // handler that panics used to poison the registry lock, so every
+    // *subsequent* emit — hence every ORM write that fires a signal —
+    // would panic forever. The panic must be caught and the registry
+    // must keep working: this emit returns normally, and a fresh
+    // subscribe + emit on a clean registry still dispatches.
+    let _guard = test_lock().lock().await;
+    clear_for_tests();
+
+    subscribe("boom", |_| panic!("handler blew up"));
+    let survivor = Arc::new(AtomicUsize::new(0));
+    let s = survivor.clone();
+    subscribe("boom", move |_| {
+        s.fetch_add(1, Ordering::SeqCst);
+    });
+
+    // Emitting must not propagate the panic, and the non-panicking
+    // sibling handler still runs.
+    let n = emit("boom", json!({})).await;
+    assert_eq!(n, 2, "both handlers are counted even though one panicked");
+    assert_eq!(
+        survivor.load(Ordering::SeqCst),
+        1,
+        "the sibling handler runs after the panicking one"
+    );
+
+    // The lock is not poisoned: a brand-new subscribe + emit works.
+    clear_for_tests();
+    let after = Arc::new(AtomicUsize::new(0));
+    let a = after.clone();
+    subscribe("after_panic", move |_| {
+        a.fetch_add(1, Ordering::SeqCst);
+    });
+    emit("after_panic", json!({})).await;
+    assert_eq!(
+        after.load(Ordering::SeqCst),
+        1,
+        "registry still usable after a handler panicked"
+    );
+}

@@ -3801,6 +3801,7 @@ checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 name = "umbra"
 version = "0.0.1"
 dependencies = [
+ "async-trait",
  "minijinja",
  "serde",
  "serde_json",
@@ -3891,6 +3892,7 @@ version = "0.0.1"
 dependencies = [
  "async-trait",
  "clap",
+ "csv",
  "sqlx",
  "tempfile",
  "tokio",
@@ -4093,6 +4095,7 @@ dependencies = [
  "futures-util",
  "http",
  "http-body-util",
+ "redis",
  "serde",
  "serde_json",
  "tokio",
@@ -4186,6 +4189,7 @@ dependencies = [
  "sqlx",
  "tempfile",
  "tokio",
+ "tracing",
  "umbra",
  "umbra-signals",
 ]

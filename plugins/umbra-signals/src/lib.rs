@@ -124,6 +124,31 @@ pub struct ModelSignals<M: Model> {
     _m: PhantomData<M>,
 }
 
+/// Decode the `"instance"` key of a signal payload into the model `M`.
+///
+/// Returns `None` (and logs a warning) when the JSON is present but
+/// doesn't deserialize into `M` — previously this swallowed the error
+/// with `.ok()` (gaps: BROKEN-5), so a payload/schema drift made typed
+/// handlers silently stop firing with nothing in the logs to explain it.
+/// A genuinely-absent instance (non-object) stays a quiet `None`.
+fn decode_instance<M: DeserializeOwned>(payload: &serde_json::Value) -> Option<M> {
+    let raw = &payload["instance"];
+    if !raw.is_object() {
+        return None;
+    }
+    match serde_json::from_value::<M>(raw.clone()) {
+        Ok(inst) => Some(inst),
+        Err(e) => {
+            tracing::warn!(
+                model = std::any::type_name::<M>(),
+                error = %e,
+                "signal payload could not be decoded into model; typed handler skipped"
+            );
+            None
+        }
+    }
+}
+
 impl<M> ModelSignals<M>
 where
     M: Model + Serialize + DeserializeOwned + Send + Sync + 'static,
@@ -142,9 +167,7 @@ where
     {
         let name = format!("pre_save:{}", M::TABLE);
         subscribe_async(&name, move |payload| {
-            let instance: Option<M> = payload["instance"]
-                .as_object()
-                .and_then(|_| serde_json::from_value(payload["instance"].clone()).ok());
+            let instance: Option<M> = decode_instance::<M>(payload);
             let created = payload["created"].as_bool().unwrap_or(false);
             let fut = instance.map(|inst| handler(&inst, created));
             async move {
@@ -169,9 +192,7 @@ where
     {
         let name = format!("post_save:{}", M::TABLE);
         subscribe_async(&name, move |payload| {
-            let instance: Option<M> = payload["instance"]
-                .as_object()
-                .and_then(|_| serde_json::from_value(payload["instance"].clone()).ok());
+            let instance: Option<M> = decode_instance::<M>(payload);
             let created = payload["created"].as_bool().unwrap_or(false);
             let fut = instance.map(|inst| handler(&inst, created));
             async move {
@@ -198,9 +219,7 @@ where
     {
         let name = format!("pre_delete:{}", M::TABLE);
         subscribe_async(&name, move |payload| {
-            let instance: Option<M> = payload["instance"]
-                .as_object()
-                .and_then(|_| serde_json::from_value(payload["instance"].clone()).ok());
+            let instance: Option<M> = decode_instance::<M>(payload);
             let fut = instance.map(|inst| handler(&inst));
             async move {
                 if let Some(f) = fut {
@@ -226,9 +245,7 @@ where
     {
         let name = format!("post_delete:{}", M::TABLE);
         subscribe_async(&name, move |payload| {
-            let instance: Option<M> = payload["instance"]
-                .as_object()
-                .and_then(|_| serde_json::from_value(payload["instance"].clone()).ok());
+            let instance: Option<M> = decode_instance::<M>(payload);
             let fut = instance.map(|inst| handler(&inst));
             async move {
                 if let Some(f) = fut {

@@ -437,7 +437,15 @@ pub async fn send(message: &EmailMessage) -> Result<(), EmailError> {
             // intended dev shape but it would leak password-reset
             // tokens or magic-link URLs in a production log
             // aggregator. Warn loudly when we're not in Dev.
-            if !matches!(umbra::settings::get().environment, umbra::Environment::Dev) {
+            // `get_opt` not `get`: sending mail before `App::build`
+            // initialises settings (a worker bootstrap, a test) must not
+            // panic. With settings absent we can't prove we're in Dev, so
+            // we take the safe branch and warn (gaps: BROKEN-6).
+            let is_dev = matches!(
+                umbra::settings::get_opt().map(|s| &s.environment),
+                Some(umbra::Environment::Dev)
+            );
+            if !is_dev {
                 tracing::warn!(
                     "umbra-email: console backend active outside Dev environment — \
                      email contents (including any tokens) will be printed to stderr. \
