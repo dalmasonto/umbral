@@ -216,6 +216,30 @@ Both predicates compile only for Postgres; use the `_pg` terminal variants (`.fe
 umbra's migration engine emits a bare `tsvector` column. Populating it is your responsibility: use a `GENERATED ALWAYS AS (to_tsvector('english', title)) STORED` clause in a hand-edited migration, or wire up a Postgres trigger. See the live-Postgres integration test in `crates/umbra-core/tests/fulltext_field.rs` for a working example.
 </Callout>
 
+### What full-text search matches — and what it doesn't
+
+Full-text search matches **lexemes**: whole words, normalised by the language config (stemming, case-folding, stop-word removal). It is **not** substring search and **not** fuzzy/reverse matching. This trips people up, so concretely, against a document `"The best product ever made"`:
+
+| Query | Matches? | Why |
+|---|---|---|
+| `matches_websearch("best product")` | ✅ | both lexemes present — a space means **AND** |
+| `matches_websearch("best")` | ✅ | `best` is a lexeme (and matches `Best` — case-folded) |
+| `matches_websearch("products")` | ✅ | stemmed to the same root as `product` |
+| `matches_websearch("tseb")` | ❌ | `tseb` (best reversed) is not a word in the document |
+| `matches_websearch("rodu")` | ❌ | a substring *inside* `product` is not a lexeme |
+| `matches("prod:*")` | ✅ | `:*` is a **prefix** match — the supported "partial word" |
+
+So a "reverse" or arbitrary substring like `tseb` will **never** match `best` — no full-text engine does that. The closest thing to partial-word matching is the prefix form (`prod:*` via `.matches`, or just typing a leading word in `.matches_websearch`). These rows are pinned by a live-Postgres test (`fts_matches_lexemes_not_substrings_or_reverses`).
+
+<Callout type="warning">
+**Full-text search is *not* the REST `?search=` parameter.** They are two different mechanisms:
+
+- **REST `/api/<table>/?search=term`** is a case-insensitive **substring** match (`UPPER(col) LIKE UPPER('%term%')`, i.e. Django's `icontains`) across the resource's text columns. `tsvector` columns are **skipped** by `?search=`. So `?search=best product` finds rows whose text literally contains the substring `best product`, and `?search=tseb` finds rows literally containing `tseb` — handy and forgiving, but it doesn't stem, rank, or use the GIN index.
+- **`TsVector` + `.matches()` / `.matches_websearch()`** is the ORM-level, index-backed, lexeme-based search shown above. There is currently no automatic `?search=` → `tsvector` wiring; to expose full-text search over HTTP today you add a custom resource action or a dedicated query parameter that calls `.matches_websearch(...)`. (Wiring `?search=` to prefer a model's `tsvector` column when one exists is a tracked enhancement.)
+
+Rule of thumb: reach for `?search=` for quick "contains this text" filtering on small/medium tables; reach for a `TsVector` column when you want word-aware, ranked, index-backed search at scale.
+</Callout>
+
 ## The table name
 
 By default the table is snake_case of the struct name - `BlogPost` becomes `blog_post`. Override with the struct-level attribute when you need a different name:
