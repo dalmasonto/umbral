@@ -145,6 +145,14 @@ pub trait Authentication: Send + Sync + 'static {
     fn security_schemes_all(&self) -> Vec<(String, serde_json::Value)> {
         self.security_scheme().into_iter().collect()
     }
+
+    /// True when this backend never identifies anyone — every request is
+    /// anonymous ([`NoAuthentication`]). Used only by the boot-time
+    /// security warning (WEB-1); defaults to `false` so a real backend is
+    /// never mistaken for the no-op.
+    fn is_anonymous(&self) -> bool {
+        false
+    }
 }
 
 // =========================================================================
@@ -161,6 +169,10 @@ pub struct NoAuthentication;
 impl Authentication for NoAuthentication {
     async fn authenticate(&self, _headers: &HeaderMap) -> Option<Identity> {
         None
+    }
+
+    fn is_anonymous(&self) -> bool {
+        true
     }
 }
 

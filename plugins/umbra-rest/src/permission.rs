@@ -111,6 +111,14 @@ impl std::error::Error for PermissionError {}
 /// reference avoids a clone per request.
 pub trait Permission: Send + Sync + 'static {
     fn check(&self, action: &Action, identity: Option<&Identity>) -> Result<(), PermissionError>;
+
+    /// True when this permission grants every action to anonymous
+    /// callers (i.e. [`AllowAny`]). Used only by the boot-time security
+    /// warning (WEB-1) that flags resources left wide open; defaults to
+    /// `false` so a custom permission is never mistaken for open.
+    fn is_open(&self) -> bool {
+        false
+    }
 }
 
 // =========================================================================
@@ -124,6 +132,10 @@ pub struct AllowAny;
 impl Permission for AllowAny {
     fn check(&self, _action: &Action, _identity: Option<&Identity>) -> Result<(), PermissionError> {
         Ok(())
+    }
+
+    fn is_open(&self) -> bool {
+        true
     }
 }
 

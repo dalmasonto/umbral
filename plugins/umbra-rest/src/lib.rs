@@ -68,9 +68,26 @@ pub use permission::{
 };
 
 /// The block-list every plugin starts with. Exposing these via REST
-/// would leak password hashes (auth_user), session IDs (session), or
-/// the migration tracking table itself.
-const DEFAULT_BLOCKED_TABLES: &[&str] = &["auth_user", "session", "umbra_migrations"];
+/// would leak password hashes (auth_user), session IDs (session), the
+/// migration tracking table, the authorization model itself (the
+/// `permissions_*` tables), the background-job queue (`task_row`, whose
+/// payloads can carry secrets and where "enqueue" is close to code
+/// execution), or the admin audit trail. A consumer who genuinely wants
+/// one served opts back in explicitly with `RestPlugin::expose(...)`.
+/// WEB-1: keeping framework-internal security/infra tables off the
+/// default surface limits the blast radius of the open-by-default API.
+const DEFAULT_BLOCKED_TABLES: &[&str] = &[
+    "auth_user",
+    "session",
+    "umbra_migrations",
+    "permissions_permission",
+    "permissions_contenttype",
+    "permissions_group",
+    "permissions_usergroup",
+    "permissions_userpermission",
+    "task_row",
+    "admin_audit_log",
+];
 
 /// Closure that transforms one field's JSON value to another. Used
 /// by [`RestPlugin::transform`]. The signature is `&Value -> Value`
@@ -1123,6 +1140,31 @@ impl Plugin for RestPlugin {
         // setting it here is safe.
         let _ = CONFIG.set(self.clone());
 
+        // WEB-1: shout if any exposed resource is reachable with no
+        // authentication AND an open (AllowAny) permission — that's
+        // anonymous full CRUD from the internet, the highest-leverage
+        // footgun in the API. We can't change the open-by-default
+        // contract from under existing apps, but a developer who didn't
+        // mean it sees exactly which tables are wide open at boot.
+        if self.authentication.is_anonymous() {
+            let open: Vec<String> = umbra::migrate::registered_models()
+                .iter()
+                .map(|m| m.table.clone())
+                .filter(|t| self.allow(t) && self.permission_for(t).is_open())
+                .collect();
+            if !open.is_empty() {
+                tracing::warn!(
+                    tables = %open.join(", "),
+                    "umbra-rest: {} resource(s) are exposed with NO authentication and an \
+                     AllowAny permission — anonymous clients can read AND write them \
+                     (POST/PUT/PATCH/DELETE). Set RestPlugin::authenticate(...) and/or a \
+                     per-resource .permission(...) (ReadOnly / IsAuthenticated / IsStaff), \
+                     or .exclude(...) the table if it shouldn't be served at all.",
+                    open.len(),
+                );
+            }
+        }
+
         let base = &self.base_path;
         let mut router = Router::new()
             .route(&format!("{base}/{{table}}/"), get(list).post(create))
@@ -1412,11 +1454,18 @@ impl umbra::web::IntoResponse for ApiError {
             ApiError::NotFound(m) => (StatusCode::NOT_FOUND, "not_found", m),
             ApiError::BadInput(m) => (StatusCode::BAD_REQUEST, "bad_input", m),
             ApiError::Validation { .. } => unreachable!("handled above"),
-            ApiError::Sqlx(e) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "database_error",
-                e.to_string(),
-            ),
+            ApiError::Sqlx(e) => {
+                // WEB-5: never echo raw DB error text to the client — it
+                // leaks table/column names, SQL fragments and constraint
+                // internals that aid an attacker. Log the detail
+                // server-side; hand the caller an opaque message.
+                tracing::error!(error = %e, "REST handler hit an unhandled database error");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "database_error",
+                    "internal server error".to_string(),
+                )
+            }
             ApiError::Json(e) => (StatusCode::BAD_REQUEST, "invalid_json", e.to_string()),
             ApiError::Unauthenticated => (
                 StatusCode::UNAUTHORIZED,
@@ -2269,6 +2318,29 @@ mod allow_block_unit {
         assert!(!p.allow("session"));
         assert!(!p.allow("umbra_migrations"));
         assert!(p.allow("article"));
+    }
+
+    /// WEB-1: the default block-list also covers the authorization model
+    /// (`permissions_*`), the background-job queue (`task_row`) and the
+    /// admin audit trail — none should be served unless explicitly
+    /// `expose`d. A normal business table stays served.
+    #[test]
+    fn default_plugin_blocks_permissions_tasks_and_audit_tables() {
+        let p = RestPlugin::new();
+        for blocked in [
+            "permissions_permission",
+            "permissions_contenttype",
+            "permissions_group",
+            "permissions_usergroup",
+            "permissions_userpermission",
+            "task_row",
+            "admin_audit_log",
+        ] {
+            assert!(!p.allow(blocked), "{blocked} must be blocked by default");
+        }
+        assert!(p.allow("product"), "business tables stay served");
+        // Opt-in still works for the new entries.
+        assert!(RestPlugin::new().expose(["task_row"]).allow("task_row"));
     }
 
     #[test]

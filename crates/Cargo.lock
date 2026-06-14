@@ -4124,6 +4124,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tower",
+ "tracing",
  "umbra",
  "uuid",
 ]
