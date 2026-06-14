@@ -75,3 +75,9 @@ All five findings fixed, each with a test (several verified against a live Postg
 | 5 | Med | `QuerySetTx::count()` uses `sea_query::Asterisk` (`COUNT(*)`) not `Alias::new("*")` (`COUNT("*")`) | `57bd7ab` | `tx_count_pg.rs` (live PG `COUNT(*)` in a transaction) |
 
 Two helpers (`fk_effective_type`, `pk_meta_for_table`) were re-exported from the facade (`umbra::migrate`) for the plugin fixes. Full workspace test re-run after the changes.
+
+### Follow-up (same day)
+
+Running the **full workspace** suite after the fixes caught a regression in fix #1 itself: decoding the joined PK with the column's declared `nullable: false` let SQLite coerce a NULL (left-join miss) to `0`, so a parent with no M2M children got a phantom child. Fixed in `790b092` — a `joined_pk_is_null` helper per backend decodes the PK as *nullable* (correct miss detection) while staying PK-agnostic; all 8 presence sites use it. `join_related`/`join_related_m2m`/`joins_nested`/`values_traversal`/`pk_string_join_values` are green.
+
+**Known, pre-existing, unrelated:** the full-workspace run is non-deterministic because many test `boot()` helpers share one `connect_sqlite("sqlite::memory:")` pool across per-`#[tokio::test]` tokio runtimes; the in-memory DB doesn't reliably survive a runtime drop, so tests intermittently see "no such table" (e.g. `filter_m2m`, `annotate_autodiscover`, `phase2_sheet`) — all pass 100% in isolation. Two `connect_sqlite`-level fixes (single-connection; named shared-cache) were tried against the deterministic `--test-threads=1` repro and BOTH failed, confirming it's the test pattern, not the helper. The real fix is test-level (temp-file SQLite DBs, or a shared multi-thread runtime); tracked as a separate test-infra task.
