@@ -8,6 +8,7 @@ Django-parity gaps grounded in an actual in-tree need (not speculation). Broad, 
 ---
 
 ## MISS-1 — No `select_for_update()` / `skip_locked()` anywhere in the ORM
+> **⏳ DEFERRED** — optimization only; the task double-claim it was for is closed by BROKEN-1 (`98ef6e9`).
 **Severity: medium** · **Verified** (zero hits for `FOR UPDATE` / `for_update` / `skip_locked` in `crates/umbra-core/src`)
 
 - **Evidence:** The ORM has no row-locking primitive. This isn't a theoretical gap — it's the exact operation `umbra-tasks` needed and worked around incorrectly (see [BROKEN-1](broken-features.md)). The tasks `claim_one` wraps a read-then-update in a transaction and *claims in a comment* that this prevents Postgres double-claims, but without `FOR UPDATE SKIP LOCKED` it doesn't.

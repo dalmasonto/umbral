@@ -11,6 +11,7 @@ Scope: `umbra-rest`, `umbra-admin`, `umbra-playground`, `umbra-openapi`, `umbra-
 ---
 
 ## WEB-1 — Insecure REST default: anonymous full CRUD on every model
+> **✅ FIXED** (`20042bf`, `2013af3`) — block-list + boot warning, and ReadOnly is now the default permission (writes need opt-in).
 **Severity: critical** · **Verified** (`lib.rs:188` falls back to `AllowAny`; `lib.rs:243` defaults `authentication` to `NoAuthentication`)
 
 - **File:** `plugins/umbra-rest/src/lib.rs:184-188` (`permission_for` → `AllowAny`), `:243` (`NoAuthentication`), `:73`/`:693-710` (`allow` / `DEFAULT_BLOCKED_TABLES`)
@@ -19,6 +20,7 @@ Scope: `umbra-rest`, `umbra-admin`, `umbra-playground`, `umbra-openapi`, `umbra-
 - **Fix:** Default to a write-protecting permission (`ReadOnly` or `IsAuthenticated`); require explicit `.expose(...)` opt-in for write actions. At minimum, log a loud boot warning when a resource is mounted with `AllowAny + NoAuthentication`, and extend the block-list to the permissions and tasks tables. This is the highest-leverage fix in the review — see WEB-2, which it amplifies.
 
 ## WEB-2 — Mass assignment: dynamic writes strip `noform` but not `noedit`
+> **✅ FIXED** (`73ef05d`, `2013af3`) — admin honors noform/noedit on write; REST `hide()` strips fields on create/update.
 **Severity: high** · **Verified** (`crates/umbra-core/src/orm/dynamic.rs:1039` and `:1290` strip only `col.noform`; no `noedit` branch anywhere on the write path)
 
 - **File:** `plugins/umbra-rest/src/lib.rs:1257-1317` (`create`/`update` → `insert_json`/`update_json`); `crates/umbra-core/src/orm/dynamic.rs:1016-1047`, `:1275-1298`
@@ -27,6 +29,7 @@ Scope: `umbra-rest`, `umbra-admin`, `umbra-playground`, `umbra-openapi`, `umbra-
 - **Fix:** Treat `noedit` as non-writable on the dynamic write path (strip it like `noform`); make REST `hide()` imply write-protection, or add an explicit per-resource writable allow-list. Document that hiding a field does not protect it on write.
 
 ## WEB-3 — Reflected XSS in the admin filter dialog (`</script>` breakout)
+> **✅ FIXED** (`4cf24e1`) — `tojson` escapes `<`/`>`/`&` + line separators; regression test.
 **Severity: high** · **Verified** (`engine.rs:42-45` `tojson` wraps `serde_json::to_string` in `Value::from_safe_string`; `filter_dialog.html:218` interpolates it into an inline `<script>`)
 
 - **File:** `plugins/umbra-admin/templates/_macros/filter_dialog.html:218`, fed by `plugins/umbra-admin/src/handlers/list.rs:857-875`; values parsed in `plugins/umbra-admin/src/pagination.rs:89-110`; filter registered in `plugins/umbra-admin/src/engine.rs:42-45`
@@ -35,6 +38,7 @@ Scope: `umbra-rest`, `umbra-admin`, `umbra-playground`, `umbra-openapi`, `umbra-
 - **Fix:** Use a script-context-safe encoder that escapes `<`, `>`, `&`, `/` (at least `</` → `<\/` and `<!--`), as Django's `json_script` does; or emit data in `<script type="application/json">` read via `JSON.parse(textContent)` instead of interpolating into executable JS.
 
 ## WEB-4 — Stored XSS via user-uploaded HTML/SVG served inline (umbra-media)
+> **✅ FIXED** (`a9f931d`) — active-content uploads neutralised to inert `.txt` at store time.
 **Severity: high**
 
 - **File:** `plugins/umbra-media/src/lib.rs:131-178` (`save`), `:190-210` (`routes`/`ServeDir`)
@@ -43,6 +47,7 @@ Scope: `umbra-rest`, `umbra-admin`, `umbra-playground`, `umbra-openapi`, `umbra-
 - **Fix:** Ship a built-in extension/MIME allow-list (default images/docs); refuse `.html`/`.svg`/`.xhtml`/`.js` unless explicitly opted in; serve user uploads with `Content-Disposition: attachment` or from a separate cookieless origin. `save` should enforce the allow-list rather than delegating entirely to the caller.
 
 ## WEB-5 — Raw DB error text leaked in REST 500 responses
+> **✅ FIXED** (`20042bf`) — DB errors logged server-side; generic message to the client.
 **Severity: medium**
 
 - **File:** `plugins/umbra-rest/src/lib.rs:1065-1069`
@@ -51,6 +56,7 @@ Scope: `umbra-rest`, `umbra-admin`, `umbra-playground`, `umbra-openapi`, `umbra-
 - **Fix:** Return a generic message in prod, log detail server-side (as `umbra-admin/src/util.rs::sanitise_form_error` already does), gate any detail behind `Environment::Dev`.
 
 ## WEB-6 — API playground exposed unauthenticated, runs requests with the victim's cookies
+> **✅ FIXED** (`83701c0`) — playground does not mount in Prod without `allow_in_prod()`.
 **Severity: medium**
 
 - **File:** `plugins/umbra-playground/src/routes.rs:130-148`, `plugins/umbra-playground/src/lib.rs:118-124`
@@ -59,6 +65,7 @@ Scope: `umbra-rest`, `umbra-admin`, `umbra-playground`, `umbra-openapi`, `umbra-
 - **Fix:** Default the playground to dev-only or gate routes on `is_staff`; refuse to mount (or warn) under `Environment::Prod`.
 
 ## WEB-7 — Admin bulk-actions and FK-autocomplete skip object/model permission checks
+> **✅ FIXED** (`4cf24e1`) — permcheck on bulk-actions (run + dispatch) and FK pickers.
 **Severity: medium**
 
 - **File:** `plugins/umbra-admin/src/handlers/actions.rs:116-236` (`dispatch_action`), `plugins/umbra-admin/src/handlers/fk_picker.rs:35` (`fk_options`)

@@ -10,6 +10,7 @@ Code that cannot work as written, swallows failures, or contradicts its own docs
 ---
 
 ## BROKEN-1 — Tasks: two Postgres workers can claim and run the same task
+> **✅ FIXED** (`98ef6e9`) — conditional `UPDATE ... WHERE status='pending'` claim guard.
 **Severity: high** · **Verified** (`claim_one` SELECTs `status='pending'` then UPDATEs `WHERE id = ?` only; no `FOR UPDATE SKIP LOCKED` anywhere in `crates/umbra-core/src`)
 
 - **File:** `plugins/umbra-tasks/src/lib.rs:372-417` (`claim_one`)
@@ -18,6 +19,7 @@ Code that cannot work as written, swallows failures, or contradicts its own docs
 - **Fix:** Add `select_for_update(skip_locked)` to the QuerySet (no-op on SQLite, `FOR UPDATE SKIP LOCKED` on Postgres) and use it in `claim_one` (see MISS-1). At minimum make the UPDATE conditional (`WHERE id = ? AND status = 'pending'`) and check `rows_affected` as an optimistic guard. Fix the comment either way.
 
 ## BROKEN-2 — Tasks: worker crash mid-task permanently loses the task
+> **⏳ DEFERRED** — needs a lease/reclaim watcher (larger change).
 **Severity: high**
 
 - **File:** `plugins/umbra-tasks/src/lib.rs:60-63, 420-496`
@@ -26,6 +28,7 @@ Code that cannot work as written, swallows failures, or contradicts its own docs
 - **Fix:** `started_at` is already stamped — have the worker loop reclaim rows where `status='running' AND started_at < now() - timeout` back to `pending`, or fold into the planned apalis migration. Log a gaps entry until then.
 
 ## BROKEN-3 — Core signals: a panicking sync handler poisons the registry mutex and bricks every ORM write
+> **✅ FIXED** (`23ad8b0`) — poison-recovering lock + `catch_unwind` per handler; regression test.
 **Severity: high**
 
 - **File:** `crates/umbra-core/src/signals.rs:189-220` (also `:155, :169, :443`)
@@ -34,6 +37,7 @@ Code that cannot work as written, swallows failures, or contradicts its own docs
 - **Fix:** Clone the sync-handler invocation out from under the lock (handlers are `Arc`-able), wrap each call in `catch_unwind`, and replace `.expect` with `lock().unwrap_or_else(|p| p.into_inner())` to shrug off poisoning.
 
 ## BROKEN-4 — `run_worker` "graceful shutdown" calls `std::process::exit(0)` from library code
+> **✅ FIXED** (`98ef6e9`) — `run_worker` returns on shutdown, no `process::exit`.
 **Severity: medium** (doc says it panics — neither is the documented behavior)
 
 - **File:** `plugins/umbra-tasks/src/lib.rs:321-334`
@@ -42,6 +46,7 @@ Code that cannot work as written, swallows failures, or contradicts its own docs
 - **Fix:** Change `run_worker` to return `Result<(), TaskError>` (the doc already says "M10+ can lift this to a Result" — lift it now); let the caller decide process exit.
 
 ## BROKEN-5 — umbra-signals typed handlers silently never fire on deserialize failure
+> **✅ FIXED** (`23ad8b0`) — typed handlers log a warning on decode failure instead of `.ok()` swallow.
 **Severity: medium**
 
 - **File:** `plugins/umbra-signals/src/lib.rs:145-149` (same at `:172, :201, :229`); core mirror at `signals.rs:233-235`
@@ -50,6 +55,7 @@ Code that cannot work as written, swallows failures, or contradicts its own docs
 - **Fix:** `tracing::warn!` (table + serde error) on the deserialize-failure branch in all four methods and core's serialize-failure branches.
 
 ## BROKEN-6 — umbra-email `send()` panics on the console backend when settings aren't initialised
+> **✅ FIXED** (`23ad8b0`) — email uses `settings::get_opt`, treats unknown env as not-Dev.
 **Severity: medium**
 
 - **File:** `plugins/umbra-email/src/lib.rs:440` vs `:357-362`
@@ -58,6 +64,7 @@ Code that cannot work as written, swallows failures, or contradicts its own docs
 - **Fix:** Use `umbra::settings::get_opt()` and treat `None` as Dev (or warn that environment is unknown).
 
 ## BROKEN-7 — `cache_page` body-collection failure fabricates an empty 200 with stale headers
+> **✅ FIXED** (`17939c4`) — logs + returns 502 instead of a fake empty 200; never caches it.
 **Severity: medium**
 
 - **File:** `plugins/umbra-cache/src/cache_page.rs:177-186`
@@ -66,6 +73,7 @@ Code that cannot work as written, swallows failures, or contradicts its own docs
 - **Fix:** Log the error and return 500 (or strip `Content-Length` and propagate a 502-style error); never re-use the success `parts` with a fabricated body.
 
 ## BROKEN-8 — `Form<T>` extractor ignores `Content-Type` and swallows body-parse failures into "field required" errors
+> **✅ FIXED** (`dbb57c8`) — `Form<T>` 415s a wrong Content-Type, 400s a malformed body.
 **Severity: medium**
 
 - **File:** `crates/umbra-core/src/forms.rs:862-876`
@@ -74,6 +82,7 @@ Code that cannot work as written, swallows failures, or contradicts its own docs
 - **Fix:** Check `Content-Type`; on mismatch or parse error return 415/400 (or a distinct non-field `FormErrors` naming the parse failure).
 
 ## BROKEN-9 — `CachePlugin` registered via `.plugin(...)` is inert
+> **✅ FIXED** (`17939c4`) — `CachePlugin::new(cache)` wires the ambient cache in `on_ready`; no-cache form warns.
 **Severity: medium** (doc-contract)
 
 - **File:** `plugins/umbra-cache/src/lib.rs:74-75, 466-484`
@@ -82,11 +91,11 @@ Code that cannot work as written, swallows failures, or contradicts its own docs
 - **Fix:** Give `CachePlugin` a constructor carrying the `Cache` and set the OnceLock in `Plugin::on_ready` — or correct the doc and emit a boot-time warning when `cache_page` layers exist with no ambient cache.
 
 ## Lower-severity
-- **BROKEN-10 (low–med)** — `MemoryBackend` never evicts expired entries except on read (`umbra-cache/src/lib.rs:241-276`); `SqliteBackend` has `sweep()`, memory has none. Write-once-read-never keys (e.g. `cache_page` keys for long-tail query strings) grow unbounded — a crawler inflates RSS without limit. Add opportunistic purge on `set`, a `sweep()` parity method, and/or a max-entry cap. (Expiry-on-read itself is correctly enforced.)
-- **BROKEN-11 (low)** — Embedded static service answers every HTTP method with the body (`umbra-static/src/lib.rs:288-313`): `EmbeddedDirService::call` never inspects `req.method()`, so `POST /widget/assets/app.js` returns 200+body (Fs mode correctly returns 405). Embedded mode also lacks the ETag/`If-Modified-Since` the module doc attributes to the plugin. Early-return 405 for non-GET/HEAD; consider a content-hash ETag.
-- **BROKEN-12 (low)** — `CacheBackend` trait doc promises "backends swallow errors internally **and log them**" (`umbra-cache/src/lib.rs:129-132`) but `SqliteBackend::set/delete/clear` and all `RedisBackend` methods are `let _ = …` with no `tracing` (`:362-384, :433-450`). A dead Redis / locked SQLite means every cache write silently no-ops forever. Add `tracing::warn!` on each swallowed `Err`.
-- **BROKEN-13 (low)** — Stale comment in `crates/umbra-core/src/orm/write.rs:26-34` claims umbra-rest still has a SQLite-only `bind_json_value` path; `bind_json_value`/`sqlx::Sqlite` no longer exist in `plugins/umbra-rest/src/`. Delete/update the paragraph — it sends the next dev hunting a Postgres-breaking path that was already fixed.
-- **BROKEN-14 (low)** — `#[derive(Form)]` rejection message (`crates/umbra-macros/src/lib.rs:3019-3025`) lists only `required, optional, email, password, min_length, max_length, length(...)` but the parser also accepts `phone`, `url`, `regex = "..."`, `message = "..."` (`:2963-2976`). Extend the message.
+- **BROKEN-10 (low–med)** ⏳ DEFERRED — `MemoryBackend` never evicts expired entries except on read (`umbra-cache/src/lib.rs:241-276`); `SqliteBackend` has `sweep()`, memory has none. Write-once-read-never keys (e.g. `cache_page` keys for long-tail query strings) grow unbounded — a crawler inflates RSS without limit. Add opportunistic purge on `set`, a `sweep()` parity method, and/or a max-entry cap. (Expiry-on-read itself is correctly enforced.)
+- **BROKEN-11 (low)** ⏳ DEFERRED — Embedded static service answers every HTTP method with the body (`umbra-static/src/lib.rs:288-313`): `EmbeddedDirService::call` never inspects `req.method()`, so `POST /widget/assets/app.js` returns 200+body (Fs mode correctly returns 405). Embedded mode also lacks the ETag/`If-Modified-Since` the module doc attributes to the plugin. Early-return 405 for non-GET/HEAD; consider a content-hash ETag.
+- **BROKEN-12 (low)** ⏳ DEFERRED — `CacheBackend` trait doc promises "backends swallow errors internally **and log them**" (`umbra-cache/src/lib.rs:129-132`) but `SqliteBackend::set/delete/clear` and all `RedisBackend` methods are `let _ = …` with no `tracing` (`:362-384, :433-450`). A dead Redis / locked SQLite means every cache write silently no-ops forever. Add `tracing::warn!` on each swallowed `Err`.
+- **BROKEN-13 (low)** ✅ FIXED (23ad8b0) — Stale comment in `crates/umbra-core/src/orm/write.rs:26-34` claims umbra-rest still has a SQLite-only `bind_json_value` path; `bind_json_value`/`sqlx::Sqlite` no longer exist in `plugins/umbra-rest/src/`. Delete/update the paragraph — it sends the next dev hunting a Postgres-breaking path that was already fixed.
+- **BROKEN-14 (low)** ⏳ DEFERRED — `#[derive(Form)]` rejection message (`crates/umbra-macros/src/lib.rs:3019-3025`) lists only `required, optional, email, password, min_length, max_length, length(...)` but the parser also accepts `phone`, `url`, `regex = "..."`, `message = "..."` (`:2963-2976`). Extend the message.
 
 ## Plugin-contract review (raw `sqlx::query` in plugins)
 | Hit | Verdict |

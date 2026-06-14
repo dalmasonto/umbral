@@ -16,6 +16,7 @@ The ORM is built on **sea-query** (`Expr::col(Alias::new(...))` for identifiers,
 ---
 
 ## ORM-1 — Unescaped LIKE wildcards in `contains`/`startswith`/`search` (LIKE-injection)
+> **✅ FIXED** (`586ed84`) — escape_like_literal + LikeExpr::escape on every literal-substring lookup; behavioral test.
 **Severity: low–medium** — functional bug + minor DB-side DoS. **Not** SQL injection: values are bound parameters.
 
 - **File:**

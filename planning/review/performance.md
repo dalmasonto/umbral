@@ -12,6 +12,7 @@ Scope: `crates/umbra-core/src/orm/` (queryset, hydration, dynamic, m2m, aggregat
 ---
 
 ## PERF-1 — REST list endpoint defaults to an unbounded full-table load
+> **✅ FIXED** (`06f19df`) — list queries clamp to a 1000-row ceiling even under NoPagination.
 **Severity: high** · **Verified** (`PageRequest::all()` sets `limit: u64::MAX` at `pagination.rs:58`; `lib.rs:1463` applies LIMIT only `&& req.limit != u64::MAX`)
 
 - **File:** `plugins/umbra-rest/src/lib.rs:242` (default `NoPagination`), `plugins/umbra-rest/src/pagination.rs:56-59` (`PageRequest::all()` → `limit: u64::MAX`), `plugins/umbra-rest/src/lib.rs:1462-1466` (limit skipped when `u64::MAX`)
@@ -20,6 +21,7 @@ Scope: `crates/umbra-core/src/orm/` (queryset, hydration, dynamic, m2m, aggregat
 - **Fix:** Default `RestPlugin` to a bounded paginator (`PageNumberPagination::new(50)` or `LimitOffsetPagination::default()`), or make `NoPagination` still apply a hard safety ceiling. At minimum, warn at boot when a resource is mounted with `NoPagination`.
 
 ## PERF-2 — Foreign-key columns are never auto-indexed
+> **⏳ DEFERRED** — auto-indexing FKs touches the migration generator + needs generated migrations.
 **Severity: high** · **Verified** (`migrate.rs:2743` emits `CREATE INDEX` only `if col.index && !col.primary_key && !col.unique`; the derive macro never sets `index=true` for FK fields)
 
 - **File:** `crates/umbra-macros/src/lib.rs:1162` (`index` true only with explicit `#[umbra(index)]`), `crates/umbra-core/src/migrate.rs:2742-2745, 2808-2810` (the only `CREATE INDEX` trigger)
@@ -28,6 +30,7 @@ Scope: `crates/umbra-core/src/orm/` (queryset, hydration, dynamic, m2m, aggregat
 - **Fix:** Default `FieldSpec.index = true` for FK fields in the derive macro (with an opt-out), and emit `CREATE INDEX` for FK columns in `CreateTable`/`AddColumn`. Note this is a migration-engine change — existing tables need a generated migration to add the indexes (do not hand-edit; run `makemigrations`).
 
 ## PERF-3 — `bulk_create` runs N×F per-row FK-existence COUNT queries before the single INSERT
+> **⏳ DEFERRED** — batch the per-row FK COUNT into one query (moderate).
 **Severity: high** · **Verified** (`queryset/mod.rs:2869` loops `validate_on_typed_create` per row; that path runs a `.count()` per FK)
 
 - **File:** `crates/umbra-core/src/orm/queryset/mod.rs:2869-2872` (per-instance validation loop) → `orm/validation.rs:80-87` → `validate_fk_references` (`validation.rs:411-435`) → `check_fk_row_exists` (`validation.rs:487-503`, one `DynQuerySet::count()`)
@@ -36,6 +39,7 @@ Scope: `crates/umbra-core/src/orm/` (queryset, hydration, dynamic, m2m, aggregat
 - **Fix:** Batch FK validation — collect distinct `(target_table, ids)` across all rows, issue one `SELECT pk FROM target WHERE pk IN (...)` per FK target, diff. Or lean on the DB FK constraint (already on for SQLite per `db.rs:295`) and classify the error. Also switch `check_fk_row_exists` from `count()` to `exists()` (see PERF-7).
 
 ## PERF-4 — Admin M2M edit form loads the entire target table as candidates
+> **⏳ DEFERRED** — admin M2M form candidate loading (UI-side).
 **Severity: medium**
 
 - **File:** `plugins/umbra-admin/src/view.rs:322-329` (`form_m2m_fields_for`); comment acknowledging it at `:256-258`
@@ -44,6 +48,7 @@ Scope: `crates/umbra-core/src/orm/` (queryset, hydration, dynamic, m2m, aggregat
 - **Fix:** Cap candidates and switch to the HTMX chip-picker — the `fk_picker` handler already does paged search correctly; reuse it for M2M.
 
 ## PERF-5 — Postgres pool has no size/timeout configuration
+> **✅ FIXED** (`65c39d0`) — PgPoolOptions with acquire_timeout + configurable max_connections.
 **Severity: medium**
 
 - **File:** `crates/umbra-core/src/db.rs:258` — `PgPool::connect(url)`
@@ -52,6 +57,7 @@ Scope: `crates/umbra-core/src/orm/` (queryset, hydration, dynamic, m2m, aggregat
 - **Fix:** Use `PgPoolOptions` with configurable `max_connections`/`acquire_timeout`/`max_lifetime`, surfaced through a settings knob.
 
 ## PERF-6 — Task `claim_one` has no row-level lock (perf + correctness)
+> **✅ FIXED** (`98ef6e9`) — conditional claim guard (correctness); FOR UPDATE SKIP LOCKED still a future optimization.
 **Severity: medium** — same root issue as [BROKEN-1](broken-features.md)/[MISS-1](query-api-sufficiency.md), noted here for the throughput angle.
 
 - **File:** `plugins/umbra-tasks/src/lib.rs:377-417`
@@ -59,8 +65,8 @@ Scope: `crates/umbra-core/src/orm/` (queryset, hydration, dynamic, m2m, aggregat
 - **Fix:** Add `FOR UPDATE SKIP LOCKED` to the candidate SELECT on Postgres — which requires the missing ORM `.select_for_update()` terminal (see [MISS-1](query-api-sufficiency.md)).
 
 ## Lower-severity
-- **PERF-7 (low)** — `exists()` materializes a full row instead of `SELECT 1` (`crates/umbra-core/src/orm/queryset/mod.rs:1352-1360`): `self.limit(1).fetch()` hydrates `T` via FromRow just to discard it. On wide tables (BLOB/text) this pays full column materialization for a boolean. Called on every `has_perm_scoped` direct-grant check (`permissions/perm.rs:133`). Reshape to `SELECT 1 ... LIMIT 1` with a scalar row type, mirroring `count()`. (Documented as a known M1 simplification.)
-- **PERF-8 (low)** — `user_perms`/membership helpers fetch full rows to read one FK column (`plugins/umbra-permissions/src/perm.rs:189-207`, `membership.rs:202-205`): `...fetch().await?.into_iter().map(|up| up.permission_id.id())` pulls every column to extract one id. Query count is already optimal (no N+1); narrow tables make this minor. Project with `values(&["permission_id"])`/`only()`.
+- **PERF-7 (low)** ⏳ DEFERRED — `exists()` materializes a full row instead of `SELECT 1` (`crates/umbra-core/src/orm/queryset/mod.rs:1352-1360`): `self.limit(1).fetch()` hydrates `T` via FromRow just to discard it. On wide tables (BLOB/text) this pays full column materialization for a boolean. Called on every `has_perm_scoped` direct-grant check (`permissions/perm.rs:133`). Reshape to `SELECT 1 ... LIMIT 1` with a scalar row type, mirroring `count()`. (Documented as a known M1 simplification.)
+- **PERF-8 (low)** ⏳ DEFERRED — `user_perms`/membership helpers fetch full rows to read one FK column (`plugins/umbra-permissions/src/perm.rs:189-207`, `membership.rs:202-205`): `...fetch().await?.into_iter().map(|up| up.permission_id.id())` pulls every column to extract one id. Query count is already optimal (no N+1); narrow tables make this minor. Project with `values(&["permission_id"])`/`only()`.
 
 ## Done well (no action)
 - **Batched select_related / prefetch / reverse-FK / M2M** — `hydration.rs`/`dynamic.rs` issue exactly `1 + len(relations)` queries regardless of parent row count; loops embed pre-fetched buckets, never query inside the row loop. No N+1.
