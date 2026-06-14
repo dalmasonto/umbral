@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tower::ServiceExt;
 
-use umbra_rest::{ActionContext, ActionError, ActionScope, ResourceConfig, RestPlugin};
+use umbra_rest::{ActionContext, ActionError, ActionScope, AllowAny, ResourceConfig, RestPlugin};
 
 #[derive(Debug, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
 struct Doc {
@@ -66,7 +66,11 @@ async fn boot() -> axum::Router {
         .settings(settings)
         .database("default", pool)
         .model::<Doc>()
-        .plugin(RestPlugin::default().resource(resource))
+        .plugin(
+            RestPlugin::default()
+                .default_permission(AllowAny)
+                .resource(resource),
+        )
         .build()
         .expect("App::build");
 

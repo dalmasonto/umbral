@@ -20,7 +20,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio::sync::OnceCell;
 use tower::ServiceExt;
 
-use umbra_rest::RestPlugin;
+use umbra_rest::{AllowAny, RestPlugin};
 
 #[derive(Debug, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
 struct Note {
@@ -52,7 +52,7 @@ async fn boot() -> &'static axum::Router {
             .settings(settings)
             .database("default", pool)
             .model::<Note>()
-            .plugin(RestPlugin::default())
+            .plugin(RestPlugin::default().default_permission(AllowAny))
             .build()
             .expect("App::build with RestPlugin");
 
@@ -348,7 +348,9 @@ async fn update_against_missing_row_returns_404() {
 
 #[test]
 fn include_only_overrides_the_default_allow_list() {
-    let plugin = RestPlugin::new().include_only(["article"]);
+    let plugin = RestPlugin::new()
+        .default_permission(AllowAny)
+        .include_only(["article"]);
     // Crude check: the plugin's `allow` method (private but
     // observable via the route handlers; here we inspect through
     // an exposed proxy in a future round). For now the unit assertion

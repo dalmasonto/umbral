@@ -202,9 +202,15 @@ pub struct RestPlugin {
     authentication: Arc<dyn Authentication>,
     /// Per-table permission classes, keyed by table name. Populated
     /// when a [`ResourceConfig`] with `.permission(...)` is merged
-    /// via [`Self::resource`]. Tables without an entry default to
-    /// [`AllowAny`].
+    /// via [`Self::resource`]. Tables without an entry fall back to
+    /// [`Self::default_permission`].
     permissions: HashMap<String, Arc<dyn Permission>>,
+    /// Fallback permission for tables with no explicit `.permission(...)`.
+    /// Defaults to [`ReadOnly`] (WEB-1: safe by default — anonymous reads,
+    /// no anonymous writes). Override the blanket default with
+    /// [`Self::default_permission`] — e.g. `AllowAny` to restore the old
+    /// fully-open behaviour, or `IsAuthenticated` for an app behind auth.
+    default_permission: Arc<dyn Permission>,
     /// Per-table opt-in view scope, keyed by table name. `None` (no
     /// entry) means "all actions exposed" — backward-compatible.
     /// `Some(set)` restricts the table to exactly that set of
@@ -262,13 +268,33 @@ impl Default for RestPlugin {
 }
 
 impl RestPlugin {
-    /// Resolve the permission class for a table, defaulting to
-    /// [`AllowAny`] if no `ResourceConfig::permission(...)` was set.
+    /// Resolve the permission class for a table.
+    ///
+    /// WEB-1: the default is now [`ReadOnly`], **not** `AllowAny`. A
+    /// resource with no explicit `.permission(...)` serves anonymous
+    /// reads (List/Retrieve) but rejects every write (Create/Update/
+    /// Delete) with 403. Open writes are now an explicit opt-in:
+    /// `.permission("table", AllowAny)` (or a real permission /
+    /// authentication backend). This closes "add RestPlugin, get a read
+    /// API, and silently expose anonymous full CRUD on every model".
     fn permission_for(&self, table: &str) -> Arc<dyn Permission> {
         self.permissions
             .get(table)
             .cloned()
-            .unwrap_or_else(|| Arc::new(AllowAny))
+            .unwrap_or_else(|| self.default_permission.clone())
+    }
+
+    /// Set the blanket fallback permission for every table that has no
+    /// explicit `ResourceConfig::permission(...)`.
+    ///
+    /// The default is [`ReadOnly`] (WEB-1). Pass [`AllowAny`] to restore
+    /// the old fully-open behaviour (anonymous CRUD on every model — only
+    /// do this for a trusted/internal deployment), or [`IsAuthenticated`]
+    /// for an app where every endpoint sits behind login. A per-resource
+    /// `.permission(...)` always wins over this default.
+    pub fn default_permission<P: Permission>(mut self, perm: P) -> Self {
+        self.default_permission = Arc::new(perm);
+        self
     }
 
     /// True when this action is mounted for this table. Tables
@@ -325,6 +351,7 @@ impl RestPlugin {
             pagination: Arc::new(NoPagination),
             authentication: Arc::new(NoAuthentication),
             permissions: HashMap::new(),
+            default_permission: Arc::new(ReadOnly),
             view_scope: HashMap::new(),
             actions: HashMap::new(),
             filters_disabled: std::collections::HashSet::new(),
@@ -905,6 +932,19 @@ impl RestPlugin {
     /// `apply_overrides` removes.
     pub(crate) fn is_field_hidden(&self, table: &str, field: &str) -> bool {
         self.hidden.iter().any(|(t, f)| t == table && f == field)
+    }
+
+    /// Drop every REST-hidden field from an inbound write body.
+    ///
+    /// WEB-2: hiding a field (`ResourceConfig::hide` / `RestPlugin::hide`)
+    /// removes it from responses (`apply_overrides`), but the column stayed
+    /// *writable* — so `PATCH /api/x {"hidden_field": ...}` could still set
+    /// it (mass assignment / privilege escalation when the hidden field is
+    /// something like `is_admin`). Stripping it here makes `hide` symmetric:
+    /// hidden in, hidden out. The ORM still strips `noform` columns on its
+    /// own; this layers the REST `hide` list on top.
+    pub(crate) fn strip_hidden_for_write(&self, table: &str, body: &mut Map<String, Value>) {
+        body.retain(|k, _| !self.is_field_hidden(table, k));
     }
 
     fn allow(&self, table: &str) -> bool {
@@ -1800,6 +1840,9 @@ async fn create(
 
     let nested_specs = cfg.nested.get(&table).cloned().unwrap_or_default();
 
+    // WEB-2: a hidden field must not be writable (see strip_hidden_for_write).
+    cfg.strip_hidden_for_write(&table, &mut body);
+
     // Flat path (the common case) — unchanged, zero overhead. The ORM owns
     // pre-validation + constraint classification + noform-stripping;
     // `insert_json` returns a structured `WriteError` that
@@ -1991,13 +2034,16 @@ fn scalar_to_string(v: &Value) -> String {
 async fn update(
     Path((table, id)): Path<(String, String)>,
     headers: umbra::web::HeaderMap,
-    Json(body): Json<Map<String, Value>>,
+    Json(mut body): Json<Map<String, Value>>,
 ) -> Result<Json<Map<String, Value>>, ApiError> {
     let cfg = CONFIG.get().expect("RestPlugin::routes was called");
     let identity = cfg.authentication.authenticate(&headers).await;
     let model = allowed_model(&table)?;
     cfg.gate(&table, &Action::Update, identity.as_ref())?;
     let pk = pk_column(&model)?;
+
+    // WEB-2: a hidden field must not be writable (see strip_hidden_for_write).
+    cfg.strip_hidden_for_write(&table, &mut body);
 
     // 404 if the target row doesn't exist before we attempt the UPDATE.
     let no_filter = FilterClause::default();

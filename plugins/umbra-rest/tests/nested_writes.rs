@@ -15,7 +15,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tower::ServiceExt;
 
 use umbra::orm::ForeignKey;
-use umbra_rest::{ResourceConfig, RestPlugin};
+use umbra_rest::{AllowAny, ResourceConfig, RestPlugin};
 
 #[derive(Debug, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
 struct Order {
@@ -48,6 +48,7 @@ async fn boot() -> axum::Router {
         .expect("pool");
 
     let rest = RestPlugin::default()
+        .default_permission(AllowAny)
         .resource(ResourceConfig::for_::<Order>().nested("items", "order_item"));
 
     let app = umbra::App::builder()

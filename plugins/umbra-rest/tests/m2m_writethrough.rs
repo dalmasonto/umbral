@@ -20,7 +20,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio::sync::OnceCell;
 use tower::ServiceExt;
 use umbra::orm::{M2M, SqlType, load_junction_selection};
-use umbra_rest::RestPlugin;
+use umbra_rest::{AllowAny, RestPlugin};
 
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
 struct Tag {
@@ -60,7 +60,7 @@ async fn boot() -> &'static axum::Router {
             .database("default", pool)
             .model::<Tag>()
             .model::<Post>()
-            .plugin(RestPlugin::default())
+            .plugin(RestPlugin::default().default_permission(AllowAny))
             .build()
             .expect("App::build");
 

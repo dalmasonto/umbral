@@ -29,7 +29,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio::sync::OnceCell;
 use tower::ServiceExt;
 use umbra::orm::ForeignKey;
-use umbra_rest::RestPlugin;
+use umbra_rest::{AllowAny, RestPlugin};
 
 #[derive(Debug, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
 struct Author {
@@ -68,7 +68,7 @@ async fn boot() -> &'static axum::Router {
             .database("default", pool)
             .model::<Author>()
             .model::<Comment>()
-            .plugin(RestPlugin::default())
+            .plugin(RestPlugin::default().default_permission(AllowAny))
             .build()
             .expect("App::build");
 

@@ -22,7 +22,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio::sync::OnceCell;
 use tower::ServiceExt;
 
-use umbra_rest::{ActionScope, ResourceConfig, RestPlugin};
+use umbra_rest::{ActionScope, AllowAny, ResourceConfig, RestPlugin};
 
 #[derive(Debug, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
 struct Post {
@@ -94,7 +94,9 @@ async fn boot() -> &'static axum::Router {
             .await
             .expect("pool");
 
-        let rest = RestPlugin::default().resource(build_resource());
+        let rest = RestPlugin::default()
+            .default_permission(AllowAny)
+            .resource(build_resource());
 
         let app = umbra::App::builder()
             .settings(settings)

@@ -18,14 +18,17 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio::sync::OnceCell;
 use tower::ServiceExt;
 
-use umbra_rest::RestPlugin;
+use umbra_rest::{AllowAny, RestPlugin};
 
 #[derive(Debug, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
 struct User {
     id: i64,
     username: String,
     email: String,
-    password_hash: String,
+    // Hidden + server-managed: not settable through the public write API
+    // (WEB-2), so it's modelled as optional — a create that omits it (or
+    // has it stripped) is valid.
+    password_hash: Option<String>,
     first_name: String,
     last_name: String,
 }
@@ -67,6 +70,7 @@ async fn boot() -> &'static axum::Router {
         // 2. masks `email` so only the domain leaks;
         // 3. synthesises a `display_name` from first + last.
         let rest = RestPlugin::default()
+            .default_permission(AllowAny)
             // single-str form — proves &str: HideFields keeps the old
             // call shape compiling unchanged (non-breaking).
             .hide("user", "password_hash")
@@ -103,7 +107,7 @@ async fn boot() -> &'static axum::Router {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,\
                 username TEXT NOT NULL,\
                 email TEXT NOT NULL,\
-                password_hash TEXT NOT NULL,\
+                password_hash TEXT,\
                 first_name TEXT NOT NULL,\
                 last_name TEXT NOT NULL\
              )",
@@ -228,11 +232,11 @@ async fn create_response_omits_hidden_fields() {
         body.get("password_hash").is_none(),
         "password_hash leaked into create response: {body}"
     );
-    // The column itself was still written — the hide is an outbound-
-    // shape transformation, not a column-level access restriction.
-    // (Verifying that would mean reading the column from the DB; the
-    // surrounding `is_some` on `id` is enough to confirm the row
-    // landed.)
+    // WEB-2: the client-supplied `password_hash` was STRIPPED before the
+    // write — hiding a field now protects it on writes too, not just on
+    // responses. The row was created from the remaining fields (the
+    // `password_hash` column took its DB default `''`), so a crafted POST
+    // can't set a hidden column. `id` present confirms the row landed.
     assert!(body.get("id").is_some(), "create should return new id");
 }
 

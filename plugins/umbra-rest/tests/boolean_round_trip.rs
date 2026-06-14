@@ -15,7 +15,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio::sync::OnceCell;
 use tower::ServiceExt;
 
-use umbra_rest::RestPlugin;
+use umbra_rest::{AllowAny, RestPlugin};
 
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
 struct Product {
@@ -56,7 +56,7 @@ async fn boot() -> &'static axum::Router {
             .settings(settings)
             .database("default", pool)
             .model::<Product>()
-            .plugin(RestPlugin::default())
+            .plugin(RestPlugin::default().default_permission(AllowAny))
             .build()
             .expect("App::build with RestPlugin");
 
