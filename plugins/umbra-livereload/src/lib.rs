@@ -200,7 +200,7 @@ async fn sse_handler() -> impl axum::response::IntoResponse {
 const CLIENT_SNIPPET: &str = r#"<script data-umbra-livereload>
 (function () {
   if (!("EventSource" in window)) return;
-  var booted = null;
+  var booted = null, es = null, lostLogged = false;
   function bustCss() {
     document.querySelectorAll('link[rel="stylesheet"]').forEach(function (l) {
       var base = (l.href || "").split("?")[0];
@@ -208,8 +208,9 @@ const CLIENT_SNIPPET: &str = r#"<script data-umbra-livereload>
     });
   }
   function connect() {
-    var es = new EventSource("/__umbra/livereload");
+    es = new EventSource("/__umbra/livereload");
     es.addEventListener("hello", function (e) {
+      lostLogged = false;
       // First connect records the boot id; a different id after a
       // reconnect means the server restarted → reload.
       if (booted === null) booted = e.data;
@@ -221,9 +222,20 @@ const CLIENT_SNIPPET: &str = r#"<script data-umbra-livereload>
       if (d.type === "css") bustCss();
       else location.reload();
     });
-    // EventSource auto-reconnects on error; the 'hello' handler above
-    // turns a reconnect-to-a-restarted-server into a reload.
+    es.onerror = function () {
+      // Expected while `umbra dev` rebuilds: the server drops the stream
+      // (the browser logs a one-off network error) and EventSource
+      // reconnects on its own — the next 'hello' carrying a new boot id
+      // then reloads the page. Not an app error.
+      if (!lostLogged) {
+        lostLogged = true;
+        console.debug("[umbra livereload] connection lost — server rebuilding? reconnecting…");
+      }
+    };
   }
+  // Close cleanly on our own reload/navigation so we don't add an extra
+  // incomplete-stream error to the console.
+  window.addEventListener("beforeunload", function () { if (es) es.close(); });
   connect();
 })();
 </script>"#;
