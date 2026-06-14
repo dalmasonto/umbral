@@ -131,7 +131,8 @@ impl umbra::cli::PluginCommand for WorkerCommand {
             let _ran = run_worker_once().await?;
             Ok(())
         } else {
-            run_worker(WorkerOptions::default()).await
+            run_worker(WorkerOptions::default()).await;
+            Ok(())
         }
     }
 }
@@ -318,19 +319,22 @@ impl Default for WorkerOptions {
     }
 }
 
-/// The polling loop. Runs forever (or until `opts.shutdown` flips to
-/// `true`): claim one pending due row, dispatch its handler, write back
-/// the terminal state, loop.
+/// The polling loop. Runs until `opts.shutdown` flips to `true`: claim
+/// one pending due row, dispatch its handler, write back the terminal
+/// state, loop. Returns normally on shutdown.
 ///
-/// Never returns under normal operation; the `!` return type signals
-/// that to the type system. A graceful shutdown is modelled as a
-/// `panic!` rather than a normal return because v1 only needs the
-/// process-exit semantics; M10+ can lift this to a `Result`.
-pub async fn run_worker(mut opts: WorkerOptions) -> ! {
+/// BROKEN-4: this used to `std::process::exit(0)` on shutdown and return
+/// `!`. That's fatal in a single-binary deployment where the worker is
+/// `tokio::spawn`ed alongside the web server — exiting the worker task
+/// would tear down the entire process, HTTP server included. A library
+/// function must never call `process::exit`; it returns and lets the
+/// caller decide what happens next.
+pub async fn run_worker(mut opts: WorkerOptions) {
     loop {
         if *opts.shutdown.borrow() {
-            // Cooperative shutdown. Process exits cleanly.
-            std::process::exit(0);
+            // Cooperative shutdown — hand control back to the caller
+            // instead of killing the process.
+            return;
         }
         match run_worker_once().await {
             Ok(true) => {}
@@ -371,9 +375,19 @@ pub async fn run_worker_once() -> Result<bool, TaskError> {
 
 /// Atomically claim one pending due row by flipping it to `running` and
 /// returning the row contents. Wrapped in a transaction so a concurrent
-/// worker can't double-claim — SQLite's single-writer model already
-/// guarantees this, but the explicit transaction keeps the contract
-/// correct for the Postgres backend.
+/// worker can't double-claim.
+///
+/// BROKEN-1: SQLite's single-writer model makes this safe there, but on
+/// Postgres (READ COMMITTED) two workers could `SELECT` the same row
+/// before either `UPDATE`s it, then both flip it to `running` — the same
+/// task runs twice. The guard is the **conditional UPDATE**: the WHERE
+/// clause re-asserts `status = 'pending'`, so the claim only counts if it
+/// actually transitioned the row. On Postgres the second worker's UPDATE
+/// blocks on the first's row lock, then re-evaluates the predicate
+/// against the committed `running` row, matches nothing, and reports zero
+/// affected rows — so it loses the race cleanly and we return `None`.
+/// (A future `SELECT ... FOR UPDATE SKIP LOCKED` — MISS-1 — would avoid
+/// the wasted SELECT, but this is already correct on both backends.)
 async fn claim_one() -> Result<Option<TaskRow>, TaskError> {
     let now = Utc::now();
     umbra::transaction(|tx| {
@@ -400,11 +414,16 @@ async fn claim_one() -> Result<Option<TaskRow>, TaskError> {
                 "attempts".to_string(),
                 serde_json::Value::from(new_attempts),
             );
-            TaskRow::objects()
-                .filter(task_row::ID.eq(row.id))
+            // Conditional claim: only transition the row if it's STILL
+            // pending. `affected == 0` means another worker beat us to it.
+            let affected = TaskRow::objects()
+                .filter(task_row::ID.eq(row.id) & task_row::STATUS.eq(STATUS_PENDING))
                 .on_tx(tx)
                 .update_values(patch)
                 .await?;
+            if affected == 0 {
+                return Ok(None);
+            }
             // Reflect the in-DB mutations in the row we return so the
             // caller doesn't need to re-SELECT.
             row.status = STATUS_RUNNING.to_string();
