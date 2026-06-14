@@ -75,9 +75,11 @@ pub(super) fn hydrate_joined_rels<T: Model + HydrateRelated>(
                 continue;
             };
             let pk_alias = format!("{prefix}__{}", pk_col.name);
-            let pk_is_null = row
-                .try_get::<Option<i64>, _>(pk_alias.as_str())
-                .map(|v| v.is_none())
+            // PK-agnostic presence check: decode the related PK via its
+            // column's SqlType, not i64 — so a String/slug- or Uuid-keyed
+            // joined row isn't mistaken for a left-join miss.
+            let pk_is_null = crate::orm::dynamic::decode_pg_to_json_aliased(row, pk_col, &pk_alias)
+                .map(|v| v.is_null())
                 .unwrap_or(true);
             if pk_is_null {
                 deeper = None;
@@ -124,9 +126,9 @@ pub(super) fn extract_m2m_child_json<T: Model>(
         return Ok(None);
     };
     let pk_alias = format!("{m2m_seg}__{}", pk_col.name);
-    let pk_null = row
-        .try_get::<Option<i64>, _>(pk_alias.as_str())
-        .map(|v| v.is_none())
+    // PK-agnostic presence check (see hydrate_joined_rels).
+    let pk_null = crate::orm::dynamic::decode_pg_to_json_aliased(row, pk_col, &pk_alias)
+        .map(|v| v.is_null())
         .unwrap_or(true);
     if pk_null {
         return Ok(None);
@@ -153,9 +155,8 @@ pub(super) fn extract_m2m_child_json<T: Model>(
                 continue;
             };
             let hpk_alias = format!("{prefix}__{}", hpk.name);
-            let hpk_null = row
-                .try_get::<Option<i64>, _>(hpk_alias.as_str())
-                .map(|v| v.is_none())
+            let hpk_null = crate::orm::dynamic::decode_pg_to_json_aliased(row, hpk, &hpk_alias)
+                .map(|v| v.is_null())
                 .unwrap_or(true);
             if hpk_null {
                 deeper = None;
