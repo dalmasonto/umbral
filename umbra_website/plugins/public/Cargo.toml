@@ -15,6 +15,10 @@ chrono = { version = "0.4", features = ["serde"] }
 # never internals.
 plugin_directory = { path = "../plugin_directory" }
 site_content = { path = "../site_content" }
+# The homepage trust strip renders a curated slice of approved reviews
+# via reviews::featured_reviews() — keeping byline/initials logic in one
+# place instead of duplicating it on the landing page.
+reviews = { path = "../reviews" }
 
 [dev-dependencies]
 # The render smoke-test (tests/render_home.rs) drives an async handler

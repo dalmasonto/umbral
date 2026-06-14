@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Dashboard{% endblock %}
 {% block content %}
+<div class="mx-auto max-w-[1200px] px-7 py-10">
   <h1 class="text-3xl font-bold mb-2">Website dashboard</h1>
   <p class="text-gray-500 mb-6">Logged in as <strong>{{ user.username }}</strong></p>
 
@@ -11,4 +12,84 @@
       accounts, and community data will be modeled in their app crates.
     </p>
   </div>
+
+  {% if user.is_superuser %}
+  {# Live admin notifications — superusers only. Events are pushed by user
+     id to superusers (see notify_admins in main.rs), so this panel only
+     ever fills for a superuser; a normal session is never targeted. #}
+  <div class="rounded border border-gray-200 bg-white p-4 mt-4">
+    <h2 class="text-lg font-semibold flex items-center gap-2">
+      <span class="relative flex h-2 w-2"><span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent opacity-75"></span><span class="relative inline-flex h-2 w-2 rounded-full bg-accent"></span></span>
+      Live admin notifications
+    </h2>
+    <p class="mt-1 text-sm text-gray-500">New submissions — plugin notes, reviews, plugin submissions, contact messages, and sponsor inquiries — appear here in real time over SSE.</p>
+    <ul id="admin-feed" class="mt-3 space-y-2 text-sm"></ul>
+    <p id="admin-feed-empty" class="mt-3 text-sm text-gray-400">Waiting for activity…</p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+{% if user.is_superuser %}
+<div id="admin-toasts" style="position:fixed;right:18px;bottom:18px;z-index:120;display:flex;flex-direction:column;gap:8px;"></div>
+<script>
+(function () {
+  "use strict";
+  if (!("EventSource" in window)) return;
+
+  // The SSE handshake resolves identity from the session; the server only
+  // targets superusers with `admin_notification`, so no group is needed.
+  var es = new EventSource("/realtime/sse");
+  es.addEventListener("admin_notification", function (e) {
+    var d = {};
+    try { d = JSON.parse(e.data); } catch (_) {}
+    addFeed(d);
+    toast(d.title || "New activity");
+  });
+
+  function addFeed(d) {
+    var ul = document.getElementById("admin-feed");
+    if (!ul) return;
+    var empty = document.getElementById("admin-feed-empty");
+    if (empty) empty.style.display = "none";
+
+    var li = document.createElement("li");
+    li.className = "flex items-center justify-between gap-3 rounded border border-gray-100 bg-gray-50 px-3 py-2";
+
+    var left = document.createElement("span");
+    left.textContent = d.title || "New activity";
+    li.appendChild(left);
+
+    var right = document.createElement("span");
+    right.className = "flex items-center gap-3 text-gray-400";
+    var time = document.createElement("span");
+    time.textContent = new Date().toLocaleTimeString();
+    right.appendChild(time);
+    if (d.url) {
+      var a = document.createElement("a");
+      a.href = d.url;
+      a.textContent = "Review →";
+      a.className = "font-semibold text-accent-2";
+      right.appendChild(a);
+    }
+    li.appendChild(right);
+    ul.insertBefore(li, ul.firstChild);
+  }
+
+  function toast(text) {
+    var box = document.getElementById("admin-toasts");
+    if (!box) return;
+    var el = document.createElement("div");
+    el.style.cssText = "background:#1b1714;color:#fff;padding:11px 14px;border-radius:10px;box-shadow:0 12px 30px -12px rgba(0,0,0,.5);font-size:13.5px;max-width:320px;transition:opacity .4s ease;";
+    el.textContent = text;
+    box.appendChild(el);
+    setTimeout(function () {
+      el.style.opacity = "0";
+      setTimeout(function () { el.remove(); }, 420);
+    }, 5000);
+  }
+})();
+</script>
+{% endif %}
 {% endblock %}

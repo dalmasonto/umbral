@@ -65,7 +65,45 @@ module.exports = {
         terminal: '0 24px 60px -28px rgba(27, 23, 20, 0.45)',
         panel: '0 30px 60px -40px rgba(27, 23, 20, 0.25)',
       },
+      // Long-form prose (blog posts) via @tailwindcss/typography. The
+      // `prose` class is themed to the warm site palette through the
+      // --tw-prose-* variables so it tracks the design system instead of
+      // the plugin's default gray. Inline-code backtick quotes are
+      // disabled (the plugin adds `::before`/`::after` "`" by default).
+      typography: () => ({
+        DEFAULT: {
+          css: {
+            maxWidth: 'none',
+            '--tw-prose-body': 'var(--ink-2)',
+            '--tw-prose-headings': 'var(--ink)',
+            '--tw-prose-lead': 'var(--muted)',
+            '--tw-prose-links': 'var(--accent-2)',
+            '--tw-prose-bold': 'var(--ink)',
+            '--tw-prose-counters': 'var(--faint)',
+            '--tw-prose-bullets': 'var(--accent-line)',
+            '--tw-prose-hr': 'var(--hairline)',
+            '--tw-prose-quotes': 'var(--muted)',
+            '--tw-prose-quote-borders': 'var(--accent-line)',
+            '--tw-prose-captions': 'var(--faint)',
+            '--tw-prose-code': 'var(--ink-2)',
+            '--tw-prose-pre-code': 'var(--shade-ink)',
+            '--tw-prose-pre-bg': 'var(--shade)',
+            '--tw-prose-th-borders': 'var(--hairline)',
+            '--tw-prose-td-borders': 'var(--hairline)',
+            'code::before': { content: 'none' },
+            'code::after': { content: 'none' },
+            code: {
+              fontWeight: '500',
+              background: 'var(--surface-2)',
+              border: '1px solid var(--hairline-2)',
+              borderRadius: '5px',
+              padding: '0.12em 0.4em',
+            },
+            'a:hover': { color: 'var(--accent)' },
+          },
+        },
+      }),
     },
   },
-  plugins: [],
+  plugins: [require('@tailwindcss/typography')],
 };

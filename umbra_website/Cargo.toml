@@ -23,6 +23,7 @@ umbra-playground   = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-playg
 umbra-media        = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-media" }  # Uploaded-file storage abstraction (local FS + S3).
 umbra-oauth        = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-oauth" }  # OAuth / social login (Google, GitHub) + account connection.
 umbra-realtime     = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-realtime" }  # SSE + WebSocket real-time push (live note feed).
+umbra-livereload   = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-livereload" }  # Dev-only browser live-reload (SSE push + file watcher). Opt-in, inert outside Dev.
 
 # ----- Available built-ins (uncomment + register in main.rs to enable) -----
 # umbra-tasks        = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-tasks" }  # DB-backed background task queue (Celery-equivalent).
@@ -35,6 +36,7 @@ umbra-realtime     = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-realt
 # ----- Third-party + framework runtime deps --------------------------------
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing = "0.1"  # admin-notification superuser-lookup logging.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"  # dashboard Table widget rows are `Vec<serde_json::Value>`.
 chrono = { version = "0.4", features = ["serde"] }
@@ -52,4 +54,5 @@ showcase = { path = "plugins/showcase" }
 security_reports = { path = "plugins/security_reports" }
 accounts = { path = "plugins/accounts" }
 community = { path = "plugins/community" }
+sponsor = { path = "plugins/sponsor" }
 public = { path = "plugins/public" }

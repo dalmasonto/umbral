@@ -35,7 +35,16 @@ impl PluginTrait for TemplatesOnly {
         Vec::new()
     }
     fn templates_dirs(&self) -> Vec<PathBuf> {
-        vec![PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("templates")]
+        // home.html imports `plugin_directory/_macros.html`, so the test
+        // must register that dir too — exactly as production does via
+        // PluginDirectoryPlugin::templates_dirs(). Without it the engine
+        // can't resolve the macro import and the render errors.
+        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let plugins_dir = manifest.parent().unwrap();
+        vec![
+            manifest.join("templates"),
+            plugins_dir.join("plugin_directory").join("templates"),
+        ]
     }
     fn on_ready(&self, _ctx: &AppContext) -> Result<(), PluginError> {
         Ok(())
@@ -123,6 +132,9 @@ async fn home_renders_real_rows_and_honest_dash() {
     let deprecated_count: Option<i64> = Some(0);
     let form_submissions: Option<i64> = Some(3);
     let glue_lines: i64 = 0;
+    // Empty reviews → the trust strip renders its honest empty state
+    // ("Be the first…"), never fabricated testimonials.
+    let reviews: Vec<i64> = Vec::new();
 
     let html = umbra::templates::render(
         "public/home.html",
@@ -134,6 +146,7 @@ async fn home_renders_real_rows_and_honest_dash() {
             deprecated_count => deprecated_count,
             form_submissions => form_submissions,
             glue_lines => glue_lines,
+            reviews => reviews,
         },
     )
     .expect("home.html renders without a template error");
@@ -183,5 +196,16 @@ async fn home_renders_real_rows_and_honest_dash() {
     assert!(
         html.contains("Unverified"),
         "unverified badge renders for the unreviewed plugin"
+    );
+
+    // 5. With no reviews seeded, the trust strip renders the honest empty
+    //    state — not the old hardcoded "Rosa Méndez" / "Theo Kline" cards.
+    assert!(
+        html.contains("Be the first to share yours"),
+        "empty reviews render the honest empty state"
+    );
+    assert!(
+        !html.contains("Rosa Méndez") && !html.contains("Theo Kline"),
+        "no fabricated testimonials remain in the homepage markup"
     );
 }

@@ -1,5 +1,5 @@
 <!doctype html>
-{# Site wrapper — header + footer extracted from design/Home.dc.html.
+{# Site wrapper - header + footer extracted from design/Home.dc.html.
    Theme is variable-driven (see styles/input.css): light values on
    :root today; dark mode arrives as a `.dark` override block + the
    `dark` class on <html>, no template changes. #}
@@ -7,12 +7,15 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}Umbra — the batteries are real plugins{% endblock %}</title>
-  <meta name="description" content="{% block meta_description %}Umbra is a modular Rust web framework for complete applications: models, migrations, admin, forms, REST, OpenAPI — every battery delivered as a plugin you can enable, replace, or extend.{% endblock %}">
+  <title>{% block title %}Umbra - the batteries are real plugins{% endblock %}</title>
+  <meta name="description" content="{% block meta_description %}Umbra is a modular Rust web framework for complete applications: models, migrations, admin, forms, REST, OpenAPI - every battery delivered as a plugin you can enable, replace, or extend.{% endblock %}">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/css/umbra.css">
+  {# Markdown rendering polish (code copy + image lightbox). Plain CSS,
+     applied to any `[data-md]` container; see static/js/md-enhance.js. #}
+  <link rel="stylesheet" href="/static/css/md-enhance.css">
   <style>
     /* Slightly wider site container (overrides the purged Tailwind class site-wide). */
     .max-w-\[1200px\] { max-width: 1280px; }
@@ -221,6 +224,26 @@
           <span class="hidden sm:inline">Search</span>
           <span class="search-trigger__kbd" aria-hidden="true">/</span>
         </button>
+        {# Sponsor dropdown: GitHub Sponsors (external) or the on-site
+           "Talk to us" form (/sponsor). Reuses the header dropdown JS via
+           data-dd/data-dd-btn/data-dd-panel. #}
+        <div class="nav-dd hidden sm:block" data-dd>
+          <button type="button" class="inline-flex items-center gap-[6px] rounded-[9px] border border-accent-line bg-accent-soft px-3 py-2 text-[13.5px] font-semibold text-accent-2 transition-colors hover:bg-accent-line" aria-expanded="false" aria-haspopup="true" data-dd-btn>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 21s-6.7-4.35-9.3-8.5C.9 9.3 2.3 5.5 5.7 5.1c1.9-.2 3.4.9 4.3 2.2.9-1.3 2.4-2.4 4.3-2.2 3.4.4 4.8 4.2 3 7.4C18.7 16.65 12 21 12 21z"/></svg>
+            Sponsor
+            <svg class="nav-dd__chev" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+          </button>
+          <div class="nav-dd__panel" role="menu" data-dd-panel style="right:0;left:auto;">
+            <a href="https://github.com/sponsors/dalmasonto" target="_blank" rel="noopener" class="nav-dd__link" role="menuitem">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2C6.48 2 2 6.58 2 12.25c0 4.53 2.87 8.37 6.84 9.73.5.1.68-.22.68-.49v-1.7c-2.78.62-3.37-1.37-3.37-1.37-.46-1.18-1.11-1.49-1.11-1.49-.91-.64.07-.62.07-.62 1 .07 1.53 1.06 1.53 1.06.89 1.56 2.34 1.11 2.91.85.09-.66.35-1.11.63-1.37-2.22-.26-4.56-1.14-4.56-5.07 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.27 2.75 1.05a9.36 9.36 0 0 1 5 0c1.91-1.32 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.94-2.34 4.81-4.57 5.06.36.32.68.94.68 1.9v2.82c0 .27.18.6.69.49A10.26 10.26 0 0 0 22 12.25C22 6.58 17.52 2 12 2Z"/></svg>
+              <span>Sponsor on GitHub<span class="nav-dd__link-sub block">One-off or monthly</span></span>
+            </a>
+            <a href="/sponsor" class="nav-dd__link" role="menuitem">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+              <span>Talk to us<span class="nav-dd__link-sub block">Partner with the team</span></span>
+            </a>
+          </div>
+        </div>
         <a href="https://github.com/dalmasonto/umbra" class="hidden items-center gap-[7px] rounded-[9px] border border-hairline-2 bg-surface px-3 py-2 text-[13.5px] font-semibold text-ink-2 sm:flex">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.58 2 12.25c0 4.53 2.87 8.37 6.84 9.73.5.1.68-.22.68-.49v-1.7c-2.78.62-3.37-1.37-3.37-1.37-.46-1.18-1.11-1.49-1.11-1.49-.91-.64.07-.62.07-.62 1 .07 1.53 1.06 1.53 1.06.89 1.56 2.34 1.11 2.91.85.09-.66.35-1.11.63-1.37-2.22-.26-4.56-1.14-4.56-5.07 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.27 2.75 1.05a9.36 9.36 0 0 1 5 0c1.91-1.32 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.94-2.34 4.81-4.57 5.06.36.32.68.94.68 1.9v2.82c0 .27.18.6.69.49A10.26 10.26 0 0 0 22 12.25C22 6.58 17.52 2 12 2Z"/></svg>
           <span>GitHub</span>
@@ -300,7 +323,6 @@
             <a href="/reviews" class="hover:text-ink">Reviews</a>
             <a href="/security" class="hover:text-ink">Security</a>
             <a href="/security" class="hover:text-ink">Report a plugin</a>
-            <a href="/security" class="hover:text-ink">Advisories</a>
           </div>
         </div>
         <div>
@@ -310,17 +332,23 @@
             <a href="/community" class="hover:text-ink">Discord</a>
             <a href="/community" class="hover:text-ink">Reddit</a>
             <a href="https://sentinmail.app/subscribe/24479467-8815-497e-94f5-61aa11278687" target="_blank" rel="noopener" class="hover:text-ink">Newsletter</a>
+            <a href="/sponsor" class="hover:text-ink">Sponsor</a>
           </div>
         </div>
       </div>
       <div class="mt-9 flex flex-wrap items-center justify-between gap-3 border-t border-tan-line pt-5 text-[12.5px] text-faint">
         <span>© 2026 Umbra. MIT licensed.</span>
-        <span class="font-mono">umbra-cli v0.1.0</span>
+        <span class="font-mono">umbra v0.1.0</span>
       </div>
     </div>
   </footer>
 
   {% block extra_scripts %}{% endblock %}
+
+  {# Enhance any rendered-markdown container ([data-md]) with copy buttons
+     on code blocks and a click-to-zoom image lightbox. No-ops when there's
+     no such container on the page. #}
+  <script src="/static/js/md-enhance.js" defer></script>
 
   {# ===== Header dropdowns + global search dialog (vanilla, namespaced) ===== #}
   <script>

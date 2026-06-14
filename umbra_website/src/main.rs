@@ -13,17 +13,19 @@ use reviews::ReviewsPlugin;
 use security_reports::SecurityReportsPlugin;
 use showcase::ShowcasePlugin;
 use site_content::SiteContentPlugin;
+use sponsor::SponsorPlugin;
 use umbra::prelude::*;
 use umbra::templates::context;
 use umbra::web::{Html, SlashRedirect, StatusCode};
 use umbra_admin::AdminPlugin;
 use umbra_auth::{AuthPlugin, AuthUser, login_required_html};
+use umbra_livereload::LiveReloadPlugin;
 use umbra_media::MediaPlugin;
 use umbra_oauth::OAuthPlugin;
 use umbra_oauth::providers::{GitHubProvider, GoogleProvider};
 use umbra_openapi::OpenApiPlugin;
 use umbra_playground::PlaygroundPlugin;
-use umbra_realtime::RealtimePlugin;
+use umbra_realtime::{ModelAction, ModelEvent, Realtime, RealtimePlugin};
 use umbra_rest::{ResourceConfig, RestPlugin};
 use umbra_security::{SecurityConfig, SecurityPlugin};
 use umbra_sessions::SessionsPlugin;
@@ -104,11 +106,83 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .plugin(SecurityReportsPlugin::default())
         .plugin(AccountsPlugin::default())
         .plugin(CommunityPlugin::default())
+        .plugin(SponsorPlugin::default())
         .plugin(PublicPlugin::default())
+        // Dev browser live-reload: a file watcher pushes reload / CSS-swap
+        // events over SSE and the client script is auto-injected into HTML
+        // responses — no manual refresh on a template/CSS edit. Inert
+        // outside Dev. Watches the site templates + static + the per-plugin
+        // template dirs under `plugins/`.
+        .plugin(LiveReloadPlugin::new().watch("plugins"))
         // Real-time push (SSE at /realtime/sse). The plugin-notes section
         // broadcasts a posted note to `public:plugin-<id>` watchers; the
         // default GroupPolicy allows those `public:*` groups.
-        .plugin(RealtimePlugin::default())
+        //
+        // Admin notifications: when new moderatable content is CREATED, the
+        // ORM's post_save signal fires `on_model`, and we push an
+        // `admin_notification` event to every superuser by user id (see
+        // `notify_admins`). Because the events are user-targeted at
+        // superusers — never a public group — this is effectively a
+        // superuser-only channel: a normal visitor's SSE connection is
+        // never sent these events. The superuser dashboard subscribes and
+        // surfaces a live toast (see templates/dashboard.html).
+        .plugin(
+            RealtimePlugin::default()
+                .on_model::<plugin_directory::models::PluginComment, _, _>(
+                    |ev: ModelEvent| async move {
+                        if ev.action == ModelAction::Created {
+                            notify_admins(
+                                "note",
+                                "New plugin note awaiting moderation",
+                                "/admin/plugin_directory/plugincomment/",
+                            )
+                            .await;
+                        }
+                    },
+                )
+                .on_model::<reviews::Review, _, _>(|ev: ModelEvent| async move {
+                    if ev.action == ModelAction::Created {
+                        notify_admins(
+                            "review",
+                            "New developer review awaiting moderation",
+                            "/admin/reviews/review/",
+                        )
+                        .await;
+                    }
+                })
+                .on_model::<plugin_directory::models::Plugin, _, _>(|ev: ModelEvent| async move {
+                    if ev.action == ModelAction::Created {
+                        notify_admins(
+                            "submission",
+                            "New plugin submission awaiting review",
+                            "/admin/plugin_directory/plugin/",
+                        )
+                        .await;
+                    }
+                })
+                .on_model::<site_content::models::ContactMessage, _, _>(
+                    |ev: ModelEvent| async move {
+                        if ev.action == ModelAction::Created {
+                            notify_admins(
+                                "contact",
+                                "New contact message",
+                                "/admin/site_content/contactmessage/",
+                            )
+                            .await;
+                        }
+                    },
+                )
+                .on_model::<sponsor::SponsorInquiry, _, _>(|ev: ModelEvent| async move {
+                    if ev.action == ModelAction::Created {
+                        notify_admins(
+                            "sponsor",
+                            "New sponsor inquiry",
+                            "/admin/sponsor/sponsorinquiry/",
+                        )
+                        .await;
+                    }
+                }),
+        )
         // Contributes the `seed_orm_data` management command.
         .plugin(seed_command::SeedDataPlugin::default())
         // --- Admin/API/security --------------------------------------------
@@ -202,4 +276,38 @@ async fn dashboard(
 
 fn internal_error<E: std::fmt::Display>(err: E) -> (StatusCode, String) {
     (StatusCode::INTERNAL_SERVER_ERROR, err.to_string())
+}
+
+/// Push an `admin_notification` real-time event to every active superuser.
+///
+/// Targeting by user id (not a public group) makes this a superuser-only
+/// channel: a normal visitor's SSE connection is never sent these events,
+/// and there's no group name they could subscribe to. `to_user` is
+/// fire-and-forget and no-ops for users with no live connection, so this
+/// is cheap when nobody's watching. Called from the RealtimePlugin
+/// `on_model` create handlers wired above.
+async fn notify_admins(kind: &'static str, title: &'static str, url: &'static str) {
+    // Skip the superuser query entirely when realtime isn't installed
+    // (e.g. a CLI command run rather than `serve`).
+    if !Realtime::is_installed() {
+        return;
+    }
+    let ids: Vec<i64> = match AuthUser::objects()
+        .filter(umbra_auth::auth_user::IS_SUPERUSER.eq(true))
+        .filter(umbra_auth::auth_user::IS_ACTIVE.eq(true))
+        .fetch()
+        .await
+    {
+        Ok(rows) => rows.into_iter().map(|u| u.id).collect(),
+        Err(e) => {
+            tracing::warn!("admin notify: superuser lookup failed: {e}");
+            return;
+        }
+    };
+    let payload = serde_json::json!({ "kind": kind, "title": title, "url": url });
+    for id in ids {
+        Realtime::to_user(id)
+            .send("admin_notification", &payload)
+            .await;
+    }
 }

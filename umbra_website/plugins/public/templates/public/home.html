@@ -1,12 +1,12 @@
 {% extends "base.html" %}
 {% import "plugin_directory/_macros.html" as media %}
 
-{% block title %}Umbra — the batteries are real plugins{% endblock %}
-{% block meta_description %}Umbra gives Rust developers a complete app framework — models, migrations, admin, forms, REST, background work — with every battery delivered as a plugin you can enable, replace, or extend. This site is built with Umbra.{% endblock %}
+{% block title %}Umbra - the batteries are real plugins{% endblock %}
+{% block meta_description %}Umbra gives Rust developers a complete app framework - models, migrations, admin, forms, REST, background work - with every battery delivered as a plugin you can enable, replace, or extend. This site is built with Umbra.{% endblock %}
 
 {# -----------------------------------------------------------------------
    Scoped presentation layer. Everything here is driven by the :root CSS
-   vars (no invented Tailwind utilities — the stylesheet is purged). It
+   vars (no invented Tailwind utilities - the stylesheet is purged). It
    adds the hero atmosphere, the staggered entrance motion, the live stat
    strip and the card hover-lift. All motion is gated behind
    `prefers-reduced-motion: no-preference` so reduced-motion users get the
@@ -101,6 +101,25 @@
     color: var(--accent);
   }
 
+  /* --- Homepage review card body: keep curated quotes compact so a
+     long review can't blow out the trust strip. The markdown filter
+     wraps the body in <p>, so clamp by height + a soft fade rather
+     than -webkit-line-clamp (which won't reach the nested <p>). ---- */
+  .home-review-body {
+    position: relative;
+    max-height: 7.4em;
+    overflow: hidden;
+  }
+  .home-review-body::after {
+    content: "";
+    position: absolute;
+    inset: auto 0 0 0;
+    height: 1.6em;
+    background: linear-gradient(to bottom, transparent, var(--surface));
+  }
+  .home-review-body > :first-child { margin-top: 0; }
+  .home-review-body > :last-child { margin-bottom: 0; }
+
   @media (prefers-reduced-motion: no-preference) {
     .plugin-card:hover {
       transform: translateY(-4px);
@@ -126,8 +145,8 @@
 {% block content %}
 
 {# -----------------------------------------------------------------------
-   Hero — kicker, headline, CTAs, built-with-Umbra proof pill, and a live
-   stat strip that surfaces the real DB-backed numbers (— when unknown).
+   Hero - kicker, headline, CTAs, built-with-Umbra proof pill, and a live
+   stat strip that surfaces the real DB-backed numbers (- when unknown).
    ----------------------------------------------------------------------- #}
 <section class="hero mx-auto max-w-[1200px] px-7 pb-9 pt-[72px] text-center">
   <div class="reveal mb-[26px] inline-flex items-center gap-[9px] rounded-full border border-accent-line bg-accent-soft px-3.5 py-1.5 text-[13px] font-semibold text-accent-2" style="--d:0ms">
@@ -138,7 +157,7 @@
     The batteries are <span class="text-accent">real plugins.</span>
   </h1>
   <p class="reveal mx-auto mt-6 max-w-[640px] text-[18px] leading-[1.55] text-muted sm:text-[20px]" style="--d:130ms">
-    Umbra gives Rust developers a complete app framework — models, migrations, admin, forms, REST, background work — with every battery delivered as a plugin you can enable, replace, or extend.
+    Umbra gives Rust developers a complete app framework - models, migrations, admin, forms, REST, background work - with every battery delivered as a plugin you can enable, replace, or extend.
   </p>
   <div class="reveal mt-[34px] flex flex-wrap justify-center gap-3" style="--d:200ms">
     <a href="/docs" class="btn-accent btn-accent--lg">
@@ -152,29 +171,29 @@
       <span class="logo-mark logo-mark--sm [--logo-bite:var(--accent-soft)]" aria-hidden="true"></span>
       Built with Umbra
     </span>
-    This whole site runs on Umbra — same apps, migrations, forms, admin &amp; plugins it documents.
+    This whole site runs on Umbra - same apps, migrations, forms, admin &amp; plugins it documents.
   </div>
 
   {# Live stat strip. Every number is real and DB-backed; an unknown
-     value renders the honest "—" (the view passes None), never a 0. #}
+     value renders the honest "-" (the view passes None), never a 0. #}
   <div class="reveal stat-strip mx-auto mt-10 max-w-[860px] text-left" style="--d:340ms" aria-label="Live framework metrics from this site's database">
     <div class="stat-cell">
-      {% if plugin_count is none %}<div class="stat-num is-dash">—</div>{% else %}<div class="stat-num">{{ plugin_count }}</div>{% endif %}
+      {% if plugin_count is none %}<div class="stat-num is-dash">-</div>{% else %}<div class="stat-num">{{ plugin_count }}</div>{% endif %}
       <div class="stat-label">Plugins listed</div>
       <div class="stat-sub">in the live directory</div>
     </div>
     <div class="stat-cell">
-      {% if community_count is none %}<div class="stat-num is-dash">—</div>{% else %}<div class="stat-num">{{ community_count }}</div>{% endif %}
+      {% if community_count is none %}<div class="stat-num is-dash">-</div>{% else %}<div class="stat-num">{{ community_count }}</div>{% endif %}
       <div class="stat-label">Community plugins</div>
       <div class="stat-sub">approved &amp; published</div>
     </div>
     <div class="stat-cell">
-      {% if model_count is none %}<div class="stat-num is-dash">—</div>{% else %}<div class="stat-num">{{ model_count }}</div>{% endif %}
+      {% if model_count is none %}<div class="stat-num is-dash">-</div>{% else %}<div class="stat-num">{{ model_count }}</div>{% endif %}
       <div class="stat-label">Models migrated</div>
       <div class="stat-sub">tracked by the engine</div>
     </div>
     <div class="stat-cell">
-      {% if glue_lines is none %}<div class="stat-num is-dash">—</div>{% else %}<div class="stat-num">{{ glue_lines }}</div>{% endif %}
+      {% if glue_lines is none %}<div class="stat-num is-dash">-</div>{% else %}<div class="stat-num">{{ glue_lines }}</div>{% endif %}
       <div class="stat-label">Lines of glue</div>
       <div class="stat-sub">to wire a new plugin</div>
     </div>
@@ -193,13 +212,15 @@
         <span class="h-[11px] w-[11px] rounded-full bg-[#28C840]"></span>
         <span class="ml-2 font-mono text-[12px] text-shade-faint">~/projects</span>
       </div>
-      <pre class="overflow-x-auto px-[22px] py-5 font-mono text-[13.5px] leading-[1.85] text-shade-ink"><span class="text-code-violet">$</span> umbra-cli startproject <span class="text-code-green">blog</span>
-<span class="text-code-violet">$</span> cd blog && umbra-cli startapp <span class="text-code-green">posts</span>
+      <pre class="overflow-x-auto px-[22px] py-5 font-mono text-[13.5px] leading-[1.85] text-shade-ink"><span class="text-code-violet">$</span> umbra startproject <span class="text-code-green">blog</span>
+<span class="text-code-violet">$</span> cd blog && umbra startapp <span class="text-code-green">posts</span>
 
-<span class="text-muted"># enable batteries — they're just plugins</span>
-<span class="text-shade-ink">plugins</span> = [<span class="text-code-amber">"umbra.admin"</span>, <span class="text-code-amber">"umbra.rest"</span>, <span class="text-code-amber">"umbra.auth"</span>]
+<span class="text-muted"># enable batteries — they're plugins, wired in main.rs</span>
+<span class="text-shade-ink">App</span>::builder()
+  .plugin(<span class="text-code-amber">AdminPlugin</span>::new())
+  .plugin(<span class="text-code-amber">RestPlugin</span>::new())
 
-<span class="text-code-violet">$</span> umbra makemigrations && umbra migrate
+<span class="text-code-violet">$</span> cargo run -- makemigrations && cargo run -- migrate
 <span class="text-code-green">✓</span> applied <span class="text-code-green">3</span> migrations · admin at <span class="text-code-blue">/admin</span></pre>
     </div>
     <div class="reveal card p-[22px]" style="--d:460ms">
@@ -226,7 +247,7 @@
 </section>
 
 {# -----------------------------------------------------------------------
-   Three ideas — complete framework / batteries are plugins / dogfooded.
+   Three ideas - complete framework / batteries are plugins / dogfooded.
    ----------------------------------------------------------------------- #}
 <section class="mx-auto max-w-[1200px] px-7 pb-6 pt-16">
   <div class="grid gap-[18px] md:grid-cols-3">
@@ -235,27 +256,27 @@
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
       </div>
       <h3 class="mb-2 text-[18px] font-bold tracking-[-0.01em]">A complete app framework</h3>
-      <p class="text-[14.5px] leading-[1.55] text-muted">Not just HTTP routing. Models, migrations, an admin, forms, REST and background work — the productive shape you already know.</p>
+      <p class="text-[14.5px] leading-[1.55] text-muted">Not just HTTP routing. Models, migrations, an admin, forms, REST and background work - the productive shape you already know.</p>
     </div>
     <div class="card p-[26px]">
       <div class="mb-4 flex h-[42px] w-[42px] items-center justify-center rounded-[11px] bg-accent-soft">
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><path d="M3 12a9 9 0 0 1 9-9 9 9 0 0 1 9 9"/><path d="M3 12a9 9 0 0 0 9 9 9 9 0 0 0 9-9"/><circle cx="12" cy="12" r="2.5"/></svg>
       </div>
       <h3 class="mb-2 text-[18px] font-bold tracking-[-0.01em]">Batteries are plugins</h3>
-      <p class="text-[14.5px] leading-[1.55] text-muted">Official capabilities ship as prebuilt plugins. Enable them, replace them with a community plugin, or extend them — same boundary either way.</p>
+      <p class="text-[14.5px] leading-[1.55] text-muted">Official capabilities ship as prebuilt plugins. Enable them, replace them with a community plugin, or extend them - same boundary either way.</p>
     </div>
     <div class="card p-[26px]">
       <div class="mb-4 flex h-[42px] w-[42px] items-center justify-center rounded-[11px] bg-accent-soft">
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><path d="M20 7L9 18l-5-5"/></svg>
       </div>
       <h3 class="mb-2 text-[18px] font-bold tracking-[-0.01em]">Proven by this site</h3>
-      <p class="text-[14.5px] leading-[1.55] text-muted">Umbra.rs is itself an Umbra project — the directory, reviews, discussions and admin you see are the same systems it documents.</p>
+      <p class="text-[14.5px] leading-[1.55] text-muted">Umbra.rs is itself an Umbra project - the directory, reviews, discussions and admin you see are the same systems it documents.</p>
     </div>
   </div>
 </section>
 
 {# -----------------------------------------------------------------------
-   Plugin directory preview — the differentiator. Cards iterate the
+   Plugin directory preview - the differentiator. Cards iterate the
    database (first three approved plugins); the static trio below is
    the honest fallback while the directory table is empty. Fabricated
    metrics (ratings, installs) appear ONLY in the fallback.
@@ -268,7 +289,7 @@
           <span class="h-1.5 w-1.5 rounded-full bg-accent"></span>First of its kind
         </div>
         <h2 class="mb-3 text-[30px] font-extrabold leading-[1.08] tracking-[-0.03em] sm:text-[38px]">One place to find a plugin for that</h2>
-        <p class="text-[16.5px] leading-[1.55] text-muted">No Rust framework has a real home for discoverable, reviewable apps &amp; plugins. Umbra does — search, filter, read what developers are saying, and check a plugin's safety before you install.</p>
+        <p class="text-[16.5px] leading-[1.55] text-muted">No Rust framework has a real home for discoverable, reviewable apps &amp; plugins. Umbra does - search, filter, read what developers are saying, and check a plugin's safety before you install.</p>
       </div>
       <a href="/plugins" class="btn-accent whitespace-nowrap">
         Open the directory
@@ -276,24 +297,25 @@
       </a>
     </div>
 
-    {# Search + filter bar. The input is live — submits to the
+    {# Search + filter bar. The input is live - submits to the
        directory page as ?search=… #}
     <div class="mb-[18px] flex flex-wrap items-center gap-2.5">
       <form action="/plugins" method="get" class="flex min-w-[280px] flex-1 items-center gap-[9px] rounded-[11px] border border-hairline-2 bg-paper px-[15px] py-3 text-[14.5px] text-faint transition-colors focus-within:border-accent-line">
         <svg class="shrink-0" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
         <input type="search" name="search" placeholder="Try “rest”, “multitenancy”, “oauth”…" aria-label="Search plugins" class="w-full bg-transparent text-ink outline-none placeholder:text-faint" style="outline:none;">
       </form>
+      {# Tabs link into the live directory facets (?source / ?audited). #}
       <div class="flex flex-wrap gap-[7px]">
-        <span class="rounded-[9px] bg-shade px-3.5 py-[9px] text-[13.5px] font-semibold text-white">All</span>
-        <span class="rounded-[9px] border border-hairline-2 bg-surface px-3.5 py-[9px] text-[13.5px] font-medium text-body">Official</span>
-        <span class="rounded-[9px] border border-hairline-2 bg-surface px-3.5 py-[9px] text-[13.5px] font-medium text-body">Community</span>
-        <span class="rounded-[9px] border border-hairline-2 bg-surface px-3.5 py-[9px] text-[13.5px] font-medium text-body">Audited</span>
+        <a href="/plugins" class="rounded-[9px] bg-shade px-3.5 py-[9px] text-[13.5px] font-semibold text-white transition-colors hover:bg-shade-2">All</a>
+        <a href="/plugins?source=official" class="rounded-[9px] border border-hairline-2 bg-surface px-3.5 py-[9px] text-[13.5px] font-medium text-body transition-colors hover:border-accent-line hover:text-ink">Official</a>
+        <a href="/plugins?source=community" class="rounded-[9px] border border-hairline-2 bg-surface px-3.5 py-[9px] text-[13.5px] font-medium text-body transition-colors hover:border-accent-line hover:text-ink">Community</a>
+        <a href="/plugins?audited=1" class="rounded-[9px] border border-hairline-2 bg-surface px-3.5 py-[9px] text-[13.5px] font-medium text-body transition-colors hover:border-accent-line hover:text-ink">Audited</a>
       </div>
     </div>
 
     <div class="grid gap-3.5 md:grid-cols-3">
       {% for p in plugins %}{% if loop.index <= 3 %}
-      {# Card is NOT a link — only the title navigates, so the rest of
+      {# Card is NOT a link - only the title navigates, so the rest of
          the card (description, metrics, install command) can be
          selected and copied without fear of navigation. The avatar
          shows the crate's first letter; the reveal staggers per card. #}
@@ -304,8 +326,8 @@
           <span class="pill-official ml-auto">{{ p.status }}</span>
         </div>
         <p class="mb-3 min-h-[40px] text-[13.5px] leading-[1.5] text-muted">{{ p.short_description }}</p>
-        {# Metrics — the design's row, always visible. Unsynced values
-           render the honest "—" (set in the view); the count is live. #}
+        {# Metrics - the design's row, always visible. Unsynced values
+           render the honest "-" (set in the view); the count is live. #}
         <div class="mb-3 flex items-center gap-2.5 text-[12px] text-faint [&>span+span]:before:mr-2.5 [&>span+span]:before:content-['·']">
           <span><span class="font-semibold text-ink align-text-top">★ {{ p.stars }}</span></span>
           <span>{{ p.downloads }} downloads</span>
@@ -325,7 +347,7 @@
         </div>
       </div>
       {% endif %}{% else %}
-      {# Static fallback — rendered until the directory table has rows. #}
+      {# Static fallback - rendered until the directory table has rows. #}
       <div class="plugin-card card rounded-[14px] p-[18px]">
         <div class="mb-[11px] flex items-center gap-2.5">
           <span class="flex h-[34px] w-[34px] items-center justify-center rounded-[9px] bg-accent-soft font-mono text-[14px] font-bold text-accent-2">R</span>
@@ -389,7 +411,7 @@
 </section>
 
 {# -----------------------------------------------------------------------
-   Why plugins — static marketing strip (clearly not data). A dark panel
+   Why plugins - static marketing strip (clearly not data). A dark panel
    with the plugin contract's payoff, paired with three contract facts.
    ----------------------------------------------------------------------- #}
 <section class="mx-auto max-w-[1200px] px-7 py-6">
@@ -409,14 +431,14 @@
           <span class="why-ico"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 9V5a3 3 0 0 0-6 0v4"/><rect x="2" y="9" width="20" height="11" rx="2"/></svg></span>
           <div>
             <div class="mb-1 text-[15px] font-bold">Own your migrations, end to end</div>
-            <p class="text-[14px] leading-[1.55] text-muted">Each plugin carries its own models and migrations. <code class="rounded-[5px] bg-surface-2 px-1 py-px font-mono text-[12.5px] text-ink-2">migrate</code> orders them by a dependency graph — cross-plugin foreign keys included.</p>
+            <p class="text-[14px] leading-[1.55] text-muted">Each plugin carries its own models and migrations. <code class="rounded-[5px] bg-surface-2 px-1 py-px font-mono text-[12.5px] text-ink-2">migrate</code> orders them by a dependency graph - cross-plugin foreign keys included.</p>
           </div>
         </div>
         <div class="why-row">
           <span class="why-ico"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 1l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 23l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg></span>
           <div>
             <div class="mb-1 text-[15px] font-bold">Replace a battery without a rewrite</div>
-            <p class="text-[14px] leading-[1.55] text-muted">Swap the default auth for your SSO, drop in a community GraphQL plugin — the admin, the ORM and the rest of your app keep working unchanged.</p>
+            <p class="text-[14px] leading-[1.55] text-muted">Swap the default auth for your SSO, drop in a community GraphQL plugin - the admin, the ORM and the rest of your app keep working unchanged.</p>
           </div>
         </div>
       </div>
@@ -427,7 +449,7 @@
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--accent-ghost)" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
       </div>
       <h3 class="mb-2.5 text-[20px] font-extrabold tracking-[-0.02em]">Wired in one line</h3>
-      <p class="mb-5 text-[14px] leading-[1.6] text-[#B0A89F]">Adding a plugin to your app is a single builder call — no registry edits, no glue module to maintain.</p>
+      <p class="mb-5 text-[14px] leading-[1.6] text-[#B0A89F]">Adding a plugin to your app is a single builder call - no registry edits, no glue module to maintain.</p>
       <pre class="overflow-x-auto rounded-[12px] bg-shade-2 px-[15px] py-3.5 font-mono text-[12.5px] leading-[1.8] text-shade-ink"><span class="text-shade-faint">App</span>::builder()
   .plugin(<span class="text-code-amber">AdminPlugin</span>::new())
   .plugin(<span class="text-code-amber">RestPlugin</span>::new())
@@ -437,7 +459,7 @@
 </section>
 
 {# -----------------------------------------------------------------------
-   Prebuilt batteries — the official plugin grid.
+   Prebuilt batteries - the official plugin grid.
    ----------------------------------------------------------------------- #}
 <section class="mx-auto max-w-[1200px] px-7 py-10">
   <div class="mx-auto mb-[34px] max-w-[680px] text-center">
@@ -489,7 +511,7 @@
 </section>
 
 {# -----------------------------------------------------------------------
-   Reviews + security — trust, side by side.
+   Reviews + security - trust, side by side.
    ----------------------------------------------------------------------- #}
 <section class="mx-auto max-w-[1200px] px-7 py-10">
   <div class="grid gap-[18px] lg:grid-cols-[1.4fr_1fr]">
@@ -498,35 +520,32 @@
       <div class="mb-5 flex items-center justify-between gap-4">
         <div>
           <h2 class="mb-1 text-[24px] font-extrabold tracking-[-0.02em]">What developers say</h2>
-          <p class="text-[14px] text-muted">Verified reviews of the framework — tied to real GitHub identities.</p>
+          <p class="text-[14px] text-muted">Verified reviews of the framework - tied to real GitHub identities.</p>
         </div>
         <a href="/reviews" class="whitespace-nowrap text-[13.5px] font-semibold text-accent-2">All reviews →</a>
       </div>
+      {# Curated approved reviews, featured first — pulled live by the
+         public plugin via reviews::featured_reviews(). The {% else %}
+         branch is the honest empty state: no fabricated testimonials. #}
       <div class="flex flex-col gap-3">
+        {% for r in reviews %}
         <div class="rounded-[14px] border border-hairline p-[18px]">
           <div class="mb-[11px] flex items-center gap-[11px]">
-            <span class="flex h-9 w-9 items-center justify-center rounded-full bg-accent-line text-[14px] font-bold text-accent-2">RM</span>
-            <div>
-              <div class="flex items-center gap-1.5 text-[14px] font-bold">Rosa Méndez <svg width="13" height="13" viewBox="0 0 24 24" fill="var(--ok)"><path d="M12 2l2.4 4.9 5.4.8-3.9 3.8.9 5.4-4.8-2.5-4.8 2.5.9-5.4L4.2 7.7l5.4-.8z"/></svg></div>
-              <div class="text-[12px] text-faint">@rmendez · Staff Eng, fintech</div>
+            <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent-line text-[13px] font-bold text-accent-2">{{ r.initials }}</span>
+            <div class="min-w-0">
+              <div class="flex items-center gap-1.5 text-[14px] font-bold">{{ r.byline }}{% if r.verified %} <svg width="13" height="13" viewBox="0 0 24 24" fill="var(--ok)" aria-label="Verified developer"><path d="M12 2l2.4 4.9 5.4.8-3.9 3.8.9 5.4-4.8-2.5-4.8 2.5.9-5.4L4.2 7.7l5.4-.8z"/></svg>{% endif %}</div>
+              <div class="text-[12px] text-faint">{{ r.context }}</div>
             </div>
-            <span class="ml-auto text-[13px] tracking-[1px] text-[#E0A92E]">★★★★★</span>
+            <span class="ml-auto whitespace-nowrap text-[13px] tracking-[1px] text-[#E0A92E]" aria-label="{{ r.rating }} out of 5">{% for i in range(r.rating) %}★{% endfor %}</span>
           </div>
-          <p class="text-[14px] leading-[1.55] text-ink-2">“The plugin boundary is the real story. We replaced the default auth with our SSO plugin in an afternoon and the admin just kept working.”</p>
-          <div class="mt-[9px] font-mono text-[11.5px] text-ghost">on v0.1 · production</div>
+          <div class="home-review-body text-[14px] leading-[1.55] text-ink-2">{{ r.body | markdown }}</div>
+          {% if r.umbra_version %}<div class="mt-[9px] font-mono text-[11.5px] text-ghost">on {{ r.umbra_version }} · {{ r.context }}</div>{% endif %}
         </div>
-        <div class="rounded-[14px] border border-hairline p-[18px]">
-          <div class="mb-[11px] flex items-center gap-[11px]">
-            <span class="flex h-9 w-9 items-center justify-center rounded-full bg-[#FDE7D6] text-[14px] font-bold text-warn">TK</span>
-            <div>
-              <div class="flex items-center gap-1.5 text-[14px] font-bold">Theo Kline <svg width="13" height="13" viewBox="0 0 24 24" fill="var(--ok)"><path d="M12 2l2.4 4.9 5.4.8-3.9 3.8.9 5.4-4.8-2.5-4.8 2.5.9-5.4L4.2 7.7l5.4-.8z"/></svg></div>
-              <div class="text-[12px] text-faint">@theok · Indie, SaaS</div>
-            </div>
-            <span class="ml-auto text-[13px] tracking-[1px] text-[#E0A92E]">★★★★★</span>
-          </div>
-          <p class="text-[14px] leading-[1.55] text-ink-2">“Coming from Django, the startproject → startapp → migrate loop felt instantly familiar — but in Rust, and everything's a plugin I can read.”</p>
-          <div class="mt-[9px] font-mono text-[11.5px] text-ghost">on v0.1 · side project</div>
+        {% else %}
+        <div class="rounded-[14px] border border-dashed border-hairline p-[22px] text-center">
+          <p class="m-0 text-[14px] leading-[1.55] text-muted">No developer reviews published yet. <a href="/reviews" class="font-semibold text-accent-2">Be the first to share yours →</a></p>
         </div>
+        {% endfor %}
       </div>
     </div>
 
@@ -535,7 +554,7 @@
         <svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="var(--accent-ghost)" stroke-width="2"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg>
       </div>
       <h2 class="mb-2.5 text-[24px] font-extrabold tracking-[-0.02em]">Plugins run real code. We take that seriously.</h2>
-      <p class="mb-5 text-[14.5px] leading-[1.6] text-[#B0A89F]">Every plugin page has a one-click way to report a security concern. Confirmed issues get an advisory and a visible warning — triaged by dedicated plugin auditors.</p>
+      <p class="mb-5 text-[14.5px] leading-[1.6] text-[#B0A89F]">Every plugin page has a one-click way to report a security concern. Confirmed issues get an advisory and a visible warning - triaged by dedicated plugin auditors.</p>
       <div class="mb-[22px] flex flex-col gap-2.5">
         <div class="flex items-center gap-2.5 text-[13.5px] text-shade-ink"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--ok)" stroke-width="2.4"><path d="M20 6L9 17l-5-5"/></svg>Audit status on every listing</div>
         <div class="flex items-center gap-2.5 text-[13.5px] text-shade-ink"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--ok)" stroke-width="2.4"><path d="M20 6L9 17l-5-5"/></svg>Responsible disclosure workflow</div>
@@ -581,7 +600,7 @@
     </a>
     <a href="https://sentinmail.app/subscribe/24479467-8815-497e-94f5-61aa11278687" target="_blank" rel="noopener" class="flex items-center gap-3.5 rounded-[13px] border border-accent-line bg-accent-soft p-4 sm:col-span-2">
       <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--accent-2)" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/></svg>
-      <div class="flex-1"><div class="text-[14px] font-bold text-[#3A2BA8]">Newsletter</div><div class="text-[12px] text-[#6E5FB8]">Monthly via Sentinmail — releases &amp; plugin spotlights.</div></div>
+      <div class="flex-1"><div class="text-[14px] font-bold text-[#3A2BA8]">Newsletter</div><div class="text-[12px] text-[#6E5FB8]">Monthly via Sentinmail - releases &amp; plugin spotlights.</div></div>
       <span class="rounded-lg bg-accent px-3.5 py-2 text-[13px] font-semibold text-white">Subscribe</span>
     </a>
   </div>

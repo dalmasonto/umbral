@@ -5,7 +5,7 @@
 
 {% block content %}
 
-<section class="mx-auto max-w-[1080px] px-7 pb-2 pt-[52px] text-center">
+<section class="mx-auto max-w-[1200px] px-7 pb-2 pt-[52px] text-center">
   <div class="kicker mb-3.5 text-accent">
     <span class="h-1.5 w-1.5 rounded-full bg-accent"></span>
     Reviews
@@ -18,8 +18,8 @@
   </p>
 </section>
 
-<section class="mx-auto max-w-[1080px] px-7 pb-6 pt-10">
-  <div class="grid gap-3.5 md:grid-cols-2">
+<section class="mx-auto max-w-[1200px] px-7 pb-6 pt-10">
+  <div class="grid gap-3.5 md:grid-cols-2 lg:grid-cols-3">
     {% for r in reviews %}
     <article class="card flex flex-col p-6">
       <div class="mb-2 flex items-center gap-1 text-[15px]" aria-label="{{ r.rating }} out of 5">
@@ -37,14 +37,14 @@
       </div>
     </article>
     {% else %}
-    <div class="card rounded-[20px] p-8 text-center text-muted md:col-span-2">
+    <div class="card rounded-[20px] p-8 text-center text-muted md:col-span-2 lg:col-span-3">
       No reviews yet. Run <code class="font-mono text-[13px] text-ink-2">cargo run -- seed_orm_data</code> to populate them.
     </div>
     {% endfor %}
   </div>
 </section>
 
-<section class="mx-auto max-w-[1080px] px-7 pb-16 pt-2">
+<section class="mx-auto max-w-[1200px] px-7 pb-16 pt-2">
   <div class="flex flex-wrap items-center gap-6 rounded-[20px] border border-accent-line bg-accent-soft px-6 py-7 sm:px-8">
     <div class="min-w-[280px] flex-1">
       <h2 class="mb-1.5 text-[22px] font-extrabold tracking-[-0.02em] text-[#3A2BA8]">Built something with Umbra?</h2>

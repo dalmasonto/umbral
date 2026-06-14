@@ -50,20 +50,49 @@ impl Plugin for ReviewsPlugin {
     }
 }
 
-/// One testimonial card on `/reviews`.
+/// One testimonial card. Used by `/reviews` and (via
+/// [`featured_reviews`]) the homepage trust strip, so it's `pub` —
+/// the byline/initials presentation logic lives here once.
 #[derive(Debug, Serialize)]
-struct ReviewView {
-    rating: i32,
-    title: String,
+pub struct ReviewView {
+    pub rating: i32,
+    pub title: String,
     /// Markdown body (rendered with `| markdown` in the template).
-    body: String,
+    pub body: String,
     /// "Staff Engineer · Acme Inc." — role and company joined.
-    byline: String,
+    pub byline: String,
     /// Short usage-context tag, e.g. "Work project".
-    context: &'static str,
+    pub context: &'static str,
     /// Two-letter monogram from the company/role.
-    initials: String,
-    verified: bool,
+    pub initials: String,
+    pub verified: bool,
+    /// The Umbra version the review is grounded in (e.g. "0.0.1").
+    /// `None` hides the version footer rather than fabricating one.
+    pub umbra_version: Option<String>,
+}
+
+impl From<Review> for ReviewView {
+    fn from(r: Review) -> Self {
+        let company = r.company.clone().unwrap_or_default();
+        let role = r.role.clone().unwrap_or_default();
+        let byline = match (role.is_empty(), company.is_empty()) {
+            (false, false) => format!("{role} · {company}"),
+            (false, true) => role.clone(),
+            (true, false) => company.clone(),
+            (true, true) => "Umbra developer".to_string(),
+        };
+        let mono_src = if !company.is_empty() { &company } else { &role };
+        ReviewView {
+            rating: r.rating.clamp(0, 5),
+            title: r.title,
+            body: r.body,
+            byline,
+            context: context_label(r.usage_context),
+            initials: initials(mono_src),
+            verified: r.verified_developer,
+            umbra_version: r.umbra_version,
+        }
+    }
 }
 
 fn context_label(c: ReviewUsageContext) -> &'static str {
@@ -93,40 +122,38 @@ async fn reviews_page() -> Result<Html<String>, (StatusCode, String)> {
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))
 }
 
-/// Load + render `/reviews`: approved reviews, featured first. Public so a
-/// render smoke-test can drive it without an axum runtime.
-pub async fn render_reviews() -> Result<String, String> {
-    let reviews: Vec<ReviewView> = Review::objects()
+/// Approved reviews, featured first. Shared by `/reviews` (all of them)
+/// and the homepage trust strip (a small curated slice). `limit = None`
+/// returns every approved review.
+pub async fn approved_reviews(limit: Option<usize>) -> Result<Vec<ReviewView>, String> {
+    let mut qs = Review::objects()
         .filter(review::MODERATION.eq("approved"))
         .order_by(review::FEATURED.desc())
         .order_by(review::CREATED_AT.desc())
-        .order_by(review::ID.desc())
+        .order_by(review::ID.desc());
+    if let Some(n) = limit {
+        qs = qs.limit(n as u64);
+    }
+    Ok(qs
         .fetch()
         .await
         .map_err(|e| e.to_string())?
         .into_iter()
-        .map(|r| {
-            let company = r.company.clone().unwrap_or_default();
-            let role = r.role.clone().unwrap_or_default();
-            let byline = match (role.is_empty(), company.is_empty()) {
-                (false, false) => format!("{role} · {company}"),
-                (false, true) => role.clone(),
-                (true, false) => company.clone(),
-                (true, true) => "Umbra developer".to_string(),
-            };
-            let mono_src = if !company.is_empty() { &company } else { &role };
-            ReviewView {
-                rating: r.rating.clamp(0, 5),
-                title: r.title,
-                body: r.body,
-                byline,
-                context: context_label(r.usage_context),
-                initials: initials(mono_src),
-                verified: r.verified_developer,
-            }
-        })
-        .collect();
+        .map(ReviewView::from)
+        .collect())
+}
 
+/// The homepage's curated set of approved reviews (featured first).
+/// A thin alias over [`approved_reviews`] so the public plugin reads
+/// intent at the call site.
+pub async fn featured_reviews(limit: usize) -> Result<Vec<ReviewView>, String> {
+    approved_reviews(Some(limit)).await
+}
+
+/// Load + render `/reviews`: approved reviews, featured first. Public so a
+/// render smoke-test can drive it without an axum runtime.
+pub async fn render_reviews() -> Result<String, String> {
+    let reviews = approved_reviews(None).await?;
     umbra::templates::render("reviews/reviews.html", &context! { reviews => reviews })
         .map_err(|e| e.to_string())
 }

@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Report an issue — Umbra{% endblock %}
+{% block title %}Report an issue - Umbra{% endblock %}
 {% block meta_description %}Report a security, safety or licensing issue with a plugin in the Umbra directory. Reports go straight to the moderators.{% endblock %}
 
 {% block extra_head %}
@@ -128,7 +128,7 @@
     <div class="pd-success__icon">
       <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
     </div>
-    <h1 class="pd-success__title">Thanks — your report was sent to the moderators.</h1>
+    <h1 class="pd-success__title">Thanks - your report was sent to the moderators.</h1>
     <p class="pd-success__body">A maintainer will review it. If it's a security concern we'll act on it as a priority.</p>
     <div class="pd-success__actions">
       {% if report.plugin_slug %}<a href="/plugins/{{ report.plugin_slug }}" class="btn-accent">Back to {{ report.plugin_name | default('the plugin') }}</a>{% endif %}
@@ -143,7 +143,7 @@
       Report an issue
     </div>
     <h1 class="pd-form-title">Report an issue</h1>
-    <p class="pd-form-sub">Spotted a security flaw, broken behaviour, malicious code or a licensing problem? Tell the moderators — reports are reviewed before any action and never published publicly.</p>
+    <p class="pd-form-sub">Spotted a security flaw, broken behaviour, malicious code or a licensing problem? Tell the moderators - reports are reviewed before any action and never published publicly.</p>
     {% if report.plugin_name %}
     <div class="pd-target">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 9.4 7.5 4.21M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
@@ -175,7 +175,7 @@
 
       <div class="pd-field {% if errors.details %}pd-field--error{% endif %}">
         <label class="pd-label" for="r-details">What's wrong? <span class="pd-req">*</span></label>
-        <textarea class="pd-textarea" id="r-details" name="details" rows="6" placeholder="Describe the issue — what you saw, how to reproduce it, and any links or versions that help us verify it." required>{{ form.details | default('') }}</textarea>
+        <textarea class="pd-textarea" id="r-details" name="details" rows="6" placeholder="Describe the issue - what you saw, how to reproduce it, and any links or versions that help us verify it." required>{{ form.details | default('') }}</textarea>
         {% if errors.details %}<span class="pd-error"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>{{ errors.details }}</span>{% else %}<span class="pd-hint">The more detail, the faster we can act.</span>{% endif %}
       </div>
 
@@ -183,7 +183,7 @@
 
     <div class="pd-form-actions">
       <button type="submit" class="btn-accent">Send report</button>
-      <span class="pd-form-note">Goes straight to the moderators — not published.</span>
+      <span class="pd-form-note">Goes straight to the moderators - not published.</span>
     </div>
   </form>
   {% endif %}

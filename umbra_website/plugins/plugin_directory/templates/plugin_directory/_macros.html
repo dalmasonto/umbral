@@ -1,5 +1,5 @@
 {#
-  _macros.html — reusable media macros for plugin logos and cover images.
+  _macros.html - reusable media macros for plugin logos and cover images.
 
   Import in any template (including those outside plugin_directory) as:
     {% import "plugin_directory/_macros.html" as media %}
@@ -9,16 +9,16 @@
 #}
 
 {#
-  plugin_logo — renders a plugin's logo image, or a letter-tile fallback.
+  plugin_logo - renders a plugin's logo image, or a letter-tile fallback.
 
   Parameters:
-    logo    — the storage key string (from ImageField serialisation), or falsy
-    name    — plugin display name; used for alt text and first-letter fallback
-    source  — "official" / "community" / "experimental" / "deprecated"
-    flagged — true → reddish tile
-    icon    — explicit letter(s) for the tile; defaults to name's first letter
-    px      — tile size in pixels (default 48)
-    radius  — Tailwind radius class (default "rounded-2xl")
+    logo    - the storage key string (from ImageField serialisation), or falsy
+    name    - plugin display name; used for alt text and first-letter fallback
+    source  - "official" / "community" / "experimental" / "deprecated"
+    flagged - true → reddish tile
+    icon    - explicit letter(s) for the tile; defaults to name's first letter
+    px      - tile size in pixels (default 48)
+    radius  - Tailwind radius class (default "rounded-2xl")
 #}
 {% macro plugin_logo(logo, name="", source="official", flagged=false, icon="", px=48, radius="rounded-2xl") %}
 {%- if logo %}
@@ -33,11 +33,11 @@
 {% endmacro %}
 
 {#
-  plugin_cover — renders a plugin's cover image banner, or nothing.
+  plugin_cover - renders a plugin's cover image banner, or nothing.
 
   Parameters:
-    cover  — the storage key string, or falsy
-    name   — plugin display name; used for alt text
+    cover  - the storage key string, or falsy
+    name   - plugin display name; used for alt text
 #}
 {% macro plugin_cover(cover, name="") %}
 {%- if cover %}

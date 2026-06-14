@@ -38,6 +38,7 @@ const CATALOG: &[Category] = &[
         slug: "orm-migrations",
         description: "Declare models, query them ergonomically, and evolve the schema safely.",
         features: &[
+            Feat { name: "One struct, three roles", summary: "The same plain struct is your model, your form, and your serializer — declare data once, reuse it everywhere, no DTOs to keep in sync.", status: SH, maturity: STA },
             Feat { name: "Model derive", summary: "#[derive(Model)] turns a struct into a table, manager, and column set.", status: SH, maturity: STA },
             Feat { name: "QuerySet builder", summary: "filter/exclude/order_by/annotate/aggregate, Q objects, subqueries.", status: SH, maturity: STA },
             Feat { name: "Relations", summary: "ForeignKey, OneToOne, M2M with select_related / prefetch_related.", status: SH, maturity: STA },
@@ -111,38 +112,60 @@ fn slugify(s: &str) -> String {
         .join("-")
 }
 
-/// Seed the catalog. Idempotent: short-circuits if any category exists.
-/// Returns `(categories, features)` inserted.
+/// Seed the catalog. Idempotent and **self-healing**: each category and
+/// feature is get-or-created by slug, so adding a new entry to `CATALOG`
+/// surfaces it on the next boot without re-inserting existing rows or
+/// needing a DB wipe. Returns `(categories, features)` newly inserted.
 pub async fn seed() -> Result<(usize, usize), Box<dyn std::error::Error + Send + Sync>> {
-    if FeatureCategory::objects().count().await? > 0 {
-        return Ok((0, 0));
-    }
+    use crate::models::{feature_category, framework_feature};
+
     let mut cats = 0;
     let mut feats = 0;
     for (ci, cat) in CATALOG.iter().enumerate() {
-        let now = Utc::now();
-        let category = FeatureCategory::objects()
-            .create(FeatureCategory {
-                id: 0,
-                name: cat.name.to_string(),
-                slug: cat.slug.to_string(),
-                description: Some(cat.description.to_string()),
-                display_order: (ci as i32) * 10,
-                visible: true,
-                created_at: now,
-                updated_at: now,
-                deleted_at: None,
-            })
-            .await?;
-        cats += 1;
+        // Get-or-create the category by slug.
+        let category = match FeatureCategory::objects()
+            .filter(feature_category::SLUG.eq(cat.slug))
+            .first()
+            .await?
+        {
+            Some(existing) => existing,
+            None => {
+                let now = Utc::now();
+                let created = FeatureCategory::objects()
+                    .create(FeatureCategory {
+                        id: 0,
+                        name: cat.name.to_string(),
+                        slug: cat.slug.to_string(),
+                        description: Some(cat.description.to_string()),
+                        display_order: (ci as i32) * 10,
+                        visible: true,
+                        created_at: now,
+                        updated_at: now,
+                        deleted_at: None,
+                    })
+                    .await?;
+                cats += 1;
+                created
+            }
+        };
+
         for (fi, f) in cat.features.iter().enumerate() {
+            let slug = format!("{}-{}", cat.slug, slugify(f.name));
+            // Skip features that already exist (by their unique slug).
+            if FrameworkFeature::objects()
+                .filter(framework_feature::SLUG.eq(slug.as_str()))
+                .exists()
+                .await?
+            {
+                continue;
+            }
             let now = Utc::now();
             FrameworkFeature::objects()
                 .create(FrameworkFeature {
                     id: 0,
                     category: ForeignKey::new(category.id),
                     name: f.name.to_string(),
-                    slug: format!("{}-{}", cat.slug, slugify(f.name)),
+                    slug,
                     short_summary: f.summary.to_string(),
                     full_description: f.summary.to_string(),
                     status: f.status,

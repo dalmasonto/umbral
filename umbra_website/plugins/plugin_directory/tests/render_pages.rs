@@ -386,7 +386,9 @@ async fn listing_and_detail_render_real_db_rows() {
     let page_size = 12;
 
     // --- Listing: page 1 --------------------------------------------------
-    let page1 = render_listing(None, 1).await.expect("page 1 renders");
+    let page1 = render_listing(None, false, None, 1)
+        .await
+        .expect("page 1 renders");
     // The featured official plugin sorts first (featured DESC), so it's on
     // page 1; humanized stars + honest em-dash still render.
     assert!(
@@ -422,7 +424,9 @@ async fn listing_and_detail_render_real_db_rows() {
     );
 
     // --- Listing: page 2 (the remainder) ---------------------------------
-    let page2 = render_listing(None, 2).await.expect("page 2 renders");
+    let page2 = render_listing(None, false, None, 2)
+        .await
+        .expect("page 2 renders");
     let page2_cards = page2.matches("class=\"pd-card").count();
     assert_eq!(
         page2_cards,
@@ -449,7 +453,7 @@ async fn listing_and_detail_render_real_db_rows() {
     // --- Source facet filter still works (and is preserved in pager) ------
     // 14 approved community rows (1 base + 13 filler) → 2 pages, the
     // official plugin dropped.
-    let community = render_listing(Some("community"), 1)
+    let community = render_listing(Some("community"), false, None, 1)
         .await
         .expect("filtered listing renders");
     assert!(community.contains("Umbra Multitenancy"));
@@ -466,6 +470,23 @@ async fn listing_and_detail_render_real_db_rows() {
     assert!(
         community.contains("href=\"/plugins?page=2&amp;source=community\""),
         "page links preserve the ?source= facet"
+    );
+
+    // --- Search (?search=) filters by name/crate/description -------------
+    let searched = render_listing(None, false, Some("multitenancy"), 1)
+        .await
+        .expect("search renders");
+    assert!(
+        searched.contains("Umbra Multitenancy"),
+        "?search=multitenancy matches the multitenancy plugin"
+    );
+    assert!(
+        !searched.contains("Umbra REST"),
+        "?search=multitenancy excludes non-matching plugins"
+    );
+    assert!(
+        searched.contains("value=\"multitenancy\""),
+        "the search input is pre-filled with the active term"
     );
 
     // --- Detail -----------------------------------------------------------

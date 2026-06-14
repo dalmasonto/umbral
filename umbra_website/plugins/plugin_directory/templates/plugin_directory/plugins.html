@@ -13,7 +13,7 @@
     }
     .pd-rise { opacity: 0; animation: pd-rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) both; animation-delay: calc(var(--i, 0) * 45ms); }
   }
-  /* Hero atmosphere — a soft indigo glow behind the title. */
+  /* Hero atmosphere - a soft indigo glow behind the title. */
   .pd-hero { position: relative; }
   .pd-hero::before {
     content: "";
@@ -30,7 +30,7 @@
   .pd-card:hover { transform: translateY(-2px); border-color: var(--accent-line); box-shadow: 0 14px 34px -22px color-mix(in srgb, var(--accent) 55%, transparent); }
   .pd-card-tan:hover { border-color: var(--tan-line); box-shadow: 0 14px 34px -22px color-mix(in srgb, var(--tan) 60%, transparent); }
   .pd-facet-active { background: var(--accent-soft); color: var(--ink-2); }
-  /* Pagination controls — neutral chips, accent for the active page. */
+  /* Pagination controls - neutral chips, accent for the active page. */
   .pd-page-link {
     min-width: 38px;
     height: 38px;
@@ -85,11 +85,17 @@
   </div>
 
   <div class="mt-7 flex flex-col gap-3 md:flex-row md:items-center">
-    <label class="flex flex-1 items-center gap-[11px] rounded-[13px] border border-hairline-2 bg-surface px-4 py-3.5 text-[15px] text-faint transition-colors focus-within:border-accent-line" aria-label="Search plugins">
+    {# Real GET form so Enter submits ?search=… ; the active facet is
+       carried in hidden inputs so searching stays within Official /
+       Community / Audited. The input is pre-filled with the current term. #}
+    <form action="/plugins" method="get" class="flex flex-1 items-center gap-[11px] rounded-[13px] border border-hairline-2 bg-surface px-4 py-3.5 text-[15px] text-faint transition-colors focus-within:border-accent-line" role="search" aria-label="Search plugins">
       <svg class="shrink-0" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
-      <input class="min-w-0 flex-1 bg-transparent text-ink outline-none placeholder:text-faint" type="search" placeholder="Search {{ total }} plugins: rest, multitenancy, oauth, storage">
+      {% if active_source %}<input type="hidden" name="source" value="{{ active_source }}">{% endif %}
+      {% if active_audited %}<input type="hidden" name="audited" value="1">{% endif %}
+      <input class="min-w-0 flex-1 bg-transparent text-ink outline-none placeholder:text-faint" type="search" name="search" value="{{ search | default('') }}" placeholder="Search {{ total }} plugins: rest, multitenancy, oauth, storage" aria-label="Search plugins">
+      {% if search %}<a href="/plugins{% if active_source %}?source={{ active_source }}{% elif active_audited %}?audited=1{% endif %}" class="shrink-0 text-[12px] font-semibold text-accent-2" title="Clear search">Clear</a>{% endif %}
       <span class="hidden rounded-md border border-hairline-2 px-[7px] py-0.5 font-mono text-[12px] text-ghost sm:inline">/</span>
-    </label>
+    </form>
     <button type="button" class="inline-flex items-center justify-between gap-8 rounded-[13px] border border-hairline-2 bg-surface px-4 py-3.5 text-[14px] font-semibold text-ink-2">
       Sort: Featured first
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--faint)" stroke-width="2.2"><path d="M6 9l6 6 6-6"/></svg>
@@ -103,7 +109,7 @@
       <div class="card rounded-2xl p-[18px]">
         <div class="mb-3 text-[12px] font-bold uppercase tracking-[0.04em] text-faint">Source</div>
         <div class="space-y-[3px]">
-          <a href="/plugins" class="flex items-center gap-[9px] rounded-lg px-2 py-[7px] text-[14px] text-body {% if not active_source %}pd-facet-active{% endif %}">All <span class="ml-auto text-[12px] text-faint">{{ counts.total }}</span></a>
+          <a href="/plugins" class="flex items-center gap-[9px] rounded-lg px-2 py-[7px] text-[14px] text-body {% if not active_source and not active_audited %}pd-facet-active{% endif %}">All <span class="ml-auto text-[12px] text-faint">{{ counts.total }}</span></a>
           <a href="/plugins?source=official" class="flex items-center gap-[9px] rounded-lg px-2 py-[7px] text-[14px] text-body {% if active_source == 'official' %}pd-facet-active{% endif %}">Official <span class="ml-auto text-[12px] text-faint">{{ counts.official }}</span></a>
           <a href="/plugins?source=community" class="flex items-center gap-[9px] rounded-lg px-2 py-[7px] text-[14px] text-body {% if active_source == 'community' %}pd-facet-active{% endif %}">Community <span class="ml-auto text-[12px] text-faint">{{ counts.community }}</span></a>
           <a href="/plugins?source=experimental" class="flex items-center gap-[9px] rounded-lg px-2 py-[7px] text-[14px] text-body {% if active_source == 'experimental' %}pd-facet-active{% endif %}">Experimental <span class="ml-auto text-[12px] text-faint">{{ counts.experimental }}</span></a>
@@ -114,7 +120,7 @@
       <div class="card rounded-2xl p-[18px]">
         <div class="mb-3 text-[12px] font-bold uppercase tracking-[0.04em] text-faint">Audit status</div>
         <div class="space-y-[3px]">
-          <div class="flex items-center gap-[9px] rounded-lg px-2 py-[7px] text-[14px] text-body"><span class="inline-flex items-center gap-1.5"><span class="h-[7px] w-[7px] rounded-full bg-ok"></span>Audited</span></div>
+          <a href="/plugins?audited=1" class="flex items-center gap-[9px] rounded-lg px-2 py-[7px] text-[14px] text-body {% if active_audited %}pd-facet-active{% endif %}"><span class="inline-flex items-center gap-1.5"><span class="h-[7px] w-[7px] rounded-full bg-ok"></span>Audited</span> <span class="ml-auto text-[12px] text-faint">{{ counts.audited }}</span></a>
           <div class="flex items-center gap-[9px] rounded-lg px-2 py-[7px] text-[14px] text-body"><span class="inline-flex items-center gap-1.5"><span class="h-[7px] w-[7px] rounded-full bg-warn"></span>Unverified</span></div>
           <div class="flex items-center gap-[9px] rounded-lg px-2 py-[7px] text-[14px] text-body"><span class="inline-flex items-center gap-1.5"><span class="h-[7px] w-[7px] rounded-full bg-[#C23B3B]"></span>Flagged <span class="ml-auto text-[12px] text-[#C23B3B]">{{ counts.flagged }}</span></span></div>
         </div>
@@ -122,7 +128,7 @@
     </aside>
 
     <div class="flex flex-col gap-3.5">
-      <div class="text-[13.5px] text-muted">Showing <span class="font-semibold text-ink">{{ pagination.range_start }}–{{ pagination.range_end }}</span> of {{ total }} plugins{% if active_source %} · <a href="/plugins" class="font-semibold text-accent-2">clear filter</a>{% endif %}</div>
+      <div class="text-[13.5px] text-muted">Showing <span class="font-semibold text-ink">{{ pagination.range_start }}–{{ pagination.range_end }}</span> of {{ total }} plugins{% if search %} matching “<span class="font-semibold text-ink">{{ search }}</span>”{% endif %}{% if active_source or active_audited or search %} · <a href="/plugins" class="font-semibold text-accent-2">clear filter</a>{% endif %}</div>
 
       {% for p in plugins %}
       {% if p.flagged %}
@@ -201,13 +207,15 @@
       {% endif %}
       {% else %}
       <div class="card rounded-2xl p-10 text-center">
-        <p class="m-0 text-[15px] text-muted">No plugins match this filter yet.{% if active_source %} <a href="/plugins" class="font-semibold text-accent-2">View all plugins</a>.{% endif %}</p>
+        <p class="m-0 text-[15px] text-muted">{% if search %}No plugins match “{{ search }}”.{% else %}No plugins match this filter yet.{% endif %}{% if active_source or active_audited or search %} <a href="/plugins" class="font-semibold text-accent-2">View all plugins</a>.{% endif %}</p>
       </div>
       {% endfor %}
 
       {% if pagination.total_pages > 1 %}
-      {# Preserve the active source facet across every page link. #}
-      {% set src_q = ('&source=' ~ active_source) if active_source else '' %}
+      {# Preserve the active facet (source or audited) AND the search term
+         across every page link. #}
+      {% set facet_q = ('&source=' ~ active_source) if active_source else ('&audited=1' if active_audited else '') %}
+      {% set src_q = facet_q ~ (('&search=' ~ (search | urlencode)) if search else '') %}
       <nav class="pd-pager mt-3 flex flex-wrap items-center justify-center gap-1.5" aria-label="Plugin pages">
         {% if pagination.has_prev %}
         <a href="/plugins?page={{ pagination.prev_page }}{{ src_q }}" class="pd-page-link inline-flex items-center gap-1.5" rel="prev">

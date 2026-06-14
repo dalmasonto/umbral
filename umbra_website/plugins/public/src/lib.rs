@@ -62,6 +62,14 @@ async fn home() -> Result<Html<String>, (StatusCode, String)> {
     let plugins: Vec<PluginRow> = pd::Plugin::objects()
         .filter(plugin::SOURCE.ne("deprecated"))
         .filter(plugin::MODERATION.eq("approved"))
+        // Featured plugins surface first in the 3-card preview (the
+        // admin's `featured` flag), then by curated display order, then
+        // by stars — so the homepage leads with what the team wants seen,
+        // not just whatever the default scan order returns.
+        .order_by(plugin::FEATURED.desc())
+        .order_by(plugin::DISPLAY_ORDER.asc())
+        .order_by(plugin::GITHUB_STARS.desc())
+        .order_by(plugin::ID.asc())
         // Count VISIBLE comments only — `annotate_count_where` renders
         // the child predicate into the correlated subquery, and the
         // automatic soft-delete exclusion drops trashed comments too
@@ -133,6 +141,11 @@ async fn home() -> Result<Html<String>, (StatusCode, String)> {
     // the project shape, not a query.
     let glue_lines: i64 = 0;
 
+    // Trust strip: a curated slice of approved reviews (featured first),
+    // pulled live from the reviews plugin. An empty result renders the
+    // honest empty state in the template — never fabricated testimonials.
+    let reviews = reviews::featured_reviews(2).await.unwrap_or_default();
+
     let body = umbra::templates::render(
         "public/home.html",
         &context! {
@@ -143,6 +156,7 @@ async fn home() -> Result<Html<String>, (StatusCode, String)> {
             deprecated_count => deprecated_count,
             form_submissions => form_submissions,
             glue_lines => glue_lines,
+            reviews => reviews,
         },
     )
     .map_err(internal_error)?;

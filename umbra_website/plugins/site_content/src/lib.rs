@@ -11,11 +11,12 @@
 //! what each method does.
 
 pub mod models;
+pub mod seed;
 
 pub use models::{
-    BlogPost, BlogPostKind, ContactMessage, ContactStatus, ContentCategory, ContentPage,
-    ContentTag, MediaAsset, NavigationItem, NavigationPlacement, PageTemplate, PublishStatus,
-    SiteSetting,
+    BlogPost, BlogPostKind, ChangelogEntry, ChangelogKind, ContactMessage, ContactStatus,
+    ContentCategory, ContentPage, ContentTag, MediaAsset, NavigationItem, NavigationPlacement,
+    PageTemplate, PublishStatus, SiteSetting,
 };
 
 use std::path::PathBuf;
@@ -26,7 +27,7 @@ use umbra::plugin::{AppContext, Plugin, PluginError};
 use umbra::templates::context;
 use umbra::web::{Html, Router, StatusCode, get};
 
-use models::blog_post;
+use models::{blog_post, changelog_entry};
 
 #[derive(Debug, Default, Clone)]
 pub struct SiteContentPlugin;
@@ -45,6 +46,7 @@ impl Plugin for SiteContentPlugin {
             ModelMeta::for_::<models::NavigationItem>(),
             ModelMeta::for_::<models::MediaAsset>(),
             ModelMeta::for_::<models::ContactMessage>(),
+            ModelMeta::for_::<models::ChangelogEntry>(),
             ModelMeta::for_::<models::SiteSetting>(),
         ]
     }
@@ -58,9 +60,25 @@ impl Plugin for SiteContentPlugin {
             .route("/docs", get(docs_page))
             .route("/changelog", get(changelog_page))
             .route("/blog", get(blog_page))
+            .route("/blog/{slug}", get(blog_detail_page))
     }
 
     fn on_ready(&self, _ctx: &AppContext) -> Result<(), PluginError> {
+        // Seed the blog on boot (idempotent). Mirrors the reviews plugin:
+        // a spawned task so a seed failure logs rather than aborting boot,
+        // and the user's dev server picks up the posts on its next reload.
+        tokio::spawn(async move {
+            match seed::seed().await {
+                Ok(0) => {}
+                Ok(n) => tracing::info!("site_content: seeded {n} blog posts"),
+                Err(e) => tracing::warn!("site_content: blog seed failed: {e}"),
+            }
+            match seed::seed_changelog().await {
+                Ok(0) => {}
+                Ok(n) => tracing::info!("site_content: seeded {n} changelog entries"),
+                Err(e) => tracing::warn!("site_content: changelog seed failed: {e}"),
+            }
+        });
         Ok(())
     }
 }
@@ -73,12 +91,56 @@ async fn docs_page() -> Result<Html<String>, (StatusCode, String)> {
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }
 
-/// The `/changelog` page — curated release notes + milestone roadmap.
-/// Editorial content, no DB.
+/// The `/changelog` page — release notes + roadmap, now its own DB table
+/// (`ChangelogEntry`) rendered as a table and managed from the admin.
 async fn changelog_page() -> Result<Html<String>, (StatusCode, String)> {
-    umbra::templates::render("site_content/changelog.html", &context! {})
+    render_changelog()
+        .await
         .map(Html)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))
+}
+
+/// One changelog row handed to `changelog.html`.
+#[derive(Debug, Serialize)]
+struct ChangelogRow {
+    version: String,
+    title: String,
+    /// Markdown highlights (rendered with `| markdown`).
+    body: String,
+    /// "Released" / "Roadmap".
+    kind: String,
+    current: bool,
+    /// Formatted release date, or empty for roadmap rows.
+    released: String,
+}
+
+/// Load + render `/changelog`: published entries by display order. Honest
+/// empty state when nothing's recorded. Public so a render smoke-test can
+/// drive it without an axum runtime.
+pub async fn render_changelog() -> Result<String, String> {
+    let entries: Vec<ChangelogRow> = ChangelogEntry::objects()
+        .filter(changelog_entry::PUBLISHED.eq(true))
+        .order_by(changelog_entry::DISPLAY_ORDER.asc())
+        .order_by(changelog_entry::ID.asc())
+        .fetch()
+        .await
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|e| ChangelogRow {
+            version: e.version,
+            title: e.title,
+            body: e.body,
+            kind: format!("{:?}", e.kind),
+            current: e.current,
+            released: e
+                .released_at
+                .map(|d| d.format("%b %-d, %Y").to_string())
+                .unwrap_or_default(),
+        })
+        .collect();
+
+    umbra::templates::render("site_content/changelog.html", &context! { entries => entries })
+        .map_err(|e| e.to_string())
 }
 
 /// One blog post card on `/blog`.
@@ -127,5 +189,68 @@ pub async fn render_blog() -> Result<String, String> {
         .collect();
 
     umbra::templates::render("site_content/blog.html", &context! { posts => posts })
+        .map_err(|e| e.to_string())
+}
+
+/// The full blog post handed to `blog_post.html`. `body` is raw Markdown,
+/// rendered with `| markdown` in the template (then enhanced client-side
+/// with copy buttons + an image lightbox).
+#[derive(Debug, Serialize)]
+struct PostDetail {
+    title: String,
+    /// Markdown source — rendered with `| markdown` on the page.
+    body: String,
+    excerpt: String,
+    kind: String,
+    published: String,
+    reading_minutes: i32,
+    seo_title: String,
+    seo_description: String,
+}
+
+async fn blog_detail_page(
+    umbra::web::Path(slug): umbra::web::Path<String>,
+) -> Result<Html<String>, (StatusCode, String)> {
+    match render_blog_detail(&slug).await {
+        Ok(Some(html)) => Ok(Html(html)),
+        Ok(None) => Err((
+            StatusCode::NOT_FOUND,
+            format!("No published blog post exists at `/blog/{slug}`."),
+        )),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e)),
+    }
+}
+
+/// Load + render `/blog/{slug}`: one published post. `Ok(None)` is a 404
+/// (no published post with that slug). Public so a render smoke-test can
+/// drive it without an axum runtime.
+pub async fn render_blog_detail(slug: &str) -> Result<Option<String>, String> {
+    let Some(post) = BlogPost::objects()
+        .filter(blog_post::SLUG.eq(slug))
+        .filter(blog_post::STATUS.eq("published"))
+        .first()
+        .await
+        .map_err(|e| e.to_string())?
+    else {
+        return Ok(None);
+    };
+
+    let excerpt = post.excerpt.clone().unwrap_or_default();
+    let detail = PostDetail {
+        seo_title: post.seo_title.clone().unwrap_or_else(|| post.title.clone()),
+        seo_description: post.seo_description.clone().unwrap_or_else(|| excerpt.clone()),
+        title: post.title,
+        body: post.body,
+        excerpt,
+        kind: format!("{:?}", post.kind),
+        published: post
+            .published_at
+            .map(|d| d.format("%b %-d, %Y").to_string())
+            .unwrap_or_default(),
+        reading_minutes: post.reading_minutes,
+    };
+
+    umbra::templates::render("site_content/blog_post.html", &context! { post => detail })
+        .map(Some)
         .map_err(|e| e.to_string())
 }

@@ -105,4 +105,14 @@ async fn features_render_categories_and_status() {
         html.contains("planned"),
         "a planned feature's status label renders"
     );
+    // gaps2 #58: the "same struct for models, forms & serializers" message
+    // surfaces — both the editorial callout and the seeded catalog entry.
+    assert!(
+        html.contains("One struct"),
+        "the one-struct differentiator is surfaced on /features"
+    );
+    assert!(
+        html.contains("Model, form,") && html.contains("serializer"),
+        "the callout spells out the three roles of a single struct"
+    );
 }

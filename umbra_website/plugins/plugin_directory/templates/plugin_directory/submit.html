@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Submit a plugin — Umbra{% endblock %}
+{% block title %}Submit a plugin - Umbra{% endblock %}
 {% block meta_description %}Submit an Umbra plugin to the directory. Community plugins are moderated before they're listed.{% endblock %}
 
 {% block extra_head %}
@@ -172,7 +172,7 @@
       Plugin submission
     </div>
     <h1 class="pd-form-title">Submit a plugin to the directory</h1>
-    <p class="pd-form-sub">Tell us about your Umbra plugin. Community submissions are moderated before they appear in the directory — nothing goes live until a maintainer reviews it.</p>
+    <p class="pd-form-sub">Tell us about your Umbra plugin. Community submissions are moderated before they appear in the directory - nothing goes live until a maintainer reviews it.</p>
   </div>
 
   {% if errors and errors.form %}
@@ -194,7 +194,7 @@
         <div class="pd-field {% if errors.slug %}pd-field--error{% endif %}">
           <label class="pd-label" for="f-slug">URL slug <span class="pd-req">*</span></label>
           <input class="pd-input pd-mono" id="f-slug" name="slug" type="text" placeholder="umbra-rest" value="{{ form.slug | default('') }}" required>
-          {% if errors.slug %}<span class="pd-error"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>{{ errors.slug }}</span>{% else %}<span class="pd-hint">Lowercase, hyphenated — becomes /plugins/your-slug.</span>{% endif %}
+          {% if errors.slug %}<span class="pd-error"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>{{ errors.slug }}</span>{% else %}<span class="pd-hint">Lowercase, hyphenated - becomes /plugins/your-slug.</span>{% endif %}
         </div>
       </div>
 
@@ -219,8 +219,8 @@
 
       <div class="pd-field {% if errors.full_content %}pd-field--error{% endif %}">
         <label class="pd-label" for="f-full">Overview <span class="pd-req">*</span></label>
-        <textarea class="pd-textarea" id="f-full" name="full_content" rows="6" placeholder="What does the plugin do? Markdown is supported — headings, lists, fenced code." required>{{ form.full_content | default('') }}</textarea>
-        {% if errors.full_content %}<span class="pd-error"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>{{ errors.full_content }}</span>{% else %}<span class="pd-hint">Markdown — rendered on the plugin's detail page.</span>{% endif %}
+        <textarea class="pd-textarea" id="f-full" name="full_content" rows="6" placeholder="What does the plugin do? Markdown is supported - headings, lists, fenced code." required>{{ form.full_content | default('') }}</textarea>
+        {% if errors.full_content %}<span class="pd-error"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>{{ errors.full_content }}</span>{% else %}<span class="pd-hint">Markdown - rendered on the plugin's detail page.</span>{% endif %}
       </div>
 
       <div class="pd-field {% if errors.installation_commands %}pd-field--error{% endif %}">
@@ -235,7 +235,7 @@
         {% if errors.setup_notes %}<span class="pd-error">{{ errors.setup_notes }}</span>{% endif %}
       </div>
 
-      <div class="pd-section-h">Links &amp; metadata <span style="font-weight:500;text-transform:none;letter-spacing:0">— all optional</span></div>
+      <div class="pd-section-h">Links &amp; metadata <span style="font-weight:500;text-transform:none;letter-spacing:0">- all optional</span></div>
 
       <div class="pd-grid-2">
         <div class="pd-field {% if errors.docs_url %}pd-field--error{% endif %}">

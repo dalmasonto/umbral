@@ -320,6 +320,59 @@ impl Default for ContactMessage {
     }
 }
 
+/// Whether a [`ChangelogEntry`] is shipped or still planned. Drives the
+/// status pill (and lets the page split shipped vs. roadmap).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Choices, Default)]
+#[choices(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum ChangelogKind {
+    #[default]
+    Released,
+    Roadmap,
+}
+
+/// A single changelog row — its own table so the `/changelog` page is
+/// admin-managed, not hardcoded. Rendered as a table on the public page.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
+#[umbra(
+    soft_delete,
+    plugin = "site_content",
+    display = "Changelog entries",
+    icon = "git-commit"
+)]
+pub struct ChangelogEntry {
+    pub id: i64,
+    /// Version label, e.g. "0.0.1" or "toward v0.1".
+    #[umbra(string, max_length = 60)]
+    pub version: String,
+    #[umbra(string, max_length = 180)]
+    pub title: String,
+    #[umbra(
+        widget = "markdown",
+        help = "Markdown — the highlights for this entry (a bullet list). Rendered with `| markdown`."
+    )]
+    pub body: String,
+    #[umbra(choices, index)]
+    pub kind: ChangelogKind,
+    /// Highlight this row as the current release (the "Current" pill).
+    #[umbra(default = "false", index)]
+    pub current: bool,
+    /// Release date — `None` for roadmap rows (renders as "—").
+    pub released_at: Option<DateTime<Utc>>,
+    /// Lower numbers sort first (newest/most-relevant at the top).
+    #[umbra(default = "0", index)]
+    pub display_order: i32,
+    /// Visibility on the public changelog.
+    #[umbra(default = "true", index)]
+    pub published: bool,
+    #[umbra(auto_now_add)]
+    pub created_at: DateTime<Utc>,
+    #[umbra(auto_now)]
+    pub updated_at: DateTime<Utc>,
+    #[umbra(index)]
+    pub deleted_at: Option<DateTime<Utc>>,
+}
+
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
 #[umbra(
     soft_delete,

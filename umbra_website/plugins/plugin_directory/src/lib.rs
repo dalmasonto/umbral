@@ -37,7 +37,8 @@ use umbra::prelude::*;
 use umbra::routes::RouteSpec;
 use umbra::templates::context;
 use umbra::web::{
-    Form, Html, IntoResponse, Path, Query, Redirect, Response, Router, StatusCode, get, post,
+    Form, HeaderMap, Html, IntoResponse, Path, Query, Redirect, Response, Router, StatusCode, get,
+    post,
 };
 
 use models::{
@@ -251,19 +252,52 @@ pub async fn render_prebuilt() -> Result<String, String> {
 #[derive(Debug, Default, serde::Deserialize)]
 struct ListingQuery {
     source: Option<String>,
+    /// `?audited=1` shows only audited plugins (the homepage "Audited"
+    /// tab links here). Mutually exclusive with `source` in the UI.
+    audited: Option<String>,
+    /// `?search=<q>` — the landing-page and directory search box. Matches
+    /// name / crate name / short description (case-insensitive substring).
+    search: Option<String>,
     page: Option<u32>,
+}
+
+/// True for `?audited=1` / `?audited=true` — anything else is "off".
+fn truthy(v: Option<&str>) -> bool {
+    matches!(v, Some("1") | Some("true") | Some("yes") | Some("on"))
+}
+
+/// Case-insensitive substring match across the fields a user expects the
+/// search box to cover: name, crate name, and short description. ORed via
+/// `Predicate: BitOr` (string columns have no single multi-field search).
+fn search_predicate(q: &str) -> umbra::orm::Predicate<PluginModel> {
+    plugin::NAME.icontains(q)
+        | plugin::CRATE_NAME.icontains(q)
+        | plugin::SHORT_DESCRIPTION.icontains(q)
 }
 
 /// Cards per listing page.
 const PAGE_SIZE: i64 = 12;
 
+/// Predicate for the "Audited" facet: a plugin counts as audited when an
+/// Umbra or third-party reviewer has signed off. The string column has no
+/// `in_`, so this ORs the two `eq` predicates (`Predicate: BitOr`) — the
+/// same definition the `PluginCard.audited` badge uses.
+fn audited_predicate() -> umbra::orm::Predicate<PluginModel> {
+    plugin::AUDIT_STATUS.eq("umbra_reviewed") | plugin::AUDIT_STATUS.eq("third_party_reviewed")
+}
+
 async fn plugin_directory(
     Query(q): Query<ListingQuery>,
 ) -> Result<Html<String>, (StatusCode, String)> {
-    render_listing(q.source.as_deref(), q.page.unwrap_or(1))
-        .await
-        .map(Html)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))
+    render_listing(
+        q.source.as_deref(),
+        truthy(q.audited.as_deref()),
+        q.search.as_deref(),
+        q.page.unwrap_or(1),
+    )
+    .await
+    .map(Html)
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))
 }
 
 /// Pagination view-model handed to `plugins.html`.
@@ -287,25 +321,55 @@ struct Pagination {
 /// smoke-test can exercise the full query → view-model → template path
 /// without an axum runtime. `source` is an optional facet filter;
 /// `page` is the 1-based page number (clamped to `[1, total_pages]`).
-pub async fn render_listing(source: Option<&str>, page: u32) -> Result<String, String> {
+pub async fn render_listing(
+    source: Option<&str>,
+    audited: bool,
+    search: Option<&str>,
+    page: u32,
+) -> Result<String, String> {
     // The active source facet, validated against the known variants so a
-    // junk `?source=` value doesn't silently filter to nothing.
-    let active_source =
-        source.filter(|s| matches!(*s, "official" | "community" | "experimental" | "deprecated"));
+    // junk `?source=` value doesn't silently filter to nothing. The
+    // `audited` facet takes precedence: when on, the source facet is
+    // ignored so the two never compose into a confusing combined filter.
+    let active_source = if audited {
+        None
+    } else {
+        source.filter(|s| matches!(*s, "official" | "community" | "experimental" | "deprecated"))
+    };
+
+    // Trimmed, non-empty search term — `?search=` / whitespace acts like
+    // no search at all.
+    let search = search.map(str::trim).filter(|s| !s.is_empty());
 
     // Real facet counts — one `SELECT COUNT(*)` per facet, never a
     // fetch-all-and-count-in-memory.
     let counts = FacetCounts::load().await.map_err(|e| e.to_string())?;
 
-    // `total` is the count for the *current view*: the active facet's
-    // count when filtering, else the grand total. Pagination is computed
-    // against this so "X of N" and the page count agree with what's shown.
-    let total = match active_source {
-        Some("official") => counts.official,
-        Some("community") => counts.community,
-        Some("experimental") => counts.experimental,
-        Some("deprecated") => counts.deprecated,
-        _ => counts.total,
+    // `total` is the count for the *current view*. With a search term the
+    // facet counts no longer describe what's shown, so we count the
+    // matching rows directly (search composed with the active facet);
+    // without one we reuse the cheap precomputed facet count.
+    let total = if let Some(q) = search {
+        let mut c = PluginModel::objects().filter(plugin::MODERATION.eq("approved"));
+        if audited {
+            c = c.filter(audited_predicate());
+        } else if let Some(src) = active_source {
+            c = c.filter(plugin::SOURCE.eq(src));
+        }
+        c.filter(search_predicate(q))
+            .count()
+            .await
+            .map_err(|e| e.to_string())?
+    } else if audited {
+        counts.audited
+    } else {
+        match active_source {
+            Some("official") => counts.official,
+            Some("community") => counts.community,
+            Some("experimental") => counts.experimental,
+            Some("deprecated") => counts.deprecated,
+            _ => counts.total,
+        }
     };
     let total_pages = if total == 0 {
         1
@@ -325,8 +389,13 @@ pub async fn render_listing(source: Option<&str>, page: u32) -> Result<String, S
     // then stars) so LIMIT/OFFSET slices a stable, page-consistent order
     // rather than an in-memory reshuffle that only sorts the current page.
     let mut listing = PluginModel::objects().filter(plugin::MODERATION.eq("approved"));
-    if let Some(src) = active_source {
+    if audited {
+        listing = listing.filter(audited_predicate());
+    } else if let Some(src) = active_source {
         listing = listing.filter(plugin::SOURCE.eq(src));
+    }
+    if let Some(q) = search {
+        listing = listing.filter(search_predicate(q));
     }
     let rows = listing
         .order_by(plugin::FEATURED.desc())
@@ -379,6 +448,8 @@ pub async fn render_listing(source: Option<&str>, page: u32) -> Result<String, S
             total => total,
             showing => showing,
             active_source => active_source,
+            active_audited => audited,
+            search => search.unwrap_or(""),
             pagination => pagination,
         },
     )
@@ -409,6 +480,9 @@ struct FacetCounts {
     experimental: i64,
     deprecated: i64,
     flagged: i64,
+    /// Plugins whose audit_status is umbra- or third-party-reviewed.
+    /// Drives the clickable "Audited" facet (`?audited=1`).
+    audited: i64,
     total: i64,
 }
 
@@ -430,6 +504,11 @@ impl FacetCounts {
             .filter(plugin::SECURITY_STATUS.eq("blocked"))
             .count()
             .await?;
+        let audited = PluginModel::objects()
+            .filter(plugin::MODERATION.eq("approved"))
+            .filter(audited_predicate())
+            .count()
+            .await?;
         let total = PluginModel::objects()
             .filter(plugin::MODERATION.eq("approved"))
             .count()
@@ -440,6 +519,7 @@ impl FacetCounts {
             experimental,
             deprecated,
             flagged,
+            audited,
             total,
         })
     }
@@ -626,10 +706,18 @@ async fn plugin_detail(
 /// awaits moderation), then redirects back to the detail page with
 /// `?submitted=1` so the success banner renders. The redirect (a fresh
 /// GET) is the POST/redirect/GET pattern — a refresh won't re-submit.
+///
+/// Progressive enhancement: a plain `<form>` submit (no JS) gets the
+/// classic redirect-to-`?submitted=1`. A `fetch()` submit (the note
+/// dialog's JS sets `Accept: application/json`) gets a tiny JSON
+/// acknowledgement instead, so the page never reloads — the success
+/// state and the live SSE banner update in place. Both paths run the
+/// exact same `create_note` ORM write.
 async fn post_plugin_note(
     Path(slug): Path<String>,
+    headers: HeaderMap,
     Form(form): Form<HashMap<String, String>>,
-) -> Result<Redirect, (StatusCode, String)> {
+) -> Result<Response, (StatusCode, String)> {
     let body = form.get("body").map(|s| s.trim()).unwrap_or("");
     if body.is_empty() {
         return Err((StatusCode::BAD_REQUEST, "A note body is required.".into()));
@@ -641,16 +729,40 @@ async fn post_plugin_note(
         .filter(|s| !s.is_empty())
         .map(str::to_string);
 
-    match create_note(&slug, body, kind, author_label)
+    let created = create_note(&slug, body, kind, author_label)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?
-    {
-        true => Ok(Redirect::to(&format!("/plugins/{slug}?submitted=1"))),
-        false => Err((
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    if !created {
+        return Err((
             StatusCode::NOT_FOUND,
             format!("No plugin directory entry exists for `{slug}`."),
-        )),
+        ));
     }
+
+    if wants_json(&headers) {
+        // AJAX path: acknowledge without a navigation. The body is
+        // pending moderation, so we only confirm receipt.
+        Ok((
+            StatusCode::OK,
+            [(umbra::web::header::CONTENT_TYPE, "application/json")],
+            r#"{"ok":true,"pending":true}"#,
+        )
+            .into_response())
+    } else {
+        // No-JS fallback: POST/redirect/GET so a refresh won't re-submit.
+        Ok(Redirect::to(&format!("/plugins/{slug}?submitted=1")).into_response())
+    }
+}
+
+/// True when the client prefers a JSON response (the note dialog's
+/// `fetch()` sets `Accept: application/json`). A plain browser form
+/// submit sends `Accept: text/html`, so it takes the redirect path.
+fn wants_json(headers: &HeaderMap) -> bool {
+    headers
+        .get(umbra::web::header::ACCEPT)
+        .and_then(|v| v.to_str().ok())
+        .map(|a| a.contains("application/json"))
+        .unwrap_or(false)
 }
 
 /// Create a pending [`PluginComment`] for the approved plugin `slug`.
