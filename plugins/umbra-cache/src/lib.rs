@@ -359,7 +359,11 @@ impl CacheBackend for SqliteBackend {
                 .ok()
                 .and_then(|cd| Utc::now().checked_add_signed(cd))
         });
-        let _ = sqlx::query(
+        // BROKEN-12: log swallowed write errors. A cache backend is
+        // best-effort (a failed write must not break the request), but a
+        // locked SQLite / dead pool that no-ops every write forever should
+        // not be invisible — the trait doc promised "and log them".
+        if let Err(e) = sqlx::query(
             "INSERT INTO umbra_cache (key, value, expires_at) VALUES (?, ?, ?)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value, expires_at = excluded.expires_at",
         )
@@ -367,20 +371,29 @@ impl CacheBackend for SqliteBackend {
         .bind(value)
         .bind(expires_at)
         .execute(&self.pool)
-        .await;
+        .await
+        {
+            tracing::warn!(error = %e, key, "umbra-cache: SQLite cache set failed (swallowed)");
+        }
     }
 
     async fn delete(&self, key: &str) {
-        let _ = sqlx::query("DELETE FROM umbra_cache WHERE key = ?")
+        if let Err(e) = sqlx::query("DELETE FROM umbra_cache WHERE key = ?")
             .bind(key)
             .execute(&self.pool)
-            .await;
+            .await
+        {
+            tracing::warn!(error = %e, key, "umbra-cache: SQLite cache delete failed (swallowed)");
+        }
     }
 
     async fn clear(&self) {
-        let _ = sqlx::query("DELETE FROM umbra_cache")
+        if let Err(e) = sqlx::query("DELETE FROM umbra_cache")
             .execute(&self.pool)
-            .await;
+            .await
+        {
+            tracing::warn!(error = %e, "umbra-cache: SQLite cache clear failed (swallowed)");
+        }
     }
 }
 
@@ -428,26 +441,34 @@ impl CacheBackend for RedisBackend {
     async fn set(&self, key: &str, value: Vec<u8>, ttl: Option<Duration>) {
         use redis::AsyncCommands;
         let mut conn = self.client.clone();
-        if let Some(dur) = ttl {
+        // BROKEN-12: log swallowed errors — a dead Redis that no-ops every
+        // write should not be silent (the trait doc promised "and log them").
+        let res: Result<(), _> = if let Some(dur) = ttl {
             let secs = dur.as_secs().max(1);
-            let _: Result<(), _> = conn.set_ex(key, value, secs).await;
+            conn.set_ex(key, value, secs).await
         } else {
-            let _: Result<(), _> = conn.set(key, value).await;
+            conn.set(key, value).await
+        };
+        if let Err(e) = res {
+            tracing::warn!(error = %e, key, "umbra-cache: Redis cache set failed (swallowed)");
         }
     }
 
     async fn delete(&self, key: &str) {
         use redis::AsyncCommands;
         let mut conn = self.client.clone();
-        let _: Result<(), _> = conn.del(key).await;
+        if let Err(e) = conn.del::<_, ()>(key).await {
+            tracing::warn!(error = %e, key, "umbra-cache: Redis cache delete failed (swallowed)");
+        }
     }
 
     async fn clear(&self) {
-        use redis::AsyncCommands;
         let mut conn = self.client.clone();
         // FLUSHDB removes all keys in the currently selected database.
         // Document this prominently: use a dedicated Redis DB for cache.
-        let _: Result<(), _> = redis::cmd("FLUSHDB").query_async::<()>(&mut conn).await;
+        if let Err(e) = redis::cmd("FLUSHDB").query_async::<()>(&mut conn).await {
+            tracing::warn!(error = %e, "umbra-cache: Redis cache clear failed (swallowed)");
+        }
     }
 }
 

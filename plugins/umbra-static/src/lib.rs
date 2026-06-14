@@ -87,7 +87,7 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use axum::body::Body;
-use axum::http::{Request, Response, StatusCode, header};
+use axum::http::{Method, Request, Response, StatusCode, header};
 use bytes::Bytes;
 use http::header::{CACHE_CONTROL, HeaderValue};
 use include_dir::Dir;
@@ -441,6 +441,12 @@ impl Service<Request<Body>> for EmbeddedDirService {
     fn call(&mut self, req: Request<Body>) -> Self::Future {
         let dir = self.dir;
         Box::pin(async move {
+            // BROKEN-11: static assets are read-only — answer only GET/HEAD.
+            // The filesystem ServeDir path already 405s other methods; the
+            // embedded path used to return 200 + the body for POST/PUT/etc.
+            if !matches!(*req.method(), Method::GET | Method::HEAD) {
+                return Ok(method_not_allowed_response());
+            }
             let rel = req.uri().path().trim_start_matches('/');
             // Empty path = root of the mount. We don't synthesise an
             // index.html; callers that want one should serve it via
@@ -472,4 +478,13 @@ fn not_found_response() -> Response<Body> {
         .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
         .body(Body::from("not found"))
         .expect("static 404 response is always valid")
+}
+
+fn method_not_allowed_response() -> Response<Body> {
+    Response::builder()
+        .status(StatusCode::METHOD_NOT_ALLOWED)
+        .header(header::ALLOW, "GET, HEAD")
+        .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+        .body(Body::from("method not allowed"))
+        .expect("static 405 response is always valid")
 }

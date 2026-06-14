@@ -3298,8 +3298,10 @@ fn parse_form_attrs(attrs: &[syn::Attribute]) -> syn::Result<FormFieldAttr> {
             } else {
                 Err(meta.error(
                     "umbra::Form derive accepts `required`, `optional`, \
-                     `email`, `password`, `min_length = N`, `max_length = N`, \
-                     `length(min = N, max = M)`, `label_field = \"name\"`",
+                     `email`, `password`, `phone`, `url`, `regex = \"...\"`, \
+                     `min_length = N`, `max_length = N`, \
+                     `length(min = N, max = M)`, `message = \"...\"`, \
+                     `label_field = \"name\"`",
                 ))
             }
         })?;
