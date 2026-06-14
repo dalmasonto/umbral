@@ -8,6 +8,23 @@ use sqlx::Row as _;
 
 use crate::orm::{HydrateRelated, Model};
 
+/// True when the related PK column at `alias` is NULL — i.e. a LEFT JOIN
+/// miss. Decodes the PK as **nullable** regardless of its declared
+/// non-nullability, so a missing row's PK reads as `Null` rather than
+/// erroring or coercing to a present default. PK-agnostic. See the
+/// SQLite counterpart for the rationale.
+pub(super) fn joined_pk_is_null(
+    row: &sqlx::postgres::PgRow,
+    pk_col: &crate::migrate::Column,
+    alias: &str,
+) -> bool {
+    let mut as_nullable = pk_col.clone();
+    as_nullable.nullable = true;
+    crate::orm::dynamic::decode_pg_to_json_aliased(row, &as_nullable, alias)
+        .map(|v| v.is_null())
+        .unwrap_or(true)
+}
+
 /// Convert a Postgres row to a `serde_json::Value::Object`. See the
 /// note on [`super::backend_sqlite::row_to_json`] — same
 /// `Option<T>`-first cascade so NULL columns map to `JsonValue::Null`
@@ -78,9 +95,7 @@ pub(super) fn hydrate_joined_rels<T: Model + HydrateRelated>(
             // PK-agnostic presence check: decode the related PK via its
             // column's SqlType, not i64 — so a String/slug- or Uuid-keyed
             // joined row isn't mistaken for a left-join miss.
-            let pk_is_null = crate::orm::dynamic::decode_pg_to_json_aliased(row, pk_col, &pk_alias)
-                .map(|v| v.is_null())
-                .unwrap_or(true);
+            let pk_is_null = joined_pk_is_null(row, pk_col, &pk_alias);
             if pk_is_null {
                 deeper = None;
                 if idx == 0 {
@@ -127,9 +142,7 @@ pub(super) fn extract_m2m_child_json<T: Model>(
     };
     let pk_alias = format!("{m2m_seg}__{}", pk_col.name);
     // PK-agnostic presence check (see hydrate_joined_rels).
-    let pk_null = crate::orm::dynamic::decode_pg_to_json_aliased(row, pk_col, &pk_alias)
-        .map(|v| v.is_null())
-        .unwrap_or(true);
+    let pk_null = joined_pk_is_null(row, pk_col, &pk_alias);
     if pk_null {
         return Ok(None);
     }
@@ -155,9 +168,7 @@ pub(super) fn extract_m2m_child_json<T: Model>(
                 continue;
             };
             let hpk_alias = format!("{prefix}__{}", hpk.name);
-            let hpk_null = crate::orm::dynamic::decode_pg_to_json_aliased(row, hpk, &hpk_alias)
-                .map(|v| v.is_null())
-                .unwrap_or(true);
+            let hpk_null = joined_pk_is_null(row, hpk, &hpk_alias);
             if hpk_null {
                 deeper = None;
                 continue;
