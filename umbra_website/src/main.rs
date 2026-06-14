@@ -19,6 +19,7 @@ use umbra::templates::context;
 use umbra::web::{Html, SlashRedirect, StatusCode};
 use umbra_admin::AdminPlugin;
 use umbra_auth::{AuthPlugin, AuthUser, login_required_html};
+use umbra_cache::{Cache, CachePlugin};
 use umbra_livereload::LiveReloadPlugin;
 use umbra_media::MediaPlugin;
 use umbra_oauth::OAuthPlugin;
@@ -82,6 +83,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .with_user_in_templates(),
         )
         .plugin(SessionsPlugin::default())
+        // Cache plugin: installs a process-wide in-memory cache as the
+        // ambient handle (BROKEN-9 wires it in on_ready). Handlers can now
+        // cache expensive data/fragments via `umbra_cache::ambient()`.
+        // NOTE: deliberately NOT layering `cache_page` on the HTML pages —
+        // its cache key is URL-only, but `base.html` renders per-user nav
+        // and would serve one visitor's view to another; and in dev it
+        // would defeat live-reload. Page caching needs an anonymous-only +
+        // non-dev mode first (see the framework follow-up).
+        // .plugin(CachePlugin::new(Cache::memory()))
         // OAuth / social login. Credentials are read from the environment
         // (UMBRA_OAUTH_<PROVIDER>_CLIENT_ID / _CLIENT_SECRET); a provider
         // with no credentials is simply not registered, so this is safe to

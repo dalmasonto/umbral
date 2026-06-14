@@ -29,7 +29,7 @@ umbra-livereload   = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-liver
 # umbra-tasks        = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-tasks" }  # DB-backed background task queue (Celery-equivalent).
 # umbra-permissions  = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-permissions" }  # Django-style ContentType + Group + Permission model.
 # umbra-rls          = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-rls" }  # Postgres row-level security policy registration.
-# umbra-cache        = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-cache" }  # Per-request caching helper.
+umbra-cache          = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-cache" }  # In-memory/SQLite/Redis cache + cache_page middleware.
 # umbra-email        = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-email" }  # SMTP + MIME email composer + sender.
 # umbra-signals      = { path = "/home/dalmas/E/projects/umbra/plugins/umbra-signals" }  # Pre/post save/delete signal dispatch.
 
