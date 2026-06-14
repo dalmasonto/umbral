@@ -296,6 +296,7 @@ umbra-security = {{ git = "https://github.com/dalmasonto/umbra" }}
 # umbra-media        = {{ git = "https://github.com/dalmasonto/umbra" }}  # Uploaded-file storage abstraction (local FS + S3).
 # umbra-signals      = {{ git = "https://github.com/dalmasonto/umbra" }}  # Pre/post save/delete signal dispatch.
 # umbra-static       = {{ git = "https://github.com/dalmasonto/umbra" }}  # Static-file serving for prod (whitenoise-equivalent).
+# umbra-livereload   = {{ git = "https://github.com/dalmasonto/umbra" }}  # Dev-only browser live-reload (SSE push + file watcher). Add `.plugin(LiveReloadPlugin::new())`.
 
 # ----- Third-party + framework runtime deps --------------------------------
 tokio = {{ version = "1", features = ["macros", "rt-multi-thread"] }}
