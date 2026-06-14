@@ -453,22 +453,41 @@ impl CacheBackend for RedisBackend {
 
 // ── CachePlugin ──────────────────────────────────────────────────────────────
 
-/// The plugin. Carries no models, no routes. Initialise it with a
-/// ready-to-use `Cache` handle at app boot so `cache_page` and any
-/// handler that calls [`ambient()`] can find it without explicit
-/// dependency injection.
+/// The plugin. Carries no models, no routes — just a `Cache` handle it
+/// installs as the ambient cache at boot, so `cache_page` and any handler
+/// that calls [`ambient()`] find it without explicit dependency injection.
+///
+/// Idiomatic registration (the carried cache is wired in `on_ready`):
 ///
 /// ```ignore
-/// CachePlugin::init(Cache::memory());
-/// // or for Redis:
-/// CachePlugin::init(Cache::redis("redis://localhost:6379/0").await?);
+/// App::builder()
+///     .plugin(CachePlugin::new(Cache::memory()))
+///     // or: CachePlugin::new(Cache::redis("redis://localhost:6379/0").await?)
+///     .build()?;
 /// ```
-#[derive(Debug, Default)]
-pub struct CachePlugin;
+///
+/// `CachePlugin::init(cache)` remains for manual/test wiring outside the
+/// plugin lifecycle.
+#[derive(Default)]
+pub struct CachePlugin {
+    /// Cache to install as the ambient handle in [`Plugin::on_ready`].
+    /// `None` for the legacy unit-style registration (where the ambient
+    /// cache is wired separately via [`CachePlugin::init`]).
+    cache: Option<Cache>,
+}
 
 impl CachePlugin {
-    /// Store `cache` as the ambient handle. Must be called before the
-    /// first request; calling it twice panics (same contract as
+    /// Build the plugin carrying `cache`. The idiomatic
+    /// `App::builder().plugin(CachePlugin::new(Cache::memory()))` then
+    /// installs it as the ambient handle at boot (BROKEN-9) — no separate
+    /// `init` call, so `cache_page` actually caches.
+    pub fn new(cache: Cache) -> Self {
+        Self { cache: Some(cache) }
+    }
+
+    /// Store `cache` as the ambient handle directly, outside the plugin
+    /// lifecycle. Prefer [`CachePlugin::new`] in app code; this stays for
+    /// manual / test wiring. Calling it twice panics (same contract as
     /// `settings::init`).
     pub fn init(cache: Cache) {
         if AMBIENT_CACHE.set(cache).is_err() {
@@ -480,5 +499,30 @@ impl CachePlugin {
 impl Plugin for CachePlugin {
     fn name(&self) -> &'static str {
         "cache"
+    }
+
+    fn on_ready(&self, _ctx: &umbra::plugin::AppContext) -> Result<(), umbra::plugin::PluginError> {
+        // BROKEN-9: registering the plugin must actually wire the cache,
+        // otherwise `cache_page` silently no-ops on every request. If a
+        // cache was supplied via `new`, install it as the ambient handle.
+        match &self.cache {
+            Some(cache) => {
+                if AMBIENT_CACHE.set(cache.clone()).is_err() {
+                    tracing::warn!(
+                        "CachePlugin::new: an ambient cache was already installed (via \
+                         CachePlugin::init or another CachePlugin); ignoring this one."
+                    );
+                }
+            }
+            None if AMBIENT_CACHE.get().is_none() => {
+                tracing::warn!(
+                    "CachePlugin registered with no cache and none set via CachePlugin::init — \
+                     cache_page layers will silently no-op. Use \
+                     CachePlugin::new(Cache::memory())."
+                );
+            }
+            None => {}
+        }
+        Ok(())
     }
 }

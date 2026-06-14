@@ -177,11 +177,20 @@ where
             let (parts, body) = resp.into_parts();
             let body_bytes = match body.collect().await {
                 Ok(collected) => collected.to_bytes(),
-                Err(_) => {
-                    // Body collection failed — reassemble and forward as-is.
-                    // Can't reconstruct the body here so return an empty 200.
-                    let fallback = Response::from_parts(parts, Body::empty());
-                    return Ok(fallback);
+                Err(e) => {
+                    // BROKEN-7: the body stream failed partway. Reusing the
+                    // success `parts` with an empty body fabricates a 200
+                    // whose `Content-Length` no longer matches the (empty)
+                    // body — that desyncs keep-alive connections and is
+                    // indistinguishable from a real empty page. Log it and
+                    // return a clean 502 instead; never cache it.
+                    tracing::error!(
+                        error = %e,
+                        "cache_page: failed to collect upstream response body; returning 502"
+                    );
+                    let mut resp = Response::new(Body::from("Bad Gateway"));
+                    *resp.status_mut() = StatusCode::BAD_GATEWAY;
+                    return Ok(resp);
                 }
             };
 
