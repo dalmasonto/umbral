@@ -242,7 +242,8 @@ async fn serialize_emits_fk_id_for_child_side_only() {
     // serialize as null — the parent_id is the parent's OWN PK, not
     // the field's data, and leaking it would break JSON output.
     let mut parent: OneToOne<AuthUser> = OneToOne::empty();
-    parent.set_parent_id(99);
+    // PK lift: set_parent_id takes the parent's PK as a serde_json::Value.
+    parent.set_parent_id(serde_json::json!(99));
     let j = serde_json::to_value(&parent).expect("serialize");
     assert!(
         j.is_null(),
