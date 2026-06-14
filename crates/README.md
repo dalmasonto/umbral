@@ -27,14 +27,54 @@ All cargo commands run from inside this directory:
 
 ```bash
 cargo build                      # build the whole workspace
-cargo test                       # run all tests
+cargo test                       # run all tests (~1600, across all crates + plugins)
 cargo test -p umbra-core         # test one crate
+cargo test -p umbra-core --test fulltext_field   # one test binary
 cargo run -p umbra-cli -- <cmd>  # run the manage.py equivalent
 cargo clippy --all-targets       # lint
 cargo fmt                        # format
 ```
 
 Build artefacts land at `crates/target/` and `crates/Cargo.lock` (both inside this directory, gitignored except `Cargo.lock` which is tracked because the workspace contains a binary).
+
+### Keeping `target/` small (the ~80 GB problem)
+
+A full `cargo test` builds **one binary per `tests/*.rs` file** (dozens of them) plus every crate and plugin. With cargo's default `debug = 2`, each binary embeds full DWARF debug info — that, not your code, is what bloats `target/` toward **~80 GB**. Two settings cut it to **~20 GB**:
+
+1. **`debug = "line-tables-only"`** — already set in this workspace's `Cargo.toml` (`[profile.dev]` + `[profile.test]`). It keeps panic/backtrace file:line locations (test failures still point at the right line) and drops the bulk of the debug info. This is the single biggest lever; you get it for free.
+2. **`CARGO_INCREMENTAL=0`** — skips the incremental-compilation cache (~1.3 GB). Worth it for one-shot full runs (CI, a big test sweep); leave it on for day-to-day dev where incremental speeds up rebuilds.
+
+So a disk-friendly full run is just:
+
+```bash
+CARGO_INCREMENTAL=0 cargo test
+```
+
+To override the debug level per-invocation without editing files (e.g. a throwaway clone, or to go even smaller with `0`):
+
+```bash
+CARGO_PROFILE_DEV_DEBUG=line-tables-only CARGO_PROFILE_TEST_DEBUG=line-tables-only CARGO_INCREMENTAL=0 cargo test
+```
+
+If `target/` has already ballooned from an earlier build, `cargo clean` (or `rm -rf target`) reclaims it; the next build uses the slim settings.
+
+> Note: `--test-threads=1` serializes test *execution*, not the build, so it does **not** save disk — the build is what consumes it. Tests run in parallel by default; keep it that way.
+
+### Running the Postgres-backed tests
+
+Most tests run on in-memory SQLite and need nothing. A handful exercise Postgres-only behaviour (full-text search, native `uuid` relations, array/JSON/network types, PG backup) and are gated `#[ignore]` so they self-skip when no server is configured. To run them, point `UMBRA_TEST_POSTGRES_URL` at a database and pass `--include-ignored`:
+
+```bash
+export UMBRA_TEST_POSTGRES_URL="postgres://user:pass@localhost/umbra_test"
+
+# all of a crate's tests, including the Postgres-gated ones
+cargo test -p umbra-core -- --include-ignored
+
+# just the full-text-search suite against Postgres
+cargo test -p umbra-core --test fulltext_field -- --include-ignored
+```
+
+The tests create and drop their own tables (`DROP TABLE IF EXISTS …` first), so the target database only needs `CREATE`/`DROP` privileges; no migrations or fixtures to set up.
 
 ## Conventions
 

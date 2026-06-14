@@ -34,3 +34,17 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/dalmasonto/umbra"
 authors = ["Dalmas Ogembo <dalmasogembo@gmail.com>"]
 rust-version = "1.85"
+
+# Disk: keep `target/` small. The workspace has dozens of integration-test
+# binaries (one per `tests/*.rs`), and the default `debug = 2` embeds full
+# DWARF in every one — that alone is what drives `target/` toward ~80 GB.
+# `line-tables-only` keeps panic/backtrace file:line locations (so test
+# failures still point at the right line) while dropping the bulk of the
+# debug info, taking the full workspace + all test binaries to ~20 GB.
+# See crates/README.md "Build, test, run" for the env-var alternative and
+# how to shrink the incremental cache.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.test]
+debug = "line-tables-only"
