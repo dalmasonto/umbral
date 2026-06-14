@@ -253,7 +253,7 @@ pub(crate) async fn update_row(
 /// columns the form-building layer hid.
 fn readonly_set(model: &ModelMeta, cfg: Option<&AdminConfig>) -> Vec<String> {
     let all_col_names: Vec<&str> = model.fields.iter().map(|c| c.name.as_str()).collect();
-    if let Some(c) = cfg {
+    let mut set: Vec<String> = if let Some(c) = cfg {
         c.effective_readonly_fields(&all_col_names)
             .into_iter()
             .map(|s| s.to_string())
@@ -264,5 +264,102 @@ fn readonly_set(model: &ModelMeta, cfg: Option<&AdminConfig>) -> Vec<String> {
             .filter(|n| crate::config::is_sensitive_column(n))
             .map(|s| s.to_string())
             .collect()
+    };
+    // Model-level write guards hold regardless of admin config. The
+    // form-building layer only *hides* these columns; without echoing
+    // them into the write skip-set a crafted POST writes them anyway —
+    // classic mass assignment (gaps: WEB-2). `noform` blocks writes
+    // entirely (documented); `noedit` renders disabled in the admin with
+    // the promise it "can't change through the admin", so the admin must
+    // enforce that too. REST keeps its own per-field rules (noedit is a
+    // UX hint there by design; noform is stripped in insert/update_json).
+    for col in &model.fields {
+        if (col.noform || col.noedit) && !set.iter().any(|s| s == &col.name) {
+            set.push(col.name.clone());
+        }
+    }
+    set
+}
+
+#[cfg(test)]
+mod readonly_set_tests {
+    use super::*;
+
+    /// Build a bare column with just the flags the readonly-set logic
+    /// reads. Every other field is an inert default — the function under
+    /// test only inspects `name`, `noform`, and `noedit`.
+    fn col(name: &str, noform: bool, noedit: bool) -> Column {
+        Column {
+            name: name.into(),
+            ty: SqlType::Text,
+            primary_key: false,
+            nullable: false,
+            fk_target: None,
+            noform,
+            noedit,
+            is_string_repr: false,
+            max_length: 0,
+            choices: vec![],
+            choice_labels: vec![],
+            default: String::new(),
+            is_multichoice: false,
+            unique: false,
+            on_delete: umbra::orm::FkAction::NoAction,
+            on_update: umbra::orm::FkAction::NoAction,
+            index: false,
+            auto_now_add: false,
+            auto_now: false,
+            help: String::new(),
+            example: String::new(),
+            widget: None,
+            supported_backends: Vec::new(),
+            min: None,
+            max: None,
+            text_format: None,
+            slug_from: None,
+        }
+    }
+
+    fn meta(fields: Vec<Column>) -> ModelMeta {
+        ModelMeta {
+            name: "M".into(),
+            table: "m".into(),
+            fields,
+            display: "M".into(),
+            icon: "database".into(),
+            database: None,
+            singleton: false,
+            unique_together: Vec::new(),
+            indexes: Vec::new(),
+            ordering: Vec::new(),
+            m2m_relations: Vec::new(),
+            soft_delete: false,
+        }
+    }
+
+    /// WEB-2 regression: a `noform` or `noedit` column must land in the
+    /// admin write skip-set even with no `AdminConfig`, so a crafted POST
+    /// can't mass-assign a field the form layer only *hid*. A plain
+    /// editable column must NOT be in the set.
+    #[test]
+    fn noform_and_noedit_columns_are_always_readonly() {
+        let m = meta(vec![
+            col("title", false, false),   // editable
+            col("locked", true, false),   // noform → hard write block
+            col("username", false, true), // noedit → admin can't change
+        ]);
+        let skip = readonly_set(&m, None);
+        assert!(
+            skip.contains(&"locked".to_string()),
+            "noform must be skipped: {skip:?}"
+        );
+        assert!(
+            skip.contains(&"username".to_string()),
+            "noedit must be skipped: {skip:?}"
+        );
+        assert!(
+            !skip.contains(&"title".to_string()),
+            "editable col must be writable: {skip:?}"
+        );
     }
 }
