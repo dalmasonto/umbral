@@ -1145,6 +1145,27 @@ where
         use axum::http::StatusCode;
         use axum::response::IntoResponse;
 
+        // BROKEN-8: this extractor only understands
+        // `application/x-www-form-urlencoded`. A client POSTing JSON or
+        // multipart used to have its body parse to an empty map and then
+        // get a wall of "field required" errors — mis-diagnosing a wrong
+        // Content-Type as missing fields. Reject a present-but-wrong
+        // Content-Type up front with 415, like axum's own `Form`.
+        let content_type = req
+            .headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_ascii_lowercase());
+        if let Some(ct) = &content_type
+            && !ct.starts_with("application/x-www-form-urlencoded")
+        {
+            return Err((
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "this endpoint expects application/x-www-form-urlencoded form data",
+            )
+                .into_response());
+        }
+
         // Read the body up to a sane limit (2 MiB matches axum's
         // default Form extractor). Anything larger almost certainly
         // means a misuse (file upload through the form extractor)
@@ -1159,12 +1180,23 @@ where
             }
         };
 
-        // Parse x-www-form-urlencoded into a String->String map.
-        // Empty bodies parse to an empty map — `FormValidate::validate`
-        // then sees every field as missing and surfaces the right
-        // per-field "required" errors.
+        // Parse x-www-form-urlencoded into a String->String map. An empty
+        // body parses to an empty map (Ok) — `FormValidate::validate` then
+        // sees every field as missing and surfaces the right per-field
+        // "required" errors. BROKEN-8: a genuinely MALFORMED body must not
+        // be swallowed into an empty map (that re-runs as bogus "field
+        // required" errors); surface it as a 400 naming the parse failure.
         let pairs: std::collections::HashMap<String, String> =
-            serde_urlencoded::from_bytes(&bytes).unwrap_or_default();
+            match serde_urlencoded::from_bytes(&bytes) {
+                Ok(pairs) => pairs,
+                Err(e) => {
+                    return Err((
+                        StatusCode::BAD_REQUEST,
+                        format!("malformed urlencoded form body: {e}"),
+                    )
+                        .into_response());
+                }
+            };
 
         // Run validation. On success, we've already proven the data
         // fits T's shape — return Ok(T). On failure, lift the
