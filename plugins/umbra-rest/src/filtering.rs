@@ -243,7 +243,11 @@ pub(crate) fn parse_search(
             }
         }
 
-        let predicate: Option<SimpleExpr> = match col.ty {
+        // Match on the column's effective type: a FK to a String/Uuid-PK
+        // target resolves to that target type (review #4), so a FK-to-slug
+        // column is searched as text (icontains) rather than coerced to int
+        // and skipped.
+        let predicate: Option<SimpleExpr> = match umbra::migrate::fk_effective_type(col) {
             SqlType::Text => {
                 let pattern = format!("%{term}%").to_uppercase();
                 Some(Expr::expr(Func::upper(Expr::col(Alias::new(&col.name)))).like(pattern))
@@ -255,9 +259,20 @@ pub(crate) fn parse_search(
                 as_float.map(|n| Expr::col(Alias::new(&col.name)).eq(n))
             }
             SqlType::Boolean => as_bool.map(|b| Expr::col(Alias::new(&col.name)).eq(b)),
+            // Full-text search: the tsvector is the purpose-built,
+            // GIN-indexed search column, so `?search=` runs word-aware FTS
+            // on it — `col @@ websearch_to_tsquery($term)`, the same operator
+            // `FullTextCol::matches_websearch` uses. Built as a native binary
+            // expr (NOT cust_with_values) so its bound term orders correctly
+            // when OR'd with the LIKE / eq predicates from other columns.
+            // Postgres-only, which is correct — FullText can't exist on SQLite.
+            SqlType::FullText => {
+                let q = Func::cust(Alias::new("websearch_to_tsquery")).arg(term.to_string());
+                Some(Expr::col(Alias::new(&col.name)).binary(sea_query::BinOper::Custom("@@"), q))
+            }
             // Date / Time / Timestamptz / Uuid / Json / Bytes / Array /
-            // network types / FullText: free-text matching is ambiguous;
-            // callers can hit those with the typed `?col__eq=` filter.
+            // network types: free-text matching is ambiguous; callers can
+            // hit those with the typed `?col__eq=` filter.
             _ => None,
         };
 
@@ -498,7 +513,10 @@ fn build_in_predicate(col: &Column, value: &str) -> Result<SimpleExpr, ApiError>
     }
 
     let expr = Expr::col(Alias::new(&col.name));
-    match col.ty {
+    // FK columns to a String/Uuid-PK target store TEXT/uuid, not BIGINT —
+    // build the IN-list against the target PK type (review #4), so codename
+    // or uuid FK values aren't rejected as "not an integer".
+    match umbra::migrate::fk_effective_type(col) {
         SqlType::SmallInt | SqlType::Integer | SqlType::BigInt | SqlType::ForeignKey => {
             let mut ints: Vec<i64> = Vec::with_capacity(parts.len());
             for p in &parts {
@@ -525,7 +543,10 @@ fn build_in_predicate(col: &Column, value: &str) -> Result<SimpleExpr, ApiError>
 /// the same dispatch as the ORM's `json_to_sea_value` would for the
 /// equivalent JSON input.
 fn coerce_value(col: &Column, value: &str) -> Result<sea_query::Value, ApiError> {
-    let v = match col.ty {
+    // FK columns coerce by their target PK type (review #4): a FK to a
+    // String/Uuid-PK target routes to the Text/Uuid arm below instead of
+    // being parsed as an integer and 400'd.
+    let v = match umbra::migrate::fk_effective_type(col) {
         SqlType::SmallInt | SqlType::Integer | SqlType::BigInt | SqlType::ForeignKey => {
             let n = value.parse::<i64>().map_err(|_| {
                 ApiError::BadInput(format!(

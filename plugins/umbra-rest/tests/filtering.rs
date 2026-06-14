@@ -29,6 +29,25 @@ struct Post {
     created_at: Option<chrono::NaiveDate>,
 }
 
+// Review #4: a FK to a String-slug-PK target. `?cat=` / `?cat__in=` filters
+// must coerce against the target PK type (text), not reject the slug as
+// "not an integer".
+#[derive(Debug, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
+#[umbra(table = "flt_cat")]
+struct Cat {
+    #[umbra(primary_key)]
+    slug: String,
+    name: String,
+}
+
+#[derive(Debug, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
+#[umbra(table = "flt_doc")]
+struct Doc {
+    id: i64,
+    cat: umbra::orm::ForeignKey<Cat>,
+    title: String,
+}
+
 static BOOT: OnceCell<axum::Router> = OnceCell::const_new();
 
 async fn boot() -> &'static axum::Router {
@@ -61,6 +80,8 @@ async fn boot() -> &'static axum::Router {
             .settings(settings)
             .database("default", pool)
             .model::<Post>()
+            .model::<Cat>()
+            .model::<Doc>()
             .plugin(rest)
             .build()
             .expect("App::build");
@@ -90,6 +111,35 @@ async fn boot() -> &'static axum::Router {
         .execute(&pool)
         .await
         .expect("seed posts");
+
+        // String-PK FK fixtures (review #4).
+        sqlx::query("CREATE TABLE flt_cat (slug TEXT PRIMARY KEY, name TEXT NOT NULL)")
+            .execute(&pool)
+            .await
+            .expect("create flt_cat");
+        sqlx::query(
+            "CREATE TABLE flt_doc (\
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,\
+                 cat TEXT NOT NULL REFERENCES flt_cat(slug),\
+                 title TEXT NOT NULL\
+             )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create flt_doc");
+        sqlx::query(
+            "INSERT INTO flt_cat (slug, name) VALUES ('tech', 'Tech'), ('news', 'News'), ('life', 'Life')",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed cats");
+        sqlx::query(
+            "INSERT INTO flt_doc (cat, title) VALUES \
+             ('tech', 'Rust 2.0'), ('tech', 'WASM'), ('news', 'Election'), ('life', 'Coffee')",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed docs");
 
         app.into_router()
     })
@@ -298,4 +348,38 @@ async fn unfiltered_resource_ignores_filter_keys() {
     // Pagination keys should be passed through silently.
     let (status, _) = get(router, "/api/post/?page=1").await;
     assert_eq!(status, StatusCode::OK, "pagination key caused error");
+}
+
+// =========================================================================
+// Review #4: FK to a String-slug-PK target must filter by the slug, not be
+// rejected as "not an integer".
+// =========================================================================
+
+#[tokio::test]
+async fn filter_fk_to_string_pk_by_slug() {
+    let router = boot().await.clone();
+    let (status, body) = get(router, "/api/flt_doc/?cat=tech").await;
+    assert_eq!(status, StatusCode::OK, "FK-to-slug filter 400'd: {body}");
+    let results = body["results"].as_array().expect("results array");
+    assert_eq!(
+        results.len(),
+        2,
+        "expected 2 docs with cat=tech, got {results:?}"
+    );
+    for row in results {
+        assert_eq!(row["cat"].as_str(), Some("tech"));
+    }
+}
+
+#[tokio::test]
+async fn filter_fk_to_string_pk_in_list() {
+    let router = boot().await.clone();
+    let (status, body) = get(router, "/api/flt_doc/?cat__in=tech,news").await;
+    assert_eq!(status, StatusCode::OK, "FK-to-slug __in 400'd: {body}");
+    let results = body["results"].as_array().expect("results array");
+    assert_eq!(
+        results.len(),
+        3,
+        "expected 3 docs in (tech,news), got {results:?}"
+    );
 }
