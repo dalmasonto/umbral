@@ -2,7 +2,7 @@
 
 > **Sweep status — 2026-06-14**
 > - **Fixed (correctness portion):** PERF-6 — `claim_one` now uses a conditional `UPDATE ... WHERE status='pending'` so two Postgres workers can't both claim a row (`98ef6e9`). The row-level-lock *optimization* (MISS-1) is still open.
-> - **Open (contained, not yet done):** PERF-1 (REST list unbounded default — add a safety ceiling/default page size), PERF-5 (Postgres pool size/timeout config).
+> - **Also fixed:** PERF-1 (REST list queries now clamp to a hard 1000-row ceiling even under NoPagination, `06f19df`), PERF-5 (Postgres pool uses PgPoolOptions with a bounded acquire_timeout + configurable max_connections via settings, `65c39d0`).
 > - **Deferred (larger change):** PERF-2 (auto-index FK columns — touches the migration generator + needs generated migrations), PERF-3 (`bulk_create` per-row FK COUNT — batch into one query), PERF-4 (admin M2M form loads whole target table). PERF-7/8 are micro-optimizations.
 
 Scope: `crates/umbra-core/src/orm/` (queryset, hydration, dynamic, m2m, aggregate, write, validation), the migrate index generator, the DB pool, and the call sites in `umbra-rest`/`umbra-admin`/`umbra-permissions`/`umbra-tasks`. Cross-checked against `bugs/gaps.md`, `gaps2.md`, `REAL-GAPS.md`, `features.md` — all findings below are new.

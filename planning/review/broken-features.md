@@ -2,7 +2,7 @@
 
 > **Sweep status — 2026-06-14**
 > - **Fixed:** BROKEN-1 (conditional claim, `98ef6e9`), BROKEN-3 (mutex-poison recover + catch_unwind, `23ad8b0`), BROKEN-4 (no `process::exit`, `98ef6e9`), BROKEN-5 (logged decode failure, `23ad8b0`), BROKEN-6 (`get_opt`, `23ad8b0`), BROKEN-13 (stale comment, `23ad8b0`).
-> - **Open (contained, not yet done):** BROKEN-7 (`cache_page` empty-200), BROKEN-8 (`Form<T>` Content-Type/swallow), BROKEN-9 (`CachePlugin` inert via `.plugin()`).
+> - **Also fixed:** BROKEN-7 (`cache_page` logs + 502 instead of fake-200, `17939c4`), BROKEN-8 (`Form<T>` checks Content-Type → 415, surfaces parse errors → 400, `dbb57c8`), BROKEN-9 (`CachePlugin::new(cache)` wires the ambient cache in `on_ready`, `17939c4`).
 > - **Deferred (larger change):** BROKEN-2 (worker-crash task reclaim — needs a lease/reclaim watcher). Low-severity BROKEN-10/11/12/14 not yet triaged.
 
 Code that cannot work as written, swallows failures, or contradicts its own docs. Checked against `bugs/gaps.md`, `gaps2.md`, `REAL-GAPS.md`, `features.md` — only new findings here. The "already tracked" list is at the bottom.
