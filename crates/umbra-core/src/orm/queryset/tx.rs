@@ -13,7 +13,7 @@
 //! time, and that the transaction stays alive for the duration of
 //! each terminal call.
 
-use sea_query::{Alias, Expr, Func, PostgresQueryBuilder, SqliteQueryBuilder};
+use sea_query::{Expr, Func, PostgresQueryBuilder, SqliteQueryBuilder};
 use sea_query_binder::SqlxBinder;
 
 use crate::orm::{HydrateRelated, Model};
@@ -103,7 +103,10 @@ impl<'tx, T: Model> QuerySetTx<'tx, T> {
         let backend = self.tx.backend_name();
         let mut rebuilt = self.qs.build_query_for(backend);
         rebuilt.clear_selects();
-        rebuilt.expr(Func::count(Expr::col(Alias::new("*"))));
+        // `sea_query::Asterisk` renders the bare SQL `*` token; `Alias::new("*")`
+        // would render `COUNT("*")` — a quoted identifier Postgres reads as a
+        // column named `*`. Matches the non-transactional count path.
+        rebuilt.expr(Func::count(Expr::col(sea_query::Asterisk)));
         rebuilt.reset_limit();
         rebuilt.reset_offset();
         match backend {
