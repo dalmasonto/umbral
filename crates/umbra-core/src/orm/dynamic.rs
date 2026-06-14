@@ -248,7 +248,9 @@ impl<'a> DynQuerySet<'a> {
             "false" => Some(false),
             _ => None,
         };
-        let like_pat = format!("%{term}%").to_uppercase();
+        // Escape LIKE wildcards in the user's term so `%`/`_` are matched
+        // literally, not as wildcards (ORM-1). Paired with `.escape('\\')`.
+        let like_pat = format!("%{}%", crate::orm::escape_like_literal(term)).to_uppercase();
 
         let mut cond = Condition::any();
         let mut added = 0;
@@ -259,7 +261,7 @@ impl<'a> DynQuerySet<'a> {
             let predicate: Option<sea_query::SimpleExpr> = match col.ty {
                 SqlType::Text => Some(
                     Expr::expr(Func::upper(Expr::col(Alias::new(&col.name))))
-                        .like(like_pat.clone()),
+                        .like(sea_query::LikeExpr::new(like_pat.clone()).escape('\\')),
                 ),
                 SqlType::SmallInt | SqlType::Integer | SqlType::BigInt | SqlType::ForeignKey => {
                     as_int.map(|n| Expr::col(Alias::new(&col.name)).eq(n))

@@ -203,8 +203,10 @@ impl<T> StrCol<T> {
     /// let _ = Post::objects().filter(post::TITLE.contains("rust"));
     /// ```
     pub fn contains<S: Into<String>>(&self, substring: S) -> Predicate<T> {
-        let pattern = format!("%{}%", substring.into());
-        Predicate::new(Expr::col(Alias::new(self.name)).like(pattern))
+        let pattern = format!("%{}%", super::escape_like_literal(&substring.into()));
+        Predicate::new(
+            Expr::col(Alias::new(self.name)).like(sea_query::LikeExpr::new(pattern).escape('\\')),
+        )
     }
 
     /// Case-insensitive substring containment via `UPPER(col) LIKE
@@ -223,8 +225,11 @@ impl<T> StrCol<T> {
     /// let _ = Post::objects().filter(post::TITLE.icontains("rust"));
     /// ```
     pub fn icontains<S: Into<String>>(&self, substring: S) -> Predicate<T> {
-        let pattern = format!("%{}%", substring.into()).to_uppercase();
-        Predicate::new(Expr::expr(Func::upper(Expr::col(Alias::new(self.name)))).like(pattern))
+        let pattern = format!("%{}%", super::escape_like_literal(&substring.into())).to_uppercase();
+        Predicate::new(
+            Expr::expr(Func::upper(Expr::col(Alias::new(self.name))))
+                .like(sea_query::LikeExpr::new(pattern).escape('\\')),
+        )
     }
 
     /// SQL `LIKE 'val%'` — prefix match. Mirrors the REST filter
@@ -239,14 +244,19 @@ impl<T> StrCol<T> {
     /// let _ = Post::objects().filter(post::TITLE.startswith("intro"));
     /// ```
     pub fn startswith<S: Into<String>>(&self, prefix: S) -> Predicate<T> {
-        let pattern = format!("{}%", prefix.into());
-        Predicate::new(Expr::col(Alias::new(self.name)).like(pattern))
+        let pattern = format!("{}%", super::escape_like_literal(&prefix.into()));
+        Predicate::new(
+            Expr::col(Alias::new(self.name)).like(sea_query::LikeExpr::new(pattern).escape('\\')),
+        )
     }
 
     /// Case-insensitive prefix match via `UPPER(col) LIKE UPPER('val%')`.
     pub fn istartswith<S: Into<String>>(&self, prefix: S) -> Predicate<T> {
-        let pattern = format!("{}%", prefix.into()).to_uppercase();
-        Predicate::new(Expr::expr(Func::upper(Expr::col(Alias::new(self.name)))).like(pattern))
+        let pattern = format!("{}%", super::escape_like_literal(&prefix.into())).to_uppercase();
+        Predicate::new(
+            Expr::expr(Func::upper(Expr::col(Alias::new(self.name))))
+                .like(sea_query::LikeExpr::new(pattern).escape('\\')),
+        )
     }
 
     /// SQL `ORDER BY ... ASC`.
@@ -907,28 +917,38 @@ impl<T> NullableStrCol<T> {
 
     /// SQL `LIKE '%val%'` substring containment.
     pub fn contains<S: Into<String>>(&self, substring: S) -> Predicate<T> {
-        let pattern = format!("%{}%", substring.into());
-        Predicate::new(Expr::col(Alias::new(self.name)).like(pattern))
+        let pattern = format!("%{}%", super::escape_like_literal(&substring.into()));
+        Predicate::new(
+            Expr::col(Alias::new(self.name)).like(sea_query::LikeExpr::new(pattern).escape('\\')),
+        )
     }
 
     /// Case-insensitive substring containment via `UPPER(col) LIKE
     /// UPPER('%val%')`.
     pub fn icontains<S: Into<String>>(&self, substring: S) -> Predicate<T> {
-        let pattern = format!("%{}%", substring.into()).to_uppercase();
-        Predicate::new(Expr::expr(Func::upper(Expr::col(Alias::new(self.name)))).like(pattern))
+        let pattern = format!("%{}%", super::escape_like_literal(&substring.into())).to_uppercase();
+        Predicate::new(
+            Expr::expr(Func::upper(Expr::col(Alias::new(self.name))))
+                .like(sea_query::LikeExpr::new(pattern).escape('\\')),
+        )
     }
 
     /// SQL `LIKE 'val%'` — prefix match. Mirrors the REST filter
     /// parser's `__startswith` lookup.
     pub fn startswith<S: Into<String>>(&self, prefix: S) -> Predicate<T> {
-        let pattern = format!("{}%", prefix.into());
-        Predicate::new(Expr::col(Alias::new(self.name)).like(pattern))
+        let pattern = format!("{}%", super::escape_like_literal(&prefix.into()));
+        Predicate::new(
+            Expr::col(Alias::new(self.name)).like(sea_query::LikeExpr::new(pattern).escape('\\')),
+        )
     }
 
     /// Case-insensitive prefix match via `UPPER(col) LIKE UPPER('val%')`.
     pub fn istartswith<S: Into<String>>(&self, prefix: S) -> Predicate<T> {
-        let pattern = format!("{}%", prefix.into()).to_uppercase();
-        Predicate::new(Expr::expr(Func::upper(Expr::col(Alias::new(self.name)))).like(pattern))
+        let pattern = format!("{}%", super::escape_like_literal(&prefix.into())).to_uppercase();
+        Predicate::new(
+            Expr::expr(Func::upper(Expr::col(Alias::new(self.name))))
+                .like(sea_query::LikeExpr::new(pattern).escape('\\')),
+        )
     }
 
     /// SQL `IS NULL`.

@@ -66,6 +66,30 @@ pub fn pk_key(value: &serde_json::Value) -> String {
     }
 }
 
+/// Escape SQL `LIKE` wildcards in a user-supplied **literal** substring.
+///
+/// `contains` / `startswith` / `icontains` / the REST `__contains`
+/// family treat their argument as a literal to find, then wrap it in
+/// structural `%`. Without escaping, a user typing `%`, `_` or `\` would
+/// inject wildcards into the pattern — a search for `"100%"` matches
+/// every row starting with `100`, and `"a_b"` matches `axb` (ORM-1).
+/// This backslash-escapes the three LIKE metacharacters; the caller then
+/// adds its own structural `%` and pairs the predicate with
+/// `LikeExpr::escape('\\')` so the database honours the escape. Not SQL
+/// injection (the pattern is still a bound parameter) — a match-semantics
+/// correctness fix. The user-facing `.like()` / `.ilike()` builders take
+/// a raw pattern on purpose and must NOT call this.
+pub fn escape_like_literal(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        if matches!(ch, '\\' | '%' | '_') {
+            out.push('\\');
+        }
+        out.push(ch);
+    }
+    out
+}
+
 /// A typed wrapper around a `sea_query::SelectStatement` for use in
 /// `col IN (SELECT col FROM ...)` predicates (gap #26).
 ///

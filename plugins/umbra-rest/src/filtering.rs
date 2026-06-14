@@ -249,8 +249,13 @@ pub(crate) fn parse_search(
         // and skipped.
         let predicate: Option<SimpleExpr> = match umbra::migrate::fk_effective_type(col) {
             SqlType::Text => {
-                let pattern = format!("%{term}%").to_uppercase();
-                Some(Expr::expr(Func::upper(Expr::col(Alias::new(&col.name)))).like(pattern))
+                // Escape LIKE wildcards so `%`/`_` in the term match
+                // literally, not as wildcards (ORM-1).
+                let pattern = format!("%{}%", umbra::orm::escape_like_literal(term)).to_uppercase();
+                Some(
+                    Expr::expr(Func::upper(Expr::col(Alias::new(&col.name))))
+                        .like(sea_query::LikeExpr::new(pattern).escape('\\')),
+                )
             }
             SqlType::SmallInt | SqlType::Integer | SqlType::BigInt | SqlType::ForeignKey => {
                 as_int.map(|n| Expr::col(Alias::new(&col.name)).eq(n))
@@ -476,17 +481,29 @@ fn build_predicate(col: &Column, lookup: &str, value: &str) -> Result<SimpleExpr
             }
         }
         "in" => build_in_predicate(col, value),
-        "contains" => Ok(expr.like(format!("%{value}%"))),
+        // The contains/icontains/startswith lookups treat `value` as a
+        // literal substring, so LIKE wildcards (`%`, `_`) in it must be
+        // escaped — otherwise `?name__contains=100%` over-matches (ORM-1).
+        // Paired with `.escape('\\')`. `eq`/`ne`/etc. bind the value
+        // directly and need no escaping.
+        "contains" => {
+            let pat = format!("%{}%", umbra::orm::escape_like_literal(value));
+            Ok(expr.like(sea_query::LikeExpr::new(pat).escape('\\')))
+        }
         "icontains" => {
             // `UPPER(col) LIKE UPPER(?)` — case-insensitive contains.
             // sea_query's `Expr::expr(...)` lets us nest UPPER around
             // the column.
+            let pat = format!("%{}%", umbra::orm::escape_like_literal(value)).to_uppercase();
             Ok(
                 Expr::expr(sea_query::Func::upper(Expr::col(Alias::new(&col.name))))
-                    .like(format!("%{}%", value.to_uppercase())),
+                    .like(sea_query::LikeExpr::new(pat).escape('\\')),
             )
         }
-        "startswith" => Ok(expr.like(format!("{value}%"))),
+        "startswith" => {
+            let pat = format!("{}%", umbra::orm::escape_like_literal(value));
+            Ok(expr.like(sea_query::LikeExpr::new(pat).escape('\\')))
+        }
         op => {
             let sea_value = coerce_value(col, value)?;
             match op {

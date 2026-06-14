@@ -271,6 +271,79 @@ async fn filter_icontains_is_case_insensitive() {
     assert_eq!(titles, vec!["Rust at last", "rust > all"]);
 }
 
+/// ORM-1 regression: `contains` / `startswith` treat their argument as a
+/// literal substring, so LIKE wildcards (`%`, `_`) in it must match
+/// *literally*, not as wildcards. Before the escaping fix, `contains("50%")`
+/// emitted `LIKE '%50%%'` and over-matched every title containing "50";
+/// `contains("a_b")` matched "axb". With escaping it matches only the rows
+/// that literally contain the typed characters.
+#[tokio::test]
+async fn contains_escapes_like_wildcards_in_user_input() {
+    let pool = fresh_pool().await;
+
+    // Extra rows whose titles distinguish "literal match" from "wildcard
+    // over-match". ids start at 6 to avoid the 1..=5 seed.
+    let extra: [(i64, &str); 4] = [
+        (6, "50% discount today"), // literally contains "50%"
+        (7, "500 items left"),     // contains "50" but NOT "50%"
+        (8, "grep a_b please"),    // literally contains "a_b"
+        (9, "grep axb please"),    // matches "a_b" only if `_` is a wildcard
+    ];
+    for (id, title) in extra {
+        sqlx::query("INSERT INTO post (id, title, body, published_at) VALUES (?, ?, ?, NULL)")
+            .bind(id)
+            .bind(title)
+            .bind("wildcard seed body")
+            .execute(&pool)
+            .await
+            .expect("seed wildcard row");
+    }
+
+    // `%` must be literal: only the "50% discount" row, never "500 items".
+    let pct: Vec<String> = Post::objects()
+        .on(&pool)
+        .filter(post::TITLE.contains("50%"))
+        .fetch()
+        .await
+        .expect("contains('50%')")
+        .into_iter()
+        .map(|p| p.title)
+        .collect();
+    assert_eq!(
+        pct,
+        vec!["50% discount today".to_string()],
+        "contains('50%') must match the literal percent, not '500 items'",
+    );
+
+    // `_` must be literal: only "a_b", never "axb".
+    let underscore: Vec<String> = Post::objects()
+        .on(&pool)
+        .filter(post::TITLE.contains("a_b"))
+        .fetch()
+        .await
+        .expect("contains('a_b')")
+        .into_iter()
+        .map(|p| p.title)
+        .collect();
+    assert_eq!(
+        underscore,
+        vec!["grep a_b please".to_string()],
+        "contains('a_b') must treat '_' literally, not as a single-char wildcard",
+    );
+
+    // startswith honours the same escaping.
+    let starts: Vec<String> = Post::objects()
+        .on(&pool)
+        .filter(post::TITLE.startswith("50%"))
+        .fetch()
+        .await
+        .expect("startswith('50%')")
+        .into_iter()
+        .map(|p| p.title)
+        .collect();
+    assert_eq!(starts, vec!["50% discount today".to_string()]);
+}
+
 /// `&` composes two predicates as SQL `AND`: published AND title contains
 /// "rust" lands the two published Rust-flavoured posts.
 #[tokio::test]
