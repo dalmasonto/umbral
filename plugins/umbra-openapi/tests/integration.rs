@@ -36,6 +36,28 @@ struct Secret {
     token: String,
 }
 
+// Review #4: FK + M2M to a String-slug-PK target must render as `string`
+// in the OpenAPI schema, not `integer/int64`.
+#[derive(Debug, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
+#[umbra(table = "oa_cat")]
+struct OaCat {
+    #[umbra(primary_key)]
+    slug: String,
+    name: String,
+}
+
+#[derive(Debug, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
+#[umbra(table = "oa_article")]
+struct OaArticle {
+    id: i64,
+    cat: umbra::orm::ForeignKey<OaCat>,
+    // OaArticle's own PK is i64 (default P); the CHILD OaCat is String-PK,
+    // so the M2M `items` schema must be `string`.
+    #[sqlx(skip)]
+    #[serde(skip)]
+    related: umbra::orm::M2M<OaCat>,
+}
+
 static BOOT: OnceCell<axum::Router> = OnceCell::const_new();
 
 async fn boot() -> &'static axum::Router {
@@ -59,6 +81,8 @@ async fn boot() -> &'static axum::Router {
             .database("default", pool)
             .model::<Note>()
             .model::<Secret>()
+            .model::<OaCat>()
+            .model::<OaArticle>()
             .plugin(AuthPlugin::<AuthUser>::default())
             .plugin(RestPlugin::default().hide("secret", "token"))
             .plugin(OpenApiPlugin::default())
@@ -389,4 +413,34 @@ impl PluginInspect for OpenApiPlugin {
     fn ui_route_for_test(&self) -> String {
         umbra_openapi::test_ui_route(self)
     }
+}
+
+// =========================================================================
+// Review #4: FK + M2M to a String-slug-PK target render as `string`.
+// =========================================================================
+
+#[tokio::test]
+async fn fk_and_m2m_to_string_pk_render_as_string_schema() {
+    let (status, body) = get_request(boot().await.clone(), "/openapi/openapi.json").await;
+    assert_eq!(status, StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_str(&body).expect("valid json");
+    let props = &v["components"]["schemas"]["OaArticle"]["properties"];
+
+    // FK to a String-slug-PK target → string (was integer/int64).
+    assert_eq!(
+        props["cat"]["type"], "string",
+        "FK to a String-PK target must be `string`; got {}",
+        props["cat"]
+    );
+    // M2M whose CHILD is String-PK → array of string items.
+    assert_eq!(
+        props["related"]["type"], "array",
+        "M2M is an array; got {}",
+        props["related"]
+    );
+    assert_eq!(
+        props["related"]["items"]["type"], "string",
+        "M2M to a String-PK child → string items; got {}",
+        props["related"]
+    );
 }

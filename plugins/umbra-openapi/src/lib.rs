@@ -449,10 +449,16 @@ fn model_schema(
             .unwrap_or_else(|| pascal_case(&rel.target_name));
         let mut prop = serde_json::Map::new();
         prop.insert("type".into(), Value::String("array".into()));
-        prop.insert(
-            "items".into(),
-            json!({ "type": "integer", "format": "int64" }),
-        );
+        // Items are the child model's PK type, not always int64 (review #4):
+        // a M2M to a String/Uuid-PK child sends an array of slugs/uuids.
+        let (item_ty, item_fmt) = umbra::migrate::pk_meta_for_table(&rel.target_table)
+            .map(|(_, pk_ty)| openapi_type(pk_ty))
+            .unwrap_or(("integer", Some("int64")));
+        let items = match item_fmt {
+            Some(f) => json!({ "type": item_ty, "format": f }),
+            None => json!({ "type": item_ty }),
+        };
+        prop.insert("items".into(), items);
         prop.insert(
             "description".into(),
             Value::String(format!(
@@ -520,7 +526,7 @@ fn column_schema_with_refs(
 }
 
 fn column_schema(col: &Column) -> Value {
-    let (ty, format) = openapi_type(col.ty);
+    let (ty, format) = openapi_type(umbra::migrate::fk_effective_type(col));
     let mut obj = Map::new();
     obj.insert("type".into(), Value::String(ty.into()));
     if let Some(f) = format {
@@ -914,7 +920,7 @@ fn filter_parameter(col: &Column, lookup: &str, name: &str) -> Value {
         }
         // eq, ne, gte, lte, gt, lt — type-aligned with the column.
         _ => {
-            let (ty, format) = openapi_type(col.ty);
+            let (ty, format) = openapi_type(umbra::migrate::fk_effective_type(col));
             let mut schema_obj = Map::new();
             schema_obj.insert("type".into(), Value::String(ty.into()));
             if let Some(f) = format {
