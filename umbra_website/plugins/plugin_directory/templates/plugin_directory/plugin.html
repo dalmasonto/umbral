@@ -110,9 +110,21 @@
   .pd-prose th, .pd-prose td { border: 1px solid var(--hairline); padding: 8px 12px; text-align: left; }
   .pd-prose th { background: var(--surface-2); font-weight: 700; }
 
-  /* ---- Note dialog ---- */
-  .pd-dialog { border: 0; padding: 0; border-radius: 18px; max-width: 520px; width: calc(100vw - 32px); background: var(--paper); color: var(--ink); box-shadow: 0 24px 60px -20px rgba(20, 14, 8, 0.4); }
-  .pd-dialog::backdrop { background: rgba(27, 23, 20, 0.45); backdrop-filter: blur(2px); }
+  /* ---- Notes chat surface (inline composer + replies) ---- */
+  .pd-composer { margin-top: 14px; border: 1px solid var(--hairline); border-radius: 14px; background: var(--surface); padding: 10px; }
+  .pd-composer textarea { min-height: 0; resize: vertical; }
+  .pd-composer-row { display: flex; gap: 8px; margin-top: 8px; align-items: center; }
+  .pd-composer-row .pd-composer-name { flex: 1; }
+  /* The replies container is always rendered (the JS insert target); show the
+     indent + rail only when it actually has replies. */
+  .pd-replies:has(.pd-reply) { margin: 6px 0 0 30px; display: flex; flex-direction: column; gap: 6px; border-left: 2px solid var(--hairline); padding-left: 12px; }
+  .pd-reply { display: flex; gap: 8px; }
+  .pd-reply-avatar { flex-shrink: 0; display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 999px; background: var(--accent-line); color: var(--accent-2); font-size: 10.5px; font-weight: 700; }
+  .pd-reply-head { font-size: 11.5px; color: var(--faint); }
+  .pd-reply-name { font-weight: 700; color: var(--ink-2); }
+  .pd-reply-toggle { margin: 4px 0 0 30px; background: transparent; border: 0; color: var(--accent-2); font-size: 12.5px; font-weight: 600; cursor: pointer; padding: 2px 0; }
+  .pd-reply-form { margin: 6px 0 0 30px; }
+  .pd-reply-form textarea { min-height: 0; resize: vertical; }
   .pd-field { width: 100%; border: 1px solid var(--hairline); background: var(--surface); border-radius: 10px; padding: 9px 12px; font-size: 14px; color: var(--ink); font-family: inherit; }
   .pd-field:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: transparent; }
   textarea.pd-field { min-height: 110px; resize: vertical; }
