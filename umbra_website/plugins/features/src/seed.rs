@@ -6,7 +6,7 @@
 
 use crate::models::{FeatureCategory, FeatureMaturity, FeatureStatus, FrameworkFeature};
 use chrono::Utc;
-use umbra::orm::ForeignKey;
+use umbra::orm::{ForeignKey, slugify};
 
 const SH: FeatureStatus = FeatureStatus::Shipped;
 const US: FeatureStatus = FeatureStatus::Usable;
@@ -102,16 +102,6 @@ const CATALOG: &[Category] = &[
         ],
     },
 ];
-
-fn slugify(s: &str) -> String {
-    s.chars()
-        .map(|c| if c.is_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
-        .collect::<String>()
-        .split('-')
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>()
-        .join("-")
-}
 
 /// Seed the catalog. Idempotent and **self-healing**: each category and
 /// feature is get-or-created by slug, so adding a new entry to `CATALOG`
