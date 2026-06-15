@@ -21,7 +21,7 @@ The community-notes thread on `/plugins/{slug}` is a flat list of top-level note
 
 1. **`create_note`** gains an optional `parent: Option<i64>`. When set, it loads the parent comment and validates it: the parent must exist, be `Visible`, belong to the same plugin, and be top-level (`parent IS NULL`) — otherwise return `Ok(None)` (treated as a 404/!) so a reply-to-reply or cross-plugin parent can't be forged. The new comment's `parent` FK is set accordingly. The returned `NotePayload` carries `parent_id: Option<i64>`.
 2. **`post_plugin_note`** reads an optional `parent_id` form field (parse to `i64`, ignore if absent/blank) and passes it to `create_note`. Honeypot + interval guards unchanged. JSON path returns `{ ok, id, html, parent_id }`; the no-JS redirect path is unchanged (the redirected page shows the reply in its thread).
-3. **`render_detail_with`** stops fetching a flat list. Instead: fetch top-level visible notes (`parent IS NULL`, `pinned DESC`, `created_at ASC`, `limit 10` as today), collect their ids, then fetch all visible replies in one batched query (`parent IN (<ids>)`, `created_at ASC`) and group them in memory under their parent — no N+1. Build a `Vec<CommentThread>` where `CommentThread { note: CommentPreview, replies: Vec<CommentPreview> }`.
+3. **`render_detail_with`** stops returning a flat list. It fetches all visible comments for the plugin in ONE query (the existing `plugin.reverse::<PluginComment>().filter(visible).order_by(pinned DESC).order_by(created_at ASC)`, with the `limit` dropped), then partitions them in memory by reading each row's hydrated `parent` (`Option<ForeignKey>`): top-level rows (`parent` is `None` — keep the first 10) and replies (grouped by `parent.id()`, fetch-order preserved). This is ORM-pure — it relies only on reading the nullable FK in Rust, not on a `parent IS NULL` / `IN` SQL predicate — and is a single query (no N+1). Build a `Vec<CommentThread>` where `CommentThread { note: CommentPreview, replies: Vec<CommentPreview> }`.
 4. **`NotePayload`** gains `parent_id: Option<i64>`. The SSE broadcast in `create_note` includes it.
 5. **Reply route: reuse `POST /plugins/{slug}/notes`** with the `parent_id` field — no new route. `render_comment_row` gains a sibling `render_reply_row` that renders the slim `_reply.html` partial, so a live-inserted reply is byte-identical to a reloaded one (the same parity rule the note row already follows).
 6. **`CommentThread`** is a new view-model; `PluginDetail.comments: Vec<CommentPreview>` becomes `Vec<CommentThread>`.
@@ -36,7 +36,7 @@ The community-notes thread on `/plugins/{slug}` is a flat list of top-level note
 
 - `create_note` with a valid `parent` creates a `Visible` reply whose `parent` points at the note; payload `parent_id` is set.
 - `create_note` rejects a parent that is hidden, on another plugin, or itself a reply (returns `None`) — the depth-1 / same-plugin guard.
-- `render_detail_with` groups replies under their notes in one batched query (assert the object graph: a note with its replies, ordered).
+- `render_detail_with` groups replies under their notes from one query + in-memory partition (assert the object graph: a note with its replies, ordered).
 - A reply rides SSE carrying `parent_id` (the payload shape).
 - Top-level notes still post and render unchanged (regression).
 
