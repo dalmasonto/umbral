@@ -9,12 +9,12 @@
 use std::collections::HashMap;
 use tokio::sync::OnceCell;
 use umbra::forms::FormValidate;
-use umbra::orm::{ForeignKey, Model};
+use umbra::orm::ForeignKey;
 use umbra_core::db;
 
 #[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbra::orm::Model)]
 #[umbra(table = "ffk_author")]
-struct Author {
+pub struct Author {
     pub id: i64,
     pub name: String,
 }
@@ -30,7 +30,7 @@ struct Author {
     umbra::forms::Form,
 )]
 #[umbra(table = "ffk_book")]
-struct Book {
+pub struct Book {
     #[umbra(primary_key)]
     pub id: i64,
     #[form(required, length(min = 1, max = 200))]
