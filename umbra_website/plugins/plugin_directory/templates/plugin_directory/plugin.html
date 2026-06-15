@@ -113,8 +113,10 @@
   /* ---- Notes chat surface (inline composer + replies) ---- */
   .pd-composer { margin-top: 14px; border: 1px solid var(--hairline); border-radius: 14px; background: var(--surface); padding: 10px; }
   .pd-composer textarea { min-height: 0; resize: vertical; }
-  .pd-composer-row { display: flex; gap: 8px; margin-top: 8px; align-items: center; }
-  .pd-composer-row .pd-composer-name { flex: 1; }
+  .pd-composer-row { display: flex; gap: 8px; margin-top: 8px; align-items: center; flex-wrap: wrap; }
+  .pd-composer-row .pd-composer-name { flex: 1 1 120px; min-width: 0; }
+  .pd-composer-row .pd-composer-kind { flex: 0 1 auto; min-width: 0; max-width: 170px; }
+  .pd-form-error { margin-bottom: 8px; font-size: 12.5px; font-weight: 600; color: #A82E2E; }
   /* The replies container is always rendered (the JS insert target); show the
      indent + rail only when it actually has replies. */
   .pd-replies:has(.pd-reply) { margin: 6px 0 0 30px; display: flex; flex-direction: column; gap: 6px; border-left: 2px solid var(--hairline); padding-left: 12px; }
@@ -624,21 +626,48 @@
         headers: { 'Accept': 'application/json' },
         body: new URLSearchParams(new FormData(form))
       }).then(function (res) {
-        if (!res.ok) throw new Error('post failed: ' + res.status);
-        return res.json();
-      }).then(function (d) {
-        if (d && d.html) insertNote(d);
-        form.reset();
-        if (form.classList.contains('pd-reply-form')) {
-          form.classList.add('hidden');
-        } else if (btn) {
-          // Brief inline confirmation for a top-level post (the composer stays put).
-          btn.textContent = 'Posted ✓';
-          setTimeout(function () { btn.textContent = label; }, 1600);
+        if (res.ok) {
+          return res.json().then(function (d) {
+            if (d && d.html) insertNote(d);
+            form.reset();
+            clearFormError(form);
+            if (form.classList.contains('pd-reply-form')) {
+              form.classList.add('hidden');
+            } else if (btn) {
+              // Brief inline confirmation for a top-level post (composer stays put).
+              btn.textContent = 'Posted ✓';
+              setTimeout(function () { btn.textContent = label; }, 1600);
+            }
+          });
         }
-      }).catch(function () { form.submit(); })
-        .finally(function () { if (btn) btn.disabled = false; });
+        // A deliberate HTTP error (e.g. the 429 throttle, or 401 login
+        // required): surface the server's message INLINE on the form — do NOT
+        // navigate to the POST url (a reload there 405s on the POST-only route).
+        return res.text().then(function (msg) {
+          showFormError(form, (msg || '').trim() || ('Couldn’t post (' + res.status + ').'));
+        });
+      }).catch(function () {
+        // Only a genuine network failure (fetch rejected) falls back to a
+        // native submit so the note isn't silently lost.
+        form.submit();
+      }).finally(function () { if (btn) btn.disabled = false; });
     });
+  }
+
+  // Show / clear a small inline error at the top of a note or reply form.
+  function showFormError(form, msg) {
+    var el = form.querySelector('[data-form-error]');
+    if (!el) {
+      el = document.createElement('div');
+      el.setAttribute('data-form-error', '');
+      el.className = 'pd-form-error';
+      form.insertBefore(el, form.firstChild);
+    }
+    el.textContent = msg;
+  }
+  function clearFormError(form) {
+    var el = form.querySelector('[data-form-error]');
+    if (el) el.remove();
   }
 
   // Insert a rendered note or reply. `d` = { id, html, parent_id }. A reply
