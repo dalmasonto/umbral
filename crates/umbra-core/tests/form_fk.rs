@@ -101,8 +101,11 @@ async fn fk_field_parses_and_links_real_parent() {
     umbra::orm::Model,
     umbra::forms::Form,
 )]
+// `pub` so the derive's generated reverse-O2O accessor (on `Author`) doesn't
+// name a private type in its public signature — newer rustc rejects that
+// (E0446). Models are `pub` by convention; the fixture just matches it.
 #[umbra(table = "ffk_passport")]
-struct Passport {
+pub struct Passport {
     #[umbra(primary_key)]
     pub id: i64,
     #[umbra(unique)]
