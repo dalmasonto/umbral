@@ -35,6 +35,8 @@ pub struct Doc {
     pub status: DocStatus,
 }
 
+impl umbra_core::orm::Searchable for Doc {}
+
 #[test]
 fn title_prefers_title_then_name_then_first_text() {
     assert_eq!(default_title::<Doc>(), "title");
@@ -53,4 +55,33 @@ fn body_includes_text_columns_excludes_slug_and_choices() {
 #[test]
 fn pk_column_is_the_primary_key() {
     assert_eq!(default_pk_column::<Doc>(), "id");
+}
+
+use umbra_core::orm::search::{branch_sql, Backend};
+
+#[test]
+fn postgres_branch_has_tsrank_setweight_and_union_shape() {
+    let sql = branch_sql::<Doc>(Backend::Postgres);
+    assert!(
+        sql.contains("'srh_doc' AS kind") || sql.contains("'srh_doc'  AS kind"),
+        "{sql}"
+    );
+    assert!(sql.contains("AS pk"), "{sql}");
+    assert!(sql.contains("ts_rank("), "{sql}");
+    assert!(
+        sql.contains("setweight(to_tsvector('english'"),
+        "title weighted: {sql}"
+    );
+    assert!(sql.contains("websearch_to_tsquery('english', $1)"), "{sql}");
+    assert!(sql.contains("::float8 AS rank"), "rank cast to f64: {sql}");
+}
+
+#[test]
+fn sqlite_branch_uses_weighted_like_case() {
+    let sql = branch_sql::<Doc>(Backend::Sqlite);
+    assert!(sql.contains("CASE WHEN"), "{sql}");
+    assert!(sql.contains("LIKE ?1"), "substring param: {sql}");
+    assert!(sql.contains("LIKE ?2"), "prefix param: {sql}");
+    assert!(sql.contains("AS rank"), "{sql}");
+    assert!(!sql.contains("to_tsvector"), "no tsvector on sqlite: {sql}");
 }

@@ -63,3 +63,103 @@ pub fn default_pk_column<T: Model>() -> &'static str {
         .map(|f| f.name)
         .unwrap_or("id")
 }
+
+/// One normalized search result. Column aliases are fixed so every model's
+/// branch unions cleanly and `sqlx::FromRow` decodes identically per backend.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct SearchHit {
+    pub kind: String,
+    pub pk: String,
+    pub title: String,
+    pub snippet: String,
+    pub rank: f64,
+}
+
+/// Which dialect to emit. Resolved from the ambient pool at run time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Backend {
+    Postgres,
+    Sqlite,
+}
+
+fn quote_ident(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
+}
+
+/// `coalesce(c1,'')||' '||coalesce(c2,'')||…` over the given columns.
+fn concat_coalesce(cols: &[&str]) -> String {
+    cols.iter()
+        .map(|c| format!("coalesce({}, '')", quote_ident(c)))
+        .collect::<Vec<_>>()
+        .join(" || ' ' || ")
+}
+
+/// The single normalized `SELECT` for one model. The query parameter is
+/// referenced positionally: `$1` (Postgres, the websearch string) /
+/// `?1` substring + `?2` prefix (SQLite). Every branch reuses the same
+/// numbers so `Search::across` binds each value once regardless of arity.
+pub fn branch_sql<T: Searchable>(backend: Backend) -> String {
+    let table = quote_ident(T::TABLE);
+    let kind = T::kind().replace('\'', "''");
+    let ident = quote_ident(T::ident());
+    let title = quote_ident(T::title());
+    let body = T::body();
+    let body_cols: Vec<&str> = if body.is_empty() {
+        vec![T::title()]
+    } else {
+        body
+    };
+    let body_concat = concat_coalesce(&body_cols);
+    // Body minus the title column, for the un-weighted part of the rank vector.
+    let rest: Vec<&str> = body_cols
+        .iter()
+        .copied()
+        .filter(|c| *c != T::title())
+        .collect();
+
+    match backend {
+        Backend::Postgres => {
+            let title_vec =
+                format!("setweight(to_tsvector('english', coalesce({title}, '')), 'A')");
+            let rest_vec = if rest.is_empty() {
+                String::new()
+            } else {
+                format!(" || to_tsvector('english', {})", concat_coalesce(&rest))
+            };
+            format!(
+                "SELECT '{kind}' AS kind, \
+                 CAST({ident} AS text) AS pk, \
+                 {title} AS title, \
+                 left({body_concat}, 200) AS snippet, \
+                 ts_rank({title_vec}{rest_vec}, websearch_to_tsquery('english', $1))::float8 AS rank \
+                 FROM {table} \
+                 WHERE to_tsvector('english', {body_concat}) @@ websearch_to_tsquery('english', $1)"
+            )
+        }
+        Backend::Sqlite => {
+            // ?1 = '%q%' (substring), ?2 = 'q%' (prefix bonus).
+            let where_like = body_cols
+                .iter()
+                .map(|c| format!("{} LIKE ?1", quote_ident(c)))
+                .collect::<Vec<_>>()
+                .join(" OR ");
+            let title_q = quote_ident(T::title());
+            let body_substr_terms = body_cols
+                .iter()
+                .map(|c| format!("(CASE WHEN {} LIKE ?1 THEN 1.0 ELSE 0 END)", quote_ident(c)))
+                .collect::<Vec<_>>()
+                .join(" + ");
+            format!(
+                "SELECT '{kind}' AS kind, \
+                 CAST({ident} AS TEXT) AS pk, \
+                 {title} AS title, \
+                 substr({body_concat}, 1, 200) AS snippet, \
+                 ( (CASE WHEN {title_q} LIKE ?1 THEN 2.0 ELSE 0 END) \
+                 + {body_substr_terms} \
+                 + (CASE WHEN {title_q} LIKE ?2 THEN 1.0 ELSE 0 END) ) AS rank \
+                 FROM {table} \
+                 WHERE {where_like}"
+            )
+        }
+    }
+}
