@@ -637,6 +637,73 @@ impl AppBuilder {
             }
         }
 
+        // Phase 2.5b — cross-database foreign-key guard (gaps2 #22).
+        //
+        // A foreign key whose target model lives on a DIFFERENT database
+        // can't be a real DB constraint — `REFERENCES` can't span pools.
+        // We resolve each model's effective alias (plugin default, then
+        // per-model override, else "default") into a table→alias map,
+        // then check every FK column: if the column's target table
+        // routes to a different alias than the model AND the field has
+        // not opted out via `#[umbra(db_constraint = false)]`, the build
+        // fails loudly here rather than emitting an invalid `FOREIGN KEY`
+        // line at migration time.
+        //
+        // Build the table→alias map with the same precedence as
+        // `model_aliases` above: plugin default first, per-model override
+        // wins, the implicit "app" models last. Any table not mentioned
+        // routes to "default".
+        let mut table_alias: HashMap<String, String> = HashMap::new();
+        for plugin in &sorted_plugins {
+            let plugin_default = plugin.database();
+            for model in plugin.models() {
+                let alias = model
+                    .database
+                    .clone()
+                    .or_else(|| plugin_default.map(|s| s.to_string()))
+                    .unwrap_or_else(|| "default".to_string());
+                table_alias.insert(model.table.clone(), alias);
+            }
+        }
+        for model in &self.models {
+            let alias = model
+                .database
+                .clone()
+                .unwrap_or_else(|| "default".to_string());
+            table_alias.insert(model.table.clone(), alias);
+        }
+        // Helper to resolve a table's alias, defaulting to "default".
+        let alias_of = |table: &str| -> String {
+            table_alias
+                .get(table)
+                .cloned()
+                .unwrap_or_else(|| "default".to_string())
+        };
+        // Walk every model's FK fields and compare aliases.
+        let all_models = sorted_plugins
+            .iter()
+            .flat_map(|p| p.models())
+            .chain(self.models.iter().cloned());
+        for model in all_models {
+            let model_db = alias_of(&model.table);
+            for field in &model.fields {
+                let Some(target_table) = field.fk_target.as_deref() else {
+                    continue;
+                };
+                if field.db_constraint {
+                    let target_db = alias_of(target_table);
+                    if target_db != model_db {
+                        return Err(BuildError::CrossDatabaseForeignKey {
+                            model: Box::leak(model.name.clone().into_boxed_str()),
+                            field: Box::leak(field.name.clone().into_boxed_str()),
+                            model_db: Box::leak(model_db.into_boxed_str()),
+                            target_db: Box::leak(target_db.into_boxed_str()),
+                        });
+                    }
+                }
+            }
+        }
+
         // Phase 2.6 — publish the default-error-pages flag before the
         // templates engine starts so `errors::default_pages_enabled()` is
         // correct the moment any 404/500 helper is called.
@@ -1223,6 +1290,19 @@ pub enum BuildError {
         url_backend: &'static str,
         pool_backend: &'static str,
     },
+    /// A foreign key targets a model on a different database than the
+    /// model that declares it, and the field has NOT opted out of the
+    /// physical constraint. A `REFERENCES` clause can't span databases,
+    /// so this would emit invalid DDL. Fix by either routing both
+    /// models to the same database, or marking the FK
+    /// `#[umbra(db_constraint = false)]` to keep it a logical-only
+    /// relation. Closes gaps2 #22.
+    CrossDatabaseForeignKey {
+        model: &'static str,
+        field: &'static str,
+        model_db: &'static str,
+        target_db: &'static str,
+    },
     /// Two plugins declared the same static namespace via
     /// `Plugin::static_dirs()`. Namespaces are the per-plugin URL/disk
     /// segment under `static_url` / `static_root`; a collision would
@@ -1286,6 +1366,20 @@ impl std::fmt::Display for BuildError {
                 f,
                 "umbra: plugin `{plugin}` requested database alias `{alias}`, which isn't \
                  registered; call .database(\"{alias}\", pool) on the builder before .build()"
+            ),
+            BuildError::CrossDatabaseForeignKey {
+                model,
+                field,
+                model_db,
+                target_db,
+            } => write!(
+                f,
+                "umbra: model `{model}` (database `{model_db}`) has a foreign key \
+                 `{field}` to a model on database `{target_db}`. A FOREIGN KEY \
+                 constraint can't span databases. Either route both models to the \
+                 same database, or mark the field `#[umbra(db_constraint = false)]` \
+                 to keep it a logical-only relation (joins / select_related still \
+                 work; no physical constraint is emitted)."
             ),
             BuildError::DatabaseBackendMismatch {
                 url_backend,

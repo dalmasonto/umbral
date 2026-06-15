@@ -296,6 +296,7 @@ mod readonly_set_tests {
             nullable: false,
             fk_target: None,
             noform,
+            db_constraint: true,
             noedit,
             is_string_repr: false,
             max_length: 0,

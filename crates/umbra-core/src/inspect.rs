@@ -848,6 +848,9 @@ impl From<&IntrospectedColumn> for Column {
             nullable: c.nullable,
             fk_target: None,
             noform: false,
+            // inspectdb introspects no FK yet (`fk_target: None`), so a
+            // real DB constraint maps to the default `true`.
+            db_constraint: true,
             noedit: false,
             is_string_repr: false,
             max_length: 0,

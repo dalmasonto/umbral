@@ -857,6 +857,7 @@ mod tests {
             nullable: false,
             fk_target: None,
             noform: false,
+            db_constraint: true,
             noedit: false,
             is_string_repr: false,
             max_length: 0,

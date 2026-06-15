@@ -675,6 +675,7 @@ mod tests {
             primary_key: false,
             nullable: false,
             noform: false,
+            db_constraint: true,
             noedit: false,
             is_string_repr: false,
             max_length: 0,

@@ -518,6 +518,23 @@ pub struct FieldSpec {
     /// If `noform` is true, `noedit` is moot (noform takes precedence).
     pub noform: bool,
 
+    /// For `SqlType::ForeignKey` fields: whether the migration engine
+    /// emits a *physical* `FOREIGN KEY ... REFERENCES` constraint.
+    /// Mirrors Django's `ForeignKey(db_constraint=...)`. Set via
+    /// `#[umbra(db_constraint = false)]`; defaults to `true` (today's
+    /// behaviour — emit the constraint).
+    ///
+    /// When `false`, the FK stays a *logical* relation: the column +
+    /// `fk_target` are unchanged, so joins, `select_related`, and the
+    /// app-level `check_fk_row_exists` pre-validation all keep working —
+    /// but no `REFERENCES` clause is rendered. This is the only way to
+    /// model an FK whose target lives on a *different* database (a real
+    /// DB constraint can't span databases). The boot-time guard in
+    /// `App::build` rejects a cross-database FK that has NOT opted out
+    /// via this flag (`BuildError::CrossDatabaseForeignKey`). Closes
+    /// gaps2 #22. Ignored for non-FK fields.
+    pub db_constraint: bool,
+
     /// When `true`, the admin shows this field disabled on the edit
     /// form. Pure UX hint — no effect on the REST API or the OpenAPI
     /// spec; clients can still POST/PUT/PATCH the column normally.

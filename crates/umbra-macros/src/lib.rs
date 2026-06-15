@@ -164,6 +164,14 @@ struct UmbraStructAttr {
 struct UmbraFieldAttr {
     /// `#[umbra(noform)]` — never show on any form.
     noform: bool,
+    /// `#[umbra(db_constraint = false)]` — keep the FK logical (column +
+    /// `fk_target`) but emit no physical `FOREIGN KEY ... REFERENCES`
+    /// constraint. Mirrors Django's `ForeignKey(db_constraint=False)`.
+    /// Required for an FK whose target lives on a different database
+    /// (a DB constraint can't span databases); the boot guard in
+    /// `App::build` rejects an un-opted-out cross-DB FK. Defaults to
+    /// `true` (emit the constraint). gaps2 #22.
+    db_constraint: bool,
     /// `#[umbra(noedit)]` — show on edit form read-only, never on create.
     noedit: bool,
     /// `#[umbra(primary_key)]` — explicitly nominate this field as the
@@ -297,6 +305,7 @@ fn has_sqlx_skip(attrs: &[syn::Attribute]) -> bool {
 fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAttr> {
     let mut parsed = UmbraFieldAttr {
         noform: false,
+        db_constraint: true,
         noedit: false,
         primary_key: false,
         no_reverse: false,
@@ -326,6 +335,17 @@ fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAtt
         attr.parse_nested_meta(|meta| {
             if meta.path.is_ident("noform") {
                 parsed.noform = true;
+                Ok(())
+            } else if meta.path.is_ident("db_constraint") {
+                // `#[umbra(db_constraint = false)]` / `= true`. Bare
+                // `#[umbra(db_constraint)]` reads as `true` (the
+                // default), matching the `string` marker's shape.
+                if let Ok(value) = meta.value() {
+                    let lit: syn::LitBool = value.parse()?;
+                    parsed.db_constraint = lit.value;
+                } else {
+                    parsed.db_constraint = true;
+                }
                 Ok(())
             } else if meta.path.is_ident("noedit") {
                 parsed.noedit = true;
@@ -476,7 +496,8 @@ fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAtt
                     .unwrap_or_else(|| "<unknown>".to_string());
                 Err(meta.error(format!(
                     "unknown field-level umbra attribute `{path}` — known keys are \
-                     `noform`, `noedit`, `primary_key`, `no_reverse`, \
+                     `noform`, `db_constraint = false`, `noedit`, \
+                     `primary_key`, `no_reverse`, \
                      `string` (or `string = true`), \
                      `max_length = N`, `choices`, `default = \"...\"`, \
                      `unique`, `on_delete = \"...\"`, \
@@ -1058,6 +1079,11 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         } else {
             quote!(false)
         };
+        let db_constraint_lit = if field_attr.db_constraint {
+            quote!(true)
+        } else {
+            quote!(false)
+        };
         let noedit_lit = if field_attr.noedit {
             quote!(true)
         } else {
@@ -1294,6 +1320,7 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                 supported_backends: #backends_tokens,
                 fk_target: #fk_target_tokens,
                 noform: #noform_lit,
+                db_constraint: #db_constraint_lit,
                 noedit: #noedit_lit,
                 is_string_repr: #is_string_repr_lit,
                 max_length: #max_length_lit,

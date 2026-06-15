@@ -629,6 +629,15 @@ pub struct Column {
     /// edit). Propagated from `FieldSpec::noform`.
     #[serde(default)]
     pub noform: bool,
+    /// For FK columns: whether to emit a physical `FOREIGN KEY ...
+    /// REFERENCES` constraint. Propagated from `FieldSpec::db_constraint`.
+    /// `false` (set via `#[umbra(db_constraint = false)]`) keeps the
+    /// logical FK (column + `fk_target`) but renders no `REFERENCES`
+    /// clause — the only valid shape for a cross-database FK. Closes
+    /// gaps2 #22. Defaults to `true` so existing migration JSON
+    /// round-trips unchanged (omitted from JSON when at its default).
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub db_constraint: bool,
     /// When `true`, this field appears on the edit form as read-only.
     /// Propagated from `FieldSpec::noedit`.
     #[serde(default)]
@@ -899,6 +908,19 @@ fn is_false(b: &bool) -> bool {
     !*b
 }
 
+/// serde default for `Column::db_constraint`: a FK emits its physical
+/// `REFERENCES` constraint unless the model opts out. Older migration
+/// JSON predating gaps2 #22 has no `db_constraint` key, so it must
+/// deserialize as `true` to preserve the historical "always emit"
+/// behaviour.
+fn default_true() -> bool {
+    true
+}
+
+fn is_true(b: &bool) -> bool {
+    *b
+}
+
 impl From<&FieldSpec> for Column {
     fn from(f: &FieldSpec) -> Self {
         Self {
@@ -908,6 +930,7 @@ impl From<&FieldSpec> for Column {
             nullable: f.nullable,
             fk_target: f.fk_target.map(|s| s.to_string()),
             noform: f.noform,
+            db_constraint: f.db_constraint,
             noedit: f.noedit,
             is_string_repr: f.is_string_repr,
             max_length: f.max_length,
@@ -3413,7 +3436,13 @@ fn render_alter_column_postgres(
             stmts.push(format!(
                 "ALTER TABLE {q_table} DROP CONSTRAINT IF EXISTS \"{cname}\""
             ));
-            if let Some(target) = &new.fk_target {
+            // gaps2 #22: only re-add the physical constraint when the FK
+            // still wants one. A `db_constraint = false` FK keeps the
+            // DROP (so flipping the flag tears down any prior constraint)
+            // but emits no ADD CONSTRAINT.
+            if let Some(target) = &new.fk_target
+                && new.db_constraint
+            {
                 let q_target = quote_pg_ident(target);
                 let on_delete_clause = new
                     .on_delete
@@ -3581,10 +3610,17 @@ fn build_column_def_sqlite(col: &Column) -> sea_query::ColumnDef {
         if col.unique {
             def.unique_key();
         }
-        def.extra(format!(
-            "REFERENCES \"{fk_target}\"(\"{pk_col_name}\"){}",
-            fk_action_suffix(col),
-        ));
+        // gaps2 #22: `#[umbra(db_constraint = false)]` keeps the logical
+        // FK (column type derived from the target PK, above) but emits
+        // NO physical `REFERENCES` clause. This is the only valid shape
+        // for a cross-database FK. The default (`true`) emits the
+        // constraint as before.
+        if col.db_constraint {
+            def.extra(format!(
+                "REFERENCES \"{fk_target}\"(\"{pk_col_name}\"){}",
+                fk_action_suffix(col),
+            ));
+        }
         return def;
     }
 
@@ -3729,10 +3765,15 @@ fn build_column_def_postgres(col: &Column) -> sea_query::ColumnDef {
         if col.unique {
             def.unique_key();
         }
-        def.extra(format!(
-            "REFERENCES \"{fk_target}\"(\"{pk_col_name}\"){}",
-            fk_action_suffix(col),
-        ));
+        // gaps2 #22: skip the physical `REFERENCES` clause when the FK
+        // opted out of the DB constraint (cross-database FK). The
+        // logical column + `fk_target` stay intact.
+        if col.db_constraint {
+            def.extra(format!(
+                "REFERENCES \"{fk_target}\"(\"{pk_col_name}\"){}",
+                fk_action_suffix(col),
+            ));
+        }
         return def;
     }
 
@@ -3882,6 +3923,7 @@ mod tests {
             nullable: false,
             fk_target: None,
             noform: false,
+            db_constraint: true,
             noedit: false,
             is_string_repr: false,
             max_length: 0,
@@ -3913,6 +3955,7 @@ mod tests {
             nullable: false,
             fk_target: None,
             noform: false,
+            db_constraint: true,
             noedit: false,
             is_string_repr: false,
             max_length: 0,
@@ -3942,6 +3985,7 @@ mod tests {
             nullable: false,
             fk_target: None,
             noform: false,
+            db_constraint: true,
             noedit: false,
             is_string_repr: false,
             max_length: 0,
@@ -4041,6 +4085,7 @@ mod tests {
             nullable: false,
             fk_target: Some("post".into()),
             noform: false,
+            db_constraint: true,
             noedit: false,
             is_string_repr: false,
             max_length: 0,
@@ -4156,6 +4201,7 @@ mod tests {
                 nullable: false,
                 fk_target: None,
                 noform: false,
+                db_constraint: true,
                 noedit: false,
                 is_string_repr: false,
                 max_length: 0,
@@ -4236,6 +4282,7 @@ mod tests {
             nullable: false,
             fk_target: None,
             noform: false,
+            db_constraint: true,
             noedit: false,
             is_string_repr: false,
             max_length: 0,
@@ -4341,6 +4388,7 @@ mod tests {
             nullable: false,
             fk_target: None,
             noform: false,
+            db_constraint: true,
             noedit: false,
             is_string_repr: false,
             max_length: 0,
@@ -4419,6 +4467,7 @@ mod tests {
             nullable: false,
             fk_target: None,
             noform: false,
+            db_constraint: true,
             noedit: false,
             is_string_repr: false,
             max_length: 0,
@@ -4529,6 +4578,7 @@ mod tests {
                 nullable: false,
                 fk_target: None,
                 noform: false,
+                db_constraint: true,
                 noedit: false,
                 is_string_repr: false,
                 max_length: 0,
