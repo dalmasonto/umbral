@@ -1,6 +1,6 @@
 ## Status
 
-**As of 2026-06-07: 99 of 109 closed.** Open: 43 (plugin-extension backlog), 49 (S3 / image backend deferred), 58 (FK picker for user_id deferred), 61 (M2M auto-junction deferred), 66 (MySQL), 70 (Cache plugin Redis/memcache split deferred), 77 (ORM signal events), 78 (RestPlugin expand FKs), 79 (migration safety research), 89-90 / 93-95 (advanced autodetector + REPL), 104 (plugin-disable semantics), 108 (REST API versioning).
+**As of 2026-06-07: 99 of 109 closed** (snapshot; more closed since). Open: 43 (plugin-extension backlog), 49 (S3 / image backend deferred), 58 (FK picker for user_id deferred), 61 (M2M auto-junction deferred), 66 (MySQL), 70 (Cache plugin Redis/memcache split deferred), 79 (migration safety research), 89-90 / 93-95 (advanced autodetector + REPL), 104 (plugin-disable semantics), 108 (REST API versioning). (Removed 77 + 78 — their entries are already `[x]`.)
 
 | # | Gap | Status |
 |---|-----|--------|
