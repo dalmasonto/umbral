@@ -100,11 +100,29 @@ Routing typos fail at `build()`, not at runtime:
 
 So a misrouted model surfaces the moment the app boots, with the offending plugin + alias named.
 
+## Cross-database foreign keys
+
+A foreign key whose target model lives on a **different** database can't be a real DB constraint — `REFERENCES` can't span pools. umbra **guards** this at boot: if a model on one database has a `ForeignKey` to a model on another, `App::build()` fails with `BuildError::CrossDatabaseForeignKey { model, field, model_db, target_db }`. You can't ship an invalid `FOREIGN KEY` by accident.
+
+To make a cross-database relation legal, opt the field out of the physical constraint:
+
+```rust
+#[derive(Debug, Clone, sqlx::FromRow, Model)]
+#[umbra(table = "page_view", database = "analytics")]
+pub struct PageView {
+    pub id: i64,
+    #[umbra(db_constraint = false)]   // `user` lives on "default" — keep this FK logical
+    pub user: ForeignKey<User>,
+    pub path: String,
+}
+```
+
+`db_constraint = false` keeps the FK **logical**: the column and its `fk_target` are unchanged, so joins, `select_related`, and app-level existence checks all keep working — but the migration emits no physical `REFERENCES`. It mirrors Django's `ForeignKey(db_constraint=False)` and works for same-database FKs too (e.g. to break a circular dependency). The default is `true` (emit the constraint).
+
 ## Not yet supported
 
 These are the known gaps — the routing primitive is solid, but a few capabilities that real multi-DB and multitenant setups need aren't built yet:
 
-- **Cross-database foreign keys have no guard (gaps2 #22).** An FK from a model on one database to a model on another **cannot** be a real DB constraint (constraints can't span databases). Today umbra does not detect this — it will emit an invalid `FOREIGN KEY` line in the migration. **Keep FK-related models on the same database.** A planned `#[umbra(db_constraint = false)]` opt-out will make a cross-DB relation legal as a *logical* FK (joins, `select_related`, app-level existence checks still work) while emitting no physical constraint.
 - **No read/write (replica) split (gaps2 #23).** Routing is one-model-one-database; there's no `db_for_read` (replica) vs `db_for_write` (primary). A model can't send reads to a replica and writes to the primary. The hard part — read-after-write consistency inside a transaction — is why this is deferred.
 - **No dynamic, per-request routing (the multitenancy gap).** Pools are resolved **per model at build time**, not **per request**. A database-per-tenant (or schema-per-tenant) setup that picks the pool from the *current request's tenant* isn't expressible through this surface — there's no ambient "current tenant → pool" hook. The closest primitive today is threading a tenant pool through `.on(&pool)` on every query by hand. First-class per-request routing is what multitenancy will need.
 - **`.on()` is SQLite-typed.** It accepts a `&sqlx::SqlitePool`; there's no `PgPool` per-query override. For Postgres, rely on model/plugin routing.
@@ -113,4 +131,4 @@ These are the known gaps — the routing primitive is solid, but a few capabilit
 ## See also
 
 - Design rationale: `arch.md` (plugins own their migrations + database), `docs/specs/03-orm-querysets.md`.
-- Open gaps tracked in `planning/gaps2.md` #22 (cross-DB FK guard), #23 (read/write split), #69 (pluggable router for new backends + multitenancy).
+- Open gaps tracked in `planning/gaps2.md` #23 (read/write split), #69 (pluggable router for new backends + multitenancy). (#22 cross-DB FK guard: shipped — see "Cross-database foreign keys" above.)
