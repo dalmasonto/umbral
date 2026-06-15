@@ -287,6 +287,12 @@ impl umbra::orm::Searchable for Plugin {
     fn ident() -> &'static str {
         "slug"
     }
+    // Only approved plugins are searchable (soft-deleted rows are excluded
+    // automatically — `Plugin` is `#[umbra(soft_delete)]`). Mirrors the old
+    // `render_search` filter so unapproved submissions never surface.
+    fn filter_sql() -> Option<&'static str> {
+        Some("moderation = 'approved'")
+    }
 }
 
 // ---------------------------------------------------------------------------

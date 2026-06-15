@@ -170,6 +170,12 @@ impl umbra::orm::Searchable for BlogPost {
     fn ident() -> &'static str {
         "slug"
     }
+    // Only published posts are searchable (soft-deleted rows excluded
+    // automatically — `BlogPost` is `#[umbra(soft_delete)]`). Mirrors the old
+    // `render_search` filter so drafts never surface in the header search.
+    fn filter_sql() -> Option<&'static str> {
+        Some("status = 'published'")
+    }
 }
 
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
