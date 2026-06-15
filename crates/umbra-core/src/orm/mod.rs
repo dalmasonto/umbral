@@ -136,7 +136,7 @@ pub use reverse_set::ReverseSet;
 pub use search::{Search, SearchHit, SearchSources, Searchable};
 pub use tsvector::TsVector;
 pub use validators::{Email, Slug, Url, ValidatorError, validate_text_format};
-pub use write::SaveError;
+pub use write::{SaveError, slugify};
 
 /// A typed boolean condition on rows of `T`.
 ///
