@@ -186,6 +186,13 @@
     min-width: 0;
     width: 100%;
     max-width: 72ch;
+    /* White reading card that stands out from the warm paper page bg,
+       matching the plugin detail page's `.card` treatment. */
+    background: var(--surface);
+    border: 1px solid var(--hairline);
+    border-radius: 18px;
+    padding: 30px 34px;
+    box-shadow: 0 12px 34px -26px rgba(27, 23, 20, 0.28);
   }
 
   .post-body.prose {
@@ -255,6 +262,12 @@
     border-left: 1px solid var(--hairline);
     padding-left: 22px;
   }
+
+  .post-toc { display: flex; flex-direction: column; gap: 2px; }
+  .post-toc__link { display: block; padding: 4px 0 4px 12px; border-left: 2px solid transparent; color: var(--muted); font-size: 13px; line-height: 1.45; text-decoration: none; transition: color 0.15s ease, border-color 0.15s ease; }
+  .post-toc__link:hover { color: var(--ink-2); }
+  .post-toc__link--sub { padding-left: 24px; font-size: 12.5px; }
+  .post-toc__link.is-active { color: var(--accent-2); border-left-color: var(--accent); font-weight: 600; }
 
   .post-rail__label {
     color: var(--faint);
@@ -441,15 +454,13 @@
        attribute is the enhancer's hook. #}
     <div class="post-body prose" data-md>{{ post.body | markdown }}</div>
 
-    <aside class="post-rail" aria-label="Article context">
-      <div class="post-rail__label">Field note</div>
-      <h2 class="post-rail__title">What this post is about</h2>
-      <p class="post-rail__text">A focused look at how Umbra keeps forms, admin, and REST close to the model instead of spreading boilerplate through the application.</p>
-      <ul class="post-rail__list">
-        <li>Start from the model boundary</li>
-        <li>Keep generated surfaces editable</li>
-        <li>Let plugins own the repetitive work</li>
-      </ul>
+    {# Live table of contents, built client-side from the post's headings
+       with scroll-spy. Replaces the old hardcoded boilerplate so the rail is
+       actually about THIS post. The rail hides itself if the post has no
+       headings (or JS is off). #}
+    <aside class="post-rail" aria-label="On this page" data-toc-rail hidden>
+      <div class="post-rail__label">On this page</div>
+      <nav class="post-toc" data-toc aria-label="Table of contents"></nav>
     </aside>
   </div>
 
@@ -460,5 +471,55 @@
     </a>
   </div>
 </article>
+
+<script>
+  // Build the right-rail table of contents from the post's headings, with
+  // scroll-spy. Reveals the rail only when there are headings (it's `hidden`
+  // by default, so no-JS / heading-less posts show no empty rail).
+  (function () {
+    var body = document.querySelector('.post-body');
+    var toc = document.querySelector('[data-toc]');
+    var rail = document.querySelector('[data-toc-rail]');
+    if (!body || !toc || !rail) return;
+    var heads = Array.prototype.slice.call(body.querySelectorAll('h2, h3'));
+    if (!heads.length) return;
+
+    function slugify(s) {
+      return (s || '').toLowerCase().trim()
+        .replace(/[^\w\s-]/g, '').replace(/\s+/g, '-').slice(0, 60) || 'section';
+    }
+    var used = {}, links = {};
+    heads.forEach(function (h) {
+      var id = h.id;
+      if (!id) { id = slugify(h.textContent); while (used[id]) id += '-x'; h.id = id; }
+      used[id] = true;
+      var a = document.createElement('a');
+      a.href = '#' + id;
+      a.textContent = h.textContent;
+      a.className = 'post-toc__link' + (h.tagName === 'H3' ? ' post-toc__link--sub' : '');
+      a.addEventListener('click', function (e) {
+        e.preventDefault();
+        h.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        if (history.replaceState) history.replaceState(null, '', '#' + id);
+      });
+      toc.appendChild(a);
+      links[id] = a;
+    });
+    rail.hidden = false;
+
+    if ('IntersectionObserver' in window) {
+      var visible = {};
+      var obs = new IntersectionObserver(function (entries) {
+        entries.forEach(function (en) { visible[en.target.id] = en.isIntersecting; });
+        var current = null;
+        heads.forEach(function (h) { if (visible[h.id] && !current) current = h.id; });
+        Object.keys(links).forEach(function (k) {
+          links[k].classList.toggle('is-active', k === current);
+        });
+      }, { rootMargin: '0px 0px -70% 0px' });
+      heads.forEach(function (h) { obs.observe(h); });
+    }
+  })();
+</script>
 
 {% endblock %}
