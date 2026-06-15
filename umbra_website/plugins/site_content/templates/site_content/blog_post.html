@@ -96,19 +96,22 @@
 
   .post-layout {
     display: grid;
-    grid-template-columns: minmax(0, 760px) minmax(230px, 1fr);
-    gap: 56px;
+    /* Body flexes to fill the width (like the plugin Overview's `1fr`); the
+       TOC rail is a fixed narrow column — NOT the reverse, which left the body
+       at ~3/4 and ballooned the rail. */
+    grid-template-columns: minmax(0, 1fr) minmax(220px, 280px);
+    gap: 48px;
     align-items: start;
     padding: 42px 0 70px;
   }
 
   /* Layout only — the white card + prose styling come from the SAME classes
      the plugin Overview tab uses: `card rounded-[20px] p-6 sm:p-7 pd-prose`
-     (see the markup below + the shared `.pd-prose` in md-enhance.css). */
+     (see the markup below + the shared `.pd-prose` in md-enhance.css). The
+     body fills its column (no max-width cap) to match the plugin content. */
   .post-body {
     min-width: 0;
     width: 100%;
-    max-width: 72ch;
   }
 
   .post-rail {
