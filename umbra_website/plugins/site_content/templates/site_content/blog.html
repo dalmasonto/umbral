@@ -1,50 +1,442 @@
 {% extends "base.html" %}
 
 {% block title %}Blog - Umbra{% endblock %}
-{% block meta_description %}The Umbra blog — deep dives, release notes, design notes, and plugin spotlights.{% endblock %}
+{% block meta_description %}The Umbra blog: release notes, framework essays, implementation notes, and plugin spotlights from the people building Umbra.{% endblock %}
+
+{% block extra_head %}
+<style>
+  .blog-shell {
+    width: min(1200px, calc(100% - 56px));
+    margin: 0 auto;
+  }
+
+  .blog-hero {
+    display: grid;
+    grid-template-columns: minmax(0, 1.05fr) minmax(320px, 0.7fr);
+    gap: clamp(24px, 5vw, 72px);
+    align-items: end;
+    padding: 58px 0 34px;
+  }
+
+  .blog-kicker {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    margin-bottom: 18px;
+    border: 1px solid var(--accent-line);
+    border-radius: 999px;
+    background: var(--accent-soft);
+    padding: 7px 12px;
+    color: var(--accent-2);
+    font-size: 13px;
+    font-weight: 800;
+  }
+
+  .blog-kicker::before {
+    content: "";
+    width: 7px;
+    height: 7px;
+    border-radius: 999px;
+    background: var(--accent);
+  }
+
+  .blog-title {
+    max-width: 780px;
+    margin: 0;
+    color: var(--ink);
+    font-size: clamp(42px, 6vw, 72px);
+    font-weight: 800;
+    letter-spacing: 0;
+    line-height: 0.98;
+  }
+
+  .blog-lede {
+    max-width: 680px;
+    margin: 22px 0 0;
+    color: var(--muted);
+    font-size: clamp(17px, 2vw, 20px);
+    line-height: 1.62;
+  }
+
+  .blog-console {
+    overflow: hidden;
+    border-radius: 22px;
+    background: var(--shade);
+    color: var(--shade-ink);
+    box-shadow: 0 28px 70px -44px rgba(27, 23, 20, 0.56);
+  }
+
+  .blog-console__bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border-bottom: 1px solid var(--shade-2);
+    padding: 14px 16px;
+  }
+
+  .blog-console__dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 999px;
+    background: var(--accent-ghost);
+  }
+
+  .blog-console__dot:nth-child(2) {
+    background: var(--code-amber);
+  }
+
+  .blog-console__dot:nth-child(3) {
+    background: var(--ok);
+  }
+
+  .blog-console__label {
+    margin-left: 8px;
+    color: var(--shade-muted);
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 12px;
+  }
+
+  .blog-console__body {
+    padding: 20px;
+  }
+
+  .blog-console__line {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    border-top: 1px solid var(--shade-2);
+    padding: 13px 0;
+    color: var(--shade-muted);
+    font-size: 13.5px;
+    line-height: 1.5;
+  }
+
+  .blog-console__line:first-child {
+    border-top: 0;
+    padding-top: 0;
+  }
+
+  .blog-console__line:last-child {
+    padding-bottom: 0;
+  }
+
+  .blog-console__prefix {
+    flex: 0 0 auto;
+    color: var(--accent-ghost);
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .blog-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.1fr) minmax(300px, 0.9fr);
+    gap: 18px;
+    align-items: start;
+    padding: 16px 0 64px;
+  }
+
+  .blog-feature {
+    display: flex;
+    min-height: 390px;
+    flex-direction: column;
+    border-radius: 24px;
+    background:
+      linear-gradient(145deg, color-mix(in srgb, var(--accent-soft) 84%, var(--surface)), var(--surface) 58%),
+      var(--surface);
+    border: 1px solid var(--accent-line);
+    padding: clamp(24px, 4vw, 38px);
+    transition: border-color 160ms ease, transform 160ms ease, box-shadow 160ms ease;
+  }
+
+  .blog-feature:hover {
+    transform: translateY(-2px);
+    border-color: color-mix(in srgb, var(--accent) 40%, var(--accent-line));
+    box-shadow: 0 26px 60px -44px color-mix(in srgb, var(--accent) 60%, transparent);
+  }
+
+  .blog-feature__meta,
+  .blog-card__meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    color: var(--faint);
+    font-size: 12.5px;
+  }
+
+  .blog-pill {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 999px;
+    background: var(--accent);
+    padding: 4px 9px;
+    color: var(--surface);
+    font-size: 12px;
+    font-weight: 800;
+  }
+
+  .blog-feature__title {
+    max-width: 680px;
+    margin: auto 0 12px;
+    color: var(--ink);
+    font-size: clamp(30px, 4.4vw, 52px);
+    font-weight: 800;
+    letter-spacing: 0;
+    line-height: 1.02;
+  }
+
+  .blog-feature__excerpt {
+    max-width: 690px;
+    margin: 0;
+    color: var(--muted);
+    font-size: 16px;
+    line-height: 1.62;
+  }
+
+  .blog-feature__read {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 28px;
+    color: var(--accent-2);
+    font-size: 14px;
+    font-weight: 800;
+  }
+
+  .blog-list {
+    display: grid;
+    gap: 12px;
+  }
+
+  .blog-card {
+    display: block;
+    border: 1px solid var(--hairline);
+    border-radius: 18px;
+    background: var(--surface);
+    padding: 20px;
+    transition: border-color 160ms ease, transform 160ms ease;
+  }
+
+  .blog-card:hover {
+    transform: translateY(-2px);
+    border-color: var(--accent-line);
+  }
+
+  .blog-card__title {
+    margin: 12px 0 7px;
+    color: var(--ink);
+    font-size: 19px;
+    font-weight: 800;
+    line-height: 1.2;
+  }
+
+  .blog-card__excerpt {
+    margin: 0;
+    color: var(--muted);
+    font-size: 14px;
+    line-height: 1.55;
+  }
+
+  .blog-empty {
+    display: grid;
+    grid-template-columns: minmax(0, 0.9fr) minmax(300px, 1.1fr);
+    gap: 18px;
+    padding: 16px 0 64px;
+  }
+
+  .blog-empty__panel {
+    border: 1px solid var(--accent-line);
+    border-radius: 24px;
+    background: var(--accent-soft);
+    padding: clamp(24px, 4vw, 38px);
+  }
+
+  .blog-empty__icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 52px;
+    height: 52px;
+    border-radius: 16px;
+    background: var(--surface);
+    color: var(--accent-2);
+  }
+
+  .blog-empty__title {
+    margin: 24px 0 8px;
+    color: var(--ink);
+    font-size: 28px;
+    font-weight: 800;
+    line-height: 1.12;
+  }
+
+  .blog-empty__copy {
+    max-width: 470px;
+    margin: 0 0 24px;
+    color: var(--muted);
+    font-size: 15px;
+    line-height: 1.6;
+  }
+
+  .blog-topic-list {
+    display: grid;
+    gap: 12px;
+  }
+
+  .blog-topic {
+    display: grid;
+    grid-template-columns: 42px 1fr;
+    gap: 14px;
+    align-items: start;
+    border: 1px solid var(--hairline);
+    border-radius: 18px;
+    background: var(--surface);
+    padding: 18px;
+  }
+
+  .blog-topic__n {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 42px;
+    height: 42px;
+    border-radius: 13px;
+    background: var(--surface-2);
+    color: var(--accent-2);
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 13px;
+    font-weight: 800;
+  }
+
+  .blog-topic__title {
+    margin: 0;
+    color: var(--ink);
+    font-size: 15.5px;
+    font-weight: 800;
+  }
+
+  .blog-topic__copy {
+    margin: 5px 0 0;
+    color: var(--muted);
+    font-size: 13.5px;
+    line-height: 1.55;
+  }
+
+  @media (max-width: 860px) {
+    .blog-shell {
+      width: min(100% - 32px, 1200px);
+    }
+
+    .blog-hero,
+    .blog-grid,
+    .blog-empty {
+      grid-template-columns: 1fr;
+    }
+
+    .blog-hero {
+      padding-top: 46px;
+    }
+
+    .blog-feature {
+      min-height: 320px;
+    }
+  }
+</style>
+{% endblock %}
 
 {% block content %}
 
-<section class="mx-auto max-w-[920px] px-7 pb-2 pt-[52px] text-center">
-  <div class="kicker mb-3.5 text-accent">
-    <span class="h-1.5 w-1.5 rounded-full bg-accent"></span>
-    Blog
+<section class="blog-shell blog-hero">
+  <div>
+    <div class="blog-kicker">Blog</div>
+    <h1 class="blog-title">Notes from the framework floor.</h1>
+    <p class="blog-lede">
+      Release notes, implementation essays, and plugin field reports from the Umbra codebase. Less launch theater, more useful detail.
+    </p>
   </div>
-  <h1 class="mx-auto max-w-[760px] text-[38px] font-extrabold leading-[1.06] tracking-[-0.03em] text-ink sm:text-[44px]">
-    Deep dives &amp; release notes
-  </h1>
-  <p class="mx-auto mt-3.5 max-w-[600px] text-[17px] leading-[1.55] text-muted">
-    Design notes, tutorials, and what's new — straight from the people building Umbra.
-  </p>
+  <aside class="blog-console" aria-label="What the Umbra blog covers">
+    <div class="blog-console__bar">
+      <span class="blog-console__dot"></span>
+      <span class="blog-console__dot"></span>
+      <span class="blog-console__dot"></span>
+      <span class="blog-console__label">dispatch.log</span>
+    </div>
+    <div class="blog-console__body">
+      <div class="blog-console__line"><span class="blog-console__prefix">01</span><span>How the framework is changing, with migration notes when behavior moves.</span></div>
+      <div class="blog-console__line"><span class="blog-console__prefix">02</span><span>Plugin design notes, tradeoffs, and examples from real app code.</span></div>
+      <div class="blog-console__line"><span class="blog-console__prefix">03</span><span>Security, admin, REST, ORM, and deployment details as they become boring enough to trust.</span></div>
+    </div>
+  </aside>
 </section>
 
-<section class="mx-auto max-w-[920px] px-7 pb-12 pt-10">
-  {% if posts %}
-  <div class="grid gap-3.5">
-    {% for p in posts %}
-    <a href="/blog/{{ p.slug }}" class="card flex flex-col p-6 transition hover:-translate-y-0.5">
-      <div class="mb-2 flex items-center gap-3 text-[12px] text-faint">
-        <span class="rounded-md bg-accent-soft px-2 py-[2px] font-semibold text-accent-2">{{ p.kind }}</span>
+{% if posts %}
+<section class="blog-shell blog-grid">
+  {% for p in posts %}
+    {% if loop.first %}
+    <a href="/blog/{{ p.slug }}" class="blog-feature">
+      <div class="blog-feature__meta">
+        <span class="blog-pill">{{ p.kind }}</span>
         {% if p.published %}<span>{{ p.published }}</span>{% endif %}
-        {% if p.reading_minutes %}<span>· {{ p.reading_minutes }} min read</span>{% endif %}
+        {% if p.reading_minutes %}<span>{{ p.reading_minutes }} min read</span>{% endif %}
       </div>
-      <h2 class="mb-1.5 text-[18px] font-bold leading-snug text-ink">{{ p.title }}</h2>
-      <p class="m-0 text-[14px] leading-[1.55] text-muted">{{ p.excerpt }}</p>
+      <h2 class="blog-feature__title">{{ p.title }}</h2>
+      <p class="blog-feature__excerpt">{{ p.excerpt }}</p>
+      <span class="blog-feature__read">Read the latest
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+      </span>
     </a>
-    {% endfor %}
-  </div>
-  {% else %}
-  <div class="card rounded-[20px] p-12 text-center">
-    <div class="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-accent-soft text-accent-2">
-      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+    <div class="blog-list">
+    {% else %}
+      <a href="/blog/{{ p.slug }}" class="blog-card">
+        <div class="blog-card__meta">
+          <span class="blog-pill">{{ p.kind }}</span>
+          {% if p.published %}<span>{{ p.published }}</span>{% endif %}
+          {% if p.reading_minutes %}<span>{{ p.reading_minutes }} min read</span>{% endif %}
+        </div>
+        <h2 class="blog-card__title">{{ p.title }}</h2>
+        <p class="blog-card__excerpt">{{ p.excerpt }}</p>
+      </a>
+    {% endif %}
+  {% endfor %}
     </div>
-    <h2 class="mb-1.5 text-[18px] font-bold text-ink">No posts yet</h2>
-    <p class="mx-auto mb-5 max-w-[420px] text-[14.5px] leading-[1.55] text-muted">The first posts are on the way. Subscribe to the newsletter and we'll send them to your inbox when they land.</p>
+</section>
+{% else %}
+<section class="blog-shell blog-empty">
+  <div class="blog-empty__panel">
+    <div class="blog-empty__icon" aria-hidden="true">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+    </div>
+    <h2 class="blog-empty__title">No posts yet</h2>
+    <p class="blog-empty__copy">The first posts are being written around shipped framework work, not placeholder announcements. Subscribe and get them when they are useful.</p>
     <a href="/community" class="btn-accent">Join the newsletter
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
     </a>
   </div>
-  {% endif %}
+  <div class="blog-topic-list" aria-label="Upcoming blog topics">
+    <article class="blog-topic">
+      <span class="blog-topic__n">01</span>
+      <div>
+        <h3 class="blog-topic__title">Release notes with migration context</h3>
+        <p class="blog-topic__copy">What changed, why it changed, and what an app owner should check before upgrading.</p>
+      </div>
+    </article>
+    <article class="blog-topic">
+      <span class="blog-topic__n">02</span>
+      <div>
+        <h3 class="blog-topic__title">Plugin architecture deep dives</h3>
+        <p class="blog-topic__copy">How official batteries use the same boundaries available to third-party plugins.</p>
+      </div>
+    </article>
+    <article class="blog-topic">
+      <span class="blog-topic__n">03</span>
+      <div>
+        <h3 class="blog-topic__title">Build notes from this website</h3>
+        <p class="blog-topic__copy">Admin, reviews, showcase, media, search, and security workflows dogfooded in Umbra itself.</p>
+      </div>
+    </article>
+  </div>
 </section>
+{% endif %}
 
 {% endblock %}

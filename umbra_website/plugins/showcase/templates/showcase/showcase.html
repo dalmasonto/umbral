@@ -5,7 +5,7 @@
 
 {% block content %}
 
-<section class="mx-auto max-w-[1080px] px-7 pb-2 pt-[52px] text-center">
+<section class="mx-auto max-w-[75rem] px-7 pb-2 pt-[52px] text-center">
   <div class="kicker mb-3.5 text-accent">
     <span class="h-1.5 w-1.5 rounded-full bg-accent"></span>
     Showcase
@@ -18,10 +18,10 @@
   </p>
 </section>
 
-<section class="mx-auto max-w-[1080px] px-7 pb-6 pt-10">
+<section class="mx-auto max-w-[75rem] px-7 pb-6 pt-10">
   <div class="grid gap-3.5 md:grid-cols-2 lg:grid-cols-3">
     {% for e in entries %}
-    <a href="{{ e.url }}" target="_blank" rel="noopener" class="card flex flex-col p-5 transition hover:-translate-y-0.5">
+    <a href="{{ e.url }}" target="_blank" rel="noopener" class="card flex min-w-0 flex-col p-5 transition hover:-translate-y-0.5">
       <div class="mb-3 flex items-center gap-3">
         <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent-soft text-[14px] font-bold text-accent-2">{{ e.initials }}</span>
         <div class="min-w-0">
@@ -48,7 +48,7 @@
   </div>
 </section>
 
-<section class="mx-auto max-w-[1080px] px-7 pb-16 pt-2">
+<section class="mx-auto max-w-[75rem] px-7 pb-16 pt-2">
   <div class="flex flex-wrap items-center gap-6 rounded-[20px] border border-accent-line bg-accent-soft px-6 py-7 sm:px-8">
     <div class="min-w-[280px] flex-1">
       <h2 class="mb-1.5 text-[22px] font-extrabold tracking-[-0.02em] text-[#3A2BA8]">Shipped something with Umbra?</h2>
