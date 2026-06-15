@@ -26,6 +26,16 @@ pub trait Searchable: Model {
     fn ident() -> &'static str {
         default_pk_column::<Self>()
     }
+
+    /// Static SQL boolean ANDed into the search `WHERE` — the row-visibility
+    /// scope (e.g. only approved / published rows). Emitted verbatim, so it
+    /// MUST reference real column names and contain NO user input (it's the
+    /// model author's constant, never a request value). Default: no extra
+    /// restriction. Soft-delete is handled automatically (see below), so this
+    /// is only for business filters like `"status = 'published'"`.
+    fn filter_sql() -> Option<&'static str> {
+        None
+    }
 }
 
 /// True when a `FieldSpec` is plain searchable prose: a `Text` column that
@@ -121,6 +131,22 @@ pub fn branch_sql<T: Searchable>(backend: Backend) -> String {
         .filter(|c| *c != T::title())
         .collect();
 
+    // Row-visibility scope, ANDed onto the match condition: the author's
+    // business filter (`filter_sql`) plus the framework's soft-delete
+    // exclusion when the model is soft-deletable. Backend-independent.
+    let mut scope: Vec<String> = Vec::new();
+    if let Some(f) = T::filter_sql() {
+        scope.push(format!("({f})"));
+    }
+    if T::SOFT_DELETE {
+        scope.push(format!("{} IS NULL", quote_ident("deleted_at")));
+    }
+    let scope_and = if scope.is_empty() {
+        String::new()
+    } else {
+        format!(" AND {}", scope.join(" AND "))
+    };
+
     match backend {
         Backend::Postgres => {
             let title_vec =
@@ -137,7 +163,7 @@ pub fn branch_sql<T: Searchable>(backend: Backend) -> String {
                  left({body_concat}, 200) AS snippet, \
                  ts_rank({title_vec}{rest_vec}, websearch_to_tsquery('english', $1))::float8 AS rank \
                  FROM {table} \
-                 WHERE to_tsvector('english', {body_concat}) @@ websearch_to_tsquery('english', $1)"
+                 WHERE to_tsvector('english', {body_concat}) @@ websearch_to_tsquery('english', $1){scope_and}"
             )
         }
         Backend::Sqlite => {
@@ -171,7 +197,7 @@ pub fn branch_sql<T: Searchable>(backend: Backend) -> String {
                  + {body_substr_terms} \
                  + (CASE WHEN {title_q} LIKE ?2 ESCAPE '\\' THEN 1.0 ELSE 0 END) ) AS rank \
                  FROM {table} \
-                 WHERE {where_like}"
+                 WHERE ({where_like}){scope_and}"
             )
         }
     }
