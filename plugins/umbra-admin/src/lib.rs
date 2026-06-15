@@ -210,6 +210,28 @@ impl AdminPlugin {
         self
     }
 
+    /// Register many [`AdminModel`]s at once — the batch form of
+    /// [`register`](Self::register). Lets each plugin export a
+    /// `Vec<AdminModel>` (its admin surface, declared next to its models)
+    /// and the app register them in one call instead of a `.register(...)`
+    /// per model in `main.rs`.
+    ///
+    /// ```ignore
+    /// // plugins/blog/src/lib.rs
+    /// pub fn admin_models() -> Vec<umbra_admin::AdminModel> {
+    ///     vec![post_admin(), comment_admin(), tag_admin()]
+    /// }
+    ///
+    /// // main.rs
+    /// AdminPlugin::default().register_many(blog::admin_models())
+    /// ```
+    pub fn register_many(mut self, models: impl IntoIterator<Item = AdminModel>) -> Self {
+        for model in models {
+            self = self.register(model);
+        }
+        self
+    }
+
     /// Register an [`AdminModel`] for a specific plugin name.
     ///
     /// This is the method the `Plugin::routes` / `on_ready` pathway uses
@@ -217,6 +239,19 @@ impl AdminPlugin {
     /// groups models by the `plugin_name` supplied here.
     pub fn register_for(mut self, plugin_name: &str, model: AdminModel) -> Self {
         self.registry.register(plugin_name, model);
+        self
+    }
+
+    /// Batch form of [`register_for`](Self::register_for) — register many
+    /// models under one plugin name (the `Plugin`-pathway batch entry).
+    pub fn register_for_many(
+        mut self,
+        plugin_name: &str,
+        models: impl IntoIterator<Item = AdminModel>,
+    ) -> Self {
+        for model in models {
+            self = self.register_for(plugin_name, model);
+        }
         self
     }
 

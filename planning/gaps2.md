@@ -283,7 +283,7 @@
 
 60. [ ] From #59 above, I have noticed our middleware is not strong for now. Usually, once a middlware is set, it cuts across every other app without touching any app/plugin code ie in django, the csrf middleware touches nothing, it sought of returns true or false and the next thing is called to continue processing the request.
 
-61. [ ] How does one publish multiple resources for Rest plugin, a user might not want to just called .resource() to publish every model on the main.rs but rather create and export resources from each plugin and just call .resources use the vec once
+61. [x] Batch resource/model registration — `RestPlugin::resources(iter)` + `AdminPlugin::register_many(iter)` / `register_for_many(name, iter)`, the per-app "export a Vec, register once" pattern (DRF-style) — archived
 
 62. [x] Browser live-reload — new opt-in `umbra-livereload` plugin (SSE push + `notify` file watcher + auto-injected client; CSS hot-swap + full reload; `.rs` handled by the rebuild→restart→reconnect→reload path). Dev-only, framework-level, dogfooded in umbra_website. — archived
 63. [ ] We need to generate alot of data upto about 5GB or even 10GB or 20GB ie a table with about 200 Million rows to just excerise and test the ORM ie in querying, aggregation, and other operations to ensure proper speed. (https://lemire.me/blog/2012/03/27/publicly-available-large-data-sets-for-database-research/)

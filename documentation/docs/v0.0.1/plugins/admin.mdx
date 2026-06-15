@@ -162,6 +162,24 @@ App::builder()
     .build()?;
 ```
 
+### Registering many models at once
+
+As with REST's [`.resources(...)`](/docs/v0.0.1/rest/exposure#registering-many-resources-at-once), keep each app's admin configs next to its models and register them in one call. `.register_many(iter)` is the batch form of `.register(...)`; `.register_for_many(plugin_name, iter)` is the batch form of `.register_for(...)` (groups the models under that plugin's sidebar section).
+
+```rust
+// plugins/blog/src/lib.rs — the blog app's admin surface
+pub fn admin_models() -> Vec<umbra_admin::AdminModel> {
+    vec![post_admin(), comment_admin(), tag_admin()]
+}
+
+// main.rs
+AdminPlugin::default()
+    .register_many(blog::admin_models())
+    .register_many(shop::admin_models());
+```
+
+Each accepts any `IntoIterator<Item = AdminModel>` and is equivalent to calling `.register(...)` once per item.
+
 ### `list_display`
 
 ```rust

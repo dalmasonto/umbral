@@ -517,6 +517,33 @@ impl RestPlugin {
         self
     }
 
+    /// Register many [`ResourceConfig`]s at once — the batch form of
+    /// [`resource`](Self::resource). Lets each plugin export a
+    /// `Vec<ResourceConfig>` (its REST surface, declared next to its
+    /// models, the way DRF keeps serializers per app) and the app register
+    /// them in one call instead of a `.resource(...)` per model in `main.rs`.
+    ///
+    /// ```ignore
+    /// // plugins/blog/src/lib.rs
+    /// pub fn rest_resources() -> Vec<umbra_rest::ResourceConfig> {
+    ///     vec![
+    ///         umbra_rest::ResourceConfig::new("post").hide("draft_notes"),
+    ///         umbra_rest::ResourceConfig::new("comment"),
+    ///     ]
+    /// }
+    ///
+    /// // main.rs
+    /// RestPlugin::default()
+    ///     .resources(blog::rest_resources())
+    ///     .resources(shop::rest_resources())
+    /// ```
+    pub fn resources(mut self, configs: impl IntoIterator<Item = ResourceConfig>) -> Self {
+        for config in configs {
+            self = self.resource(config);
+        }
+        self
+    }
+
     /// Register a [`ResourceConfig`] — every `hide` / `transform` /
     /// `computed` it carries is folded into the plugin under the
     /// resource's table name.

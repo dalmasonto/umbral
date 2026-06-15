@@ -178,3 +178,23 @@ fn multiple_resource_configs_stack_additively() {
     assert!(dbg.contains("password_hash"));
     assert!(dbg.contains("draft_notes"));
 }
+
+#[test]
+fn resources_batch_registers_every_config() {
+    // `.resources([...])` must register every config — identical to calling
+    // `.resource(...)` once per item, the per-plugin "export a Vec" pattern.
+    let configs = vec![
+        ResourceConfig::new("user").hide("password_hash"),
+        ResourceConfig::new("post").hide("draft_notes"),
+    ];
+    let plugin = RestPlugin::default().resources(configs);
+    let dbg = format!("{plugin:?}");
+    assert!(
+        dbg.contains("password_hash"),
+        "first config registered: {dbg}"
+    );
+    assert!(
+        dbg.contains("draft_notes"),
+        "second config registered: {dbg}"
+    );
+}
