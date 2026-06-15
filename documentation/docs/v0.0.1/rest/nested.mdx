@@ -48,15 +48,15 @@ The order is inserted first; then each item is inserted with **its foreign key t
 
 ## All-or-nothing on failure
 
-If any child fails validation (a missing required field, a bad FK, a constraint clash), the **whole write is rolled back**: the parent and any already-created siblings are deleted, so you never get a half-created parent:
+If any child fails validation (a missing required field, a bad FK, a constraint clash), the **whole write is rolled back** in a single database transaction — the parent and all children either commit together or not at all, so you never get a half-created parent:
 
 ```http
 POST /api/order/ { "customer": "Grace", "items": [ {"product":"ok","qty":1}, {"qty":5} ] }
 → 400  (the second item has no product)  → no order is created
 ```
 
-<Callout type="warning">
-The rollback is **compensating** (delete-on-failure), not yet a true database transaction: the dynamic write path has no transaction variant. It covers the common validation-failure case fully; a process crash *between* the parent and child inserts could still orphan a parent. The transactional fix is tracked in `planning/orm_fixes.md` #2.
+<Callout type="info">
+This is a **real database transaction**: `create_nested` opens one `umbra::db::Transaction`, inserts the parent + every child on it (`DynQuerySet::insert_json_in_tx`), and `commit()`s only after they all succeed. Any failure — a bad child, a constraint clash, or even a process crash *between* inserts — leaves **zero rows**, because the transaction is never committed and the database rolls it back. (This replaced an earlier compensating delete-on-failure handler; see `planning/orm_fixes.md` #2.)
 </Callout>
 
 ## Scope
