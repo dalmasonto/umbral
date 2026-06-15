@@ -92,7 +92,7 @@ compensation).
 
 ## 3. No cross-model search: the ORM can't UNION or rank across two models
 
-**Status:** fixed (`feat(orm): Search::across`) — `umbra::orm::Search::across::<(A, B, …)>(query, limit)` searches every text column of each `Searchable` model and returns one `Vec<SearchHit>` ranked by relevance (Postgres inline `ts_rank`/`setweight`, nothing stored; SQLite weighted `LIKE`). The website `render_search` now calls it instead of merging two queries in Rust. Stored+GIN tsvector remains a logged future optimization.
+**Status:** fixed (`feat(orm): Search::across`) — `umbra::orm::Search::across::<(A, B, …)>(query, limit)` searches every text column of each `Searchable` model and returns one `Vec<SearchHit>` ranked by relevance (Postgres inline `ts_rank`/`setweight`, nothing stored; SQLite weighted `LIKE`). The website `render_search` now calls it instead of merging two queries in Rust. Row-visibility is preserved via `Searchable::filter_sql()` (a static `WHERE` fragment — plugins `moderation = 'approved'`, posts `status = 'published'`) plus automatic `deleted_at IS NULL` for soft-deletable models, so unapproved/unpublished/soft-deleted rows don't leak into search. Stored+GIN tsvector remains a logged future optimization.
 
 **Status (original):** open — Rust-side merge in place; a unified ranked search needs its own spec.
 
