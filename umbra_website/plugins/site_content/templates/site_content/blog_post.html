@@ -26,10 +26,6 @@
   }
 
   .post-hero {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(300px, 390px);
-    gap: 48px;
-    align-items: end;
     border-bottom: 1px solid var(--hairline);
     padding: 54px 0 42px;
   }
@@ -98,82 +94,6 @@
     font-weight: 800;
   }
 
-  .post-map {
-    overflow: hidden;
-    border-radius: 24px;
-    background: var(--shade);
-    color: var(--shade-ink);
-    box-shadow: 0 28px 70px -48px rgba(27, 23, 20, 0.62);
-  }
-
-  .post-map__top {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    border-bottom: 1px solid var(--shade-2);
-    padding: 14px 16px;
-    color: var(--shade-muted);
-    font-size: 12px;
-    font-weight: 800;
-  }
-
-  .post-map__body {
-    padding: 22px;
-  }
-
-  .post-map__line {
-    display: grid;
-    grid-template-columns: 34px minmax(0, 1fr);
-    gap: 12px;
-    align-items: stretch;
-  }
-
-  .post-map__line + .post-map__line {
-    margin-top: 12px;
-  }
-
-  .post-map__step {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border: 1px solid var(--shade-2);
-    border-radius: 10px;
-    color: var(--accent-ghost);
-    font-family: "JetBrains Mono", ui-monospace, monospace;
-    font-size: 12px;
-    font-weight: 800;
-  }
-
-  .post-map__node {
-    border: 1px solid var(--shade-2);
-    border-radius: 14px;
-    background: color-mix(in srgb, var(--shade-2) 54%, transparent);
-    padding: 13px 14px;
-  }
-
-  .post-map__node b {
-    display: block;
-    color: var(--shade-ink);
-    font-size: 14px;
-    line-height: 1.2;
-  }
-
-  .post-map__node span {
-    display: block;
-    margin-top: 4px;
-    color: var(--shade-muted);
-    font-size: 12.5px;
-    line-height: 1.45;
-  }
-
-  .post-map__foot {
-    border-top: 1px solid var(--shade-2);
-    padding: 15px 22px 18px;
-    color: var(--shade-muted);
-    font-size: 12.5px;
-    line-height: 1.5;
-  }
-
   .post-layout {
     display: grid;
     grid-template-columns: minmax(0, 760px) minmax(230px, 1fr);
@@ -182,77 +102,13 @@
     padding: 42px 0 70px;
   }
 
+  /* Layout only — the white card + prose styling come from the SAME classes
+     the plugin Overview tab uses: `card rounded-[20px] p-6 sm:p-7 pd-prose`
+     (see the markup below + the shared `.pd-prose` in md-enhance.css). */
   .post-body {
     min-width: 0;
     width: 100%;
     max-width: 72ch;
-    /* White reading card that stands out from the warm paper page bg,
-       matching the plugin detail page's `.card` treatment. */
-    background: var(--surface);
-    border: 1px solid var(--hairline);
-    border-radius: 18px;
-    padding: 30px 34px;
-    box-shadow: 0 12px 34px -26px rgba(27, 23, 20, 0.28);
-  }
-
-  .post-body.prose {
-    color: var(--muted);
-    font-size: 15px;
-    line-height: 1.72;
-  }
-
-  .post-body.prose :where(h2) {
-    margin-top: 2.2em;
-    margin-bottom: 0.55em;
-    color: var(--ink);
-    font-size: 29px;
-    letter-spacing: 0;
-    line-height: 1.12;
-  }
-
-  .post-body.prose :where(h3) {
-    margin-top: 1.9em;
-    color: var(--ink);
-    font-size: 22px;
-    letter-spacing: 0;
-  }
-
-  .post-body.prose :where(p, li) {
-    color: var(--muted);
-  }
-
-  .post-body.prose :where(strong) {
-    color: var(--ink);
-  }
-
-  .post-body.prose :where(a) {
-    color: var(--accent-2);
-    font-weight: 700;
-    text-decoration-thickness: 1px;
-    text-underline-offset: 3px;
-  }
-
-  .post-body.prose :where(pre) {
-    max-width: 100%;
-    overflow-x: auto;
-    border: 1px solid var(--shade-2);
-    border-radius: 18px;
-    background: var(--shade);
-    box-shadow: 0 22px 56px -42px rgba(27, 23, 20, 0.58);
-  }
-
-  .post-body :where(.md-code) {
-    max-width: 100%;
-    min-width: 0;
-  }
-
-  .post-body :where(.md-code__bar) {
-    max-width: 100%;
-  }
-
-  .post-body :where(.md-code pre) {
-    max-width: 100%;
-    overflow-x: auto;
   }
 
   .post-rail {
@@ -424,27 +280,6 @@
       </div>
     </div>
 
-    <aside class="post-map" aria-label="Article theme">
-      <div class="post-map__top">
-        <span>Umbra surface area</span>
-        <span>{{ post.kind }}</span>
-      </div>
-      <div class="post-map__body">
-        <div class="post-map__line">
-          <div class="post-map__step">01</div>
-          <div class="post-map__node"><b>Models</b><span>Typed data becomes the system boundary.</span></div>
-        </div>
-        <div class="post-map__line">
-          <div class="post-map__step">02</div>
-          <div class="post-map__node"><b>Forms and admin</b><span>Operational screens arrive from the same contract.</span></div>
-        </div>
-        <div class="post-map__line">
-          <div class="post-map__step">03</div>
-          <div class="post-map__node"><b>REST</b><span>Public APIs follow without a second model layer.</span></div>
-        </div>
-      </div>
-      <div class="post-map__foot">One declaration should be enough to build the boring parts correctly.</div>
-    </aside>
   </header>
 
   <div class="post-layout">
@@ -452,7 +287,7 @@
        enhanced client-side (md-enhance.js): code blocks gain a language
        label + copy button, images become a lightbox gallery. The `data-md`
        attribute is the enhancer's hook. #}
-    <div class="post-body prose" data-md>{{ post.body | markdown }}</div>
+    <div class="post-body pd-prose card rounded-[20px] p-6 sm:p-7" data-md>{{ post.body | markdown }}</div>
 
     {# Live table of contents, built client-side from the post's headings
        with scroll-spy. Replaces the old hardcoded boilerplate so the rail is

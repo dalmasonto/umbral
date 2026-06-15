@@ -89,26 +89,9 @@
   .pd-link:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--hairline)); color: var(--accent-2); transform: translateY(-1px); }
   .pd-link svg { width: 15px; height: 15px; }
 
-  /* ---- Markdown prose ---- */
-  .pd-prose { color: var(--ink-2); font-size: 14px; line-height: 1.7; }
-  .pd-prose h1, .pd-prose h2, .pd-prose h3 { color: var(--ink); font-weight: 800; letter-spacing: -0.01em; margin: 1.4em 0 0.5em; line-height: 1.25; }
-  .pd-prose h1 { font-size: 23px; }
-  .pd-prose h2 { font-size: 20px; }
-  .pd-prose h3 { font-size: 17px; }
-  .pd-prose p { margin: 0.8em 0; }
-  .pd-prose ul, .pd-prose ol { margin: 0.8em 0; padding-left: 1.3em; }
-  .pd-prose li { margin: 0.3em 0; }
-  .pd-prose a { color: var(--accent-2); text-decoration: underline; }
-  .pd-prose code { font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.88em; background: var(--surface-2); border: 1px solid var(--hairline); border-radius: 6px; padding: 0.12em 0.4em; color: var(--ink-2); }
-  /* Only style UNWRAPPED code blocks (the JS-off fallback). When md-enhance.js
-     wraps a <pre> in `.md-code`, the pre stops being a direct child, so the
-     dark frame fully owns it — the same code-block component as the blog. */
-  .pd-prose > pre { background: var(--shade); color: var(--shade-ink); border-radius: 14px; padding: 16px 20px; overflow-x: auto; margin: 1em 0; }
-  .pd-prose > pre code { background: transparent; border: 0; padding: 0; color: inherit; }
-  .pd-prose blockquote { border-left: 3px solid var(--accent-line); padding-left: 14px; color: var(--muted); margin: 1em 0; }
-  .pd-prose table { width: 100%; border-collapse: collapse; margin: 1em 0; font-size: 14px; }
-  .pd-prose th, .pd-prose td { border: 1px solid var(--hairline); padding: 8px 12px; text-align: left; }
-  .pd-prose th { background: var(--surface-2); font-weight: 700; }
+  /* `.pd-prose` (the shared markdown prose component) now lives globally in
+     static/css/md-enhance.css so the plugin page, notes, and blog all render
+     identically. */
 
   /* ---- Notes chat surface (inline composer + replies) ---- */
   .pd-composer { margin-top: 14px; border: 1px solid var(--hairline); border-radius: 14px; background: var(--surface); padding: 10px; }
