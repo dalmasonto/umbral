@@ -28,6 +28,7 @@
     var gallery = []; // every enhanced image, in document order
     roots.forEach(function (root) {
       enhanceCodeBlocks(root);
+      enhanceTables(root);
       collectImages(root, gallery);
     });
     if (gallery.length) initLightbox(gallery);
@@ -87,6 +88,26 @@
       pre.parentNode.insertBefore(wrap, pre);
       wrap.appendChild(bar);
       wrap.appendChild(pre);
+    });
+  }
+
+  /* ---- Tables: rounded, horizontally-scrollable frame ---------------- */
+  function enhanceTables(root) {
+    Array.prototype.slice.call(root.querySelectorAll("table")).forEach(function (table) {
+      // Already framed (re-run after a live DOM insert) — the table's direct
+      // parent is the `.md-table__scroll` scroller once framed, so skip.
+      if (table.parentNode && table.parentNode.classList.contains("md-table__scroll")) return;
+      // `.md-table` clips the rounded corners (overflow:hidden); the inner
+      // `.md-table__scroll` carries the horizontal scroll so a wide table
+      // scrolls without the corners bleeding. `not-prose` keeps Tailwind
+      // `prose` from re-styling the framed table.
+      var wrap = document.createElement("div");
+      wrap.className = "md-table not-prose";
+      var scroll = document.createElement("div");
+      scroll.className = "md-table__scroll";
+      table.parentNode.insertBefore(wrap, table);
+      wrap.appendChild(scroll);
+      scroll.appendChild(table);
     });
   }
 

@@ -78,6 +78,7 @@
 /* ===== Images + lightbox ===== */
 .md-img {
   cursor: zoom-in;
+  border-radius: 12px;
   transition: filter 0.15s ease;
 }
 .md-img:hover { filter: brightness(0.96); }
@@ -145,4 +146,41 @@
 
 @media (max-width: 640px) {
   .md-lightbox__nav { width: 38px; height: 38px; font-size: 22px; }
+}
+
+/* ===== Tables ===== */
+/* `md-enhance.js` wraps each [data-md] <table> in a `.md-table` frame so
+   the rounded border can clip the corners and wide tables scroll instead
+   of breaking the page. */
+.md-table {
+  margin: 1em 0;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  overflow: hidden;          /* clip the table to the rounded corners */
+}
+/* Inner scroller: wide tables scroll horizontally without breaking the
+   rounded frame. The scroll lives here, NOT on the corner-clipping wrapper —
+   `overflow-x: auto` on a radius'd box would let the corners bleed. */
+.md-table__scroll {
+  overflow-x: auto;
+}
+.md-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+.md-table th,
+.md-table td {
+  padding: 9px 14px;
+  text-align: left;
+  border-bottom: 1px solid var(--hairline);
+}
+.md-table th {
+  background: var(--surface-2);
+  font-weight: 700;
+  color: var(--ink);
+}
+.md-table tr:last-child td { border-bottom: 0; }
+.md-table tbody tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--surface-2) 45%, transparent);
 }
