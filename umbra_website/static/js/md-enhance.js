@@ -16,6 +16,16 @@
 (function () {
   "use strict";
 
+  // Lightbox state, declared up here (not next to the lightbox helpers
+  // below) on purpose: this script loads with `defer`, so when it runs the
+  // DOM is already parsed and `ready()` invokes its callback SYNCHRONOUSLY.
+  // That callback can call `initLightbox` immediately — before a `var`
+  // declaration placed lower in this IIFE would have executed, leaving
+  // `lbState` hoisted-undefined ("Cannot set properties of undefined
+  // (setting 'gallery')"). Initialising here guarantees it exists first.
+  var lb = null; // the single overlay, lazily built
+  var lbState = { gallery: [], index: 0 };
+
   function ready(fn) {
     if (document.readyState !== "loading") fn();
     else document.addEventListener("DOMContentLoaded", fn);
@@ -141,9 +151,6 @@
       });
     });
   }
-
-  var lb = null; // the single overlay, lazily built
-  var lbState = { gallery: [], index: 0 };
 
   function initLightbox(gallery) {
     lbState.gallery = gallery;
