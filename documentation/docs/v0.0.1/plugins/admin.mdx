@@ -628,16 +628,22 @@ The palette slot (`<div id="umbra-palette-slot">`) lives in `wrapper.html` so it
 | Per-user drag-resize dashboard layout editor | Deferred - data layer + endpoints are wired; a future JS drag-drop UI just calls `PUT /admin/api/dashboard/layout` |
 | Actual file serving (`GET /admin/api/files/{token}`) | Deferred - HMAC-signed token + streaming + range headers land when the ORM `File` field type lands |
 | Thumbnail generation | Deferred (same milestone as file serving) |
-| Postgres-only field types | Not supported in the SQLite admin |
+| Rich form widgets for Postgres-only fields | Basic - the types store/query fine on Postgres; the admin renders a text input (dedicated widgets deferred) |
 | Per-row permissions | Binary is-staff gating only |
 
 For the design spec see `docs/admin-backend/backend-prd.md` and `docs/admin-backend/design-prd.md`.
 
 ## What is NOT in v1
 
-- **Postgres-only field types.** Columns typed `Array`, `Inet`, `Cidr`, `MacAddr`,
-  or `FullText` trigger a boot-time system check failure - they cannot appear in an
-  SQLite-backed admin. A Postgres-aware admin upgrade is a later milestone.
+- **Postgres-only field types in a _SQLite-backed_ admin.** The ORM ships these
+  Postgres-only column types — `Array`, `Inet`, `MacAddr`, `FullText` (tsvector),
+  and `Decimal` — and they store and query in a Postgres-backed admin. What's
+  deferred: they fail the boot-time
+  [system check](../orm/column-types#postgres-only-types) on a **SQLite** backend
+  (so a SQLite admin can't include them), and the admin renders them with a basic
+  text input pending dedicated widgets. (`Cidr` exists as a column type but isn't
+  reachable from `#[derive(Model)]` yet, and PostGIS isn't implemented — see
+  gaps2 #70.)
 - **Per-row permissions.** Auth gating is binary: staff or not. Row-level
   restrictions and per-model action gating are deferred.
 
