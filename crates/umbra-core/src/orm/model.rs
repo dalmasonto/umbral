@@ -472,8 +472,9 @@ impl PrimaryKey for String {}
 /// runtime introspection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FieldSpec {
-    /// The SQL column name. Matches the Rust field name by default; the
-    /// M3 derive lets `#[umbra(rename = "...")]` override.
+    /// The SQL column name — always the Rust field name. Only the table name
+    /// is overridable (via `#[umbra(table = "...")]`); there is no field-level
+    /// column-rename attribute, so the column is whatever the field is called.
     pub name: &'static str,
 
     /// The SQL type kind. M2 ships the minimum set needed for the

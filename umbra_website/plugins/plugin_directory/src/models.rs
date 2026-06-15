@@ -280,10 +280,10 @@ impl umbra::orm::Searchable for Plugin {
         "plugin"
     }
     // The directory routes plugins by `slug`, so `SearchHit.pk` carries the
-    // slug for the `/plugins/{slug}` URL. The column is the `slug` field (no
-    // `#[umbra(column = ...)]` rename). `title()` picks `name`; `body()`
-    // searches the prose columns (name / crate_name / short_description /
-    // full_content / …), dropping the `moderation` choices column.
+    // slug for the `/plugins/{slug}` URL. The column is the `slug` field name
+    // (umbra columns are always the struct field name). `title()` picks `name`;
+    // `body()` searches the prose columns (name / crate_name / short_description
+    // / full_content / …), dropping the `moderation` choices column.
     fn ident() -> &'static str {
         "slug"
     }
