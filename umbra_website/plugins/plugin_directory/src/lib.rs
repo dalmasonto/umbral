@@ -758,7 +758,16 @@ async fn post_plugin_note(
         .filter(|s| !s.is_empty())
         .map(str::to_string);
 
-    let Some(payload) = create_note(&slug, body, kind, author_label, None)
+    // Optional parent: set by the inline reply form's hidden `parent_id`.
+    // `create_note` validates it (visible, top-level, same plugin) and rejects
+    // anything else, so a forged/blank value is harmless.
+    let parent_id = form
+        .get("parent_id")
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .and_then(|s| s.parse::<i64>().ok());
+
+    let Some(payload) = create_note(&slug, body, kind, author_label, parent_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?
     else {
@@ -774,6 +783,7 @@ async fn post_plugin_note(
             "ok": true,
             "id": payload.id,
             "html": payload.html,
+            "parent_id": payload.parent_id,
         }))
         .unwrap_or_else(|_| r#"{"ok":true}"#.to_string());
         Ok(note_json_response(body, Some(cookie)))

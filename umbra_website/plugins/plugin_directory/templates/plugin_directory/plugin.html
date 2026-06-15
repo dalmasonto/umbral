@@ -411,7 +411,6 @@
                 <h2 class="mb-1 text-[24px] font-extrabold tracking-[-0.02em]">Community notes</h2>
                 <p class="text-[14px] text-muted"><span data-note-count>{{ plugin.notes }}</span> note<span data-note-plural>{% if plugin.notes != 1 %}s{% endif %}</span> in the discussion thread.</p>
               </div>
-              <button type="button" class="btn-accent" data-open-note>Add a note</button>
             </div>
             {# Own-submission success, revealed in place by the fetch()
                handler so posting a note never reloads the page. The note
@@ -429,10 +428,33 @@
                 {% include "plugin_directory/_reply.html" %}
                 {% endfor %}
               </div>
+              <button type="button" class="pd-reply-toggle" data-reply-toggle="{{ thread.note.id }}">Reply</button>
+              <form class="pd-reply-form hidden" method="post" action="/plugins/{{ plugin.slug }}/notes" data-reply-form="{{ thread.note.id }}">
+                <div class="hidden" aria-hidden="true"><label>Website<input type="text" name="website" tabindex="-1" autocomplete="off"></label></div>
+                {{ csrf_input }}
+                <input type="hidden" name="parent_id" value="{{ thread.note.id }}">
+                <textarea class="pd-field" name="body" required rows="1" placeholder="Reply… Markdown supported."></textarea>
+                <div class="pd-composer-row">
+                  <input class="pd-field pd-composer-name" name="author_label" maxlength="120" placeholder="Name (optional)">
+                  <button type="submit" class="btn-accent">Reply</button>
+                </div>
+              </form>
               {% else %}
               <p class="m-0 rounded-[14px] border border-hairline bg-paper px-4 py-5 text-[14px] text-muted" data-note-empty>No notes yet. Be the first to share how this plugin works for you.</p>
               {% endfor %}
             </div>
+            <form class="pd-composer" method="post" action="/plugins/{{ plugin.slug }}/notes" data-note-form>
+              <div class="hidden" aria-hidden="true"><label>Website<input type="text" name="website" tabindex="-1" autocomplete="off"></label></div>
+              {{ csrf_input }}
+              <textarea class="pd-field" name="body" required rows="2" placeholder="Add a note — Markdown supported, code gets highlighted."></textarea>
+              <div class="pd-composer-row">
+                <select class="pd-field pd-composer-kind" name="kind">
+                  {% for opt in plugin.note_kinds %}<option value="{{ opt.value }}">{{ opt.label }}</option>{% endfor %}
+                </select>
+                <input class="pd-field pd-composer-name" name="author_label" maxlength="120" placeholder="Name (optional)">
+                <button type="submit" class="btn-accent">Post</button>
+              </div>
+            </form>
           </div>
         </section>
 
@@ -509,51 +531,8 @@
   </div>
 </section>
 
-{# ---- Add a note dialog ---- #}
-<dialog class="pd-dialog" id="pd-note-dialog">
-  <form method="post" action="/plugins/{{ plugin.slug }}/notes" class="p-6">
-    {# Honeypot: hidden from people, tempting to bots. A non-empty value is
-       silently dropped server-side. aria-hidden + tabindex keep it out of
-       the way of screen readers and keyboard users. #}
-    <div class="hidden" aria-hidden="true">
-      <label>Website<input type="text" name="website" tabindex="-1" autocomplete="off"></label>
-    </div>
-      {{ csrf_input }}
-    <div class="mb-4 flex items-start justify-between gap-3">
-      <div>
-        <h2 class="m-0 text-[20px] font-extrabold tracking-[-0.02em]">Add a note</h2>
-        <p class="mt-1 text-[13px] text-muted">Shared after moderation. Be specific - versions and backends help.</p>
-      </div>
-      <button type="button" class="btn-ghost px-2.5 py-1.5" data-close-note aria-label="Close">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M18 6 6 18M6 6l12 12"/></svg>
-      </button>
-    </div>
-    <div class="pd-space-3-5">
-      <div>
-        <label class="mb-1.5 block text-[12.5px] font-semibold text-ink-2" for="pd-note-body">Your note</label>
-        <textarea class="pd-field" id="pd-note-body" name="body" required placeholder="How does this plugin work for you? Markdown supported."></textarea>
-      </div>
-      <div class="grid pd-gap4 sm:grid-cols-2">
-        <div>
-          <label class="mb-1.5 block text-[12.5px] font-semibold text-ink-2" for="pd-note-kind">Kind</label>
-          <select class="pd-field" id="pd-note-kind" name="kind">
-            {% for opt in plugin.note_kinds %}
-            <option value="{{ opt.value }}">{{ opt.label }}</option>
-            {% endfor %}
-          </select>
-        </div>
-        <div>
-          <label class="mb-1.5 block text-[12.5px] font-semibold text-ink-2" for="pd-note-author">Name <span class="pd-fw-normal text-faint">(optional)</span></label>
-          <input class="pd-field" id="pd-note-author" name="author_label" maxlength="120" placeholder="Anonymous">
-        </div>
-      </div>
-    </div>
-    <div class="mt-5 flex pd-justify-end gap-2.5">
-      <button type="button" class="btn-ghost" data-close-note>Cancel</button>
-      <button type="submit" class="btn-accent">Post note</button>
-    </div>
-  </form>
-</dialog>
+{# The note composer + per-note reply forms are inline in the notes panel
+   above (the modal dialog was replaced by the chat-style composer). #}
 
 <script>
   (function () {
@@ -606,65 +585,47 @@
       });
     });
 
-    // ---- Note dialog ----
-    var dlg = document.getElementById('pd-note-dialog');
-    if (dlg) {
-      document.querySelectorAll('[data-open-note]').forEach(function (b) {
-        b.addEventListener('click', function () {
-          if (typeof dlg.showModal === 'function') dlg.showModal();
-          else dlg.setAttribute('open', '');
-          var ta = dlg.querySelector('textarea');
-          if (ta) ta.focus();
-        });
+    // ---- Note + reply composers ----
+    // Submit any note/reply form via fetch as application/x-www-form-urlencoded
+    // (via URLSearchParams), NOT multipart — umbra's CSRF middleware + Form
+    // extractor only accept urlencoded; multipart 403/415s. On success insert
+    // the rendered row in place (no reload); the native submit is the no-JS +
+    // error fallback.
+    function wireForm(form) {
+      if (!(form && window.fetch && window.FormData)) return;
+      form.addEventListener('submit', function (e) {
+        e.preventDefault();
+        var btn = form.querySelector('button[type="submit"]');
+        if (btn) btn.disabled = true;
+        fetch(form.action, {
+          method: 'POST',
+          headers: { 'Accept': 'application/json' },
+          body: new URLSearchParams(new FormData(form))
+        }).then(function (res) {
+          if (!res.ok) throw new Error('post failed: ' + res.status);
+          return res.json();
+        }).then(function (d) {
+          if (d && d.html) insertNote(d);
+          form.reset();
+          if (form.classList.contains('pd-reply-form')) form.classList.add('hidden');
+        }).catch(function () { form.submit(); })
+          .finally(function () { if (btn) btn.disabled = false; });
       });
-      dlg.querySelectorAll('[data-close-note]').forEach(function (b) {
-        b.addEventListener('click', function () { dlg.close(); });
-      });
-      dlg.addEventListener('click', function (e) {
-        if (e.target === dlg) dlg.close();
-      });
-
-      // AJAX submit: post the note without a full page reload. The
-      // handler returns JSON ({ ok, id, html }) for `Accept:
-      // application/json` (see post_plugin_note). On success we insert the
-      // rendered row in place, then close + reset the dialog. The native
-      // submit is the no-JS fallback and the error fallback.
-      var form = dlg.querySelector('form');
-      if (form && window.fetch && window.FormData) {
-        form.addEventListener('submit', function (e) {
-          e.preventDefault();
-          var submitBtn = form.querySelector('button[type="submit"]');
-          if (submitBtn) submitBtn.disabled = true;
-          // Encode as application/x-www-form-urlencoded (via
-          // URLSearchParams), NOT multipart/form-data (what `new
-          // FormData(form)` would send). The note endpoint is an urlencoded
-          // `Form<...>` route: umbra's CSRF middleware only reads the token
-          // from an urlencoded body, and the `Form` extractor 415s on
-          // multipart. This matches the no-JS form submit exactly, so the
-          // CSRF token rides through and the post succeeds without a reload.
-          fetch(form.action, {
-            method: 'POST',
-            headers: { 'Accept': 'application/json' },
-            body: new URLSearchParams(new FormData(form))
-          }).then(function (res) {
-            if (!res.ok) throw new Error('post failed: ' + res.status);
-            return res.json();
-          }).then(function (d) {
-            if (d && d.html) insertNote(d.html);
-            if (typeof dlg.close === 'function') dlg.close();
-            form.reset();
-            var ok = document.getElementById('pd-note-success');
-            if (ok) { ok.classList.remove('hidden'); ok.classList.add('flex'); }
-          }).catch(function () {
-            // Network/CSRF failure: fall back to a normal submit so the
-            // user's note isn't silently lost.
-            form.submit();
-          }).finally(function () {
-            if (submitBtn) submitBtn.disabled = false;
-          });
-        });
-      }
     }
+    document.querySelectorAll('[data-note-form], [data-reply-form]').forEach(wireForm);
+
+    // Reply toggles, delegated so notes inserted live (SSE) get a working box too.
+    document.addEventListener('click', function (e) {
+      var t = e.target.closest('[data-reply-toggle]');
+      if (!t) return;
+      var id = t.getAttribute('data-reply-toggle');
+      var f = document.querySelector('[data-reply-form="' + id + '"]');
+      if (f) {
+        f.classList.toggle('hidden');
+        var ta = f.querySelector('textarea');
+        if (ta && !f.classList.contains('hidden')) ta.focus();
+      }
+    });
   })();
 
   // Insert a rendered note row into the thread. Shared by the AJAX submit
@@ -672,15 +633,24 @@
   // data-comment-id so the submitter never sees their own note twice when
   // the SSE echo of their post arrives. Appends at the bottom to match the
   // server's created-at-ascending order, then bumps every note counter.
-  function insertNote(html) {
-    var list = document.getElementById('pd-note-list');
-    if (!list) return;
+  // Insert a rendered note or reply. `d` = { id, html, parent_id }. A reply
+  // (parent_id set) appends into that note's [data-replies-for]; a top-level
+  // note appends to #pd-note-list and bumps the counters. Deduped by id so the
+  // submitter never double-sees their own row when the SSE echo arrives.
+  function insertNote(d) {
+    var html = d.html, id = String(d.id);
     var tmp = document.createElement('div');
     tmp.innerHTML = html.trim();
     var row = tmp.firstElementChild;
     if (!row) return;
-    var id = row.getAttribute('data-comment-id');
-    if (id && list.querySelector('[data-comment-id="' + id + '"]')) return;
+    if (document.querySelector('[data-comment-id="' + id + '"]')) return;
+    if (d.parent_id) {
+      var box = document.querySelector('[data-replies-for="' + d.parent_id + '"]');
+      if (box) box.appendChild(row);
+      return;
+    }
+    var list = document.getElementById('pd-note-list');
+    if (!list) return;
     var empty = list.querySelector('[data-note-empty]');
     if (empty) empty.remove();
     list.appendChild(row);
@@ -709,7 +679,7 @@
     es.addEventListener('note', function (e) {
       try {
         var d = JSON.parse(e.data);
-        if (d && d.html) insertNote(d.html);
+        if (d && d.html) insertNote(d);
       } catch (_) {}
     });
   })();
