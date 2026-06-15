@@ -177,17 +177,25 @@ let profile = Profile::objects()
 // profile.user.resolved() is Some(&AuthUser)
 ```
 
-### Reading from the parent side: `OneToOne<C>`
+### Reading from the parent side
 
-Django's pattern `request.user.profile.avatar` reads the relation from the parent. Umbra ships a dedicated `OneToOne<C>` field type for this, declared on the parent, with no umbra-specific attribute (the back-link is discovered at runtime by scanning the child's `FIELDS` for the unique FK pointing back at the parent):
+The relationship lives entirely on the **child** (`Profile`) — exactly like Django, where you add `OneToOneField` to `Profile` and never touch the `User` model. To read it back from the parent (Django's `user.profile.avatar`), how you spell it depends on whether you can edit the parent type.
+
+<Callout type="info">
+**For `AuthUser` — and any parent you can't edit — use the method accessor and add nothing to it.** `AuthUser` lives in `umbra-auth`; you don't fork it, and (just like Django) you don't need to. The derive on `Profile` generates `user.profile().await?` directly on `AuthUser` — the faithful equivalent of Django's `user.profile`. See the **Cross-crate back-link** section just below. The `OneToOne<C>` **struct field** described next is *only* for a parent type **you own** (e.g. a custom user model in your crate).
+</Callout>
+
+#### `OneToOne<C>` — when you own the parent type
+
+If the parent model is in your crate, you can declare a `OneToOne<C>` field on it instead of using the method accessor. You get the same back-link **plus** serde-nesting (the child shows up as a nested object in REST + templates) and `prefetch_related` batch loading. No umbra attribute — the back-link is discovered at runtime by scanning the child's `FIELDS` for the unique FK pointing back:
 
 ```rust
 #[derive(Model)]
-pub struct AuthUser {
+pub struct Account {                  // a model YOU define
     pub id: i64,
-    pub username: String,
-    // No `#[umbra(...)]` needed. The framework finds Profile's
-    // `#[umbra(unique)] pub user: ForeignKey<AuthUser>` at runtime.
+    pub email: String,
+    // Reads back the `Profile` whose `#[umbra(unique)] user: ForeignKey<Account>`
+    // points here. No `#[umbra(...)]` needed — the back-link is found at runtime.
     #[sqlx(skip)]
     pub profile: OneToOne<Profile>,
 }
@@ -196,23 +204,23 @@ pub struct AuthUser {
 Load it explicitly with `prefetch_related`:
 
 ```rust
-let user = AuthUser::objects()
+let account = Account::objects()
     .prefetch_related("profile")
-    .get(auth_user::ID.eq(1))
+    .get(account::ID.eq(1))
     .await?;
 
-// user.profile.resolved() is Option<&Profile>
-if let Some(profile) = user.profile.resolved() {
+// account.profile.resolved() is Option<&Profile>
+if let Some(profile) = account.profile.resolved() {
     println!("{}", profile.avatar);
 }
 ```
 
-Query budget: 1 (users) + 1 (profiles) regardless of how many users come back, no N+1.
+Query budget: 1 (accounts) + 1 (profiles) regardless of how many come back, no N+1.
 
-In a template the serialised user has the profile as a nested object (or `null`), so `{{ user.profile.avatar }}` works directly:
+In a template the serialised account carries the profile as a nested object (or `null`), so `{{ account.profile.avatar }}` works directly:
 
 ```rust
-serde_json::to_value(&user)["profile"]["avatar"]  // "alice.png"
+serde_json::to_value(&account)["profile"]["avatar"]  // "alice.png"
 ```
 
 ### Loaded vs unloaded
@@ -220,11 +228,11 @@ serde_json::to_value(&user)["profile"]["avatar"]  // "alice.png"
 `OneToOne<C>::resolved()` returns `None` both when prefetch wasn't called *and* when prefetch ran but found no matching child. Use `is_loaded()` to distinguish the two:
 
 ```rust
-if !user.profile.is_loaded() {
+if !account.profile.is_loaded() {
     // never called .prefetch_related("profile")
 }
-if user.profile.is_loaded() && user.profile.resolved().is_none() {
-    // prefetched, but this user has no profile row
+if account.profile.is_loaded() && account.profile.resolved().is_none() {
+    // prefetched, but this account has no profile row
 }
 ```
 
