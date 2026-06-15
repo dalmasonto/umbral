@@ -174,9 +174,21 @@ If you also set [`slash_redirect`](./trailing-slash), the redirect runs **before
 
 If neither form matches, the 404 template fires. One consistent 404 page across both raw misses and redirect dead-ends.
 
-## What about Django's `handler403` / `handler400`?
+## Custom pages for other status codes (403, 429, 410, …)
 
-403 / 400 / 410 are deferred. The common case - typo'd URL and panicking handler - is what these methods cover. If you need custom 403 / 400 pages today, return them from your handlers via `IntoResponse` (the manual axum way).
+`.error_template(status, "name.html")` registers a styled page for any status code a handler returns - the same treatment 404/500 get. When a handler returns `Err((status, message))` (a bare, non-HTML error response with that status), the template renders in its place, **preserving the status code**:
+
+```rust
+use umbra::web::StatusCode;
+
+App::builder()
+    .error_template(StatusCode::TOO_MANY_REQUESTS, "429.html")
+    .error_template(StatusCode::FORBIDDEN, "403.html")
+```
+
+The template receives `{ status, status_text, message, request_path, dev_mode }` - e.g. `{{ status }}` → `429`, `{{ status_text }}` → `Too Many Requests`, `{{ message }}` → the handler's body.
+
+API / AJAX clients are respected: a request with `Accept: application/json` keeps the **raw** status + message (so a `fetch()` can read it), while browser navigations (`Accept: text/html`) get the HTML page. Already-HTML responses and unregistered statuses pass through untouched. 404 and 500 keep their dedicated methods above.
 
 ## Falling back to the raw axum API
 

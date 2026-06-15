@@ -257,6 +257,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .templates_dir("templates")
         .not_found_template("404.html")
         .server_error_template("500.html")
+        .error_template(StatusCode::TOO_MANY_REQUESTS, "429.html")
         .slash_redirect(SlashRedirect::Append)
         // --- Routes ---------------------------------------------------------
         .routes(Routes::new().layered(
