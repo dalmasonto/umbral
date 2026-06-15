@@ -73,7 +73,42 @@ impl umbra::orm::Searchable for Plugin {
 }
 ```
 
-The string is a **static SQL boolean ANDed into the search `WHERE`** — it must name real columns and contain **no user input** (it's your constant, never a request value). Soft-delete is handled for you: a `#[umbra(soft_delete)]` model automatically excludes `deleted_at IS NULL`, so `filter_sql` is only for business rules like `"status = 'published'"`.
+The string is a **static SQL boolean ANDed into the search `WHERE`**. Soft-delete is handled for you: a `#[umbra(soft_delete)]` model automatically excludes `deleted_at IS NULL`, so `filter_sql` is only for business rules.
+
+### Any column, and compound conditions
+
+It is **not** limited to choice fields. The fragment is raw SQL, so it can reference any column and combine conditions with `AND` / `OR` / `IN` / parentheses:
+
+```rust
+// a choice column + an FK column + a boolean, combined
+fn filter_sql() -> Option<&'static str> {
+    Some("status = 'published' AND category = 3 AND featured = true")
+}
+```
+
+- **Choice columns** — compared to the stored string: `status = 'published'`.
+- **FK columns** — compared to the parent's id (umbra's FK column is the field name): `author = 5`, or `category IN (1, 2, 3)`.
+- **Booleans / numbers / dates / nullability** — `featured = true`, `price > 0`, `archived_at IS NULL`.
+
+<Callout type="warning">
+Write SQL that's valid on **every backend you run** — the same fragment is spliced into both the Postgres and SQLite query. Stick to portable expressions (the examples above are); a Postgres-only function would break SQLite.
+</Callout>
+
+### What it can't do: per-request values
+
+Because `filter_sql()` returns a `&'static str`, every value in it must be a **constant you write at compile time**. It cannot carry a runtime value — there is no safe way to put "the logged-in user's id" or any request data into it (that string is interpolated into the SQL verbatim, so request data there would be a SQL-injection hole).
+
+So `filter_sql` answers *"which rows of this model are ever searchable"* (published, approved), **not** *"search only this author's rows for this request"*. For a per-request filter on a single model, skip `Search::across` and use a normal QuerySet, where values are safely bound:
+
+```rust
+BlogPost::objects()
+    .filter(blog_post::STATUS.eq("published"))
+    .filter(blog_post::AUTHOR.eq(author_id))   // a runtime value, bound safely
+    .filter(Q::or(blog_post::TITLE.contains(q), blog_post::BODY.contains(q)))
+    .fetch().await?
+```
+
+`Search::across` is for the cross-model, ranked case; a single model filtered by a runtime value is plain QuerySet territory.
 
 ## Run a search
 
