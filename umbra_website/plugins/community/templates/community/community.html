@@ -2,8 +2,8 @@
 {#
   /community - the community hub. Built within the site's existing design
   language (kicker pill + extrabold hero, .reveal stagger, .card, accent
-  tokens). Channel URLs marked PLACEHOLDER below should be swapped for the
-  real Discord / Reddit / X destinations.
+  tokens). Some social destinations are intentionally rendered as disabled
+  coming-soon cards until the project opens those channels.
 #}
 
 {% block title %}Community - Umbra{% endblock %}
@@ -28,7 +28,7 @@
     text-decoration: none;
     transition: border-color .16s ease, transform .16s ease, box-shadow .16s ease;
   }
-  .cm-channel:hover {
+  .cm-channel:not(.cm-channel--disabled):hover {
     transform: translateY(-2px);
     border-color: color-mix(in srgb, var(--brand, var(--accent)) 45%, var(--hairline));
     box-shadow: 0 16px 32px -20px color-mix(in srgb, var(--brand, var(--accent)) 50%, transparent);
@@ -39,12 +39,40 @@
     background: color-mix(in srgb, var(--brand, var(--accent)) 13%, var(--surface-2));
     transition: background .16s ease;
   }
-  .cm-channel:hover .cm-channel__icon { background: color-mix(in srgb, var(--brand, var(--accent)) 20%, var(--surface-2)); }
+  .cm-channel:not(.cm-channel--disabled):hover .cm-channel__icon { background: color-mix(in srgb, var(--brand, var(--accent)) 20%, var(--surface-2)); }
   .cm-channel__icon svg { width: 22px; height: 22px; }
   .cm-channel__name { font-size: 15px; font-weight: 700; letter-spacing: -.01em; color: var(--ink); }
   .cm-channel__desc { font-size: 12.5px; color: var(--faint); margin-top: 2px; }
   .cm-channel__arrow { margin-left: auto; flex-shrink: 0; width: 17px; height: 17px; color: var(--ghost); transition: transform .16s ease, color .16s ease; }
-  .cm-channel:hover .cm-channel__arrow { color: var(--brand, var(--accent)); transform: translateX(3px); }
+  .cm-channel:not(.cm-channel--disabled):hover .cm-channel__arrow { color: var(--brand, var(--accent)); transform: translateX(3px); }
+  .cm-channel--disabled {
+    cursor: default;
+    background: color-mix(in srgb, var(--surface-2) 58%, var(--surface));
+  }
+  .cm-channel--disabled .cm-channel__icon {
+    background: color-mix(in srgb, var(--surface-2) 72%, var(--surface));
+  }
+  .cm-channel--disabled .cm-channel__icon svg {
+    opacity: .62;
+  }
+  .cm-channel--disabled .cm-channel__name {
+    color: color-mix(in srgb, var(--ink) 72%, var(--faint));
+  }
+  .cm-channel--disabled .cm-channel__desc {
+    color: var(--ghost);
+  }
+  .cm-channel__badge {
+    margin-left: auto;
+    flex-shrink: 0;
+    border: 1px solid var(--hairline);
+    border-radius: 999px;
+    background: var(--surface);
+    padding: 5px 9px;
+    color: var(--faint);
+    font-size: 11.5px;
+    font-weight: 800;
+    white-space: nowrap;
+  }
 
   /* ===== Newsletter band ===== */
   .cm-news {
@@ -89,7 +117,7 @@
     Build Umbra <span class="text-accent">in the open.</span>
   </h1>
   <p class="reveal mx-auto mt-6 max-w-[600px] text-[18px] leading-[1.55] text-muted sm:text-[19px]" style="--d:130ms">
-    Ship a plugin, ask a question, report a bug, or just follow along. Pick a channel below - or get the highlights straight to your inbox.
+    Ship a plugin, ask a question, report a bug, or just follow along. Pick a live channel below, or get the highlights straight to your inbox.
   </p>
   <div class="reveal mt-9 flex flex-wrap justify-center gap-3" style="--d:200ms">
     <a href="{{ newsletter_url }}" target="_blank" rel="noopener" class="btn-accent btn-accent--lg">
@@ -103,11 +131,16 @@
 {# ===== Channels ===== #}
 <section class="mx-auto max-w-[75rem] px-7 pb-2 pt-14">
   <h2 class="reveal text-[24px] font-extrabold tracking-[-0.025em] text-ink" style="--d:0ms">Find your channel</h2>
-  <p class="reveal mb-6 mt-1 text-[15px] text-muted" style="--d:60ms">Every channel is open - jump in wherever feels right.</p>
+  <p class="reveal mb-6 mt-1 text-[15px] text-muted" style="--d:60ms">Some channels are live now. The rest are opening as the project gets busier.</p>
 
   <div class="grid gap-3.5 sm:grid-cols-2 lg:grid-cols-3">
     {% for ch in channels %}
+    {% set coming_soon = ch.slug == "discussions" or ch.slug == "discord" or ch.slug == "x" %}
+    {% if coming_soon %}
+    <div class="cm-channel cm-channel--disabled reveal" aria-disabled="true" style="--d:{{ loop.index0 * 60 + 80 }}ms; --brand: {{ ch.brand }}">
+    {% else %}
     <a href="{{ ch.url }}"{% if ch.external %} target="_blank" rel="noopener"{% endif %} class="cm-channel reveal" style="--d:{{ loop.index0 * 60 + 80 }}ms; --brand: {{ ch.brand }}">
+    {% endif %}
       <span class="cm-channel__icon">
         {%- if ch.slug == "github" %}<svg viewBox="0 0 24 24" fill="var(--ink)"><path d="M12 2C6.48 2 2 6.58 2 12.25c0 4.53 2.87 8.37 6.84 9.73.5.1.68-.22.68-.49v-1.7c-2.78.62-3.37-1.37-3.37-1.37-.46-1.18-1.11-1.49-1.11-1.49-.91-.64.07-.62.07-.62 1 .07 1.53 1.06 1.53 1.06.89 1.56 2.34 1.11 2.91.85.09-.66.35-1.11.63-1.37-2.22-.26-4.56-1.14-4.56-5.07 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.27 2.75 1.05a9.36 9.36 0 0 1 5 0c1.91-1.32 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.94-2.34 4.81-4.57 5.06.36.32.68.94.68 1.9v2.82c0 .27.18.6.69.49A10.26 10.26 0 0 0 22 12.25C22 6.58 17.52 2 12 2Z"/></svg>
         {%- elif ch.slug == "discussions" %}<svg viewBox="0 0 24 24" fill="none" stroke="#6E40C9" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
@@ -118,9 +151,17 @@
         {%- else %}<svg viewBox="0 0 24 24" fill="none" stroke="var(--brand, var(--accent))" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M8 12h8M12 8v8"/></svg>
         {%- endif %}
       </span>
-      <div><div class="cm-channel__name">{{ ch.name }}</div><div class="cm-channel__desc">{{ ch.description }}</div></div>
+      <div><div class="cm-channel__name">{% if ch.slug == "x" %}Twitter (X){% else %}{{ ch.name }}{% endif %}</div><div class="cm-channel__desc">{{ ch.description }}</div></div>
+      {% if coming_soon %}
+      <span class="cm-channel__badge">Coming soon</span>
+      {% else %}
       <svg class="cm-channel__arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+      {% endif %}
+    {% if coming_soon %}
+    </div>
+    {% else %}
     </a>
+    {% endif %}
     {% else %}
     <p class="text-[14px] text-muted">No channels configured yet. Run <code class="font-mono text-[13px] text-ink-2">cargo run -- seed_orm_data</code>.</p>
     {% endfor %}

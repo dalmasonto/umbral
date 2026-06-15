@@ -34,3 +34,8 @@ plugins/umbra-playground/frontend/node_modules/
 
 # Media storage (local FS + S3).
 media/
+
+# Local planning drafts
+/planning/github-sponsors-profile.md
+
+shadow-security.md
