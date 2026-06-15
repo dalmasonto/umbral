@@ -424,13 +424,6 @@
                 <p class="text-[14px] text-muted"><span data-note-count>{{ plugin.notes }}</span> note<span data-note-plural>{% if plugin.notes != 1 %}s{% endif %}</span> in the discussion thread.</p>
               </div>
             </div>
-            {# Own-submission success, revealed in place by the fetch()
-               handler so posting a note never reloads the page. The note
-               itself is inserted live into the thread below (SSE + AJAX). #}
-            <div id="pd-note-success" class="mb-4 hidden items-center gap-2.5 rounded-[12px] border pd-success bg-ok-soft px-4 py-3 text-[13.5px] font-bold text-ok">
-              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--ok)" stroke-width="2.2"><path d="M20 6 9 17l-5-5"/></svg>
-              <span>Posted. Thanks for the note.</span>
-            </div>
             <div class="space-y-3" id="pd-note-list">
               {% for thread in plugin.comments %}
               {% set comment = thread.note %}
@@ -597,36 +590,10 @@
       });
     });
 
-    // ---- Note + reply composers ----
-    // Submit any note/reply form via fetch as application/x-www-form-urlencoded
-    // (via URLSearchParams), NOT multipart — umbra's CSRF middleware + Form
-    // extractor only accept urlencoded; multipart 403/415s. On success insert
-    // the rendered row in place (no reload); the native submit is the no-JS +
-    // error fallback.
-    function wireForm(form) {
-      if (!(form && window.fetch && window.FormData)) return;
-      form.addEventListener('submit', function (e) {
-        e.preventDefault();
-        var btn = form.querySelector('button[type="submit"]');
-        if (btn) btn.disabled = true;
-        fetch(form.action, {
-          method: 'POST',
-          headers: { 'Accept': 'application/json' },
-          body: new URLSearchParams(new FormData(form))
-        }).then(function (res) {
-          if (!res.ok) throw new Error('post failed: ' + res.status);
-          return res.json();
-        }).then(function (d) {
-          if (d && d.html) insertNote(d);
-          form.reset();
-          if (form.classList.contains('pd-reply-form')) form.classList.add('hidden');
-        }).catch(function () { form.submit(); })
-          .finally(function () { if (btn) btn.disabled = false; });
-      });
-    }
+    // ---- Note + reply composers ---- (wireForm is a global fn, defined below)
     document.querySelectorAll('[data-note-form], [data-reply-form]').forEach(wireForm);
 
-    // Reply toggles, delegated so notes inserted live (SSE) get a working box too.
+    // Reply toggles, delegated so notes inserted live (SSE/AJAX) get a working box too.
     document.addEventListener('click', function (e) {
       var t = e.target.closest('[data-reply-toggle]');
       if (!t) return;
@@ -640,15 +607,46 @@
     });
   })();
 
-  // Insert a rendered note row into the thread. Shared by the AJAX submit
-  // (instant local feedback) and the SSE feed (other open tabs). Deduped by
-  // data-comment-id so the submitter never sees their own note twice when
-  // the SSE echo of their post arrives. Appends at the bottom to match the
-  // server's created-at-ascending order, then bumps every note counter.
+  // Submit a note/reply form via fetch as application/x-www-form-urlencoded
+  // (URLSearchParams), NOT multipart — umbra's CSRF middleware + Form extractor
+  // only accept urlencoded; multipart 403/415s. On success insert the rendered
+  // row in place (no reload); the native submit is the no-JS + error fallback.
+  // Global so insertNote can wire a freshly-cloned reply form too.
+  function wireForm(form) {
+    if (!(form && window.fetch && window.FormData)) return;
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      var btn = form.querySelector('button[type="submit"]');
+      var label = btn ? btn.textContent : '';
+      if (btn) btn.disabled = true;
+      fetch(form.action, {
+        method: 'POST',
+        headers: { 'Accept': 'application/json' },
+        body: new URLSearchParams(new FormData(form))
+      }).then(function (res) {
+        if (!res.ok) throw new Error('post failed: ' + res.status);
+        return res.json();
+      }).then(function (d) {
+        if (d && d.html) insertNote(d);
+        form.reset();
+        if (form.classList.contains('pd-reply-form')) {
+          form.classList.add('hidden');
+        } else if (btn) {
+          // Brief inline confirmation for a top-level post (the composer stays put).
+          btn.textContent = 'Posted ✓';
+          setTimeout(function () { btn.textContent = label; }, 1600);
+        }
+      }).catch(function () { form.submit(); })
+        .finally(function () { if (btn) btn.disabled = false; });
+    });
+  }
+
   // Insert a rendered note or reply. `d` = { id, html, parent_id }. A reply
   // (parent_id set) appends into that note's [data-replies-for]; a top-level
-  // note appends to #pd-note-list and bumps the counters. Deduped by id so the
-  // submitter never double-sees their own row when the SSE echo arrives.
+  // note appends to #pd-note-list, gets its reply affordances cloned from the
+  // #pd-live-extras template (so a live-arrived note is replyable without a
+  // reload), and bumps the counters. Deduped by id so the submitter never
+  // double-sees their own row when the SSE echo of their post arrives.
   function insertNote(d) {
     var html = d.html, id = String(d.id);
     var tmp = document.createElement('div');
@@ -666,16 +664,31 @@
     var empty = list.querySelector('[data-note-empty]');
     if (empty) empty.remove();
     list.appendChild(row);
+    // Give the live note the same reply affordances the page-load loop renders
+    // (replies container + toggle + reply form carrying THIS viewer's CSRF),
+    // keyed to its id, then wire the cloned form. Mirrors the loop markup.
+    var tpl = document.getElementById('pd-live-extras');
+    if (tpl) {
+      var ex = document.createElement('div');
+      ex.innerHTML = tpl.innerHTML.replace(/__ID__/g, id);
+      var node;
+      while ((node = ex.firstElementChild)) {
+        if (node.tagName === 'FORM') wireForm(node);
+        list.appendChild(node);
+      }
+    }
     bumpNoteCount();
   }
 
-  // Increment every note counter (sidebar stat, tab badge, thread heading)
-  // and fix the singular/plural "note(s)" suffix.
+  // Bump every note counter (sidebar stat, tab badge, thread heading) to one
+  // canonical next value — read once, written to all, so they can't diverge.
   function bumpNoteCount() {
     var next = null;
     document.querySelectorAll('[data-note-count]').forEach(function (el) {
-      var n = parseInt(el.textContent.replace(/[^0-9]/g, ''), 10);
-      next = (isNaN(n) ? 0 : n) + 1;
+      if (next === null) {
+        var n = parseInt(el.textContent.replace(/[^0-9]/g, ''), 10);
+        next = (isNaN(n) ? 0 : n) + 1;
+      }
       el.textContent = String(next);
     });
     var plural = document.querySelector('[data-note-plural]');
@@ -696,5 +709,24 @@
     });
   })();
 </script>
+
+{# Reply affordances cloned by insertNote() for live-arrived top-level notes,
+   keyed by replacing __ID__ with the note id. Mirrors the per-note markup in
+   the thread loop above — keep the two in sync. Carries the current viewer's
+   csrf (rendered here, NOT in the broadcast partial, so no token leaks). #}
+<template id="pd-live-extras">
+  <div class="pd-replies" data-replies-for="__ID__"></div>
+  <button type="button" class="pd-reply-toggle" data-reply-toggle="__ID__">Reply</button>
+  <form class="pd-reply-form hidden" method="post" action="/plugins/{{ plugin.slug }}/notes" data-reply-form="__ID__">
+    <div class="hidden" aria-hidden="true"><label>Website<input type="text" name="website" tabindex="-1" autocomplete="off"></label></div>
+    {{ csrf_input }}
+    <input type="hidden" name="parent_id" value="__ID__">
+    <textarea class="pd-field" name="body" required rows="1" placeholder="Reply… Markdown supported."></textarea>
+    <div class="pd-composer-row">
+      <input class="pd-field pd-composer-name" name="author_label" maxlength="120" placeholder="Name (optional)">
+      <button type="submit" class="btn-accent">Reply</button>
+    </div>
+  </form>
+</template>
 
 {% endblock %}
