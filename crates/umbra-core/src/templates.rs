@@ -457,12 +457,68 @@ pub fn highlight_css() -> &'static str {
         .as_str()
 }
 
+/// Render one fenced code block to safe HTML. `lang` is the fence info
+/// token (`Some("rust")`) or `None` for an unlabelled / indented block.
+/// With a known language the body is syntect-highlighted into `hl-` token
+/// spans; otherwise — or on any highlighter error — it falls back to a
+/// plain escaped block that still carries `class="language-…"` so the
+/// `md-enhance.js` label keeps working. Never panics, never drops the
+/// user's code.
+fn highlight_code_block(lang: Option<&str>, src: &str) -> String {
+    let ss = syntax_set();
+    let syntax = lang.and_then(|l| {
+        ss.find_syntax_by_token(l)
+            .or_else(|| ss.find_syntax_by_extension(l))
+    });
+    if let Some(syntax) = syntax {
+        let mut generator =
+            ClassedHTMLGenerator::new_with_class_style(syntax, ss, hl_class_style());
+        let mut ok = true;
+        for line in LinesWithEndings::from(src) {
+            if generator
+                .parse_html_for_line_which_includes_newline(line)
+                .is_err()
+            {
+                ok = false;
+                break;
+            }
+        }
+        if ok {
+            // `finalize()` returns safe `<span class="hl-…">` markup —
+            // pass it through unescaped.
+            return wrap_code_block(lang, &generator.finalize());
+        }
+    }
+    // Fallback: escape the raw text so it is inert, then wrap.
+    let mut escaped = String::with_capacity(src.len());
+    html_escape_into(&mut escaped, src);
+    wrap_code_block(lang, &escaped)
+}
+
+/// Wrap inner code HTML (token spans, or escaped plain text) in
+/// `<pre><code class="language-…">` so the md-enhance frame + language
+/// label attach. The language token is HTML-escaped before it lands in the
+/// class value (it comes straight from the fence info string).
+fn wrap_code_block(lang: Option<&str>, inner: &str) -> String {
+    let mut out = String::with_capacity(inner.len() + 48);
+    out.push_str("<pre><code");
+    if let Some(l) = lang {
+        out.push_str(" class=\"language-");
+        html_escape_into(&mut out, l);
+        out.push('"');
+    }
+    out.push('>');
+    out.push_str(inner);
+    out.push_str("</code></pre>");
+    out
+}
+
 /// Render CommonMark + GFM `input` to sanitized HTML. Pulled out of the
 /// filter closure so it's unit-testable and reusable by any future
 /// Rust-side caller (e.g. a REST endpoint that returns pre-rendered
 /// HTML).
 pub fn render_markdown(input: &str) -> String {
-    use pulldown_cmark::{Options, Parser, html};
+    use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd, html};
 
     let mut options = Options::empty();
     options.insert(Options::ENABLE_TABLES);
@@ -471,10 +527,51 @@ pub fn render_markdown(input: &str) -> String {
     options.insert(Options::ENABLE_FOOTNOTES);
 
     let parser = Parser::new_ext(input, options);
-    let mut rendered = String::new();
-    html::push_html(&mut rendered, parser);
 
-    ammonia::clean(&rendered)
+    // Rewrite the event stream: replace each code block with a single
+    // pre-highlighted Html event. The fence info token selects the syntect
+    // syntax; everything else passes through unchanged.
+    let mut events: Vec<Event> = Vec::new();
+    let mut in_code = false;
+    let mut code_lang: Option<String> = None;
+    let mut code_buf = String::new();
+    for event in parser {
+        match event {
+            Event::Start(Tag::CodeBlock(kind)) => {
+                in_code = true;
+                code_buf.clear();
+                code_lang = match kind {
+                    CodeBlockKind::Fenced(info) => {
+                        info.split_whitespace().next().map(str::to_string)
+                    }
+                    CodeBlockKind::Indented => None,
+                };
+            }
+            Event::End(TagEnd::CodeBlock) => {
+                in_code = false;
+                let highlighted = highlight_code_block(code_lang.as_deref(), &code_buf);
+                events.push(Event::Html(highlighted.into()));
+            }
+            Event::Text(text) if in_code => code_buf.push_str(&text),
+            other => events.push(other),
+        }
+    }
+
+    let mut rendered = String::new();
+    html::push_html(&mut rendered, events.into_iter());
+
+    // Sanitize. `pre`/`code`/`span` are already default-allowed tags, so we
+    // widen the allowlist by exactly one inert attribute — `class` on those
+    // three — letting syntect's `hl-` token spans and the `language-*` label
+    // survive. style / on* handlers / javascript: URLs stay stripped: this is
+    // the whole "safely" surface. Built per call: ammonia::Builder isn't Sync
+    // (boxed attribute_filter), so it can't be a shared static without a Mutex
+    // that would serialize rendering; this costs the same as ammonia::clean.
+    let mut cleaner = ammonia::Builder::default();
+    cleaner.add_tag_attributes("pre", &["class"]);
+    cleaner.add_tag_attributes("code", &["class"]);
+    cleaner.add_tag_attributes("span", &["class"]);
+    cleaner.clean(&rendered).to_string()
 }
 
 /// Tiny HTML attribute-value escape — covers the four characters
@@ -1068,6 +1165,57 @@ mod tests {
         assert!(
             css.contains(".hl-"),
             "theme CSS must target hl- classes: {css}"
+        );
+    }
+
+    #[test]
+    fn fenced_rust_block_gets_syntect_token_spans() {
+        let html = render_markdown("```rust\nfn main() {}\n```\n");
+        assert!(
+            html.contains("language-rust"),
+            "keeps the language class for the md-enhance label: {html}"
+        );
+        assert!(
+            html.contains("class=\"hl-"),
+            "emits syntect hl- token spans: {html}"
+        );
+    }
+
+    #[test]
+    fn script_in_code_fence_is_escaped_not_executed() {
+        let html = render_markdown("```\n<script>alert(1)</script>\n```\n");
+        assert!(!html.contains("<script>"), "no live script tag: {html}");
+        assert!(
+            html.contains("&lt;script&gt;"),
+            "rendered as inert text: {html}"
+        );
+    }
+
+    #[test]
+    fn prose_script_is_still_stripped() {
+        let html = render_markdown("hello <script>alert(1)</script> world");
+        assert!(!html.contains("<script>"), "prose script stripped: {html}");
+    }
+
+    #[test]
+    fn markdown_allows_class_but_not_style() {
+        let html = render_markdown("<span class=\"x\" style=\"color:red\">hi</span>");
+        assert!(html.contains("class=\"x\""), "class survives: {html}");
+        assert!(!html.contains("style="), "style stripped: {html}");
+    }
+
+    #[test]
+    fn unknown_and_plain_fences_do_not_panic() {
+        let unknown = render_markdown("```notalanguage\nx := 1\n```\n");
+        let plain = render_markdown("```\nplain text\n```\n");
+        assert!(
+            unknown.contains("<pre><code"),
+            "unknown lang block: {unknown}"
+        );
+        assert!(plain.contains("<pre><code"), "plain block: {plain}");
+        assert!(
+            unknown.contains("language-notalanguage"),
+            "unknown lang still labelled: {unknown}"
         );
     }
 }
