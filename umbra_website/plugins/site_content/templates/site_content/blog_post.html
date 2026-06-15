@@ -3,33 +3,457 @@
 {% block title %}{{ post.seo_title }} - Umbra Blog{% endblock %}
 {% block meta_description %}{{ post.seo_description }}{% endblock %}
 
+{% block extra_head %}
+<style>
+  .post-shell {
+    width: min(1200px, calc(100% - 56px));
+    margin: 0 auto;
+  }
+
+  .post-back {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    color: var(--muted);
+    font-size: 13.5px;
+    font-weight: 800;
+    text-decoration: none;
+    transition: color 160ms ease;
+  }
+
+  .post-back:hover {
+    color: var(--ink);
+  }
+
+  .post-hero {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(300px, 390px);
+    gap: 48px;
+    align-items: end;
+    border-bottom: 1px solid var(--hairline);
+    padding: 54px 0 42px;
+  }
+
+  .post-kicker {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 9px;
+    margin: 24px 0 18px;
+    color: var(--faint);
+    font-size: 12.5px;
+  }
+
+  .post-kind {
+    border: 1px solid var(--accent-line);
+    border-radius: 999px;
+    background: var(--accent-soft);
+    padding: 5px 10px;
+    color: var(--accent-2);
+    font-weight: 800;
+  }
+
+  .post-title {
+    max-width: 840px;
+    margin: 0;
+    color: var(--ink);
+    font-size: 58px;
+    font-weight: 850;
+    letter-spacing: 0;
+    line-height: 0.98;
+  }
+
+  .post-excerpt {
+    max-width: 720px;
+    margin: 22px 0 0;
+    color: var(--muted);
+    font-size: 19px;
+    line-height: 1.62;
+  }
+
+  .post-meta {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 14px;
+    max-width: 720px;
+    margin-top: 32px;
+  }
+
+  .post-meta__item {
+    border-top: 1px solid var(--hairline);
+    padding-top: 12px;
+  }
+
+  .post-meta__label {
+    color: var(--faint);
+    font-size: 11.5px;
+    font-weight: 800;
+    text-transform: uppercase;
+  }
+
+  .post-meta__value {
+    margin-top: 5px;
+    color: var(--ink);
+    font-size: 14px;
+    font-weight: 800;
+  }
+
+  .post-map {
+    overflow: hidden;
+    border-radius: 24px;
+    background: var(--shade);
+    color: var(--shade-ink);
+    box-shadow: 0 28px 70px -48px rgba(27, 23, 20, 0.62);
+  }
+
+  .post-map__top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid var(--shade-2);
+    padding: 14px 16px;
+    color: var(--shade-muted);
+    font-size: 12px;
+    font-weight: 800;
+  }
+
+  .post-map__body {
+    padding: 22px;
+  }
+
+  .post-map__line {
+    display: grid;
+    grid-template-columns: 34px minmax(0, 1fr);
+    gap: 12px;
+    align-items: stretch;
+  }
+
+  .post-map__line + .post-map__line {
+    margin-top: 12px;
+  }
+
+  .post-map__step {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--shade-2);
+    border-radius: 10px;
+    color: var(--accent-ghost);
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 12px;
+    font-weight: 800;
+  }
+
+  .post-map__node {
+    border: 1px solid var(--shade-2);
+    border-radius: 14px;
+    background: color-mix(in srgb, var(--shade-2) 54%, transparent);
+    padding: 13px 14px;
+  }
+
+  .post-map__node b {
+    display: block;
+    color: var(--shade-ink);
+    font-size: 14px;
+    line-height: 1.2;
+  }
+
+  .post-map__node span {
+    display: block;
+    margin-top: 4px;
+    color: var(--shade-muted);
+    font-size: 12.5px;
+    line-height: 1.45;
+  }
+
+  .post-map__foot {
+    border-top: 1px solid var(--shade-2);
+    padding: 15px 22px 18px;
+    color: var(--shade-muted);
+    font-size: 12.5px;
+    line-height: 1.5;
+  }
+
+  .post-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 760px) minmax(230px, 1fr);
+    gap: 56px;
+    align-items: start;
+    padding: 42px 0 70px;
+  }
+
+  .post-body {
+    min-width: 0;
+    width: 100%;
+    max-width: 72ch;
+  }
+
+  .post-body.prose {
+    color: var(--muted);
+    font-size: 15px;
+    line-height: 1.72;
+  }
+
+  .post-body.prose :where(h2) {
+    margin-top: 2.2em;
+    margin-bottom: 0.55em;
+    color: var(--ink);
+    font-size: 29px;
+    letter-spacing: 0;
+    line-height: 1.12;
+  }
+
+  .post-body.prose :where(h3) {
+    margin-top: 1.9em;
+    color: var(--ink);
+    font-size: 22px;
+    letter-spacing: 0;
+  }
+
+  .post-body.prose :where(p, li) {
+    color: var(--muted);
+  }
+
+  .post-body.prose :where(strong) {
+    color: var(--ink);
+  }
+
+  .post-body.prose :where(a) {
+    color: var(--accent-2);
+    font-weight: 700;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 3px;
+  }
+
+  .post-body.prose :where(pre) {
+    max-width: 100%;
+    overflow-x: auto;
+    border: 1px solid var(--shade-2);
+    border-radius: 18px;
+    background: var(--shade);
+    box-shadow: 0 22px 56px -42px rgba(27, 23, 20, 0.58);
+  }
+
+  .post-body :where(.md-code) {
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .post-body :where(.md-code__bar) {
+    max-width: 100%;
+  }
+
+  .post-body :where(.md-code pre) {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+
+  .post-rail {
+    position: sticky;
+    top: 96px;
+    min-width: 0;
+    border-left: 1px solid var(--hairline);
+    padding-left: 22px;
+  }
+
+  .post-rail__label {
+    color: var(--faint);
+    font-size: 11.5px;
+    font-weight: 800;
+    text-transform: uppercase;
+  }
+
+  .post-rail__title {
+    margin: 8px 0 0;
+    color: var(--ink);
+    font-size: 19px;
+    font-weight: 850;
+    line-height: 1.16;
+  }
+
+  .post-rail__text {
+    margin: 11px 0 0;
+    color: var(--muted);
+    font-size: 13.5px;
+    line-height: 1.55;
+  }
+
+  .post-rail__list {
+    display: grid;
+    gap: 10px;
+    margin: 20px 0 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .post-rail__list li {
+    border-top: 1px solid var(--hairline);
+    padding-top: 10px;
+    color: var(--ink);
+    font-size: 13px;
+    font-weight: 750;
+  }
+
+  .post-footer {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    border-top: 1px solid var(--hairline);
+    padding-top: 28px;
+  }
+
+  @media (max-width: 920px) {
+    .post-shell {
+      width: min(1200px, calc(100% - 32px));
+    }
+
+    .post-hero,
+    .post-layout {
+      grid-template-columns: 1fr;
+    }
+
+    .post-title {
+      font-size: 44px;
+      line-height: 1.04;
+    }
+
+    .post-map {
+      max-width: 560px;
+    }
+
+    .post-layout {
+      gap: 34px;
+    }
+
+    .post-rail {
+      position: static;
+      border-left: 0;
+      border-top: 1px solid var(--hairline);
+      padding-left: 0;
+      padding-top: 22px;
+    }
+  }
+
+  @media (max-width: 620px) {
+    .post-hero {
+      padding-top: 40px;
+    }
+
+    .post-title {
+      font-size: 36px;
+    }
+
+    .post-excerpt {
+      font-size: 17px;
+    }
+
+    .post-meta {
+      grid-template-columns: 1fr;
+    }
+
+    .post-map__body {
+      padding: 16px;
+    }
+
+    .post-map__line {
+      grid-template-columns: 1fr;
+    }
+
+    .post-map__step {
+      min-height: 34px;
+      justify-content: flex-start;
+      padding-left: 12px;
+    }
+  }
+</style>
+{% endblock %}
+
 {% block content %}
 
-<article class="mx-auto max-w-[820px] px-7 pb-16 pt-[52px]">
-  <a href="/blog" class="mb-7 inline-flex items-center gap-1.5 text-[13.5px] font-semibold text-muted transition-colors hover:text-ink">
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 18l-6-6 6-6"/></svg>
-    Back to the blog
-  </a>
+<article class="post-shell">
+  <header class="post-hero">
+    <div>
+      <a href="/blog" class="post-back">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 18l-6-6 6-6"/></svg>
+        Back to the blog
+      </a>
 
-  <header class="mb-8">
-    <div class="mb-3 flex flex-wrap items-center gap-3 text-[12.5px] text-faint">
-      <span class="rounded-md bg-accent-soft px-2 py-[2px] font-semibold text-accent-2">{{ post.kind }}</span>
-      {% if post.published %}<span>{{ post.published }}</span>{% endif %}
-      {% if post.reading_minutes %}<span>· {{ post.reading_minutes }} min read</span>{% endif %}
+      <div class="post-kicker">
+        <span class="post-kind">{{ post.kind }}</span>
+        {% if post.published %}<span>{{ post.published }}</span>{% endif %}
+        {% if post.reading_minutes %}<span>{{ post.reading_minutes }} min read</span>{% endif %}
+      </div>
+
+      <h1 class="post-title">{{ post.title }}</h1>
+      {% if post.excerpt %}
+      <p class="post-excerpt">{{ post.excerpt }}</p>
+      {% endif %}
+
+      <div class="post-meta">
+        <div class="post-meta__item">
+          <div class="post-meta__label">Filed as</div>
+          <div class="post-meta__value">{{ post.kind }}</div>
+        </div>
+        {% if post.published %}
+        <div class="post-meta__item">
+          <div class="post-meta__label">Published</div>
+          <div class="post-meta__value">{{ post.published }}</div>
+        </div>
+        {% endif %}
+        {% if post.reading_minutes %}
+        <div class="post-meta__item">
+          <div class="post-meta__label">Read time</div>
+          <div class="post-meta__value">{{ post.reading_minutes }} minutes</div>
+        </div>
+        {% endif %}
+      </div>
     </div>
-    <h1 class="text-[34px] font-extrabold leading-[1.1] tracking-[-0.03em] text-ink sm:text-[42px]">{{ post.title }}</h1>
-    {% if post.excerpt %}
-    <p class="mt-4 text-[18px] leading-[1.55] text-muted">{{ post.excerpt }}</p>
-    {% endif %}
+
+    <aside class="post-map" aria-label="Article theme">
+      <div class="post-map__top">
+        <span>Umbra surface area</span>
+        <span>{{ post.kind }}</span>
+      </div>
+      <div class="post-map__body">
+        <div class="post-map__line">
+          <div class="post-map__step">01</div>
+          <div class="post-map__node"><b>Models</b><span>Typed data becomes the system boundary.</span></div>
+        </div>
+        <div class="post-map__line">
+          <div class="post-map__step">02</div>
+          <div class="post-map__node"><b>Forms and admin</b><span>Operational screens arrive from the same contract.</span></div>
+        </div>
+        <div class="post-map__line">
+          <div class="post-map__step">03</div>
+          <div class="post-map__node"><b>REST</b><span>Public APIs follow without a second model layer.</span></div>
+        </div>
+      </div>
+      <div class="post-map__foot">One declaration should be enough to build the boring parts correctly.</div>
+    </aside>
   </header>
 
-  {# Raw markdown rendered by the framework `| markdown` filter, then
-     enhanced client-side (md-enhance.js): code blocks gain a language
-     label + copy button, images become a lightbox gallery. The `data-md`
-     attribute is the enhancer's hook. #}
-  <div class="prose max-w-none" data-md>{{ post.body | markdown }}</div>
+  <div class="post-layout">
+    {# Raw markdown rendered by the framework `| markdown` filter, then
+       enhanced client-side (md-enhance.js): code blocks gain a language
+       label + copy button, images become a lightbox gallery. The `data-md`
+       attribute is the enhancer's hook. #}
+    <div class="post-body prose" data-md>{{ post.body | markdown }}</div>
 
-  <div class="mt-12 flex flex-wrap items-center justify-between gap-4 border-t border-hairline pt-7">
+    <aside class="post-rail" aria-label="Article context">
+      <div class="post-rail__label">Field note</div>
+      <h2 class="post-rail__title">What this post is about</h2>
+      <p class="post-rail__text">A focused look at how Umbra keeps forms, admin, and REST close to the model instead of spreading boilerplate through the application.</p>
+      <ul class="post-rail__list">
+        <li>Start from the model boundary</li>
+        <li>Keep generated surfaces editable</li>
+        <li>Let plugins own the repetitive work</li>
+      </ul>
+    </aside>
+  </div>
+
+  <div class="post-footer">
     <a href="/blog" class="btn-ghost">More posts</a>
     <a href="https://sentinmail.app/subscribe/24479467-8815-497e-94f5-61aa11278687" target="_blank" rel="noopener" class="btn-accent">Subscribe to the newsletter
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M13 6l6 6-6 6"/></svg>

@@ -73,6 +73,9 @@
   background: transparent;
   border: 0;
   padding: 0;
+  /* Wrap long lines instead of scrolling the block horizontally. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 /* ===== Images + lightbox ===== */
