@@ -310,12 +310,14 @@ pub fn render_markdown(input: &str) -> String {
     let mut rendered = String::new();
     html::push_html(&mut rendered, events.into_iter());
 
-    // Sanitize. Widen ammonia's default allowlist by exactly one inert
-    // attribute — `class` on pre/code/span — so syntect's `hl-` token
-    // spans and the `language-*` label survive. style / on* handlers /
-    // javascript: URLs stay stripped: this is the whole "safely" surface.
+    // Sanitize. `pre`/`code`/`span` are already default-allowed tags, so we
+    // widen the allowlist by exactly one inert attribute — `class` on those
+    // three — letting syntect's `hl-` token spans and the `language-*` label
+    // survive. style / on* handlers / javascript: URLs stay stripped: this is
+    // the whole "safely" surface. Built per call: ammonia::Builder isn't Sync
+    // (boxed attribute_filter), so it can't be a shared static without a Mutex
+    // that would serialize rendering; this costs the same as ammonia::clean.
     let mut cleaner = ammonia::Builder::default();
-    cleaner.add_tags(&["span"]);
     cleaner.add_tag_attributes("pre", &["class"]);
     cleaner.add_tag_attributes("code", &["class"]);
     cleaner.add_tag_attributes("span", &["class"]);
