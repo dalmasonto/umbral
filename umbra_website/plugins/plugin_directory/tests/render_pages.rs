@@ -574,15 +574,16 @@ async fn listing_and_detail_render_real_db_rows() {
     );
     // No success banner without the ?submitted=1 flag.
     assert!(
-        !detail.contains("pending moderation"),
+        !detail.contains("your note is live"),
         "the success banner is absent on a plain detail render"
     );
 
-    // --- POST a note → a pending PluginComment exists, banner shows -------
-    // A live-feed watcher subscribes to this plugin's SSE group first, so
-    // we can assert posting a note fans out over realtime (the demo the
-    // detail page wires with EventSource). Registered directly on the
-    // registry (the SSE route's policy gate isn't exercised here).
+    // --- POST a note → a VISIBLE PluginComment exists, broadcast live -----
+    // Publish-then-moderate: a posted note is visible at once and fans out
+    // over SSE as a fully rendered row. A live-feed watcher subscribes to
+    // this plugin's group first (the demo the detail page wires with
+    // EventSource), registered directly on the registry (the SSE route's
+    // policy gate isn't exercised here).
     let rest_row = Plugin::objects()
         .filter(plugin_directory::models::plugin::SLUG.eq("umbra-rest"))
         .first()
@@ -602,64 +603,71 @@ async fn listing_and_detail_render_real_db_rows() {
         Some("Reviewer".to_string()),
     )
     .await
-    .expect("note create query ok");
-    assert!(created, "create_note returns true for an existing plugin");
+    .expect("note create query ok")
+    .expect("create_note returns a payload for an existing plugin");
+    // The payload is the rendered row, carrying the body and the new PK.
+    assert!(
+        created.html.contains("Works great on Postgres 16."),
+        "the payload html is the rendered note body; got {}",
+        created.html
+    );
+    assert!(
+        created.html.contains(&format!("data-comment-id=\"{}\"", created.id)),
+        "the payload html tags the row with its id for client dedupe; got {}",
+        created.html
+    );
 
-    // The note fanned out over SSE: the watcher got a `note` event with the
-    // author + a pending flag (NOT the unmoderated body).
+    // The note fanned out over SSE: the watcher got a `note` event carrying
+    // the same id + rendered html the AJAX caller received.
     let live = watcher
         .try_recv()
         .expect("posting a note broadcast to the plugin's SSE watchers");
     assert_eq!(live.event, "note");
     let live_data = live.data.to_string();
     assert!(
-        live_data.contains("Reviewer"),
-        "the live note names the author; got {live_data}"
+        live_data.contains("Works great on Postgres 16."),
+        "the live note carries the rendered body; got {live_data}"
     );
     assert!(
-        live_data.contains("pending"),
-        "the live note is flagged pending; got {live_data}"
-    );
-    assert!(
-        !live_data.contains("Postgres 16"),
-        "the unmoderated body is NOT broadcast; got {live_data}"
+        live_data.contains(&created.id.to_string()),
+        "the live note carries the row id; got {live_data}"
     );
 
-    // The row exists with the submitted body and Pending moderation.
-    let pending = PluginComment::objects()
+    // The row exists with the submitted body and Visible moderation.
+    let posted = PluginComment::objects()
         .filter(plugin_directory::models::plugin_comment::BODY.eq("Works great on Postgres 16."))
         .first()
         .await
         .expect("query the posted note")
         .expect("the posted note row exists");
     assert_eq!(
-        pending.moderation,
-        CommentModeration::Pending,
-        "a posted note awaits moderation"
+        posted.moderation,
+        CommentModeration::Visible,
+        "a posted note is visible immediately (publish-then-moderate)"
     );
 
-    // A note for an unknown slug is a clean 404 (Ok(false)), no row.
+    // A note for an unknown slug is a clean 404 (Ok(None)), no row.
     let missing_note = create_note("does-not-exist", "body", "general", None)
         .await
         .expect("create_note query ok");
     assert!(
-        !missing_note,
-        "create_note returns false for an unknown slug"
+        missing_note.is_none(),
+        "create_note returns None for an unknown slug"
     );
 
-    // Re-render with ?submitted=1 → the success banner appears (the
-    // pending note is NOT in the visible list, proving moderation gates it).
+    // Re-render with ?submitted=1 → the success banner appears AND the new
+    // note is in the visible thread (no admin action needed).
     let after = render_detail_with("umbra-rest", true)
         .await
         .expect("submitted detail renders")
         .expect("plugin exists");
     assert!(
-        after.contains("Thanks - your note is pending moderation."),
+        after.contains("Thanks - your note is live in the thread."),
         "the ?submitted=1 success banner renders"
     );
     assert!(
-        !after.contains("Works great on Postgres 16."),
-        "the pending note is filtered out of the visible thread"
+        after.contains("Works great on Postgres 16."),
+        "the posted note shows in the visible thread immediately"
     );
 
     // A non-existent slug is a clean 404 (Ok(None)), not an error.

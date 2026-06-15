@@ -700,28 +700,57 @@ async fn plugin_detail(
     }
 }
 
-/// Handle a posted community note (`POST /plugins/{slug}/notes`). Looks
-/// up the approved plugin by slug (404 if gone), creates a
-/// [`PluginComment`] through the ORM with `moderation = Pending` (so it
-/// awaits moderation), then redirects back to the detail page with
-/// `?submitted=1` so the success banner renders. The redirect (a fresh
-/// GET) is the POST/redirect/GET pattern — a refresh won't re-submit.
+/// Minimum seconds between two note posts from the same browser. A courtesy
+/// throttle (the cookie is trivially cleared), paired with framework rate
+/// limiting later.
+const NOTE_MIN_INTERVAL_SECS: i64 = 20;
+
+/// Handle a posted community note (`POST /plugins/{slug}/notes`). Looks up the
+/// approved plugin by slug (404 if gone) and creates a visible
+/// [`PluginComment`] through the ORM (publish-then-moderate: an admin sets
+/// `Hidden` later to take it down).
 ///
-/// Progressive enhancement: a plain `<form>` submit (no JS) gets the
-/// classic redirect-to-`?submitted=1`. A `fetch()` submit (the note
-/// dialog's JS sets `Accept: application/json`) gets a tiny JSON
-/// acknowledgement instead, so the page never reloads — the success
-/// state and the live SSE banner update in place. Both paths run the
-/// exact same `create_note` ORM write.
+/// Progressive enhancement: a `fetch()` submit (the note dialog sets `Accept:
+/// application/json`) gets `{ ok, id, html }` back and inserts the rendered
+/// row in place, so the page never reloads; the same row also rides the SSE
+/// feed to every other open tab. A plain `<form>` submit (no JS) takes the
+/// POST/redirect/GET path so a refresh won't re-submit. Two light guards run
+/// first: a honeypot field and a per-browser submit interval.
 async fn post_plugin_note(
     Path(slug): Path<String>,
     headers: HeaderMap,
     Form(form): Form<HashMap<String, String>>,
 ) -> Result<Response, (StatusCode, String)> {
+    let json = wants_json(&headers);
+
     let body = form.get("body").map(|s| s.trim()).unwrap_or("");
     if body.is_empty() {
         return Err((StatusCode::BAD_REQUEST, "A note body is required.".into()));
     }
+
+    // Honeypot: a real visitor never sees the `website` field. A non-empty
+    // value is a bot, so accept silently (give it no signal) but write and
+    // broadcast nothing.
+    if form
+        .get("website")
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false)
+    {
+        return Ok(if json {
+            note_json_response(r#"{"ok":true,"skipped":true}"#.to_string(), None)
+        } else {
+            Redirect::to(&format!("/plugins/{slug}?submitted=1")).into_response()
+        });
+    }
+
+    // Per-browser throttle: reject a second post inside the interval window.
+    if !note_interval_ok(&headers) {
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            "You're posting too fast. Give it a few seconds.".into(),
+        ));
+    }
+
     let kind = form.get("kind").map(String::as_str).unwrap_or("general");
     let author_label = form
         .get("author_label")
@@ -729,28 +758,30 @@ async fn post_plugin_note(
         .filter(|s| !s.is_empty())
         .map(str::to_string);
 
-    let created = create_note(&slug, body, kind, author_label)
+    let Some(payload) = create_note(&slug, body, kind, author_label)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-    if !created {
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?
+    else {
         return Err((
             StatusCode::NOT_FOUND,
             format!("No plugin directory entry exists for `{slug}`."),
         ));
-    }
+    };
 
-    if wants_json(&headers) {
-        // AJAX path: acknowledge without a navigation. The body is
-        // pending moderation, so we only confirm receipt.
-        Ok((
-            StatusCode::OK,
-            [(umbra::web::header::CONTENT_TYPE, "application/json")],
-            r#"{"ok":true,"pending":true}"#,
-        )
-            .into_response())
+    let cookie = note_throttle_cookie();
+    if json {
+        let body = serde_json::to_string(&serde_json::json!({
+            "ok": true,
+            "id": payload.id,
+            "html": payload.html,
+        }))
+        .unwrap_or_else(|_| r#"{"ok":true}"#.to_string());
+        Ok(note_json_response(body, Some(cookie)))
     } else {
         // No-JS fallback: POST/redirect/GET so a refresh won't re-submit.
-        Ok(Redirect::to(&format!("/plugins/{slug}?submitted=1")).into_response())
+        let mut resp = Redirect::to(&format!("/plugins/{slug}?submitted=1")).into_response();
+        set_throttle_cookie(&mut resp, &cookie);
+        Ok(resp)
     }
 }
 
@@ -765,17 +796,67 @@ fn wants_json(headers: &HeaderMap) -> bool {
         .unwrap_or(false)
 }
 
-/// Create a pending [`PluginComment`] for the approved plugin `slug`.
-/// Returns `Ok(false)` when no approved plugin matches the slug (a 404).
-/// Public so the render smoke-test can drive the create path without an
-/// axum runtime. `kind` is the form's `CommentKind` string; an unknown
-/// value falls back to `General`.
+/// A JSON 200, optionally carrying the throttle `Set-Cookie`.
+fn note_json_response(body: String, cookie: Option<String>) -> Response {
+    let mut resp = (
+        StatusCode::OK,
+        [(umbra::web::header::CONTENT_TYPE, "application/json")],
+        body,
+    )
+        .into_response();
+    if let Some(c) = cookie {
+        set_throttle_cookie(&mut resp, &c);
+    }
+    resp
+}
+
+/// The `pd_nt` cookie value stamping the current post time so the throttle
+/// survives reloads. HttpOnly + SameSite=Lax + site-wide path.
+fn note_throttle_cookie() -> String {
+    format!(
+        "pd_nt={}; Path=/; Max-Age=86400; HttpOnly; SameSite=Lax",
+        chrono::Utc::now().timestamp()
+    )
+}
+
+/// Attach a `Set-Cookie` header, ignoring an unencodable value.
+fn set_throttle_cookie(resp: &mut Response, cookie: &str) {
+    if let Ok(v) = umbra::web::header::HeaderValue::from_str(cookie) {
+        resp.headers_mut()
+            .insert(umbra::web::header::SET_COOKIE, v);
+    }
+}
+
+/// True when enough time has passed since the last `pd_nt` post, or there is
+/// no parseable cookie. False only when a recent timestamp is present.
+fn note_interval_ok(headers: &HeaderMap) -> bool {
+    let last = headers
+        .get(umbra::web::header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|raw| {
+            raw.split(';').find_map(|kv| {
+                kv.trim()
+                    .strip_prefix("pd_nt=")
+                    .and_then(|n| n.parse::<i64>().ok())
+            })
+        });
+    match last {
+        Some(ts) => chrono::Utc::now().timestamp() - ts >= NOTE_MIN_INTERVAL_SECS,
+        None => true,
+    }
+}
+
+/// Create a visible [`PluginComment`] for the approved plugin `slug` and
+/// return its rendered row as a [`NotePayload`]. Returns `Ok(None)` when no
+/// approved plugin matches the slug (a 404). Public so the render smoke-test
+/// can drive the create path without an axum runtime. `kind` is the form's
+/// `CommentKind` string; an unknown value falls back to `General`.
 pub async fn create_note(
     slug: &str,
     body: &str,
     kind: &str,
     author_label: Option<String>,
-) -> Result<bool, String> {
+) -> Result<Option<NotePayload>, String> {
     let Some(plugin) = PluginModel::objects()
         .filter(plugin::SLUG.eq(slug))
         .filter(plugin::MODERATION.eq("approved"))
@@ -783,7 +864,7 @@ pub async fn create_note(
         .await
         .map_err(|e| e.to_string())?
     else {
-        return Ok(false);
+        return Ok(None);
     };
 
     let kind = match kind {
@@ -793,40 +874,36 @@ pub async fn create_note(
         "migration_note" => CommentKind::MigrationNote,
         _ => CommentKind::General,
     };
-    // Capture broadcast bits before the values move into the comment.
-    let kind_label = format!("{kind:?}");
-    let author = author_label
-        .clone()
-        .unwrap_or_else(|| "Someone".to_string());
 
     let mut comment = pd::PluginComment::default();
     comment.plugin = ForeignKey::new(plugin.id);
     comment.body = body.to_string();
     comment.kind = kind;
-    comment.moderation = CommentModeration::Pending;
+    // Publish-then-moderate: the note is visible immediately. An admin sets
+    // `Hidden` later to take it down (the detail query + count both filter on
+    // `visible`, so hiding drops it from the thread on the next load). The
+    // body is sanitized at render time by the `markdown` filter, which is the
+    // XSS boundary now that an unmoderated body goes public on submit.
+    comment.moderation = CommentModeration::Visible;
     comment.author_label = author_label;
 
-    pd::PluginComment::objects()
+    let created = pd::PluginComment::objects()
         .create(comment)
         .await
         .map_err(|e| e.to_string())?;
 
-    // Live note feed (SSE): notify everyone watching this plugin's notes.
-    // The note is pending moderation, so we broadcast only a lightweight
-    // notification (who + kind), NOT the unmoderated body. No-op when
-    // RealtimePlugin isn't installed (e.g. the render smoke-test).
+    // Render the new row exactly as the page loop would, then ship it.
+    let id = created.id;
+    let preview = CommentPreview::from_model(created);
+    let html = render_comment_row(&preview)?;
+
+    // Live note feed (SSE): everyone watching this plugin's thread gets the
+    // rendered row and inserts it in place. No-op when RealtimePlugin isn't
+    // installed (e.g. the render smoke-test).
     umbra_realtime::Realtime::to_group(format!("public:plugin-{}", plugin.id))
-        .send(
-            "note",
-            &serde_json::json!({
-                "plugin": plugin.id,
-                "author": author,
-                "kind": kind_label,
-                "pending": true,
-            }),
-        )
+        .send("note", &serde_json::json!({ "id": id, "html": html }))
         .await;
-    Ok(true)
+    Ok(Some(NotePayload { id, html }))
 }
 
 // ---------------------------------------------------------------------------
@@ -1570,6 +1647,9 @@ struct StatusRow {
 
 #[derive(Debug, Serialize)]
 struct CommentPreview {
+    /// PK, surfaced as `data-comment-id` so a live insert can dedupe
+    /// against an already-rendered row.
+    id: i64,
     initials: String,
     name: String,
     role: String,
@@ -1608,6 +1688,7 @@ impl CommentPreview {
             role.to_string()
         };
         Self {
+            id: c.id,
             initials: initials(&name),
             name,
             role,
@@ -1619,6 +1700,26 @@ impl CommentPreview {
             backend,
         }
     }
+}
+
+/// Render a single comment row to HTML using the same partial the page
+/// loop includes, so a live-inserted note is byte-identical to a reloaded
+/// one. The body is sanitized by the `markdown` filter (ammonia), so the
+/// returned HTML is safe to broadcast and insert via `innerHTML`.
+fn render_comment_row(preview: &CommentPreview) -> Result<String, String> {
+    umbra::templates::render(
+        "plugin_directory/_comment.html",
+        &umbra::templates::context! { comment => preview },
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// The live payload for a freshly posted note: the new row's PK and its
+/// rendered HTML. Broadcast over SSE and returned to the AJAX submitter.
+#[derive(Debug, Serialize)]
+pub struct NotePayload {
+    pub id: i64,
+    pub html: String,
 }
 
 // ---------------------------------------------------------------------------

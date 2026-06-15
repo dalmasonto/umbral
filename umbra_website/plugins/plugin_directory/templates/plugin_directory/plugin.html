@@ -127,7 +127,7 @@
   {% if submitted %}
   <div class="mb-6 flex items-center gap-2.5 rounded-[14px] border pd-success bg-ok-soft px-4 py-3">
     <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--ok)" stroke-width="2.2"><path d="M20 6 9 17l-5-5"/></svg>
-    <span class="text-[13.5px] font-bold text-ok">Thanks - your note is pending moderation.</span>
+    <span class="text-[13.5px] font-bold text-ok">Thanks - your note is live in the thread.</span>
   </div>
   {% endif %}
 
@@ -254,7 +254,7 @@
           </div>
         </div>
         <div class="pd-stat">
-          <div class="pd-stat-value">{{ plugin.notes }}</div>
+          <div class="pd-stat-value" data-note-count>{{ plugin.notes }}</div>
           <div class="pd-stat-label">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
             notes
@@ -280,7 +280,7 @@
         <button class="pd-tab" role="tab" id="tab-overview" aria-controls="panel-overview" aria-selected="true" data-tab="overview">Overview</button>
         <button class="pd-tab" role="tab" id="tab-features" aria-controls="panel-features" aria-selected="false" tabindex="-1" data-tab="features">Features<span class="pd-tab-count">{{ plugin.total_features }}</span></button>
         <button class="pd-tab" role="tab" id="tab-compatibility" aria-controls="panel-compatibility" aria-selected="false" tabindex="-1" data-tab="compatibility">Compatibility</button>
-        <button class="pd-tab" role="tab" id="tab-notes" aria-controls="panel-notes" aria-selected="false" tabindex="-1" data-tab="notes">Notes<span class="pd-tab-count">{{ plugin.notes }}</span></button>
+        <button class="pd-tab" role="tab" id="tab-notes" aria-controls="panel-notes" aria-selected="false" tabindex="-1" data-tab="notes">Notes<span class="pd-tab-count" data-note-count>{{ plugin.notes }}</span></button>
         <button class="pd-tab" role="tab" id="tab-issues" aria-controls="panel-issues" aria-selected="false" tabindex="-1" data-tab="issues">Issues</button>
       </div>
 
@@ -406,54 +406,22 @@
             <div class="mb-5 flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h2 class="mb-1 text-[24px] font-extrabold tracking-[-0.02em]">Community notes</h2>
-                <p class="text-[14px] text-muted">{{ plugin.notes }} visible note{% if plugin.notes != 1 %}s{% endif %} from the discussion thread.</p>
+                <p class="text-[14px] text-muted"><span data-note-count>{{ plugin.notes }}</span> note<span data-note-plural>{% if plugin.notes != 1 %}s{% endif %}</span> in the discussion thread.</p>
               </div>
               <button type="button" class="btn-accent" data-open-note>Add a note</button>
             </div>
-            {# Live note feed (SSE): revealed when someone posts a note. #}
-            <div id="pd-live-note" class="mb-4 hidden items-center gap-2.5 rounded-[12px] border border-accent-line bg-accent-soft px-4 py-3 text-[13.5px] font-semibold text-accent-2">
-              <span class="relative flex h-2 w-2"><span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent opacity-75"></span><span class="relative inline-flex h-2 w-2 rounded-full bg-accent"></span></span>
-              <span id="pd-live-note-text">A new note was just posted, awaiting review.</span>
-            </div>
             {# Own-submission success, revealed in place by the fetch()
-               handler so posting a note never reloads the page. #}
+               handler so posting a note never reloads the page. The note
+               itself is inserted live into the thread below (SSE + AJAX). #}
             <div id="pd-note-success" class="mb-4 hidden items-center gap-2.5 rounded-[12px] border pd-success bg-ok-soft px-4 py-3 text-[13.5px] font-bold text-ok">
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="var(--ok)" stroke-width="2.2"><path d="M20 6 9 17l-5-5"/></svg>
-              <span>Thanks — your note was submitted for review.</span>
+              <span>Posted. Thanks for the note.</span>
             </div>
-            <div class="space-y-3">
+            <div class="space-y-3" id="pd-note-list">
               {% for comment in plugin.comments %}
-              <article class="rounded-[14px] border border-hairline p-[18px]">
-                <div class="mb-2.5 flex flex-wrap items-center gap-3">
-                  <span class="flex h-9 w-9 items-center justify-center rounded-full bg-accent-line text-[13px] font-bold text-accent-2">{{ comment.initials }}</span>
-                  <div>
-                    <div class="text-[14px] font-bold">{{ comment.name }}</div>
-                    <div class="text-[12px] text-faint">{{ comment.role }} · {{ comment.created }}</div>
-                  </div>
-                  {% if comment.badge %}
-                  {% if comment.badge_kind == "ok" %}
-                  <span class="ml-auto text-[12px] font-semibold text-ok">{{ comment.badge }}</span>
-                  {% elif comment.badge_kind == "bad" %}
-                  <span class="ml-auto text-[12px] font-semibold text-[#A82E2E]">{{ comment.badge }}</span>
-                  {% else %}
-                  <span class="ml-auto text-[12px] font-semibold text-warn">{{ comment.badge }}</span>
-                  {% endif %}
-                  {% endif %}
-                </div>
-                <div class="pd-prose text-[14px]" data-md>{{ comment.body | markdown }}</div>
-                {% if comment.plugin_version or comment.backend %}
-                <div class="mt-3 flex flex-wrap gap-2">
-                  {% if comment.plugin_version %}
-                  <span class="rounded-[7px] border border-hairline bg-surface-2 px-2 py-1 font-mono text-[11.5px] text-body">v{{ comment.plugin_version }}</span>
-                  {% endif %}
-                  {% if comment.backend %}
-                  <span class="rounded-[7px] border border-hairline bg-surface-2 px-2 py-1 text-[11.5px] text-body">{{ comment.backend }}</span>
-                  {% endif %}
-                </div>
-                {% endif %}
-              </article>
+              {% include "plugin_directory/_comment.html" %}
               {% else %}
-              <p class="m-0 rounded-[14px] border border-hairline bg-paper px-4 py-5 text-[14px] text-muted">No notes yet. Be the first to share how this plugin works for you.</p>
+              <p class="m-0 rounded-[14px] border border-hairline bg-paper px-4 py-5 text-[14px] text-muted" data-note-empty>No notes yet. Be the first to share how this plugin works for you.</p>
               {% endfor %}
             </div>
           </div>
@@ -535,6 +503,12 @@
 {# ---- Add a note dialog ---- #}
 <dialog class="pd-dialog" id="pd-note-dialog">
   <form method="post" action="/plugins/{{ plugin.slug }}/notes" class="p-6">
+    {# Honeypot: hidden from people, tempting to bots. A non-empty value is
+       silently dropped server-side. aria-hidden + tabindex keep it out of
+       the way of screen readers and keyboard users. #}
+    <div class="hidden" aria-hidden="true">
+      <label>Website<input type="text" name="website" tabindex="-1" autocomplete="off"></label>
+    </div>
       {{ csrf_input }}
     <div class="mb-4 flex items-start justify-between gap-3">
       <div>
@@ -642,22 +616,32 @@
       });
 
       // AJAX submit: post the note without a full page reload. The
-      // handler returns JSON for `Accept: application/json` (see
-      // post_plugin_note); on success we close the dialog, reset the
-      // form and reveal the in-place success banner. The native submit
-      // is the no-JS fallback and the error fallback.
+      // handler returns JSON ({ ok, id, html }) for `Accept:
+      // application/json` (see post_plugin_note). On success we insert the
+      // rendered row in place, then close + reset the dialog. The native
+      // submit is the no-JS fallback and the error fallback.
       var form = dlg.querySelector('form');
       if (form && window.fetch && window.FormData) {
         form.addEventListener('submit', function (e) {
           e.preventDefault();
           var submitBtn = form.querySelector('button[type="submit"]');
           if (submitBtn) submitBtn.disabled = true;
+          // Encode as application/x-www-form-urlencoded (via
+          // URLSearchParams), NOT multipart/form-data (what `new
+          // FormData(form)` would send). The note endpoint is an urlencoded
+          // `Form<...>` route: umbra's CSRF middleware only reads the token
+          // from an urlencoded body, and the `Form` extractor 415s on
+          // multipart. This matches the no-JS form submit exactly, so the
+          // CSRF token rides through and the post succeeds without a reload.
           fetch(form.action, {
             method: 'POST',
             headers: { 'Accept': 'application/json' },
-            body: new FormData(form)
+            body: new URLSearchParams(new FormData(form))
           }).then(function (res) {
             if (!res.ok) throw new Error('post failed: ' + res.status);
+            return res.json();
+          }).then(function (d) {
+            if (d && d.html) insertNote(d.html);
             if (typeof dlg.close === 'function') dlg.close();
             form.reset();
             var ok = document.getElementById('pd-note-success');
@@ -674,20 +658,50 @@
     }
   })();
 
-  // Live note feed (SSE). Subscribes to this plugin's public realtime
-  // group; when anyone posts a note, reveal the banner. Powered by
+  // Insert a rendered note row into the thread. Shared by the AJAX submit
+  // (instant local feedback) and the SSE feed (other open tabs). Deduped by
+  // data-comment-id so the submitter never sees their own note twice when
+  // the SSE echo of their post arrives. Appends at the bottom to match the
+  // server's created-at-ascending order, then bumps every note counter.
+  function insertNote(html) {
+    var list = document.getElementById('pd-note-list');
+    if (!list) return;
+    var tmp = document.createElement('div');
+    tmp.innerHTML = html.trim();
+    var row = tmp.firstElementChild;
+    if (!row) return;
+    var id = row.getAttribute('data-comment-id');
+    if (id && list.querySelector('[data-comment-id="' + id + '"]')) return;
+    var empty = list.querySelector('[data-note-empty]');
+    if (empty) empty.remove();
+    list.appendChild(row);
+    bumpNoteCount();
+  }
+
+  // Increment every note counter (sidebar stat, tab badge, thread heading)
+  // and fix the singular/plural "note(s)" suffix.
+  function bumpNoteCount() {
+    var next = null;
+    document.querySelectorAll('[data-note-count]').forEach(function (el) {
+      var n = parseInt(el.textContent.replace(/[^0-9]/g, ''), 10);
+      next = (isNaN(n) ? 0 : n) + 1;
+      el.textContent = String(next);
+    });
+    var plural = document.querySelector('[data-note-plural]');
+    if (plural && next !== null) plural.textContent = next === 1 ? '' : 's';
+  }
+
+  // Live note feed (SSE). Subscribes to this plugin's public realtime group;
+  // when anyone posts a note, insert it into the thread. Powered by
   // umbra-realtime (GET /realtime/sse). Degrades silently if unsupported.
   (function () {
     if (!('EventSource' in window)) return;
     var es = new EventSource('/realtime/sse?groups=public:plugin-{{ plugin.id }}');
     es.addEventListener('note', function (e) {
-      var banner = document.getElementById('pd-live-note');
-      var txt = document.getElementById('pd-live-note-text');
       try {
         var d = JSON.parse(e.data);
-        if (txt) txt.textContent = (d.author || 'Someone') + ' just posted a note, awaiting review.';
+        if (d && d.html) insertNote(d.html);
       } catch (_) {}
-      if (banner) { banner.classList.remove('hidden'); banner.classList.add('flex'); }
     });
   })();
 </script>

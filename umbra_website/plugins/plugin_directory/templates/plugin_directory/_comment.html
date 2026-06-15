@@ -1,0 +1,34 @@
+{# One community-note row. Rendered by the page loop and, identically,
+   server-side for the live SSE / AJAX payload so a live insert matches a
+   reloaded thread byte for byte. `comment` is a `CommentPreview`. The body
+   is sanitized by the `markdown` filter (pulldown-cmark + ammonia), which
+   is the XSS boundary now that notes are public the moment they post. #}
+<article class="rounded-[14px] border border-hairline p-[18px]" data-comment-id="{{ comment.id }}">
+  <div class="mb-2.5 flex flex-wrap items-center gap-3">
+    <span class="flex h-9 w-9 items-center justify-center rounded-full bg-accent-line text-[13px] font-bold text-accent-2">{{ comment.initials }}</span>
+    <div>
+      <div class="text-[14px] font-bold">{{ comment.name }}</div>
+      <div class="text-[12px] text-faint">{{ comment.role }} · {{ comment.created }}</div>
+    </div>
+    {% if comment.badge %}
+    {% if comment.badge_kind == "ok" %}
+    <span class="ml-auto text-[12px] font-semibold text-ok">{{ comment.badge }}</span>
+    {% elif comment.badge_kind == "bad" %}
+    <span class="ml-auto text-[12px] font-semibold text-[#A82E2E]">{{ comment.badge }}</span>
+    {% else %}
+    <span class="ml-auto text-[12px] font-semibold text-warn">{{ comment.badge }}</span>
+    {% endif %}
+    {% endif %}
+  </div>
+  <div class="pd-prose text-[14px]" data-md>{{ comment.body | markdown }}</div>
+  {% if comment.plugin_version or comment.backend %}
+  <div class="mt-3 flex flex-wrap gap-2">
+    {% if comment.plugin_version %}
+    <span class="rounded-[7px] border border-hairline bg-surface-2 px-2 py-1 font-mono text-[11.5px] text-body">v{{ comment.plugin_version }}</span>
+    {% endif %}
+    {% if comment.backend %}
+    <span class="rounded-[7px] border border-hairline bg-surface-2 px-2 py-1 text-[11.5px] text-body">{{ comment.backend }}</span>
+    {% endif %}
+  </div>
+  {% endif %}
+</article>
