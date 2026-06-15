@@ -87,3 +87,74 @@ it, and `commit()`. Refactor `insert_json`'s execution tail to be generic over t
 executor (pool vs `&mut Transaction`) so both share the build/validate/decode logic.
 Add a regression test that a child failure leaves zero rows (true rollback, not
 compensation).
+
+---
+
+## 3. No cross-model search: the ORM can't UNION or rank across two models
+
+**Status:** open — Rust-side merge in place; a unified ranked search needs its own spec.
+
+**Where:** `umbra_website/plugins/plugin_directory` — `render_search`. The header
+command-palette searches BOTH plugins and blog posts and must return one combined
+list. The ORM has no surface to UNION two different models' querysets or to rank
+results across them, so `render_search` runs two independent queries —
+`PluginModel::objects().filter(name/crate/desc contains q).limit(6)` and
+`site_content::models::BlogPost::objects().filter(status=published, title/body
+contains q).limit(4)` — maps each row into a unified `SearchHit { kind, href, name,
+label, short_description, logo }`, and concatenates in Rust (plugins first, then
+posts). There is no relevance ranking (order is per-model insertion order, plugins
+always before posts), the per-model sub-limits (6 / 4) are arbitrary, and there's no
+global "top N across both by score".
+
+**Related — full-text reachability:** the ORM already ships full-text (`FullTextCol::matches`
++ tsvector, used elsewhere), but neither `Plugin` nor `BlogPost` declares a tsvector
+column, so this search is `LIKE`-based (`.contains()`), not ranked. A real ranked
+search wants tsvector + `ts_rank`, which *also* needs the cross-model UNION to order
+hits from different tables against each other.
+
+**Workaround (shipped):** two independent querysets + a Rust-side merge into
+`Vec<SearchHit>`, fixed sub-limits, plugins-then-posts ordering. The blog query is
+wrapped in `match` + `tracing::warn!` so a missing `site_content_blog_post` table
+(e.g. a test DB without that plugin's migrations) degrades to plugins-only instead of
+a 500. Acceptable while the combined result set is small and unranked.
+
+**Proper fix (needs a spec):** an ORM surface for cross-model search. Two shapes to
+weigh: (a) a `UNION ALL` over a normalized projection (`kind, pk, title, snippet,
+rank`) from each participating model with one shared `ORDER BY rank LIMIT N`, exposed
+as something like `Search::across::<(Plugin, BlogPost)>(q)`; or (b) a dedicated search
+index / materialized view the models feed. The hard part is relevance ranking
+(tsvector `ts_rank` vs `LIKE` score) and a stable cross-table ordering key. Postgres-
+first; SQLite degrades to `LIKE` + a coarse score. Until then the Rust-merge above is
+the recommended shape for a small, unranked combined search.
+
+---
+
+## 4. `#[derive(Model)]` leaks a private model type through generated `pub` items
+
+**Status:** open — documented constraint (models in relations must be `pub`); a clean macro fix is hard.
+
+**Where:** `crates/umbra-core/tests/form_fk.rs`. A model that isn't `pub` trips
+rustc's `private_interfaces` lint — and, for a forward-O2O, the hard error E0446 —
+because the derive emits `pub` items whose signatures name the (private) model type:
+the per-column consts (`author::ID`, …) and, for relations, a reverse-relation
+accessor generated **on the OTHER model**. A private `Passport` with
+`#[umbra(unique)] holder: ForeignKey<Author>` (forward O2O) made the derive emit a
+`pub` reverse-O2O accessor on `Author` returning the private `Passport` → E0446. That
+single error failed the whole `umbra-core` test target's compile, silently hiding
+every other test in the target (a broken test binary proves nothing).
+
+**Workaround (shipped):** declare any model that participates in a relation `pub` —
+which is the convention anyway. Fixed the fixture (`9bcd466` made `Passport` `pub`; a
+follow-up makes `Author` / `Book` `pub` too and drops an unused import) so the
+`form_fk` target compiles warning-free.
+
+**Proper fix (hard):** a single `#[derive(Model)]` invocation sees only ONE model's
+tokens, so it can't know the visibility of the related model on whose `impl` block the
+reverse accessor lands — it can't visibility-match an item it emits onto another type.
+Options: (a) emit the model's *own* generated items (column consts) with visibility
+matching the annotated model, so a `pub(crate)` model gets `pub(crate)` consts — fixes
+the `author::ID` leak but not the cross-model reverse accessor; (b) emit a clearer
+compile error / `compile_error!` when a relation field targets a model whose visibility
+can't be guaranteed, with a message pointing at the "models in relations must be `pub`"
+rule; (c) just document the constraint. Low real-world impact (models are `pub` by
+convention), so logged-and-tracked rather than worked around silently.
