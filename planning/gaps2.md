@@ -242,7 +242,7 @@
 
 37. [x] FileField + ImageField (ImageField = FileField + widget="image") wired through multipart form submission to the ambient Storage backend; MediaPlugin provides it, enforced by a boot system-check — archived
 
-38. [ ] `.filter(sc::ContactMessage::CREATED_AT.gte(week_ago))` - This does not work, should atleast work well as `.filter(contact_message::CREATED_AT.gte(week_ago))` (This works well)
+38. [x] Column predicate consts reachable as `Model::COL` (associated const) alongside `module::COL` — `#[derive(Model)]` now emits `impl Struct { pub const COL: ColType<Self> = module::COL; }` per column (an alias of the module const, one source of truth), so `.filter(ContactMessage::CREATED_AT.gte(..))` works without importing the column module — archived
 
 39. [x] annotate_count child-side filters + child soft-delete + Form derive auto-skips ReverseSet — archived
 

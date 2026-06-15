@@ -901,6 +901,9 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
     // declaration order matches between the two.
     let mut field_specs: Vec<TokenStream2> = Vec::new();
     let mut column_consts: Vec<TokenStream2> = Vec::new();
+    // gaps2 #38: associated-const aliases (`Model::COL`) mirroring each
+    // `column_consts` entry (`module::COL`). Emitted in an `impl Struct {}`.
+    let mut assoc_consts: Vec<TokenStream2> = Vec::new();
     let mut m2m_specs: Vec<TokenStream2> = Vec::new();
     // Gap #44 — one entry per `ReverseSet<C>` field. Emitted as
     // `Model::REVERSE_FK_RELATIONS` so the prefetch_related dispatch
@@ -1358,8 +1361,15 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                 pub const #const_ident: ::umbra::orm::column::StrCol<super::#struct_name> =
                     ::umbra::orm::column::StrCol::new(#field_name_str);
             });
+            assoc_consts.push(quote_spanned! { span =>
+                pub const #const_ident: ::umbra::orm::column::StrCol<Self> =
+                    #module_name::#const_ident;
+            });
         } else {
-            column_consts.push(column_const_for(struct_name, &field_name_str, field, &kind));
+            let (module_const, assoc_const) =
+                column_const_for(struct_name, &module_name, &field_name_str, field, &kind);
+            column_consts.push(module_const);
+            assoc_consts.push(assoc_const);
         }
     }
 
@@ -2019,6 +2029,18 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             use super::#struct_name;
 
             #(#column_consts)*
+        }
+
+        // gaps2 #38: re-expose the column predicate constants as associated
+        // consts on the struct, so `Model::COL.eq(..)` works alongside the
+        // `module::COL` form — no column-module import at the filter site.
+        // Each is an alias of the corresponding `module::COL`, so there's a
+        // single source of truth for the column name/type. `allow(dead_code)`
+        // restores parity with the `pub mod` form: unused generated consts on
+        // a non-`pub` model shouldn't warn (the module consts never did).
+        #[allow(dead_code)]
+        impl #struct_name {
+            #(#assoc_consts)*
         }
     };
 
@@ -3052,10 +3074,11 @@ fn option_inner(ty: &Type) -> Option<&Type> {
 /// user crate that derives `Model` gets the same path resolution.
 fn column_const_for(
     struct_name: &syn::Ident,
+    module_name: &syn::Ident,
     field_name: &str,
     field: &Field,
     kind: &FieldKind,
-) -> TokenStream2 {
+) -> (TokenStream2, TokenStream2) {
     let const_ident = format_ident!("{}", to_screaming_snake_case(field_name));
     let span = field.ty.span();
     let col_ident = match kind {
@@ -3113,16 +3136,24 @@ fn column_const_for(
         // MultiChoice and Many2Many are handled inline by the caller,
         // so these arms are unreachable in practice. We return an empty
         // token stream as a defensive default.
-        FieldKind::MultiChoice(_) => return TokenStream2::new(),
-        FieldKind::Many2Many(_) => return TokenStream2::new(),
-        FieldKind::ReverseSet(_) => return TokenStream2::new(),
-        FieldKind::OneToOne(_) => return TokenStream2::new(),
-        FieldKind::Unsupported(_) => return TokenStream2::new(),
+        FieldKind::MultiChoice(_) => return (TokenStream2::new(), TokenStream2::new()),
+        FieldKind::Many2Many(_) => return (TokenStream2::new(), TokenStream2::new()),
+        FieldKind::ReverseSet(_) => return (TokenStream2::new(), TokenStream2::new()),
+        FieldKind::OneToOne(_) => return (TokenStream2::new(), TokenStream2::new()),
+        FieldKind::Unsupported(_) => return (TokenStream2::new(), TokenStream2::new()),
     };
-    quote_spanned! { span =>
+    // The module-level const (`module::COL`), and its associated-const
+    // alias on the struct (`Model::COL`) — gaps2 #38. The alias just points
+    // at the module const, so there's one source of truth for the value.
+    let module_const = quote_spanned! { span =>
         pub const #const_ident: ::umbra::orm::column::#col_ident<super::#struct_name> =
             ::umbra::orm::column::#col_ident::new(#field_name);
-    }
+    };
+    let assoc_const = quote_spanned! { span =>
+        pub const #const_ident: ::umbra::orm::column::#col_ident<Self> =
+            #module_name::#const_ident;
+    };
+    (module_const, assoc_const)
 }
 
 /// Convert `CamelCase` / `PascalCase` to `snake_case`.
