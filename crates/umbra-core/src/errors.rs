@@ -496,11 +496,144 @@ pub async fn render_500_middleware(
         .into_response()
 }
 
+// ─── General error pages (any status code) ──────────────────────────────────
+
+/// State for the general error-page middleware: a status → template-name map.
+/// Cloned per request (an `Arc`, cheap).
+#[derive(Clone)]
+pub struct RenderErrorState {
+    pub templates: std::sync::Arc<std::collections::HashMap<StatusCode, String>>,
+}
+
+/// Middleware that styles error responses for ANY registered status code
+/// (e.g. 429, 403, 410) the way [`render_500_middleware`] does for 500. After
+/// the handler runs, if the response status has a registered template and the
+/// body isn't already HTML, the body text is captured as the `message` and the
+/// template is rendered in its place — preserving the original status code.
+///
+/// Registered via `App::builder().error_template(status, "name.html")`. 404
+/// and 500 keep their dedicated paths (`not_found_template` /
+/// `server_error_template`); this covers everything else a handler returns as
+/// `Err((status, message))`.
+pub async fn render_error_middleware(
+    axum::extract::State(state): axum::extract::State<RenderErrorState>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response<Body> {
+    let path = req.uri().path().to_string();
+    // API / AJAX clients (Accept: application/json) keep the raw status +
+    // message body so they can read it programmatically; only browser
+    // navigations (Accept: text/html, the default) get the styled HTML page.
+    let wants_json = req
+        .headers()
+        .get(header::ACCEPT)
+        .and_then(|v| v.to_str().ok())
+        .map(|a| a.contains("application/json"))
+        .unwrap_or(false);
+    let resp = next.run(req).await;
+
+    let status = resp.status();
+    let Some(template) = state.templates.get(&status).cloned() else {
+        return resp;
+    };
+    if wants_json {
+        return resp;
+    }
+
+    // Already-HTML error responses (a handler that rendered its own page) pass
+    // through untouched — only bare text/plain (or no content-type) errors get
+    // the styled template.
+    let ct = resp
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if ct.starts_with("text/html") {
+        return resp;
+    }
+
+    // Capture the body (the handler's message). 64KB cap, same as the 500 path.
+    let (_parts, body) = resp.into_parts();
+    let bytes = axum::body::to_bytes(body, 64 * 1024)
+        .await
+        .unwrap_or_default();
+    let message = String::from_utf8_lossy(&bytes).to_string();
+
+    let ctx = error_context(status, &message, &path, is_dev_mode());
+    let (body_str, content_type) = render_error_page(&template, status, &ctx);
+
+    (status, [(header::CONTENT_TYPE, content_type)], body_str).into_response()
+}
+
+/// Template context for a general error page: `{ status, status_text, message,
+/// request_path, dev_mode }`.
+fn error_context(status: StatusCode, message: &str, path: &str, dev: bool) -> minijinja::Value {
+    minijinja::context! {
+        status => status.as_u16(),
+        status_text => status.canonical_reason().unwrap_or(""),
+        message => message,
+        request_path => path,
+        dev_mode => dev,
+    }
+}
+
+/// Render `template` for an error page, falling back to the status' canonical
+/// reason phrase as plain text if the template can't render. Mirrors the
+/// loud-fail posture of [`render_500`].
+fn render_error_page(
+    template: &str,
+    status: StatusCode,
+    ctx: &minijinja::Value,
+) -> (String, &'static str) {
+    match crate::templates::render(template, ctx) {
+        Ok(html) => (html, "text/html; charset=utf-8"),
+        Err(secondary) => {
+            tracing::error!(
+                template = %template,
+                status = %status.as_u16(),
+                error = %secondary,
+                "render_error_page: the configured error template failed to render; \
+                 falling back to plain text",
+            );
+            let reason = status.canonical_reason().unwrap_or("Error");
+            (reason.to_string(), "text/plain; charset=utf-8")
+        }
+    }
+}
+
 // ─── Tests ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn error_context_carries_status_reason_message_and_path() {
+        let ctx = error_context(
+            StatusCode::TOO_MANY_REQUESTS,
+            "slow down",
+            "/p/notes",
+            false,
+        );
+        let mut env = minijinja::Environment::new();
+        env.add_template(
+            "t",
+            "{{ status }}|{{ status_text }}|{{ message }}|{{ request_path }}|{{ dev_mode }}",
+        )
+        .unwrap();
+        let out = env.get_template("t").unwrap().render(ctx).unwrap();
+        assert_eq!(out, "429|Too Many Requests|slow down|/p/notes|false");
+    }
+
+    #[test]
+    fn render_error_page_falls_back_to_plain_text_when_template_cant_render() {
+        // No ambient template engine in this unit test, so `render()` errors
+        // and we land on the canonical-reason plain-text fallback.
+        let ctx = error_context(StatusCode::TOO_MANY_REQUESTS, "msg", "/x", false);
+        let (body, ct) = render_error_page("nonexistent.html", StatusCode::TOO_MANY_REQUESTS, &ctx);
+        assert!(ct.starts_with("text/plain"), "content-type: {ct}");
+        assert_eq!(body, "Too Many Requests");
+    }
 
     #[test]
     fn render_not_found_returns_plain_text_when_no_template() {

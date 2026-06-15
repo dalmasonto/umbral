@@ -101,6 +101,9 @@ pub struct AppBuilder {
     slash_redirect: crate::slash::SlashRedirect,
     not_found_template: Option<String>,
     server_error_template: Option<String>,
+    /// Custom template per status code for general error pages (429, 403, …),
+    /// styled like the 404/500 pages. See [`Self::error_template`].
+    error_templates: HashMap<axum::http::StatusCode, String>,
     /// Optional hook called before the 500 template is rendered.
     server_error_hook: Option<crate::errors::ServerErrorHook>,
     /// When `true` (the default), the embedded default 404/500 templates
@@ -144,6 +147,7 @@ impl Default for AppBuilder {
             slash_redirect: crate::slash::SlashRedirect::default(),
             not_found_template: None,
             server_error_template: None,
+            error_templates: HashMap::new(),
             server_error_hook: None,
             default_error_pages: true,
             cors: None,
@@ -322,6 +326,30 @@ impl AppBuilder {
     /// template renders.
     pub fn server_error_template(mut self, name: impl Into<String>) -> Self {
         self.server_error_template = Some(name.into());
+        self
+    }
+
+    /// Register a custom template for error responses with `status` (e.g.
+    /// `429`, `403`, `410`). When a handler returns `Err((status, message))`
+    /// (or any non-HTML error response with this status), the template is
+    /// rendered in its place — styled like the 404/500 pages — preserving the
+    /// status code. The template receives `{ status, status_text, message,
+    /// request_path, dev_mode }`. Repeatable for multiple codes.
+    ///
+    /// 404 and 500 have dedicated methods ([`Self::not_found_template`] /
+    /// [`Self::server_error_template`]); use this for everything else.
+    ///
+    /// ```ignore
+    /// App::builder()
+    ///     .error_template(StatusCode::TOO_MANY_REQUESTS, "errors/429.html")
+    ///     .error_template(StatusCode::FORBIDDEN, "errors/403.html")
+    /// ```
+    pub fn error_template(
+        mut self,
+        status: axum::http::StatusCode,
+        name: impl Into<String>,
+    ) -> Self {
+        self.error_templates.insert(status, name.into());
         self
     }
 
@@ -954,6 +982,21 @@ impl AppBuilder {
             router = router.layer(axum::middleware::from_fn_with_state(
                 render_state,
                 crate::errors::render_500_middleware,
+            ));
+        }
+
+        // General custom error pages: style any registered status code
+        // (429/403/410/…) the way the 500 path does, for handler-Err
+        // responses — rendering each through its template while preserving the
+        // status. Already-HTML and unregistered statuses pass through; this is
+        // independent of the 500 layer above (different status codes).
+        if !self.error_templates.is_empty() {
+            let state = crate::errors::RenderErrorState {
+                templates: std::sync::Arc::new(std::mem::take(&mut self.error_templates)),
+            };
+            router = router.layer(axum::middleware::from_fn_with_state(
+                state,
+                crate::errors::render_error_middleware,
             ));
         }
 
