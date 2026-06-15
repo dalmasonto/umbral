@@ -1870,12 +1870,15 @@ async fn create(
 /// declared child array with its FK to the parent set, returning the full
 /// nested object.
 ///
-/// **Atomicity:** the dynamic write path (`DynQuerySet::insert_json`) has
-/// no transaction variant yet (see `planning/orm_fixes.md`), so this is
-/// *compensating*, not a true DB transaction — if any child fails, the
-/// parent and already-created siblings are deleted, so a bad child never
-/// leaves a half-created parent. (A process crash mid-write could still
-/// orphan a parent; the true fix is `insert_json_in_tx`.)
+/// **Atomicity (orm_fixes #2):** the whole nested write runs on ONE
+/// `umbra::db::Transaction` via `DynQuerySet::insert_json_in_tx`. The
+/// parent and every child insert on the same open tx and only become
+/// durable when `tx.commit()` succeeds at the end. Any failure —
+/// including a process crash mid-write — leaves zero rows because the
+/// transaction is never committed; sqlx rolls it back on drop. This
+/// replaces the old compensating-delete handler, which could orphan a
+/// parent if the process died between the parent insert and a failing
+/// child (each statement auto-committed independently).
 async fn create_nested(
     cfg: &RestPlugin,
     table: &str,
@@ -1916,51 +1919,49 @@ async fn create_nested(
         });
     }
 
-    // Insert the parent.
+    // One transaction for the parent + all children. Dropping `tx`
+    // without committing rolls everything back — that's the rollback
+    // safety net for any early return below.
+    let mut tx = umbra::db::begin().await?;
+
+    // Insert the parent on the transaction.
     let mut parent = umbra::orm::DynQuerySet::for_meta(&model)
-        .insert_json(body)
+        .insert_json_in_tx(body, &mut tx)
         .await?;
     let parent_pk = pk_column(&model)?.name.clone();
     let pk_value = parent.get(&parent_pk).cloned().ok_or_else(|| {
         ApiError::BadInput("nested: parent row has no primary key after insert".into())
     })?;
 
-    // Insert children, tracking created rows so a failure can compensate.
-    let mut undo: Vec<(ModelMeta, String, Value)> = Vec::new();
+    // Insert each child on the same transaction. A failure returns Err,
+    // `tx` drops un-committed, and the parent + earlier children roll
+    // back at the DB level — no compensating deletes needed.
     let mut results: Vec<(String, Vec<Value>)> = Vec::new();
-
     for p in pending {
-        let child_pk = pk_column(&p.child)?.name.clone();
         let mut created = Vec::with_capacity(p.items.len());
         for item in p.items {
             let Value::Object(mut child_body) = item else {
-                compensate(&undo, &model, &parent_pk, &pk_value).await;
                 return Err(ApiError::BadInput(format!(
                     "items in nested `{}` must be objects",
                     p.field
                 )));
             };
-            // Set the child's FK to the just-created parent.
+            // Set the child's FK to the just-created (uncommitted)
+            // parent — `insert_json_in_tx` validates the FK against the
+            // open tx, so it resolves even though the parent isn't
+            // committed yet.
             child_body.insert(p.fk.clone(), pk_value.clone());
-            match umbra::orm::DynQuerySet::for_meta(&p.child)
-                .insert_json(&child_body)
-                .await
-            {
-                Ok(mut crow) => {
-                    if let Some(cpk) = crow.get(&child_pk).cloned() {
-                        undo.push((p.child.clone(), child_pk.clone(), cpk));
-                    }
-                    cfg.apply_overrides(&p.child.table, &mut crow);
-                    created.push(Value::Object(crow));
-                }
-                Err(e) => {
-                    compensate(&undo, &model, &parent_pk, &pk_value).await;
-                    return Err(e.into());
-                }
-            }
+            let mut crow = umbra::orm::DynQuerySet::for_meta(&p.child)
+                .insert_json_in_tx(&child_body, &mut tx)
+                .await?;
+            cfg.apply_overrides(&p.child.table, &mut crow);
+            created.push(Value::Object(crow));
         }
         results.push((p.field, created));
     }
+
+    // Commit only after every insert succeeded.
+    tx.commit().await?;
 
     cfg.apply_overrides(table, &mut parent);
     for (field, children) in results {
@@ -2006,36 +2007,6 @@ fn child_fk_to<'a>(child: &'a ModelMeta, parent_table: &str) -> Result<&'a str, 
             child.table, parent_table
         ))
     })
-}
-
-/// Undo a partial nested write: delete created children (newest first),
-/// then the parent. Best-effort — we're already returning the real error.
-async fn compensate(
-    undo: &[(ModelMeta, String, Value)],
-    parent: &ModelMeta,
-    parent_pk: &str,
-    parent_pk_value: &Value,
-) {
-    for (child, pk_name, pk_val) in undo.iter().rev() {
-        let _ = umbra::orm::DynQuerySet::for_meta(child)
-            .filter_eq_string(pk_name, &scalar_to_string(pk_val))
-            .delete()
-            .await;
-    }
-    let _ = umbra::orm::DynQuerySet::for_meta(parent)
-        .filter_eq_string(parent_pk, &scalar_to_string(parent_pk_value))
-        .delete()
-        .await;
-}
-
-/// Render a JSON scalar to the string form `filter_eq_string` coerces.
-fn scalar_to_string(v: &Value) -> String {
-    match v {
-        Value::String(s) => s.clone(),
-        Value::Number(n) => n.to_string(),
-        Value::Bool(b) => b.to_string(),
-        _ => String::new(),
-    }
 }
 
 async fn update(

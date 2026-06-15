@@ -636,6 +636,71 @@ pub async fn set_junction_dynamic(
     Ok(())
 }
 
+/// Transaction-aware sibling of [`set_junction_dynamic`]. Same
+/// DELETE-then-multi-row-INSERT replacement, but every statement
+/// runs on the passed transaction instead of opening its own. Used
+/// by [`crate::orm::dynamic::DynQuerySet::insert_json_in_tx`] so a
+/// nested create's junction rows commit (or roll back) atomically
+/// with the parent + child INSERTs.
+pub async fn set_junction_dynamic_in_tx(
+    junction_table: &str,
+    parent_id: sea_query::Value,
+    child_ids: Vec<sea_query::Value>,
+    tx: &mut crate::db::Transaction,
+) -> Result<(), sqlx::Error> {
+    let insert: Option<sea_query::InsertStatement> = if child_ids.is_empty() {
+        None
+    } else {
+        let mut insert = Query::insert();
+        insert
+            .into_table(Alias::new(junction_table))
+            .columns([Alias::new("parent_id"), Alias::new("child_id")])
+            .on_conflict(
+                OnConflict::columns([Alias::new("parent_id"), Alias::new("child_id")])
+                    .do_nothing()
+                    .to_owned(),
+            );
+        for child_id in child_ids {
+            insert.values_panic([
+                Expr::value(parent_id.clone()).into(),
+                Expr::value(child_id).into(),
+            ]);
+        }
+        Some(insert)
+    };
+
+    let mut delete = Query::delete();
+    delete
+        .from_table(Alias::new(junction_table))
+        .and_where(Expr::col(Alias::new("parent_id")).eq(parent_id));
+
+    match tx.backend_name() {
+        "sqlite" => {
+            let inner = tx
+                .as_sqlite_mut()
+                .expect("backend_name == sqlite implies a sqlite tx");
+            let (sql, values) = delete.build_sqlx(SqliteQueryBuilder);
+            sqlx::query_with(&sql, values).execute(&mut **inner).await?;
+            if let Some(insert) = insert {
+                let (sql, values) = insert.build_sqlx(SqliteQueryBuilder);
+                sqlx::query_with(&sql, values).execute(&mut **inner).await?;
+            }
+        }
+        _ => {
+            let inner = tx
+                .as_pg_mut()
+                .expect("backend_name == postgres implies a pg tx");
+            let (sql, values) = delete.build_sqlx(PostgresQueryBuilder);
+            sqlx::query_with(&sql, values).execute(&mut **inner).await?;
+            if let Some(insert) = insert {
+                let (sql, values) = insert.build_sqlx(PostgresQueryBuilder);
+                sqlx::query_with(&sql, values).execute(&mut **inner).await?;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// "Which child PKs does `parent_id` hold the M2M junction relation
 /// to, as plain strings?" The dynamic equivalent of
 /// [`M2M::fetch`] for callers that only have the junction name +

@@ -69,6 +69,42 @@ pub async fn validate_on_create(meta: &ModelMeta, body: &Map<String, Value>) -> 
     errors
 }
 
+/// Transaction-aware sibling of [`validate_on_create`]. Identical
+/// except the FK-existence check runs on the passed transaction
+/// instead of the ambient pool, so a nested create can validate a
+/// child whose FK points at a parent that was inserted earlier on
+/// the SAME (still-uncommitted) transaction. Reading on the pool
+/// would not see the uncommitted parent and would reject the child
+/// as a dangling reference.
+///
+/// The M2M shape/existence check stays on the ambient pool: M2M
+/// targets are unrelated to the in-flight parent, so committed-read
+/// visibility is the right semantics there.
+pub async fn validate_on_create_in_tx(
+    meta: &ModelMeta,
+    body: &Map<String, Value>,
+    tx: &mut crate::db::Transaction,
+) -> Vec<WriteError> {
+    let mut errors = validate_required_create(meta, body);
+    errors.extend(validate_choices(meta, body));
+    errors.extend(validate_m2m_relations(meta, body).await);
+    let mut fk_errors = validate_fk_references_in_tx(meta, body, tx).await;
+    let fk_fields: std::collections::HashSet<String> = fk_errors
+        .iter()
+        .filter_map(|e| match e {
+            WriteError::ForeignKeyNotFound { field, .. } => Some(field.clone()),
+            _ => None,
+        })
+        .collect();
+    errors.retain(|e| match e {
+        WriteError::RequiredFieldMissing { field } => !fk_fields.contains(field),
+        WriteError::BlankNotAllowed { field } => !fk_fields.contains(field),
+        _ => true,
+    });
+    errors.append(&mut fk_errors);
+    errors
+}
+
 /// Update-shaped equivalent. Required-field check only fires on
 /// fields the client EXPLICITLY sent as blank — missing keys are
 /// fine per the partial-update contract.
@@ -435,6 +471,39 @@ async fn validate_fk_references(meta: &ModelMeta, body: &Map<String, Value>) -> 
     out
 }
 
+/// Transaction-aware sibling of [`validate_fk_references`]. The only
+/// difference is the existence check runs through the open
+/// transaction so an FK at an uncommitted parent resolves.
+async fn validate_fk_references_in_tx(
+    meta: &ModelMeta,
+    body: &Map<String, Value>,
+    tx: &mut crate::db::Transaction,
+) -> Vec<WriteError> {
+    let mut out = Vec::new();
+    for col in &meta.fields {
+        let Some(target_table) = col.fk_target.as_deref() else {
+            continue;
+        };
+        let Some(value) = body.get(&col.name) else {
+            continue;
+        };
+        if value.is_null() {
+            continue;
+        }
+        let Some(target_meta) = model_meta_by_table(target_table) else {
+            continue;
+        };
+        if !check_fk_row_exists_in_tx(&target_meta, value, tx).await {
+            out.push(WriteError::ForeignKeyNotFound {
+                field: col.name.clone(),
+                target_table: target_table.to_string(),
+                value: value.clone(),
+            });
+        }
+    }
+    out
+}
+
 fn column_is_required(col: &Column) -> bool {
     !col.primary_key
         && !col.noform
@@ -500,6 +569,67 @@ async fn check_fk_row_exists(target: &ModelMeta, value: &Value) -> bool {
         .await
         .unwrap_or(0);
     count > 0
+}
+
+/// Transaction-aware existence check. Mirrors [`check_fk_row_exists`]
+/// but the COUNT runs on the open transaction so an uncommitted
+/// parent inserted earlier on the same tx is visible. Built with
+/// sea-query so SQLite and Postgres share one code path; dispatch is
+/// on the transaction's backend name.
+async fn check_fk_row_exists_in_tx(
+    target: &ModelMeta,
+    value: &Value,
+    tx: &mut crate::db::Transaction,
+) -> bool {
+    use sea_query::{Alias, Expr, Func, PostgresQueryBuilder, Query, SqliteQueryBuilder};
+    use sea_query_binder::SqlxBinder;
+
+    let Some(pk) = target.fields.iter().find(|c| c.primary_key) else {
+        return true;
+    };
+    // Build the PK predicate as a typed sea-query value so binding
+    // works on both backends (a string PK binds as TEXT, an integer
+    // PK as the right integer width).
+    let pk_value = match crate::orm::write::json_to_sea_value(pk.ty, value, false, &pk.name, None) {
+        Ok(v) => v,
+        // A value that won't coerce to the PK type can't match a real
+        // row; treat as "not found" so the FK error surfaces rather
+        // than a panic.
+        Err(_) => return false,
+    };
+    let mut q = Query::select();
+    q.from(Alias::new(&target.table))
+        .expr(Func::count(Expr::col(Alias::new(&pk.name))))
+        .and_where(Expr::col(Alias::new(&pk.name)).eq(pk_value));
+
+    match tx.backend_name() {
+        "sqlite" => {
+            let Some(inner) = tx.as_sqlite_mut() else {
+                return true;
+            };
+            let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
+            match sqlx::query_scalar_with::<_, i64, _>(&sql, values)
+                .fetch_one(&mut **inner)
+                .await
+            {
+                Ok(n) => n > 0,
+                Err(_) => false,
+            }
+        }
+        _ => {
+            let Some(inner) = tx.as_pg_mut() else {
+                return true;
+            };
+            let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
+            match sqlx::query_scalar_with::<_, i64, _>(&sql, values)
+                .fetch_one(&mut **inner)
+                .await
+            {
+                Ok(n) => n > 0,
+                Err(_) => false,
+            }
+        }
+    }
 }
 
 /// Parse SQLite constraint messages of the form

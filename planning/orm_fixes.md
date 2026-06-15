@@ -57,7 +57,9 @@ multi-reverse-set parents.
 
 ## 2. `DynQuerySet::insert_json` has no transaction variant (blocks true-atomic nested writes)
 
-**Status:** open — compensation workaround in place; true fix is a tx-aware insert.
+**Status:** fixed (`feat(orm): transactional dynamic insert (insert_json_in_tx) for atomic nested writes`) — added `DynQuerySet::insert_json_in_tx(&self, body, &mut umbra::db::Transaction)`; refactored `insert_json`'s body-normalise + column-build tail into shared helpers (`normalise_insert_body` / `build_insert_plan`) so the pool and tx paths can't drift; the tx path runs the INSERT, PK re-fetch, M2M junction writes (`set_junction_dynamic_in_tx`), M2M read-back, AND FK-existence validation (`validate_on_create_in_tx`, reading the open tx so a child's FK at the uncommitted parent resolves) all on the passed tx; `umbra-rest::create_nested` now opens one `umbra::db::begin()`, inserts parent + all children on it, and `commit()`s — the compensating-delete handler (`compensate` / `scalar_to_string`) is removed. Regression coverage in `crates/umbra-core/tests/dyn_insert_tx.rs` proves true rollback (a failing child leaves zero rows, parent included — never committed), atomic happy-path commit, and FK visibility across the open tx.
+
+**Status (original):** open — compensation workaround in place; true fix is a tx-aware insert.
 
 **Where:** `plugins/umbra-rest` — feature #58 (writable nested serializers). A
 `POST /api/order/` with `{ items: [...] }` should create the parent + children in

@@ -1018,161 +1018,35 @@ impl<'a> DynQuerySet<'a> {
         self,
         body: &serde_json::Map<String, serde_json::Value>,
     ) -> Result<serde_json::Map<String, serde_json::Value>, crate::orm::write::WriteError> {
-        use crate::orm::write::{WriteError, is_default_pk};
+        use crate::orm::write::WriteError;
 
-        // Phase -1 — strip `noform` columns. The user-facing
-        // contract is "this column is server-managed; clients
-        // never write to it" — REST callers used to filter at
-        // the boundary, but the rule belongs at the dynamic-
-        // write seam so every consumer (REST, admin, custom
-        // handlers) gets it for free. The owned clone lets us
-        // continue to take `&body` from the caller.
-        //
-        // Gap 109: we also need a mutable view to auto-derive
-        // `#[umbra(slug_from = "...")]` columns before validation
-        // runs (so a missing-required check doesn't fire on a
-        // slug we're about to fill). When either rule triggers we
-        // take the owned copy; otherwise the borrow passes
-        // through.
-        let needs_owned = self
-            .meta
-            .fields
-            .iter()
-            .any(|c| c.noform || c.slug_from.is_some());
-        let mut body_owned: serde_json::Map<String, serde_json::Value>;
-        let body: &serde_json::Map<String, serde_json::Value> = if needs_owned {
-            body_owned = body.clone();
-            for col in &self.meta.fields {
-                if col.noform {
-                    body_owned.remove(&col.name);
+        // Phase -1 — normalise the body (strip `noform`, derive
+        // `slug_from`). Shared with the tx path.
+        let body_owned: serde_json::Map<String, serde_json::Value>;
+        let body: &serde_json::Map<String, serde_json::Value> =
+            match normalise_insert_body(self.meta, body) {
+                Some(owned) => {
+                    body_owned = owned;
+                    &body_owned
                 }
-            }
-            crate::orm::write::apply_slug_from(&self.meta.fields, &mut body_owned, false);
-            &body_owned
-        } else {
-            body
-        };
+                None => body,
+            };
 
-        // Phase 0 — pre-DB validation. Required-field + FK
-        // existence + choices + M2M shape checks run together
-        // so the response carries every problem in one round-
-        // trip. The REST plugin used to do this; centralising
-        // it here means the admin plugin and any third-party
-        // caller of `insert_json` gets the same structured
-        // errors.
-        let validation_errors = crate::orm::validation::validate_on_create(&self.meta, body).await;
+        // Phase 0 — pre-DB validation against the ambient pool.
+        let validation_errors = crate::orm::validation::validate_on_create(self.meta, body).await;
         if !validation_errors.is_empty() {
             return Err(WriteError::Multiple {
                 errors: validation_errors,
             });
         }
 
-        let mut cols: Vec<&str> = Vec::new();
-        let mut values: Vec<SeaValue> = Vec::new();
-        for col in &self.meta.fields {
-            // Auto-increment PK: omit when the body supplies no value,
-            // null, or the integer sentinel 0. The backend hands out
-            // the next id.
-            if col.primary_key {
-                let supplied = body.get(&col.name);
-                let is_sentinel = match supplied {
-                    None | Some(serde_json::Value::Null) => true,
-                    Some(v) => is_default_pk(col.ty, v),
-                };
-                if matches!(
-                    col.ty,
-                    SqlType::Integer | SqlType::BigInt | SqlType::SmallInt
-                ) && is_sentinel
-                {
-                    continue;
-                }
-            }
-            let Some(json) = body.get(&col.name) else {
-                // BUG-5 fix: `auto_now` and `auto_now_add` columns
-                // auto-populate with `Utc::now()` on the dynamic
-                // write path when the body omits them — closes
-                // the gap where the REST plugin's POST handler
-                // would reject a required `created_at` field even
-                // though the framework was supposed to manage it.
-                if col.auto_now_add || col.auto_now {
-                    let now_value = crate::orm::write::now_for_column(col.ty);
-                    cols.push(&col.name);
-                    values.push(now_value);
-                    continue;
-                }
-                // `validate_on_create` already caught
-                // missing-required-field cases above, but a
-                // column with a default that the body omitted
-                // still needs to be skipped here so the backend
-                // fills it.
-                continue;
-            };
-            if json.is_null() {
-                // Pre-validation lets nullable nulls through; a
-                // null on a non-nullable column was caught above.
-                continue;
-            }
-            // IMP-3: pre-validate `#[umbra(min = N)]` / `max = N`.
-            // The DB-side CHECK catches violations too; surfacing
-            // a structured error is friendlier.
-            if let Some(n) = json.as_i64() {
-                if let Some(min) = col.min {
-                    if n < min {
-                        return Err(WriteError::Validator {
-                            field: col.name.clone(),
-                            message: format!("must be >= {min} (got {n})."),
-                        });
-                    }
-                }
-                if let Some(max) = col.max {
-                    if n > max {
-                        return Err(WriteError::Validator {
-                            field: col.name.clone(),
-                            message: format!("must be <= {max} (got {n})."),
-                        });
-                    }
-                }
-            }
-            // BUG-11/12/13: Slug / Email / Url wrappers.
-            if let (Some(fmt), Some(s)) = (col.text_format.as_deref(), json.as_str()) {
-                if let Err(e) = crate::orm::validators::validate_text_format(fmt, s) {
-                    return Err(WriteError::Validator {
-                        field: col.name.clone(),
-                        message: e.to_string(),
-                    });
-                }
-            }
-            let sea_value = crate::orm::write::json_to_sea_value(
-                col.ty,
-                json,
-                col.nullable,
-                &col.name,
-                fk_target_pk_sql_type(col),
-            )?;
-            cols.push(&col.name);
-            values.push(sea_value);
-        }
-
-        // The PK name we'll read back. Used for RETURNING on Postgres
-        // and for the SQLite follow-up SELECT.
-        let pk_col = self
-            .meta
-            .fields
-            .iter()
-            .find(|c| c.primary_key)
-            .ok_or_else(|| {
-                WriteError::Sqlx(sqlx::Error::Protocol(
-                    "insert_json: model has no PK".to_string(),
-                ))
-            })?;
-        let pk_name = pk_col.name.clone();
-        let pk_ty = pk_col.ty;
-
-        let mut q = Query::insert();
-        q.into_table(Alias::new(&self.meta.table));
-        q.columns(cols.iter().map(|c| Alias::new(*c)).collect::<Vec<_>>());
-        let exprs: Vec<sea_query::SimpleExpr> = values.into_iter().map(Into::into).collect();
-        q.values_panic(exprs);
+        // Phase 1 — build the INSERT + read back the PK shape.
+        // Shared with the tx path.
+        let InsertPlan {
+            mut q,
+            pk_name,
+            pk_ty,
+        } = build_insert_plan(self.meta, body)?;
 
         // gaps #77: fire `pre_save:<table>` for the dynamic-write
         // path so REST endpoints and admin form submits surface in
@@ -1270,6 +1144,136 @@ impl<'a> DynQuerySet<'a> {
                     true,
                 )
                 .await;
+                Ok(out)
+            }
+        }
+    }
+
+    /// Terminal: INSERT one row from a JSON map ON the passed
+    /// transaction. The transactional sibling of [`Self::insert_json`]:
+    /// the INSERT, the PK re-fetch, the M2M junction writes, the M2M
+    /// read-back, AND the FK-existence validation all execute on `tx`
+    /// rather than the ambient pool — so a caller can insert a parent
+    /// and its children on one transaction and have the whole set
+    /// commit (or roll back) atomically (`planning/orm_fixes.md` #2).
+    ///
+    /// Validation runs against the open transaction
+    /// ([`crate::orm::validation::validate_on_create_in_tx`]) so a
+    /// child whose FK targets a parent inserted earlier on the same
+    /// (uncommitted) `tx` resolves. This is what makes a true-atomic
+    /// nested create possible without the old compensating-delete
+    /// dance.
+    ///
+    /// **Signals.** Unlike the auto-commit path, this does NOT fire
+    /// `pre_save` / `post_save`. The row isn't durable until the
+    /// caller commits `tx`, and a subscriber (audit log, cache
+    /// invalidation, search index) firing before commit could observe
+    /// — or react to — a write that then rolls back. The caller owns
+    /// the commit, so the caller owns whatever post-commit signalling
+    /// it wants. (The typed `Manager::create_in_tx` path makes the
+    /// same choice for the same reason.)
+    pub async fn insert_json_in_tx(
+        self,
+        body: &serde_json::Map<String, serde_json::Value>,
+        tx: &mut crate::db::Transaction,
+    ) -> Result<serde_json::Map<String, serde_json::Value>, crate::orm::write::WriteError> {
+        use crate::orm::write::WriteError;
+
+        // Phase -1 — normalise (shared with the pool path).
+        let body_owned: serde_json::Map<String, serde_json::Value>;
+        let body: &serde_json::Map<String, serde_json::Value> =
+            match normalise_insert_body(self.meta, body) {
+                Some(owned) => {
+                    body_owned = owned;
+                    &body_owned
+                }
+                None => body,
+            };
+
+        // Phase 0 — validation reads through the transaction so an FK
+        // at an uncommitted parent resolves.
+        let validation_errors =
+            crate::orm::validation::validate_on_create_in_tx(self.meta, body, tx).await;
+        if !validation_errors.is_empty() {
+            return Err(WriteError::Multiple {
+                errors: validation_errors,
+            });
+        }
+
+        // Phase 1 — build the INSERT (shared with the pool path).
+        let InsertPlan {
+            mut q,
+            pk_name,
+            pk_ty,
+        } = build_insert_plan(self.meta, body)?;
+
+        match tx.backend_name() {
+            "sqlite" => {
+                let (sql, vals) = q.build_sqlx(SqliteQueryBuilder);
+                let res = {
+                    let inner = tx.as_sqlite_mut().expect("sqlite backend_name");
+                    sqlx::query_with(&sql, vals)
+                        .execute(&mut **inner)
+                        .await
+                        .map_err(|e| classify_or_sqlx(e, body))?
+                };
+                // Re-fetch by PK on the same tx so the caller sees the
+                // row the DB stored (defaults, autoincrement).
+                let pk_pred = match pk_ty {
+                    SqlType::Integer | SqlType::BigInt | SqlType::SmallInt => {
+                        Expr::col(Alias::new(&pk_name)).eq(res.last_insert_rowid())
+                    }
+                    _ => {
+                        let supplied = body
+                            .get(&pk_name)
+                            .cloned()
+                            .unwrap_or(serde_json::Value::Null);
+                        let sea_value = crate::orm::write::json_to_sea_value(
+                            pk_ty, &supplied, false, &pk_name, None,
+                        )?;
+                        Expr::col(Alias::new(&pk_name)).eq(sea_value)
+                    }
+                };
+                let mut sel = Query::select();
+                sel.from(Alias::new(&self.meta.table));
+                for c in &self.meta.fields {
+                    sel.column(Alias::new(&c.name));
+                }
+                sel.cond_where(Condition::all().add(pk_pred));
+                let (sel_sql, sel_vals) = sel.build_sqlx(SqliteQueryBuilder);
+                let mut out = serde_json::Map::new();
+                {
+                    let inner = tx.as_sqlite_mut().expect("sqlite backend_name");
+                    let row = sqlx::query_with(&sel_sql, sel_vals)
+                        .fetch_one(&mut **inner)
+                        .await?;
+                    for col in &self.meta.fields {
+                        out.insert(col.name.clone(), decode_to_json(&row, col)?);
+                    }
+                }
+                // Phase 2/3 — junction writes + read-back on the tx.
+                let pk_value = out.get(&pk_name).cloned();
+                write_m2m_junctions_in_tx(self.meta, pk_value.as_ref(), body, tx).await?;
+                hydrate_m2m_into_tx(self.meta, pk_value.as_ref(), &mut out, tx).await?;
+                Ok(out)
+            }
+            _ => {
+                q.returning_all();
+                let (sql, vals) = q.build_sqlx(PostgresQueryBuilder);
+                let mut out = serde_json::Map::new();
+                {
+                    let inner = tx.as_pg_mut().expect("postgres backend_name");
+                    let row = sqlx::query_with(&sql, vals)
+                        .fetch_one(&mut **inner)
+                        .await
+                        .map_err(|e| classify_or_sqlx(e, body))?;
+                    for col in &self.meta.fields {
+                        out.insert(col.name.clone(), decode_pg_to_json(&row, col)?);
+                    }
+                }
+                let pk_value = out.get(&pk_name).cloned();
+                write_m2m_junctions_in_tx(self.meta, pk_value.as_ref(), body, tx).await?;
+                hydrate_m2m_into_tx(self.meta, pk_value.as_ref(), &mut out, tx).await?;
                 Ok(out)
             }
         }
@@ -2572,6 +2576,244 @@ async fn collect_parent_pks(
 /// its PK column (read straight off the post-INSERT row). When
 /// it's `None` or unparseable we silently skip — there's nothing
 /// to anchor the junction to.
+/// Phase -1 of the dynamic insert: strip `noform` columns and derive
+/// any `#[umbra(slug_from = "...")]` columns. Returns `Some(owned)`
+/// when either rule fired (the caller binds the owned copy) or `None`
+/// when the body passes through untouched. Shared by `insert_json`
+/// and `insert_json_in_tx` so the two paths can't drift on what they
+/// strip / derive before validation runs.
+fn normalise_insert_body(
+    meta: &crate::migrate::ModelMeta,
+    body: &serde_json::Map<String, serde_json::Value>,
+) -> Option<serde_json::Map<String, serde_json::Value>> {
+    let needs_owned = meta
+        .fields
+        .iter()
+        .any(|c| c.noform || c.slug_from.is_some());
+    if !needs_owned {
+        return None;
+    }
+    let mut owned = body.clone();
+    for col in &meta.fields {
+        if col.noform {
+            owned.remove(&col.name);
+        }
+    }
+    crate::orm::write::apply_slug_from(&meta.fields, &mut owned, false);
+    Some(owned)
+}
+
+/// The prepared INSERT plus the PK shape the caller re-fetches by.
+struct InsertPlan {
+    q: sea_query::InsertStatement,
+    pk_name: String,
+    pk_ty: SqlType,
+}
+
+/// Phase 1 of the dynamic insert: validate min/max + text-format
+/// wrappers per column, coerce each JSON value to its `SeaValue`, and
+/// assemble the `Query::insert()`. Auto-increment integer PKs and
+/// absent-with-default columns are omitted so the backend fills them;
+/// `auto_now` / `auto_now_add` columns the body omitted are filled
+/// with `Utc::now()`. Shared by `insert_json` and `insert_json_in_tx`
+/// so column handling is identical on both paths; the methods differ
+/// only in which executor runs the statement.
+fn build_insert_plan(
+    meta: &crate::migrate::ModelMeta,
+    body: &serde_json::Map<String, serde_json::Value>,
+) -> Result<InsertPlan, crate::orm::write::WriteError> {
+    use crate::orm::write::{WriteError, is_default_pk};
+
+    let mut cols: Vec<&str> = Vec::new();
+    let mut values: Vec<SeaValue> = Vec::new();
+    for col in &meta.fields {
+        if col.primary_key {
+            let supplied = body.get(&col.name);
+            let is_sentinel = match supplied {
+                None | Some(serde_json::Value::Null) => true,
+                Some(v) => is_default_pk(col.ty, v),
+            };
+            if matches!(
+                col.ty,
+                SqlType::Integer | SqlType::BigInt | SqlType::SmallInt
+            ) && is_sentinel
+            {
+                continue;
+            }
+        }
+        let Some(json) = body.get(&col.name) else {
+            if col.auto_now_add || col.auto_now {
+                let now_value = crate::orm::write::now_for_column(col.ty);
+                cols.push(&col.name);
+                values.push(now_value);
+                continue;
+            }
+            continue;
+        };
+        if json.is_null() {
+            continue;
+        }
+        if let Some(n) = json.as_i64() {
+            if let Some(min) = col.min {
+                if n < min {
+                    return Err(WriteError::Validator {
+                        field: col.name.clone(),
+                        message: format!("must be >= {min} (got {n})."),
+                    });
+                }
+            }
+            if let Some(max) = col.max {
+                if n > max {
+                    return Err(WriteError::Validator {
+                        field: col.name.clone(),
+                        message: format!("must be <= {max} (got {n})."),
+                    });
+                }
+            }
+        }
+        if let (Some(fmt), Some(s)) = (col.text_format.as_deref(), json.as_str()) {
+            if let Err(e) = crate::orm::validators::validate_text_format(fmt, s) {
+                return Err(WriteError::Validator {
+                    field: col.name.clone(),
+                    message: e.to_string(),
+                });
+            }
+        }
+        let sea_value = crate::orm::write::json_to_sea_value(
+            col.ty,
+            json,
+            col.nullable,
+            &col.name,
+            fk_target_pk_sql_type(col),
+        )?;
+        cols.push(&col.name);
+        values.push(sea_value);
+    }
+
+    let pk_col = meta.fields.iter().find(|c| c.primary_key).ok_or_else(|| {
+        WriteError::Sqlx(sqlx::Error::Protocol(
+            "insert_json: model has no PK".to_string(),
+        ))
+    })?;
+    let pk_name = pk_col.name.clone();
+    let pk_ty = pk_col.ty;
+
+    let mut q = Query::insert();
+    q.into_table(Alias::new(&meta.table));
+    q.columns(cols.iter().map(|c| Alias::new(*c)).collect::<Vec<_>>());
+    let exprs: Vec<sea_query::SimpleExpr> = values.into_iter().map(Into::into).collect();
+    q.values_panic(exprs);
+
+    Ok(InsertPlan { q, pk_name, pk_ty })
+}
+
+/// Transaction-aware sibling of [`write_m2m_junctions`]: mirrors each
+/// M2M field in `body` into its junction table on the passed `tx`, so
+/// the junction rows commit / roll back with the parent INSERT.
+async fn write_m2m_junctions_in_tx(
+    meta: &crate::migrate::ModelMeta,
+    parent_pk_json: Option<&serde_json::Value>,
+    body: &serde_json::Map<String, serde_json::Value>,
+    tx: &mut crate::db::Transaction,
+) -> Result<(), crate::orm::write::WriteError> {
+    if meta.m2m_relations.is_empty() {
+        return Ok(());
+    }
+    let Some(parent_pk_value) = parent_pk_json.and_then(json_pk_to_sea) else {
+        return Ok(());
+    };
+    for rel in &meta.m2m_relations {
+        let Some(value) = body.get(&rel.field_name) else {
+            continue;
+        };
+        let Some(items) = value.as_array() else {
+            continue;
+        };
+        let mut child_ids: Vec<sea_query::Value> = Vec::with_capacity(items.len());
+        for item in items {
+            if item.is_null() {
+                continue;
+            }
+            if let Some(v) = json_pk_to_sea(item) {
+                child_ids.push(v);
+            }
+        }
+        let junction_table = format!("{}_{}", meta.table, rel.field_name);
+        crate::orm::m2m::set_junction_dynamic_in_tx(
+            &junction_table,
+            parent_pk_value.clone(),
+            child_ids,
+            tx,
+        )
+        .await
+        .map_err(crate::orm::write::WriteError::Sqlx)?;
+    }
+    Ok(())
+}
+
+/// Transaction-aware sibling of [`hydrate_m2m_into`]: read the just-
+/// written junction rows back off the SAME `tx` so the response echoes
+/// the M2M arrays the caller will see post-commit. Reading on the pool
+/// here would miss the uncommitted junction writes.
+async fn hydrate_m2m_into_tx(
+    meta: &crate::migrate::ModelMeta,
+    parent_pk_json: Option<&serde_json::Value>,
+    out: &mut serde_json::Map<String, serde_json::Value>,
+    tx: &mut crate::db::Transaction,
+) -> Result<(), sqlx::Error> {
+    if meta.m2m_relations.is_empty() {
+        return Ok(());
+    }
+    let Some(parent_pk_value) = parent_pk_json.and_then(json_pk_to_sea) else {
+        return Ok(());
+    };
+    for rel in &meta.m2m_relations {
+        let junction_table = format!("{}_{}", meta.table, rel.field_name);
+        let mut sel = Query::select();
+        sel.from(Alias::new(&junction_table));
+        sel.column(Alias::new("child_id"));
+        sel.and_where(Expr::col(Alias::new("parent_id")).eq(parent_pk_value.clone()));
+        let children: Vec<serde_json::Value> = match tx.backend_name() {
+            "sqlite" => {
+                let inner = tx.as_sqlite_mut().expect("sqlite backend_name");
+                let (sql, values) = sel.build_sqlx(SqliteQueryBuilder);
+                let rows = sqlx::query_with(&sql, values)
+                    .fetch_all(&mut **inner)
+                    .await?;
+                rows.iter()
+                    .map(|r| {
+                        r.try_get::<i64, _>("child_id")
+                            .map(|i| serde_json::Value::Number(i.into()))
+                            .or_else(|_| {
+                                r.try_get::<String, _>("child_id")
+                                    .map(serde_json::Value::String)
+                            })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?
+            }
+            _ => {
+                let inner = tx.as_pg_mut().expect("postgres backend_name");
+                let (sql, values) = sel.build_sqlx(PostgresQueryBuilder);
+                let rows = sqlx::query_with(&sql, values)
+                    .fetch_all(&mut **inner)
+                    .await?;
+                rows.iter()
+                    .map(|r| {
+                        r.try_get::<i64, _>("child_id")
+                            .map(|i| serde_json::Value::Number(i.into()))
+                            .or_else(|_| {
+                                r.try_get::<String, _>("child_id")
+                                    .map(serde_json::Value::String)
+                            })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?
+            }
+        };
+        out.insert(rel.field_name.clone(), serde_json::Value::Array(children));
+    }
+    Ok(())
+}
+
 async fn write_m2m_junctions(
     meta: &crate::migrate::ModelMeta,
     parent_pk_json: Option<&serde_json::Value>,
