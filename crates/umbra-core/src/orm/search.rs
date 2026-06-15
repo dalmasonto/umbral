@@ -141,16 +141,25 @@ pub fn branch_sql<T: Searchable>(backend: Backend) -> String {
             )
         }
         Backend::Sqlite => {
-            // ?1 = '%q%' (substring), ?2 = 'q%' (prefix bonus).
+            // ?1 = '%q%' (substring), ?2 = 'q%' (prefix bonus). The patterns
+            // are `\`-escaped (see `escape_like`), so every LIKE declares
+            // `ESCAPE '\'` — otherwise the escaping is inert and a query with
+            // a literal `%`/`_` would match as a wildcard. Harmless when the
+            // query has no special chars (no backslashes in the pattern).
             let where_like = body_cols
                 .iter()
-                .map(|c| format!("{} LIKE ?1", quote_ident(c)))
+                .map(|c| format!("{} LIKE ?1 ESCAPE '\\'", quote_ident(c)))
                 .collect::<Vec<_>>()
                 .join(" OR ");
             let title_q = quote_ident(T::title());
             let body_substr_terms = body_cols
                 .iter()
-                .map(|c| format!("(CASE WHEN {} LIKE ?1 THEN 1.0 ELSE 0 END)", quote_ident(c)))
+                .map(|c| {
+                    format!(
+                        "(CASE WHEN {} LIKE ?1 ESCAPE '\\' THEN 1.0 ELSE 0 END)",
+                        quote_ident(c)
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join(" + ");
             format!(
@@ -158,9 +167,9 @@ pub fn branch_sql<T: Searchable>(backend: Backend) -> String {
                  CAST({ident} AS TEXT) AS pk, \
                  {title} AS title, \
                  substr({body_concat}, 1, 200) AS snippet, \
-                 ( (CASE WHEN {title_q} LIKE ?1 THEN 2.0 ELSE 0 END) \
+                 ( (CASE WHEN {title_q} LIKE ?1 ESCAPE '\\' THEN 2.0 ELSE 0 END) \
                  + {body_substr_terms} \
-                 + (CASE WHEN {title_q} LIKE ?2 THEN 1.0 ELSE 0 END) ) AS rank \
+                 + (CASE WHEN {title_q} LIKE ?2 ESCAPE '\\' THEN 1.0 ELSE 0 END) ) AS rank \
                  FROM {table} \
                  WHERE {where_like}"
             )

@@ -52,6 +52,8 @@ async fn boot() {
             .execute(&pool).await.unwrap();
         sqlx::query("INSERT INTO sa_post (title, body) VALUES ('Using redis', 'a guide to caching')")
             .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO sa_post (title, body) VALUES ('50% off coupon', 'limited time')")
+            .execute(&pool).await.unwrap();
     })
     .await;
 }
@@ -118,4 +120,20 @@ async fn no_match_returns_empty() {
         .await
         .expect("runs");
     assert!(hits.is_empty(), "no rows match");
+}
+
+#[tokio::test]
+async fn like_metacharacters_in_query_match_literally() {
+    boot().await;
+    // The query's `%` is escaped (`escape_like` + `ESCAPE '\'`), so "50%"
+    // matches the row literally containing "50%", not as a trailing wildcard.
+    // Without the ESCAPE clause the escaped pattern is inert and this returns
+    // nothing — this test is the regression guard for that.
+    let hits = Search::across::<(Plugin, Post)>("50%", 10)
+        .await
+        .expect("runs");
+    assert!(
+        hits.iter().any(|h| h.title == "50% off coupon"),
+        "a literal-% query matches the row containing '50%': {hits:?}"
+    );
 }
