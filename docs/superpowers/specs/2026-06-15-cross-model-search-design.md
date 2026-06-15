@@ -52,6 +52,14 @@ pub trait Searchable: Model {
     /// natural key when the URL uses one (e.g. `Plugin` → `slug`), so the
     /// caller builds a link with no extra lookup.
     fn ident() -> &'static str { default_pk_column::<Self>() }
+
+    /// Static SQL boolean ANDed into the search WHERE — the row-visibility
+    /// scope (only approved / published rows). Verbatim, no user input.
+    /// Default: no restriction. Soft-delete (`deleted_at IS NULL`) is applied
+    /// automatically for `#[umbra(soft_delete)]` models, so this is only for
+    /// business filters. Added after first integration revealed `Search::across`
+    /// would otherwise surface unapproved/unpublished rows.
+    fn filter_sql() -> Option<&'static str> { None }
 }
 ```
 

@@ -37,6 +37,20 @@ The defaults read `Model::FIELDS`:
 - **`ident()`** defaults to the primary key. Override it to a natural key (a `slug`) when the model is routed by that key, so `SearchHit.pk` carries the right value for the URL.
 </Callout>
 
+## Restrict which rows are searchable
+
+By default every row of an opted-in model is searchable. Override `filter_sql()` to scope it — typically to a published/approved state — so drafts or unmoderated rows never surface:
+
+```rust
+impl umbra::orm::Searchable for Plugin {
+    fn kind() -> &'static str { "plugin" }
+    fn ident() -> &'static str { "slug" }
+    fn filter_sql() -> Option<&'static str> { Some("moderation = 'approved'") }
+}
+```
+
+The string is a **static SQL boolean ANDed into the search `WHERE`** — it must name real columns and contain **no user input** (it's your constant, never a request value). Soft-delete is handled for you: a `#[umbra(soft_delete)]` model automatically excludes `deleted_at IS NULL`, so `filter_sql` is only for business rules like `"status = 'published'"`.
+
 ## Run a search
 
 Pass a tuple of `Searchable` models (arity 1–6):
