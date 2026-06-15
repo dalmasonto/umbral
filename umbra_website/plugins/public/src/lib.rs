@@ -1,7 +1,7 @@
 //! PublicPlugin — owns the public-facing pages of the umbra.dev site.
 //!
-//! Currently serves `/` (the landing page). Models, routes, and
-//! `on_ready` work live in the impl below.
+//! Currently serves `/` (the landing page) and `/roadmap`. Models,
+//! routes, and `on_ready` work live in the impl below.
 //!
 //! The landing page pulls four live numbers from the database and a
 //! plugin table from the `plugin_directory` plugin. Every number
@@ -34,11 +34,16 @@ impl Plugin for PublicPlugin {
     }
 
     fn routes(&self) -> Router {
-        Router::new().route("/", get(home))
+        Router::new()
+            .route("/", get(home))
+            .route("/roadmap", get(roadmap))
     }
 
     fn route_paths(&self) -> Vec<RouteSpec> {
-        vec![RouteSpec::new("/", vec!["GET"])]
+        vec![
+            RouteSpec::new("/", vec!["GET"]),
+            RouteSpec::new("/roadmap", vec!["GET"]),
+        ]
     }
 
     fn templates_dirs(&self) -> Vec<PathBuf> {
@@ -160,6 +165,12 @@ async fn home() -> Result<Html<String>, (StatusCode, String)> {
         },
     )
     .map_err(internal_error)?;
+    Ok(Html(body))
+}
+
+async fn roadmap() -> Result<Html<String>, (StatusCode, String)> {
+    let body = umbra::templates::render("public/roadmap.html", &context! {})
+        .map_err(internal_error)?;
     Ok(Html(body))
 }
 
