@@ -100,8 +100,11 @@
   .pd-prose li { margin: 0.3em 0; }
   .pd-prose a { color: var(--accent-2); text-decoration: underline; }
   .pd-prose code { font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.88em; background: var(--surface-2); border: 1px solid var(--hairline); border-radius: 6px; padding: 0.12em 0.4em; color: var(--ink-2); }
-  .pd-prose pre { background: var(--shade); color: var(--shade-ink); border-radius: 14px; padding: 16px 20px; overflow-x: auto; margin: 1em 0; }
-  .pd-prose pre code { background: transparent; border: 0; padding: 0; color: inherit; }
+  /* Only style UNWRAPPED code blocks (the JS-off fallback). When md-enhance.js
+     wraps a <pre> in `.md-code`, the pre stops being a direct child, so the
+     dark frame fully owns it — the same code-block component as the blog. */
+  .pd-prose > pre { background: var(--shade); color: var(--shade-ink); border-radius: 14px; padding: 16px 20px; overflow-x: auto; margin: 1em 0; }
+  .pd-prose > pre code { background: transparent; border: 0; padding: 0; color: inherit; }
   .pd-prose blockquote { border-left: 3px solid var(--accent-line); padding-left: 14px; color: var(--muted); margin: 1em 0; }
   .pd-prose table { width: 100%; border-collapse: collapse; margin: 1em 0; font-size: 14px; }
   .pd-prose th, .pd-prose td { border: 1px solid var(--hairline); padding: 8px 12px; text-align: left; }
@@ -289,7 +292,7 @@
         <section class="pd-tabpanel" id="panel-overview" role="tabpanel" aria-labelledby="tab-overview" data-active>
           <div class="card rounded-[20px] p-6 sm:p-7">
             <h2 class="mb-4 text-[24px] font-extrabold tracking-[-0.02em]">About</h2>
-            <div class="pd-prose">{{ plugin.full_content | markdown }}</div>
+            <div class="pd-prose" data-md>{{ plugin.full_content | markdown }}</div>
           </div>
 
           <div class="card mt-5 rounded-[20px] p-6 sm:p-7">
@@ -347,7 +350,7 @@
                   <span class="ml-auto text-[11.5px] text-faint">{{ feature.maturity }}</span>
                 </div>
                 {% if feature.description %}
-                <div class="pd-prose mt-2 text-[13.5px]">{{ feature.description | markdown }}</div>
+                <div class="pd-prose mt-2 text-[13.5px]" data-md>{{ feature.description | markdown }}</div>
                 {% endif %}
               </div>
               {% endfor %}
