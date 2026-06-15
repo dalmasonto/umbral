@@ -758,7 +758,7 @@ async fn post_plugin_note(
         .filter(|s| !s.is_empty())
         .map(str::to_string);
 
-    let Some(payload) = create_note(&slug, body, kind, author_label)
+    let Some(payload) = create_note(&slug, body, kind, author_label, None)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?
     else {
@@ -856,6 +856,7 @@ pub async fn create_note(
     body: &str,
     kind: &str,
     author_label: Option<String>,
+    parent: Option<i64>,
 ) -> Result<Option<NotePayload>, String> {
     let Some(plugin) = PluginModel::objects()
         .filter(plugin::SLUG.eq(slug))
@@ -867,6 +868,25 @@ pub async fn create_note(
         return Ok(None);
     };
 
+    // A reply: the parent must be a VISIBLE, top-level (parent IS NULL) comment
+    // on THIS plugin. Anything else (unknown id, hidden, cross-plugin, or a
+    // reply-to-a-reply) is rejected as a 404 so it can't be forged. Depth stays 1.
+    if let Some(parent_id) = parent {
+        let ok = match pd::PluginComment::objects()
+            .filter(plugin_comment::ID.eq(parent_id))
+            .filter(plugin_comment::MODERATION.eq("visible"))
+            .first()
+            .await
+            .map_err(|e| e.to_string())?
+        {
+            Some(p) => p.plugin.id() == plugin.id && p.parent.is_none(),
+            None => false,
+        };
+        if !ok {
+            return Ok(None);
+        }
+    }
+
     let kind = match kind {
         "question" => CommentKind::Question,
         "usage_note" => CommentKind::UsageNote,
@@ -877,6 +897,7 @@ pub async fn create_note(
 
     let mut comment = pd::PluginComment::default();
     comment.plugin = ForeignKey::new(plugin.id);
+    comment.parent = parent.map(ForeignKey::new);
     comment.body = body.to_string();
     comment.kind = kind;
     // Publish-then-moderate: the note is visible immediately. An admin sets
@@ -901,9 +922,16 @@ pub async fn create_note(
     // rendered row and inserts it in place. No-op when RealtimePlugin isn't
     // installed (e.g. the render smoke-test).
     umbra_realtime::Realtime::to_group(format!("public:plugin-{}", plugin.id))
-        .send("note", &serde_json::json!({ "id": id, "html": html }))
+        .send(
+            "note",
+            &serde_json::json!({ "id": id, "html": html, "parent_id": parent }),
+        )
         .await;
-    Ok(Some(NotePayload { id, html }))
+    Ok(Some(NotePayload {
+        id,
+        html,
+        parent_id: parent,
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -1720,6 +1748,9 @@ fn render_comment_row(preview: &CommentPreview) -> Result<String, String> {
 pub struct NotePayload {
     pub id: i64,
     pub html: String,
+    /// The note this is a reply to, or `None` for a top-level note. Lets the
+    /// client route a live insert into the right replies container.
+    pub parent_id: Option<i64>,
 }
 
 // ---------------------------------------------------------------------------

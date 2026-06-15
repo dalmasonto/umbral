@@ -91,7 +91,32 @@ impl umbra::storage::Storage for TestStorage {
 
 /// Boot the app once: ambient pool + model registry + template engine,
 /// then create the tables and seed representative rows.
+///
+/// Safe to call from multiple `#[tokio::test]` functions in the same binary.
+/// `App::build` calls `settings::init` which panics on a second call, so the
+/// async Mutex serialises concurrent callers and the AtomicBool lets late
+/// arrivals skip the work once the winner has finished.
 async fn boot() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tokio::sync::Mutex;
+
+    static BOOTED: AtomicBool = AtomicBool::new(false);
+    static LOCK: std::sync::OnceLock<Mutex<()>> = std::sync::OnceLock::new();
+
+    // Fast path: already initialised.
+    if BOOTED.load(Ordering::Acquire) {
+        return;
+    }
+
+    // Slow path: hold the async mutex so only one task runs init.
+    let mutex = LOCK.get_or_init(|| Mutex::new(()));
+    let _guard = mutex.lock().await;
+
+    // Re-check under the lock — another task may have finished while we waited.
+    if BOOTED.load(Ordering::Acquire) {
+        return;
+    }
+
     // Register a storage backend before build so the `logo` / `cover_image`
     // image-field system check passes. Set-once / first-wins, so harmless.
     let _ = umbra::storage::set_storage(std::sync::Arc::new(TestStorage));
@@ -129,6 +154,8 @@ async fn boot() {
 
     ensure_tables(&pool).await;
     seed().await;
+
+    BOOTED.store(true, Ordering::Release);
 }
 
 /// Test-only schema. Covers every column the ORM reads/writes for the
@@ -601,6 +628,7 @@ async fn listing_and_detail_render_real_db_rows() {
         "Works great on Postgres 16.",
         "usage_note",
         Some("Reviewer".to_string()),
+        None,
     )
     .await
     .expect("note create query ok")
@@ -647,7 +675,7 @@ async fn listing_and_detail_render_real_db_rows() {
     );
 
     // A note for an unknown slug is a clean 404 (Ok(None)), no row.
-    let missing_note = create_note("does-not-exist", "body", "general", None)
+    let missing_note = create_note("does-not-exist", "body", "general", None, None)
         .await
         .expect("create_note query ok");
     assert!(
@@ -939,6 +967,46 @@ async fn listing_and_detail_render_real_db_rows() {
         !prebuilt.contains("More official plugins"),
         "the hardcoded 'More official plugins' strip was removed"
     );
+}
+
+#[tokio::test]
+async fn create_note_threads_replies_under_a_visible_top_level_note() {
+    boot().await;
+
+    let note = create_note("umbra-rest", "Parent note body.", "general", None, None)
+        .await
+        .expect("note create ok")
+        .expect("a payload for an existing plugin");
+    assert!(note.parent_id.is_none(), "a top-level note has no parent_id");
+
+    let reply = create_note("umbra-rest", "A reply body.", "general", None, Some(note.id))
+        .await
+        .expect("reply create ok")
+        .expect("a payload for a valid parent");
+    assert_eq!(
+        reply.parent_id,
+        Some(note.id),
+        "the reply payload carries the parent note id"
+    );
+
+    let row = PluginComment::objects()
+        .filter(plugin_directory::models::plugin_comment::BODY.eq("A reply body."))
+        .first()
+        .await
+        .expect("query the reply")
+        .expect("the reply row exists");
+    assert_eq!(row.parent.as_ref().map(|fk| fk.id()), Some(note.id));
+    assert_eq!(row.moderation, CommentModeration::Visible);
+
+    let nested = create_note("umbra-rest", "Nested.", "general", None, Some(reply.id))
+        .await
+        .expect("create ok");
+    assert!(nested.is_none(), "replying to a reply is rejected (depth-1)");
+
+    let bad = create_note("umbra-rest", "Orphan.", "general", None, Some(999_999))
+        .await
+        .expect("create ok");
+    assert!(bad.is_none(), "an unknown parent id is rejected");
 }
 
 /// Build a form-data map for the submission tests.
