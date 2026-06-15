@@ -497,7 +497,7 @@ pub mod orm {
     //! is generic over `T: Model`, so plugin authors and users get the
     //! full query API by implementing one trait, by hand or via derive.
 
-    pub use umbra_core::orm::write::{SaveError, WriteError};
+    pub use umbra_core::orm::write::{SaveError, WriteError, slugify};
     pub use umbra_core::orm::{
         Aggregate, AggregateKind, ArrayElement, ChoiceField, CsvImportReport, DynError,
         DynQuerySet, Email, F, FColExt, FExpr, FieldSpec, FileField, FkAction, ForeignKey,
