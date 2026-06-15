@@ -1,0 +1,41 @@
+---
+title: Syntax highlighting
+description: Fenced code blocks in the markdown filter are highlighted server-side, safely.
+sidebar_position: 9
+icon: code
+tags: [markdown, templates]
+---
+
+The `| markdown` filter highlights fenced code blocks on the server. Add a language to the fence and the rendered HTML carries syntect token classes (`hl-…`), colored by a built-in `base16-ocean.dark` theme. Highlighting is class-based — never inline styles — so the sanitizer keeps its guard up: only the inert `class` attribute is allowed through, while `<script>`, event handlers, and `javascript:` URLs are still stripped. An unknown or missing language falls back to a plain (but still labelled) block, and highlighting never panics or drops your code.
+
+## Example
+
+In a template:
+
+```html
+<div class="prose" data-md>{{ post.body | markdown }}</div>
+```
+
+Where `post.body` contains a fenced block with a language:
+
+````markdown
+```rust
+fn main() {
+    println!("hello, umbra");
+}
+```
+````
+
+To get colors, include the generated stylesheet once in your base template's `<head>`:
+
+```html
+{{ highlight_styles() }}
+```
+
+That emits the `base16-ocean.dark` token stylesheet inline. The token colors render on top of whatever code-block frame your CSS provides.
+
+<Callout type="info">
+  The colors come from a fixed theme. To change palettes you regenerate the stylesheet from a different syntect theme — the token classes stay the same, so no template changes are needed.
+</Callout>
+
+See the design rationale in `docs/superpowers/specs/2026-06-15-markdown-syntax-highlighting-design.md`.
