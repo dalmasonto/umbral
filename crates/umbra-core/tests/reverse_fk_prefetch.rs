@@ -55,6 +55,9 @@ async fn boot() {
             .database("default", pool.clone())
             .model::<Post>()
             .model::<Comment>()
+            .model::<Article>()
+            .model::<Note>()
+            .model::<Tagline>()
             .build()
             .expect("App::build");
 
@@ -77,6 +80,63 @@ async fn boot() {
         .execute(&pool)
         .await
         .expect("CREATE TABLE rfk_comment");
+
+        // orm_fixes #1 fixture: an Article with TWO reverse sets.
+        sqlx::query(
+            "CREATE TABLE rfk_article (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                headline TEXT NOT NULL,
+                deleted_at TEXT
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("CREATE TABLE rfk_article");
+        sqlx::query(
+            "CREATE TABLE rfk_note (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                text TEXT NOT NULL,
+                article INTEGER NOT NULL REFERENCES rfk_article(id)
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("CREATE TABLE rfk_note");
+        sqlx::query(
+            "CREATE TABLE rfk_tagline (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                phrase TEXT NOT NULL,
+                article INTEGER NOT NULL REFERENCES rfk_article(id),
+                created_at TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("CREATE TABLE rfk_tagline");
+
+        sqlx::query("INSERT INTO rfk_article (headline) VALUES ('a1')")
+            .execute(&pool)
+            .await
+            .expect("seed article");
+        for text in &["n1", "n2"] {
+            sqlx::query("INSERT INTO rfk_note (text, article) VALUES (?, 1)")
+                .bind(*text)
+                .execute(&pool)
+                .await
+                .expect("seed note");
+        }
+        // Bind a real `DateTime<Utc>` exactly as production writes it —
+        // sqlx encodes it space-separated for SQLite. This is the value
+        // chrono's RFC3339 `Deserialize` later chokes on.
+        let now: chrono::DateTime<chrono::Utc> = chrono::Utc::now();
+        for phrase in &["t1"] {
+            sqlx::query("INSERT INTO rfk_tagline (phrase, article, created_at) VALUES (?, 1, ?)")
+                .bind(*phrase)
+                .bind(now)
+                .execute(&pool)
+                .await
+                .expect("seed tagline");
+        }
 
         // alpha (1): 2 comments
         // beta  (2): 1 comment
@@ -167,5 +227,132 @@ async fn loud_error_on_unknown_prefetch_field_naming_reverse_set() {
     assert!(
         msg.contains("no_such_field"),
         "error names the bad field: {msg}"
+    );
+}
+
+// =========================================================================
+// orm_fixes #1 — a parent with TWO `ReverseSet<C>` fields (two different
+// child models). Prefetching the SECOND set (or both) must populate the
+// right slot. The website hit this: `Plugin` had `comment_set` +
+// `feature_set`, and prefetching `feature_set` came back empty.
+// =========================================================================
+
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
+#[umbra(table = "rfk_note")]
+pub struct Note {
+    pub id: i64,
+    pub text: String,
+    pub article: ForeignKey<Article>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
+#[umbra(table = "rfk_tagline")]
+pub struct Tagline {
+    pub id: i64,
+    pub phrase: String,
+    pub article: ForeignKey<Article>,
+    /// A `DateTime<Utc>` child column — the prefetch hydration decodes
+    /// each child row via `serde_json::from_value::<Tagline>(..)`, so a
+    /// datetime that didn't round-trip would silently drop the whole row
+    /// and empty the bucket. Mirrors `PluginFeature::created_at` on the
+    /// website; pins that the round-trip holds.
+    #[umbra(auto_now_add)]
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// Mirrors `Plugin` on the website as closely as possible: it is
+/// `soft_delete`, carries an explicit `#[umbra(primary_key)] id`, and has
+/// two reverse sets to two different child models (both reverse via the
+/// same FK column name, `article`).
+#[derive(Debug, Clone, Default, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
+#[umbra(soft_delete, table = "rfk_article")]
+pub struct Article {
+    #[umbra(primary_key)]
+    pub id: i64,
+    pub headline: String,
+    /// FIRST reverse set.
+    #[sqlx(skip)]
+    #[serde(skip)]
+    #[umbra(reverse_fk = "article")]
+    pub note_set: ReverseSet<Note>,
+    /// SECOND reverse set — the one the website's prefetch silently
+    /// dropped.
+    #[sqlx(skip)]
+    #[serde(skip)]
+    #[umbra(reverse_fk = "article")]
+    pub tagline_set: ReverseSet<Tagline>,
+    pub deleted_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// Direct test of the documented (wrong) root cause: the macro must
+/// emit a `REVERSE_FK_RELATIONS` entry for EVERY `ReverseSet` field,
+/// not just the first. (It does — this guards against a regression to
+/// the single-field shape.)
+#[test]
+fn macro_emits_a_reverse_fk_spec_for_every_set() {
+    use umbra::orm::Model;
+    let names: Vec<&str> = Article::REVERSE_FK_RELATIONS
+        .iter()
+        .map(|s| s.field_name)
+        .collect();
+    assert!(names.contains(&"note_set"), "first set present: {names:?}");
+    assert!(
+        names.contains(&"tagline_set"),
+        "SECOND set present: {names:?}"
+    );
+    assert_eq!(names.len(), 2, "exactly the two declared sets: {names:?}");
+}
+
+/// Prefetch BOTH reverse sets — each slot must carry its own children.
+#[tokio::test]
+async fn prefetch_both_reverse_sets_populates_each_slot() {
+    boot().await;
+    let articles = Article::objects()
+        .prefetch_related("note_set")
+        .prefetch_related("tagline_set")
+        .fetch()
+        .await
+        .expect("fetch");
+    let a = articles
+        .iter()
+        .find(|a| a.headline == "a1")
+        .expect("a1 present");
+
+    let notes = a.note_set.resolved().expect("note_set hydrated");
+    let mut note_texts: Vec<&str> = notes.iter().map(|n| n.text.as_str()).collect();
+    note_texts.sort();
+    assert_eq!(note_texts, vec!["n1", "n2"], "note_set has both notes");
+
+    let taglines = a.tagline_set.resolved().expect("tagline_set hydrated");
+    let tag_phrases: Vec<&str> = taglines.iter().map(|t| t.phrase.as_str()).collect();
+    assert_eq!(tag_phrases, vec!["t1"], "tagline_set has its tagline");
+}
+
+/// The exact website shape: prefetch ONLY the SECOND reverse set and
+/// assert it populates (the first is left untouched / None).
+#[tokio::test]
+async fn prefetch_only_second_reverse_set_populates_it() {
+    boot().await;
+    let articles = Article::objects()
+        .prefetch_related("tagline_set")
+        .fetch()
+        .await
+        .expect("fetch");
+    let a = articles
+        .iter()
+        .find(|a| a.headline == "a1")
+        .expect("a1 present");
+
+    let taglines = a
+        .tagline_set
+        .resolved()
+        .expect("second reverse set must hydrate even when prefetched alone");
+    let tag_phrases: Vec<&str> = taglines.iter().map(|t| t.phrase.as_str()).collect();
+    assert_eq!(tag_phrases, vec!["t1"]);
+
+    // First set wasn't prefetched → stays unloaded.
+    assert!(
+        a.note_set.resolved().is_none(),
+        "un-prefetched first set stays None"
     );
 }

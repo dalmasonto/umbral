@@ -8,7 +8,11 @@ symptom, where it bit, the workaround in place, and the proper fix.
 
 ## 1. `prefetch_related("<field>")` returns empty buckets for a SECOND reverse-FK field on one model
 
-**Status:** open — workaround in place, proper fix pending.
+**Status:** fixed (not a framework bug as diagnosed) — regression tests added; website workaround can be removed.
+
+**Resolution:** the documented root cause was wrong, and so was the headline symptom. Investigated via TDD: a parent with TWO `ReverseSet<C>` fields (two different child models, same `reverse_fk` column name `article`), mirroring the website's `Plugin` (`soft_delete`, explicit `#[umbra(primary_key)] id`, child carrying a `DateTime<Utc>` column) — prefetching only the SECOND set, and both sets together, BOTH populate correctly. The macro emits one `REVERSE_FK_RELATIONS` entry + one `set_m2m_parent_ids` arm + one `set_reverse_fk_resolved_json` arm PER `ReverseSet` field (Vec iteration, not first-only); the runtime dispatch loop hydrates each reverse-FK field independently with its own per-parent bucket. Verified the macro already emitted both arms at the workaround commit (`f1eb714`), so the macro was never the cause. The PK-agnostic hydration refactor (`b624594`, landed ~4h AFTER the workaround) made the loader bucket children via `pk_as_json()`/`pk_key` rather than i64-only, but even the pre-refactor i64 path dispatched per-field correctly. No code path reproduces "second set empty"; the website observation was most likely a data/seed-state artifact misattributed to the framework. Regression tests live in `crates/umbra-core/tests/reverse_fk_prefetch.rs` (`macro_emits_a_reverse_fk_spec_for_every_set`, `prefetch_both_reverse_sets_populates_each_slot`, `prefetch_only_second_reverse_set_populates_it`). The `/prebuilt` `IN`-batch workaround is no longer necessary — `prefetch_related("feature_set")` works.
+
+**Status (original):** open — workaround in place, proper fix pending.
 
 **Where:** `umbra_website/plugins/plugin_directory` — `Plugin` declares two
 `ReverseSet` fields: `comment_set: ReverseSet<PluginComment>` (pre-existing) and
