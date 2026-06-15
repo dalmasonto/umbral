@@ -37,6 +37,30 @@ The defaults read `Model::FIELDS`:
 - **`ident()`** defaults to the primary key. Override it to a natural key (a `slug`) when the model is routed by that key, so `SearchHit.pk` carries the right value for the URL.
 </Callout>
 
+## Choose which fields are searched
+
+The defaults cover most models, but you can name the columns explicitly — to **narrow** the search to a few meaningful fields, or to pick a title the auto-detection wouldn't. Each method returns the SQL column name(s) as plain strings:
+
+```rust
+impl umbra::orm::Searchable for Plugin {
+    fn kind() -> &'static str { "plugin" }
+    fn ident() -> &'static str { "slug" }
+
+    // Search ONLY these columns, instead of every text column.
+    fn body() -> Vec<&'static str> { vec!["name", "short_description"] }
+
+    // The column whose value is shown as the result's title.
+    fn title() -> &'static str { "name" }
+}
+```
+
+- **`body()`** — the columns concatenated into the searchable text (and, on Postgres, fed to `to_tsvector`). Returning a narrower list keeps noise out of results. Default: every `Text` column minus slug / url / email validators and `choices` sets.
+- **`title()`** — the single column surfaced as `SearchHit.title`, and weighted highest in ranking (a title match outranks a body-only match). Default: the column named `title` or `name`, else the first text column.
+
+<Callout type="warning">
+These are the **SQL column names** passed as strings, not Rust column constants. For umbra models the column name is the struct field name — the `short_description` field is the `"short_description"` column — so use the field name verbatim.
+</Callout>
+
 ## Restrict which rows are searchable
 
 By default every row of an opted-in model is searchable. Override `filter_sql()` to scope it — typically to a published/approved state — so drafts or unmoderated rows never surface:
