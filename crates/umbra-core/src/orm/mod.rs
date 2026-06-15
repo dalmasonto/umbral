@@ -133,7 +133,7 @@ pub use post::Post;
 pub use queryset::{GetError, JoinKind, Manager, QuerySet, QuerySetTx, TryForEachError};
 pub use reverse_accessor::{ReverseError, ReverseRelations};
 pub use reverse_set::ReverseSet;
-pub use search::Searchable;
+pub use search::{Search, SearchHit, SearchSources, Searchable};
 pub use tsvector::TsVector;
 pub use validators::{Email, Slug, Url, ValidatorError, validate_text_format};
 pub use write::SaveError;

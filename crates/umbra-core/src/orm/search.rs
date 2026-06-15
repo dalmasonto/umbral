@@ -1,6 +1,7 @@
 //! Cross-model relevance search. See
 //! `docs/superpowers/specs/2026-06-15-cross-model-search-design.md`.
 
+use crate::db::DbPool;
 use crate::orm::{FieldSpec, Model, SqlType};
 
 /// A model that can take part in [`Search::across`]. Opt in with a marker
@@ -160,6 +161,79 @@ pub fn branch_sql<T: Searchable>(backend: Backend) -> String {
                  FROM {table} \
                  WHERE {where_like}"
             )
+        }
+    }
+}
+
+/// A tuple of `Searchable` models. Produces one normalized branch per member
+/// for a given backend. Implemented for tuples of arity 1..=6 via the macro
+/// below.
+pub trait SearchSources {
+    fn branches(backend: Backend) -> Vec<String>;
+}
+
+macro_rules! impl_search_sources {
+    ($($T:ident),+) => {
+        impl<$($T: Searchable),+> SearchSources for ($($T,)+) {
+            fn branches(backend: Backend) -> Vec<String> {
+                vec![$( branch_sql::<$T>(backend) ),+]
+            }
+        }
+    };
+}
+impl_search_sources!(A);
+impl_search_sources!(A, B);
+impl_search_sources!(A, B, C);
+impl_search_sources!(A, B, C, D);
+impl_search_sources!(A, B, C, D, E);
+impl_search_sources!(A, B, C, D, E, F);
+
+/// Escape SQL `LIKE` metacharacters in a user query (for the SQLite path).
+fn escape_like(q: &str) -> String {
+    q.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
+}
+
+/// Cross-model relevance search. See the module docs.
+pub struct Search;
+
+impl Search {
+    /// Search every model in `S` for `query`, returning up to `limit` hits
+    /// ordered by descending relevance. A blank query yields an empty Vec
+    /// without touching the database.
+    pub async fn across<S: SearchSources>(
+        query: &str,
+        limit: u64,
+    ) -> Result<Vec<SearchHit>, sqlx::Error> {
+        let q = query.trim();
+        if q.is_empty() {
+            return Ok(Vec::new());
+        }
+        match crate::db::pool_dispatched() {
+            DbPool::Postgres(pool) => {
+                let sql = format!(
+                    "{} ORDER BY rank DESC LIMIT $2",
+                    S::branches(Backend::Postgres).join("\nUNION ALL\n")
+                );
+                sqlx::query_as::<_, SearchHit>(&sql)
+                    .bind(q)
+                    .bind(limit as i64)
+                    .fetch_all(pool)
+                    .await
+            }
+            DbPool::Sqlite(pool) => {
+                let sql = format!(
+                    "{} ORDER BY rank DESC LIMIT ?3",
+                    S::branches(Backend::Sqlite).join("\nUNION ALL\n")
+                );
+                let like = format!("%{}%", escape_like(q));
+                let prefix = format!("{}%", escape_like(q));
+                sqlx::query_as::<_, SearchHit>(&sql)
+                    .bind(like) // ?1
+                    .bind(prefix) // ?2
+                    .bind(limit as i64) // ?3
+                    .fetch_all(pool)
+                    .await
+            }
         }
     }
 }
