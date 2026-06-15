@@ -74,7 +74,7 @@ pub struct SearchHit {
     pub pk: String,       // Searchable::ident() value, CAST to text — the routing key (PK by default, e.g. slug for Plugin)
     pub title: String,
     pub snippet: String,
-    pub rank: f32,
+    pub rank: f64,        // PG ts_rank::float8; SQLite REAL — f64 decodes on both
 }
 ```
 
