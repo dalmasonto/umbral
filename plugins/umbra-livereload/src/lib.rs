@@ -254,8 +254,10 @@ async fn inject_client(
     // is serving its own cached copy. Force revalidation on every response
     // (HTML, CSS, JS, …) so saves always show up. Dev-only — this layer is
     // mounted only in `Environment::Dev`.
-    res.headers_mut()
-        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store, must-revalidate"));
+    res.headers_mut().insert(
+        CACHE_CONTROL,
+        HeaderValue::from_static("no-store, must-revalidate"),
+    );
 
     let is_html = res
         .headers()
