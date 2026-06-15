@@ -1,0 +1,59 @@
+---
+title: Cross-model search
+description: Search several models at once and get one relevance-ranked list of hits.
+sidebar_position: 13
+tags: [orm, search, full-text, ts_rank, relevance]
+---
+
+# Cross-model search
+
+`Search::across` searches every text column of each opted-in model and returns **one** list ordered by relevance. On Postgres it ranks with `ts_rank` (computed inline at query time — nothing is stored), and on SQLite it degrades to a weighted `LIKE`. One call replaces hand-merging a query per model in Rust.
+
+The surface lives in `umbra::orm`: `Searchable`, `Search`, and `SearchHit`.
+
+## Opt a model in
+
+A marker `impl` is enough — the searchable columns, the title, and the routing key are read from the model's metadata. Override a default only when you need to.
+
+```rust
+use umbra::prelude::*;
+
+impl umbra::orm::Searchable for Plugin {
+    fn kind() -> &'static str { "plugin" }   // result tag; default = the table name
+    fn ident() -> &'static str { "slug" }    // becomes SearchHit.pk (the routing key)
+}
+
+impl umbra::orm::Searchable for BlogPost {
+    fn kind() -> &'static str { "blog" }
+    fn ident() -> &'static str { "slug" }
+}
+```
+
+<Callout type="info">
+The defaults read `Model::FIELDS`:
+
+- **`title()`** picks the text column named `title` or `name` (case-insensitive), else the first text column.
+- **`body()`** is every `Text` column, minus metadata-flagged non-content ones (slug / url / email validators and `choices` sets) — so searching `"published"` won't match every published row.
+- **`ident()`** defaults to the primary key. Override it to a natural key (a `slug`) when the model is routed by that key, so `SearchHit.pk` carries the right value for the URL.
+</Callout>
+
+## Run a search
+
+Pass a tuple of `Searchable` models (arity 1–6):
+
+```rust
+let hits = umbra::orm::Search::across::<(Plugin, BlogPost)>("redis cache", 10).await?;
+for hit in hits {
+    // hit.kind  — "plugin" / "blog"   (route on this)
+    // hit.pk    — the ident value as text (e.g. the slug)
+    // hit.title — the title column's value
+    // hit.snippet — leading slice of the body
+    // hit.rank  — f64, descending
+}
+```
+
+`hits` is a `Vec<SearchHit>` ordered by descending `rank`; a title match outranks a body-only match. A blank or whitespace-only query returns an empty list **without touching the database**.
+
+The query dispatches on the ambient pool, so the same call works on Postgres and SQLite with no code change.
+
+See the design rationale in `docs/superpowers/specs/2026-06-15-cross-model-search-design.md`.
