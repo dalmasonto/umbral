@@ -31,6 +31,10 @@ The rules the derive enforces:
 - `serde_json::Value` for a JSON column; `Option<serde_json::Value>` for a nullable one.
 - `Option<T>` of any of the above is the only path to a nullable column.
 
+<Callout type="warning" title="Models in relations must be `pub`">
+Declare any model that takes part in a relation (a `ForeignKey<T>`, a reverse set, or a forward `OneToOne`) as `pub`. The derive generates public items — the per-column constants and, for relations, accessors that name the related type — and Rust rejects a `pub` item whose signature names a less-visible type (`private_interfaces`, or a hard `E0446` for a forward one-to-one). A single `#[derive(Model)]` only sees the struct it's expanding, so it can't widen the visibility for you. Every model in the examples is `pub` anyway; this only bites a `pub(crate)` or module-private model that links to another.
+</Callout>
+
 **PK auto-generation rule.** `Manager::create(instance)` skips the `id` column in the INSERT when the value is the "default" sentinel, letting the database assign it:
 
 | PK type | Sentinel value | Result |
