@@ -35,6 +35,11 @@ chrono-tz = "0.10"
 # <script>/onerror=/etc. into a rendered page (secure-by-default).
 pulldown-cmark = { version = "0.12", default-features = false, features = ["html"] }
 ammonia = "4"
+# syntect: server-side syntax highlighting for fenced code blocks in the
+# `markdown` filter. default-features off + `default-fancy` selects the
+# pure-Rust fancy-regex backend (no C/onig dep) with the bundled default
+# syntaxes + themes. See docs/superpowers/specs/2026-06-15-markdown-syntax-highlighting-design.md
+syntect = { version = "5", default-features = false, features = ["default-fancy"] }
 clap = { version = "4", features = ["derive", "string"] }
 async-trait = "0.1"
 dotenvy = "0.15"

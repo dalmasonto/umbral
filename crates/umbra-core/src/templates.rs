@@ -54,6 +54,10 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use minijinja::{AutoEscape, Environment};
+use syntect::highlighting::ThemeSet;
+use syntect::html::{ClassStyle, ClassedHTMLGenerator, css_for_theme_with_class_style};
+use syntect::parsing::SyntaxSet;
+use syntect::util::LinesWithEndings;
 
 tokio::task_local! {
     /// Per-request ambient user value, set by a session-aware layer
@@ -414,6 +418,43 @@ fn register_sanitize_filter(env: &mut Environment<'static>) {
 /// (the RTE widget's output).
 pub fn sanitize_html(input: &str) -> String {
     ammonia::clean(input)
+}
+
+/// The class prefix syntect token spans carry (`hl-keyword`, `hl-string`,
+/// `hl-source`, …). Shared by the highlighter and the generated
+/// stylesheet so the two never drift.
+const HL_PREFIX: &str = "hl-";
+
+fn hl_class_style() -> ClassStyle {
+    ClassStyle::SpacedPrefixed { prefix: HL_PREFIX }
+}
+
+/// The bundled syntect syntax set, loaded once. The load parses a binary
+/// dump and is expensive, so it is cached for the life of the process.
+fn syntax_set() -> &'static SyntaxSet {
+    static SYNTAX_SET: OnceLock<SyntaxSet> = OnceLock::new();
+    SYNTAX_SET.get_or_init(SyntaxSet::load_defaults_newlines)
+}
+
+/// The `base16-ocean.dark` token stylesheet, generated once from syntect's
+/// bundled theme with the `hl-` class prefix. This is the single source of
+/// truth for token colors — the markdown highlighter emits matching
+/// classes. Returns `""` only if syntect cannot generate the CSS (it
+/// always can for a bundled theme), so callers never need to handle an
+/// error.
+pub fn highlight_css() -> &'static str {
+    static HIGHLIGHT_CSS: OnceLock<String> = OnceLock::new();
+    HIGHLIGHT_CSS
+        .get_or_init(|| {
+            let themes = ThemeSet::load_defaults();
+            match themes.themes.get("base16-ocean.dark") {
+                Some(theme) => {
+                    css_for_theme_with_class_style(theme, hl_class_style()).unwrap_or_default()
+                }
+                None => String::new(),
+            }
+        })
+        .as_str()
 }
 
 /// Render CommonMark + GFM `input` to sanitized HTML. Pulled out of the
@@ -1018,5 +1059,15 @@ mod tests {
     #[test]
     fn static_helper_does_not_double_slash_on_leading_slash_arg() {
         assert_eq!(render_static("/static/", "/admin/x"), "/static/admin/x");
+    }
+
+    #[test]
+    fn highlight_css_contains_hl_rules() {
+        let css = highlight_css();
+        assert!(!css.is_empty(), "generated theme CSS should not be empty");
+        assert!(
+            css.contains(".hl-"),
+            "theme CSS must target hl- classes: {css}"
+        );
     }
 }
