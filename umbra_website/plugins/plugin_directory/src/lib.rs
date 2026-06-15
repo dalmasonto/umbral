@@ -35,6 +35,7 @@ use umbra::migrate::ModelMeta;
 use umbra::plugin::{AppContext, Plugin, PluginError};
 use umbra::prelude::*;
 use umbra::routes::RouteSpec;
+use umbra_auth::OptionalUser;
 use umbra::templates::context;
 use umbra::web::{
     Form, HeaderMap, Html, IntoResponse, Path, Query, Redirect, Response, Router, StatusCode, get,
@@ -719,6 +720,7 @@ const NOTE_MIN_INTERVAL_SECS: i64 = 20;
 async fn post_plugin_note(
     Path(slug): Path<String>,
     headers: HeaderMap,
+    OptionalUser(maybe_user): OptionalUser,
     Form(form): Form<HashMap<String, String>>,
 ) -> Result<Response, (StatusCode, String)> {
     let json = wants_json(&headers);
@@ -727,6 +729,18 @@ async fn post_plugin_note(
     if body.is_empty() {
         return Err((StatusCode::BAD_REQUEST, "A note body is required.".into()));
     }
+
+    // Posting requires a logged-in account — every note is attributed to a
+    // user (no anonymous false reports) and linked for later features (a
+    // user's own notes, a contributor leaderboard). The composer is hidden
+    // from logged-out visitors in the template; this is the backstop (the
+    // AJAX path surfaces this message inline on the form).
+    let Some(user) = maybe_user else {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            "Please log in to post a note.".into(),
+        ));
+    };
 
     // Honeypot: a real visitor never sees the `website` field. A non-empty
     // value is a bot, so accept silently (give it no signal) but write and
@@ -752,11 +766,9 @@ async fn post_plugin_note(
     }
 
     let kind = form.get("kind").map(String::as_str).unwrap_or("general");
-    let author_label = form
-        .get("author_label")
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .map(str::to_string);
+    // Display name + author FK come from the logged-in user, not a free-text
+    // field — names can't be spoofed and the note links back to the account.
+    let author = Some((user.id, user.username.clone()));
 
     // Optional parent: set by the inline reply form's hidden `parent_id`.
     // `create_note` validates it (visible, top-level, same plugin) and rejects
@@ -767,7 +779,7 @@ async fn post_plugin_note(
         .filter(|s| !s.is_empty())
         .and_then(|s| s.parse::<i64>().ok());
 
-    let Some(payload) = create_note(&slug, body, kind, author_label, parent_id)
+    let Some(payload) = create_note(&slug, body, kind, author, parent_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?
     else {
@@ -865,7 +877,7 @@ pub async fn create_note(
     slug: &str,
     body: &str,
     kind: &str,
-    author_label: Option<String>,
+    author: Option<(i64, String)>,
     parent: Option<i64>,
 ) -> Result<Option<NotePayload>, String> {
     let Some(plugin) = PluginModel::objects()
@@ -916,7 +928,8 @@ pub async fn create_note(
     // body is sanitized at render time by the `markdown` filter, which is the
     // XSS boundary now that an unmoderated body goes public on submit.
     comment.moderation = CommentModeration::Visible;
-    comment.author_label = author_label;
+    comment.author = author.as_ref().map(|(id, _)| ForeignKey::new(*id));
+    comment.author_label = author.map(|(_, name)| name);
 
     let created = pd::PluginComment::objects()
         .create(comment)

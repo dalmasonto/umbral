@@ -585,19 +585,16 @@ async fn listing_and_detail_render_real_db_rows() {
         detail.contains("class=\"copy-btn\"") && detail.contains("icon-copy"),
         "the copy button markup is present"
     );
-    // The add-note dialog form posts to the new route with a textarea +
-    // kind select.
+    // Posting is login-gated: this anonymous render (the test mounts no auth
+    // middleware, so `user` is unauthenticated) shows the "log in to post" CTA,
+    // not the composer form.
     assert!(
-        detail.contains("action=\"/plugins/umbra-rest/notes\""),
-        "the note form posts to the new route"
+        detail.contains("/login?next=/plugins/umbra-rest"),
+        "anonymous detail render shows the log-in-to-post CTA"
     );
     assert!(
-        detail.contains("name=\"body\"") && detail.contains("name=\"kind\""),
-        "the note form has a body textarea and a kind select"
-    );
-    assert!(
-        detail.contains("<select") && detail.contains("usage_note"),
-        "the kind select renders CommentKind options"
+        !detail.contains("action=\"/plugins/umbra-rest/notes\""),
+        "the note composer + reply forms are hidden from anonymous visitors"
     );
     // No success banner without the ?submitted=1 flag.
     assert!(
@@ -627,7 +624,7 @@ async fn listing_and_detail_render_real_db_rows() {
         "umbra-rest",
         "Works great on Postgres 16.",
         "usage_note",
-        Some("Reviewer".to_string()),
+        None,
         None,
     )
     .await
@@ -1007,6 +1004,43 @@ async fn create_note_threads_replies_under_a_visible_top_level_note() {
         .await
         .expect("create ok");
     assert!(bad.is_none(), "an unknown parent id is rejected");
+}
+
+#[tokio::test]
+async fn create_note_links_the_comment_to_the_logged_in_user() {
+    boot().await;
+
+    // The handler passes (user.id, user.username); create_note links the
+    // author FK and uses the username as the display label — no spoofable
+    // free-text name.
+    let payload = create_note(
+        "umbra-rest",
+        "A note from a real account.",
+        "general",
+        Some((7, "alice".to_string())),
+        None,
+    )
+    .await
+    .expect("create ok")
+    .expect("payload");
+    assert!(
+        payload.html.contains("alice"),
+        "the rendered row shows the user's name: {}",
+        payload.html
+    );
+
+    let row = PluginComment::objects()
+        .filter(plugin_directory::models::plugin_comment::BODY.eq("A note from a real account."))
+        .first()
+        .await
+        .expect("query the note")
+        .expect("the note row exists");
+    assert_eq!(
+        row.author.as_ref().map(|fk| fk.id()),
+        Some(7),
+        "the author FK links the note to the user"
+    );
+    assert_eq!(row.author_label.as_deref(), Some("alice"));
 }
 
 #[tokio::test]

@@ -117,6 +117,8 @@
   .pd-composer-row .pd-composer-name { flex: 1 1 120px; min-width: 0; }
   .pd-composer-row .pd-composer-kind { flex: 0 1 auto; min-width: 0; max-width: 170px; }
   .pd-form-error { margin-bottom: 8px; font-size: 12.5px; font-weight: 600; color: #A82E2E; }
+  .pd-composer-as { flex: 1; min-width: 0; font-size: 12.5px; color: var(--faint); }
+  .pd-login-cta { margin-top: 14px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; border: 1px dashed var(--hairline); border-radius: 14px; background: var(--surface-2); padding: 14px 16px; font-size: 13.5px; color: var(--muted); }
   /* The replies container is always rendered (the JS insert target); show the
      indent + rail only when it actually has replies. */
   .pd-replies:has(.pd-reply) { margin: 6px 0 0 30px; display: flex; flex-direction: column; gap: 6px; border-left: 2px solid var(--hairline); padding-left: 12px; }
@@ -435,21 +437,23 @@
                 {% include "plugin_directory/_reply.html" %}
                 {% endfor %}
               </div>
+              {% if user.is_authenticated %}
               <button type="button" class="pd-reply-toggle" data-reply-toggle="{{ thread.note.id }}">Reply</button>
               <form class="pd-reply-form hidden" method="post" action="/plugins/{{ plugin.slug }}/notes" data-reply-form="{{ thread.note.id }}">
                 <div class="hidden" aria-hidden="true"><label>Website<input type="text" name="website" tabindex="-1" autocomplete="off"></label></div>
                 {{ csrf_input }}
                 <input type="hidden" name="parent_id" value="{{ thread.note.id }}">
-                <textarea class="pd-field" name="body" required rows="1" placeholder="Reply… Markdown supported."></textarea>
-                <div class="pd-composer-row">
-                  <input class="pd-field pd-composer-name" name="author_label" maxlength="120" placeholder="Name (optional)">
+                <textarea class="pd-field" name="body" required rows="1" placeholder="Reply as @{{ user.username }}… Markdown supported."></textarea>
+                <div class="pd-composer-row pd-justify-end">
                   <button type="submit" class="btn-accent">Reply</button>
                 </div>
               </form>
+              {% endif %}
               {% else %}
               <p class="m-0 rounded-[14px] border border-hairline bg-paper px-4 py-5 text-[14px] text-muted" data-note-empty>No notes yet. Be the first to share how this plugin works for you.</p>
               {% endfor %}
             </div>
+            {% if user.is_authenticated %}
             <form class="pd-composer" method="post" action="/plugins/{{ plugin.slug }}/notes" data-note-form>
               <div class="hidden" aria-hidden="true"><label>Website<input type="text" name="website" tabindex="-1" autocomplete="off"></label></div>
               {{ csrf_input }}
@@ -458,10 +462,16 @@
                 <select class="pd-field pd-composer-kind" name="kind">
                   {% for opt in plugin.note_kinds %}<option value="{{ opt.value }}">{{ opt.label }}</option>{% endfor %}
                 </select>
-                <input class="pd-field pd-composer-name" name="author_label" maxlength="120" placeholder="Name (optional)">
+                <span class="pd-composer-as">Posting as <b>@{{ user.username }}</b></span>
                 <button type="submit" class="btn-accent">Post</button>
               </div>
             </form>
+            {% else %}
+            <div class="pd-login-cta">
+              <span>Log in to post a note and join the discussion.</span>
+              <a class="btn-accent" href="/login?next=/plugins/{{ plugin.slug }}">Log in</a>
+            </div>
+            {% endif %}
           </div>
         </section>
 
@@ -743,6 +753,7 @@
    keyed by replacing __ID__ with the note id. Mirrors the per-note markup in
    the thread loop above — keep the two in sync. Carries the current viewer's
    csrf (rendered here, NOT in the broadcast partial, so no token leaks). #}
+{% if user.is_authenticated %}
 <template id="pd-live-extras">
   <div class="pd-replies" data-replies-for="__ID__"></div>
   <button type="button" class="pd-reply-toggle" data-reply-toggle="__ID__">Reply</button>
@@ -751,11 +762,11 @@
     {{ csrf_input }}
     <input type="hidden" name="parent_id" value="__ID__">
     <textarea class="pd-field" name="body" required rows="1" placeholder="Reply… Markdown supported."></textarea>
-    <div class="pd-composer-row">
-      <input class="pd-field pd-composer-name" name="author_label" maxlength="120" placeholder="Name (optional)">
+    <div class="pd-composer-row pd-justify-end">
       <button type="submit" class="btn-accent">Reply</button>
     </div>
   </form>
 </template>
+{% endif %}
 
 {% endblock %}
