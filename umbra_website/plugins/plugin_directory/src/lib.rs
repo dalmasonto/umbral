@@ -636,59 +636,78 @@ pub async fn render_search(q: &str) -> Result<String, String> {
 
     let mut hits: Vec<SearchHit> = Vec::new();
     if !trimmed.is_empty() {
-        // Plugins: name / crate / description substring match across approved,
-        // non-deleted plugins. `Q::or` nests the `.contains()` LIKE predicates.
-        let plugins = PluginModel::objects()
-            .filter(plugin::MODERATION.eq("approved"))
-            .filter(Q::or(
-                Q::or(
-                    plugin::NAME.contains(trimmed),
-                    plugin::CRATE_NAME.contains(trimmed),
-                ),
-                plugin::SHORT_DESCRIPTION.contains(trimmed),
-            ))
-            .order_by(plugin::FEATURED.desc())
-            .order_by(plugin::DISPLAY_ORDER.asc())
-            .limit(6)
-            .fetch()
-            .await
-            .map_err(|e| e.to_string())?;
-        hits.extend(plugins.into_iter().map(|p| SearchHit {
-            kind: "plugin",
-            href: format!("/plugins/{}", p.slug),
-            name: p.name,
-            label: source_str(p.source).to_string(),
-            short_description: p.short_description,
-            logo: p.logo.map(|f| f.key().to_string()),
-        }));
-
-        // Blog posts: title / body substring match across PUBLISHED posts.
-        // Resilient: a failed blog query (e.g. the table is unavailable) logs
-        // and falls back to plugin-only results rather than 500-ing the whole
-        // search box.
-        use site_content::models::{BlogPost, blog_post};
-        match BlogPost::objects()
-            .filter(blog_post::STATUS.eq("published"))
-            .filter(Q::or(
-                blog_post::TITLE.contains(trimmed),
-                blog_post::BODY.contains(trimmed),
-            ))
-            .order_by(blog_post::PUBLISHED_AT.desc())
-            .limit(4)
-            .fetch()
-            .await
-        {
-            Ok(posts) => hits.extend(posts.into_iter().map(|p| SearchHit {
-                kind: "blog",
-                href: format!("/blog/{}", p.slug),
-                name: p.title,
-                label: "blog".to_string(),
-                short_description: p.excerpt.unwrap_or_default(),
-                logo: None,
-            })),
+        use site_content::models::BlogPost;
+        // One ranked UNION across both models (ORM-built `ts_rank` on Postgres,
+        // weighted `LIKE` on SQLite). A backend error (e.g. a test DB without
+        // the blog table) degrades to no hits rather than 500-ing the search
+        // box. `SearchHit.pk` is the slug for both kinds (see each model's
+        // `Searchable::ident`), so it routes straight into the detail URLs.
+        match umbra::orm::Search::across::<(PluginModel, BlogPost)>(trimmed, 10).await {
+            Ok(found) => {
+                // The ranked hits carry slug/title/snippet but not the plugin
+                // logo or source label (the template shows both). Batch-load
+                // those for the plugin hits in ONE ORM query (slug -> row),
+                // OR-chaining `slug.eq(..)` since string columns have no `in_`.
+                // The ranked order from `found` is preserved below; no N+1.
+                let plugin_slugs: Vec<String> = found
+                    .iter()
+                    .filter(|h| h.kind == "plugin")
+                    .map(|h| h.pk.clone())
+                    .collect();
+                let mut meta_by_slug: std::collections::HashMap<
+                    String,
+                    (Option<String>, &'static str),
+                > = std::collections::HashMap::new();
+                if let Some(pred) = plugin_slugs
+                    .iter()
+                    .map(|s| plugin::SLUG.eq(s.as_str()))
+                    .reduce(|acc, p| acc | p)
+                {
+                    let rows = PluginModel::objects()
+                        .filter(pred)
+                        .fetch()
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    for p in rows {
+                        meta_by_slug.insert(
+                            p.slug,
+                            (p.logo.map(|f| f.key().to_string()), source_str(p.source)),
+                        );
+                    }
+                }
+                for h in found {
+                    match h.kind.as_str() {
+                        "plugin" => {
+                            let (logo, label) = meta_by_slug
+                                .get(&h.pk)
+                                .cloned()
+                                .unwrap_or((None, "plugin"));
+                            hits.push(SearchHit {
+                                kind: "plugin",
+                                href: format!("/plugins/{}", h.pk),
+                                name: h.title,
+                                label: label.to_string(),
+                                short_description: h.snippet,
+                                logo,
+                            });
+                        }
+                        _ => {
+                            hits.push(SearchHit {
+                                kind: "blog",
+                                href: format!("/blog/{}", h.pk),
+                                name: h.title,
+                                label: "blog".to_string(),
+                                short_description: h.snippet,
+                                logo: None,
+                            });
+                        }
+                    }
+                }
+            }
             Err(e) => {
                 tracing::warn!(
-                    "global search: blog query failed, returning plugin results only: {e}"
+                    error = %e,
+                    "global search: cross-model search failed; returning no hits"
                 );
             }
         }

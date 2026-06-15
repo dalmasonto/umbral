@@ -159,6 +159,19 @@ pub struct BlogPost {
     pub deleted_at: Option<DateTime<Utc>>,
 }
 
+impl umbra::orm::Searchable for BlogPost {
+    fn kind() -> &'static str {
+        "blog"
+    }
+    // The site routes blog posts by `slug`, not `id`, so `SearchHit.pk` must
+    // carry the slug for the `/blog/{slug}` URL the header search builds.
+    // `title()` already picks `title`; `body()` keeps every prose column.
+    // The column is the `slug` field (no `#[umbra(column = ...)]` rename).
+    fn ident() -> &'static str {
+        "slug"
+    }
+}
+
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
 #[umbra(
     soft_delete,

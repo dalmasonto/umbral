@@ -258,6 +258,37 @@ async fn ensure_tables(pool: &sqlx::SqlitePool) {
             t = PluginComment::TABLE,
             pt = Plugin::TABLE
         ),
+        // The header search now UNIONs across plugins AND blog posts via
+        // `Search::across::<(PluginModel, BlogPost)>`. The single ranked query
+        // references `blog_post`'s text columns, so that table must exist for
+        // the cross-model search to run (production has it; in prod both
+        // tables are migrated). Only the columns the search reads are needed.
+        format!(
+            "CREATE TABLE {t} (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                public_id TEXT NOT NULL,
+                slug TEXT NOT NULL,
+                title TEXT NOT NULL,
+                excerpt TEXT,
+                body TEXT NOT NULL,
+                status TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                author INTEGER,
+                category INTEGER,
+                cover_image_url TEXT,
+                attachment_url TEXT,
+                seo_title TEXT,
+                seo_description TEXT,
+                reading_minutes INTEGER NOT NULL DEFAULT 0,
+                view_count INTEGER NOT NULL DEFAULT 0,
+                featured INTEGER NOT NULL DEFAULT 0,
+                published_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                deleted_at TEXT
+            )",
+            t = site_content::models::BlogPost::TABLE
+        ),
     ];
     for sql in stmts {
         sqlx::query(&sql).execute(pool).await.expect("CREATE TABLE");
