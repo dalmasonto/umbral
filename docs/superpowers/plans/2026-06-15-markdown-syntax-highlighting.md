@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make fenced code blocks in the `| markdown` filter render with server-side, class-based syntect highlighting that is XSS-safe, so every markdown surface (blog, notes, usage docs) shows colored code.
+**Goal:** Make fenced code blocks in the `| markdown` filter render with server-side, class-based syntect highlighting that is XSS-safe, so every markdown surface (blog, notes, usage docs) shows colored code. Also polish the already-server-rendered tables and images (website CSS/JS only): a rounded, horizontally-scrollable table frame and rounded, lightbox-able images.
 
 **Architecture:** Rewrite `render_markdown`'s pulldown-cmark event stream so each fenced code block becomes a single pre-highlighted `Event::Html` produced by syntect's `ClassedHTMLGenerator` (inert `hl-` token spans, never inline styles). The final ammonia pass is widened by exactly one inert attribute — `class` on `pre`/`code`/`span` — so the spans and the `language-*` label survive while `style`/`on*`/`javascript:` stay stripped. Token colors come from a `base16-ocean.dark` stylesheet syntect generates, inlined into `base.html` via a `highlight_styles()` template global.
 
@@ -18,6 +18,8 @@
 - **`crates/umbra-core/src/templates.rs`** — all framework logic: the lazy `SyntaxSet`, `highlight_code_block`/`wrap_code_block` helpers, the rewritten `render_markdown`, `highlight_css()`, and the `highlight_styles()` global registration. (One file: highlighting is one cohesive concern living next to the filter it extends.)
 - **`crates/umbra/src/lib.rs`** — re-export `highlight_css` from the `umbra::templates` facade module.
 - **`umbra_website/templates/base.html`** — emit `{{ highlight_styles() }}` once in `<head>`.
+- **`umbra_website/static/js/md-enhance.js`** — add `enhanceTables(root)` (wrap `<table>` in a `.md-table` frame), called in the existing `[data-md]` root loop.
+- **`umbra_website/static/css/md-enhance.css`** — add the `.md-table` styles and a `border-radius` on `.md-img`.
 - **`documentation/docs/v0.0.1/web/markdown-syntax-highlighting.mdx`** — the user-facing doc page.
 
 All commands in this plan run from the framework workspace root `crates/` unless a path says otherwise. The website is a separate cargo project and is verified last.
@@ -566,14 +568,119 @@ git commit -m "docs(web): syntax highlighting page for the markdown filter"
 
 ---
 
+### Task 6: Table frame + image radius (website CSS/JS)
+
+These are static assets — no Rust rebuild; the dev server serves the updated files directly. No JS unit-test harness exists, so verification is "served correctly" + a visual check, mirroring Task 4.
+
+**Files:**
+- Modify: `umbra_website/static/js/md-enhance.js` (add `enhanceTables`, call it in the `[data-md]` loop)
+- Modify: `umbra_website/static/css/md-enhance.css` (add `.md-table` block; add radius to `.md-img`)
+
+- [ ] **Step 1: Add `enhanceTables` and call it**
+
+In `umbra_website/static/js/md-enhance.js`, update the root loop inside `ready(...)` (currently calls `enhanceCodeBlocks` + `collectImages`) to also enhance tables:
+
+```js
+    roots.forEach(function (root) {
+      enhanceCodeBlocks(root);
+      enhanceTables(root);
+      collectImages(root, gallery);
+    });
+```
+
+Then add the function next to `enhanceCodeBlocks`:
+
+```js
+  /* ---- Tables: rounded, horizontally-scrollable frame ---------------- */
+  function enhanceTables(root) {
+    Array.prototype.slice.call(root.querySelectorAll("table")).forEach(function (table) {
+      // Already framed (e.g. re-run after a live DOM insert) — skip.
+      if (table.parentNode && table.parentNode.classList.contains("md-table")) return;
+      var wrap = document.createElement("div");
+      // `not-prose` keeps Tailwind `prose` from re-styling the framed table.
+      wrap.className = "md-table not-prose";
+      table.parentNode.insertBefore(wrap, table);
+      wrap.appendChild(table);
+    });
+  }
+```
+
+- [ ] **Step 2: Add the table styles + image radius**
+
+Append to `umbra_website/static/css/md-enhance.css`:
+
+```css
+/* ===== Tables ===== */
+.md-table {
+  overflow-x: auto;            /* wide tables scroll instead of breaking layout */
+  margin: 1em 0;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+}
+.md-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+.md-table th,
+.md-table td {
+  padding: 9px 14px;
+  text-align: left;
+  border-bottom: 1px solid var(--hairline);
+}
+.md-table th {
+  background: var(--surface-2);
+  font-weight: 700;
+  color: var(--ink);
+}
+.md-table tr:last-child td { border-bottom: 0; }   /* clean bottom corners */
+.md-table tbody tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--surface-2) 45%, transparent);
+}
+```
+
+And update the existing `.md-img` rule (currently `cursor: zoom-in;` + `transition`) to add the radius:
+
+```css
+.md-img {
+  cursor: zoom-in;
+  border-radius: 12px;
+  transition: filter 0.15s ease;
+}
+```
+
+- [ ] **Step 3: Verify the updated assets are served**
+
+Run:
+```bash
+curl -s http://localhost:8100/static/js/md-enhance.js | grep -c enhanceTables
+curl -s http://localhost:8100/static/css/md-enhance.css | grep -c 'md-table'
+```
+Expected: the JS count is `2` (definition + call), the CSS count is `>= 1`.
+
+- [ ] **Step 4: Visual check in the browser**
+
+Open a page whose markdown has a table and an image (a blog post is surest). Confirm: the table sits in a rounded, bordered frame with a shaded header and scrolls horizontally when narrow; images are rounded and open the lightbox on click. (The `.md-table` wrapper is added by JS, so it only appears in the live DOM, not in `curl` output.)
+
+- [ ] **Step 5: Commit**
+
+```bash
+cd /home/dalmas/E/projects/umbra
+git add umbra_website/static/js/md-enhance.js umbra_website/static/css/md-enhance.css
+git commit -m "feat(website): rounded table frame + image radius for markdown"
+```
+
+---
+
 ## Final verification
 
 - [ ] From `crates/`: `cargo fmt --check && cargo clippy -p umbra-core --all-targets && cargo build && cargo test -p umbra-core` — all green.
 - [ ] The website rebuilt and `/plugins/umbra-admin` serves the inlined `<style>` with `.hl-` rules; a fenced code block renders `hl-` token spans.
+- [ ] `md-enhance.js`/`.css` are served with the table frame + image radius; a blog table renders a rounded scrollable frame and images are rounded + lightbox-able.
 - [ ] Notes still post via AJAX without a reload (the earlier fix is untouched).
 
 ## Self-review notes
 
-- **Spec coverage:** server-side filter highlighting (Task 2), class-based not inline (Task 2 helper uses `ClassedHTMLGenerator`), ammonia `class`-only widening (Task 2 + the `markdown_allows_class_but_not_style` test), `base16-ocean.dark` (Task 1), inline `<style>` delivery (Tasks 3–4), pure-Rust fancy-regex backend (Task 1 Cargo feature), graceful unknown-lang fallback (Task 2 test), `OnceLock` caching with no render caching (Task 1), tests (Tasks 1–3), facade re-export (Task 3), doc page (Task 5). All spec sections map to a task.
+- **Spec coverage:** server-side filter highlighting (Task 2), class-based not inline (Task 2 helper uses `ClassedHTMLGenerator`), ammonia `class`-only widening (Task 2 + the `markdown_allows_class_but_not_style` test), `base16-ocean.dark` (Task 1), inline `<style>` delivery (Tasks 3–4), pure-Rust fancy-regex backend (Task 1 Cargo feature), graceful unknown-lang fallback (Task 2 test), `OnceLock` caching with no render caching (Task 1), tests (Tasks 1–3), facade re-export (Task 3), doc page (Task 5), folded-in table frame + image radius (Task 6). Video is explicitly out of scope (own spec). All spec sections map to a task.
 - **Type consistency:** `hl_class_style()`, `HL_PREFIX`, `syntax_set()`, `highlight_css()`, `highlight_code_block(Option<&str>, &str)`, `wrap_code_block(Option<&str>, &str)`, `register_highlight_styles_function(&mut Environment)` are defined once and referenced consistently.
 - **Placeholder scan:** none — every code step shows complete code; the only runtime substitution is the blog `<slug>` in Task 4 Step 3, which is discovered by the preceding command.

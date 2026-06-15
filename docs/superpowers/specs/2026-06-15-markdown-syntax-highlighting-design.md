@@ -52,8 +52,23 @@ Unchanged. The enhancer keys off the `<code class="language-…">` class (now pr
 
 - `documentation/docs/v0.0.1/web/markdown-syntax-highlighting.mdx`: purpose (one paragraph), one fenced-code example showing the rendered result, and a link to this spec. Per "ship a feature, ship its doc page."
 
+## Folded in: table & image polish (website only)
+
+Bundled into this change to close the visible markdown quality in one pass. These are website CSS/JS only — no framework change — because the server already renders the markup; only styling is missing.
+
+- **Tables already parse server-side.** `render_markdown` has `ENABLE_TABLES` on (`templates.rs:427`) and ammonia's default allowlist passes `table/thead/tbody/tr/th/td`. There is no "remark-gfm" to add — that is the JS/unified ecosystem; pulldown-cmark already emits the table. The gap is styling: `md-enhance.js` gains an `enhanceTables(root)` that wraps each `[data-md] table` in a `<div class="md-table not-prose">` frame — the same pattern it already uses to wrap `<pre>` in `.md-code`. `md-enhance.css` styles `.md-table` with a rounded outer border, a header background, row separators, and `overflow-x: auto` so wide tables scroll on mobile instead of breaking the layout.
+- **Image lightbox already exists.** `md-enhance.js` already makes every `[data-md] img` a clickable lightbox with gallery + prev/next + keyboard nav, and `.md-lightbox` is fully styled. The only gap is that images don't look clickable or rounded: add `border-radius` to the existing `.md-img` rule (which already carries `cursor: zoom-in` + a hover filter). No new lightbox code.
+- **GFM column alignment (`:---:`) is intentionally NOT honored.** pulldown emits it as an inline `style="text-align:…"`, and ammonia strips `style` by design. Honoring it would mean widening the sanitizer's most dangerous attribute — the same boundary the highlighting decision holds.
+
+### Website changes (this section)
+
+- `umbra_website/static/js/md-enhance.js`: add `enhanceTables(root)` and call it in the existing `[data-md]` root loop, next to `enhanceCodeBlocks`.
+- `umbra_website/static/css/md-enhance.css`: add a `.md-table` block (frame, border, radius, header background, row borders, mobile scroll) and a `border-radius` on `.md-img`.
+
 ## Out of scope
 
-- The notes → chat surface (one-level replies, inline composer, compact layout). That is the next spec; this one only makes code render colored wherever `| markdown` already runs.
+- **Video / embeds in markdown** (`<video>`, YouTube/Vimeo iframes). Deferred to its own spec: the `| markdown` filter is shared by trusted blog posts and untrusted, instantly-public notes, so safe video needs a per-surface trust policy plus a domain/scheme allowlist — the "configurable allowlist for embeds" deferred at `templates.rs:250`. Not a CSS tweak, and unsafe to enable globally on the shared filter.
+- GFM table column alignment (needs the `style` attribute, against the sanitizer boundary).
+- The notes → chat surface (one-level replies, inline composer, compact layout). That is a separate spec; this one only improves what `| markdown` already renders.
 - Render-result caching / memoization.
-- A light-theme variant or per-consumer configurable theme. One baked theme now; configurability is a later slice if asked for.
+- A light-theme variant or per-consumer configurable highlight theme. One baked theme now; configurability is a later slice if asked for.
