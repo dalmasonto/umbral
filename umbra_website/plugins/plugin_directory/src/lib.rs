@@ -609,14 +609,20 @@ async fn plugin_search(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))
 }
 
-/// A single search hit — the shape `search_results.html` iterates.
+/// A single search hit — the shape `search_results.html` iterates. The global
+/// search spans both plugins and blog posts; `kind` distinguishes them and
+/// `href` is the link target.
 #[derive(Debug, Serialize)]
 struct SearchHit {
-    slug: String,
+    /// "plugin" or "blog" — drives the result icon and the kind label.
+    kind: &'static str,
+    /// The link target: `/plugins/{slug}` or `/blog/{slug}`.
+    href: String,
     name: String,
-    source: String,
+    /// Short label shown after the name (the plugin source, or "blog").
+    label: String,
     short_description: String,
-    /// Storage key for the logo image, resolved to a URL by `media_url()`.
+    /// Plugin logo storage key (resolved by `media_url()`); `None` for posts.
     logo: Option<String>,
 }
 
@@ -628,13 +634,11 @@ struct SearchHit {
 pub async fn render_search(q: &str) -> Result<String, String> {
     let trimmed = q.trim();
 
-    let hits: Vec<SearchHit> = if trimmed.is_empty() {
-        Vec::new()
-    } else {
-        // Name / crate / description substring match across approved,
-        // non-deleted plugins. `Q::or` nests the three `.contains()`
-        // LIKE predicates; the ORM renders the backend-correct LIKE.
-        PluginModel::objects()
+    let mut hits: Vec<SearchHit> = Vec::new();
+    if !trimmed.is_empty() {
+        // Plugins: name / crate / description substring match across approved,
+        // non-deleted plugins. `Q::or` nests the `.contains()` LIKE predicates.
+        let plugins = PluginModel::objects()
             .filter(plugin::MODERATION.eq("approved"))
             .filter(Q::or(
                 Q::or(
@@ -645,20 +649,50 @@ pub async fn render_search(q: &str) -> Result<String, String> {
             ))
             .order_by(plugin::FEATURED.desc())
             .order_by(plugin::DISPLAY_ORDER.asc())
-            .limit(8)
+            .limit(6)
             .fetch()
             .await
-            .map_err(|e| e.to_string())?
-            .into_iter()
-            .map(|p| SearchHit {
-                slug: p.slug,
-                name: p.name,
-                source: source_str(p.source).to_string(),
-                short_description: p.short_description,
-                logo: p.logo.map(|f| f.key().to_string()),
-            })
-            .collect()
-    };
+            .map_err(|e| e.to_string())?;
+        hits.extend(plugins.into_iter().map(|p| SearchHit {
+            kind: "plugin",
+            href: format!("/plugins/{}", p.slug),
+            name: p.name,
+            label: source_str(p.source).to_string(),
+            short_description: p.short_description,
+            logo: p.logo.map(|f| f.key().to_string()),
+        }));
+
+        // Blog posts: title / body substring match across PUBLISHED posts.
+        // Resilient: a failed blog query (e.g. the table is unavailable) logs
+        // and falls back to plugin-only results rather than 500-ing the whole
+        // search box.
+        use site_content::models::{BlogPost, blog_post};
+        match BlogPost::objects()
+            .filter(blog_post::STATUS.eq("published"))
+            .filter(Q::or(
+                blog_post::TITLE.contains(trimmed),
+                blog_post::BODY.contains(trimmed),
+            ))
+            .order_by(blog_post::PUBLISHED_AT.desc())
+            .limit(4)
+            .fetch()
+            .await
+        {
+            Ok(posts) => hits.extend(posts.into_iter().map(|p| SearchHit {
+                kind: "blog",
+                href: format!("/blog/{}", p.slug),
+                name: p.title,
+                label: "blog".to_string(),
+                short_description: p.excerpt.unwrap_or_default(),
+                logo: None,
+            })),
+            Err(e) => {
+                tracing::warn!(
+                    "global search: blog query failed, returning plugin results only: {e}"
+                );
+            }
+        }
+    }
 
     umbra::templates::render(
         "plugin_directory/search_results.html",

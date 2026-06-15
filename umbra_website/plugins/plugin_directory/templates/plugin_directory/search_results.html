@@ -4,15 +4,21 @@
 {% import "plugin_directory/_macros.html" as media %}
 {% if hits %}
 {% for hit in hits %}
-<a class="pd-search-result" href="/plugins/{{ hit.slug }}">
-  {{ media.plugin_logo(hit.logo, hit.name, hit.source, false, "", 36, "rounded-[9px]") }}
+<a class="pd-search-result" href="{{ hit.href }}">
+  {% if hit.kind == "blog" %}
+  <span class="pd-search-icon" aria-hidden="true" style="display:flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:9px;background:var(--surface-2);color:var(--accent-2);flex-shrink:0;">
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+  </span>
+  {% else %}
+  {{ media.plugin_logo(hit.logo, hit.name, hit.label, false, "", 36, "rounded-[9px]") }}
+  {% endif %}
   <span class="pd-search-name">{{ hit.name }}</span>
-  <span class="pd-search-source">{{ hit.source }}</span>
+  <span class="pd-search-source">{{ hit.label }}</span>
   <span class="pd-search-desc">{{ hit.short_description }}</span>
 </a>
 {% endfor %}
 {% elif q %}
-<div class="pd-search-empty">No plugins match "{{ q }}"</div>
+<div class="pd-search-empty">No plugins or posts match "{{ q }}"</div>
 {% else %}
-<div class="pd-search-empty">Type to search plugins…</div>
+<div class="pd-search-empty">Type to search plugins and the blog…</div>
 {% endif %}

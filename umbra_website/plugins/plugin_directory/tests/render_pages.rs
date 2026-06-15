@@ -705,7 +705,9 @@ async fn listing_and_detail_render_real_db_rows() {
     // slug, and the non-matching multitenancy plugin is absent.
     let hits = render_search("rest").await.expect("search renders");
     assert!(
-        hits.contains("<a class=\"pd-search-result\" href=\"/plugins/umbra-rest\">"),
+        // minijinja autoescapes `/` in an attribute value to `&#x2f;` (the
+        // browser decodes it back); the slug now flows through `hit.href`.
+        hits.contains("href=\"&#x2f;plugins&#x2f;umbra-rest\""),
         "matching plugin is a search-result link to its slug"
     );
     assert!(
@@ -722,14 +724,14 @@ async fn listing_and_detail_render_real_db_rows() {
         .await
         .expect("empty search renders");
     assert!(
-        none.contains("No plugins match \"zzznomatch\""),
+        none.contains("No plugins or posts match \"zzznomatch\""),
         "no-match query renders the empty state with the query echoed"
     );
 
     // Empty query → the type-to-search hint, no DB hits.
     let blank = render_search("   ").await.expect("blank search renders");
     assert!(
-        blank.contains("Type to search plugins…"),
+        blank.contains("Type to search plugins and the blog…"),
         "empty query renders the hint state"
     );
     assert!(

@@ -160,6 +160,7 @@
   {% endif %}
 
   <form class="card pd-form-card" method="post" action="/report" novalidate>
+      {{ csrf_input }}
     <input type="hidden" name="plugin" value="{{ report.plugin_slug }}">
     <div class="pd-fieldset">
 
