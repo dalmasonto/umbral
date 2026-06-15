@@ -47,8 +47,14 @@ fn body_includes_text_columns_excludes_slug_and_choices() {
     let body = default_body::<Doc>();
     assert!(body.contains(&"title"), "title is a body column: {body:?}");
     assert!(body.contains(&"body"), "body is a body column: {body:?}");
-    assert!(!body.contains(&"slug"), "slug (text_format) excluded: {body:?}");
-    assert!(!body.contains(&"status"), "choices column excluded: {body:?}");
+    assert!(
+        !body.contains(&"slug"),
+        "slug (text_format) excluded: {body:?}"
+    );
+    assert!(
+        !body.contains(&"status"),
+        "choices column excluded: {body:?}"
+    );
     assert!(!body.contains(&"id"), "non-text PK excluded: {body:?}");
 }
 
@@ -57,7 +63,7 @@ fn pk_column_is_the_primary_key() {
     assert_eq!(default_pk_column::<Doc>(), "id");
 }
 
-use umbra_core::orm::search::{branch_sql, Backend};
+use umbra_core::orm::search::{Backend, branch_sql};
 
 #[test]
 fn postgres_branch_has_tsrank_setweight_and_union_shape() {

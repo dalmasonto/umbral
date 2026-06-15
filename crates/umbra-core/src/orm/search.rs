@@ -52,7 +52,10 @@ pub fn default_title<T: Model>() -> &'static str {
             return c;
         }
     }
-    texts.first().copied().unwrap_or_else(default_pk_column::<T>)
+    texts
+        .first()
+        .copied()
+        .unwrap_or_else(default_pk_column::<T>)
 }
 
 /// The primary-key column name (first `primary_key` field; falls back to
@@ -190,7 +193,9 @@ impl_search_sources!(A, B, C, D, E, F);
 
 /// Escape SQL `LIKE` metacharacters in a user query (for the SQLite path).
 fn escape_like(q: &str) -> String {
-    q.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
+    q.replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
 }
 
 /// Cross-model relevance search. See the module docs.

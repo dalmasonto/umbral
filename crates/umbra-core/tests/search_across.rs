@@ -67,7 +67,10 @@ async fn across_returns_both_models_ranked_with_title_first() {
         hits.iter().any(|h| h.kind == "plugin"),
         "a plugin hit: {hits:?}"
     );
-    assert!(hits.iter().any(|h| h.kind == "post"), "a post hit: {hits:?}");
+    assert!(
+        hits.iter().any(|h| h.kind == "post"),
+        "a post hit: {hits:?}"
+    );
     // The title matches ("Redis cache", "Using redis") outrank the body-only
     // match ("Logger" / "writes to redis").
     let top = &hits[0];
