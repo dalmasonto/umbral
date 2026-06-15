@@ -85,3 +85,16 @@ fn sqlite_branch_uses_weighted_like_case() {
     assert!(sql.contains("AS rank"), "{sql}");
     assert!(!sql.contains("to_tsvector"), "no tsvector on sqlite: {sql}");
 }
+
+#[test]
+fn facade_paths_resolve() {
+    // Compile-time proof the public path the docs promise exists.
+    fn _assert<T: umbra::orm::Searchable>() {}
+    let _ = umbra::orm::SearchHit {
+        kind: String::new(),
+        pk: String::new(),
+        title: String::new(),
+        snippet: String::new(),
+        rank: 0.0,
+    };
+}

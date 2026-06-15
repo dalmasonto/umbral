@@ -504,7 +504,8 @@ pub mod orm {
         GetError, HydrateRelated, ImageField, JoinKind, M2M, M2MRelationSpec, Manager, MaskError,
         MaskKeyring, Masked, Model, MultiChoice, OneToOne, OneToOneRelationSpec, Post, Predicate,
         PrimaryKey, Q, QuerySet, QuerySetTx, ReverseError, ReverseFkRelationSpec, ReverseRelations,
-        ReverseSet, Slug, SqlType, TryForEachError, TsVector, Url, ValidatorError, column,
+        ReverseSet, Search, SearchHit, Searchable, Slug, SqlType, TryForEachError, TsVector, Url,
+        ValidatorError, column,
         decode_to_string, escape_like_literal, import_table_rows, load_junction_selection, pk_key,
         set_junction_dynamic, set_mask_keyring, validate_text_format, write,
     };
