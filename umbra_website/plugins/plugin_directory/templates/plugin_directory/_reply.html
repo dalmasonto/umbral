@@ -1,0 +1,11 @@
+{# One reply row — slimmer than a top-level note (_comment.html). Rendered by
+   the page loop and, identically, server-side for the live SSE / AJAX insert.
+   `comment` is a `CommentPreview`. Body sanitized by `| markdown` (the XSS
+   boundary). `data-reply` marks it slim; `data-comment-id` dedupes live. #}
+<article class="pd-reply" data-comment-id="{{ comment.id }}" data-reply>
+  <span class="pd-reply-avatar">{{ comment.initials }}</span>
+  <div class="min-w-0">
+    <div class="pd-reply-head"><span class="pd-reply-name">{{ comment.name }}</span> · {{ comment.created }}</div>
+    <div class="pd-prose text-[13.5px]" data-md>{{ comment.body | markdown }}</div>
+  </div>
+</article>

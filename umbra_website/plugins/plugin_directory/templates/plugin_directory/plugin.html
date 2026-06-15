@@ -421,8 +421,14 @@
               <span>Posted. Thanks for the note.</span>
             </div>
             <div class="space-y-3" id="pd-note-list">
-              {% for comment in plugin.comments %}
+              {% for thread in plugin.comments %}
+              {% set comment = thread.note %}
               {% include "plugin_directory/_comment.html" %}
+              <div class="pd-replies" data-replies-for="{{ thread.note.id }}">
+                {% for comment in thread.replies %}
+                {% include "plugin_directory/_reply.html" %}
+                {% endfor %}
+              </div>
               {% else %}
               <p class="m-0 rounded-[14px] border border-hairline bg-paper px-4 py-5 text-[14px] text-muted" data-note-empty>No notes yet. Be the first to share how this plugin works for you.</p>
               {% endfor %}

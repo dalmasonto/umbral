@@ -1009,6 +1009,33 @@ async fn create_note_threads_replies_under_a_visible_top_level_note() {
     assert!(bad.is_none(), "an unknown parent id is rejected");
 }
 
+#[tokio::test]
+async fn detail_page_nests_replies_under_their_note() {
+    boot().await;
+
+    let note = create_note("umbra-rest", "Top note here.", "general", None, None)
+        .await
+        .expect("ok")
+        .expect("payload");
+    create_note("umbra-rest", "First reply.", "general", None, Some(note.id))
+        .await
+        .expect("ok")
+        .expect("payload");
+
+    let html = render_detail("umbra-rest")
+        .await
+        .expect("render ok")
+        .expect("the plugin exists");
+
+    assert!(html.contains("Top note here."), "note renders");
+    assert!(html.contains("First reply."), "reply renders");
+    assert!(html.contains("data-reply"), "reply uses the slim reply partial");
+    assert!(
+        html.contains(&format!("data-replies-for=\"{}\"", note.id)),
+        "the note has a replies container keyed by its id"
+    );
+}
+
 /// Build a form-data map for the submission tests.
 fn submission_data(pairs: &[(&str, &str)]) -> std::collections::HashMap<String, String> {
     pairs

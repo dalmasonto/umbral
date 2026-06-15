@@ -916,7 +916,11 @@ pub async fn create_note(
     // Render the new row exactly as the page loop would, then ship it.
     let id = created.id;
     let preview = CommentPreview::from_model(created);
-    let html = render_comment_row(&preview)?;
+    let html = if parent.is_some() {
+        render_reply_row(&preview)?
+    } else {
+        render_comment_row(&preview)?
+    };
 
     // Live note feed (SSE): everyone watching this plugin's thread gets the
     // rendered row and inserts it in place. No-op when RealtimePlugin isn't
@@ -1332,18 +1336,54 @@ pub async fn render_detail_with(slug: &str, submitted: bool) -> Result<Option<St
         .await
         .map_err(|e| e.to_string())?;
 
-    let comment_rows = plugin
+    // All visible comments for this plugin in one reverse query, ordered so
+    // pinned top-level notes lead and everything is chronological. Partition
+    // in memory (ORM-pure: read the hydrated `parent` Option) into top-level
+    // notes (first 10) and their replies — no N+1, no IS NULL/IN predicate.
+    let all_comments = plugin
         .reverse::<pd::PluginComment>()
         .map_err(|e| e.to_string())?
         .filter(plugin_comment::MODERATION.eq("visible"))
         .order_by(plugin_comment::PINNED.desc())
         .order_by(plugin_comment::CREATED_AT.asc())
-        .limit(10)
         .fetch()
         .await
         .map_err(|e| e.to_string())?;
 
-    let detail = PluginDetail::build(plugin, feature_rows, compat_rows, comment_rows);
+    // True total of visible comments (notes + replies) for the plugin, used
+    // for the "N notes" stat — captured before truncation. Fetches all into
+    // memory; acceptable while per-plugin note counts stay in the low
+    // hundreds. Add a DB-side limit when that changes (which means moving the
+    // top-10 truncation to the query layer).
+    let notes_total = all_comments.len() as i64;
+
+    let mut replies_by_parent: std::collections::HashMap<i64, Vec<pd::PluginComment>> =
+        std::collections::HashMap::new();
+    let mut top_level: Vec<pd::PluginComment> = Vec::new();
+    for c in all_comments {
+        match c.parent.as_ref().map(|fk| fk.id()) {
+            Some(pid) => replies_by_parent.entry(pid).or_default().push(c),
+            None => top_level.push(c),
+        }
+    }
+    top_level.truncate(10);
+    let comment_rows: Vec<CommentThread> = top_level
+        .into_iter()
+        .map(|note| {
+            let replies = replies_by_parent
+                .remove(&note.id)
+                .unwrap_or_default()
+                .into_iter()
+                .map(CommentPreview::from_model)
+                .collect();
+            CommentThread {
+                note: CommentPreview::from_model(note),
+                replies,
+            }
+        })
+        .collect();
+
+    let detail = PluginDetail::build(plugin, feature_rows, compat_rows, comment_rows, notes_total);
     umbra::templates::render(
         "plugin_directory/plugin.html",
         &context!(plugin => detail, submitted => submitted),
@@ -1403,7 +1443,7 @@ struct PluginDetail {
     compat: Vec<CompatRow>,
     /// Compact compatibility summary for the sidebar (one StatusRow/row).
     compatibility: Vec<StatusRow>,
-    comments: Vec<CommentPreview>,
+    comments: Vec<CommentThread>,
     /// CommentKind options for the "Add a note" dialog select.
     note_kinds: Vec<NoteKind>,
     /// Storage key for the logo image, resolved to a URL by `media_url()`.
@@ -1466,7 +1506,8 @@ impl PluginDetail {
         p: PluginModel,
         features: Vec<PluginFeature>,
         compatibility: Vec<PluginCompatibility>,
-        comments: Vec<pd::PluginComment>,
+        comments: Vec<CommentThread>,
+        notes_total: i64,
     ) -> Self {
         let flagged = matches!(p.security_status, SecurityStatus::Blocked);
         let (status, status_kind) = if flagged {
@@ -1550,11 +1591,7 @@ impl PluginDetail {
             })
             .collect();
 
-        let comment_previews: Vec<CommentPreview> = comments
-            .into_iter()
-            .map(CommentPreview::from_model)
-            .collect();
-        let notes = comment_previews.len() as i64;
+        let comment_previews = comments;
 
         let install = install_line(&p.installation_commands, &p.crate_name);
         let add_line = format!("umbra add {}", p.crate_name);
@@ -1607,7 +1644,7 @@ impl PluginDetail {
                 .filter(|v| !v.trim().is_empty())
                 .unwrap_or_else(|| "—".to_string()),
             rating: "—".to_string(),
-            notes,
+            notes: notes_total,
             tags: derive_tags(&p),
             links,
             features: feature_rows,
@@ -1730,6 +1767,13 @@ impl CommentPreview {
     }
 }
 
+/// One top-level note plus its (depth-1) replies, in render order.
+#[derive(Debug, Serialize)]
+struct CommentThread {
+    note: CommentPreview,
+    replies: Vec<CommentPreview>,
+}
+
 /// Render a single comment row to HTML using the same partial the page
 /// loop includes, so a live-inserted note is byte-identical to a reloaded
 /// one. The body is sanitized by the `markdown` filter (ammonia), so the
@@ -1737,6 +1781,17 @@ impl CommentPreview {
 fn render_comment_row(preview: &CommentPreview) -> Result<String, String> {
     umbra::templates::render(
         "plugin_directory/_comment.html",
+        &umbra::templates::context! { comment => preview },
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// Render one reply row via the slim `_reply.html`, the reply counterpart to
+/// [`render_comment_row`] — so a live-inserted reply is byte-identical to a
+/// reloaded one. Body sanitized by `| markdown`, safe to broadcast.
+fn render_reply_row(preview: &CommentPreview) -> Result<String, String> {
+    umbra::templates::render(
+        "plugin_directory/_reply.html",
         &umbra::templates::context! { comment => preview },
     )
     .map_err(|e| e.to_string())
