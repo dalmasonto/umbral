@@ -1393,37 +1393,52 @@ pub async fn render_detail_with(slug: &str, submitted: bool) -> Result<Option<St
         .await
         .map_err(|e| e.to_string())?;
 
-    // All visible comments for this plugin in one reverse query, ordered so
-    // pinned top-level notes lead and everything is chronological. Partition
-    // in memory (ORM-pure: read the hydrated `parent` Option) into top-level
-    // notes (first 10) and their replies — no N+1, no IS NULL/IN predicate.
-    let all_comments = plugin
+    // True total of visible comments (notes + replies) for the "N notes" stat
+    // — counted DB-side, not by loading every row into memory.
+    let notes_total = plugin
         .reverse::<pd::PluginComment>()
         .map_err(|e| e.to_string())?
         .filter(plugin_comment::MODERATION.eq("visible"))
+        .count()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Top-level notes (parent IS NULL), pinned first then chronological, capped
+    // at 10. The IS NULL predicate and the LIMIT are both pushed to the query
+    // layer — the cap is enforced by the DB, not by truncating an in-memory Vec.
+    let top_level = plugin
+        .reverse::<pd::PluginComment>()
+        .map_err(|e| e.to_string())?
+        .filter(plugin_comment::MODERATION.eq("visible"))
+        .filter(plugin_comment::PARENT.is_null())
         .order_by(plugin_comment::PINNED.desc())
         .order_by(plugin_comment::CREATED_AT.asc())
+        .limit(10)
         .fetch()
         .await
         .map_err(|e| e.to_string())?;
 
-    // True total of visible comments (notes + replies) for the plugin, used
-    // for the "N notes" stat — captured before truncation. Fetches all into
-    // memory; acceptable while per-plugin note counts stay in the low
-    // hundreds. Add a DB-side limit when that changes (which means moving the
-    // top-10 truncation to the query layer).
-    let notes_total = all_comments.len() as i64;
-
+    // Replies for exactly those notes, fetched in one IN query (FK column
+    // `parent` IN [note ids]) and grouped by parent id. No N+1; an empty note
+    // list skips the query entirely.
+    let note_ids: Vec<i64> = top_level.iter().map(|n| n.id).collect();
     let mut replies_by_parent: std::collections::HashMap<i64, Vec<pd::PluginComment>> =
         std::collections::HashMap::new();
-    let mut top_level: Vec<pd::PluginComment> = Vec::new();
-    for c in all_comments {
-        match c.parent.as_ref().map(|fk| fk.id()) {
-            Some(pid) => replies_by_parent.entry(pid).or_default().push(c),
-            None => top_level.push(c),
+    if !note_ids.is_empty() {
+        let replies = pd::PluginComment::objects()
+            .filter(plugin_comment::PARENT.in_(&note_ids))
+            .filter(plugin_comment::MODERATION.eq("visible"))
+            .order_by(plugin_comment::CREATED_AT.asc())
+            .fetch()
+            .await
+            .map_err(|e| e.to_string())?;
+        for r in replies {
+            if let Some(pid) = r.parent.as_ref().map(|fk| fk.id()) {
+                replies_by_parent.entry(pid).or_default().push(r);
+            }
         }
     }
-    top_level.truncate(10);
+
     let comment_rows: Vec<CommentThread> = top_level
         .into_iter()
         .map(|note| {
