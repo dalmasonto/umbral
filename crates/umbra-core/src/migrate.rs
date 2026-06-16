@@ -4284,8 +4284,10 @@ mod tests {
             }
         }
         let prev = meta_with(baseline());
-        let mutations: Vec<(&str, fn(&mut Column))> = vec![
-            ("unique", |c| c.unique = true),
+        // Safe-to-alter changes: each must surface as an `AlterColumn`.
+        // (`nullable` here is false→true — a *loosening*, which is safe;
+        // the tightening direction is guarded separately below.)
+        let safe_mutations: Vec<(&str, fn(&mut Column))> = vec![
             ("default", |c| c.default = "hello".into()),
             ("choices", |c| {
                 c.choices = vec!["a".into(), "b".into()];
@@ -4293,7 +4295,7 @@ mod tests {
             }),
             ("nullable", |c| c.nullable = true),
         ];
-        for (label, mutate) in mutations {
+        for (label, mutate) in safe_mutations {
             let mut col = baseline();
             mutate(&mut col);
             let current = meta_with(col);
@@ -4307,6 +4309,25 @@ mod tests {
                     .any(|op| matches!(op, Operation::AlterColumn { column, .. } if column == "x")),
                 "{label}: expected AlterColumn on `x`; got: {ops:?}",
             );
+        }
+
+        // Adding UNIQUE to an existing column is detected too, but as an
+        // `UnsafeAlter` guard rather than a bare `AlterColumn`: dropping a
+        // UNIQUE constraint onto a populated column aborts the migration
+        // if duplicates already exist, so the engine refuses it with a
+        // duplicate-pre-check message instead of silently emitting it.
+        let mut col = baseline();
+        col.unique = true;
+        let current = meta_with(col);
+        match diff_columns("M", &prev, &current) {
+            Err(MigrateError::UnsafeAlter { column, reason, .. }) => {
+                assert_eq!(column, "x");
+                assert!(
+                    reason.contains("UNIQUE"),
+                    "unsafe-alter reason should mention UNIQUE; got: {reason}",
+                );
+            }
+            other => panic!("unique add should be an UnsafeAlter guard; got: {other:?}"),
         }
     }
 

@@ -220,6 +220,17 @@ fn create_table_with_fk(table: &str, fk_target: &str, db_constraint: bool) -> Op
     }
 }
 
+/// Pick the `CREATE TABLE` statement out of a rendered op's statements.
+/// FK auto-indexing means a `CreateTable` op renders as multiple
+/// statements (the table itself plus a `CREATE INDEX` per FK column);
+/// the DDL assertions here target the table definition specifically.
+fn create_table_stmt<'a>(stmts: &'a [String], backend: &str) -> &'a String {
+    stmts
+        .iter()
+        .find(|s| s.to_ascii_uppercase().contains("CREATE TABLE"))
+        .unwrap_or_else(|| panic!("{backend}: expected a CREATE TABLE statement; got {stmts:?}"))
+}
+
 /// A same-DB FK with `db_constraint = false` builds and the emitted DDL
 /// carries NO `FOREIGN KEY` / `REFERENCES` clause for that column — only
 /// the bare column survives.
@@ -229,8 +240,10 @@ fn db_constraint_false_omits_references_in_ddl() {
 
     for backend in ["sqlite", "postgres"] {
         let stmts = render_operation_for(&op, backend);
-        assert_eq!(stmts.len(), 1, "{backend}: one CreateTable statement");
-        let sql = &stmts[0];
+        // A CreateTable for an FK column now also emits a CREATE INDEX on
+        // that column (FK auto-indexing), so inspect the CREATE TABLE
+        // statement specifically rather than assuming a single statement.
+        let sql = create_table_stmt(&stmts, backend);
         assert!(
             !sql.to_ascii_uppercase().contains("REFERENCES"),
             "{backend}: db_constraint = false must omit REFERENCES; got {sql}"
@@ -255,8 +268,9 @@ fn default_fk_still_emits_references_in_ddl() {
 
     for backend in ["sqlite", "postgres"] {
         let stmts = render_operation_for(&op, backend);
-        assert_eq!(stmts.len(), 1, "{backend}: one CreateTable statement");
-        let sql = &stmts[0];
+        // FK auto-indexing adds a CREATE INDEX statement alongside the
+        // CreateTable; assert on the CREATE TABLE statement itself.
+        let sql = create_table_stmt(&stmts, backend);
         assert!(
             sql.to_ascii_uppercase().contains("REFERENCES"),
             "{backend}: a default FK must still emit REFERENCES; got {sql}"

@@ -210,8 +210,12 @@ fn create_table_emits_references_sqlite() {
     };
 
     let stmts = render_operation_for(&op, "sqlite");
-    assert_eq!(stmts.len(), 1, "CreateTable should emit one statement");
-    let sql = &stmts[0];
+    // FK auto-indexing emits a CREATE INDEX alongside the CreateTable;
+    // assert on the CREATE TABLE statement itself.
+    let sql = stmts
+        .iter()
+        .find(|s| s.to_ascii_uppercase().contains("CREATE TABLE"))
+        .expect("a CREATE TABLE statement");
     let lower = sql.to_ascii_lowercase();
 
     assert!(
@@ -335,8 +339,12 @@ fn create_table_emits_references_postgres() {
     };
 
     let stmts = render_operation_for(&op, "postgres");
-    assert_eq!(stmts.len(), 1, "CreateTable should emit one statement");
-    let sql = &stmts[0];
+    // FK auto-indexing emits a CREATE INDEX alongside the CreateTable;
+    // assert on the CREATE TABLE statement itself.
+    let sql = stmts
+        .iter()
+        .find(|s| s.to_ascii_uppercase().contains("CREATE TABLE"))
+        .expect("a CREATE TABLE statement");
     let lower = sql.to_ascii_lowercase();
 
     assert!(
