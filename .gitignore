@@ -22,6 +22,9 @@ target/
 node_modules
 create_db.sh
 
+# Throwaway cot.rs comparison benchmark (not part of umbra; never committed).
+examples/cot-bench/
+
 # Git worktrees created by the using-git-worktrees skill
 .worktrees/
 

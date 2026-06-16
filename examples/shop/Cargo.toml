@@ -45,3 +45,8 @@ async-trait = "0.1"
 # ----- Project plugins -----------------------------------------------------
 content = { path = "plugins/content" }
 ecommerce = { path = "plugins/ecommerce" }
+
+[dev-dependencies]
+# Only for the connection-cost / WAL benchmark controls under examples/.
+axum = "0.8"
+sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio"] }

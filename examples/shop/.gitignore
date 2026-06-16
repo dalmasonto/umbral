@@ -3,6 +3,12 @@
 .env
 Cargo.lock
 
+# Throwaway connection-cost benchmark scaffolding (bare_axum / umbra_min /
+# clone_bisect). Local-only — kept on disk so the benchmarks can be re-run,
+# never committed. The `axum` dev-dependency in Cargo.toml exists only for
+# these; drop it if you remove them.
+/examples/
+
 # Tailwind build artefacts (gaps2 #20). Committed bits:
 #   styles/{input.css,tailwind.config.js,package.json}  — source
 #   static/css/shop.css                                  — compiled output
