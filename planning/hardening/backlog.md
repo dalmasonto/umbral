@@ -104,3 +104,37 @@ Ranked by pain-relief (proposed module trees in the report):
 - **#78** Module splits for the 5 files >2,800 LOC.
 - (Existing updated: **#34** stale ref + `update_expr`; **#35** + hydration 3rd surface; **#63** FK/`deleted_at` indexes; **#68** `on_delete` ORM cascade; **#79** unsafe-ALTER pre-check.)
 - **Doc-fix batch** — the ~8 Critical + long-tail doc drifts (not a gaps2 entry; a single docs PR).
+
+---
+
+## Wave C — per-plugin review (all 19 built-in plugins)
+
+> One report per plugin in `planning/hardening/plugins-review/<plugin>.md` (the detailed single source). Standard 5 axes **plus completeness** (stubs / no-op hooks / half-features / what's missing vs the Django·Celery·DRF peer). Net-new findings filed as **gaps2 #79–#86**; the per-plugin reports hold the full long tail.
+
+**Verdicts**
+
+| Plugin | Verdict | Headline net-new |
+|---|---|---|
+| umbra-rest | Solid (strongest) | `?ordering=` reserved+doc'd but never read → silent unsorted (#79); confirms #76 from REST side |
+| umbra-auth | Solid | `Identity` drops `is_superuser` at REST boundary (#80); no pw-strength/throttle (#82) |
+| umbra-sessions | Solid | no rolling expiry / no `clearsessions` / no `SessionStore` trait (#80/#82) |
+| umbra-permissions | Solid (~90% DRF parity) | `table_app_label` splits at first `_` → wrong Permission row (#80) |
+| umbra-email | Solid v1 | no CRLF/header-injection guard+test on `subject` (#81); console leaks tokens |
+| umbra-signals | Solid (w/ fix) | async handler panics not isolated → kill the request (#80) |
+| umbra-realtime | Solid (single-instance) | hard non-optional `umbra-auth` dep (#84); no Last-Event-ID resume (#82) |
+| umbra-livereload | Complete | `to_bytes(body, usize::MAX)` uncapped buffer (report) |
+| umbra-health | Complete | `probe_database` raw `sqlx` ORM bypass → add `umbra::db::ping()` (#84); no per-check timeout |
+| umbra-playground | Complete (real plugin) | naive multi-`replace()` placeholder chain → injection breakout (#81) |
+| umbra-cache | Has gaps | `cache_page` Host/Cookie poisoning (#81); single backend (#82) |
+| umbra-static | Has gaps | embedded ETag/304 missing + symlink loop (#81); no manifest hash (#82) |
+| umbra-tasks | Lean v1 | fragile `starts_with("handler not found")` non-retriable check (#80); no SKIP-LOCKED/beat/result-backend (#82) |
+| umbra-oauth | Real, incomplete | token refresh never implemented (#79); reqwest no-timeout (#81); PKCE = #74 |
+| umbra-openapi | Accurate schema, path holes | CRUD paths hardcode `/api/...` ignoring `base_path()` (#79) |
+| umbra-security | Solid for scope | `csrf_exempt_paths` segment-boundary bug (#81); empty-key = #75 |
+| umbra-media | Has gaps | no file-lifecycle cleanup + fully-buffered `Storage` trait (#82) |
+| umbra-admin | Has gaps | `TabularInline` stored-but-never-rendered stub (#79); base-path 404s + view-perm disclosure (#83) |
+| umbra-rls | Real but non-functional | emits policy DDL but nothing sets `app.user_id` per request → deny-all (#79, ties #69) |
+
+**Contract:** clean across the board — facade-only imports, no raw `sqlx::query`/`query_as` in plugin `src/` (the lone `umbra-health` `SELECT 1` is the one exception → #84), each owns its migrations. The two dependency-direction smells are #76 (`auth→rest`) and #84 (`realtime→auth` hard dep).
+
+**New gaps2 entries (#79–#86):** #79 advertised-but-non-functional surfaces · #80 reliability/correctness (signals async-panic, sessions expiry, tasks claim, permissions app_label, auth superuser) · #81 plugin security (csrf boundary, email injection, playground, cache/static, oauth timeout) · #82 missing breadth (media/static/cache/tasks/rest deferred features) · #83 admin base-path + authz · #84 plugin-contract + shared `db::ping()`/`block_on_ready` primitives · #85 security/correctness test-coverage holes · #86 plugin doc drifts.
