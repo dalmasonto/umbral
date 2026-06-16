@@ -35,10 +35,22 @@ use sea_query::{
 use sea_query_binder::SqlxBinder;
 use sqlx::Row;
 
-use crate::db::{DbPool, pool_dispatched};
+use crate::db::{DbPool, pool_for_dispatched};
 use crate::migrate::{Column, ModelMeta};
 use crate::orm::SqlType;
 use crate::orm::write::{WriteError, json_to_sea_value, null_for};
+
+/// Resolve the pool for a dynamic (late-bound) query on `meta`, routing
+/// through the `DatabaseRouter` exactly like the typed path.
+fn resolve_pool_dyn(meta: &crate::migrate::ModelMeta, op: crate::db::RouteOp) -> crate::db::DbPool {
+    let ctx = crate::db::route_context();
+    let r = crate::db::router::router();
+    let alias = match op {
+        crate::db::RouteOp::Read => r.db_for_read(meta, &ctx),
+        crate::db::RouteOp::Write => r.db_for_write(meta, &ctx),
+    };
+    pool_for_dispatched(alias.as_str()).clone()
+}
 
 /// Errors a runtime-typed query can produce.
 ///
@@ -566,15 +578,15 @@ impl<'a> DynQuerySet<'a> {
             q.cond_where(cond.clone());
         }
 
-        match pool_dispatched() {
+        match resolve_pool_dyn(self.meta, crate::db::RouteOp::Read) {
             DbPool::Sqlite(pool) => {
                 let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
-                let row = sqlx::query_with(&sql, values).fetch_one(pool).await?;
+                let row = sqlx::query_with(&sql, values).fetch_one(&pool).await?;
                 Ok(row.try_get::<i64, _>(0)?)
             }
             DbPool::Postgres(pool) => {
                 let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
-                let row = sqlx::query_with(&sql, values).fetch_one(pool).await?;
+                let row = sqlx::query_with(&sql, values).fetch_one(&pool).await?;
                 Ok(row.try_get::<i64, _>(0)?)
             }
         }
@@ -600,10 +612,10 @@ impl<'a> DynQuerySet<'a> {
             q.limit(n);
         }
 
-        match pool_dispatched() {
+        match resolve_pool_dyn(self.meta, crate::db::RouteOp::Read) {
             DbPool::Sqlite(pool) => {
                 let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
-                let rows = sqlx::query_with(&sql, values).fetch_all(pool).await?;
+                let rows = sqlx::query_with(&sql, values).fetch_all(&pool).await?;
                 let mut out = Vec::with_capacity(rows.len());
                 for row in rows {
                     out.push(decode_to_string(&row, col_meta)?);
@@ -612,7 +624,7 @@ impl<'a> DynQuerySet<'a> {
             }
             DbPool::Postgres(pool) => {
                 let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
-                let rows = sqlx::query_with(&sql, values).fetch_all(pool).await?;
+                let rows = sqlx::query_with(&sql, values).fetch_all(&pool).await?;
                 let mut out = Vec::with_capacity(rows.len());
                 for row in rows {
                     out.push(decode_pg_to_string(&row, col_meta)?);
@@ -651,15 +663,15 @@ impl<'a> DynQuerySet<'a> {
             q.cond_where(cond.clone());
         }
 
-        let rows_affected = match pool_dispatched() {
+        let rows_affected = match resolve_pool_dyn(self.meta, crate::db::RouteOp::Write) {
             DbPool::Sqlite(pool) => {
                 let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
-                let res = sqlx::query_with(&sql, values).execute(pool).await?;
+                let res = sqlx::query_with(&sql, values).execute(&pool).await?;
                 res.rows_affected()
             }
             DbPool::Postgres(pool) => {
                 let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
-                let res = sqlx::query_with(&sql, values).execute(pool).await?;
+                let res = sqlx::query_with(&sql, values).execute(&pool).await?;
                 res.rows_affected()
             }
         };
@@ -691,15 +703,15 @@ impl<'a> DynQuerySet<'a> {
             q.cond_where(cond.clone());
         }
 
-        let rows_affected = match pool_dispatched() {
+        let rows_affected = match resolve_pool_dyn(self.meta, crate::db::RouteOp::Write) {
             DbPool::Sqlite(pool) => {
                 let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
-                let res = sqlx::query_with(&sql, values).execute(pool).await?;
+                let res = sqlx::query_with(&sql, values).execute(&pool).await?;
                 res.rows_affected()
             }
             DbPool::Postgres(pool) => {
                 let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
-                let res = sqlx::query_with(&sql, values).execute(pool).await?;
+                let res = sqlx::query_with(&sql, values).execute(&pool).await?;
                 res.rows_affected()
             }
         };
@@ -735,15 +747,15 @@ impl<'a> DynQuerySet<'a> {
             q.cond_where(cond.clone());
         }
 
-        match pool_dispatched() {
+        match resolve_pool_dyn(self.meta, crate::db::RouteOp::Write) {
             DbPool::Sqlite(pool) => {
                 let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
-                let res = sqlx::query_with(&sql, values).execute(pool).await?;
+                let res = sqlx::query_with(&sql, values).execute(&pool).await?;
                 Ok(res.rows_affected())
             }
             DbPool::Postgres(pool) => {
                 let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
-                let res = sqlx::query_with(&sql, values).execute(pool).await?;
+                let res = sqlx::query_with(&sql, values).execute(&pool).await?;
                 Ok(res.rows_affected())
             }
         }
@@ -810,15 +822,15 @@ impl<'a> DynQuerySet<'a> {
             q.cond_where(cond.clone());
         }
 
-        match pool_dispatched() {
+        match resolve_pool_dyn(self.meta, crate::db::RouteOp::Write) {
             DbPool::Sqlite(pool) => {
                 let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
-                let res = sqlx::query_with(&sql, values).execute(pool).await?;
+                let res = sqlx::query_with(&sql, values).execute(&pool).await?;
                 Ok(res.rows_affected())
             }
             DbPool::Postgres(pool) => {
                 let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
-                let res = sqlx::query_with(&sql, values).execute(pool).await?;
+                let res = sqlx::query_with(&sql, values).execute(&pool).await?;
                 Ok(res.rows_affected())
             }
         }
@@ -890,10 +902,10 @@ impl<'a> DynQuerySet<'a> {
         let exprs: Vec<sea_query::SimpleExpr> = values.into_iter().map(Into::into).collect();
         q.values_panic(exprs);
 
-        match pool_dispatched() {
+        match resolve_pool_dyn(self.meta, crate::db::RouteOp::Write) {
             DbPool::Sqlite(pool) => {
                 let (sql, vals) = q.build_sqlx(SqliteQueryBuilder);
-                let res = sqlx::query_with(&sql, vals).execute(pool).await?;
+                let res = sqlx::query_with(&sql, vals).execute(&pool).await?;
                 Ok(res.last_insert_rowid())
             }
             DbPool::Postgres(pool) => {
@@ -911,11 +923,11 @@ impl<'a> DynQuerySet<'a> {
                 if let Some(pk) = pk_name {
                     q.returning_col(Alias::new(&pk));
                     let (sql, vals) = q.build_sqlx(PostgresQueryBuilder);
-                    let row = sqlx::query_with(&sql, vals).fetch_one(pool).await?;
+                    let row = sqlx::query_with(&sql, vals).fetch_one(&pool).await?;
                     Ok(row.try_get::<i64, _>(pk.as_str()).unwrap_or(0))
                 } else {
                     let (sql, vals) = q.build_sqlx(PostgresQueryBuilder);
-                    let _ = sqlx::query_with(&sql, vals).execute(pool).await?;
+                    let _ = sqlx::query_with(&sql, vals).execute(&pool).await?;
                     Ok(0)
                 }
             }
@@ -949,10 +961,10 @@ impl<'a> DynQuerySet<'a> {
             q.offset(n);
         }
 
-        match pool_dispatched() {
+        match resolve_pool_dyn(self.meta, crate::db::RouteOp::Read) {
             DbPool::Sqlite(pool) => {
                 let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
-                let rows = sqlx::query_with(&sql, values).fetch_all(pool).await?;
+                let rows = sqlx::query_with(&sql, values).fetch_all(&pool).await?;
                 let mut out: Vec<HashMap<String, String>> = Vec::with_capacity(rows.len());
                 for row in rows {
                     let mut entry = HashMap::new();
@@ -970,7 +982,7 @@ impl<'a> DynQuerySet<'a> {
             }
             DbPool::Postgres(pool) => {
                 let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
-                let rows = sqlx::query_with(&sql, values).fetch_all(pool).await?;
+                let rows = sqlx::query_with(&sql, values).fetch_all(&pool).await?;
                 let mut out: Vec<HashMap<String, String>> = Vec::with_capacity(rows.len());
                 for row in rows {
                     let mut entry = HashMap::new();
@@ -1035,10 +1047,10 @@ impl<'a> DynQuerySet<'a> {
                     .map(|col| (col_name, col))
             })
             .collect();
-        let mut out: Vec<serde_json::Map<String, serde_json::Value>> = match pool_dispatched() {
+        let mut out: Vec<serde_json::Map<String, serde_json::Value>> = match resolve_pool_dyn(self.meta, crate::db::RouteOp::Read) {
             DbPool::Sqlite(pool) => {
                 let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
-                let rows = sqlx::query_with(&sql, values).fetch_all(pool).await?;
+                let rows = sqlx::query_with(&sql, values).fetch_all(&pool).await?;
                 let mut out: Vec<serde_json::Map<String, serde_json::Value>> =
                     Vec::with_capacity(rows.len());
                 for row in rows {
@@ -1052,7 +1064,7 @@ impl<'a> DynQuerySet<'a> {
             }
             DbPool::Postgres(pool) => {
                 let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
-                let rows = sqlx::query_with(&sql, values).fetch_all(pool).await?;
+                let rows = sqlx::query_with(&sql, values).fetch_all(&pool).await?;
                 let mut out: Vec<serde_json::Map<String, serde_json::Value>> =
                     Vec::with_capacity(rows.len());
                 for row in rows {
@@ -1156,11 +1168,11 @@ impl<'a> DynQuerySet<'a> {
         )
         .await;
 
-        match pool_dispatched() {
+        match resolve_pool_dyn(self.meta, crate::db::RouteOp::Write) {
             DbPool::Sqlite(pool) => {
                 let (sql, vals) = q.build_sqlx(SqliteQueryBuilder);
                 let res = sqlx::query_with(&sql, vals)
-                    .execute(pool)
+                    .execute(&pool)
                     .await
                     .map_err(|e| classify_or_sqlx(e, body))?;
                 // Re-fetch by PK so the caller sees the row as the DB
@@ -1190,7 +1202,7 @@ impl<'a> DynQuerySet<'a> {
                 }
                 sel.cond_where(Condition::all().add(pk_pred));
                 let (sel_sql, sel_vals) = sel.build_sqlx(SqliteQueryBuilder);
-                let row = sqlx::query_with(&sel_sql, sel_vals).fetch_one(pool).await?;
+                let row = sqlx::query_with(&sel_sql, sel_vals).fetch_one(&pool).await?;
                 let mut out = serde_json::Map::new();
                 for col in &self.meta.fields {
                     out.insert(col.name.clone(), decode_to_json(&row, col)?);
@@ -1223,7 +1235,7 @@ impl<'a> DynQuerySet<'a> {
                 q.returning_all();
                 let (sql, vals) = q.build_sqlx(PostgresQueryBuilder);
                 let row = sqlx::query_with(&sql, vals)
-                    .fetch_one(pool)
+                    .fetch_one(&pool)
                     .await
                     .map_err(|e| classify_or_sqlx(e, body))?;
                 let mut out = serde_json::Map::new();
@@ -1493,12 +1505,12 @@ impl<'a> DynQuerySet<'a> {
             None => Vec::new(),
         };
 
-        match pool_dispatched() {
+        match resolve_pool_dyn(self.meta, crate::db::RouteOp::Write) {
             DbPool::Sqlite(pool) => {
                 if any {
                     let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
                     sqlx::query_with(&sql, values)
-                        .execute(pool)
+                        .execute(&pool)
                         .await
                         .map_err(|e| classify_or_sqlx(e, body))?;
                 }
@@ -1522,7 +1534,7 @@ impl<'a> DynQuerySet<'a> {
                 if any {
                     let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
                     sqlx::query_with(&sql, values)
-                        .execute(pool)
+                        .execute(&pool)
                         .await
                         .map_err(|e| classify_or_sqlx(e, body))?;
                 }
@@ -2264,7 +2276,7 @@ async fn hydrate_select_related_into(
     sr_fields: &[String],
     rows: &mut [serde_json::Map<String, serde_json::Value>],
 ) -> Result<(), sqlx::Error> {
-    let pool = pool_dispatched();
+    let pool = resolve_pool_dyn(meta, crate::db::RouteOp::Read);
     for chain in sr_fields {
         let hops: Vec<&str> = chain.split('.').filter(|s| !s.is_empty()).collect();
         if hops.is_empty() {
@@ -2514,10 +2526,10 @@ async fn hydrate_m2m_batched(
         sel.and_where(Expr::col(Alias::new("parent_id")).is_in(parent_sea_vals.clone()));
 
         let mut children_by_parent: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
-        match pool_dispatched() {
+        match resolve_pool_dyn(meta, crate::db::RouteOp::Read) {
             DbPool::Sqlite(pool) => {
                 let (sql, values) = sel.build_sqlx(SqliteQueryBuilder);
-                let db_rows = sqlx::query_with(&sql, values).fetch_all(pool).await?;
+                let db_rows = sqlx::query_with(&sql, values).fetch_all(&pool).await?;
                 for r in &db_rows {
                     let parent = read_junction_id_sqlite(r, "parent_id")?;
                     let child = read_junction_id_sqlite(r, "child_id")?;
@@ -2529,7 +2541,7 @@ async fn hydrate_m2m_batched(
             }
             DbPool::Postgres(pool) => {
                 let (sql, values) = sel.build_sqlx(PostgresQueryBuilder);
-                let db_rows = sqlx::query_with(&sql, values).fetch_all(pool).await?;
+                let db_rows = sqlx::query_with(&sql, values).fetch_all(&pool).await?;
                 for r in &db_rows {
                     let parent = read_junction_id_pg(r, "parent_id")?;
                     let child = read_junction_id_pg(r, "child_id")?;
@@ -2610,10 +2622,10 @@ async fn hydrate_m2m_into(
         sel.from(Alias::new(&junction_table));
         sel.column(Alias::new("child_id"));
         sel.and_where(Expr::col(Alias::new("parent_id")).eq(parent_pk_value.clone()));
-        let children: Vec<serde_json::Value> = match pool_dispatched() {
+        let children: Vec<serde_json::Value> = match resolve_pool_dyn(meta, crate::db::RouteOp::Read) {
             DbPool::Sqlite(pool) => {
                 let (sql, values) = sel.build_sqlx(SqliteQueryBuilder);
-                let rows = sqlx::query_with(&sql, values).fetch_all(pool).await?;
+                let rows = sqlx::query_with(&sql, values).fetch_all(&pool).await?;
                 rows.iter()
                     .map(|r| {
                         r.try_get::<i64, _>("child_id")
@@ -2627,7 +2639,7 @@ async fn hydrate_m2m_into(
             }
             DbPool::Postgres(pool) => {
                 let (sql, values) = sel.build_sqlx(PostgresQueryBuilder);
-                let rows = sqlx::query_with(&sql, values).fetch_all(pool).await?;
+                let rows = sqlx::query_with(&sql, values).fetch_all(&pool).await?;
                 rows.iter()
                     .map(|r| {
                         r.try_get::<i64, _>("child_id")
@@ -2662,10 +2674,10 @@ async fn collect_parent_pks(
     for cond in where_clauses {
         sel.cond_where(cond.clone());
     }
-    match pool_dispatched() {
+    match resolve_pool_dyn(meta, crate::db::RouteOp::Read) {
         DbPool::Sqlite(pool) => {
             let (sql, values) = sel.build_sqlx(SqliteQueryBuilder);
-            let rows = sqlx::query_with(&sql, values).fetch_all(pool).await?;
+            let rows = sqlx::query_with(&sql, values).fetch_all(&pool).await?;
             rows.iter()
                 .map(|row| decode_to_json(row, pk_col))
                 .collect::<Result<Vec<_>, _>>()
@@ -2673,7 +2685,7 @@ async fn collect_parent_pks(
         }
         DbPool::Postgres(pool) => {
             let (sql, values) = sel.build_sqlx(PostgresQueryBuilder);
-            let rows = sqlx::query_with(&sql, values).fetch_all(pool).await?;
+            let rows = sqlx::query_with(&sql, values).fetch_all(&pool).await?;
             rows.iter()
                 .map(|row| decode_pg_to_json(row, pk_col))
                 .collect::<Result<Vec<_>, _>>()
