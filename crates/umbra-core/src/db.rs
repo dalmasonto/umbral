@@ -51,6 +51,9 @@ use sqlx::{ConnectOptions, PgPool, SqlitePool};
 use std::str::FromStr;
 use std::time::Duration;
 
+pub mod route_context;
+pub mod router;
+
 /// A pool of database connections, typed by backend.
 ///
 /// Cloning is cheap — both variants wrap an `Arc`-backed inner
