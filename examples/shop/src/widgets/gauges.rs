@@ -58,7 +58,11 @@ pub fn shop_fulfillment_radial() -> Widget {
                 .filter(|(s, _)| matches!(s.as_str(), "fulfilled" | "shipped" | "delivered"))
                 .map(|(_, n)| *n)
                 .sum();
-            let pct = if total > 0.0 { done / total * 100.0 } else { 0.0 };
+            let pct = if total > 0.0 {
+                done / total * 100.0
+            } else {
+                0.0
+            };
             WidgetPayload::Radial(RadialPayload::single("Fulfilled", pct))
         }),
     }
@@ -80,7 +84,11 @@ pub fn shop_sales_heatmap() -> Widget {
             let weeks = ["Week 1", "Week 2", "Week 3", "Week 4"];
             let cols = ["D1", "D2", "D3", "D4", "D5", "D6", "D7"];
             let grid: Vec<Vec<f64>> = (0..weeks.len())
-                .map(|w| (0..cols.len()).map(|d| trail.get(w * 7 + d).copied().unwrap_or(0.0)).collect())
+                .map(|w| {
+                    (0..cols.len())
+                        .map(|d| trail.get(w * 7 + d).copied().unwrap_or(0.0))
+                        .collect()
+                })
                 .collect();
             WidgetPayload::Heatmap(HeatmapPayload::from_grid(weeks, cols, grid))
         }),

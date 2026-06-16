@@ -8,7 +8,7 @@
 
 pub mod models;
 
-pub use models::{Category, Tag, Post, Comment, Page, Faq, Menu, MenuItem, Banner, Testimonial, ContactMessage, Subscriber, MediaAsset, Redirect, SiteSetting};
+pub use models::{Category, Tag, Post, Comment, Page, Faq, Menu, MenuItem, Banner, Testimonial, ContactMessage, Note, Subscriber, MediaAsset, Redirect, SiteSetting};
 
 use umbra::migrate::ModelMeta;
 use umbra::plugin::{AppContext, Plugin, PluginError};
@@ -35,6 +35,7 @@ impl Plugin for ContentPlugin {
             ModelMeta::for_::<models::Banner>(),
             ModelMeta::for_::<models::Testimonial>(),
             ModelMeta::for_::<models::ContactMessage>(),
+            ModelMeta::for_::<models::Note>(),
             ModelMeta::for_::<models::Subscriber>(),
             ModelMeta::for_::<models::MediaAsset>(),
             ModelMeta::for_::<models::Redirect>(),

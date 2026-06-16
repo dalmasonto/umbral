@@ -6,18 +6,73 @@
 
 use std::collections::HashMap;
 
-use content::models::{ContactMessage, Faq, Post, faq, post};
+use content::models::{ContactMessage, Faq, Note, Post, faq, note, post};
 use ecommerce::models::{Brand, Product, Review, brand, product, review};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use umbra::forms::Form;
 use umbra::templates::context;
-use umbra::web::{Html, IntoResponse, Path, Query, Redirect, Response, StatusCode};
+use umbra::web::{Html, IntoResponse, Json, Path, Query, Redirect, Response, StatusCode};
 
 use super::internal_error;
 
 #[derive(Debug, Deserialize)]
 pub struct ContactQuery {
     sent: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BenchJsonResponse {
+    ok: bool,
+    name: &'static str,
+    items: [i32; 4],
+}
+
+pub async fn bench_json() -> Json<BenchJsonResponse> {
+    Json(BenchJsonResponse {
+        ok: true,
+        name: "shop",
+        items: [1, 2, 3, 4],
+    })
+}
+
+pub async fn bench_text() -> &'static str {
+    "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+}
+
+pub async fn bench_note_write() -> Result<Json<Note>, (StatusCode, String)> {
+    let note = Note::objects()
+        .create(Note {
+            id: 0,
+            title: "ApacheBench note".to_string(),
+            description: "Inserted by the shop benchmark write endpoint.".to_string(),
+        })
+        .await
+        .map_err(internal_error)?;
+
+    Ok(Json(note))
+}
+
+pub async fn bench_note_read() -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let notes = Note::objects()
+        .order_by(note::ID.desc())
+        .limit(25)
+        .fetch()
+        .await
+        .map_err(internal_error)?;
+
+    let total = Note::objects().count().await.map_err(internal_error)?;
+
+    Ok(Json(serde_json::json!({
+        "total": total,
+        "notes": notes,
+    })))
 }
 
 // gaps2 #19 follow-up: ContactMessage now serves as BOTH the

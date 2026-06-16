@@ -233,6 +233,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .routes(
             Routes::new()
                 .get("/", views::home)
+                .get("/bench/json", views::bench_json)
+                .get("/bench/text", views::bench_text)
+                .get("/bench/notes/write", views::bench_note_write)
+                .get("/bench/notes/read", views::bench_note_read)
                 .get("/products", views::product_list)
                 .get("/products/{id}", views::product_detail)
                 .get("/posts", views::post_list)

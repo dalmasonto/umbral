@@ -291,6 +291,14 @@ pub struct ContactMessage {
 }
 
 #[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
+pub struct Note {
+    pub id: i64,
+    #[umbra(string)]
+    pub title: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, Model)]
 pub struct Subscriber {
     pub id: i64,
     #[umbra(unique)]
