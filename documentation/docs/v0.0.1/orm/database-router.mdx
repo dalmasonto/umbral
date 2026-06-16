@@ -1,0 +1,80 @@
+---
+title: Database router (swappable routing)
+description: Take over how umbra picks the database, schema, and read/write target per request — read replicas, database-per-tenant, schema-per-tenant.
+sidebar_position: 15
+tags: [orm, database, routing, multitenancy, replicas, schema-per-tenant]
+---
+
+# Database router
+
+[Database routing](./database-routing) routes each model to a database statically, by name. A **`DatabaseRouter`** lets you take those decisions over yourself, per request — read/write replica split, database-per-tenant, or schema-per-tenant — without touching the ORM.
+
+<Callout type="info">
+The default behavior is unchanged. With no router installed you get today's static per-model routing (`#[umbra(database = "…")]` → `Plugin::database()` → `"default"`). Installing a router is purely additive.
+</Callout>
+
+## The trait
+
+```rust
+pub trait DatabaseRouter: Send + Sync {
+    fn db_for_read(&self, model: &ModelMeta, ctx: &RouteContext) -> Alias { /* default: static alias */ }
+    fn db_for_write(&self, model: &ModelMeta, ctx: &RouteContext) -> Alias { /* default: static alias */ }
+    fn allow_relation(&self, a: &ModelMeta, b: &ModelMeta) -> bool { /* default: same database */ }
+    fn allow_migrate(&self, alias: &str, model: &ModelMeta) -> bool { /* default: migrate on its alias */ }
+    fn schema_for(&self, ctx: &RouteContext) -> Option<Schema> { None }
+}
+```
+
+Every method has a default that reproduces today's behavior, so you only override what you need.
+
+## Example: read/write split
+
+```rust
+use umbra::db::{Alias, DatabaseRouter, RouteContext};
+use umbra::migrate::ModelMeta;
+
+struct ReplicaRouter;
+impl DatabaseRouter for ReplicaRouter {
+    fn db_for_read(&self, _m: &ModelMeta, _c: &RouteContext) -> Alias { Alias::new("replica") }
+    fn db_for_write(&self, _m: &ModelMeta, _c: &RouteContext) -> Alias { Alias::new("default") }
+}
+
+App::builder()
+    .database("default", primary_pool)
+    .database("replica", replica_pool)
+    .router(ReplicaRouter)
+    .build()?;
+```
+
+Reads now resolve to the `replica` pool, writes to `default`.
+
+## Per-request context
+
+For per-tenant routing, populate a request-scoped [`RouteContext`] from each request and read it in your router:
+
+```rust
+App::builder()
+    .route_context(|req| {
+        let tenant = req.headers().get("X-Tenant").and_then(|v| v.to_str().ok());
+        match tenant {
+            Some(t) => RouteContext::new().with_tenant(TenantKey::new(t)),
+            None => RouteContext::new(),
+        }
+    })
+    .router(MyTenantRouter)
+    .build()?;
+```
+
+The context rides a task-local for the whole request, so every ORM call inside the handler sees it — no threading required. **Background jobs do not inherit it:** a spawned task gets the default context (no tenant) unless it opts in explicitly via `umbra::db::route_context_scope(ctx, fut)`. This is deliberate — a worker never silently runs as the wrong tenant.
+
+## Schema-per-tenant
+
+`schema_for(ctx)` returns the Postgres schema to scope a request's queries to. umbra applies it by **schema-qualifying table names in the generated SQL** (`"tenant_7"."post"`) — zero extra round-trips, no `SET search_path`, no connection pinning. SQLite (no schemas) ignores it.
+
+```rust
+fn schema_for(&self, ctx: &RouteContext) -> Option<Schema> {
+    ctx.tenant().and_then(|t| Schema::new(format!("tenant_{}", t.as_str())))
+}
+```
+
+This is the routing **mechanism**. The ergonomics for *managing* many tenant schemas (a `Tenant` model, `migrate_schemas`, the shared-`public` split) are a follow-up; see the design spec at `docs/superpowers/specs/2026-06-16-database-router-foundation-design.md`.
