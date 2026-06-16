@@ -54,8 +54,8 @@ use std::time::Duration;
 pub mod route_context;
 pub mod router;
 
-pub use route_context::{current as route_context, RouteContext, TenantKey};
-pub use router::{router, Alias, DatabaseRouter, DefaultRouter, RouteOp, Schema};
+pub use route_context::{RouteContext, TenantKey, current as route_context};
+pub use router::{Alias, DatabaseRouter, DefaultRouter, RouteOp, Schema, router};
 
 /// A pool of database connections, typed by backend.
 ///

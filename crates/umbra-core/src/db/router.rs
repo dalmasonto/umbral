@@ -48,7 +48,9 @@ impl Schema {
     pub fn new(s: impl Into<String>) -> Option<Self> {
         let s = s.into();
         let ok = (1..=63).contains(&s.len())
-            && s.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && s.chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
             && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
         ok.then_some(Schema(s))
     }
