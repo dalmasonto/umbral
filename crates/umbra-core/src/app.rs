@@ -63,7 +63,23 @@ impl App {
 
         tracing::info!("umbra serving on {}", listener.local_addr()?);
 
-        axum::serve(listener, self.router).await
+        // Serve via `into_make_service()` rather than passing the router
+        // directly. `axum::serve(listener, router)` drives the `Router` as
+        // its own connection-maker, whose per-connection `call` runs
+        // `self.clone().with_state(())` — and `with_state` finalizes EVERY
+        // route eagerly, an O(route-count) cost paid once per new TCP
+        // connection. With keep-alive that's amortized over all requests on
+        // the connection; WITHOUT keep-alive (one connection per request) it
+        // is paid on every request, capping throughput at ~1/with_state-cost
+        // regardless of the handler. For an app with hundreds of routes (a
+        // full admin + REST surface) that throttled no-keep-alive throughput
+        // by ~4x or worse. `IntoMakeService` instead hands each connection a
+        // cheap `Router::clone()` (an `Arc` bump) and lets routing finalize
+        // lazily per request — measurably faster on fresh connections and no
+        // slower with keep-alive. No `ConnectInfo` regression: the direct
+        // path didn't provide it either (that needs
+        // `into_make_service_with_connect_info`).
+        axum::serve(listener, self.router.into_make_service()).await
     }
 
     /// Consume the [`App`] and return its merged axum router.
