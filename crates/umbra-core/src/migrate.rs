@@ -290,6 +290,25 @@ pub fn model_alias(model_name: &str) -> Option<String> {
     MODEL_ALIASES.get()?.get(model_name).cloned()
 }
 
+static MODEL_META_BY_NAME: OnceLock<std::collections::HashMap<String, ModelMeta>> = OnceLock::new();
+
+/// Cached `&ModelMeta` lookup by model name. Returns `None` before
+/// `App::build` populates the registry (low-level tests), which the routing
+/// seam treats as "fall back to legacy static routing".
+pub fn model_meta_ref(name: &str) -> Option<&'static ModelMeta> {
+    if !is_initialised() {
+        return None;
+    }
+    MODEL_META_BY_NAME
+        .get_or_init(|| {
+            registered_models()
+                .into_iter()
+                .map(|m| (m.name.clone(), m))
+                .collect()
+        })
+        .get(name)
+}
+
 /// Return the models registered against a specific plugin. Empty if
 /// no plugin by that name registered models.
 pub fn models_for_plugin(plugin: &str) -> Vec<ModelMeta> {

@@ -1113,10 +1113,21 @@ fn only_with_typed_terminal_error(terminal: &'static str) -> sqlx::Error {
     ))
 }
 
-fn resolve_pool<T: Model>(explicit: Option<DbPool>) -> DbPool {
+fn resolve_pool<T: Model>(explicit: Option<DbPool>, op: crate::db::RouteOp) -> DbPool {
     if let Some(pool) = explicit {
         return pool;
     }
+    // Route through the swappable router when the registry is up.
+    if let Some(meta) = crate::migrate::model_meta_ref(T::NAME) {
+        let ctx = crate::db::route_context::current();
+        let r = crate::db::router::router();
+        let alias = match op {
+            crate::db::RouteOp::Read => r.db_for_read(meta, &ctx),
+            crate::db::RouteOp::Write => r.db_for_write(meta, &ctx),
+        };
+        return crate::db::pool_for_dispatched(alias.as_str()).clone();
+    }
+    // Registry-less fallback (low-level tests): today's static behavior.
     if let Some(alias) = crate::migrate::model_alias(T::NAME) {
         return crate::db::pool_for_dispatched(&alias).clone();
     }
@@ -1527,7 +1538,8 @@ impl<T: Model> QuerySet<T> {
             });
         let has_m2m_join = !m2m_join_fields.is_empty();
 
-        let mut rows = match resolve_pool::<T>(self.explicit_pool.clone()) {
+        let mut rows = match resolve_pool::<T>(self.explicit_pool.clone(), crate::db::RouteOp::Read)
+        {
             DbPool::Sqlite(pool) => {
                 let mut q = self.build_query_for("sqlite");
                 self.apply_join_related(&mut q);
@@ -1592,11 +1604,11 @@ impl<T: Model> QuerySet<T> {
             r.set_m2m_parent_ids();
         }
         if !sr_fields.is_empty() {
-            let pool = resolve_pool::<T>(self.explicit_pool.clone());
+            let pool = resolve_pool::<T>(self.explicit_pool.clone(), crate::db::RouteOp::Read);
             hydrate_select_related::<T>(&mut rows, &sr_fields, &pool).await?;
         }
         if !prefetch_fields.is_empty() {
-            let pool = resolve_pool::<T>(self.explicit_pool.clone());
+            let pool = resolve_pool::<T>(self.explicit_pool.clone(), crate::db::RouteOp::Read);
             hydrate_prefetch_related::<T>(&mut rows, &prefetch_fields, &pool).await?;
         }
         Ok(rows)
@@ -1641,7 +1653,7 @@ impl<T: Model> QuerySet<T> {
         F: FnMut(T) -> Result<(), E>,
     {
         let chunk_size = chunk_size.max(1);
-        let pool = resolve_pool::<T>(self.explicit_pool.clone());
+        let pool = resolve_pool::<T>(self.explicit_pool.clone(), crate::db::RouteOp::Read);
         let mut offset: u64 = 0;
         loop {
             let mut rows: Vec<T> = match &pool {
@@ -1797,7 +1809,7 @@ impl<T: Model> QuerySet<T> {
         // poisoned annotation (unknown relation) must fail loudly
         // here, not silently vanish from the plan.
         self.check_annotations()?;
-        let pool = resolve_pool::<T>(self.explicit_pool.clone());
+        let pool = resolve_pool::<T>(self.explicit_pool.clone(), crate::db::RouteOp::Read);
         let backend = pool.backend_name();
         let q = self.build_query_for(backend);
         match pool {
@@ -1851,7 +1863,7 @@ impl<T: Model> QuerySet<T> {
     /// tuple impl rather than the user struct — count() doesn't need
     /// T's FromRow bounds.
     pub async fn count(self) -> Result<i64, sqlx::Error> {
-        let pool = resolve_pool::<T>(self.explicit_pool.clone());
+        let pool = resolve_pool::<T>(self.explicit_pool.clone(), crate::db::RouteOp::Read);
         let backend = pool.backend_name();
         // Build the dialect-appropriate filtered query first, then
         // rebuild as COUNT. Doing it in this order keeps the predicate
@@ -2026,7 +2038,7 @@ impl<T: Model> QuerySet<T> {
                 })?;
             chosen.push(col);
         }
-        let pool = resolve_pool::<T>(self.explicit_pool.clone());
+        let pool = resolve_pool::<T>(self.explicit_pool.clone(), crate::db::RouteOp::Read);
         let backend = pool.backend_name();
         // Build the base query (predicates + ORDER BY) then swap its
         // SELECT list for only the requested columns.
@@ -2196,7 +2208,7 @@ impl<T: Model> QuerySet<T> {
         // BY / LIMIT all stay scoped to it) so JOIN'd tables can't
         // shadow bare-column predicates — same trick
         // apply_join_related uses.
-        let pool = resolve_pool::<T>(self.explicit_pool.clone());
+        let pool = resolve_pool::<T>(self.explicit_pool.clone(), crate::db::RouteOp::Read);
         let backend = pool.backend_name();
         let inner = self.build_query_for(backend);
         let parent_alias = Alias::new("__p");
@@ -2354,7 +2366,7 @@ impl<T: Model> QuerySet<T> {
                 )));
             }
         }
-        let pool = resolve_pool::<T>(self.explicit_pool.clone());
+        let pool = resolve_pool::<T>(self.explicit_pool.clone(), crate::db::RouteOp::Read);
         let backend = pool.backend_name();
         let mut q = self.build_query_for(backend);
         q.clear_selects();
@@ -2451,7 +2463,7 @@ impl<T: Model> QuerySet<T> {
                 )));
             }
         }
-        let pool = resolve_pool::<T>(self.explicit_pool.clone());
+        let pool = resolve_pool::<T>(self.explicit_pool.clone(), crate::db::RouteOp::Read);
         let backend = pool.backend_name();
         let mut q = self.build_query_for(backend);
         q.clear_selects();
@@ -2748,7 +2760,7 @@ impl<T: Model> QuerySet<T> {
                 .collect()
         };
 
-        let pool = resolve_pool::<T>(self.explicit_pool.clone());
+        let pool = resolve_pool::<T>(self.explicit_pool.clone(), crate::db::RouteOp::Read);
         match pool {
             DbPool::Sqlite(pool) => {
                 let q = self.build_query_for("sqlite");
@@ -2813,7 +2825,7 @@ impl<T: Model> QuerySet<T> {
             return self.soft_delete_update().await;
         }
         let atomic = self.should_atomic_wrap();
-        let pool = resolve_pool::<T>(self.explicit_pool.clone());
+        let pool = resolve_pool::<T>(self.explicit_pool.clone(), crate::db::RouteOp::Write);
         let backend = pool.backend_name();
         let mut stmt = self.build_delete_for(backend);
         let pk = pk_field::<T>();
@@ -2928,7 +2940,7 @@ impl<T: Model> QuerySet<T> {
             // Silently skip PK rewrites, same as update_values.
             return Ok(0);
         }
-        let pool = resolve_pool::<T>(self.explicit_pool.clone());
+        let pool = resolve_pool::<T>(self.explicit_pool.clone(), crate::db::RouteOp::Write);
         let backend = pool.backend_name();
 
         let mut stmt = sea_query::Query::update();
@@ -3007,7 +3019,7 @@ impl<T: Model> QuerySet<T> {
         values: serde_json::Map<String, serde_json::Value>,
     ) -> Result<u64, crate::orm::write::WriteError> {
         let atomic = self.should_atomic_wrap();
-        let pool = resolve_pool::<T>(self.explicit_pool.clone());
+        let pool = resolve_pool::<T>(self.explicit_pool.clone(), crate::db::RouteOp::Write);
         let backend = pool.backend_name();
         let mut stmt = self.build_update_for(backend, &values)?;
         // RETURNING <pk> so bulk_post_save can include the matched ids.
@@ -3117,7 +3129,7 @@ impl<T: Model> QuerySet<T> {
     /// shape as a hard delete.
     async fn soft_delete_update(self) -> Result<u64, sqlx::Error> {
         let atomic = self.should_atomic_wrap();
-        let pool = resolve_pool::<T>(self.explicit_pool.clone());
+        let pool = resolve_pool::<T>(self.explicit_pool.clone(), crate::db::RouteOp::Write);
         let backend = pool.backend_name();
         let now = chrono::Utc::now();
         let mut stmt = sea_query::Query::update();
@@ -3668,7 +3680,7 @@ impl<T: Model> Manager<T> {
             });
         }
 
-        let pool = resolve_pool::<T>(None);
+        let pool = resolve_pool::<T>(None, crate::db::RouteOp::Write);
         let backend = pool.backend_name();
         let stmt = build_insert_one_for::<T>(backend, &map)?;
         let atomic = self.should_atomic_wrap();
@@ -3786,7 +3798,7 @@ impl<T: Model> Manager<T> {
         if !all_errors.is_empty() {
             return Err(WriteError::Multiple { errors: all_errors });
         }
-        let pool = resolve_pool::<T>(None);
+        let pool = resolve_pool::<T>(None, crate::db::RouteOp::Write);
         let backend = pool.backend_name();
         let mut stmt = build_insert_many_for::<T>(backend, &maps)?;
         // First row's map is used to enrich UNIQUE / FK
@@ -4025,7 +4037,7 @@ impl<T: Model> Manager<T> {
             + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
     {
         let map = serialize_to_map(&instance)?;
-        let pool = resolve_pool::<T>(None);
+        let pool = resolve_pool::<T>(None, crate::db::RouteOp::Write);
         let backend = pool.backend_name();
         let mut stmt = build_insert_one_for::<T>(backend, &map)?;
 
@@ -4196,7 +4208,7 @@ impl<T: Model> Manager<T> {
             .collect::<Result<_, _>>()?;
         stmt.and_where(sea_query::Expr::col(Alias::new(pk_name)).is_in(pk_seas));
 
-        let pool = resolve_pool::<T>(None);
+        let pool = resolve_pool::<T>(None, crate::db::RouteOp::Write);
         let affected = match pool {
             DbPool::Sqlite(pool) => {
                 let (sql, values) = stmt.build_sqlx(SqliteQueryBuilder);
@@ -4235,7 +4247,7 @@ impl<T: Model> Manager<T> {
         T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
             + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
     {
-        let pool = resolve_pool::<T>(None);
+        let pool = resolve_pool::<T>(None, crate::db::RouteOp::Read);
         match pool {
             DbPool::Sqlite(pool) => {
                 sqlx::query_as::<sqlx::Sqlite, T>(sql)
@@ -4446,7 +4458,7 @@ impl<T: Model> Manager<T> {
         // Fire pre_save before the write.
         crate::signals::emit_pre_save::<T>(&instance, created).await;
 
-        let pool = resolve_pool::<T>(None);
+        let pool = resolve_pool::<T>(None, crate::db::RouteOp::Write);
         let backend = pool.backend_name();
 
         if created {
@@ -4605,7 +4617,7 @@ impl<T: Model> Manager<T> {
             SoftOrHardStatement::Delete(stmt)
         };
 
-        let pool = resolve_pool::<T>(None);
+        let pool = resolve_pool::<T>(None, crate::db::RouteOp::Write);
         let affected = match (&pool, stmt_sql) {
             (DbPool::Sqlite(pool), SoftOrHardStatement::Delete(stmt)) => {
                 let (sql, values) = stmt.build_sqlx(SqliteQueryBuilder);
