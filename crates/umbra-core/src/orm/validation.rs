@@ -306,6 +306,27 @@ fn validate_required_update(meta: &ModelMeta, body: &Map<String, Value>) -> Vec<
 /// Blank / null / missing values are skipped — those are the
 /// required-field check's job. Columns with an empty `choices`
 /// list are unrestricted.
+/// Stringify a JSON number for choices comparison. An integer-valued
+/// float (`2.0`, which serde parses as a `Number` with a fractional
+/// representation) renders as `"2"` so it matches a choice declared
+/// `"2"`; a genuine fractional value (`2.5`) keeps its decimal form and
+/// will correctly fail the membership test against integer choices.
+fn normalize_number_repr(n: &serde_json::Number) -> String {
+    if let Some(i) = n.as_i64() {
+        return i.to_string();
+    }
+    if let Some(u) = n.as_u64() {
+        return u.to_string();
+    }
+    if let Some(f) = n.as_f64() {
+        if f.is_finite() && f.fract() == 0.0 && f.abs() < i64::MAX as f64 {
+            return (f as i64).to_string();
+        }
+        return f.to_string();
+    }
+    n.to_string()
+}
+
 fn validate_choices(meta: &ModelMeta, body: &Map<String, Value>) -> Vec<WriteError> {
     let mut out = Vec::new();
     for col in &meta.fields {
@@ -321,7 +342,7 @@ fn validate_choices(meta: &ModelMeta, body: &Map<String, Value>) -> Vec<WriteErr
         let value_repr = match value {
             Value::String(s) if s.is_empty() => continue,
             Value::String(s) => s.clone(),
-            Value::Number(n) => n.to_string(),
+            Value::Number(n) => normalize_number_repr(n),
             Value::Bool(b) => b.to_string(),
             _ => continue, // odd shape — let the DB sort it out
         };
@@ -780,6 +801,35 @@ mod tests {
         let mut body = serde_json::Map::new();
         body.insert("status".into(), serde_json::Value::String(String::new()));
         assert!(validate_choices(&meta, &body).is_empty());
+    }
+
+    #[test]
+    fn choices_validator_accepts_integer_valued_float() {
+        // A column with numeric-looking string choices, fed a JSON number.
+        let meta = meta_with(vec![col("level", &["1", "2", "3"])]);
+        // serde parses `2` as an integer Number, `2.0` as a float Number —
+        // both must normalise to "2" and pass against choice "2".
+        let mut body = serde_json::Map::new();
+        body.insert("level".into(), serde_json::json!(2));
+        assert!(
+            validate_choices(&meta, &body).is_empty(),
+            "integer 2 should match choice \"2\"",
+        );
+        let mut body = serde_json::Map::new();
+        body.insert("level".into(), serde_json::json!(2.0));
+        assert!(
+            validate_choices(&meta, &body).is_empty(),
+            "float 2.0 should normalise to \"2\" and match",
+        );
+    }
+
+    #[test]
+    fn choices_validator_rejects_fractional_value() {
+        let meta = meta_with(vec![col("level", &["1", "2", "3"])]);
+        let mut body = serde_json::Map::new();
+        body.insert("level".into(), serde_json::json!(2.5));
+        let errors = validate_choices(&meta, &body);
+        assert_eq!(errors.len(), 1, "2.5 is not a valid choice; got {errors:?}");
     }
 
     #[test]

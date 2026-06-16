@@ -191,7 +191,19 @@ pub fn render_not_found(template: Option<&str>, path: &str) -> Response<Body> {
         routes_by_plugin => routes_ctx,
     };
     let (body, content_type) = effective_template
-        .and_then(|name| crate::templates::render(name, &ctx).ok())
+        .and_then(|name| match crate::templates::render(name, &ctx) {
+            Ok(html) => Some(html),
+            // Falling back to plain text is intentional (no double-fault on
+            // the error path), but a broken error template should leave a
+            // trace rather than silently degrade.
+            Err(e) => {
+                tracing::warn!(
+                    "error-page template `{name}` failed to render ({e}); \
+                     falling back to plain text"
+                );
+                None
+            }
+        })
         .map(|html| (html, "text/html; charset=utf-8"))
         .unwrap_or_else(|| ("Not Found".to_string(), "text/plain; charset=utf-8"));
 

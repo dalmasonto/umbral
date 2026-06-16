@@ -713,8 +713,19 @@ pub mod messages {
             let Some(token) = self.token.as_deref() else {
                 return Vec::new();
             };
-            let current = self.read(token).await.unwrap_or_default();
-            let _ = super::set_data(token, SESSION_KEY, &Vec::<Message>::new()).await;
+            // Only clear the queue when the read actually succeeded. The
+            // old `unwrap_or_default()` cleared even on a DB error, which
+            // would destroy pending messages the user never saw.
+            let current = match self.read(token).await {
+                Ok(msgs) => msgs,
+                Err(e) => {
+                    tracing::warn!("messages: failed to read flash queue; not clearing: {e}");
+                    return Vec::new();
+                }
+            };
+            if !current.is_empty() {
+                let _ = super::set_data(token, SESSION_KEY, &Vec::<Message>::new()).await;
+            }
             current
         }
 

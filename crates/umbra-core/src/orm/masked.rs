@@ -201,7 +201,23 @@ pub fn set_mask_keyring(keyring: MaskKeyring) -> bool {
 /// access if not explicitly set.
 fn keyring() -> Option<&'static MaskKeyring> {
     KEYRING
-        .get_or_init(|| MaskKeyring::from_env().ok())
+        .get_or_init(|| match MaskKeyring::from_env() {
+            Ok(k) => Some(k),
+            // No public key in the env → masking is simply not configured.
+            // That's an expected, silent state.
+            Err(MaskError::NoKeyring) => None,
+            // A key IS present but couldn't be parsed. Don't swallow this:
+            // every `Masked<T>` reveal will fail later with a confusing
+            // error, so surface the real cause once, loudly, at first use.
+            Err(e) => {
+                tracing::warn!(
+                    "UMBRA_MASK_PUBLIC_KEY/UMBRA_MASK_PRIVATE_KEY is set but could not be \
+                     parsed ({e}); Masked<T> fields will fail to seal/reveal. Fix the key \
+                     or unset the variables."
+                );
+                None
+            }
+        })
         .as_ref()
 }
 
