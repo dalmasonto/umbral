@@ -1,3 +1,5 @@
+done hardening
+
 # Race-condition & concurrent-write audit
 
 Scope: can two concurrent requests produce diverged or corrupted data? Read against the real code; `file:line` cited. READ-ONLY review — nothing fixed.

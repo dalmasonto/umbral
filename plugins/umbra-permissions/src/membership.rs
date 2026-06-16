@@ -41,13 +41,17 @@ pub async fn add_user_to_group(user_id: &str, group: &Group) -> Result<(), PermE
     if is_in_group(user_id, group.id).await? {
         return Ok(());
     }
-    UserGroup::objects()
+    match UserGroup::objects()
         .create(UserGroup {
             id: 0,
             user_id: user_id.to_string(),
             group_id: umbra::orm::ForeignKey::new(group.id),
         })
-        .await?;
+        .await
+    {
+        Ok(_) | Err(umbra::orm::write::WriteError::UniqueViolation { .. }) => {}
+        Err(e) => return Err(e.into()),
+    }
     Ok(())
 }
 
@@ -75,15 +79,6 @@ pub async fn remove_user_from_group(user_id: &str, group: &Group) -> Result<(), 
 /// checkbox set — the form posts the whole desired state, not a
 /// delta.
 pub async fn set_user_groups(user_id: &str, group_ids: &[i64]) -> Result<(), PermError> {
-    // Wipe existing memberships for this user. Bounded by
-    // count(groups the user was previously in) — typically <10.
-    UserGroup::objects()
-        .filter(user_group::USER_ID.eq(user_id.to_string()))
-        .delete()
-        .await?;
-    if group_ids.is_empty() {
-        return Ok(());
-    }
     let rows: Vec<UserGroup> = group_ids
         .iter()
         .map(|gid| UserGroup {
@@ -92,8 +87,21 @@ pub async fn set_user_groups(user_id: &str, group_ids: &[i64]) -> Result<(), Per
             group_id: umbra::orm::ForeignKey::new(*gid),
         })
         .collect();
-    UserGroup::objects().bulk_create(rows).await?;
-    Ok(())
+    let user_id = user_id.to_string();
+    umbra::db::transaction(|tx| {
+        Box::pin(async move {
+            UserGroup::objects()
+                .filter(user_group::USER_ID.eq(user_id))
+                .on_tx(tx)
+                .delete()
+                .await?;
+            if !rows.is_empty() {
+                UserGroup::objects().bulk_create_in_tx(rows, tx).await?;
+            }
+            Ok::<_, PermError>(())
+        })
+    })
+    .await
 }
 
 /// Resolve `user_id`'s group memberships as full `Group` rows. One
@@ -131,13 +139,17 @@ pub async fn grant_user_permission(user_id: &str, perm: &Permission) -> Result<(
     if has_direct_user_permission(user_id, &perm.codename).await? {
         return Ok(());
     }
-    UserPermission::objects()
+    match UserPermission::objects()
         .create(UserPermission {
             id: 0,
             user_id: user_id.to_string(),
             permission_id: umbra::orm::ForeignKey::new(perm.codename.clone()),
         })
-        .await?;
+        .await
+    {
+        Ok(_) | Err(umbra::orm::write::WriteError::UniqueViolation { .. }) => {}
+        Err(e) => return Err(e.into()),
+    }
     Ok(())
 }
 

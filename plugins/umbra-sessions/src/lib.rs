@@ -402,55 +402,65 @@ pub async fn set_data<T: Serialize>(
     value: &T,
 ) -> Result<(), SessionError> {
     let stored_id = hash_token(session_token);
-    // Pull the current row so we don't clobber other keys.
-    let row: Option<Session> = Session::objects()
-        .filter(session::ID.eq(&stored_id))
-        .first()
-        .await?;
-    let current = match row {
-        Some(current) => current,
-        None => {
-            // Lazy materialisation (gaps2 #46): the session hasn't been
-            // persisted yet (the middleware mints the token in memory
-            // and only the first WRITE creates the row). CREATE an
-            // anonymous row now, then apply the write below.
-            let now = Utc::now();
-            let fresh = Session {
-                id: stored_id.clone(),
-                user_id: None,
-                data: "{}".to_string(),
-                created_at: now,
-                expires_at: now + Duration::seconds(DEFAULT_TTL_SECONDS),
-            };
-            match Session::objects().create(fresh).await {
-                Ok(created) => created,
-                // Race tolerance: a concurrent write on the same token
-                // already created the row. Treat the PK collision as
-                // "already exists" and re-read so we modify the live
-                // row rather than erroring. The net effect is exactly
-                // one row for the first write to materialise a session.
-                Err(umbra::orm::write::WriteError::UniqueViolation { .. }) => Session::objects()
-                    .filter(session::ID.eq(&stored_id))
-                    .first()
-                    .await?
-                    .ok_or_else(|| {
-                        SessionError::Sqlx(sqlx::Error::Protocol(
-                            "set_data: row vanished after a concurrent create".to_string(),
-                        ))
-                    })?,
-                Err(e) => return Err(e.into()),
-            }
+    let encoded_value = serde_json::to_string(&serde_json::to_value(value)?)?;
+    upsert_session_data_key(&stored_id, key, &encoded_value).await
+}
+
+fn sqlite_json_path(key: &str) -> String {
+    let escaped = key.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("$.\"{escaped}\"")
+}
+
+async fn upsert_session_data_key(
+    stored_id: &str,
+    key: &str,
+    encoded_value: &str,
+) -> Result<(), SessionError> {
+    let now = Utc::now();
+    let expires_at = now + Duration::seconds(DEFAULT_TTL_SECONDS);
+    match umbra::db::pool_dispatched() {
+        umbra::db::DbPool::Sqlite(pool) => {
+            let path = sqlite_json_path(key);
+            sqlx::query(
+                r#"
+                INSERT INTO session (id, user_id, data, created_at, expires_at)
+                VALUES (?1, NULL, json_set('{}', ?2, json(?3)), ?4, ?5)
+                ON CONFLICT(id) DO UPDATE SET
+                    data = json_set(COALESCE(NULLIF(session.data, ''), '{}'), ?2, json(?3))
+                "#,
+            )
+            .bind(stored_id)
+            .bind(path)
+            .bind(encoded_value)
+            .bind(now)
+            .bind(expires_at)
+            .execute(pool)
+            .await?;
         }
-    };
-    let mut map: serde_json::Map<String, serde_json::Value> = serde_json::from_str(&current.data)?;
-    map.insert(key.to_string(), serde_json::to_value(value)?);
-    let updated = serde_json::to_string(&map)?;
-    let mut patch = serde_json::Map::new();
-    patch.insert("data".to_string(), serde_json::Value::String(updated));
-    Session::objects()
-        .filter(session::ID.eq(&stored_id))
-        .update_values(patch)
-        .await?;
+        umbra::db::DbPool::Postgres(pool) => {
+            let path = vec![key.to_string()];
+            sqlx::query(
+                r#"
+                INSERT INTO session (id, user_id, data, created_at, expires_at)
+                VALUES ($1, NULL, jsonb_set('{}'::jsonb, $2::text[], $3::jsonb, true)::text, $4, $5)
+                ON CONFLICT (id) DO UPDATE SET
+                    data = jsonb_set(
+                        COALESCE(NULLIF(session.data, '')::jsonb, '{}'::jsonb),
+                        $2::text[],
+                        $3::jsonb,
+                        true
+                    )::text
+                "#,
+            )
+            .bind(stored_id)
+            .bind(path)
+            .bind(encoded_value)
+            .bind(now)
+            .bind(expires_at)
+            .execute(pool)
+            .await?;
+        }
+    }
     Ok(())
 }
 
