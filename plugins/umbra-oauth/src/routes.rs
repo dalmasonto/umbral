@@ -17,7 +17,9 @@ use serde_json::json;
 use umbra::templates::context;
 use umbra::web::{Html, IntoResponse, Json, Redirect, Response, Router, StatusCode, get, post};
 use umbra_auth::{AuthToken, AuthUser, auth_user, current_session_user_id};
-use umbra_sessions::{SessionToken, current_session, get_data, login_user_id, set_data};
+use umbra_sessions::{
+    SessionToken, cookie_from_headers, current_session, get_data, login_user_id, set_data,
+};
 
 use crate::OAuthPlugin;
 use crate::models::{SocialAccount, social_account};
@@ -217,6 +219,12 @@ async fn oauth_callback(
     };
     if Some(&flow.state) != query.state.as_ref() || flow.provider != provider {
         return (StatusCode::BAD_REQUEST, "oauth state mismatch").into_response();
+    }
+    let Some(raw_session_token) = cookie_from_headers(&headers) else {
+        return (StatusCode::BAD_REQUEST, "missing oauth session").into_response();
+    };
+    if let Err(e) = set_data(&raw_session_token, FLOW_KEY, &serde_json::Value::Null).await {
+        return server_error(&format!("failed to consume oauth flow state: {e}"));
     }
     let Some(code) = query.code else {
         return (StatusCode::BAD_REQUEST, "missing authorization code").into_response();

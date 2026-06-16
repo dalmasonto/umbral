@@ -267,7 +267,7 @@ async fn is_superuser_safe(user_id: i64) -> bool {
             .filter(umbra::orm::Predicate::<AuthUser>::col_eq("id", user_id))
             .first()
             .await,
-        Ok(Some(u)) if u.is_superuser
+        Ok(Some(u)) if u.is_superuser && u.is_active
     )
 }
 

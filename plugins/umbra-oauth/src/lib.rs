@@ -139,7 +139,9 @@ impl OAuthPlugin {
     /// Whether `next` is a permitted SPA return URL (prefix match
     /// against the [`allow_return`](Self::allow_return) allowlist).
     pub(crate) fn is_allowed_return(&self, next: &str) -> bool {
-        self.allowed_returns.iter().any(|p| next.starts_with(p))
+        self.allowed_returns
+            .iter()
+            .any(|p| allowed_return_matches(p, next))
     }
 
     /// The flow-endpoint paths for every registered provider. The one
@@ -180,6 +182,20 @@ impl OAuthPlugin {
     pub(crate) fn lookup(&self, key: &str) -> Option<&Arc<dyn OAuthProvider>> {
         self.providers.iter().find(|p| p.key() == key)
     }
+}
+
+fn allowed_return_matches(allowed: &str, next: &str) -> bool {
+    let (Ok(allowed), Ok(next)) = (url::Url::parse(allowed), url::Url::parse(next)) else {
+        return false;
+    };
+    if allowed.scheme() != next.scheme()
+        || allowed.host_str() != next.host_str()
+        || allowed.port_or_known_default() != next.port_or_known_default()
+    {
+        return false;
+    }
+    let allowed_path = allowed.path().trim_end_matches('/');
+    next.path() == allowed_path || next.path().starts_with(&format!("{allowed_path}/"))
 }
 
 impl Plugin for OAuthPlugin {

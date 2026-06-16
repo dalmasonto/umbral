@@ -238,6 +238,49 @@ impl MediaTracking {
     }
 }
 
+/// Storage decorator enforcing the plugin's upload-size cap on every
+/// ambient upload path, including admin/form multipart handling.
+struct SizeLimitedStorage {
+    inner: Arc<dyn Storage>,
+    max_size: u64,
+}
+
+impl SizeLimitedStorage {
+    fn new(inner: Arc<dyn Storage>, max_size: u64) -> Self {
+        Self { inner, max_size }
+    }
+}
+
+#[umbra::storage::async_trait]
+impl Storage for SizeLimitedStorage {
+    async fn store(
+        &self,
+        filename: &str,
+        content_type: &str,
+        bytes: &[u8],
+    ) -> Result<StoredFile, StorageError> {
+        if bytes.len() as u64 > self.max_size {
+            return Err(StorageError::TooLarge {
+                limit: self.max_size,
+                actual: bytes.len() as u64,
+            });
+        }
+        self.inner.store(filename, content_type, bytes).await
+    }
+
+    async fn retrieve(&self, key: &str) -> Result<Vec<u8>, StorageError> {
+        self.inner.retrieve(key).await
+    }
+
+    async fn delete(&self, key: &str) -> Result<(), StorageError> {
+        self.inner.delete(key).await
+    }
+
+    fn url(&self, key: &str) -> String {
+        self.inner.url(key)
+    }
+}
+
 #[umbra::storage::async_trait]
 impl Storage for MediaTracking {
     async fn store(
@@ -507,7 +550,11 @@ impl Plugin for MediaPlugin {
         // `media_file` row per upload. `save` keeps writing through the
         // inner `self.storage` plus its own single insert, so the two
         // entry points each record exactly one row — no double-insert.
-        umbra::storage::set_storage(Arc::new(MediaTracking::new(self.storage.clone())));
+        let storage: Arc<dyn Storage> = match self.max_size {
+            Some(max_size) => Arc::new(SizeLimitedStorage::new(self.storage.clone(), max_size)),
+            None => self.storage.clone(),
+        };
+        umbra::storage::set_storage(Arc::new(MediaTracking::new(storage)));
         Ok(())
     }
 

@@ -10,7 +10,7 @@
 use async_trait::async_trait;
 
 /// Tokens returned by a provider's token endpoint.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct TokenSet {
     /// The OAuth access token (bearer for API calls + the identity fetch).
     pub access_token: String,
@@ -20,6 +20,17 @@ pub struct TokenSet {
     pub expires_in: Option<i64>,
     /// Space-separated granted scopes.
     pub scopes: String,
+}
+
+impl std::fmt::Debug for TokenSet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TokenSet")
+            .field("access_token", &"***")
+            .field("refresh_token", &self.refresh_token.as_ref().map(|_| "***"))
+            .field("expires_in", &self.expires_in)
+            .field("scopes", &self.scopes)
+            .finish()
+    }
 }
 
 /// The identity a provider resolves a [`TokenSet`] to.

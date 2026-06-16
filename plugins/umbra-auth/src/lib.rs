@@ -84,7 +84,7 @@ pub use token::{AuthToken, PlaintextToken, TOKEN_PREFIX, digest_token};
 use std::marker::PhantomData;
 
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
-use argon2::{Argon2, password_hash::rand_core::OsRng};
+use argon2::{Algorithm, Argon2, Params, Version, password_hash::rand_core::OsRng};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use umbra::prelude::*;
@@ -231,6 +231,7 @@ pub struct AuthUser {
     /// Never shown on any form — password management goes through the
     /// dedicated Change Password flow in the admin.
     #[umbra(noform)]
+    #[serde(skip_serializing)]
     pub password_hash: String,
     pub is_active: bool,
     pub is_staff: bool,
@@ -528,7 +529,7 @@ impl From<umbra::orm::write::WriteError> for AuthError {
 /// parameters can be re-hashed on next login.
 pub fn hash_password(plaintext: &str) -> Result<String, AuthError> {
     let salt = SaltString::generate(&mut OsRng);
-    let hash = Argon2::default()
+    let hash = password_hasher()
         .hash_password(plaintext.as_bytes(), &salt)?
         .to_string();
     Ok(hash)
@@ -540,11 +541,19 @@ pub fn hash_password(plaintext: &str) -> Result<String, AuthError> {
 /// bool can use `.unwrap_or(false)`.
 pub fn verify_password(plaintext: &str, hash: &str) -> Result<bool, AuthError> {
     let parsed = PasswordHash::new(hash)?;
-    match Argon2::default().verify_password(plaintext.as_bytes(), &parsed) {
+    match password_hasher().verify_password(plaintext.as_bytes(), &parsed) {
         Ok(()) => Ok(true),
         Err(argon2::password_hash::Error::Password) => Ok(false),
         Err(e) => Err(AuthError::PasswordHash(e)),
     }
+}
+
+fn password_hasher() -> Argon2<'static> {
+    Argon2::new(
+        Algorithm::Argon2id,
+        Version::V0x13,
+        Params::new(19_456, 2, 1, None).expect("hard-coded argon2 params are valid"),
+    )
 }
 
 // =========================================================================

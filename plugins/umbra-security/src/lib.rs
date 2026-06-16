@@ -390,7 +390,9 @@ impl CsrfState {
             .map(|s| matches!(s.environment, Environment::Prod))
             .unwrap_or(false);
         let secret = if cfg.signed_csrf {
-            settings.map(|s| s.secret_key.clone())
+            settings
+                .map(|s| s.secret_key.trim().to_string())
+                .filter(|s| !s.is_empty())
         } else {
             None
         };
@@ -405,9 +407,10 @@ impl CsrfState {
 
     /// True when `path` falls under a configured CSRF-exempt prefix.
     fn is_exempt(&self, path: &str) -> bool {
-        self.exempt_paths
-            .iter()
-            .any(|p| path.starts_with(p.as_str()))
+        self.exempt_paths.iter().any(|prefix| {
+            let prefix = prefix.trim_end_matches('/');
+            path == prefix || path.starts_with(&format!("{prefix}/"))
+        })
     }
 
     /// The session value to fold into the signature, or `None` when session

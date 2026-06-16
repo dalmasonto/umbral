@@ -1,3 +1,5 @@
+done hardening
+
 # Security review — umbra
 
 Read-only audit, 2026-06-16. Scope: SQL injection, authz, CSRF/headers, secrets/PII, XSS/template-injection, untrusted-input boundaries across `crates/umbra-core/src/` + `plugins/`. Citations are `file:line` against real code. Nothing was modified.

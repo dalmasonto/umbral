@@ -101,7 +101,7 @@ impl<A: Authentication> Authentication for WithPermissions<A> {
                 .await
                 .ok()
                 .flatten()
-                .map(|u| u.is_superuser)
+                .map(|u| u.is_superuser && u.is_active)
                 .unwrap_or(false),
             Err(_) => false,
         };
