@@ -776,9 +776,7 @@ impl RestPlugin {
         // object were `?include=`-hydrated; everything else (raw integer
         // FKs, scalar columns) is left untouched. ---
         if depth < MAX_DEPTH
-            && let Some(meta) = umbra::migrate::registered_models()
-                .into_iter()
-                .find(|m| m.table == table)
+            && let Some(meta) = umbra::migrate::model_meta_for_table(table)
         {
             for col in &meta.fields {
                 // File/image columns store a bare storage KEY in a TEXT
@@ -1739,13 +1737,16 @@ async fn list(
     let include = parse_include(params.get("include").map(|s| s.as_str()), &model)?;
     let fields_param = params.get("fields").map(|s| s.as_str());
 
-    // `?format=csv` — export the FULL filtered set (no pagination) as a
-    // downloadable CSV (feature #61). Same auth gate, filters, search,
-    // `?include=` and `?fields=` as the JSON list — just a different
-    // serialization. The honest tradeoff: it streams every matching row,
-    // so pair it with filters on large tables.
+    // `?format=csv` — export the filtered set with the same hard ceiling
+    // as JSON list responses. This endpoint buffers rows before writing
+    // CSV, so it must never bypass MAX_LIST_ROWS.
     if params.get("format").map(String::as_str) == Some("csv") {
-        let mut rows = fetch_rows(&model, None, None, &filter, &include).await?;
+        let csv_page = PageRequest {
+            limit: MAX_LIST_ROWS,
+            offset: 0,
+            page: None,
+        };
+        let mut rows = fetch_rows(&model, None, Some(csv_page), &filter, &include).await?;
         for row in &mut rows {
             cfg.apply_overrides(&table, row);
             RestPlugin::apply_sparse_fields(row, fields_param);

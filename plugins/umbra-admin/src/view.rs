@@ -510,6 +510,7 @@ pub(crate) async fn form_m2m_fields_for(
         };
         let candidate_rows = match umbra::orm::DynQuerySet::for_meta(&target)
             .select_cols(&select_cols)
+            .limit(200)
             .fetch_as_strings()
             .await
         {

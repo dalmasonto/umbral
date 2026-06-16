@@ -140,6 +140,27 @@ pub fn pk_meta_for_table(table: &str) -> Option<(String, crate::orm::SqlType)> {
     map.get(table).cloned()
 }
 
+/// Cached model lookup by SQL table name.
+///
+/// Unlike [`registered_models`], this does not deep-clone the full
+/// registry on every call. It clones only the matched [`ModelMeta`],
+/// which keeps row-by-row dynamic serializers from paying
+/// O(registry-size) per row.
+pub fn model_meta_for_table(table: &str) -> Option<ModelMeta> {
+    if !is_initialised() {
+        return None;
+    }
+    static CACHE: std::sync::OnceLock<std::collections::HashMap<String, ModelMeta>> =
+        std::sync::OnceLock::new();
+    let map = CACHE.get_or_init(|| {
+        registered_models()
+            .into_iter()
+            .map(|m| (m.table.clone(), m))
+            .collect()
+    });
+    map.get(table).cloned()
+}
+
 /// The SQL type a column's value actually binds / decodes as (PK lift).
 /// Equals `col.ty` for everything except a `ForeignKey`, where it resolves
 /// to the referenced model's PK type via [`pk_meta_for_table`] — so an FK
@@ -2951,6 +2972,12 @@ fn render_operation(op: &Operation) -> Vec<String> {
     render_operation_for(op, crate::backend::active().name())
 }
 
+fn should_emit_btree_index(col: &Column) -> bool {
+    !col.primary_key
+        && !col.unique
+        && (col.index || matches!(col.ty, SqlType::ForeignKey) || col.name == "deleted_at")
+}
+
 /// Render one operation against an explicit backend name. The
 /// dispatching seam — the public [`render_operation`] is just
 /// `render_operation_for(op, backend::active().name())`. Splitting
@@ -3000,11 +3027,12 @@ fn render_operation_sqlite(op: &Operation) -> Vec<String> {
                 stmt.index(&mut idx);
             }
             let mut stmts = vec![stmt.build(SqliteQueryBuilder)];
-            // Single-column `#[umbra(index)]` indexes follow the
-            // CREATE TABLE. Same convention on both backends so a
-            // SQLite-dev / Postgres-prod app sees parallel names.
+            // Single-column explicit indexes plus ORM-required helper
+            // indexes follow the CREATE TABLE. FK columns need indexes
+            // for reverse/select-related queries, and soft-delete
+            // models read through `deleted_at IS NULL` by default.
             for col in columns {
-                if col.index && !col.primary_key && !col.unique {
+                if should_emit_btree_index(col) {
                     stmts.push(create_index_stmt(table, &col.name));
                 }
             }
@@ -3069,7 +3097,7 @@ fn render_operation_sqlite(op: &Operation) -> Vec<String> {
                 stmt.add_column(&mut def);
                 vec![stmt.build(SqliteQueryBuilder)]
             };
-            if column.index && !column.primary_key && !column.unique {
+            if should_emit_btree_index(column) {
                 stmts.push(create_index_stmt(table, &column.name));
             }
             stmts
@@ -3183,7 +3211,7 @@ fn render_operation_postgres(op: &Operation) -> Vec<String> {
                     // useless for search without one, so the engine never
                     // makes the caller hand-write it.
                     stmts.push(create_gin_index_stmt(table, &col.name));
-                } else if col.index && !col.primary_key && !col.unique {
+                } else if should_emit_btree_index(col) {
                     stmts.push(create_index_stmt(table, &col.name));
                 }
             }
@@ -3206,7 +3234,7 @@ fn render_operation_postgres(op: &Operation) -> Vec<String> {
             if matches!(column.ty, crate::orm::SqlType::FullText) {
                 // Auto-GIN for a tsvector column added later (#33).
                 stmts.push(create_gin_index_stmt(table, &column.name));
-            } else if column.index && !column.primary_key && !column.unique {
+            } else if should_emit_btree_index(column) {
                 stmts.push(create_index_stmt(table, &column.name));
             }
             stmts

@@ -1,3 +1,5 @@
+done hardening
+
 # Performance & Scalability Review — umbra
 
 Read-only review of the ORM, REST, admin, permissions, and OpenAPI plugins. Each finding cites `file:line`, quantifies the cost, and proposes a fix. Severity: **Critical** (O(table) memory / unbounded query reachable from a public endpoint), **Important** (N+1 on a common path), **Optional**, **FYI**.

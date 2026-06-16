@@ -114,13 +114,39 @@ pub(crate) struct AdminPerms {
 
 impl AdminPerms {
     /// Probe all four standard actions for one (user, plugin, table)
-    /// tuple. Four independent queries; small enough to avoid batching.
+    /// tuple. Loads the user's permission set once and checks codenames
+    /// in memory.
     pub(crate) async fn load(user: &AuthUser, plugin: &str, table: &str) -> Self {
+        if !permissions_installed() || user.is_superuser {
+            return Self {
+                can_view: true,
+                can_add: true,
+                can_change: true,
+                can_delete: true,
+            };
+        }
+        let user_id = user.id.to_string();
+        let perms = match umbra_permissions::user_perms(&user_id).await {
+            Ok(perms) => perms,
+            Err(err) => {
+                tracing::warn!(
+                    user_id = user_id.as_str(),
+                    error = %err,
+                    "permission set load failed; denying admin model actions by default"
+                );
+                return Self {
+                    can_view: false,
+                    can_add: false,
+                    can_change: false,
+                    can_delete: false,
+                };
+            }
+        };
         Self {
-            can_view: check(user, plugin, table, Action::View).await,
-            can_add: check(user, plugin, table, Action::Add).await,
-            can_change: check(user, plugin, table, Action::Change).await,
-            can_delete: check(user, plugin, table, Action::Delete).await,
+            can_view: perms.contains(&codename(plugin, table, Action::View)),
+            can_add: perms.contains(&codename(plugin, table, Action::Add)),
+            can_change: perms.contains(&codename(plugin, table, Action::Change)),
+            can_delete: perms.contains(&codename(plugin, table, Action::Delete)),
         }
     }
 }

@@ -1024,6 +1024,17 @@ impl<'a> DynQuerySet<'a> {
             .pk_column()
             .map(|c| c.name.clone())
             .unwrap_or_default();
+        let selected_cols: Vec<(&String, &Column)> = self
+            .select_cols
+            .iter()
+            .filter_map(|col_name| {
+                self.meta
+                    .fields
+                    .iter()
+                    .find(|c| &c.name == col_name)
+                    .map(|col| (col_name, col))
+            })
+            .collect();
         let mut out: Vec<serde_json::Map<String, serde_json::Value>> = match pool_dispatched() {
             DbPool::Sqlite(pool) => {
                 let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
@@ -1032,12 +1043,8 @@ impl<'a> DynQuerySet<'a> {
                     Vec::with_capacity(rows.len());
                 for row in rows {
                     let mut entry = serde_json::Map::new();
-                    for col_name in &self.select_cols {
-                        if let Some(col_meta) =
-                            self.meta.fields.iter().find(|c| &c.name == col_name)
-                        {
-                            entry.insert(col_name.clone(), decode_to_json(&row, col_meta)?);
-                        }
+                    for (col_name, col_meta) in &selected_cols {
+                        entry.insert((*col_name).clone(), decode_to_json(&row, col_meta)?);
                     }
                     out.push(entry);
                 }
@@ -1050,12 +1057,8 @@ impl<'a> DynQuerySet<'a> {
                     Vec::with_capacity(rows.len());
                 for row in rows {
                     let mut entry = serde_json::Map::new();
-                    for col_name in &self.select_cols {
-                        if let Some(col_meta) =
-                            self.meta.fields.iter().find(|c| &c.name == col_name)
-                        {
-                            entry.insert(col_name.clone(), decode_pg_to_json(&row, col_meta)?);
-                        }
+                    for (col_name, col_meta) in &selected_cols {
+                        entry.insert((*col_name).clone(), decode_pg_to_json(&row, col_meta)?);
                     }
                     out.push(entry);
                 }

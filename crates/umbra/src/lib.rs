@@ -239,7 +239,7 @@ pub mod migrate {
         OpSafety, Operation, Snapshot, check_pending_safety, check_pending_safety_in,
         classify_operation, detect_all_drift, detect_drift, diff, fake_apply, fake_apply_in,
         fake_initial, fake_initial_in, fk_effective_type, make, make_in, model_alias,
-        models_for_plugin, pk_meta_for_table, plugin_order, record_applied,
+        model_meta_for_table, models_for_plugin, pk_meta_for_table, plugin_order, record_applied,
         registered_api_endpoints, registered_models, registered_plugins, render_operation_for, run,
         run_checked, run_checked_in, run_in, show, show_in, table_alias,
     };
