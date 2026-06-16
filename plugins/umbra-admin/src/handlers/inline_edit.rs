@@ -160,7 +160,16 @@ pub(crate) async fn cell_edit_post(
         )
             .into_response();
     }
-    let form: HashMap<String, String> = serde_urlencoded::from_str(&body).unwrap_or_default();
+    let form: HashMap<String, String> = match serde_urlencoded::from_str(&body) {
+        Ok(form) => form,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                format!("invalid inline edit form body: {e}"),
+            )
+                .into_response();
+        }
+    };
     let new_value = form.get(&field).cloned().unwrap_or_default();
     match DynQuerySet::for_meta(&model)
         .filter_eq_string(&pk.name, &id)

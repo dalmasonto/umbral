@@ -385,8 +385,7 @@ pub fn get_data<T: serde::de::DeserializeOwned>(
     session: &Session,
     key: &str,
 ) -> Result<Option<T>, SessionError> {
-    let map: serde_json::Map<String, serde_json::Value> =
-        serde_json::from_str(&session.data).unwrap_or_default();
+    let map: serde_json::Map<String, serde_json::Value> = serde_json::from_str(&session.data)?;
     match map.get(key) {
         None => Ok(None),
         Some(value) => Ok(Some(serde_json::from_value(value.clone())?)),
@@ -443,8 +442,7 @@ pub async fn set_data<T: Serialize>(
             }
         }
     };
-    let mut map: serde_json::Map<String, serde_json::Value> =
-        serde_json::from_str(&current.data).unwrap_or_default();
+    let mut map: serde_json::Map<String, serde_json::Value> = serde_json::from_str(&current.data)?;
     map.insert(key.to_string(), serde_json::to_value(value)?);
     let updated = serde_json::to_string(&map)?;
     let mut patch = serde_json::Map::new();

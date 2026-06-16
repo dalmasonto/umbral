@@ -557,11 +557,13 @@ impl From<StorageError> for MediaError {
     /// Map a backend [`StorageError`] onto `MediaError`'s existing
     /// variants so `save` can `?` on the storage call without growing a
     /// new public variant. `TooLarge` carries the limit/actual through;
-    /// `Io` is preserved; `NotFound` / `Backend` collapse to `Storage`.
+    /// `Io` is preserved; `NoBackend` / `NotFound` / `Backend` collapse
+    /// to `Storage`.
     fn from(e: StorageError) -> Self {
         match e {
             StorageError::TooLarge { limit, actual } => MediaError::TooLarge { limit, actual },
             StorageError::Io(io) => MediaError::Io(io),
+            StorageError::NoBackend => MediaError::Storage("no storage backend registered".into()),
             StorageError::NotFound => MediaError::Storage("object not found".to_string()),
             StorageError::Backend(s) => MediaError::Storage(s),
         }

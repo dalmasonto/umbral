@@ -31,7 +31,7 @@ pub mod prelude {
     pub use crate::routes::Routes;
     // The `Storage` trait so plugin authors can implement a custom
     // file-bytes backend via `use umbra::prelude::*`. The ambient
-    // accessors (`storage`/`set_storage`/`storage_opt`) stay on the
+    // accessors (`storage`/`try_storage`/`set_storage`/`storage_opt`) stay on the
     // `umbra::storage` module — power-user surface, not bare names.
     pub use crate::storage::Storage;
     pub use crate::web::{
@@ -324,12 +324,12 @@ pub mod storage {
     //!
     //! Plugin authors implementing a custom backend get the [`Storage`]
     //! trait from the prelude (`use umbra::prelude::*`). The ambient
-    //! accessors ([`storage`], [`storage_opt`], [`set_storage`]) are
+    //! accessors ([`storage`], [`try_storage`], [`storage_opt`], [`set_storage`]) are
     //! power-user surface, reached as `umbra::storage::storage()` so they
     //! don't pollute the prelude with bare names.
 
     pub use umbra_core::storage::{
-        Storage, StorageError, StoredFile, set_storage, storage, storage_opt,
+        Storage, StorageError, StoredFile, set_storage, storage, storage_opt, try_storage,
     };
 
     /// Re-export of `async-trait` so a plugin author implementing

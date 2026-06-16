@@ -39,7 +39,7 @@
 //! // In the list handler:
 //! let filter = parse_filters(&params, &model.fields, cfg.filters_enabled)?;
 //! let qs = DynQuerySet::for_meta(&model);
-//! let qs = if let Some(cond) = filter.into_condition() {
+//! let qs = if let Some(cond) = filter.condition_clone() {
 //!     qs.filter_condition(cond)
 //! } else { qs };
 //! let rows = qs.fetch_as_json().await?;
@@ -88,12 +88,6 @@ impl FilterClause {
     /// this resource).
     pub(crate) fn is_empty(&self) -> bool {
         self.condition.is_none()
-    }
-
-    /// Consume the clause, returning the inner condition (if any).
-    #[allow(dead_code)]
-    pub(crate) fn into_condition(self) -> Option<Condition> {
-        self.condition
     }
 
     /// Clone the inner condition (sea_query's Condition is Clone).

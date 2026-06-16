@@ -100,6 +100,8 @@ pub struct StoredFile {
 /// Errors a [`Storage`] operation can return.
 #[derive(Debug)]
 pub enum StorageError {
+    /// No ambient backend has been registered.
+    NoBackend,
     /// No object exists under the given key.
     NotFound,
     /// The bytes exceeded the backend's configured size cap.
@@ -119,6 +121,10 @@ pub enum StorageError {
 impl std::fmt::Display for StorageError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            StorageError::NoBackend => write!(
+                f,
+                "storage: no backend registered; add MediaPlugin or call set_storage"
+            ),
             StorageError::NotFound => write!(f, "storage: object not found"),
             StorageError::TooLarge { limit, actual } => write!(
                 f,
@@ -183,9 +189,15 @@ pub fn set_storage(s: Arc<dyn Storage>) -> bool {
 /// `MediaPlugin` (which registers its `FsStorage` in `on_ready`) or by
 /// calling [`set_storage`] directly.
 pub fn storage() -> Arc<dyn Storage> {
-    STORAGE.get().cloned().expect(
+    try_storage().expect(
         "no Storage backend registered; add MediaPlugin or call umbra::storage::set_storage",
     )
+}
+
+/// Return the ambient storage backend, or an explicit error if one has
+/// not been registered.
+pub fn try_storage() -> Result<Arc<dyn Storage>, StorageError> {
+    STORAGE.get().cloned().ok_or(StorageError::NoBackend)
 }
 
 /// Return the ambient storage backend if one has been registered, else
