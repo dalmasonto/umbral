@@ -357,6 +357,32 @@ impl Plugin for SecurityPlugin {
 
         router
     }
+
+    fn on_ready(&self, _ctx: &umbra::plugin::AppContext) -> Result<(), umbra::plugin::PluginError> {
+        // Boot nudge: HSTS and CSP are opt-in (safe defaults for dev), but
+        // a Prod deployment shipping neither is a real exposure — SSL
+        // stripping with no HSTS, XSS with no CSP backstop. Warn loudly so
+        // the gap is visible at startup rather than discovered in an audit.
+        let is_prod = umbra::settings::get_opt()
+            .map(|s| matches!(s.environment, Environment::Prod))
+            .unwrap_or(false);
+        if is_prod {
+            if !self.config.hsts {
+                tracing::warn!(
+                    "SecurityPlugin: HSTS is disabled in Environment::Prod — responses ship \
+                     no Strict-Transport-Security header, leaving clients open to SSL \
+                     stripping. Enable with `.with_hsts(true)`."
+                );
+            }
+            if self.config.content_security_policy.is_none() {
+                tracing::warn!(
+                    "SecurityPlugin: no Content-Security-Policy set in Environment::Prod — \
+                     XSS has no CSP backstop. Set `content_security_policy` in SecurityConfig."
+                );
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Add a `SetResponseHeaderLayer::if_not_present` for `name` when `value` is a

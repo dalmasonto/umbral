@@ -63,8 +63,12 @@ struct GoogleTokenResponse {
 /// Parse Google's token-endpoint JSON into a [`TokenSet`]. Pure — unit
 /// tested against sample bodies.
 fn parse_token(body: &str) -> Result<TokenSet, OAuthError> {
-    let r: GoogleTokenResponse = serde_json::from_str(body)
-        .map_err(|e| OAuthError::Provider(format!("google token parse: {e}")))?;
+    // Don't interpolate the serde error: on a non-JSON body (e.g. an HTML
+    // error page, or a body that echoes credentials) its message can carry
+    // a fragment of the raw response into logs / surfaced errors.
+    let r: GoogleTokenResponse = serde_json::from_str(body).map_err(|_| {
+        OAuthError::Provider("google token response was not valid JSON".to_string())
+    })?;
     Ok(TokenSet {
         access_token: r.access_token,
         refresh_token: r.refresh_token,
@@ -183,6 +187,18 @@ mod tests {
         let no_refresh = parse_token(r#"{"access_token":"at2"}"#).unwrap();
         assert_eq!(no_refresh.access_token, "at2");
         assert_eq!(no_refresh.refresh_token, None);
+    }
+
+    #[test]
+    fn token_parse_error_does_not_leak_body() {
+        // A non-JSON body that happens to contain a secret-looking string.
+        let body = "<html>error: leaked_secret_abc123</html>";
+        let err = parse_token(body).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            !msg.contains("leaked_secret_abc123"),
+            "error must not echo the response body: {msg}"
+        );
     }
 
     #[test]

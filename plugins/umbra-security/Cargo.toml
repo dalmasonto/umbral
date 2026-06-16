@@ -21,6 +21,7 @@ hex = "0.4"
 # workspace lock (umbra-auth / umbra-sessions / umbra-core use them).
 hmac = "0.12"
 sha2 = "0.10"
+tracing = "0.1"
 # Constant-time token comparison. Without this, the lexicographic
 # short-circuit in String == leaks token-prefix matches over time.
 # CSRF tokens aren't direct credentials, but OWASP calls for

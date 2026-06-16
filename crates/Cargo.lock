@@ -4422,6 +4422,7 @@ dependencies = [
  "tokio",
  "tower",
  "tower-http",
+ "tracing",
  "umbra",
 ]
 

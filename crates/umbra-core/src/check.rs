@@ -143,6 +143,10 @@ pub fn framework_checks() -> Vec<SystemCheck> {
             run: settings_allowed_hosts,
         },
         SystemCheck {
+            id: "settings.host_validation",
+            run: settings_host_validation,
+        },
+        SystemCheck {
             id: "settings.log_level",
             run: settings_log_level,
         },
@@ -211,6 +215,46 @@ fn settings_required(ctx: &CheckContext<'_>) -> Vec<SystemCheckFinding> {
         });
     }
     findings
+}
+
+/// Warn when the server binds a non-loopback address but Host-header
+/// validation isn't enforced. `App::build` only mounts the
+/// `allowed_hosts` guard under [`Environment::Prod`] (see
+/// `app.rs`); a deployment that binds `0.0.0.0` while still flagged
+/// `Dev` therefore accepts *any* `Host` header — the classic vector
+/// for cache-poisoning and poisoned password-reset links.
+///
+/// The Prod path already enforces, so this only fires outside Prod,
+/// and only on a non-loopback bind (a local `127.0.0.1` dev server is
+/// not reachable with a forged Host from the network). It's a warning,
+/// not a boot-blocking error, for the same reason the insecure-key
+/// non-loopback case is: surprising a homelab test with a hard failure
+/// would be worse than the nudge.
+fn settings_host_validation(ctx: &CheckContext<'_>) -> Vec<SystemCheckFinding> {
+    if !host_validation_unenforced(&ctx.settings.environment, &ctx.settings.bind_addr) {
+        return Vec::new();
+    }
+    vec![SystemCheckFinding {
+        check_id: "settings.host_validation",
+        severity: Severity::Warning,
+        location: CheckLocation::Settings,
+        message: format!(
+            "bind_addr `{}` is not loopback, but Host-header validation is only enforced in Environment::Prod. This deployment accepts any Host header (cache-poisoning / poisoned-reset-link risk).",
+            ctx.settings.bind_addr,
+        ),
+        hint: Some(
+            "set UMBRA_ENVIRONMENT=Prod (enforces allowed_hosts), or bind 127.0.0.1 for local dev."
+                .to_string(),
+        ),
+    }]
+}
+
+/// Pure predicate behind [`settings_host_validation`]: Host validation
+/// is unenforced when we're *not* in Prod yet bound to a non-loopback
+/// address. Split out so it's testable without constructing a full
+/// [`CheckContext`] (which needs a live backend).
+fn host_validation_unenforced(environment: &Environment, bind_addr: &str) -> bool {
+    !matches!(environment, Environment::Prod) && !is_loopback_bind(bind_addr)
 }
 
 /// True when `bind_addr` parses as the loopback interface — i.e.
@@ -598,4 +642,39 @@ pub fn run_all(ctx: &CheckContext<'_>, checks: &[SystemCheck]) -> Vec<SystemChec
         findings.extend((check.run)(ctx));
     }
     findings
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{host_validation_unenforced, is_loopback_bind};
+    use crate::settings::Environment;
+
+    #[test]
+    fn loopback_binds_are_recognised() {
+        assert!(is_loopback_bind("127.0.0.1:8000"));
+        assert!(is_loopback_bind("localhost:3000"));
+        assert!(is_loopback_bind("[::1]:8080"));
+        assert!(is_loopback_bind(":8000")); // host omitted → local
+        assert!(!is_loopback_bind("0.0.0.0:8000"));
+        assert!(!is_loopback_bind("192.168.1.10:8000"));
+    }
+
+    #[test]
+    fn host_validation_warns_only_off_prod_and_non_loopback() {
+        // Non-loopback + not Prod → unenforced (warn).
+        assert!(host_validation_unenforced(
+            &Environment::Dev,
+            "0.0.0.0:8000"
+        ));
+        // Prod enforces regardless of bind.
+        assert!(!host_validation_unenforced(
+            &Environment::Prod,
+            "0.0.0.0:8000"
+        ));
+        // Loopback bind is not network-reachable with a forged Host.
+        assert!(!host_validation_unenforced(
+            &Environment::Dev,
+            "127.0.0.1:8000"
+        ));
+    }
 }

@@ -180,6 +180,40 @@ static REGISTRARS: OnceLock<Vec<TemplateRegistrar>> = OnceLock::new();
 /// characters — the attribute values themselves still go through
 /// `html_escape` so a hostile alt-text can't break out of the
 /// attribute quote.
+/// True when `url` is safe to place in an `<img src>`: a relative URL
+/// (no scheme) or an `http`/`https` absolute URL. Any other scheme
+/// (`javascript:`, `data:`, `vbscript:`, …) is rejected. Fails closed:
+/// a malformed scheme (embedded control chars, spaces) is also rejected.
+fn url_scheme_is_safe(url: &str) -> bool {
+    let trimmed = url.trim();
+    // A URL scheme is the run before the first ':' — but only if no
+    // '/', '?', '#' appears first (those mean a relative path/query).
+    let mut scheme_end = None;
+    for (i, c) in trimmed.char_indices() {
+        match c {
+            ':' => {
+                scheme_end = Some(i);
+                break;
+            }
+            '/' | '?' | '#' => break,
+            _ => {}
+        }
+    }
+    let Some(end) = scheme_end else {
+        return true; // no scheme → relative URL → safe
+    };
+    let scheme = &trimmed[..end];
+    // A real scheme is alpha then [a-z0-9+.-]*. Anything else is suspicious.
+    let mut chars = scheme.chars();
+    let well_formed = matches!(chars.next(), Some(c) if c.is_ascii_alphabetic())
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '-'));
+    if !well_formed {
+        return false;
+    }
+    let lower = scheme.to_ascii_lowercase();
+    lower == "http" || lower == "https"
+}
+
 fn register_img_filter(env: &mut Environment<'static>) {
     env.add_filter(
         "img",
@@ -197,6 +231,18 @@ fn register_img_filter(env: &mut Environment<'static>) {
             // silent drop. Matches the rest of the framework's
             // strict-input posture.
             kwargs.assert_all_used()?;
+
+            // Defense-in-depth: never emit a `javascript:` / `data:` /
+            // other non-http(s) scheme into `src`. Not a live XSS (browsers
+            // don't run JS from `<img src>` and the value is HTML-escaped),
+            // but a hostile stored URL has no business here. A disallowed
+            // scheme neutralises to an empty src (broken image) rather than
+            // erroring the whole page on user data.
+            let url = if url_scheme_is_safe(&url) {
+                url
+            } else {
+                String::new()
+            };
 
             let mut out = String::with_capacity(url.len() + 128);
             out.push_str("<img src=\"");
@@ -1105,6 +1151,46 @@ impl From<std::io::Error> for TemplateError {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn img_url_scheme_safety() {
+        // Relative + http(s) are allowed.
+        assert!(url_scheme_is_safe("/media/cat.png"));
+        assert!(url_scheme_is_safe("cat.png"));
+        assert!(url_scheme_is_safe("../up/cat.png"));
+        assert!(url_scheme_is_safe("http://example.com/cat.png"));
+        assert!(url_scheme_is_safe("https://example.com/cat.png"));
+        assert!(url_scheme_is_safe("HTTPS://EXAMPLE.com/cat.png"));
+        assert!(url_scheme_is_safe("?query=only"));
+        assert!(url_scheme_is_safe("#fragment"));
+        // Dangerous / non-http schemes are rejected.
+        assert!(!url_scheme_is_safe("javascript:alert(1)"));
+        assert!(!url_scheme_is_safe("  javascript:alert(1)"));
+        assert!(!url_scheme_is_safe("JaVaScRiPt:alert(1)"));
+        assert!(!url_scheme_is_safe(
+            "data:text/html,<script>alert(1)</script>"
+        ));
+        assert!(!url_scheme_is_safe("vbscript:msgbox(1)"));
+        assert!(!url_scheme_is_safe("mailto:a@b.com"));
+        // Malformed scheme (embedded control char) fails closed.
+        assert!(!url_scheme_is_safe("java\u{0}script:alert(1)"));
+    }
+
+    #[test]
+    fn img_filter_neutralises_javascript_url() {
+        let mut env = minijinja::Environment::new();
+        register_img_filter(&mut env);
+        env.add_template("t", "{{ url | img }}").unwrap();
+        let tmpl = env.get_template("t").unwrap();
+        let out = tmpl
+            .render(minijinja::context! { url => "javascript:alert(1)" })
+            .unwrap();
+        assert!(
+            !out.contains("javascript:"),
+            "javascript: URL must be neutralised; got {out}"
+        );
+        assert!(out.contains("src=\"\""), "expected empty src; got {out}");
+    }
 
     #[test]
     fn nested_template_names_are_relative_to_templates_root() {

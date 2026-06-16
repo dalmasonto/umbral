@@ -217,7 +217,12 @@ async fn oauth_callback(
     let Some(flow) = flow else {
         return (StatusCode::BAD_REQUEST, "no oauth flow in progress").into_response();
     };
-    if Some(&flow.state) != query.state.as_ref() || flow.provider != provider {
+    let state_ok = query
+        .state
+        .as_deref()
+        .map(|s| ct_eq(&flow.state, s))
+        .unwrap_or(false);
+    if !state_ok || flow.provider != provider {
         return (StatusCode::BAD_REQUEST, "oauth state mismatch").into_response();
     }
     let Some(raw_session_token) = cookie_from_headers(&headers) else {
@@ -319,5 +324,40 @@ async fn oauth_disconnect(
             tracing::warn!("oauth: disconnect failed: {e}");
             (StatusCode::INTERNAL_SERVER_ERROR, "disconnect failed").into_response()
         }
+    }
+}
+
+/// Constant-time string equality for the OAuth `state` CSRF check.
+/// `state` is a server-minted UUID, so a timing oracle is impractical,
+/// but a constant-time compare matches the rest of the framework's
+/// posture (sessions, CSRF tokens). Length is compared directly — it
+/// isn't secret — then every byte is mixed before the verdict.
+fn ct_eq(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ct_eq;
+
+    #[test]
+    fn ct_eq_matches_only_identical_strings() {
+        assert!(ct_eq("abc123", "abc123"));
+        assert!(ct_eq("", ""));
+        assert!(!ct_eq("abc123", "abc124"));
+        assert!(!ct_eq("abc", "abcd")); // length mismatch
+        assert!(!ct_eq("abcd", "abc"));
+        // A real UUID-shaped state round-trips.
+        let state = "550e8400-e29b-41d4-a716-446655440000";
+        assert!(ct_eq(state, state));
+        assert!(!ct_eq(state, "550e8400-e29b-41d4-a716-446655440001"));
     }
 }

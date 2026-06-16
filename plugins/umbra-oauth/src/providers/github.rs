@@ -61,8 +61,12 @@ struct GitHubTokenResponse {
 
 /// Parse GitHub's token JSON (returned when `Accept: application/json`).
 fn parse_token(body: &str) -> Result<TokenSet, OAuthError> {
-    let r: GitHubTokenResponse = serde_json::from_str(body)
-        .map_err(|e| OAuthError::Provider(format!("github token parse: {e}")))?;
+    // Don't interpolate the serde error: on a non-JSON body (e.g. an HTML
+    // error page, or a body that echoes credentials) its message can carry
+    // a fragment of the raw response into logs / surfaced errors.
+    let r: GitHubTokenResponse = serde_json::from_str(body).map_err(|_| {
+        OAuthError::Provider("github token response was not valid JSON".to_string())
+    })?;
     Ok(TokenSet {
         access_token: r.access_token,
         // OAuth apps don't issue refresh tokens.
