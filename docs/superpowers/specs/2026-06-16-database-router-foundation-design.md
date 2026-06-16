@@ -164,3 +164,13 @@ A `SET search_path` is one network round-trip (sub-ms localhost, 1–5ms cross-A
 - New: `crates/umbra-core/src/db/router.rs` (trait + `DefaultRouter` + `Alias`/`Schema`), `crates/umbra-core/src/db/route_context.rs` (`RouteContext` + task-local + `current`/`scope`), `RouteContextLayer` middleware.
 - Modified: `orm/queryset/mod.rs` (`resolve_pool` → read/write split + router call; table-ref helper), the dynamic path (`orm/dynamic.rs`), `app.rs` (router/route_context builder methods + publish; Phase 2.5b → `allow_relation`), the migrate engine (per-alias walk → `allow_migrate`), facade re-exports + prelude.
 - The schema-aware table-ref helper is the central new chokepoint both the typed and dynamic builders call.
+
+## Follow-ups from the final review (2026-06-16)
+
+These were surfaced by the post-implementation code review. None block the foundation (all are invisible under `DefaultRouter`); they are the items the Phase 2 / replica work must address.
+
+- **Important — `get_or_create` / `update_or_create` read their existence-check from `db_for_read`.** Their internal `self.filter(...).first()` resolves via `RouteOp::Read`, so under a read/write-split router with replication lag the "does it exist?" probe hits the lagging replica, returns a stale not-found, and the following `create()` inserts a duplicate. Invisible under `DefaultRouter` (read alias == write alias). Fix before the first replica router: route the upsert's existence check through `db_for_write` (read-your-writes). Compounds the existing no-transaction gap (gaps2 #71).
+- **Minor — M2M junction pool selection bypasses the router.** `orm/m2m.rs` `set_junction_dynamic` / `load_junction_selection` (and `_in_tx` variants) pick the pool via raw `pool_dispatched()` (default alias). Their *table refs* are schema-qualified (so schema-per-tenant is fine), but a db-per-tenant / replica router would land junction writes on the default pool. Junctions carry no `ModelMeta`, so closing this needs a junction-aware routing key.
+- **Minor — `raw()` is classified `RouteOp::Read`.** A `raw("UPDATE …")` would hit the read replica under a split router. Defensible default (most `raw` is SELECT); add a doc-note, or a write-variant.
+- **Minor — an unregistered alias from a custom router panics** (`pool_for_dispatched` → caught by the panic layer → 500). Consider a typed error for misconfigured tenant routers.
+- **Minor — SQLite + `schema_for == Some` is unguarded.** `schema_qualified_table` is backend-agnostic; a router wrongly returning `Some` on SQLite emits a schema-qualified ref SQLite rejects at execution. The spec's promised one-time warn-and-skip needs backend awareness at the helper — a Phase-2 follow-up.

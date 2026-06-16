@@ -149,9 +149,12 @@ pub fn router() -> Arc<dyn DatabaseRouter> {
 /// This is the SQL-level seam for option-C schema-per-tenant: every FROM/JOIN
 /// table position in the ORM routes through here, so a router that returns
 /// `Some("tenant_7")` makes generated SQL read `"tenant_7"."post"` with zero
-/// extra round-trips (no `SET search_path`). SQLite has no schemas; on a
-/// SQLite-bound request the router's `schema_for` is expected to return `None`,
-/// and this helper then emits the bare table regardless.
+/// extra round-trips (no `SET search_path`). SQLite has no schemas, so a router
+/// must return `None` from `schema_for` for any SQLite-bound request. This
+/// helper is backend-agnostic — it does NOT detect SQLite — so a router that
+/// wrongly returns `Some` on SQLite emits a schema-qualified ref that SQLite
+/// rejects at execution. A backend-aware warn-and-skip is a Phase-2 follow-up
+/// (see the design spec); today the contract is "no schema router on SQLite".
 pub fn schema_qualified_table(table: &str) -> sea_query::TableRef {
     use sea_query::{Alias as SqAlias, IntoTableRef};
     let ctx = crate::db::route_context::current();
