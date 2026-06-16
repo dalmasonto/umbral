@@ -1136,6 +1136,18 @@ fn resolve_pool<T: Model>(explicit: Option<DbPool>, op: crate::db::RouteOp) -> D
     crate::db::pool_dispatched().clone()
 }
 
+/// Pin a QuerySet to an explicit pool, dispatching SQLite vs Postgres. Used by
+/// the upsert paths (`get_or_create` / `update_or_create`) so their
+/// existence-check reads run on the WRITE database — read-your-writes, so a
+/// read/write-split router never probes a lagging replica and inserts a
+/// duplicate (or reads a stale row back after the update).
+fn pin_to_pool<T: Model>(qs: QuerySet<T>, pool: &DbPool) -> QuerySet<T> {
+    match pool {
+        DbPool::Sqlite(p) => qs.on(p),
+        DbPool::Postgres(p) => qs.on_pg(p),
+    }
+}
+
 // GetError / TryForEachError moved to `errors`; re-exported above.
 
 /// Emit a one-shot advisory when a `right_join_related` is applied
@@ -3922,8 +3934,12 @@ impl<T: Model> Manager<T> {
             + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>
             + HydrateRelated,
     {
-        if let Some(existing) = self
-            .filter(predicate)
+        // Read-your-writes: probe for the existing row on the WRITE database,
+        // not a (possibly lagging) read replica — otherwise a read/write-split
+        // router could miss a just-written row and insert a duplicate. The
+        // following `create()` already resolves the same write target.
+        let write_pool = resolve_pool::<T>(None, crate::db::RouteOp::Write);
+        if let Some(existing) = pin_to_pool(self.filter(predicate), &write_pool)
             .first()
             .await
             .map_err(crate::orm::write::WriteError::Sqlx)?
@@ -3971,8 +3987,12 @@ impl<T: Model> Manager<T> {
         })?;
         let pk_name = pk.name;
 
-        if let Some(existing) = self
-            .filter(predicate)
+        // Read-your-writes: the existence probe and the post-update re-fetch
+        // run on the WRITE database, so a read/write-split router doesn't miss
+        // a just-written row (duplicate insert) or read a stale row back. The
+        // intervening UPDATE already routes to the same write target.
+        let write_pool = resolve_pool::<T>(None, crate::db::RouteOp::Write);
+        if let Some(existing) = pin_to_pool(self.filter(predicate), &write_pool)
             .first()
             .await
             .map_err(WriteError::Sqlx)?
@@ -4006,8 +4026,7 @@ impl<T: Model> Manager<T> {
                 crate::orm::write::json_to_sea_value(pk.ty, &pk_value_json2, false, pk_name, None)?;
             let refetch_pred: Predicate<T> =
                 Predicate::new(sea_query::Expr::col(sea_query::Alias::new(pk_name)).eq(pk_sea2));
-            let updated = self
-                .filter(refetch_pred)
+            let updated = pin_to_pool(self.filter(refetch_pred), &write_pool)
                 .first()
                 .await
                 .map_err(WriteError::Sqlx)?
@@ -4249,6 +4268,11 @@ impl<T: Model> Manager<T> {
         T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
             + for<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow>,
     {
+        // Routing: `raw` resolves to the READ database (most raw statements
+        // are SELECTs, which this returns as `Vec<T>`). Under a read/write-
+        // split router, a raw statement that WRITES must pin the write pool
+        // explicitly via `.on(&pool)` / `.on_pg(&pool)`, since the router
+        // cannot inspect arbitrary SQL to know it mutates.
         let pool = resolve_pool::<T>(None, crate::db::RouteOp::Read);
         match pool {
             DbPool::Sqlite(pool) => {
