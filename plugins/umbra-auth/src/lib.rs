@@ -231,7 +231,6 @@ pub struct AuthUser {
     /// Never shown on any form — password management goes through the
     /// dedicated Change Password flow in the admin.
     #[umbra(noform)]
-    #[serde(skip_serializing)]
     pub password_hash: String,
     pub is_active: bool,
     pub is_staff: bool,
