@@ -63,6 +63,14 @@ struct FlowState {
     /// session from before this field existed still deserialize.
     #[serde(default)]
     return_to: Option<String>,
+    /// The PKCE `code_verifier` (RFC 7636) minted with this flow. The
+    /// authorize redirect carries only its hash; this secret is replayed
+    /// on the token exchange to prove the redeemer is the client that
+    /// began the flow, so an intercepted `code` can't be redeemed alone.
+    /// `#[serde(default)]` so a flow persisted before PKCE landed still
+    /// deserializes (it exchanges with an empty verifier, as it did before).
+    #[serde(default)]
+    code_verifier: String,
 }
 
 /// `?next=<url>` on a login/connect start — the SPA return URL.
@@ -136,16 +144,21 @@ async fn begin_flow(
         ));
     };
     let state = uuid::Uuid::new_v4().to_string();
+    // PKCE (RFC 7636): mint a secret verifier, persist it with the flow,
+    // and send only its hash on the redirect.
+    let code_verifier = crate::pkce::generate_verifier();
+    let code_challenge = crate::pkce::challenge_s256(&code_verifier);
     let flow = FlowState {
         state: state.clone(),
         provider: provider.to_string(),
         connect_user,
         return_to,
+        code_verifier,
     };
     if let Err(e) = set_data(token, FLOW_KEY, &flow).await {
         return server_error(&format!("failed to store flow state: {e}"));
     }
-    let url = p.authorize_url(&state, &plugin.redirect_uri(provider));
+    let url = p.authorize_url(&state, &plugin.redirect_uri(provider), &code_challenge);
     Redirect::to(&url).into_response()
 }
 
@@ -237,7 +250,10 @@ async fn oauth_callback(
 
     // Exchange the code and resolve the identity.
     let redirect_uri = plugin.redirect_uri(&provider);
-    let tokens = match p.exchange_code(&code, &redirect_uri).await {
+    let tokens = match p
+        .exchange_code(&code, &redirect_uri, &flow.code_verifier)
+        .await
+    {
         Ok(t) => t,
         Err(e) => return server_error(&format!("token exchange failed for `{provider}`: {e}")),
     };

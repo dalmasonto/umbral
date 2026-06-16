@@ -120,17 +120,25 @@ impl OAuthProvider for GitHubProvider {
         "GitHub"
     }
 
-    fn authorize_url(&self, state: &str, redirect_uri: &str) -> String {
+    fn authorize_url(&self, state: &str, redirect_uri: &str, code_challenge: &str) -> String {
         let mut url = url::Url::parse(AUTH_URL).expect("AUTH_URL is a valid URL");
         url.query_pairs_mut()
             .append_pair("client_id", &self.client_id)
             .append_pair("redirect_uri", redirect_uri)
             .append_pair("scope", &self.scopes)
-            .append_pair("state", state);
+            .append_pair("state", state)
+            // PKCE (RFC 7636): bind this request to the token exchange.
+            .append_pair("code_challenge", code_challenge)
+            .append_pair("code_challenge_method", "S256");
         url.to_string()
     }
 
-    async fn exchange_code(&self, code: &str, redirect_uri: &str) -> Result<TokenSet, OAuthError> {
+    async fn exchange_code(
+        &self,
+        code: &str,
+        redirect_uri: &str,
+        code_verifier: &str,
+    ) -> Result<TokenSet, OAuthError> {
         let resp = reqwest::Client::new()
             .post(TOKEN_URL)
             .header(reqwest::header::ACCEPT, "application/json")
@@ -139,6 +147,8 @@ impl OAuthProvider for GitHubProvider {
                 ("client_id", self.client_id.as_str()),
                 ("client_secret", self.client_secret.as_str()),
                 ("redirect_uri", redirect_uri),
+                // PKCE: prove we began this flow.
+                ("code_verifier", code_verifier),
             ])
             .send()
             .await
@@ -201,11 +211,18 @@ mod tests {
     #[test]
     fn authorize_url_carries_state_and_scope() {
         let p = GitHubProvider::new("ghid", "ghsecret");
-        let url = p.authorize_url("st8", "https://app.example/oauth/github/callback");
+        let url = p.authorize_url(
+            "st8",
+            "https://app.example/oauth/github/callback",
+            "chal-LENGE_123",
+        );
         assert!(url.starts_with(AUTH_URL));
         assert!(url.contains("client_id=ghid"));
         assert!(url.contains("state=st8"));
         assert!(url.contains("scope=read%3Auser+user%3Aemail"));
+        // PKCE challenge is carried with the S256 method.
+        assert!(url.contains("code_challenge=chal-LENGE_123"));
+        assert!(url.contains("code_challenge_method=S256"));
     }
 
     #[test]
