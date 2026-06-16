@@ -8,6 +8,12 @@ use crate::orm::Model;
 use crate::plugin::Plugin;
 use crate::settings::Settings;
 
+/// A per-request resolver that builds the request-scoped
+/// [`crate::db::RouteContext`] from the incoming request. Installed via
+/// [`AppBuilder::route_context`] and driven by [`route_context_scope_layer`].
+type RouteContextResolver =
+    std::sync::Arc<dyn Fn(&crate::web::Request) -> crate::db::RouteContext + Send + Sync>;
+
 /// A built and ready-to-serve umbra application.
 ///
 /// Created via `App::builder().build()`. Owns the merged router that
@@ -136,6 +142,15 @@ pub struct AppBuilder {
     /// `DefaultRouter` (today's static per-model routing). Installed
     /// during `build()` via [`crate::db::router::install_router`].
     db_router: Option<std::sync::Arc<dyn crate::db::DatabaseRouter>>,
+    /// Optional per-request resolver that builds the request-scoped
+    /// [`crate::db::RouteContext`]. When set, `build()` installs a layer that
+    /// runs the resolver on each request and scopes the ENTIRE downstream
+    /// future (handler plus every `.await`, including ORM calls) inside
+    /// [`crate::db::route_context::scope`], so the ambient
+    /// `umbra::db::route_context()` accessor — and thus the `DatabaseRouter`
+    /// — sees the context this resolver set. Added via
+    /// [`AppBuilder::route_context`].
+    route_context_resolver: Option<RouteContextResolver>,
 }
 
 impl Default for AppBuilder {
@@ -160,6 +175,7 @@ impl Default for AppBuilder {
             compress: false,
             middleware: Vec::new(),
             db_router: None,
+            route_context_resolver: None,
         }
     }
 }
@@ -193,6 +209,38 @@ impl AppBuilder {
     /// `DefaultRouter` (today's static per-model routing).
     pub fn router<R: crate::db::DatabaseRouter + 'static>(mut self, router: R) -> Self {
         self.db_router = Some(std::sync::Arc::new(router));
+        self
+    }
+
+    /// Install a per-request [`crate::db::RouteContext`] resolver.
+    ///
+    /// The resolver runs once per request, builds a `RouteContext` (typically
+    /// reading a tenant header or subdomain), and `build()` wraps the entire
+    /// downstream future in [`crate::db::route_context::scope`]. Because the
+    /// scope spans the whole handler — including every `.await` and every ORM
+    /// call — the ambient `umbra::db::route_context()` accessor inside the
+    /// handler, and the active [`crate::db::DatabaseRouter`], see exactly the
+    /// context this resolver returned. A request the resolver maps to a
+    /// default `RouteContext` runs with no tenant (no silent inheritance from
+    /// a prior request).
+    ///
+    /// ```ignore
+    /// use umbra::prelude::*;
+    /// use umbra::db::{RouteContext, TenantKey};
+    ///
+    /// App::builder()
+    ///     .route_context(|req| match req.headers().get("x-tenant") {
+    ///         Some(v) => RouteContext::new()
+    ///             .with_tenant(TenantKey::new(v.to_str().unwrap_or_default())),
+    ///         None => RouteContext::new(),
+    ///     })
+    ///     .build()?;
+    /// ```
+    pub fn route_context<F>(mut self, resolver: F) -> Self
+    where
+        F: Fn(&crate::web::Request) -> crate::db::RouteContext + Send + Sync + 'static,
+    {
+        self.route_context_resolver = Some(std::sync::Arc::new(resolver));
         self
     }
 
@@ -1033,6 +1081,22 @@ impl AppBuilder {
         }
         router = middleware_stack.apply(router);
 
+        // Phase 5.66 — request-scoped routing context (DatabaseRouter
+        // foundation). When a resolver is registered, wrap the whole
+        // downstream future in `route_context::scope`. Installed OUTSIDE the
+        // middleware stack above so the task-local is established before any
+        // middleware or handler runs — every `.await` in the request,
+        // including ORM calls that read `route_context::current()`, then sees
+        // the resolved context. A `from_fn` layer is the only mechanism that
+        // can wrap `next.run(req)` in a scope; the `Middleware` contract's
+        // `before_request(req) -> req` cannot.
+        if let Some(resolver) = self.route_context_resolver.take() {
+            router = router.layer(axum::middleware::from_fn_with_state(
+                resolver,
+                route_context_scope_layer,
+            ));
+        }
+
         // Phase 5.7 — wrap with the panic-catch layer. Comes AFTER the
         // fallback wiring so a panicking fallback handler is also caught
         // (the panic-catch layer wraps the entire router).
@@ -1144,6 +1208,22 @@ impl AppBuilder {
             plugins: sorted_plugins,
         })
     }
+}
+
+/// The axum middleware fn installed by [`AppBuilder::route_context`]: run the
+/// resolver against the incoming request to build a [`crate::db::RouteContext`],
+/// then drive the ENTIRE downstream future inside
+/// [`crate::db::route_context::scope`]. Scoping `next.run(req)` (rather than
+/// just a prefix of it) is what keeps the task-local alive across every
+/// `.await` the handler performs, so ambient ORM calls route per the resolved
+/// context.
+async fn route_context_scope_layer(
+    axum::extract::State(resolver): axum::extract::State<RouteContextResolver>,
+    req: crate::web::Request,
+    next: axum::middleware::Next,
+) -> crate::web::Response {
+    let ctx = resolver(&req);
+    crate::db::route_context::scope(ctx, next.run(req)).await
 }
 
 /// Validate the registered plugins and return them in a stable
