@@ -12,8 +12,8 @@
 
 use std::path::PathBuf;
 
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::SqlitePool;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio::sync::OnceCell;
 use umbra::db::DatabaseRouter;
 use umbra::migrate::ModelMeta;

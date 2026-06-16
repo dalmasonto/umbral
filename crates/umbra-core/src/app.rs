@@ -755,10 +755,8 @@ impl AppBuilder {
             .flat_map(|p| p.models())
             .chain(self.models.iter().cloned())
             .collect();
-        let meta_by_table: HashMap<&str, &ModelMeta> = all_models
-            .iter()
-            .map(|m| (m.table.as_str(), m))
-            .collect();
+        let meta_by_table: HashMap<&str, &ModelMeta> =
+            all_models.iter().map(|m| (m.table.as_str(), m)).collect();
         // Clone the candidate router — install still happens at Phase 3, so
         // we must NOT take/consume `self.db_router` here.
         let candidate_router = self.db_router.clone();

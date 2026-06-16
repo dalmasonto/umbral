@@ -24,9 +24,8 @@ pub struct Event {
 
 async fn make_pool(table: &str) -> sqlx::SqlitePool {
     let pool = db::connect_sqlite("sqlite::memory:").await.unwrap();
-    let ddl = format!(
-        "CREATE TABLE {table} (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)"
-    );
+    let ddl =
+        format!("CREATE TABLE {table} (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)");
     sqlx::query(&ddl).execute(&pool).await.unwrap();
     pool
 }
@@ -59,10 +58,7 @@ async fn dyn_count_routes_to_analytics_pool() {
 
     // DynQuerySet::count() must hit `analytics` (the pool that has the row),
     // not `default` (which is empty). Before the fix this returns 0.
-    let n = DynQuerySet::for_meta(&meta)
-        .count()
-        .await
-        .expect("count");
+    let n = DynQuerySet::for_meta(&meta).count().await.expect("count");
 
     assert_eq!(
         n, 1,

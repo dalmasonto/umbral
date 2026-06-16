@@ -79,7 +79,9 @@ async fn custom_router_veto_rejects_same_db_fk() {
             assert_eq!(model_db, "default");
             assert_eq!(target_db, "default");
         }
-        Err(other) => panic!("expected CrossDatabaseForeignKey from the router veto, got {other:?}"),
+        Err(other) => {
+            panic!("expected CrossDatabaseForeignKey from the router veto, got {other:?}")
+        }
         Ok(_) => panic!("expected the router veto to fail the build, but it succeeded"),
     }
 }
