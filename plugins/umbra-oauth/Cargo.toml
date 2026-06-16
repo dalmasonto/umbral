@@ -25,6 +25,12 @@ chrono = { version = "0.4", features = ["serde"] }
 url = "2"
 # Random, unguessable CSRF `state` token for the authorization request.
 uuid = { version = "1", features = ["v4"] }
+# PKCE (RFC 7636): a CSPRNG `code_verifier`, its SHA-256 `code_challenge`,
+# and URL-safe base64 for both. Versions match the sibling auth/security
+# plugins so the workspace resolves one copy of each.
+rand = "0.8"
+sha2 = "0.10"
+base64 = "0.22"
 # OAuth flow HTTP: token exchange (POST) + identity fetch (GET). We build
 # the requests directly on reqwest rather than pulling the `oauth2` crate
 # (whose API churns across versions) — the authorization-code flow is thin

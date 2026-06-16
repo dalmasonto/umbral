@@ -107,7 +107,7 @@ impl OAuthProvider for GoogleProvider {
         "Google"
     }
 
-    fn authorize_url(&self, state: &str, redirect_uri: &str) -> String {
+    fn authorize_url(&self, state: &str, redirect_uri: &str, code_challenge: &str) -> String {
         let mut url = url::Url::parse(AUTH_URL).expect("AUTH_URL is a valid URL");
         url.query_pairs_mut()
             .append_pair("client_id", &self.client_id)
@@ -115,6 +115,9 @@ impl OAuthProvider for GoogleProvider {
             .append_pair("response_type", "code")
             .append_pair("scope", &self.scopes)
             .append_pair("state", state)
+            // PKCE (RFC 7636): bind this request to the token exchange.
+            .append_pair("code_challenge", code_challenge)
+            .append_pair("code_challenge_method", "S256")
             // Ask for a refresh token (offline access) and force the
             // consent screen so Google re-issues one on re-link.
             .append_pair("access_type", "offline")
@@ -122,7 +125,12 @@ impl OAuthProvider for GoogleProvider {
         url.to_string()
     }
 
-    async fn exchange_code(&self, code: &str, redirect_uri: &str) -> Result<TokenSet, OAuthError> {
+    async fn exchange_code(
+        &self,
+        code: &str,
+        redirect_uri: &str,
+        code_verifier: &str,
+    ) -> Result<TokenSet, OAuthError> {
         let resp = reqwest::Client::new()
             .post(TOKEN_URL)
             .form(&[
@@ -131,6 +139,8 @@ impl OAuthProvider for GoogleProvider {
                 ("client_secret", self.client_secret.as_str()),
                 ("redirect_uri", redirect_uri),
                 ("grant_type", "authorization_code"),
+                // PKCE: prove we began this flow.
+                ("code_verifier", code_verifier),
             ])
             .send()
             .await
@@ -164,12 +174,19 @@ mod tests {
     #[test]
     fn authorize_url_carries_state_scope_and_offline() {
         let p = GoogleProvider::new("client123", "secret");
-        let url = p.authorize_url("xyz-state", "https://app.example/oauth/google/callback");
+        let url = p.authorize_url(
+            "xyz-state",
+            "https://app.example/oauth/google/callback",
+            "chal-LENGE_123",
+        );
         assert!(url.starts_with(AUTH_URL));
         assert!(url.contains("client_id=client123"));
         assert!(url.contains("state=xyz-state"));
         assert!(url.contains("access_type=offline"));
         assert!(url.contains("response_type=code"));
+        // PKCE challenge is carried with the S256 method.
+        assert!(url.contains("code_challenge=chal-LENGE_123"));
+        assert!(url.contains("code_challenge_method=S256"));
         // redirect_uri is percent-encoded.
         assert!(url.contains("redirect_uri=https%3A%2F%2Fapp.example%2Foauth%2Fgoogle%2Fcallback"));
     }

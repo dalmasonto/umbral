@@ -92,12 +92,19 @@ pub trait OAuthProvider: Send + Sync {
     /// A human label for buttons / admin, e.g. `"Google"`.
     fn label(&self) -> &'static str;
 
-    /// Build the URL to redirect the user to, carrying the CSRF `state`
-    /// and the callback `redirect_uri`.
-    fn authorize_url(&self, state: &str, redirect_uri: &str) -> String;
+    /// Build the URL to redirect the user to, carrying the CSRF `state`,
+    /// the callback `redirect_uri`, and the PKCE `code_challenge` (always
+    /// sent alongside `code_challenge_method=S256`).
+    fn authorize_url(&self, state: &str, redirect_uri: &str, code_challenge: &str) -> String;
 
-    /// Exchange an authorization `code` for tokens.
-    async fn exchange_code(&self, code: &str, redirect_uri: &str) -> Result<TokenSet, OAuthError>;
+    /// Exchange an authorization `code` for tokens, proving possession of
+    /// the PKCE secret by sending the matching `code_verifier`.
+    async fn exchange_code(
+        &self,
+        code: &str,
+        redirect_uri: &str,
+        code_verifier: &str,
+    ) -> Result<TokenSet, OAuthError>;
 
     /// Resolve a token set to the account identity.
     async fn fetch_identity(&self, tokens: &TokenSet) -> Result<Identity, OAuthError>;

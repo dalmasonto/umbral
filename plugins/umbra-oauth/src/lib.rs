@@ -32,6 +32,7 @@
 //! ```
 
 pub mod models;
+pub mod pkce;
 pub mod policy;
 pub mod provider;
 pub mod providers;

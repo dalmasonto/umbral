@@ -31,13 +31,14 @@ impl OAuthProvider for FakeProvider {
     fn label(&self) -> &'static str {
         self.label
     }
-    fn authorize_url(&self, _state: &str, _redirect_uri: &str) -> String {
+    fn authorize_url(&self, _state: &str, _redirect_uri: &str, _code_challenge: &str) -> String {
         unreachable!("discovery tests never start a flow")
     }
     async fn exchange_code(
         &self,
         _code: &str,
         _redirect_uri: &str,
+        _code_verifier: &str,
     ) -> Result<TokenSet, OAuthError> {
         unreachable!("discovery tests never exchange a code")
     }
