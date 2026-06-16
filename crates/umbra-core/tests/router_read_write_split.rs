@@ -1,5 +1,7 @@
-//! A custom router that splits reads -> "replica", writes -> "default" proves
-//! the read/write seam (#23) and that ctx flows into the router.
+//! Read/write-split router coverage: reads -> "replica", writes -> "default".
+//! Exercises the #23 split across several terminals (fetch/count = read,
+//! create/delete = write), proves ctx flows into the router, and proves
+//! `.on(&pool)` is a HARD override that bypasses the router entirely.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -42,20 +44,20 @@ async fn make_pool() -> sqlx::SqlitePool {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn reads_hit_replica_writes_hit_default() {
+async fn read_write_split_across_terminals_and_on_override() {
     let default = make_pool().await;
     let replica = make_pool().await;
 
     umbra::App::builder()
         .settings(umbra::Settings::from_env().expect("settings load"))
-        .database("default", default)
-        .database("replica", replica)
+        .database("default", default.clone())
+        .database("replica", replica.clone())
         .router(SplitRouter)
         .model::<Widget>()
         .build()
         .unwrap();
 
-    // A write goes to "default".
+    // create() is a WRITE -> "default".
     Widget::objects()
         .create(Widget {
             id: 0,
@@ -63,15 +65,66 @@ async fn reads_hit_replica_writes_hit_default() {
         })
         .await
         .unwrap();
-    assert_eq!(WRITES.load(Ordering::SeqCst), 1);
+    assert_eq!(WRITES.load(Ordering::SeqCst), 1, "create routed as a write");
 
-    // A read goes to "replica" -- a SEPARATE empty pool, so the write above is
-    // invisible. That divergence proves the split.
+    // fetch() is a READ -> "replica" (a separate, empty pool), so the write
+    // above is invisible. That divergence proves the split.
     let rows = Widget::objects().fetch().await.unwrap();
     assert!(READS.load(Ordering::SeqCst) >= 1);
     assert_eq!(
         rows.len(),
         0,
-        "read routed to the empty replica, not default"
+        "fetch routed to the empty replica, not default"
     );
+
+    // `.on(&pool)` is a HARD override: it bypasses the router, so this read
+    // hits `default` (where the write landed) and does NOT consult db_for_read.
+    let reads_before = READS.load(Ordering::SeqCst);
+    let pinned = Widget::objects().on(&default).fetch().await.unwrap();
+    assert_eq!(
+        pinned.len(),
+        1,
+        ".on() must bypass the router and read `default`"
+    );
+    assert_eq!(pinned[0].name, "a");
+    assert_eq!(
+        READS.load(Ordering::SeqCst),
+        reads_before,
+        ".on() must not consult db_for_read"
+    );
+
+    // count() is a READ -> "replica". Seed the replica directly with two rows
+    // so the count is distinguishable from default's single row.
+    sqlx::query("INSERT INTO rw_widget (name) VALUES ('r1'), ('r2')")
+        .execute(&replica)
+        .await
+        .unwrap();
+    let n = Widget::objects().count().await.unwrap();
+    assert_eq!(
+        n, 2,
+        "count() routed to the replica (2 rows), not default (1 row)"
+    );
+
+    // delete() is a WRITE -> "default": it removes default's row and leaves the
+    // replica untouched.
+    let writes_before = WRITES.load(Ordering::SeqCst);
+    Widget::objects()
+        .filter(widget::NAME.eq("a"))
+        .delete()
+        .await
+        .unwrap();
+    assert!(
+        WRITES.load(Ordering::SeqCst) > writes_before,
+        "delete routed as a write"
+    );
+    let default_left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM rw_widget")
+        .fetch_one(&default)
+        .await
+        .unwrap();
+    assert_eq!(default_left, 0, "delete removed default's row");
+    let replica_left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM rw_widget")
+        .fetch_one(&replica)
+        .await
+        .unwrap();
+    assert_eq!(replica_left, 2, "delete did not touch the replica");
 }
