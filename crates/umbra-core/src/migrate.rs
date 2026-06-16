@@ -1357,8 +1357,22 @@ pub async fn run_in(dir: &Path) -> Result<u64, MigrateError> {
 /// [`table_alias`]. Tables not owned by any registered model fall
 /// through to `"default"` so the migration engine's own
 /// `umbra_migrations` book-keeping stays in the main DB.
+///
+/// A second gate consults the installed [`DatabaseRouter`]: if the
+/// router's [`allow_migrate`](crate::db::DatabaseRouter::allow_migrate)
+/// returns `false` for this (alias, model) pair the operation is
+/// excluded from the alias's run. Junction / unowned tables (no
+/// registered `ModelMeta`) are always allowed — the router has no
+/// model to inspect.
 fn op_targets_alias(op: &Operation, alias: &str) -> bool {
-    table_alias(op.table_name()) == alias
+    if table_alias(op.table_name()) != alias {
+        return false;
+    }
+    // Let the router veto migrating this table on this alias.
+    match model_meta_for_table(op.table_name()) {
+        Some(meta) => crate::db::router::router().allow_migrate(alias, &meta),
+        None => true, // junction / unowned table — migrate on its alias
+    }
 }
 
 /// SQLite per-alias variant. Same shape as the legacy `run_in_sqlite`
