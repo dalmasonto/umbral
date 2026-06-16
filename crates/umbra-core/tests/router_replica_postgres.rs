@@ -1,14 +1,24 @@
 //! REAL streaming-replication validation of the read/write split. `#[ignore]`,
 //! gated on `UMBRA_PRIMARY_URL` + `UMBRA_REPLICA_URL` (a Postgres primary and a
-//! read-only streaming replica). Proves umbra routes writes to the primary and
-//! reads to the ACTUAL replica (not the same pool), including read-your-writes
-//! against replica lag.
+//! read-only streaming replica).
+//!
+//! The proof is rigorous: it **pauses WAL replay** on the standby so the
+//! replica is deliberately STALE while the primary is FRESH, then shows
+//! (a) an umbra read returns the *stale replica* state — not the fresh
+//! primary, definitively proving the read hit the replica; and (b)
+//! `get_or_create` finds the un-replicated row on the *primary* (read-your-
+//! writes under real lag), never inserting a duplicate.
 //!
 //! ```text
 //! UMBRA_PRIMARY_URL=postgres://app:apppass@localhost:5433/appdb \
 //! UMBRA_REPLICA_URL=postgres://app:apppass@localhost:5440/appdb \
 //!   cargo test -p umbra-core --test router_replica_postgres -- --ignored --nocapture
 //! ```
+//!
+//! Prerequisite: the app role needs EXECUTE on the replay-control functions
+//! (run once on the PRIMARY as a superuser; it replicates to the standby):
+//! `GRANT EXECUTE ON FUNCTION pg_catalog.pg_wal_replay_pause() TO app;`
+//! `GRANT EXECUTE ON FUNCTION pg_catalog.pg_wal_replay_resume() TO app;`
 
 #![allow(dead_code)]
 
@@ -36,12 +46,19 @@ impl DatabaseRouter for ReplicaRouter {
     }
 }
 
-async fn wait_for(pool: &sqlx::PgPool, predicate_sql: &str, what: &str) {
+async fn count(pool: &sqlx::PgPool) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM repl_note")
+        .fetch_one(pool)
+        .await
+        .expect("count")
+}
+
+async fn wait_until<F>(pool: &sqlx::PgPool, mut done: F, what: &str)
+where
+    F: FnMut(i64) -> bool,
+{
     for _ in 0..100 {
-        if let Ok(true) = sqlx::query_scalar::<_, bool>(predicate_sql)
-            .fetch_one(pool)
-            .await
-        {
+        if done(count(pool).await) {
             return;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -58,15 +75,17 @@ async fn read_write_split_against_real_streaming_replica() {
     let primary = sqlx::PgPool::connect(&primary_url).await.expect("primary");
     let replica = sqlx::PgPool::connect(&replica_url).await.expect("replica");
 
-    // Sanity: the replica really is a read-only standby.
     let in_recovery: bool = sqlx::query_scalar("SELECT pg_is_in_recovery()")
         .fetch_one(&replica)
         .await
         .expect("recovery check");
-    assert!(in_recovery, "UMBRA_REPLICA_URL must point at a read-only standby");
+    assert!(in_recovery, "UMBRA_REPLICA_URL must be a read-only standby");
 
-    // Schema is created on the PRIMARY only — the read-only replica gets it via
-    // replication (you cannot CREATE TABLE on a standby).
+    // Make sure replay is running, then (re)create the table on the PRIMARY
+    // and wait for it to stream to the standby.
+    let _ = sqlx::query("SELECT pg_wal_replay_resume()")
+        .execute(&replica)
+        .await; // ignore "not paused" error
     sqlx::query("DROP TABLE IF EXISTS repl_note")
         .execute(&primary)
         .await
@@ -75,15 +94,22 @@ async fn read_write_split_against_real_streaming_replica() {
         .execute(&primary)
         .await
         .expect("create on primary");
-    wait_for(
-        &replica,
-        "SELECT to_regclass('public.repl_note') IS NOT NULL",
-        "table replicated to standby",
-    )
-    .await;
+    // Wait for the table object to exist on the standby (DDL replicates too).
+    for _ in 0..100 {
+        if sqlx::query_scalar::<_, Option<String>>("SELECT to_regclass('public.repl_note')::text")
+            .fetch_one(&replica)
+            .await
+            .ok()
+            .flatten()
+            .is_some()
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 
     let mut settings = umbra::Settings::from_env().expect("settings");
-    settings.database_url = primary_url.clone(); // keep the boot backend-check happy
+    settings.database_url = primary_url.clone();
 
     umbra::App::builder()
         .settings(settings)
@@ -94,55 +120,82 @@ async fn read_write_split_against_real_streaming_replica() {
         .build()
         .expect("App::build");
 
-    // WRITE via umbra → db_for_write → "default" (the primary).
-    let created = RNote::objects()
+    // 1) WRITE row "alpha" via umbra → primary, and let the standby catch up.
+    RNote::objects()
         .create(RNote {
             id: 0,
-            body: "hello-from-primary".into(),
+            body: "alpha".into(),
         })
         .await
-        .expect("create");
-    assert!(created.id > 0, "primary assigned a PK");
+        .expect("create alpha");
+    wait_until(&replica, |n| n == 1, "alpha replicated").await;
 
-    // Read-your-writes: probe immediately — `get_or_create` must find the row
-    // on the WRITE pool, never insert a duplicate (router_upsert_readwrite is
-    // the rigorous empty-replica proof; here it must also hold against a real
-    // replica that may not have caught up yet).
+    // 2) FREEZE the standby: pause WAL replay. From here the replica's visible
+    //    state is stuck at {alpha} no matter what the primary does.
+    sqlx::query("SELECT pg_wal_replay_pause()")
+        .execute(&replica)
+        .await
+        .expect("pause replay");
+
+    // 3) WRITE row "beta" via umbra → primary. Primary now has {alpha, beta};
+    //    the frozen replica still has only {alpha}.
+    RNote::objects()
+        .create(RNote {
+            id: 0,
+            body: "beta".into(),
+        })
+        .await
+        .expect("create beta");
+
+    // Sanity: the two databases have genuinely diverged.
+    assert_eq!(count(&primary).await, 2, "primary has alpha+beta");
+    assert_eq!(count(&replica).await, 1, "frozen replica still has only alpha");
+
+    // 4) READ-YOUR-WRITES UNDER LAG: get_or_create on "beta" must find it on
+    //    the PRIMARY (the write pool). If it probed the frozen replica it would
+    //    miss beta and insert a duplicate (primary → 3 rows).
     let (_row, was_created) = RNote::objects()
         .get_or_create(
-            RNote::BODY.eq("hello-from-primary"),
+            RNote::BODY.eq("beta"),
             RNote {
                 id: 0,
-                body: "hello-from-primary".into(),
+                body: "beta".into(),
             },
         )
         .await
         .expect("get_or_create");
-    assert!(
-        !was_created,
-        "read-your-writes: found on the write DB, no duplicate"
-    );
+    assert!(!was_created, "read-your-writes: found beta on the primary");
+    assert_eq!(count(&primary).await, 2, "no duplicate inserted on the primary");
 
-    // Wait for the write to actually stream to the standby.
-    wait_for(
-        &replica,
-        "SELECT count(*) = 1 FROM repl_note WHERE body = 'hello-from-primary'",
-        "row replicated to standby",
-    )
-    .await;
-
-    // READ via umbra → db_for_read → "replica" → reads the ACTUAL standby.
+    // 5) THE KEY PROOF: an umbra READ routes to the replica, so it must return
+    //    the STALE state {alpha} — NOT the primary's fresh {alpha, beta}. This
+    //    is what proves the read hit the replica, not the primary.
     let rows = RNote::objects().fetch().await.expect("fetch from replica");
-    assert_eq!(rows.len(), 1, "umbra read the row back from the streaming replica");
-    assert_eq!(rows[0].body, "hello-from-primary");
+    assert_eq!(
+        rows.len(),
+        1,
+        "umbra read the STALE replica (got {:?}), not the fresh primary",
+        rows.iter().map(|r| &r.body).collect::<Vec<_>>()
+    );
+    assert_eq!(rows[0].body, "alpha");
+    assert_eq!(RNote::objects().count().await.expect("count"), 1);
 
-    // And the count terminal (also a read) hits the replica too.
-    let n = RNote::objects().count().await.expect("count from replica");
-    assert_eq!(n, 1);
+    // 6) RESUME replay; the replica catches up and umbra now reads both rows.
+    sqlx::query("SELECT pg_wal_replay_resume()")
+        .execute(&replica)
+        .await
+        .expect("resume replay");
+    wait_until(&replica, |n| n == 2, "beta replicated after resume").await;
+    let rows = RNote::objects().fetch().await.expect("fetch after catch-up");
+    assert_eq!(rows.len(), 2, "replica caught up; umbra reads both");
 
     sqlx::query("DROP TABLE IF EXISTS repl_note")
         .execute(&primary)
         .await
         .ok();
-    println!("OK: writes→primary, reads→real streaming replica, read-your-writes held");
+    println!(
+        "OK: write→primary; replica frozen via pg_wal_replay_pause; umbra fetch returned the \
+         STALE replica state {{alpha}} while the primary held {{alpha,beta}}; read-your-writes \
+         found beta on the primary (no duplicate); resume → umbra reads both."
+    );
 }
