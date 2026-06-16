@@ -1,62 +1,93 @@
-//! The smallest umbra app that actually does something.
+//! Minimal umbra app for an apples-to-apples framework benchmark: one
+//! model, four endpoints (plain text, JSON, DB read, DB write). NO session
+//! or auth plugins — just the core + the ORM, so the numbers reflect the
+//! framework and ORM, not a maximalist app's middleware stack.
 //!
-//! Everything below is reachable through `umbra::prelude::*` or the
-//! `umbra::db` / `umbra::web` facades. Nothing in this file touches
-//! `umbra_core` or `umbra_macros` directly. If a future change to
-//! the facade breaks this file, the facade has regressed, not the
-//! example.
+//! DB defaults to a WAL file (`hello_bench.db`) via umbra's real
+//! `connect_sqlite` (WAL + synchronous=NORMAL + 5s busy_timeout). Override
+//! with `UMBRA_DATABASE_URL`.
 
 use umbra::prelude::*;
+use umbra::web::JsonResponse;
+
+#[derive(
+    Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbra::orm::Model,
+)]
+#[umbra(table = "hello_note")]
+struct Note {
+    id: i64,
+    title: String,
+}
+
+#[derive(serde::Serialize)]
+struct BenchJson {
+    ok: bool,
+    name: &'static str,
+    items: [i32; 4],
+}
+
+async fn bench_text() -> &'static str {
+    "hello from umbra-hello"
+}
+
+async fn bench_json() -> JsonResponse<BenchJson> {
+    JsonResponse(BenchJson {
+        ok: true,
+        name: "hello",
+        items: [1, 2, 3, 4],
+    })
+}
+
+// DB read: newest 25 rows + a total count (mirrors the cot/shop read).
+async fn bench_read() -> JsonResponse<Vec<Note>> {
+    let notes = Note::objects()
+        .order_by(note::ID.desc())
+        .limit(25)
+        .fetch()
+        .await
+        .expect("read");
+    let _total = Note::objects().count().await.expect("count");
+    JsonResponse(notes)
+}
+
+async fn bench_write() -> &'static str {
+    Note::objects()
+        .create(Note {
+            id: 0,
+            title: "ApacheBench note".to_string(),
+        })
+        .await
+        .expect("write");
+    "ok"
+}
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Settings: defaults → umbra.toml → UMBRA_*-prefixed env vars.
-    // With no toml and no env in scope this resolves to the dev defaults
-    // baked into `Settings`, which is exactly what the example wants.
+async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let settings = Settings::from_env()?;
+    let db_url = std::env::var("UMBRA_DATABASE_URL")
+        .unwrap_or_else(|_| "sqlite://hello_bench.db?mode=rwc".to_string());
 
-    // Open the default pool up front so a bad DATABASE_URL fails before
-    // we bind a port. `App::build()` would otherwise auto-connect.
-    let pool = umbra::db::connect(&settings.database_url).await?;
+    // umbra's genuine SQLite pool (WAL + synchronous=NORMAL + busy_timeout).
+    let pool = umbra::db::connect_sqlite(&db_url).await?;
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS hello_note \
+         (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL)",
+    )
+    .execute(&pool)
+    .await?;
 
     let app = App::builder()
         .settings(settings)
         .database("default", pool)
+        .model::<Note>()
         .routes(
             Routes::new()
-                .get("/", root)
-                .get("/settings", settings_view),
+                .get("/bench/text", bench_text)
+                .get("/bench/json", bench_json)
+                .get("/bench/notes/read", bench_read)
+                .get("/bench/notes/write", bench_write),
         )
         .build()?;
 
-    app.serve("127.0.0.1:3000".parse::<std::net::SocketAddr>()?)
-        .await?;
-
-    Ok(())
-}
-
-async fn root() -> &'static str {
-    "hello from umbra-hello"
-}
-
-/// Tiny JSON-shaped view over the loaded settings.
-///
-/// We deliberately do not include `secret_key`. The body is hand-formatted
-/// JSON returned as a string so the example stays serde-free. Swapping in
-/// `JsonResponse` once the facade ships a re-export of `serde_json::Value`
-/// (or accepts a borrowed `&str` payload) is a one-line change.
-async fn settings_view() -> String {
-    let s = umbra::Settings::from_env()
-        .expect("settings already loaded once; second load should not fail");
-
-    let env_label = match s.environment {
-        Environment::Dev => "Dev",
-        Environment::Test => "Test",
-        Environment::Prod => "Prod",
-    };
-
-    format!(
-        "{{\"database_url\":\"{}\",\"environment\":\"{}\"}}",
-        s.database_url, env_label,
-    )
+    umbra_cli::dispatch(app).await
 }
