@@ -132,6 +132,10 @@ pub struct AppBuilder {
     /// plugins' contributions in the final stack. Added via
     /// [`AppBuilder::middleware`].
     middleware: Vec<std::sync::Arc<dyn crate::middleware::Middleware>>,
+    /// Optional custom [`crate::db::DatabaseRouter`]. `None` uses
+    /// `DefaultRouter` (today's static per-model routing). Installed
+    /// during `build()` via [`crate::db::router::install_router`].
+    db_router: Option<std::sync::Arc<dyn crate::db::DatabaseRouter>>,
 }
 
 impl Default for AppBuilder {
@@ -155,6 +159,7 @@ impl Default for AppBuilder {
             atomic_transactions: None,
             compress: false,
             middleware: Vec::new(),
+            db_router: None,
         }
     }
 }
@@ -181,6 +186,13 @@ impl AppBuilder {
     /// unchanged.
     pub fn database(mut self, alias: &str, pool: impl Into<DbPool>) -> Self {
         self.databases.insert(alias.to_owned(), pool.into());
+        self
+    }
+
+    /// Install a custom [`crate::db::DatabaseRouter`]. Omit to use
+    /// `DefaultRouter` (today's static per-model routing).
+    pub fn router<R: crate::db::DatabaseRouter + 'static>(mut self, router: R) -> Self {
+        self.db_router = Some(std::sync::Arc::new(router));
         self
     }
 
@@ -718,6 +730,9 @@ impl AppBuilder {
         // stays deterministic.
         crate::settings::init(&settings);
         db::init(self.databases);
+        if let Some(router) = self.db_router {
+            crate::db::router::install_router(router);
+        }
         crate::backend::init(backend);
         if let Some(enabled) = self.atomic_transactions {
             db::init_atomic_default(enabled);

@@ -22,6 +22,7 @@ pub mod prelude {
     //! raw pool accessors are reached as `umbra::db::pool()` so they do
     //! not pollute the prelude with bare names like `pool`.
 
+    pub use crate::db::{DatabaseRouter, RouteContext, TenantKey};
     pub use crate::middleware::Middleware;
     pub use crate::orm::{
         ChoiceField, Choices, F, FColExt, FileField, ForeignKey, ImageField, M2M, Masked, Model,
@@ -178,10 +179,12 @@ pub mod db {
     //! ```
 
     pub use umbra_core::db::{
-        DbPool, Transaction, TxFuture, begin, begin_pg, begin_sqlite, connect, connect_sqlite,
-        pool, pool_dispatched, pool_for, pool_for_dispatched, registered_aliases, transaction,
-        transaction_pg, transaction_sqlite,
+        Alias, DatabaseRouter, DbPool, DefaultRouter, RouteContext, RouteOp, Schema, TenantKey,
+        Transaction, TxFuture, begin, begin_pg, begin_sqlite, connect, connect_sqlite, pool,
+        pool_dispatched, pool_for, pool_for_dispatched, registered_aliases, route_context, router,
+        transaction, transaction_pg, transaction_sqlite,
     };
+    pub use umbra_core::db::route_context::scope as route_context_scope;
 }
 
 /// Run an async closure inside a database transaction against the ambient pool.
