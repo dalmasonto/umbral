@@ -1,0 +1,18 @@
+[package]
+name = "umbra-read-replica"
+version = "0.1.0"
+edition = "2024"
+description = "Standalone umbra example: a DatabaseRouter that splits reads to a replica pool and writes to the primary."
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+umbra = { path = "../../crates/umbra" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+# The model derives sqlx::FromRow + serde; the schema bootstrap runs a raw
+# CREATE TABLE on the pool (an example shortcut — a real app uses migrations).
+sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio"] }
+serde = { version = "1", features = ["derive"] }
+chrono = { version = "0.4", features = ["serde"] }
+# The router logs each routing decision so the read/write split is visible.
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
