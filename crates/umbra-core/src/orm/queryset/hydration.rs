@@ -98,9 +98,20 @@ pub(super) async fn hydrate_select_related<T: Model + HydrateRelated>(
         // registry isn't initialised (low-level tests that drive
         // the QuerySet without `App::build` — the legacy behaviour,
         // byte-identical for every integer-PK target).
-        let target_meta = crate::migrate::registered_models()
-            .into_iter()
-            .find(|m| m.table == fk_target);
+        //
+        // `registered_models()` PANICS on an uninitialised registry, so
+        // it must be guarded — otherwise this select_related path crashes
+        // exactly the registry-less tests the comment above promises to
+        // support. When the registry is absent, `target_meta` stays
+        // `None`: `soft_delete` defaults off and the PK resolves through
+        // the (also registry-safe) `pk_meta_for_table` / `"id"` fallback.
+        let target_meta = if crate::migrate::is_initialised() {
+            crate::migrate::registered_models()
+                .into_iter()
+                .find(|m| m.table == fk_target)
+        } else {
+            None
+        };
         let target_soft_delete = target_meta.as_ref().is_some_and(|m| m.soft_delete);
         let (target_pk_col, target_pk_ty) = target_meta
             .as_ref()
@@ -398,10 +409,14 @@ pub(super) async fn hydrate_reverse_fk_for_field<T: Model + HydrateRelated>(
     // column is typed as the PARENT's PK, so bind the parent PK values as
     // that type (correct uuid binding on Postgres).
     let parent_pk_ty = parent_pk_sql_type::<T>();
-    let child_soft_delete = crate::migrate::registered_models()
-        .into_iter()
-        .find(|m| m.table == spec.target_table)
-        .is_some_and(|m| m.soft_delete);
+    // Registry-safe: `registered_models()` panics before `App::build`, so
+    // guard it. Registry-less tests (and the legacy integer-PK path) treat
+    // an absent registry as "child is not soft-delete".
+    let child_soft_delete = crate::migrate::is_initialised()
+        && crate::migrate::registered_models()
+            .into_iter()
+            .find(|m| m.table == spec.target_table)
+            .is_some_and(|m| m.soft_delete);
     let child_rows = fetch_related_as_json_by_pk(
         spec.target_table,
         spec.fk_column,
