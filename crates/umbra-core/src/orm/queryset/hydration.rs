@@ -578,8 +578,9 @@ async fn hydrate_one_to_one_for_field<T: Model + HydrateRelated>(
 /// `rows` then receives the matching bucket via
 /// `HydrateRelated::set_m2m_resolved_json`.
 ///
-/// V1 scope: i64 parent PK only (parents whose `pk_i64()` returns
-/// `None` are skipped). Reverse-FK names (post-#44) route through
+/// PK-agnostic: parents are bucketed by `pk_as_json()` (canonicalised
+/// via `pk_key`), so i64-, String-, and Uuid-PK parents all hydrate.
+/// Reverse-FK names (post-#44) route through
 /// [`hydrate_reverse_fk_for_field`] before the M2M lookup. Unknown
 /// names error loudly with a hint pointing at the right method.
 pub(super) async fn hydrate_prefetch_related<T: Model + HydrateRelated>(

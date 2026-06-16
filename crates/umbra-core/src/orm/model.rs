@@ -76,38 +76,25 @@ pub trait HydrateRelated {
     /// model that declares an M2M field. A model with no M2M fields
     /// inherits the default and pays nothing.
     ///
-    /// V1 limitation: works only when `Self::PrimaryKey` is `i64` (the
-    /// `M2M<T>` struct stores `Option<i64>` for the parent id). Models
-    /// with non-i64 PKs fail to compile here, which matches the
-    /// constraint documented in `M2M<T>`.
+    /// PK-agnostic: the macro sets each `M2M<Child, P>` field's parent id
+    /// from `self.<pk>` via the typed [`crate::orm::M2M::set_parent_id`],
+    /// so it works for **any** parent PK type — `i64`, `String`,
+    /// `uuid::Uuid`. A non-i64-PK parent declares the field with the
+    /// matching `P` (e.g. `M2M<Student, String>`); `P` defaults to `i64`.
     fn set_m2m_parent_ids(&mut self) {}
-
-    /// Return this row's primary key as an `i64`, when the model uses
-    /// an i64 PK. Used by `prefetch_related` (gap #19) to collect
-    /// parent ids for the batched JOIN against the junction table.
-    ///
-    /// Default: `None` — models with non-i64 PKs silently skip the
-    /// prefetch hydration. The macro emits an override returning
-    /// `Some(self.<pk>)` only when the PK type is `i64`, matching
-    /// the M2M-plumbing's overall i64 constraint.
-    fn pk_i64(&self) -> Option<i64> {
-        None
-    }
 
     /// Return this row's primary key as a `serde_json::Value`, whatever
     /// the PK type — `i64`, `String`, `uuid::Uuid`, a custom newtype.
-    /// This is the **PK-agnostic** replacement for [`pk_i64`](Self::pk_i64):
-    /// the relation-hydration paths (`prefetch_related`, reverse-FK and
+    /// The relation-hydration paths (`prefetch_related`, reverse-FK and
     /// reverse-OneToOne collection) bucket children by the parent's PK,
     /// and keying those buckets on a `Value` (canonicalised via
-    /// [`crate::orm::pk_key`]) lifts the historical i64-only constraint so
-    /// UUID- and slug-PK models flow through too.
+    /// [`crate::orm::pk_key`]) lets UUID- and slug-PK models flow through
+    /// too, not just i64.
     ///
     /// Default: `None`. The `#[derive(Model)]` macro emits an override for
     /// every model that returns `to_value(&self.<pk>)` — so a hand-written
     /// `Model` impl that doesn't override it simply opts out of the
-    /// Value-keyed hydration (the same forgive-and-skip posture `pk_i64`
-    /// had).
+    /// Value-keyed hydration (a forgive-and-skip posture).
     fn pk_as_json(&self) -> Option<serde_json::Value> {
         None
     }
