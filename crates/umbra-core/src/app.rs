@@ -739,27 +739,58 @@ impl AppBuilder {
                 .cloned()
                 .unwrap_or_else(|| "default".to_string())
         };
-        // Walk every model's FK fields and compare aliases.
-        let all_models = sorted_plugins
+        // Walk every model's FK fields and check each FK relation. The
+        // default (no custom router) path keeps today's build-time local
+        // alias equality (`alias_of(a) == alias_of(b)`): the trait's
+        // DEFAULT `allow_relation` reads the GLOBAL `model_alias`, which is
+        // still unpublished at this Phase 2.5b point, so routing the
+        // default case through the trait would compare "default" == "default"
+        // for everything and silently disable the #22 guard. A CUSTOM router
+        // is asked directly via `allow_relation`.
+        //
+        // Materialize the models into a Vec so we can both build a
+        // table→meta lookup AND iterate them.
+        let all_models: Vec<ModelMeta> = sorted_plugins
             .iter()
             .flat_map(|p| p.models())
-            .chain(self.models.iter().cloned());
-        for model in all_models {
-            let model_db = alias_of(&model.table);
+            .chain(self.models.iter().cloned())
+            .collect();
+        let meta_by_table: HashMap<&str, &ModelMeta> = all_models
+            .iter()
+            .map(|m| (m.table.as_str(), m))
+            .collect();
+        // Clone the candidate router — install still happens at Phase 3, so
+        // we must NOT take/consume `self.db_router` here.
+        let candidate_router = self.db_router.clone();
+        for model in &all_models {
             for field in &model.fields {
                 let Some(target_table) = field.fk_target.as_deref() else {
                     continue;
                 };
-                if field.db_constraint {
+                if !field.db_constraint {
+                    continue;
+                }
+                let allowed = match &candidate_router {
+                    Some(r) => match meta_by_table.get(target_table) {
+                        Some(target_meta) => r.allow_relation(model, target_meta),
+                        // Target isn't a registered model (shouldn't happen
+                        // for a real FK); don't false-reject — fall back to
+                        // the local alias check.
+                        None => alias_of(&model.table) == alias_of(target_table),
+                    },
+                    // No custom router: today's build-time local alias
+                    // equality (#22).
+                    None => alias_of(&model.table) == alias_of(target_table),
+                };
+                if !allowed {
+                    let model_db = alias_of(&model.table);
                     let target_db = alias_of(target_table);
-                    if target_db != model_db {
-                        return Err(BuildError::CrossDatabaseForeignKey {
-                            model: Box::leak(model.name.clone().into_boxed_str()),
-                            field: Box::leak(field.name.clone().into_boxed_str()),
-                            model_db: Box::leak(model_db.into_boxed_str()),
-                            target_db: Box::leak(target_db.into_boxed_str()),
-                        });
-                    }
+                    return Err(BuildError::CrossDatabaseForeignKey {
+                        model: Box::leak(model.name.clone().into_boxed_str()),
+                        field: Box::leak(field.name.clone().into_boxed_str()),
+                        model_db: Box::leak(model_db.into_boxed_str()),
+                        target_db: Box::leak(target_db.into_boxed_str()),
+                    });
                 }
             }
         }
