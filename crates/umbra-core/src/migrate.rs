@@ -2663,6 +2663,20 @@ fn diff_columns(
                     ),
                 });
             }
+            if prev_col.nullable && !curr_col.nullable && curr_col.default.is_empty() {
+                return Err(MigrateError::UnsafeAlter {
+                    model: model.to_string(),
+                    column: (*name).to_string(),
+                    reason: "nullable → NOT NULL requires a default/backfill before tightening; otherwise existing NULL rows abort the migration".to_string(),
+                });
+            }
+            if !prev_col.unique && curr_col.unique {
+                return Err(MigrateError::UnsafeAlter {
+                    model: model.to_string(),
+                    column: (*name).to_string(),
+                    reason: "adding UNIQUE to an existing column requires a duplicate pre-check/backfill migration; otherwise existing duplicate values abort the migration".to_string(),
+                });
+            }
             // Any schema-meaningful field change triggers AlterColumn.
             // UI-only flags (`noform`, `noedit`, `max_length`,
             // `is_string_repr`, `is_multichoice`) are intentionally

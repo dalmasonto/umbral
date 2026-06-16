@@ -1,3 +1,5 @@
+done hardening
+
 # Correctness & Domain-Parity Review — umbra
 
 Scope: read-only correctness / Django-parity audit of the ORM, migration engine, dynamic (admin/REST) path, and validators. Severities: **Critical** (data corruption / silent wrong result / unsafe migration), **Important** (behavior contradicts docs/spec on a common path), **Optional**, **FYI**. `file:line` cited from the working tree at review time. Existing gap numbers cited where they match; otherwise **NEW**.

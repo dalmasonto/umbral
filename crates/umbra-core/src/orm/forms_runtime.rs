@@ -144,6 +144,23 @@ fn json_scalar_to_string(v: &serde_json::Value) -> String {
     }
 }
 
+fn pk_string_to_sea_value(id: &str, ty: crate::orm::SqlType) -> Option<sea_query::Value> {
+    match ty {
+        crate::orm::SqlType::SmallInt | crate::orm::SqlType::Integer => id
+            .parse::<i32>()
+            .ok()
+            .map(|n| sea_query::Value::Int(Some(n))),
+        crate::orm::SqlType::BigInt | crate::orm::SqlType::ForeignKey => id
+            .parse::<i64>()
+            .ok()
+            .map(|n| sea_query::Value::BigInt(Some(n))),
+        crate::orm::SqlType::Uuid | crate::orm::SqlType::Text => {
+            Some(sea_query::Value::String(Some(Box::new(id.to_string()))))
+        }
+        _ => Some(sea_query::Value::String(Some(Box::new(id.to_string())))),
+    }
+}
+
 /// Split a submitted M2M value into ids. The form layer joins repeated
 /// keys with `,`; we also accept whitespace. Empty pieces are dropped.
 pub fn parse_multi_ids(raw: &str) -> Vec<String> {
@@ -220,11 +237,21 @@ pub async fn validate_multi_fk_exists(
         .into_iter()
         .filter_map(|r| r.get(&pk_col).map(json_scalar_to_string))
         .collect();
+    let pk_ty = meta
+        .fields
+        .iter()
+        .find(|c| c.name == pk_col)
+        .map(|c| c.ty)
+        .unwrap_or(crate::orm::SqlType::BigInt);
     let mut out = Vec::with_capacity(ids.len());
     for id in ids {
         if found.contains(id) {
-            if let Ok(n) = id.parse::<i64>() {
-                out.push(sea_query::Value::BigInt(Some(n)));
+            match pk_string_to_sea_value(id, pk_ty) {
+                Some(value) => out.push(value),
+                None => errs.add(
+                    field,
+                    format!("{field}: id {id} is not a valid primary key"),
+                ),
             }
         } else {
             errs.add(field, format!("{field}: id {id} has no matching record"));

@@ -392,8 +392,14 @@ async fn validate_m2m_relations(meta: &ModelMeta, body: &Map<String, Value>) -> 
         };
         let mut missing: Vec<Value> = Vec::new();
         for item in to_check {
-            if !check_fk_row_exists(&target_meta, item).await {
-                missing.push(item.clone());
+            match check_fk_row_exists(&target_meta, item).await {
+                Ok(true) => {}
+                Ok(false) => missing.push(item.clone()),
+                Err(e) => {
+                    out.push(e);
+                    missing.clear();
+                    break;
+                }
             }
         }
         if !missing.is_empty() {
@@ -460,12 +466,16 @@ async fn validate_fk_references(meta: &ModelMeta, body: &Map<String, Value>) -> 
             // fall back to DB-side enforcement.
             continue;
         };
-        if !check_fk_row_exists(&target_meta, value).await {
-            out.push(WriteError::ForeignKeyNotFound {
-                field: col.name.clone(),
-                target_table: target_table.to_string(),
-                value: value.clone(),
-            });
+        match check_fk_row_exists(&target_meta, value).await {
+            Ok(true) => {}
+            Ok(false) => {
+                out.push(WriteError::ForeignKeyNotFound {
+                    field: col.name.clone(),
+                    target_table: target_table.to_string(),
+                    value: value.clone(),
+                });
+            }
+            Err(e) => out.push(e),
         }
     }
     out
@@ -493,12 +503,16 @@ async fn validate_fk_references_in_tx(
         let Some(target_meta) = model_meta_by_table(target_table) else {
             continue;
         };
-        if !check_fk_row_exists_in_tx(&target_meta, value, tx).await {
-            out.push(WriteError::ForeignKeyNotFound {
-                field: col.name.clone(),
-                target_table: target_table.to_string(),
-                value: value.clone(),
-            });
+        match check_fk_row_exists_in_tx(&target_meta, value, tx).await {
+            Ok(true) => {}
+            Ok(false) => {
+                out.push(WriteError::ForeignKeyNotFound {
+                    field: col.name.clone(),
+                    target_table: target_table.to_string(),
+                    value: value.clone(),
+                });
+            }
+            Err(e) => out.push(e),
         }
     }
     out
@@ -553,22 +567,25 @@ fn model_meta_by_table(table: &str) -> Option<ModelMeta> {
 /// Single-row existence check against the FK target table. Uses
 /// `DynQuerySet::count` so both SQLite and Postgres work without
 /// raw SQL.
-async fn check_fk_row_exists(target: &ModelMeta, value: &Value) -> bool {
+async fn check_fk_row_exists(target: &ModelMeta, value: &Value) -> Result<bool, WriteError> {
     let Some(pk) = target.fields.iter().find(|c| c.primary_key) else {
-        return true;
+        return Ok(true);
     };
     let pk_repr = match value {
         Value::Number(n) => n.to_string(),
         Value::String(s) => s.clone(),
         Value::Bool(b) => b.to_string(),
-        _ => return true,
+        _ => return Ok(true),
     };
     let count = crate::orm::dynamic::DynQuerySet::for_meta(target)
         .filter_eq_string(&pk.name, &pk_repr)
         .count()
         .await
-        .unwrap_or(0);
-    count > 0
+        .map_err(|e| match e {
+            crate::orm::dynamic::DynError::Write(e) => e,
+            crate::orm::dynamic::DynError::Sqlx(e) => WriteError::Sqlx(e),
+        })?;
+    Ok(count > 0)
 }
 
 /// Transaction-aware existence check. Mirrors [`check_fk_row_exists`]
@@ -580,12 +597,12 @@ async fn check_fk_row_exists_in_tx(
     target: &ModelMeta,
     value: &Value,
     tx: &mut crate::db::Transaction,
-) -> bool {
+) -> Result<bool, WriteError> {
     use sea_query::{Alias, Expr, Func, PostgresQueryBuilder, Query, SqliteQueryBuilder};
     use sea_query_binder::SqlxBinder;
 
     let Some(pk) = target.fields.iter().find(|c| c.primary_key) else {
-        return true;
+        return Ok(true);
     };
     // Build the PK predicate as a typed sea-query value so binding
     // works on both backends (a string PK binds as TEXT, an integer
@@ -595,7 +612,7 @@ async fn check_fk_row_exists_in_tx(
         // A value that won't coerce to the PK type can't match a real
         // row; treat as "not found" so the FK error surfaces rather
         // than a panic.
-        Err(_) => return false,
+        Err(_) => return Ok(false),
     };
     let mut q = Query::select();
     q.from(Alias::new(&target.table))
@@ -605,28 +622,28 @@ async fn check_fk_row_exists_in_tx(
     match tx.backend_name() {
         "sqlite" => {
             let Some(inner) = tx.as_sqlite_mut() else {
-                return true;
+                return Ok(true);
             };
             let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
             match sqlx::query_scalar_with::<_, i64, _>(&sql, values)
                 .fetch_one(&mut **inner)
                 .await
             {
-                Ok(n) => n > 0,
-                Err(_) => false,
+                Ok(n) => Ok(n > 0),
+                Err(e) => Err(WriteError::Sqlx(e)),
             }
         }
         _ => {
             let Some(inner) = tx.as_pg_mut() else {
-                return true;
+                return Ok(true);
             };
             let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
             match sqlx::query_scalar_with::<_, i64, _>(&sql, values)
                 .fetch_one(&mut **inner)
                 .await
             {
-                Ok(n) => n > 0,
-                Err(_) => false,
+                Ok(n) => Ok(n > 0),
+                Err(e) => Err(WriteError::Sqlx(e)),
             }
         }
     }

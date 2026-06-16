@@ -98,11 +98,24 @@ pub(super) async fn hydrate_select_related<T: Model + HydrateRelated>(
         // registry isn't initialised (low-level tests that drive
         // the QuerySet without `App::build` — the legacy behaviour,
         // byte-identical for every integer-PK target).
-        let (target_pk_col, target_pk_ty) = crate::migrate::pk_meta_for_table(fk_target)
+        let target_meta = crate::migrate::registered_models()
+            .into_iter()
+            .find(|m| m.table == fk_target);
+        let target_soft_delete = target_meta.as_ref().is_some_and(|m| m.soft_delete);
+        let (target_pk_col, target_pk_ty) = target_meta
+            .as_ref()
+            .and_then(|m| m.pk_column().map(|c| (c.name.clone(), c.ty)))
+            .or_else(|| crate::migrate::pk_meta_for_table(fk_target))
             .unwrap_or_else(|| ("id".to_string(), crate::orm::SqlType::BigInt));
-        let related_rows =
-            fetch_related_as_json_by_pk(fk_target, &target_pk_col, target_pk_ty, &ids, pool)
-                .await?;
+        let related_rows = fetch_related_as_json_by_pk(
+            fk_target,
+            &target_pk_col,
+            target_pk_ty,
+            target_soft_delete,
+            &ids,
+            pool,
+        )
+        .await?;
         let id_to_json: HashMap<String, JsonValue> = related_rows
             .into_iter()
             .filter_map(|obj| {
@@ -227,6 +240,15 @@ pub(super) async fn hydrate_select_related_nested<T: Model + HydrateRelated>(
         // rather than crash.
         return Ok(());
     }
+    let hop_target_soft_delete: Vec<bool> = hop_targets
+        .iter()
+        .map(|t| {
+            registered
+                .iter()
+                .find(|m| &m.table == t)
+                .is_some_and(|m| m.soft_delete)
+        })
+        .collect();
 
     // Phase 1: fetch each level's rows top-down, one batched IN
     // query per hop. `levels[i]` holds the rows at depth i (before
@@ -249,6 +271,7 @@ pub(super) async fn hydrate_select_related_nested<T: Model + HydrateRelated>(
             hop_targets[0],
             &hop_target_pk[0].0,
             hop_target_pk[0].1,
+            hop_target_soft_delete[0],
             &ids,
             pool,
         )
@@ -278,6 +301,7 @@ pub(super) async fn hydrate_select_related_nested<T: Model + HydrateRelated>(
                 hop_target,
                 &hop_target_pk[hop_idx].0,
                 hop_target_pk[hop_idx].1,
+                hop_target_soft_delete[hop_idx],
                 &next_ids,
                 pool,
             )
@@ -374,10 +398,15 @@ pub(super) async fn hydrate_reverse_fk_for_field<T: Model + HydrateRelated>(
     // column is typed as the PARENT's PK, so bind the parent PK values as
     // that type (correct uuid binding on Postgres).
     let parent_pk_ty = parent_pk_sql_type::<T>();
+    let child_soft_delete = crate::migrate::registered_models()
+        .into_iter()
+        .find(|m| m.table == spec.target_table)
+        .is_some_and(|m| m.soft_delete);
     let child_rows = fetch_related_as_json_by_pk(
         spec.target_table,
         spec.fk_column,
         parent_pk_ty,
+        child_soft_delete,
         &parent_pks,
         pool,
     )
@@ -489,6 +518,7 @@ async fn hydrate_one_to_one_for_field<T: Model + HydrateRelated>(
         spec.target_table,
         fk_column,
         parent_pk_ty,
+        child_meta.soft_delete,
         &parent_pks,
         pool,
     )
@@ -692,6 +722,15 @@ pub(super) async fn hydrate_prefetch_related<T: Model + HydrateRelated>(
             ))
             .is_in(parent_seavals),
         );
+        if child_meta.soft_delete {
+            q.and_where(
+                sea_query::Expr::col((
+                    sea_query::Alias::new("c"),
+                    sea_query::Alias::new("deleted_at"),
+                ))
+                .is_null(),
+            );
+        }
 
         // Execute and group by parent_id, keyed PK-agnostically. The
         // `__parent_id` value decodes through the same shape-aware helper
@@ -777,6 +816,7 @@ pub(crate) async fn fetch_related_as_json_by_pk(
     table: &str,
     pk_col: &str,
     pk_ty: crate::orm::SqlType,
+    soft_delete: bool,
     ids: &[JsonValue],
     pool: &DbPool,
 ) -> Result<Vec<JsonValue>, sqlx::Error> {
@@ -810,6 +850,9 @@ pub(crate) async fn fetch_related_as_json_by_pk(
             sea_query::Expr::col(sea_query::Alias::new(pk_col))
                 .is_in(seavals.into_iter().map(sea_query::SimpleExpr::Value)),
         );
+    if soft_delete {
+        q.and_where(sea_query::Expr::col(sea_query::Alias::new("deleted_at")).is_null());
+    }
 
     match pool {
         DbPool::Sqlite(pool) => {

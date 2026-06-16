@@ -2937,6 +2937,13 @@ impl<T: Model> QuerySet<T> {
         for p in &self.predicates {
             stmt.and_where(p.cond_for(backend));
         }
+        if self.soft_delete_active {
+            if self.only_deleted {
+                stmt.and_where(Expr::col(Alias::new("deleted_at")).is_not_null());
+            } else if !self.with_deleted {
+                stmt.and_where(Expr::col(Alias::new("deleted_at")).is_null());
+            }
+        }
         let pk = pk_field::<T>();
         if let Some(pkf) = pk {
             stmt.returning_col(Alias::new(pkf.name));
@@ -3232,6 +3239,13 @@ impl<T: Model> QuerySet<T> {
         }
         for p in &self.predicates {
             stmt.and_where(p.cond_for(backend_name));
+        }
+        if self.soft_delete_active {
+            if self.only_deleted {
+                stmt.and_where(Expr::col(Alias::new("deleted_at")).is_not_null());
+            } else if !self.with_deleted {
+                stmt.and_where(Expr::col(Alias::new("deleted_at")).is_null());
+            }
         }
         Ok(stmt)
     }

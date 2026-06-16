@@ -27,10 +27,9 @@
 //! accessor returns `Result<QuerySet<C>, ReverseError>` up front; the
 //! QuerySet itself stays lazy and awaitable.
 //!
-//! V1 constraint: i64 parent PK only, consistent with the rest of the
-//! relation machinery (`pk_i64()` in `HydrateRelated`). A non-i64 PK
-//! surfaces a clean [`ReverseError::NonI64Pk`] rather than silently
-//! mis-binding.
+//! Parent PKs are bound through the same JSON-to-SQL coercion as the
+//! rest of the ORM relation machinery, so i64, String, and UUID PKs all
+//! work.
 
 use sea_query::{Alias, Expr};
 
@@ -65,8 +64,8 @@ pub enum ReverseError {
         column: String,
         parent_table: &'static str,
     },
-    /// This instance's PK isn't an `i64` (v1 only supports i64 PKs for
-    /// the relation machinery), so we can't bind the child filter.
+    /// This instance's PK could not be read or bound into the child FK
+    /// predicate.
     NonI64Pk { parent: &'static str },
 }
 
@@ -106,8 +105,8 @@ impl std::fmt::Display for ReverseError {
             ),
             ReverseError::NonI64Pk { parent } => write!(
                 f,
-                "umbra::orm::reverse: `{parent}` has a non-i64 primary key; the reverse \
-                 accessor supports i64 PKs only at v1"
+                "umbra::orm::reverse: `{parent}` primary key could not be bound into the \
+                 reverse relation predicate"
             ),
         }
     }
@@ -161,7 +160,7 @@ pub trait ReverseRelations: Model + HydrateRelated {
         self.reverse_on::<C>(spec.name)
     }
 
-    /// Shared tail: read this instance's i64 PK and build
+    /// Shared tail: read this instance's PK and build
     /// `C::objects().filter(<fk_col> = pk)`.
     #[doc(hidden)]
     fn reverse_on<C: Model + HydrateRelated>(
@@ -169,14 +168,24 @@ pub trait ReverseRelations: Model + HydrateRelated {
         fk_col: &'static str,
     ) -> Result<QuerySet<C>, ReverseError> {
         let pk = self
-            .pk_i64()
+            .pk_as_json()
             .ok_or(ReverseError::NonI64Pk { parent: Self::NAME })?;
+        let spec = C::FIELDS.iter().find(|f| f.name == fk_col).ok_or_else(|| {
+            ReverseError::UnknownColumn {
+                child: C::NAME,
+                column: fk_col.to_string(),
+            }
+        })?;
+        let parent_pk_ty = Self::FIELDS.iter().find(|f| f.primary_key).map(|f| f.ty);
+        let pk_value =
+            crate::orm::write::json_to_sea_value(spec.ty, &pk, false, fk_col, parent_pk_ty)
+                .map_err(|_| ReverseError::NonI64Pk { parent: Self::NAME })?;
         // Build the predicate from a runtime column name + the parent
         // PK. `Predicate::new` is crate-internal, which is exactly why
         // this accessor lives in umbra-core rather than in a plugin:
         // turning a runtime column name into a typed `Predicate<C>`
         // needs the crate-private constructor.
-        let predicate: Predicate<C> = Predicate::new(Expr::col(Alias::new(fk_col)).eq(pk));
+        let predicate: Predicate<C> = Predicate::new(Expr::col(Alias::new(fk_col)).eq(pk_value));
         Ok(Manager::<C>::new().filter(predicate))
     }
 }

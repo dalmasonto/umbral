@@ -122,6 +122,9 @@ pub struct DynQuerySet<'a> {
     limit: Option<u64>,
     offset: Option<u64>,
     select_cols: Vec<String>,
+    with_deleted: bool,
+    only_deleted: bool,
+    hard_delete: bool,
     /// FK column names to expand via a batched `IN (...)` lookup
     /// after the main query — same one-hop semantics as the typed
     /// `QuerySet::select_related`. Each entry must be a single-hop
@@ -145,8 +148,52 @@ impl<'a> DynQuerySet<'a> {
             limit: None,
             offset: None,
             select_cols,
+            with_deleted: false,
+            only_deleted: false,
+            hard_delete: false,
             select_related: Vec::new(),
         }
+    }
+
+    /// Include soft-deleted rows for models tagged with
+    /// `#[umbra(soft_delete)]`.
+    pub fn with_deleted(mut self) -> Self {
+        self.with_deleted = true;
+        self
+    }
+
+    /// Restrict a soft-delete model to only rows whose `deleted_at` is
+    /// populated.
+    pub fn only_deleted(mut self) -> Self {
+        self.only_deleted = true;
+        self
+    }
+
+    /// Force a real `DELETE` for a soft-delete model.
+    pub fn hard_delete(mut self) -> Self {
+        self.hard_delete = true;
+        self
+    }
+
+    fn effective_where_clauses(&self) -> Vec<Condition> {
+        let mut clauses = self.where_clauses.clone();
+        if self.meta.soft_delete {
+            if self.only_deleted {
+                clauses
+                    .push(Condition::all().add(Expr::col(Alias::new("deleted_at")).is_not_null()));
+            } else if !self.with_deleted {
+                clauses.push(Condition::all().add(Expr::col(Alias::new("deleted_at")).is_null()));
+            }
+        }
+        clauses
+    }
+
+    fn live_where_clauses(&self) -> Vec<Condition> {
+        let mut clauses = self.where_clauses.clone();
+        if self.meta.soft_delete {
+            clauses.push(Condition::all().add(Expr::col(Alias::new("deleted_at")).is_null()));
+        }
+        clauses
     }
 
     /// Restrict the SELECT list to the supplied column names. Names
@@ -514,7 +561,8 @@ impl<'a> DynQuerySet<'a> {
         let mut q = Query::select();
         q.from(Alias::new(&self.meta.table));
         q.expr(Func::count(Expr::col(Asterisk)));
-        for cond in &self.where_clauses {
+        let where_clauses = self.effective_where_clauses();
+        for cond in &where_clauses {
             q.cond_where(cond.clone());
         }
 
@@ -544,7 +592,8 @@ impl<'a> DynQuerySet<'a> {
         q.distinct();
         q.from(Alias::new(&self.meta.table));
         q.column(Alias::new(col));
-        for cond in &self.where_clauses {
+        let where_clauses = self.effective_where_clauses();
+        for cond in &where_clauses {
             q.cond_where(cond.clone());
         }
         if let Some(n) = self.limit {
@@ -582,11 +631,15 @@ impl<'a> DynQuerySet<'a> {
     /// caches / write audit-log rows / sync a search index get the
     /// list of PKs that just left the table, not just a row count.
     pub async fn delete(self) -> Result<u64, DynError> {
+        if self.meta.soft_delete && !self.hard_delete {
+            return self.soft_delete_update().await;
+        }
+        let where_clauses = self.effective_where_clauses();
         // Pre-collect the affected PKs only when the model has a PK
         // column (every Model does in practice; the guard handles
         // the hypothetical PK-less ModelMeta).
         let parent_pks: Vec<serde_json::Value> = match self.meta.pk_column() {
-            Some(pk_col) => collect_parent_pks(&self.meta, pk_col, &self.where_clauses)
+            Some(pk_col) => collect_parent_pks(&self.meta, pk_col, &where_clauses)
                 .await
                 .unwrap_or_default(),
             None => Vec::new(),
@@ -594,7 +647,7 @@ impl<'a> DynQuerySet<'a> {
 
         let mut q = Query::delete();
         q.from_table(Alias::new(&self.meta.table));
-        for cond in &self.where_clauses {
+        for cond in &where_clauses {
             q.cond_where(cond.clone());
         }
 
@@ -615,6 +668,42 @@ impl<'a> DynQuerySet<'a> {
         // captured pre-DELETE. Fires even when zero rows matched —
         // matches the typed bulk-delete convention (subscribers that
         // want to skip empty events filter in their handler).
+        crate::signals::emit_bulk_post_delete_by_table(&self.meta.table, parent_pks).await;
+        Ok(rows_affected)
+    }
+
+    async fn soft_delete_update(self) -> Result<u64, DynError> {
+        let where_clauses = self.live_where_clauses();
+        let parent_pks: Vec<serde_json::Value> = match self.meta.pk_column() {
+            Some(pk_col) => collect_parent_pks(self.meta, pk_col, &where_clauses)
+                .await
+                .unwrap_or_default(),
+            None => Vec::new(),
+        };
+
+        let mut q = Query::update();
+        q.table(Alias::new(&self.meta.table));
+        q.value(
+            Alias::new("deleted_at"),
+            sea_query::Value::ChronoDateTimeUtc(Some(Box::new(chrono::Utc::now()))),
+        );
+        for cond in &where_clauses {
+            q.cond_where(cond.clone());
+        }
+
+        let rows_affected = match pool_dispatched() {
+            DbPool::Sqlite(pool) => {
+                let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
+                let res = sqlx::query_with(&sql, values).execute(pool).await?;
+                res.rows_affected()
+            }
+            DbPool::Postgres(pool) => {
+                let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
+                let res = sqlx::query_with(&sql, values).execute(pool).await?;
+                res.rows_affected()
+            }
+        };
+
         crate::signals::emit_bulk_post_delete_by_table(&self.meta.table, parent_pks).await;
         Ok(rows_affected)
     }
@@ -641,7 +730,8 @@ impl<'a> DynQuerySet<'a> {
         let mut q = Query::update();
         q.table(Alias::new(&self.meta.table));
         q.value(Alias::new(col), sea_value);
-        for cond in &self.where_clauses {
+        let where_clauses = self.effective_where_clauses();
+        for cond in &where_clauses {
             q.cond_where(cond.clone());
         }
 
@@ -715,7 +805,8 @@ impl<'a> DynQuerySet<'a> {
         if !any {
             return Ok(0);
         }
-        for cond in &self.where_clauses {
+        let where_clauses = self.effective_where_clauses();
+        for cond in &where_clauses {
             q.cond_where(cond.clone());
         }
 
@@ -841,7 +932,8 @@ impl<'a> DynQuerySet<'a> {
         for c in &self.select_cols {
             q.column(Alias::new(c));
         }
-        for cond in &self.where_clauses {
+        let where_clauses = self.effective_where_clauses();
+        for cond in &where_clauses {
             q.cond_where(cond.clone());
         }
         for (col, descending) in &self.order {
@@ -910,7 +1002,8 @@ impl<'a> DynQuerySet<'a> {
         for c in &self.select_cols {
             q.column(Alias::new(c));
         }
-        for cond in &self.where_clauses {
+        let where_clauses = self.effective_where_clauses();
+        for cond in &where_clauses {
             q.cond_where(cond.clone());
         }
         for (col, descending) in &self.order {
@@ -1344,25 +1437,7 @@ impl<'a> DynQuerySet<'a> {
                 }
                 continue;
             };
-            // IMP-3: same min/max pre-validation as insert_json.
-            if let Some(n) = json.as_i64() {
-                if let Some(min) = col.min {
-                    if n < min {
-                        return Err(WriteError::Validator {
-                            field: col.name.clone(),
-                            message: format!("must be >= {min} (got {n})."),
-                        });
-                    }
-                }
-                if let Some(max) = col.max {
-                    if n > max {
-                        return Err(WriteError::Validator {
-                            field: col.name.clone(),
-                            message: format!("must be <= {max} (got {n})."),
-                        });
-                    }
-                }
-            }
+            validate_numeric_bounds(col, json)?;
             // BUG-11/12/13: same wrapper-type pre-validation as
             // insert_json.
             if let (Some(fmt), Some(s)) = (col.text_format.as_deref(), json.as_str()) {
@@ -1395,7 +1470,8 @@ impl<'a> DynQuerySet<'a> {
         if !any && !touches_m2m {
             return Ok(0);
         }
-        for cond in &self.where_clauses {
+        let where_clauses = self.effective_where_clauses();
+        for cond in &where_clauses {
             q.cond_where(cond.clone());
         }
         // Find every parent_id matched by the filter so we can
@@ -2068,6 +2144,32 @@ fn classify_or_sqlx(
     crate::orm::write::WriteError::Sqlx(e)
 }
 
+fn validate_numeric_bounds(
+    col: &Column,
+    json: &serde_json::Value,
+) -> Result<(), crate::orm::write::WriteError> {
+    let Some(n) = json.as_f64() else {
+        return Ok(());
+    };
+    if let Some(min) = col.min {
+        if n < min as f64 {
+            return Err(crate::orm::write::WriteError::Validator {
+                field: col.name.clone(),
+                message: format!("must be >= {min} (got {n})."),
+            });
+        }
+    }
+    if let Some(max) = col.max {
+        if n > max as f64 {
+            return Err(crate::orm::write::WriteError::Validator {
+                field: col.name.clone(),
+                message: format!("must be <= {max} (got {n})."),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Convert a JSON PK-shaped value (number or string) into a
 /// `sea_query::Value` usable as a junction-table binding. Returns
 /// `None` for shapes we don't know how to bind (arrays, objects,
@@ -2197,6 +2299,15 @@ async fn hydrate_select_related_into(
             // practice). Skip the chain rather than crash.
             continue;
         }
+        let hop_target_soft_delete: Vec<bool> = targets
+            .iter()
+            .map(|t| {
+                registered
+                    .iter()
+                    .find(|m| &m.table == t)
+                    .is_some_and(|m| m.soft_delete)
+            })
+            .collect();
 
         // Phase 1: per-hop fetch, top-down. levels[i] holds the
         // related-row JSON objects at depth i, BEFORE any nesting
@@ -2222,6 +2333,7 @@ async fn hydrate_select_related_into(
                 &targets[0],
                 &hop_target_pk[0].0,
                 hop_target_pk[0].1,
+                hop_target_soft_delete[0],
                 &ids,
                 &pool,
             )
@@ -2252,6 +2364,7 @@ async fn hydrate_select_related_into(
                     hop_target,
                     &hop_target_pk[hop_idx].0,
                     hop_target_pk[hop_idx].1,
+                    hop_target_soft_delete[hop_idx],
                     &next_ids,
                     &pool,
                 )
@@ -2653,24 +2766,7 @@ fn build_insert_plan(
         if json.is_null() {
             continue;
         }
-        if let Some(n) = json.as_i64() {
-            if let Some(min) = col.min {
-                if n < min {
-                    return Err(WriteError::Validator {
-                        field: col.name.clone(),
-                        message: format!("must be >= {min} (got {n})."),
-                    });
-                }
-            }
-            if let Some(max) = col.max {
-                if n > max {
-                    return Err(WriteError::Validator {
-                        field: col.name.clone(),
-                        message: format!("must be <= {max} (got {n})."),
-                    });
-                }
-            }
-        }
+        validate_numeric_bounds(col, json)?;
         if let (Some(fmt), Some(s)) = (col.text_format.as_deref(), json.as_str()) {
             if let Err(e) = crate::orm::validators::validate_text_format(fmt, s) {
                 return Err(WriteError::Validator {
