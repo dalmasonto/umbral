@@ -61,10 +61,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_env_filter(std::env::var("RUST_LOG").unwrap_or_else(|_| "info".into()))
         .init();
 
-    let settings = Settings::from_env()?;
+    let mut settings = Settings::from_env()?;
 
-    // Primary pool (writes). Registered under the framework-required "default"
-    // alias. See `.env` for the sqlite file URL the demo uses.
+    // Default to a sqlite FILE so the primary and replica pools share one
+    // database and reads see writes. The framework default is `sqlite::memory:`,
+    // which would hand each pool its own separate in-memory DB — fine for tests,
+    // confusing for this demo. Override either side with UMBRA_DATABASE_URL /
+    // UMBRA_REPLICA_URL (e.g. two Postgres URLs for a real replica split).
+    if settings.database_url == "sqlite::memory:" {
+        settings.database_url = "sqlite://read_replica.db?mode=rwc".to_string();
+    }
+
+    // Primary pool (writes), registered under the framework-required "default"
+    // alias.
     let primary = umbra::db::connect(&settings.database_url).await?;
 
     // Replica pool (reads). A real read replica in production; here it falls

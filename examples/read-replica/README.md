@@ -47,7 +47,7 @@ App::builder()
 
 ## Demo vs. production
 
-The demo runs against **one** sqlite file (see `.env`), so the "replica" is the same database as the primary and reads see writes immediately — the router is still consulted and logged, you just can't observe replication lag. For a real split:
+The demo runs against **one** sqlite file (`read_replica.db`, created on first run), so the "replica" is the same database as the primary and reads see writes immediately — the router is still consulted and logged, you just can't observe replication lag. For a real split:
 
 ```bash
 UMBRA_DATABASE_URL=postgres://.../primary \
