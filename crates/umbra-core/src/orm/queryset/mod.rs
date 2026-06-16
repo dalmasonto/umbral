@@ -509,7 +509,7 @@ impl<T> QuerySet<T> {
                 if let Ok((_child_table, _fk_col, parent_table, parent_pk)) = &ann.resolved {
                     let mut sub = sea_query::Query::select();
                     sub.expr(ann.agg.to_simple_expr())
-                        .from(Alias::new(junction.as_str()))
+                        .from(crate::db::router::schema_qualified_table(junction.as_str()))
                         .and_where(
                             sea_query::Expr::col((
                                 Alias::new(junction.as_str()),
@@ -535,7 +535,9 @@ impl<T> QuerySet<T> {
             if let Ok((child_table, fk_col, parent_table, parent_pk)) = &ann.resolved {
                 let mut sub = sea_query::Query::select();
                 sub.expr(ann.agg.to_simple_expr())
-                    .from(Alias::new(child_table.as_str()))
+                    .from(crate::db::router::schema_qualified_table(
+                        child_table.as_str(),
+                    ))
                     .and_where(
                         sea_query::Expr::col((
                             Alias::new(child_table.as_str()),
@@ -1363,7 +1365,7 @@ impl<T: Model> QuerySet<T> {
                     emitted_right |= kind == JoinKind::Right;
                     outer.join_as(
                         kind.sea(),
-                        Alias::new(hop.child_table.as_str()),
+                        crate::db::router::schema_qualified_table(hop.child_table.as_str()),
                         hop_alias.clone(),
                         Expr::col((prev_alias.clone(), Alias::new(hop.fk_col.as_str())))
                             .equals((hop_alias.clone(), Alias::new(hop.child_pk.as_str()))),
@@ -1422,14 +1424,14 @@ impl<T: Model> QuerySet<T> {
                 emitted_right |= child_kind == JoinKind::Right;
                 outer.join_as(
                     sea_query::JoinType::LeftJoin,
-                    Alias::new(junction_table),
+                    crate::db::router::schema_qualified_table(&junction_table),
                     junction_alias.clone(),
                     Expr::col((parent_alias.clone(), Alias::new(parent_pk.name)))
                         .equals((junction_alias.clone(), Alias::new("parent_id"))),
                 );
                 outer.join_as(
                     child_kind.sea(),
-                    Alias::new(m2m_rel.target_table),
+                    crate::db::router::schema_qualified_table(m2m_rel.target_table),
                     child_alias.clone(),
                     Expr::col((junction_alias.clone(), Alias::new("child_id")))
                         .equals((child_alias.clone(), Alias::new(child_pk.name.as_str()))),
@@ -1464,7 +1466,7 @@ impl<T: Model> QuerySet<T> {
                         };
                         outer.join_as(
                             kind.sea(),
-                            Alias::new(hop.child_table.as_str()),
+                            crate::db::router::schema_qualified_table(hop.child_table.as_str()),
                             hop_alias.clone(),
                             Expr::col((prev_alias.clone(), Alias::new(hop.fk_col.as_str())))
                                 .equals((hop_alias.clone(), Alias::new(hop.child_pk.as_str()))),
@@ -2225,7 +2227,7 @@ impl<T: Model> QuerySet<T> {
             let join_alias = Alias::new(format!("__j_{}", info.rel_name));
             outer.join_as(
                 sea_query::JoinType::LeftJoin,
-                Alias::new(info.related_table),
+                crate::db::router::schema_qualified_table(info.related_table),
                 join_alias.clone(),
                 Expr::col((parent_alias.clone(), Alias::new(info.rel_name.as_str()))).equals((
                     join_alias.clone(),
@@ -2944,7 +2946,7 @@ impl<T: Model> QuerySet<T> {
         let backend = pool.backend_name();
 
         let mut stmt = sea_query::Query::update();
-        stmt.table(Alias::new(T::TABLE));
+        stmt.table(crate::db::router::schema_qualified_table(T::TABLE));
         stmt.value(Alias::new(field.name), expr.to_simple_expr());
         for p in &self.predicates {
             stmt.and_where(p.cond_for(backend));
@@ -3113,7 +3115,7 @@ impl<T: Model> QuerySet<T> {
     /// `_sqlite` explicit-pool variants can share the SQL builder.
     fn build_delete_for(&self, backend_name: &str) -> sea_query::DeleteStatement {
         let mut stmt = Query::delete();
-        stmt.from_table(Alias::new(T::TABLE));
+        stmt.from_table(crate::db::router::schema_qualified_table(T::TABLE));
         for p in &self.predicates {
             stmt.and_where(p.cond_for(backend_name));
         }
@@ -3133,7 +3135,7 @@ impl<T: Model> QuerySet<T> {
         let backend = pool.backend_name();
         let now = chrono::Utc::now();
         let mut stmt = sea_query::Query::update();
-        stmt.table(Alias::new(T::TABLE));
+        stmt.table(crate::db::router::schema_qualified_table(T::TABLE));
         stmt.value(
             Alias::new("deleted_at"),
             sea_query::Value::ChronoDateTimeUtc(Some(Box::new(now))),
@@ -3228,7 +3230,7 @@ impl<T: Model> QuerySet<T> {
     ) -> Result<sea_query::UpdateStatement, crate::orm::write::WriteError> {
         use crate::orm::write::{WriteError, json_to_sea_value};
         let mut stmt = Query::update();
-        stmt.table(Alias::new(T::TABLE));
+        stmt.table(crate::db::router::schema_qualified_table(T::TABLE));
         for (col_name, val) in values {
             // Look up the column on the model. Unknown column names
             // fail loudly here rather than producing a bad UPDATE.
@@ -3339,7 +3341,7 @@ impl<T: Model> Manager<T> {
         let columns: Vec<Alias> = T::FIELDS.iter().map(|f| Alias::new(f.name)).collect();
         let query = Query::select()
             .columns(columns)
-            .from(Alias::new(T::TABLE))
+            .from(crate::db::router::schema_qualified_table(T::TABLE))
             .take();
         let mut qs = QuerySet::new(query);
         // BUG-8: seed the default ORDER BY from `Model::ORDERING` so
@@ -4174,7 +4176,7 @@ impl<T: Model> Manager<T> {
         // WHERE. Goes through sea-query's update statement for
         // backend portability.
         let mut stmt = sea_query::Query::update();
-        stmt.table(Alias::new(T::TABLE));
+        stmt.table(crate::db::router::schema_qualified_table(T::TABLE));
 
         for field in &update_cols {
             // CASE pk_col
@@ -4487,7 +4489,7 @@ impl<T: Model> Manager<T> {
             // UPDATE path: UPDATE ... WHERE <pk> = <value> RETURNING *.
             use sea_query::{Alias, Expr, Query};
             let mut stmt = Query::update();
-            stmt.table(Alias::new(T::TABLE));
+            stmt.table(crate::db::router::schema_qualified_table(T::TABLE));
             for field in T::FIELDS {
                 if field.primary_key {
                     continue;
@@ -4601,7 +4603,7 @@ impl<T: Model> Manager<T> {
         let stmt_sql = if T::SOFT_DELETE {
             let now = chrono::Utc::now();
             let mut up = Query::update();
-            up.table(Alias::new(T::TABLE));
+            up.table(crate::db::router::schema_qualified_table(T::TABLE));
             up.value(
                 Alias::new("deleted_at"),
                 sea_query::Value::ChronoDateTimeUtc(Some(Box::new(now))),
@@ -4612,7 +4614,7 @@ impl<T: Model> Manager<T> {
             SoftOrHardStatement::Update(up)
         } else {
             let mut stmt = Query::delete();
-            stmt.from_table(Alias::new(T::TABLE));
+            stmt.from_table(crate::db::router::schema_qualified_table(T::TABLE));
             stmt.and_where(Expr::col(Alias::new(pk_field.name)).eq(pk_sea));
             SoftOrHardStatement::Delete(stmt)
         };

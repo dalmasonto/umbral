@@ -636,7 +636,7 @@ async fn check_fk_row_exists_in_tx(
         Err(_) => return Ok(false),
     };
     let mut q = Query::select();
-    q.from(Alias::new(&target.table))
+    q.from(crate::db::router::schema_qualified_table(&target.table))
         .expr(Func::count(Expr::col(Alias::new(&pk.name))))
         .and_where(Expr::col(Alias::new(&pk.name)).eq(pk_value));
 

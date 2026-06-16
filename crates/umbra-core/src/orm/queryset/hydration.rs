@@ -714,12 +714,12 @@ pub(super) async fn hydrate_prefetch_related<T: Model + HydrateRelated>(
             );
         }
         q.from_as(
-            sea_query::Alias::new(child_meta.table.as_str()),
+            crate::db::router::schema_qualified_table(child_meta.table.as_str()),
             sea_query::Alias::new("c"),
         )
         .join_as(
             sea_query::JoinType::InnerJoin,
-            sea_query::Alias::new(&junction_table),
+            crate::db::router::schema_qualified_table(&junction_table),
             sea_query::Alias::new("j"),
             sea_query::Expr::col((
                 sea_query::Alias::new("j"),
@@ -860,7 +860,7 @@ pub(crate) async fn fetch_related_as_json_by_pk(
 
     let mut q = sea_query::Query::select();
     q.column(sea_query::Asterisk)
-        .from(sea_query::Alias::new(table))
+        .from(crate::db::router::schema_qualified_table(table))
         .and_where(
             sea_query::Expr::col(sea_query::Alias::new(pk_col))
                 .is_in(seavals.into_iter().map(sea_query::SimpleExpr::Value)),

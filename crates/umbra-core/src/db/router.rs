@@ -141,6 +141,26 @@ pub fn router() -> Arc<dyn DatabaseRouter> {
     ROUTER.get().cloned().unwrap_or_else(default_router_arc)
 }
 
+/// Build a sea-query table reference, schema-qualified when the active router
+/// yields a schema for the current request. When `schema_for` is `None` (the
+/// default), returns the bare table — byte-identical to today's SQL, so the
+/// whole existing suite stays green under `DefaultRouter`.
+///
+/// This is the SQL-level seam for option-C schema-per-tenant: every FROM/JOIN
+/// table position in the ORM routes through here, so a router that returns
+/// `Some("tenant_7")` makes generated SQL read `"tenant_7"."post"` with zero
+/// extra round-trips (no `SET search_path`). SQLite has no schemas; on a
+/// SQLite-bound request the router's `schema_for` is expected to return `None`,
+/// and this helper then emits the bare table regardless.
+pub fn schema_qualified_table(table: &str) -> sea_query::TableRef {
+    use sea_query::{Alias as SqAlias, IntoTableRef};
+    let ctx = crate::db::route_context::current();
+    match router().schema_for(&ctx) {
+        Some(schema) => (SqAlias::new(schema.as_str()), SqAlias::new(table)).into_table_ref(),
+        None => SqAlias::new(table).into_table_ref(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -162,5 +182,22 @@ mod tests {
     fn alias_roundtrips() {
         assert_eq!(Alias::from("replica").as_str(), "replica");
         assert_eq!(Alias::default_alias().as_str(), "default");
+    }
+
+    #[test]
+    fn schema_qualified_table_is_bare_under_default_router() {
+        // Default router => schema_for None => bare table, byte-identical to
+        // today's SQL. No installed router (ROUTER OnceLock empty) here, so
+        // `router()` falls back to `DefaultRouter`.
+        let sql = sea_query::Query::select()
+            .column(sea_query::Asterisk)
+            .from(schema_qualified_table("widget"))
+            .to_string(sea_query::PostgresQueryBuilder);
+        assert!(sql.contains("\"widget\""), "got: {sql}");
+        // NOT schema-dot-qualified: no `"<schema>"."widget"` form.
+        assert!(
+            !sql.contains(".\"widget\""),
+            "unexpected qualification: {sql}"
+        );
     }
 }

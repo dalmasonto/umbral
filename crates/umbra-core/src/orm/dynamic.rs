@@ -450,7 +450,7 @@ impl<'a> DynQuerySet<'a> {
         };
         let subq = Query::select()
             .column(Alias::new("parent_id"))
-            .from(Alias::new(junction_table))
+            .from(crate::db::router::schema_qualified_table(&junction_table))
             .and_where(in_clause)
             .to_owned();
         let cond =
@@ -571,7 +571,7 @@ impl<'a> DynQuerySet<'a> {
     /// to a count).
     pub async fn count(self) -> Result<i64, DynError> {
         let mut q = Query::select();
-        q.from(Alias::new(&self.meta.table));
+        q.from(crate::db::router::schema_qualified_table(&self.meta.table));
         q.expr(Func::count(Expr::col(Asterisk)));
         let where_clauses = self.effective_where_clauses();
         for cond in &where_clauses {
@@ -602,7 +602,7 @@ impl<'a> DynQuerySet<'a> {
         };
         let mut q = Query::select();
         q.distinct();
-        q.from(Alias::new(&self.meta.table));
+        q.from(crate::db::router::schema_qualified_table(&self.meta.table));
         q.column(Alias::new(col));
         let where_clauses = self.effective_where_clauses();
         for cond in &where_clauses {
@@ -658,7 +658,7 @@ impl<'a> DynQuerySet<'a> {
         };
 
         let mut q = Query::delete();
-        q.from_table(Alias::new(&self.meta.table));
+        q.from_table(crate::db::router::schema_qualified_table(&self.meta.table));
         for cond in &where_clauses {
             q.cond_where(cond.clone());
         }
@@ -694,7 +694,7 @@ impl<'a> DynQuerySet<'a> {
         };
 
         let mut q = Query::update();
-        q.table(Alias::new(&self.meta.table));
+        q.table(crate::db::router::schema_qualified_table(&self.meta.table));
         q.value(
             Alias::new("deleted_at"),
             sea_query::Value::ChronoDateTimeUtc(Some(Box::new(chrono::Utc::now()))),
@@ -740,7 +740,7 @@ impl<'a> DynQuerySet<'a> {
         };
 
         let mut q = Query::update();
-        q.table(Alias::new(&self.meta.table));
+        q.table(crate::db::router::schema_qualified_table(&self.meta.table));
         q.value(Alias::new(col), sea_value);
         let where_clauses = self.effective_where_clauses();
         for cond in &where_clauses {
@@ -773,7 +773,7 @@ impl<'a> DynQuerySet<'a> {
         skip: &[String],
     ) -> Result<u64, DynError> {
         let mut q = Query::update();
-        q.table(Alias::new(&self.meta.table));
+        q.table(crate::db::router::schema_qualified_table(&self.meta.table));
         let mut any = false;
         for col in &self.meta.fields {
             if col.primary_key || skip.iter().any(|s| s == &col.name) {
@@ -897,7 +897,7 @@ impl<'a> DynQuerySet<'a> {
         }
 
         let mut q = Query::insert();
-        q.into_table(Alias::new(&self.meta.table));
+        q.into_table(crate::db::router::schema_qualified_table(&self.meta.table));
         q.columns(cols.iter().map(|c| Alias::new(*c)).collect::<Vec<_>>());
         let exprs: Vec<sea_query::SimpleExpr> = values.into_iter().map(Into::into).collect();
         q.values_panic(exprs);
@@ -940,7 +940,7 @@ impl<'a> DynQuerySet<'a> {
     /// `select_cols` (defaults to all).
     pub async fn fetch_as_strings(self) -> Result<Vec<HashMap<String, String>>, DynError> {
         let mut q = Query::select();
-        q.from(Alias::new(&self.meta.table));
+        q.from(crate::db::router::schema_qualified_table(&self.meta.table));
         for c in &self.select_cols {
             q.column(Alias::new(c));
         }
@@ -1010,7 +1010,7 @@ impl<'a> DynQuerySet<'a> {
         self,
     ) -> Result<Vec<serde_json::Map<String, serde_json::Value>>, DynError> {
         let mut q = Query::select();
-        q.from(Alias::new(&self.meta.table));
+        q.from(crate::db::router::schema_qualified_table(&self.meta.table));
         for c in &self.select_cols {
             q.column(Alias::new(c));
         }
@@ -1047,36 +1047,37 @@ impl<'a> DynQuerySet<'a> {
                     .map(|col| (col_name, col))
             })
             .collect();
-        let mut out: Vec<serde_json::Map<String, serde_json::Value>> = match resolve_pool_dyn(self.meta, crate::db::RouteOp::Read) {
-            DbPool::Sqlite(pool) => {
-                let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
-                let rows = sqlx::query_with(&sql, values).fetch_all(&pool).await?;
-                let mut out: Vec<serde_json::Map<String, serde_json::Value>> =
-                    Vec::with_capacity(rows.len());
-                for row in rows {
-                    let mut entry = serde_json::Map::new();
-                    for (col_name, col_meta) in &selected_cols {
-                        entry.insert((*col_name).clone(), decode_to_json(&row, col_meta)?);
+        let mut out: Vec<serde_json::Map<String, serde_json::Value>> =
+            match resolve_pool_dyn(self.meta, crate::db::RouteOp::Read) {
+                DbPool::Sqlite(pool) => {
+                    let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
+                    let rows = sqlx::query_with(&sql, values).fetch_all(&pool).await?;
+                    let mut out: Vec<serde_json::Map<String, serde_json::Value>> =
+                        Vec::with_capacity(rows.len());
+                    for row in rows {
+                        let mut entry = serde_json::Map::new();
+                        for (col_name, col_meta) in &selected_cols {
+                            entry.insert((*col_name).clone(), decode_to_json(&row, col_meta)?);
+                        }
+                        out.push(entry);
                     }
-                    out.push(entry);
+                    out
                 }
-                out
-            }
-            DbPool::Postgres(pool) => {
-                let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
-                let rows = sqlx::query_with(&sql, values).fetch_all(&pool).await?;
-                let mut out: Vec<serde_json::Map<String, serde_json::Value>> =
-                    Vec::with_capacity(rows.len());
-                for row in rows {
-                    let mut entry = serde_json::Map::new();
-                    for (col_name, col_meta) in &selected_cols {
-                        entry.insert((*col_name).clone(), decode_pg_to_json(&row, col_meta)?);
+                DbPool::Postgres(pool) => {
+                    let (sql, values) = q.build_sqlx(PostgresQueryBuilder);
+                    let rows = sqlx::query_with(&sql, values).fetch_all(&pool).await?;
+                    let mut out: Vec<serde_json::Map<String, serde_json::Value>> =
+                        Vec::with_capacity(rows.len());
+                    for row in rows {
+                        let mut entry = serde_json::Map::new();
+                        for (col_name, col_meta) in &selected_cols {
+                            entry.insert((*col_name).clone(), decode_pg_to_json(&row, col_meta)?);
+                        }
+                        out.push(entry);
                     }
-                    out.push(entry);
+                    out
                 }
-                out
-            }
-        };
+            };
 
         // M2M echo via one batched IN per relation across every
         // parent row in `out`. Replaces the per-row, per-relation
@@ -1196,13 +1197,15 @@ impl<'a> DynQuerySet<'a> {
                     }
                 };
                 let mut sel = Query::select();
-                sel.from(Alias::new(&self.meta.table));
+                sel.from(crate::db::router::schema_qualified_table(&self.meta.table));
                 for c in &self.meta.fields {
                     sel.column(Alias::new(&c.name));
                 }
                 sel.cond_where(Condition::all().add(pk_pred));
                 let (sel_sql, sel_vals) = sel.build_sqlx(SqliteQueryBuilder);
-                let row = sqlx::query_with(&sel_sql, sel_vals).fetch_one(&pool).await?;
+                let row = sqlx::query_with(&sel_sql, sel_vals)
+                    .fetch_one(&pool)
+                    .await?;
                 let mut out = serde_json::Map::new();
                 for col in &self.meta.fields {
                     out.insert(col.name.clone(), decode_to_json(&row, col)?);
@@ -1343,7 +1346,7 @@ impl<'a> DynQuerySet<'a> {
                     }
                 };
                 let mut sel = Query::select();
-                sel.from(Alias::new(&self.meta.table));
+                sel.from(crate::db::router::schema_qualified_table(&self.meta.table));
                 for c in &self.meta.fields {
                     sel.column(Alias::new(&c.name));
                 }
@@ -1434,7 +1437,7 @@ impl<'a> DynQuerySet<'a> {
         }
 
         let mut q = Query::update();
-        q.table(Alias::new(&self.meta.table));
+        q.table(crate::db::router::schema_qualified_table(&self.meta.table));
         let mut any = false;
         for col in &self.meta.fields {
             if col.primary_key {
@@ -2520,7 +2523,7 @@ async fn hydrate_m2m_batched(
     for rel in &meta.m2m_relations {
         let junction_table = format!("{}_{}", meta.table, rel.field_name);
         let mut sel = Query::select();
-        sel.from(Alias::new(&junction_table));
+        sel.from(crate::db::router::schema_qualified_table(&junction_table));
         sel.column(Alias::new("parent_id"));
         sel.column(Alias::new("child_id"));
         sel.and_where(Expr::col(Alias::new("parent_id")).is_in(parent_sea_vals.clone()));
@@ -2619,39 +2622,40 @@ async fn hydrate_m2m_into(
     for rel in &meta.m2m_relations {
         let junction_table = format!("{}_{}", meta.table, rel.field_name);
         let mut sel = Query::select();
-        sel.from(Alias::new(&junction_table));
+        sel.from(crate::db::router::schema_qualified_table(&junction_table));
         sel.column(Alias::new("child_id"));
         sel.and_where(Expr::col(Alias::new("parent_id")).eq(parent_pk_value.clone()));
-        let children: Vec<serde_json::Value> = match resolve_pool_dyn(meta, crate::db::RouteOp::Read) {
-            DbPool::Sqlite(pool) => {
-                let (sql, values) = sel.build_sqlx(SqliteQueryBuilder);
-                let rows = sqlx::query_with(&sql, values).fetch_all(&pool).await?;
-                rows.iter()
-                    .map(|r| {
-                        r.try_get::<i64, _>("child_id")
-                            .map(|i| serde_json::Value::Number(i.into()))
-                            .or_else(|_| {
-                                r.try_get::<String, _>("child_id")
-                                    .map(serde_json::Value::String)
-                            })
-                    })
-                    .collect::<Result<Vec<_>, _>>()?
-            }
-            DbPool::Postgres(pool) => {
-                let (sql, values) = sel.build_sqlx(PostgresQueryBuilder);
-                let rows = sqlx::query_with(&sql, values).fetch_all(&pool).await?;
-                rows.iter()
-                    .map(|r| {
-                        r.try_get::<i64, _>("child_id")
-                            .map(|i| serde_json::Value::Number(i.into()))
-                            .or_else(|_| {
-                                r.try_get::<String, _>("child_id")
-                                    .map(serde_json::Value::String)
-                            })
-                    })
-                    .collect::<Result<Vec<_>, _>>()?
-            }
-        };
+        let children: Vec<serde_json::Value> =
+            match resolve_pool_dyn(meta, crate::db::RouteOp::Read) {
+                DbPool::Sqlite(pool) => {
+                    let (sql, values) = sel.build_sqlx(SqliteQueryBuilder);
+                    let rows = sqlx::query_with(&sql, values).fetch_all(&pool).await?;
+                    rows.iter()
+                        .map(|r| {
+                            r.try_get::<i64, _>("child_id")
+                                .map(|i| serde_json::Value::Number(i.into()))
+                                .or_else(|_| {
+                                    r.try_get::<String, _>("child_id")
+                                        .map(serde_json::Value::String)
+                                })
+                        })
+                        .collect::<Result<Vec<_>, _>>()?
+                }
+                DbPool::Postgres(pool) => {
+                    let (sql, values) = sel.build_sqlx(PostgresQueryBuilder);
+                    let rows = sqlx::query_with(&sql, values).fetch_all(&pool).await?;
+                    rows.iter()
+                        .map(|r| {
+                            r.try_get::<i64, _>("child_id")
+                                .map(|i| serde_json::Value::Number(i.into()))
+                                .or_else(|_| {
+                                    r.try_get::<String, _>("child_id")
+                                        .map(serde_json::Value::String)
+                                })
+                        })
+                        .collect::<Result<Vec<_>, _>>()?
+                }
+            };
         out.insert(rel.field_name.clone(), serde_json::Value::Array(children));
     }
     Ok(())
@@ -2669,7 +2673,7 @@ async fn collect_parent_pks(
     where_clauses: &[Condition],
 ) -> Result<Vec<serde_json::Value>, crate::orm::write::WriteError> {
     let mut sel = Query::select();
-    sel.from(Alias::new(&meta.table));
+    sel.from(crate::db::router::schema_qualified_table(&meta.table));
     sel.column(Alias::new(&pk_col.name));
     for cond in where_clauses {
         sel.cond_where(cond.clone());
@@ -2810,7 +2814,7 @@ fn build_insert_plan(
     let pk_ty = pk_col.ty;
 
     let mut q = Query::insert();
-    q.into_table(Alias::new(&meta.table));
+    q.into_table(crate::db::router::schema_qualified_table(&meta.table));
     q.columns(cols.iter().map(|c| Alias::new(*c)).collect::<Vec<_>>());
     let exprs: Vec<sea_query::SimpleExpr> = values.into_iter().map(Into::into).collect();
     q.values_panic(exprs);
@@ -2881,7 +2885,7 @@ async fn hydrate_m2m_into_tx(
     for rel in &meta.m2m_relations {
         let junction_table = format!("{}_{}", meta.table, rel.field_name);
         let mut sel = Query::select();
-        sel.from(Alias::new(&junction_table));
+        sel.from(crate::db::router::schema_qualified_table(&junction_table));
         sel.column(Alias::new("child_id"));
         sel.and_where(Expr::col(Alias::new("parent_id")).eq(parent_pk_value.clone()));
         let children: Vec<serde_json::Value> = match tx.backend_name() {

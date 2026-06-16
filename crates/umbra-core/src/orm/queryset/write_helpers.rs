@@ -131,7 +131,8 @@ pub(super) fn build_insert_one_for<T: Model>(
     }
 
     let mut stmt = Query::insert();
-    stmt.into_table(Alias::new(T::TABLE)).columns(columns);
+    stmt.into_table(crate::db::router::schema_qualified_table(T::TABLE))
+        .columns(columns);
     stmt.values(values).map_err(|e| {
         crate::orm::write::WriteError::Sqlx(sqlx::Error::Protocol(format!(
             "umbra::orm::write: sea-query rejected INSERT values: {e}"
@@ -176,7 +177,8 @@ pub(super) fn build_insert_many_for<T: Model>(
     let columns: Vec<Alias> = included_fields.iter().map(|f| Alias::new(f.name)).collect();
 
     let mut stmt = Query::insert();
-    stmt.into_table(Alias::new(T::TABLE)).columns(columns);
+    stmt.into_table(crate::db::router::schema_qualified_table(T::TABLE))
+        .columns(columns);
     for map in maps {
         let row_values: Result<Vec<_>, _> = included_fields
             .iter()

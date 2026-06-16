@@ -191,10 +191,13 @@ impl<T: Model, P: PrimaryKey> M2M<T, P> {
                 .iter()
                 .map(|f| (Alias::new("c"), Alias::new(f.name))),
         )
-        .from_as(Alias::new(T::TABLE), Alias::new("c"))
+        .from_as(
+            crate::db::router::schema_qualified_table(T::TABLE),
+            Alias::new("c"),
+        )
         .join_as(
             sea_query::JoinType::InnerJoin,
-            Alias::new(junction),
+            crate::db::router::schema_qualified_table(junction),
             Alias::new("j"),
             Expr::col((Alias::new("j"), Alias::new("child_id")))
                 .equals((Alias::new("c"), Alias::new(child_pk))),
@@ -235,7 +238,7 @@ impl<T: Model, P: PrimaryKey> M2M<T, P> {
         let child_pk: T::PrimaryKey = child.primary_key();
         let child_pk_json = pk_seaval_to_json(child_pk.clone().into());
         let mut q = Query::insert();
-        q.into_table(Alias::new(junction))
+        q.into_table(crate::db::router::schema_qualified_table(junction))
             .columns([Alias::new("parent_id"), Alias::new("child_id")])
             .values_panic([
                 Expr::value(parent_id.clone()).into(),
@@ -274,7 +277,7 @@ impl<T: Model, P: PrimaryKey> M2M<T, P> {
         let child_pk: T::PrimaryKey = child.primary_key();
         let child_pk_json = pk_seaval_to_json(child_pk.clone().into());
         let mut q = Query::delete();
-        q.from_table(Alias::new(junction))
+        q.from_table(crate::db::router::schema_qualified_table(junction))
             .and_where(Expr::col(Alias::new("parent_id")).eq(parent_id.clone()))
             .and_where(Expr::col(Alias::new("child_id")).eq(child_pk));
         execute_delete(&q).await?;
@@ -302,7 +305,7 @@ impl<T: Model, P: PrimaryKey> M2M<T, P> {
             return Ok(0);
         };
         let mut q = Query::delete();
-        q.from_table(Alias::new(junction))
+        q.from_table(crate::db::router::schema_qualified_table(junction))
             .and_where(Expr::col(Alias::new("parent_id")).eq(parent_id.clone()))
             .returning_col(Alias::new("child_id"));
         let removed_ids = execute_delete_returning_ids::<T>(&q).await?;
@@ -346,7 +349,7 @@ impl<T: Model, P: PrimaryKey> M2M<T, P> {
         // DB actually cleared.
         let mut delete = Query::delete();
         delete
-            .from_table(Alias::new(junction))
+            .from_table(crate::db::router::schema_qualified_table(junction))
             .and_where(Expr::col(Alias::new("parent_id")).eq(parent_id.clone()))
             .returning_col(Alias::new("child_id"));
         let child_pk_ty = child_pk_ty::<T>();
@@ -364,7 +367,7 @@ impl<T: Model, P: PrimaryKey> M2M<T, P> {
                     let child_pk: T::PrimaryKey = child.primary_key();
                     let mut insert = Query::insert();
                     insert
-                        .into_table(Alias::new(junction))
+                        .into_table(crate::db::router::schema_qualified_table(junction))
                         .columns([Alias::new("parent_id"), Alias::new("child_id")])
                         .values_panic([
                             Expr::value(parent_id.clone()).into(),
@@ -393,7 +396,7 @@ impl<T: Model, P: PrimaryKey> M2M<T, P> {
                     let child_pk: T::PrimaryKey = child.primary_key();
                     let mut insert = Query::insert();
                     insert
-                        .into_table(Alias::new(junction))
+                        .into_table(crate::db::router::schema_qualified_table(junction))
                         .columns([Alias::new("parent_id"), Alias::new("child_id")])
                         .values_panic([
                             Expr::value(parent_id.clone()).into(),
@@ -464,7 +467,7 @@ impl<T: Model, P: PrimaryKey> M2M<T, P> {
         }
         let mut q = Query::select();
         q.expr(Expr::value(1))
-            .from(Alias::new(junction_table))
+            .from(crate::db::router::schema_qualified_table(junction_table))
             .and_where(
                 Expr::col(Alias::new("parent_id"))
                     .is_in(parent_ids.iter().cloned().map(|v| v.into())),
@@ -524,7 +527,7 @@ impl<T: Model, P: PrimaryKey> M2M<T, P> {
         let mut q = Query::select();
         q.distinct()
             .column(Alias::new("child_id"))
-            .from(Alias::new(junction_table))
+            .from(crate::db::router::schema_qualified_table(junction_table))
             .and_where(
                 Expr::col(Alias::new("parent_id"))
                     .is_in(parent_ids.iter().cloned().map(|v| v.into())),
@@ -587,7 +590,7 @@ pub async fn set_junction_dynamic(
     } else {
         let mut insert = Query::insert();
         insert
-            .into_table(Alias::new(junction_table))
+            .into_table(crate::db::router::schema_qualified_table(junction_table))
             .columns([Alias::new("parent_id"), Alias::new("child_id")])
             .on_conflict(
                 OnConflict::columns([Alias::new("parent_id"), Alias::new("child_id")])
@@ -607,7 +610,7 @@ pub async fn set_junction_dynamic(
 
     let mut delete = Query::delete();
     delete
-        .from_table(Alias::new(junction_table))
+        .from_table(crate::db::router::schema_qualified_table(junction_table))
         .and_where(Expr::col(Alias::new("parent_id")).eq(parent_id));
 
     let pool = crate::db::pool_dispatched();
@@ -653,7 +656,7 @@ pub async fn set_junction_dynamic_in_tx(
     } else {
         let mut insert = Query::insert();
         insert
-            .into_table(Alias::new(junction_table))
+            .into_table(crate::db::router::schema_qualified_table(junction_table))
             .columns([Alias::new("parent_id"), Alias::new("child_id")])
             .on_conflict(
                 OnConflict::columns([Alias::new("parent_id"), Alias::new("child_id")])
@@ -671,7 +674,7 @@ pub async fn set_junction_dynamic_in_tx(
 
     let mut delete = Query::delete();
     delete
-        .from_table(Alias::new(junction_table))
+        .from_table(crate::db::router::schema_qualified_table(junction_table))
         .and_where(Expr::col(Alias::new("parent_id")).eq(parent_id));
 
     match tx.backend_name() {
@@ -722,7 +725,7 @@ pub async fn load_junction_selection(
     let mut q = Query::select();
     q.distinct()
         .column(Alias::new("child_id"))
-        .from(Alias::new(junction_table))
+        .from(crate::db::router::schema_qualified_table(junction_table))
         .and_where(Expr::col(Alias::new("parent_id")).eq(parent_id));
     let pool = crate::db::pool_dispatched();
     let mut out: Vec<String> = Vec::new();
