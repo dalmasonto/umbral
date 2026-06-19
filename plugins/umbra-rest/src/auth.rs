@@ -45,8 +45,8 @@ use umbra::web::{HeaderMap, header};
 
 /// Who the request belongs to, after authentication.
 ///
-/// The shape is intentionally narrow: `user_id` and a `is_staff`
-/// boolean cover most permission checks. An `extras` map carries
+/// The shape is intentionally narrow: `user_id`, `is_staff`, and
+/// `is_superuser` cover most permission checks. An `extras` map carries
 /// app-specific bits (role names, organisation id, scope strings) for
 /// custom permission impls.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -61,6 +61,12 @@ pub struct Identity {
     /// Staff flag, mirroring Django's `User.is_staff`. Used by the
     /// built-in [`crate::permission::IsStaff`].
     pub is_staff: bool,
+    /// Superuser flag, mirroring Django's `User.is_superuser`. A
+    /// superuser bypasses all permission checks in the built-in
+    /// permission classes; custom permission impls can consult this
+    /// field to grant unconditional access.
+    #[serde(default)]
+    pub is_superuser: bool,
     /// App-specific extras a permission check might want to consult.
     /// `umbra-auth` doesn't populate this; user-defined auth backends
     /// can stuff role names, organisation ids, etc. here.
@@ -77,6 +83,7 @@ impl Identity {
         Self {
             user_id: user_id.to_string(),
             is_staff: false,
+            is_superuser: false,
             extras: Default::default(),
         }
     }
@@ -90,6 +97,12 @@ impl Identity {
     /// Set the staff flag explicitly. Chainable.
     pub fn with_staff(mut self, is_staff: bool) -> Self {
         self.is_staff = is_staff;
+        self
+    }
+
+    /// Set the superuser flag explicitly. Chainable.
+    pub fn with_superuser(mut self, is_superuser: bool) -> Self {
+        self.is_superuser = is_superuser;
         self
     }
 

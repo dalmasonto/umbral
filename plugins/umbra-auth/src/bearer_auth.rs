@@ -106,6 +106,7 @@ impl Authentication for BearerAuthentication {
         Some(
             Identity::user(crate::UserModel::id_string(&user))
                 .with_staff(user.is_staff)
+                .with_superuser(user.is_superuser)
                 .with_extra("auth", serde_json::json!("bearer")),
         )
     }

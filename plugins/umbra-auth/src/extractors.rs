@@ -120,6 +120,7 @@ async fn identity_from_session(headers: &HeaderMap) -> Option<Identity> {
     Some(
         Identity::user(crate::UserModel::id_string(&user))
             .with_staff(user.is_staff)
+            .with_superuser(user.is_superuser)
             .with_extra("auth", serde_json::json!("session")),
     )
 }
@@ -137,6 +138,7 @@ async fn identity_from_bearer(headers: &HeaderMap) -> Option<Identity> {
     Some(
         Identity::user(crate::UserModel::id_string(&user))
             .with_staff(user.is_staff)
+            .with_superuser(user.is_superuser)
             .with_extra("auth", serde_json::json!("bearer")),
     )
 }
