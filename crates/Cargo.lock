@@ -4426,6 +4426,7 @@ dependencies = [
  "hmac",
  "http",
  "http-body-util",
+ "serde_json",
  "sha2",
  "subtle",
  "tempfile",

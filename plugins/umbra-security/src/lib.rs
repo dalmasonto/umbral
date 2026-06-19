@@ -359,11 +359,13 @@ impl Plugin for SecurityPlugin {
     }
 
     fn on_ready(&self, _ctx: &umbra::plugin::AppContext) -> Result<(), umbra::plugin::PluginError> {
+        let settings = umbra::settings::get_opt();
+
         // Boot nudge: HSTS and CSP are opt-in (safe defaults for dev), but
         // a Prod deployment shipping neither is a real exposure — SSL
         // stripping with no HSTS, XSS with no CSP backstop. Warn loudly so
         // the gap is visible at startup rather than discovered in an audit.
-        let is_prod = umbra::settings::get_opt()
+        let is_prod = settings
             .map(|s| matches!(s.environment, Environment::Prod))
             .unwrap_or(false);
         if is_prod {
@@ -381,6 +383,9 @@ impl Plugin for SecurityPlugin {
                 );
             }
         }
+
+        check_secret_key(settings, &self.config)?;
+
         Ok(())
     }
 }
@@ -482,7 +487,17 @@ pub fn generate_token() -> String {
 
 /// HMAC-SHA256 over `raw` (and the session value, when bound), keyed by the app
 /// secret, hex-encoded.
+///
+/// `secret` must never be empty in production. Boot (`on_ready`) already
+/// rejects an empty `SECRET_KEY` before this path is reachable in a real
+/// deployment; the assert below catches the bug in debug/test builds if
+/// that guard is somehow bypassed.
 fn sign(secret: &str, raw: &str, session: Option<&str>) -> String {
+    debug_assert!(
+        !secret.is_empty(),
+        "sign() called with an empty secret — CSRF tokens are trivially forgeable; \
+         on_ready should have rejected boot already"
+    );
     use hmac::{Hmac, Mac};
     use sha2::Sha256;
     let mut mac =
@@ -704,6 +719,57 @@ pub fn tokens_match(a: &str, b: &str) -> bool {
     a.as_bytes().ct_eq(b.as_bytes()).into()
 }
 
+/// Validate that `secret_key` is non-empty when signed CSRF is enabled.
+///
+/// Called from [`SecurityPlugin::on_ready`]. Extracted as a free function so
+/// integration tests can exercise it with an explicit [`umbra::Settings`]
+/// without needing a live `App::build()` to populate the ambient
+/// `SETTINGS` OnceLock (which is `pub(crate)` and unreachable from plugin
+/// tests).
+///
+/// Behaviour when `settings` is `None` (i.e. `get_opt()` returned nothing,
+/// common in tests that bypass `App::build()`): treated as non-prod, no
+/// error.
+fn check_secret_key(
+    settings: Option<&umbra::Settings>,
+    config: &SecurityConfig,
+) -> Result<(), umbra::plugin::PluginError> {
+    // Only relevant when signed CSRF is active; plain double-submit doesn't
+    // use the secret at all.
+    if !config.csrf || !config.signed_csrf {
+        return Ok(());
+    }
+
+    let Some(s) = settings else {
+        // No settings available — running outside App::build() (e.g. tests).
+        // Can't determine environment or secret; skip.
+        return Ok(());
+    };
+
+    if s.secret_key.trim().is_empty() {
+        match s.environment {
+            Environment::Dev | Environment::Test => {
+                tracing::warn!(
+                    "SecurityPlugin: SECRET_KEY is empty — CSRF tokens are signed with an \
+                     empty HMAC key and are trivially forgeable. Set `secret_key` in \
+                     umbra.toml or the UMBRA_SECRET_KEY environment variable before \
+                     deploying."
+                );
+            }
+            Environment::Prod => {
+                return Err(
+                    "SecurityPlugin: SECRET_KEY must not be empty in production. \
+                     An empty key makes CSRF tokens trivially forgeable. \
+                     Set `secret_key` in umbra.toml or via UMBRA_SECRET_KEY."
+                        .into(),
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Test-only constructors. `#[doc(hidden)]` — NOT a stable API; integration
 /// tests need a CSRF-wrapped router without `App::build()`-resolved settings.
 #[doc(hidden)]
@@ -725,6 +791,16 @@ pub mod test_support {
             exempt_paths: Vec::new(),
         };
         router.layer(middleware::from_fn_with_state(state, csrf_middleware))
+    }
+
+    /// Exercise [`check_secret_key`] directly with an explicit [`umbra::Settings`],
+    /// bypassing the ambient `SETTINGS` OnceLock (which is `pub(crate)` and
+    /// unreachable from plugin tests).
+    pub fn validate_secret_key(
+        settings: &umbra::Settings,
+        config: &SecurityConfig,
+    ) -> Result<(), umbra::plugin::PluginError> {
+        check_secret_key(Some(settings), config)
     }
 }
 
