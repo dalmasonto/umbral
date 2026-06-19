@@ -46,6 +46,10 @@
 //!   `umbra-tasks` periodic job, or a `clearsessions` management
 //!   command, lands when one or the other is real.
 
+pub mod store;
+
+pub use store::{DbStore, SessionRecord, SessionStore, active_store, install_store};
+
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use umbra::prelude::*;
@@ -194,11 +198,11 @@ impl From<umbra::orm::write::WriteError> for SessionError {
 /// usual "use argon2 / bcrypt" advice doesn't apply. The whole point
 /// is that an attacker who exfiltrates the DB sees `hex(sha256(t))`
 /// instead of `t` and can't replay sessions.
+///
+/// Implementation lives in `store.rs` (pub(crate)) and is re-used here
+/// to avoid maintaining two copies of the same hash function.
 fn hash_token(raw: &str) -> String {
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(raw.as_bytes());
-    format!("{:x}", hasher.finalize())
+    store::hash_token(raw)
 }
 
 /// Create a new session row. Returns the **raw** session token
