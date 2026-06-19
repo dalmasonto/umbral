@@ -91,6 +91,7 @@ use axum::http::{Method, Request, Response, StatusCode, header};
 use bytes::Bytes;
 use http::header::{CACHE_CONTROL, HeaderValue};
 use include_dir::Dir;
+use sha2::{Digest, Sha256};
 use tower::Service;
 use tower_http::services::ServeDir;
 use tower_http::set_header::SetResponseHeaderLayer;
@@ -273,12 +274,25 @@ impl Plugin for StaticPlugin {
 
         match &self.source {
             Source::Fs(dir) => {
-                let serve_dir = ServeDir::new(dir);
+                // Wrap ServeDir with a symlink-escape guard: canonicalize the
+                // resolved path and reject (404) anything that escapes the
+                // configured root. Without this, a symlink inside the root can
+                // point to /etc/passwd (or anywhere outside), and tokio::fs::File
+                // would follow it silently because ServeDir only blocks
+                // Component::ParentDir (`..`), not post-symlink escapes.
+                //
+                // ServeDir returns Response<ServeFileSystemResponseBody>; map that
+                // to Response<Body> so SymlinkGuardService has a uniform response
+                // type for both the pass-through and the 404 short-circuit paths.
+                let inner = tower::ServiceBuilder::new()
+                    .map_response(|resp: Response<_>| resp.map(Body::new))
+                    .service(ServeDir::new(dir));
+                let svc = SymlinkGuardService::new(dir.clone(), inner);
                 match cache_layer {
-                    None => Router::new().nest_service(&self.mount, serve_dir),
+                    None => Router::new().nest_service(&self.mount, svc),
                     Some(layer) => Router::new().nest_service(
                         &self.mount,
-                        tower::ServiceBuilder::new().layer(layer).service(serve_dir),
+                        tower::ServiceBuilder::new().layer(layer).service(svc),
                     ),
                 }
             }
@@ -415,6 +429,19 @@ impl umbra::cli::PluginCommand for CollectStaticCommand {
     }
 }
 
+/// Compute a strong ETag for asset bytes: the first 16 hex chars of the
+/// SHA-256 digest, wrapped in double-quotes as the HTTP spec requires.
+/// 64 bits of content hash is plenty for cache-busting purposes while
+/// keeping the header short.
+fn etag_for(contents: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(contents);
+    let digest = hasher.finalize();
+    // Format first 8 bytes (16 hex chars) as the tag value.
+    let hex: String = digest[..8].iter().map(|b| format!("{b:02x}")).collect();
+    format!("\"{hex}\"")
+}
+
 /// Tower `Service` that resolves a request path against an embedded
 /// `Dir` and returns the file bytes with a content-type guessed from
 /// the extension. `Infallible` because every code path produces a
@@ -423,6 +450,12 @@ impl umbra::cli::PluginCommand for CollectStaticCommand {
 /// `nest_service` strips the mount prefix before calling us, so the
 /// path we see is already relative to the embedded root. A leading
 /// `/` (axum normalises to one) is trimmed before the lookup.
+///
+/// ETag support: a strong ETag derived from the first 16 hex chars of
+/// the SHA-256 of the asset bytes is emitted on every 200 response.
+/// If the request carries `If-None-Match` with a matching ETag value
+/// a `304 Not Modified` is returned with no body, letting the browser
+/// reuse its cached copy without a full re-download.
 #[derive(Clone)]
 struct EmbeddedDirService {
     dir: &'static Dir<'static>,
@@ -459,6 +492,31 @@ impl Service<Request<Body>> for EmbeddedDirService {
                 return Ok(not_found_response());
             };
 
+            let contents = file.contents();
+            let etag = etag_for(contents);
+
+            // Conditional GET: if the client's If-None-Match matches our ETag,
+            // return 304 with no body. The comparison is exact (strong ETag):
+            // the spec allows the value to be a comma-separated list of quoted
+            // tags or `*`; we check for `*` and for the exact quoted string.
+            let if_none_match = req
+                .headers()
+                .get(header::IF_NONE_MATCH)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
+            if if_none_match == "*"
+                || if_none_match
+                    .split(',')
+                    .map(|t| t.trim())
+                    .any(|t| t == etag)
+            {
+                return Ok(Response::builder()
+                    .status(StatusCode::NOT_MODIFIED)
+                    .header(header::ETAG, &etag)
+                    .body(Body::empty())
+                    .expect("304 response is always valid"));
+            }
+
             let content_type = mime_guess::from_path(rel)
                 .first_or_octet_stream()
                 .to_string();
@@ -466,9 +524,131 @@ impl Service<Request<Body>> for EmbeddedDirService {
             Ok(Response::builder()
                 .status(StatusCode::OK)
                 .header(header::CONTENT_TYPE, content_type)
-                .body(Body::from(Bytes::from_static(file.contents())))
+                .header(header::ETAG, &etag)
+                .body(Body::from(Bytes::from_static(contents)))
                 .expect("static response is always valid"))
         })
+    }
+}
+
+/// Tower `Service` that wraps a `ServeDir` with a symlink-escape guard.
+///
+/// `ServeDir` blocks path traversal via `..` components but does not
+/// canonicalize the resolved path — a symlink inside the served root that
+/// points to a file outside the root (e.g. `/etc/passwd`) will be followed
+/// silently by `tokio::fs::File::open`. This wrapper:
+///
+/// 1. Builds the candidate path the same way `ServeDir` would (root + decoded
+///    normal components).
+/// 2. Canonicalizes that candidate with `std::fs::canonicalize` (resolves all
+///    symlinks).
+/// 3. Rejects with 404 if the canonical path is NOT a prefix of the canonical
+///    root, indicating the symlink pointed outside the root.
+///
+/// If `std::fs::canonicalize` fails (e.g. the file doesn't exist — a 404
+/// that ServeDir would return anyway), we let ServeDir handle it normally.
+/// Paths that contain `..` or are otherwise syntactically invalid return
+/// 404 immediately without consulting ServeDir.
+#[derive(Clone)]
+struct SymlinkGuardService<S> {
+    /// Canonical absolute path of the served root directory.
+    canonical_root: Option<PathBuf>,
+    /// Configured root path (used when canonical_root is unavailable).
+    root: PathBuf,
+    inner: S,
+}
+
+impl<S> SymlinkGuardService<S> {
+    fn new(root: PathBuf, inner: S) -> Self {
+        // Canonicalize at construction time. If the directory doesn't exist
+        // yet, canonical_root is None and we skip the guard (ServeDir will 404
+        // on every request anyway).
+        let canonical_root = std::fs::canonicalize(&root).ok();
+        Self {
+            canonical_root,
+            root,
+            inner,
+        }
+    }
+
+    /// Decode the request URI path into a candidate on-disk path relative to
+    /// the root, applying the same component filtering as ServeDir
+    /// (Normal only; reject Prefix/RootDir/ParentDir).
+    fn candidate_path(&self, uri_path: &str) -> Option<PathBuf> {
+        let decoded = percent_encoding::percent_decode_str(uri_path.trim_start_matches('/'))
+            .decode_utf8()
+            .ok()?;
+        let mut candidate = self.root.clone();
+        for component in std::path::Path::new(&*decoded).components() {
+            match component {
+                std::path::Component::Normal(c) => candidate.push(c),
+                std::path::Component::CurDir => {}
+                _ => return None, // Prefix / RootDir / ParentDir — reject
+            }
+        }
+        Some(candidate)
+    }
+}
+
+impl<S> Service<Request<Body>> for SymlinkGuardService<S>
+where
+    S: Service<Request<Body>, Response = Response<Body>, Error = Infallible>
+        + Clone
+        + Send
+        + 'static,
+    S::Future: Send + 'static,
+{
+    type Response = Response<Body>;
+    type Error = Infallible;
+    type Future =
+        Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send + 'static>>;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, req: Request<Body>) -> Self::Future {
+        // If canonical_root is None the directory doesn't exist; skip guard
+        // and let ServeDir return 404 as normal.
+        let Some(canonical_root) = self.canonical_root.clone() else {
+            let fut = self.inner.call(req);
+            return Box::pin(fut);
+        };
+
+        // Build the candidate path. A None return means a syntactically
+        // invalid path (contains `..` etc.) — 404 immediately.
+        let candidate = match self.candidate_path(req.uri().path()) {
+            Some(p) => p,
+            None => return Box::pin(std::future::ready(Ok(not_found_response()))),
+        };
+
+        // Canonicalize the candidate to resolve all symlinks.
+        //
+        // Three cases:
+        //   Ok(canonical) — file exists; accept only if it's within the root.
+        //   Err(NotFound) — file doesn't exist; let ServeDir return its own 404.
+        //   Err(_)        — any other error (ELOOP for a symlink loop, EACCES,
+        //                   etc.): return 404 ourselves so the caller gets a
+        //                   clean "not found", not a 500. ServeDir would turn
+        //                   most of these into 500; we want 404 for safety.
+        match std::fs::canonicalize(&candidate) {
+            Ok(canonical_candidate) => {
+                // Reject if the canonical candidate escapes the canonical root.
+                if !canonical_candidate.starts_with(&canonical_root) {
+                    return Box::pin(std::future::ready(Ok(not_found_response())));
+                }
+                // Within root — proceed.
+                let fut = self.inner.call(req);
+                Box::pin(fut)
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // Non-existent file: pass to ServeDir which returns 404.
+                let fut = self.inner.call(req);
+                Box::pin(fut)
+            }
+            // Symlink loop, permission denied, or any other IO error: 404.
+            Err(_) => Box::pin(std::future::ready(Ok(not_found_response()))),
+        }
     }
 }
 

@@ -4478,6 +4478,8 @@ dependencies = [
  "http-body-util",
  "include_dir",
  "mime_guess",
+ "percent-encoding",
+ "sha2",
  "tempfile",
  "tokio",
  "tower",
