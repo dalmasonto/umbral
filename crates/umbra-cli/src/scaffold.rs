@@ -15,6 +15,8 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use umbra_casing::pascal_case_from_ident;
+
 /// Error type for scaffolding operations. Wraps I/O and validation
 /// failures with enough context for a user-facing message.
 #[derive(Debug)]
@@ -124,25 +126,8 @@ fn validate_name(name: &str) -> Result<(), ScaffoldError> {
     Ok(())
 }
 
-/// Convert a kebab/snake case name into PascalCase for type names.
-///
-/// `posts` → `Posts`. `blog-engine` → `BlogEngine`. `task_queue` →
-/// `TaskQueue`. Used to generate the `{Name}Plugin` struct name.
-fn pascal_case(name: &str) -> String {
-    let mut out = String::with_capacity(name.len());
-    let mut next_upper = true;
-    for c in name.chars() {
-        if c == '-' || c == '_' {
-            next_upper = true;
-        } else if next_upper {
-            out.push(c.to_ascii_uppercase());
-            next_upper = false;
-        } else {
-            out.push(c);
-        }
-    }
-    out
-}
+// `pascal_case` replaced by `umbra_casing::pascal_case_from_ident` (imported
+// above) in the gaps2 #77 consolidation refactor.
 
 /// Convert a name to its Rust identifier form (hyphens → underscores).
 /// Rewrite git-deps to path-deps anchored at `umbra_repo`. Closes
@@ -839,7 +824,7 @@ pub fn scaffold_app(
     fs::create_dir_all(root.join("src"))?;
 
     let crate_name = rust_ident(name);
-    let pascal = pascal_case(name);
+    let pascal = pascal_case_from_ident(name);
     let mut files = Vec::new();
 
     let cargo_toml = format!(
@@ -995,7 +980,7 @@ pub fn scaffold_plugin(
     fs::create_dir_all(root.join("src"))?;
 
     let crate_name = rust_ident(name);
-    let pascal = pascal_case(name);
+    let pascal = pascal_case_from_ident(name);
     let mut files = Vec::new();
 
     // Cargo.toml — pulls in the deps the example modules use. async-
@@ -1291,10 +1276,10 @@ mod tests {
 
     #[test]
     fn pascal_case_handles_kebab_and_snake() {
-        assert_eq!(pascal_case("posts"), "Posts");
-        assert_eq!(pascal_case("blog_engine"), "BlogEngine");
-        assert_eq!(pascal_case("blog-engine"), "BlogEngine");
-        assert_eq!(pascal_case("api2"), "Api2");
+        assert_eq!(pascal_case_from_ident("posts"), "Posts");
+        assert_eq!(pascal_case_from_ident("blog_engine"), "BlogEngine");
+        assert_eq!(pascal_case_from_ident("blog-engine"), "BlogEngine");
+        assert_eq!(pascal_case_from_ident("api2"), "Api2");
     }
 
     #[test]

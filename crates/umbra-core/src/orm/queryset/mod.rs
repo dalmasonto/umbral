@@ -58,6 +58,7 @@ use serde_json::Value as JsonValue;
 
 use crate::db::DbPool;
 use crate::orm::{FExpr, HydrateRelated, Model, OrderExpr, Predicate};
+use umbra_casing::to_snake_case;
 
 /// Entry point for queries on a model.
 ///
@@ -272,27 +273,8 @@ enum AutoDiscovery {
     NotFound(Vec<String>),
 }
 
-/// Lowercase a struct name into snake_case (`PluginComment` →
-/// `plugin_comment`). Inserts `_` before an uppercase letter that
-/// follows a lowercase/digit, then lowercases the whole thing. Pure
-/// ASCII — model struct names are ASCII identifiers.
-fn snake_case(name: &str) -> String {
-    let mut out = String::with_capacity(name.len() + 4);
-    let mut prev_lower_or_digit = false;
-    for ch in name.chars() {
-        if ch.is_ascii_uppercase() {
-            if prev_lower_or_digit {
-                out.push('_');
-            }
-            out.push(ch.to_ascii_lowercase());
-            prev_lower_or_digit = false;
-        } else {
-            out.push(ch);
-            prev_lower_or_digit = ch.is_ascii_lowercase() || ch.is_ascii_digit();
-        }
-    }
-    out
-}
+// `snake_case` replaced by `umbra_casing::to_snake_case` (imported above)
+// in the gaps2 #77 consolidation refactor.
 
 /// Scan the model registry for children whose FK targets `T::TABLE`,
 /// and match `relation` against each candidate's conventional name
@@ -315,7 +297,7 @@ fn discover_reverse_relation<T: crate::orm::Model>(relation: &str) -> AutoDiscov
                 continue;
             }
             // Conventional name forms this (child, fk_column) answers to.
-            let snake = snake_case(&meta.name);
+            let snake = to_snake_case(&meta.name);
             let lower = meta.name.to_ascii_lowercase();
             let mut forms = vec![
                 meta.table.clone(),

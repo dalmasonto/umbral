@@ -27,6 +27,7 @@ use umbra::migrate::{Column, ModelMeta};
 use umbra::orm::SqlType;
 use umbra::prelude::*;
 use umbra::web::{Html, IntoResponse, Json, Response, StatusCode, header};
+use umbra_casing::pascal_case_from_ident;
 
 const SWAGGER_UI_HTML: &str = include_str!("../templates/swagger_ui.html");
 
@@ -229,7 +230,7 @@ fn build_spec(cfg: &OpenApiPlugin) -> Value {
         std::collections::HashMap::new();
     for plugin in umbra::migrate::registered_plugins() {
         for model in umbra::migrate::models_for_plugin(&plugin) {
-            table_to_schema.insert(model.table.clone(), pascal_case(&model.name));
+            table_to_schema.insert(model.table.clone(), pascal_case_from_ident(&model.name));
         }
     }
 
@@ -249,7 +250,7 @@ fn build_spec(cfg: &OpenApiPlugin) -> Value {
             if !cfg.is_exposed(&model.table) {
                 continue;
             }
-            let schema_name = pascal_case(&model.name);
+            let schema_name = pascal_case_from_ident(&model.name);
             schemas.insert(schema_name.clone(), model_schema(&model, &table_to_schema));
             // Advertise every filterable column × lookup AND the
             // `?search=` free-text parameter (when enabled) as
@@ -446,7 +447,7 @@ fn model_schema(
         let target_schema = table_to_schema
             .get(&rel.target_table)
             .cloned()
-            .unwrap_or_else(|| pascal_case(&rel.target_name));
+            .unwrap_or_else(|| pascal_case_from_ident(&rel.target_name));
         let mut prop = serde_json::Map::new();
         prop.insert("type".into(), Value::String("array".into()));
         // Items are the child model's PK type, not always int64 (review #4):
@@ -1137,21 +1138,8 @@ pub fn test_ui_route(p: &OpenApiPlugin) -> String {
     p.ui_route()
 }
 
-/// Crude PascalCase: split on `_` and uppercase the first char of
-/// each chunk. Model names already arrive PascalCase from
-/// `Model::NAME`, so this only matters when a plugin author passes a
-/// snake_case name in the metadata.
-fn pascal_case(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for chunk in s.split('_') {
-        let mut chars = chunk.chars();
-        if let Some(c) = chars.next() {
-            out.extend(c.to_uppercase());
-            out.push_str(chars.as_str());
-        }
-    }
-    out
-}
+// `pascal_case` replaced by `umbra_casing::pascal_case_from_ident` (imported
+// above) in the gaps2 #77 consolidation refactor.
 
 #[cfg(test)]
 mod tests {

@@ -49,6 +49,7 @@
 use std::path::{Path, PathBuf};
 
 use sqlx::{PgPool, Row, SqlitePool};
+use umbra_casing::{pascal_case_from_table, to_snake_case};
 
 use crate::migrate::{self, Column, MigrationFile, ModelMeta, Operation, Snapshot};
 use crate::orm::SqlType;
@@ -255,7 +256,7 @@ pub async fn introspect_pool(pool: &SqlitePool) -> Result<IntrospectedSchema, In
         let table: String = row.try_get("name")?;
         let columns = introspect_columns(pool, &table).await?;
         tables.push(IntrospectedTable {
-            name: pascal_case(&table),
+            name: pascal_case_from_table(&table),
             table,
             columns,
         });
@@ -295,7 +296,7 @@ pub async fn introspect_pool_pg(pool: &PgPool) -> Result<IntrospectedSchema, Ins
     for (table,) in table_rows {
         let columns = introspect_columns_pg(pool, &table).await?;
         tables.push(IntrospectedTable {
-            name: pascal_case(&table),
+            name: pascal_case_from_table(&table),
             table,
             columns,
         });
@@ -567,64 +568,9 @@ fn map_sqlite_type(raw: &str) -> Option<SqlType> {
     }
 }
 
-/// Convert a SQL identifier (typically a table name) into UpperCamelCase
-/// for use as a Rust struct name. Splits on `_`, ` `, and `-`, takes the
-/// alphanumeric remainder, and uppercases the first character of each
-/// segment. `blog_post` becomes `BlogPost`; `auth_user_groups` becomes
-/// `AuthUserGroups`. Empty input returns the empty string; the renderer
-/// upstream guarantees a non-empty table name.
-/// Mirror of `umbra_macros::to_snake_case`. The M3 derive computes a
-/// model's `TABLE` const as snake_case of the struct name; the
-/// renderer uses this helper to decide whether the source SQL table
-/// name round-trips through the derive (so the `#[umbra(table = ...)]`
-/// attribute can be omitted). Kept identical to the derive's body so
-/// the two agree byte-for-byte.
-fn derive_table_name(camel: &str) -> String {
-    let chars: Vec<char> = camel.chars().collect();
-    let mut out = String::with_capacity(camel.len() + 4);
-    for (i, &c) in chars.iter().enumerate() {
-        if c.is_ascii_uppercase() {
-            let prev = if i == 0 { None } else { Some(chars[i - 1]) };
-            let next = chars.get(i + 1).copied();
-            let prev_lower_or_digit =
-                matches!(prev, Some(p) if p.is_ascii_lowercase() || p.is_ascii_digit());
-            let run_break = prev.map(|p| p.is_ascii_uppercase()).unwrap_or(false)
-                && matches!(next, Some(n) if n.is_ascii_lowercase());
-            if i != 0 && (prev_lower_or_digit || run_break) {
-                out.push('_');
-            }
-            out.push(c.to_ascii_lowercase());
-        } else {
-            out.push(c);
-        }
-    }
-    out
-}
-
-fn pascal_case(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    let mut upper_next = true;
-    for ch in input.chars() {
-        if ch == '_' || ch == ' ' || ch == '-' {
-            upper_next = true;
-            continue;
-        }
-        if !ch.is_alphanumeric() {
-            continue;
-        }
-        if upper_next {
-            for u in ch.to_uppercase() {
-                out.push(u);
-            }
-            upper_next = false;
-        } else {
-            for l in ch.to_lowercase() {
-                out.push(l);
-            }
-        }
-    }
-    out
-}
+// `derive_table_name` (was `to_snake_case`) and `pascal_case` (now
+// `pascal_case_from_table`) are imported from `umbra_casing` at the top
+// of this file. The local copies were removed in the gaps2 #77 refactor.
 
 /// Render the introspected schema as the contents of a `models.rs`
 /// file. The output is one `#[derive(Model)]` struct per table, with
@@ -678,7 +624,7 @@ fn render_one_struct(table: &IntrospectedTable) -> String {
     // sqlx::FromRow supertrait isn't satisfied and the generated file
     // fails to compile.
     out.push_str("#[derive(Debug, Clone, sqlx::FromRow, Model)]\n");
-    if derive_table_name(&table.name) != table.table {
+    if to_snake_case(&table.name) != table.table {
         out.push_str(&format!("#[umbra(table = \"{}\")]\n", table.table));
     }
     out.push_str(&format!("pub struct {} {{\n", table.name));

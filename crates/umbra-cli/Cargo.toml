@@ -22,6 +22,8 @@ name = "umbra"
 path = "src/main.rs"
 
 [dependencies]
+# Shared casing helpers (pascal_case_from_ident for scaffold).
+umbra-casing = { path = "../umbra-casing", version = "0.0.1" }
 umbra = { path = "../umbra", version = "0.0.1" }
 # umbra-cli is internal — depending on umbra-core directly is fine. We
 # reach for `umbra_core::settings::get()` to read the bind_addr from

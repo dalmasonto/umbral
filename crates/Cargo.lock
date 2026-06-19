@@ -4139,6 +4139,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "umbra-casing"
+version = "0.0.1"
+
+[[package]]
 name = "umbra-cli"
 version = "0.0.1"
 dependencies = [
@@ -4150,6 +4154,7 @@ dependencies = [
  "tokio",
  "tracing-subscriber",
  "umbra",
+ "umbra-casing",
  "umbra-core",
 ]
 
@@ -4195,6 +4200,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "umbra",
+ "umbra-casing",
  "uuid",
 ]
 
@@ -4220,7 +4226,6 @@ dependencies = [
  "http-body-util",
  "serde",
  "serde_json",
- "sqlx",
  "tokio",
  "tower",
  "tracing",
@@ -4255,6 +4260,7 @@ dependencies = [
  "tokio",
  "trybuild",
  "umbra",
+ "umbra-casing",
  "umbra-tasks",
 ]
 
@@ -4319,6 +4325,7 @@ dependencies = [
  "tower",
  "umbra",
  "umbra-auth",
+ "umbra-casing",
  "umbra-rest",
 ]
 

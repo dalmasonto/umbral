@@ -9,6 +9,8 @@ authors.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+# Shared casing helpers (to_snake_case, pascal_case variants).
+umbra-casing = { path = "../umbra-casing", version = "0.0.1" }
 axum = "0.8"
 # tower is the Service/Layer trait core that axum builds on. We need
 # it as a regular (not dev) dep because the trailing-slash redirect

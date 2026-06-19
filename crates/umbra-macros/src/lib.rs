@@ -86,6 +86,7 @@ use syn::{
     Data, DeriveInput, Field, Fields, GenericArgument, ItemFn, PathArguments, ReturnType, Type,
     TypePath, parse_macro_input,
 };
+use umbra_casing::to_snake_case;
 
 /// Generate `impl Model` for a struct.
 ///
@@ -3134,35 +3135,8 @@ fn column_const_for(
     (module_const, assoc_const)
 }
 
-/// Convert `CamelCase` / `PascalCase` to `snake_case`.
-///
-/// Rules: insert `_` before any uppercase letter that follows a
-/// lowercase letter or a digit, and before the last letter of an
-/// uppercase run that's followed by a lowercase letter (so `HTTPRequest`
-/// becomes `http_request`, not `httprequest` or `h_t_t_p_request`). All
-/// ASCII; non-ASCII characters pass through unchanged. Underscores
-/// already in the input are preserved.
-fn to_snake_case(camel: &str) -> String {
-    let chars: Vec<char> = camel.chars().collect();
-    let mut out = String::with_capacity(camel.len() + 4);
-    for (i, &c) in chars.iter().enumerate() {
-        if c.is_ascii_uppercase() {
-            let prev = if i == 0 { None } else { Some(chars[i - 1]) };
-            let next = chars.get(i + 1).copied();
-            let prev_lower_or_digit =
-                matches!(prev, Some(p) if p.is_ascii_lowercase() || p.is_ascii_digit());
-            let run_break = prev.map(|p| p.is_ascii_uppercase()).unwrap_or(false)
-                && matches!(next, Some(n) if n.is_ascii_lowercase());
-            if i != 0 && (prev_lower_or_digit || run_break) {
-                out.push('_');
-            }
-            out.push(c.to_ascii_lowercase());
-        } else {
-            out.push(c);
-        }
-    }
-    out
-}
+// `to_snake_case` is imported from `umbra_casing` at the top of this file.
+// The local copy was removed in the gaps2 #77 consolidation refactor.
 
 /// Convert `snake_case` (or anything mixed) to `SCREAMING_SNAKE_CASE`.
 ///
