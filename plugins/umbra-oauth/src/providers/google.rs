@@ -131,7 +131,7 @@ impl OAuthProvider for GoogleProvider {
         redirect_uri: &str,
         code_verifier: &str,
     ) -> Result<TokenSet, OAuthError> {
-        let resp = reqwest::Client::new()
+        let resp = crate::http::http_client()
             .post(TOKEN_URL)
             .form(&[
                 ("code", code),
@@ -153,7 +153,7 @@ impl OAuthProvider for GoogleProvider {
     }
 
     async fn fetch_identity(&self, tokens: &TokenSet) -> Result<Identity, OAuthError> {
-        let resp = reqwest::Client::new()
+        let resp = crate::http::http_client()
             .get(USERINFO_URL)
             .bearer_auth(&tokens.access_token)
             .send()

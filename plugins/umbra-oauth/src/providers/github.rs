@@ -139,7 +139,7 @@ impl OAuthProvider for GitHubProvider {
         redirect_uri: &str,
         code_verifier: &str,
     ) -> Result<TokenSet, OAuthError> {
-        let resp = reqwest::Client::new()
+        let resp = crate::http::http_client()
             .post(TOKEN_URL)
             .header(reqwest::header::ACCEPT, "application/json")
             .form(&[
@@ -161,7 +161,7 @@ impl OAuthProvider for GitHubProvider {
     }
 
     async fn fetch_identity(&self, tokens: &TokenSet) -> Result<Identity, OAuthError> {
-        let client = reqwest::Client::new();
+        let client = crate::http::http_client();
         let user_body = client
             .get(USER_URL)
             .bearer_auth(&tokens.access_token)
