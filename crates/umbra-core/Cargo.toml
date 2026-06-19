@@ -106,7 +106,7 @@ uuid = { version = "1", features = ["serde", "v7"] }
 # multipart module reference `bytes::Bytes` / `futures_util::stream`.
 multer = "3"
 bytes = "1"
-futures-util = { version = "0.3", default-features = false }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 # `Masked<T>` field encryption (GDPR encrypt-at-rest). crypto_box is the
 # RustCrypto X25519 + XSalsa20-Poly1305 box primitive; the module composes
 # it into an anonymous-sender ("sealed box") scheme — encrypt with a public
