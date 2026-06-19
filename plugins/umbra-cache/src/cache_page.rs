@@ -18,8 +18,11 @@
 //!
 //! ## Cache key
 //!
-//! `cache:page:GET:/path?query` — method + full URI including query string.
-//! Fragments are stripped by the browser and never reach the server.
+//! `cache:page:GET:<host>:/path?query` — method + Host header + full URI
+//! including query string.  Fragments are stripped by the browser and never
+//! reach the server.  Including the Host header prevents multi-tenant
+//! cache-poisoning where tenant A's cached page would otherwise be served to
+//! requests arriving on a different Host.
 //!
 //! ## What gets cached
 //!
@@ -29,6 +32,9 @@
 //! - Status code other than 200.
 //! - Response carries `Cache-Control: no-store`.
 //! - Response carries a `Set-Cookie` header (the body may be personalised).
+//! - Request carries an `umbra_session` cookie — personalised / logged-in
+//!   requests are neither served from nor written to the page cache, keeping
+//!   the cache to the safe anonymous-only subset.
 //!
 //! ## Ambient cache dependency
 //!
@@ -138,9 +144,27 @@ where
                 return inner.call(req).await;
             }
 
-            // Build the cache key from method + full URI (path + query)
+            // Bypass for personalised / authenticated requests: if the incoming
+            // request carries an `umbra_session` cookie the response is user-
+            // specific and must not be served from or stored in the page cache.
+            // We match the literal cookie name "umbra_session" (the canonical
+            // name from umbra-sessions::COOKIE_NAME) without importing that crate
+            // to avoid a plugin-to-plugin dependency.
+            if request_has_session_cookie(&req) {
+                return inner.call(req).await;
+            }
+
+            // Build the cache key from method + Host header + full URI (path + query).
+            // Including the Host prevents multi-tenant cache-poisoning where different
+            // virtual hosts serving different content share cache entries.
+            let host = req
+                .headers()
+                .get(header::HOST)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("")
+                .to_owned();
             let uri = req.uri().to_string();
-            let cache_key = format!("cache:page:{}:{}", method, uri);
+            let cache_key = format!("cache:page:{}:{}:{}", method, host, uri);
 
             // Resolve the cache to use: explicit (test injection) > ambient
             let cache: Option<&Cache> = if let Some(ref c) = explicit_cache {
@@ -208,6 +232,29 @@ where
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
+/// Return `true` when the request carries an `umbra_session` cookie.
+///
+/// Session-cookie-bearing requests are for authenticated / personalised pages.
+/// Serving those from (or caching them into) the shared page cache would either
+/// leak one user's content to another user or serve a stale anonymous page to a
+/// logged-in user.  We bypass the cache entirely for these requests.
+///
+/// The cookie name `umbra_session` matches `umbra_sessions::COOKIE_NAME`.  We
+/// match the literal string to avoid a crate dependency from umbra-cache on
+/// umbra-sessions.
+fn request_has_session_cookie<B>(req: &Request<B>) -> bool {
+    // Cookie header value is a semicolon-separated list of "name=value" pairs.
+    req.headers()
+        .get(header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .map(|cookie_str| {
+            cookie_str
+                .split(';')
+                .any(|pair| pair.trim().starts_with("umbra_session="))
+        })
+        .unwrap_or(false)
+}
 
 /// Return `true` when the response should not be cached:
 /// - `Cache-Control: no-store` is present
