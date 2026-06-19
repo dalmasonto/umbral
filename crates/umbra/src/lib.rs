@@ -181,7 +181,7 @@ pub mod db {
     pub use umbra_core::db::route_context::scope as route_context_scope;
     pub use umbra_core::db::{
         Alias, DatabaseRouter, DbPool, DefaultRouter, RouteContext, RouteOp, Schema, TenantKey,
-        Transaction, TxFuture, begin, begin_pg, begin_sqlite, connect, connect_sqlite, pool,
+        Transaction, TxFuture, begin, begin_pg, begin_sqlite, connect, connect_sqlite, ping, pool,
         pool_dispatched, pool_for, pool_for_dispatched, registered_aliases, route_context, router,
         transaction, transaction_pg, transaction_sqlite,
     };
