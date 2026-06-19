@@ -1005,7 +1005,8 @@ pub fn render<C: Serialize>(name: &str, ctx: &C) -> Result<String, TemplateError
 #[doc(hidden)]
 pub fn render_str<C: Serialize>(src: &str, ctx: &C) -> Result<String, TemplateError> {
     let mut env = minijinja::Environment::new();
-    env.add_template("__inline", src).map_err(TemplateError::Render)?;
+    env.add_template("__inline", src)
+        .map_err(TemplateError::Render)?;
     render_with(&env, "__inline", ctx)
 }
 

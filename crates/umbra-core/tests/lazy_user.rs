@@ -34,7 +34,11 @@ async fn resolver_does_not_run_when_user_is_not_rendered() {
     .expect("render");
 
     assert_eq!(out, "hello ada");
-    assert_eq!(calls.load(Ordering::SeqCst), 0, "resolver must NOT run when user unused");
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "resolver must NOT run when user unused"
+    );
 }
 
 /// On a current-thread runtime `block_in_place` is unavailable, so
@@ -72,12 +76,18 @@ async fn resolver_runs_once_across_two_renders_that_read_user() {
     });
 
     let out = with_current_user_lazy(lazy, async {
-        let a = umbra_core::templates::render_str("{{ user.is_staff }}", &serde_json::json!({})).unwrap();
-        let b = umbra_core::templates::render_str("{{ user.is_staff }}", &serde_json::json!({})).unwrap();
+        let a = umbra_core::templates::render_str("{{ user.is_staff }}", &serde_json::json!({}))
+            .unwrap();
+        let b = umbra_core::templates::render_str("{{ user.is_staff }}", &serde_json::json!({}))
+            .unwrap();
         format!("{a}-{b}")
     })
     .await;
 
     assert_eq!(out, "true-true");
-    assert_eq!(calls.load(Ordering::SeqCst), 1, "resolver memoized: runs exactly once");
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "resolver memoized: runs exactly once"
+    );
 }
