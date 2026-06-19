@@ -804,6 +804,42 @@ mod tests {
         assert!(!st.is_exempt("/contact"));
     }
 
+    /// `/api` exempt must NOT bleed into `/api-internal`, `/apixyz`, etc.
+    /// The boundary check requires the prefix to be followed by `/` (sub-path)
+    /// or be an exact match — a bare `starts_with("/api")` would incorrectly
+    /// exempt those sibling routes.
+    #[test]
+    fn csrf_exempt_boundary_stops_at_path_segment() {
+        let st = CsrfState {
+            secure: false,
+            signed: false,
+            secret: None,
+            session_cookie: None,
+            exempt_paths: vec!["/api".to_string()],
+        };
+        // Exact match and sub-paths ARE exempt.
+        assert!(st.is_exempt("/api"), "/api exact must be exempt");
+        assert!(st.is_exempt("/api/users"), "/api/users sub-path must be exempt");
+        assert!(
+            st.is_exempt("/api/v2/resource"),
+            "/api/v2/resource must be exempt"
+        );
+        // Paths that merely START WITH the string but aren't segment-separated
+        // must NOT be exempt — that would be a CSRF-bypass on unintended routes.
+        assert!(
+            !st.is_exempt("/api-internal"),
+            "/api-internal must NOT be exempt when /api is configured"
+        );
+        assert!(
+            !st.is_exempt("/apixyz"),
+            "/apixyz must NOT be exempt when /api is configured"
+        );
+        assert!(
+            !st.is_exempt("/api2"),
+            "/api2 must NOT be exempt when /api is configured"
+        );
+    }
+
     #[test]
     fn hsts_value_reflects_flags() {
         let cfg = SecurityConfig {
