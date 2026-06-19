@@ -263,6 +263,15 @@ pub enum EmailError {
         filename: String,
         content_type: String,
     },
+    /// The email subject (or another user-supplied header value)
+    /// contains a CR (`\r`), LF (`\n`), NUL (`\x00`), or any other
+    /// ASCII control character that is banned in RFC 5322 header
+    /// fields. This is the SMTP header-injection / Bcc-injection
+    /// guard. Pass a clean subject string.
+    InvalidHeaderValue {
+        field: &'static str,
+        offending_char: char,
+    },
 }
 
 impl std::fmt::Display for EmailError {
@@ -285,6 +294,16 @@ impl std::fmt::Display for EmailError {
             } => write!(
                 f,
                 "umbra-email: attachment `{filename}` has invalid content type `{content_type}`",
+            ),
+            EmailError::InvalidHeaderValue {
+                field,
+                offending_char,
+            } => write!(
+                f,
+                "umbra-email: {field} contains a forbidden control character \
+                 U+{:04X} (CRLF/LF/CR/NUL in a header value is an SMTP \
+                 injection vector)",
+                *offending_char as u32,
             ),
         }
     }
@@ -459,6 +478,36 @@ pub async fn send(message: &EmailMessage) -> Result<(), EmailError> {
     }
 }
 
+/// Validate a user-supplied header value against the characters that are
+/// banned in RFC 5322 header fields.
+///
+/// RFC 5322 §2.2 / RFC 5321 §4.1.1 forbid bare CR (`\r`), bare LF
+/// (`\n`), and NUL (`\x00`) in header values because they allow an
+/// attacker to inject arbitrary headers — the classic SMTP
+/// header-injection / Bcc-injection vector.  We also reject the full
+/// C0 control range (< U+0020) except for horizontal tab (U+0009),
+/// which RFC 5322 allows inside folded header values.
+///
+/// `lettre` 0.11 does not validate these characters itself, so this
+/// function is the plugin's own gate.
+fn validate_header_value(field: &'static str, value: &str) -> Result<(), EmailError> {
+    for ch in value.chars() {
+        // Allow printable ASCII + non-ASCII Unicode.
+        // Allow horizontal tab (RFC 5322 permits it in folded headers).
+        // Reject every other control character (< U+0020) plus DEL.
+        let is_forbidden = matches!(ch, '\r' | '\n' | '\x00')
+            || (ch < '\x20' && ch != '\t')
+            || ch == '\x7f';
+        if is_forbidden {
+            return Err(EmailError::InvalidHeaderValue {
+                field,
+                offending_char: ch,
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Compose an `EmailMessage` into a wire-ready `lettre::Message`.
 ///
 /// The public bridge between the umbra type and the lettre type.
@@ -469,7 +518,34 @@ pub async fn send(message: &EmailMessage) -> Result<(), EmailError> {
 ///
 /// `from` is the envelope From address — typically pulled from the
 /// `email_default_from` setting when `EmailMessage.from` is empty.
+///
+/// # Errors
+///
+/// Returns [`EmailError::InvalidHeaderValue`] if `message.subject`
+/// (or any other user-supplied header string) contains a CR, LF, NUL,
+/// or other ASCII control character banned by RFC 5322.  This is the
+/// SMTP header-injection / Bcc-injection guard.  `lettre` 0.11 does
+/// not perform this check itself.
 pub fn compose(from: &str, message: &EmailMessage) -> Result<Message, EmailError> {
+    // --- Header-injection guard (RFC 5322 / SMTP Bcc-injection) -------
+    // Validate before touching the lettre builder so we get a typed,
+    // descriptive error rather than a silently-accepted malicious message.
+    validate_header_value("subject", &message.subject)?;
+    // Also guard the From display name and the Reply-To display name.
+    // The address *local-part* and *domain* are validated by lettre's
+    // `Mailbox::parse`; the display name is free-form text that lettre
+    // does not validate.
+    validate_header_value("from", from)?;
+    if let Some(reply_to) = &message.reply_to {
+        validate_header_value("reply_to", reply_to)?;
+    }
+    // Individual recipient addresses are parsed by lettre; guard the
+    // whole address string here too (display names included).
+    for recipient in &message.to {
+        validate_header_value("to", recipient)?;
+    }
+    // ------------------------------------------------------------------
+
     let from_mbox: Mailbox = from.parse()?;
     let mut builder = Message::builder().from(from_mbox).subject(&message.subject);
 
