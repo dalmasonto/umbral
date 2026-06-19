@@ -446,21 +446,36 @@ async fn process_one(row: TaskRow) -> Result<(), TaskError> {
             .map(|h| h(&row.payload))
             .map(|fut| (fut,))
     };
-    let result = match handler {
+    // Resolve to a typed `TaskError` so the retry decision can match on
+    // the variant rather than inspect the error string.  The `err_msg`
+    // string is kept separate from the variant so handler-returned
+    // strings are stored verbatim in the `error` column (preserving the
+    // original behaviour), while the variant drives the non-retriable
+    // check without depending on the Display text.
+    let result: Result<(), (TaskError, String)> = match handler {
         Some((fut,)) => {
             // Catch panics so one bad handler doesn't take the worker
             // down. `tokio::task::spawn` gives us the JoinHandle whose
             // join error carries panic payloads we can stringify.
             let outcome = tokio::task::spawn(fut).await;
             match outcome {
-                Ok(r) => r,
+                Ok(Ok(())) => Ok(()),
+                Ok(Err(msg)) => Err((TaskError::Other(msg.clone()), msg)),
                 Err(join) if join.is_panic() => {
-                    Err(format!("handler panicked: {:?}", join.into_panic()))
+                    let msg = format!("handler panicked: {:?}", join.into_panic());
+                    Err((TaskError::HandlerPanicked(msg.clone()), msg))
                 }
-                Err(join) => Err(format!("handler join error: {join}")),
+                Err(join) => {
+                    let msg = format!("handler join error: {join}");
+                    Err((TaskError::Other(msg.clone()), msg))
+                }
             }
         }
-        None => Err(format!("handler not found: {}", row.name)),
+        None => {
+            let err = TaskError::HandlerNotFound(row.name.clone());
+            let msg = err.to_string();
+            Err((err, msg))
+        }
     };
 
     let now = Utc::now();
@@ -478,13 +493,14 @@ async fn process_one(row: TaskRow) -> Result<(), TaskError> {
                 .update_values(patch)
                 .await?;
         }
-        Err(err_msg) => {
-            // "handler not found" is non-retriable — a missing handler
+        Err((err, err_msg)) => {
+            // `HandlerNotFound` is non-retriable — a missing handler
             // won't appear on the next attempt unless the operator
-            // changes the code. Treat as terminal failure regardless
-            // of attempts.
+            // changes the code. Match on the typed variant so this
+            // decision is robust to any future change in the Display
+            // text.
             let exhausted = row.attempts >= row.max_attempts;
-            let non_retriable = err_msg.starts_with("handler not found");
+            let non_retriable = matches!(err, TaskError::HandlerNotFound(_));
             let mut patch = serde_json::Map::new();
             if exhausted || non_retriable {
                 patch.insert(

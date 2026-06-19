@@ -286,6 +286,66 @@ async fn unknown_handler_marks_task_failed_with_handler_not_found_error() {
 }
 
 // =========================================================================
+// 4b. non-retriable: missing handler must NOT burn through max_attempts
+// =========================================================================
+
+/// A task whose handler is not registered must be marked failed on the
+/// FIRST worker iteration regardless of `max_attempts`. This verifies
+/// the retry decision uses the typed `TaskError::HandlerNotFound`
+/// variant, not a string match — so it can't silently break if the
+/// error message text changes.
+#[tokio::test(flavor = "multi_thread")]
+async fn unknown_handler_is_non_retriable_regardless_of_max_attempts() {
+    let _guard = test_lock().await;
+    boot().await;
+    drain_queue().await;
+    _clear_handlers_for_tests();
+
+    // max_attempts is high; the task must still fail on attempt 1.
+    let id = enqueue(
+        "handler_that_does_not_exist",
+        serde_json::json!({}),
+        EnqueueOptions {
+            max_attempts: Some(10),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("enqueue");
+
+    // Single worker step — should claim the row and immediately mark it failed.
+    let processed = run_worker_once().await.expect("worker step");
+    assert!(processed, "worker should have claimed the row");
+
+    let row = fetch(id).await;
+    assert_eq!(
+        row.status, STATUS_FAILED,
+        "HandlerNotFound must be non-retriable: expected failed, got {:?}",
+        row.status
+    );
+    assert_eq!(
+        row.attempts, 1,
+        "must NOT burn through max_attempts ({}) before failing; got {} attempts",
+        row.max_attempts, row.attempts
+    );
+    assert!(
+        row.completed_at.is_some(),
+        "completed_at must be set on non-retriable failure"
+    );
+    let err = row.error.as_deref().unwrap_or("");
+    assert!(
+        err.contains("handler not found"),
+        "error column should mention the missing handler; got {err:?}",
+    );
+
+    // Queue is now drained — a second iteration should be a no-op.
+    assert!(
+        !run_worker_once().await.expect("step 2"),
+        "no pending rows should remain after non-retriable failure"
+    );
+}
+
+// =========================================================================
 // 5. basic enqueue shape
 // =========================================================================
 
