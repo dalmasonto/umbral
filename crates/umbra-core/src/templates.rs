@@ -158,7 +158,12 @@ impl std::fmt::Debug for LazyUserProxy {
 
 impl std::fmt::Display for LazyUserProxy {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("<lazy user>")
+        // `{{ user }}` — resolve (memoized) and delegate to the resolved
+        // value's own Display so bare rendering is faithful. Uses the same
+        // `resolve_blocking` path as `get_value` to ensure at-most-once
+        // resolution and the same current-thread / no-runtime fallback.
+        let resolved = self.0.resolve_blocking();
+        std::fmt::Display::fmt(&resolved, f)
     }
 }
 
@@ -169,10 +174,11 @@ impl minijinja::value::Object for LazyUserProxy {
     }
 
     fn is_true(self: &Arc<Self>) -> bool {
-        // `{% if user %}` — a lazy user is always truthy (authenticated or
-        // anonymous, it is "something"). This matches the eager path where a
-        // `Some(value)` is injected unconditionally.
-        true
+        // `{% if user %}` — resolve (memoized) and delegate to the resolved
+        // value's truthiness so the proxy faithfully represents whether the
+        // resolved value is truthy. Uses the same `resolve_blocking` path as
+        // `get_value` so resolution is still at most once per request.
+        self.0.resolve_blocking().is_true()
     }
 }
 

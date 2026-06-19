@@ -37,6 +37,28 @@ async fn resolver_does_not_run_when_user_is_not_rendered() {
     assert_eq!(calls.load(Ordering::SeqCst), 0, "resolver must NOT run when user unused");
 }
 
+/// On a current-thread runtime `block_in_place` is unavailable, so
+/// `resolve_blocking` returns the anonymous fallback value. This test
+/// verifies that rendering `{{ user.is_staff }}` in that configuration
+/// does NOT panic and produces the anonymous-fallback output (`false`).
+#[tokio::test]
+async fn current_thread_runtime_does_not_panic_returns_anonymous_fallback() {
+    // Default `#[tokio::test]` uses the current-thread flavor.
+    let lazy = LazyUser::new(|| async { user_value(true) });
+
+    let out = with_current_user_lazy(lazy, async {
+        umbra_core::templates::render_str("{{ user.is_staff }}", &serde_json::json!({}))
+    })
+    .await
+    .expect("render must not panic");
+
+    // The current-thread path returns the anonymous value (is_staff: false).
+    assert_eq!(
+        out, "false",
+        "current-thread runtime: expected anonymous fallback (is_staff=false), got {out}"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn resolver_runs_once_across_two_renders_that_read_user() {
     let calls = Arc::new(AtomicUsize::new(0));
