@@ -439,9 +439,9 @@ pub mod templates {
 
     pub use minijinja::{Environment, Value, context};
     pub use umbra_core::templates::{
-        CURRENT_CSRF, CURRENT_USER, TemplateError, TemplateRegistrar, current_csrf, highlight_css,
-        merge_ambient_context, merge_ambient_value, render, resolve_static_url, with_current_csrf,
-        with_current_user,
+        CURRENT_CSRF, CURRENT_USER, LazyUser, TemplateError, TemplateRegistrar, current_csrf,
+        highlight_css, merge_ambient_context, merge_ambient_value, render, render_str,
+        resolve_static_url, with_current_csrf, with_current_user, with_current_user_lazy,
     };
 }
 

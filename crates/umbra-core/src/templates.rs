@@ -50,7 +50,10 @@
 //! - Hot reload in development via `minijinja-autoreload`.
 
 use std::collections::HashSet;
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
+use std::sync::Arc;
 use std::sync::OnceLock;
 
 use minijinja::{AutoEscape, Environment};
@@ -77,6 +80,105 @@ tokio::task_local! {
     /// references `{{ csrf_token }}` then renders it empty under the
     /// engine's lenient-undefined behaviour).
     pub static CURRENT_CSRF: Option<String>;
+
+    /// Lazy counterpart to `CURRENT_USER`: a resolver that produces the
+    /// user value on first access, memoized. Set by an auth middleware that
+    /// wants per-request laziness (resolve only if a template reads `user`).
+    pub static CURRENT_USER_LAZY: LazyUser;
+}
+
+type UserFut = Pin<Box<dyn Future<Output = minijinja::Value> + Send>>;
+type UserResolver = Arc<dyn Fn() -> UserFut + Send + Sync>;
+
+/// A lazily-resolved, per-request template `user`. The `resolver` runs at
+/// most once (guarded by the `OnceCell`); resolution happens synchronously
+/// from inside minijinja's sync render via `block_in_place`.
+///
+/// The lazy value is injected into the template context as a minijinja `Object`
+/// proxy ([`LazyUserProxy`]). Minijinja calls `get_value` on the proxy only
+/// when the template actually accesses an attribute on `user`, so requests that
+/// never render `user` skip resolution entirely.
+#[derive(Clone)]
+pub struct LazyUser {
+    cell: Arc<tokio::sync::OnceCell<minijinja::Value>>,
+    resolver: UserResolver,
+}
+
+impl LazyUser {
+    pub fn new<F, Fut>(resolver: F) -> Self
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = minijinja::Value> + Send + 'static,
+    {
+        Self {
+            cell: Arc::new(tokio::sync::OnceCell::new()),
+            resolver: Arc::new(move || Box::pin(resolver())),
+        }
+    }
+
+    /// Resolve (memoized) from a synchronous context. Requires a multi-thread
+    /// tokio runtime; on a current-thread runtime or outside any runtime it
+    /// logs and returns the anonymous value so callers fall back cleanly.
+    fn resolve_blocking(&self) -> minijinja::Value {
+        use tokio::runtime::{Handle, RuntimeFlavor};
+        let Ok(handle) = Handle::try_current() else {
+            return anonymous_user_value();
+        };
+        if handle.runtime_flavor() == RuntimeFlavor::CurrentThread {
+            tracing::warn!(
+                "umbra::templates: lazy `user` needs a multi-thread runtime; rendering anonymous"
+            );
+            return anonymous_user_value();
+        }
+        let cell = self.cell.clone();
+        let resolver = self.resolver.clone();
+        tokio::task::block_in_place(move || {
+            handle.block_on(async move { cell.get_or_init(|| resolver()).await.clone() })
+        })
+    }
+
+    /// Wrap this `LazyUser` in a minijinja `Value` proxy that resolves on
+    /// first attribute access from inside the synchronous render loop.
+    fn into_proxy_value(self) -> minijinja::Value {
+        minijinja::Value::from_object(LazyUserProxy(self))
+    }
+}
+
+/// A minijinja Object proxy that defers resolution of the user until the
+/// template actually accesses an attribute (e.g. `{{ user.is_staff }}`).
+/// Minijinja calls `get_value` for attribute access — we resolve there, not
+/// at context-merge time.
+struct LazyUserProxy(LazyUser);
+
+impl std::fmt::Debug for LazyUserProxy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("LazyUserProxy")
+    }
+}
+
+impl std::fmt::Display for LazyUserProxy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("<lazy user>")
+    }
+}
+
+impl minijinja::value::Object for LazyUserProxy {
+    fn get_value(self: &Arc<Self>, key: &minijinja::Value) -> Option<minijinja::Value> {
+        let resolved = self.0.resolve_blocking();
+        resolved.get_item(key).ok()
+    }
+
+    fn is_true(self: &Arc<Self>) -> bool {
+        // `{% if user %}` — a lazy user is always truthy (authenticated or
+        // anonymous, it is "something"). This matches the eager path where a
+        // `Some(value)` is injected unconditionally.
+        true
+    }
+}
+
+/// Scope a lazy `user` resolver for the duration of `fut`.
+pub async fn with_current_user_lazy<F: Future>(lazy: LazyUser, fut: F) -> F::Output {
+    CURRENT_USER_LAZY.scope(lazy, fut).await
 }
 
 /// Run `fut` with the ambient template user value scoped to `user`
@@ -892,6 +994,15 @@ pub fn render<C: Serialize>(name: &str, ctx: &C) -> Result<String, TemplateError
     render_with(env, name, ctx)
 }
 
+/// Render an inline template source through the ambient-context path.
+/// Test/bench helper only.
+#[doc(hidden)]
+pub fn render_str<C: Serialize>(src: &str, ctx: &C) -> Result<String, TemplateError> {
+    let mut env = minijinja::Environment::new();
+    env.add_template("__inline", src).map_err(TemplateError::Render)?;
+    render_with(&env, "__inline", ctx)
+}
+
 /// True when the ambient settings say we're in Dev. Returns false if
 /// settings haven't been initialised (production-style binaries that
 /// never went through `App::build()`).
@@ -983,11 +1094,16 @@ pub fn merge_ambient_value(ctx_value: minijinja::Value) -> minijinja::Value {
         // The fallback is the same shape `serialize_anonymous` would
         // produce, kept in core so umbra-auth isn't a dependency of
         // the templates module.
-        let layer_user = CURRENT_USER.try_with(|u| u.clone()).ok().flatten();
-        pairs.push((
-            "user".to_string(),
-            layer_user.unwrap_or_else(anonymous_user_value),
-        ));
+        // Prefer the lazy channel (proxy defers resolution until attribute access),
+        // then the eager task-local, then the anonymous fallback.
+        let user_value = if let Ok(lazy) = CURRENT_USER_LAZY.try_with(|lazy| lazy.clone()) {
+            lazy.into_proxy_value()
+        } else if let Some(v) = CURRENT_USER.try_with(|u| u.clone()).ok().flatten() {
+            v
+        } else {
+            anonymous_user_value()
+        };
+        pairs.push(("user".to_string(), user_value));
     }
 
     if let Some(token) = csrf {
