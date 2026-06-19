@@ -264,11 +264,20 @@ pub async fn user_context_layer(
     req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
-    let user_value = match current_user(req.headers()).await {
-        Ok(Some(u)) => serialize_authenticated_with_relations(&u).await,
-        _ => anonymous_user_value(),
-    };
-    umbra::templates::with_current_user(Some(user_value), next.run(req)).await
+    // Install a LAZY resolver instead of resolving eagerly. The closure runs
+    // (at most once) only if a template actually reads `user`; a JSON/API
+    // response that never renders the template pays nothing.
+    let headers = req.headers().clone();
+    let lazy = umbra::templates::LazyUser::new(move || {
+        let headers = headers.clone();
+        async move {
+            match current_user(&headers).await {
+                Ok(Some(u)) => serialize_authenticated_with_relations(&u).await,
+                _ => anonymous_user_value(),
+            }
+        }
+    });
+    umbra::templates::with_current_user_lazy(lazy, next.run(req)).await
 }
 
 /// Depth cap for the recursive relation expansion in
