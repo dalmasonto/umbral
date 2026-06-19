@@ -495,9 +495,8 @@ fn validate_header_value(field: &'static str, value: &str) -> Result<(), EmailEr
         // Allow printable ASCII + non-ASCII Unicode.
         // Allow horizontal tab (RFC 5322 permits it in folded headers).
         // Reject every other control character (< U+0020) plus DEL.
-        let is_forbidden = matches!(ch, '\r' | '\n' | '\x00')
-            || (ch < '\x20' && ch != '\t')
-            || ch == '\x7f';
+        let is_forbidden =
+            matches!(ch, '\r' | '\n' | '\x00') || (ch < '\x20' && ch != '\t') || ch == '\x7f';
         if is_forbidden {
             return Err(EmailError::InvalidHeaderValue {
                 field,

@@ -819,7 +819,10 @@ mod tests {
         };
         // Exact match and sub-paths ARE exempt.
         assert!(st.is_exempt("/api"), "/api exact must be exempt");
-        assert!(st.is_exempt("/api/users"), "/api/users sub-path must be exempt");
+        assert!(
+            st.is_exempt("/api/users"),
+            "/api/users sub-path must be exempt"
+        );
         assert!(
             st.is_exempt("/api/v2/resource"),
             "/api/v2/resource must be exempt"
