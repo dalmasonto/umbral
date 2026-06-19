@@ -248,18 +248,17 @@ where
 // pick it up as `{{ user }}`.
 // =========================================================================
 
-/// Resolve [`current_user`] and stash it in
-/// [`umbra::templates::CURRENT_USER`] for the request's duration.
-/// Always injects a value:
+/// Install a per-request lazy resolver on the
+/// [`umbra::templates::CURRENT_USER_LAZY`] channel.
 ///
-/// - Authenticated → the serialized user merged with
-///   `is_authenticated: true`.
-/// - Anonymous → the sentinel `{ is_authenticated: false }`.
+/// The resolver clones the request headers and runs **at most once**,
+/// only when a template actually accesses `{{ user }}`. Requests that
+/// never render a template (JSON/API responses) pay zero DB reads.
+/// When the resolver does run it performs the session + user lookup
+/// and memoizes the result for the rest of the request.
 ///
-/// One DB read per request (cookie + session + user) on top of
-/// whatever else the handler does. Opt in via
-/// [`crate::AuthPlugin::with_user_in_templates`] when the app is
-/// HTML-heavy; leave off for REST-only services.
+/// Opt in via [`crate::AuthPlugin::with_user_in_templates`] when the
+/// app is HTML-heavy; leave off for REST-only services.
 pub async fn user_context_layer(
     req: axum::extract::Request,
     next: axum::middleware::Next,
