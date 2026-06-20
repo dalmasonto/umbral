@@ -442,10 +442,57 @@ pub fn clear_cookie_header_named(name: &str) -> String {
 /// hydrates the row, see `umbra_auth::current_user` (lives there so
 /// `umbra-sessions` stays free of any user-model dependency).
 pub async fn current_session(headers: &HeaderMap) -> Result<Option<Session>, SessionError> {
-    let Some(id) = cookie_from_headers(headers) else {
+    let cookie_id = cookie_from_headers(headers);
+
+    // In-request fast path: serve a `Session` view from the in-memory
+    // record (no DB) when a request scope is active AND the request's
+    // cookie addresses the scoped session (or there's no cookie — a fresh
+    // request reading its own freshly-written session). A handler that
+    // wrote the session this request sees its own writes back without a
+    // re-query. A *different* cookie value falls through to the DB read so
+    // an explicit cross-session lookup still works.
+    if let Some(view) = current(|s| {
+        let same_session = match &cookie_id {
+            Some(c) => c == s.token(),
+            None => true,
+        };
+        if same_session {
+            // `Some(None)` = scoped + matched but no row yet (anonymous
+            // fresh request) -> report absence WITHOUT a DB read.
+            Some(session_view_from_record(s.token(), s.record()))
+        } else {
+            None
+        }
+    })
+    .flatten()
+    {
+        return Ok(view);
+    }
+
+    // Fallback: today's cookie -> read_session path (out-of-request, or a
+    // cookie that doesn't match the scoped session).
+    let Some(id) = cookie_id else {
         return Ok(None);
     };
     read_session(&id).await
+}
+
+/// Build a `Session` row view from the in-memory request-scoped record.
+/// Returns `None` when the record hasn't materialised yet (an anonymous
+/// fresh request that never wrote the session) so callers see the same
+/// "no session" answer they'd get from the DB. The `id` is the hashed
+/// token, matching how the row is keyed at rest.
+fn session_view_from_record(
+    token: &str,
+    record: Option<&SessionRecord>,
+) -> Option<Session> {
+    record.map(|r| Session {
+        id: hash_token(token),
+        user_id: r.user_id.clone(),
+        data: r.data.clone(),
+        created_at: r.created_at,
+        expires_at: r.expires_at,
+    })
 }
 
 /// Read the request's session cookie and return the stringified user
@@ -459,6 +506,35 @@ pub async fn current_session(headers: &HeaderMap) -> Result<Option<Session>, Ses
 /// reserved for the caller, since each user model knows its own PK
 /// shape.
 pub async fn current_user_id_str(headers: &HeaderMap) -> Result<Option<String>, SessionError> {
+    let cookie_id = cookie_from_headers(headers);
+
+    // In-request fast path: read `user_id` straight off the in-memory
+    // record (no DB). This is the per-request hot path the benchmark hit —
+    // resolving the logged-in user used to cost a `read_session` query on
+    // every authed request. Guard on the cookie matching the scoped token
+    // so a cross-session lookup still goes to the DB.
+    //
+    // The outer `Option` distinguishes "handled in memory" (`Some`, even
+    // when the inner user id is `None` for an anonymous session) from "not
+    // scoped / different cookie -> fall through to the DB" (`None`).
+    let handled: Option<Option<String>> = current(|s| {
+        let same_session = match &cookie_id {
+            Some(c) => c == s.token(),
+            None => true,
+        };
+        if same_session {
+            Some(s.user_id().map(|u| u.to_string()))
+        } else {
+            None
+        }
+    })
+    .flatten();
+    if let Some(uid) = handled {
+        return Ok(uid);
+    }
+
+    // Fallback: out-of-request, or a cookie that doesn't match the scoped
+    // session — today's read_session path.
     Ok(current_session(headers).await?.and_then(|s| s.user_id))
 }
 
@@ -481,17 +557,54 @@ pub fn get_data<T: serde::de::DeserializeOwned>(
     }
 }
 
-/// Write a typed value into a session's `data` map by key. Reads the
-/// existing map, sets the key, writes the row back. `session_token`
-/// is the raw token from the cookie; hashed before the WHERE clause
-/// like every other session-lookup path.
+/// Write a typed value into a session's `data` map by key.
+///
+/// ## In-request fast path (no mid-request DB write)
+///
+/// When called inside a request whose [`session_layer`]-scoped session
+/// matches `session_token`, this mutates the in-memory record via
+/// `current_mut(|s| s.set_raw(...))` and marks it dirty. The actual DB
+/// write happens once, at layer exit (`store.save`). This keeps a
+/// handler that writes several keys to a single persist at the end of
+/// the request instead of one upsert per key.
+///
+/// ## Fallback (out-of-request / token mismatch)
+///
+/// For a background task, a different session's token, or any caller
+/// outside a request scope, falls back to the direct upsert
+/// (`upsert_session_data_key`) so the row is written immediately — the
+/// original direct-write semantics, unchanged.
+///
+/// `session_token` is the raw token from the cookie; hashed before the
+/// WHERE clause like every other session-lookup path.
 pub async fn set_data<T: Serialize>(
     session_token: &str,
     key: &str,
     value: &T,
 ) -> Result<(), SessionError> {
+    let json_value = serde_json::to_value(value)?;
+
+    // In-request fast path: if the live request-scoped session is the one
+    // this token addresses, mutate the in-memory record and let the layer
+    // persist it at exit. `current_mut` returns `None` outside a request
+    // scope (background task), so we fall through to the direct write.
+    let handled = current_mut(|s| {
+        if s.token() == session_token {
+            s.set_raw(key, json_value.clone());
+            true
+        } else {
+            false
+        }
+    })
+    .unwrap_or(false);
+    if handled {
+        return Ok(());
+    }
+
+    // Fallback: direct upsert (preserves the out-of-request write
+    // semantics for background callers / a non-active session token).
     let stored_id = hash_token(session_token);
-    let encoded_value = serde_json::to_string(&serde_json::to_value(value)?)?;
+    let encoded_value = serde_json::to_string(&json_value)?;
     upsert_session_data_key(&stored_id, key, &encoded_value).await
 }
 
@@ -584,6 +697,28 @@ pub async fn login_user_id(
     response_headers: &mut HeaderMap,
     user_id_str: Option<String>,
 ) -> Result<String, SessionError> {
+    // In-request fast path: rotate the request-scoped session in memory.
+    // The layer persists the new record (dirty) at exit; we still destroy
+    // the OLD row here (fixation defense) and write the Set-Cookie now so
+    // the rotated token reaches the client.
+    if let Some((new_token, old_token)) = login_user_id_in_request(&user_id_str) {
+        // Session fixation defense: destroy the row keyed by the old token
+        // so a leaked cookie can't grant authed access. Mirrors the
+        // fallback path's unconditional destroy.
+        if let Some(old) = old_token {
+            let _ = destroy_session(&old).await;
+        }
+        let cookie = set_cookie_header(&new_token, None);
+        response_headers.insert(
+            header::SET_COOKIE,
+            cookie.parse().expect("cookie value parses"),
+        );
+        return Ok(new_token);
+    }
+
+    // Fallback (out-of-request): today's destroy-old + create-new + carry
+    // path, writing directly to the DB.
+    //
     // Capture data from the anonymous session before destroying it,
     // so flash messages etc. don't vanish across login.
     let carry_over_data: Option<String> =
@@ -622,6 +757,35 @@ pub async fn login_user_id(
         cookie.parse().expect("cookie value parses"),
     );
     Ok(token)
+}
+
+/// In-request half of [`login_user_id`]: rotate the request-scoped
+/// session in memory and report `(new_token, old_token)`. Returns `None`
+/// when called outside a request scope (so the caller falls back to the
+/// direct DB path).
+///
+/// `rotate` mints a NEW token and a fresh record pinned to `user_id`,
+/// carrying the old record's `data` string over **only if it isn't
+/// `"{}"`** (the carry-if-not-empty rule, handled inside `rotate`). The
+/// rotation marks the record dirty + fresh so the layer's exit `save`
+/// persists the new authed row and the layer leaves the fresh-cookie
+/// emission to us (we write the Set-Cookie in `login_user_id`).
+fn login_user_id_in_request(user_id_str: &Option<String>) -> Option<(String, Option<String>)> {
+    current_mut(|s| {
+        // The token before rotation = the old session's token (the row we
+        // must destroy for the fixation defense). A `fresh` request that
+        // never materialised a row still has a candidate token, but no DB
+        // row keyed by it, so destroying it is a harmless no-op.
+        let old_token = if s.record().is_some() {
+            Some(s.token().to_string())
+        } else {
+            None
+        };
+        // Carry the old data string across the rotation (flash messages,
+        // cart). `rotate` applies the != "{}" filter internally.
+        s.rotate(user_id_str.clone(), true);
+        (s.token().to_string(), old_token)
+    })
 }
 
 /// End a session. Reads the session token from the request headers,
@@ -951,31 +1115,7 @@ pub async fn session_layer(
     // Load via the store at entry. `fresh = record.is_none()`.
     let (token, fresh, record) = match cookie_token {
         Some(t) => match store.load(&t).await {
-            Ok(Some(rec)) => {
-                // Sliding expiry: when enabled, extend expires_at to
-                // now + TTL so an actively-used session never hard-expires
-                // mid-use. Preserved as an on-entry write (matching the
-                // pre-refactor behaviour) so it fires for EVERY live
-                // session, including requests that mutate the session only
-                // via the side-channel helpers (`set_data` / `Messages`),
-                // which never flip the RequestSession `dirty` flag. This is
-                // the one extra write per request that the default-off flag
-                // avoids for everyone who doesn't need rolling windows.
-                if *SLIDING_EXPIRY_ENABLED.get().unwrap_or(&false) {
-                    let stored_id = hash_token(&t);
-                    let new_expires = Utc::now() + Duration::seconds(DEFAULT_TTL_SECONDS);
-                    let mut patch = serde_json::Map::new();
-                    patch.insert(
-                        "expires_at".to_string(),
-                        serde_json::to_value(new_expires).unwrap_or(serde_json::Value::Null),
-                    );
-                    let _ = Session::objects()
-                        .filter(session::ID.eq(&stored_id))
-                        .update_values(patch)
-                        .await;
-                }
-                (t, false, Some(rec))
-            }
+            Ok(Some(rec)) => (t, false, Some(rec)),
             // Cookie present but stale/expired/destroyed (or a load
             // error). Mint a candidate token IN MEMORY only — no DB row
             // yet. A row materialises lazily iff the handler writes the
@@ -997,7 +1137,24 @@ pub async fn session_layer(
         req.extensions_mut().insert(SessionFresh);
     }
 
-    let rs = RefCell::new(RequestSession::new(token.clone(), fresh, record));
+    let mut rs_value = RequestSession::new(token.clone(), fresh, record);
+
+    // Sliding expiry: when enabled and a LIVE record was loaded, extend
+    // expires_at to now + TTL so an actively-used session never
+    // hard-expires mid-use. Applied IN MEMORY and marked dirty so the
+    // single exit-time `store.save` persists it — DB-free on entry, and
+    // crucially it shares the one exit save with any handler `set_data`
+    // write (otherwise the exit save would clobber the bump back to the
+    // loaded value). Fires only for a live loaded session, so the
+    // lazy-creation contract (#46) is untouched: a fresh request never
+    // gets a sliding write. This is the one extra write per request the
+    // default-off flag avoids for everyone who doesn't need rolling
+    // windows.
+    if !fresh && *SLIDING_EXPIRY_ENABLED.get().unwrap_or(&false) {
+        rs_value.bump_expiry(Utc::now() + Duration::seconds(DEFAULT_TTL_SECONDS));
+    }
+
+    let rs = RefCell::new(rs_value);
 
     // Scope the session task-local around the handler future, then recover
     // the (possibly mutated) RequestSession after it resolves.

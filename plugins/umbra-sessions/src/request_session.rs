@@ -121,6 +121,19 @@ impl RequestSession {
         self.dirty = true;
     }
 
+    /// Sliding expiry: extend the loaded record's `expires_at` and mark
+    /// the session dirty so `session_layer`'s exit save persists the new
+    /// window. No-op if no record was loaded (a fresh session never gets a
+    /// sliding bump — the lazy-creation contract stays intact). Sharing the
+    /// exit save with any `set_raw` write this request is what keeps the
+    /// bump from being clobbered by the save of a stale `expires_at`.
+    pub fn bump_expiry(&mut self, new_expires: chrono::DateTime<Utc>) {
+        if let Some(record) = self.record.as_mut() {
+            record.expires_at = new_expires;
+            self.dirty = true;
+        }
+    }
+
     /// Login rotation: mint a NEW token and a fresh record pinned to
     /// `user_id`, optionally carrying the old record's `data` string over
     /// (flash messages, cart, etc.). Marks the session dirty and fresh so
