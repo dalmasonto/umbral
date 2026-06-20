@@ -1,6 +1,6 @@
 ## Features worthy having
 
-1. [ ] **A logs plugin like django-logs** 🔴 High
+1. [x] **A logs plugin like django-logs** — SHIPPED 2026-06-20: `umbra-logs` plugin — `RequestLog` model + non-blocking fire-and-forget capture layer (`wrap_router`) recording method/path/status/duration/ip/user-agent, path-prefix exclusions + deterministic `sample_rate` + `min_status`, and a read-only `admin_model()` helper for browsing in the admin (`250e984`). Follow-up: `user_id` is header-based (`X-Umbra-User-Id`) to keep the plugin dep-light; auto-resolving it from the request `Identity` extension when auth is mounted is a low-risk enhancement.
     > Why: This is both a feature and an architectural proof. If you cannot write a third-party plugin that intercepts every ORM write and logs it, the plugin contract is incomplete. It also answers gap #43 ("can a plugin be extended?"). A logs plugin that auto-registers its model, auto-wires into the admin, and auto-tracks mutations without touching core is the definitive demo that the plugin system works end-to-end.
     >
     > How: `LogsPlugin` implements `Plugin`, contributes a single `LogEntry` model (`id, table, action, pk, actor_id, timestamp, changes_json`). Hook into the ORM via the signal system (gap #38) — `post_save`, `post_delete`, `m2m_changed` — or via a middleware layer that wraps `QuerySet` terminals. Admin: auto-discover the model (already works) and add a "Recent activity" widget to the dashboard (gap #7). No core changes needed.
