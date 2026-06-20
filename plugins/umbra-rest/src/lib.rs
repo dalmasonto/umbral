@@ -96,6 +96,19 @@ const DEFAULT_BLOCKED_TABLES: &[&str] = &[
     "admin_audit_log",
 ];
 
+/// Field names that are ALWAYS stripped from every serialized response,
+/// on every table, regardless of `.expose(...)` / `.hide(...)` / any
+/// `ResourceConfig` override. This is the hard security denylist.
+///
+/// The threat: a developer calls `.expose(["auth_user"])` to serve that
+/// table over REST but forgets to pair it with `.hide("password_hash")`.
+/// Without this list the argon2 hash leaks to every API consumer.
+/// With it, `password_hash` is stripped *after* all configurable logic
+/// runs, so no combination of builder calls can re-expose it.
+///
+/// Gap: gaps2 #75.
+const HARD_DENIED_FIELDS: &[&str] = &["password_hash"];
+
 /// Closure that transforms one field's JSON value to another. Used
 /// by [`RestPlugin::transform`]. The signature is `&Value -> Value`
 /// — the field's current value goes in, the replacement comes out.
@@ -842,6 +855,13 @@ impl RestPlugin {
                 row.insert(name.clone(), v);
             }
         }
+
+        // Hard security denylist — applied LAST, after all configurable
+        // hide / transform / computed logic, so no `.expose()` or missing
+        // `.hide()` call can re-expose these fields. gaps2 #75.
+        for field in HARD_DENIED_FIELDS {
+            row.remove(*field);
+        }
     }
 
     /// Sparse fieldset (gap #81 + nested-projection extension). Prune
@@ -963,6 +983,11 @@ impl RestPlugin {
     /// time. So checking `self.hidden` alone agrees 1:1 with what
     /// `apply_overrides` removes.
     pub(crate) fn is_field_hidden(&self, table: &str, field: &str) -> bool {
+        // Hard-denied fields are always hidden, regardless of any
+        // `.expose()` / `.hide()` configuration. gaps2 #75.
+        if HARD_DENIED_FIELDS.contains(&field) {
+            return true;
+        }
         self.hidden.iter().any(|(t, f)| t == table && f == field)
     }
 
@@ -2449,7 +2474,10 @@ mod allow_block_unit {
         assert!(p.is_field_hidden("account", "password_hash"));
         assert!(p.is_field_hidden("account", "api_token"));
         assert!(!p.is_field_hidden("account", "label"));
-        assert!(!p.is_field_hidden("other", "password_hash"));
+        // password_hash is in HARD_DENIED_FIELDS, so is_field_hidden returns
+        // true for it on ANY table — even one that never called .hide().
+        // gaps2 #75: hard denylist is un-overridable.
+        assert!(p.is_field_hidden("other", "password_hash"));
     }
 
     #[test]

@@ -96,8 +96,12 @@ async fn is_hidden_false_for_visible_field() {
 #[tokio::test]
 async fn is_hidden_false_for_unknown_table() {
     boot().await;
+    // Use a non-sensitive field name. `password_hash` is now in the
+    // HARD_DENIED_FIELDS list (gaps2 #75) and always returns true, which
+    // would make this assertion wrong. Use a plain field that has no
+    // special treatment to verify the "no hides registered" path.
     assert!(
-        !umbra_rest::is_hidden("no_such_table", "password_hash"),
-        "a field on a table with no hides must report false"
+        !umbra_rest::is_hidden("no_such_table", "some_plain_field"),
+        "a non-sensitive field on a table with no hides must report false"
     );
 }
