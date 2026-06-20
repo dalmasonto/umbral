@@ -307,7 +307,7 @@
 
 > **#71–#78 — surfaced 2026-06-16 by the hardening review** (`planning/hardening/`). Full prioritized detail in `planning/hardening/backlog.md`; per-finding cites in `planning/hardening/reviews/*.md`.
 
-71. [~] **Concurrency / data-divergence hardening.** _PARTIAL (2026-06-20): SHIPPED — `set_user_groups` transactional + rollback test (`a4cdbd8`); `update_or_create`/`get_or_create` converge on UNIQUE race (`18b6a93`); `add_user_to_group`/`grant_user_permission` idempotent caught-UNIQUE (`c818cab`). REMAINING (sole sub-part): session `set_data` read-modify-write loses concurrent keys + swallows corrupt data (`plugins/umbra-sessions/src/lib.rs:400-456`) — DEFERRED to Phase 2a (`perf/sessionstore-2a` rewrites the session core)._
+71. [x] Concurrency / data-divergence hardening — FULLY CLOSED (2026-06-20): set_user_groups tx (a4cdbd8), update_or_create/get_or_create converge (18b6a93), idempotent grants (c818cab), session set_data key-loss resolved by Phase 2a SessionStore (5763cf7/49c1740/b6976fd/ff06898). — archived
 
 72. [x] Endpoint scalability — SHIPPED (2026-06-20): CSV 1000-cap (58d8c2e), FK/deleted_at index emission (2d2864f), M2M form cap=200 (9de4b4d), apply_overrides clone-once-per-request (cca87e1), AdminPerms one-query (7af921a). — archived
 
