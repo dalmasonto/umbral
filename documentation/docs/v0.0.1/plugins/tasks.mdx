@@ -288,6 +288,80 @@ let reclaimed = reclaim_orphaned_tasks(Duration::from_secs(60)).await?;
 println!("{reclaimed} orphaned task(s) reclaimed");
 ```
 
+## Periodic tasks (beat)
+
+For *recurring* work — a nightly cleanup, an hourly digest, a job every five
+minutes — register a periodic schedule, Celery `beat_schedule` style, and run the
+**beat** process. Beat is the scheduler; it does not run handlers itself. Each
+time a schedule is due, beat enqueues a normal task row; the **worker** drains it.
+Run them as two separate processes (exactly like Celery's `worker` and `beat`).
+
+Register schedules on the plugin builder with `.periodic(name, schedule, task, payload)`:
+
+```rust
+use std::time::Duration;
+use umbra_tasks::{Schedule, TasksPlugin};
+
+App::builder()
+    .plugin(
+        TasksPlugin::default()
+            // Cron: midnight every day.
+            .periodic(
+                "cleanup",
+                Schedule::cron("0 0 * * *"),
+                "cleanup_task",
+                serde_json::json!({ "older_than_days": 30 }),
+            )
+            // Fixed interval: every hour.
+            .periodic(
+                "heartbeat",
+                Schedule::every(Duration::from_secs(3600)),
+                "heartbeat_task",
+                serde_json::json!({}),
+            ),
+    )
+    .build()?;
+```
+
+`name` is the schedule's **stable key** — one `periodic_task` row per name.
+Re-registering with the same name updates the existing row (its `task`, `payload`,
+and `schedule`) instead of duplicating it; `next_run` is only recomputed when the
+schedule string actually changes, so an unchanged redeploy never starves the task.
+
+### Schedule format
+
+| Variant | Constructor | Meaning |
+|---------|-------------|---------|
+| Cron | `Schedule::cron("min hour dom mon dow")` | Standard **5-field** cron (`"0 0 * * *"` = midnight daily, `"*/5 * * * *"` = every 5 minutes). A 6-field form with a leading seconds column is also accepted. |
+| Interval | `Schedule::every(Duration)` | Fire every fixed duration after the previous run. |
+
+The schedule persists as a single string column (`"cron:0 0 * * *"` /
+`"every:3600"`). A schedule that yields no further fire time disables the row
+(`enabled = false`) rather than spinning.
+
+### Running beat
+
+```bash
+# Run the scheduler continuously alongside the worker.
+cargo run -- tasks-beat
+
+# Sync schedules, run one tick, and exit (tests / cron-driven beats).
+cargo run -- tasks-beat --once
+```
+
+On startup beat syncs the registered schedules to `periodic_task` rows, then each
+tick (default every 5s) enqueues every due schedule.
+
+<Callout type="info">
+**Multi-instance safe.** You can run more than one `tasks-beat` process without
+double-firing. Each due row is claimed with an optimistic conditional UPDATE —
+`SET next_run = <next> WHERE id = ? AND next_run = <the value just read>` — and the
+task is enqueued only if that UPDATE won the race (affected exactly one row). A
+second beat instance reading the same row finds `next_run` already advanced, its
+UPDATE matches nothing, and it enqueues nothing. The same conditional-claim guard
+the worker uses.
+</Callout>
+
 ## Combining with signals
 
 <Callout type="info">
@@ -311,11 +385,10 @@ The signals docs page is at [`/docs/v0.0.1/plugins/signals`](/docs/v0.0.1/plugin
   (a concurrent worker whose UPDATE matches zero rows loses the race
   cleanly). `SELECT … FOR UPDATE SKIP LOCKED` is a future optimization
   that avoids the wasted candidate SELECT, not a correctness fix.
-- **Periodic/cron scheduling ("beat").** One-shot `eta`/`delay` scheduling ships
-  now (see above), but there is no recurring/cron repeat mechanism yet. Deferred
-  to the deep spec (`planning/features.md` #82).
-- **Result backend and priority queues.** No place to read a task's return value
-  back, and no priority ordering beyond `run_at` then id. Also #82.
+- **Result backend.** No place to read a task's return value back, and no
+  task-status query API beyond inspecting the `task_row` row directly. The
+  remaining Celery gap, deferred to the deep spec (`planning/features.md` #82).
+- **Priority queues.** No priority ordering beyond `run_at` then id. Also #82.
 - **Per-task backoff / timeout persistence.** `EnqueueOptions` accepts the fields
   but the worker applies worker-level defaults in v1 (see the callout above). #82.
 - **Status enum.** Status is stored as a plain string (`pending`, `running`,

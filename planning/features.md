@@ -474,3 +474,11 @@ These are the cross-cutting capabilities that turn a framework from a neat ORM d
     > **Stretch (post-v1)**: UTM-parameter capture (`?utm_source=...`) so campaign tracking works; A/B-test bucketing tied to the session cookie; export-to-CSV from the admin views (`Daily visits → Download CSV`); per-path conversion funnels (path-A then path-B within session = "conversion").
 
 79. [ ] We need factory testing library. Related to #74. Aim: Make it easy to write tests that simulate realistic plugin submissions and model updates.
+
+82. [ ] **umbra-tasks: remaining Celery gaps — result backend, task-status API, priority queues** 🟡 Medium
+    > Periodic/cron "beat" scheduling SHIPPED (a `PeriodicTask` model + `Schedule::cron`/`Schedule::every` + `run_beat`/`tasks-beat`, with an atomic optimistic-claim guard so multiple beat instances can't double-enqueue; see `plugins/umbra-tasks/src/lib.rs` and the tasks doc page). Reliability (eta/delay `run_at`, exponential-backoff retries, per-task timeout, visibility-timeout orphan reclaim) shipped earlier. What's left to call the tasks plugin full Celery parity:
+    >
+    > - **Result backend.** No place to read a task's return value back. Today a handler returns `Result<(), String>` and only the error string is persisted; a success discards any payload. A result backend would persist the handler's typed return value (JSON) keyed by task id so the enqueuer can poll/await it.
+    > - **Task-status query API.** Reading a task's lifecycle (pending → running → succeeded/failed) means SELECTing the `task_row` row directly. A typed `task_status(id) -> Status` (and ideally an `AsyncResult`-style await) belongs in the public surface.
+    > - **Priority queues.** Ordering is `run_at` then id (FIFO among due rows). No way to say "this job jumps the queue." A `priority: i64` column + `ORDER BY priority DESC, run_at, id` would cover the common case.
+    > - **Per-task backoff / timeout persistence.** `EnqueueOptions::timeout` (and per-task backoff overrides) are accepted on the API but not persisted to a column; the worker applies its worker-level defaults. Persisting them as columns is the follow-up.

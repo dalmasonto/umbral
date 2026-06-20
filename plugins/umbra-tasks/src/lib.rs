@@ -41,8 +41,17 @@
 //!   handler that overruns is recorded as a retriable failure (backed off
 //!   or abandoned) rather than holding its claim until the visibility
 //!   timeout.
-//! - No periodic/cron scheduling ("beat"), no result backend, no priority
-//!   queues. Deferred to the deep spec (planning/features.md #82).
+//! - Periodic/cron scheduling ("beat", this revision): a [`PeriodicTask`]
+//!   model carries a stable `name`, the handler `task` to fire, its JSON
+//!   `payload`, a serialized [`Schedule`] (cron expression or fixed
+//!   interval) and the computed `next_run`. [`TasksPlugin::periodic`]
+//!   registers a recurring task Celery-`beat_schedule` style; [`run_beat`]
+//!   is the separate beat process that, each tick, atomically claims every
+//!   due row (an optimistic conditional `UPDATE` advances `next_run` so a
+//!   second beat instance can't double-fire it) and enqueues the underlying
+//!   task. Run it via the `tasks-beat` CLI command.
+//! - No result backend, no task-status query API, no priority queues. Those
+//!   are the remaining Celery gaps, deferred to planning/features.md #82.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -108,9 +117,15 @@ pub struct TaskRow {
     pub created_at: DateTime<Utc>,
 }
 
-/// The plugin. Registers the [`TaskRow`] model.
+/// The plugin. Registers the [`TaskRow`] and [`PeriodicTask`] models and
+/// collects any [`TasksPlugin::periodic`] schedules.
 #[derive(Debug, Default)]
-pub struct TasksPlugin;
+pub struct TasksPlugin {
+    /// Recurring schedules collected via [`TasksPlugin::periodic`].
+    /// Published to [`REGISTERED_PERIODIC`] in [`Plugin::on_ready`] and
+    /// upserted to `PeriodicTask` rows by [`run_beat`] on startup.
+    periodic: Vec<PeriodicSpec>,
+}
 
 impl Plugin for TasksPlugin {
     fn name(&self) -> &'static str {
@@ -118,11 +133,73 @@ impl Plugin for TasksPlugin {
     }
 
     fn models(&self) -> Vec<umbra::migrate::ModelMeta> {
-        vec![umbra::migrate::ModelMeta::for_::<TaskRow>()]
+        vec![
+            umbra::migrate::ModelMeta::for_::<TaskRow>(),
+            umbra::migrate::ModelMeta::for_::<PeriodicTask>(),
+        ]
     }
 
     fn commands(&self) -> Vec<Box<dyn umbra::cli::PluginCommand>> {
-        vec![Box::new(WorkerCommand)]
+        vec![Box::new(WorkerCommand), Box::new(BeatCommand)]
+    }
+
+    fn on_ready(&self, _ctx: &umbra::plugin::AppContext) -> Result<(), umbra::plugin::PluginError> {
+        // Install the builder-collected periodic specs into the ambient
+        // registry so `run_beat` can sync them to `PeriodicTask` rows on
+        // startup. `on_ready` is sync, so the async DB upsert happens in
+        // the beat loop; here we only publish the in-memory specs.
+        if !self.periodic.is_empty()
+            && REGISTERED_PERIODIC.set(self.periodic.clone()).is_err()
+        {
+            tracing::warn!(
+                "umbra-tasks: periodic specs already installed by another \
+                 TasksPlugin; ignoring this registration"
+            );
+        }
+        Ok(())
+    }
+}
+
+impl TasksPlugin {
+    /// Register a recurring task, Celery `beat_schedule` style. `name` is
+    /// the schedule's stable key (one `PeriodicTask` row per name); `task`
+    /// is the handler name [`run_beat`] enqueues each time the schedule
+    /// fires; `payload` is the JSON args the handler receives.
+    ///
+    /// Specs are collected on the builder and installed into the ambient
+    /// registry in [`Plugin::on_ready`]; [`run_beat`] upserts them to
+    /// `PeriodicTask` rows on startup (insert new, update the
+    /// schedule/task/payload of existing ones by name).
+    ///
+    /// ```ignore
+    /// App::builder()
+    ///     .plugin(
+    ///         TasksPlugin::default()
+    ///             .periodic(
+    ///                 "nightly_cleanup",
+    ///                 Schedule::cron("0 0 * * *"),
+    ///                 "cleanup_task",
+    ///                 serde_json::json!({ "older_than_days": 30 }),
+    ///             ),
+    ///     )
+    ///     .build()?;
+    /// ```
+    pub fn periodic<P: Serialize>(
+        mut self,
+        name: &str,
+        schedule: Schedule,
+        task: &str,
+        payload: P,
+    ) -> Self {
+        let payload = serde_json::to_string(&payload)
+            .unwrap_or_else(|e| panic!("umbra-tasks: periodic payload not serializable: {e}"));
+        self.periodic.push(PeriodicSpec {
+            name: name.to_string(),
+            schedule,
+            task: task.to_string(),
+            payload,
+        });
+        self
     }
 }
 
@@ -156,6 +233,42 @@ impl umbra::cli::PluginCommand for WorkerCommand {
             Ok(())
         } else {
             run_worker(WorkerOptions::default()).await;
+            Ok(())
+        }
+    }
+}
+
+/// `tasks-beat`: run the periodic-task scheduler (Celery beat).
+///
+/// On startup it syncs the registered [`PeriodicSpec`]s to `PeriodicTask`
+/// rows, then each tick claims every due row atomically and enqueues the
+/// underlying task. Run it as its OWN process alongside `tasks-worker`
+/// (the worker drains the queue beat fills).
+///
+/// `--once` runs one sync + one tick and exits (tests, cron-driven beats).
+/// Without `--once` it polls forever at the default interval.
+#[derive(Debug, Default)]
+pub struct BeatCommand;
+
+#[async_trait::async_trait]
+impl umbra::cli::PluginCommand for BeatCommand {
+    fn command(&self) -> clap::Command {
+        clap::Command::new("tasks-beat")
+            .about("Run the umbra-tasks periodic scheduler (Celery beat)")
+            .arg(
+                clap::Arg::new("once")
+                    .long("once")
+                    .help("Sync schedules, run one tick, and exit")
+                    .action(clap::ArgAction::SetTrue),
+            )
+    }
+
+    async fn run(&self, matches: &clap::ArgMatches) -> Result<(), umbra::cli::CliError> {
+        if matches.get_flag("once") {
+            let _fired = run_beat_once().await?;
+            Ok(())
+        } else {
+            run_beat(BeatOptions::default()).await;
             Ok(())
         }
     }
@@ -808,5 +921,396 @@ async fn process_one(row: TaskRow, policy: RetryPolicy) -> Result<(), TaskError>
                 .await?;
         }
     }
+    Ok(())
+}
+
+// =========================================================================
+// Periodic / cron scheduling — the "beat" (Celery beat parity).
+// =========================================================================
+
+/// A recurring schedule: either a standard cron expression or a fixed
+/// interval. Serializes to a single string column on [`PeriodicTask`] so
+/// the schedule persists alongside the row.
+///
+/// ## Cron format
+///
+/// [`Schedule::cron`] accepts a **standard 5-field** expression
+/// (`min hour day-of-month month day-of-week`, e.g. `"0 0 * * *"` for
+/// midnight daily). Internally a leading `0 ` seconds field is prepended
+/// for the `cron` crate, which wants a 6-field (`sec min hour dom mon dow`)
+/// expression. A 6-field expression is passed through unchanged, so the
+/// seconds field is available if you need it.
+///
+/// ## Serialized form
+///
+/// - Cron: `"cron:0 0 * * *"`
+/// - Interval: `"every:3600"` (seconds)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Schedule {
+    /// A cron expression (5 or 6 field — see the type docs).
+    Cron(String),
+    /// Fire every fixed `Duration` after the previous run.
+    Every(Duration),
+}
+
+impl Schedule {
+    /// A cron schedule from a standard 5-field (or 6-field) expression.
+    pub fn cron(expr: impl Into<String>) -> Self {
+        Schedule::Cron(expr.into())
+    }
+
+    /// A fixed-interval schedule firing every `period`.
+    pub fn every(period: Duration) -> Self {
+        Schedule::Every(period)
+    }
+
+    /// The next fire time strictly after `after`, or `None` if the schedule
+    /// will never fire again (an exhausted or unparseable cron). For
+    /// [`Schedule::Every`] this is always `Some(after + period)`.
+    pub fn next_after(&self, after: DateTime<Utc>) -> Option<DateTime<Utc>> {
+        match self {
+            Schedule::Cron(expr) => {
+                let normalized = normalize_cron(expr);
+                let schedule = cron::Schedule::from_str(&normalized).ok()?;
+                schedule.after(&after).next()
+            }
+            Schedule::Every(period) => {
+                let delta = chrono::Duration::from_std(*period).ok()?;
+                Some(after + delta)
+            }
+        }
+    }
+
+    /// Serialize to the single string stored in the `schedule` column.
+    pub fn to_storage(&self) -> String {
+        match self {
+            Schedule::Cron(expr) => format!("cron:{expr}"),
+            Schedule::Every(period) => format!("every:{}", period.as_secs()),
+        }
+    }
+
+    /// Parse the stored string form back into a `Schedule`.
+    pub fn from_storage(s: &str) -> Option<Schedule> {
+        if let Some(expr) = s.strip_prefix("cron:") {
+            Some(Schedule::Cron(expr.to_string()))
+        } else if let Some(secs) = s.strip_prefix("every:") {
+            secs.parse::<u64>().ok().map(|n| Schedule::Every(Duration::from_secs(n)))
+        } else {
+            None
+        }
+    }
+}
+
+/// Prepend a seconds field to a 5-field cron expression so the `cron`
+/// crate (which wants `sec min hour dom mon dow`) accepts it. A 6+ field
+/// expression is returned unchanged.
+fn normalize_cron(expr: &str) -> String {
+    let fields = expr.split_whitespace().count();
+    if fields == 5 {
+        format!("0 {expr}")
+    } else {
+        expr.to_string()
+    }
+}
+
+use std::str::FromStr;
+
+/// A persisted recurring task. One row per [`PeriodicSpec::name`]; the beat
+/// loop advances `next_run` each time it fires the underlying `task`.
+///
+/// Columns are nullable / defaulted so the model migrates additively
+/// against an existing `task_row`-only DB (same lesson as `run_at`): a
+/// brand-new table is created by `makemigrations`/`migrate`, and the
+/// non-nullable identity columns (`name`/`task`/`payload`/`schedule`/
+/// `next_run`) are only ever written by code that fills them.
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize, umbra::orm::Model)]
+pub struct PeriodicTask {
+    pub id: i64,
+    /// The schedule's stable key. One row per name; re-registering a spec
+    /// with the same name updates this row rather than duplicating it.
+    #[umbra(unique)]
+    pub name: String,
+    /// The handler name [`run_beat`] enqueues when the schedule fires.
+    pub task: String,
+    /// JSON args passed to the enqueued task.
+    pub payload: String,
+    /// The serialized [`Schedule`] (`"cron:..."` / `"every:..."`).
+    pub schedule: String,
+    /// The next instant this task is due. The beat loop claims rows whose
+    /// `next_run <= now` and advances this forward.
+    pub next_run: DateTime<Utc>,
+    /// When the schedule last fired (`None` until the first fire).
+    pub last_run: Option<DateTime<Utc>>,
+    /// Whether the schedule is active. A schedule that yields no further
+    /// fire time (`next_after` returns `None`) is disabled here.
+    pub enabled: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// A recurring-task registration collected by [`TasksPlugin::periodic`] and
+/// upserted to a [`PeriodicTask`] row on beat startup.
+#[derive(Debug, Clone)]
+pub struct PeriodicSpec {
+    /// The schedule's stable key (the row's `name`).
+    pub name: String,
+    /// The schedule.
+    pub schedule: Schedule,
+    /// The handler name to enqueue each fire.
+    pub task: String,
+    /// JSON-encoded args for the enqueued task.
+    pub payload: String,
+}
+
+/// Process-wide registry of the periodic specs collected on the builder.
+/// Installed in [`Plugin::on_ready`] (sync), consumed by [`run_beat`]'s
+/// async startup sync. Mirrors the worker's [`HANDLERS`] OnceLock.
+static REGISTERED_PERIODIC: OnceLock<Vec<PeriodicSpec>> = OnceLock::new();
+
+/// Test-only escape hatch: drop the installed periodic registry so a case
+/// can re-publish its own specs. Only resets if it was set.
+#[doc(hidden)]
+pub fn _registered_periodic() -> Option<&'static Vec<PeriodicSpec>> {
+    REGISTERED_PERIODIC.get()
+}
+
+/// Sync the registered [`PeriodicSpec`]s to `PeriodicTask` rows. Inserts a
+/// new row for each previously-unseen `name` (computing `next_run` from the
+/// schedule); for an existing row, updates `task`/`payload`/`schedule` and
+/// recomputes `next_run` only if the schedule string changed, leaving
+/// `last_run` intact. Idempotent.
+///
+/// Returns the number of rows inserted or updated. Driven on beat startup
+/// from the ambient registry; tests call [`sync_periodic_specs`] directly.
+pub async fn sync_registered_periodic() -> Result<u64, TaskError> {
+    let Some(specs) = REGISTERED_PERIODIC.get() else {
+        return Ok(0);
+    };
+    sync_periodic_specs(specs).await
+}
+
+/// [`sync_registered_periodic`] over an explicit spec slice (test entry
+/// point that doesn't depend on the ambient OnceLock).
+pub async fn sync_periodic_specs(specs: &[PeriodicSpec]) -> Result<u64, TaskError> {
+    let now = Utc::now();
+    let mut changed: u64 = 0;
+    for spec in specs {
+        let storage = spec.schedule.to_storage();
+        let existing = PeriodicTask::objects()
+            .filter(periodic_task::NAME.eq(spec.name.as_str()))
+            .first()
+            .await?;
+        match existing {
+            None => {
+                let next_run = spec.schedule.next_after(now).unwrap_or(now);
+                PeriodicTask::objects()
+                    .create(PeriodicTask {
+                        id: 0,
+                        name: spec.name.clone(),
+                        task: spec.task.clone(),
+                        payload: spec.payload.clone(),
+                        schedule: storage,
+                        next_run,
+                        last_run: None,
+                        enabled: true,
+                        created_at: now,
+                        updated_at: now,
+                    })
+                    .await?;
+                changed += 1;
+            }
+            Some(row) => {
+                let mut patch = serde_json::Map::new();
+                patch.insert(
+                    "task".to_string(),
+                    serde_json::Value::String(spec.task.clone()),
+                );
+                patch.insert(
+                    "payload".to_string(),
+                    serde_json::Value::String(spec.payload.clone()),
+                );
+                patch.insert(
+                    "schedule".to_string(),
+                    serde_json::Value::String(storage.clone()),
+                );
+                patch.insert("updated_at".to_string(), serde_json::to_value(now)?);
+                // Only recompute `next_run` when the schedule actually
+                // changed — otherwise an unchanged re-sync would keep
+                // shoving the next fire time forward and starve the task.
+                if row.schedule != storage {
+                    let next_run = spec.schedule.next_after(now).unwrap_or(now);
+                    patch.insert("next_run".to_string(), serde_json::to_value(next_run)?);
+                }
+                let affected = PeriodicTask::objects()
+                    .filter(periodic_task::ID.eq(row.id))
+                    .update_values(patch)
+                    .await?;
+                changed += affected;
+            }
+        }
+    }
+    Ok(changed)
+}
+
+/// Default beat poll interval: how long to sleep between ticks when no row
+/// is due. Celery beat defaults to a 5-minute max-loop but checks far more
+/// often; 5s is a reasonable resolution for second-granularity crons.
+pub const DEFAULT_BEAT_POLL_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Options for [`run_beat`].
+pub struct BeatOptions {
+    /// How long to sleep between ticks. Defaults to
+    /// [`DEFAULT_BEAT_POLL_INTERVAL`] (5s).
+    pub poll_interval: Duration,
+    /// Flip to `true` to cleanly exit after the in-flight tick. A
+    /// never-fires channel is installed by [`BeatOptions::default`].
+    pub shutdown: watch::Receiver<bool>,
+}
+
+impl Default for BeatOptions {
+    fn default() -> Self {
+        let (_tx, rx) = watch::channel(false);
+        std::mem::forget(_tx);
+        Self {
+            poll_interval: DEFAULT_BEAT_POLL_INTERVAL,
+            shutdown: rx,
+        }
+    }
+}
+
+/// The beat loop. Syncs the registered schedules once on startup, then each
+/// tick fires every due [`PeriodicTask`] (atomically claimed so multiple
+/// beat instances can't double-enqueue) and sleeps `poll_interval`. Runs
+/// until `opts.shutdown` flips. Like [`run_worker`], it never calls
+/// `process::exit` — it returns so a single-binary deployment that spawned
+/// it can tear down cleanly.
+pub async fn run_beat(mut opts: BeatOptions) {
+    if let Err(e) = sync_registered_periodic().await {
+        tracing::error!(error = %e, "umbra-tasks: beat startup sync failed");
+    }
+    loop {
+        if *opts.shutdown.borrow() {
+            return;
+        }
+        match fire_due_periodic().await {
+            Ok(fired) if fired > 0 => {
+                tracing::info!(count = fired, "umbra-tasks: beat fired periodic tasks");
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::error!(error = %e, "umbra-tasks: beat tick failed");
+            }
+        }
+        tokio::select! {
+            _ = tokio::time::sleep(opts.poll_interval) => {}
+            _ = opts.shutdown.changed() => {}
+        }
+    }
+}
+
+/// Single beat step for tests / cron-driven beats: sync the registered
+/// schedules, then fire every due row once. Returns the number of tasks
+/// enqueued this tick.
+pub async fn run_beat_once() -> Result<u64, TaskError> {
+    sync_registered_periodic().await?;
+    fire_due_periodic().await
+}
+
+/// Fire every due periodic task: for each `enabled` row whose
+/// `next_run <= now`, atomically claim it (advance `next_run` to the next
+/// fire time and stamp `last_run`) and — only if the claim won the race —
+/// enqueue the underlying task. Returns the number of tasks enqueued.
+///
+/// The claim is an optimistic conditional UPDATE: `... WHERE id = ? AND
+/// next_run = <the value we read>`. [`QuerySet::update_values`] returns the
+/// affected-row count, so we enqueue only when it's `1`. A second beat
+/// instance that read the same row loses the race — its UPDATE matches
+/// nothing (the `next_run` guard already moved) and affects `0` rows, so it
+/// enqueues nothing. This is the multi-instance double-enqueue guard,
+/// mirroring [`claim_one`]'s conditional claim on the worker side.
+pub async fn fire_due_periodic() -> Result<u64, TaskError> {
+    let now = Utc::now();
+    let due: Vec<PeriodicTask> = PeriodicTask::objects()
+        .filter(periodic_task::ENABLED.eq(true) & periodic_task::NEXT_RUN.le(now))
+        .order_by(periodic_task::NEXT_RUN.asc())
+        .order_by(periodic_task::ID.asc())
+        .fetch()
+        .await?;
+
+    let mut fired: u64 = 0;
+    for row in due {
+        let Some(schedule) = Schedule::from_storage(&row.schedule) else {
+            tracing::warn!(
+                name = %row.name,
+                schedule = %row.schedule,
+                "umbra-tasks: periodic task has an unparseable schedule; disabling"
+            );
+            disable_periodic(row.id).await?;
+            continue;
+        };
+
+        match schedule.next_after(now) {
+            Some(next_run) => {
+                let mut patch = serde_json::Map::new();
+                patch.insert("next_run".to_string(), serde_json::to_value(next_run)?);
+                patch.insert("last_run".to_string(), serde_json::to_value(now)?);
+                patch.insert("updated_at".to_string(), serde_json::to_value(now)?);
+                // Optimistic claim: only one beat instance can advance the
+                // row from THIS exact `next_run`. `affected == 1` means we
+                // won and may enqueue; `0` means another instance beat us.
+                let affected = PeriodicTask::objects()
+                    .filter(
+                        periodic_task::ID.eq(row.id) & periodic_task::NEXT_RUN.eq(row.next_run),
+                    )
+                    .update_values(patch)
+                    .await?;
+                if affected == 1 {
+                    enqueue_periodic(&row).await?;
+                    fired += 1;
+                }
+            }
+            None => {
+                // No further fire time — disable the schedule.
+                disable_periodic(row.id).await?;
+            }
+        }
+    }
+    Ok(fired)
+}
+
+/// Enqueue the task a periodic row fires. The stored `payload` is already a
+/// JSON string, so it's enqueued verbatim (re-serializing a `&str` would
+/// double-encode it).
+async fn enqueue_periodic(row: &PeriodicTask) -> Result<(), TaskError> {
+    let now = Utc::now();
+    TaskRow::objects()
+        .create(TaskRow {
+            id: 0,
+            name: row.task.clone(),
+            payload: row.payload.clone(),
+            status: STATUS_PENDING.to_string(),
+            attempts: 0,
+            max_attempts: DEFAULT_MAX_ATTEMPTS,
+            scheduled_for: now,
+            run_at: Some(now),
+            started_at: None,
+            completed_at: None,
+            error: None,
+            created_at: now,
+        })
+        .await?;
+    Ok(())
+}
+
+/// Disable a periodic row (a schedule that will never fire again).
+async fn disable_periodic(id: i64) -> Result<(), TaskError> {
+    let now = Utc::now();
+    let mut patch = serde_json::Map::new();
+    patch.insert("enabled".to_string(), serde_json::Value::Bool(false));
+    patch.insert("updated_at".to_string(), serde_json::to_value(now)?);
+    PeriodicTask::objects()
+        .filter(periodic_task::ID.eq(id))
+        .update_values(patch)
+        .await?;
     Ok(())
 }

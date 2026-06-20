@@ -54,7 +54,7 @@ async fn boot() {
         umbra::App::builder()
             .settings(settings)
             .database("default", pool)
-            .plugin(TasksPlugin)
+            .plugin(TasksPlugin::default())
             .build()
             .expect("App::build with TasksPlugin");
 
@@ -448,7 +448,7 @@ async fn dispatch_routes_tasks_worker_command_to_run_worker_once() {
     .await
     .expect("enqueue");
 
-    let plugins: Vec<Box<dyn umbra::prelude::Plugin>> = vec![Box::new(TasksPlugin)];
+    let plugins: Vec<Box<dyn umbra::prelude::Plugin>> = vec![Box::new(TasksPlugin::default())];
     let outcome = umbra::cli::dispatch(&plugins, vec!["umbra-cli", "tasks-worker", "--once"])
         .await
         .expect("dispatch ok");
@@ -468,7 +468,7 @@ async fn dispatch_returns_unmatched_for_unknown_command() {
     let _guard = test_lock().await;
     boot().await;
 
-    let plugins: Vec<Box<dyn umbra::prelude::Plugin>> = vec![Box::new(TasksPlugin)];
+    let plugins: Vec<Box<dyn umbra::prelude::Plugin>> = vec![Box::new(TasksPlugin::default())];
     let outcome = umbra::cli::dispatch(&plugins, vec!["umbra-cli", "no-such-cmd"])
         .await
         .expect("dispatch should return DispatchOutcome::Unmatched, not Err");

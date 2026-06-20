@@ -43,7 +43,7 @@ async fn boot() {
         umbra::App::builder()
             .settings(settings)
             .database("default", pool)
-            .plugin(TasksPlugin)
+            .plugin(TasksPlugin::default())
             .build()
             .expect("App::build with TasksPlugin");
 
