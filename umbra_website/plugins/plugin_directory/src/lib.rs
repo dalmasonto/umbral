@@ -35,7 +35,7 @@ use umbra::migrate::ModelMeta;
 use umbra::plugin::{AppContext, Plugin, PluginError};
 use umbra::prelude::*;
 use umbra::routes::RouteSpec;
-use umbra_auth::OptionalUser;
+use umbra_auth::{AuthUser, OptionalUser};
 use umbra::templates::context;
 use umbra::web::{
     Form, HeaderMap, Html, IntoResponse, Path, Query, Redirect, Response, Router, StatusCode, get,
@@ -72,6 +72,23 @@ impl Plugin for PluginDirectoryPlugin {
             .route("/plugins/submit", get(submit_page).post(post_submission))
             .route("/plugins/{slug}", get(plugin_detail))
             .route("/plugins/{slug}/notes", post(post_plugin_note))
+            .route("/plugins/{slug}/moderators", post(post_add_moderator))
+            .route(
+                "/plugins/{slug}/moderators/{user_id}/remove",
+                post(post_remove_moderator),
+            )
+            .route(
+                "/plugins/{slug}/comments/{comment_id}/moderate",
+                post(post_moderate_comment),
+            )
+            .route(
+                "/plugins/{slug}/issues/{comment_id}/resolve",
+                post(post_resolve_issue),
+            )
+            .route(
+                "/plugins/{slug}/issues/{comment_id}/reopen",
+                post(post_reopen_issue),
+            )
             .route("/report", get(report_page).post(post_report))
             .route("/search", get(plugin_search))
     }
@@ -83,6 +100,14 @@ impl Plugin for PluginDirectoryPlugin {
             RouteSpec::new("/plugins/submit", vec!["GET", "POST"]),
             RouteSpec::new("/plugins/{slug}", vec!["GET"]),
             RouteSpec::new("/plugins/{slug}/notes", vec!["POST"]),
+            RouteSpec::new("/plugins/{slug}/moderators", vec!["POST"]),
+            RouteSpec::new(
+                "/plugins/{slug}/moderators/{user_id}/remove",
+                vec!["POST"],
+            ),
+            RouteSpec::new("/plugins/{slug}/comments/{comment_id}/moderate", vec!["POST"]),
+            RouteSpec::new("/plugins/{slug}/issues/{comment_id}/resolve", vec!["POST"]),
+            RouteSpec::new("/plugins/{slug}/issues/{comment_id}/reopen", vec!["POST"]),
             RouteSpec::new("/report", vec!["GET", "POST"]),
             RouteSpec::new("/search", vec!["GET"]),
         ]
@@ -1157,6 +1182,14 @@ pub async fn create_report(
     comment.kind = CommentKind::General;
     comment.moderation = CommentModeration::Pending;
     comment.author_label = Some("Issue report".to_string());
+    // This is an ISSUE (a bug / abuse report), not a discussion note — so it
+    // lands in the Issues set distinctly from notes and is resolvable by a
+    // moderator. A security/malware report stays private to the moderation
+    // queue (`is_public = false`); other categories are public so the
+    // community can see and corroborate them. `is_resolved` starts false.
+    comment.is_issue = true;
+    comment.is_public = !matches!(category, "security" | "malware");
+    comment.is_resolved = false;
 
     pd::PluginComment::objects()
         .create(comment)
@@ -1313,6 +1346,15 @@ pub async fn create_submission(
     Ok(created.id)
 }
 
+/// Whether `user_id` OWNS `plugin` (is its `created_by`). Owner-only
+/// actions (managing the moderator roster) gate on this, NOT on
+/// [`can_moderate`] — only the creator adds or removes moderators, while
+/// the moderators they add can act on Notes/Issues but not on the roster
+/// itself.
+pub fn is_owner(plugin: &PluginModel, user_id: i64) -> bool {
+    plugin.created_by.as_ref().map(|fk| fk.id()) == Some(user_id)
+}
+
 /// Whether `user_id` may moderate `plugin`'s Notes and Issues.
 ///
 /// Two roles can moderate: the plugin's owner (its `created_by`) and any
@@ -1333,6 +1375,387 @@ pub async fn can_moderate(plugin: &PluginModel, user_id: i64) -> bool {
         .exists()
         .await
         .unwrap_or(false)
+}
+
+// ---------------------------------------------------------------------------
+// Moderation actions (Task B) — moderator roster + Note/Issue moderation
+// ---------------------------------------------------------------------------
+//
+// Two authorization tiers gate these:
+//
+// * Owner-only (`is_owner`): managing the moderator roster (add / remove).
+//   Only the plugin's creator hands out or revokes moderation rights.
+// * `can_moderate` (owner OR granted moderator): acting on the content —
+//   hiding/unhiding/flagging a Note, resolving/reopening an Issue.
+//
+// Each handler follows the same shape: resolve `OptionalUser` (401 if
+// absent) → load the approved plugin by slug (404 if absent) → authz
+// check (403 on failure) → ORM mutation → existing-style Response. The
+// row-level work lives in extracted `*_logic` functions so the tests can
+// drive the exact same code the routes call (no parallel logic), and
+// every read/write goes through the ORM (no raw SQL).
+
+/// Look the (approved) plugin up by slug for a moderation action. `None`
+/// is the handler's 404.
+async fn load_plugin_for_moderation(slug: &str) -> Result<Option<PluginModel>, String> {
+    PluginModel::objects()
+        .filter(plugin::SLUG.eq(slug))
+        .filter(plugin::MODERATION.eq("approved"))
+        .first()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The outcome of an `add moderator` attempt, mapped to a friendly
+/// response by the handler. `AlreadyModerator` is the graceful path for a
+/// UNIQUE(plugin, user) clash — never a 500.
+#[derive(Debug, PartialEq, Eq)]
+pub enum AddModeratorOutcome {
+    Added,
+    AlreadyModerator,
+    UserNotFound,
+}
+
+/// Grant `target` (resolved from a username or a numeric user id) moderation
+/// rights over `plugin`, recording `added_by`. Owner-only — the caller has
+/// already verified `is_owner`. Idempotent against the UNIQUE(plugin, user)
+/// constraint: a re-add returns [`AddModeratorOutcome::AlreadyModerator`]
+/// rather than erroring. Public so the test drives the exact roster-mutation
+/// path the route calls.
+pub async fn add_moderator_logic(
+    plugin: &PluginModel,
+    target: &str,
+    added_by: i64,
+) -> Result<AddModeratorOutcome, String> {
+    // Resolve the target user: a bare integer is a user id, anything else a
+    // username. Either way the AuthUser must exist.
+    let user_id = match target.trim().parse::<i64>() {
+        Ok(id) => {
+            if AuthUser::objects()
+                .filter(umbra_auth::auth_user::ID.eq(id))
+                .exists()
+                .await
+                .map_err(|e| e.to_string())?
+            {
+                id
+            } else {
+                return Ok(AddModeratorOutcome::UserNotFound);
+            }
+        }
+        Err(_) => match AuthUser::objects()
+            .filter(umbra_auth::auth_user::USERNAME.eq(target.trim()))
+            .first()
+            .await
+            .map_err(|e| e.to_string())?
+        {
+            Some(u) => u.id,
+            None => return Ok(AddModeratorOutcome::UserNotFound),
+        },
+    };
+
+    // Idempotent: if the grant already exists, report it gracefully instead
+    // of tripping the UNIQUE(plugin, user) constraint on insert.
+    if PluginModerator::objects()
+        .filter(plugin_moderator::PLUGIN.eq(plugin.id))
+        .filter(plugin_moderator::USER.eq(user_id))
+        .exists()
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        return Ok(AddModeratorOutcome::AlreadyModerator);
+    }
+
+    let grant = PluginModerator {
+        id: 0,
+        plugin: ForeignKey::new(plugin.id),
+        user: ForeignKey::new(user_id),
+        added_by: Some(ForeignKey::new(added_by)),
+        created_at: chrono::Utc::now(),
+    };
+    match PluginModerator::objects().create(grant).await {
+        Ok(_) => Ok(AddModeratorOutcome::Added),
+        // A concurrent insert could still race us into the UNIQUE clash —
+        // treat that as "already a moderator" rather than a 500.
+        Err(_) => Ok(AddModeratorOutcome::AlreadyModerator),
+    }
+}
+
+/// Revoke `user_id`'s moderation grant over `plugin`. Owner-only (the
+/// caller has verified `is_owner`). Idempotent: deleting a grant that
+/// isn't there is a no-op `Ok(())`. Returns the number of rows removed.
+pub async fn remove_moderator_logic(plugin: &PluginModel, user_id: i64) -> Result<u64, String> {
+    PluginModerator::objects()
+        .filter(plugin_moderator::PLUGIN.eq(plugin.id))
+        .filter(plugin_moderator::USER.eq(user_id))
+        .delete()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Apply a moderation `action` (`hide` | `unhide` | `flag`) to the comment
+/// `comment_id`, which MUST belong to `plugin`. Sets `moderation` to
+/// `Hidden` / `Visible` / `Flagged`. `can_moderate`-gated (the caller has
+/// verified it). `Ok(false)` means the comment doesn't exist on this plugin
+/// (a 404); an unknown action is a 400 surfaced as `Err`. Public so the test
+/// drives the exact mutation path.
+pub async fn moderate_comment_logic(
+    plugin: &PluginModel,
+    comment_id: i64,
+    action: &str,
+) -> Result<bool, String> {
+    let new_state = match action.trim() {
+        "hide" => CommentModeration::Hidden,
+        "unhide" => CommentModeration::Visible,
+        "flag" => CommentModeration::Flagged,
+        other => return Err(format!("Unknown moderation action `{other}`.")),
+    };
+
+    // The comment must belong to THIS plugin — scope the predicate so a
+    // moderator of plugin X can't touch plugin Y's thread.
+    let belongs = pd::PluginComment::objects()
+        .filter(plugin_comment::ID.eq(comment_id))
+        .filter(plugin_comment::PLUGIN.eq(plugin.id))
+        .exists()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !belongs {
+        return Ok(false);
+    }
+
+    // Mirror `moderation` into the `is_public` flag so a hidden/flagged row
+    // drops out of the public thread (which filters on `moderation`) and the
+    // moderator-visibility flag stays consistent.
+    let is_public = matches!(new_state, CommentModeration::Visible);
+    let mut values = serde_json::Map::new();
+    values.insert(
+        "moderation".to_string(),
+        serde_json::Value::String(moderation_db_literal(new_state).to_string()),
+    );
+    values.insert("is_public".to_string(), serde_json::Value::Bool(is_public));
+
+    pd::PluginComment::objects()
+        .filter(plugin_comment::ID.eq(comment_id))
+        .filter(plugin_comment::PLUGIN.eq(plugin.id))
+        .update_values(values)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
+/// Set `is_resolved` on an issue comment belonging to `plugin`.
+/// `can_moderate`-gated (verified by the caller). Only meaningful for
+/// `is_issue = true` rows; the column is set regardless but the value is
+/// inert on a plain note. `Ok(false)` means the comment isn't on this plugin
+/// (a 404). Public so the test drives the exact mutation path.
+pub async fn resolve_issue_logic(
+    plugin: &PluginModel,
+    comment_id: i64,
+    resolved: bool,
+) -> Result<bool, String> {
+    let belongs = pd::PluginComment::objects()
+        .filter(plugin_comment::ID.eq(comment_id))
+        .filter(plugin_comment::PLUGIN.eq(plugin.id))
+        .exists()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !belongs {
+        return Ok(false);
+    }
+
+    let mut values = serde_json::Map::new();
+    values.insert("is_resolved".to_string(), serde_json::Value::Bool(resolved));
+    pd::PluginComment::objects()
+        .filter(plugin_comment::ID.eq(comment_id))
+        .filter(plugin_comment::PLUGIN.eq(plugin.id))
+        .update_values(values)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
+/// The DB literal (`rename_all = "snake_case"`) for a [`CommentModeration`]
+/// variant — the string the `moderation` column stores. Kept next to the
+/// logic functions so the `update_values` map writes the same literal the
+/// detail query filters on (`moderation = 'visible'` etc.).
+fn moderation_db_literal(m: CommentModeration) -> &'static str {
+    match m {
+        CommentModeration::Pending => "pending",
+        CommentModeration::Visible => "visible",
+        CommentModeration::Hidden => "hidden",
+        CommentModeration::Flagged => "flagged",
+        CommentModeration::Deleted => "deleted",
+        CommentModeration::Locked => "locked",
+    }
+}
+
+/// `POST /plugins/{slug}/moderators` — owner-only. Add a user (by
+/// `username` or `user_id` form field) to the plugin's moderator roster.
+async fn post_add_moderator(
+    Path(slug): Path<String>,
+    OptionalUser(maybe_user): OptionalUser,
+    Form(form): Form<HashMap<String, String>>,
+) -> Result<Response, (StatusCode, String)> {
+    let Some(user) = maybe_user else {
+        return Err((StatusCode::UNAUTHORIZED, "Please log in.".into()));
+    };
+    let Some(plugin) = load_plugin_for_moderation(&slug)
+        .await
+        .map_err(internal_error)?
+    else {
+        return Err((StatusCode::NOT_FOUND, format!("No plugin `{slug}`.")));
+    };
+    if !is_owner(&plugin, user.id) {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "Only the plugin owner can manage moderators.".into(),
+        ));
+    }
+
+    let target = form
+        .get("username")
+        .or_else(|| form.get("user_id"))
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty());
+    let Some(target) = target else {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "A username or user_id is required.".into(),
+        ));
+    };
+
+    match add_moderator_logic(&plugin, target, user.id)
+        .await
+        .map_err(internal_error)?
+    {
+        AddModeratorOutcome::Added => {
+            Ok(Redirect::to(&format!("/plugins/{slug}")).into_response())
+        }
+        AddModeratorOutcome::AlreadyModerator => Ok((
+            StatusCode::OK,
+            format!("`{target}` is already a moderator of this plugin."),
+        )
+            .into_response()),
+        AddModeratorOutcome::UserNotFound => Err((
+            StatusCode::NOT_FOUND,
+            format!("No user matches `{target}`."),
+        )),
+    }
+}
+
+/// `POST /plugins/{slug}/moderators/{user_id}/remove` — owner-only.
+/// Idempotent revoke of a moderator grant.
+async fn post_remove_moderator(
+    Path((slug, user_id)): Path<(String, i64)>,
+    OptionalUser(maybe_user): OptionalUser,
+) -> Result<Response, (StatusCode, String)> {
+    let Some(user) = maybe_user else {
+        return Err((StatusCode::UNAUTHORIZED, "Please log in.".into()));
+    };
+    let Some(plugin) = load_plugin_for_moderation(&slug)
+        .await
+        .map_err(internal_error)?
+    else {
+        return Err((StatusCode::NOT_FOUND, format!("No plugin `{slug}`.")));
+    };
+    if !is_owner(&plugin, user.id) {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "Only the plugin owner can manage moderators.".into(),
+        ));
+    }
+
+    remove_moderator_logic(&plugin, user_id)
+        .await
+        .map_err(internal_error)?;
+    Ok(Redirect::to(&format!("/plugins/{slug}")).into_response())
+}
+
+/// `POST /plugins/{slug}/comments/{comment_id}/moderate` —
+/// `can_moderate`-gated. Body: `action = hide | unhide | flag`.
+async fn post_moderate_comment(
+    Path((slug, comment_id)): Path<(String, i64)>,
+    OptionalUser(maybe_user): OptionalUser,
+    Form(form): Form<HashMap<String, String>>,
+) -> Result<Response, (StatusCode, String)> {
+    let Some(user) = maybe_user else {
+        return Err((StatusCode::UNAUTHORIZED, "Please log in.".into()));
+    };
+    let Some(plugin) = load_plugin_for_moderation(&slug)
+        .await
+        .map_err(internal_error)?
+    else {
+        return Err((StatusCode::NOT_FOUND, format!("No plugin `{slug}`.")));
+    };
+    if !can_moderate(&plugin, user.id).await {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "You don't have moderation rights on this plugin.".into(),
+        ));
+    }
+
+    let action = form.get("action").map(|s| s.trim()).unwrap_or("");
+    match moderate_comment_logic(&plugin, comment_id, action).await {
+        Ok(true) => Ok(Redirect::to(&format!("/plugins/{slug}")).into_response()),
+        Ok(false) => Err((
+            StatusCode::NOT_FOUND,
+            "That comment isn't on this plugin.".into(),
+        )),
+        Err(msg) => Err((StatusCode::BAD_REQUEST, msg)),
+    }
+}
+
+/// `POST /plugins/{slug}/issues/{comment_id}/resolve` —
+/// `can_moderate`-gated. Marks an issue resolved.
+async fn post_resolve_issue(
+    Path((slug, comment_id)): Path<(String, i64)>,
+    OptionalUser(maybe_user): OptionalUser,
+) -> Result<Response, (StatusCode, String)> {
+    moderate_issue_resolution(slug, comment_id, maybe_user, true).await
+}
+
+/// `POST /plugins/{slug}/issues/{comment_id}/reopen` —
+/// `can_moderate`-gated. Re-opens a resolved issue.
+async fn post_reopen_issue(
+    Path((slug, comment_id)): Path<(String, i64)>,
+    OptionalUser(maybe_user): OptionalUser,
+) -> Result<Response, (StatusCode, String)> {
+    moderate_issue_resolution(slug, comment_id, maybe_user, false).await
+}
+
+/// Shared body for the resolve / reopen handlers (same authz + lookup, only
+/// the boolean differs).
+async fn moderate_issue_resolution(
+    slug: String,
+    comment_id: i64,
+    maybe_user: Option<AuthUser>,
+    resolved: bool,
+) -> Result<Response, (StatusCode, String)> {
+    let Some(user) = maybe_user else {
+        return Err((StatusCode::UNAUTHORIZED, "Please log in.".into()));
+    };
+    let Some(plugin) = load_plugin_for_moderation(&slug)
+        .await
+        .map_err(internal_error)?
+    else {
+        return Err((StatusCode::NOT_FOUND, format!("No plugin `{slug}`.")));
+    };
+    if !can_moderate(&plugin, user.id).await {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "You don't have moderation rights on this plugin.".into(),
+        ));
+    }
+
+    match resolve_issue_logic(&plugin, comment_id, resolved)
+        .await
+        .map_err(internal_error)?
+    {
+        true => Ok(Redirect::to(&format!("/plugins/{slug}")).into_response()),
+        false => Err((
+            StatusCode::NOT_FOUND,
+            "That issue isn't on this plugin.".into(),
+        )),
+    }
 }
 
 /// Render the submit page. `errors` carries a failed submission's field
