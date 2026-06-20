@@ -237,7 +237,7 @@
 
 40. [x] Foreign keys work with Form derive (ModelChoice) — archived
 
-41. [ ] The body Markdown, code, and RTE don't work yet. I filled in markdown field and got back an error `body is required, null`. So the markdown field did not fill the underlying body input field. When the error came back, the textarea and the mardown field were both shows (./images/Screenshot from 2026-06-11 03-55-50.png)
+41. [x] Markdown/code/RTE editor now populates the underlying input — FIXED (2026-06-20): admin.js syncs editors to the backing textarea on change + flushes on htmx:beforeRequest AND submit (8503382). — archived
 42. [x] FK save binds text not bigint — archived
 43. [x] Admin full-page create/edit forms now validate every field up front (`validate_form` in `view.rs`) and surface ALL failures at once — required / number / date / time / datetime-local / choice / max_length — each rendered below its own input (`FormField.error` + `form.html`), instead of one DB error at a time at the top. — archived
 44. [x] The post-save `refreshTable` handler now re-fetches the changelist from the server-authoritative `data-rows-url` stamped on `#table-body` (real admin base + table), instead of string-synthesizing `window.location.pathname + '/rows'` — the fragile link that broke the refresh on a custom base path / trailing slash. Sheet create + full-page update both already emit `refreshTable` (gaps2 #13); the URL derivation was the weak point. — archived (needs in-browser confirmation of the original symptom)
