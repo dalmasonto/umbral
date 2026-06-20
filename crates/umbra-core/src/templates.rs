@@ -427,6 +427,13 @@ fn register_img_filter(env: &mut Environment<'static>) {
 /// `"https://cdn.example.com/s/admin/admin.css"`.
 fn register_static_function(env: &mut Environment<'static>, static_url: String) {
     env.add_function("static", move |path: String| -> String {
+        // Route through the manifest-aware resolver so a `--hashed`
+        // collect makes `{{ static("css/app.css") }}` emit the
+        // content-hashed URL. The captured `static_url` is the fixed
+        // prefix; the manifest lookup is the only per-call ambient read.
+        if let Some(hashed) = crate::static_files::manifest_lookup(&path) {
+            return join_static_url(&static_url, hashed);
+        }
         join_static_url(&static_url, &path)
     });
 }
@@ -455,6 +462,19 @@ pub fn resolve_static_url(path: &str) -> String {
     let static_url = crate::settings::get_opt()
         .map(|s| s.static_url.clone())
         .unwrap_or_else(|| "/static/".to_string());
+
+    // Manifest cache-busting (Django's ManifestStaticFilesStorage): when
+    // `collectstatic --hashed` has run, a `staticfiles.json` maps the
+    // logical path the template wrote (`css/app.css`) to its
+    // content-hashed name (`css/app.<hash>.css`). Resolving to the hashed
+    // URL lets the asset carry far-future cache headers — the hash in the
+    // name changes whenever the bytes do, so a stale cache can never mask
+    // a new build. When no manifest is loaded (no `--hashed` run), the
+    // lookup misses and we serve the plain path exactly as before.
+    if let Some(hashed) = crate::static_files::manifest_lookup(path) {
+        return join_static_url(&static_url, hashed);
+    }
+
     join_static_url(&static_url, path)
 }
 

@@ -9,8 +9,19 @@ repository.workspace = true
 authors.workspace = true
 rust-version.workspace = true
 
+[features]
+default = []
+# S3 (and S3-compatible: MinIO, R2) static-storage backend for
+# `collectstatic --storage s3`. Pulls in `rust-s3` only when enabled, so a
+# local-only app never compiles the AWS client. Off by default.
+s3 = ["dep:rust-s3"]
+
 [dependencies]
 umbra = { path = "../../crates/umbra", version = "0.0.1" }
+# Optional S3 backend (rust-s3). `blocking` so the synchronous
+# StaticStorage::put can upload without an async runtime; default features
+# off to keep the dep lean. Only built under the `s3` feature.
+rust-s3 = { version = "0.35", optional = true, default-features = false, features = ["blocking", "tokio-rustls-tls"] }
 tower-http = { version = "0.6", features = ["fs", "set-header"] }
 tower = { version = "0.5", default-features = false, features = ["util"] }
 http = "1"

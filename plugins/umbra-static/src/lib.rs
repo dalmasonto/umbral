@@ -97,6 +97,9 @@ use tower_http::services::ServeDir;
 use tower_http::set_header::SetResponseHeaderLayer;
 use umbra::prelude::*;
 
+#[cfg(feature = "s3")]
+mod s3_storage;
+
 /// Where this plugin gets its asset bytes from. Constructors pick
 /// the variant — callers don't touch the enum.
 #[derive(Debug, Clone)]
@@ -364,11 +367,43 @@ impl umbra::cli::PluginCommand for CollectStaticCommand {
                     )
                     .action(clap::ArgAction::SetTrue),
             )
+            .arg(
+                clap::Arg::new("hashed")
+                    .long("hashed")
+                    .help(
+                        "Write content-hashed copies (app.<hash>.css) alongside each asset and a \
+                         staticfiles.json manifest. Django's ManifestStaticFilesStorage. Use in \
+                         PROD: the hashed filename changes when bytes do, so assets can carry \
+                         far-future cache headers without stale-cache risk.",
+                    )
+                    .action(clap::ArgAction::SetTrue),
+            )
+            .arg(
+                clap::Arg::new("storage")
+                    .long("storage")
+                    .value_name("BACKEND")
+                    .help(
+                        "Where to write collected assets: `local` (default, the on-disk \
+                         static_root) or `s3` (upload to a bucket; requires the umbra-static `s3` \
+                         feature and UMBRA_STATIC_BUCKET / UMBRA_STATIC_REGION). Overrides \
+                         UMBRA_STATIC_STORAGE.",
+                    ),
+            )
     }
 
     async fn run(&self, matches: &clap::ArgMatches) -> Result<(), umbra::cli::CliError> {
         let clear = matches.get_flag("clear");
+        let hashed = matches.get_flag("hashed");
         let static_root = umbra::settings::get().static_root.clone();
+
+        // Backend selection: --storage flag, else UMBRA_STATIC_STORAGE,
+        // else local. `local` is always available; `s3` requires the
+        // feature AND the bucket/region env vars.
+        let backend = matches
+            .get_one::<String>("storage")
+            .cloned()
+            .or_else(|| umbra::settings::get().extra_str("static_storage").map(str::to_string))
+            .unwrap_or_else(|| "local".to_string());
 
         // The published contributions come from `App::build`. If they're
         // absent, the command was invoked without a built App — surface
@@ -379,12 +414,57 @@ impl umbra::cli::PluginCommand for CollectStaticCommand {
                 .into()
         })?;
 
-        let summary = umbra::static_files::collect_into(
-            &published.contributions,
-            &published.root_dirs,
-            &static_root,
-            clear,
-        )?;
+        let summary = match backend.as_str() {
+            "local" => {
+                let storage = umbra::static_files::LocalStorage::new(&static_root);
+                // Local convention: ensure the root dir exists even for an
+                // empty collect (a reverse proxy may point at it).
+                if !(clear && std::path::Path::new(&static_root).exists()) {
+                    std::fs::create_dir_all(&static_root).map_err(|e| -> umbra::cli::CliError {
+                        format!("collectstatic: cannot create static_root `{static_root}`: {e}")
+                            .into()
+                    })?;
+                }
+                umbra::static_files::collect_into_with(
+                    &published.contributions,
+                    &published.root_dirs,
+                    &static_root,
+                    &storage,
+                    clear,
+                    hashed,
+                )?
+            }
+            "s3" => {
+                #[cfg(feature = "s3")]
+                {
+                    let storage = s3_storage::S3Storage::from_env().map_err(
+                        |e| -> umbra::cli::CliError {
+                            format!("collectstatic --storage s3: {e}").into()
+                        },
+                    )?;
+                    umbra::static_files::collect_into_with(
+                        &published.contributions,
+                        &published.root_dirs,
+                        &static_root,
+                        &storage,
+                        clear,
+                        hashed,
+                    )?
+                }
+                #[cfg(not(feature = "s3"))]
+                {
+                    return Err("collectstatic --storage s3 requires the umbra-static `s3` \
+                                cargo feature (build with --features s3)."
+                        .into());
+                }
+            }
+            other => {
+                return Err(format!(
+                    "collectstatic: unknown --storage backend `{other}` (expected `local` or `s3`)."
+                )
+                .into());
+            }
+        };
 
         // Warn about every declared-but-absent namespaced source dir.
         // These are misconfigurations (a plugin promised assets that

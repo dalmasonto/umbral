@@ -1,6 +1,6 @@
 ---
 title: Static Files
-description: Serve CSS, JS, and image assets via the unified STATIC_URL pipeline - filesystem or embedded, with collectstatic and Cache-Control headers.
+description: Serve CSS, JS, and image assets via the unified STATIC_URL pipeline - filesystem or embedded, with collectstatic, manifest-hash cache-busting, a swappable StaticStorage backend (local or s3), and Cache-Control headers.
 sidebar_position: 14
 tags: [static, assets, cache, middleware]
 ---
@@ -118,6 +118,45 @@ cargo run -- collectstatic --clear  # wipe static_root/ first, then collect
 ```
 
 The command is **provided by `StaticPlugin` itself**; it only exists when you register the plugin (`.plugin(StaticPlugin::new(...))`). Point a CDN or nginx at `static_root` and set `static_url` to its origin, or let the framework serve it.
+
+## Cache-busting with `--hashed`
+
+In production, run `collectstatic --hashed` (umbra's `ManifestStaticFilesStorage`). For each collected file it writes a content-hashed copy alongside the original (`css/app.css` → `css/app.<hash>.css`, the hash being the first 12 hex of the SHA-256 of the bytes) and records a `static_root/staticfiles.json` manifest mapping the logical path to the hashed one:
+
+```bash
+cargo run -- collectstatic --hashed   # recommended for prod
+```
+
+```json
+// static_root/staticfiles.json
+{ "css/app.css": "css/app.9f2c1a0b3d4e.css" }
+```
+
+With the manifest present, `{{ static('css/app.css') }}` automatically resolves to the **hashed** URL (`/static/css/app.9f2c1a0b3d4e.css`) — no template change. Because the filename changes whenever the bytes change, you can serve these assets with far-future `Cache-Control: public, max-age=31536000, immutable` headers and never worry about a stale cache masking a new build. The original (un-hashed) copies are kept too, so an old deploy referencing the plain name still resolves.
+
+The manifest is loaded once at `App::build()`; an app that never runs `--hashed` has no manifest and `static()` emits the plain URLs exactly as before.
+
+## Storage backend (`--storage s3`)
+
+`collectstatic` writes through a swappable `StaticStorage` backend (Django's `STATICFILES_STORAGE`). The default is the local filesystem (`static_root/`); pass `--storage s3` to upload the collected tree (and, with `--hashed`, the hashed copies + manifest) straight to an S3 bucket or S3-compatible store (MinIO, Cloudflare R2):
+
+```bash
+# Build umbra-static with the optional `s3` feature:
+#   umbra-static = { version = "0.0.1", features = ["s3"] }
+
+export UMBRA_STATIC_BUCKET=my-assets
+export UMBRA_STATIC_REGION=us-east-1
+# Optional: UMBRA_STATIC_ENDPOINT (MinIO/R2), UMBRA_STATIC_PREFIX, plus the
+# standard AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY credential chain.
+
+cargo run -- collectstatic --hashed --storage s3
+```
+
+The backend can also be selected via `UMBRA_STATIC_STORAGE=s3` (the `--storage` flag overrides it). Implement the `StaticStorage` trait (`put` / `exists`) for any other destination. Design rationale: `planning/gaps2.md` #82 (cache-busting) and #55 (storage backend).
+
+<Callout type="info">
+The `s3` backend is **feature-gated** — `rust-s3` is only compiled when you enable the `s3` feature on `umbra-static`, so a local-only app never pulls in the AWS client.
+</Callout>
 
 <Callout type="info">
 **Dev vs prod.** In development the pipeline serves plugin `static_dirs()` live from each source directory (rebuild, drop in, served next request - no recompile) and `StaticPlugin` site dirs straight off disk. In production you run `collectstatic` once and serve the resulting `static_root/` tree from the framework, nginx, or a CDN. Embedded assets (`static_files()` / `StaticPlugin::embedded`) need neither - they ship in the binary. Design rationale: `arch.md` and `planning/gaps.md` #67.

@@ -37,6 +37,7 @@
 //! [`Plugin::static_dirs`]: crate::plugin::Plugin::static_dirs
 //! [`Environment::Dev`]: crate::settings::Environment
 
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::OnceLock;
@@ -44,10 +45,152 @@ use std::sync::OnceLock;
 use axum::body::Body;
 use axum::extract::State;
 use axum::http::{Request, Response, StatusCode, header};
+use sha2::{Digest, Sha256};
 use tower::ServiceExt;
 use tower_http::services::ServeFile;
 
 use crate::plugin::{Plugin, StaticDir};
+
+/// The on-disk name of the hashed-asset manifest written into
+/// `static_root` by `collectstatic --hashed`. Django calls the same file
+/// `staticfiles.json`; we keep the name so the concept ports directly.
+pub const MANIFEST_FILENAME: &str = "staticfiles.json";
+
+/// Anything that can go wrong writing an asset through a
+/// [`StaticStorage`] backend. Backend-agnostic: a filesystem `put` and an
+/// S3 `put_object` both funnel their failure through this enum so
+/// `collect_into` has one error type regardless of where assets land.
+#[derive(Debug)]
+pub enum StaticError {
+    /// An IO error writing/reading an asset. Carries the logical path
+    /// that failed so the message names the culprit.
+    Io {
+        path: String,
+        source: std::io::Error,
+    },
+    /// A backend-specific failure (a remote upload rejected, credentials
+    /// missing, region unreachable). Carries a human-readable message.
+    Backend(String),
+}
+
+impl std::fmt::Display for StaticError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StaticError::Io { path, source } => {
+                write!(f, "static storage io error at `{path}`: {source}")
+            }
+            StaticError::Backend(msg) => write!(f, "static storage backend error: {msg}"),
+        }
+    }
+}
+
+impl std::error::Error for StaticError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            StaticError::Io { source, .. } => Some(source),
+            StaticError::Backend(_) => None,
+        }
+    }
+}
+
+/// A swappable destination for collected static assets — Django's
+/// `STATICFILES_STORAGE`. `collectstatic` writes every file *through* a
+/// `StaticStorage` rather than calling `std::fs` directly, so the same
+/// collect path targets the local filesystem ([`LocalStorage`], the
+/// default) or a remote object store (the feature-gated S3 backend in
+/// `umbra-static`) without the collect engine knowing which.
+///
+/// `rel_path` is always the logical path RELATIVE to `static_root`
+/// (`"admin/admin.css"`, `"css/app.css"`), forward-slash separated. The
+/// backend maps it onto its own addressing (a filesystem join, an S3
+/// object key) — the engine never constructs an absolute on-disk path.
+pub trait StaticStorage: Send + Sync {
+    /// Write `bytes` at the logical `rel_path`, creating any intermediate
+    /// structure (directories, key prefixes) the backend needs.
+    /// Overwrites an existing object so re-running `collectstatic` is
+    /// idempotent.
+    fn put(&self, rel_path: &str, bytes: &[u8]) -> Result<(), StaticError>;
+
+    /// Whether an object already exists at `rel_path`.
+    fn exists(&self, rel_path: &str) -> Result<bool, StaticError>;
+}
+
+/// The default [`StaticStorage`]: writes collected assets onto the local
+/// filesystem under `root` (the resolved `static_root`). Reproduces the
+/// pre-storage-trait filesystem copy exactly — `put("a/b.css", bytes)`
+/// writes `<root>/a/b.css`, creating parent dirs as needed.
+#[derive(Debug, Clone)]
+pub struct LocalStorage {
+    /// The on-disk root every `rel_path` is joined onto.
+    pub root: PathBuf,
+}
+
+impl LocalStorage {
+    /// A filesystem storage rooted at `root` (the resolved `static_root`).
+    pub fn new(root: impl Into<PathBuf>) -> Self {
+        Self { root: root.into() }
+    }
+
+    /// Resolve a logical `rel_path` onto its on-disk path under `root`.
+    fn full_path(&self, rel_path: &str) -> PathBuf {
+        let mut p = self.root.clone();
+        for seg in rel_path.split('/') {
+            if !seg.is_empty() {
+                p.push(seg);
+            }
+        }
+        p
+    }
+}
+
+impl StaticStorage for LocalStorage {
+    fn put(&self, rel_path: &str, bytes: &[u8]) -> Result<(), StaticError> {
+        let dest = self.full_path(rel_path);
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent).map_err(|source| StaticError::Io {
+                path: rel_path.to_string(),
+                source,
+            })?;
+        }
+        std::fs::write(&dest, bytes).map_err(|source| StaticError::Io {
+            path: rel_path.to_string(),
+            source,
+        })
+    }
+
+    fn exists(&self, rel_path: &str) -> Result<bool, StaticError> {
+        Ok(self.full_path(rel_path).exists())
+    }
+}
+
+/// Compute the content-hash filename fragment Django's
+/// `ManifestStaticFilesStorage` uses: the first 12 hex chars of the
+/// SHA-256 of the file bytes. 48 bits is ample for cache-busting (a
+/// collision needs ~16M distinct versions of one asset) while keeping the
+/// hashed filename short.
+pub fn content_hash(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    let digest = hasher.finalize();
+    digest[..6].iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Insert the content hash before the final extension of a logical path:
+/// `"css/app.css"` → `"css/app.<hash>.css"`, `"js/x"` (no extension) →
+/// `"js/x.<hash>"`, `"a/b.min.css"` → `"a/b.min.<hash>.css"` (only the
+/// LAST `.` segment is treated as the extension, matching Django).
+pub fn hashed_name(rel_path: &str, hash: &str) -> String {
+    // Split off the final path segment so a `.` in a directory name (rare
+    // but possible) never gets mistaken for the file extension.
+    let (dir, file) = match rel_path.rfind('/') {
+        Some(i) => (&rel_path[..=i], &rel_path[i + 1..]),
+        None => ("", rel_path),
+    };
+    match file.rfind('.') {
+        Some(dot) => format!("{dir}{}.{hash}.{}", &file[..dot], &file[dot + 1..]),
+        None => format!("{dir}{file}.{hash}"),
+    }
+}
 
 /// One plugin's namespaced static contribution, flattened so it can be
 /// published ambiently for a CLI command that has no access to the
@@ -138,6 +281,64 @@ pub fn publish_static(p: PublishedStatic) {
 /// to learn every plugin's source dirs without the plugin list.
 pub fn published_static() -> Option<&'static PublishedStatic> {
     PUBLISHED.get()
+}
+
+/// The loaded hashed-asset manifest: logical path → hashed path
+/// (`"css/app.css" -> "css/app.<hash>.css"`). Loaded once from
+/// `<static_root>/staticfiles.json` and cached ambiently, the same
+/// read-only-at-boot family as `settings::SETTINGS` and [`PUBLISHED`].
+///
+/// `None` (the `OnceLock` unset, or set to `None`) means no manifest was
+/// found — `resolve_static_url` then falls back to today's plain
+/// `static_url + path` join. A present manifest means `collectstatic
+/// --hashed` ran, so prod serves the content-hashed filenames and can set
+/// far-future cache headers on them.
+static MANIFEST: OnceLock<Option<HashMap<String, String>>> = OnceLock::new();
+
+/// Load the hashed-asset manifest from `<static_root>/staticfiles.json`
+/// into the ambient slot, once. Idempotent: the first load wins (matching
+/// `settings`/`published_static`); a second call is a no-op.
+///
+/// Call at `App::build` after settings resolve. A missing or unparseable
+/// manifest is recorded as `None` (no hashing in effect) rather than an
+/// error — an app that never ran `collectstatic --hashed` legitimately
+/// has no manifest, and `resolve_static_url` must keep working.
+pub fn load_manifest(static_root: impl AsRef<Path>) {
+    let path = static_root.as_ref().join(MANIFEST_FILENAME);
+    let loaded = std::fs::read(&path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<HashMap<String, String>>(&bytes).ok());
+    let _ = MANIFEST.set(loaded);
+}
+
+/// Look up the hashed name for a logical asset path in the loaded
+/// manifest. Returns `None` when no manifest is loaded OR the path isn't
+/// in it (an asset not collected through `--hashed`); the caller then
+/// uses the path unchanged.
+///
+/// The lookup key is the logical path as the template wrote it
+/// (`"css/app.css"`), normalised to drop a leading slash so
+/// `static("/css/app.css")` and `static("css/app.css")` hit the same
+/// entry — matching `resolve_static_url`'s join, which also trims the
+/// leading slash.
+pub fn manifest_lookup(path: &str) -> Option<&'static str> {
+    let manifest = MANIFEST.get()?.as_ref()?;
+    let key = path.trim_start_matches('/');
+    manifest.get(key).map(String::as_str)
+}
+
+/// Whether a hashed-asset manifest is currently loaded. `resolve_static_url`
+/// uses this to decide between hashed and plain URLs.
+pub fn manifest_loaded() -> bool {
+    matches!(MANIFEST.get(), Some(Some(_)))
+}
+
+/// Test-only: install a manifest directly, bypassing the on-disk load.
+/// Used by `resolve_static_url` tests that need a known manifest without
+/// staging a `staticfiles.json` on disk.
+#[doc(hidden)]
+pub fn set_manifest_for_tests(manifest: Option<HashMap<String, String>>) {
+    let _ = MANIFEST.set(manifest);
 }
 
 /// Maps a plugin's static namespace to its on-disk source directory.
@@ -479,6 +680,10 @@ pub enum CollectError {
         path: PathBuf,
         source: std::io::Error,
     },
+    /// A [`StaticStorage`] backend rejected a write (a failed S3 upload,
+    /// a permission error from the local filesystem put). Carries the
+    /// backend error so the CLI can surface which destination failed.
+    Static(StaticError),
 }
 
 impl std::fmt::Display for CollectError {
@@ -495,6 +700,7 @@ impl std::fmt::Display for CollectError {
                 "umbra collect_static: io error at `{}`: {source}",
                 path.display()
             ),
+            CollectError::Static(e) => write!(f, "umbra collect_static: {e}"),
         }
     }
 }
@@ -503,6 +709,7 @@ impl std::error::Error for CollectError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             CollectError::Io { source, .. } => Some(source),
+            CollectError::Static(e) => Some(e),
             CollectError::Collision(_) => None,
         }
     }
@@ -577,7 +784,62 @@ pub fn collect_into(
     clear: bool,
 ) -> Result<CollectSummary, CollectError> {
     let static_root = static_root.into();
+    let storage = LocalStorage::new(static_root.clone());
 
+    // Local-filesystem convention: ensure the root dir exists even when
+    // nothing is collected (an app may point a reverse proxy at it
+    // regardless). The storage-backed path creates parents per-file, but
+    // an empty collect would otherwise leave no root dir at all. `clear`
+    // is handled inside `collect_into_with`.
+    if !(clear && static_root.exists()) {
+        std::fs::create_dir_all(&static_root).map_err(|source| CollectError::Io {
+            path: static_root.clone(),
+            source,
+        })?;
+    }
+
+    collect_into_with(contributions, root_dirs, &static_root, &storage, clear, false)
+}
+
+/// The storage-backed core collect routine. Writes every collected file
+/// *through* `storage` (the [`StaticStorage`] seam) instead of `std::fs`
+/// directly, so the same engine targets the local filesystem or a remote
+/// object store. [`collect_into`] is the convenience wrapper that
+/// constructs a [`LocalStorage`] and never hashes.
+///
+/// `static_root` is still passed alongside `storage` because it is the
+/// logical destination recorded in the [`CollectSummary`] (and where the
+/// manifest is written for [`LocalStorage`]); the bytes themselves go
+/// through `storage.put(rel_path, ..)`.
+///
+/// When `hashed` is true (Django's `ManifestStaticFilesStorage`), each
+/// file is *also* written under a content-hashed name
+/// (`app.<hash>.css`), and a `<logical path> -> <hashed path>` mapping is
+/// recorded into a `staticfiles.json` manifest written at the
+/// `static_root` root. The original (un-hashed) copy is kept too, so an
+/// old deploy referencing the plain name still resolves.
+///
+/// No collision check: the contributions are pre-validated. The same
+/// guarantees as [`collect_static`] apply.
+///
+/// This is filesystem/asset infrastructure (copying asset files), so
+/// `std::fs` for the *source* read is the correct tool — the ORM-only
+/// rule governs database rows, not files. The *destination* write is the
+/// one routed through `storage`.
+pub fn collect_into_with(
+    contributions: &[StaticContribution],
+    root_dirs: &[PathBuf],
+    static_root: impl Into<PathBuf>,
+    storage: &dyn StaticStorage,
+    clear: bool,
+    hashed: bool,
+) -> Result<CollectSummary, CollectError> {
+    let static_root = static_root.into();
+
+    // `clear` only makes sense for the local filesystem (a remote bucket
+    // is cleared by its own lifecycle policy). When the local root
+    // exists, empty it before collecting. For non-local backends the dir
+    // simply doesn't exist and this is a no-op.
     if clear && static_root.exists() {
         std::fs::remove_dir_all(&static_root).map_err(|source| CollectError::Io {
             path: static_root.clone(),
@@ -585,15 +847,15 @@ pub fn collect_into(
         })?;
     }
 
-    std::fs::create_dir_all(&static_root).map_err(|source| CollectError::Io {
-        path: static_root.clone(),
-        source,
-    })?;
-
     let mut summary = CollectSummary {
         static_root: static_root.clone(),
         ..Default::default()
     };
+
+    // Logical-path → hashed-path manifest, accumulated across every file
+    // when `hashed` is set. BTreeMap so the written JSON is deterministic
+    // (sorted keys) — easier to diff between collect runs.
+    let mut manifest: BTreeMap<String, String> = BTreeMap::new();
 
     // Namespaced contributions → <static_root>/<namespace>/.
     for contribution in contributions {
@@ -616,14 +878,19 @@ pub fn collect_into(
             continue;
         }
 
-        let dest = static_root.join(namespace);
-        let files = copy_tree(source_dir, &dest)?;
+        let files = copy_tree(
+            source_dir,
+            namespace,
+            storage,
+            hashed,
+            &mut manifest,
+        )?;
 
         summary.collected.push(CollectedNamespace {
             namespace,
             plugin,
             files,
-            destination: dest,
+            destination: static_root.join(namespace),
         });
     }
 
@@ -636,24 +903,44 @@ pub fn collect_into(
         if !root.exists() {
             continue;
         }
-        let files = copy_tree(root, &static_root)?;
+        let files = copy_tree(root, "", storage, hashed, &mut manifest)?;
         summary.root_files += files;
         summary.root_dirs.push(root.clone());
+    }
+
+    // Write the manifest once, after every file is hashed. Keyed by the
+    // logical path the template uses (`css/app.css`), valued by the
+    // hashed path (`css/app.<hash>.css`) — exactly what
+    // `manifest_lookup` reads back.
+    if hashed {
+        let json = serde_json::to_vec_pretty(&manifest).map_err(|e| CollectError::Io {
+            path: static_root.join(MANIFEST_FILENAME),
+            source: std::io::Error::other(e),
+        })?;
+        storage
+            .put(MANIFEST_FILENAME, &json)
+            .map_err(CollectError::Static)?;
     }
 
     Ok(summary)
 }
 
-/// Recursively copy every file under `src` into `dest`, preserving the
-/// tree shape, and return the count of files (not directories) copied.
-/// Existing files are overwritten (`std::fs::copy` replaces), making
-/// re-runs idempotent.
-fn copy_tree(src: &Path, dest: &Path) -> Result<usize, CollectError> {
-    std::fs::create_dir_all(dest).map_err(|source| CollectError::Io {
-        path: dest.to_path_buf(),
-        source,
-    })?;
-
+/// Recursively walk every file under `src`, writing each through
+/// `storage` at the logical path `<prefix>/<relative path>` (prefix is
+/// the namespace, or `""` for root dirs). Returns the count of files
+/// (not directories) written.
+///
+/// When `hashed` is set, each file is additionally written under its
+/// content-hashed name and the `<logical> -> <hashed>` pair recorded in
+/// `manifest`. Re-runs overwrite (storage `put` replaces), keeping the
+/// collect idempotent.
+fn copy_tree(
+    src: &Path,
+    prefix: &str,
+    storage: &dyn StaticStorage,
+    hashed: bool,
+    manifest: &mut BTreeMap<String, String>,
+) -> Result<usize, CollectError> {
     let mut count = 0;
     let entries = std::fs::read_dir(src).map_err(|source| CollectError::Io {
         path: src.to_path_buf(),
@@ -670,19 +957,40 @@ fn copy_tree(src: &Path, dest: &Path) -> Result<usize, CollectError> {
             source,
         })?;
         let src_path = entry.path();
-        let dest_path = dest.join(entry.file_name());
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let child_prefix = if prefix.is_empty() {
+            name.clone()
+        } else {
+            format!("{prefix}/{name}")
+        };
 
         if file_type.is_dir() {
-            count += copy_tree(&src_path, &dest_path)?;
+            count += copy_tree(&src_path, &child_prefix, storage, hashed, manifest)?;
         } else {
             // Covers regular files and symlinks-to-files alike:
-            // `std::fs::copy` follows symlinks and copies the target
+            // `std::fs::read` follows symlinks and reads the target
             // bytes, which is what a collected asset should be.
-            std::fs::copy(&src_path, &dest_path).map_err(|source| CollectError::Io {
+            let bytes = std::fs::read(&src_path).map_err(|source| CollectError::Io {
                 path: src_path.clone(),
                 source,
             })?;
+            storage
+                .put(&child_prefix, &bytes)
+                .map_err(CollectError::Static)?;
             count += 1;
+
+            if hashed {
+                let hash = content_hash(&bytes);
+                let hashed_path = hashed_name(&child_prefix, &hash);
+                // Write the hashed copy alongside the original. The
+                // manifest never points at itself, and the original is
+                // kept so an old deploy referencing the plain name still
+                // resolves.
+                storage
+                    .put(&hashed_path, &bytes)
+                    .map_err(CollectError::Static)?;
+                manifest.insert(child_prefix.clone(), hashed_path);
+            }
         }
     }
 
@@ -1184,6 +1492,121 @@ mod tests {
         assert_eq!(summary.root_files, 1);
         assert_eq!(summary.root_dirs.len(), 1);
         assert!(summary.missing.is_empty());
+    }
+
+    #[test]
+    fn hashed_name_inserts_hash_before_extension() {
+        assert_eq!(
+            hashed_name("css/app.css", "abc123"),
+            "css/app.abc123.css"
+        );
+        // No extension: hash appended.
+        assert_eq!(hashed_name("js/bundle", "deadbe"), "js/bundle.deadbe");
+        // Only the LAST dot is the extension (Django parity).
+        assert_eq!(
+            hashed_name("a/b.min.css", "0f0f0f"),
+            "a/b.min.0f0f0f.css"
+        );
+        // Top-level file, no directory.
+        assert_eq!(hashed_name("favicon.ico", "112233"), "favicon.112233.ico");
+    }
+
+    #[test]
+    fn content_hash_is_stable_and_12_hex() {
+        let h = content_hash(b"body{}");
+        assert_eq!(h.len(), 12);
+        assert!(h.chars().all(|c| c.is_ascii_hexdigit()));
+        // Same bytes -> same hash; different bytes -> different hash.
+        assert_eq!(content_hash(b"body{}"), h);
+        assert_ne!(content_hash(b"body{ }"), h);
+    }
+
+    #[test]
+    fn local_storage_put_writes_through_root() {
+        let root = tempfile::tempdir().expect("root");
+        let storage = LocalStorage::new(root.path());
+        storage
+            .put("css/app.css", b"BODY")
+            .expect("put writes the file");
+        assert_eq!(read_at(root.path(), "css/app.css"), b"BODY");
+        assert!(storage.exists("css/app.css").expect("exists"));
+        assert!(!storage.exists("css/missing.css").expect("exists"));
+    }
+
+    #[test]
+    fn collect_hashed_writes_copies_and_manifest() {
+        let admin_src = tempfile::tempdir().expect("admin src");
+        let root_src = tempfile::tempdir().expect("root src");
+        let static_root = tempfile::tempdir().expect("static root");
+
+        write_at(admin_src.path(), "admin.css", b"ADMIN_CSS");
+        write_at(root_src.path(), "css/app.css", b"APP_CSS");
+
+        let contributions = vec![StaticContribution {
+            namespace: "admin",
+            source_dir: admin_src.path().to_path_buf(),
+            plugin: "admin-plugin",
+        }];
+        let root_dirs = vec![root_src.path().to_path_buf()];
+
+        let storage = LocalStorage::new(static_root.path());
+        let summary = collect_into_with(
+            &contributions,
+            &root_dirs,
+            static_root.path(),
+            &storage,
+            false,
+            true,
+        )
+        .expect("hashed collect succeeds");
+
+        // Originals are kept.
+        assert_eq!(read_at(static_root.path(), "admin/admin.css"), b"ADMIN_CSS");
+        assert_eq!(read_at(static_root.path(), "css/app.css"), b"APP_CSS");
+        assert_eq!(summary.total_files(), 1);
+        assert_eq!(summary.root_files, 1);
+
+        // Manifest exists and maps logical -> hashed for BOTH the
+        // namespaced and root-dir files, keyed by the template's logical
+        // path.
+        let manifest_bytes = read_at(static_root.path(), MANIFEST_FILENAME);
+        let manifest: HashMap<String, String> =
+            serde_json::from_slice(&manifest_bytes).expect("manifest parses");
+
+        let admin_hashed = manifest
+            .get("admin/admin.css")
+            .expect("admin entry present");
+        let app_hashed = manifest.get("css/app.css").expect("app entry present");
+
+        // The hashed names carry the content hash and keep the extension.
+        let admin_hash = content_hash(b"ADMIN_CSS");
+        assert_eq!(admin_hashed, &format!("admin/admin.{admin_hash}.css"));
+        let app_hash = content_hash(b"APP_CSS");
+        assert_eq!(app_hashed, &format!("css/app.{app_hash}.css"));
+
+        // The hashed COPIES were actually written alongside the originals.
+        assert_eq!(read_at(static_root.path(), admin_hashed), b"ADMIN_CSS");
+        assert_eq!(read_at(static_root.path(), app_hashed), b"APP_CSS");
+    }
+
+    #[test]
+    fn collect_without_hashed_writes_no_manifest() {
+        let src = tempfile::tempdir().expect("src");
+        let static_root = tempfile::tempdir().expect("static root");
+        write_at(src.path(), "x.css", b"X");
+
+        let contributions = vec![StaticContribution {
+            namespace: "ns",
+            source_dir: src.path().to_path_buf(),
+            plugin: "p",
+        }];
+        let storage = LocalStorage::new(static_root.path());
+        collect_into_with(&contributions, &[], static_root.path(), &storage, false, false)
+            .expect("plain collect");
+
+        assert_eq!(read_at(static_root.path(), "ns/x.css"), b"X");
+        // No manifest, no hashed copy.
+        assert!(!static_root.path().join(MANIFEST_FILENAME).exists());
     }
 
     #[tokio::test]

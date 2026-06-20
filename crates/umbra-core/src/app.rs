@@ -1041,6 +1041,15 @@ impl AppBuilder {
             root_dirs: root_dirs.clone(),
         });
 
+        // Load the hashed-asset manifest (`<static_root>/staticfiles.json`)
+        // if `collectstatic --hashed` has produced one. With a manifest
+        // present, `resolve_static_url` / the `static()` template global
+        // emit content-hashed URLs so prod assets carry far-future cache
+        // headers. Absent (no `--hashed` run), this is a no-op and URLs
+        // stay plain. Loaded unconditionally — the URL resolution applies
+        // whether or not this app serves the bytes itself.
+        crate::static_files::load_manifest(&settings.static_root);
+
         if !is_cdn_url && !static_base.is_empty() {
             let registry = crate::static_files::StaticRegistry::from_plugins(&sorted_plugins)
                 .map_err(|c| BuildError::DuplicateStaticNamespace {
