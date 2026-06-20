@@ -47,6 +47,7 @@
 //! ```
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -54,7 +55,6 @@ use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::{Json, Router};
 use serde::Serialize;
-use umbra::db::DbPool;
 use umbra::plugin::Plugin;
 use umbra::routes::RouteSpec;
 
@@ -101,9 +101,17 @@ pub trait HealthCheck: Send + Sync + 'static {
     async fn check(&self) -> Result<(), HealthError>;
 }
 
+/// Default per-check timeout. Keeps the readiness probe from hanging
+/// when one dependency is blocked: after 5 s the check is marked DOWN
+/// rather than stalling the response indefinitely.
+const DEFAULT_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
+
 #[derive(Clone)]
 struct HealthState {
     checks: Arc<Vec<Arc<dyn HealthCheck>>>,
+    /// Per-check timeout. On elapsed the check is recorded as unhealthy
+    /// with a `"timed out"` detail instead of hanging the probe.
+    check_timeout: Duration,
 }
 
 /// Mounts `/healthz` (liveness) and `/ready` (readiness) plus
@@ -116,19 +124,26 @@ struct HealthState {
 /// them without credentials.
 pub struct HealthPlugin {
     checks: Vec<Arc<dyn HealthCheck>>,
+    /// Per-check timeout applied to every check in the readiness runner
+    /// (including the built-in DB probe). Defaults to 5 s.
+    check_timeout: Duration,
 }
 
 impl std::fmt::Debug for HealthPlugin {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HealthPlugin")
             .field("checks_count", &self.checks.len())
+            .field("check_timeout", &self.check_timeout)
             .finish()
     }
 }
 
 impl Default for HealthPlugin {
     fn default() -> Self {
-        Self { checks: Vec::new() }
+        Self {
+            checks: Vec::new(),
+            check_timeout: DEFAULT_CHECK_TIMEOUT,
+        }
     }
 }
 
@@ -136,6 +151,17 @@ impl HealthPlugin {
     /// Register a [`HealthCheck`]. Chainable.
     pub fn check<C: HealthCheck>(mut self, check: C) -> Self {
         self.checks.push(Arc::new(check));
+        self
+    }
+
+    /// Override the per-check timeout (default: 5 s).
+    ///
+    /// Any check — including the built-in DB probe — that does not
+    /// complete within this duration is recorded as DOWN with a
+    /// `"timed out"` detail, and the probe returns promptly rather
+    /// than hanging.
+    pub fn check_timeout(mut self, timeout: Duration) -> Self {
+        self.check_timeout = timeout;
         self
     }
 }
@@ -148,6 +174,7 @@ impl Plugin for HealthPlugin {
     fn routes(&self) -> Router {
         let state = HealthState {
             checks: Arc::new(self.checks.clone()),
+            check_timeout: self.check_timeout,
         };
         Router::new()
             .route("/healthz", get(liveness))
@@ -183,21 +210,29 @@ struct ReadinessBody {
 async fn readiness(State(state): State<HealthState>) -> impl IntoResponse {
     let mut checks = serde_json::Map::new();
     let mut all_ok = true;
+    let timeout = state.check_timeout;
 
-    // DB connectivity. The check is `SELECT 1` on the default
-    // pool — cheap, fast, dialect-neutral. Failures get logged
-    // at WARN with the underlying error so on-call has a starting
-    // point.
-    match probe_database().await {
-        Ok(()) => {
+    // DB connectivity via the framework's `umbra::db::ping()` — backend-
+    // appropriate `SELECT 1`, no raw sqlx in the plugin. Wrapped in the
+    // configured timeout so a stuck pool doesn't hang the probe.
+    match tokio::time::timeout(timeout, umbra::db::ping()).await {
+        Ok(Ok(())) => {
             checks.insert("database".to_string(), serde_json::json!({"status": "ok"}));
         }
-        Err(e) => {
+        Ok(Err(e)) => {
             tracing::warn!(error = %e, "health: database probe failed");
             all_ok = false;
             checks.insert(
                 "database".to_string(),
-                serde_json::json!({"status": "fail", "reason": e}),
+                serde_json::json!({"status": "fail", "reason": e.to_string()}),
+            );
+        }
+        Err(_elapsed) => {
+            tracing::warn!("health: database probe timed out");
+            all_ok = false;
+            checks.insert(
+                "database".to_string(),
+                serde_json::json!({"status": "fail", "reason": "timed out"}),
             );
         }
     }
@@ -205,18 +240,27 @@ async fn readiness(State(state): State<HealthState>) -> impl IntoResponse {
     // Developer-registered checks. Run sequentially rather than
     // concurrently — concurrency would multiply tail latencies
     // and amplify the cost of one slow check across every probe.
+    // Each check is bounded by the same configured timeout.
     for check in state.checks.iter() {
         let name = check.name().to_string();
-        match check.check().await {
-            Ok(()) => {
+        match tokio::time::timeout(timeout, check.check()).await {
+            Ok(Ok(())) => {
                 checks.insert(name, serde_json::json!({"status": "ok"}));
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 tracing::warn!(check = %check.name(), reason = %e, "health: check failed");
                 all_ok = false;
                 checks.insert(
-                    check.name().to_string(),
+                    name,
                     serde_json::json!({"status": "fail", "reason": e.reason}),
+                );
+            }
+            Err(_elapsed) => {
+                tracing::warn!(check = %check.name(), "health: check timed out");
+                all_ok = false;
+                checks.insert(
+                    name,
+                    serde_json::json!({"status": "fail", "reason": "timed out"}),
                 );
             }
         }
@@ -232,23 +276,4 @@ async fn readiness(State(state): State<HealthState>) -> impl IntoResponse {
         checks,
     };
     (status_code, Json(body))
-}
-
-/// Run a `SELECT 1` against the default pool. Returns the error
-/// message as a string on failure so the JSON body can surface it
-/// without exposing the full sqlx error type to the wire.
-async fn probe_database() -> Result<(), String> {
-    let pool = umbra::db::pool_dispatched();
-    match pool {
-        DbPool::Sqlite(p) => sqlx::query("SELECT 1")
-            .execute(&*p)
-            .await
-            .map(|_| ())
-            .map_err(|e| e.to_string()),
-        DbPool::Postgres(p) => sqlx::query("SELECT 1")
-            .execute(&*p)
-            .await
-            .map(|_| ())
-            .map_err(|e| e.to_string()),
-    }
 }

@@ -95,10 +95,7 @@ async fn cookie_bearing_json_request_does_not_touch_pool() {
         .oneshot(
             Request::builder()
                 .uri("/json")
-                .header(
-                    http::header::COOKIE,
-                    format!("umbra_session={fake_token}"),
-                )
+                .header(http::header::COOKIE, format!("umbra_session={fake_token}"))
                 .body(Body::empty())
                 .unwrap(),
         )

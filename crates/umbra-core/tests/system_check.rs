@@ -102,6 +102,7 @@ fn settings_required_passes_when_dev_environment() {
         backend: &SqliteBackend,
         settings: &settings,
         provides_storage: true,
+        registered_plugin_names: &[],
     };
     let findings = run_all(&ctx, &framework_checks());
     assert!(
@@ -121,6 +122,7 @@ fn settings_required_passes_when_secret_key_overridden_in_prod() {
         backend: &SqliteBackend,
         settings: &settings,
         provides_storage: true,
+        registered_plugin_names: &[],
     };
     let findings = run_all(&ctx, &framework_checks());
     let errors: Vec<_> = findings
@@ -144,6 +146,7 @@ fn settings_required_errors_when_default_secret_in_prod() {
         backend: &SqliteBackend,
         settings: &settings,
         provides_storage: true,
+        registered_plugin_names: &[],
     };
     let findings = run_all(&ctx, &framework_checks());
 
@@ -166,6 +169,7 @@ fn run_all_handles_empty_checks() {
         backend: &SqliteBackend,
         settings: &settings,
         provides_storage: true,
+        registered_plugin_names: &[],
     };
     let findings = run_all(&ctx, &[]);
     assert!(

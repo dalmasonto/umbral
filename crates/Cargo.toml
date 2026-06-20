@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "umbra-casing",
     "umbra-core",
     "umbra-macros",
     "umbra",
@@ -26,6 +27,7 @@ members = [
     "../plugins/umbra-oauth",
     "../plugins/umbra-realtime",
     "../plugins/umbra-livereload",
+    "../plugins/umbra-analytics",
 ]
 
 [workspace.package]

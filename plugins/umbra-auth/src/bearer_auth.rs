@@ -23,7 +23,7 @@
 //! a cookie and curl to send a token:
 //!
 //! ```ignore
-//! use umbra_rest::ChainAuthentication;
+//! use umbra::auth::ChainAuthentication;
 //! use std::sync::Arc;
 //!
 //! let auth = ChainAuthentication::new(vec![
@@ -47,7 +47,7 @@
 use crate::{AuthUser, auth_user, token::AuthToken};
 use async_trait::async_trait;
 use umbra::web::{HeaderMap, header};
-use umbra_rest::{Authentication, Identity};
+use umbra::auth::{Authentication, Identity};
 
 /// The bearer-token authenticator. Stateless — every request reads
 /// the header, looks up the token row, hydrates the user. The
@@ -106,6 +106,7 @@ impl Authentication for BearerAuthentication {
         Some(
             Identity::user(crate::UserModel::id_string(&user))
                 .with_staff(user.is_staff)
+                .with_superuser(user.is_superuser)
                 .with_extra("auth", serde_json::json!("bearer")),
         )
     }

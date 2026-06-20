@@ -53,6 +53,48 @@ pub(crate) fn is_htmx(headers: &HeaderMap) -> bool {
         .unwrap_or(false)
 }
 
+/// Merge a `WriteError`'s per-field messages into the matching `FormField`
+/// slots and return a non-empty top-banner string for the remaining
+/// non-field errors (or an empty string when every failure was field-level).
+///
+/// This is the structured half of gaps2 #12 part 2. The caller builds the
+/// `Vec<FormField>` first (with prefill values preserved), then calls this
+/// to attribute each error to the right input. `non_field_errors()` go to
+/// the top-of-form banner; `field_errors()` for a column that isn't in
+/// `fields` (hidden/readonly) fall back to the banner too so they aren't
+/// silently lost.
+pub(crate) fn apply_write_error_to_fields(
+    we: &umbra::orm::write::WriteError,
+    fields: &mut [crate::view::FormField],
+) -> String {
+    // per-field messages
+    let by_col = we.field_errors();
+    let mut unmatched: Vec<String> = Vec::new();
+    for (col, messages) in &by_col {
+        if let Some(f) = fields.iter_mut().find(|f| &f.name == col) {
+            // Join multiple messages with "; " — the same shape the
+            // up-front validate_form errors use (single string per slot).
+            let msg = messages.join("; ");
+            if f.error.is_empty() {
+                f.error = msg;
+            } else {
+                f.error.push_str("; ");
+                f.error.push_str(&msg);
+            }
+        } else {
+            // Column hidden from form or not on this model — escalate to
+            // the top banner so the error is never silently dropped.
+            for m in messages {
+                unmatched.push(format!("`{col}`: {m}"));
+            }
+        }
+    }
+    // non-field errors always go to the banner
+    let mut banner_parts: Vec<String> = we.non_field_errors();
+    banner_parts.extend(unmatched);
+    banner_parts.join("; ")
+}
+
 /// Turn an `AdminError` into a string safe to show the user inside an
 /// inline form-error span. SQL errors are logged in full but the
 /// surfaced text is sanitised:
@@ -210,7 +252,7 @@ pub(crate) fn naturaltime(raw: &str) -> String {
 ///   SQLite     `UNIQUE constraint failed: profile.user`           → `user`
 ///   SQLite     `UNIQUE constraint failed: profile.user, profile.x` → `user` (first wins)
 ///   Postgres   `Key (user)=(7) already exists.`                    → `user`
-fn parse_unique_violation_column(msg: &str) -> Option<String> {
+pub(crate) fn parse_unique_violation_column(msg: &str) -> Option<String> {
     // SQLite — strip everything before "UNIQUE constraint failed: ".
     if let Some(idx) = msg.find("UNIQUE constraint failed: ") {
         let tail = &msg[idx + "UNIQUE constraint failed: ".len()..];

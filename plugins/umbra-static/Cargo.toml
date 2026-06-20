@@ -15,6 +15,8 @@ tower-http = { version = "0.6", features = ["fs", "set-header"] }
 tower = { version = "0.5", default-features = false, features = ["util"] }
 http = "1"
 tracing = "0.1"
+sha2 = "0.10"
+percent-encoding = "2"
 # Embedded-asset support: callers pass in a `&'static Dir<'static>`
 # produced by `include_dir!()` and we serve files out of memory. We
 # only need the type — the macro that produces a `Dir` lives in the

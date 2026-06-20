@@ -672,3 +672,172 @@ fn min_max_skipped_for_non_numeric_columns() {
         "min/max on TEXT must not emit a CHECK clause; got {sql}",
     );
 }
+
+// --------------------------------------------------------------------- //
+// Auto-index emission for FK columns + soft-delete (deleted_at)         //
+// --------------------------------------------------------------------- //
+
+/// Helper: build a ForeignKey column pointing at a named table.
+fn fk_col(name: &str, target_table: &str) -> Column {
+    Column {
+        name: name.to_string(),
+        ty: SqlType::ForeignKey,
+        primary_key: false,
+        nullable: false,
+        fk_target: Some(target_table.to_string()),
+        noform: false,
+        db_constraint: true,
+        noedit: false,
+        is_string_repr: false,
+        max_length: 0,
+        choices: Vec::new(),
+        choice_labels: Vec::new(),
+        default: String::new(),
+        is_multichoice: false,
+        unique: false,
+        on_delete: umbra_core::orm::FkAction::NoAction,
+        on_update: umbra_core::orm::FkAction::NoAction,
+        index: false,
+        auto_now_add: false,
+        auto_now: false,
+        help: String::new(),
+        example: String::new(),
+        widget: None,
+        supported_backends: Vec::new(),
+        min: None,
+        max: None,
+        text_format: None,
+        slug_from: None,
+    }
+}
+
+/// Helper: build a nullable Timestamptz column named `deleted_at` (the
+/// soft-delete sentinel column). Every soft-delete model carries this
+/// in its FIELDS; the migration engine should auto-index it so
+/// `WHERE deleted_at IS NULL` never does a full-table scan.
+fn deleted_at_col() -> Column {
+    Column {
+        name: "deleted_at".to_string(),
+        ty: SqlType::Timestamptz,
+        primary_key: false,
+        nullable: true,
+        fk_target: None,
+        noform: false,
+        db_constraint: true,
+        noedit: false,
+        is_string_repr: false,
+        max_length: 0,
+        choices: Vec::new(),
+        choice_labels: Vec::new(),
+        default: String::new(),
+        is_multichoice: false,
+        unique: false,
+        on_delete: umbra_core::orm::FkAction::NoAction,
+        on_update: umbra_core::orm::FkAction::NoAction,
+        index: false,
+        auto_now_add: false,
+        auto_now: false,
+        help: String::new(),
+        example: String::new(),
+        widget: None,
+        supported_backends: Vec::new(),
+        min: None,
+        max: None,
+        text_format: None,
+        slug_from: None,
+    }
+}
+
+/// A `CreateTable` with a FK column auto-emits a `CREATE INDEX` on that
+/// column on both backends. FK columns are always indexed so reverse
+/// lookups and `select_related` joins never do full-table scans.
+///
+/// The index name follows the `idx_<table>_<col>` convention and the
+/// statement uses `IF NOT EXISTS` so re-applying an already-applied
+/// migration is idempotent.
+#[test]
+fn test_fk_column_gets_index() {
+    let op = Operation::CreateTable {
+        table: "comment".to_string(),
+        columns: vec![id_pk(), fk_col("post_id", "post"), text_not_null("body")],
+        unique_together: Vec::new(),
+        indexes: Vec::new(),
+    };
+
+    for backend in ["postgres", "sqlite"] {
+        let stmts = render_operation_for(&op, backend);
+        // Must be CREATE TABLE + CREATE INDEX (at least 2 statements).
+        assert!(
+            stmts.len() >= 2,
+            "{backend}: expected CREATE TABLE + CREATE INDEX; got {stmts:?}",
+        );
+        let joined = stmts.join("\n");
+        assert!(
+            joined.contains("CREATE INDEX IF NOT EXISTS"),
+            "{backend}: missing CREATE INDEX IF NOT EXISTS; got {joined}",
+        );
+        assert!(
+            joined.contains("idx_comment_post_id"),
+            "{backend}: expected index name `idx_comment_post_id`; got {joined}",
+        );
+        assert!(
+            joined.contains("\"post_id\"") || joined.contains("`post_id`"),
+            "{backend}: index should reference the post_id column; got {joined}",
+        );
+    }
+}
+
+/// A `CreateTable` for a soft-delete model (carrying a `deleted_at`
+/// column) auto-emits a `CREATE INDEX` on `deleted_at` so the default
+/// `WHERE deleted_at IS NULL` filter in every QuerySet terminal never
+/// scans the full table.
+#[test]
+fn test_soft_delete_column_gets_index() {
+    let op = Operation::CreateTable {
+        table: "post".to_string(),
+        columns: vec![id_pk(), text_not_null("title"), deleted_at_col()],
+        unique_together: Vec::new(),
+        indexes: Vec::new(),
+    };
+
+    for backend in ["postgres", "sqlite"] {
+        let stmts = render_operation_for(&op, backend);
+        assert!(
+            stmts.len() >= 2,
+            "{backend}: expected CREATE TABLE + CREATE INDEX on deleted_at; got {stmts:?}",
+        );
+        let joined = stmts.join("\n");
+        assert!(
+            joined.contains("idx_post_deleted_at"),
+            "{backend}: expected index name `idx_post_deleted_at`; got {joined}",
+        );
+    }
+}
+
+/// Plain string / integer columns do NOT receive a spurious index.
+/// Only FK columns, explicit `#[umbra(index)]` columns, and `deleted_at`
+/// should trigger auto-index emission; `title` and `view_count` must not.
+#[test]
+fn test_plain_column_no_index() {
+    let mut view_count = col("view_count", SqlType::Integer);
+    view_count.nullable = true;
+    let op = Operation::CreateTable {
+        table: "post".to_string(),
+        columns: vec![id_pk(), text_not_null("title"), view_count],
+        unique_together: Vec::new(),
+        indexes: Vec::new(),
+    };
+
+    for backend in ["postgres", "sqlite"] {
+        let stmts = render_operation_for(&op, backend);
+        assert_eq!(
+            stmts.len(),
+            1,
+            "{backend}: plain columns must not emit a spurious CREATE INDEX; got {stmts:?}",
+        );
+        assert!(
+            !stmts[0].contains("CREATE INDEX"),
+            "{backend}: unexpected CREATE INDEX for plain columns; got {stmts:?}",
+        );
+    }
+}

@@ -45,6 +45,90 @@ use crate::check::SystemCheck;
 use crate::migrate::ModelMeta;
 use crate::settings::Settings;
 
+/// Run an async future to completion from inside a synchronous
+/// `Plugin::on_ready` implementation.
+///
+/// `Plugin::on_ready` is a sync trait method (the trait has to be
+/// object-safe for `Vec<Box<dyn Plugin>>`), but most real-world async
+/// work — schema DDL via sqlx, policy setup, initial seeding — needs
+/// to await. This helper bridges that gap safely under every runtime
+/// configuration that umbra encounters in practice:
+///
+/// | Caller context | Bridge used |
+/// |---|---|
+/// | Multi-thread tokio runtime (`#[tokio::main]`, prod binaries) | `tokio::task::block_in_place` + `Handle::block_on` — parks the OS thread, doesn't block the executor |
+/// | Current-thread tokio runtime (`#[tokio::test]` default) | Spawns a dedicated OS thread with its own `Runtime`; `block_in_place` would panic here |
+/// | No ambient runtime (bare `main`, exotic callers) | Creates a temporary `Runtime` and `block_on`s |
+///
+/// ## Why not just `Handle::current().block_on(fut)`?
+///
+/// `block_on` on a `Handle` panics when called from within a
+/// current-thread runtime (which is the default for `#[tokio::test]`).
+/// The multi-thread path requires `block_in_place` to hand control
+/// back to the executor; the current-thread path requires moving to a
+/// different OS thread entirely.
+///
+/// ## Usage
+///
+/// ```rust,ignore
+/// fn on_ready(&self, ctx: &AppContext) -> Result<(), PluginError> {
+///     umbra::plugin::block_on_ready(self.do_async_setup(&ctx.pool))?;
+///     Ok(())
+/// }
+/// ```
+pub fn block_on_ready<F>(fut: F) -> F::Output
+where
+    F: std::future::Future + Send,
+    F::Output: Send,
+{
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => {
+            // We are inside a tokio runtime. The safe bridging path
+            // depends on the runtime flavor:
+            //
+            // - Multi-thread: `block_in_place` parks the current OS
+            //   thread and yields it to the executor so other tasks
+            //   keep running. The `Handle::block_on` call inside then
+            //   drives the future to completion on that parked thread.
+            //
+            // - Current-thread: `block_in_place` panics because a
+            //   single-threaded executor can't lend the thread to sync
+            //   work while simultaneously needing it to drive the
+            //   reactor. The only safe path is to escape to a new OS
+            //   thread. We use `std::thread::scope` (stable since
+            //   Rust 1.63, our MSRV is 1.85) so non-`'static`
+            //   borrows from the call frame can cross the thread
+            //   boundary safely — the scope join guarantees the
+            //   spawned thread exits before the frame does.
+            if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread {
+                tokio::task::block_in_place(|| handle.block_on(fut))
+            } else {
+                // Current-thread (or unknown flavor): escape to a
+                // scoped thread with its own single-thread runtime.
+                std::thread::scope(|s| {
+                    s.spawn(|| {
+                        tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build()
+                            .expect("block_on_ready: failed to build current-thread runtime")
+                            .block_on(fut)
+                    })
+                    .join()
+                    .expect("block_on_ready: scoped thread panicked")
+                })
+            }
+        }
+        Err(_) => {
+            // No ambient runtime. Build a temporary one for this call.
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("block_on_ready: failed to build runtime")
+                .block_on(fut)
+        }
+    }
+}
+
 /// The contract every umbra extension implements.
 ///
 /// Every method except `name()` has a default that returns the empty

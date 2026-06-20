@@ -119,16 +119,63 @@ pub struct PageView {
 
 `db_constraint = false` keeps the FK **logical**: the column and its `fk_target` are unchanged, so joins, `select_related`, and app-level existence checks all keep working — but the migration emits no physical `REFERENCES`. It mirrors Django's `ForeignKey(db_constraint=False)` and works for same-database FKs too (e.g. to break a circular dependency). The default is `true` (emit the constraint).
 
+## Read/write (replica) split
+
+The `DatabaseRouter` trait (gaps2 #69 foundation, shipped 2026-06-16) lets you send reads to a replica pool and writes to the primary with a single trait impl — the model, handlers, and the rest of the ORM are untouched.
+
+Implement `DatabaseRouter` and register it with `.router(...)`:
+
+```rust
+use umbra::db::{Alias, DatabaseRouter, RouteContext};
+use umbra::migrate::ModelMeta;
+
+struct ReplicaRouter;
+
+impl DatabaseRouter for ReplicaRouter {
+    fn db_for_read(&self, _model: &ModelMeta, _ctx: &RouteContext) -> Alias {
+        Alias::new("replica")   // reads  → the replica pool
+    }
+    fn db_for_write(&self, _model: &ModelMeta, _ctx: &RouteContext) -> Alias {
+        Alias::new("default")   // writes → the primary pool
+    }
+}
+
+let primary = umbra::db::connect(&settings.database_url).await?;
+let replica = umbra::db::connect(&replica_url).await?;
+
+App::builder()
+    .settings(settings)
+    .database("default", primary)   // primary / write pool
+    .database("replica", replica)   // read-replica pool
+    .router(ReplicaRouter)
+    .model::<Note>()
+    // ...routes...
+    .build()?;
+```
+
+Every read terminal (`fetch`, `first`, `count`, `exists`, `get`, `aggregate`) calls `db_for_read`; every write terminal (`create`, `bulk_create`, `update_values`, `delete`, …) calls `db_for_write`. `.on(&pool)` is a hard override that bypasses the router entirely.
+
+**Read-after-write consistency.** `get_or_create` and `update_or_create` probe the **write** pool for their existence check (not the replica), so they can't miss a just-written row on a lagging replica and spuriously insert a duplicate.
+
+A working end-to-end example lives in `examples/read-replica/`.
+
+<Callout type="info">
+`DatabaseRouter` is also the hook for more advanced routing: per-tenant db selection, per-request schema qualification (Postgres schema-per-tenant via `schema_for`), and custom `allow_relation` / `allow_migrate` policies. The default implementation — used when you call `.router(...)` with nothing — reproduces today's static per-model behavior exactly.
+</Callout>
+
 ## Not yet supported
 
 These are the known gaps — the routing primitive is solid, but a few capabilities that real multi-DB and multitenant setups need aren't built yet:
 
-- **No read/write (replica) split (gaps2 #23).** Routing is one-model-one-database; there's no `db_for_read` (replica) vs `db_for_write` (primary). A model can't send reads to a replica and writes to the primary. The hard part — read-after-write consistency inside a transaction — is why this is deferred.
-- **No dynamic, per-request routing (the multitenancy gap).** Pools are resolved **per model at build time**, not **per request**. A database-per-tenant (or schema-per-tenant) setup that picks the pool from the *current request's tenant* isn't expressible through this surface — there's no ambient "current tenant → pool" hook. The closest primitive today is threading a tenant pool through `.on(&pool)` on every query by hand. First-class per-request routing is what multitenancy will need.
-- **`.on()` is SQLite-typed.** It accepts a `&sqlx::SqlitePool`; there's no `PgPool` per-query override. For Postgres, rely on model/plugin routing.
+- **No schema-per-tenant or database-per-tenant management layer.** The `DatabaseRouter` foundation shipped the *routing mechanism* (trait + `RouteContext` task-local + `schema_for` SQL qualification), but the *management ergonomics* are Phase 2: a `Tenant` model, `migrate_schemas`, the `SHARED_APPS`/public split (which model tables are per-tenant vs shared), and a built-in HTTP tenant-resolver. A custom router can use `schema_for` today, but you provision schemas and seed the resolver yourself.
+- **No dynamic, per-request pool routing for multitenancy.** `App::builder().route_context(|req| RouteContext { … })` is the seam for a per-request resolver, and the task-local propagates it; what doesn't exist yet is an ambient `Tenant` registry + `migrate_schemas` that makes database-per-tenant a first-class pattern rather than DIY wiring.
+- **No row-level tenancy.** `SET LOCAL app.user_id` / Postgres RLS (`umbra-rls`) is a separate spec; it is not part of the foundation.
+- **`.on()` is SQLite-typed.** It accepts a `&sqlx::SqlitePool`; there's no `PgPool` per-query override. For Postgres, rely on model/plugin routing or a custom router.
 - **The `databases` settings map isn't auto-connected** — see the callout above.
 
 ## See also
 
 - Design rationale: `arch.md` (plugins own their migrations + database), `docs/specs/03-orm-querysets.md`.
-- Open gaps tracked in `planning/gaps2.md` #23 (read/write split), #69 (pluggable router for new backends + multitenancy). (#22 cross-DB FK guard: shipped — see "Cross-database foreign keys" above.)
+- `DatabaseRouter` foundation spec: `docs/superpowers/specs/2026-06-16-database-router-foundation-design.md`.
+- Working example: `examples/read-replica/`.
+- Open gaps: `planning/gaps2.md` #69 Phase 2 (schema/db-per-tenant management, row-level tenancy). (#22 cross-DB FK guard: shipped — see "Cross-database foreign keys" above. #23 read/write split: shipped — see "Read/write (replica) split" above.)

@@ -524,6 +524,56 @@ async fn set_user_groups_replaces_full_set() {
     assert!(groups.is_empty(), "empty set clears every membership");
 }
 
+/// Verify that `set_user_groups` is atomic: if the INSERT half of the
+/// DELETE+INSERT replacement fails (here: a duplicate group_id in the
+/// input triggers the UNIQUE constraint on `(user_id, group_id)` inside
+/// `bulk_create_in_tx`), the whole transaction rolls back and the prior
+/// membership set is preserved unchanged.
+///
+/// Note: we cannot inject a true concurrent race deterministically in a
+/// unit test, but we can prove the transactional-replacement contract
+/// holds — "on INSERT failure, the old set survives" — which is
+/// equivalent: if the transaction commits, the caller sees the new set;
+/// if it aborts, the caller sees the old set; there is no intermediate
+/// empty window visible to any reader.
+#[tokio::test(flavor = "multi_thread")]
+async fn set_user_groups_rolls_back_on_insert_failure() {
+    boot().await;
+    let g_a = fetch_or_create_group("rollback_test_a").await;
+    let g_b = fetch_or_create_group("rollback_test_b").await;
+    let user = "8099";
+
+    // Establish a known initial state: user is a member of g_a only.
+    membership::set_user_groups(user, &[g_a.id]).await.unwrap();
+    let before: Vec<i64> = membership::groups_for_user(user)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|g| g.id)
+        .collect();
+    assert_eq!(before, vec![g_a.id], "pre-condition: user is in g_a only");
+
+    // Attempt a replacement that will fail: passing the same group_id
+    // twice triggers the UNIQUE(user_id, group_id) constraint on the
+    // multi-row INSERT inside `bulk_create_in_tx`, causing the whole
+    // transaction (including the preceding DELETE) to roll back.
+    let result = membership::set_user_groups(user, &[g_b.id, g_b.id]).await;
+    assert!(result.is_err(), "duplicate group_id must return an error");
+
+    // After the failed replacement, the original membership must be intact.
+    let after: Vec<i64> = membership::groups_for_user(user)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|g| g.id)
+        .collect();
+    assert_eq!(
+        after, vec![g_a.id],
+        "transaction rolled back: prior membership (g_a) must be preserved"
+    );
+    assert!(!after.contains(&g_b.id), "g_b must NOT appear after rollback");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn grant_and_revoke_user_permission_round_trips() {
     boot().await;

@@ -5,6 +5,10 @@
 //! - **Derive classification.** `ipnetwork::IpNetwork` lands as
 //!   `SqlType::Inet`; `Option<IpNetwork>` as nullable. Same for
 //!   `mac_address::MacAddress` → `SqlType::MacAddr`.
+//! - **`#[umbra(cidr)]` opt-in.** Closes the derive-reachable half of
+//!   gaps2 #70: a `#[umbra(cidr)]` field switches `IpNetwork` /
+//!   `Option<IpNetwork>` from Inet → Cidr without changing the Rust type.
+//!   Without the attr it stays Inet (regression guard).
 //! - **Backend gating.** Inet/Cidr/MacAddr against SQLite fails at
 //!   boot with `field.backend`.
 //! - **DDL rendering.** Postgres emits `inet` / `macaddr` column
@@ -21,6 +25,23 @@ pub struct Node {
     pub addr: ipnetwork::IpNetwork,
     pub mac: mac_address::MacAddress,
     pub fallback: Option<ipnetwork::IpNetwork>,
+}
+
+/// A model that exercises `#[umbra(cidr)]` on both non-nullable and nullable
+/// `IpNetwork` fields. The Rust type is identical to `Inet`; only the
+/// `SqlType` (and therefore the DDL / inspectdb output) differs.
+#[derive(Debug, Clone, sqlx::FromRow, umbra::orm::Model)]
+#[umbra(table = "umbra_phase44_subnet")]
+pub struct Subnet {
+    pub id: i64,
+    /// Non-nullable CIDR: `#[umbra(cidr)]` → `SqlType::Cidr`, not `Inet`.
+    #[umbra(cidr)]
+    pub network: ipnetwork::IpNetwork,
+    /// Nullable CIDR: `#[umbra(cidr)]` on `Option<IpNetwork>` → nullable Cidr.
+    #[umbra(cidr)]
+    pub fallback_net: Option<ipnetwork::IpNetwork>,
+    /// Plain INET (no attr) — regression guard; must stay `SqlType::Inet`.
+    pub gateway: ipnetwork::IpNetwork,
 }
 
 #[test]
@@ -318,4 +339,56 @@ async fn network_fields_round_trip_through_postgres() {
     assert_eq!(rows[0].addr, primary);
     assert_eq!(rows[0].mac, mac);
     assert_eq!(rows[0].fallback, Some(backup));
+}
+
+// =============================================================================
+// `#[umbra(cidr)]` derive attribute — closes the derive-reachable half of
+// gaps2 #70.
+// =============================================================================
+
+/// `#[umbra(cidr)]` on a non-nullable `IpNetwork` field classifies as
+/// `SqlType::Cidr` (not `Inet`). A plain `IpNetwork` field without the
+/// attribute stays `Inet` (regression guard).
+#[test]
+fn cidr_attr_classifies_as_cidr_sqltype() {
+    let by_name: std::collections::HashMap<&str, &umbra::orm::FieldSpec> =
+        <Subnet as Model>::FIELDS
+            .iter()
+            .map(|f| (f.name, f))
+            .collect();
+
+    let network = by_name.get("network").expect("network field");
+    assert_eq!(
+        network.ty,
+        SqlType::Cidr,
+        "#[umbra(cidr)] IpNetwork should classify as Cidr"
+    );
+    assert!(!network.nullable);
+
+    let fallback_net = by_name.get("fallback_net").expect("fallback_net field");
+    assert_eq!(
+        fallback_net.ty,
+        SqlType::Cidr,
+        "#[umbra(cidr)] Option<IpNetwork> should classify as Cidr"
+    );
+    assert!(fallback_net.nullable);
+
+    // Regression: plain IpNetwork (no attr) must remain Inet.
+    let gateway = by_name.get("gateway").expect("gateway field");
+    assert_eq!(
+        gateway.ty,
+        SqlType::Inet,
+        "IpNetwork without #[umbra(cidr)] must remain Inet"
+    );
+    assert!(!gateway.nullable);
+}
+
+/// Column constants for a model with `#[umbra(cidr)]` fields expose the
+/// `CidrCol` / `NullableCidrCol` types (not `InetCol`).
+#[test]
+fn cidr_attr_produces_cidr_col_constants() {
+    use umbra::orm::column::{CidrCol, InetCol, NullableCidrCol};
+    let _: CidrCol<Subnet> = subnet::NETWORK;
+    let _: NullableCidrCol<Subnet> = subnet::FALLBACK_NET;
+    let _: InetCol<Subnet> = subnet::GATEWAY;
 }

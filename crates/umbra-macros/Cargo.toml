@@ -12,6 +12,8 @@ rust-version.workspace = true
 proc-macro = true
 
 [dependencies]
+# Shared casing helpers — no deps, safe to use from a proc-macro crate.
+umbra-casing = { path = "../umbra-casing", version = "0.0.1" }
 # Standard proc-macro toolkit. syn parses the input; quote emits the
 # output tokens; proc-macro2 bridges the proc_macro / syn type space.
 proc-macro2 = "1"

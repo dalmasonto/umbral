@@ -67,7 +67,7 @@ const SHELL_HTML: &str = include_str!("shell.html");
 /// per-app scope. The app name is HTML-attribute-escaped (quotes +
 /// `<>` + `&`) so an exotic project slug can't break out of the
 /// meta-tag attribute or the inline script.
-fn render_shell(state: &PlaygroundState) -> String {
+pub fn render_shell(state: &PlaygroundState) -> String {
     if state.degraded {
         return PLACEHOLDER_HTML.to_string();
     }
@@ -84,12 +84,49 @@ fn render_shell(state: &PlaygroundState) -> String {
     // openapi being mounted alongside).
     let spec_url = umbra::routes::registered_openapi_spec_url().unwrap_or("/openapi/openapi.json");
     let spec_url_json = json_escape(spec_url);
-    SHELL_HTML
-        .replace("__CSS_PATH__", &css)
-        .replace("__JS_PATH__", &js)
-        .replace("__APP_NAME_ATTR__", &app_meta)
-        .replace("__APP_NAME_JSON__", &app_js)
-        .replace("__OPENAPI_URL_JSON__", &spec_url_json)
+    single_pass_replace(
+        SHELL_HTML,
+        &[
+            ("__CSS_PATH__", css.as_str()),
+            ("__JS_PATH__", js.as_str()),
+            ("__APP_NAME_ATTR__", app_meta.as_str()),
+            ("__APP_NAME_JSON__", app_js.as_str()),
+            ("__OPENAPI_URL_JSON__", spec_url_json.as_str()),
+        ],
+    )
+}
+
+/// Replace every `(token, value)` pair in `template` in a single left-to-right
+/// scan. At each position the template is checked against every token; the
+/// first matching token is consumed and its value is emitted. The emitted
+/// value is **never** rescanned, so a value that contains a token literal
+/// cannot trigger a second substitution — closing the sequential-replace
+/// injection path.
+fn single_pass_replace(template: &str, replacements: &[(&str, &str)]) -> String {
+    let bytes = template.as_bytes();
+    let len = bytes.len();
+    let mut out = String::with_capacity(len);
+    let mut i = 0;
+    'outer: while i < len {
+        for &(token, value) in replacements {
+            let tb = token.as_bytes();
+            if bytes[i..].starts_with(tb) {
+                out.push_str(value);
+                i += tb.len();
+                continue 'outer;
+            }
+        }
+        // No token matched at position i — emit one byte verbatim.
+        // SAFETY: we walk byte-by-byte and reassemble into String only
+        // after the loop. The original template is valid UTF-8, and we
+        // only skip ahead by `token.len()` (which is also a &str, hence
+        // valid UTF-8 boundaries). Single-byte advances may land mid-codepoint
+        // for multi-byte chars, so push via char to stay correct.
+        let ch = template[i..].chars().next().expect("non-empty slice");
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
 }
 
 /// HTML attribute escape. Replaces `&`, `<`, `>`, `"`, `'` with

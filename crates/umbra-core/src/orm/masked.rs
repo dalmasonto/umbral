@@ -186,51 +186,71 @@ fn decode_key(b64: &str) -> Result<[u8; 32], MaskError> {
         .map_err(|_| MaskError::BadKey("key is not 32 bytes".to_string()))
 }
 
-/// Ambient keyring. Resolved once: an explicit [`set_mask_keyring`] wins;
-/// otherwise the first access tries the environment.
-static KEYRING: OnceLock<Option<MaskKeyring>> = OnceLock::new();
+/// Ambient keyring state. Stores `Ok(Some(keyring))` when correctly
+/// configured, `Ok(None)` when masking is simply not configured (the key
+/// env-var is absent), and `Err(MaskError::BadKey(...))` when a key env-var
+/// IS present but is malformed (bad base64 or wrong byte length). The third
+/// state is the bug-fix: a malformed key must never silently resolve to
+/// `None` and allow plaintext writes.
+static KEYRING: OnceLock<Result<Option<MaskKeyring>, MaskError>> = OnceLock::new();
 
 /// Inject the ambient mask keyring (tests, or an app loading keys from a
 /// vault). Returns `false` if the keyring was already resolved. Mirrors
 /// `crate::storage::set_storage`'s set-once discipline.
 pub fn set_mask_keyring(keyring: MaskKeyring) -> bool {
-    KEYRING.set(Some(keyring)).is_ok()
+    KEYRING.set(Ok(Some(keyring))).is_ok()
 }
 
-/// The ambient keyring, lazily resolved from the environment on first
-/// access if not explicitly set.
-fn keyring() -> Option<&'static MaskKeyring> {
+/// The ambient keyring, lazily resolved from the environment on first access
+/// if not explicitly set.
+///
+/// Returns:
+/// - `Ok(Some(kr))` — correctly configured, use `kr` to seal/open.
+/// - `Ok(None)` — masking not configured (env-var absent); callers return
+///   `Err(MaskError::NoKeyring)`.
+/// - `Err(e)` — key IS present but malformed; callers propagate `e` so the
+///   caller sees `BadKey(...)` rather than the misleading `NoKeyring`.
+fn keyring() -> Result<Option<&'static MaskKeyring>, &'static MaskError> {
     KEYRING
         .get_or_init(|| match MaskKeyring::from_env() {
-            Ok(k) => Some(k),
+            Ok(k) => Ok(Some(k)),
             // No public key in the env → masking is simply not configured.
             // That's an expected, silent state.
-            Err(MaskError::NoKeyring) => None,
-            // A key IS present but couldn't be parsed. Don't swallow this:
-            // every `Masked<T>` reveal will fail later with a confusing
-            // error, so surface the real cause once, loudly, at first use.
+            Err(MaskError::NoKeyring) => Ok(None),
+            // A key IS present but couldn't be parsed. Store the error so
+            // every subsequent seal/open returns BadKey, not the misleading
+            // NoKeyring. Also log once so operators see it in the startup
+            // logs without having to trigger an actual write.
             Err(e) => {
-                tracing::warn!(
+                tracing::error!(
                     "UMBRA_MASK_PUBLIC_KEY/UMBRA_MASK_PRIVATE_KEY is set but could not be \
-                     parsed ({e}); Masked<T> fields will fail to seal/reveal. Fix the key \
-                     or unset the variables."
+                     parsed ({e}); all Masked<T> seal/reveal calls will fail with BadKey. \
+                     Fix the key or unset the variable."
                 );
-                None
+                Err(e)
             }
         })
         .as_ref()
+        .map(|opt| opt.as_ref())
+        .map_err(|e| e)
 }
 
 /// Seal plaintext with the ambient keyring.
 fn ambient_seal(plaintext: &str) -> Result<String, MaskError> {
-    keyring()
-        .ok_or(MaskError::NoKeyring)
-        .map(|k| k.seal(plaintext.as_bytes()))
+    match keyring() {
+        Ok(Some(k)) => Ok(k.seal(plaintext.as_bytes())),
+        Ok(None) => Err(MaskError::NoKeyring),
+        Err(e) => Err(e.clone()),
+    }
 }
 
 /// Open ciphertext with the ambient keyring.
 fn ambient_open(ciphertext: &str) -> Result<String, MaskError> {
-    keyring().ok_or(MaskError::NoKeyring)?.open(ciphertext)
+    match keyring() {
+        Ok(Some(k)) => k.open(ciphertext),
+        Ok(None) => Err(MaskError::NoKeyring),
+        Err(e) => Err(e.clone()),
+    }
 }
 
 // =========================================================================
@@ -285,7 +305,11 @@ impl<T> Masked<T> {
     pub fn is_revealable(&self) -> bool {
         match &self.inner {
             MaskInner::Plain(_) => true,
-            MaskInner::Sealed(_) => keyring().map(MaskKeyring::can_reveal).unwrap_or(false),
+            MaskInner::Sealed(_) => keyring()
+                .ok()
+                .and_then(|opt| opt)
+                .map(MaskKeyring::can_reveal)
+                .unwrap_or(false),
         }
     }
 

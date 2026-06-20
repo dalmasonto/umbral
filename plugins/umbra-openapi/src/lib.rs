@@ -16,9 +16,14 @@
 //! ## Scope
 //!
 //! v1 only describes umbra-rest's auto-generated endpoints. Hand-
-//! written routes the user added on the builder are not in scope, and
-//! the spec carries no `securitySchemes` entries. Pagination is also
-//! deferred because umbra-rest does not paginate yet.
+//! written routes the user added on the builder are not in scope.
+//! The spec emits a `components.securitySchemes` block populated from
+//! the REST layer's registered auth schemes (via
+//! `umbra_rest::registered_security_schemes()`). List endpoints
+//! include the pagination query parameters that match the configured
+//! backend — `page`/`page_size` for [`umbra_rest::PageNumberPagination`],
+//! `limit`/`offset` for [`umbra_rest::LimitOffsetPagination`], none for
+//! [`umbra_rest::NoPagination`] (the default).
 
 use std::sync::OnceLock;
 
@@ -27,6 +32,7 @@ use umbra::migrate::{Column, ModelMeta};
 use umbra::orm::SqlType;
 use umbra::prelude::*;
 use umbra::web::{Html, IntoResponse, Json, Response, StatusCode, header};
+use umbra_casing::pascal_case_from_ident;
 
 const SWAGGER_UI_HTML: &str = include_str!("../templates/swagger_ui.html");
 
@@ -229,9 +235,14 @@ fn build_spec(cfg: &OpenApiPlugin) -> Value {
         std::collections::HashMap::new();
     for plugin in umbra::migrate::registered_plugins() {
         for model in umbra::migrate::models_for_plugin(&plugin) {
-            table_to_schema.insert(model.table.clone(), pascal_case(&model.name));
+            table_to_schema.insert(model.table.clone(), pascal_case_from_ident(&model.name));
         }
     }
+
+    // Read the REST base path once before the model loop. This is what
+    // the real mounted routes use, so the documented paths mirror the live
+    // routes exactly. E.g. `.at("/v2")` → paths under `/v2/`, not `/api/`.
+    let rest_base = umbra_rest::registered_base_path().to_owned();
 
     for plugin in umbra::migrate::registered_plugins() {
         for model in umbra::migrate::models_for_plugin(&plugin) {
@@ -249,7 +260,7 @@ fn build_spec(cfg: &OpenApiPlugin) -> Value {
             if !cfg.is_exposed(&model.table) {
                 continue;
             }
-            let schema_name = pascal_case(&model.name);
+            let schema_name = pascal_case_from_ident(&model.name);
             schemas.insert(schema_name.clone(), model_schema(&model, &table_to_schema));
             // Advertise every filterable column × lookup AND the
             // `?search=` free-text parameter (when enabled) as
@@ -258,10 +269,12 @@ fn build_spec(cfg: &OpenApiPlugin) -> Value {
             // then drive a real filter UI off the spec instead of
             // guessing.
             let mut list_params = Vec::new();
-            // Pagination always documented — the REST plugin
-            // accepts `?page` / `?page_size` on every list endpoint
-            // regardless of resource config.
-            list_params.extend(pagination_parameters());
+            // Emit the pagination query params that match the configured
+            // backend. PageNumber → page/page_size; LimitOffset →
+            // limit/offset; NoPagination and unknown custom → nothing.
+            list_params.extend(pagination_parameters_for_style(
+                umbra_rest::registered_pagination_style(),
+            ));
             if umbra_rest::search_enabled_for(&model.table) {
                 list_params.push(search_parameter());
             }
@@ -279,7 +292,7 @@ fn build_spec(cfg: &OpenApiPlugin) -> Value {
                 list_params.extend(filter_parameters(&model));
             }
             paths.insert(
-                format!("/api/{}/", model.table),
+                format!("{}/{}/", rest_base, model.table),
                 collection_paths(&model.table, &schema_name, &list_params),
             );
             // Retrieve respects both `?fields=` and `?include=` — same
@@ -290,7 +303,7 @@ fn build_spec(cfg: &OpenApiPlugin) -> Value {
                 item_params.push(include_parameter(&model));
             }
             paths.insert(
-                format!("/api/{}/{{id}}", model.table),
+                format!("{}/{}/{{id}}", rest_base, model.table),
                 item_paths(&model.table, &schema_name, &item_params),
             );
         }
@@ -446,7 +459,7 @@ fn model_schema(
         let target_schema = table_to_schema
             .get(&rel.target_table)
             .cloned()
-            .unwrap_or_else(|| pascal_case(&rel.target_name));
+            .unwrap_or_else(|| pascal_case_from_ident(&rel.target_name));
         let mut prop = serde_json::Map::new();
         prop.insert("type".into(), Value::String("array".into()));
         // Items are the child model's PK type, not always int64 (review #4):
@@ -821,33 +834,57 @@ fn include_parameter(model: &ModelMeta) -> Value {
     })
 }
 
-/// Playground-openapi-gaps #3: the two standard pagination
-/// parameters umbra-rest accepts on every list endpoint. Documented
-/// here so generated clients and Swagger UI surface them as
-/// configurable, instead of leaving callers to discover the shape
-/// from the response envelope.
-fn pagination_parameters() -> Vec<Value> {
-    vec![
-        json!({
-            "name": "page",
-            "in": "query",
-            "required": false,
-            "description": "1-indexed page number. Defaults to 1 when omitted.",
-            "schema": { "type": "integer", "format": "int32", "minimum": 1, "default": 1 },
-            "x-umbra-pagination": "page",
-        }),
-        json!({
-            "name": "page_size",
-            "in": "query",
-            "required": false,
-            "description": "Rows per page. Capped at 100. Default 20.",
-            "schema": {
-                "type": "integer", "format": "int32",
-                "minimum": 1, "maximum": 100, "default": 20,
-            },
-            "x-umbra-pagination": "page_size",
-        }),
-    ]
+/// Playground-openapi-gaps #3 / gaps2 #79: emit the pagination query
+/// parameters that match the configured backend, not a hardcoded
+/// `page`/`page_size` pair.
+///
+/// - [`PaginationStyle::PageNumber`] → `page` + `page_size` (Django default)
+/// - [`PaginationStyle::LimitOffset`] → `limit` + `offset` (REST classic)
+/// - [`PaginationStyle::None`] / [`PaginationStyle::Custom`] → empty Vec
+///   (NoPagination has no URL params; unknown custom backends are opaque)
+fn pagination_parameters_for_style(style: umbra_rest::PaginationStyle) -> Vec<Value> {
+    match style {
+        umbra_rest::PaginationStyle::PageNumber => vec![
+            json!({
+                "name": "page",
+                "in": "query",
+                "required": false,
+                "description": "1-indexed page number. Defaults to 1 when omitted.",
+                "schema": { "type": "integer", "format": "int32", "minimum": 1, "default": 1 },
+                "x-umbra-pagination": "page",
+            }),
+            json!({
+                "name": "page_size",
+                "in": "query",
+                "required": false,
+                "description": "Rows per page. Capped at 100. Default 20.",
+                "schema": {
+                    "type": "integer", "format": "int32",
+                    "minimum": 1, "maximum": 100, "default": 20,
+                },
+                "x-umbra-pagination": "page_size",
+            }),
+        ],
+        umbra_rest::PaginationStyle::LimitOffset => vec![
+            json!({
+                "name": "limit",
+                "in": "query",
+                "required": false,
+                "description": "Maximum rows to return. Defaults to the configured page size.",
+                "schema": { "type": "integer", "format": "int32", "minimum": 1 },
+                "x-umbra-pagination": "limit",
+            }),
+            json!({
+                "name": "offset",
+                "in": "query",
+                "required": false,
+                "description": "Number of rows to skip from the start of the result set. Defaults to 0.",
+                "schema": { "type": "integer", "format": "int32", "minimum": 0, "default": 0 },
+                "x-umbra-pagination": "offset",
+            }),
+        ],
+        umbra_rest::PaginationStyle::None | umbra_rest::PaginationStyle::Custom => vec![],
+    }
 }
 
 /// Build the OpenAPI `parameters` entries that document the
@@ -1137,21 +1174,8 @@ pub fn test_ui_route(p: &OpenApiPlugin) -> String {
     p.ui_route()
 }
 
-/// Crude PascalCase: split on `_` and uppercase the first char of
-/// each chunk. Model names already arrive PascalCase from
-/// `Model::NAME`, so this only matters when a plugin author passes a
-/// snake_case name in the metadata.
-fn pascal_case(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for chunk in s.split('_') {
-        let mut chars = chunk.chars();
-        if let Some(c) = chars.next() {
-            out.extend(c.to_uppercase());
-            out.push_str(chars.as_str());
-        }
-    }
-    out
-}
+// `pascal_case` replaced by `umbra_casing::pascal_case_from_ident` (imported
+// above) in the gaps2 #77 consolidation refactor.
 
 #[cfg(test)]
 mod tests {
@@ -1638,21 +1662,46 @@ mod tests {
         );
     }
 
-    /// Playground-openapi-gaps #3: every list endpoint advertises
-    /// `page` + `page_size` as query parameters, so generated
-    /// clients and the playground know they're tunable.
+    /// gaps2 #79: pagination_parameters_for_style emits the correct
+    /// params per pagination class, not always `page`/`page_size`.
     #[test]
-    fn pagination_parameters_shape_round_trips() {
-        let params = pagination_parameters();
-        assert_eq!(params.len(), 2);
-        assert_eq!(params[0]["name"], "page");
-        assert_eq!(params[0]["in"], "query");
-        assert_eq!(params[0]["schema"]["type"], "integer");
-        assert_eq!(params[0]["schema"]["minimum"], 1);
-        assert_eq!(params[0]["schema"]["default"], 1);
-        assert_eq!(params[0]["x-umbra-pagination"], "page");
-        assert_eq!(params[1]["name"], "page_size");
-        assert_eq!(params[1]["schema"]["maximum"], 100);
-        assert_eq!(params[1]["x-umbra-pagination"], "page_size");
+    fn pagination_parameters_per_style() {
+        use umbra_rest::PaginationStyle;
+
+        // NoPagination → no params.
+        let none_params = pagination_parameters_for_style(PaginationStyle::None);
+        assert!(
+            none_params.is_empty(),
+            "NoPagination should emit no pagination params; got {none_params:?}"
+        );
+
+        // Custom → no params (opaque).
+        let custom_params = pagination_parameters_for_style(PaginationStyle::Custom);
+        assert!(
+            custom_params.is_empty(),
+            "Custom pagination should emit no params; got {custom_params:?}"
+        );
+
+        // PageNumber → page + page_size.
+        let page_params = pagination_parameters_for_style(PaginationStyle::PageNumber);
+        assert_eq!(page_params.len(), 2, "PageNumber should emit 2 params");
+        assert_eq!(page_params[0]["name"], "page");
+        assert_eq!(page_params[0]["in"], "query");
+        assert_eq!(page_params[0]["schema"]["type"], "integer");
+        assert_eq!(page_params[0]["schema"]["minimum"], 1);
+        assert_eq!(page_params[0]["schema"]["default"], 1);
+        assert_eq!(page_params[0]["x-umbra-pagination"], "page");
+        assert_eq!(page_params[1]["name"], "page_size");
+        assert_eq!(page_params[1]["schema"]["maximum"], 100);
+        assert_eq!(page_params[1]["x-umbra-pagination"], "page_size");
+
+        // LimitOffset → limit + offset.
+        let lo_params = pagination_parameters_for_style(PaginationStyle::LimitOffset);
+        assert_eq!(lo_params.len(), 2, "LimitOffset should emit 2 params");
+        assert_eq!(lo_params[0]["name"], "limit");
+        assert_eq!(lo_params[0]["x-umbra-pagination"], "limit");
+        assert_eq!(lo_params[1]["name"], "offset");
+        assert_eq!(lo_params[1]["x-umbra-pagination"], "offset");
+        assert_eq!(lo_params[1]["schema"]["minimum"], 0);
     }
 }

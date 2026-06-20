@@ -416,6 +416,67 @@ impl PluginInspect for OpenApiPlugin {
 }
 
 // =========================================================================
+// gaps2 #79a: default boot uses NoPagination → no page/page_size params.
+// =========================================================================
+
+#[tokio::test]
+async fn no_pagination_style_emits_no_pagination_params() {
+    let (_, body) = get_request(boot().await.clone(), "/openapi/openapi.json").await;
+    let v: serde_json::Value = serde_json::from_str(&body).expect("json");
+    let list_params = v["paths"]["/api/note/"]["get"]["parameters"]
+        .as_array()
+        .expect("list params array on /api/note/");
+
+    let param_names: Vec<&str> = list_params
+        .iter()
+        .filter_map(|p| p["name"].as_str())
+        .collect();
+
+    assert!(
+        !param_names.contains(&"page"),
+        "NoPagination should not emit a `page` param; got {param_names:?}"
+    );
+    assert!(
+        !param_names.contains(&"page_size"),
+        "NoPagination should not emit a `page_size` param; got {param_names:?}"
+    );
+}
+
+// =========================================================================
+// gaps2 #79b: the spec paths match the real REST base path (default /api).
+// =========================================================================
+
+#[tokio::test]
+async fn spec_paths_use_registered_rest_base_path() {
+    let (_, body) = get_request(boot().await.clone(), "/openapi/openapi.json").await;
+    let v: serde_json::Value = serde_json::from_str(&body).expect("json");
+    let paths = v["paths"].as_object().expect("paths");
+
+    // The default RestPlugin uses /api — the paths must reflect that.
+    assert!(
+        paths.contains_key("/api/note/"),
+        "/api/note/ must be in paths when REST base is /api; keys: {:?}",
+        paths.keys().collect::<Vec<_>>()
+    );
+    assert!(
+        paths.contains_key("/api/note/{id}"),
+        "/api/note/{{id}} must be in paths; keys: {:?}",
+        paths.keys().collect::<Vec<_>>()
+    );
+    // No hardcoded fallback path should appear if /api is the live base.
+    // (Both would appear if we ever accidentally duplicated with a different base.)
+    let non_api: Vec<&str> = paths
+        .keys()
+        .map(|k| k.as_str())
+        .filter(|k| k.starts_with("/note/"))
+        .collect();
+    assert!(
+        non_api.is_empty(),
+        "No bare /note/ paths should appear (only /api/note/); got {non_api:?}"
+    );
+}
+
+// =========================================================================
 // Review #4: FK + M2M to a String-slug-PK target render as `string`.
 // =========================================================================
 

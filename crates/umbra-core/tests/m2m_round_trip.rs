@@ -588,7 +588,7 @@ async fn set_junction_dynamic_replaces_selection_with_typed_values() {
         })
         .collect();
 
-    umbra::orm::set_junction_dynamic(JUNCTION_TABLE, parent_value.clone(), child_values)
+    umbra::orm::set_junction_dynamic(JUNCTION_TABLE, parent_value.clone(), child_values, None)
         .await
         .expect("set_junction_dynamic");
 
@@ -610,7 +610,7 @@ async fn set_junction_dynamic_replaces_selection_with_typed_values() {
         )
         .unwrap(),
     ];
-    umbra::orm::set_junction_dynamic(JUNCTION_TABLE, parent_value.clone(), only_b)
+    umbra::orm::set_junction_dynamic(JUNCTION_TABLE, parent_value.clone(), only_b, None)
         .await
         .expect("set_junction_dynamic with new selection");
     let fetched = group.perms.fetch().await.expect("fetch after replace");
@@ -618,7 +618,7 @@ async fn set_junction_dynamic_replaces_selection_with_typed_values() {
     assert_eq!(fetched[0].codename, perm_b.codename);
 
     // Empty selection clears the junction.
-    umbra::orm::set_junction_dynamic(JUNCTION_TABLE, parent_value, Vec::new())
+    umbra::orm::set_junction_dynamic(JUNCTION_TABLE, parent_value, Vec::new(), None)
         .await
         .expect("set_junction_dynamic with empty selection");
     let fetched = group.perms.fetch().await.expect("fetch after clear");
@@ -661,6 +661,7 @@ async fn load_junction_selection_returns_current_child_pks_as_strings() {
         JUNCTION_TABLE,
         parent_value,
         umbra::orm::SqlType::Text,
+        None,
     )
     .await
     .expect("load_junction_selection");

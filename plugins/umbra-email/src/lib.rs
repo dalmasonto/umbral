@@ -263,6 +263,22 @@ pub enum EmailError {
         filename: String,
         content_type: String,
     },
+    /// The email subject (or another user-supplied header value)
+    /// contains a CR (`\r`), LF (`\n`), NUL (`\x00`), or any other
+    /// ASCII control character that is banned in RFC 5322 header
+    /// fields. This is the SMTP header-injection / Bcc-injection
+    /// guard. Pass a clean subject string.
+    InvalidHeaderValue {
+        field: &'static str,
+        offending_char: char,
+    },
+    /// The console backend was used in a non-Dev/Test environment.
+    /// Printing full message bodies (including password-reset tokens)
+    /// to stderr/stdout in production would leak secrets to log
+    /// aggregators. Configure `email_smtp_host` for production, or
+    /// set `UMBRA_EMAIL_BACKEND=console` explicitly if you understand
+    /// the risk and are intentionally forcing console mode.
+    ConsoleBackendInProduction,
 }
 
 impl std::fmt::Display for EmailError {
@@ -285,6 +301,23 @@ impl std::fmt::Display for EmailError {
             } => write!(
                 f,
                 "umbra-email: attachment `{filename}` has invalid content type `{content_type}`",
+            ),
+            EmailError::InvalidHeaderValue {
+                field,
+                offending_char,
+            } => write!(
+                f,
+                "umbra-email: {field} contains a forbidden control character \
+                 U+{:04X} (CRLF/LF/CR/NUL in a header value is an SMTP \
+                 injection vector)",
+                *offending_char as u32,
+            ),
+            EmailError::ConsoleBackendInProduction => write!(
+                f,
+                "umbra-email: console backend refused to send in a non-Dev/Test \
+                 environment — printing email bodies (including tokens) to stderr \
+                 leaks secrets to log aggregators. Configure `email_smtp_host` for \
+                 production, or set `UMBRA_EMAIL_BACKEND=console` to opt in explicitly.",
             ),
         }
     }
@@ -333,6 +366,11 @@ struct EmailConfig {
     smtp_user: Option<String>,
     smtp_password: Option<String>,
     default_from: Option<String>,
+    /// Per-send timeout passed to lettre. Covers connection +
+    /// SMTP command exchange. Configurable via `email_smtp_timeout_secs`
+    /// in settings; defaults to 10 s. Set to 0 to remove the cap
+    /// (not recommended in production).
+    smtp_timeout_secs: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -388,6 +426,17 @@ fn load_config() -> EmailConfig {
         .and_then(|v| v.as_str())
         .map(str::to_string);
 
+    // 10 s is tight enough to surface a hung relay without stalling a
+    // request for longer than a user will tolerate. Override with
+    // `email_smtp_timeout_secs = N` in umbra.toml or
+    // `UMBRA_EMAIL_SMTP_TIMEOUT_SECS=N` in the environment. Set to 0
+    // to remove the cap entirely (not recommended in production).
+    let smtp_timeout_secs = extra
+        .and_then(|e| e.get("email_smtp_timeout_secs"))
+        .and_then(|v| v.as_integer())
+        .and_then(|n| u64::try_from(n).ok())
+        .unwrap_or(10);
+
     let backend = if env_forced_console || smtp_host.is_none() {
         BackendKind::Console
     } else {
@@ -401,6 +450,7 @@ fn load_config() -> EmailConfig {
         smtp_user,
         smtp_password,
         default_from,
+        smtp_timeout_secs,
     }
 }
 
@@ -433,30 +483,64 @@ pub async fn send(message: &EmailMessage) -> Result<(), EmailError> {
     match cfg.backend {
         BackendKind::Console => {
             // The console backend prints the full rendered RFC 822
-            // message — headers AND body — to stderr. That's the
-            // intended dev shape but it would leak password-reset
-            // tokens or magic-link URLs in a production log
-            // aggregator. Warn loudly when we're not in Dev.
+            // message — headers AND body — to stderr. In Dev / Test
+            // that is the intended developer-visibility behaviour.
+            // In production it would leak password-reset tokens or
+            // magic-link URLs to log aggregators.
+            //
+            // Fail-closed in non-Dev/Test: return a clear error
+            // instead of printing the body, so the operator knows
+            // exactly why mail was refused and what to fix.
+            //
             // `get_opt` not `get`: sending mail before `App::build`
             // initialises settings (a worker bootstrap, a test) must not
-            // panic. With settings absent we can't prove we're in Dev, so
-            // we take the safe branch and warn (gaps: BROKEN-6).
-            let is_dev = matches!(
-                umbra::settings::get_opt().map(|s| &s.environment),
-                Some(umbra::Environment::Dev)
+            // panic. With settings absent we treat the environment as
+            // unknown and take the safe path: refuse to print secrets.
+            let env = umbra::settings::get_opt().map(|s| s.environment.clone());
+            let is_dev_or_test = matches!(
+                env,
+                Some(umbra::Environment::Dev) | Some(umbra::Environment::Test)
             );
-            if !is_dev {
-                tracing::warn!(
-                    "umbra-email: console backend active outside Dev environment — \
-                     email contents (including any tokens) will be printed to stderr. \
-                     Set UMBRA_EMAIL_SMTP_HOST in production or force console with \
-                     UMBRA_EMAIL_BACKEND=console intentionally.",
+            if !is_dev_or_test {
+                tracing::error!(
+                    "umbra-email: console backend refused to deliver in a non-Dev/Test \
+                     environment. Configure `email_smtp_host` for production.",
                 );
+                return Err(EmailError::ConsoleBackendInProduction);
             }
             ConsoleBackend.deliver(&composed, message)
         }
         BackendKind::Smtp => deliver_smtp(cfg, composed).await,
     }
+}
+
+/// Validate a user-supplied header value against the characters that are
+/// banned in RFC 5322 header fields.
+///
+/// RFC 5322 §2.2 / RFC 5321 §4.1.1 forbid bare CR (`\r`), bare LF
+/// (`\n`), and NUL (`\x00`) in header values because they allow an
+/// attacker to inject arbitrary headers — the classic SMTP
+/// header-injection / Bcc-injection vector.  We also reject the full
+/// C0 control range (< U+0020) except for horizontal tab (U+0009),
+/// which RFC 5322 allows inside folded header values.
+///
+/// `lettre` 0.11 does not validate these characters itself, so this
+/// function is the plugin's own gate.
+fn validate_header_value(field: &'static str, value: &str) -> Result<(), EmailError> {
+    for ch in value.chars() {
+        // Allow printable ASCII + non-ASCII Unicode.
+        // Allow horizontal tab (RFC 5322 permits it in folded headers).
+        // Reject every other control character (< U+0020) plus DEL.
+        let is_forbidden =
+            matches!(ch, '\r' | '\n' | '\x00') || (ch < '\x20' && ch != '\t') || ch == '\x7f';
+        if is_forbidden {
+            return Err(EmailError::InvalidHeaderValue {
+                field,
+                offending_char: ch,
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Compose an `EmailMessage` into a wire-ready `lettre::Message`.
@@ -469,7 +553,34 @@ pub async fn send(message: &EmailMessage) -> Result<(), EmailError> {
 ///
 /// `from` is the envelope From address — typically pulled from the
 /// `email_default_from` setting when `EmailMessage.from` is empty.
+///
+/// # Errors
+///
+/// Returns [`EmailError::InvalidHeaderValue`] if `message.subject`
+/// (or any other user-supplied header string) contains a CR, LF, NUL,
+/// or other ASCII control character banned by RFC 5322.  This is the
+/// SMTP header-injection / Bcc-injection guard.  `lettre` 0.11 does
+/// not perform this check itself.
 pub fn compose(from: &str, message: &EmailMessage) -> Result<Message, EmailError> {
+    // --- Header-injection guard (RFC 5322 / SMTP Bcc-injection) -------
+    // Validate before touching the lettre builder so we get a typed,
+    // descriptive error rather than a silently-accepted malicious message.
+    validate_header_value("subject", &message.subject)?;
+    // Also guard the From display name and the Reply-To display name.
+    // The address *local-part* and *domain* are validated by lettre's
+    // `Mailbox::parse`; the display name is free-form text that lettre
+    // does not validate.
+    validate_header_value("from", from)?;
+    if let Some(reply_to) = &message.reply_to {
+        validate_header_value("reply_to", reply_to)?;
+    }
+    // Individual recipient addresses are parsed by lettre; guard the
+    // whole address string here too (display names included).
+    for recipient in &message.to {
+        validate_header_value("to", recipient)?;
+    }
+    // ------------------------------------------------------------------
+
     let from_mbox: Mailbox = from.parse()?;
     let mut builder = Message::builder().from(from_mbox).subject(&message.subject);
 
@@ -555,6 +666,8 @@ fn build_attachment_part(att: &Attachment) -> Result<SinglePart, EmailError> {
 }
 
 async fn deliver_smtp(cfg: &EmailConfig, message: Message) -> Result<(), EmailError> {
+    use std::time::Duration;
+
     let host = cfg
         .smtp_host
         .as_deref()
@@ -569,6 +682,17 @@ async fn deliver_smtp(cfg: &EmailConfig, message: Message) -> Result<(), EmailEr
     if let (Some(user), Some(pass)) = (cfg.smtp_user.as_deref(), cfg.smtp_password.as_deref()) {
         transport = transport.credentials(Credentials::new(user.to_string(), pass.to_string()));
     }
+
+    // Apply the configurable send timeout. A value of 0 removes the cap
+    // entirely (lettre interprets `None` as no timeout), which is not
+    // recommended in production. The default (10 s) is tight enough to
+    // surface a hung relay without stalling a request indefinitely.
+    let timeout = if cfg.smtp_timeout_secs == 0 {
+        None
+    } else {
+        Some(Duration::from_secs(cfg.smtp_timeout_secs))
+    };
+    transport = transport.timeout(timeout);
 
     let transport = transport.build();
     transport.send(message).await?;
@@ -646,5 +770,46 @@ mod tests {
     fn no_recipients_surfaces_as_a_specific_error() {
         let err = EmailError::NoRecipients;
         assert!(format!("{err}").contains("empty"));
+    }
+
+    /// `ConsoleBackendInProduction` must have a human-readable Display
+    /// that names the problem and the fix, but must NOT carry any
+    /// message body — the whole point is that we never print secrets.
+    #[test]
+    fn console_backend_in_production_error_display_names_the_problem() {
+        let err = EmailError::ConsoleBackendInProduction;
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("console backend refused"),
+            "display should name the refusal; got: {msg}"
+        );
+        assert!(
+            msg.contains("email_smtp_host"),
+            "display should tell the operator what to configure; got: {msg}"
+        );
+    }
+
+    /// `load_config` must default `smtp_timeout_secs` to 10 when no
+    /// `email_smtp_timeout_secs` key is present in the environment.
+    /// This is the structural proof that every SMTP send has a timeout
+    /// floor (a real hung-server integration test isn't feasible in
+    /// unit-test scope, but if the default is 0 a hung relay would
+    /// block indefinitely).
+    #[test]
+    fn smtp_timeout_default_is_ten_seconds() {
+        // Exercise load_config in isolation. The CONFIG OnceLock may
+        // already be set in this process from another test (cargo test
+        // runs unit tests in one binary), so we call load_config()
+        // directly rather than going through config().
+        // Ensure the key is absent so we get the pure default.
+        unsafe {
+            std::env::remove_var("UMBRA_EMAIL_SMTP_TIMEOUT_SECS");
+        }
+        let cfg = load_config();
+        assert_eq!(
+            cfg.smtp_timeout_secs, 10,
+            "smtp_timeout_secs should default to 10 s; got {}",
+            cfg.smtp_timeout_secs
+        );
     }
 }

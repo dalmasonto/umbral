@@ -43,7 +43,7 @@ use axum_core::extract::FromRequestParts;
 use http::StatusCode;
 use http::request::Parts;
 use umbra::web::HeaderMap;
-use umbra_rest::{Authentication, Identity};
+use umbra::auth::{Authentication, Identity};
 use umbra_sessions::SessionError;
 
 // =========================================================================
@@ -167,6 +167,7 @@ impl Authentication for SessionAuthentication {
         Some(
             Identity::user(crate::UserModel::id_string(&user))
                 .with_staff(user.is_staff)
+                .with_superuser(user.is_superuser)
                 .with_extra("auth", serde_json::json!("session")),
         )
     }

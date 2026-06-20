@@ -622,6 +622,24 @@ pub fn highlight_css() -> &'static str {
         .as_str()
 }
 
+/// Return `true` iff every character in a fence info token is safe to
+/// embed verbatim in a `class="language-…"` HTML attribute value.
+///
+/// A legitimate language token is just a word: `rust`, `c++`, `c#`,
+/// `shell`, `text/plain`, etc. It never needs `<`, `>`, `"`, `'`, `=`,
+/// backticks, or whitespace. Rejecting those characters closes the
+/// class-injection vector that would otherwise let a hostile fence like
+/// `` ```<script>alert(1)</script> `` survive ammonia's pass (ammonia
+/// allows `class` on `<code>` but does not filter the attribute VALUE).
+fn fence_lang_is_safe(lang: &str) -> bool {
+    !lang.is_empty()
+        && lang.len() <= 64
+        && lang.chars().all(|c| {
+            c.is_ascii_alphanumeric()
+                || matches!(c, '+' | '-' | '_' | '.' | '#' | '/' | '@')
+        })
+}
+
 /// Render one fenced code block to safe HTML. `lang` is the fence info
 /// token (`Some("rust")`) or `None` for an unlabelled / indented block.
 /// With a known language the body is syntect-highlighted into `hl-` token
@@ -630,6 +648,15 @@ pub fn highlight_css() -> &'static str {
 /// `md-enhance.js` label keeps working. Never panics, never drops the
 /// user's code.
 fn highlight_code_block(lang: Option<&str>, src: &str) -> String {
+    // Validate the lang token before touching it. A hostile fence info
+    // string (e.g. `<script>alert(1)</script>`) must never land in the
+    // `class="language-…"` attribute value even after HTML-escaping,
+    // because ammonia re-parses the tree and may not re-escape `<`/`>`
+    // that appear inside attribute values of allowed elements. Treating
+    // an unsafe token as `None` produces a plain unlabelled code block
+    // (still safe and still readable) rather than a class-injection path.
+    let lang = lang.filter(|l| fence_lang_is_safe(l));
+
     let ss = syntax_set();
     let syntax = lang.and_then(|l| {
         ss.find_syntax_by_token(l)
@@ -1440,6 +1467,51 @@ mod tests {
         assert!(
             unknown.contains("language-notalanguage"),
             "unknown lang still labelled: {unknown}"
+        );
+    }
+
+    /// Security: a hostile fence info token (e.g. `<script>alert(1)</script>`)
+    /// must NOT appear as a live tag in the output. `wrap_code_block` HTML-escapes
+    /// the lang token before inserting it into the class attribute value, and
+    /// ammonia's builder only permits `class` on `<code>` — it does not allow
+    /// arbitrary attributes or values. So a `<script>` info string is inert.
+    ///
+    /// Also asserts that the SAFE path — a plain `language-rust` class on
+    /// the `<code>` element — still survives after the widened allowlist so
+    /// the syntect token spans have a hook. This is the regression pin for
+    /// gaps2 #36 sub-part (a).
+    #[test]
+    fn hostile_fence_info_string_is_escaped_and_language_class_survives() {
+        // Hostile: info token that looks like a script injection.
+        let hostile = render_markdown("```<script>alert(1)</script>\ncode\n```\n");
+        assert!(
+            !hostile.contains("<script>"),
+            "live <script> from fence info must be stripped: {hostile}"
+        );
+        // The escaped form will appear inside a class value; ammonia lets
+        // class through but the content is HTML-escaped so it is inert.
+        assert!(
+            hostile.contains("<pre><code"),
+            "code block structure must survive: {hostile}"
+        );
+
+        // Hostile: info token with a class-injection attempt.
+        let class_inject = render_markdown("```evil\" onmouseover=\"alert(1)\ncode\n```\n");
+        assert!(
+            !class_inject.contains("onmouseover"),
+            "event handler injected via fence info must not survive: {class_inject}"
+        );
+
+        // Safe: the normal case — language-rust class must survive so
+        // syntect hl- spans (server-side) and the md-enhance label both work.
+        let safe = render_markdown("```rust\nfn ok() {}\n```\n");
+        assert!(
+            safe.contains("language-rust"),
+            "language-rust class must survive sanitization (gaps2 #36a): {safe}"
+        );
+        assert!(
+            safe.contains("class=\"hl-"),
+            "syntect hl- token spans must survive sanitization: {safe}"
         );
     }
 

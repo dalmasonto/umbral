@@ -29,9 +29,11 @@ The cross-backend types compile and run against both Postgres and SQLite. The Po
 | `Vec<u8>` | `Bytes` | `BYTEA` | `BLOB` |
 | `Vec<T>` (Postgres-only, `T` ≠ `u8`) | `Array(T)` | `T[]` | - (boot fails) |
 | `ipnetwork::IpNetwork` (Postgres-only) | `Inet` | `INET` | - (boot fails) |
+| `ipnetwork::IpNetwork` + `#[umbra(cidr)]` (Postgres-only) | `Cidr` | `CIDR` | - (boot fails) |
 | `mac_address::MacAddress` (Postgres-only) | `MacAddr` | `MACADDR` | - (boot fails) |
 | `umbra::orm::TsVector` (Postgres-only) | `FullText` | `TSVECTOR` | - (boot fails) |
 | `rust_decimal::Decimal` (Postgres-only) | `Decimal` | `NUMERIC(19, 4)` | - (boot fails) |
+| `Option<rust_decimal::Decimal>` (Postgres-only) | `Decimal` (nullable) | `NUMERIC(19, 4)` | - (boot fails) |
 | `ForeignKey<T>` | `ForeignKey` | `BIGINT REFERENCES "t"("id")` | `BIGINT REFERENCES "t"("id")` |
 
 Any of these types wrapped in `Option<T>` produces the nullable column. `Option` is the only path to a nullable column - there is no `null = true` attribute.
@@ -563,7 +565,7 @@ JSON wire shape (REST API request bodies, admin form values, backup `dumpdata` o
 
 ## Postgres-only types
 
-`Vec<T>`, `ipnetwork::IpNetwork`, `mac_address::MacAddress`, `umbra::orm::TsVector`, and `rust_decimal::Decimal` (a fixed-point `NUMERIC(19, 4)`, non-nullable only — `Option<Decimal>` isn't supported yet) are Postgres-only. A model that includes one of these fields:
+`Vec<T>`, `ipnetwork::IpNetwork`, `mac_address::MacAddress`, `umbra::orm::TsVector`, and `rust_decimal::Decimal` (a fixed-point `NUMERIC(19, 4)`; both `Decimal` and `Option<Decimal>` are supported) are Postgres-only. A model that includes one of these fields:
 
 - Boots clean against a `PgPool`.
 - Fails the boot-time system check against a `SqlitePool` with an error pointing at the model and field name.

@@ -32,6 +32,10 @@ http = "1"
 http-body-util = "0.1"
 bytes = "1"
 futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
+# Compression (gzip/br/deflate/zstd) and response-header management via tower-http.
+# The compression features gate the underlying codec crates (flate2 for gzip/deflate,
+# brotli for br). set-header covers SetResponseHeaderLayer used by Cache-Control/Vary.
+tower-http = { version = "0.6", features = ["compression-gzip", "compression-br", "compression-deflate", "compression-zstd", "set-header"] }
 
 # Optional Redis backend dep. Only compiled when the `redis` feature is
 # enabled. Connection manager handles reconnect transparently and avoids
@@ -48,3 +52,4 @@ axum = "0.8"
 tower = { version = "0.5", features = ["util"] }
 http = "1"
 http-body-util = "0.1"
+flate2 = "1"

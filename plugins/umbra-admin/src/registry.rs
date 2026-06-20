@@ -26,7 +26,7 @@
 //! lands (gap 33), add a `view_<table>` permission check per entry and
 //! filter out models the viewer may not see.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use umbra_auth::AuthUser;
 
@@ -105,10 +105,15 @@ impl AdminRegistry {
     ///
     /// # Permission filtering
     ///
-    /// Currently any staff user sees everything. When `umbra-permissions`
-    /// lands, add per-model `view_<table>` permission checks here and
-    /// filter `entries` accordingly before grouping.
-    pub fn apps(&self, _viewer: &AuthUser) -> Vec<App> {
+    /// When `viewer_codenames` is `Some(set)`, a model is included in the
+    /// sidebar only if the set contains `"<plugin>.view_<table>"`. This
+    /// mirrors the changelist gate in `permcheck::require(Action::View)`.
+    ///
+    /// `None` means "no filtering" — used when `PermissionsPlugin` is not
+    /// installed (staff-only baseline) or when the viewer is a superuser
+    /// (who holds every permission implicitly). Both cases preserve the
+    /// pre-#75 / pre-#83 behaviour: all models visible to every staff user.
+    pub fn apps(&self, _viewer: &AuthUser, viewer_codenames: Option<&HashSet<String>>) -> Vec<App> {
         // Build the merged map: start with synthesised defaults for every
         // model in the global registry, then overlay explicit registrations.
         let mut merged: HashMap<String, AdminRegistration> = HashMap::new();
@@ -151,9 +156,25 @@ impl AdminRegistry {
             merged.insert(table.clone(), explicit.clone());
         }
 
+        // Permission gate — filter out models the viewer may not see.
+        //
+        // When `viewer_codenames` is `Some`, keep only entries whose
+        // `"<plugin>.view_<table>"` codename is in the set. When `None`
+        // (superuser / no PermissionsPlugin), every model passes through.
+        let merged_filtered: Vec<AdminRegistration> = merged
+            .into_values()
+            .filter(|reg| match viewer_codenames {
+                None => true,
+                Some(codenames) => {
+                    let required = format!("{}.view_{}", reg.plugin, reg.model.table);
+                    codenames.contains(&required)
+                }
+            })
+            .collect();
+
         // Group by plugin, sort, and produce the tree.
         let mut by_plugin: HashMap<String, Vec<AdminRegistration>> = HashMap::new();
-        for reg in merged.into_values() {
+        for reg in merged_filtered {
             by_plugin.entry(reg.plugin.clone()).or_default().push(reg);
         }
         let mut apps: Vec<App> = by_plugin

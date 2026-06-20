@@ -71,6 +71,13 @@ pub struct CheckContext<'a> {
     /// build a `CheckContext` by hand (without a plugin walk) set `true`
     /// to keep the storage check inert.
     pub provides_storage: bool,
+    /// The names of every registered plugin, in topological order, as
+    /// returned by [`crate::plugin::Plugin::name`]. Populated by
+    /// `App::build` before running phase 4 checks. Tests that build a
+    /// `CheckContext` by hand should supply an empty slice (`&[]`) to
+    /// make plugin-aware checks that need a specific set of names inert,
+    /// or supply the names they want to exercise directly.
+    pub registered_plugin_names: &'a [&'a str],
 }
 
 /// One issue surfaced by a system check.
@@ -165,6 +172,10 @@ pub fn framework_checks() -> Vec<SystemCheck> {
         SystemCheck {
             id: "field.choices_default",
             run: field_choices_default,
+        },
+        SystemCheck {
+            id: "plugin.security_missing",
+            run: plugin_security_missing,
         },
     ]
 }
@@ -606,6 +617,55 @@ fn field_choices_default(_ctx: &CheckContext<'_>) -> Vec<SystemCheckFinding> {
         }
     }
     findings
+}
+
+/// Warn when `AuthPlugin` or `SessionsPlugin` is registered but
+/// `SecurityPlugin` is NOT.
+///
+/// An app that handles authenticated or session traffic with no
+/// `SecurityPlugin` has **no CSRF protection and no hardening headers**
+/// (CSP, Strict-Transport-Security, X-Frame-Options, etc.) — an
+/// easy-to-miss footgun. The check is a **Warning** (boot continues)
+/// because some apps legitimately handle CSRF through other means (a
+/// reverse-proxy header, a separate middleware, or a custom plugin).
+///
+/// Gaps2 #25 (scaffold-independent half): the scaffold half that auto-
+/// mounts `SecurityPlugin` in `umbra startproject` is deferred until the
+/// #8 scaffold lands.
+fn plugin_security_missing(ctx: &CheckContext<'_>) -> Vec<SystemCheckFinding> {
+    let names = ctx.registered_plugin_names;
+    let has_auth = names.contains(&"auth");
+    let has_sessions = names.contains(&"sessions");
+    if !(has_auth || has_sessions) {
+        // Neither auth nor sessions — nothing to warn about.
+        return Vec::new();
+    }
+    if names.contains(&"security") {
+        // SecurityPlugin is present — all good.
+        return Vec::new();
+    }
+    let who = match (has_auth, has_sessions) {
+        (true, true) => "AuthPlugin and SessionsPlugin are",
+        (true, false) => "AuthPlugin is",
+        (false, true) => "SessionsPlugin is",
+        (false, false) => unreachable!(),
+    };
+    vec![SystemCheckFinding {
+        check_id: "plugin.security_missing",
+        severity: Severity::Warning,
+        location: CheckLocation::Settings,
+        message: format!(
+            "{who} mounted without SecurityPlugin — requests have no CSRF \
+             protection or security headers (CSP, HSTS, X-Frame-Options, …). \
+             Add `.plugin(SecurityPlugin::new())` to your App builder, or \
+             handle CSRF / headers through another mechanism.",
+        ),
+        hint: Some(
+            "add `.plugin(umbra_security::SecurityPlugin::new())` to your \
+             `App::builder()` call."
+                .to_string(),
+        ),
+    }]
 }
 
 /// True for `SqlType` variants that only work on Postgres. Phase 4.1

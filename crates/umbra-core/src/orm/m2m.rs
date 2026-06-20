@@ -551,6 +551,40 @@ impl<T: Model, P: PrimaryKey> M2M<T, P> {
     }
 }
 
+/// Resolve the write pool for a junction operation, routing through the
+/// `DatabaseRouter` when the model registry is available.
+///
+/// The junction table belongs to the parent model's database (that is the
+/// same DB the migration engine targets when it creates the junction). We
+/// therefore route by the parent's `ModelMeta`. When `parent_model` is
+/// `None`, or when the registry isn't up yet (boot / low-level tests), we
+/// fall back to `pool_dispatched()` — preserving today's single-DB
+/// behaviour.
+fn junction_pool_for_write(parent_model: Option<&str>) -> crate::db::DbPool {
+    if let Some(name) = parent_model {
+        if let Some(meta) = crate::migrate::model_meta_ref(name) {
+            let ctx = crate::db::route_context::current();
+            let alias = crate::db::router::router().db_for_write(meta, &ctx);
+            return crate::db::pool_for_dispatched(alias.as_str()).clone();
+        }
+    }
+    crate::db::pool_dispatched().clone()
+}
+
+/// Resolve the read pool for a junction operation, routing through the
+/// `DatabaseRouter` when the model registry is available. See
+/// [`junction_pool_for_write`] for the routing rationale.
+fn junction_pool_for_read(parent_model: Option<&str>) -> crate::db::DbPool {
+    if let Some(name) = parent_model {
+        if let Some(meta) = crate::migrate::model_meta_ref(name) {
+            let ctx = crate::db::route_context::current();
+            let alias = crate::db::router::router().db_for_read(meta, &ctx);
+            return crate::db::pool_for_dispatched(alias.as_str()).clone();
+        }
+    }
+    crate::db::pool_dispatched().clone()
+}
+
 /// "Replace this parent's M2M junction entries with exactly
 /// `child_ids`." The dynamic equivalent of [`M2M::set`] for callers
 /// that only have the junction name + a list of typed
@@ -570,6 +604,13 @@ impl<T: Model, P: PrimaryKey> M2M<T, P> {
 /// relation" shape — the DELETE runs and no INSERT is emitted at all
 /// (never an `INSERT ... VALUES ()`).
 ///
+/// `parent_model` is the `Model::NAME` of the parent model. When
+/// provided and the app registry is live, the write pool is selected
+/// via the ambient `DatabaseRouter` (db-per-tenant / read-replica
+/// routing). Pass `None` from low-level tests or contexts where only a
+/// single pool exists; `pool_dispatched()` is used as the fallback so
+/// single-DB apps are unchanged.
+///
 /// gaps2 #47: the insert was M one-row INSERTs in a loop; it's now a
 /// single multi-row statement (M round-trips → 1) with the same
 /// transaction + DELETE semantics and the same `ON CONFLICT DO NOTHING`.
@@ -581,6 +622,7 @@ pub async fn set_junction_dynamic(
     junction_table: &str,
     parent_id: sea_query::Value,
     child_ids: Vec<sea_query::Value>,
+    parent_model: Option<&str>,
 ) -> Result<(), sqlx::Error> {
     // Build the one multi-row INSERT shared by both backends. `None` when
     // there are no children — the empty case clears via DELETE alone and
@@ -613,7 +655,7 @@ pub async fn set_junction_dynamic(
         .from_table(crate::db::router::schema_qualified_table(junction_table))
         .and_where(Expr::col(Alias::new("parent_id")).eq(parent_id));
 
-    let pool = crate::db::pool_dispatched();
+    let pool = junction_pool_for_write(parent_model);
     match pool {
         crate::db::DbPool::Sqlite(p) => {
             let mut tx = p.begin().await?;
@@ -715,21 +757,27 @@ pub async fn set_junction_dynamic_in_tx(
 /// template layer can string-compare against candidate PKs without
 /// learning typed shapes.
 ///
+/// `parent_model` is the `Model::NAME` of the parent model. When
+/// provided and the app registry is live, the read pool is selected
+/// via the ambient `DatabaseRouter`. Pass `None` from low-level
+/// tests; `pool_dispatched()` is used as the fallback.
+///
 /// Free-standing for the same reason as `set_junction_dynamic`:
 /// admin code works with `ModelMeta` / `SqlType`, not typed `T`.
 pub async fn load_junction_selection(
     junction_table: &str,
     parent_id: sea_query::Value,
     child_pk_ty: super::SqlType,
+    parent_model: Option<&str>,
 ) -> Result<Vec<String>, sqlx::Error> {
     let mut q = Query::select();
     q.distinct()
         .column(Alias::new("child_id"))
         .from(crate::db::router::schema_qualified_table(junction_table))
         .and_where(Expr::col(Alias::new("parent_id")).eq(parent_id));
-    let pool = crate::db::pool_dispatched();
+    let pool = junction_pool_for_read(parent_model);
     let mut out: Vec<String> = Vec::new();
-    match pool {
+    match &pool {
         crate::db::DbPool::Sqlite(p) => {
             let (sql, values) = q.build_sqlx(SqliteQueryBuilder);
             let rows = sqlx::query_with(&sql, values).fetch_all(p).await?;

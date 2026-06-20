@@ -513,6 +513,20 @@ impl<'a> DynQuerySet<'a> {
                     .collect();
                 Condition::all().add(expr.is_in(parsed))
             }
+            // UUIDs are stored as BLOB in SQLite (sqlx Encode<Sqlite> for Uuid
+            // uses .as_bytes()). Binding them as strings would miss every row.
+            // Parse each submitted string into a Uuid and pass the typed vec so
+            // sea-query-binder emits blob binds that match the stored values.
+            SqlType::Uuid => {
+                let parsed: Vec<uuid::Uuid> = vals
+                    .iter()
+                    .filter_map(|s| uuid::Uuid::parse_str(s).ok())
+                    .collect();
+                if parsed.is_empty() {
+                    return self;
+                }
+                Condition::all().add(expr.is_in(parsed))
+            }
             _ => Condition::all().add(expr.is_in(vals.iter().map(|s| s.to_string()))),
         };
         self.where_clauses.push(cond);
@@ -537,6 +551,9 @@ impl<'a> DynQuerySet<'a> {
                 let v = matches!(value, "true" | "on" | "1");
                 Some(expr.eq(v))
             }
+            // UUIDs stored as BLOB in SQLite — parse the string into a typed
+            // Uuid so sea-query-binder emits a blob bind that matches the row.
+            SqlType::Uuid => uuid::Uuid::parse_str(value).ok().map(|u| expr.eq(u)),
             _ => Some(expr.eq(value.to_string())),
         };
         if let Some(p) = predicate {
@@ -2957,9 +2974,14 @@ async fn write_m2m_junctions(
             }
         }
         let junction_table = format!("{}_{}", meta.table, rel.field_name);
-        crate::orm::m2m::set_junction_dynamic(&junction_table, parent_pk_value.clone(), child_ids)
-            .await
-            .map_err(crate::orm::write::WriteError::Sqlx)?;
+        crate::orm::m2m::set_junction_dynamic(
+            &junction_table,
+            parent_pk_value.clone(),
+            child_ids,
+            Some(&meta.name),
+        )
+        .await
+        .map_err(crate::orm::write::WriteError::Sqlx)?;
     }
     Ok(())
 }

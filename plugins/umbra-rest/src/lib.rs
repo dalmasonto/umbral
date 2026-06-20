@@ -45,11 +45,12 @@ use umbra::prelude::*;
 use umbra::web::{IntoResponse, Json, Path, Query, Response, StatusCode};
 
 pub mod filtering;
-pub(crate) use filtering::{FilterClause, parse_filters, parse_search};
+pub(crate) use filtering::{FilterClause, parse_filters, parse_ordering, parse_search};
 
 pub mod pagination;
 pub use pagination::{
     LimitOffsetPagination, NoPagination, PageNumberPagination, PageRequest, Pagination,
+    PaginationStyle,
 };
 
 pub mod resource;
@@ -95,6 +96,19 @@ const DEFAULT_BLOCKED_TABLES: &[&str] = &[
     "task_row",
     "admin_audit_log",
 ];
+
+/// Field names that are ALWAYS stripped from every serialized response,
+/// on every table, regardless of `.expose(...)` / `.hide(...)` / any
+/// `ResourceConfig` override. This is the hard security denylist.
+///
+/// The threat: a developer calls `.expose(["auth_user"])` to serve that
+/// table over REST but forgets to pair it with `.hide("password_hash")`.
+/// Without this list the argon2 hash leaks to every API consumer.
+/// With it, `password_hash` is stripped *after* all configurable logic
+/// runs, so no combination of builder calls can re-expose it.
+///
+/// Gap: gaps2 #75.
+const HARD_DENIED_FIELDS: &[&str] = &["password_hash"];
 
 /// Closure that transforms one field's JSON value to another. Used
 /// by [`RestPlugin::transform`]. The signature is `&Value -> Value`
@@ -763,10 +777,31 @@ impl RestPlugin {
         // Cap recursion so a self-referential FK that got `?include=`'d
         // (or a pathological hydration) can't loop forever. 5 hops is
         // comfortably past `?include=`'s own MAX_DEPTH of 3.
-        self.apply_overrides_depth(table, row, 0);
+        self.apply_overrides_depth(table, None, row, 0);
     }
 
-    fn apply_overrides_depth(&self, table: &str, row: &mut Map<String, Value>, depth: usize) {
+    /// Batch-list variant: the caller resolves the `ModelMeta` for
+    /// `table` ONCE before the loop and passes a reference in.  Eliminates
+    /// the per-row `model_meta_for_table` clone that `apply_overrides`
+    /// would otherwise issue on every iteration.  For nested FK depths
+    /// (depth > 0) the recursion falls back to `model_meta_for_table` as
+    /// usual — those paths are rare and not on the hot N-row critical path.
+    pub(crate) fn apply_overrides_with_meta(
+        &self,
+        table: &str,
+        meta: &ModelMeta,
+        row: &mut Map<String, Value>,
+    ) {
+        self.apply_overrides_depth(table, Some(meta), row, 0);
+    }
+
+    fn apply_overrides_depth(
+        &self,
+        table: &str,
+        meta_hint: Option<&ModelMeta>,
+        row: &mut Map<String, Value>,
+        depth: usize,
+    ) {
         const MAX_DEPTH: usize = 5;
 
         // --- Recurse into hydrated nested relations FIRST, so the
@@ -775,39 +810,54 @@ impl RestPlugin {
         // (now-clean) parent row. Only FK columns whose value is a JSON
         // object were `?include=`-hydrated; everything else (raw integer
         // FKs, scalar columns) is left untouched. ---
-        if depth < MAX_DEPTH
-            && let Some(meta) = umbra::migrate::model_meta_for_table(table)
-        {
-            for col in &meta.fields {
-                // File/image columns store a bare storage KEY in a TEXT
-                // column. REST consumers want the resolved public URL, not
-                // the opaque key, so swap a non-empty string value for
-                // `storage().url(key)`. A nullable field with no upload is
-                // `Value::Null` and stays null; an empty string stays empty
-                // (never turned into a bare `/media/`). Resolved through the
-                // ambient Storage backend, falling back to the raw key when
-                // no backend is wired.
-                if matches!(col.widget.as_deref(), Some("file") | Some("image")) {
-                    // Compute the owned resolved URL while only borrowing
-                    // `row` immutably (via `row.get`); let that borrow end
-                    // before the `row.insert` below (borrow-checker dance).
-                    let resolved: Option<String> = match row.get(&col.name) {
-                        Some(Value::String(key)) if !key.is_empty() => Some(
-                            umbra::storage::storage_opt()
-                                .map(|s| s.url(key))
-                                .unwrap_or_else(|| key.clone()),
-                        ),
-                        _ => None,
-                    };
-                    if let Some(url) = resolved {
-                        row.insert(col.name.clone(), Value::String(url));
+        //
+        // At depth 0, the caller may supply a pre-resolved `meta_hint`
+        // so the list-row loop pays only one `model_meta_for_table`
+        // clone across all N rows instead of N clones.  At depth > 0
+        // (nested FK tables) we fall back to the cached lookup.
+        if depth < MAX_DEPTH {
+            let owned: Option<ModelMeta>;
+            let meta_opt: Option<&ModelMeta> = if let Some(m) = meta_hint {
+                Some(m)
+            } else {
+                owned = umbra::migrate::model_meta_for_table(table);
+                owned.as_ref()
+            };
+            if let Some(meta) = meta_opt {
+                for col in &meta.fields {
+                    // File/image columns store a bare storage KEY in a TEXT
+                    // column. REST consumers want the resolved public URL, not
+                    // the opaque key, so swap a non-empty string value for
+                    // `storage().url(key)`. A nullable field with no upload is
+                    // `Value::Null` and stays null; an empty string stays empty
+                    // (never turned into a bare `/media/`). Resolved through the
+                    // ambient Storage backend, falling back to the raw key when
+                    // no backend is wired.
+                    if matches!(col.widget.as_deref(), Some("file") | Some("image")) {
+                        // Compute the owned resolved URL while only borrowing
+                        // `row` immutably (via `row.get`); let that borrow end
+                        // before the `row.insert` below (borrow-checker dance).
+                        let resolved: Option<String> = match row.get(&col.name) {
+                            Some(Value::String(key)) if !key.is_empty() => Some(
+                                umbra::storage::storage_opt()
+                                    .map(|s| s.url(key))
+                                    .unwrap_or_else(|| key.clone()),
+                            ),
+                            _ => None,
+                        };
+                        if let Some(url) = resolved {
+                            row.insert(col.name.clone(), Value::String(url));
+                        }
                     }
-                }
-                let Some(fk_target) = col.fk_target.as_deref() else {
-                    continue;
-                };
-                if let Some(Value::Object(nested)) = row.get_mut(&col.name) {
-                    self.apply_overrides_depth(fk_target, nested, depth + 1);
+                    let Some(fk_target) = col.fk_target.as_deref() else {
+                        continue;
+                    };
+                    if let Some(Value::Object(nested)) = row.get_mut(&col.name) {
+                        // Nested FK targets are looked up fresh — `None` hint
+                        // means `apply_overrides_depth` falls back to
+                        // `model_meta_for_table` for that FK's table.
+                        self.apply_overrides_depth(fk_target, None, nested, depth + 1);
+                    }
                 }
             }
         }
@@ -841,6 +891,13 @@ impl RestPlugin {
                 let v = func(row);
                 row.insert(name.clone(), v);
             }
+        }
+
+        // Hard security denylist — applied LAST, after all configurable
+        // hide / transform / computed logic, so no `.expose()` or missing
+        // `.hide()` call can re-expose these fields. gaps2 #75.
+        for field in HARD_DENIED_FIELDS {
+            row.remove(*field);
         }
     }
 
@@ -963,6 +1020,11 @@ impl RestPlugin {
     /// time. So checking `self.hidden` alone agrees 1:1 with what
     /// `apply_overrides` removes.
     pub(crate) fn is_field_hidden(&self, table: &str, field: &str) -> bool {
+        // Hard-denied fields are always hidden, regardless of any
+        // `.expose()` / `.hide()` configuration. gaps2 #75.
+        if HARD_DENIED_FIELDS.contains(&field) {
+            return true;
+        }
         self.hidden.iter().any(|(t, f)| t == table && f == field)
     }
 
@@ -1081,6 +1143,30 @@ pub fn registered_security_schemes() -> Vec<(String, serde_json::Value)> {
         .get()
         .map(|cfg| cfg.authentication.security_schemes_all())
         .unwrap_or_default()
+}
+
+/// Public read: the base path the REST plugin mounts all CRUD routes under.
+/// Used by `umbra-openapi` to build the documented paths that match the
+/// real mounted routes — e.g. `"/v2"` when the plugin was configured with
+/// `.at("/v2")`. Returns `"/api"` (the default) when CONFIG isn't populated.
+pub fn registered_base_path() -> &'static str {
+    CONFIG
+        .get()
+        .map(|cfg| cfg.base_path.as_str())
+        .unwrap_or("/api")
+}
+
+/// Public read: which pagination query-parameter style the configured
+/// backend reads. Used by `umbra-openapi` to emit the correct `parameters`
+/// entries on list endpoints — `page`/`page_size` for [`PageNumberPagination`],
+/// `limit`/`offset` for [`LimitOffsetPagination`], nothing for
+/// [`NoPagination`], and nothing for unknown custom backends. Returns
+/// [`PaginationStyle::None`] when CONFIG isn't populated.
+pub fn registered_pagination_style() -> PaginationStyle {
+    CONFIG
+        .get()
+        .map(|cfg| cfg.pagination.style())
+        .unwrap_or(PaginationStyle::None)
 }
 
 /// One custom `@action`'s OpenAPI-facing schema info — read by
@@ -1442,6 +1528,10 @@ enum ApiError {
     /// action. Returned when a Permission produced
     /// `PermissionError::Forbidden` on an authenticated identity.
     Forbidden,
+    /// 500 — a non-database internal error (e.g. CSV serialization
+    /// failure). The message is logged server-side; the client sees
+    /// an opaque "internal server error" response.
+    Internal(String),
 }
 
 impl From<sqlx::Error> for ApiError {
@@ -1545,6 +1635,14 @@ impl umbra::web::IntoResponse for ApiError {
                 "authentication required".to_string(),
             ),
             ApiError::Forbidden => (StatusCode::FORBIDDEN, "forbidden", "forbidden".to_string()),
+            ApiError::Internal(m) => {
+                tracing::error!(error = %m, "REST handler hit an internal error");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    "internal server error".to_string(),
+                )
+            }
         };
 
         let body = if status == StatusCode::NOT_FOUND {
@@ -1729,6 +1827,14 @@ async fn list(
         }
     }
 
+    // `?ordering=-created_at,name` — DRF-style sort: comma-separated
+    // field names, leading `-` for DESC. Unknown fields are silently
+    // dropped (same as DynQuerySet::order_by_col does internally).
+    let ordering: Vec<(String, bool)> = params
+        .get("ordering")
+        .map(|s| parse_ordering(s, &model.fields))
+        .unwrap_or_default();
+
     // `?include=fk1,fk2` — expand the named FK columns into their
     // full related-row objects via one batched IN(...) per FK. The
     // parser rejects unknown / non-FK names with a 400 so clients
@@ -1736,6 +1842,12 @@ async fn list(
     // response that looks fine until they check it.
     let include = parse_include(params.get("include").map(|s| s.as_str()), &model)?;
     let fields_param = params.get("fields").map(|s| s.as_str());
+
+    // Resolve the ModelMeta once for the whole response — shared by both
+    // the CSV and JSON paths below.  `apply_overrides_with_meta` accepts a
+    // `&ModelMeta` reference so the per-row loop pays only one clone for
+    // the entire list instead of one clone per row (gaps2 #72).
+    let list_meta = umbra::migrate::model_meta_for_table(&table);
 
     // `?format=csv` — export the filtered set with the same hard ceiling
     // as JSON list responses. This endpoint buffers rows before writing
@@ -1746,18 +1858,26 @@ async fn list(
             offset: 0,
             page: None,
         };
-        let mut rows = fetch_rows(&model, None, Some(csv_page), &filter, &include).await?;
+        let mut rows = fetch_rows(&model, None, Some(csv_page), &filter, &include, &ordering).await?;
         for row in &mut rows {
-            cfg.apply_overrides(&table, row);
+            if let Some(ref meta) = list_meta {
+                cfg.apply_overrides_with_meta(&table, meta, row);
+            } else {
+                cfg.apply_overrides(&table, row);
+            }
             RestPlugin::apply_sparse_fields(row, fields_param);
         }
-        return Ok(csv_response(&table, &model, &rows));
+        return csv_response(&table, &model, &rows);
     }
 
     let page_req = cfg.pagination.extract_request(&params);
-    let mut rows = fetch_rows(&model, None, Some(page_req), &filter, &include).await?;
+    let mut rows = fetch_rows(&model, None, Some(page_req), &filter, &include, &ordering).await?;
     for row in &mut rows {
-        cfg.apply_overrides(&table, row);
+        if let Some(ref meta) = list_meta {
+            cfg.apply_overrides_with_meta(&table, meta, row);
+        } else {
+            cfg.apply_overrides(&table, row);
+        }
         RestPlugin::apply_sparse_fields(row, fields_param);
     }
     // Skip the extra COUNT round-trip for NoPagination — it would
@@ -1773,9 +1893,13 @@ async fn list(
 }
 
 /// Build a CSV download response from the fetched rows.
-fn csv_response(table: &str, model: &ModelMeta, rows: &[Map<String, Value>]) -> Response {
-    let csv = rows_to_csv(model, rows);
-    (
+///
+/// Returns `Err(ApiError::Internal(...))` if the CSV writer or UTF-8
+/// conversion fails, so the caller can return a 500 instead of a
+/// silently-truncated or empty 200.
+fn csv_response(table: &str, model: &ModelMeta, rows: &[Map<String, Value>]) -> Result<Response, ApiError> {
+    let csv = rows_to_csv(model, rows).map_err(ApiError::Internal)?;
+    Ok((
         StatusCode::OK,
         [
             (
@@ -1789,14 +1913,30 @@ fn csv_response(table: &str, model: &ModelMeta, rows: &[Map<String, Value>]) -> 
         ],
         csv,
     )
-        .into_response()
+        .into_response())
 }
 
 /// Serialize rows to CSV. Columns follow the model's field order (only
 /// those present after hide / sparse-field filtering), with any extra keys
 /// (computed fields) appended in first-seen order. Object / array cells
 /// render as compact JSON. The `csv` writer handles quoting + escaping.
-fn rows_to_csv(model: &ModelMeta, rows: &[Map<String, Value>]) -> String {
+///
+/// Returns `Err(msg)` if the underlying writer or UTF-8 conversion fails,
+/// so callers can surface a 500 instead of returning a silently-truncated
+/// or empty 200.
+fn rows_to_csv(model: &ModelMeta, rows: &[Map<String, Value>]) -> Result<String, String> {
+    let bytes = rows_to_csv_into(Vec::new(), model, rows)?;
+    String::from_utf8(bytes).map_err(|e| format!("csv utf-8 conversion failed: {e}"))
+}
+
+/// Inner helper: writes CSV into any `std::io::Write`. Separated so
+/// tests can inject a failing writer to exercise the error path without
+/// spinning up the full HTTP stack.
+fn rows_to_csv_into<W: std::io::Write>(
+    sink: W,
+    model: &ModelMeta,
+    rows: &[Map<String, Value>],
+) -> Result<W, String> {
     let mut cols: Vec<String> = Vec::new();
     for f in &model.fields {
         if rows.iter().any(|r| r.contains_key(&f.name)) {
@@ -1810,16 +1950,16 @@ fn rows_to_csv(model: &ModelMeta, rows: &[Map<String, Value>]) -> String {
             }
         }
     }
-    let mut wtr = csv::Writer::from_writer(Vec::new());
-    let _ = wtr.write_record(&cols);
+    let mut wtr = csv::Writer::from_writer(sink);
+    wtr.write_record(&cols)
+        .map_err(|e| format!("csv header write failed: {e}"))?;
     for r in rows {
         let record: Vec<String> = cols.iter().map(|c| csv_cell(r.get(c))).collect();
-        let _ = wtr.write_record(&record);
+        wtr.write_record(&record)
+            .map_err(|e| format!("csv row write failed: {e}"))?;
     }
     wtr.into_inner()
-        .ok()
-        .and_then(|b| String::from_utf8(b).ok())
-        .unwrap_or_default()
+        .map_err(|e| format!("csv flush failed: {e}"))
 }
 
 /// One CSV cell from a JSON value: scalars verbatim, null → empty,
@@ -1850,7 +1990,7 @@ async fn retrieve(
     // its `user` FK expanded to the full AuthUser object. Same
     // parser, same 400-on-bad-name semantics.
     let include = parse_include(params.get("include").map(|s| s.as_str()), &model)?;
-    let mut rows = fetch_rows(&model, Some((&pk.name, &id)), None, &no_filter, &include).await?;
+    let mut rows = fetch_rows(&model, Some((&pk.name, &id)), None, &no_filter, &include, &[]).await?;
     let Some(mut row) = rows.pop() else {
         return Err(ApiError::NotFound(format!(
             "no row with {} = {} in {}",
@@ -2053,7 +2193,7 @@ async fn update(
 
     // 404 if the target row doesn't exist before we attempt the UPDATE.
     let no_filter = FilterClause::default();
-    let existing = fetch_rows(&model, Some((&pk.name, &id)), None, &no_filter, &[]).await?;
+    let existing = fetch_rows(&model, Some((&pk.name, &id)), None, &no_filter, &[], &[]).await?;
     if existing.is_empty() {
         return Err(ApiError::NotFound(format!(
             "no row with {} = {} in {}",
@@ -2069,7 +2209,7 @@ async fn update(
         .filter_eq_string(&pk.name, &id)
         .update_json(&body)
         .await?;
-    let mut rows = fetch_rows(&model, Some((&pk.name, &id)), None, &no_filter, &[]).await?;
+    let mut rows = fetch_rows(&model, Some((&pk.name, &id)), None, &no_filter, &[], &[]).await?;
     let Some(mut row) = rows.pop() else {
         return Err(ApiError::BadInput(
             "row updated but disappeared on read-back".into(),
@@ -2219,6 +2359,7 @@ async fn fetch_rows(
     page: Option<PageRequest>,
     filter: &FilterClause,
     include: &[String],
+    ordering: &[(String, bool)],
 ) -> Result<Vec<Map<String, Value>>, ApiError> {
     let mut qs = umbra::orm::DynQuerySet::for_meta(model);
 
@@ -2233,6 +2374,13 @@ async fn fetch_rows(
             && let Some(cond) = filter.condition_clone()
         {
             qs = qs.filter_condition(cond);
+        }
+        // `?ordering=-created_at,name` — apply each directive in order.
+        // Unknown fields were already stripped by `parse_ordering`; what
+        // remains are validated column names safe to pass directly to
+        // `order_by_col` without further SQL-injection risk.
+        for (col, desc) in ordering {
+            qs = qs.order_by_col(col, *desc);
         }
         if let Some(req) = page {
             // PERF-1: a list request must never issue an unbounded
@@ -2449,7 +2597,10 @@ mod allow_block_unit {
         assert!(p.is_field_hidden("account", "password_hash"));
         assert!(p.is_field_hidden("account", "api_token"));
         assert!(!p.is_field_hidden("account", "label"));
-        assert!(!p.is_field_hidden("other", "password_hash"));
+        // password_hash is in HARD_DENIED_FIELDS, so is_field_hidden returns
+        // true for it on ANY table — even one that never called .hide().
+        // gaps2 #75: hard denylist is un-overridable.
+        assert!(p.is_field_hidden("other", "password_hash"));
     }
 
     #[test]
@@ -2665,5 +2816,120 @@ mod sparse_fields_unit {
         // `other` (sibling of c under b) was pruned away
         let b = m["a"]["b"].as_object().unwrap();
         assert_eq!(b.keys().cloned().collect::<Vec<_>>(), vec!["c".to_string()]);
+    }
+}
+
+#[cfg(test)]
+mod csv_writer_unit {
+    //! Unit tests for `rows_to_csv` / `rows_to_csv_into`.
+    //!
+    //! The happy-path test verifies header order + cell quoting without
+    //! spinning up the HTTP stack.  The error-path test injects a `Write`
+    //! implementation that always returns an `io::Error` and asserts that
+    //! `rows_to_csv_into` surfaces the error rather than swallowing it.
+
+    use super::{rows_to_csv, rows_to_csv_into};
+    use serde_json::{Map, Value, json};
+    use umbra::migrate::ModelMeta;
+    use umbra::orm::SqlType;
+
+    fn make_meta(fields: &[(&str, SqlType)]) -> ModelMeta {
+        // Build via JSON round-trip so we stay insulated from new
+        // `#[serde(default)]` fields added in the future. We must
+        // supply the three non-defaulted `Column` fields explicitly:
+        // `name`, `ty`, `primary_key`, and `nullable`.
+        let cols: Vec<serde_json::Value> = fields
+            .iter()
+            .map(|(n, ty)| serde_json::json!({
+                "name": n,
+                "ty": ty,
+                "primary_key": false,
+                "nullable": false,
+            }))
+            .collect();
+        let json = serde_json::json!({
+            "name": "Test",
+            "table": "test",
+            "fields": cols,
+        });
+        serde_json::from_value(json).expect("ModelMeta round-trip")
+    }
+
+    fn row(pairs: &[(&str, Value)]) -> Map<String, Value> {
+        pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
+    }
+
+    /// Happy path: header follows model field order; a value containing a
+    /// comma is quoted by the csv crate; `rows_to_csv` returns `Ok`.
+    #[test]
+    fn happy_path_header_and_quoting() {
+        let meta = make_meta(&[("id", SqlType::BigInt), ("name", SqlType::Text)]);
+        let rows = vec![
+            row(&[("id", json!(1)), ("name", json!("Anvil"))]),
+            row(&[("id", json!(2)), ("name", json!("Rope, sturdy"))]),
+        ];
+        let csv = rows_to_csv(&meta, &rows).expect("rows_to_csv should succeed");
+        let mut lines = csv.lines();
+        assert_eq!(lines.next(), Some("id,name"), "header row");
+        let body: Vec<&str> = lines.collect();
+        assert!(body.iter().any(|l| l.contains("Anvil")), "first row present");
+        assert!(
+            body.iter().any(|l| l.contains("\"Rope, sturdy\"")),
+            "comma value is quoted: {body:?}",
+        );
+    }
+
+    /// Empty rows: the function succeeds (no panic / no Err), produces
+    /// valid UTF-8, and the output terminates with a newline. Column
+    /// detection requires at least one row to confirm a field is
+    /// present, so the zero-row case emits an empty header — that's the
+    /// documented behaviour and not a bug; this test just guards that we
+    /// don't crash or return an Err.
+    #[test]
+    fn empty_rows_does_not_error() {
+        let meta = make_meta(&[("id", SqlType::BigInt), ("name", SqlType::Text)]);
+        let result = rows_to_csv(&meta, &[]);
+        assert!(result.is_ok(), "zero rows must not return Err: {result:?}");
+    }
+
+    /// Error path: a `Write` impl that always fails causes `rows_to_csv_into`
+    /// to return `Err(...)` rather than swallowing the failure and returning
+    /// an empty/truncated result.
+    #[test]
+    fn write_error_is_surfaced_not_swallowed() {
+        /// A `Write` that always returns an IO error on the first write.
+        #[derive(Debug)]
+        struct AlwaysError;
+        impl std::io::Write for AlwaysError {
+            fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "injected write failure",
+                ))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "injected flush failure",
+                ))
+            }
+        }
+
+        let meta = make_meta(&[("id", SqlType::BigInt), ("name", SqlType::Text)]);
+        let rows = vec![row(&[("id", json!(1)), ("name", json!("x"))])];
+
+        let result = rows_to_csv_into(AlwaysError, &meta, &rows);
+        assert!(
+            result.is_err(),
+            "a failing writer must propagate Err, not return truncated data"
+        );
+        let msg = result.unwrap_err();
+        // The csv crate buffers writes internally; the injected IO error
+        // surfaces when `into_inner()` flushes the buffer, so the message
+        // identifies the flush stage rather than the record-write stage.
+        assert!(
+            msg.contains("csv header write failed") || msg.contains("csv flush failed"),
+            "error message identifies a write or flush stage: {msg:?}",
+        );
     }
 }

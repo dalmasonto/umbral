@@ -237,7 +237,17 @@ pub async fn emit(name: &str, payload: Value) -> usize {
         (futs, count)
     };
     for fut in futures {
-        fut.await;
+        // Mirror the sync path's catch_unwind isolation: a panicking async
+        // subscriber must not unwind through emit() into the ORM write that
+        // fired the signal. Wrap each future with AssertUnwindSafe (the
+        // handler already opted in to `Send + Sync + 'static`) and use
+        // FutureExt::catch_unwind; on Err log and continue to the next
+        // subscriber, exactly as the sync branch does above.
+        use futures_util::future::FutureExt as _;
+        let result = std::panic::AssertUnwindSafe(fut).catch_unwind().await;
+        if result.is_err() {
+            tracing::error!(signal = %name, "async signal handler panicked; skipping it");
+        }
     }
     total
 }

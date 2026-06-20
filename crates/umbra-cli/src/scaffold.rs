@@ -15,6 +15,8 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use umbra_casing::pascal_case_from_ident;
+
 /// Error type for scaffolding operations. Wraps I/O and validation
 /// failures with enough context for a user-facing message.
 #[derive(Debug)]
@@ -99,6 +101,12 @@ pub struct ScaffoldReport {
     /// Post-scaffold instructions for the user. The binary prints
     /// these after the file list.
     pub next_steps: Vec<String>,
+    /// Whether the project's `Cargo.toml` was updated to include the
+    /// new plugin as a path dependency. `None` means the operation
+    /// wasn't attempted (e.g. `scaffold_project` doesn't auto-register).
+    /// `Some(true)` = dep added, `Some(false)` = dep already present
+    /// (idempotent — no duplicate written).
+    pub cargo_toml_registered: Option<bool>,
 }
 
 /// Validate a name is acceptable as a Rust crate identifier.
@@ -124,25 +132,8 @@ fn validate_name(name: &str) -> Result<(), ScaffoldError> {
     Ok(())
 }
 
-/// Convert a kebab/snake case name into PascalCase for type names.
-///
-/// `posts` → `Posts`. `blog-engine` → `BlogEngine`. `task_queue` →
-/// `TaskQueue`. Used to generate the `{Name}Plugin` struct name.
-fn pascal_case(name: &str) -> String {
-    let mut out = String::with_capacity(name.len());
-    let mut next_upper = true;
-    for c in name.chars() {
-        if c == '-' || c == '_' {
-            next_upper = true;
-        } else if next_upper {
-            out.push(c.to_ascii_uppercase());
-            next_upper = false;
-        } else {
-            out.push(c);
-        }
-    }
-    out
-}
+// `pascal_case` replaced by `umbra_casing::pascal_case_from_ident` (imported
+// above) in the gaps2 #77 consolidation refactor.
 
 /// Convert a name to its Rust identifier form (hyphens → underscores).
 /// Rewrite git-deps to path-deps anchored at `umbra_repo`. Closes
@@ -797,6 +788,7 @@ cargo run -- makemigrations
         root,
         files,
         next_steps,
+        cargo_toml_registered: None,
     })
 }
 
@@ -839,7 +831,7 @@ pub fn scaffold_app(
     fs::create_dir_all(root.join("src"))?;
 
     let crate_name = rust_ident(name);
-    let pascal = pascal_case(name);
+    let pascal = pascal_case_from_ident(name);
     let mut files = Vec::new();
 
     let cargo_toml = format!(
@@ -938,10 +930,22 @@ impl Plugin for {pascal}Plugin {{
     );
     write_file(&root, "src/models.rs", &models_rs, &mut files)?;
 
+    // Auto-register the new crate as a path dep in the project's Cargo.toml.
+    // This is a best-effort step: if it fails (e.g. the user ran startapp
+    // from a directory that isn't a Cargo project), we warn but don't roll
+    // back the scaffold files already written.
+    let project_cargo_toml = project_root.join("Cargo.toml");
+    let cargo_toml_registered = if project_cargo_toml.is_file() {
+        match register_dep_in_cargo_toml(&project_cargo_toml, name) {
+            Ok(added) => Some(added),
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
+
     let next_steps = vec![
-        format!("Add `{name}` to your project's Cargo.toml dependencies:"),
-        format!("    {name} = {{ path = \"plugins/{name}\" }}"),
-        "Add the plugin to your App::builder chain in src/main.rs:".to_string(),
+        "Wire the plugin into your App::builder chain in src/main.rs:".to_string(),
         format!("    .plugin({crate_name}::{pascal}Plugin::default())"),
         "Declare your first model in src/models.rs and uncomment the".to_string(),
         "    `Plugin::models()` line in src/lib.rs.".to_string(),
@@ -951,6 +955,7 @@ impl Plugin for {pascal}Plugin {{
         root,
         files,
         next_steps,
+        cargo_toml_registered,
     })
 }
 
@@ -995,7 +1000,7 @@ pub fn scaffold_plugin(
     fs::create_dir_all(root.join("src"))?;
 
     let crate_name = rust_ident(name);
-    let pascal = pascal_case(name);
+    let pascal = pascal_case_from_ident(name);
     let mut files = Vec::new();
 
     // Cargo.toml — pulls in the deps the example modules use. async-
@@ -1225,10 +1230,19 @@ pub async fn hello(Query(params): Query<HelloParams>) -> Json<HelloResponse> {{
     );
     write_file(&root, "src/handlers.rs", &handlers_rs, &mut files)?;
 
+    // Auto-register the new crate as a path dep in the project's Cargo.toml.
+    let project_cargo_toml = project_root.join("Cargo.toml");
+    let cargo_toml_registered = if project_cargo_toml.is_file() {
+        match register_dep_in_cargo_toml(&project_cargo_toml, name) {
+            Ok(added) => Some(added),
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
+
     let next_steps = vec![
-        format!("Add `{name}` to your project's Cargo.toml dependencies:"),
-        format!("    {name} = {{ path = \"plugins/{name}\" }}"),
-        "Add the plugin to your App::builder chain in src/main.rs:".to_string(),
+        "Wire the plugin into your App::builder chain in src/main.rs:".to_string(),
         format!("    .plugin({crate_name}::{pascal}Plugin::default())"),
         "Generate + apply the initial migration:".to_string(),
         "    cargo run -- makemigrations".to_string(),
@@ -1240,6 +1254,7 @@ pub async fn hello(Query(params): Query<HelloParams>) -> Json<HelloResponse> {{
         root,
         files,
         next_steps,
+        cargo_toml_registered,
     })
 }
 
@@ -1258,6 +1273,68 @@ fn write_file(
     fs::write(&full, contents)?;
     files.push(PathBuf::from(rel_path));
     Ok(())
+}
+
+/// Attempt to register `<name> = { path = "plugins/<name>" }` under
+/// `[dependencies]` in the project's `Cargo.toml`.
+///
+/// Returns:
+/// - `Ok(true)`  — dep was added.
+/// - `Ok(false)` — dep was already present (idempotent; no duplicate written).
+/// - `Err(_)`    — the file couldn't be read or written. Callers treat this
+///   as a soft failure: the scaffold files are already on disk, so we warn
+///   but don't roll them back.
+///
+/// The insertion uses minimal string surgery (find the `[dependencies]`
+/// header, append one line immediately after it) so comments, ordering,
+/// and formatting of existing deps are preserved. `toml_edit` is not yet
+/// a dep of umbra-cli; if it's added later this function is the right
+/// place to switch to it.
+pub fn register_dep_in_cargo_toml(
+    cargo_toml_path: &Path,
+    name: &str,
+) -> io::Result<bool> {
+    let text = fs::read_to_string(cargo_toml_path)?;
+
+    // The dep line we want present. Match on `name =` to catch both
+    // quoted and unquoted forms that `cargo new` might emit.
+    let dep_key = format!("{name} =");
+    if text.lines().any(|l| l.trim_start().starts_with(&dep_key)) {
+        // Already registered — nothing to do.
+        return Ok(false);
+    }
+
+    // Find the `[dependencies]` section header and insert immediately after it.
+    // We insert after the header line itself so the new dep sits at the top of
+    // the block, before any existing deps. This is the least-surprising position:
+    // the user can re-order freely after.
+    let dep_line = format!("{name} = {{ path = \"plugins/{name}\" }}\n");
+
+    let mut out = String::with_capacity(text.len() + dep_line.len());
+    let mut inserted = false;
+
+    for line in text.split_inclusive('\n') {
+        out.push_str(line);
+        // Match `[dependencies]` exactly (trimmed), not `[dev-dependencies]`
+        // or `[build-dependencies]`.
+        if !inserted && line.trim() == "[dependencies]" {
+            out.push_str(&dep_line);
+            inserted = true;
+        }
+    }
+
+    if !inserted {
+        // No `[dependencies]` section found — append one at the end so the
+        // manifest stays valid rather than silently failing.
+        if !out.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push_str("\n[dependencies]\n");
+        out.push_str(&dep_line);
+    }
+
+    fs::write(cargo_toml_path, &out)?;
+    Ok(true)
 }
 
 #[cfg(test)]
@@ -1291,10 +1368,10 @@ mod tests {
 
     #[test]
     fn pascal_case_handles_kebab_and_snake() {
-        assert_eq!(pascal_case("posts"), "Posts");
-        assert_eq!(pascal_case("blog_engine"), "BlogEngine");
-        assert_eq!(pascal_case("blog-engine"), "BlogEngine");
-        assert_eq!(pascal_case("api2"), "Api2");
+        assert_eq!(pascal_case_from_ident("posts"), "Posts");
+        assert_eq!(pascal_case_from_ident("blog_engine"), "BlogEngine");
+        assert_eq!(pascal_case_from_ident("blog-engine"), "BlogEngine");
+        assert_eq!(pascal_case_from_ident("api2"), "Api2");
     }
 
     #[test]

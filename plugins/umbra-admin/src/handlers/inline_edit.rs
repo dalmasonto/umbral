@@ -79,10 +79,11 @@ pub(crate) async fn cell_edit_get(
     };
     let value = row.get(&field).cloned().unwrap_or_default();
     let input_type = input_kind(col);
+    let base = crate::branding::current().base_path;
 
     let html = format!(
         r#"<form
-            hx-post="/admin/{table}/{id}/cell/{field}"
+            hx-post="{base}/{table}/{id}/cell/{field}"
             hx-target="closest td"
             hx-swap="innerHTML"
             class="flex items-center gap-xs"

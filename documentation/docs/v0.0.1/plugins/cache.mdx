@@ -97,6 +97,47 @@ What gets cached: only `GET` and `HEAD` responses with status 200. The following
 
 If the ambient cache was not initialised, misses and stores are silently skipped - the handler fires normally.
 
+## Opt-in compression and HTTP cache headers
+
+These are **router-wide, default-off** knobs on `CachePlugin`. They are orthogonal to `cache_page` (which caches server-side response bodies) — these emit HTTP headers that tell browsers and downstream proxies how to handle responses.
+
+### Response compression
+
+```rust
+CachePlugin::new(Cache::memory())
+    .with_compression()
+```
+
+Applies `tower_http::CompressionLayer` to the router. The layer negotiates with the client's `Accept-Encoding` header and compresses responses with gzip, brotli, deflate, or zstd as available. No compression is applied when the client sends no `Accept-Encoding`, or when tower-http's default predicate suppresses it (responses below 32 bytes, gRPC responses, and image content-types are skipped by default).
+
+### Cache-Control and Vary headers
+
+```rust
+CachePlugin::new(Cache::memory())
+    .cache_control("public, max-age=3600")
+    .vary("Accept-Encoding")
+```
+
+`cache_control(value)` emits a `Cache-Control` response header with the given directive string on every response. `vary(value)` emits a `Vary` header. Both use `SetResponseHeaderLayer::overriding`, so the plugin's value takes precedence over anything the handler set.
+
+Pair `Vary: Accept-Encoding` with `.with_compression()` so shared caches (CDNs, reverse proxies) store separate variants per encoding.
+
+### Composing all three
+
+```rust
+App::builder()
+    .plugin(
+        CachePlugin::new(Cache::memory())
+            .with_compression()
+            .cache_control("public, max-age=3600")
+            .vary("Accept-Encoding"),
+    )
+    .build()
+    .await?;
+```
+
+The three builder methods can be mixed freely with the existing `cache_page` layer — they operate at different levels of the stack.
+
 ## Scaling to production
 
 Development: `Cache::memory()` - zero config. Staging or small prod: `Cache::sqlite(pool)` - durable, no extra service. Multi-instance production: `Cache::redis(url)` - shared across all app processes, server-side TTL, millisecond latency.

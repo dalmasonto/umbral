@@ -362,11 +362,14 @@ let publish = Action::new(
 )
 .scope(ActionScope::Both)            // Row | Bulk | Both
 .danger()                             // red styling
-.confirm("Publish selected posts?"); // confirm dialog before firing
+.confirm("Publish selected posts?")  // confirm dialog before firing
+.permission("blog.publish_post");    // requires this codename to run
 
 AdminModel::new("post")
     .actions(vec![Action::delete_selected(), publish])
 ```
+
+**`.permission(codename)`** restricts the action to users who hold the named codename (or are superusers). The check runs after the model-level `change_<model>` gate and before the handler. When `umbra-permissions` is not installed the check is a no-op and any staff user can run the action. Use the same composite `"<plugin>.<verb>_<model>"` format that `PermissionsPlugin` auto-creates, or any custom codename you seed.
 
 `ActionResult` variants and their HTMX encoding:
 

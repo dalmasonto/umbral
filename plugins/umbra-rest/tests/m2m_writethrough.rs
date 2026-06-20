@@ -159,7 +159,7 @@ async fn patch_json(router: axum::Router, uri: &str, body: Value) -> (StatusCode
 /// insert order.
 async fn junction_rows_for(post_id: i64) -> Vec<i64> {
     let parent = sea_query::Value::BigInt(Some(post_id));
-    let mut ids: Vec<i64> = load_junction_selection("post_tags", parent, SqlType::BigInt)
+    let mut ids: Vec<i64> = load_junction_selection("post_tags", parent, SqlType::BigInt, None)
         .await
         .expect("read junction")
         .into_iter()

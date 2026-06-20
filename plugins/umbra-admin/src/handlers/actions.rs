@@ -4,7 +4,6 @@
 //! developer's `AdminModel::actions(...)` config; this module just
 //! resolves the right `Action` and invokes its handler.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::extract::{Path, State};
@@ -41,15 +40,19 @@ pub(crate) async fn run_action(
     {
         return r;
     }
-    let form: HashMap<String, String> = match serde_urlencoded::from_str(&body) {
+    let pairs: Vec<(String, String)> = match serde_urlencoded::from_str(&body) {
         Ok(m) => m,
         Err(e) => return AdminError::BadInput(e.to_string()).into_response(),
     };
-    let action_key = form.get("action").cloned().unwrap_or_default();
-    let selected_ids: Vec<i64> = form
+    let action_key = pairs
+        .iter()
+        .find(|(k, _)| k == "action")
+        .map(|(_, v)| v.clone())
+        .unwrap_or_default();
+    let selected_ids: Vec<String> = pairs
         .iter()
         .filter(|(k, _)| k.as_str() == "selected")
-        .filter_map(|(_, v)| v.parse::<i64>().ok())
+        .map(|(_, v)| v.clone())
         .collect();
 
     let cfg = state.config_for(&table);
@@ -58,6 +61,14 @@ pub(crate) async fn run_action(
         return AdminError::NotFound(format!("no action `{action_key}` for table `{table}`"))
             .into_response();
     };
+
+    // gaps2 #79: enforce Action::permission before running the handler.
+    // Superusers bypass the check; non-superusers need the exact codename.
+    if let Some(ref required_perm) = action.permission {
+        if let Err(r) = check_action_perm(&who, required_perm).await {
+            return r;
+        }
+    }
 
     let inv = ActionInvocation {
         ids: selected_ids.clone(),
@@ -79,7 +90,7 @@ pub(crate) async fn run_action(
         who.id,
         &format!("action:{action_key}"),
         &table,
-        selected_ids.first().copied(),
+        selected_ids.first().and_then(|s| s.parse::<i64>().ok()),
         &summary,
     )
     .await;
@@ -155,19 +166,31 @@ pub(crate) async fn dispatch_action(
         return r;
     }
 
-    let ids: Vec<i64> = if body.trim_start().starts_with('{') {
+    let ids: Vec<String> = if body.trim_start().starts_with('{') {
         match serde_json::from_str::<serde_json::Value>(&body) {
             Ok(v) => v["ids"]
                 .as_array()
-                .map(|arr| arr.iter().filter_map(|x| x.as_i64()).collect())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|x| {
+                            // Accept both JSON numbers and JSON strings so callers
+                            // can send either `{"ids":[1,2]}` or `{"ids":["a","b"]}`.
+                            x.as_str()
+                                .map(|s| s.to_string())
+                                .or_else(|| x.as_i64().map(|n| n.to_string()))
+                        })
+                        .collect()
+                })
                 .unwrap_or_default(),
             Err(e) => return AdminError::BadInput(format!("bad JSON: {e}")).into_response(),
         }
     } else {
-        let form: HashMap<String, String> = serde_urlencoded::from_str(&body).unwrap_or_default();
-        form.iter()
+        let pairs: Vec<(String, String)> =
+            serde_urlencoded::from_str(&body).unwrap_or_default();
+        pairs
+            .into_iter()
             .filter(|(k, _)| k.as_str() == "ids" || k.as_str() == "selected")
-            .filter_map(|(_, v)| v.parse::<i64>().ok())
+            .map(|(_, v)| v)
             .collect()
     };
 
@@ -176,6 +199,14 @@ pub(crate) async fn dispatch_action(
     let Some(action) = action else {
         return AdminError::NotFound(format!("no action `{key}` for `{table}`")).into_response();
     };
+
+    // gaps2 #79: enforce Action::permission before running the handler.
+    // Superusers bypass the check; non-superusers need the exact codename.
+    if let Some(ref required_perm) = action.permission {
+        if let Err(r) = crate::handlers::actions::check_action_perm(&who, required_perm).await {
+            return r;
+        }
+    }
 
     let inv = ActionInvocation {
         ids: ids.clone(),
@@ -199,7 +230,7 @@ pub(crate) async fn dispatch_action(
         who.id,
         &format!("action:{key}"),
         &table,
-        ids.first().copied(),
+        ids.first().and_then(|s| s.parse::<i64>().ok()),
         &summary,
     )
     .await;
@@ -259,5 +290,47 @@ pub(crate) async fn dispatch_action(
                 .body(axum::body::Body::empty())
                 .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
         }
+    }
+}
+
+/// Check that `who` holds the required action permission codename.
+///
+/// Mirrors `permcheck::check` but operates on a raw codename string
+/// (as stored in `Action::permission`) rather than deriving one from
+/// (plugin, table, verb).  Superusers always pass; the check is a
+/// no-op when `umbra-permissions` is not installed.
+pub(crate) async fn check_action_perm(
+    who: &umbra_auth::AuthUser,
+    required_perm: &str,
+) -> Result<(), Response> {
+    // No-op when the permissions plugin isn't installed (matches the
+    // rest of the admin's graceful-fallback behaviour from permcheck.rs).
+    if !crate::permcheck::permissions_installed() {
+        return Ok(());
+    }
+    let user_id = who.id.to_string();
+    let allowed = umbra_permissions::has_perm_for_superuser(
+        &user_id,
+        who.is_superuser,
+        required_perm,
+    )
+    .await
+    .unwrap_or_else(|err| {
+        tracing::warn!(
+            user_id = user_id.as_str(),
+            perm = required_perm,
+            error = %err,
+            "action permission check failed; denying by default"
+        );
+        false
+    });
+    if allowed {
+        Ok(())
+    } else {
+        Err((
+            StatusCode::FORBIDDEN,
+            "umbra-admin: permission denied for this action",
+        )
+            .into_response())
     }
 }

@@ -61,9 +61,12 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use http::header::{HeaderValue, CACHE_CONTROL, VARY};
 use serde::{Serialize, de::DeserializeOwned};
 use sqlx::SqlitePool;
 use tokio::sync::Mutex;
+use tower_http::compression::CompressionLayer;
+use tower_http::set_header::SetResponseHeaderLayer;
 use umbra::prelude::*;
 
 pub mod cache_page;
@@ -472,6 +475,47 @@ impl CacheBackend for RedisBackend {
     }
 }
 
+// ── CacheHeaders config ──────────────────────────────────────────────────────
+
+/// Opt-in HTTP response-header config for `CachePlugin`.
+///
+/// Both knobs are **off by default** — wiring a `CachePlugin` without calling
+/// [`CachePlugin::with_compression`] or [`CachePlugin::cache_control`] leaves
+/// the response pipeline unchanged.
+///
+/// They are independent of and composable with the server-side `cache_page`
+/// store: `cache_page` caches full response bodies, while these knobs emit
+/// HTTP headers that tell downstream clients and proxies how to treat responses.
+///
+/// # Example
+///
+/// ```ignore
+/// App::builder()
+///     .plugin(
+///         CachePlugin::new(Cache::memory())
+///             .with_compression()
+///             .cache_control("public, max-age=3600")
+///             .vary("Accept-Encoding"),
+///     )
+///     .build()
+///     .await?;
+/// ```
+#[derive(Debug, Clone, Default)]
+pub struct CacheHeaders {
+    /// When `true`, applies `tower_http::compression::CompressionLayer` to the
+    /// router. The layer negotiates encoding with the client via
+    /// `Accept-Encoding` and compresses responses with gzip, brotli, deflate,
+    /// or zstd as available.
+    pub compression: bool,
+    /// When `Some(value)`, emits a `Cache-Control` response header on every
+    /// response (using `SetResponseHeaderLayer::overriding`). The value is the
+    /// raw directive string, e.g. `"public, max-age=3600"` or `"no-store"`.
+    pub cache_control: Option<String>,
+    /// When `Some(value)`, emits a `Vary` response header. Common value:
+    /// `"Accept-Encoding"` to tell caches that responses differ by encoding.
+    pub vary: Option<String>,
+}
+
 // ── CachePlugin ──────────────────────────────────────────────────────────────
 
 /// The plugin. Carries no models, no routes — just a `Cache` handle it
@@ -489,12 +533,23 @@ impl CacheBackend for RedisBackend {
 ///
 /// `CachePlugin::init(cache)` remains for manual/test wiring outside the
 /// plugin lifecycle.
+///
+/// ## Opt-in compression and Cache-Control headers
+///
+/// ```ignore
+/// CachePlugin::new(Cache::memory())
+///     .with_compression()               // enables gzip/br/zstd negotiation
+///     .cache_control("public, max-age=3600")
+///     .vary("Accept-Encoding")
+/// ```
 #[derive(Default)]
 pub struct CachePlugin {
     /// Cache to install as the ambient handle in [`Plugin::on_ready`].
     /// `None` for the legacy unit-style registration (where the ambient
     /// cache is wired separately via [`CachePlugin::init`]).
     cache: Option<Cache>,
+    /// Opt-in HTTP header + compression config. Default: nothing applied.
+    headers: CacheHeaders,
 }
 
 impl CachePlugin {
@@ -503,7 +558,10 @@ impl CachePlugin {
     /// installs it as the ambient handle at boot (BROKEN-9) — no separate
     /// `init` call, so `cache_page` actually caches.
     pub fn new(cache: Cache) -> Self {
-        Self { cache: Some(cache) }
+        Self {
+            cache: Some(cache),
+            headers: CacheHeaders::default(),
+        }
     }
 
     /// Store `cache` as the ambient handle directly, outside the plugin
@@ -515,11 +573,76 @@ impl CachePlugin {
             panic!("CachePlugin::init called more than once");
         }
     }
+
+    /// Enable response compression. Applies `tower_http::compression::CompressionLayer`
+    /// to the router; negotiates gzip / brotli / deflate / zstd via `Accept-Encoding`.
+    /// Default: off.
+    pub fn with_compression(mut self) -> Self {
+        self.headers.compression = true;
+        self
+    }
+
+    /// Emit a `Cache-Control` header on every response. `value` is the raw
+    /// directive string (e.g. `"public, max-age=3600"`, `"no-store"`).
+    /// Default: not set.
+    pub fn cache_control(mut self, value: impl Into<String>) -> Self {
+        self.headers.cache_control = Some(value.into());
+        self
+    }
+
+    /// Emit a `Vary` header on every response. Typically paired with
+    /// [`with_compression`][Self::with_compression]: `"Accept-Encoding"` tells
+    /// caches that different encodings are distinct variants of the same URL.
+    /// Default: not set.
+    pub fn vary(mut self, value: impl Into<String>) -> Self {
+        self.headers.vary = Some(value.into());
+        self
+    }
 }
 
 impl Plugin for CachePlugin {
     fn name(&self) -> &'static str {
         "cache"
+    }
+
+    fn wrap_router(&self, router: Router) -> Router {
+        let h = &self.headers;
+        let mut router = router;
+
+        // Cache-Control header (overriding — the plugin's policy takes
+        // precedence over whatever a handler set).
+        if let Some(ref val) = h.cache_control {
+            if let Ok(hv) = HeaderValue::from_str(val) {
+                router = router.layer(SetResponseHeaderLayer::overriding(CACHE_CONTROL, hv));
+            } else {
+                tracing::warn!(
+                    value = %val,
+                    "CachePlugin: cache_control value contains invalid header characters; \
+                     Cache-Control header will NOT be emitted"
+                );
+            }
+        }
+
+        // Vary header (overriding).
+        if let Some(ref val) = h.vary {
+            if let Ok(hv) = HeaderValue::from_str(val) {
+                router = router.layer(SetResponseHeaderLayer::overriding(VARY, hv));
+            } else {
+                tracing::warn!(
+                    value = %val,
+                    "CachePlugin: vary value contains invalid header characters; \
+                     Vary header will NOT be emitted"
+                );
+            }
+        }
+
+        // Compression (outermost so the body is already compressed before any
+        // header-setter above runs on the response on the way out).
+        if h.compression {
+            router = router.layer(CompressionLayer::new());
+        }
+
+        router
     }
 
     fn on_ready(&self, _ctx: &umbra::plugin::AppContext) -> Result<(), umbra::plugin::PluginError> {

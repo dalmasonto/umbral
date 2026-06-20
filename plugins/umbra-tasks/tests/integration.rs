@@ -13,8 +13,9 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio::sync::{Mutex, OnceCell};
 
 use umbra_tasks::{
-    _clear_handlers_for_tests, DEFAULT_MAX_ATTEMPTS, EnqueueOptions, STATUS_FAILED, STATUS_PENDING,
-    STATUS_SUCCEEDED, TaskRow, TasksPlugin, enqueue, register_handler, run_worker_once,
+    DEFAULT_VISIBILITY_TIMEOUT, EnqueueOptions, STATUS_FAILED, STATUS_PENDING, STATUS_RUNNING,
+    STATUS_SUCCEEDED, TaskRow, TasksPlugin, _clear_handlers_for_tests, enqueue,
+    reclaim_orphaned_tasks, register_handler, run_worker_once, DEFAULT_MAX_ATTEMPTS,
 };
 
 static BOOT: OnceCell<()> = OnceCell::const_new();
@@ -286,6 +287,66 @@ async fn unknown_handler_marks_task_failed_with_handler_not_found_error() {
 }
 
 // =========================================================================
+// 4b. non-retriable: missing handler must NOT burn through max_attempts
+// =========================================================================
+
+/// A task whose handler is not registered must be marked failed on the
+/// FIRST worker iteration regardless of `max_attempts`. This verifies
+/// the retry decision uses the typed `TaskError::HandlerNotFound`
+/// variant, not a string match — so it can't silently break if the
+/// error message text changes.
+#[tokio::test(flavor = "multi_thread")]
+async fn unknown_handler_is_non_retriable_regardless_of_max_attempts() {
+    let _guard = test_lock().await;
+    boot().await;
+    drain_queue().await;
+    _clear_handlers_for_tests();
+
+    // max_attempts is high; the task must still fail on attempt 1.
+    let id = enqueue(
+        "handler_that_does_not_exist",
+        serde_json::json!({}),
+        EnqueueOptions {
+            max_attempts: Some(10),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("enqueue");
+
+    // Single worker step — should claim the row and immediately mark it failed.
+    let processed = run_worker_once().await.expect("worker step");
+    assert!(processed, "worker should have claimed the row");
+
+    let row = fetch(id).await;
+    assert_eq!(
+        row.status, STATUS_FAILED,
+        "HandlerNotFound must be non-retriable: expected failed, got {:?}",
+        row.status
+    );
+    assert_eq!(
+        row.attempts, 1,
+        "must NOT burn through max_attempts ({}) before failing; got {} attempts",
+        row.max_attempts, row.attempts
+    );
+    assert!(
+        row.completed_at.is_some(),
+        "completed_at must be set on non-retriable failure"
+    );
+    let err = row.error.as_deref().unwrap_or("");
+    assert!(
+        err.contains("handler not found"),
+        "error column should mention the missing handler; got {err:?}",
+    );
+
+    // Queue is now drained — a second iteration should be a no-op.
+    assert!(
+        !run_worker_once().await.expect("step 2"),
+        "no pending rows should remain after non-retriable failure"
+    );
+}
+
+// =========================================================================
 // 5. basic enqueue shape
 // =========================================================================
 
@@ -403,5 +464,245 @@ async fn dispatch_returns_unmatched_for_unknown_command() {
     assert!(
         matches!(outcome, umbra::cli::DispatchOutcome::Unmatched),
         "expected Unmatched for an unknown subcommand, got: {outcome:?}",
+    );
+}
+
+// =========================================================================
+// 9. Orphan-task reclaim (visibility timeout / at-least-once guarantee)
+// =========================================================================
+
+/// Directly insert a RUNNING row with an expired started_at to simulate a
+/// crashed worker. Verify that WITHOUT calling reclaim_orphaned_tasks the
+/// row stays stuck (proving the test would fail before the fix).
+#[tokio::test(flavor = "multi_thread")]
+async fn stuck_running_task_stays_stuck_without_reclaim() {
+    let _guard = test_lock().await;
+    boot().await;
+    drain_queue().await;
+    _clear_handlers_for_tests();
+
+    let pool = umbra::db::pool();
+    let old_started_at = Utc::now() - chrono::Duration::hours(2);
+    sqlx::query(
+        "INSERT INTO task_row \
+         (name, payload, status, attempts, max_attempts, scheduled_for, \
+          started_at, completed_at, error, created_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)",
+    )
+    .bind("orphan_handler")
+    .bind("{}")
+    .bind(STATUS_RUNNING)
+    .bind(1i64)
+    .bind(3i64)
+    .bind(Utc::now().to_rfc3339())
+    .bind(old_started_at.to_rfc3339())
+    .bind(Utc::now().to_rfc3339())
+    .execute(&pool)
+    .await
+    .expect("insert stuck running row");
+
+    // Without reclaim: run_worker_once should NOT pick up the RUNNING row.
+    let processed = run_worker_once().await.expect("worker step");
+    assert!(
+        !processed,
+        "run_worker_once must not re-claim an already-RUNNING row; \
+         without reclaim the task stays stuck"
+    );
+
+    // Confirm the row is still in RUNNING state — it's orphaned.
+    let rows: Vec<TaskRow> = {
+        sqlx::query_as::<_, TaskRow>("SELECT * FROM task_row WHERE status = ?")
+            .bind(STATUS_RUNNING)
+            .fetch_all(&pool)
+            .await
+            .expect("fetch running rows")
+    };
+    assert_eq!(rows.len(), 1, "stuck row should still be RUNNING without reclaim");
+}
+
+/// A task left in RUNNING with an expired started_at (crashed worker) is
+/// reclaimed by reclaim_orphaned_tasks and becomes runnable again. A
+/// subsequent run_worker_once completes it successfully.
+#[tokio::test(flavor = "multi_thread")]
+async fn orphaned_running_task_is_reclaimed_and_completes() {
+    let _guard = test_lock().await;
+    boot().await;
+    drain_queue().await;
+    _clear_handlers_for_tests();
+
+    static FLAG: OnceLock<AtomicBool> = OnceLock::new();
+    FLAG.get_or_init(|| AtomicBool::new(false))
+        .store(false, Ordering::SeqCst);
+
+    register_handler("orphan_completes", |_payload: &str| async move {
+        FLAG.get().unwrap().store(true, Ordering::SeqCst);
+        Ok(())
+    });
+
+    // Simulate a crashed-worker: insert a RUNNING row whose started_at
+    // is well past the visibility timeout.
+    let pool = umbra::db::pool();
+    let old_started_at = Utc::now() - chrono::Duration::hours(2);
+    sqlx::query(
+        "INSERT INTO task_row \
+         (name, payload, status, attempts, max_attempts, scheduled_for, \
+          started_at, completed_at, error, created_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)",
+    )
+    .bind("orphan_completes")
+    .bind("{}")
+    .bind(STATUS_RUNNING)
+    .bind(1i64) // one attempt already counted by the crashed worker
+    .bind(3i64)
+    .bind(Utc::now().to_rfc3339())
+    .bind(old_started_at.to_rfc3339())
+    .bind(Utc::now().to_rfc3339())
+    .execute(&pool)
+    .await
+    .expect("insert stuck running row");
+
+    // Reclaim with a tiny timeout so the row qualifies immediately.
+    let reclaimed = reclaim_orphaned_tasks(Duration::from_millis(1))
+        .await
+        .expect("reclaim");
+    assert_eq!(reclaimed, 1, "exactly one orphaned task should be reclaimed");
+
+    // The row should now be PENDING again.
+    let rows: Vec<TaskRow> = sqlx::query_as::<_, TaskRow>("SELECT * FROM task_row")
+        .fetch_all(&pool)
+        .await
+        .expect("fetch all");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].status, STATUS_PENDING,
+        "reclaimed task should be PENDING, got {:?}",
+        rows[0].status
+    );
+    assert!(
+        rows[0].started_at.is_none(),
+        "started_at should be cleared on reclaim"
+    );
+
+    // The next worker iteration should pick up and complete the task.
+    let processed = run_worker_once().await.expect("worker step after reclaim");
+    assert!(processed, "worker should process the reclaimed task");
+    assert!(
+        FLAG.get().unwrap().load(Ordering::SeqCst),
+        "handler should have run after reclaim"
+    );
+
+    let rows: Vec<TaskRow> = sqlx::query_as::<_, TaskRow>("SELECT * FROM task_row")
+        .fetch_all(&pool)
+        .await
+        .expect("fetch all after completion");
+    assert_eq!(rows[0].status, STATUS_SUCCEEDED);
+}
+
+/// A RUNNING task with a fresh started_at (live worker) must NOT be
+/// reclaimed — the lease is still valid.
+#[tokio::test(flavor = "multi_thread")]
+async fn fresh_running_task_is_not_reclaimed() {
+    let _guard = test_lock().await;
+    boot().await;
+    drain_queue().await;
+    _clear_handlers_for_tests();
+
+    let pool = umbra::db::pool();
+    // started_at is just now — well within any visibility timeout.
+    let fresh_started_at = Utc::now();
+    sqlx::query(
+        "INSERT INTO task_row \
+         (name, payload, status, attempts, max_attempts, scheduled_for, \
+          started_at, completed_at, error, created_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)",
+    )
+    .bind("live_handler")
+    .bind("{}")
+    .bind(STATUS_RUNNING)
+    .bind(1i64)
+    .bind(3i64)
+    .bind(Utc::now().to_rfc3339())
+    .bind(fresh_started_at.to_rfc3339())
+    .bind(Utc::now().to_rfc3339())
+    .execute(&pool)
+    .await
+    .expect("insert fresh running row");
+
+    // Reclaim with the full default timeout — fresh row must not qualify.
+    let reclaimed = reclaim_orphaned_tasks(DEFAULT_VISIBILITY_TIMEOUT)
+        .await
+        .expect("reclaim");
+    assert_eq!(
+        reclaimed, 0,
+        "a fresh RUNNING task must NOT be reclaimed; got {reclaimed}"
+    );
+
+    // Confirm still RUNNING.
+    let rows: Vec<TaskRow> = sqlx::query_as::<_, TaskRow>("SELECT * FROM task_row")
+        .fetch_all(&pool)
+        .await
+        .expect("fetch all");
+    assert_eq!(rows[0].status, STATUS_RUNNING, "row should still be RUNNING");
+}
+
+/// An orphaned RUNNING task that has already consumed all max_attempts must
+/// be marked FAILED by reclaim_orphaned_tasks, not reset to PENDING for an
+/// infinite retry loop.
+#[tokio::test(flavor = "multi_thread")]
+async fn orphaned_task_at_max_attempts_is_failed_not_retried() {
+    let _guard = test_lock().await;
+    boot().await;
+    drain_queue().await;
+    _clear_handlers_for_tests();
+
+    let pool = umbra::db::pool();
+    let old_started_at = Utc::now() - chrono::Duration::hours(2);
+    // attempts == max_attempts: exhausted.
+    sqlx::query(
+        "INSERT INTO task_row \
+         (name, payload, status, attempts, max_attempts, scheduled_for, \
+          started_at, completed_at, error, created_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)",
+    )
+    .bind("exhausted_handler")
+    .bind("{}")
+    .bind(STATUS_RUNNING)
+    .bind(3i64) // attempts
+    .bind(3i64) // max_attempts — exhausted
+    .bind(Utc::now().to_rfc3339())
+    .bind(old_started_at.to_rfc3339())
+    .bind(Utc::now().to_rfc3339())
+    .execute(&pool)
+    .await
+    .expect("insert exhausted running row");
+
+    let reclaimed = reclaim_orphaned_tasks(Duration::from_millis(1))
+        .await
+        .expect("reclaim");
+    assert_eq!(reclaimed, 1, "exhausted orphan should be reclaimed");
+
+    let rows: Vec<TaskRow> = sqlx::query_as::<_, TaskRow>("SELECT * FROM task_row")
+        .fetch_all(&pool)
+        .await
+        .expect("fetch all");
+    assert_eq!(
+        rows[0].status, STATUS_FAILED,
+        "exhausted orphan must be FAILED, not PENDING; got {:?}",
+        rows[0].status
+    );
+    assert!(
+        rows[0].completed_at.is_some(),
+        "completed_at should be set when marking FAILED via reclaim"
+    );
+    assert!(
+        rows[0].error.is_some(),
+        "error column should explain the failure"
+    );
+
+    // Queue should now be empty — no pending rows for the worker.
+    let processed = run_worker_once().await.expect("worker step after exhausted reclaim");
+    assert!(
+        !processed,
+        "no runnable tasks should remain after exhausted-orphan reclaim"
     );
 }

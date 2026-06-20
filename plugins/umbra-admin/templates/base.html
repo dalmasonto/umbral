@@ -273,7 +273,7 @@ antialiased flex admin-shell" id="umbra-admin-body"{% endblock %} {% block body 
             aria-label="Breadcrumb"
         >
             <a
-                href="{{ admin_base }}/"
+                href="{{ admin_base }}/{% if restore_last_path %}?dashboard=1{% endif %}"
                 class="text-outline hover:text-on-surface transition-colors shrink-0"
                 >Home</a
             >

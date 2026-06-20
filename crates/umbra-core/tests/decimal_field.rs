@@ -5,8 +5,7 @@
 //! with a Decimal field must use the `_pg` query terminals, and the live
 //! round-trip is behind `#[ignore]`. Derive classification runs anywhere.
 //!
-//! Note: only a *non-nullable* Decimal is supported today; `Option<Decimal>`
-//! has no `NullableDecimal` classification yet (tracked in gaps2 #70).
+//! `Option<Decimal>` now classifies as `NullableDecimal` (closes gaps2 #70).
 
 use umbra::orm::{Model, SqlType};
 
@@ -15,6 +14,18 @@ use umbra::orm::{Model, SqlType};
 pub struct Invoice {
     pub id: i64,
     pub total: rust_decimal::Decimal,
+}
+
+/// Model with a nullable `Option<Decimal>` field — was "M3 doesn't support
+/// this field type" before gaps2 #70 was closed.
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize, umbra::orm::Model)]
+#[umbra(table = "umbra_decimal_quote")]
+pub struct Quote {
+    pub id: i64,
+    /// Non-nullable sanity check — must still work alongside nullable.
+    pub required_total: rust_decimal::Decimal,
+    /// Nullable NUMERIC — previously unsupported (gaps2 #70).
+    pub discount: Option<rust_decimal::Decimal>,
 }
 
 #[test]
@@ -69,4 +80,39 @@ async fn decimal_round_trips_on_postgres() {
     let rows = Invoice::objects().fetch_pg(&pool).await.expect("fetch_pg");
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].total, rust_decimal::Decimal::new(12345, 2));
+}
+
+// =============================================================================
+// NullableDecimal — `Option<rust_decimal::Decimal>` support (gaps2 #70)
+// =============================================================================
+
+/// `Option<Decimal>` classifies as nullable `SqlType::Decimal`.
+/// Before this fix the derive emitted "M3 doesn't support this field type".
+#[test]
+fn nullable_decimal_classifies_as_nullable_decimal_sqltype() {
+    let by_name: std::collections::HashMap<&str, &umbra::orm::FieldSpec> =
+        <Quote as Model>::FIELDS
+            .iter()
+            .map(|f| (f.name, f))
+            .collect();
+
+    let required_total = by_name.get("required_total").expect("required_total field");
+    assert_eq!(required_total.ty, SqlType::Decimal);
+    assert!(!required_total.nullable, "non-nullable Decimal must not be nullable");
+
+    let discount = by_name.get("discount").expect("discount field");
+    assert_eq!(
+        discount.ty,
+        SqlType::Decimal,
+        "Option<Decimal> should classify as SqlType::Decimal"
+    );
+    assert!(discount.nullable, "Option<Decimal> must be nullable");
+}
+
+/// Column constants for `Option<Decimal>` expose `NullableDecimalCol`.
+#[test]
+fn nullable_decimal_produces_nullable_decimal_col_constant() {
+    use umbra::orm::column::{DecimalCol, NullableDecimalCol};
+    let _: DecimalCol<Quote> = quote::REQUIRED_TOTAL;
+    let _: NullableDecimalCol<Quote> = quote::DISCOUNT;
 }

@@ -1,0 +1,211 @@
+---
+title: Template filters & functions
+description: minijinja built-in filters, umbra's custom filters and template functions, and how to register your own from app or plugin code.
+sidebar_position: 11
+icon: filter
+tags: [templates, filters, minijinja, plugins]
+---
+
+Umbra templates run on [minijinja](https://docs.rs/minijinja/latest/minijinja/), a faithful Jinja2 port. Every filter and function minijinja ships is available without any setup. On top of that umbra registers its own filters and globals at engine-build time, and any plugin can contribute more through the `Plugin::template_registrars` hook.
+
+## minijinja built-in filters
+
+The full list lives at [docs.rs/minijinja — filters](https://docs.rs/minijinja/latest/minijinja/filters/index.html). The most commonly-reached ones:
+
+| Filter / function | What it does |
+|---|---|
+| `\| default(value)` | Substitute `value` when the left side is undefined or falsy. |
+| `\| default(value, true)` | Substitute when undefined **or** falsy (second arg opts in to falsy-check). |
+| `\| length` | Character count for strings, element count for sequences. |
+| `\| upper` / `\| lower` | Case-fold a string. |
+| `\| title` | Title-case a string. |
+| `\| trim` | Strip leading and trailing whitespace. |
+| `\| replace(from, to)` | String replace. |
+| `\| truncate(n)` | Truncate to at most *n* characters, appending `…` if cut. |
+| `\| join(sep)` | Join a sequence with a separator string. |
+| `\| first` / `\| last` | First or last element of a sequence. |
+| `\| reverse` | Reverse a sequence. |
+| `\| sort` | Sort a sequence (strings lexicographically, numbers numerically). |
+| `\| items` | Iterate a map as `(key, value)` pairs. |
+| `\| select(attr)` | Filter a sequence to items where *attr* is truthy. |
+| `\| map(attr)` | Extract *attr* from each item in a sequence. |
+| `\| unique` | Deduplicate a sequence preserving order. |
+| `\| abs` | Absolute value of a number. |
+| `\| round(n)` | Round a number to *n* decimal places. |
+| `\| float` / `\| int` | Coerce a value to float or integer. |
+| `\| list` | Collect an iterator into a list. |
+| `\| tojson` | Serialize a value to a JSON string (useful for inline `<script>` data). |
+| `\| urlencode` | Percent-encode a string for use in a URL query parameter. |
+| `\| indent(n)` | Indent every line of a multiline string by *n* spaces. |
+| `\| wordwrap(n)` | Wrap long lines at *n* characters. |
+
+<Callout type="info">
+  Umbra enables autoescape for every `.html` / `.htm` template. Values piped through `| safe` (or returned as `minijinja::Value::from_safe_string` in Rust) bypass the escaping — all other output is HTML-escaped automatically.
+</Callout>
+
+Date and time formatting uses minijinja's `now()` built-in. Umbra replaces that global with its own `now()` (see below), which accepts a chrono `strftime` format string for consistent, UTC-based rendering.
+
+## Umbra filters and template functions
+
+These are registered by umbra itself at engine-build time. They are available in every template, in every plugin, without any import or configuration.
+
+### `| img` — lazy-loaded image tag
+
+Turn a URL into a performance-correct `<img>` tag.
+
+```html
+{{ product.photo_url | img(alt="Widget", width=800, height=600, class="product-photo") }}
+```
+
+Produces:
+
+```html
+<img src="/media/widgets/photo.jpg" alt="Widget" loading="lazy" decoding="async" width="800" height="600" class="product-photo">
+```
+
+All keyword arguments are optional. `alt` defaults to `""` (screen-reader-safe for decorative images). `width` and `height`, when provided, reserve layout space and prevent cumulative layout shift (CLS). A `javascript:` or `data:` URL in `src` is replaced with an empty string rather than emitted; the output is always safe to render without an extra `| safe`.
+
+### `| markdown` — CommonMark + GFM to HTML
+
+Render a markdown string to sanitized HTML. Fenced code blocks are syntax-highlighted server-side (see [Syntax highlighting](/docs/v0.0.1/web/markdown-syntax-highlighting)).
+
+```html
+<div class="prose">{{ post.body | markdown }}</div>
+```
+
+The output is passed through ammonia before it reaches the page — `<script>` tags, inline event handlers, and `javascript:` URLs are stripped. The result is a safe string; no extra `| safe` is needed.
+
+### `| sanitize` — clean stored HTML
+
+Clean a stored HTML string (e.g. from an admin rich-text editor) to ammonia's safe allowlist. Use this instead of `| markdown` when the stored value is already HTML, not markdown.
+
+```html
+<div class="body">{{ page.body | sanitize }}</div>
+```
+
+### `| currency` — money formatting
+
+Format a number as money with two decimals, comma thousands separators, and a leading symbol for common ISO codes.
+
+```html
+{{ product.price | currency }}          {# → $1,234.50  (default USD) #}
+{{ product.price | currency("EUR") }}   {# → €1,234.50               #}
+{{ product.price | currency("GBP") }}   {# → £1,234.50               #}
+{{ product.price | currency("KES") }}   {# → KSh 1,234.50            #}
+{{ product.price | currency("XYZ") }}   {# → 1,234.50 XYZ  (unknown code) #}
+```
+
+The sign (if negative) appears outside the symbol: `-$12.40`, not `$-12.40`.
+
+### `static(path)` — static asset URL
+
+Resolve a developer-shipped asset path through the configured `static_url`. Works whether static files are served locally (`/static/`) or from a CDN origin.
+
+```html
+<link rel="stylesheet" href="{{ static('admin/admin.css') }}">
+<img src="{{ static('logo.svg') }}" alt="Logo">
+```
+
+With the default `static_url = "/static/"`, `static("admin/admin.css")` yields `/static/admin/admin.css`.
+
+### `media_url(key)` — uploaded file URL
+
+Resolve a stored file or image key through the configured storage backend (local disk, S3, etc.). `ImageField` and `FileField` serialize as the bare storage key; `media_url` turns it into the public URL.
+
+```html
+{% if plugin.logo %}
+  <img src="{{ media_url(plugin.logo) }}" alt="Logo">
+{% endif %}
+```
+
+An empty key returns an empty string. When no storage backend is configured, the key falls through unchanged.
+
+### `now(fmt?)` — current UTC timestamp
+
+Render the current UTC time. Without an argument, emits an RFC 3339 string. Pass a [`chrono` strftime](https://docs.rs/chrono/latest/chrono/format/strftime/index.html) format string for a custom shape.
+
+```html
+<footer>Generated {{ now() }}</footer>              {# 2026-06-19T14:30:00+00:00 #}
+<footer>Generated {{ now("%B %-d, %Y") }}</footer>  {# June 19, 2026            #}
+```
+
+### `highlight_styles()` — syntax highlighting CSS
+
+Emit the `base16-ocean.dark` stylesheet for the `| markdown` filter's server-side token spans. Call once in your base template's `<head>`:
+
+```html
+{{ highlight_styles() }}
+```
+
+See [Syntax highlighting](/docs/v0.0.1/web/markdown-syntax-highlighting) for the full setup.
+
+### Ambient context variables
+
+These are injected into every template by the renderer — no explicit context key needed:
+
+| Variable | Description |
+|---|---|
+| `user` | The current request user. Always present: anonymous requests get `{ is_authenticated: false, is_staff: false, is_superuser: false }`. Attributes like `user.email`, `user.is_staff` are available when `umbra-auth` + sessions are installed. |
+| `csrf_token` | The CSRF token string (injected when `umbra-security`'s CSRF middleware is mounted). |
+| `csrf_input` | A pre-built `<input type="hidden" name="csrf_token" value="...">` element (safe string). Drop into any POST form. |
+
+## Registering a custom filter or function
+
+Plugins expose custom filters and functions through `Plugin::template_registrars`. The method returns a `Vec<TemplateRegistrar>` where each registrar is an owned, `'static` closure that receives a `&mut minijinja::Environment` and calls `env.add_filter` / `env.add_function` / `env.add_global`. The closures are stored process-wide and re-run on every dev-mode hot-reload so your filters are always live.
+
+```rust
+use umbra::prelude::*;
+use umbra::templates::TemplateRegistrar;
+
+pub struct ShopPlugin;
+
+impl Plugin for ShopPlugin {
+    fn template_registrars(&self) -> Vec<TemplateRegistrar> {
+        vec![Box::new(|env| {
+            // A filter: {{ name | shout }} → "HELLO"
+            env.add_filter("shout", |s: String| s.to_uppercase());
+
+            // A no-arg global function: {{ exclaim() }} → "!"
+            env.add_function("exclaim", || "!".to_string());
+
+            // A function that takes arguments: {{ pluralize(count, "item", "items") }}
+            env.add_function("pluralize", |n: i64, singular: String, plural: String| {
+                if n == 1 { singular } else { plural }
+            });
+        })]
+    }
+}
+```
+
+Register the plugin with the app builder in `main.rs`:
+
+```rust
+App::builder()
+    .plugin(ShopPlugin)
+    .build()
+    .await?;
+```
+
+`template_registrars()` runs in topological dependency order, after the framework's built-ins, so a plugin can deliberately override a built-in by re-registering the same name (minijinja's `add_filter` / `add_function` overwrites on collision).
+
+The closure must be `'static` — capture any per-plugin config by value, not by reference to `self`:
+
+```rust
+fn template_registrars(&self) -> Vec<TemplateRegistrar> {
+    let base_currency = self.config.base_currency.clone(); // capture by value
+    vec![Box::new(move |env| {
+        env.add_function("shop_currency", move || base_currency.clone());
+    })]
+}
+```
+
+<Callout type="info">
+  Filters and functions registered this way are available globally — no `{% load %}` equivalent is needed, unlike Django's custom template tags. Every template in the project sees them once the plugin is installed.
+</Callout>
+
+## See also
+
+- [minijinja filter index](https://docs.rs/minijinja/latest/minijinja/filters/index.html) — the complete built-in filter reference.
+- [Syntax highlighting](/docs/v0.0.1/web/markdown-syntax-highlighting) — the `| markdown` filter's server-side code highlighting.
+- [Plugins are apps](/docs/v0.0.1/plugins/plugins-are-apps) — the Plugin trait and how plugins wire into the app builder.
+- [`crates/umbra-core/src/templates.rs`](https://github.com/dalmas-ogembo/umbra/tree/main/crates/umbra-core/src/templates.rs) — source for all built-in filters and functions.

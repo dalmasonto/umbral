@@ -940,10 +940,12 @@ impl AppBuilder {
         // capability flag (not the ambient `storage_opt()`) because
         // backends register in `on_ready`, which runs *after* this phase.
         let provides_storage = sorted_plugins.iter().any(|p| p.provides_storage());
+        let plugin_names: Vec<&str> = sorted_plugins.iter().map(|p| p.name()).collect();
         let ctx = crate::check::CheckContext {
             backend,
             settings: crate::settings::get(),
             provides_storage,
+            registered_plugin_names: &plugin_names,
         };
         let mut checks = crate::check::framework_checks();
         for plugin in &sorted_plugins {

@@ -32,7 +32,7 @@ pub(crate) async fn ws_handler(
     headers: HeaderMap,
     Query(q): Query<WsQuery>,
 ) -> Response {
-    let user_id = umbra_auth::current_session_user_id(&headers).await;
+    let user_id = Realtime::resolver()(headers.clone()).await;
 
     let requested: Vec<String> = q
         .groups

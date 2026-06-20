@@ -244,7 +244,7 @@ let recent: Vec<Post> = Post::objects()
     .await?;
 ```
 
-`update_or_create` returns `(row, created: bool)`. `bulk_update` returns rows-affected. `raw` skips select_related/prefetch_related chains and binds no parameters; sanitise input before calling.
+`update_or_create` returns `(row, created: bool)`. Both `get_or_create` and `update_or_create` are safe under concurrent callers: if two writers race and both try to INSERT the same row, the one that loses the race catches the `UniqueViolation` and re-fetches the winning row, so callers always converge rather than seeing an error. A UNIQUE constraint on the predicate columns is required for this guarantee. `bulk_update` returns rows-affected. `raw` skips select_related/prefetch_related chains and binds no parameters; sanitise input before calling.
 
 ## Composition: subqueries + set ops + in_bulk
 

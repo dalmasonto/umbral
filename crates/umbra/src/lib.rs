@@ -107,6 +107,20 @@ pub use sqlx as _sqlx;
 pub use umbra_core::app::{App, AppBuilder, BuildError};
 pub use umbra_core::settings::{Environment, Settings};
 
+/// The authentication identity contract (gaps2 #76).
+///
+/// [`Identity`] and [`Authentication`] live in `umbra-core` so that
+/// `umbra-auth` and `umbra-rest` both depend *inward* on core.
+/// Re-exported here so plugin authors and app code reach them via
+/// `umbra::auth::Identity` / `umbra::auth::Authentication`, and so
+/// `umbra-auth` can drop its `umbra-rest` dependency entirely.
+pub mod auth {
+    pub use umbra_core::auth_contract::{
+        Authentication, ChainAuthentication, FnAuthentication, Identity, NoAuthentication,
+        parse_basic_credentials,
+    };
+}
+
 /// CORS configuration for [`AppBuilder::cors`]. See
 /// [`umbra_core::cors`] for the full surface.
 pub mod cors {
@@ -181,7 +195,7 @@ pub mod db {
     pub use umbra_core::db::route_context::scope as route_context_scope;
     pub use umbra_core::db::{
         Alias, DatabaseRouter, DbPool, DefaultRouter, RouteContext, RouteOp, Schema, TenantKey,
-        Transaction, TxFuture, begin, begin_pg, begin_sqlite, connect, connect_sqlite, pool,
+        Transaction, TxFuture, begin, begin_pg, begin_sqlite, connect, connect_sqlite, ping, pool,
         pool_dispatched, pool_for, pool_for_dispatched, registered_aliases, route_context, router,
         transaction, transaction_pg, transaction_sqlite,
     };
@@ -274,6 +288,7 @@ pub mod plugin {
 
     pub use umbra_core::plugin::{
         ApiEndpoint, AppContext, Plugin, PluginError, StaticDir, StaticFile,
+        block_on_ready,
     };
 }
 
@@ -438,13 +453,13 @@ pub mod templates {
     //! plugin crate doesn't depend on minijinja directly).
 
     pub use minijinja::{Environment, Value, context};
-    pub use umbra_core::templates::{
-        CURRENT_CSRF, CURRENT_USER, LazyUser, TemplateError, TemplateRegistrar, current_csrf,
-        highlight_css, merge_ambient_context, merge_ambient_value, render,
-        resolve_static_url, with_current_csrf, with_current_user, with_current_user_lazy,
-    };
     #[doc(hidden)]
     pub use umbra_core::templates::render_str;
+    pub use umbra_core::templates::{
+        CURRENT_CSRF, CURRENT_USER, LazyUser, TemplateError, TemplateRegistrar, current_csrf,
+        highlight_css, merge_ambient_context, merge_ambient_value, render, resolve_static_url,
+        with_current_csrf, with_current_user, with_current_user_lazy,
+    };
 }
 
 pub mod signals {

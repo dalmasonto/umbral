@@ -179,6 +179,14 @@ pub struct AdminPlugin {
     dashboard_models_title: String,
     /// Optional one-line subtitle under the heading.
     dashboard_models_subtitle: Option<String>,
+    /// gaps2 #33 — "restore where I left off" feature flag. Default
+    /// `true` (Django-style: on by default, opt out to disable).
+    /// When `true`: `/admin/` 302-redirects to `last_path` if one is
+    /// stored; the changelist handler writes `last_path` on every visit;
+    /// the "Home" breadcrumb carries `?dashboard=1` as an escape hatch.
+    /// When `false`: `/admin/` always renders the dashboard; the
+    /// changelist handler skips the `last_path` write (no dead data).
+    restore_last_path: bool,
 }
 
 impl Default for AdminPlugin {
@@ -192,6 +200,7 @@ impl Default for AdminPlugin {
             dashboard_models: DashboardModelsConfig::default(),
             dashboard_models_title: "Models".to_string(),
             dashboard_models_subtitle: None,
+            restore_last_path: true,
         }
     }
 }
@@ -441,6 +450,29 @@ impl AdminPlugin {
         self.dashboard_models_subtitle = Some(subtitle.into());
         self
     }
+
+    /// Control whether the admin "restore where I left off" feature is
+    /// active (default: **`true`** — on by default, opt out to disable).
+    ///
+    /// When enabled (`true`, the default):
+    /// - `/admin/` 302-redirects to the last-visited changelist URL
+    ///   stored in `admin_user_pref.preferences.last_path`.
+    /// - The changelist handler writes `last_path` on every page visit.
+    /// - The "Home" breadcrumb carries `?dashboard=1` so the dashboard
+    ///   is reachable in one click (the escape hatch becomes a UI affordance).
+    ///
+    /// When disabled (`false`):
+    /// - `/admin/` always renders the dashboard directly.
+    /// - The changelist handler skips the `last_path` write — no dead
+    ///   data accumulates in `admin_user_pref.preferences`.
+    ///
+    /// ```ignore
+    /// AdminPlugin::default().restore_last_path(false)
+    /// ```
+    pub fn restore_last_path(mut self, enabled: bool) -> Self {
+        self.restore_last_path = enabled;
+        self
+    }
 }
 
 /// Shared state injected into every route via [`axum::extract::State`].
@@ -463,6 +495,10 @@ struct AdminState {
     /// Heading + optional subtitle for the model-cards section.
     dashboard_models_title: String,
     dashboard_models_subtitle: Option<String>,
+    /// gaps2 #33 — mirrors `AdminPlugin::restore_last_path`. The index
+    /// handler reads this to decide whether to redirect; the list handler
+    /// reads it to decide whether to write `last_path`.
+    restore_last_path: bool,
 }
 
 impl AdminState {
@@ -533,8 +569,12 @@ impl Plugin for AdminPlugin {
         //
         // Gap 107: the configured `base_path` rides along with the
         // branding so templates and handlers read it from one place.
+        // gaps2 #33: `restore_last_path` joins the branding cell so
+        // templates can query the flag (e.g. to emit `?dashboard=1`
+        // on the "Home" breadcrumb link) without a handler pass-through.
         let mut sealed_branding = self.branding.clone();
         sealed_branding.base_path = self.base_path.clone();
+        sealed_branding.restore_last_path = self.restore_last_path;
         let _ = branding::BRANDING.set(sealed_branding);
 
         // Final section list: developer-declared sections first
@@ -566,6 +606,7 @@ impl Plugin for AdminPlugin {
             dashboard_models: self.dashboard_models.clone(),
             dashboard_models_title: self.dashboard_models_title.clone(),
             dashboard_models_subtitle: self.dashboard_models_subtitle.clone(),
+            restore_last_path: self.restore_last_path,
         };
         Router::new()
             // Login / logout (no auth required)

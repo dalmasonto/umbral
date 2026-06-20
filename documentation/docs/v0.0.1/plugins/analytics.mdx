@@ -1,0 +1,106 @@
+---
+title: Analytics (PostHog)
+description: Fire-and-forget product-analytics event capture for umbra apps via a PostHog backend. Captures never block a request.
+sidebar_position: 19
+tags: [analytics, posthog, events, middleware, plugin]
+---
+
+# Analytics (PostHog)
+
+`umbra-analytics` wires PostHog product-analytics into your umbra app the idiomatic way: register the plugin, call `capture` or `identify` from any handler, and analytics failures are silent — they never block a response or propagate errors to callers. Every HTTP send is fire-and-forget, spawned on a background task.
+
+When no API key is configured the plugin is a **clean no-op**: `capture` and `identify` log at `debug` level and return immediately. You can develop and run tests without a PostHog account.
+
+## Wiring
+
+Add the crate to your app's `Cargo.toml`:
+
+```toml
+umbra-analytics = { path = "../../plugins/umbra-analytics", version = "0.0.1" }
+```
+
+Register the plugin in your `main.rs`:
+
+```rust
+use umbra::prelude::*;
+use umbra_analytics::AnalyticsPlugin;
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    App::builder()
+        .plugin(
+            AnalyticsPlugin::new("phc_your_project_api_key")
+                // Optional: fire a $pageview event on every request
+                // (path, method, status code in properties). Default OFF.
+                .capture_requests(),
+        )
+        .build()
+        .await?
+        .serve()
+        .await
+}
+```
+
+## Capturing events
+
+`capture` and `identify` are free async functions. Call them from any handler or service — no dependency injection needed, the ambient client is installed at boot.
+
+```rust
+use umbra_analytics::{capture, identify};
+use serde_json::json;
+
+async fn signup_handler(/* ... */) -> impl IntoResponse {
+    // Associate the user with properties in PostHog.
+    identify("user_42", json!({
+        "$set": { "email": "alice@example.com", "plan": "pro" }
+    })).await;
+
+    // Capture a named event with custom properties.
+    capture("user_42", "signup", json!({
+        "plan": "pro",
+        "referrer": "homepage"
+    })).await;
+
+    StatusCode::CREATED
+}
+```
+
+Both calls return immediately. The HTTP send to PostHog happens in a background `tokio::spawn`; a PostHog outage or misconfiguration never surfaces as an error to your users.
+
+## Configuration
+
+The API key and host are resolved in this order (first match wins):
+
+| Source | Key |
+|---|---|
+| Builder arg (`AnalyticsPlugin::new(key)`) | — |
+| Environment variable | `UMBRA_POSTHOG_API_KEY` |
+| `umbra.toml` extra key | `posthog_api_key` |
+
+The PostHog host defaults to `https://us.i.posthog.com`. Override for EU data residency or a self-hosted instance:
+
+```rust
+AnalyticsPlugin::new("phc_your_key")
+    .host("https://eu.i.posthog.com")
+```
+
+Or via env / `umbra.toml`:
+
+```bash
+UMBRA_POSTHOG_HOST=https://eu.i.posthog.com
+```
+
+## Opt-in per-request middleware
+
+`.capture_requests()` mounts an axum `from_fn` middleware that fires a PostHog `$pageview` event for every HTTP request, with `path`, `method`, and `status` in properties. The status is captured *after* the handler responds so it reflects the real HTTP status code.
+
+This is off by default. Enable it only when you want volume metrics without instrumenting individual handlers.
+
+## No-op without a key
+
+When the API key is absent at boot, `AnalyticsPlugin` logs a one-time warning and registers without installing an ambient client. `capture` and `identify` become silent no-ops for the lifetime of the process. No panics, no errors returned to handlers.
+
+## See also
+
+- Plugin trait contract: [`docs/specs/`](/docs/v0.0.1/plugins/the-plugin-trait) and `arch.md §7` for the `Plugin` trait surface (`on_ready`, `wrap_router`).
+- PostHog capture API reference: https://posthog.com/docs/api/capture

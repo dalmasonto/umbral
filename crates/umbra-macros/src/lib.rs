@@ -86,6 +86,7 @@ use syn::{
     Data, DeriveInput, Field, Fields, GenericArgument, ItemFn, PathArguments, ReturnType, Type,
     TypePath, parse_macro_input,
 };
+use umbra_casing::to_snake_case;
 
 /// Generate `impl Model` for a struct.
 ///
@@ -162,6 +163,11 @@ struct UmbraStructAttr {
 /// Field-level `#[umbra(...)]` attribute parsed from a struct field.
 #[derive(Default)]
 struct UmbraFieldAttr {
+    /// `#[umbra(cidr)]` — on an `IpNetwork` / `Option<IpNetwork>` field,
+    /// classify the column as `SqlType::Cidr` (CIDR) instead of the
+    /// default `SqlType::Inet` (INET). No-ops on any other field type.
+    /// Closes the derive-reachable half of gaps2 #70.
+    cidr: bool,
     /// `#[umbra(noform)]` — never show on any form.
     noform: bool,
     /// `#[umbra(db_constraint = false)]` — keep the FK logical (column +
@@ -304,6 +310,7 @@ fn has_sqlx_skip(attrs: &[syn::Attribute]) -> bool {
 
 fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAttr> {
     let mut parsed = UmbraFieldAttr {
+        cidr: false,
         noform: false,
         db_constraint: true,
         noedit: false,
@@ -333,7 +340,14 @@ fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAtt
             continue;
         }
         attr.parse_nested_meta(|meta| {
-            if meta.path.is_ident("noform") {
+            if meta.path.is_ident("cidr") {
+                // `#[umbra(cidr)]` — upgrade an `IpNetwork` /
+                // `Option<IpNetwork>` field from INET to CIDR. The Rust
+                // type stays `ipnetwork::IpNetwork`; only the SqlType
+                // changes. Closes the derive-reachable half of gaps2 #70.
+                parsed.cidr = true;
+                Ok(())
+            } else if meta.path.is_ident("noform") {
                 parsed.noform = true;
                 Ok(())
             } else if meta.path.is_ident("db_constraint") {
@@ -496,7 +510,7 @@ fn parse_umbra_field_attr(attrs: &[syn::Attribute]) -> syn::Result<UmbraFieldAtt
                     .unwrap_or_else(|| "<unknown>".to_string());
                 Err(meta.error(format!(
                     "unknown field-level umbra attribute `{path}` — known keys are \
-                     `noform`, `db_constraint = false`, `noedit`, \
+                     `cidr`, `noform`, `db_constraint = false`, `noedit`, \
                      `primary_key`, `no_reverse`, \
                      `string` (or `string = true`), \
                      `max_length = N`, `choices`, `default = \"...\"`, \
@@ -1058,7 +1072,7 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             force_unique = true;
         }
 
-        // Parse field-level `#[umbra(noform)]` / `#[umbra(noedit)]`.
+        // Parse field-level `#[umbra(noform)]` / `#[umbra(noedit)]` etc.
         let mut field_attr = match parse_umbra_field_attr(&field.attrs) {
             Ok(a) => a,
             Err(e) => {
@@ -1069,6 +1083,16 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         };
         if force_unique {
             field_attr.unique = true;
+        }
+        // `#[umbra(cidr)]` on an IpNetwork / Option<IpNetwork> field
+        // upgrades the classification from Inet → Cidr (or
+        // NullableInet → NullableCidr). No-op on any other kind.
+        if field_attr.cidr {
+            kind = match kind {
+                FieldKind::Inet => FieldKind::Cidr,
+                FieldKind::NullableInet => FieldKind::NullableCidr,
+                other => other,
+            };
         }
         let noform_lit = if field_attr.noform {
             quote!(true)
@@ -1581,6 +1605,9 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                                 junction,
                                 ::core::convert::Into::into(parent_id),
                                 pending,
+                                ::core::option::Option::Some(
+                                    <Self as ::umbra::orm::Model>::NAME,
+                                ),
                             )
                             .await
                             .map_err(::umbra::orm::write::WriteError::Sqlx)?;
@@ -2058,10 +2085,6 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
 /// | `Option<chrono::DateTime<chrono::Utc>>`  | `NullableDateTime`    | `Timestamptz` | `NullableDateTimeCol<Self>`  |
 /// | `Option<uuid::Uuid>`                     | `NullableUuid`        | `Uuid`        | `NullableUuidCol<Self>`      |
 /// | `i128` / `u64` / `u128` / anything else  | `Unsupported(...)`    | (error)       | (error)                      |
-#[allow(dead_code)] // Cidr / NullableCidr are matched but the derive
-// doesn't yet emit them (Inet is the default for
-// `ipnetwork::IpNetwork`; Cidr opt-in via
-// `#[umbra(cidr)]` attribute is a follow-on).
 enum FieldKind {
     SmallInt,
     Integer,
@@ -2147,6 +2170,9 @@ enum FieldKind {
     /// `rust_decimal::Decimal` — NUMERIC(19, 4) fixed-point. Closes
     /// BUG-10.
     Decimal,
+    /// `Option<rust_decimal::Decimal>` — nullable NUMERIC(19, 4). Closes
+    /// the nullable half of gaps2 #70.
+    NullableDecimal,
     /// `umbra::orm::Slug` — TEXT with `[A-Za-z0-9_-]+` validation.
     /// Closes BUG-11. Storage is the inner String; the `text_format`
     /// marker on FieldSpec carries the validator selector.
@@ -2276,7 +2302,9 @@ impl FieldKind {
             }
             FieldKind::MultiChoice(_) => quote!(::umbra::orm::SqlType::Text),
             FieldKind::Bytes | FieldKind::NullableBytes => quote!(::umbra::orm::SqlType::Bytes),
-            FieldKind::Decimal => quote!(::umbra::orm::SqlType::Decimal),
+            FieldKind::Decimal | FieldKind::NullableDecimal => {
+                quote!(::umbra::orm::SqlType::Decimal)
+            }
             // BUG-16: M2M fields have no column on the parent table. They
             // are skipped before reaching this point; the arm exists only
             // to keep the match exhaustive.
@@ -2318,6 +2346,7 @@ impl FieldKind {
                 | FieldKind::NullableFileField
                 | FieldKind::NullableImageField
                 | FieldKind::NullableMasked
+                | FieldKind::NullableDecimal
         )
     }
 
@@ -2560,6 +2589,9 @@ fn classify_field_type(ty: &Type) -> FieldKind {
         }
         if is_tsvector(inner) {
             return FieldKind::NullableFullText;
+        }
+        if is_decimal(inner) {
+            return FieldKind::NullableDecimal;
         }
         if let Some(fk_inner) = foreign_key_inner(inner) {
             return FieldKind::NullableForeignKey(Box::new(fk_inner.clone()));
@@ -3111,6 +3143,7 @@ fn column_const_for(
         FieldKind::Masked => format_ident!("StrCol"),
         FieldKind::NullableMasked => format_ident!("NullableStrCol"),
         FieldKind::Decimal => format_ident!("DecimalCol"),
+        FieldKind::NullableDecimal => format_ident!("NullableDecimalCol"),
         // MultiChoice and Many2Many are handled inline by the caller,
         // so these arms are unreachable in practice. We return an empty
         // token stream as a defensive default.
@@ -3134,35 +3167,8 @@ fn column_const_for(
     (module_const, assoc_const)
 }
 
-/// Convert `CamelCase` / `PascalCase` to `snake_case`.
-///
-/// Rules: insert `_` before any uppercase letter that follows a
-/// lowercase letter or a digit, and before the last letter of an
-/// uppercase run that's followed by a lowercase letter (so `HTTPRequest`
-/// becomes `http_request`, not `httprequest` or `h_t_t_p_request`). All
-/// ASCII; non-ASCII characters pass through unchanged. Underscores
-/// already in the input are preserved.
-fn to_snake_case(camel: &str) -> String {
-    let chars: Vec<char> = camel.chars().collect();
-    let mut out = String::with_capacity(camel.len() + 4);
-    for (i, &c) in chars.iter().enumerate() {
-        if c.is_ascii_uppercase() {
-            let prev = if i == 0 { None } else { Some(chars[i - 1]) };
-            let next = chars.get(i + 1).copied();
-            let prev_lower_or_digit =
-                matches!(prev, Some(p) if p.is_ascii_lowercase() || p.is_ascii_digit());
-            let run_break = prev.map(|p| p.is_ascii_uppercase()).unwrap_or(false)
-                && matches!(next, Some(n) if n.is_ascii_lowercase());
-            if i != 0 && (prev_lower_or_digit || run_break) {
-                out.push('_');
-            }
-            out.push(c.to_ascii_lowercase());
-        } else {
-            out.push(c);
-        }
-    }
-    out
-}
+// `to_snake_case` is imported from `umbra_casing` at the top of this file.
+// The local copy was removed in the gaps2 #77 consolidation refactor.
 
 /// Convert `snake_case` (or anything mixed) to `SCREAMING_SNAKE_CASE`.
 ///

@@ -256,6 +256,7 @@ async fn set_junction_dynamic_batched_insert_round_trip() {
         "fm_article_tags",
         pval.clone(),
         vec![bigint(1), bigint(2), bigint(3)],
+        None,
     )
     .await
     .expect("set {1,2,3}");
@@ -270,6 +271,7 @@ async fn set_junction_dynamic_batched_insert_round_trip() {
         "fm_article_tags",
         pval.clone(),
         vec![bigint(2), bigint(3), bigint(4)],
+        None,
     )
     .await
     .expect("re-set {2,3,4}");
@@ -285,6 +287,7 @@ async fn set_junction_dynamic_batched_insert_round_trip() {
         "fm_article_tags",
         pval.clone(),
         vec![bigint(5), bigint(5), bigint(6)],
+        None,
     )
     .await
     .expect("set with an in-batch duplicate must not error");
@@ -295,7 +298,7 @@ async fn set_junction_dynamic_batched_insert_round_trip() {
     );
 
     // Empty list clears the relation (no INSERT emitted at all).
-    umbra::orm::set_junction_dynamic("fm_article_tags", pval, Vec::new())
+    umbra::orm::set_junction_dynamic("fm_article_tags", pval, Vec::new(), None)
         .await
         .expect("empty selection clears");
     assert!(

@@ -87,33 +87,41 @@ impl<A: Authentication> Authentication for WithPermissions<A> {
     async fn authenticate(&self, headers: &http::HeaderMap) -> Option<Identity> {
         let mut identity = self.inner.authenticate(headers).await?;
 
-        // Pull `is_superuser` off the user row. A None return here
-        // is "user vanished between authenticate and now," which
-        // shouldn't be fatal — fall through and treat as non-super.
-        // The default `AuthUser` keys by i64; custom user models can
-        // key by any string, so parse on the way in and skip the
-        // lookup if the PK doesn't fit (the codename grants below
-        // still work, since `user_perms` already speaks strings).
-        let is_superuser = match identity.user_id.parse::<i64>() {
+        // Pull `is_active` and `is_superuser` off the user row. A None
+        // return here is "user vanished between authenticate and now,"
+        // which shouldn't be fatal — fall through and treat as inactive
+        // non-superuser (deny-by-default). The default `AuthUser` keys by
+        // i64; custom user models can key by any string, so parse on the
+        // way in and skip the lookup if the PK doesn't fit (the codename
+        // grants below still work, since `user_perms` already speaks
+        // strings).
+        let (is_active, is_superuser) = match identity.user_id.parse::<i64>() {
             Ok(auth_user_id) => Manager::<AuthUser>::default()
                 .filter(Predicate::<AuthUser>::col_eq("id", auth_user_id))
                 .first()
                 .await
                 .ok()
                 .flatten()
-                .map(|u| u.is_superuser && u.is_active)
-                .unwrap_or(false),
-            Err(_) => false,
+                .map(|u| (u.is_active, u.is_superuser && u.is_active))
+                .unwrap_or((false, false)),
+            Err(_) => (false, false),
         };
+        // Store both flags so `HasPermission::check` can read them
+        // without touching the database — it is intentionally sync.
+        identity.extras.insert(
+            "is_active".to_string(),
+            serde_json::Value::Bool(is_active),
+        );
         identity.extras.insert(
             "is_superuser".to_string(),
             serde_json::Value::Bool(is_superuser),
         );
 
-        // Skip the perm-set DB read entirely for superusers — they
-        // bypass every codename check, so the codename list isn't
-        // load-bearing for them.
-        if !is_superuser {
+        // Skip the perm-set DB read for superusers (they bypass every
+        // codename check, so the list isn't load-bearing) and for
+        // inactive users (their session is stale — deny-by-default, so
+        // storing codenames would be misleading and wasteful).
+        if is_active && !is_superuser {
             if let Ok(perms) = crate::user_perms(&identity.user_id).await {
                 let arr: Vec<serde_json::Value> =
                     perms.into_iter().map(serde_json::Value::String).collect();
@@ -157,6 +165,24 @@ impl Permission for HasPermission {
             return Err(PermissionError::Unauthenticated);
         };
 
+        // Inactive-user gate — must come before the superuser bypass so
+        // that a deactivated superuser cannot slip through. If the
+        // `is_active` key is absent (caller wired `HasPermission` without
+        // `WithPermissions`), the key is simply missing and
+        // `unwrap_or(true)` gives the benefit of the doubt — the
+        // behaviour stays the same as before this fix for that wiring.
+        // `WithPermissions` always populates it, so the safe default here
+        // is `true` (don't add a surprise 403 for callers that populate
+        // the extras themselves without this key).
+        let is_active = id
+            .extras
+            .get("is_active")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        if !is_active {
+            return Err(PermissionError::Forbidden);
+        }
+
         // Superuser bypass — mirrors `has_perm_for_superuser`. The
         // flag was set by `WithPermissions::authenticate`; if the
         // user wired `HasPermission` against a different
@@ -195,7 +221,15 @@ mod tests {
     use super::*;
 
     fn make_identity_with_perms(perms: &[&str], is_super: bool) -> Identity {
+        make_identity(perms, is_super, true)
+    }
+
+    fn make_identity(perms: &[&str], is_super: bool, is_active: bool) -> Identity {
         let mut id = Identity::user(7);
+        id.extras.insert(
+            "is_active".to_string(),
+            serde_json::Value::Bool(is_active),
+        );
         id.extras.insert(
             "is_superuser".to_string(),
             serde_json::Value::Bool(is_super),
@@ -258,5 +292,73 @@ mod tests {
             perm.check(&Action::Create, Some(&id)),
             Err(PermissionError::Forbidden)
         ));
+    }
+
+    // ---- gaps2 #75: inactive-user denial --------------------------------
+
+    #[test]
+    fn inactive_user_with_matching_codename_is_denied() {
+        // Even though the codename is in the extras, an inactive user
+        // must not be granted access.
+        let perm = HasPermission::new("blog.publish_post");
+        let id = make_identity(&["blog.publish_post"], false, false);
+        assert!(
+            matches!(
+                perm.check(&Action::Create, Some(&id)),
+                Err(PermissionError::Forbidden)
+            ),
+            "inactive user with matching codename must be denied"
+        );
+    }
+
+    #[test]
+    fn inactive_superuser_is_denied() {
+        // An inactive superuser must NOT bypass permission checks.
+        // `WithPermissions::authenticate` already stores `is_superuser =
+        // false` for inactive superusers (it ANDs with `is_active`), but
+        // the `is_active` gate here is the belt-and-suspenders defence
+        // that catches the case where callers build the identity manually
+        // and accidentally set both `is_active = false` and
+        // `is_superuser = true`.
+        let perm = HasPermission::new("blog.publish_post");
+        let mut id = Identity::user(7);
+        id.extras.insert(
+            "is_active".to_string(),
+            serde_json::Value::Bool(false),
+        );
+        id.extras.insert(
+            "is_superuser".to_string(),
+            serde_json::Value::Bool(true),
+        );
+        assert!(
+            matches!(
+                perm.check(&Action::Delete, Some(&id)),
+                Err(PermissionError::Forbidden)
+            ),
+            "inactive superuser must be denied regardless of is_superuser flag"
+        );
+    }
+
+    #[test]
+    fn active_superuser_is_still_granted() {
+        // Regression guard: the is_active gate must not break the normal
+        // active-superuser path.
+        let perm = HasPermission::new("blog.publish_post");
+        let id = make_identity(&[], true, true);
+        assert!(
+            perm.check(&Action::Delete, Some(&id)).is_ok(),
+            "active superuser must still bypass codename check"
+        );
+    }
+
+    #[test]
+    fn active_user_with_codename_is_granted() {
+        // Regression guard: normal active-user codename grant must still work.
+        let perm = HasPermission::new("blog.publish_post");
+        let id = make_identity(&["blog.publish_post"], false, true);
+        assert!(
+            perm.check(&Action::Create, Some(&id)).is_ok(),
+            "active user with matching codename must be granted"
+        );
     }
 }

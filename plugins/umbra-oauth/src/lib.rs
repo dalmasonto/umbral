@@ -31,6 +31,7 @@
 //!     )
 //! ```
 
+mod http;
 pub mod models;
 pub mod pkce;
 pub mod policy;

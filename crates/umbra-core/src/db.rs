@@ -228,6 +228,34 @@ pub fn pool_for_dispatched(alias: &str) -> &'static DbPool {
         .unwrap_or_else(|| panic!("umbra: no database registered under alias '{alias}'"))
 }
 
+/// Ping the default database pool with a backend-appropriate liveness
+/// query (`SELECT 1`).
+///
+/// Resolves the ambient pool via [`pool_dispatched`] and dispatches:
+///
+/// - **SQLite** — `SELECT 1` via the sqlite driver.
+/// - **Postgres** — `SELECT 1` via the postgres driver.
+///
+/// Returns `Ok(())` when the pool is reachable. Returns
+/// `Err(sqlx::Error)` on any connection or query failure so callers
+/// can map it to a wire-friendly string without exposing the full sqlx
+/// error type.
+///
+/// # Panics
+///
+/// Panics if `App::build()` hasn't run (same contract as
+/// [`pool_dispatched`]).
+pub async fn ping() -> Result<(), sqlx::Error> {
+    match pool_dispatched() {
+        DbPool::Sqlite(p) => {
+            sqlx::query("SELECT 1").execute(p).await.map(|_| ())
+        }
+        DbPool::Postgres(p) => {
+            sqlx::query("SELECT 1").execute(p).await.map(|_| ())
+        }
+    }
+}
+
 /// List every registered pool alias, sorted alphabetically.
 ///
 /// Used by the migration engine to walk each DB in deterministic
@@ -502,6 +530,7 @@ pub async fn begin_pg(pool: &sqlx::PgPool) -> Result<Transaction, sqlx::Error> {
         inner: TransactionInner::Postgres(tx),
     })
 }
+
 
 /// Pinned, boxed `Future` with a lifetime parameter.
 ///

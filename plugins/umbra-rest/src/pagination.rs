@@ -62,6 +62,25 @@ impl PageRequest {
     }
 }
 
+/// Which query parameters the pagination backend reads from the request.
+/// Used by `umbra-openapi` to emit the correct `parameters` entries on
+/// list endpoints rather than always advertising `page`/`page_size`.
+///
+/// Custom [`Pagination`] implementors that don't override [`Pagination::style`]
+/// return [`PaginationStyle::Custom`], which causes the OpenAPI plugin to emit
+/// no pagination params (safe: we don't know what the custom backend reads).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaginationStyle {
+    /// No query params — every row is returned. Maps to [`NoPagination`].
+    None,
+    /// `?page=N&page_size=M`. Maps to [`PageNumberPagination`].
+    PageNumber,
+    /// `?limit=N&offset=M`. Maps to [`LimitOffsetPagination`].
+    LimitOffset,
+    /// A custom implementor; query params are unknown to the framework.
+    Custom,
+}
+
 /// The pagination contract. Implementors are stored on the plugin as
 /// `Arc<dyn Pagination>` so the list handler can dispatch through a
 /// trait object — register custom shapes per-app at builder time.
@@ -89,6 +108,19 @@ pub trait Pagination: Send + Sync + 'static {
     /// there's no point — the envelope just embeds `rows.len()`.
     fn needs_total(&self) -> bool {
         true
+    }
+
+    /// Identifies which query parameters this backend reads so that
+    /// `umbra-openapi` can emit the correct `parameters` entries on list
+    /// endpoints. Override in custom implementations to advertise the
+    /// right params (or return [`PaginationStyle::Custom`] to suppress
+    /// the generated params block).
+    ///
+    /// Built-in impls each return the appropriate variant; the default
+    /// here is [`PaginationStyle::Custom`] so an unaware custom impl
+    /// doesn't accidentally advertise wrong parameters.
+    fn style(&self) -> PaginationStyle {
+        PaginationStyle::Custom
     }
 }
 
@@ -133,6 +165,10 @@ impl Pagination for NoPagination {
 
     fn needs_total(&self) -> bool {
         false
+    }
+
+    fn style(&self) -> PaginationStyle {
+        PaginationStyle::None
     }
 }
 
@@ -259,6 +295,10 @@ impl Pagination for PageNumberPagination {
             "results": rows,
         })
     }
+
+    fn style(&self) -> PaginationStyle {
+        PaginationStyle::PageNumber
+    }
 }
 
 // =========================================================================
@@ -353,6 +393,10 @@ impl Pagination for LimitOffsetPagination {
             "previous": previous,
             "results": rows,
         })
+    }
+
+    fn style(&self) -> PaginationStyle {
+        PaginationStyle::LimitOffset
     }
 }
 

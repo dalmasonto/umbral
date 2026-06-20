@@ -144,6 +144,11 @@ pub use write::{SaveError, slugify};
 /// to `QuerySet::filter` / `QuerySet::exclude` to constrain a query. The
 /// type parameter `T` ties the predicate to its model so a `Predicate<Post>`
 /// can't accidentally be applied to a `QuerySet<Comment>`.
+///
+/// `Clone` is implemented manually (rather than derived) so the bound does
+/// not bleed onto `T` — `sea_query::SimpleExpr` is `Clone` regardless of
+/// whether `T` is. The `get_or_create` / `update_or_create` convergence path
+/// needs to re-issue the same predicate after a `UniqueViolation` re-fetch.
 pub struct Predicate<T> {
     /// The default condition. Renders correctly on Postgres and on
     /// any backend whose operators match sea-query's defaults.
@@ -208,6 +213,21 @@ impl<T> Predicate<T> {
                 .clone()
                 .unwrap_or_else(|| self.cond.clone()),
             _ => self.cond.clone(),
+        }
+    }
+}
+
+/// Manual `Clone` for `Predicate<T>`.
+///
+/// `sea_query::SimpleExpr` is `Clone` regardless of `T`, so we implement the
+/// trait by hand rather than deriving it. A derived impl would add an
+/// unnecessary `T: Clone` bound that would propagate to every QuerySet caller.
+impl<T> Clone for Predicate<T> {
+    fn clone(&self) -> Self {
+        Self {
+            cond: self.cond.clone(),
+            cond_sqlite: self.cond_sqlite.clone(),
+            _phantom: PhantomData,
         }
     }
 }

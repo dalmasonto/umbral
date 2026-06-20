@@ -96,8 +96,9 @@ pub enum ActionScope {
 /// Context available to action handlers.
 #[derive(Debug, Clone)]
 pub struct ActionInvocation {
-    /// Selected primary keys.
-    pub ids: Vec<i64>,
+    /// Selected primary keys as raw strings (matches the model's actual PK
+    /// type — i64, String, or Uuid — without forcing a parse to i64).
+    pub ids: Vec<String>,
     /// Username of the currently-logged-in staff user.
     pub username: String,
     /// SQL table the action was invoked on.
@@ -139,8 +140,9 @@ pub struct Action {
     /// If `Some`, a confirm dialog is shown before firing.
     pub(crate) confirm: Option<String>,
     /// Permission codename to check. `None` = any staff user may invoke.
-    /// Full umbra-permissions integration deferred (gap 33); today gated
-    /// on `is_staff` only. Field is stored for when permissions land.
+    /// When `Some(codename)`, the action handler only runs if the acting
+    /// user holds that codename (directly or via group), or is a superuser.
+    /// No-op when `umbra-permissions` is not installed (gaps2 #79).
     pub(crate) permission: Option<String>,
     pub(crate) handler: ActionHandlerFn,
 }
@@ -204,7 +206,15 @@ impl Action {
         self
     }
 
-    /// Require a permission codename (deferred; stored for future use).
+    /// Require a permission codename before this action can run (gaps2 #79).
+    ///
+    /// When set, the admin checks that the acting user holds `codename`
+    /// (directly or via a group) before invoking the handler. Superusers
+    /// bypass the check. If `umbra-permissions` is not installed, the check
+    /// is a no-op and any staff user can run the action.
+    ///
+    /// `codename` should be the full composite key your permissions plugin
+    /// uses, e.g. `"blog.publish_post"`.
     pub fn permission(mut self, codename: impl Into<String>) -> Self {
         self.permission = Some(codename.into());
         self
@@ -229,14 +239,13 @@ impl Action {
                 let pk_name = crate::discovery::pk_column(&meta)
                     .map(|c| c.name.clone())
                     .unwrap_or_else(|| "id".to_string());
-                let count = inv.ids.len();
                 match umbra::orm::DynQuerySet::for_meta(&meta)
-                    .filter_in_i64(&pk_name, &inv.ids)
+                    .filter_in_strings(&pk_name, &inv.ids)
                     .delete()
                     .await
                 {
-                    Ok(_) => Ok(ActionResult::Toast {
-                        message: format!("Deleted {count} row(s)."),
+                    Ok(deleted) => Ok(ActionResult::Toast {
+                        message: format!("Deleted {deleted} row(s)."),
                         level: ToastLevel::Success,
                     }),
                     Err(e) => {

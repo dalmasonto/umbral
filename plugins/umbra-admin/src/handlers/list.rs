@@ -236,30 +236,34 @@ struct FilterFacet {
 pub(crate) async fn index(
     State(state): State<AdminState>,
     headers: HeaderMap,
-    // `params` is unused now that the `?dashboard=1` opt-out is gone
-    // (gaps2 #33) — we always render the dashboard from `/admin/`.
-    // Keep the extractor so the route still accepts the query string;
-    // the underscore is the framework convention for "intentionally
-    // unused".
-    Query(_params): Query<HashMap<String, String>>,
+    // gaps2 #33 — `?dashboard=1` forces the dashboard even when
+    // `restore_last_path` is enabled. Always extracted so the route
+    // accepts the query string in both flag states.
+    Query(params): Query<HashMap<String, String>>,
 ) -> Response {
     let user = match require_staff(&headers, "/admin/").await {
         Ok(u) => u,
         Err(r) => return r,
     };
-    // The admin index handler used to redirect `/admin/` to the
-    // user's `last_path` (gaps2 #11 round 2) — a "where I left
-    // off" affordance. That was a footgun: once `last_path` was
-    // set to a changelist, there was no UI way to get back to
-    // the dashboard short of `?dashboard=1` or a direct SQL
-    // UPDATE against `admin_user_pref.preferences.last_path`.
-    // The `last_path` writer is still in the changelist handler
-    // (it's a cheap upsert with no behavioural cost), but the
-    // index handler no longer reads it. Always render the
-    // dashboard. Tracked as gaps2 #33; the proper fix lives in
-    // a config flag on `AdminPlugin` (default ON, opt out for
-    // power users who want the restore).
-    let apps = sidebar_apps(&state, &user);
+    // gaps2 #33 — "restore where I left off" feature.
+    //
+    // When `restore_last_path` is enabled (the default), redirect the
+    // user to the last changelist they visited unless they explicitly
+    // asked for the dashboard via `?dashboard=1`. This is the Django-
+    // style opt-out: on by default, disable with
+    // `AdminPlugin::default().restore_last_path(false)`.
+    //
+    // When the flag is false, always render the dashboard — no read,
+    // no redirect.
+    let dashboard_forced = params.get("dashboard").map(|v| v == "1").unwrap_or(false);
+    if state.restore_last_path && !dashboard_forced {
+        if let Ok(Some(last_path)) = crate::models::get_last_path(user.id).await {
+            if !last_path.is_empty() {
+                return Redirect::to(&last_path).into_response();
+            }
+        }
+    }
+    let apps = sidebar_apps(&state, &user).await;
 
     // Sectioned widget list — each entry carries its own title +
     // optional subtitle + widget array. The template renders one
@@ -501,25 +505,27 @@ pub(crate) async fn list(
             "gaps2 #11: failed to persist table prefs (continuing render)"
         );
     }
-    // gaps2 #11 round 2 — also persist this URL as `last_path` so a
-    // visit to `/admin/` redirects the user back to the changelist
-    // they were last working in. The path includes the current
-    // query string so the redirect's destination IS the same view
-    // they had before (then the `set_table_pref` write above keeps
-    // it warm for paramless visits too).
-    let qs = serialize_table_pref(&pref).unwrap_or_default();
-    let last_path = if qs.is_empty() {
-        format!("{}/{}/", crate::branding::current().base_path, table)
-    } else {
-        format!("{}/{}/?{qs}", crate::branding::current().base_path, table)
-    };
-    if let Err(e) = crate::models::set_last_path(user.id, &last_path).await {
-        tracing::warn!(
-            user = user.id,
-            table = %table,
-            error = %e,
-            "gaps2 #11: failed to persist last_path (continuing render)"
-        );
+    // gaps2 #11 round 2 / gaps2 #33 — persist this URL as `last_path`
+    // so a visit to `/admin/` can redirect the user back to the
+    // changelist they were last working in. Gated on
+    // `state.restore_last_path`: when the operator disabled the feature
+    // we skip the write entirely so no dead data accumulates in
+    // `admin_user_pref.preferences`.
+    if state.restore_last_path {
+        let qs = serialize_table_pref(&pref).unwrap_or_default();
+        let last_path = if qs.is_empty() {
+            format!("{}/{}/", crate::branding::current().base_path, table)
+        } else {
+            format!("{}/{}/?{qs}", crate::branding::current().base_path, table)
+        };
+        if let Err(e) = crate::models::set_last_path(user.id, &last_path).await {
+            tracing::warn!(
+                user = user.id,
+                table = %table,
+                error = %e,
+                "gaps2 #11: failed to persist last_path (continuing render)"
+            );
+        }
     }
     let _ = page;
 
@@ -572,7 +578,7 @@ pub(crate) async fn list(
     let active_filter_list = build_active_filter_list(&model, &active_filters).await;
     let filter_qs = build_filter_qs(&active_filters);
     let filter_groups = build_filter_groups(&active_filters);
-    let apps = sidebar_apps(&state, &user);
+    let apps = sidebar_apps(&state, &user).await;
     let breadcrumbs = vec![
         serde_json::json!({ "label": model.name.clone(), "url": format!("{}/{table}/", crate::branding::current().base_path) }),
     ];

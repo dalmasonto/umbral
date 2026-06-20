@@ -49,7 +49,18 @@ export UMBRA_EMAIL_SMTP_PORT=587
 export UMBRA_EMAIL_SMTP_USER=acme@example.com
 export UMBRA_EMAIL_SMTP_PASSWORD=secret
 export UMBRA_EMAIL_DEFAULT_FROM=noreply@acme.test
+export UMBRA_EMAIL_SMTP_TIMEOUT_SECS=10   # optional; default 10 s
 ```
+
+<Callout type="warning">
+**The console backend is dev-only.** In `Environment::Prod` (or when settings are absent), `send()` returns `EmailError::ConsoleBackendInProduction` instead of printing the message body. Printing full message bodies — including password-reset tokens and magic-link URLs — to stderr would expose secrets to log aggregators.
+
+To fix: set `UMBRA_EMAIL_SMTP_HOST` in production. If you intentionally want console output in a staging environment, set `UMBRA_EMAIL_BACKEND=console` explicitly and use `Environment::Dev` or `Environment::Test`.
+</Callout>
+
+### SMTP send timeout
+
+The SMTP transport applies a configurable per-send timeout (default: **10 seconds**). A hung relay will surface as `EmailError::Smtp` after that deadline rather than blocking the request indefinitely. Override via `email_smtp_timeout_secs` in `umbra.toml` or `UMBRA_EMAIL_SMTP_TIMEOUT_SECS`. Set to `0` to remove the cap (not recommended in production).
 
 ## Building messages
 
