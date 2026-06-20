@@ -50,6 +50,7 @@ pub(crate) use filtering::{FilterClause, parse_filters, parse_ordering, parse_se
 pub mod pagination;
 pub use pagination::{
     LimitOffsetPagination, NoPagination, PageNumberPagination, PageRequest, Pagination,
+    PaginationStyle,
 };
 
 pub mod resource;
@@ -1106,6 +1107,30 @@ pub fn registered_security_schemes() -> Vec<(String, serde_json::Value)> {
         .get()
         .map(|cfg| cfg.authentication.security_schemes_all())
         .unwrap_or_default()
+}
+
+/// Public read: the base path the REST plugin mounts all CRUD routes under.
+/// Used by `umbra-openapi` to build the documented paths that match the
+/// real mounted routes — e.g. `"/v2"` when the plugin was configured with
+/// `.at("/v2")`. Returns `"/api"` (the default) when CONFIG isn't populated.
+pub fn registered_base_path() -> &'static str {
+    CONFIG
+        .get()
+        .map(|cfg| cfg.base_path.as_str())
+        .unwrap_or("/api")
+}
+
+/// Public read: which pagination query-parameter style the configured
+/// backend reads. Used by `umbra-openapi` to emit the correct `parameters`
+/// entries on list endpoints — `page`/`page_size` for [`PageNumberPagination`],
+/// `limit`/`offset` for [`LimitOffsetPagination`], nothing for
+/// [`NoPagination`], and nothing for unknown custom backends. Returns
+/// [`PaginationStyle::None`] when CONFIG isn't populated.
+pub fn registered_pagination_style() -> PaginationStyle {
+    CONFIG
+        .get()
+        .map(|cfg| cfg.pagination.style())
+        .unwrap_or(PaginationStyle::None)
 }
 
 /// One custom `@action`'s OpenAPI-facing schema info — read by
