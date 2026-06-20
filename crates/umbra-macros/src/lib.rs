@@ -918,14 +918,6 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
     // Match arms for the per-field
     // `HydrateRelated::set_reverse_fk_resolved_json` body.
     let mut reverse_fk_resolved_arms: Vec<TokenStream2> = Vec::new();
-    // Idents of every field that maps to a real DB column (i.e. not M2M,
-    // not parent-side ReverseSet, not parent-side OneToOne). Used to emit
-    // `Model::to_db_row` which builds the column map for ORM writes
-    // independently of `serde::Serialize` — so fields marked
-    // `#[serde(skip_serializing)]` (e.g. `password_hash`) still reach the
-    // INSERT/UPDATE path even though they are absent from the public JSON
-    // output.
-    let mut db_field_idents: Vec<syn::Ident> = Vec::new();
 
     for field in fields.iter() {
         let field_name = field.ident.as_ref().unwrap();
@@ -1348,10 +1340,6 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                 slug_from: #slug_from_tokens,
             }
         });
-        // Collect this field for the `to_db_row` emit. Every field that
-        // reaches here corresponds to a real DB column — M2M, ReverseSet,
-        // and parent-side OneToOne all `continue`d above.
-        db_field_idents.push(field_name.clone());
 
         if is_choices_field || is_multichoice_field {
             // Closed-set TEXT fields (single- or multi-valued) get a
@@ -1887,32 +1875,6 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         }
     };
 
-    // Build the `to_db_row` body. Each DB-column field is serialized
-    // individually via `serde_json::to_value(&self.<field>)` so that fields
-    // carrying `#[serde(skip_serializing)]` (e.g. `AuthUser::password_hash`)
-    // are still included in the INSERT/UPDATE column map — their type still
-    // implements `Serialize`, the attribute just suppresses output in the
-    // struct-level serializer. Serializing the field value directly bypasses
-    // that suppression and gives the ORM the actual column value.
-    //
-    // Fields whose `to_value` fails (practically impossible for built-in
-    // types) are silently omitted; the ORM write path will surface a
-    // `RequiredFieldMissing` error for any non-nullable column that ends up
-    // absent, so this is safe to ignore here.
-    let to_db_row_inserts: Vec<TokenStream2> = db_field_idents
-        .iter()
-        .map(|ident| {
-            let name_str = ident.to_string();
-            quote! {
-                if let ::core::result::Result::Ok(v) =
-                    ::umbra::_serde_json::to_value(&self.#ident)
-                {
-                    __map.insert(#name_str.to_string(), v);
-                }
-            }
-        })
-        .collect();
-
     let output = quote! {
         impl ::umbra::orm::Model for #struct_name {
             type PrimaryKey = #pk_ty_tokens;
@@ -1945,14 +1907,6 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                 // a copy; for `String` the clone is the work the call
                 // site would have done anyway.
                 self.#pk_field_name.clone()
-            }
-            fn to_db_row(&self) -> ::umbra::_serde_json::Map<::std::string::String, ::umbra::_serde_json::Value>
-            where
-                Self: ::serde::Serialize,
-            {
-                let mut __map = ::umbra::_serde_json::Map::new();
-                #(#to_db_row_inserts)*
-                __map
             }
         }
 
