@@ -150,6 +150,51 @@ via `tokio::task::spawn` so one bad job cannot take the worker down.
 `EnqueueOptions` lets you set `max_attempts` (default 3) and `scheduled_for`
 (default `Utc::now()`) to delay execution.
 
+## Visibility timeout and at-least-once delivery
+
+When a worker claims a task it stamps `started_at = now()`. If the worker process
+crashes mid-handler that row stays in `running` forever — a silent data loss. The
+visibility timeout closes this gap.
+
+On every poll the worker first calls `reclaim_orphaned_tasks(visibility_timeout)`:
+any row whose `status = 'running'` and `started_at < now - visibility_timeout` is
+considered abandoned. The reclaim pass:
+
+- resets the row to `pending` (clearing `started_at`) so the next worker poll
+  picks it up again, as long as `attempts < max_attempts`.
+- marks the row `failed` if `attempts >= max_attempts` — no infinite retry loop.
+
+The default timeout is **5 minutes** (`DEFAULT_VISIBILITY_TIMEOUT`). Override it
+when building the worker:
+
+```rust
+use std::time::Duration;
+use umbra_tasks::{run_worker, WorkerOptions};
+
+run_worker(WorkerOptions {
+    visibility_timeout: Duration::from_secs(30 * 60), // 30 minutes
+    ..WorkerOptions::default()
+}).await;
+```
+
+<Callout type="info">
+Set `visibility_timeout` to comfortably exceed the longest handler your application
+runs. A timeout shorter than the handler runtime will reclaim the task while it is
+still executing, resulting in duplicate runs (at-least-once, not exactly-once).
+Handlers must therefore be idempotent when `max_attempts > 1`.
+</Callout>
+
+You can also call `reclaim_orphaned_tasks` directly — for example, in a scheduled
+job or a one-shot management command — with any timeout you choose:
+
+```rust
+use std::time::Duration;
+use umbra_tasks::reclaim_orphaned_tasks;
+
+let reclaimed = reclaim_orphaned_tasks(Duration::from_secs(60)).await?;
+println!("{reclaimed} orphaned task(s) reclaimed");
+```
+
 ## Combining with signals
 
 <Callout type="info">

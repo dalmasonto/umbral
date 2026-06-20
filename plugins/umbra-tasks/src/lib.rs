@@ -57,9 +57,10 @@ use umbra::prelude::*;
 /// Status string for a freshly enqueued row, or a row a failing handler
 /// has been reset to so it can retry.
 pub const STATUS_PENDING: &str = "pending";
-/// Status string while a worker is mid-execution. Useful for observability;
-/// a crashed worker leaves the row in this state until manual cleanup or a
-/// future timeout-watcher reclaims it.
+/// Status string while a worker is mid-execution. The worker loop calls
+/// [`reclaim_orphaned_tasks`] on every iteration so tasks left in this state
+/// by a crashed worker are moved back to [`STATUS_PENDING`] once the
+/// visibility timeout has elapsed.
 pub const STATUS_RUNNING: &str = "running";
 /// Terminal status for a handler that returned `Ok`.
 pub const STATUS_SUCCEEDED: &str = "succeeded";
@@ -292,8 +293,12 @@ pub fn _clear_handlers_for_tests() {
     }
 }
 
-/// Options for [`run_worker`]. Carries the poll interval and a
-/// shutdown receiver so a real binary can wire `Ctrl-C` into the loop.
+/// Default visibility timeout: tasks stuck in `running` for longer than
+/// this are reclaimed and re-queued (or failed if at `max_attempts`).
+pub const DEFAULT_VISIBILITY_TIMEOUT: Duration = Duration::from_secs(5 * 60); // 5 minutes
+
+/// Options for [`run_worker`]. Carries the poll interval, shutdown signal,
+/// and visibility timeout for orphan-task reclaim.
 pub struct WorkerOptions {
     /// How long to sleep when the queue is empty. Defaults to 1 second.
     pub poll_interval: Duration,
@@ -301,6 +306,12 @@ pub struct WorkerOptions {
     /// in-flight iteration finishes. A default never-fires channel is
     /// installed when callers use [`WorkerOptions::default`].
     pub shutdown: watch::Receiver<bool>,
+    /// How long a task may stay in `running` before it is considered
+    /// orphaned (i.e. its worker crashed). Orphaned tasks are moved back
+    /// to `pending` so another worker can pick them up, unless they have
+    /// already exhausted `max_attempts`, in which case they are marked
+    /// `failed`. Defaults to [`DEFAULT_VISIBILITY_TIMEOUT`] (5 minutes).
+    pub visibility_timeout: Duration,
 }
 
 impl Default for WorkerOptions {
@@ -315,11 +326,13 @@ impl Default for WorkerOptions {
         Self {
             poll_interval: Duration::from_secs(1),
             shutdown: rx,
+            visibility_timeout: DEFAULT_VISIBILITY_TIMEOUT,
         }
     }
 }
 
-/// The polling loop. Runs until `opts.shutdown` flips to `true`: claim
+/// The polling loop. Runs until `opts.shutdown` flips to `true`: reclaim
+/// any orphaned tasks (RUNNING longer than `opts.visibility_timeout`), claim
 /// one pending due row, dispatch its handler, write back the terminal
 /// state, loop. Returns normally on shutdown.
 ///
@@ -335,6 +348,11 @@ pub async fn run_worker(mut opts: WorkerOptions) {
             // Cooperative shutdown — hand control back to the caller
             // instead of killing the process.
             return;
+        }
+        // Reclaim orphaned tasks before claiming a new one so that a
+        // crashed-worker's row becomes visible in the same iteration.
+        if let Err(e) = reclaim_orphaned_tasks(opts.visibility_timeout).await {
+            tracing::error!(error = %e, "umbra-tasks: orphan reclaim failed");
         }
         match run_worker_once().await {
             Ok(true) => {}
@@ -357,6 +375,85 @@ pub async fn run_worker(mut opts: WorkerOptions) {
             }
         }
     }
+}
+
+/// Reclaim orphaned tasks: any row whose `status = 'running'` and
+/// `started_at < now - visibility_timeout` is considered abandoned by a
+/// crashed worker. Rows within `max_attempts` are reset to `pending` so
+/// another worker picks them up; rows already at `max_attempts` are
+/// marked `failed` (no infinite retry loop).
+///
+/// This is the at-least-once guarantee: work is never silently dropped
+/// because the worker that claimed it died mid-flight.
+pub async fn reclaim_orphaned_tasks(visibility_timeout: Duration) -> Result<u64, TaskError> {
+    let cutoff = Utc::now()
+        - chrono::Duration::from_std(visibility_timeout)
+            .unwrap_or(chrono::Duration::seconds(300));
+
+    // Fetch all stuck-running rows whose lease has expired.
+    let orphans: Vec<TaskRow> = TaskRow::objects()
+        .filter(task_row::STATUS.eq(STATUS_RUNNING) & task_row::STARTED_AT.lt(cutoff))
+        .fetch()
+        .await?;
+
+    if orphans.is_empty() {
+        return Ok(0);
+    }
+
+    let mut reclaimed: u64 = 0;
+    let now = Utc::now();
+
+    for row in orphans {
+        let exhausted = row.attempts >= row.max_attempts;
+        let mut patch = serde_json::Map::new();
+        if exhausted {
+            // No retries left — mark permanently failed.
+            patch.insert(
+                "status".to_string(),
+                serde_json::Value::String(STATUS_FAILED.to_string()),
+            );
+            patch.insert("completed_at".to_string(), serde_json::to_value(now)?);
+            patch.insert(
+                "error".to_string(),
+                serde_json::Value::String(
+                    "umbra-tasks: task abandoned by crashed worker; max_attempts exhausted"
+                        .to_string(),
+                ),
+            );
+        } else {
+            // Still has retries — reset to pending so the next claim
+            // picks it up. Clear `started_at` so the lease is fresh.
+            patch.insert(
+                "status".to_string(),
+                serde_json::Value::String(STATUS_PENDING.to_string()),
+            );
+            patch.insert("started_at".to_string(), serde_json::Value::Null);
+            patch.insert(
+                "error".to_string(),
+                serde_json::Value::String(
+                    "umbra-tasks: task abandoned by crashed worker; retrying".to_string(),
+                ),
+            );
+        }
+        // Conditional on STILL being running+expired to avoid a TOCTOU
+        // race where another worker completed the task between the SELECT
+        // and this UPDATE.
+        let affected = TaskRow::objects()
+            .filter(
+                task_row::ID.eq(row.id)
+                    & task_row::STATUS.eq(STATUS_RUNNING)
+                    & task_row::STARTED_AT.lt(cutoff),
+            )
+            .update_values(patch)
+            .await?;
+        reclaimed += affected;
+    }
+
+    if reclaimed > 0 {
+        tracing::info!(count = reclaimed, "umbra-tasks: reclaimed orphaned tasks");
+    }
+
+    Ok(reclaimed)
 }
 
 /// Single-iteration worker step. Returns `Ok(true)` if a task was
