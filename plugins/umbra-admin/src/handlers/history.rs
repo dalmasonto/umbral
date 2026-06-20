@@ -42,7 +42,7 @@ pub(crate) async fn history_handler(
         }
     };
 
-    let apps = sidebar_apps(&state, &user);
+    let apps = sidebar_apps(&state, &user).await;
     let initial_theme = user_theme(&user).await;
     match render(
         "admin/history.html",

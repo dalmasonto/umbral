@@ -259,7 +259,7 @@ pub(crate) async fn index(
     // dashboard. Tracked as gaps2 #33; the proper fix lives in
     // a config flag on `AdminPlugin` (default ON, opt out for
     // power users who want the restore).
-    let apps = sidebar_apps(&state, &user);
+    let apps = sidebar_apps(&state, &user).await;
 
     // Sectioned widget list — each entry carries its own title +
     // optional subtitle + widget array. The template renders one
@@ -572,7 +572,7 @@ pub(crate) async fn list(
     let active_filter_list = build_active_filter_list(&model, &active_filters).await;
     let filter_qs = build_filter_qs(&active_filters);
     let filter_groups = build_filter_groups(&active_filters);
-    let apps = sidebar_apps(&state, &user);
+    let apps = sidebar_apps(&state, &user).await;
     let breadcrumbs = vec![
         serde_json::json!({ "label": model.name.clone(), "url": format!("{}/{table}/", crate::branding::current().base_path) }),
     ];

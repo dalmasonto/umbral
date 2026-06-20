@@ -46,10 +46,43 @@ pub(crate) struct SidebarApp {
 /// Build the per-plugin nav tree. Reads the registry's `apps()` cut
 /// (which already honours `Plugin::admin_register` + the auto-discovered
 /// fallback) and reshapes each entry for direct template consumption.
-pub(crate) fn sidebar_apps(state: &AdminState, user: &umbra_auth::AuthUser) -> Vec<SidebarApp> {
+///
+/// Permission gating (gaps2 #83): when `PermissionsPlugin` is installed,
+/// loads the viewer's full codename set once and passes it to `apps()` so
+/// each model entry is filtered against `"<plugin>.view_<table>"`. Superusers
+/// and cases where the plugin is absent skip the load (codenames = `None`),
+/// matching the no-op fallback that the rest of the admin uses.
+pub(crate) async fn sidebar_apps(
+    state: &AdminState,
+    user: &umbra_auth::AuthUser,
+) -> Vec<SidebarApp> {
+    // Resolve the viewer's codenames once (one DB round-trip) so the
+    // per-model filter in `apps()` is in-memory. Superusers see everything;
+    // when PermissionsPlugin isn't installed the check is a no-op (None).
+    let viewer_codenames: Option<std::collections::HashSet<String>> =
+        if !crate::permcheck::permissions_installed() || user.is_superuser {
+            None
+        } else {
+            let user_id = user.id.to_string();
+            match umbra_permissions::user_perms(&user_id).await {
+                Ok(set) => Some(set),
+                Err(err) => {
+                    tracing::warn!(
+                        user_id = user_id.as_str(),
+                        error = %err,
+                        "sidebar_apps: failed to load viewer codenames; showing no models"
+                    );
+                    // Deny-by-default: an empty set means no model passes the
+                    // view-codename check. Consistent with permcheck::check's
+                    // "unwrap_or_else(|_| false)" policy.
+                    Some(std::collections::HashSet::new())
+                }
+            }
+        };
+
     state
         .registry
-        .apps(user)
+        .apps(user, viewer_codenames.as_ref())
         .into_iter()
         .map(|app| SidebarApp {
             plugin: app.plugin.clone(),

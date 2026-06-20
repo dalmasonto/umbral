@@ -176,7 +176,7 @@ pub(crate) async fn detail(
     let Some(row) = rows.into_iter().next() else {
         return AdminError::NotFound(format!("no row with {} = {}", pk.name, id)).into_response();
     };
-    let apps = sidebar_apps(&state, &user);
+    let apps = sidebar_apps(&state, &user).await;
     let breadcrumbs = vec![
         serde_json::json!({ "label": model.name.clone(), "url": format!("{}/{table}/", crate::branding::current().base_path) }),
         serde_json::json!({ "label": format!("#{id}"), "url": format!("{}/{table}/{id}", crate::branding::current().base_path) }),
@@ -227,7 +227,7 @@ pub(crate) async fn new_form(
     // parent PK yet — the junction rows get written post-INSERT by
     // the POST handler once the parent has an id).
     let m2m_fields = form_m2m_fields_for(&model, None).await;
-    let apps = sidebar_apps(&state, &user);
+    let apps = sidebar_apps(&state, &user).await;
     let breadcrumbs = vec![
         serde_json::json!({ "label": model.name.clone(), "url": format!("{}/{table}/", crate::branding::current().base_path) }),
         serde_json::json!({ "label": "Add", "url": format!("{}/{table}/new", crate::branding::current().base_path) }),
@@ -308,7 +308,7 @@ pub(crate) async fn create(
             }
         }
         let m2m_fields = form_m2m_fields_for(&model, None).await;
-        let apps = sidebar_apps(&state, &user);
+        let apps = sidebar_apps(&state, &user).await;
         let breadcrumbs = vec![
             serde_json::json!({ "label": model.name.clone(), "url": format!("{}/{table}/", crate::branding::current().base_path) }),
             serde_json::json!({ "label": "Add", "url": format!("{}/{table}/new", crate::branding::current().base_path) }),
@@ -360,7 +360,7 @@ pub(crate) async fn create(
         Err(e) => {
             let fields = form_fields_for(&model, Some(&form), cfg);
             let m2m_fields = form_m2m_fields_for(&model, None).await;
-            let apps = sidebar_apps(&state, &user);
+            let apps = sidebar_apps(&state, &user).await;
             let breadcrumbs = vec![
                 serde_json::json!({ "label": model.name.clone(), "url": format!("{}/{table}/", crate::branding::current().base_path) }),
                 serde_json::json!({ "label": "Add", "url": format!("{}/{table}/new", crate::branding::current().base_path) }),
@@ -434,7 +434,7 @@ pub(crate) async fn edit_form(
     // one `SELECT DISTINCT child_id FROM <junction> WHERE parent_id
     // = ?` per M2M field.
     let m2m_fields = form_m2m_fields_for(&model, Some(&id)).await;
-    let apps = sidebar_apps(&state, &user);
+    let apps = sidebar_apps(&state, &user).await;
     let breadcrumbs = vec![
         serde_json::json!({ "label": model.name.clone(), "url": format!("{}/{table}/", crate::branding::current().base_path) }),
         serde_json::json!({ "label": format!("#{id}"), "url": format!("{}/{table}/{id}", crate::branding::current().base_path) }),
@@ -526,7 +526,7 @@ pub(crate) async fn update(
             }
         }
         let m2m_fields = form_m2m_fields_for(&model, Some(&id)).await;
-        let apps = sidebar_apps(&state, &user);
+        let apps = sidebar_apps(&state, &user).await;
         let breadcrumbs = vec![
             serde_json::json!({ "label": model.name.clone(), "url": format!("{}/{table}/", crate::branding::current().base_path) }),
             serde_json::json!({ "label": format!("#{id}"), "url": format!("{}/{table}/{id}", crate::branding::current().base_path) }),
@@ -605,7 +605,7 @@ pub(crate) async fn update(
         Err(e) => {
             let fields = form_fields_for(&model, Some(&form), cfg);
             let m2m_fields = form_m2m_fields_for(&model, Some(&id)).await;
-            let apps = sidebar_apps(&state, &user);
+            let apps = sidebar_apps(&state, &user).await;
             let breadcrumbs = vec![
                 serde_json::json!({ "label": model.name.clone(), "url": format!("{}/{table}/", crate::branding::current().base_path) }),
                 serde_json::json!({ "label": format!("#{id}"), "url": format!("{}/{table}/{id}", crate::branding::current().base_path) }),

@@ -31,7 +31,7 @@ pub(crate) async fn palette_fragment(
         Ok(u) => u,
         Err(r) => return r,
     };
-    let sidebar = sidebar_apps(&state, &user);
+    let sidebar = sidebar_apps(&state, &user).await;
 
     let models: Vec<serde_json::Value> = sidebar
         .into_iter()
