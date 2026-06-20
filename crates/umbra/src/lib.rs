@@ -274,6 +274,7 @@ pub mod plugin {
 
     pub use umbra_core::plugin::{
         ApiEndpoint, AppContext, Plugin, PluginError, StaticDir, StaticFile,
+        block_on_ready,
     };
 }
 

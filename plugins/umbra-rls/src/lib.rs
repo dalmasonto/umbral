@@ -35,17 +35,15 @@
 //! reachable. Users who want a hard failure on misconfiguration
 //! check `crate::db::pool_dispatched()` in their own boot path.
 //!
-//! ## The sync-vs-async on_ready issue
+//! ## The sync-vs-async on_ready bridge
 //!
 //! `umbra::plugin::Plugin::on_ready` is a sync trait method, but
 //! `sqlx::query(...).execute(pool)` is async. We bridge with
-//! `tokio::runtime::Handle::current().block_on(...)`. This works
-//! because `App::build` runs inside a tokio runtime (the user's
-//! `#[tokio::main]` or equivalent); any non-tokio caller hits a
-//! panic in `Handle::current` with the standard "no reactor running"
-//! message, which is the correct signal.
+//! `umbra::plugin::block_on_ready(...)`, the shared helper that works
+//! under multi-thread runtimes, `#[tokio::test]`'s current-thread
+//! runtime, and bare (no-runtime) callers without panicking.
 
-use umbra::plugin::{AppContext, Plugin, PluginError};
+use umbra::plugin::{AppContext, Plugin, PluginError, block_on_ready};
 use umbra::web::Router;
 
 /// One row-level security policy.
@@ -250,16 +248,11 @@ impl Plugin for RlsPlugin {
                 Ok(())
             }
             umbra::db::DbPool::Postgres(pg_pool) => {
-                // on_ready is sync; sqlx is async. Bridge via the
-                // current tokio runtime. App::build is invoked inside
-                // a tokio runtime by every reasonable user binary, so
-                // Handle::current() succeeds; the alternative (a
-                // non-tokio caller) panics with the standard
-                // `Handle::current` "no reactor" message, which is the
-                // honest behavior.
-                let handle = tokio::runtime::Handle::current();
-                handle
-                    .block_on(self.apply_policies(pg_pool))
+                // on_ready is sync; sqlx is async. Use the shared
+                // block_on_ready helper which handles multi-thread
+                // runtimes, current-thread runtimes (#[tokio::test]),
+                // and the no-runtime case without panicking.
+                block_on_ready(self.apply_policies(pg_pool))
                     .map_err(|e| -> PluginError { Box::new(e) })?;
                 Ok(())
             }

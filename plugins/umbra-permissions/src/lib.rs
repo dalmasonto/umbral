@@ -95,7 +95,7 @@ pub use membership::{
     revoke_user_permission, set_user_groups,
 };
 
-use umbra::plugin::{AppContext, Plugin, PluginError};
+use umbra::plugin::{AppContext, Plugin, PluginError, block_on_ready};
 use umbra::web::Router;
 
 // =========================================================================
@@ -133,34 +133,12 @@ impl Plugin for PermissionsPlugin {
 
     fn on_ready(&self, ctx: &AppContext) -> Result<(), PluginError> {
         let pool = ctx.pool.clone();
-        // on_ready is a sync trait method; sqlx is async. Two bridging paths:
-        //
-        // (a) If we are already inside a tokio runtime (the normal case:
-        //     the user's #[tokio::main] or the test's #[tokio::test]),
-        //     `block_in_place` parks the current OS thread and runs the
-        //     async work on it without blocking the executor thread pool.
-        //
-        // (b) If there is no ambient runtime (uncommon; a bare main that
-        //     calls App::build before spinning up tokio), we fall back to
-        //     a one-shot Runtime.
-        //
-        // This matches the pattern used by other umbra plugins (umbra-rls
-        // uses Handle::current().block_on which panics in tokio tests;
-        // block_in_place is the correct form when already inside a runtime).
-        match tokio::runtime::Handle::try_current() {
-            Ok(_) => {
-                tokio::task::block_in_place(|| {
-                    tokio::runtime::Handle::current().block_on(ensure_standard_permissions(&pool))
-                })
-                .map_err(|e| -> PluginError { Box::new(e) })?;
-            }
-            Err(_) => {
-                tokio::runtime::Runtime::new()
-                    .expect("tokio runtime for PermissionsPlugin::on_ready")
-                    .block_on(ensure_standard_permissions(&pool))
-                    .map_err(|e| -> PluginError { Box::new(e) })?;
-            }
-        }
+        // on_ready is a sync trait method; sqlx is async. Use the shared
+        // block_on_ready helper which handles multi-thread runtimes,
+        // current-thread runtimes (#[tokio::test]), and the no-runtime
+        // case without panicking.
+        block_on_ready(ensure_standard_permissions(&pool))
+            .map_err(|e| -> PluginError { Box::new(e) })?;
         Ok(())
     }
 }
