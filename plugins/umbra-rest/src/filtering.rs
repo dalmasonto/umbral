@@ -114,6 +114,43 @@ impl FilterClause {
 // Public entry point
 // =========================================================================
 
+/// Parse `?ordering=<spec>` into a validated ordering directive list.
+///
+/// `spec` is a comma-separated sequence of field names, each optionally
+/// prefixed with `-` for DESC (e.g. `ordering=-created_at,name`). Fields
+/// that do not match a column on the model are **silently ignored** —
+/// consistent with how `DynQuerySet::order_by_col` itself drops unknown
+/// columns internally, so a stale or typo'd field name degrades to the
+/// model's default ordering rather than 400-ing the caller.
+///
+/// Returns a `Vec<(column_name, descending)>` in declaration order.
+/// An empty `raw` string or a spec made entirely of unknown fields
+/// returns an empty vec (no ORDER BY applied).
+pub(crate) fn parse_ordering(
+    raw: &str,
+    columns: &[Column],
+) -> Vec<(String, bool)> {
+    let mut out = Vec::new();
+    for token in raw.split(',') {
+        let token = token.trim();
+        if token.is_empty() {
+            continue;
+        }
+        let (col_name, desc) = if let Some(rest) = token.strip_prefix('-') {
+            (rest, true)
+        } else {
+            (token, false)
+        };
+        // Validate against the model's actual columns; drop unknown fields
+        // rather than interpolating raw input into ORDER BY (SQL-injection
+        // guard, and consistent with DynQuerySet::order_by_col semantics).
+        if columns.iter().any(|c| c.name == col_name) {
+            out.push((col_name.to_string(), desc));
+        }
+    }
+    out
+}
+
 /// Parse every `key=value` pair in `params` that looks like a field
 /// filter (`<field>` or `<field>__<lookup>`), validate the field
 /// against the model's columns and the lookup against the column's

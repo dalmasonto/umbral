@@ -45,7 +45,7 @@ use umbra::prelude::*;
 use umbra::web::{IntoResponse, Json, Path, Query, Response, StatusCode};
 
 pub mod filtering;
-pub(crate) use filtering::{FilterClause, parse_filters, parse_search};
+pub(crate) use filtering::{FilterClause, parse_filters, parse_ordering, parse_search};
 
 pub mod pagination;
 pub use pagination::{
@@ -1754,6 +1754,14 @@ async fn list(
         }
     }
 
+    // `?ordering=-created_at,name` — DRF-style sort: comma-separated
+    // field names, leading `-` for DESC. Unknown fields are silently
+    // dropped (same as DynQuerySet::order_by_col does internally).
+    let ordering: Vec<(String, bool)> = params
+        .get("ordering")
+        .map(|s| parse_ordering(s, &model.fields))
+        .unwrap_or_default();
+
     // `?include=fk1,fk2` — expand the named FK columns into their
     // full related-row objects via one batched IN(...) per FK. The
     // parser rejects unknown / non-FK names with a 400 so clients
@@ -1771,7 +1779,7 @@ async fn list(
             offset: 0,
             page: None,
         };
-        let mut rows = fetch_rows(&model, None, Some(csv_page), &filter, &include).await?;
+        let mut rows = fetch_rows(&model, None, Some(csv_page), &filter, &include, &ordering).await?;
         for row in &mut rows {
             cfg.apply_overrides(&table, row);
             RestPlugin::apply_sparse_fields(row, fields_param);
@@ -1780,7 +1788,7 @@ async fn list(
     }
 
     let page_req = cfg.pagination.extract_request(&params);
-    let mut rows = fetch_rows(&model, None, Some(page_req), &filter, &include).await?;
+    let mut rows = fetch_rows(&model, None, Some(page_req), &filter, &include, &ordering).await?;
     for row in &mut rows {
         cfg.apply_overrides(&table, row);
         RestPlugin::apply_sparse_fields(row, fields_param);
@@ -1875,7 +1883,7 @@ async fn retrieve(
     // its `user` FK expanded to the full AuthUser object. Same
     // parser, same 400-on-bad-name semantics.
     let include = parse_include(params.get("include").map(|s| s.as_str()), &model)?;
-    let mut rows = fetch_rows(&model, Some((&pk.name, &id)), None, &no_filter, &include).await?;
+    let mut rows = fetch_rows(&model, Some((&pk.name, &id)), None, &no_filter, &include, &[]).await?;
     let Some(mut row) = rows.pop() else {
         return Err(ApiError::NotFound(format!(
             "no row with {} = {} in {}",
@@ -2078,7 +2086,7 @@ async fn update(
 
     // 404 if the target row doesn't exist before we attempt the UPDATE.
     let no_filter = FilterClause::default();
-    let existing = fetch_rows(&model, Some((&pk.name, &id)), None, &no_filter, &[]).await?;
+    let existing = fetch_rows(&model, Some((&pk.name, &id)), None, &no_filter, &[], &[]).await?;
     if existing.is_empty() {
         return Err(ApiError::NotFound(format!(
             "no row with {} = {} in {}",
@@ -2094,7 +2102,7 @@ async fn update(
         .filter_eq_string(&pk.name, &id)
         .update_json(&body)
         .await?;
-    let mut rows = fetch_rows(&model, Some((&pk.name, &id)), None, &no_filter, &[]).await?;
+    let mut rows = fetch_rows(&model, Some((&pk.name, &id)), None, &no_filter, &[], &[]).await?;
     let Some(mut row) = rows.pop() else {
         return Err(ApiError::BadInput(
             "row updated but disappeared on read-back".into(),
@@ -2244,6 +2252,7 @@ async fn fetch_rows(
     page: Option<PageRequest>,
     filter: &FilterClause,
     include: &[String],
+    ordering: &[(String, bool)],
 ) -> Result<Vec<Map<String, Value>>, ApiError> {
     let mut qs = umbra::orm::DynQuerySet::for_meta(model);
 
@@ -2258,6 +2267,13 @@ async fn fetch_rows(
             && let Some(cond) = filter.condition_clone()
         {
             qs = qs.filter_condition(cond);
+        }
+        // `?ordering=-created_at,name` — apply each directive in order.
+        // Unknown fields were already stripped by `parse_ordering`; what
+        // remains are validated column names safe to pass directly to
+        // `order_by_col` without further SQL-injection risk.
+        for (col, desc) in ordering {
+            qs = qs.order_by_col(col, *desc);
         }
         if let Some(req) = page {
             // PERF-1: a list request must never issue an unbounded
