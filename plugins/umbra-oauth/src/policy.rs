@@ -20,6 +20,7 @@
 
 use chrono::{Duration, Utc};
 use umbra::orm::Masked;
+use umbra::orm::write::WriteError;
 use umbra::prelude::*;
 use umbra_auth::{AuthUser, auth_user};
 
@@ -152,47 +153,6 @@ async fn refresh_tokens(
     Ok(())
 }
 
-/// Mint a fresh `AuthUser` for a social signup. The password is set to an
-/// unusable marker (`"!"`) — these accounts authenticate only through the
-/// provider until the user sets a password.
-async fn create_auth_user(provider_key: &str, identity: &Identity) -> Result<i64, OAuthError> {
-    // A verified email is safe to use as the account's unique email (rule
-    // 3 already proved no existing user holds it). An unverified or
-    // missing email gets a unique no-reply placeholder so it can neither
-    // collide nor be trusted; the raw value still lives on the social
-    // account's `provider_email`.
-    let placeholder = format!("{provider_key}_{}@users.noreply.umbra", identity.uid);
-    let email = if identity.email_verified {
-        identity.email.clone().unwrap_or(placeholder)
-    } else {
-        placeholder
-    };
-
-    let base = identity
-        .email
-        .as_deref()
-        .filter(|_| identity.email_verified)
-        .and_then(|e| e.split('@').next())
-        .map(str::to_string)
-        .or_else(|| identity.display_name.clone())
-        .unwrap_or_else(|| format!("{provider_key}_{}", identity.uid));
-    let username = unique_username(&base).await?;
-
-    let user = AuthUser {
-        id: 0,
-        username,
-        email,
-        password_hash: "!".to_string(),
-        is_active: true,
-        is_staff: false,
-        is_superuser: false,
-        date_joined: Utc::now(),
-        last_login: Some(Utc::now()),
-    };
-    let created = AuthUser::objects().create(user).await.map_err(db_err)?;
-    Ok(created.id)
-}
-
 /// Reduce a string to a username-safe slug.
 fn sanitize_username(raw: &str) -> String {
     let base: String = raw
@@ -206,24 +166,81 @@ fn sanitize_username(raw: &str) -> String {
     }
 }
 
-/// A unique username derived from `base`, appending `1`, `2`, … on
-/// collision.
-async fn unique_username(base: &str) -> Result<String, OAuthError> {
-    let base = sanitize_username(base);
-    let mut candidate = base.clone();
+/// Mint a fresh `AuthUser` for a social signup. The password is set to an
+/// unusable marker (`"!"`) — these accounts authenticate only through the
+/// provider until the user sets a password.
+///
+/// Username uniqueness is enforced by the DB `UNIQUE` constraint on
+/// `auth_user.username`. Rather than a SELECT-then-INSERT (which has a
+/// TOCTOU race when two OAuth callbacks race for the same base name), we
+/// attempt the INSERT and catch `WriteError::UniqueViolation` on the
+/// `username` column, then retry with the next numeric suffix. Up to
+/// `MAX_USERNAME_RETRIES` attempts are made before giving up.
+async fn create_auth_user(provider_key: &str, identity: &Identity) -> Result<i64, OAuthError> {
+    // A verified email is safe to use as the account's unique email (rule
+    // 3 already proved no existing user holds it). An unverified or
+    // missing email gets a unique no-reply placeholder so it can neither
+    // collide nor be trusted; the raw value still lives on the social
+    // account's `provider_email`.
+    let placeholder = format!("{provider_key}_{}@users.noreply.umbra", identity.uid);
+    let email = if identity.email_verified {
+        identity.email.clone().unwrap_or(placeholder)
+    } else {
+        placeholder
+    };
+
+    let base = sanitize_username(
+        &identity
+            .email
+            .as_deref()
+            .filter(|_| identity.email_verified)
+            .and_then(|e| e.split('@').next())
+            .map(str::to_string)
+            .or_else(|| identity.display_name.clone())
+            .unwrap_or_else(|| format!("{provider_key}_{}", identity.uid)),
+    );
+
+    // Attempt INSERT, retrying on username UNIQUE collision by appending a
+    // numeric suffix (base → base1 → base2 → …). The DB constraint is the
+    // authoritative uniqueness check, eliminating the TOCTOU race that a
+    // SELECT-before-INSERT would carry.
+    const MAX_USERNAME_RETRIES: u32 = 20;
     let mut n = 0u32;
     loop {
-        let taken = AuthUser::objects()
-            .filter(auth_user::USERNAME.eq(&candidate))
-            .first()
-            .await
-            .map_err(db_err)?
-            .is_some();
-        if !taken {
-            return Ok(candidate);
+        let candidate = if n == 0 {
+            base.clone()
+        } else {
+            format!("{base}{n}")
+        };
+
+        let user = AuthUser {
+            id: 0,
+            username: candidate,
+            email: email.clone(),
+            password_hash: "!".to_string(),
+            is_active: true,
+            is_staff: false,
+            is_superuser: false,
+            date_joined: Utc::now(),
+            last_login: Some(Utc::now()),
+        };
+
+        match AuthUser::objects().create(user).await {
+            Ok(created) => return Ok(created.id),
+            Err(WriteError::UniqueViolation { field, .. })
+                if field.as_deref() == Some("username") || field.is_none() =>
+            {
+                n += 1;
+                if n > MAX_USERNAME_RETRIES {
+                    return Err(OAuthError::Database(format!(
+                        "could not find a unique username after {MAX_USERNAME_RETRIES} attempts \
+                         (base: {base})"
+                    )));
+                }
+                // Try next suffix.
+            }
+            Err(e) => return Err(db_err(e)),
         }
-        n += 1;
-        candidate = format!("{base}{n}");
     }
 }
 
@@ -442,6 +459,50 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(acct.access_token.reveal().unwrap(), "rotated-789");
+    }
+
+    // Retry contract: when the first candidate username is already taken, the
+    // INSERT-with-retry path resolves to the next suffix rather than erroring.
+    // This is the observable contract that the TOCTOU fix enforces — a
+    // pre-existing row at candidate N forces a successful resolve at N+1.
+    #[tokio::test]
+    async fn username_collision_retries_to_next_suffix() {
+        boot().await;
+
+        // Seed a user that will occupy the base candidate.
+        // The identity below derives base = "alice" (from the verified email).
+        seed_user("alice", "taken_alice@seed.example.com").await;
+
+        // A new OAuth login whose base username resolves to "alice" (taken).
+        // The retry loop must succeed with "alice1".
+        let id = identity("google-uid-retry-01", Some("alice@provider.example.com"), true);
+        let user_id = create_auth_user("google", &id).await.unwrap();
+
+        let user = AuthUser::objects()
+            .filter(auth_user::ID.eq(user_id))
+            .first()
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            user.username, "alice1",
+            "collision at base → resolved to base + suffix 1"
+        );
+
+        // A third signup with the same base also resolves cleanly (alice1 taken → alice2).
+        let id2 = identity("google-uid-retry-02", Some("alice@other.example.com"), true);
+        let user_id2 = create_auth_user("google", &id2).await.unwrap();
+
+        let user2 = AuthUser::objects()
+            .filter(auth_user::ID.eq(user_id2))
+            .first()
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            user2.username, "alice2",
+            "collision at base1 → resolved to base + suffix 2"
+        );
     }
 
     // Connect-mode safety: connecting an identity already linked to a
