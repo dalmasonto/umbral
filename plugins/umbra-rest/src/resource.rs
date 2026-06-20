@@ -56,6 +56,7 @@ use serde_json::{Map, Value};
 
 use crate::auth::Identity;
 use crate::permission::{Action, Permission};
+use crate::throttle::Throttle;
 use crate::{ComputedFn, HideFields, TransformFn};
 
 /// Whether a custom action is mounted on the collection
@@ -202,6 +203,11 @@ pub struct ResourceConfig {
     /// Permission class for this resource. `None` defaults to
     /// [`crate::permission::AllowAny`] at merge time.
     pub(crate) permission: Option<Arc<dyn Permission>>,
+    /// Throttles for this resource. Run (after the plugin-wide
+    /// `default_throttle`s) on every request to this table — all must
+    /// pass, the first to deny returns 429. Empty = no per-table
+    /// throttle. Merged into the plugin's per-table map at `.resource()`.
+    pub(crate) throttles: Vec<Arc<dyn Throttle>>,
     /// Opt-in view scope. `None` means "all actions exposed" — the
     /// backward-compatible default. `Some(set)` restricts the
     /// resource to exactly that set; everything else 404s.
@@ -253,6 +259,7 @@ impl ResourceConfig {
             transforms: Vec::new(),
             computed: Vec::new(),
             permission: None,
+            throttles: Vec::new(),
             view_scope: None,
             actions: Vec::new(),
             filters_disabled: false,
@@ -378,6 +385,27 @@ impl ResourceConfig {
     /// ```
     pub fn permission<P: Permission>(mut self, perm: P) -> Self {
         self.permission = Some(Arc::new(perm));
+        self
+    }
+
+    /// Attach a throttle to this resource. Run after auth and the
+    /// permission check, before the handler; on a denial the request
+    /// returns **429 Too Many Requests** with a `Retry-After` header.
+    ///
+    /// Throttles **stack**: call this more than once, and combine with the
+    /// plugin-wide [`RestPlugin::default_throttle`](crate::RestPlugin::
+    /// default_throttle) — every throttle that applies to the request must
+    /// pass. Throttling is opt-in; a resource with none imposes no limit.
+    ///
+    /// ```ignore
+    /// // Cap anonymous reads on this table at 100/hour, plus a tight
+    /// // 10/min on the "uploads" scope.
+    /// ResourceConfig::new("upload")
+    ///     .throttle(AnonRateThrottle::new("100/hour"))
+    ///     .throttle(ScopedRateThrottle::new("10/min", "upload:create"))
+    /// ```
+    pub fn throttle<T: Throttle>(mut self, throttle: T) -> Self {
+        self.throttles.push(Arc::new(throttle));
         self
     }
 

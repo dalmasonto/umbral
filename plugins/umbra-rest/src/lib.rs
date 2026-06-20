@@ -68,6 +68,12 @@ pub use permission::{
     PermissionError, ReadOnly,
 };
 
+pub mod throttle;
+pub use throttle::{
+    AnonRateThrottle, ScopedRateThrottle, Throttle, ThrottleContext, ThrottleDenied,
+    UserRateThrottle,
+};
+
 /// The block-list every plugin starts with. Exposing these via REST
 /// would leak password hashes (auth_user), session IDs (session), the
 /// migration tracking table, the authorization model itself (the
@@ -226,6 +232,16 @@ pub struct RestPlugin {
     /// via [`Self::resource`]. Tables without an entry fall back to
     /// [`Self::default_permission`].
     permissions: HashMap<String, Arc<dyn Permission>>,
+    /// Throttles that apply to EVERY resource, run after auth and before
+    /// the handler. A Vec because throttles stack — all must pass, the
+    /// first to deny wins (429). Empty by default: no limits unless the
+    /// app opts in via [`Self::default_throttle`]. Per-table throttles
+    /// ([`Self::throttles`]) run in addition to these.
+    default_throttles: Vec<Arc<dyn Throttle>>,
+    /// Per-table throttles, keyed by table name. Merged from
+    /// [`ResourceConfig::throttle`]. A table's throttles run alongside
+    /// (after) the `default_throttles` — both sets must pass.
+    throttles: HashMap<String, Vec<Arc<dyn Throttle>>>,
     /// Fallback permission for tables with no explicit `.permission(...)`.
     /// Defaults to [`ReadOnly`] (WEB-1: safe by default — anonymous reads,
     /// no anonymous writes). Override the blanket default with
@@ -318,6 +334,28 @@ impl RestPlugin {
         self
     }
 
+    /// Add a throttle that applies to EVERY resource. Run after auth
+    /// resolves and before the handler (DRF order); on the first denial
+    /// the request returns **429 Too Many Requests** with a `Retry-After`
+    /// header and a `{"detail":"Request was throttled.","retry_after":N}`
+    /// body.
+    ///
+    /// Throttles **stack**: call this more than once (or pair with a
+    /// per-resource [`ResourceConfig::throttle`]) and ALL of them must
+    /// pass. Throttling is OFF by default — a `RestPlugin` with no
+    /// throttle imposes no limits, so adding the plugin never surprises an
+    /// existing API with a rate cap.
+    ///
+    /// ```ignore
+    /// RestPlugin::default()
+    ///     .default_throttle(AnonRateThrottle::new("100/hour"))
+    ///     .default_throttle(UserRateThrottle::new("1000/day"))
+    /// ```
+    pub fn default_throttle<T: Throttle>(mut self, throttle: T) -> Self {
+        self.default_throttles.push(Arc::new(throttle));
+        self
+    }
+
     /// True when this action is mounted for this table. Tables
     /// without an explicit `.views(...)` scope expose every action
     /// (backward-compatible default). Tables with a scope expose
@@ -358,6 +396,83 @@ impl RestPlugin {
             Err(PermissionError::Forbidden) => Err(ApiError::Forbidden),
         }
     }
+
+    /// Run every applicable throttle for `(table, action)` after auth has
+    /// resolved, before the handler (DRF order). Returns
+    /// `Err(ApiError::Throttled { retry_after })` on the FIRST denial so
+    /// the handler's `?` surfaces a 429 with a `Retry-After` header.
+    ///
+    /// Both the plugin-wide `default_throttles` and the per-table
+    /// `throttles` run; all must pass. The scope handed to each throttle
+    /// is `"<table>:<action>"` (e.g. `"post:list"`) — that's what
+    /// [`ScopedRateThrottle`] matches against.
+    fn gate_throttle(
+        &self,
+        table: &str,
+        action: &Action,
+        identity: Option<&Identity>,
+        client_ip: Option<&str>,
+    ) -> Result<(), ApiError> {
+        // Fast path: no throttle configured anywhere for this table.
+        let per_table = self.throttles.get(table);
+        if self.default_throttles.is_empty() && per_table.is_none() {
+            return Ok(());
+        }
+        let scope = format!("{table}:{}", action_label(action));
+        let ctx = ThrottleContext {
+            identity,
+            client_ip,
+            scope: &scope,
+        };
+        let all = self
+            .default_throttles
+            .iter()
+            .chain(per_table.into_iter().flatten());
+        for t in all {
+            if let Err(ThrottleDenied { retry_after }) = t.check(&ctx) {
+                return Err(ApiError::Throttled { retry_after });
+            }
+        }
+        Ok(())
+    }
+}
+
+/// The scope-label segment for an [`Action`] — `list` / `retrieve` /
+/// `create` / `update` / `delete`, or the raw name for a custom action.
+/// Used to build the `"<table>:<action>"` throttle scope.
+fn action_label(action: &Action) -> String {
+    match action {
+        Action::List => "list".to_string(),
+        Action::Retrieve => "retrieve".to_string(),
+        Action::Create => "create".to_string(),
+        Action::Update => "update".to_string(),
+        Action::Delete => "delete".to_string(),
+        Action::Custom(name) => name.clone(),
+    }
+}
+
+/// Resolve the caller's IP from proxy headers for throttle keying.
+/// Takes the first hop of `X-Forwarded-For`, else `X-Real-IP`. Returns
+/// `None` when neither resolves (direct connection, no proxy) — the
+/// throttles then fall back to a shared `"unknown"` bucket, which limits
+/// rather than opening a hole. Mirrors `umbra-auth`'s `client_ip` and
+/// `umbra-logs`'s `resolve_ip`.
+fn throttle_client_ip(headers: &umbra::web::HeaderMap) -> Option<String> {
+    if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
+        if let Some(first) = xff.split(',').next() {
+            let ip = first.trim();
+            if !ip.is_empty() {
+                return Some(ip.to_string());
+            }
+        }
+    }
+    if let Some(real) = headers.get("x-real-ip").and_then(|v| v.to_str().ok()) {
+        let ip = real.trim();
+        if !ip.is_empty() {
+            return Some(ip.to_string());
+        }
+    }
+    None
 }
 
 impl RestPlugin {
@@ -372,6 +487,8 @@ impl RestPlugin {
             pagination: Arc::new(NoPagination),
             authentication: Arc::new(NoAuthentication),
             permissions: HashMap::new(),
+            default_throttles: Vec::new(),
+            throttles: HashMap::new(),
             default_permission: Arc::new(ReadOnly),
             view_scope: HashMap::new(),
             actions: HashMap::new(),
@@ -590,6 +707,7 @@ impl RestPlugin {
             transforms,
             computed,
             permission,
+            throttles,
             view_scope,
             actions,
             filters_disabled,
@@ -613,6 +731,15 @@ impl RestPlugin {
             // per table, which the AndPermission combinator already
             // covers explicitly on the user side.
             self.permissions.insert(table.clone(), perm);
+        }
+        if !throttles.is_empty() {
+            // Additive: repeated `.resource(...)` calls for the same table
+            // stack their throttles (all must pass), matching the way
+            // `.throttle(...)` itself stacks within one config.
+            self.throttles
+                .entry(table.clone())
+                .or_default()
+                .extend(throttles);
         }
         if let Some(scope) = view_scope {
             self.view_scope.insert(table.clone(), scope);
@@ -1528,6 +1655,14 @@ enum ApiError {
     /// action. Returned when a Permission produced
     /// `PermissionError::Forbidden` on an authenticated identity.
     Forbidden,
+    /// 429 — the caller is over their rate. Raised when a
+    /// [`Throttle`] denied the request (after auth, before the
+    /// handler). Carries the retry hint that becomes a `Retry-After`
+    /// header (seconds, rounded up). The body is the DRF shape
+    /// `{"detail":"Request was throttled.","retry_after":N}`.
+    Throttled {
+        retry_after: Option<std::time::Duration>,
+    },
     /// 500 — a non-database internal error (e.g. CSV serialization
     /// failure). The message is logged server-side; the client sees
     /// an opaque "internal server error" response.
@@ -1612,6 +1747,29 @@ impl umbra::web::IntoResponse for ApiError {
             return (StatusCode::BAD_REQUEST, Json(body)).into_response();
         }
 
+        // 429 takes a DRF-shaped body (`detail` + `retry_after`) plus a
+        // `Retry-After` header, so it's built here rather than through the
+        // single-message envelope below.
+        if let ApiError::Throttled { retry_after } = self {
+            // Round UP to whole seconds — never tell a client to retry
+            // before a slot actually frees.
+            let secs = retry_after
+                .map(|d| {
+                    let whole = d.as_secs();
+                    if d.subsec_nanos() > 0 { whole + 1 } else { whole }
+                })
+                .unwrap_or(0);
+            let body = serde_json::json!({
+                "detail": "Request was throttled.",
+                "retry_after": secs,
+            });
+            let mut resp = (StatusCode::TOO_MANY_REQUESTS, Json(body)).into_response();
+            if let Ok(val) = http::HeaderValue::from_str(&secs.to_string()) {
+                resp.headers_mut().insert(http::header::RETRY_AFTER, val);
+            }
+            return resp;
+        }
+
         let (status, code, msg) = match self {
             ApiError::NotFound(m) => (StatusCode::NOT_FOUND, "not_found", m),
             ApiError::BadInput(m) => (StatusCode::BAD_REQUEST, "bad_input", m),
@@ -1635,6 +1793,7 @@ impl umbra::web::IntoResponse for ApiError {
                 "authentication required".to_string(),
             ),
             ApiError::Forbidden => (StatusCode::FORBIDDEN, "forbidden", "forbidden".to_string()),
+            ApiError::Throttled { .. } => unreachable!("handled above"),
             ApiError::Internal(m) => {
                 tracing::error!(error = %m, "REST handler hit an internal error");
                 (
@@ -1808,6 +1967,12 @@ async fn list(
     let identity = cfg.authentication.authenticate(&headers).await;
     let model = allowed_model(&table)?;
     cfg.gate(&table, &Action::List, identity.as_ref())?;
+    cfg.gate_throttle(
+        &table,
+        &Action::List,
+        identity.as_ref(),
+        throttle_client_ip(&headers).as_deref(),
+    )?;
 
     // Parse query-string filters when this resource has opted in.
     // Filters are ON by default; `filters_disabled` is the opt-out set.
@@ -1983,6 +2148,12 @@ async fn retrieve(
     let identity = cfg.authentication.authenticate(&headers).await;
     let model = allowed_model(&table)?;
     cfg.gate(&table, &Action::Retrieve, identity.as_ref())?;
+    cfg.gate_throttle(
+        &table,
+        &Action::Retrieve,
+        identity.as_ref(),
+        throttle_client_ip(&headers).as_deref(),
+    )?;
     let pk = pk_column(&model)?;
     let no_filter = FilterClause::default();
     // `?include=` works the same on the retrieve path — `GET
@@ -2012,6 +2183,12 @@ async fn create(
     let identity = cfg.authentication.authenticate(&headers).await;
     let model = allowed_model(&table)?;
     cfg.gate(&table, &Action::Create, identity.as_ref())?;
+    cfg.gate_throttle(
+        &table,
+        &Action::Create,
+        identity.as_ref(),
+        throttle_client_ip(&headers).as_deref(),
+    )?;
 
     let nested_specs = cfg.nested.get(&table).cloned().unwrap_or_default();
 
@@ -2186,6 +2363,12 @@ async fn update(
     let identity = cfg.authentication.authenticate(&headers).await;
     let model = allowed_model(&table)?;
     cfg.gate(&table, &Action::Update, identity.as_ref())?;
+    cfg.gate_throttle(
+        &table,
+        &Action::Update,
+        identity.as_ref(),
+        throttle_client_ip(&headers).as_deref(),
+    )?;
     let pk = pk_column(&model)?;
 
     // WEB-2: a hidden field must not be writable (see strip_hidden_for_write).
@@ -2227,6 +2410,12 @@ async fn destroy(
     let identity = cfg.authentication.authenticate(&headers).await;
     let model = allowed_model(&table)?;
     cfg.gate(&table, &Action::Delete, identity.as_ref())?;
+    cfg.gate_throttle(
+        &table,
+        &Action::Delete,
+        identity.as_ref(),
+        throttle_client_ip(&headers).as_deref(),
+    )?;
     let pk = pk_column(&model)?;
     let affected = umbra::orm::DynQuerySet::for_meta(&model)
         .filter_eq_string(&pk.name, &id)
@@ -2281,7 +2470,14 @@ async fn custom_action_dispatch(
     // Permission gate runs with `Action::Custom(name)` so the
     // resource's permission can deny or allow per-action.
     let identity = cfg.authentication.authenticate(&headers).await;
-    cfg.gate(&table, &Action::Custom(name.clone()), identity.as_ref())?;
+    let custom = Action::Custom(name.clone());
+    cfg.gate(&table, &custom, identity.as_ref())?;
+    cfg.gate_throttle(
+        &table,
+        &custom,
+        identity.as_ref(),
+        throttle_client_ip(&headers).as_deref(),
+    )?;
 
     let query = parse_query_string(uri.query().unwrap_or(""));
     let ctx = ActionContext {

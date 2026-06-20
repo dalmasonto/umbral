@@ -1,0 +1,98 @@
+---
+title: Throttling
+description: DRF-style API rate limiting — AnonRateThrottle, UserRateThrottle, ScopedRateThrottle, the rate string format, and the 429 + Retry-After response.
+sidebar_position: 8
+icon: gauge
+tags: [rest, throttling, rate-limiting]
+---
+
+A throttle answers *how often may this caller hit this resource?*. It's the third request-time gate, run **after** [authentication](/docs/v0.0.1/rest/authentication) resolves an `Identity` and the [permission](/docs/v0.0.1/rest/permissions) check approves the action, but **before** the handler runs (the same order as Django REST Framework). A request that passes auth and permission can still be rejected with **429 Too Many Requests** if the caller is over their rate.
+
+Throttling is **opt-in**: a `RestPlugin` with no throttle configured imposes no limits, so adding it never surprises an existing API with a rate cap.
+
+<Callout type="info">
+Throttles are backed by an in-memory sliding-window limiter (`umbra::ratelimit::RateLimiter`). State lives in the process, so a multi-instance deployment behind a load balancer gives each replica its own counters (effective limit `rate × replicas`). A Redis-backed store is the multi-instance follow-up.
+</Callout>
+
+## Adding a throttle
+
+Use `RestPlugin::default_throttle(...)` to limit **every** resource, or `ResourceConfig::throttle(...)` for one table. Throttles **stack** — call either more than once and *all* of them must pass; the first to deny wins.
+
+```rust
+use umbra_rest::{AnonRateThrottle, UserRateThrottle, ResourceConfig, RestPlugin, ScopedRateThrottle};
+
+RestPlugin::default()
+    // Plugin-wide: anonymous callers get 100/hour, signed-in users 1000/day.
+    .default_throttle(AnonRateThrottle::new("100/hour"))
+    .default_throttle(UserRateThrottle::new("1000/day"))
+    // Per-resource: a tighter cap on a write-heavy upload endpoint.
+    .resource(
+        ResourceConfig::new("upload")
+            .throttle(ScopedRateThrottle::new("10/min", "upload:create")),
+    );
+```
+
+## The three built-ins
+
+<CardGrid>
+  <Card title="AnonRateThrottle">
+    Limits **anonymous** requests only, keyed by client IP. Authenticated requests pass through untouched.
+  </Card>
+  <Card title="UserRateThrottle">
+    Limits **authenticated** requests only, keyed by the user id from the `Identity`. Anonymous requests pass through.
+  </Card>
+  <Card title="ScopedRateThrottle">
+    Limits a **named scope**, keyed by `scope` + (user id when authenticated, else IP). Built with `ScopedRateThrottle::new(rate, scope)`; only acts when the request's scope matches.
+  </Card>
+</CardGrid>
+
+The scope the dispatch hands each throttle is `"<table>:<action>"` — `post:list`, `upload:create`, or the custom action's name for `@action` endpoints. That's what `ScopedRateThrottle` matches against.
+
+Pairing `AnonRateThrottle` with `UserRateThrottle` is the common shape: one rate for the public, a higher one for logged-in users.
+
+## Rate format
+
+Both `default_throttle` and `.throttle(...)` take a DRF-style `"<num>/<period>"` string. The period token is case-insensitive:
+
+| Token | Window |
+|---|---|
+| `sec`, `s`, `second` | 1 second |
+| `min`, `m`, `minute` | 60 seconds |
+| `hour`, `h` | 1 hour |
+| `day`, `d` | 1 day |
+
+A bare number (`"5"`) is shorthand for `"5/sec"`. A malformed rate (bad count, unknown period) panics at construction — a wrong rate is always a configuration bug, surfaced loudly at startup. Use `AnonRateThrottle::try_new(...)` if you want the parse error instead.
+
+## The 429 response
+
+On the first throttle that denies, the request short-circuits to **429 Too Many Requests** with a `Retry-After` header (whole seconds, rounded up) and a DRF-shaped body:
+
+```json
+{ "detail": "Request was throttled.", "retry_after": 58 }
+```
+
+`retry_after` is the time until a slot frees for that caller — the moment the oldest request in the sliding window ages out.
+
+## Custom throttles
+
+Implement the `Throttle` trait for anything the built-ins don't cover (per-org quotas, burst-vs-sustained tiers):
+
+```rust
+use umbra_rest::{Throttle, ThrottleContext, ThrottleDenied};
+
+struct AllowList;
+
+impl Throttle for AllowList {
+    fn check(&self, ctx: &ThrottleContext) -> Result<(), ThrottleDenied> {
+        // ctx.identity, ctx.client_ip, ctx.scope are all available.
+        Ok(()) // never throttle
+    }
+}
+```
+
+Wrap a `umbra::ratelimit::RateLimiter` to reuse the sliding-window counting the built-ins use.
+
+## See also
+
+- Design rationale: the `umbra-rest` throttle module (`plugins/umbra-rest/src/throttle.rs`) and the core primitive (`crates/umbra-core/src/ratelimit.rs`).
+- The two gates that run before throttling: [authentication](/docs/v0.0.1/rest/authentication) and [permissions](/docs/v0.0.1/rest/permissions).

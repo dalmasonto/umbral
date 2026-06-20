@@ -22,6 +22,7 @@ pub mod migrate;
 pub mod orm;
 pub mod pagination;
 pub mod plugin;
+pub mod ratelimit;
 pub mod routes;
 pub mod settings;
 pub mod signals;

@@ -482,6 +482,19 @@ pub mod pagination {
     };
 }
 
+pub mod ratelimit {
+    //! In-memory sliding-window rate limiter — the primitive behind
+    //! umbra-rest's API throttles ([`umbra_rest::throttle`]).
+    //!
+    //! Not a plugin: a [`RateLimiter`] is a standalone keyed counter a
+    //! throttle (or any caller) wraps. Build a [`Rate`] from a DRF-style
+    //! string (`Rate::parse("100/hour")`) and ask `limiter.check(key)` for
+    //! a [`RateDecision`]. See `umbra-core`'s `ratelimit` module for the
+    //! window semantics and the single-process / multi-instance caveats.
+
+    pub use umbra_core::ratelimit::{Rate, RateDecision, RateLimiter};
+}
+
 pub mod signals {
     //! In-process signal registry.
     //!
