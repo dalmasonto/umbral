@@ -28,12 +28,27 @@
 //! identical, only the [`Broker`] swaps. Requires the `redis` feature.
 
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
+use http::HeaderMap;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{RwLock, mpsc};
 use umbra::plugin::{AppContext, Plugin, PluginError};
+
+/// Resolves the authenticated user's `i64` id from request headers. Returns
+/// `None` for anonymous / unauthenticated requests.
+///
+/// The default resolver (set by [`RealtimePlugin::default`]) always returns
+/// `None` — every connection is anonymous — so a push-only feed compiles with
+/// no auth dependency. Wire a real resolver via
+/// [`RealtimePlugin::identity_resolver`], or use the convenience method
+/// [`RealtimePlugin::with_auth_sessions`] (requires the `auth` feature) to
+/// plug in `umbra-auth`'s session-cookie lookup.
+pub type IdentityResolver =
+    Arc<dyn Fn(HeaderMap) -> Pin<Box<dyn Future<Output = Option<i64>> + Send>> + Send + Sync>;
 
 /// Re-export so a `MessageHandler` impl can name the attribute
 /// (`#[umbra_realtime::async_trait]`) without a direct `async-trait` dep.
@@ -525,6 +540,7 @@ pub struct Realtime {
     registry: Arc<Registry>,
     policy: Arc<dyn GroupPolicy>,
     handler: Arc<dyn MessageHandler>,
+    resolver: IdentityResolver,
 }
 
 impl Realtime {
@@ -554,6 +570,13 @@ impl Realtime {
     /// The configured inbound-message handler (WS transport).
     pub fn message_handler() -> Arc<dyn MessageHandler> {
         Self::get().handler.clone()
+    }
+
+    /// The identity resolver: maps request headers to an authenticated user's
+    /// `i64` id (or `None` for anonymous). Used by both transports at handshake
+    /// to populate the registry entry and pass the user id to the group policy.
+    pub fn resolver() -> IdentityResolver {
+        Self::get().resolver.clone()
     }
 
     /// Target a single user's every live connection.
@@ -616,6 +639,11 @@ impl Target {
 pub struct RealtimePlugin {
     policy: Arc<dyn GroupPolicy>,
     handler: Arc<dyn MessageHandler>,
+    /// How to resolve the authenticated user id from request headers at the
+    /// SSE/WS handshake. Defaults to always-`None` (anonymous). Override via
+    /// [`identity_resolver`](Self::identity_resolver) or the convenience
+    /// [`with_auth_sessions`](Self::with_auth_sessions) (requires feature `auth`).
+    resolver: IdentityResolver,
     /// Deferred signal-subscription registrations (one per `on_table` /
     /// `on_model` call). Run once at `on_ready` so they only fire when the
     /// plugin is actually installed.
@@ -626,11 +654,18 @@ pub struct RealtimePlugin {
     redis_url: Option<String>,
 }
 
+/// The no-op identity resolver: every connection is anonymous (`None`).
+/// This is the default so anonymous / push-only feeds require no auth dep.
+fn anonymous_resolver() -> IdentityResolver {
+    Arc::new(|_headers: HeaderMap| Box::pin(async { None }))
+}
+
 impl Default for RealtimePlugin {
     fn default() -> Self {
         Self {
             policy: Arc::new(PublicGroupsOnly),
             handler: Arc::new(NoopMessageHandler),
+            resolver: anonymous_resolver(),
             subscriptions: Vec::new(),
             redis_url: None,
         }
@@ -644,6 +679,35 @@ impl RealtimePlugin {
     pub fn group_policy<P: GroupPolicy + 'static>(mut self, policy: P) -> Self {
         self.policy = Arc::new(policy);
         self
+    }
+
+    /// Supply a custom identity resolver: an async function that maps the
+    /// request headers to the authenticated user's `i64` id (or `None` for
+    /// anonymous). This is the extension point for custom auth schemes (JWT,
+    /// API keys, etc.) without pulling in `umbra-auth`.
+    ///
+    /// For session-cookie auth backed by `umbra-auth`, use the convenience
+    /// method [`with_auth_sessions`](Self::with_auth_sessions) (requires the
+    /// `auth` cargo feature).
+    pub fn identity_resolver<F, Fut>(mut self, f: F) -> Self
+    where
+        F: Fn(HeaderMap) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Option<i64>> + Send + 'static,
+    {
+        self.resolver = Arc::new(move |h| Box::pin(f(h)));
+        self
+    }
+
+    /// Use `umbra-auth`'s session-cookie resolver to identify the current
+    /// user at the SSE/WS handshake. This is the standard wiring when
+    /// `umbra-auth` is installed.
+    ///
+    /// Requires the `auth` cargo feature (`--features auth`).
+    #[cfg(feature = "auth")]
+    pub fn with_auth_sessions(self) -> Self {
+        self.identity_resolver(|headers| async move {
+            umbra_auth::current_session_user_id(&headers).await
+        })
     }
 
     /// Set the inbound-message handler for the WebSocket transport. The
@@ -756,6 +820,7 @@ impl Plugin for RealtimePlugin {
             registry,
             policy: self.policy.clone(),
             handler: self.handler.clone(),
+            resolver: self.resolver.clone(),
         });
         // Register the model-change subscriptions now that the ambient
         // handle exists (a fired handler calls Realtime::to_group, etc.).

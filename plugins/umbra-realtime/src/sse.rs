@@ -30,7 +30,7 @@ pub(crate) struct SseQuery {
 
 /// The SSE endpoint handler. Identity → group policy → register → stream.
 pub(crate) async fn sse_handler(headers: HeaderMap, Query(q): Query<SseQuery>) -> Response {
-    let user_id = umbra_auth::current_session_user_id(&headers).await;
+    let user_id = Realtime::resolver()(headers.clone()).await;
 
     let requested: Vec<String> = q
         .groups
