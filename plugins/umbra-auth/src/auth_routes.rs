@@ -89,6 +89,32 @@ struct ErrorOut {
     detail: String,
 }
 
+/// Resolve the client IP best-effort from reverse-proxy headers. ConnectInfo
+/// isn't wired in umbra's serve path, so the peer address isn't available; the
+/// proxy headers are the reliable source. Takes the first hop of
+/// `X-Forwarded-For`, else `X-Real-IP`. When neither resolves (direct
+/// connection, no proxy), falls back to a fixed key so the throttle still
+/// counts — every un-proxied caller shares one bucket, which is the safe side:
+/// it limits, it never opens a hole. Mirrors `umbra_logs`'s `resolve_ip`.
+fn client_ip(headers: &HeaderMap) -> String {
+    if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
+        if let Some(first) = xff.split(',').next() {
+            let ip = first.trim();
+            if !ip.is_empty() {
+                return ip.to_string();
+            }
+        }
+    }
+    if let Some(real) = headers.get("x-real-ip").and_then(|v| v.to_str().ok()) {
+        let ip = real.trim();
+        if !ip.is_empty() {
+            return ip.to_string();
+        }
+    }
+    // No IP resolvable: a fixed sentinel so the limiter still functions.
+    "unknown".to_string()
+}
+
 fn err(status: StatusCode, error: &'static str, detail: impl Into<String>) -> Response {
     (
         status,
@@ -263,7 +289,18 @@ pub(crate) fn openapi_paths(prefix: &str) -> Vec<(String, serde_json::Value)> {
 /// `username` / `email` — the `UNIQUE` constraints on those
 /// columns (gap #65) raise a sqlx error containing the keyword
 /// "unique", which this branch translates to the 409 status.
-async fn register(Json(body): Json<RegisterIn>) -> Response {
+async fn register(headers: HeaderMap, Json(body): Json<RegisterIn>) -> Response {
+    // Throttle BEFORE any DB work — defends mass automated account creation.
+    // Keyed per IP (no username yet at register time). 429 once the IP has
+    // burned its budget (default 10 / hour).
+    let ip = client_ip(&headers);
+    if !crate::register_throttle_check(&ip) {
+        return err(
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate_limited",
+            "too many registration attempts; try again later",
+        );
+    }
     if body.username.is_empty() || body.email.is_empty() || body.password.is_empty() {
         return err(
             StatusCode::BAD_REQUEST,
@@ -303,9 +340,23 @@ async fn register(Json(body): Json<RegisterIn>) -> Response {
 /// and then bumps `auth_user.last_login`. No duplicate session
 /// code lives here.
 async fn login(headers: HeaderMap, Json(body): Json<LoginIn>) -> Response {
+    // Throttle BEFORE touching the DB — defends credential stuffing / brute
+    // force. Keyed per IP + username. The SAME 429 is returned regardless of
+    // whether the account exists, so this never leaks account existence. The
+    // check ALSO records this attempt; a successful login below forgives the
+    // counter so a legit user's earlier typo doesn't lock them out.
+    let ip = client_ip(&headers);
+    if !crate::login_throttle_check(&ip, &body.username) {
+        return err(
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate_limited",
+            "too many login attempts; try again later",
+        );
+    }
     let user: AuthUser = match crate::authenticate(&body.username, &body.password).await {
         Ok(u) => u,
         Err(_) => {
+            // The failed attempt is already counted by the check above.
             return err(
                 StatusCode::UNAUTHORIZED,
                 "invalid_credentials",
@@ -313,6 +364,8 @@ async fn login(headers: HeaderMap, Json(body): Json<LoginIn>) -> Response {
             );
         }
     };
+    // Authenticated: forgive the counter so prior typos don't accumulate.
+    crate::login_throttle_clear(&ip, &body.username);
     let (_token_row, plaintext) = match AuthToken::create_for(&user, "login").await {
         Ok(t) => t,
         Err(e) => {

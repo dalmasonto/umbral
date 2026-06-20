@@ -68,6 +68,7 @@ pub mod extractors;
 pub mod login_required;
 pub mod password_validation;
 pub mod session_user;
+pub mod throttle;
 pub mod token;
 
 pub use password_validation::{
@@ -84,6 +85,9 @@ pub use login_required::{
 pub use session_user::{
     OptionalUser, SessionAuthentication, User, current_user, login, login_with_request, logout,
     user_context_layer,
+};
+pub use throttle::{
+    Throttle, ThrottleConfig, login_throttle_check, login_throttle_clear, register_throttle_check,
 };
 pub use token::{AuthToken, PlaintextToken, TOKEN_PREFIX, digest_token};
 
@@ -336,6 +340,14 @@ pub struct AuthPlugin<U: UserModel = AuthUser> {
     /// ([`PasswordPolicy`] is not `Clone` — it holds boxed trait objects).
     /// The mutex lets `on_ready` `.take()` it; the first boot wins.
     password_policy: std::sync::Mutex<Option<PasswordPolicy>>,
+    /// The login/register rate-limit configuration this plugin installs at
+    /// boot. Secure by default ([`ThrottleConfig::default`]: login 5 / 5 min
+    /// per IP+username, register 10 / hour per IP, `enabled = true`). Builder
+    /// methods ([`AuthPlugin::login_throttle`], [`AuthPlugin::register_throttle`])
+    /// tune the budgets; [`AuthPlugin::disable_throttle`] flips `enabled` off
+    /// as an explicit opt-out. `Copy`, so no `Mutex`/`take` dance is needed —
+    /// `on_ready` reads it directly.
+    throttle_config: throttle::ThrottleConfig,
     _u: PhantomData<U>,
 }
 
@@ -349,6 +361,10 @@ impl<U: UserModel> Default for AuthPlugin<U> {
             // full validator set. `None` defers to PasswordPolicy::default()
             // (the secure set) at install time; it does NOT mean "off".
             password_policy: std::sync::Mutex::new(None),
+            // SECURE BY DEFAULT: throttling is ON for login + register with
+            // the credential-stuffing-resistant budgets above. `disable_throttle`
+            // is the only path that turns it off.
+            throttle_config: throttle::ThrottleConfig::default(),
             _u: PhantomData,
         }
     }
@@ -427,6 +443,42 @@ impl<U: UserModel> AuthPlugin<U> {
     /// password instead.
     pub fn disable_password_validation(mut self) -> Self {
         self.password_policy = std::sync::Mutex::new(Some(PasswordPolicy::empty()));
+        self
+    }
+
+    /// Tune the login rate limit: `max` failed-or-not attempts per trailing
+    /// `window`, keyed per IP + username. The default is 5 / 5 min — a budget
+    /// that stops credential-stuffing dead while leaving room for a human who
+    /// fat-fingers their password a couple of times (a successful login also
+    /// clears the counter). Lower it for a high-security surface; raise it for
+    /// a shared-NAT office where many users hit login from one IP.
+    ///
+    /// ```ignore
+    /// AuthPlugin::<AuthUser>::default().login_throttle(10, Duration::from_secs(300))
+    /// ```
+    pub fn login_throttle(mut self, max: usize, window: std::time::Duration) -> Self {
+        self.throttle_config.login_max = max;
+        self.throttle_config.login_window = window;
+        self
+    }
+
+    /// Tune the register rate limit: `max` account-creation attempts per
+    /// trailing `window`, keyed per IP. The default is 10 / hour, which brakes
+    /// mass automated signups without blocking a legitimate burst from one
+    /// office.
+    pub fn register_throttle(mut self, max: usize, window: std::time::Duration) -> Self {
+        self.throttle_config.register_max = max;
+        self.throttle_config.register_window = window;
+        self
+    }
+
+    /// Explicit opt-OUT: turn login + register throttling OFF entirely.
+    /// Secure-by-default means an app that genuinely wants no rate limit — a
+    /// load test, an internal tool behind its own gateway limiter — has to ask
+    /// for it by name. Don't reach for this to silence a throttled test; use a
+    /// distinct IP/username per attempt or a generous `login_throttle` instead.
+    pub fn disable_throttle(mut self) -> Self {
+        self.throttle_config.enabled = false;
         self
     }
 }
@@ -545,6 +597,11 @@ impl<U: UserModel> Plugin for AuthPlugin<U> {
             .and_then(|mut guard| guard.take())
             .unwrap_or_default();
         password_validation::install_policy(policy);
+        // Install the rate limiter the same way: the route handlers are free
+        // functions, so they read the limiter ambiently via the `throttle`
+        // free helpers. First boot wins (idempotent set), matching the
+        // password-policy / ambient-pool contract.
+        throttle::install(throttle::AuthThrottle::from_config(self.throttle_config));
         Ok(())
     }
 }
