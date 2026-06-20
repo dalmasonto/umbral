@@ -4,7 +4,7 @@
 
 1. [x] Save-feedback toast in the admin sheet — SHIPPED in commit `d2916d5` as gaps2 #13. — archived
 
-2. [ ] Can we have a posthog wiring maybe as a plugin, or a way of linking such logging systems into umbra
+2. [x] PostHog / analytics plugin — SHIPPED (2026-06-20): new umbra-analytics plugin (capture/identify fire-and-forget, ambient client, no-op-without-key, opt-in $pageview middleware) + 7 tests + docs (405d09b). — archived
 
 3. [x] Change-password dialog extracted to an HTML `<template>` — SHIPPED in commit `5b22cc5`. — archived
 
