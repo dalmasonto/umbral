@@ -65,4 +65,10 @@ Soft-deleted rows still exist: they count toward UNIQUE constraints, foreign key
 `update_values` and `update_expr` honour the same soft-delete scope as reads: the default queryset only updates live rows (`deleted_at IS NULL`); `.with_deleted()` lifts the filter (live + trashed); `.only_deleted()` restricts to trashed rows only. This is what makes the restore pattern above safe — no explicit `filter(post::ID.eq(id))` is strictly required when `.only_deleted()` is in play, though adding one is good practice for targeted restores.
 </Callout>
 
-Pinned by `crates/umbra-core/tests/soft_delete.rs` (feature #72, gaps2 #34); behaviour reference in the `Model::SOFT_DELETE` docs in `crates/umbra-core/src/orm/model.rs`.
+## Admin and REST
+
+The dynamic path (`DynQuerySet`) used by the admin and the REST plugin honours soft-delete identically: list endpoints exclude trashed rows by default, and the DELETE endpoint soft-deletes instead of hard-deleting. The same `with_deleted()` / `only_deleted()` / `hard_delete()` toggles are available on `DynQuerySet` for admin views that need to expose a trash UI.
+
+A full admin trash affordance (changelist filter, restore action, hard-delete confirm) is planned but not yet shipped.
+
+Pinned by `crates/umbra-core/tests/soft_delete.rs` (feature #72, gaps2 #34) and `crates/umbra-core/tests/soft_delete_dynamic.rs` (gaps2 #35); behaviour reference in the `Model::SOFT_DELETE` docs in `crates/umbra-core/src/orm/model.rs`.
